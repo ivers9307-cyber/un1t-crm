@@ -1,0 +1,797 @@
+{
+  "name": "[LEADS] New Lead Capture \u2192 Glofox + CRM + MailerLite + WATI \u2014 v3",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "calendly-lead",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "calendly-webhook",
+      "name": "Calendly Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        200,
+        200
+      ],
+      "webhookId": "calendly-lead"
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "social-lead",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "social-webhook",
+      "name": "Social Media Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        200,
+        500
+      ],
+      "webhookId": "social-lead"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Calendly v2 webhook (invitee.created event)\nconst raw = $input.first().json;\nconst body = raw.body || raw;\nconst invitee = body.payload || body;\nconst questions = invitee.questions_and_answers || [];\nlet phone = '';\nfor (const q of questions) {\n  const qText = (q.question || '').toLowerCase();\n  if (qText.includes('phone') || qText.includes('mobile')) phone = q.answer || '';\n}\nphone = phone.replace(/[\\s\\-\\(\\)]/g, '');\nif (phone.startsWith('0')) phone = '+353' + phone.substring(1);\nelse if (!phone.startsWith('+')) phone = '+353' + phone;\nconst name = invitee.name || '';\nreturn [{ json: {\n  name, first_name: name.split(' ')[0] || '', last_name: name.split(' ').slice(1).join(' ') || '',\n  email: (invitee.email || '').toLowerCase().trim(), phone,\n  lead_source: 'calendly',\n  event_type: invitee.event_type_name || 'Trial Class',\n  booking_time: invitee.scheduled_event?.start_time || '',\n  created_at: new Date().toISOString()\n}}];"
+      },
+      "id": "normalize-calendly",
+      "name": "Normalize Calendly Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const payload = $input.first().json;\nconst body = payload.body || payload;\nconst fields = body.field_data || [];\nlet name = '', email = '', phone = '';\nfor (const f of fields) {\n  if (f.name === 'full_name') name = f.values?.[0] || '';\n  if (f.name === 'email') email = f.values?.[0] || '';\n  if (f.name === 'phone_number') phone = f.values?.[0] || '';\n}\nname = name || body.name || body.full_name || '';\nemail = email || body.email || '';\nphone = phone || body.phone || body.phone_number || '';\nphone = phone.replace(/[\\s\\-\\(\\)]/g, '');\nif (phone.startsWith('0')) phone = '+353' + phone.substring(1);\nelse if (!phone.startsWith('+')) phone = '+353' + phone;\nlet lead_source = 'meta';\nif (body.source === 'tiktok' || body.ad_platform === 'tiktok') lead_source = 'tiktok';\nreturn [{ json: {\n  name, first_name: name.split(' ')[0] || '', last_name: name.split(' ').slice(1).join(' ') || '',\n  email: email.toLowerCase().trim(), phone, lead_source,\n  event_type: 'Social Lead Form', booking_time: '',\n  created_at: new Date().toISOString()\n}}];"
+      },
+      "id": "normalize-social",
+      "name": "Normalize Social Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "mergeByFields": {},
+        "options": {}
+      },
+      "id": "merge-leads",
+      "name": "Merge Lead Data",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        680,
+        350
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const lead = $input.first().json;\nconst errors = [];\nif (!lead.email || !lead.email.includes('@')) errors.push('Invalid email');\nif (!lead.phone || lead.phone.length < 8) errors.push('Invalid phone');\nif (!lead.name) errors.push('Missing name');\nif (errors.length > 0) return [{ json: { ...lead, valid: false, validation_errors: errors } }];\nreturn [{ json: { ...lead, valid: true, validation_errors: [] } }];"
+      },
+      "id": "validate-lead",
+      "name": "Validate Lead Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        900,
+        350
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true
+          },
+          "conditions": [
+            {
+              "id": "valid",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "if-valid",
+      "name": "Is Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        350
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=REPLACE_WITH_CRM_BASE_URL/api/contacts/search",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "term",
+              "value": "={{ $json.email }}"
+            },
+            {
+              "name": "fields",
+              "value": "email"
+            },
+            {
+              "name": "limit",
+              "value": "1"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "crm-check-dup",
+      "name": "CRM: Check Duplicate",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1340,
+        250
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "CRM_API_KEY",
+          "name": "CRM API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const lead = $('Validate Lead Data').first().json;\nconst result = $input.first().json;\nconst exists = result.data?.items?.length > 0;\nconst existingId = exists ? result.data.items[0].item.id : null;\nreturn [{ json: { ...lead, crm_exists: exists, crm_contact_id: existingId } }];"
+      },
+      "id": "dedup-check",
+      "name": "Deduplication Logic",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1560,
+        250
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true
+          },
+          "conditions": [
+            {
+              "id": "new",
+              "leftValue": "={{ $json.crm_exists }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "notEquals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "if-new-lead",
+      "name": "Is New Lead?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1780,
+        250
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://gf-api.aws.glofox.com/prod/2.0/register",
+        "authentication": "noAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"first_name\": \"{{ $json.first_name }}\",\n  \"last_name\": \"{{ $json.last_name }}\",\n  \"email\": \"{{ $json.email }}\",\n  \"phone\": \"{{ $json.phone }}\",\n  \"type\": \"MEMBER\",\n  \"password\": \"TempPass_{{ $json.first_name }}{{ Math.floor(Math.random()*9000+1000) }}\",\n  \"lead_status\": \"LEAD\"\n}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-glofox-branch-id",
+              "value": "REPLACE_WITH_BRANCH_ID"
+            },
+            {
+              "name": "x-api-key",
+              "value": "REPLACE_WITH_GLOFOX_API_KEY"
+            },
+            {
+              "name": "x-glofox-api-token",
+              "value": "REPLACE_WITH_GLOFOX_API_TOKEN"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "glofox-create",
+      "name": "Glofox: Create Member",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2060,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const lead = $('Deduplication Logic').first().json;\nconst glofoxRes = $('Glofox: Create Member').first().json;\nconst glofoxId = glofoxRes.user?._id || glofoxRes._id || 'unknown';\nreturn [{ json: { ...lead, glofox_member_id: glofoxId } }];"
+      },
+      "id": "store-glofox-id",
+      "name": "Store Glofox Member ID",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2300,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=REPLACE_WITH_CRM_BASE_URL/api/contacts",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"name\": \"{{ $json.name }}\",\n  \"first_name\": \"{{ $json.first_name }}\",\n  \"last_name\": \"{{ $json.last_name }}\",\n  \"email\": \"{{ $json.email }}\",\n  \"phone\": \"{{ $json.phone }}\",\n  \"glofox_member_id\": \"{{ $json.glofox_member_id }}\",\n  \"trial_credits_remaining\": 3,\n  \"lead_source\": \"{{ $json.lead_source }}\",\n  \"lead_status\": \"active_trial\",\n  \"lead_created_at\": \"{{ $json.created_at }}\"\n}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "crm-create-contact",
+      "name": "CRM: Create Contact",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2540,
+        0
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "CRM_API_KEY",
+          "name": "CRM API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=REPLACE_WITH_CRM_BASE_URL/api/deals",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"title\": \"{{ $json.name }} \u2014 {{ $json.lead_source }} Lead\",\n  \"contact_id\": \"{{ $('CRM: Create Contact').first().json.data?.id }}\",\n  \"stage_slug\": \"new_lead\"\n}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "crm-create-deal",
+      "name": "CRM: Create Deal",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2780,
+        0
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "CRM_API_KEY",
+          "name": "CRM API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=REPLACE_WITH_CRM_BASE_URL/api/notes",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"contact_id\": \"{{ $('CRM: Create Contact').first().json.data?.id }}\",\n  \"deal_id\": \"{{ $('CRM: Create Deal').first().json.data?.id }}\",\n  \"content\": \"Lead created via {{ $json.lead_source }}\\nGlofox ID: {{ $json.glofox_member_id }}\\nCreated: {{ $json.created_at }}\\n3 trial credits added.\"\n}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "crm-add-note",
+      "name": "CRM: Add Note",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3020,
+        0
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "CRM_API_KEY",
+          "name": "CRM API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=REPLACE_WITH_CRM_BASE_URL/api/activities",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"subject\": \"Follow up with {{ $json.name }}\",\n  \"type\": \"call\",\n  \"contact_id\": \"{{ $('CRM: Create Contact').first().json.data?.id }}\",\n  \"deal_id\": \"{{ $('CRM: Create Deal').first().json.data?.id }}\",\n  \"due_date\": \"{{ $now.plus({hours: 24}).toFormat('yyyy-MM-dd') }}\",\n  \"due_time\": \"10:00\",\n  \"note\": \"New {{ $json.lead_source }} lead \u2014 call within 24 hours\"\n}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "crm-create-activity",
+      "name": "CRM: Follow-up Activity",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3260,
+        0
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "CRM_API_KEY",
+          "name": "CRM API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://connect.mailerlite.com/api/subscribers",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"email\": \"{{ $json.email }}\",\n  \"fields\": { \"name\": \"{{ $json.first_name }}\", \"last_name\": \"{{ $json.last_name }}\", \"phone\": \"{{ $json.phone }}\" },\n  \"groups\": [\"REPLACE_WITH_LEAD_GROUP_ID\"],\n  \"status\": \"active\"\n}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "mailerlite-create",
+      "name": "MailerLite: Create Subscriber",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2540,
+        200
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "MAILERLITE_API_KEY",
+          "name": "MailerLite API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://live-mt-server.wati.io/api/v1/addContact/{{ $json.phone }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"name\": \"{{ $json.name }}\",\n  \"customParams\": [\n    { \"name\": \"lead_source\", \"value\": \"{{ $json.lead_source }}\" },\n    { \"name\": \"glofox_id\", \"value\": \"{{ $json.glofox_member_id }}\" },\n    { \"name\": \"status\", \"value\": \"Lead\" }\n  ]\n}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "wati-add-contact",
+      "name": "WATI: Add Contact",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2540,
+        400
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "WATI_API_KEY",
+          "name": "WATI API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://live-mt-server.wati.io/api/v1/sendTemplateMessage/{{ $json.phone }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"template_name\": \"welcome_trial_lead\",\n  \"broadcast_name\": \"lead_gen_welcome\",\n  \"parameters\": [{ \"name\": \"name\", \"value\": \"{{ $json.first_name }}\" }]\n}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "wati-send-welcome",
+      "name": "WATI: Welcome WhatsApp",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2780,
+        400
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "WATI_API_KEY",
+          "name": "WATI API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={ \"status\": \"ok\" }",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "respond-ok",
+      "name": "Respond OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        3260,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const error = $input.first().json;\nconst lead = $('Validate Lead Data').first()?.json || {};\nreturn [{ json: {\n  timestamp: new Date().toISOString(), name: lead.name || 'Unknown',\n  email: lead.email || 'Unknown', phone: lead.phone || 'Unknown',\n  lead_source: lead.lead_source || 'Unknown',\n  error_message: error.message || JSON.stringify(error),\n  failed_step: error.node?.name || 'Unknown'\n}}];"
+      },
+      "id": "error-formatter",
+      "name": "Format Error Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1340,
+        600
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "value": "REPLACE_WITH_ERROR_LOG_SHEET_ID"
+        },
+        "sheetName": {
+          "value": "Failed Leads"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData"
+        },
+        "options": {}
+      },
+      "id": "error-log-sheet",
+      "name": "Log Error to Google Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1560,
+        600
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "GOOGLE_SHEETS_CRED",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const lead = $input.first().json;\nreturn [{ json: { ...lead, action: 'existing_lead_updated', note: 'Lead exists in CRM (ID: ' + lead.crm_contact_id + ')' } }];"
+      },
+      "id": "existing-lead-handler",
+      "name": "Handle Existing Lead",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2060,
+        400
+      ]
+    }
+  ],
+  "connections": {
+    "Calendly Webhook": {
+      "main": [
+        [
+          {
+            "node": "Normalize Calendly Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Social Media Webhook": {
+      "main": [
+        [
+          {
+            "node": "Normalize Social Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Calendly Data": {
+      "main": [
+        [
+          {
+            "node": "Merge Lead Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Social Data": {
+      "main": [
+        [
+          {
+            "node": "Merge Lead Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Lead Data": {
+      "main": [
+        [
+          {
+            "node": "Validate Lead Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Lead Data": {
+      "main": [
+        [
+          {
+            "node": "Is Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Valid?": {
+      "main": [
+        [
+          {
+            "node": "CRM: Check Duplicate",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Format Error Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CRM: Check Duplicate": {
+      "main": [
+        [
+          {
+            "node": "Deduplication Logic",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Deduplication Logic": {
+      "main": [
+        [
+          {
+            "node": "Is New Lead?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is New Lead?": {
+      "main": [
+        [
+          {
+            "node": "Glofox: Create Member",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Handle Existing Lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Glofox: Create Member": {
+      "main": [
+        [
+          {
+            "node": "Store Glofox Member ID",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Store Glofox Member ID": {
+      "main": [
+        [
+          {
+            "node": "CRM: Create Contact",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "MailerLite: Create Subscriber",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "WATI: Add Contact",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CRM: Create Contact": {
+      "main": [
+        [
+          {
+            "node": "CRM: Create Deal",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CRM: Create Deal": {
+      "main": [
+        [
+          {
+            "node": "CRM: Add Note",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CRM: Add Note": {
+      "main": [
+        [
+          {
+            "node": "CRM: Follow-up Activity",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CRM: Follow-up Activity": {
+      "main": [
+        [
+          {
+            "node": "Respond OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "MailerLite: Create Subscriber": {
+      "main": [
+        [
+          {
+            "node": "Respond OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "WATI: Add Contact": {
+      "main": [
+        [
+          {
+            "node": "WATI: Welcome WhatsApp",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "WATI: Welcome WhatsApp": {
+      "main": [
+        [
+          {
+            "node": "Respond OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Error Data": {
+      "main": [
+        [
+          {
+            "node": "Log Error to Google Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "tags": [
+    {
+      "name": "leads"
+    },
+    {
+      "name": "production"
+    }
+  ]
+}

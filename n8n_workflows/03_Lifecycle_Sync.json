@@ -1,0 +1,827 @@
+{
+  "name": "[SYNC] Lifecycle Updates \u2014 Cold Lead + Cancellation + Re-engagement \u2014 v3",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "crm-deal-update",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "crm-webhook",
+      "name": "CRM: Deal Updated Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        200,
+        200
+      ],
+      "webhookId": "crm-deal-update"
+    },
+    {
+      "parameters": {
+        "jsCode": "const payload = $input.first().json;\nconst body = payload.body || payload;\nconst current = body.current || {};\nconst stageId = current.stage_id;\nconst status = current.status;\nconst isCold = status === 'lost';\n// Look up contact details from CRM\nreturn [{ json: {\n  is_cold: isCold, contact_id: current.contact_id,\n  deal_id: current.id, stage_id: stageId, status\n}}];"
+      },
+      "id": "detect-cold",
+      "name": "Detect Cold/Lost Deal",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=REPLACE_WITH_CRM_BASE_URL/api/contacts/{{ $json.contact_id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "crm-fetch-cold-contact",
+      "name": "CRM: Fetch Contact",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        660,
+        200
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "CRM_API_KEY",
+          "name": "CRM API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const prev = $('Detect Cold/Lost Deal').first().json;\nconst contact = $input.first().json.data || {};\nreturn [{ json: { ...prev, email: contact.email, phone: contact.phone, name: contact.name } }];"
+      },
+      "id": "merge-cold-data",
+      "name": "Merge Contact Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true
+          },
+          "conditions": [
+            {
+              "id": "cold-check",
+              "leftValue": "={{ $json.is_cold }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "if-cold",
+      "name": "Is Cold/Lost?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "=https://live-mt-server.wati.io/api/v1/updateContact/{{ $json.phone }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={ \"customParams\": [{ \"name\": \"status\", \"value\": \"Cold \u2014 Email Only\" }, { \"name\": \"whatsapp_active\", \"value\": \"false\" }]}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "wati-deactivate",
+      "name": "WATI: Deactivate WhatsApp",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1340,
+        100
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "WATI_API_KEY",
+          "name": "WATI API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://connect.mailerlite.com/api/subscribers/{{ $json.email }}/groups/REPLACE_WITH_COLD_LEADS_GROUP_ID",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "mailerlite-cold",
+      "name": "MailerLite: Move to Cold Leads",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1340,
+        250
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "MAILERLITE_API_KEY",
+          "name": "MailerLite API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "=REPLACE_WITH_CRM_BASE_URL/api/contacts/{{ $json.contact_id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={ \"label\": \"Cold \u2014 Email Only\", \"lead_status\": \"cold\" }",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "crm-tag-cold",
+      "name": "CRM: Tag Cold + Update Status",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1340,
+        400
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "CRM_API_KEY",
+          "name": "CRM API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "mailerlite-reengagement",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "mailerlite-webhook",
+      "name": "MailerLite: Subscriber Clicked Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        200,
+        600
+      ],
+      "webhookId": "mailerlite-reengagement"
+    },
+    {
+      "parameters": {
+        "jsCode": "const payload = $input.first().json;\nconst body = payload.body || payload;\nconst email = body.data?.subscriber?.email || body.email || '';\nreturn [{ json: {\n  email, name: body.data?.subscriber?.fields?.name || '',\n  phone: body.data?.subscriber?.fields?.phone || '',\n  event_type: body.type || 'subscriber.clicked',\n  campaign_name: body.data?.campaign?.name || 'Unknown'\n}}];"
+      },
+      "id": "parse-reengage",
+      "name": "Parse Re-engagement Event",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        600
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=REPLACE_WITH_CRM_BASE_URL/api/contacts/search",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "term",
+              "value": "={{ $json.email }}"
+            },
+            {
+              "name": "fields",
+              "value": "email"
+            },
+            {
+              "name": "limit",
+              "value": "1"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "crm-lookup-reengage",
+      "name": "CRM: Lookup Person",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        660,
+        600
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "CRM_API_KEY",
+          "name": "CRM API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const lead = $('Parse Re-engagement Event').first().json;\nconst result = $input.first().json;\nconst contact = result.data?.items?.[0]?.item || {};\nconst leadStatus = contact.lead_status || '';\nconst isLostMember = leadStatus === 'lost_member';\nconst newStatus = isLostMember ? 'returning' : 'active_trial';\nconst newTag = isLostMember ? 'Returning Member' : 'Re-engaged Lead';\nreturn [{ json: {\n  ...lead, contact_id: contact.id || null,\n  current_status: leadStatus,\n  is_lost_member: isLostMember,\n  new_status: newStatus, new_tag: newTag\n}}];"
+      },
+      "id": "classify-reengage",
+      "name": "Classify Re-engagement Type",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        900,
+        600
+      ]
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "=https://connect.mailerlite.com/api/subscribers/{{ $json.email }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={ \"status\": \"active\", \"groups\": [\"REPLACE_WITH_ACTIVE_LEAD_GROUP_ID\"] }",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "mailerlite-resub",
+      "name": "MailerLite: Resubscribe",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1140,
+        500
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "MAILERLITE_API_KEY",
+          "name": "MailerLite API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "=https://live-mt-server.wati.io/api/v1/updateContact/{{ $json.phone }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={ \"customParams\": [{ \"name\": \"status\", \"value\": \"{{ $json.new_tag }}\" }, { \"name\": \"whatsapp_active\", \"value\": \"true\" }]}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "wati-reactivate",
+      "name": "WATI: Reactivate Contact",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1140,
+        650
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "WATI_API_KEY",
+          "name": "WATI API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://live-mt-server.wati.io/api/v1/sendTemplateMessage/{{ $json.phone }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={ \"template_name\": \"{{ $json.is_lost_member ? 'welcome_back_member' : 'welcome_back_lead' }}\", \"broadcast_name\": \"reengagement\", \"parameters\": [{ \"name\": \"name\", \"value\": \"{{ $json.name.split(' ')[0] }}\" }] }",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "wati-welcome-back",
+      "name": "WATI: Welcome Back Message",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1380,
+        650
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "WATI_API_KEY",
+          "name": "WATI API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "=REPLACE_WITH_CRM_BASE_URL/api/contacts/{{ $json.contact_id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={ \"label\": \"{{ $json.new_tag }}\", \"lead_status\": \"{{ $json.new_status }}\" }",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "crm-reactivate",
+      "name": "CRM: Update Status + Label",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1140,
+        800
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "CRM_API_KEY",
+          "name": "CRM API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=REPLACE_WITH_CRM_BASE_URL/api/notes",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={ \"contact_id\": \"{{ $json.contact_id }}\", \"content\": \"Re-engaged on {{ $now.setZone('Europe/Dublin').toFormat('yyyy-MM-dd HH:mm') }}\\nTriggered by: {{ $('Parse Re-engagement Event').first().json.campaign_name }}\\nType: {{ $json.new_tag }}\\nStatus updated: {{ $json.current_status }} \u2192 {{ $json.new_status }}\" }",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "crm-reengage-note",
+      "name": "CRM: Re-engagement Note",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1380,
+        800
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "CRM_API_KEY",
+          "name": "CRM API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "glofox-cancellation",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "glofox-cancel-webhook",
+      "name": "Glofox: Membership Cancelled Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        200,
+        1000
+      ],
+      "webhookId": "glofox-cancellation"
+    },
+    {
+      "parameters": {
+        "jsCode": "const payload = $input.first().json;\nconst body = payload.body || payload;\nreturn [{ json: {\n  member_id: body.member_id || body.data?.member_id || '',\n  name: body.member_name || body.data?.member_name || '',\n  email: (body.member_email || body.data?.member_email || '').toLowerCase().trim(),\n  phone: body.member_phone || body.data?.member_phone || '',\n  cancellation_reason: body.reason || body.data?.reason || 'Not provided',\n  cancellation_date: new Date().toISOString()\n}}];"
+      },
+      "id": "parse-cancel",
+      "name": "Parse Cancellation Event",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        1000
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=REPLACE_WITH_CRM_BASE_URL/api/contacts/search",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "term",
+              "value": "={{ $json.email }}"
+            },
+            {
+              "name": "fields",
+              "value": "email"
+            },
+            {
+              "name": "limit",
+              "value": "1"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "crm-lookup-cancel",
+      "name": "CRM: Find Cancelled Member",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        660,
+        1000
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "CRM_API_KEY",
+          "name": "CRM API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const cancelData = $('Parse Cancellation Event').first().json;\nconst result = $input.first().json;\nconst contact = result.data?.items?.[0]?.item || {};\nreturn [{ json: { ...cancelData, contact_id: contact.id || null } }];"
+      },
+      "id": "merge-cancel",
+      "name": "Merge Cancel Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        900,
+        1000
+      ]
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "=REPLACE_WITH_CRM_BASE_URL/api/contacts/{{ $json.contact_id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={ \"label\": \"Lost Member\", \"lead_status\": \"lost_member\", \"trial_credits_remaining\": 0 }",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "crm-lost-member",
+      "name": "CRM: Tag Lost + Update Status",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1140,
+        900
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "CRM_API_KEY",
+          "name": "CRM API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=REPLACE_WITH_CRM_BASE_URL/api/notes",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={ \"contact_id\": \"{{ $json.contact_id }}\", \"content\": \"Membership cancelled on {{ $json.cancellation_date }}\\nReason: {{ $json.cancellation_reason }}\\nLead Status \u2192 lost_member\" }",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "crm-cancel-note",
+      "name": "CRM: Cancellation Note",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1380,
+        900
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "CRM_API_KEY",
+          "name": "CRM API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "=https://live-mt-server.wati.io/api/v1/updateContact/{{ $json.phone }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={ \"customParams\": [{ \"name\": \"status\", \"value\": \"Lost Member\" }] }",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "wati-lost",
+      "name": "WATI: Tag Lost Member",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1140,
+        1050
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "WATI_API_KEY",
+          "name": "WATI API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://connect.mailerlite.com/api/subscribers/{{ $json.email }}/groups/REPLACE_WITH_LOST_MEMBERS_GROUP_ID",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "mailerlite-lost",
+      "name": "MailerLite: Move to Lost Members",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1140,
+        1200
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "MAILERLITE_API_KEY",
+          "name": "MailerLite API Key"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "CRM: Deal Updated Webhook": {
+      "main": [
+        [
+          {
+            "node": "Detect Cold/Lost Deal",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Detect Cold/Lost Deal": {
+      "main": [
+        [
+          {
+            "node": "CRM: Fetch Contact",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CRM: Fetch Contact": {
+      "main": [
+        [
+          {
+            "node": "Merge Contact Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Contact Data": {
+      "main": [
+        [
+          {
+            "node": "Is Cold/Lost?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Cold/Lost?": {
+      "main": [
+        [
+          {
+            "node": "WATI: Deactivate WhatsApp",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "MailerLite: Move to Cold Leads",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "CRM: Tag Cold + Update Status",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "MailerLite: Subscriber Clicked Webhook": {
+      "main": [
+        [
+          {
+            "node": "Parse Re-engagement Event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Re-engagement Event": {
+      "main": [
+        [
+          {
+            "node": "CRM: Lookup Person",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CRM: Lookup Person": {
+      "main": [
+        [
+          {
+            "node": "Classify Re-engagement Type",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Classify Re-engagement Type": {
+      "main": [
+        [
+          {
+            "node": "MailerLite: Resubscribe",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "WATI: Reactivate Contact",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "CRM: Update Status + Label",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "WATI: Reactivate Contact": {
+      "main": [
+        [
+          {
+            "node": "WATI: Welcome Back Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CRM: Update Status + Label": {
+      "main": [
+        [
+          {
+            "node": "CRM: Re-engagement Note",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Glofox: Membership Cancelled Webhook": {
+      "main": [
+        [
+          {
+            "node": "Parse Cancellation Event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Cancellation Event": {
+      "main": [
+        [
+          {
+            "node": "CRM: Find Cancelled Member",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CRM: Find Cancelled Member": {
+      "main": [
+        [
+          {
+            "node": "Merge Cancel Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Cancel Data": {
+      "main": [
+        [
+          {
+            "node": "CRM: Tag Lost + Update Status",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "WATI: Tag Lost Member",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "MailerLite: Move to Lost Members",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CRM: Tag Lost + Update Status": {
+      "main": [
+        [
+          {
+            "node": "CRM: Cancellation Note",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "tags": [
+    {
+      "name": "sync"
+    },
+    {
+      "name": "lifecycle"
+    },
+    {
+      "name": "production"
+    }
+  ]
+}
