@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { LayoutDashboard, Users, Columns3, CheckSquare, Search } from 'lucide-react'
+import { LayoutDashboard, Users, Columns3, CheckSquare, Calendar, BookOpen } from 'lucide-react'
 import clsx from 'clsx'
 
 const nav = [
@@ -10,6 +10,8 @@ const nav = [
   { href: '/pipeline',   label: 'Pipeline',   icon: Columns3 },
   { href: '/contacts',   label: 'Contacts',   icon: Users },
   { href: '/activities', label: 'Activities',  icon: CheckSquare },
+  { href: '/events',     label: 'Events',      icon: Calendar },
+  { href: '/bookings',   label: 'Bookings',    icon: BookOpen },
 ]
 
 export default function Sidebar() {
