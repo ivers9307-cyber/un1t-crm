@@ -14,6 +14,7 @@ export async function POST(request) {
     contact_id: body.contact_id || body.person_id,  // accept either name
     deal_id: body.deal_id,
     content: body.content,
+    ...(body.location_id ? { location_id: body.location_id } : {}),
   }).select().single()
 
   if (error) {

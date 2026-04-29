@@ -13,11 +13,12 @@ export async function GET(request) {
   const limit = parseInt(searchParams.get('limit') || '10')
   const db = createServerClient()
 
+  const locationId = searchParams.get('location_id')
+
   // Search deals by contact email (most common n8n use case)
-  const { data: contacts } = await db.from('contacts')
-    .select('id')
-    .ilike('email', `%${term}%`)
-    .limit(1)
+  let contactQuery = db.from('contacts').select('id').ilike('email', `%${term}%`).limit(1)
+  if (locationId) contactQuery = contactQuery.eq('location_id', locationId)
+  const { data: contacts } = await contactQuery
 
   if (!contacts || contacts.length === 0) {
     return NextResponse.json({ success: true, data: { items: [] } })

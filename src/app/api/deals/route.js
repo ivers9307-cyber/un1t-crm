@@ -23,6 +23,7 @@ export async function POST(request) {
     stage_id: stageId,
     status: body.status || 'open',
     value: body.value || 0,
+    ...(body.location_id ? { location_id: body.location_id } : {}),
   }).select().single()
 
   if (error) {

@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { LayoutDashboard, Users, Columns3, CheckSquare, Calendar, BookOpen, Settings, LogOut } from 'lucide-react'
 import { createBrowserClient } from '@/lib/supabase'
+import LocationSwitcher from './LocationSwitcher'
 import clsx from 'clsx'
 
 const allNav = [
@@ -39,9 +40,18 @@ export default function Sidebar({ user }) {
       {/* Logo + Location */}
       <div className="p-5 border-b border-un1t-gray">
         <h1 className="text-xl font-bold tracking-wider">UN1T</h1>
-        <p className="text-xs text-un1t-light mt-0.5">
-          {user?.activeLocation?.name || 'Lead Management'}
-        </p>
+        <div className="mt-1">
+          {user?.locations?.length > 1 ? (
+            <LocationSwitcher
+              locations={user.locations}
+              activeLocationId={user.activeLocation?.id}
+            />
+          ) : (
+            <p className="text-xs text-un1t-light">
+              {user?.activeLocation?.name || 'Lead Management'}
+            </p>
+          )}
+        </div>
       </div>
 
       {/* Navigation */}

@@ -1,4 +1,6 @@
 import { createServerClient } from '@/lib/supabase'
+import { getCurrentUser } from '@/lib/auth'
+import { redirect } from 'next/navigation'
 import Link from 'next/link'
 import { Plus, ExternalLink, Copy, Calendar, Clock, Users } from 'lucide-react'
 import EventActions from '@/components/EventActions'
@@ -7,9 +9,9 @@ export const dynamic = 'force-dynamic'
 export const revalidate = 0
 export const fetchCache = 'force-no-store'
 
-async function getEvents() {
+async function getEvents(locationId) {
   const db = createServerClient()
-  const { data: events } = await db.from('event_types').select('*').order('created_at', { ascending: false })
+  const { data: events } = await db.from('event_types').select('*').eq('location_id', locationId).order('created_at', { ascending: false })
 
   // Get booking counts per event
   const eventIds = (events || []).map(e => e.id)
@@ -36,7 +38,9 @@ function getAvailableDays(availability) {
 }
 
 export default async function EventsPage() {
-  const events = await getEvents()
+  const user = await getCurrentUser()
+  if (!user) redirect('/login')
+  const events = await getEvents(user.activeLocation?.id)
 
   return (
     <div className="p-8">

@@ -196,7 +196,7 @@ export default async function ContactDetailPage({ params }) {
           <div className="bg-un1t-dark border border-un1t-gray rounded-lg">
             <div className="flex items-center justify-between p-4 border-b border-un1t-gray">
               <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light">Timeline</h3>
-              <ContactActions contactId={contact.id} />
+              <ContactActions contactId={contact.id} locationId={contact.location_id} />
             </div>
             <div className="divide-y divide-un1t-gray">
               {timeline.length === 0 && (

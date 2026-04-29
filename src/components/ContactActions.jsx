@@ -5,7 +5,7 @@ import { Plus } from 'lucide-react'
 import { createBrowserClient } from '@/lib/supabase'
 import { useRouter } from 'next/navigation'
 
-export default function ContactActions({ contactId }) {
+export default function ContactActions({ contactId, locationId }) {
   const [showForm, setShowForm] = useState(null) // 'note' | 'activity' | null
   const [saving, setSaving] = useState(false)
   const router = useRouter()
@@ -16,7 +16,7 @@ export default function ContactActions({ contactId }) {
     setSaving(true)
     const content = e.target.content.value.trim()
     if (!content) return
-    await db.from('notes').insert({ contact_id: contactId, content })
+    await db.from('notes').insert({ contact_id: contactId, content, location_id: locationId })
     setSaving(false)
     setShowForm(null)
     router.refresh()
@@ -33,6 +33,7 @@ export default function ContactActions({ contactId }) {
       due_date: fd.get('due_date') || null,
       due_time: fd.get('due_time') || null,
       note: fd.get('note') || null,
+      location_id: locationId,
     })
     setSaving(false)
     setShowForm(null)

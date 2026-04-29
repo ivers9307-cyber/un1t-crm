@@ -1,4 +1,6 @@
 import { createServerClient } from '@/lib/supabase'
+import { getCurrentUser } from '@/lib/auth'
+import { redirect } from 'next/navigation'
 import KanbanBoard from '@/components/KanbanBoard'
 
 export const dynamic = 'force-dynamic'
@@ -6,13 +8,18 @@ export const revalidate = 0
 export const fetchCache = 'force-no-store'
 
 export default async function PipelinePage() {
+  const user = await getCurrentUser()
+  if (!user) redirect('/login')
+  const locationId = user.activeLocation?.id
+
   const db = createServerClient()
 
   const [stagesRes, dealsRes] = await Promise.all([
-    db.from('pipeline_stages').select('*').order('display_order'),
+    db.from('pipeline_stages').select('*').eq('location_id', locationId).order('display_order'),
     db.from('deals')
       .select('*, contacts(*)')
       .eq('status', 'open')
+      .eq('location_id', locationId)
       .order('created_at', { ascending: false }),
   ])
 

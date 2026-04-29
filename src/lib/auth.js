@@ -54,8 +54,17 @@ export async function getCurrentUser() {
     .eq('profile_id', user.id)
 
   const locations = (locationLinks || []).map(pl => pl.locations).filter(Boolean)
+
+  // Check for location cookie (set by LocationSwitcher)
+  const cookieStore = cookies()
+  const locationCookie = cookieStore.get('un1t_active_location')?.value
+  const cookieLocation = locationCookie
+    ? locations.find(l => l.id === locationCookie)
+    : null
+
+  // Priority: cookie > default assignment > first location
   const defaultLink = (locationLinks || []).find(pl => pl.is_default)
-  const activeLocation = defaultLink?.locations || locations[0] || null
+  const activeLocation = cookieLocation || defaultLink?.locations || locations[0] || null
 
   return {
     ...profile,

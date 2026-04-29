@@ -22,6 +22,7 @@ export async function POST(request) {
     lead_source: body.lead_source,
     lead_status: body.lead_status || 'active_trial',
     lead_created_at: body.lead_created_at || new Date().toISOString(),
+    ...(body.location_id ? { location_id: body.location_id } : {}),
   }).select().single()
 
   if (error) {
@@ -43,6 +44,10 @@ export async function GET(request) {
   const db = createServerClient()
 
   let query = db.from('contacts').select('*')
+
+  // Location filter
+  const locationId = searchParams.get('location_id')
+  if (locationId) query = query.eq('location_id', locationId)
 
   // Filters
   const status = searchParams.get('lead_status')

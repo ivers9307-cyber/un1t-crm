@@ -35,7 +35,7 @@ const defaultAvailability = {
   sun: null,
 }
 
-export default function EventForm({ event }) {
+export default function EventForm({ event, locationId }) {
   const router = useRouter()
   const isEditing = !!event
 
@@ -108,6 +108,7 @@ export default function EventForm({ event }) {
       custom_fields: customFields.filter(f => f.label.trim()),
       webhook_url: webhookUrl || null,
       active: true,
+      ...(locationId && !isEditing ? { location_id: locationId } : {}),
     }
 
     let result

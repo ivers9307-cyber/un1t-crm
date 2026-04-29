@@ -19,6 +19,7 @@ export async function POST(request) {
     due_time: body.due_time,
     note: body.note,
     done: body.done || false,
+    ...(body.location_id ? { location_id: body.location_id } : {}),
   }).select().single()
 
   if (error) {

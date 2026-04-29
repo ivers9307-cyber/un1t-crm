@@ -21,6 +21,8 @@ export async function GET(request) {
   const dateTo = searchParams.get('date_to')
   const contactId = searchParams.get('contact_id')
 
+  const locationId = searchParams.get('location_id')
+  if (locationId) query = query.eq('location_id', locationId)
   if (eventId) query = query.eq('event_type_id', eventId)
   if (status) query = query.eq('status', status)
   if (dateFrom) query = query.gte('booking_date', dateFrom)

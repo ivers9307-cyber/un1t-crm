@@ -1,4 +1,6 @@
 import { createServerClient } from '@/lib/supabase'
+import { getCurrentUser } from '@/lib/auth'
+import { redirect } from 'next/navigation'
 import Link from 'next/link'
 import { Mail, Phone, ChevronRight } from 'lucide-react'
 
@@ -15,11 +17,14 @@ const statusBadge = {
 }
 
 export default async function ContactsPage({ searchParams }) {
+  const user = await getCurrentUser()
+  if (!user) redirect('/login')
+
   const db = createServerClient()
   const status = searchParams?.status || ''
   const search = searchParams?.q || ''
 
-  let query = db.from('contacts').select('*').order('created_at', { ascending: false }).limit(100)
+  let query = db.from('contacts').select('*').eq('location_id', user.activeLocation?.id).order('created_at', { ascending: false }).limit(100)
   if (status) query = query.eq('lead_status', status)
   if (search) query = query.or(`name.ilike.%${search}%,email.ilike.%${search}%`)
 

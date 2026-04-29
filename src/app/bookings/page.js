@@ -1,4 +1,6 @@
 import { createServerClient } from '@/lib/supabase'
+import { getCurrentUser } from '@/lib/auth'
+import { redirect } from 'next/navigation'
 import Link from 'next/link'
 import { Calendar, Clock, User, Mail } from 'lucide-react'
 import BookingStatusToggle from '@/components/BookingStatusToggle'
@@ -7,12 +9,13 @@ export const dynamic = 'force-dynamic'
 export const revalidate = 0
 export const fetchCache = 'force-no-store'
 
-async function getBookings(filter) {
+async function getBookings(filter, locationId) {
   const db = createServerClient()
   const today = new Date().toISOString().split('T')[0]
 
   let query = db.from('bookings')
     .select('*, event_types(name, color, slug), contacts(id, name, email)')
+    .eq('location_id', locationId)
     .order('booking_date', { ascending: filter === 'upcoming' })
     .order('start_time', { ascending: true })
 
@@ -43,8 +46,11 @@ function formatDate(dateStr) {
 }
 
 export default async function BookingsPage({ searchParams }) {
+  const user = await getCurrentUser()
+  if (!user) redirect('/login')
+
   const filter = searchParams.filter || 'upcoming'
-  const bookings = await getBookings(filter)
+  const bookings = await getBookings(filter, user.activeLocation?.id)
 
   const filters = [
     { key: 'upcoming', label: 'Upcoming' },

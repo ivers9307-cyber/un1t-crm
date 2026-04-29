@@ -97,10 +97,18 @@ export default async function SettingsPage() {
 
       {/* Locations Section */}
       <div className="mb-10">
-        <div className="flex items-center gap-2 mb-4">
-          <MapPin size={18} className="text-un1t-light" />
-          <h3 className="text-lg font-semibold">Locations</h3>
-          <span className="text-xs bg-un1t-gray text-un1t-light px-2 py-0.5 rounded-full ml-1">{locations.length}</span>
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-2">
+            <MapPin size={18} className="text-un1t-light" />
+            <h3 className="text-lg font-semibold">Locations</h3>
+            <span className="text-xs bg-un1t-gray text-un1t-light px-2 py-0.5 rounded-full ml-1">{locations.length}</span>
+          </div>
+          <Link
+            href="/settings/locations/new"
+            className="text-xs bg-white text-black px-3 py-1.5 rounded-md hover:bg-gray-200 transition-colors font-medium"
+          >
+            Add Location
+          </Link>
         </div>
 
         <div className="bg-un1t-dark border border-un1t-gray rounded-lg divide-y divide-un1t-gray">
@@ -110,9 +118,17 @@ export default async function SettingsPage() {
                 <p className="text-sm font-medium">{loc.name}</p>
                 <p className="text-xs text-un1t-light mt-0.5">{loc.address || loc.slug}</p>
               </div>
-              <span className={`text-xs px-2 py-0.5 rounded-full ${loc.active ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`}>
-                {loc.active ? 'Active' : 'Inactive'}
-              </span>
+              <div className="flex items-center gap-3">
+                <span className={`text-xs px-2 py-0.5 rounded-full ${loc.active ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`}>
+                  {loc.active ? 'Active' : 'Inactive'}
+                </span>
+                <Link
+                  href={`/settings/locations/${loc.id}`}
+                  className="text-xs text-blue-400 hover:text-blue-300"
+                >
+                  Edit
+                </Link>
+              </div>
             </div>
           ))}
         </div>

@@ -1,4 +1,6 @@
 import { createServerClient } from '@/lib/supabase'
+import { getCurrentUser } from '@/lib/auth'
+import { redirect } from 'next/navigation'
 import Link from 'next/link'
 import { Phone, Mail, Calendar, CheckSquare, Clock, User } from 'lucide-react'
 import ActivityToggle from '@/components/ActivityToggle'
@@ -10,11 +12,15 @@ export const fetchCache = 'force-no-store'
 const typeIcons = { call: Phone, email: Mail, meeting: Calendar, task: CheckSquare }
 
 export default async function ActivitiesPage({ searchParams }) {
+  const user = await getCurrentUser()
+  if (!user) redirect('/login')
+
   const db = createServerClient()
   const filter = searchParams?.filter || 'upcoming'
 
   let query = db.from('activities')
     .select('*, contacts(id, name)')
+    .eq('location_id', user.activeLocation?.id)
     .order('due_date', { ascending: true })
     .limit(100)
 

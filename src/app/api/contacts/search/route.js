@@ -16,6 +16,9 @@ export async function GET(request) {
 
   let query = db.from('contacts').select('*')
 
+  const locationId = searchParams.get('location_id')
+  if (locationId) query = query.eq('location_id', locationId)
+
   if (fields === 'email') {
     query = query.ilike('email', `%${term}%`)
   } else {

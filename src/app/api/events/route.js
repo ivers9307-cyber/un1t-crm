@@ -12,6 +12,8 @@ export async function GET(request) {
   const activeOnly = searchParams.get('active') === 'true'
 
   let query = db.from('event_types').select('*').order('created_at', { ascending: false })
+  const locationId = searchParams.get('location_id')
+  if (locationId) query = query.eq('location_id', locationId)
   if (activeOnly) query = query.eq('active', true)
 
   const { data, error } = await query
@@ -43,6 +45,7 @@ export async function POST(request) {
     custom_fields: body.custom_fields || [],
     webhook_url: body.webhook_url || null,
     active: body.active !== false,
+    ...(body.location_id ? { location_id: body.location_id } : {}),
   }).select().single()
 
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })

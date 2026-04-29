@@ -1,4 +1,6 @@
 import { createServerClient } from '@/lib/supabase'
+import { getCurrentUser } from '@/lib/auth'
+import { redirect } from 'next/navigation'
 import Link from 'next/link'
 import { Users, Target, Clock, TrendingUp } from 'lucide-react'
 
@@ -6,14 +8,14 @@ export const dynamic = 'force-dynamic'
 export const revalidate = 0
 export const fetchCache = 'force-no-store'
 
-async function getStats() {
+async function getStats(locationId) {
   const db = createServerClient()
 
   const [contacts, activeTrials, activitiesDue, recentLeads] = await Promise.all([
-    db.from('contacts').select('id', { count: 'exact', head: true }),
-    db.from('contacts').select('id', { count: 'exact', head: true }).eq('lead_status', 'active_trial'),
-    db.from('activities').select('id', { count: 'exact', head: true }).eq('done', false).lte('due_date', new Date().toISOString().split('T')[0]),
-    db.from('contacts').select('id, name, lead_source, lead_status, created_at').order('created_at', { ascending: false }).limit(8),
+    db.from('contacts').select('id', { count: 'exact', head: true }).eq('location_id', locationId),
+    db.from('contacts').select('id', { count: 'exact', head: true }).eq('lead_status', 'active_trial').eq('location_id', locationId),
+    db.from('activities').select('id', { count: 'exact', head: true }).eq('done', false).lte('due_date', new Date().toISOString().split('T')[0]).eq('location_id', locationId),
+    db.from('contacts').select('id, name, lead_source, lead_status, created_at').eq('location_id', locationId).order('created_at', { ascending: false }).limit(8),
   ])
 
   return {
@@ -25,7 +27,9 @@ async function getStats() {
 }
 
 export default async function Dashboard() {
-  const stats = await getStats()
+  const user = await getCurrentUser()
+  if (!user) redirect('/login')
+  const stats = await getStats(user.activeLocation?.id)
 
   const cards = [
     { label: 'Total Contacts', value: stats.totalContacts, icon: Users, color: 'text-blue-400' },
