@@ -57,7 +57,7 @@ export default function ScheduleCalendar({ user }) {
     setLoading(true)
 
     const start = formatDate(weekStart)
-    const end = formatDate(weekEnd)
+    const end = formatDate(addDays(weekStart, 6))
 
     const [shiftsRes, templatesRes, staffRes] = await Promise.all([
       fetch(`/api/schedule/shifts?location_id=${locationId}&start_date=${start}&end_date=${end}`).then(r => r.json()),
@@ -69,7 +69,7 @@ export default function ScheduleCalendar({ user }) {
     setTemplates((templatesRes.data || []).filter(t => t.active))
     setStaff(staffRes.data || [])
     setLoading(false)
-  }, [locationId, weekStart, weekEnd])
+  }, [locationId, weekStart])
 
   useEffect(() => { fetchData() }, [fetchData])
 
