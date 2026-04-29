@@ -21,7 +21,7 @@ export default function AppShell({ children, user }) {
       <main className="flex-1 overflow-auto">
         {children}
       </main>
-      {user && <AssistantBubble user={user} />}
+      {user && (user.role === 'owner' || user.permissions?.assistant === true) && <AssistantBubble user={user} />}
     </div>
   )
 }
