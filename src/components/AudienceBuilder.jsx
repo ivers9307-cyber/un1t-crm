@@ -9,7 +9,7 @@ const FIELD_OPTIONS = [
   { value: 'email_status',          label: 'Email Status',          type: 'select',
     options: ['active', 'bounced', 'complained', 'unsubscribed'] },
   { value: 'lead_source',           label: 'Lead Source',           type: 'select',
-    options: ['calendly', 'meta', 'tiktok', 'walkin', 'referral', 'website', 'other'] },
+    options: ['booking', 'meta', 'tiktok', 'walkin', 'referral', 'website', 'whatsapp', 'other'] },
   { value: 'label',                 label: 'Label',                 type: 'text' },
   { value: 'tags',                  label: 'Tag',                   type: 'text' },
   { value: 'total_emails_sent',     label: 'Emails Sent',           type: 'number' },

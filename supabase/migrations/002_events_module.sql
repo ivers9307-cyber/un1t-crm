@@ -1,4 +1,4 @@
--- UN1T CRM — Events Module (Calendly Replacement)
+-- UN1T CRM — Events & Booking Module
 -- Run this in Supabase SQL Editor after 001_initial_schema.sql
 
 -- ============================================================

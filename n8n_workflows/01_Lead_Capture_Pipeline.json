@@ -1,22 +1,22 @@
 {
-  "name": "[LEADS] New Lead Capture \u2192 Glofox + CRM + MailerLite + WATI \u2014 v3",
+  "name": "[LEADS] New Lead Capture \u2192 Glofox + CRM \u2014 v4",
   "nodes": [
     {
       "parameters": {
         "httpMethod": "POST",
-        "path": "calendly-lead",
+        "path": "booking-lead",
         "responseMode": "responseNode",
         "options": {}
       },
-      "id": "calendly-webhook",
-      "name": "Calendly Webhook",
+      "id": "booking-webhook",
+      "name": "Booking Webhook",
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2,
       "position": [
         200,
         200
       ],
-      "webhookId": "calendly-lead"
+      "webhookId": "booking-lead"
     },
     {
       "parameters": {
@@ -37,10 +37,10 @@
     },
     {
       "parameters": {
-        "jsCode": "// Calendly v2 webhook (invitee.created event)\nconst raw = $input.first().json;\nconst body = raw.body || raw;\nconst invitee = body.payload || body;\nconst questions = invitee.questions_and_answers || [];\nlet phone = '';\nfor (const q of questions) {\n  const qText = (q.question || '').toLowerCase();\n  if (qText.includes('phone') || qText.includes('mobile')) phone = q.answer || '';\n}\nphone = phone.replace(/[\\s\\-\\(\\)]/g, '');\nif (phone.startsWith('0')) phone = '+353' + phone.substring(1);\nelse if (!phone.startsWith('+')) phone = '+353' + phone;\nconst name = invitee.name || '';\nreturn [{ json: {\n  name, first_name: name.split(' ')[0] || '', last_name: name.split(' ').slice(1).join(' ') || '',\n  email: (invitee.email || '').toLowerCase().trim(), phone,\n  lead_source: 'calendly',\n  event_type: invitee.event_type_name || 'Trial Class',\n  booking_time: invitee.scheduled_event?.start_time || '',\n  created_at: new Date().toISOString()\n}}];"
+        "jsCode": "// Booking webhook from internal Events/Booking module\nconst raw = $input.first().json;\nconst body = raw.body || raw;\nconst booking = body.payload || body;\nconst questions = booking.custom_fields || [];\nlet phone = '';\nfor (const q of questions) {\n  const qText = (q.label || '').toLowerCase();\n  if (qText.includes('phone') || qText.includes('mobile')) phone = q.value || '';\n}\nphone = phone.replace(/[\\s\\-\\(\\)]/g, '');\nif (phone.startsWith('0')) phone = '+353' + phone.substring(1);\nelse if (!phone.startsWith('+')) phone = '+353' + phone;\nconst name = booking.name || '';\nreturn [{ json: {\n  name, first_name: name.split(' ')[0] || '', last_name: name.split(' ').slice(1).join(' ') || '',\n  email: (booking.email || '').toLowerCase().trim(), phone,\n  lead_source: 'booking',\n  event_type: booking.service_type || 'Trial Class',\n  booking_time: booking.scheduled_time || '',\n  created_at: new Date().toISOString()\n}}];"
       },
-      "id": "normalize-calendly",
-      "name": "Normalize Calendly Data",
+      "id": "normalize-booking",
+      "name": "Normalize Booking Data",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
@@ -371,99 +371,6 @@
     },
     {
       "parameters": {
-        "method": "POST",
-        "url": "https://connect.mailerlite.com/api/subscribers",
-        "authentication": "genericCredentialType",
-        "genericAuthType": "httpHeaderAuth",
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={\n  \"email\": \"{{ $json.email }}\",\n  \"fields\": { \"name\": \"{{ $json.first_name }}\", \"last_name\": \"{{ $json.last_name }}\", \"phone\": \"{{ $json.phone }}\" },\n  \"groups\": [\"REPLACE_WITH_LEAD_GROUP_ID\"],\n  \"status\": \"active\"\n}",
-        "sendHeaders": true,
-        "headerParameters": {
-          "parameters": [
-            {
-              "name": "Content-Type",
-              "value": "application/json"
-            }
-          ]
-        },
-        "options": {
-          "timeout": 10000
-        }
-      },
-      "id": "mailerlite-create",
-      "name": "MailerLite: Create Subscriber",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [
-        2540,
-        200
-      ],
-      "credentials": {
-        "httpHeaderAuth": {
-          "id": "MAILERLITE_API_KEY",
-          "name": "MailerLite API Key"
-        }
-      }
-    },
-    {
-      "parameters": {
-        "method": "POST",
-        "url": "=https://live-mt-server.wati.io/api/v1/addContact/{{ $json.phone }}",
-        "authentication": "genericCredentialType",
-        "genericAuthType": "httpHeaderAuth",
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={\n  \"name\": \"{{ $json.name }}\",\n  \"customParams\": [\n    { \"name\": \"lead_source\", \"value\": \"{{ $json.lead_source }}\" },\n    { \"name\": \"glofox_id\", \"value\": \"{{ $json.glofox_member_id }}\" },\n    { \"name\": \"status\", \"value\": \"Lead\" }\n  ]\n}",
-        "options": {
-          "timeout": 10000
-        }
-      },
-      "id": "wati-add-contact",
-      "name": "WATI: Add Contact",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [
-        2540,
-        400
-      ],
-      "credentials": {
-        "httpHeaderAuth": {
-          "id": "WATI_API_KEY",
-          "name": "WATI API Key"
-        }
-      }
-    },
-    {
-      "parameters": {
-        "method": "POST",
-        "url": "=https://live-mt-server.wati.io/api/v1/sendTemplateMessage/{{ $json.phone }}",
-        "authentication": "genericCredentialType",
-        "genericAuthType": "httpHeaderAuth",
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={\n  \"template_name\": \"welcome_trial_lead\",\n  \"broadcast_name\": \"lead_gen_welcome\",\n  \"parameters\": [{ \"name\": \"name\", \"value\": \"{{ $json.first_name }}\" }]\n}",
-        "options": {
-          "timeout": 10000
-        }
-      },
-      "id": "wati-send-welcome",
-      "name": "WATI: Welcome WhatsApp",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [
-        2780,
-        400
-      ],
-      "credentials": {
-        "httpHeaderAuth": {
-          "id": "WATI_API_KEY",
-          "name": "WATI API Key"
-        }
-      }
-    },
-    {
-      "parameters": {
         "respondWith": "json",
         "responseBody": "={ \"status\": \"ok\" }",
         "options": {
@@ -536,11 +443,11 @@
     }
   ],
   "connections": {
-    "Calendly Webhook": {
+    "Booking Webhook": {
       "main": [
         [
           {
-            "node": "Normalize Calendly Data",
+            "node": "Normalize Booking Data",
             "type": "main",
             "index": 0
           }
@@ -558,7 +465,7 @@
         ]
       ]
     },
-    "Normalize Calendly Data": {
+    "Normalize Booking Data": {
       "main": [
         [
           {
@@ -678,16 +585,6 @@
             "node": "CRM: Create Contact",
             "type": "main",
             "index": 0
-          },
-          {
-            "node": "MailerLite: Create Subscriber",
-            "type": "main",
-            "index": 0
-          },
-          {
-            "node": "WATI: Add Contact",
-            "type": "main",
-            "index": 0
           }
         ]
       ]
@@ -726,39 +623,6 @@
       ]
     },
     "CRM: Follow-up Activity": {
-      "main": [
-        [
-          {
-            "node": "Respond OK",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "MailerLite: Create Subscriber": {
-      "main": [
-        [
-          {
-            "node": "Respond OK",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "WATI: Add Contact": {
-      "main": [
-        [
-          {
-            "node": "WATI: Welcome WhatsApp",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "WATI: Welcome WhatsApp": {
       "main": [
         [
           {

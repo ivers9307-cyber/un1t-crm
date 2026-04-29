@@ -1,5 +1,5 @@
 {
-  "name": "[SYNC] Lifecycle Updates \u2014 Cold Lead + Cancellation + Re-engagement \u2014 v3",
+  "name": "[SYNC] Lifecycle Management → CRM — v5",
   "nodes": [
     {
       "parameters": {
@@ -101,65 +101,12 @@
     {
       "parameters": {
         "method": "PUT",
-        "url": "=https://live-mt-server.wati.io/api/v1/updateContact/{{ $json.phone }}",
-        "authentication": "genericCredentialType",
-        "genericAuthType": "httpHeaderAuth",
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={ \"customParams\": [{ \"name\": \"status\", \"value\": \"Cold \u2014 Email Only\" }, { \"name\": \"whatsapp_active\", \"value\": \"false\" }]}",
-        "options": {
-          "timeout": 10000
-        }
-      },
-      "id": "wati-deactivate",
-      "name": "WATI: Deactivate WhatsApp",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [
-        1340,
-        100
-      ],
-      "credentials": {
-        "httpHeaderAuth": {
-          "id": "WATI_API_KEY",
-          "name": "WATI API Key"
-        }
-      }
-    },
-    {
-      "parameters": {
-        "method": "POST",
-        "url": "=https://connect.mailerlite.com/api/subscribers/{{ $json.email }}/groups/REPLACE_WITH_COLD_LEADS_GROUP_ID",
-        "authentication": "genericCredentialType",
-        "genericAuthType": "httpHeaderAuth",
-        "options": {
-          "timeout": 10000
-        }
-      },
-      "id": "mailerlite-cold",
-      "name": "MailerLite: Move to Cold Leads",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [
-        1340,
-        250
-      ],
-      "credentials": {
-        "httpHeaderAuth": {
-          "id": "MAILERLITE_API_KEY",
-          "name": "MailerLite API Key"
-        }
-      }
-    },
-    {
-      "parameters": {
-        "method": "PUT",
         "url": "=REPLACE_WITH_CRM_BASE_URL/api/contacts/{{ $json.contact_id }}",
         "authentication": "genericCredentialType",
         "genericAuthType": "httpHeaderAuth",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={ \"label\": \"Cold \u2014 Email Only\", \"lead_status\": \"cold\" }",
+        "jsonBody": "={ \"label\": \"Cold — Email Only\", \"lead_status\": \"cold\" }",
         "options": {
           "timeout": 10000
         }
@@ -170,7 +117,7 @@
       "typeVersion": 4.2,
       "position": [
         1340,
-        400
+        250
       ],
       "credentials": {
         "httpHeaderAuth": {
@@ -178,23 +125,6 @@
           "name": "CRM API Key"
         }
       }
-    },
-    {
-      "parameters": {
-        "httpMethod": "POST",
-        "path": "mailerlite-reengagement",
-        "responseMode": "lastNode",
-        "options": {}
-      },
-      "id": "mailerlite-webhook",
-      "name": "MailerLite: Subscriber Clicked Webhook",
-      "type": "n8n-nodes-base.webhook",
-      "typeVersion": 2,
-      "position": [
-        200,
-        600
-      ],
-      "webhookId": "mailerlite-reengagement"
     },
     {
       "parameters": {
@@ -267,90 +197,6 @@
     {
       "parameters": {
         "method": "PUT",
-        "url": "=https://connect.mailerlite.com/api/subscribers/{{ $json.email }}",
-        "authentication": "genericCredentialType",
-        "genericAuthType": "httpHeaderAuth",
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={ \"status\": \"active\", \"groups\": [\"REPLACE_WITH_ACTIVE_LEAD_GROUP_ID\"] }",
-        "options": {
-          "timeout": 10000
-        }
-      },
-      "id": "mailerlite-resub",
-      "name": "MailerLite: Resubscribe",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [
-        1140,
-        500
-      ],
-      "credentials": {
-        "httpHeaderAuth": {
-          "id": "MAILERLITE_API_KEY",
-          "name": "MailerLite API Key"
-        }
-      }
-    },
-    {
-      "parameters": {
-        "method": "PUT",
-        "url": "=https://live-mt-server.wati.io/api/v1/updateContact/{{ $json.phone }}",
-        "authentication": "genericCredentialType",
-        "genericAuthType": "httpHeaderAuth",
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={ \"customParams\": [{ \"name\": \"status\", \"value\": \"{{ $json.new_tag }}\" }, { \"name\": \"whatsapp_active\", \"value\": \"true\" }]}",
-        "options": {
-          "timeout": 10000
-        }
-      },
-      "id": "wati-reactivate",
-      "name": "WATI: Reactivate Contact",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [
-        1140,
-        650
-      ],
-      "credentials": {
-        "httpHeaderAuth": {
-          "id": "WATI_API_KEY",
-          "name": "WATI API Key"
-        }
-      }
-    },
-    {
-      "parameters": {
-        "method": "POST",
-        "url": "=https://live-mt-server.wati.io/api/v1/sendTemplateMessage/{{ $json.phone }}",
-        "authentication": "genericCredentialType",
-        "genericAuthType": "httpHeaderAuth",
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={ \"template_name\": \"{{ $json.is_lost_member ? 'welcome_back_member' : 'welcome_back_lead' }}\", \"broadcast_name\": \"reengagement\", \"parameters\": [{ \"name\": \"name\", \"value\": \"{{ $json.name.split(' ')[0] }}\" }] }",
-        "options": {
-          "timeout": 10000
-        }
-      },
-      "id": "wati-welcome-back",
-      "name": "WATI: Welcome Back Message",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [
-        1380,
-        650
-      ],
-      "credentials": {
-        "httpHeaderAuth": {
-          "id": "WATI_API_KEY",
-          "name": "WATI API Key"
-        }
-      }
-    },
-    {
-      "parameters": {
-        "method": "PUT",
         "url": "=REPLACE_WITH_CRM_BASE_URL/api/contacts/{{ $json.contact_id }}",
         "authentication": "genericCredentialType",
         "genericAuthType": "httpHeaderAuth",
@@ -367,7 +213,7 @@
       "typeVersion": 4.2,
       "position": [
         1140,
-        800
+        650
       ],
       "credentials": {
         "httpHeaderAuth": {
@@ -384,7 +230,7 @@
         "genericAuthType": "httpHeaderAuth",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={ \"contact_id\": \"{{ $json.contact_id }}\", \"content\": \"Re-engaged on {{ $now.setZone('Europe/Dublin').toFormat('yyyy-MM-dd HH:mm') }}\\nTriggered by: {{ $('Parse Re-engagement Event').first().json.campaign_name }}\\nType: {{ $json.new_tag }}\\nStatus updated: {{ $json.current_status }} \u2192 {{ $json.new_status }}\" }",
+        "jsonBody": "={ \"contact_id\": \"{{ $json.contact_id }}\", \"content\": \"Re-engaged on {{ $now.setZone('Europe/Dublin').toFormat('yyyy-MM-dd HH:mm') }}\\nTriggered by: {{ $('Parse Re-engagement Event').first().json.campaign_name }}\\nType: {{ $json.new_tag }}\\nStatus updated: {{ $json.current_status }} → {{ $json.new_status }}\" }",
         "options": {
           "timeout": 10000
         }
@@ -395,7 +241,7 @@
       "typeVersion": 4.2,
       "position": [
         1380,
-        800
+        650
       ],
       "credentials": {
         "httpHeaderAuth": {
@@ -508,7 +354,7 @@
       "typeVersion": 4.2,
       "position": [
         1140,
-        900
+        950
       ],
       "credentials": {
         "httpHeaderAuth": {
@@ -525,7 +371,7 @@
         "genericAuthType": "httpHeaderAuth",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={ \"contact_id\": \"{{ $json.contact_id }}\", \"content\": \"Membership cancelled on {{ $json.cancellation_date }}\\nReason: {{ $json.cancellation_reason }}\\nLead Status \u2192 lost_member\" }",
+        "jsonBody": "={ \"contact_id\": \"{{ $json.contact_id }}\", \"content\": \"Membership cancelled on {{ $json.cancellation_date }}\\nReason: {{ $json.cancellation_reason }}\\nLead Status → lost_member\" }",
         "options": {
           "timeout": 10000
         }
@@ -536,65 +382,12 @@
       "typeVersion": 4.2,
       "position": [
         1380,
-        900
+        950
       ],
       "credentials": {
         "httpHeaderAuth": {
           "id": "CRM_API_KEY",
           "name": "CRM API Key"
-        }
-      }
-    },
-    {
-      "parameters": {
-        "method": "PUT",
-        "url": "=https://live-mt-server.wati.io/api/v1/updateContact/{{ $json.phone }}",
-        "authentication": "genericCredentialType",
-        "genericAuthType": "httpHeaderAuth",
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={ \"customParams\": [{ \"name\": \"status\", \"value\": \"Lost Member\" }] }",
-        "options": {
-          "timeout": 10000
-        }
-      },
-      "id": "wati-lost",
-      "name": "WATI: Tag Lost Member",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [
-        1140,
-        1050
-      ],
-      "credentials": {
-        "httpHeaderAuth": {
-          "id": "WATI_API_KEY",
-          "name": "WATI API Key"
-        }
-      }
-    },
-    {
-      "parameters": {
-        "method": "POST",
-        "url": "=https://connect.mailerlite.com/api/subscribers/{{ $json.email }}/groups/REPLACE_WITH_LOST_MEMBERS_GROUP_ID",
-        "authentication": "genericCredentialType",
-        "genericAuthType": "httpHeaderAuth",
-        "options": {
-          "timeout": 10000
-        }
-      },
-      "id": "mailerlite-lost",
-      "name": "MailerLite: Move to Lost Members",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [
-        1140,
-        1200
-      ],
-      "credentials": {
-        "httpHeaderAuth": {
-          "id": "MAILERLITE_API_KEY",
-          "name": "MailerLite API Key"
         }
       }
     }
@@ -648,33 +441,12 @@
       "main": [
         [
           {
-            "node": "WATI: Deactivate WhatsApp",
-            "type": "main",
-            "index": 0
-          },
-          {
-            "node": "MailerLite: Move to Cold Leads",
-            "type": "main",
-            "index": 0
-          },
-          {
             "node": "CRM: Tag Cold + Update Status",
             "type": "main",
             "index": 0
           }
         ],
         []
-      ]
-    },
-    "MailerLite: Subscriber Clicked Webhook": {
-      "main": [
-        [
-          {
-            "node": "Parse Re-engagement Event",
-            "type": "main",
-            "index": 0
-          }
-        ]
       ]
     },
     "Parse Re-engagement Event": {
@@ -703,28 +475,7 @@
       "main": [
         [
           {
-            "node": "MailerLite: Resubscribe",
-            "type": "main",
-            "index": 0
-          },
-          {
-            "node": "WATI: Reactivate Contact",
-            "type": "main",
-            "index": 0
-          },
-          {
             "node": "CRM: Update Status + Label",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "WATI: Reactivate Contact": {
-      "main": [
-        [
-          {
-            "node": "WATI: Welcome Back Message",
             "type": "main",
             "index": 0
           }
@@ -780,16 +531,6 @@
         [
           {
             "node": "CRM: Tag Lost + Update Status",
-            "type": "main",
-            "index": 0
-          },
-          {
-            "node": "WATI: Tag Lost Member",
-            "type": "main",
-            "index": 0
-          },
-          {
-            "node": "MailerLite: Move to Lost Members",
             "type": "main",
             "index": 0
           }

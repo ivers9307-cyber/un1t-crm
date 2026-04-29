@@ -19,7 +19,7 @@ export async function GET(request, { params }) {
     return NextResponse.json({ success: false, error: 'Location not found' }, { status: 404 })
   }
 
-  // Return integration settings (glofox, wati, etc.)
+  // Return integration settings (glofox, etc.)
   return NextResponse.json({
     success: true,
     data: {
@@ -27,7 +27,6 @@ export async function GET(request, { params }) {
       location_name: data.name,
       location_slug: data.slug,
       glofox: data.settings?.glofox || null,
-      wati: data.settings?.wati || null,
       webhooks: data.settings?.webhooks || null,
     },
   })
@@ -56,7 +55,6 @@ export async function PUT(request, { params }) {
   const updatedSettings = {
     ...(location.settings || {}),
     ...(body.glofox !== undefined ? { glofox: body.glofox } : {}),
-    ...(body.wati !== undefined ? { wati: body.wati } : {}),
     ...(body.webhooks !== undefined ? { webhooks: body.webhooks } : {}),
   }
 

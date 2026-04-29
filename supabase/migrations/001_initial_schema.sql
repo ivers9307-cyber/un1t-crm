@@ -40,7 +40,7 @@ CREATE TABLE contacts (
   -- Fields that were Pipedrive "custom fields" — now native columns
   glofox_member_id TEXT,
   trial_credits_remaining INT DEFAULT 3,
-  lead_source TEXT,                          -- calendly, meta, tiktok
+  lead_source TEXT,                          -- booking, meta, tiktok, walkin, referral, website, whatsapp
   lead_status TEXT DEFAULT 'active_trial',   -- active_trial, cold, lost_member, member, returning
   lead_created_at TIMESTAMPTZ DEFAULT NOW(),
 

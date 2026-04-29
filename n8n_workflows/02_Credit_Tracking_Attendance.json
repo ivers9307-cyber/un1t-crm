@@ -1,5 +1,5 @@
 {
-  "name": "[SYNC] Credit Tracking & Class Attendance \u2192 WATI + CRM + MailerLite \u2014 v4",
+  "name": "[SYNC] Credit Tracking & Class Attendance → CRM — v5",
   "nodes": [
     {
       "parameters": {
@@ -165,7 +165,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// NOTE: Glofox credits endpoint is UNCONFIRMED \u2014 verify with Glofox support\nconst lead = $('Loop Through Leads').first().json;\nconst cr = $input.first().json;\nconst currentCredits = cr.data?.total ?? cr.data?.credits_remaining ?? cr.total ?? cr.credits ?? 0;\nconst lastKnown = lead.last_known_credits;\nif (currentCredits === lastKnown) return [{ json: { ...lead, action: 'no_change', current_credits: currentCredits } }];\nlet action = 'no_change', whatsapp_template = '', stage_slug = '';\nif (currentCredits === 2) { action = 'first_class'; whatsapp_template = 'after_first_class'; stage_slug = 'trial_active'; }\nelse if (currentCredits === 1) { action = 'second_class'; whatsapp_template = 'after_second_class'; }\nelse if (currentCredits === 0) { action = 'third_class'; whatsapp_template = 'after_third_class'; stage_slug = 'conversion_ready'; }\nreturn [{ json: { ...lead, action, whatsapp_template, stage_slug, current_credits: currentCredits } }];"
+        "jsCode": "// NOTE: Glofox credits endpoint is UNCONFIRMED — verify with Glofox support\nconst lead = $('Loop Through Leads').first().json;\nconst cr = $input.first().json;\nconst currentCredits = cr.data?.total ?? cr.data?.credits_remaining ?? cr.total ?? cr.credits ?? 0;\nconst lastKnown = lead.last_known_credits;\nif (currentCredits === lastKnown) return [{ json: { ...lead, action: 'no_change', current_credits: currentCredits } }];\nlet action = 'no_change', whatsapp_template = '', stage_slug = '';\nif (currentCredits === 2) { action = 'first_class'; whatsapp_template = 'after_first_class'; stage_slug = 'trial_active'; }\nelse if (currentCredits === 1) { action = 'second_class'; whatsapp_template = 'after_second_class'; }\nelse if (currentCredits === 0) { action = 'third_class'; whatsapp_template = 'after_third_class'; stage_slug = 'conversion_ready'; }\nreturn [{ json: { ...lead, action, whatsapp_template, stage_slug, current_credits: currentCredits } }];"
       },
       "id": "compare-credits",
       "name": "Compare Credits",
@@ -254,34 +254,6 @@
     },
     {
       "parameters": {
-        "method": "POST",
-        "url": "=https://live-mt-server.wati.io/api/v1/sendTemplateMessage/{{ $json.phone }}",
-        "authentication": "genericCredentialType",
-        "genericAuthType": "httpHeaderAuth",
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={ \"template_name\": \"after_first_class\", \"broadcast_name\": \"credit_tracking\", \"parameters\": [{ \"name\": \"name\", \"value\": \"{{ $json.first_name }}\" }] }",
-        "options": {
-          "timeout": 10000
-        }
-      },
-      "id": "wati-1st",
-      "name": "WATI: 1st Class Message",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [
-        2260,
-        0
-      ],
-      "credentials": {
-        "httpHeaderAuth": {
-          "id": "WATI_API_KEY",
-          "name": "WATI API Key"
-        }
-      }
-    },
-    {
-      "parameters": {
         "method": "GET",
         "url": "=REPLACE_WITH_CRM_BASE_URL/api/deals/search",
         "authentication": "genericCredentialType",
@@ -362,40 +334,12 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "=https://live-mt-server.wati.io/api/v1/sendTemplateMessage/{{ $json.phone }}",
-        "authentication": "genericCredentialType",
-        "genericAuthType": "httpHeaderAuth",
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={ \"template_name\": \"after_second_class\", \"broadcast_name\": \"credit_tracking\", \"parameters\": [{ \"name\": \"name\", \"value\": \"{{ $json.first_name }}\" }] }",
-        "options": {
-          "timeout": 10000
-        }
-      },
-      "id": "wati-2nd",
-      "name": "WATI: 2nd Class Message",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [
-        2260,
-        280
-      ],
-      "credentials": {
-        "httpHeaderAuth": {
-          "id": "WATI_API_KEY",
-          "name": "WATI API Key"
-        }
-      }
-    },
-    {
-      "parameters": {
-        "method": "POST",
         "url": "=REPLACE_WITH_CRM_BASE_URL/api/activities",
         "authentication": "genericCredentialType",
         "genericAuthType": "httpHeaderAuth",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={\n  \"subject\": \"Personal reach out \u2014 {{ $('Compare Credits').first().json.name }} (1 credit left)\",\n  \"type\": \"call\",\n  \"contact_id\": \"{{ $('Compare Credits').first().json.contact_id }}\",\n  \"due_date\": \"{{ $now.plus({days: 1}).toFormat('yyyy-MM-dd') }}\",\n  \"due_time\": \"10:00\",\n  \"note\": \"2 of 3 trial credits used. 1 remaining. Personal outreach recommended.\"\n}",
+        "jsonBody": "={\n  \"subject\": \"Personal reach out — {{ $('Compare Credits').first().json.name }} (1 credit left)\",\n  \"type\": \"call\",\n  \"contact_id\": \"{{ $('Compare Credits').first().json.contact_id }}\",\n  \"due_date\": \"{{ $now.plus({days: 1}).toFormat('yyyy-MM-dd') }}\",\n  \"due_time\": \"10:00\",\n  \"note\": \"2 of 3 trial credits used. 1 remaining. Personal outreach recommended.\"\n}",
         "options": {
           "timeout": 10000
         }
@@ -412,34 +356,6 @@
         "httpHeaderAuth": {
           "id": "CRM_API_KEY",
           "name": "CRM API Key"
-        }
-      }
-    },
-    {
-      "parameters": {
-        "method": "POST",
-        "url": "=https://live-mt-server.wati.io/api/v1/sendTemplateMessage/{{ $json.phone }}",
-        "authentication": "genericCredentialType",
-        "genericAuthType": "httpHeaderAuth",
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={ \"template_name\": \"after_third_class\", \"broadcast_name\": \"credit_tracking\", \"parameters\": [{ \"name\": \"name\", \"value\": \"{{ $json.first_name }}\" }] }",
-        "options": {
-          "timeout": 10000
-        }
-      },
-      "id": "wati-3rd",
-      "name": "WATI: 3rd Class Message",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [
-        2260,
-        560
-      ],
-      "credentials": {
-        "httpHeaderAuth": {
-          "id": "WATI_API_KEY",
-          "name": "WATI API Key"
         }
       }
     },
@@ -519,31 +435,6 @@
         "httpHeaderAuth": {
           "id": "CRM_API_KEY",
           "name": "CRM API Key"
-        }
-      }
-    },
-    {
-      "parameters": {
-        "method": "POST",
-        "url": "=https://connect.mailerlite.com/api/subscribers/{{ $('Compare Credits').first().json.email }}/groups/REPLACE_WITH_MEMBERSHIP_OFFER_GROUP_ID",
-        "authentication": "genericCredentialType",
-        "genericAuthType": "httpHeaderAuth",
-        "options": {
-          "timeout": 10000
-        }
-      },
-      "id": "mailerlite-membership",
-      "name": "MailerLite: Membership Offer",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [
-        2700,
-        800
-      ],
-      "credentials": {
-        "httpHeaderAuth": {
-          "id": "MAILERLITE_API_KEY",
-          "name": "MailerLite API Key"
         }
       }
     }
@@ -643,11 +534,6 @@
       "main": [
         [
           {
-            "node": "WATI: 1st Class Message",
-            "type": "main",
-            "index": 0
-          },
-          {
             "node": "CRM: Lookup Deal (1st)",
             "type": "main",
             "index": 0
@@ -655,22 +541,12 @@
         ],
         [
           {
-            "node": "WATI: 2nd Class Message",
-            "type": "main",
-            "index": 0
-          },
-          {
             "node": "CRM: Staff Outreach",
             "type": "main",
             "index": 0
           }
         ],
         [
-          {
-            "node": "WATI: 3rd Class Message",
-            "type": "main",
-            "index": 0
-          },
           {
             "node": "CRM: Lookup Deal (3rd)",
             "type": "main",
@@ -691,17 +567,6 @@
         [
           {
             "node": "Loop Through Leads",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "WATI: 1st Class Message": {
-      "main": [
-        [
-          {
-            "node": "Wait: Rate Limit",
             "type": "main",
             "index": 0
           }
@@ -741,29 +606,7 @@
         ]
       ]
     },
-    "WATI: 2nd Class Message": {
-      "main": [
-        [
-          {
-            "node": "Wait: Rate Limit",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
     "CRM: Staff Outreach": {
-      "main": [
-        [
-          {
-            "node": "Wait: Rate Limit",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "WATI: 3rd Class Message": {
       "main": [
         [
           {
@@ -790,11 +633,6 @@
         [
           {
             "node": "CRM: Conversion Ready",
-            "type": "main",
-            "index": 0
-          },
-          {
-            "node": "MailerLite: Membership Offer",
             "type": "main",
             "index": 0
           }

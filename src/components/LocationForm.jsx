@@ -19,8 +19,6 @@ export default function LocationForm({ location }) {
   const settings = location?.settings || {}
   const [glofoxBranchId, setGlofoxBranchId] = useState(settings.glofox?.branch_id || '')
   const [glofoxApiKey, setGlofoxApiKey] = useState(settings.glofox?.api_key || '')
-  const [watiApiKey, setWatiApiKey] = useState(settings.wati?.api_key || '')
-  const [watiBaseUrl, setWatiBaseUrl] = useState(settings.wati?.base_url || '')
 
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
@@ -46,10 +44,6 @@ export default function LocationForm({ location }) {
         glofox: glofoxBranchId || glofoxApiKey ? {
           branch_id: glofoxBranchId || null,
           api_key: glofoxApiKey || null,
-        } : null,
-        wati: watiApiKey || watiBaseUrl ? {
-          api_key: watiApiKey || null,
-          base_url: watiBaseUrl || null,
         } : null,
       },
       updated_at: new Date().toISOString(),
@@ -200,34 +194,6 @@ export default function LocationForm({ location }) {
             type="password"
             value={glofoxApiKey}
             onChange={e => setGlofoxApiKey(e.target.value)}
-            placeholder="••••••••••••••••"
-            className="w-full bg-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-white placeholder:text-un1t-mid focus:outline-none focus:border-white/40 font-mono"
-          />
-        </div>
-      </div>
-
-      {/* WATI Integration */}
-      <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5 space-y-4">
-        <h3 className="font-semibold text-sm text-un1t-light uppercase tracking-wider">WATI (WhatsApp) Integration</h3>
-        <p className="text-xs text-un1t-mid">Connect this location to WATI for automated WhatsApp messaging</p>
-
-        <div>
-          <label className="block text-sm mb-1.5">API Base URL</label>
-          <input
-            type="text"
-            value={watiBaseUrl}
-            onChange={e => setWatiBaseUrl(e.target.value)}
-            placeholder="https://live-server-12345.wati.io"
-            className="w-full bg-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-white placeholder:text-un1t-mid focus:outline-none focus:border-white/40 font-mono"
-          />
-        </div>
-
-        <div>
-          <label className="block text-sm mb-1.5">API Key</label>
-          <input
-            type="password"
-            value={watiApiKey}
-            onChange={e => setWatiApiKey(e.target.value)}
             placeholder="••••••••••••••••"
             className="w-full bg-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-white placeholder:text-un1t-mid focus:outline-none focus:border-white/40 font-mono"
           />

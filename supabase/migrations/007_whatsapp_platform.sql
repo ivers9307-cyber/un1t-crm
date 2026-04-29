@@ -1,6 +1,6 @@
 -- ============================================================
 -- 007: WhatsApp Business Platform — Meta Cloud API integration
--- Replaces WATI with direct Meta Cloud API for bulk & individual messaging
+-- Native WhatsApp messaging via Meta Cloud API for templates, broadcasts & inbox
 -- ============================================================
 
 -- ============================================================

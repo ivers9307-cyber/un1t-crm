@@ -62,7 +62,7 @@ export default async function EventsPage() {
         <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-12 text-center">
           <Calendar size={40} className="mx-auto mb-4 text-un1t-light" />
           <h3 className="text-lg font-semibold mb-2">No events yet</h3>
-          <p className="text-sm text-un1t-light mb-4">Create your first bookable event to replace Calendly</p>
+          <p className="text-sm text-un1t-light mb-4">Create your first bookable event to start accepting bookings</p>
           <Link
             href="/events/new"
             className="inline-flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium px-4 py-2.5 rounded-lg transition-colors"
