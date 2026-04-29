@@ -12,8 +12,8 @@ export async function GET(request) {
   let query = db.from('shift_swap_requests')
     .select(`
       *,
-      requester_shift:shifts!requester_shift_id(*, shift_templates(*), profiles(id, full_name)),
-      target_shift:shifts!target_shift_id(*, shift_templates(*), profiles(id, full_name)),
+      requester_shift:shifts!requester_shift_id(*, shift_templates(*), profiles!profile_id(id, full_name)),
+      target_shift:shifts!target_shift_id(*, shift_templates(*), profiles!profile_id(id, full_name)),
       requester:profiles!requester_id(id, full_name, avatar_url),
       target:profiles!target_id(id, full_name, avatar_url),
       reviewer:profiles!reviewed_by(id, full_name)

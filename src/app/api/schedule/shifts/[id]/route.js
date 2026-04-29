@@ -28,7 +28,7 @@ export async function PUT(request, { params }) {
   const { data, error } = await db.from('shifts')
     .update(updates)
     .eq('id', params.id)
-    .select('*, shift_templates(*), profiles(id, full_name, email, avatar_url, role)')
+    .select('*, shift_templates(*), profiles!profile_id(id, full_name, email, avatar_url, role)')
     .single()
 
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })

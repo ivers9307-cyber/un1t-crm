@@ -39,7 +39,7 @@ async function executeTool(toolName, input, context) {
         status: 'scheduled',
         published: false,
         created_by: context.userId,
-      }).select('*, shift_templates(name), profiles(full_name)').single()
+      }).select('*, shift_templates(name), profiles!profile_id(full_name)').single()
       if (error) return { error: error.message }
       return { success: true, shift: { date: data.shift_date, staff: data.profiles?.full_name, template: data.shift_templates?.name } }
     }
@@ -65,7 +65,7 @@ async function executeTool(toolName, input, context) {
       const startDate = input.start_date
       const endDate = new Date(new Date(startDate + 'T00:00:00').getTime() + 6 * 86400000).toISOString().split('T')[0]
       const { data } = await db.from('shifts')
-        .select('shift_date, status, profiles(full_name), shift_templates(name, start_time, end_time)')
+        .select('shift_date, status, profiles!profile_id(full_name), shift_templates(name, start_time, end_time)')
         .eq('location_id', locationId)
         .gte('shift_date', startDate)
         .lte('shift_date', endDate)

@@ -12,7 +12,7 @@ export async function GET(request) {
   const db = createServerClient()
 
   let query = db.from('shifts')
-    .select('*, shift_templates(*), profiles(id, full_name, email, avatar_url, role)')
+    .select('*, shift_templates(*), profiles!profile_id(id, full_name, email, avatar_url, role)')
     .order('shift_date')
 
   if (locationId) query = query.eq('location_id', locationId)
@@ -54,7 +54,7 @@ export async function POST(request) {
 
   const { data, error } = await db.from('shifts')
     .upsert(records, { onConflict: 'location_id,profile_id,shift_template_id,shift_date', ignoreDuplicates: false })
-    .select('*, shift_templates(*), profiles(id, full_name, email, avatar_url, role)')
+    .select('*, shift_templates(*), profiles!profile_id(id, full_name, email, avatar_url, role)')
 
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
   return NextResponse.json({ success: true, data }, { status: 201 })

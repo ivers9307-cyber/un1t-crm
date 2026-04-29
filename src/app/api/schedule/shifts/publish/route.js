@@ -30,7 +30,7 @@ export async function POST(request) {
     .gte('shift_date', start_date)
     .lte('shift_date', end_date)
     .eq('published', false)
-    .select('*, profiles(id, full_name, email)')
+    .select('*, profiles!profile_id(id, full_name, email)')
 
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
 
