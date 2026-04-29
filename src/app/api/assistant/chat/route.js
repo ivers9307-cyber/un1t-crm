@@ -145,6 +145,87 @@ async function executeTool(toolName, input, context) {
       return { ...data, remaining: data.total_days + data.carried_over - data.used_days, year }
     }
 
+    case 'generate_report': {
+      // Call the reports generation endpoint internally
+      const res = await fetch(`${process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'}/api/schedule/reports`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          report_type: input.report_type,
+          period_start: input.period_start,
+          period_end: input.period_end,
+          location_id: locationId,
+        }),
+      })
+      // Since we can't easily call the internal API with auth context,
+      // generate inline instead
+      const reportType = input.report_type
+      const periodStart = input.period_start
+      const periodEnd = input.period_end
+
+      if (reportType === 'staff_hours') {
+        const { data: shifts } = await db.from('shifts')
+          .select('shift_date, profile_id, profiles!profile_id(full_name), shift_templates(start_time, end_time)')
+          .eq('location_id', locationId)
+          .gte('shift_date', periodStart)
+          .lte('shift_date', periodEnd)
+          .order('shift_date')
+        const staffHours = {}
+        for (const s of (shifts || [])) {
+          const name = s.profiles?.full_name || 'Unknown'
+          if (!staffHours[name]) staffHours[name] = 0
+          const st = s.shift_templates?.start_time
+          const en = s.shift_templates?.end_time
+          if (st && en) {
+            const [sh, sm] = st.split(':').map(Number)
+            const [eh, em] = en.split(':').map(Number)
+            let hrs = (eh + em / 60) - (sh + sm / 60)
+            if (hrs < 0) hrs += 24
+            staffHours[name] += hrs
+          }
+        }
+        const result = Object.entries(staffHours).map(([name, hours]) => ({ name, hours: Math.round(hours * 10) / 10 })).sort((a, b) => b.hours - a.hours)
+        return { report: 'Staff Hours Worked', period: `${periodStart} to ${periodEnd}`, staff: result, total_hours: Math.round(result.reduce((s, r) => s + r.hours, 0) * 10) / 10 }
+      }
+
+      if (reportType === 'staff_cost') {
+        const { data: profiles } = await db.from('profiles').select('id, full_name, employment_type, annual_salary, hourly_rate, contracted_hours_per_week').eq('active', true)
+        const { data: shifts } = await db.from('shifts')
+          .select('shift_date, profile_id, shift_templates(start_time, end_time)')
+          .eq('location_id', locationId)
+          .gte('shift_date', periodStart)
+          .lte('shift_date', periodEnd)
+        const rateMap = {}
+        for (const p of (profiles || [])) {
+          let rate = 0
+          if (p.employment_type === 'contractor') rate = Number(p.hourly_rate) || 0
+          else if (p.annual_salary && p.contracted_hours_per_week) rate = Number(p.annual_salary) / (Number(p.contracted_hours_per_week) * 52)
+          rateMap[p.id] = { name: p.full_name, rate: Math.round(rate * 100) / 100 }
+        }
+        const costs = {}
+        for (const s of (shifts || [])) {
+          const p = rateMap[s.profile_id]
+          if (!p) continue
+          if (!costs[p.name]) costs[p.name] = { hours: 0, cost: 0, rate: p.rate }
+          const st = s.shift_templates?.start_time
+          const en = s.shift_templates?.end_time
+          if (st && en) {
+            const [sh, sm] = st.split(':').map(Number)
+            const [eh, em] = en.split(':').map(Number)
+            let hrs = (eh + em / 60) - (sh + sm / 60)
+            if (hrs < 0) hrs += 24
+            costs[p.name].hours += hrs
+            costs[p.name].cost += hrs * p.rate
+          }
+        }
+        const result = Object.entries(costs).map(([name, d]) => ({ name, hours: Math.round(d.hours * 10) / 10, cost: `€${(Math.round(d.cost * 100) / 100).toFixed(2)}`, hourly_rate: `€${d.rate.toFixed(2)}` })).sort((a, b) => parseFloat(b.cost.slice(1)) - parseFloat(a.cost.slice(1)))
+        const totalCost = Object.values(costs).reduce((s, d) => s + d.cost, 0)
+        return { report: 'Staff Cost Breakdown', period: `${periodStart} to ${periodEnd}`, currency: 'EUR', staff: result, total_cost: `€${(Math.round(totalCost * 100) / 100).toFixed(2)}` }
+      }
+
+      return { error: `Use the Reporting tab for ${reportType} reports — navigate to /schedule and click Reporting` }
+    }
+
     default:
       return { error: `Unknown tool: ${toolName}` }
   }

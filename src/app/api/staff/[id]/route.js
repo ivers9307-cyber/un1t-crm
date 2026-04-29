@@ -13,6 +13,11 @@ export async function PUT(request, { params }) {
   if (body.role !== undefined) profileUpdates.role = body.role
   if (body.permissions !== undefined) profileUpdates.permissions = body.permissions
   if (body.active !== undefined) profileUpdates.active = body.active
+  if (body.employment_type !== undefined) profileUpdates.employment_type = body.employment_type
+  if (body.annual_salary !== undefined) profileUpdates.annual_salary = body.annual_salary
+  if (body.hourly_rate !== undefined) profileUpdates.hourly_rate = body.hourly_rate
+  if (body.contracted_hours_per_week !== undefined) profileUpdates.contracted_hours_per_week = body.contracted_hours_per_week
+  if (body.annual_leave_entitlement !== undefined) profileUpdates.annual_leave_entitlement = body.annual_leave_entitlement
 
   if (Object.keys(profileUpdates).length > 0) {
     const { error } = await db.from('profiles').update(profileUpdates).eq('id', id)

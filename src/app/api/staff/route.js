@@ -45,6 +45,11 @@ export async function POST(request) {
     const updates = {}
     if (body.role) updates.role = body.role
     if (body.permissions) updates.permissions = body.permissions
+    if (body.employment_type) updates.employment_type = body.employment_type
+    if (body.annual_salary != null) updates.annual_salary = body.annual_salary
+    if (body.hourly_rate != null) updates.hourly_rate = body.hourly_rate
+    if (body.contracted_hours_per_week != null) updates.contracted_hours_per_week = body.contracted_hours_per_week
+    if (body.annual_leave_entitlement != null) updates.annual_leave_entitlement = body.annual_leave_entitlement
 
     await db.from('profiles')
       .update(updates)

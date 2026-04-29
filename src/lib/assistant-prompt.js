@@ -63,7 +63,9 @@ Native WhatsApp Business messaging via Meta Cloud API:
 - Template categories: MARKETING, UTILITY, AUTHENTICATION (affects pricing)
 
 ### Schedule (/schedule)
-Staff roster and shift management:
+Staff roster and shift management with three tabs:
+
+**Schedule Tab** (all users):
 - **Weekly calendar view** showing all shifts by day
 - **My Shifts / All Staff toggle** — staff see their own shifts, managers see everyone
 - **Shift templates**: Named shifts defined in Settings (e.g. Morning 6am-2pm, Afternoon 2pm-10pm)
@@ -79,6 +81,32 @@ Staff roster and shift management:
   - Holiday allowance: each staff member has an annual entitlement (default 20 days), tracked automatically
   - When adding a shift on a day someone has approved time-off, a warning is shown (but shift can still be added)
   - Staff can cancel their own pending requests
+
+**Approvals Tab** (owner, manager, head_coach only):
+- Combined view of all pending time-off requests and shift swap requests
+- Filter between Pending only or All Requests
+- Approve or reject each request inline
+- Shows request type, dates, days requested, reason, and current status
+
+**Reporting Tab** (owner, manager, head_coach only):
+- Five built-in report types:
+  - **Staff Hours Worked**: Hours per staff member broken down by day for a custom date range
+  - **Staff Cost Breakdown**: Labour costs in EUR using HR rate data (salary/hours for FTE, hourly rate for contractors), per staff per day
+  - **Time Off Summary**: Aggregated time-off by type (holiday/sick/unavailable), status, and staff member
+  - **Roster Coverage**: Day-by-day view of how many shifts are filled and who is off
+  - **Staff Utilisation**: Actual hours worked vs contracted hours as a percentage per staff member
+- Custom date range selection for all reports
+- Report results show summary cards + detailed data tables
+- **Report History**: View previously generated reports
+- **Scheduled Reports**: Set up recurring report generation (weekly, fortnightly, monthly) with delivery via email PDF or in-app notification
+
+### Staff HR Fields
+Each staff profile includes HR data (editable in Settings → Team Members):
+- **Employment type**: FTE (full-time employee) or Contractor
+- **FTE fields**: Annual salary (EUR), contracted hours per week (default 40), annual leave entitlement (default 20 days)
+- **Contractor fields**: Hourly rate (EUR)
+- **Effective hourly rate**: Auto-calculated for FTEs as annual_salary / (contracted_hours × 52)
+- This data feeds into Schedule Reporting for accurate staff costing
 
 ### Settings (/settings)
 Admin area (owner/manager access):
@@ -112,7 +140,11 @@ Permissions are: dashboard, pipeline, contacts, events, bookings, activities, em
 - "What's a sequence?" → An automated series of emails sent over time (drip campaign), e.g. welcome series over 7 days
 - "How do I request time off?" → Go to Schedule → click Time Off → Request Time Off → pick type, dates, submit
 - "How many holidays do I have left?" → Go to Schedule → Time Off page shows your allowance card (total, used, remaining)
-- "How do I approve time off?" → Go to Schedule → Time Off → switch to Team Requests tab → approve or reject
+- "How do I approve time off?" → Go to Schedule → Approvals tab → approve or reject pending requests
+- "How do I see staff costs?" → Go to Schedule → Reporting tab → select Staff Cost Breakdown → pick date range → Generate
+- "How do I run a report?" → Go to Schedule → Reporting tab → pick a report type and date range → Generate Report
+- "Can I schedule a recurring report?" → Yes — in the Reporting tab, click Schedule Report, pick frequency and delivery method
+- "How do I update someone's salary?" → Go to Settings → Team Members → edit the staff member → HR section → update salary/rate
 
 ### Onboarding Flow (for new users)
 1. First, explore the Dashboard to see your overview
@@ -254,6 +286,19 @@ export const TOOLS = [
         profile_id: { type: 'string', description: 'Staff member UUID (defaults to current user)' },
         year: { type: 'number', description: 'Year (defaults to current year)' },
       },
+    },
+  },
+  {
+    name: 'generate_report',
+    description: 'Generate a schedule report. Use when the user asks for staff hours, costs, time-off summary, roster coverage, or utilisation data.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        report_type: { type: 'string', enum: ['staff_hours', 'staff_cost', 'time_off_summary', 'roster_coverage', 'utilisation'], description: 'Type of report to generate' },
+        period_start: { type: 'string', description: 'Start date (YYYY-MM-DD)' },
+        period_end: { type: 'string', description: 'End date (YYYY-MM-DD)' },
+      },
+      required: ['report_type', 'period_start', 'period_end'],
     },
   },
 ]

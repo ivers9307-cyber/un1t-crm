@@ -56,6 +56,12 @@ export default function StaffForm({ staff, locations }) {
     active: staff?.active ?? true,
     location_ids: staff?.location_ids || locations.map(l => l.id),
     permissions: staff?.permissions || { ...defaultPermissions },
+    // HR fields
+    employment_type: staff?.employment_type || 'fte',
+    annual_salary: staff?.annual_salary || '',
+    hourly_rate: staff?.hourly_rate || '',
+    contracted_hours_per_week: staff?.contracted_hours_per_week ?? 40,
+    annual_leave_entitlement: staff?.annual_leave_entitlement ?? 20,
   })
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
@@ -96,6 +102,11 @@ export default function StaffForm({ staff, locations }) {
       permissions: form.permissions,
       location_ids: form.location_ids,
       active: form.active,
+      employment_type: form.employment_type,
+      annual_salary: form.employment_type === 'fte' && form.annual_salary ? Number(form.annual_salary) : null,
+      hourly_rate: form.employment_type === 'contractor' && form.hourly_rate ? Number(form.hourly_rate) : null,
+      contracted_hours_per_week: form.employment_type === 'fte' ? Number(form.contracted_hours_per_week) : null,
+      annual_leave_entitlement: form.employment_type === 'fte' ? Number(form.annual_leave_entitlement) : null,
     }
 
     if (!isEdit) {
@@ -226,6 +237,95 @@ export default function StaffForm({ staff, locations }) {
             </label>
           ))}
         </div>
+      </div>
+
+      {/* HR / Employment Details */}
+      <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5 space-y-4">
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light">Employment Details</h3>
+
+        <div>
+          <label className="block text-sm text-un1t-light mb-2">Employment Type</label>
+          <div className="flex gap-2">
+            {[
+              { value: 'fte', label: 'Full-Time Employee' },
+              { value: 'contractor', label: 'Contractor' },
+            ].map(opt => (
+              <button
+                key={opt.value}
+                type="button"
+                onClick={() => setForm(prev => ({ ...prev, employment_type: opt.value }))}
+                className={`flex-1 py-2 px-3 rounded-md text-sm border transition-colors ${
+                  form.employment_type === opt.value
+                    ? 'border-white/40 bg-white/5 text-white'
+                    : 'border-un1t-gray text-un1t-light hover:border-white/20'
+                }`}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {form.employment_type === 'fte' ? (
+          <>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm text-un1t-light mb-1">Annual Salary (€)</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value={form.annual_salary}
+                  onChange={e => setForm(prev => ({ ...prev, annual_salary: e.target.value }))}
+                  placeholder="e.g. 35000"
+                  className="w-full bg-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:border-white/40"
+                />
+              </div>
+              <div>
+                <label className="block text-sm text-un1t-light mb-1">Contracted Hours / Week</label>
+                <input
+                  type="number"
+                  step="0.5"
+                  min="0"
+                  max="80"
+                  value={form.contracted_hours_per_week}
+                  onChange={e => setForm(prev => ({ ...prev, contracted_hours_per_week: e.target.value }))}
+                  className="w-full bg-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:border-white/40"
+                />
+              </div>
+            </div>
+            {form.annual_salary && form.contracted_hours_per_week > 0 && (
+              <div className="text-xs text-un1t-light bg-black/30 rounded-md px-3 py-2">
+                Effective hourly rate: <span className="text-white font-medium">€{(Number(form.annual_salary) / (Number(form.contracted_hours_per_week) * 52)).toFixed(2)}</span>/hr
+              </div>
+            )}
+            <div>
+              <label className="block text-sm text-un1t-light mb-1">Annual Leave Entitlement (days)</label>
+              <input
+                type="number"
+                step="0.5"
+                min="0"
+                max="50"
+                value={form.annual_leave_entitlement}
+                onChange={e => setForm(prev => ({ ...prev, annual_leave_entitlement: e.target.value }))}
+                className="w-full bg-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:border-white/40"
+              />
+            </div>
+          </>
+        ) : (
+          <div>
+            <label className="block text-sm text-un1t-light mb-1">Hourly Rate (€)</label>
+            <input
+              type="number"
+              step="0.01"
+              min="0"
+              value={form.hourly_rate}
+              onChange={e => setForm(prev => ({ ...prev, hourly_rate: e.target.value }))}
+              placeholder="e.g. 18.50"
+              className="w-full bg-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:border-white/40"
+            />
+          </div>
+        )}
       </div>
 
       {/* Permissions */}
