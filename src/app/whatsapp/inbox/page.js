@@ -4,7 +4,7 @@ import WAInbox from '@/components/WAInbox'
 
 export const dynamic = 'force-dynamic'
 
-export default async function InboxPage() {
+export default async function InboxPage({ searchParams }) {
   const user = await getCurrentUser()
   if (!user) redirect('/login')
 
@@ -12,6 +12,7 @@ export default async function InboxPage() {
     <WAInbox
       locationId={user.activeLocation?.id}
       userId={user.id}
+      initialConversationId={searchParams?.c || null}
     />
   )
 }

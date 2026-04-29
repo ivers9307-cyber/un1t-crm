@@ -3,6 +3,7 @@ import { notFound } from 'next/navigation'
 import Link from 'next/link'
 import { ArrowLeft, Mail, Phone, Tag, Calendar, MessageSquare, CheckSquare, Clock, BookOpen, ArrowRight, MessageCircle } from 'lucide-react'
 import ContactActions from '@/components/ContactActions'
+import StartWhatsAppButton from '@/components/StartWhatsAppButton'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
@@ -95,9 +96,16 @@ export default async function ContactDetailPage({ params }) {
             )}
           </div>
         </div>
-        <span className={`px-3 py-1 rounded-full text-sm border ${statusColors[contact.lead_status] || 'bg-un1t-gray text-un1t-light border-un1t-gray'}`}>
-          {contact.lead_status?.replace('_', ' ')}
-        </span>
+        <div className="flex items-center gap-3">
+          <StartWhatsAppButton
+            contactId={contact.id}
+            contactPhone={contact.phone}
+            waPhone={contact.wa_phone}
+          />
+          <span className={`px-3 py-1 rounded-full text-sm border ${statusColors[contact.lead_status] || 'bg-un1t-gray text-un1t-light border-un1t-gray'}`}>
+            {contact.lead_status?.replace('_', ' ')}
+          </span>
+        </div>
       </div>
 
       <div className="grid grid-cols-3 gap-6">

@@ -52,9 +52,9 @@ function isUnknownSender(conv) {
   return !conv.contact_id && !conv.contacts
 }
 
-export default function WAInbox({ locationId, userId }) {
+export default function WAInbox({ locationId, userId, initialConversationId }) {
   const [conversations, setConversations] = useState([])
-  const [selectedId, setSelectedId] = useState(null)
+  const [selectedId, setSelectedId] = useState(initialConversationId || null)
   const [messages, setMessages] = useState([])
   const [conversation, setConversation] = useState(null)
   const [newMessage, setNewMessage] = useState('')
