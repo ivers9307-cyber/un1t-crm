@@ -52,10 +52,27 @@ export async function POST(request) {
     created_by: user.id,
   }))
 
+  // Check for time-off conflicts (warn but allow)
+  const profileIds = [...new Set(records.map(r => r.profile_id))]
+  const shiftDates = [...new Set(records.map(r => r.shift_date))]
+  const minDate = shiftDates.sort()[0]
+  const maxDate = shiftDates.sort().reverse()[0]
+
+  const { data: timeOffConflicts } = await db.from('time_off_requests')
+    .select('profile_id, type, start_date, end_date, profiles!profile_id(full_name)')
+    .in('profile_id', profileIds)
+    .eq('status', 'approved')
+    .lte('start_date', maxDate)
+    .gte('end_date', minDate)
+
+  const warnings = (timeOffConflicts || []).map(t =>
+    `${t.profiles?.full_name} has approved ${t.type} from ${t.start_date} to ${t.end_date}`
+  )
+
   const { data, error } = await db.from('shifts')
     .upsert(records, { onConflict: 'location_id,profile_id,shift_template_id,shift_date', ignoreDuplicates: false })
     .select('*, shift_templates(*), profiles!profile_id(id, full_name, email, avatar_url, role)')
 
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
-  return NextResponse.json({ success: true, data }, { status: 201 })
+  return NextResponse.json({ success: true, data, warnings: warnings.length > 0 ? warnings : undefined }, { status: 201 })
 }

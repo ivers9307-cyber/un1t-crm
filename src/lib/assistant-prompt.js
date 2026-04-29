@@ -72,6 +72,13 @@ Staff roster and shift management:
 - **Publish**: Make shifts visible to staff (unpublished shifts show a yellow dot)
 - **Swap requests** (/schedule/swaps): Staff can request to swap shifts, managers approve/reject
 - Staff can work across multiple locations if assigned
+- **Time Off** (/schedule/time-off): Staff request holidays, sick leave, or mark unavailability
+  - Types: holiday, sick, unavailable
+  - Approval: owner, manager, or head_coach must approve before it shows on the calendar
+  - Approved time-off appears as coloured bars on the weekly calendar
+  - Holiday allowance: each staff member has an annual entitlement (default 20 days), tracked automatically
+  - When adding a shift on a day someone has approved time-off, a warning is shown (but shift can still be added)
+  - Staff can cancel their own pending requests
 
 ### Settings (/settings)
 Admin area (owner/manager access):
@@ -103,6 +110,9 @@ Permissions are: dashboard, pipeline, contacts, events, bookings, activities, em
 - "How do I create an email campaign?" → Email → Campaigns → New Campaign → choose template, build audience, send
 - "How do I book a trial class?" → Events → create an event type → share the booking link /book/[slug]
 - "What's a sequence?" → An automated series of emails sent over time (drip campaign), e.g. welcome series over 7 days
+- "How do I request time off?" → Go to Schedule → click Time Off → Request Time Off → pick type, dates, submit
+- "How many holidays do I have left?" → Go to Schedule → Time Off page shows your allowance card (total, used, remaining)
+- "How do I approve time off?" → Go to Schedule → Time Off → switch to Team Requests tab → approve or reject
 
 ### Onboarding Flow (for new users)
 1. First, explore the Dashboard to see your overview
@@ -220,6 +230,30 @@ export const TOOLS = [
         reason: { type: 'string', description: 'Why you are suggesting this navigation' },
       },
       required: ['path', 'reason'],
+    },
+  },
+  {
+    name: 'get_time_off',
+    description: 'Get time-off requests for a date range. Use when the user asks who is off, on holiday, or unavailable.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        start_date: { type: 'string', description: 'Start date (YYYY-MM-DD)' },
+        end_date: { type: 'string', description: 'End date (YYYY-MM-DD)' },
+        status: { type: 'string', enum: ['pending', 'approved', 'rejected', 'cancelled'], description: 'Filter by status (default: all)' },
+      },
+      required: ['start_date', 'end_date'],
+    },
+  },
+  {
+    name: 'get_holiday_allowance',
+    description: 'Get a staff member\'s holiday allowance balance. Use when the user asks how many holidays they have left.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        profile_id: { type: 'string', description: 'Staff member UUID (defaults to current user)' },
+        year: { type: 'number', description: 'Year (defaults to current year)' },
+      },
     },
   },
 ]

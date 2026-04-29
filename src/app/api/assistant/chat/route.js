@@ -111,6 +111,40 @@ async function executeTool(toolName, input, context) {
       return { action: 'navigate', path: input.path, reason: input.reason }
     }
 
+    case 'get_time_off': {
+      let query = db.from('time_off_requests')
+        .select('start_date, end_date, type, status, total_days, reason, profiles!profile_id(full_name)')
+        .eq('location_id', locationId)
+        .lte('start_date', input.end_date)
+        .gte('end_date', input.start_date)
+        .order('start_date')
+      if (input.status) query = query.eq('status', input.status)
+      const { data } = await query
+      return {
+        time_off: (data || []).map(t => ({
+          staff: t.profiles?.full_name,
+          type: t.type,
+          start: t.start_date,
+          end: t.end_date,
+          days: t.total_days,
+          status: t.status,
+          reason: t.reason,
+        }))
+      }
+    }
+
+    case 'get_holiday_allowance': {
+      const profileId = input.profile_id || context.userId
+      const year = input.year || new Date().getFullYear()
+      const { data } = await db.from('staff_allowances')
+        .select('total_days, used_days, carried_over')
+        .eq('profile_id', profileId)
+        .eq('year', year)
+        .single()
+      if (!data) return { total_days: 20, used_days: 0, carried_over: 0, remaining: 20, year }
+      return { ...data, remaining: data.total_days + data.carried_over - data.used_days, year }
+    }
+
     default:
       return { error: `Unknown tool: ${toolName}` }
   }

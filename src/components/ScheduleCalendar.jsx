@@ -1,7 +1,14 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { ChevronLeft, ChevronRight, Copy, Send, Plus, Users, User, Clock, MapPin, X, ArrowLeftRight } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Copy, Send, Plus, Users, User, Clock, MapPin, X, ArrowLeftRight, CalendarOff, Palmtree, ThermometerSun, Ban } from 'lucide-react'
+import Link from 'next/link'
+
+const TIME_OFF_CONFIG = {
+  holiday:     { label: 'Holiday',     color: '#22C55E', icon: Palmtree },
+  sick:        { label: 'Sick',        color: '#EF4444', icon: ThermometerSun },
+  unavailable: { label: 'Unavailable', color: '#F59E0B', icon: Ban },
+}
 
 const DAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 const canManage = (role) => ['owner', 'manager', 'head_coach'].includes(role)
@@ -45,6 +52,7 @@ export default function ScheduleCalendar({ user }) {
   const [publishing, setPublishing] = useState(false)
   const [copying, setCopying] = useState(false)
   const [swapModal, setSwapModal] = useState(null) // shift to swap
+  const [timeOff, setTimeOff] = useState([]) // approved time-off for the week
 
   const locationId = user.activeLocation?.id
   const isManager = canManage(user.role)
@@ -59,15 +67,17 @@ export default function ScheduleCalendar({ user }) {
     const start = formatDate(weekStart)
     const end = formatDate(addDays(weekStart, 6))
 
-    const [shiftsRes, templatesRes, staffRes] = await Promise.all([
+    const [shiftsRes, templatesRes, staffRes, timeOffRes] = await Promise.all([
       fetch(`/api/schedule/shifts?location_id=${locationId}&start_date=${start}&end_date=${end}`).then(r => r.json()),
       fetch(`/api/schedule/templates?location_id=${locationId}`).then(r => r.json()),
       fetch('/api/staff').then(r => r.json()),
+      fetch(`/api/schedule/time-off?location_id=${locationId}&start_date=${start}&end_date=${end}&status=approved`).then(r => r.json()),
     ])
 
     setShifts(shiftsRes.data || [])
     setTemplates((templatesRes.data || []).filter(t => t.active))
     setStaff(staffRes.data || [])
+    setTimeOff(timeOffRes.data || [])
     setLoading(false)
   }, [locationId, weekStart])
 
@@ -105,6 +115,9 @@ export default function ScheduleCalendar({ user }) {
       })
       const data = await res.json()
       if (data.success) {
+        if (data.warnings && data.warnings.length > 0) {
+          alert('Shift added with warning:\n\n' + data.warnings.join('\n'))
+        }
         setShowAddModal(null)
         fetchData()
       } else {
@@ -183,6 +196,14 @@ export default function ScheduleCalendar({ user }) {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          {/* Time Off link */}
+          <Link
+            href="/schedule/time-off"
+            className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg border border-un1t-gray text-un1t-light hover:text-white hover:border-white/30 transition-colors"
+          >
+            <CalendarOff size={14} /> Time Off
+          </Link>
+
           {/* View toggle */}
           <div className="flex bg-un1t-dark border border-un1t-gray rounded-lg overflow-hidden text-xs">
             <button
@@ -266,9 +287,31 @@ export default function ScheduleCalendar({ user }) {
                   <div className={`text-lg font-bold ${isToday ? 'text-white' : 'text-white'}`}>{date.getDate()}</div>
                 </div>
 
-                {/* Shifts */}
+                {/* Shifts & Time Off */}
                 <div className="bg-un1t-dark/50 border border-un1t-gray border-t-0 rounded-b-lg p-1.5 space-y-1.5 min-h-[160px]">
-                  {dayShifts.length === 0 && (
+                  {/* Time-off bars */}
+                  {timeOff
+                    .filter(t => t.start_date <= dateStr && t.end_date >= dateStr)
+                    .filter(t => viewMode === 'all' || t.profile_id === user.id)
+                    .map(t => {
+                      const conf = TIME_OFF_CONFIG[t.type] || TIME_OFF_CONFIG.unavailable
+                      const Icon = conf.icon
+                      return (
+                        <div
+                          key={`to-${t.id}`}
+                          className="rounded-md px-2 py-1.5 text-xs flex items-center gap-1.5"
+                          style={{ backgroundColor: conf.color + '18', borderLeft: `3px solid ${conf.color}` }}
+                        >
+                          <Icon size={12} style={{ color: conf.color }} />
+                          <span className="font-medium truncate" style={{ color: conf.color }}>
+                            {t.profiles?.full_name} — {conf.label}
+                          </span>
+                        </div>
+                      )
+                    })
+                  }
+
+                  {dayShifts.length === 0 && timeOff.filter(t => t.start_date <= dateStr && t.end_date >= dateStr).length === 0 && (
                     <div className="text-center py-6 text-xs text-un1t-mid">No shifts</div>
                   )}
 

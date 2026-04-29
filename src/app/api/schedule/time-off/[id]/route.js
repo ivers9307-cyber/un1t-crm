@@ -1,0 +1,60 @@
+import { NextResponse } from 'next/server'
+import { createServerClient } from '@/lib/supabase'
+import { getCurrentUser } from '@/lib/auth'
+
+// PUT /api/schedule/time-off/:id — Approve, reject, or cancel a request
+export async function PUT(request, { params }) {
+  const user = await getCurrentUser()
+  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+
+  const body = await request.json()
+  const db = createServerClient()
+
+  // Get the existing request
+  const { data: existing } = await db.from('time_off_requests')
+    .select('*')
+    .eq('id', params.id)
+    .single()
+
+  if (!existing) {
+    return NextResponse.json({ success: false, error: 'Request not found' }, { status: 404 })
+  }
+
+  const { status, review_note } = body
+
+  // Staff can only cancel their own pending requests
+  if (user.id === existing.profile_id) {
+    if (status !== 'cancelled' || existing.status !== 'pending') {
+      if (!['owner', 'manager', 'head_coach'].includes(user.role)) {
+        return NextResponse.json({ success: false, error: 'You can only cancel your own pending requests' }, { status: 403 })
+      }
+    }
+  } else if (!['owner', 'manager', 'head_coach'].includes(user.role)) {
+    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
+  }
+
+  const updates = { status, updated_at: new Date().toISOString() }
+
+  // If approving or rejecting, record who did it
+  if (status === 'approved' || status === 'rejected') {
+    if (!['owner', 'manager', 'head_coach'].includes(user.role)) {
+      return NextResponse.json({ success: false, error: 'Only managers can approve or reject requests' }, { status: 403 })
+    }
+    updates.reviewed_by = user.id
+    updates.reviewed_at = new Date().toISOString()
+    if (review_note) updates.review_note = review_note
+  }
+
+  const { data, error } = await db.from('time_off_requests')
+    .update(updates)
+    .eq('id', params.id)
+    .select(`
+      *,
+      profiles!profile_id(id, full_name, avatar_url, role),
+      reviewer:profiles!reviewed_by(id, full_name)
+    `)
+    .single()
+
+  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
+  return NextResponse.json({ success: true, data })
+}
