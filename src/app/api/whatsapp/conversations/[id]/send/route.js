@@ -64,7 +64,7 @@ export async function POST(request, { params }) {
     // Save message to DB
     await db.from('whatsapp_messages').insert({
       conversation_id: params.id,
-      contact_id: contact.id,
+      contact_id: contact?.id || null,
       location_id: conversation.location_id,
       wa_message_id: result.messageId,
       direction: 'outbound',

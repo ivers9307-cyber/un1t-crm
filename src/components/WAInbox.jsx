@@ -4,7 +4,8 @@ import { useState, useEffect, useRef } from 'react'
 import Link from 'next/link'
 import {
   ArrowLeft, Send, MessageCircle, Clock, CheckCheck,
-  Check, Image, FileText, Mic, AlertCircle, RefreshCw
+  Check, Image, FileText, Mic, AlertCircle, RefreshCw,
+  UserPlus, X, UserCheck
 } from 'lucide-react'
 
 function formatTime(dateStr) {
@@ -40,6 +41,17 @@ function MessageTypeIcon({ type }) {
   }
 }
 
+// Display name helper — prefers contact name, falls back to WA profile name, then phone
+function getDisplayName(conv) {
+  if (conv.contacts?.name) return conv.contacts.name
+  if (conv.wa_profile_name) return conv.wa_profile_name
+  return conv.wa_phone
+}
+
+function isUnknownSender(conv) {
+  return !conv.contact_id && !conv.contacts
+}
+
 export default function WAInbox({ locationId, userId }) {
   const [conversations, setConversations] = useState([])
   const [selectedId, setSelectedId] = useState(null)
@@ -48,20 +60,27 @@ export default function WAInbox({ locationId, userId }) {
   const [newMessage, setNewMessage] = useState('')
   const [sending, setSending] = useState(false)
   const [loading, setLoading] = useState(true)
+  const [showAddContact, setShowAddContact] = useState(false)
+  const [addContactForm, setAddContactForm] = useState({
+    name: '', first_name: '', email: '', lead_status: 'new_lead', add_to_pipeline: true, pipeline_stage: 'new',
+  })
+  const [addingContact, setAddingContact] = useState(false)
   const messagesEndRef = useRef(null)
   const pollRef = useRef(null)
 
   // Load conversations
   useEffect(() => {
     fetchConversations()
-    // Poll every 10 seconds
     pollRef.current = setInterval(fetchConversations, 10000)
     return () => clearInterval(pollRef.current)
   }, [locationId])
 
   // Load messages when conversation selected
   useEffect(() => {
-    if (selectedId) fetchMessages(selectedId)
+    if (selectedId) {
+      fetchMessages(selectedId)
+      setShowAddContact(false)
+    }
   }, [selectedId])
 
   // Scroll to bottom on new messages
@@ -88,6 +107,16 @@ export default function WAInbox({ locationId, userId }) {
       if (data.success) {
         setConversation(data.conversation)
         setMessages(data.messages)
+
+        // Pre-fill add contact form with WA profile name
+        if (!data.conversation.contact_id && data.conversation.wa_profile_name) {
+          const profileName = data.conversation.wa_profile_name
+          setAddContactForm(prev => ({
+            ...prev,
+            name: profileName,
+            first_name: profileName.split(' ')[0] || '',
+          }))
+        }
       }
     } catch (err) {
       console.error('Failed to fetch messages:', err)
@@ -113,7 +142,6 @@ export default function WAInbox({ locationId, userId }) {
 
       if (data.success) {
         setNewMessage('')
-        // Refresh messages
         await fetchMessages(selectedId)
         await fetchConversations()
       } else if (data.window_expired) {
@@ -128,10 +156,37 @@ export default function WAInbox({ locationId, userId }) {
     }
   }
 
+  async function handleAddContact() {
+    if (!addContactForm.name.trim()) return
+
+    setAddingContact(true)
+    try {
+      const res = await fetch(`/api/whatsapp/conversations/${selectedId}/add-contact`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(addContactForm),
+      })
+
+      const data = await res.json()
+      if (data.success) {
+        setShowAddContact(false)
+        await fetchMessages(selectedId)
+        await fetchConversations()
+      } else {
+        alert(data.error || 'Failed to add contact')
+      }
+    } catch (err) {
+      alert('Failed to add contact')
+    } finally {
+      setAddingContact(false)
+    }
+  }
+
   const windowOpen = conversation?.window_expires_at && new Date(conversation.window_expires_at) > new Date()
   const windowExpiry = conversation?.window_expires_at
     ? new Date(conversation.window_expires_at).toLocaleString('en-IE', { hour: '2-digit', minute: '2-digit', day: 'numeric', month: 'short' })
     : null
+  const isUnknown = conversation && !conversation.contact_id
 
   return (
     <div className="flex h-screen">
@@ -163,8 +218,9 @@ export default function WAInbox({ locationId, userId }) {
           )}
 
           {conversations.map(conv => {
-            const contact = conv.contacts
             const isSelected = selectedId === conv.id
+            const displayName = getDisplayName(conv)
+            const unknown = isUnknownSender(conv)
 
             return (
               <button
@@ -178,8 +234,13 @@ export default function WAInbox({ locationId, userId }) {
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
                       <p className="text-sm font-medium truncate">
-                        {contact?.name || conv.wa_phone}
+                        {displayName}
                       </p>
+                      {unknown && (
+                        <span className="bg-orange-500/20 text-orange-400 text-[9px] font-bold px-1.5 py-0.5 rounded shrink-0">
+                          NEW
+                        </span>
+                      )}
                       {conv.unread_count > 0 && (
                         <span className="bg-green-500 text-white text-[10px] font-bold w-5 h-5 rounded-full flex items-center justify-center shrink-0">
                           {conv.unread_count}
@@ -215,9 +276,16 @@ export default function WAInbox({ locationId, userId }) {
             {/* Chat header */}
             <div className="px-5 py-3 border-b border-un1t-gray bg-un1t-dark flex items-center justify-between shrink-0">
               <div>
-                <p className="font-semibold text-sm">
-                  {conversation?.contacts?.name || conversation?.wa_phone}
-                </p>
+                <div className="flex items-center gap-2">
+                  <p className="font-semibold text-sm">
+                    {conversation?.contacts?.name || conversation?.wa_profile_name || conversation?.wa_phone}
+                  </p>
+                  {isUnknown && (
+                    <span className="bg-orange-500/20 text-orange-400 text-[9px] font-bold px-1.5 py-0.5 rounded">
+                      Not in contacts
+                    </span>
+                  )}
+                </div>
                 <p className="text-xs text-un1t-mid">
                   {conversation?.wa_phone}
                   {conversation?.contacts?.lead_status && (
@@ -237,16 +305,119 @@ export default function WAInbox({ locationId, userId }) {
                     Window closed — templates only
                   </span>
                 )}
-                {conversation?.contacts?.id && (
+                {isUnknown ? (
+                  <button
+                    onClick={() => setShowAddContact(!showAddContact)}
+                    className="flex items-center gap-1.5 text-xs bg-green-600 text-white px-3 py-1.5 rounded-md hover:bg-green-700 transition-colors"
+                  >
+                    <UserPlus size={12} />
+                    Add to Contacts
+                  </button>
+                ) : conversation?.contacts?.id && (
                   <Link
                     href={`/contacts/${conversation.contacts.id}`}
-                    className="text-xs text-un1t-light hover:text-white transition-colors"
+                    className="flex items-center gap-1.5 text-xs text-un1t-light hover:text-white transition-colors"
                   >
+                    <UserCheck size={12} />
                     View contact
                   </Link>
                 )}
               </div>
             </div>
+
+            {/* Add to Contacts form — slides in below header */}
+            {showAddContact && isUnknown && (
+              <div className="border-b border-un1t-gray bg-un1t-dark/80 px-5 py-4 shrink-0">
+                <div className="flex items-center justify-between mb-3">
+                  <h4 className="text-sm font-semibold flex items-center gap-2">
+                    <UserPlus size={14} />
+                    Add to Contacts
+                  </h4>
+                  <button onClick={() => setShowAddContact(false)} className="text-un1t-light hover:text-white">
+                    <X size={14} />
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3 max-w-2xl">
+                  <div>
+                    <label className="block text-xs text-un1t-light mb-1">Full Name *</label>
+                    <input
+                      type="text"
+                      value={addContactForm.name}
+                      onChange={e => setAddContactForm({ ...addContactForm, name: e.target.value, first_name: e.target.value.split(' ')[0] })}
+                      placeholder="John Smith"
+                      className="w-full bg-black border border-un1t-gray rounded-md px-3 py-1.5 text-sm text-white placeholder:text-un1t-mid focus:outline-none focus:border-white/40"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-un1t-light mb-1">Email (optional)</label>
+                    <input
+                      type="email"
+                      value={addContactForm.email}
+                      onChange={e => setAddContactForm({ ...addContactForm, email: e.target.value })}
+                      placeholder="john@example.com"
+                      className="w-full bg-black border border-un1t-gray rounded-md px-3 py-1.5 text-sm text-white placeholder:text-un1t-mid focus:outline-none focus:border-white/40"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-un1t-light mb-1">Lead Status</label>
+                    <select
+                      value={addContactForm.lead_status}
+                      onChange={e => setAddContactForm({ ...addContactForm, lead_status: e.target.value })}
+                      className="w-full bg-black border border-un1t-gray rounded-md px-3 py-1.5 text-sm text-white focus:outline-none focus:border-white/40"
+                    >
+                      <option value="new_lead">New Lead</option>
+                      <option value="contacted">Contacted</option>
+                      <option value="active_trial">Active Trial</option>
+                      <option value="member">Member</option>
+                      <option value="past_member">Past Member</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs text-un1t-light mb-1">Pipeline Stage</label>
+                    <select
+                      value={addContactForm.pipeline_stage}
+                      onChange={e => setAddContactForm({ ...addContactForm, pipeline_stage: e.target.value })}
+                      className="w-full bg-black border border-un1t-gray rounded-md px-3 py-1.5 text-sm text-white focus:outline-none focus:border-white/40"
+                    >
+                      <option value="new">New</option>
+                      <option value="contacted">Contacted</option>
+                      <option value="trial_booked">Trial Booked</option>
+                      <option value="trial_attended">Trial Attended</option>
+                      <option value="negotiation">Negotiation</option>
+                      <option value="won">Won</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-4 mt-3">
+                  <label className="flex items-center gap-2 text-xs text-un1t-light cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={addContactForm.add_to_pipeline}
+                      onChange={e => setAddContactForm({ ...addContactForm, add_to_pipeline: e.target.checked })}
+                      className="rounded border-un1t-gray"
+                    />
+                    Add to pipeline
+                  </label>
+                  <div className="flex-1" />
+                  <button
+                    onClick={() => setShowAddContact(false)}
+                    className="text-xs text-un1t-light hover:text-white px-3 py-1.5 transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleAddContact}
+                    disabled={addingContact || !addContactForm.name.trim()}
+                    className="flex items-center gap-1.5 text-xs bg-green-600 text-white px-4 py-1.5 rounded-md hover:bg-green-700 transition-colors disabled:opacity-50"
+                  >
+                    <UserPlus size={12} />
+                    {addingContact ? 'Adding...' : 'Add Contact'}
+                  </button>
+                </div>
+              </div>
+            )}
 
             {/* Messages */}
             <div className="flex-1 overflow-auto p-4 space-y-2 bg-[#0b141a]">
