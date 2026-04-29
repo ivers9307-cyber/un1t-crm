@@ -4,10 +4,43 @@ import { SYSTEM_PROMPT, TOOLS } from '@/lib/assistant-prompt'
 
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages'
 
+// Role-based tool permissions — server-side enforcement
+// 'all' = any role, 'manager' = owner/manager/head_coach, 'admin' = owner/manager only
+const TOOL_PERMISSIONS = {
+  navigate_user:        'all',
+  get_shifts_for_week:  'all',       // staff see filtered results
+  get_time_off:         'all',       // staff see filtered results
+  get_holiday_allowance:'all',       // staff see own only
+  search_contacts:      'manager',
+  list_staff:           'manager',
+  list_shift_templates: 'manager',
+  create_shift:         'manager',
+  create_contact:       'admin',
+  move_deal:            'admin',
+  create_activity:      'manager',
+  generate_report:      'manager',
+}
+
+const MANAGER_ROLES = ['owner', 'manager', 'head_coach']
+const ADMIN_ROLES = ['owner', 'manager']
+
+function checkToolPermission(toolName, role) {
+  const level = TOOL_PERMISSIONS[toolName] || 'admin'
+  if (level === 'all') return true
+  if (level === 'manager') return MANAGER_ROLES.includes(role)
+  if (level === 'admin') return ADMIN_ROLES.includes(role)
+  return false
+}
+
 // Execute a tool call against the CRM
 async function executeTool(toolName, input, context) {
   const db = createServerClient()
-  const { locationId } = context
+  const { locationId, role, userId } = context
+
+  // Server-side permission check
+  if (!checkToolPermission(toolName, role)) {
+    return { error: `Permission denied: your role (${role}) does not have access to this action. Please ask a manager or owner for help.` }
+  }
 
   switch (toolName) {
     case 'create_contact': {
@@ -64,12 +97,19 @@ async function executeTool(toolName, input, context) {
     case 'get_shifts_for_week': {
       const startDate = input.start_date
       const endDate = new Date(new Date(startDate + 'T00:00:00').getTime() + 6 * 86400000).toISOString().split('T')[0]
-      const { data } = await db.from('shifts')
-        .select('shift_date, status, profiles!profile_id(full_name), shift_templates(name, start_time, end_time)')
+      let query = db.from('shifts')
+        .select('shift_date, status, profile_id, profiles!profile_id(full_name), shift_templates(name, start_time, end_time)')
         .eq('location_id', locationId)
         .gte('shift_date', startDate)
         .lte('shift_date', endDate)
         .order('shift_date')
+
+      // Staff can only see their own shifts
+      if (!MANAGER_ROLES.includes(role)) {
+        query = query.eq('profile_id', userId)
+      }
+
+      const { data } = await query
       return {
         shifts: (data || []).map(s => ({
           date: s.shift_date,
@@ -113,12 +153,18 @@ async function executeTool(toolName, input, context) {
 
     case 'get_time_off': {
       let query = db.from('time_off_requests')
-        .select('start_date, end_date, type, status, total_days, reason, profiles!profile_id(full_name)')
+        .select('start_date, end_date, type, status, total_days, reason, profile_id, profiles!profile_id(full_name)')
         .eq('location_id', locationId)
         .lte('start_date', input.end_date)
         .gte('end_date', input.start_date)
         .order('start_date')
       if (input.status) query = query.eq('status', input.status)
+
+      // Staff can only see their own time-off requests
+      if (!MANAGER_ROLES.includes(role)) {
+        query = query.eq('profile_id', userId)
+      }
+
       const { data } = await query
       return {
         time_off: (data || []).map(t => ({
@@ -134,7 +180,11 @@ async function executeTool(toolName, input, context) {
     }
 
     case 'get_holiday_allowance': {
-      const profileId = input.profile_id || context.userId
+      // Staff can only check their own allowance
+      let profileId = input.profile_id || userId
+      if (!MANAGER_ROLES.includes(role) && input.profile_id && input.profile_id !== userId) {
+        return { error: 'You can only view your own holiday allowance.' }
+      }
       const year = input.year || new Date().getFullYear()
       const { data } = await db.from('staff_allowances')
         .select('total_days, used_days, carried_over')
@@ -257,6 +307,10 @@ export async function POST(request) {
 
   const systemPrompt = SYSTEM_PROMPT + contextBlock
 
+  // Filter tools to only those the user's role permits
+  const userRole = userContext?.role || 'staff'
+  const allowedTools = TOOLS.filter(tool => checkToolPermission(tool.name, userRole))
+
   // Call Claude API
   let claudeMessages = messages.map(m => ({
     role: m.role,
@@ -282,7 +336,7 @@ export async function POST(request) {
         max_tokens: 1024,
         system: systemPrompt,
         messages: claudeMessages,
-        tools: TOOLS,
+        tools: allowedTools,
       }),
     })
 
@@ -305,6 +359,7 @@ export async function POST(request) {
           const result = await executeTool(block.name, block.input, {
             locationId: userContext?.locationId,
             userId: userContext?.userId,
+            role: userContext?.role || 'staff',
           })
           toolResults.push({
             type: 'tool_result',
