@@ -75,18 +75,23 @@ async function handleIncomingMessage(db, message, contacts, phoneNumberId) {
   if (locations?.length) defaultLocationId = locations[0].id
 
   // Try to find existing contact by phone number
+  // Meta sends phone without '+' (e.g. 353873147675), but contacts may store it
+  // with '+' (e.g. +353873147675). Check both formats.
+  const phoneWithPlus = senderPhone.startsWith('+') ? senderPhone : `+${senderPhone}`
+  const phoneWithout = senderPhone.startsWith('+') ? senderPhone.slice(1) : senderPhone
+
   let contact = null
   const { data: existingContacts } = await db.from('contacts')
     .select('id, location_id')
-    .or(`wa_phone.eq.${senderPhone},phone.eq.${senderPhone}`)
+    .or(`wa_phone.eq.${phoneWithout},wa_phone.eq.${phoneWithPlus},phone.eq.${phoneWithout},phone.eq.${phoneWithPlus}`)
     .limit(1)
 
   if (existingContacts?.length) {
     contact = existingContacts[0]
 
-    // Ensure wa_phone is set on the contact
+    // Ensure wa_phone is set on the contact (store without + to match Meta's format)
     await db.from('contacts')
-      .update({ wa_phone: senderPhone })
+      .update({ wa_phone: phoneWithout })
       .eq('id', contact.id)
       .is('wa_phone', null)
   }
