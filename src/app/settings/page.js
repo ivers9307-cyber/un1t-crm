@@ -26,7 +26,15 @@ export default async function SettingsPage() {
   const roleColors = {
     owner: 'bg-purple-500/20 text-purple-400',
     manager: 'bg-blue-500/20 text-blue-400',
+    head_coach: 'bg-emerald-500/20 text-emerald-400',
     staff: 'bg-gray-500/20 text-gray-400',
+  }
+
+  const roleLabels = {
+    owner: 'Owner',
+    manager: 'Manager',
+    head_coach: 'Head Coach',
+    staff: 'Staff',
   }
 
   return (
@@ -69,7 +77,7 @@ export default async function SettingsPage() {
                   <td className="p-3 text-un1t-light">{s.email}</td>
                   <td className="p-3">
                     <span className={`text-xs px-2 py-0.5 rounded-full ${roleColors[s.role] || roleColors.staff}`}>
-                      {s.role}
+                      {roleLabels[s.role] || s.role}
                     </span>
                   </td>
                   <td className="p-3 text-un1t-light text-xs">

@@ -7,6 +7,13 @@ import { createBrowserClient } from '@/lib/supabase'
 import LocationSwitcher from './LocationSwitcher'
 import clsx from 'clsx'
 
+const roleLabels = {
+  owner: 'Owner',
+  manager: 'Manager',
+  head_coach: 'Head Coach',
+  staff: 'Staff',
+}
+
 const allNav = [
   { href: '/',           label: 'Dashboard',   icon: LayoutDashboard, permission: 'dashboard' },
   { href: '/pipeline',   label: 'Pipeline',    icon: Columns3,        permission: 'pipeline' },
@@ -83,7 +90,7 @@ export default function Sidebar({ user }) {
         <div className="flex items-center justify-between">
           <div className="min-w-0">
             <p className="text-sm font-medium truncate">{user?.full_name || 'User'}</p>
-            <p className="text-xs text-un1t-light truncate">{user?.role || ''}</p>
+            <p className="text-xs text-un1t-light truncate">{roleLabels[user?.role] || user?.role || ''}</p>
           </div>
           <button
             onClick={handleLogout}

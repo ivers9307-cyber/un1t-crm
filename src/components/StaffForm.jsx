@@ -12,13 +12,35 @@ const allPermissions = [
   { key: 'events',     label: 'Events' },
   { key: 'bookings',   label: 'Bookings' },
   { key: 'activities', label: 'Activities' },
+  { key: 'email',      label: 'Email Marketing' },
+  { key: 'whatsapp',   label: 'WhatsApp' },
   { key: 'settings',   label: 'Settings & Staff Management' },
 ]
 
-const defaultPermissions = {
-  dashboard: true, pipeline: true, contacts: true,
-  events: true, bookings: true, activities: true, settings: false,
+const defaultPermissionsByRole = {
+  staff: {
+    dashboard: true, pipeline: true, contacts: true,
+    events: true, bookings: true, activities: true,
+    email: false, whatsapp: false, settings: false,
+  },
+  head_coach: {
+    dashboard: true, pipeline: true, contacts: true,
+    events: true, bookings: true, activities: true,
+    email: true, whatsapp: true, settings: false,
+  },
+  manager: {
+    dashboard: true, pipeline: true, contacts: true,
+    events: true, bookings: true, activities: true,
+    email: true, whatsapp: true, settings: true,
+  },
+  owner: {
+    dashboard: true, pipeline: true, contacts: true,
+    events: true, bookings: true, activities: true,
+    email: true, whatsapp: true, settings: true,
+  },
 }
+
+const defaultPermissions = defaultPermissionsByRole.staff
 
 export default function StaffForm({ staff, locations }) {
   const isEdit = !!staff
@@ -154,10 +176,18 @@ export default function StaffForm({ staff, locations }) {
           <label className="block text-sm text-un1t-light mb-1">Role</label>
           <select
             value={form.role}
-            onChange={e => setForm(prev => ({ ...prev, role: e.target.value }))}
+            onChange={e => {
+              const newRole = e.target.value
+              setForm(prev => ({
+                ...prev,
+                role: newRole,
+                permissions: isEdit ? prev.permissions : (defaultPermissionsByRole[newRole] || defaultPermissions),
+              }))
+            }}
             className="w-full bg-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:border-white/40"
           >
             <option value="staff">Staff</option>
+            <option value="head_coach">Head Coach</option>
             <option value="manager">Manager</option>
             <option value="owner">Owner / Admin</option>
           </select>
