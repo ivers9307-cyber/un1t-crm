@@ -1,8 +1,9 @@
 import { createClient } from '@supabase/supabase-js'
+import { createBrowserClient as createSSRBrowserClient } from '@supabase/ssr'
 
-// Browser client (uses anon key, respects RLS)
+// Browser client (uses anon key, stores session in cookies via @supabase/ssr)
 export function createBrowserClient() {
-  return createClient(
+  return createSSRBrowserClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
   )
