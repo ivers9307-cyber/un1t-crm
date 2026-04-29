@@ -3,6 +3,8 @@ import Link from 'next/link'
 import { Users, Target, Clock, TrendingUp } from 'lucide-react'
 
 export const dynamic = 'force-dynamic'
+export const revalidate = 0
+export const fetchCache = 'force-no-store'
 
 async function getStats() {
   const db = createServerClient()

@@ -5,6 +5,8 @@ import { ArrowLeft, Mail, Phone, Tag, Calendar, MessageSquare, CheckSquare, Cloc
 import ContactActions from '@/components/ContactActions'
 
 export const dynamic = 'force-dynamic'
+export const revalidate = 0
+export const fetchCache = 'force-no-store'
 
 export default async function ContactDetailPage({ params }) {
   const db = createServerClient()

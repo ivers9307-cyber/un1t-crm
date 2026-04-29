@@ -3,6 +3,8 @@ import Link from 'next/link'
 import { Mail, Phone, ChevronRight } from 'lucide-react'
 
 export const dynamic = 'force-dynamic'
+export const revalidate = 0
+export const fetchCache = 'force-no-store'
 
 const statusBadge = {
   active_trial:  'bg-green-500/20 text-green-400',

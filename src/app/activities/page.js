@@ -4,6 +4,8 @@ import { Phone, Mail, Calendar, CheckSquare, Clock, User } from 'lucide-react'
 import ActivityToggle from '@/components/ActivityToggle'
 
 export const dynamic = 'force-dynamic'
+export const revalidate = 0
+export const fetchCache = 'force-no-store'
 
 const typeIcons = { call: Phone, email: Mail, meeting: Calendar, task: CheckSquare }
 
