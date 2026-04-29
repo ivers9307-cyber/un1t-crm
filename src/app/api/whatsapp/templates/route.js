@@ -38,6 +38,9 @@ export async function GET(request) {
 
   if (locationId) query = query.eq('location_id', locationId)
 
+  const status = searchParams.get('status')
+  if (status) query = query.eq('status', status)
+
   const { data, error } = await query
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 

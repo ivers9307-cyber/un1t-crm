@@ -5,7 +5,7 @@ import Link from 'next/link'
 import {
   ArrowLeft, Send, MessageCircle, Clock, CheckCheck,
   Check, Image, FileText, Mic, AlertCircle, RefreshCw,
-  UserPlus, X, UserCheck
+  UserPlus, X, UserCheck, ChevronDown, LayoutTemplate
 } from 'lucide-react'
 
 function formatTime(dateStr) {
@@ -65,12 +65,18 @@ export default function WAInbox({ locationId, userId, initialConversationId }) {
     name: '', first_name: '', email: '', lead_status: 'new_lead', add_to_pipeline: true, pipeline_stage: 'new',
   })
   const [addingContact, setAddingContact] = useState(false)
+  const [templates, setTemplates] = useState([])
+  const [showTemplatePicker, setShowTemplatePicker] = useState(false)
+  const [selectedTemplate, setSelectedTemplate] = useState(null)
+  const [templateVars, setTemplateVars] = useState({})
+  const [sendingTemplate, setSendingTemplate] = useState(false)
   const messagesEndRef = useRef(null)
   const pollRef = useRef(null)
 
   // Load conversations
   useEffect(() => {
     fetchConversations()
+    fetchTemplates()
     pollRef.current = setInterval(fetchConversations, 10000)
     return () => clearInterval(pollRef.current)
   }, [locationId])
@@ -179,6 +185,74 @@ export default function WAInbox({ locationId, userId, initialConversationId }) {
       alert('Failed to add contact')
     } finally {
       setAddingContact(false)
+    }
+  }
+
+  async function fetchTemplates() {
+    try {
+      const res = await fetch(`/api/whatsapp/templates?location_id=${locationId}&status=APPROVED`)
+      const data = await res.json()
+      if (data.success) setTemplates(data.templates || [])
+    } catch (err) {
+      console.error('Failed to fetch templates:', err)
+    }
+  }
+
+  function selectTemplate(template) {
+    setSelectedTemplate(template)
+    setTemplateVars({})
+    // Pre-fill variable mapping with contact name if available
+    const bodyComp = template.components?.find(c => c.type === 'BODY')
+    const vars = bodyComp?.text?.match(/\{\{\d+\}\}/g) || []
+    if (vars.length > 0 && conversation?.contacts?.first_name) {
+      setTemplateVars({ '1': conversation.contacts.first_name })
+    }
+  }
+
+  async function handleSendTemplate() {
+    if (!selectedTemplate || !selectedId) return
+
+    setSendingTemplate(true)
+    try {
+      // Build template components with variable values
+      const bodyComp = selectedTemplate.components?.find(c => c.type === 'BODY')
+      const vars = bodyComp?.text?.match(/\{\{\d+\}\}/g) || []
+      const components = []
+
+      if (vars.length > 0) {
+        const parameters = vars.map((_, i) => ({
+          type: 'text',
+          text: templateVars[String(i + 1)] || ' ',
+        }))
+        components.push({ type: 'body', parameters })
+      }
+
+      const res = await fetch(`/api/whatsapp/conversations/${selectedId}/send`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: 'template',
+          template_name: selectedTemplate.name,
+          template_language: selectedTemplate.language || 'en',
+          template_components: components,
+          sent_by: userId,
+        }),
+      })
+
+      const data = await res.json()
+      if (data.success) {
+        setShowTemplatePicker(false)
+        setSelectedTemplate(null)
+        setTemplateVars({})
+        await fetchMessages(selectedId)
+        await fetchConversations()
+      } else {
+        alert(data.error || 'Failed to send template')
+      }
+    } catch (err) {
+      alert('Failed to send template')
+    } finally {
+      setSendingTemplate(false)
     }
   }
 
@@ -448,30 +522,146 @@ export default function WAInbox({ locationId, userId, initialConversationId }) {
               <div ref={messagesEndRef} />
             </div>
 
-            {/* Message input */}
-            <div className="px-4 py-3 border-t border-un1t-gray bg-un1t-dark shrink-0">
-              <div className="flex items-center gap-2">
-                <input
-                  type="text"
-                  value={newMessage}
-                  onChange={e => setNewMessage(e.target.value)}
-                  onKeyDown={e => e.key === 'Enter' && !e.shiftKey && handleSend()}
-                  placeholder={windowOpen ? "Type a message..." : "Window closed — use template messages"}
-                  disabled={!windowOpen}
-                  className="flex-1 bg-black border border-un1t-gray rounded-full px-4 py-2 text-sm text-white placeholder:text-un1t-mid focus:outline-none focus:border-white/40 disabled:opacity-50"
-                />
-                <button
-                  onClick={handleSend}
-                  disabled={sending || !newMessage.trim() || !windowOpen}
-                  className="w-10 h-10 bg-green-600 rounded-full flex items-center justify-center hover:bg-green-700 transition-colors disabled:opacity-50"
-                >
-                  <Send size={16} className="text-white ml-0.5" />
-                </button>
-              </div>
-              {!windowOpen && (
-                <p className="text-xs text-orange-400 mt-2 text-center">
-                  The 24h window has expired. Send a template message to re-engage this contact via a broadcast.
-                </p>
+            {/* Message input / Template picker */}
+            <div className="border-t border-un1t-gray bg-un1t-dark shrink-0">
+              {windowOpen ? (
+                /* Normal text input when window is open */
+                <div className="px-4 py-3">
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      value={newMessage}
+                      onChange={e => setNewMessage(e.target.value)}
+                      onKeyDown={e => e.key === 'Enter' && !e.shiftKey && handleSend()}
+                      placeholder="Type a message..."
+                      className="flex-1 bg-black border border-un1t-gray rounded-full px-4 py-2 text-sm text-white placeholder:text-un1t-mid focus:outline-none focus:border-white/40"
+                    />
+                    <button
+                      onClick={handleSend}
+                      disabled={sending || !newMessage.trim()}
+                      className="w-10 h-10 bg-green-600 rounded-full flex items-center justify-center hover:bg-green-700 transition-colors disabled:opacity-50"
+                    >
+                      <Send size={16} className="text-white ml-0.5" />
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                /* Template picker when window is closed */
+                <div className="px-4 py-3">
+                  {!showTemplatePicker && !selectedTemplate && (
+                    <div className="text-center">
+                      <p className="text-xs text-orange-400 mb-2">
+                        The 24h window is closed. Send a template message to start the conversation.
+                      </p>
+                      <button
+                        onClick={() => setShowTemplatePicker(true)}
+                        className="flex items-center gap-2 mx-auto text-sm bg-green-600 text-white px-4 py-2 rounded-md hover:bg-green-700 transition-colors"
+                      >
+                        <LayoutTemplate size={14} />
+                        Choose Template
+                      </button>
+                    </div>
+                  )}
+
+                  {showTemplatePicker && !selectedTemplate && (
+                    <div>
+                      <div className="flex items-center justify-between mb-2">
+                        <p className="text-xs text-un1t-light font-semibold uppercase tracking-wider">Select a template</p>
+                        <button onClick={() => setShowTemplatePicker(false)} className="text-un1t-light hover:text-white">
+                          <X size={14} />
+                        </button>
+                      </div>
+                      {templates.length === 0 ? (
+                        <p className="text-xs text-un1t-mid py-2">No approved templates available. Create one in WhatsApp → Templates.</p>
+                      ) : (
+                        <div className="space-y-1 max-h-48 overflow-auto">
+                          {templates.map(t => {
+                            const bodyComp = t.components?.find(c => c.type === 'BODY')
+                            return (
+                              <button
+                                key={t.id}
+                                onClick={() => selectTemplate(t)}
+                                className="w-full text-left px-3 py-2 rounded-md hover:bg-un1t-gray/30 transition-colors"
+                              >
+                                <p className="text-sm font-medium">{t.name}</p>
+                                <p className="text-xs text-un1t-mid truncate mt-0.5">
+                                  {bodyComp?.text || 'No body text'}
+                                </p>
+                              </button>
+                            )
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {selectedTemplate && (
+                    <div>
+                      <div className="flex items-center justify-between mb-2">
+                        <p className="text-xs text-un1t-light font-semibold uppercase tracking-wider">
+                          Template: {selectedTemplate.name}
+                        </p>
+                        <button
+                          onClick={() => { setSelectedTemplate(null); setShowTemplatePicker(true) }}
+                          className="text-xs text-un1t-light hover:text-white"
+                        >
+                          Change
+                        </button>
+                      </div>
+
+                      {/* Template preview */}
+                      <div className="bg-[#005c4b] rounded-lg px-3 py-2 mb-3 max-w-[80%]">
+                        <p className="text-sm text-white whitespace-pre-wrap">
+                          {(() => {
+                            const bodyComp = selectedTemplate.components?.find(c => c.type === 'BODY')
+                            let text = bodyComp?.text || ''
+                            // Replace variables with filled values
+                            text = text.replace(/\{\{(\d+)\}\}/g, (match, num) => {
+                              return templateVars[num] || `{{${num}}}`
+                            })
+                            return text
+                          })()}
+                        </p>
+                      </div>
+
+                      {/* Variable inputs */}
+                      {(() => {
+                        const bodyComp = selectedTemplate.components?.find(c => c.type === 'BODY')
+                        const vars = bodyComp?.text?.match(/\{\{\d+\}\}/g) || []
+                        if (vars.length === 0) return null
+
+                        return (
+                          <div className="space-y-2 mb-3">
+                            {vars.map((v, i) => {
+                              const num = String(i + 1)
+                              return (
+                                <div key={num} className="flex items-center gap-2">
+                                  <span className="text-xs text-un1t-mid w-10">{`{{${num}}}`}</span>
+                                  <input
+                                    type="text"
+                                    value={templateVars[num] || ''}
+                                    onChange={e => setTemplateVars({ ...templateVars, [num]: e.target.value })}
+                                    placeholder={num === '1' ? 'e.g. first name' : `Variable ${num}`}
+                                    className="flex-1 bg-black border border-un1t-gray rounded-md px-3 py-1.5 text-sm text-white placeholder:text-un1t-mid focus:outline-none focus:border-white/40"
+                                  />
+                                </div>
+                              )
+                            })}
+                          </div>
+                        )
+                      })()}
+
+                      <button
+                        onClick={handleSendTemplate}
+                        disabled={sendingTemplate}
+                        className="flex items-center gap-2 text-sm bg-green-600 text-white px-4 py-2 rounded-md hover:bg-green-700 transition-colors disabled:opacity-50 w-full justify-center"
+                      >
+                        <Send size={14} />
+                        {sendingTemplate ? 'Sending...' : 'Send Template'}
+                      </button>
+                    </div>
+                  )}
+                </div>
               )}
             </div>
           </>
