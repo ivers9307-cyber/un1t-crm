@@ -1,5 +1,6 @@
 'use client'
 
+import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { LayoutDashboard, Users, Columns3, CheckSquare, Calendar, BookOpen, Mail, MessageCircle, CalendarClock, Settings, LogOut } from 'lucide-react'
@@ -31,6 +32,30 @@ export default function Sidebar({ user }) {
   const pathname = usePathname()
   const router = useRouter()
   const permissions = user?.permissions || {}
+  const [branding, setBranding] = useState(null)
+
+  // Load branding (logo) for current location
+  useEffect(() => {
+    if (!user?.activeLocation?.id) return
+    fetch(`/api/settings/branding?location_id=${user.activeLocation.id}`)
+      .then(r => r.json())
+      .then(data => {
+        if (data.success && data.data) {
+          setBranding(data.data)
+          // Also set favicon if available
+          if (data.data.favicon_url) {
+            let link = document.querySelector("link[rel~='icon']")
+            if (!link) {
+              link = document.createElement('link')
+              link.rel = 'icon'
+              document.head.appendChild(link)
+            }
+            link.href = data.data.favicon_url
+          }
+        }
+      })
+      .catch(() => {})
+  }, [user?.activeLocation?.id])
 
   // Filter nav based on permissions — owners see everything
   const nav = allNav.filter(item => {
@@ -49,7 +74,11 @@ export default function Sidebar({ user }) {
     <aside className="w-56 bg-un1t-dark border-r border-un1t-gray flex flex-col shrink-0">
       {/* Logo + Location */}
       <div className="p-5 border-b border-un1t-gray">
-        <h1 className="text-xl font-bold tracking-wider">UN1T</h1>
+        {branding?.logo_url ? (
+          <img src={branding.logo_url} alt={branding.company_name || 'Logo'} className="h-8 max-w-[140px] object-contain" />
+        ) : (
+          <h1 className="text-xl font-bold tracking-wider">{branding?.company_name || 'UN1T'}</h1>
+        )}
         <div className="mt-1">
           {user?.locations?.length > 1 ? (
             <LocationSwitcher

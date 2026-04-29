@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { createBrowserClient } from '@/lib/supabase'
 
@@ -11,9 +11,20 @@ export default function LoginPage() {
   const [success, setSuccess] = useState(null)
   const [loading, setLoading] = useState(false)
   const [mode, setMode] = useState('login') // 'login' | 'forgot'
+  const [branding, setBranding] = useState(null)
   const router = useRouter()
   const searchParams = useSearchParams()
   const redirect = searchParams.get('redirect') || '/'
+
+  // Load branding for login page
+  useEffect(() => {
+    fetch('/api/public/branding')
+      .then(r => r.json())
+      .then(data => {
+        if (data.success && data.data) setBranding(data.data)
+      })
+      .catch(() => {})
+  }, [])
 
   async function handleLogin(e) {
     e.preventDefault()
@@ -62,7 +73,11 @@ export default function LoginPage() {
       <div className="w-full max-w-sm">
         {/* Logo */}
         <div className="text-center mb-8">
-          <h1 className="text-3xl font-bold tracking-wider text-white">UN1T</h1>
+          {branding?.logo_url ? (
+            <img src={branding.logo_url} alt={branding.company_name || 'Logo'} className="h-10 mx-auto object-contain" />
+          ) : (
+            <h1 className="text-3xl font-bold tracking-wider text-white">{branding?.company_name || 'UN1T'}</h1>
+          )}
           <p className="text-sm text-gray-500 mt-1">Lead Management</p>
         </div>
 

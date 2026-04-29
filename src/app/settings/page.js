@@ -2,7 +2,8 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
-import { Users, MapPin, Shield, Clock } from 'lucide-react'
+import { Users, MapPin, Shield, Clock, Palette } from 'lucide-react'
+import BrandingSettings from '@/components/BrandingSettings'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
@@ -160,6 +161,19 @@ export default async function SettingsPage() {
           <p className="text-sm text-un1t-light">Define named shift templates (Morning, Afternoon, Evening) used when building the weekly roster.</p>
         </div>
       </div>
+
+      {/* Branding Section — Owner only */}
+      {user.role === 'owner' && (
+        <div className="mb-10">
+          <div className="flex items-center gap-2 mb-4">
+            <Palette size={18} className="text-un1t-light" />
+            <h3 className="text-lg font-semibold">Branding</h3>
+          </div>
+          <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5">
+            <BrandingSettings user={user} />
+          </div>
+        </div>
+      )}
 
       {/* Security Section */}
       <div>

@@ -10,7 +10,15 @@ export default function ResetPasswordPage() {
   const [error, setError] = useState(null)
   const [loading, setLoading] = useState(false)
   const [ready, setReady] = useState(false)
+  const [branding, setBranding] = useState(null)
   const router = useRouter()
+
+  useEffect(() => {
+    fetch('/api/public/branding')
+      .then(r => r.json())
+      .then(data => { if (data.success && data.data) setBranding(data.data) })
+      .catch(() => {})
+  }, [])
 
   useEffect(() => {
     // Supabase automatically picks up the recovery token from the URL hash
@@ -60,7 +68,11 @@ export default function ResetPasswordPage() {
       <div className="w-full max-w-sm">
         {/* Logo */}
         <div className="text-center mb-8">
-          <h1 className="text-3xl font-bold tracking-wider text-white">UN1T</h1>
+          {branding?.logo_url ? (
+            <img src={branding.logo_url} alt={branding.company_name || 'Logo'} className="h-10 mx-auto object-contain" />
+          ) : (
+            <h1 className="text-3xl font-bold tracking-wider text-white">{branding?.company_name || 'UN1T'}</h1>
+          )}
           <p className="text-sm text-gray-500 mt-1">Lead Management</p>
         </div>
 
