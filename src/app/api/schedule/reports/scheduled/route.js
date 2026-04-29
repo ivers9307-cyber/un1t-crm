@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
+import { calculateNextRun } from '@/lib/report-generator'
 
 // GET /api/schedule/reports/scheduled — List scheduled reports
 export async function GET(request) {
@@ -47,20 +48,30 @@ export async function POST(request) {
     active: true,
   }
 
-  // Calculate next_run_at
-  const now = new Date()
-  if (record.frequency === 'weekly' && record.day_of_week != null) {
-    const target = new Date(now)
-    const diff = (record.day_of_week - target.getDay() + 7) % 7 || 7
-    target.setDate(target.getDate() + diff)
-    target.setHours(7, 0, 0, 0) // 7 AM
-    record.next_run_at = target.toISOString()
-  } else if (record.frequency === 'monthly' && record.day_of_month) {
-    const target = new Date(now.getFullYear(), now.getMonth() + 1, record.day_of_month, 7, 0, 0)
-    record.next_run_at = target.toISOString()
-  }
+  // Calculate next_run_at using the shared helper
+  record.next_run_at = calculateNextRun(record.frequency, record.day_of_week, record.day_of_month)
 
   const { data, error } = await db.from('scheduled_reports').insert(record).select().single()
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
   return NextResponse.json({ success: true, data }, { status: 201 })
+}
+
+// DELETE /api/schedule/reports/scheduled?id=xxx — Deactivate a scheduled report
+export async function DELETE(request) {
+  const user = await getCurrentUser()
+  if (!user || !['owner', 'manager', 'head_coach'].includes(user.role)) {
+    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
+  }
+
+  const { searchParams } = new URL(request.url)
+  const id = searchParams.get('id')
+  if (!id) return NextResponse.json({ success: false, error: 'id is required' }, { status: 400 })
+
+  const db = createServerClient()
+  const { error } = await db.from('scheduled_reports')
+    .update({ active: false, updated_at: new Date().toISOString() })
+    .eq('id', id)
+
+  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
+  return NextResponse.json({ success: true })
 }
