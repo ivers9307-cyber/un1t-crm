@@ -91,22 +91,27 @@ export default function ScheduleCalendar({ user }) {
   // Count unpublished shifts
   const unpublishedCount = shifts.filter(s => !s.published).length
 
-  async function handleAddShift(profileId, templateId, date, roleLabel, notes) {
-    const res = await fetch('/api/schedule/shifts', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        location_id: locationId,
-        profile_id: profileId,
-        shift_template_id: templateId,
-        shift_date: date,
-        role_label: roleLabel || null,
-        notes: notes || null,
-      }),
-    })
-    if ((await res.json()).success) {
-      setShowAddModal(null)
-      fetchData()
+  async function handleAddShift(profileId, templateId, date) {
+    try {
+      const res = await fetch('/api/schedule/shifts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          location_id: locationId,
+          profile_id: profileId,
+          shift_template_id: templateId,
+          shift_date: date,
+        }),
+      })
+      const data = await res.json()
+      if (data.success) {
+        setShowAddModal(null)
+        fetchData()
+      } else {
+        alert(data.error || 'Failed to add shift')
+      }
+    } catch (err) {
+      alert('Failed to add shift: ' + err.message)
     }
   }
 
@@ -366,10 +371,16 @@ export default function ScheduleCalendar({ user }) {
 function AddShiftModal({ date, templates, staff, onAdd, onClose }) {
   const [profileId, setProfileId] = useState('')
   const [templateId, setTemplateId] = useState('')
-  const [roleLabel, setRoleLabel] = useState('')
-  const [notes, setNotes] = useState('')
+  const [saving, setSaving] = useState(false)
 
   const dayLabel = new Date(date + 'T00:00:00').toLocaleDateString('en-IE', { weekday: 'long', day: 'numeric', month: 'long' })
+
+  async function handleClick() {
+    if (!profileId || !templateId) return
+    setSaving(true)
+    await onAdd(profileId, templateId, date)
+    setSaving(false)
+  }
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={onClose}>
@@ -399,36 +410,14 @@ function AddShiftModal({ date, templates, staff, onAdd, onClose }) {
               ))}
             </select>
           </div>
-
-          <div>
-            <label className="block text-xs text-un1t-light mb-1">Role / Position</label>
-            <input
-              type="text"
-              value={roleLabel}
-              onChange={e => setRoleLabel(e.target.value)}
-              placeholder="e.g. Front Desk, Floor Coach"
-              className="w-full bg-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-white"
-            />
-          </div>
-
-          <div>
-            <label className="block text-xs text-un1t-light mb-1">Notes</label>
-            <input
-              type="text"
-              value={notes}
-              onChange={e => setNotes(e.target.value)}
-              placeholder="Optional notes for this shift"
-              className="w-full bg-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-white"
-            />
-          </div>
         </div>
 
         <button
-          onClick={() => profileId && templateId && onAdd(profileId, templateId, date, roleLabel, notes)}
-          disabled={!profileId || !templateId}
+          onClick={handleClick}
+          disabled={!profileId || !templateId || saving}
           className="w-full mt-4 bg-white text-black font-medium text-sm py-2.5 rounded-md hover:bg-gray-200 transition-colors disabled:opacity-50"
         >
-          Add Shift
+          {saving ? 'Adding...' : 'Add Shift'}
         </button>
       </div>
     </div>
