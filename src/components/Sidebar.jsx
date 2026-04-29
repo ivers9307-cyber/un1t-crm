@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
-import { LayoutDashboard, Users, Columns3, CheckSquare, Calendar, BookOpen, Settings, LogOut } from 'lucide-react'
+import { LayoutDashboard, Users, Columns3, CheckSquare, Calendar, BookOpen, Mail, Settings, LogOut } from 'lucide-react'
 import { createBrowserClient } from '@/lib/supabase'
 import LocationSwitcher from './LocationSwitcher'
 import clsx from 'clsx'
@@ -14,6 +14,7 @@ const allNav = [
   { href: '/activities', label: 'Activities',   icon: CheckSquare,     permission: 'activities' },
   { href: '/events',     label: 'Events',       icon: Calendar,        permission: 'events' },
   { href: '/bookings',   label: 'Bookings',     icon: BookOpen,        permission: 'bookings' },
+  { href: '/email',      label: 'Email',        icon: Mail,            permission: 'email' },
   { href: '/settings',   label: 'Settings',     icon: Settings,        permission: 'settings' },
 ]
 

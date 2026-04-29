@@ -4,7 +4,7 @@ import { usePathname } from 'next/navigation'
 import Sidebar from './Sidebar'
 
 // Routes that should NOT show the CRM sidebar
-const publicPaths = ['/login', '/book/']
+const publicPaths = ['/login', '/book/', '/unsubscribe/', '/preferences/']
 
 export default function AppShell({ children, user }) {
   const pathname = usePathname()

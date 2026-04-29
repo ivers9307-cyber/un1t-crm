@@ -1,0 +1,296 @@
+import { NextResponse } from 'next/server'
+import { createServerClient } from '@/lib/supabase'
+
+// POST /api/webhooks/postmark — Handle Postmark delivery webhooks
+// Configure in Postmark: Settings → Webhooks → Add webhook → point to this URL
+// Events: Delivery, Bounce, SpamComplaint, Open, Click
+export async function POST(request) {
+  const body = await request.json()
+  const db = createServerClient()
+
+  const messageId = body.MessageID
+  if (!messageId) {
+    return NextResponse.json({ error: 'Missing MessageID' }, { status: 400 })
+  }
+
+  const recordType = body.RecordType
+
+  try {
+    switch (recordType) {
+      case 'Delivery': {
+        // Update email_sends
+        await db.from('email_sends')
+          .update({ status: 'delivered', delivered_at: body.DeliveredAt })
+          .eq('postmark_message_id', messageId)
+
+        // Update campaign_recipients
+        await db.from('campaign_recipients')
+          .update({ status: 'delivered', delivered_at: body.DeliveredAt })
+          .eq('postmark_message_id', messageId)
+          .in('status', ['sent', 'queued'])
+
+        // Increment campaign delivered count
+        const { data: send } = await db.from('email_sends')
+          .select('campaign_id')
+          .eq('postmark_message_id', messageId)
+          .single()
+
+        if (send?.campaign_id) {
+          await db.rpc('increment_campaign_metric', {
+            p_campaign_id: send.campaign_id,
+            p_field: 'total_delivered',
+          }).catch(() => {
+            // Fallback if RPC doesn't exist
+            db.from('campaigns')
+              .update({ total_delivered: db.raw('total_delivered + 1') })
+              .eq('id', send.campaign_id)
+          })
+        }
+        break
+      }
+
+      case 'Open': {
+        const now = new Date().toISOString()
+
+        // Update email_sends (first open)
+        await db.from('email_sends')
+          .update({
+            status: 'opened',
+            opened_at: now,
+            open_count: (body.FirstOpen ? 1 : undefined),
+          })
+          .eq('postmark_message_id', messageId)
+
+        // Increment open count
+        const { data: openSend } = await db.from('email_sends')
+          .select('id, contact_id, campaign_id, open_count')
+          .eq('postmark_message_id', messageId)
+          .single()
+
+        if (openSend) {
+          await db.from('email_sends')
+            .update({ open_count: (openSend.open_count || 0) + 1 })
+            .eq('id', openSend.id)
+
+          // Update contact stats (only on first open)
+          if (body.FirstOpen) {
+            await db.from('contacts')
+              .update({ total_emails_opened: db.raw ? undefined : 1 })
+              .eq('id', openSend.contact_id)
+
+            // Use raw SQL for increment
+            await db.rpc('increment_contact_opens', { p_contact_id: openSend.contact_id }).catch(() => {})
+          }
+
+          // Update campaign_recipients
+          await db.from('campaign_recipients')
+            .update({ status: 'opened', opened_at: now })
+            .eq('postmark_message_id', messageId)
+            .in('status', ['sent', 'delivered'])
+
+          // Increment campaign open count (first open only)
+          if (body.FirstOpen && openSend.campaign_id) {
+            await db.from('campaigns')
+              .select('total_opened')
+              .eq('id', openSend.campaign_id)
+              .single()
+              .then(({ data }) => {
+                if (data) {
+                  db.from('campaigns')
+                    .update({ total_opened: (data.total_opened || 0) + 1 })
+                    .eq('id', openSend.campaign_id)
+                }
+              })
+          }
+        }
+        break
+      }
+
+      case 'Click': {
+        const now = new Date().toISOString()
+        const clickedUrl = body.OriginalLink
+
+        // Update email_sends
+        const { data: clickSend } = await db.from('email_sends')
+          .select('id, contact_id, campaign_id, click_count')
+          .eq('postmark_message_id', messageId)
+          .single()
+
+        if (clickSend) {
+          await db.from('email_sends')
+            .update({
+              status: 'clicked',
+              clicked_at: now,
+              click_count: (clickSend.click_count || 0) + 1,
+            })
+            .eq('id', clickSend.id)
+
+          // Update campaign_recipients
+          const { data: recipient } = await db.from('campaign_recipients')
+            .select('clicked_links')
+            .eq('postmark_message_id', messageId)
+            .single()
+
+          if (recipient) {
+            const links = recipient.clicked_links || []
+            links.push({ url: clickedUrl, clicked_at: now })
+
+            await db.from('campaign_recipients')
+              .update({
+                status: 'clicked',
+                clicked_at: recipient.clicked_at || now,
+                clicked_links: links,
+              })
+              .eq('postmark_message_id', messageId)
+          }
+
+          // Increment campaign click count
+          if (clickSend.campaign_id) {
+            await db.from('campaigns')
+              .select('total_clicked')
+              .eq('id', clickSend.campaign_id)
+              .single()
+              .then(({ data }) => {
+                if (data) {
+                  db.from('campaigns')
+                    .update({ total_clicked: (data.total_clicked || 0) + 1 })
+                    .eq('id', clickSend.campaign_id)
+                }
+              })
+          }
+
+          // Update contact stats
+          await db.rpc('increment_contact_clicks', { p_contact_id: clickSend.contact_id }).catch(() => {})
+        }
+        break
+      }
+
+      case 'Bounce': {
+        const now = new Date().toISOString()
+        const bounceType = body.Type === 'HardBounce' ? 'hard' : body.Type === 'SoftBounce' ? 'soft' : 'transient'
+
+        // Update email_sends
+        await db.from('email_sends')
+          .update({ status: 'bounced', bounced_at: now, bounce_type: bounceType })
+          .eq('postmark_message_id', messageId)
+
+        // Update campaign_recipients
+        await db.from('campaign_recipients')
+          .update({ status: 'bounced', bounced_at: now, bounce_type: bounceType })
+          .eq('postmark_message_id', messageId)
+
+        // Hard bounce — mark contact as bounced to prevent future sends
+        if (bounceType === 'hard') {
+          const { data: bounceSend } = await db.from('email_sends')
+            .select('contact_id, campaign_id')
+            .eq('postmark_message_id', messageId)
+            .single()
+
+          if (bounceSend) {
+            await db.from('contacts')
+              .update({ email_status: 'bounced' })
+              .eq('id', bounceSend.contact_id)
+
+            if (bounceSend.campaign_id) {
+              await db.from('campaigns')
+                .select('total_bounced')
+                .eq('id', bounceSend.campaign_id)
+                .single()
+                .then(({ data }) => {
+                  if (data) {
+                    db.from('campaigns')
+                      .update({ total_bounced: (data.total_bounced || 0) + 1 })
+                      .eq('id', bounceSend.campaign_id)
+                  }
+                })
+            }
+          }
+        }
+        break
+      }
+
+      case 'SpamComplaint': {
+        const now = new Date().toISOString()
+
+        await db.from('email_sends')
+          .update({ status: 'complained', complained_at: now })
+          .eq('postmark_message_id', messageId)
+
+        await db.from('campaign_recipients')
+          .update({ status: 'complained', complained_at: now })
+          .eq('postmark_message_id', messageId)
+
+        // Mark contact as complained and auto-unsubscribe from marketing
+        const { data: complaintSend } = await db.from('email_sends')
+          .select('contact_id, campaign_id')
+          .eq('postmark_message_id', messageId)
+          .single()
+
+        if (complaintSend) {
+          await db.from('contacts')
+            .update({ email_status: 'complained' })
+            .eq('id', complaintSend.contact_id)
+
+          await db.from('contact_preferences')
+            .update({ email_marketing: false })
+            .eq('contact_id', complaintSend.contact_id)
+
+          // Log consent change
+          await db.from('consent_log').insert({
+            contact_id: complaintSend.contact_id,
+            channel: 'email_marketing',
+            action: 'opted_out',
+            source: 'spam_complaint',
+          })
+
+          if (complaintSend.campaign_id) {
+            await db.from('campaigns')
+              .select('total_complained')
+              .eq('id', complaintSend.campaign_id)
+              .single()
+              .then(({ data }) => {
+                if (data) {
+                  db.from('campaigns')
+                    .update({ total_complained: (data.total_complained || 0) + 1 })
+                    .eq('id', complaintSend.campaign_id)
+                }
+              })
+          }
+        }
+        break
+      }
+
+      case 'SubscriptionChange': {
+        // Postmark's built-in unsubscribe handling
+        if (body.SuppressSending) {
+          const { data: unsubSend } = await db.from('email_sends')
+            .select('contact_id')
+            .eq('postmark_message_id', messageId)
+            .single()
+
+          if (unsubSend) {
+            await db.from('contact_preferences')
+              .update({ email_marketing: false })
+              .eq('contact_id', unsubSend.contact_id)
+
+            await db.from('consent_log').insert({
+              contact_id: unsubSend.contact_id,
+              channel: 'email_marketing',
+              action: 'opted_out',
+              source: 'one_click_unsubscribe',
+            })
+          }
+        }
+        break
+      }
+
+      default:
+        console.log(`Unhandled Postmark webhook type: ${recordType}`)
+    }
+
+    return NextResponse.json({ success: true })
+  } catch (error) {
+    console.error('Postmark webhook error:', error)
+    return NextResponse.json({ error: error.message }, { status: 500 })
+  }
+}
