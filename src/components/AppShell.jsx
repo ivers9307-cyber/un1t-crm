@@ -2,6 +2,7 @@
 
 import { usePathname } from 'next/navigation'
 import Sidebar from './Sidebar'
+import AssistantBubble from './AssistantBubble'
 
 // Routes that should NOT show the CRM sidebar
 const publicPaths = ['/login', '/book/', '/unsubscribe/', '/preferences/']
@@ -20,6 +21,7 @@ export default function AppShell({ children, user }) {
       <main className="flex-1 overflow-auto">
         {children}
       </main>
+      {user && <AssistantBubble user={user} />}
     </div>
   )
 }
