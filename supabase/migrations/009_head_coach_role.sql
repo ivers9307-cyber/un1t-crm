@@ -17,6 +17,7 @@ ALTER TABLE profiles ALTER COLUMN permissions SET DEFAULT '{
   "activities": true,
   "email": false,
   "whatsapp": false,
+  "schedule": true,
   "settings": false
 }'::JSONB;
 

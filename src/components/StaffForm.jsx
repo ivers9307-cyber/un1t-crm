@@ -14,6 +14,7 @@ const allPermissions = [
   { key: 'activities', label: 'Activities' },
   { key: 'email',      label: 'Email Marketing' },
   { key: 'whatsapp',   label: 'WhatsApp' },
+  { key: 'schedule',   label: 'Schedule' },
   { key: 'settings',   label: 'Settings & Staff Management' },
 ]
 
@@ -21,22 +22,22 @@ const defaultPermissionsByRole = {
   staff: {
     dashboard: true, pipeline: true, contacts: true,
     events: true, bookings: true, activities: true,
-    email: false, whatsapp: false, settings: false,
+    email: false, whatsapp: false, schedule: true, settings: false,
   },
   head_coach: {
     dashboard: true, pipeline: true, contacts: true,
     events: true, bookings: true, activities: true,
-    email: true, whatsapp: true, settings: false,
+    email: true, whatsapp: true, schedule: true, settings: false,
   },
   manager: {
     dashboard: true, pipeline: true, contacts: true,
     events: true, bookings: true, activities: true,
-    email: true, whatsapp: true, settings: true,
+    email: true, whatsapp: true, schedule: true, settings: true,
   },
   owner: {
     dashboard: true, pipeline: true, contacts: true,
     events: true, bookings: true, activities: true,
-    email: true, whatsapp: true, settings: true,
+    email: true, whatsapp: true, schedule: true, settings: true,
   },
 }
 

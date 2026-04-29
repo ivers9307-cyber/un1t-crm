@@ -1,0 +1,480 @@
+'use client'
+
+import { useState, useEffect, useCallback } from 'react'
+import { ChevronLeft, ChevronRight, Copy, Send, Plus, Users, User, Clock, MapPin, X, ArrowLeftRight } from 'lucide-react'
+
+const DAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+const canManage = (role) => ['owner', 'manager', 'head_coach'].includes(role)
+
+function getMonday(date) {
+  const d = new Date(date)
+  const day = d.getDay()
+  const diff = d.getDate() - day + (day === 0 ? -6 : 1)
+  d.setDate(diff)
+  d.setHours(0, 0, 0, 0)
+  return d
+}
+
+function formatDate(date) {
+  return date.toISOString().split('T')[0]
+}
+
+function addDays(date, days) {
+  const d = new Date(date)
+  d.setDate(d.getDate() + days)
+  return d
+}
+
+function formatTime(time) {
+  if (!time) return ''
+  const [h, m] = time.split(':')
+  const hour = parseInt(h)
+  const suffix = hour >= 12 ? 'pm' : 'am'
+  const display = hour > 12 ? hour - 12 : hour === 0 ? 12 : hour
+  return m === '00' ? `${display}${suffix}` : `${display}:${m}${suffix}`
+}
+
+export default function ScheduleCalendar({ user }) {
+  const [weekStart, setWeekStart] = useState(() => getMonday(new Date()))
+  const [shifts, setShifts] = useState([])
+  const [templates, setTemplates] = useState([])
+  const [staff, setStaff] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [viewMode, setViewMode] = useState('all') // 'my' or 'all'
+  const [showAddModal, setShowAddModal] = useState(null) // { date, dayIndex }
+  const [publishing, setPublishing] = useState(false)
+  const [copying, setCopying] = useState(false)
+  const [swapModal, setSwapModal] = useState(null) // shift to swap
+
+  const locationId = user.activeLocation?.id
+  const isManager = canManage(user.role)
+
+  const weekEnd = addDays(weekStart, 6)
+  const weekLabel = `${weekStart.toLocaleDateString('en-IE', { day: 'numeric', month: 'short' })} – ${weekEnd.toLocaleDateString('en-IE', { day: 'numeric', month: 'short', year: 'numeric' })}`
+
+  const fetchData = useCallback(async () => {
+    if (!locationId) return
+    setLoading(true)
+
+    const start = formatDate(weekStart)
+    const end = formatDate(weekEnd)
+
+    const [shiftsRes, templatesRes, staffRes] = await Promise.all([
+      fetch(`/api/schedule/shifts?location_id=${locationId}&start_date=${start}&end_date=${end}`).then(r => r.json()),
+      fetch(`/api/schedule/templates?location_id=${locationId}`).then(r => r.json()),
+      fetch('/api/staff').then(r => r.json()),
+    ])
+
+    setShifts(shiftsRes.data || [])
+    setTemplates((templatesRes.data || []).filter(t => t.active))
+    setStaff(staffRes.data || [])
+    setLoading(false)
+  }, [locationId, weekStart, weekEnd])
+
+  useEffect(() => { fetchData() }, [fetchData])
+
+  // Filter staff to those assigned to this location
+  const locationStaff = staff.filter(s =>
+    s.active && (s.profile_locations || []).some(pl => pl.location_id === locationId)
+  )
+
+  // Group shifts by day
+  const shiftsByDay = DAY_LABELS.map((_, i) => {
+    const date = formatDate(addDays(weekStart, i))
+    const dayShifts = shifts.filter(s => s.shift_date === date)
+    if (viewMode === 'my') {
+      return dayShifts.filter(s => s.profile_id === user.id)
+    }
+    return dayShifts
+  })
+
+  // Count unpublished shifts
+  const unpublishedCount = shifts.filter(s => !s.published).length
+
+  async function handleAddShift(profileId, templateId, date, roleLabel, notes) {
+    const res = await fetch('/api/schedule/shifts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        location_id: locationId,
+        profile_id: profileId,
+        shift_template_id: templateId,
+        shift_date: date,
+        role_label: roleLabel || null,
+        notes: notes || null,
+      }),
+    })
+    if ((await res.json()).success) {
+      setShowAddModal(null)
+      fetchData()
+    }
+  }
+
+  async function handleDeleteShift(shiftId) {
+    if (!confirm('Remove this shift?')) return
+    await fetch(`/api/schedule/shifts/${shiftId}`, { method: 'DELETE' })
+    fetchData()
+  }
+
+  async function handlePublish() {
+    if (!confirm('Publish the roster for this week? Staff will be able to see their shifts.')) return
+    setPublishing(true)
+    await fetch('/api/schedule/shifts/publish', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        location_id: locationId,
+        start_date: formatDate(weekStart),
+        end_date: formatDate(weekEnd),
+        notify: true,
+      }),
+    })
+    setPublishing(false)
+    fetchData()
+  }
+
+  async function handleCopyWeek() {
+    const prevWeekStart = addDays(weekStart, -7)
+    if (!confirm(`Copy last week's roster (${formatDate(prevWeekStart)}) to this week?`)) return
+    setCopying(true)
+    const res = await fetch('/api/schedule/shifts/copy-week', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        location_id: locationId,
+        source_start: formatDate(prevWeekStart),
+        target_start: formatDate(weekStart),
+      }),
+    })
+    const data = await res.json()
+    setCopying(false)
+    if (data.success) fetchData()
+    else alert(data.error || 'Failed to copy week')
+  }
+
+  async function handleSwapRequest(shiftId, reason) {
+    const res = await fetch('/api/schedule/swaps', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ requester_shift_id: shiftId, reason }),
+    })
+    const data = await res.json()
+    if (data.success) {
+      setSwapModal(null)
+      alert('Swap request submitted — waiting for manager approval')
+    } else {
+      alert(data.error || 'Failed to submit swap request')
+    }
+  }
+
+  return (
+    <div>
+      {/* Header */}
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h2 className="text-2xl font-bold">Schedule</h2>
+          <p className="text-sm text-un1t-light mt-1">
+            {user.activeLocation?.name} — Staff roster
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          {/* View toggle */}
+          <div className="flex bg-un1t-dark border border-un1t-gray rounded-lg overflow-hidden text-xs">
+            <button
+              onClick={() => setViewMode('my')}
+              className={`flex items-center gap-1.5 px-3 py-2 transition-colors ${viewMode === 'my' ? 'bg-white text-black' : 'text-un1t-light hover:text-white'}`}
+            >
+              <User size={14} /> My Shifts
+            </button>
+            <button
+              onClick={() => setViewMode('all')}
+              className={`flex items-center gap-1.5 px-3 py-2 transition-colors ${viewMode === 'all' ? 'bg-white text-black' : 'text-un1t-light hover:text-white'}`}
+            >
+              <Users size={14} /> All Staff
+            </button>
+          </div>
+
+          {isManager && (
+            <>
+              <button
+                onClick={handleCopyWeek}
+                disabled={copying}
+                className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg border border-un1t-gray text-un1t-light hover:text-white hover:border-white/30 transition-colors disabled:opacity-50"
+              >
+                <Copy size={14} /> {copying ? 'Copying...' : 'Copy Last Week'}
+              </button>
+              {unpublishedCount > 0 && (
+                <button
+                  onClick={handlePublish}
+                  disabled={publishing}
+                  className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white transition-colors disabled:opacity-50"
+                >
+                  <Send size={14} /> {publishing ? 'Publishing...' : `Publish (${unpublishedCount})`}
+                </button>
+              )}
+            </>
+          )}
+        </div>
+      </div>
+
+      {/* Week Navigation */}
+      <div className="flex items-center justify-between mb-4">
+        <button
+          onClick={() => setWeekStart(addDays(weekStart, -7))}
+          className="p-2 rounded-lg hover:bg-un1t-gray/50 text-un1t-light hover:text-white transition-colors"
+        >
+          <ChevronLeft size={20} />
+        </button>
+        <div className="text-center">
+          <span className="font-semibold">{weekLabel}</span>
+          <button
+            onClick={() => setWeekStart(getMonday(new Date()))}
+            className="ml-3 text-xs text-blue-400 hover:text-blue-300"
+          >
+            Today
+          </button>
+        </div>
+        <button
+          onClick={() => setWeekStart(addDays(weekStart, 7))}
+          className="p-2 rounded-lg hover:bg-un1t-gray/50 text-un1t-light hover:text-white transition-colors"
+        >
+          <ChevronRight size={20} />
+        </button>
+      </div>
+
+      {/* Calendar Grid */}
+      {loading ? (
+        <div className="text-center py-20 text-un1t-light">Loading roster...</div>
+      ) : (
+        <div className="grid grid-cols-7 gap-2">
+          {DAY_LABELS.map((label, i) => {
+            const date = addDays(weekStart, i)
+            const dateStr = formatDate(date)
+            const isToday = formatDate(new Date()) === dateStr
+            const dayShifts = shiftsByDay[i]
+
+            return (
+              <div key={i} className="min-h-[200px]">
+                {/* Day header */}
+                <div className={`text-center py-2 rounded-t-lg text-xs font-semibold ${isToday ? 'bg-blue-600 text-white' : 'bg-un1t-dark text-un1t-light'}`}>
+                  <div>{label}</div>
+                  <div className={`text-lg font-bold ${isToday ? 'text-white' : 'text-white'}`}>{date.getDate()}</div>
+                </div>
+
+                {/* Shifts */}
+                <div className="bg-un1t-dark/50 border border-un1t-gray border-t-0 rounded-b-lg p-1.5 space-y-1.5 min-h-[160px]">
+                  {dayShifts.length === 0 && (
+                    <div className="text-center py-6 text-xs text-un1t-mid">No shifts</div>
+                  )}
+
+                  {dayShifts.map(shift => {
+                    const tmpl = shift.shift_templates || {}
+                    const startTime = shift.start_time_override || tmpl.start_time
+                    const endTime = shift.end_time_override || tmpl.end_time
+                    const isMyShift = shift.profile_id === user.id
+
+                    return (
+                      <div
+                        key={shift.id}
+                        className={`rounded-md p-2 text-xs relative group ${isMyShift ? 'ring-1 ring-blue-400/50' : ''}`}
+                        style={{ backgroundColor: (tmpl.color || '#3B82F6') + '20', borderLeft: `3px solid ${tmpl.color || '#3B82F6'}` }}
+                      >
+                        <div className="font-semibold truncate">{shift.profiles?.full_name || 'Unknown'}</div>
+                        <div className="text-un1t-light mt-0.5 flex items-center gap-1">
+                          <Clock size={10} />
+                          {formatTime(startTime)}–{formatTime(endTime)}
+                        </div>
+                        {shift.role_label && (
+                          <div className="text-un1t-light mt-0.5">{shift.role_label}</div>
+                        )}
+                        {shift.notes && (
+                          <div className="text-un1t-mid mt-0.5 truncate" title={shift.notes}>{shift.notes}</div>
+                        )}
+                        {tmpl.name && (
+                          <div className="mt-1 inline-block px-1.5 py-0.5 rounded text-[10px] font-medium" style={{ backgroundColor: (tmpl.color || '#3B82F6') + '30', color: tmpl.color || '#3B82F6' }}>
+                            {tmpl.name}
+                          </div>
+                        )}
+                        {!shift.published && (
+                          <div className="absolute top-1 right-1 w-2 h-2 rounded-full bg-yellow-400" title="Unpublished" />
+                        )}
+
+                        {/* Actions (hover) */}
+                        <div className="absolute top-1 right-1 hidden group-hover:flex gap-1">
+                          {isMyShift && (
+                            <button
+                              onClick={() => setSwapModal(shift)}
+                              className="p-1 rounded bg-un1t-dark/80 hover:bg-un1t-gray text-un1t-light hover:text-white"
+                              title="Request swap"
+                            >
+                              <ArrowLeftRight size={12} />
+                            </button>
+                          )}
+                          {isManager && (
+                            <button
+                              onClick={() => handleDeleteShift(shift.id)}
+                              className="p-1 rounded bg-un1t-dark/80 hover:bg-red-500/30 text-un1t-light hover:text-red-400"
+                              title="Remove shift"
+                            >
+                              <X size={12} />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    )
+                  })}
+
+                  {/* Add shift button */}
+                  {isManager && (
+                    <button
+                      onClick={() => setShowAddModal({ date: dateStr, dayIndex: i })}
+                      className="w-full py-2 rounded-md border border-dashed border-un1t-gray text-un1t-mid hover:text-white hover:border-white/30 text-xs transition-colors flex items-center justify-center gap-1"
+                    >
+                      <Plus size={12} /> Add
+                    </button>
+                  )}
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      {/* Add Shift Modal */}
+      {showAddModal && (
+        <AddShiftModal
+          date={showAddModal.date}
+          templates={templates}
+          staff={locationStaff}
+          onAdd={handleAddShift}
+          onClose={() => setShowAddModal(null)}
+        />
+      )}
+
+      {/* Swap Request Modal */}
+      {swapModal && (
+        <SwapModal
+          shift={swapModal}
+          onSubmit={handleSwapRequest}
+          onClose={() => setSwapModal(null)}
+        />
+      )}
+    </div>
+  )
+}
+
+function AddShiftModal({ date, templates, staff, onAdd, onClose }) {
+  const [profileId, setProfileId] = useState('')
+  const [templateId, setTemplateId] = useState('')
+  const [roleLabel, setRoleLabel] = useState('')
+  const [notes, setNotes] = useState('')
+
+  const dayLabel = new Date(date + 'T00:00:00').toLocaleDateString('en-IE', { weekday: 'long', day: 'numeric', month: 'long' })
+
+  return (
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={onClose}>
+      <div className="bg-un1t-dark border border-un1t-gray rounded-xl p-6 w-full max-w-md" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="font-semibold">Add Shift — {dayLabel}</h3>
+          <button onClick={onClose} className="text-un1t-light hover:text-white"><X size={18} /></button>
+        </div>
+
+        <div className="space-y-3">
+          <div>
+            <label className="block text-xs text-un1t-light mb-1">Staff Member *</label>
+            <select value={profileId} onChange={e => setProfileId(e.target.value)} className="w-full bg-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-white">
+              <option value="">Select staff...</option>
+              {staff.map(s => (
+                <option key={s.id} value={s.id}>{s.full_name} ({s.role})</option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-xs text-un1t-light mb-1">Shift *</label>
+            <select value={templateId} onChange={e => setTemplateId(e.target.value)} className="w-full bg-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-white">
+              <option value="">Select shift...</option>
+              {templates.map(t => (
+                <option key={t.id} value={t.id}>{t.name} ({formatTime(t.start_time)}–{formatTime(t.end_time)})</option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-xs text-un1t-light mb-1">Role / Position</label>
+            <input
+              type="text"
+              value={roleLabel}
+              onChange={e => setRoleLabel(e.target.value)}
+              placeholder="e.g. Front Desk, Floor Coach"
+              className="w-full bg-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-white"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs text-un1t-light mb-1">Notes</label>
+            <input
+              type="text"
+              value={notes}
+              onChange={e => setNotes(e.target.value)}
+              placeholder="Optional notes for this shift"
+              className="w-full bg-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-white"
+            />
+          </div>
+        </div>
+
+        <button
+          onClick={() => profileId && templateId && onAdd(profileId, templateId, date, roleLabel, notes)}
+          disabled={!profileId || !templateId}
+          className="w-full mt-4 bg-white text-black font-medium text-sm py-2.5 rounded-md hover:bg-gray-200 transition-colors disabled:opacity-50"
+        >
+          Add Shift
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function SwapModal({ shift, onSubmit, onClose }) {
+  const [reason, setReason] = useState('')
+
+  const tmpl = shift.shift_templates || {}
+
+  return (
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={onClose}>
+      <div className="bg-un1t-dark border border-un1t-gray rounded-xl p-6 w-full max-w-md" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="font-semibold">Request Shift Swap</h3>
+          <button onClick={onClose} className="text-un1t-light hover:text-white"><X size={18} /></button>
+        </div>
+
+        <div className="bg-black/30 rounded-lg p-3 mb-4 text-sm">
+          <div className="font-medium">{tmpl.name} — {new Date(shift.shift_date + 'T00:00:00').toLocaleDateString('en-IE', { weekday: 'long', day: 'numeric', month: 'long' })}</div>
+          <div className="text-un1t-light text-xs mt-1">
+            {formatTime(shift.start_time_override || tmpl.start_time)}–{formatTime(shift.end_time_override || tmpl.end_time)}
+            {shift.role_label && ` · ${shift.role_label}`}
+          </div>
+        </div>
+
+        <div>
+          <label className="block text-xs text-un1t-light mb-1">Reason (optional)</label>
+          <textarea
+            value={reason}
+            onChange={e => setReason(e.target.value)}
+            rows={3}
+            placeholder="Why do you need to swap this shift?"
+            className="w-full bg-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-white resize-none"
+          />
+        </div>
+
+        <button
+          onClick={() => onSubmit(shift.id, reason)}
+          className="w-full mt-4 bg-white text-black font-medium text-sm py-2.5 rounded-md hover:bg-gray-200 transition-colors"
+        >
+          Submit Swap Request
+        </button>
+        <p className="text-xs text-un1t-mid mt-2 text-center">A manager will review your request</p>
+      </div>
+    </div>
+  )
+}
