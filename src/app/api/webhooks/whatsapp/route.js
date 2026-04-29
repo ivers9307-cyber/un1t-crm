@@ -1,0 +1,273 @@
+import { createServerClient } from '@/lib/supabase'
+import { NextResponse } from 'next/server'
+import { refreshWindow } from '@/lib/whatsapp'
+
+// GET — Meta webhook verification (required for setup)
+export async function GET(request) {
+  const { searchParams } = new URL(request.url)
+  const mode = searchParams.get('hub.mode')
+  const token = searchParams.get('hub.verify_token')
+  const challenge = searchParams.get('hub.challenge')
+
+  const verifyToken = process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN || 'un1t_wa_verify'
+
+  if (mode === 'subscribe' && token === verifyToken) {
+    return new Response(challenge, { status: 200 })
+  }
+
+  return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+}
+
+// POST — Incoming messages and status updates from Meta
+export async function POST(request) {
+  const body = await request.json()
+  const db = createServerClient()
+
+  try {
+    const entries = body.entry || []
+
+    for (const entry of entries) {
+      const changes = entry.changes || []
+
+      for (const change of changes) {
+        if (change.field !== 'messages') continue
+
+        const value = change.value
+        const phoneNumberId = value.metadata?.phone_number_id
+
+        // Handle incoming messages
+        if (value.messages) {
+          for (const message of value.messages) {
+            await handleIncomingMessage(db, message, value.contacts, phoneNumberId)
+          }
+        }
+
+        // Handle status updates (sent, delivered, read, failed)
+        if (value.statuses) {
+          for (const status of value.statuses) {
+            await handleStatusUpdate(db, status)
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.error('WhatsApp webhook error:', err)
+  }
+
+  // Always return 200 to Meta (they retry on non-200)
+  return NextResponse.json({ success: true })
+}
+
+async function handleIncomingMessage(db, message, contacts, phoneNumberId) {
+  const senderPhone = message.from  // E.164 format
+  const messageId = message.id
+  const timestamp = message.timestamp ? new Date(parseInt(message.timestamp) * 1000) : new Date()
+
+  // Get contact name from Meta's contacts array
+  const metaContact = contacts?.find(c => c.wa_id === senderPhone)
+  const senderName = metaContact?.profile?.name || null
+
+  // Find contact by phone number
+  let contact = null
+  const { data: existingContacts } = await db.from('contacts')
+    .select('id, location_id')
+    .or(`wa_phone.eq.${senderPhone},phone.eq.${senderPhone}`)
+    .limit(1)
+
+  if (existingContacts?.length) {
+    contact = existingContacts[0]
+  } else {
+    // Create new contact from WhatsApp message
+    const { data: newContact } = await db.from('contacts').insert({
+      name: senderName || senderPhone,
+      first_name: senderName?.split(' ')[0] || null,
+      email: `${senderPhone}@wa.placeholder`,  // Placeholder — needs real email
+      phone: senderPhone,
+      wa_phone: senderPhone,
+      lead_source: 'whatsapp',
+      lead_status: 'active_trial',
+    }).select('id, location_id').single()
+
+    contact = newContact
+  }
+
+  if (!contact) {
+    console.error('Could not find or create contact for:', senderPhone)
+    return
+  }
+
+  // Update wa_phone if not set
+  await db.from('contacts').update({ wa_phone: senderPhone }).eq('id', contact.id).is('wa_phone', null)
+
+  const locationId = contact.location_id
+
+  // Get or create conversation
+  const { data: existingConv } = await db.from('whatsapp_conversations')
+    .select('id')
+    .eq('contact_id', contact.id)
+    .limit(1)
+    .single()
+
+  let conversationId
+  if (existingConv) {
+    conversationId = existingConv.id
+  } else {
+    const { data: newConv } = await db.from('whatsapp_conversations').insert({
+      location_id: locationId,
+      contact_id: contact.id,
+      wa_phone: senderPhone,
+      status: 'active',
+    }).select('id').single()
+    conversationId = newConv?.id
+  }
+
+  if (!conversationId) return
+
+  // Refresh 24h window (inbound message opens the window)
+  await refreshWindow(db, conversationId)
+
+  // Extract message content
+  let body = ''
+  let messageType = message.type || 'text'
+  let mediaUrl = null
+  let mediaMime = null
+
+  switch (messageType) {
+    case 'text':
+      body = message.text?.body || ''
+      break
+    case 'image':
+      body = message.image?.caption || ''
+      mediaUrl = message.image?.id  // Media ID — needs download
+      mediaMime = message.image?.mime_type
+      break
+    case 'video':
+      body = message.video?.caption || ''
+      mediaUrl = message.video?.id
+      mediaMime = message.video?.mime_type
+      break
+    case 'document':
+      body = message.document?.caption || message.document?.filename || ''
+      mediaUrl = message.document?.id
+      mediaMime = message.document?.mime_type
+      break
+    case 'audio':
+      mediaUrl = message.audio?.id
+      mediaMime = message.audio?.mime_type
+      break
+    case 'location':
+      body = `Location: ${message.location?.latitude}, ${message.location?.longitude}`
+      break
+    case 'contacts':
+      body = `Shared contact: ${message.contacts?.[0]?.name?.formatted_name || 'Unknown'}`
+      break
+    case 'interactive':
+      body = message.interactive?.button_reply?.title || message.interactive?.list_reply?.title || ''
+      break
+    case 'reaction':
+      body = `Reacted: ${message.reaction?.emoji || ''}`
+      break
+    default:
+      body = `[${messageType} message]`
+  }
+
+  // Save message
+  await db.from('whatsapp_messages').insert({
+    conversation_id: conversationId,
+    contact_id: contact.id,
+    location_id: locationId,
+    wa_message_id: messageId,
+    direction: 'inbound',
+    message_type: messageType,
+    body,
+    media_url: mediaUrl,
+    media_mime_type: mediaMime,
+    status: 'delivered',
+    sent_at: timestamp.toISOString(),
+  })
+
+  // Update conversation
+  await db.from('whatsapp_conversations').update({
+    last_message_at: timestamp.toISOString(),
+    last_message_direction: 'inbound',
+    last_message_preview: body?.substring(0, 100) || `[${messageType}]`,
+    unread_count: db.rpc ? undefined : 1,  // Increment handled below
+  }).eq('id', conversationId)
+
+  // Increment unread count
+  await db.rpc('increment_unread', { conv_id: conversationId }).catch(() => {
+    // If RPC doesn't exist, do raw update
+    db.from('whatsapp_conversations')
+      .update({ unread_count: 1 })  // Simplified — ideally increment
+      .eq('id', conversationId)
+  })
+}
+
+async function handleStatusUpdate(db, status) {
+  const messageId = status.id
+  const statusValue = status.status  // sent, delivered, read, failed
+  const timestamp = status.timestamp ? new Date(parseInt(status.timestamp) * 1000) : new Date()
+
+  const updates = { status: statusValue }
+
+  switch (statusValue) {
+    case 'sent':
+      updates.sent_at = timestamp.toISOString()
+      break
+    case 'delivered':
+      updates.delivered_at = timestamp.toISOString()
+      break
+    case 'read':
+      updates.read_at = timestamp.toISOString()
+      break
+    case 'failed':
+      updates.error_code = status.errors?.[0]?.code?.toString()
+      updates.error_message = status.errors?.[0]?.title || 'Delivery failed'
+      break
+  }
+
+  // Update message record
+  await db.from('whatsapp_messages')
+    .update(updates)
+    .eq('wa_message_id', messageId)
+
+  // Update broadcast recipient if this was a broadcast message
+  const { data: msg } = await db.from('whatsapp_messages')
+    .select('broadcast_id, contact_id')
+    .eq('wa_message_id', messageId)
+    .single()
+
+  if (msg?.broadcast_id) {
+    const recipUpdates = { status: statusValue }
+    if (statusValue === 'delivered') recipUpdates.delivered_at = timestamp.toISOString()
+    if (statusValue === 'read') recipUpdates.read_at = timestamp.toISOString()
+    if (statusValue === 'failed') {
+      recipUpdates.failed_at = timestamp.toISOString()
+      recipUpdates.error_message = status.errors?.[0]?.title
+    }
+
+    await db.from('whatsapp_broadcast_recipients')
+      .update(recipUpdates)
+      .eq('broadcast_id', msg.broadcast_id)
+      .eq('contact_id', msg.contact_id)
+
+    // Update broadcast metrics
+    if (['delivered', 'read', 'failed'].includes(statusValue)) {
+      const metricField = statusValue === 'delivered' ? 'total_delivered'
+        : statusValue === 'read' ? 'total_read'
+        : 'total_failed'
+
+      // Simple increment via raw SQL would be ideal; this is a workaround
+      const { data: broadcast } = await db.from('whatsapp_broadcasts')
+        .select(metricField)
+        .eq('id', msg.broadcast_id)
+        .single()
+
+      if (broadcast) {
+        await db.from('whatsapp_broadcasts')
+          .update({ [metricField]: (broadcast[metricField] || 0) + 1 })
+          .eq('id', msg.broadcast_id)
+      }
+    }
+  }
+}
