@@ -1,4 +1,5 @@
-import { createServerClient, getCurrentUser } from '@/lib/supabase'
+import { createServerClient } from '@/lib/supabase'
+import { getCurrentUser } from '@/lib/auth'
 import { redirect } from 'next/navigation'
 import StaffForm from '@/components/StaffForm'
 

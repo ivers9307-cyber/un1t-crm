@@ -1,4 +1,4 @@
-import { getCurrentUser } from '@/lib/supabase'
+import { getCurrentUser } from '@/lib/auth'
 import AppShell from './AppShell'
 
 export default async function AppShellServer({ children }) {
