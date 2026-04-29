@@ -59,11 +59,11 @@ BEGIN
 
   IF NEW.direction = 'outbound' THEN
     INSERT INTO activities (
-      contact_id, location_id, type, description, created_at
+      contact_id, type, subject, note, created_at
     ) VALUES (
       NEW.contact_id,
-      NEW.location_id,
       'whatsapp_sent',
+      'WhatsApp sent',
       COALESCE('WhatsApp: ' || LEFT(NEW.body, 100), 'WhatsApp template: ' || NEW.template_name),
       NEW.created_at
     );
@@ -74,11 +74,11 @@ BEGIN
     WHERE id = NEW.contact_id;
   ELSIF NEW.direction = 'inbound' THEN
     INSERT INTO activities (
-      contact_id, location_id, type, description, created_at
+      contact_id, type, subject, note, created_at
     ) VALUES (
       NEW.contact_id,
-      NEW.location_id,
       'whatsapp_received',
+      'WhatsApp received',
       'WhatsApp: ' || LEFT(NEW.body, 100),
       NEW.created_at
     );

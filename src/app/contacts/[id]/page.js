@@ -1,7 +1,7 @@
 import { createServerClient } from '@/lib/supabase'
 import { notFound } from 'next/navigation'
 import Link from 'next/link'
-import { ArrowLeft, Mail, Phone, Tag, Calendar, MessageSquare, CheckSquare, Clock, BookOpen, ArrowRight } from 'lucide-react'
+import { ArrowLeft, Mail, Phone, Tag, Calendar, MessageSquare, CheckSquare, Clock, BookOpen, ArrowRight, MessageCircle } from 'lucide-react'
 import ContactActions from '@/components/ContactActions'
 
 export const dynamic = 'force-dynamic'
@@ -25,18 +25,21 @@ const activityIcons = {
   task: { bg: 'bg-orange-500/20', color: 'text-orange-400', label: 'Task' },
   booking: { bg: 'bg-indigo-500/20', color: 'text-indigo-400', label: 'Booking' },
   pipeline: { bg: 'bg-emerald-500/20', color: 'text-emerald-400', label: 'Pipeline' },
+  whatsapp_sent: { bg: 'bg-green-500/20', color: 'text-green-400', label: 'WhatsApp Sent' },
+  whatsapp_received: { bg: 'bg-green-500/20', color: 'text-green-300', label: 'WhatsApp Received' },
 }
 
 export default async function ContactDetailPage({ params }) {
   const db = createServerClient()
   const { id } = params
 
-  const [contactRes, dealsRes, notesRes, activitiesRes, bookingsRes] = await Promise.all([
+  const [contactRes, dealsRes, notesRes, activitiesRes, bookingsRes, waConvRes] = await Promise.all([
     db.from('contacts').select('*').eq('id', id).single(),
     db.from('deals').select('*, pipeline_stages(name, color)').eq('contact_id', id).order('created_at', { ascending: false }),
     db.from('notes').select('*').eq('contact_id', id).order('created_at', { ascending: false }),
     db.from('activities').select('*').eq('contact_id', id).order('created_at', { ascending: false }),
     db.from('bookings').select('*, event_types(name, color)').eq('contact_id', id).order('booking_date', { ascending: true }),
+    db.from('whatsapp_conversations').select('id, wa_phone, last_message_at, last_message_preview, last_message_direction, unread_count, status').eq('contact_id', id).order('last_message_at', { ascending: false }),
   ])
 
   if (!contactRes.data) notFound()
@@ -46,6 +49,7 @@ export default async function ContactDetailPage({ params }) {
   const notes = notesRes.data || []
   const activities = activitiesRes.data || []
   const bookings = bookingsRes.data || []
+  const waConversations = waConvRes.data || []
 
   const today = new Date().toISOString().split('T')[0]
   const upcomingBookings = bookings.filter(b => b.booking_date >= today && b.status === 'confirmed')
@@ -86,6 +90,9 @@ export default async function ContactDetailPage({ params }) {
           <div className="flex items-center gap-4 mt-2 text-sm text-un1t-light">
             {contact.email && <span className="flex items-center gap-1.5"><Mail size={14} /> {contact.email}</span>}
             {contact.phone && <span className="flex items-center gap-1.5"><Phone size={14} /> {contact.phone}</span>}
+            {contact.wa_phone && contact.wa_phone !== contact.phone && (
+              <span className="flex items-center gap-1.5"><MessageCircle size={14} /> {contact.wa_phone}</span>
+            )}
           </div>
         </div>
         <span className={`px-3 py-1 rounded-full text-sm border ${statusColors[contact.lead_status] || 'bg-un1t-gray text-un1t-light border-un1t-gray'}`}>
@@ -119,6 +126,41 @@ export default async function ContactDetailPage({ params }) {
               </div>
             ))}
           </div>
+
+          {/* WhatsApp Conversations */}
+          {(waConversations.length > 0 || contact.wa_phone) && (
+            <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-4">
+              <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light mb-3 flex items-center gap-1.5">
+                <MessageCircle size={12} /> WhatsApp
+              </h3>
+              {contact.wa_phone && (
+                <p className="text-xs text-un1t-mid mb-2">{contact.wa_phone}</p>
+              )}
+              {waConversations.length === 0 && <p className="text-sm text-un1t-mid">No conversations</p>}
+              {waConversations.map(conv => (
+                <Link
+                  key={conv.id}
+                  href="/whatsapp/inbox"
+                  className="block py-2 border-b border-un1t-gray last:border-0 hover:bg-un1t-gray/20 -mx-1 px-1 rounded transition-colors"
+                >
+                  <div className="flex items-center justify-between">
+                    <p className="text-sm truncate flex-1">
+                      {conv.last_message_direction === 'outbound' && <span className="text-un1t-light">You: </span>}
+                      {conv.last_message_preview || 'No messages'}
+                    </p>
+                    {conv.unread_count > 0 && (
+                      <span className="bg-green-500 text-white text-[10px] font-bold w-5 h-5 rounded-full flex items-center justify-center shrink-0 ml-2">
+                        {conv.unread_count}
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-xs text-un1t-mid mt-0.5">
+                    {conv.last_message_at ? new Date(conv.last_message_at).toLocaleString('en-IE', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : ''}
+                  </p>
+                </Link>
+              ))}
+            </div>
+          )}
 
           {/* Upcoming Bookings */}
           <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-4">
@@ -209,6 +251,7 @@ export default async function ContactDetailPage({ params }) {
                   : item.activityType === 'pipeline' ? ArrowRight
                   : item.activityType === 'email' ? Mail
                   : item.activityType === 'meeting' ? Calendar
+                  : item.activityType === 'whatsapp_sent' || item.activityType === 'whatsapp_received' ? MessageCircle
                   : CheckSquare
 
                 return (
@@ -231,7 +274,7 @@ export default async function ContactDetailPage({ params }) {
                         </span>
                       </div>
                       <p className="text-sm mt-1 whitespace-pre-wrap text-un1t-light">
-                        {item.content || item.note || ''}
+                        {item.content || item.note || item.description || ''}
                       </p>
                       {item.type === 'activity' && item.done && item.activityType !== 'pipeline' && item.activityType !== 'booking' && (
                         <span className="text-xs text-green-400 mt-1 inline-block">Completed</span>

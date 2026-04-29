@@ -74,17 +74,17 @@ export async function POST(request, { params }) {
       // Log to timeline
       await db.from('activities').insert({
         contact_id: contact.id,
-        location_id: conversation.location_id,
         type: 'note',
-        description: 'Contact created from WhatsApp conversation and added to pipeline.',
+        subject: 'Contact created from WhatsApp',
+        note: 'Contact created from WhatsApp conversation and added to pipeline.',
       })
     } else {
       // Just log the creation
       await db.from('activities').insert({
         contact_id: contact.id,
-        location_id: conversation.location_id,
         type: 'note',
-        description: 'Contact created from WhatsApp conversation.',
+        subject: 'Contact created from WhatsApp',
+        note: 'Contact created from WhatsApp conversation.',
       })
     }
 
@@ -97,9 +97,9 @@ export async function POST(request, { params }) {
     if (messages?.length) {
       const activities = messages.map(msg => ({
         contact_id: contact.id,
-        location_id: conversation.location_id,
         type: msg.direction === 'inbound' ? 'whatsapp_received' : 'whatsapp_sent',
-        description: `WhatsApp: ${(msg.body || `[${msg.message_type}]`).substring(0, 100)}`,
+        subject: msg.direction === 'inbound' ? 'WhatsApp received' : 'WhatsApp sent',
+        note: `WhatsApp: ${(msg.body || `[${msg.message_type}]`).substring(0, 100)}`,
         created_at: msg.sent_at,
       }))
 
