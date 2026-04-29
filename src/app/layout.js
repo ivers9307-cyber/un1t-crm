@@ -1,19 +1,16 @@
 import './globals.css'
-import Sidebar from '@/components/Sidebar'
+import AppShellServer from '@/components/AppShellServer'
 
 export const metadata = {
   title: 'UN1T CRM',
-  description: 'Lead management for UN1T Dublin',
+  description: 'Lead management for UN1T',
 }
 
 export default function RootLayout({ children }) {
   return (
     <html lang="en">
-      <body className="flex h-screen overflow-hidden">
-        <Sidebar />
-        <main className="flex-1 overflow-auto">
-          {children}
-        </main>
+      <body>
+        <AppShellServer>{children}</AppShellServer>
       </body>
     </html>
   )
