@@ -71,19 +71,19 @@ export default async function EmailPage({ searchParams }) {
         <div className="flex gap-2">
           <Link
             href="/email/templates"
-            className="flex items-center gap-2 border border-un1t-gray text-un1t-light hover:text-white hover:border-white/30 text-sm font-medium px-4 py-2.5 rounded-lg transition-colors"
+            className="flex items-center gap-2 border border-un1t-gray text-un1t-light hover:text-un1t-white hover:border-un1t-white/30 text-sm font-medium px-4 py-2.5 rounded-lg transition-colors"
           >
             Templates
           </Link>
           <Link
             href="/email/sequences"
-            className="flex items-center gap-2 border border-un1t-gray text-un1t-light hover:text-white hover:border-white/30 text-sm font-medium px-4 py-2.5 rounded-lg transition-colors"
+            className="flex items-center gap-2 border border-un1t-gray text-un1t-light hover:text-un1t-white hover:border-un1t-white/30 text-sm font-medium px-4 py-2.5 rounded-lg transition-colors"
           >
             Sequences
           </Link>
           <Link
             href="/email/campaigns/new"
-            className="flex items-center gap-2 bg-white text-black text-sm font-medium px-4 py-2.5 rounded-lg hover:bg-gray-200 transition-colors"
+            className="flex items-center gap-2 bg-un1t-white text-un1t-black text-sm font-medium px-4 py-2.5 rounded-lg hover:bg-un1t-accent transition-colors"
           >
             <Plus size={16} />
             New Campaign
@@ -119,8 +119,8 @@ export default async function EmailPage({ searchParams }) {
             href={`/email${f.key !== 'all' ? `?filter=${f.key}` : ''}`}
             className={`text-xs px-3 py-1.5 rounded-full transition-colors ${
               filter === f.key
-                ? 'bg-white text-black'
-                : 'border border-un1t-gray text-un1t-light hover:text-white hover:border-white/30'
+                ? 'bg-un1t-white text-un1t-black'
+                : 'border border-un1t-gray text-un1t-light hover:text-un1t-white hover:border-un1t-white/30'
             }`}
           >
             {f.label}
@@ -138,7 +138,7 @@ export default async function EmailPage({ searchParams }) {
           </p>
           <Link
             href="/email/campaigns/new"
-            className="inline-flex items-center gap-2 bg-white text-black text-sm font-medium px-4 py-2.5 rounded-lg hover:bg-gray-200 transition-colors"
+            className="inline-flex items-center gap-2 bg-un1t-white text-un1t-black text-sm font-medium px-4 py-2.5 rounded-lg hover:bg-un1t-accent transition-colors"
           >
             <Plus size={16} />
             Create Campaign

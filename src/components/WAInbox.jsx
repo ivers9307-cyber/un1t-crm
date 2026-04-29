@@ -268,12 +268,12 @@ export default function WAInbox({ locationId, userId, initialConversationId }) {
       <div className="w-80 border-r border-un1t-gray flex flex-col shrink-0 bg-un1t-dark">
         <div className="p-4 border-b border-un1t-gray flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <Link href="/whatsapp" className="text-un1t-light hover:text-white transition-colors">
+            <Link href="/whatsapp" className="text-un1t-light hover:text-un1t-white transition-colors">
               <ArrowLeft size={18} />
             </Link>
             <h3 className="font-semibold">Inbox</h3>
           </div>
-          <button onClick={fetchConversations} className="p-1.5 text-un1t-light hover:text-white transition-colors">
+          <button onClick={fetchConversations} className="p-1.5 text-un1t-light hover:text-un1t-white transition-colors">
             <RefreshCw size={14} />
           </button>
         </div>
@@ -390,7 +390,7 @@ export default function WAInbox({ locationId, userId, initialConversationId }) {
                 ) : conversation?.contacts?.id && (
                   <Link
                     href={`/contacts/${conversation.contacts.id}`}
-                    className="flex items-center gap-1.5 text-xs text-un1t-light hover:text-white transition-colors"
+                    className="flex items-center gap-1.5 text-xs text-un1t-light hover:text-un1t-white transition-colors"
                   >
                     <UserCheck size={12} />
                     View contact
@@ -407,7 +407,7 @@ export default function WAInbox({ locationId, userId, initialConversationId }) {
                     <UserPlus size={14} />
                     Add to Contacts
                   </h4>
-                  <button onClick={() => setShowAddContact(false)} className="text-un1t-light hover:text-white">
+                  <button onClick={() => setShowAddContact(false)} className="text-un1t-light hover:text-un1t-white">
                     <X size={14} />
                   </button>
                 </div>
@@ -420,7 +420,7 @@ export default function WAInbox({ locationId, userId, initialConversationId }) {
                       value={addContactForm.name}
                       onChange={e => setAddContactForm({ ...addContactForm, name: e.target.value, first_name: e.target.value.split(' ')[0] })}
                       placeholder="John Smith"
-                      className="w-full bg-black border border-un1t-gray rounded-md px-3 py-1.5 text-sm text-white placeholder:text-un1t-mid focus:outline-none focus:border-white/40"
+                      className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-1.5 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid"
                     />
                   </div>
                   <div>
@@ -430,7 +430,7 @@ export default function WAInbox({ locationId, userId, initialConversationId }) {
                       value={addContactForm.email}
                       onChange={e => setAddContactForm({ ...addContactForm, email: e.target.value })}
                       placeholder="john@example.com"
-                      className="w-full bg-black border border-un1t-gray rounded-md px-3 py-1.5 text-sm text-white placeholder:text-un1t-mid focus:outline-none focus:border-white/40"
+                      className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-1.5 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid"
                     />
                   </div>
                   <div>
@@ -438,7 +438,7 @@ export default function WAInbox({ locationId, userId, initialConversationId }) {
                     <select
                       value={addContactForm.lead_status}
                       onChange={e => setAddContactForm({ ...addContactForm, lead_status: e.target.value })}
-                      className="w-full bg-black border border-un1t-gray rounded-md px-3 py-1.5 text-sm text-white focus:outline-none focus:border-white/40"
+                      className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-1.5 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
                     >
                       <option value="new_lead">New Lead</option>
                       <option value="contacted">Contacted</option>
@@ -452,7 +452,7 @@ export default function WAInbox({ locationId, userId, initialConversationId }) {
                     <select
                       value={addContactForm.pipeline_stage}
                       onChange={e => setAddContactForm({ ...addContactForm, pipeline_stage: e.target.value })}
-                      className="w-full bg-black border border-un1t-gray rounded-md px-3 py-1.5 text-sm text-white focus:outline-none focus:border-white/40"
+                      className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-1.5 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
                     >
                       <option value="new">New</option>
                       <option value="contacted">Contacted</option>
@@ -477,7 +477,7 @@ export default function WAInbox({ locationId, userId, initialConversationId }) {
                   <div className="flex-1" />
                   <button
                     onClick={() => setShowAddContact(false)}
-                    className="text-xs text-un1t-light hover:text-white px-3 py-1.5 transition-colors"
+                    className="text-xs text-un1t-light hover:text-un1t-white px-3 py-1.5 transition-colors"
                   >
                     Cancel
                   </button>
@@ -502,8 +502,8 @@ export default function WAInbox({ locationId, userId, initialConversationId }) {
                 >
                   <div className={`max-w-[65%] rounded-lg px-3 py-2 ${
                     msg.direction === 'outbound'
-                      ? 'bg-[#005c4b] text-white'
-                      : 'bg-un1t-dark text-white'
+                      ? 'bg-[#005c4b] text-un1t-white'
+                      : 'bg-un1t-dark text-un1t-white'
                   }`}>
                     {msg.message_type === 'template' && (
                       <p className="text-[10px] text-green-300 mb-1">Template: {msg.template_name}</p>
@@ -511,7 +511,7 @@ export default function WAInbox({ locationId, userId, initialConversationId }) {
                     <MessageTypeIcon type={msg.message_type} />
                     <p className="text-sm whitespace-pre-wrap">{msg.body || `[${msg.message_type}]`}</p>
                     <div className="flex items-center justify-end gap-1 mt-0.5">
-                      <span className="text-[10px] text-white/50">
+                      <span className="text-[10px] text-un1t-white/50">
                         {new Date(msg.sent_at || msg.created_at).toLocaleTimeString('en-IE', { hour: '2-digit', minute: '2-digit' })}
                       </span>
                       {msg.direction === 'outbound' && <StatusIcon status={msg.status} />}
@@ -534,14 +534,14 @@ export default function WAInbox({ locationId, userId, initialConversationId }) {
                       onChange={e => setNewMessage(e.target.value)}
                       onKeyDown={e => e.key === 'Enter' && !e.shiftKey && handleSend()}
                       placeholder="Type a message..."
-                      className="flex-1 bg-black border border-un1t-gray rounded-full px-4 py-2 text-sm text-white placeholder:text-un1t-mid focus:outline-none focus:border-white/40"
+                      className="flex-1 bg-un1t-black border border-un1t-gray rounded-full px-4 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid"
                     />
                     <button
                       onClick={handleSend}
                       disabled={sending || !newMessage.trim()}
                       className="w-10 h-10 bg-green-600 rounded-full flex items-center justify-center hover:bg-green-700 transition-colors disabled:opacity-50"
                     >
-                      <Send size={16} className="text-white ml-0.5" />
+                      <Send size={16} className="text-un1t-white ml-0.5" />
                     </button>
                   </div>
                 </div>
@@ -567,7 +567,7 @@ export default function WAInbox({ locationId, userId, initialConversationId }) {
                     <div>
                       <div className="flex items-center justify-between mb-2">
                         <p className="text-xs text-un1t-light font-semibold uppercase tracking-wider">Select a template</p>
-                        <button onClick={() => setShowTemplatePicker(false)} className="text-un1t-light hover:text-white">
+                        <button onClick={() => setShowTemplatePicker(false)} className="text-un1t-light hover:text-un1t-white">
                           <X size={14} />
                         </button>
                       </div>
@@ -603,7 +603,7 @@ export default function WAInbox({ locationId, userId, initialConversationId }) {
                         </p>
                         <button
                           onClick={() => { setSelectedTemplate(null); setShowTemplatePicker(true) }}
-                          className="text-xs text-un1t-light hover:text-white"
+                          className="text-xs text-un1t-light hover:text-un1t-white"
                         >
                           Change
                         </button>
@@ -611,7 +611,7 @@ export default function WAInbox({ locationId, userId, initialConversationId }) {
 
                       {/* Template preview */}
                       <div className="bg-[#005c4b] rounded-lg px-3 py-2 mb-3 max-w-[80%]">
-                        <p className="text-sm text-white whitespace-pre-wrap">
+                        <p className="text-sm text-un1t-white whitespace-pre-wrap">
                           {(() => {
                             const bodyComp = selectedTemplate.components?.find(c => c.type === 'BODY')
                             let text = bodyComp?.text || ''
@@ -642,7 +642,7 @@ export default function WAInbox({ locationId, userId, initialConversationId }) {
                                     value={templateVars[num] || ''}
                                     onChange={e => setTemplateVars({ ...templateVars, [num]: e.target.value })}
                                     placeholder={num === '1' ? 'e.g. first name' : `Variable ${num}`}
-                                    className="flex-1 bg-black border border-un1t-gray rounded-md px-3 py-1.5 text-sm text-white placeholder:text-un1t-mid focus:outline-none focus:border-white/40"
+                                    className="flex-1 bg-un1t-black border border-un1t-gray rounded-md px-3 py-1.5 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid"
                                   />
                                 </div>
                               )

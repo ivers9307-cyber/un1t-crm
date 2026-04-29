@@ -36,7 +36,7 @@ export default function LocationSwitcher({ locations, activeLocationId }) {
         className="flex items-center gap-1.5 w-full text-left group"
       >
         <MapPin size={12} className="text-un1t-mid shrink-0" />
-        <span className="text-xs text-un1t-light group-hover:text-white transition-colors truncate">
+        <span className="text-xs text-un1t-light group-hover:text-un1t-white transition-colors truncate">
           {active.name}
         </span>
         <ChevronDown size={12} className={`text-un1t-mid shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} />
@@ -50,8 +50,8 @@ export default function LocationSwitcher({ locations, activeLocationId }) {
               onClick={() => switchLocation(loc.id)}
               className={`w-full text-left px-3 py-2 text-xs transition-colors ${
                 loc.id === activeLocationId
-                  ? 'text-white bg-un1t-gray/50'
-                  : 'text-un1t-light hover:text-white hover:bg-un1t-gray/30'
+                  ? 'text-un1t-white bg-un1t-gray/50'
+                  : 'text-un1t-light hover:text-un1t-white hover:bg-un1t-gray/30'
               }`}
             >
               {loc.name}

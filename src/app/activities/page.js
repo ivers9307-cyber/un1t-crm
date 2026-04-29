@@ -48,8 +48,8 @@ export default async function ActivitiesPage({ searchParams }) {
             href={`/activities?filter=${f.key}`}
             className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
               filter === f.key
-                ? 'border-white text-white bg-un1t-gray'
-                : 'border-un1t-gray text-un1t-light hover:text-white hover:border-un1t-mid'
+                ? 'border-un1t-white text-un1t-white bg-un1t-gray'
+                : 'border-un1t-gray text-un1t-light hover:text-un1t-white hover:border-un1t-mid'
             }`}
           >
             {f.label}
@@ -84,7 +84,7 @@ export default async function ActivitiesPage({ searchParams }) {
               <div className="flex-1 min-w-0">
                 <p className={`text-sm font-medium ${a.done ? 'line-through' : ''}`}>{a.subject}</p>
                 {a.contacts?.name && (
-                  <Link href={`/contacts/${a.contacts.id}`} className="text-xs text-un1t-light hover:text-white flex items-center gap-1 mt-0.5">
+                  <Link href={`/contacts/${a.contacts.id}`} className="text-xs text-un1t-light hover:text-un1t-white flex items-center gap-1 mt-0.5">
                     <User size={10} /> {a.contacts.name}
                   </Link>
                 )}

@@ -78,8 +78,8 @@ export default async function BookingsPage({ searchParams }) {
             href={`/bookings?filter=${f.key}`}
             className={`text-xs px-3 py-1.5 rounded-full transition-colors ${
               filter === f.key
-                ? 'bg-white text-black'
-                : 'border border-un1t-gray text-un1t-light hover:text-white hover:border-white/30'
+                ? 'bg-un1t-white text-un1t-black'
+                : 'border border-un1t-gray text-un1t-light hover:text-un1t-white hover:border-un1t-white/30'
             }`}
           >
             {f.label}

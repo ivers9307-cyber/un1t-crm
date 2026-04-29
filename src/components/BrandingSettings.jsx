@@ -140,13 +140,13 @@ export default function BrandingSettings({ user }) {
             type="text"
             value={companyName}
             onChange={e => setCompanyName(e.target.value)}
-            className="flex-1 bg-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-white placeholder:text-un1t-mid focus:outline-none focus:border-white/40"
+            className="flex-1 bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid"
             placeholder="UN1T"
           />
           <button
             onClick={handleSaveName}
             disabled={saving}
-            className="px-4 py-2 bg-white text-black text-xs font-medium rounded-md hover:bg-gray-200 transition-colors disabled:opacity-50 flex items-center gap-1.5"
+            className="px-4 py-2 bg-un1t-white text-un1t-black text-xs font-medium rounded-md hover:bg-un1t-accent transition-colors disabled:opacity-50 flex items-center gap-1.5"
           >
             {saved ? <><Check size={12} /> Saved</> : saving ? 'Saving...' : 'Save'}
           </button>
@@ -160,7 +160,7 @@ export default function BrandingSettings({ user }) {
 
         <div className="flex items-start gap-4">
           {/* Preview */}
-          <div className="w-32 h-16 bg-black border border-un1t-gray rounded-lg flex items-center justify-center overflow-hidden shrink-0"
+          <div className="w-32 h-16 bg-un1t-black border border-un1t-gray rounded-lg flex items-center justify-center overflow-hidden shrink-0"
                style={{ backgroundImage: 'url("data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' width=\'16\' height=\'16\' fill=\'none\'%3E%3Crect x=\'0\' y=\'0\' width=\'8\' height=\'8\' fill=\'%23222\'/%3E%3Crect x=\'8\' y=\'8\' width=\'8\' height=\'8\' fill=\'%23222\'/%3E%3C/svg%3E")' }}>
             {settings?.logo_url ? (
               <img src={settings.logo_url} alt="Logo" className="max-w-full max-h-full object-contain" />
@@ -180,7 +180,7 @@ export default function BrandingSettings({ user }) {
             <button
               onClick={() => logoInputRef.current?.click()}
               disabled={uploading === 'logo'}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-un1t-dark border border-un1t-gray rounded-md text-white hover:bg-un1t-gray/50 transition-colors disabled:opacity-50"
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-un1t-dark border border-un1t-gray rounded-md text-un1t-white hover:bg-un1t-gray/50 transition-colors disabled:opacity-50"
             >
               <Upload size={12} />
               {uploading === 'logo' ? 'Uploading...' : 'Upload Logo'}
@@ -205,7 +205,7 @@ export default function BrandingSettings({ user }) {
 
         <div className="flex items-start gap-4">
           {/* Preview */}
-          <div className="w-16 h-16 bg-black border border-un1t-gray rounded-lg flex items-center justify-center overflow-hidden shrink-0"
+          <div className="w-16 h-16 bg-un1t-black border border-un1t-gray rounded-lg flex items-center justify-center overflow-hidden shrink-0"
                style={{ backgroundImage: 'url("data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' width=\'16\' height=\'16\' fill=\'none\'%3E%3Crect x=\'0\' y=\'0\' width=\'8\' height=\'8\' fill=\'%23222\'/%3E%3Crect x=\'8\' y=\'8\' width=\'8\' height=\'8\' fill=\'%23222\'/%3E%3C/svg%3E")' }}>
             {settings?.favicon_url ? (
               <img src={settings.favicon_url} alt="Favicon" className="w-8 h-8 object-contain" />
@@ -225,7 +225,7 @@ export default function BrandingSettings({ user }) {
             <button
               onClick={() => faviconInputRef.current?.click()}
               disabled={uploading === 'favicon'}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-un1t-dark border border-un1t-gray rounded-md text-white hover:bg-un1t-gray/50 transition-colors disabled:opacity-50"
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-un1t-dark border border-un1t-gray rounded-md text-un1t-white hover:bg-un1t-gray/50 transition-colors disabled:opacity-50"
             >
               <Upload size={12} />
               {uploading === 'favicon' ? 'Uploading...' : 'Upload Favicon'}

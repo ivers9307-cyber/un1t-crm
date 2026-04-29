@@ -133,7 +133,7 @@ export default function StaffForm({ staff, locations }) {
 
   return (
     <form onSubmit={handleSubmit} className="space-y-6">
-      <Link href="/settings" className="inline-flex items-center gap-1.5 text-sm text-un1t-light hover:text-white">
+      <Link href="/settings" className="inline-flex items-center gap-1.5 text-sm text-un1t-light hover:text-un1t-white">
         <ArrowLeft size={16} /> Back to Settings
       </Link>
 
@@ -154,7 +154,7 @@ export default function StaffForm({ staff, locations }) {
             required
             value={form.full_name}
             onChange={e => setForm(prev => ({ ...prev, full_name: e.target.value }))}
-            className="w-full bg-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:border-white/40"
+            className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
           />
         </div>
 
@@ -166,7 +166,7 @@ export default function StaffForm({ staff, locations }) {
             disabled={isEdit}
             value={form.email}
             onChange={e => setForm(prev => ({ ...prev, email: e.target.value }))}
-            className="w-full bg-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:border-white/40 disabled:opacity-50"
+            className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid disabled:opacity-50"
           />
         </div>
 
@@ -179,7 +179,7 @@ export default function StaffForm({ staff, locations }) {
               minLength={8}
               value={form.password}
               onChange={e => setForm(prev => ({ ...prev, password: e.target.value }))}
-              className="w-full bg-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:border-white/40"
+              className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
               placeholder="Min 8 characters"
             />
           </div>
@@ -197,7 +197,7 @@ export default function StaffForm({ staff, locations }) {
                 permissions: isEdit ? prev.permissions : (defaultPermissionsByRole[newRole] || defaultPermissions),
               }))
             }}
-            className="w-full bg-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:border-white/40"
+            className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
           >
             <option value="staff">Staff</option>
             <option value="head_coach">Head Coach</option>
@@ -256,7 +256,7 @@ export default function StaffForm({ staff, locations }) {
                 onClick={() => setForm(prev => ({ ...prev, employment_type: opt.value }))}
                 className={`flex-1 py-2 px-3 rounded-md text-sm border transition-colors ${
                   form.employment_type === opt.value
-                    ? 'border-white/40 bg-white/5 text-white'
+                    ? 'border-un1t-white/40 bg-un1t-gray/30 text-un1t-white'
                     : 'border-un1t-gray text-un1t-light hover:border-white/20'
                 }`}
               >
@@ -278,7 +278,7 @@ export default function StaffForm({ staff, locations }) {
                   value={form.annual_salary}
                   onChange={e => setForm(prev => ({ ...prev, annual_salary: e.target.value }))}
                   placeholder="e.g. 35000"
-                  className="w-full bg-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:border-white/40"
+                  className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
                 />
               </div>
               <div>
@@ -290,13 +290,13 @@ export default function StaffForm({ staff, locations }) {
                   max="80"
                   value={form.contracted_hours_per_week}
                   onChange={e => setForm(prev => ({ ...prev, contracted_hours_per_week: e.target.value }))}
-                  className="w-full bg-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:border-white/40"
+                  className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
                 />
               </div>
             </div>
             {form.annual_salary && form.contracted_hours_per_week > 0 && (
               <div className="text-xs text-un1t-light bg-black/30 rounded-md px-3 py-2">
-                Effective hourly rate: <span className="text-white font-medium">€{(Number(form.annual_salary) / (Number(form.contracted_hours_per_week) * 52)).toFixed(2)}</span>/hr
+                Effective hourly rate: <span className="text-un1t-white font-medium">€{(Number(form.annual_salary) / (Number(form.contracted_hours_per_week) * 52)).toFixed(2)}</span>/hr
               </div>
             )}
             <div>
@@ -308,7 +308,7 @@ export default function StaffForm({ staff, locations }) {
                 max="50"
                 value={form.annual_leave_entitlement}
                 onChange={e => setForm(prev => ({ ...prev, annual_leave_entitlement: e.target.value }))}
-                className="w-full bg-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:border-white/40"
+                className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
               />
             </div>
           </>
@@ -322,7 +322,7 @@ export default function StaffForm({ staff, locations }) {
               value={form.hourly_rate}
               onChange={e => setForm(prev => ({ ...prev, hourly_rate: e.target.value }))}
               placeholder="e.g. 18.50"
-              className="w-full bg-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:border-white/40"
+              className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
             />
           </div>
         )}
@@ -357,7 +357,7 @@ export default function StaffForm({ staff, locations }) {
       <button
         type="submit"
         disabled={saving}
-        className="w-full bg-white text-black font-medium text-sm py-2.5 rounded-md hover:bg-gray-200 transition-colors disabled:opacity-50"
+        className="w-full bg-un1t-white text-un1t-black font-medium text-sm py-2.5 rounded-md hover:bg-un1t-accent transition-colors disabled:opacity-50"
       >
         {saving ? 'Saving...' : isEdit ? 'Save Changes' : 'Create Team Member'}
       </button>

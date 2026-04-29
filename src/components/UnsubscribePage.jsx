@@ -22,7 +22,7 @@ export default function UnsubscribePage({ token }) {
   }
 
   return (
-    <div className="min-h-screen bg-black flex items-center justify-center p-4">
+    <div className="min-h-screen bg-un1t-black flex items-center justify-center p-4">
       <div className="w-full max-w-md text-center">
         <h1 className="text-2xl font-bold tracking-wider mb-8">UN1T</h1>
 
@@ -34,13 +34,13 @@ export default function UnsubscribePage({ token }) {
             </p>
             <button
               onClick={handleUnsubscribe}
-              className="w-full bg-white text-black font-medium py-2.5 rounded-md hover:bg-gray-200 transition-colors"
+              className="w-full bg-un1t-white text-un1t-black font-medium py-2.5 rounded-md hover:bg-un1t-accent transition-colors"
             >
               Unsubscribe
             </button>
             <Link
               href={`/preferences/${token}`}
-              className="block mt-4 text-sm text-un1t-light hover:text-white transition-colors"
+              className="block mt-4 text-sm text-un1t-light hover:text-un1t-white transition-colors"
             >
               Or manage all your communication preferences
             </Link>
@@ -66,7 +66,7 @@ export default function UnsubscribePage({ token }) {
             </p>
             <Link
               href={`/preferences/${token}`}
-              className="text-sm text-un1t-light hover:text-white transition-colors"
+              className="text-sm text-un1t-light hover:text-un1t-white transition-colors"
             >
               Manage preferences
             </Link>
@@ -81,7 +81,7 @@ export default function UnsubscribePage({ token }) {
             </p>
             <button
               onClick={() => setStatus('idle')}
-              className="text-sm text-un1t-light hover:text-white transition-colors"
+              className="text-sm text-un1t-light hover:text-un1t-white transition-colors"
             >
               Try again
             </button>

@@ -34,7 +34,7 @@ export default async function SequencesPage() {
     <div className="p-8">
       <div className="flex items-center justify-between mb-6">
         <div className="flex items-center gap-4">
-          <Link href="/email" className="text-un1t-light hover:text-white transition-colors">
+          <Link href="/email" className="text-un1t-light hover:text-un1t-white transition-colors">
             <ArrowLeft size={20} />
           </Link>
           <div>
@@ -44,7 +44,7 @@ export default async function SequencesPage() {
         </div>
         <Link
           href="/email/sequences/new"
-          className="flex items-center gap-2 bg-white text-black text-sm font-medium px-4 py-2.5 rounded-lg hover:bg-gray-200 transition-colors"
+          className="flex items-center gap-2 bg-un1t-white text-un1t-black text-sm font-medium px-4 py-2.5 rounded-lg hover:bg-un1t-accent transition-colors"
         >
           <Plus size={16} />
           New Sequence
@@ -60,7 +60,7 @@ export default async function SequencesPage() {
           </p>
           <Link
             href="/email/sequences/new"
-            className="inline-flex items-center gap-2 bg-white text-black text-sm font-medium px-4 py-2.5 rounded-lg hover:bg-gray-200 transition-colors"
+            className="inline-flex items-center gap-2 bg-un1t-white text-un1t-black text-sm font-medium px-4 py-2.5 rounded-lg hover:bg-un1t-accent transition-colors"
           >
             <Plus size={16} />
             Create Sequence

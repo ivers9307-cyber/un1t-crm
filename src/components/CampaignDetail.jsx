@@ -68,7 +68,7 @@ export default function CampaignDetail({ campaign, recipients = [], locationId, 
       {/* Top bar */}
       <div className="flex items-center justify-between px-5 py-3 border-b border-un1t-gray bg-un1t-dark shrink-0">
         <div className="flex items-center gap-4">
-          <Link href="/email" className="text-un1t-light hover:text-white transition-colors">
+          <Link href="/email" className="text-un1t-light hover:text-un1t-white transition-colors">
             <ArrowLeft size={20} />
           </Link>
           <div>
@@ -92,8 +92,8 @@ export default function CampaignDetail({ campaign, recipients = [], locationId, 
             onClick={() => setTab(t.key)}
             className={`px-5 py-2.5 text-sm font-medium border-b-2 transition-colors ${
               tab === t.key
-                ? 'text-white border-white'
-                : 'text-un1t-light border-transparent hover:text-white'
+                ? 'text-un1t-white border-un1t-white'
+                : 'text-un1t-light border-transparent hover:text-un1t-white'
             }`}
           >
             {t.label}
@@ -148,7 +148,7 @@ export default function CampaignDetail({ campaign, recipients = [], locationId, 
                           {campaign.audience_filter.logic || 'and'}
                         </span>
                       )}
-                      <span className="text-white">{f.field.replace(/_/g, ' ')}</span>
+                      <span className="text-un1t-white">{f.field.replace(/_/g, ' ')}</span>
                       <span className="text-un1t-mid">{f.op.replace(/_/g, ' ')}</span>
                       {!['is_null', 'not_null'].includes(f.op) && (
                         <span className="text-blue-400">{f.value}</span>
@@ -192,7 +192,7 @@ export default function CampaignDetail({ campaign, recipients = [], locationId, 
                             <div>
                               <Link
                                 href={`/contacts/${r.contact_id}`}
-                                className="text-white hover:underline"
+                                className="text-un1t-white hover:underline"
                               >
                                 {contact?.name || 'Unknown'}
                               </Link>

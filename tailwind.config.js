@@ -5,13 +5,13 @@ module.exports = {
     extend: {
       colors: {
         un1t: {
-          black: '#0A0A0A',
-          dark: '#1A1A1A',
-          gray: '#2A2A2A',
-          mid: '#4A4A4A',
-          light: '#8A8A8A',
-          white: '#F5F5F5',
-          accent: '#E5E5E5',
+          black: '#FFFFFF',
+          dark: '#F7F8FA',
+          gray: '#E2E5E9',
+          mid: '#94A3B8',
+          light: '#64748B',
+          white: '#111827',
+          accent: '#1E293B',
         },
         stage: {
           new: '#3B82F6',

@@ -41,7 +41,7 @@ export default function BookingStatusToggle({ bookingId, currentStatus }) {
               key={opt}
               onClick={() => updateStatus(opt)}
               className={`w-full text-left text-xs px-3 py-1.5 hover:bg-un1t-gray/50 transition-colors ${
-                opt === status ? 'text-white' : 'text-un1t-light'
+                opt === status ? 'text-un1t-white' : 'text-un1t-light'
               }`}
             >
               {opt.replace('_', ' ')}

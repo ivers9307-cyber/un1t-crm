@@ -103,7 +103,7 @@ export default function AudienceBuilder({ filter, onChange, audienceCount }) {
           <button
             onClick={() => updateFilter(filters, 'and')}
             className={`px-3 py-1 rounded-md text-xs font-medium transition-colors ${
-              logic === 'and' ? 'bg-white text-black' : 'border border-un1t-gray text-un1t-light hover:text-white'
+              logic === 'and' ? 'bg-un1t-white text-un1t-black' : 'border border-un1t-gray text-un1t-light hover:text-un1t-white'
             }`}
           >
             ALL filters
@@ -111,7 +111,7 @@ export default function AudienceBuilder({ filter, onChange, audienceCount }) {
           <button
             onClick={() => updateFilter(filters, 'or')}
             className={`px-3 py-1 rounded-md text-xs font-medium transition-colors ${
-              logic === 'or' ? 'bg-white text-black' : 'border border-un1t-gray text-un1t-light hover:text-white'
+              logic === 'or' ? 'bg-un1t-white text-un1t-black' : 'border border-un1t-gray text-un1t-light hover:text-un1t-white'
             }`}
           >
             ANY filter
@@ -148,7 +148,7 @@ export default function AudienceBuilder({ filter, onChange, audienceCount }) {
               <select
                 value={f.field}
                 onChange={e => handleFieldChange(index, e.target.value)}
-                className="bg-black border border-un1t-gray rounded-md px-2.5 py-1.5 text-sm text-white focus:outline-none focus:border-white/40"
+                className="bg-un1t-black border border-un1t-gray rounded-md px-2.5 py-1.5 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
               >
                 {FIELD_OPTIONS.map(opt => (
                   <option key={opt.value} value={opt.value}>{opt.label}</option>
@@ -159,7 +159,7 @@ export default function AudienceBuilder({ filter, onChange, audienceCount }) {
               <select
                 value={f.op}
                 onChange={e => updateRow(index, { op: e.target.value })}
-                className="bg-black border border-un1t-gray rounded-md px-2.5 py-1.5 text-sm text-white focus:outline-none focus:border-white/40"
+                className="bg-un1t-black border border-un1t-gray rounded-md px-2.5 py-1.5 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
               >
                 {ops.map(op => (
                   <option key={op.value} value={op.value}>{op.label}</option>
@@ -171,7 +171,7 @@ export default function AudienceBuilder({ filter, onChange, audienceCount }) {
                 <select
                   value={f.value}
                   onChange={e => updateRow(index, { value: e.target.value })}
-                  className="bg-black border border-un1t-gray rounded-md px-2.5 py-1.5 text-sm text-white focus:outline-none focus:border-white/40 flex-1"
+                  className="bg-un1t-black border border-un1t-gray rounded-md px-2.5 py-1.5 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid flex-1"
                 >
                   {fieldConfig.options?.map(opt => (
                     <option key={opt} value={opt}>{opt.replace(/_/g, ' ')}</option>
@@ -182,7 +182,7 @@ export default function AudienceBuilder({ filter, onChange, audienceCount }) {
                   type="number"
                   value={f.value}
                   onChange={e => updateRow(index, { value: e.target.value })}
-                  className="bg-black border border-un1t-gray rounded-md px-2.5 py-1.5 text-sm text-white focus:outline-none focus:border-white/40 w-24"
+                  className="bg-un1t-black border border-un1t-gray rounded-md px-2.5 py-1.5 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid w-24"
                 />
               ) : showValue && fieldConfig.type === 'date' ? (
                 ['days_since_gt', 'days_since_lt'].includes(f.op) ? (
@@ -192,7 +192,7 @@ export default function AudienceBuilder({ filter, onChange, audienceCount }) {
                       value={f.value}
                       onChange={e => updateRow(index, { value: e.target.value })}
                       placeholder="30"
-                      className="bg-black border border-un1t-gray rounded-md px-2.5 py-1.5 text-sm text-white focus:outline-none focus:border-white/40 w-20"
+                      className="bg-un1t-black border border-un1t-gray rounded-md px-2.5 py-1.5 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid w-20"
                     />
                     <span className="text-xs text-un1t-mid">days</span>
                   </div>
@@ -201,7 +201,7 @@ export default function AudienceBuilder({ filter, onChange, audienceCount }) {
                     type="date"
                     value={f.value}
                     onChange={e => updateRow(index, { value: e.target.value })}
-                    className="bg-black border border-un1t-gray rounded-md px-2.5 py-1.5 text-sm text-white focus:outline-none focus:border-white/40"
+                    className="bg-un1t-black border border-un1t-gray rounded-md px-2.5 py-1.5 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
                   />
                 )
               ) : showValue ? (
@@ -210,7 +210,7 @@ export default function AudienceBuilder({ filter, onChange, audienceCount }) {
                   value={f.value}
                   onChange={e => updateRow(index, { value: e.target.value })}
                   placeholder="Value..."
-                  className="bg-black border border-un1t-gray rounded-md px-2.5 py-1.5 text-sm text-white placeholder:text-un1t-mid focus:outline-none focus:border-white/40 flex-1"
+                  className="bg-un1t-black border border-un1t-gray rounded-md px-2.5 py-1.5 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid flex-1"
                 />
               ) : null}
 
@@ -230,7 +230,7 @@ export default function AudienceBuilder({ filter, onChange, audienceCount }) {
       <div className="flex items-center justify-between">
         <button
           onClick={addFilter}
-          className="flex items-center gap-1.5 text-xs text-un1t-light hover:text-white transition-colors"
+          className="flex items-center gap-1.5 text-xs text-un1t-light hover:text-un1t-white transition-colors"
         >
           <Plus size={14} />
           Add filter
@@ -239,7 +239,7 @@ export default function AudienceBuilder({ filter, onChange, audienceCount }) {
         {audienceCount !== null && (
           <span className="text-sm text-un1t-light">
             <Users size={14} className="inline mr-1.5" />
-            <strong className="text-white">{audienceCount}</strong> contacts match
+            <strong className="text-un1t-white">{audienceCount}</strong> contacts match
           </span>
         )}
       </div>

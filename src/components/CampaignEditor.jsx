@@ -220,7 +220,7 @@ export default function CampaignEditor({ campaign, locationId, userId }) {
       {/* Top Bar */}
       <div className="flex items-center justify-between px-5 py-3 border-b border-un1t-gray bg-un1t-dark shrink-0">
         <div className="flex items-center gap-4">
-          <Link href="/email" className="text-un1t-light hover:text-white transition-colors">
+          <Link href="/email" className="text-un1t-light hover:text-un1t-white transition-colors">
             <ArrowLeft size={20} />
           </Link>
           <input
@@ -228,7 +228,7 @@ export default function CampaignEditor({ campaign, locationId, userId }) {
             value={name}
             onChange={e => setName(e.target.value)}
             placeholder="Campaign name..."
-            className="bg-transparent text-lg font-semibold text-white placeholder:text-un1t-mid focus:outline-none w-64"
+            className="bg-transparent text-lg font-semibold text-un1t-white placeholder:text-un1t-mid focus:outline-none w-64"
           />
           <span className="text-xs bg-un1t-gray text-un1t-light px-2 py-0.5 rounded-full">Draft</span>
         </div>
@@ -243,7 +243,7 @@ export default function CampaignEditor({ campaign, locationId, userId }) {
           <button
             onClick={handleSave}
             disabled={saving}
-            className="flex items-center gap-1.5 text-sm text-un1t-light hover:text-white border border-un1t-gray hover:border-white/30 px-3 py-1.5 rounded-md transition-colors disabled:opacity-50"
+            className="flex items-center gap-1.5 text-sm text-un1t-light hover:text-un1t-white border border-un1t-gray hover:border-un1t-white/30 px-3 py-1.5 rounded-md transition-colors disabled:opacity-50"
           >
             <Save size={14} />
             {saving ? 'Saving...' : 'Save'}
@@ -251,7 +251,7 @@ export default function CampaignEditor({ campaign, locationId, userId }) {
           <button
             onClick={handleSend}
             disabled={sending || !subject}
-            className="flex items-center gap-1.5 text-sm bg-white text-black font-medium px-4 py-1.5 rounded-md hover:bg-gray-200 transition-colors disabled:opacity-50"
+            className="flex items-center gap-1.5 text-sm bg-un1t-white text-un1t-black font-medium px-4 py-1.5 rounded-md hover:bg-un1t-accent transition-colors disabled:opacity-50"
           >
             <Send size={14} />
             {sending ? 'Sending...' : 'Send Campaign'}
@@ -273,8 +273,8 @@ export default function CampaignEditor({ campaign, locationId, userId }) {
             onClick={() => setTab(t.key)}
             className={`px-5 py-2.5 text-sm font-medium border-b-2 transition-colors ${
               tab === t.key
-                ? 'text-white border-white'
-                : 'text-un1t-light border-transparent hover:text-white'
+                ? 'text-un1t-white border-un1t-white'
+                : 'text-un1t-light border-transparent hover:text-un1t-white'
             }`}
           >
             {t.label}
@@ -291,7 +291,7 @@ export default function CampaignEditor({ campaign, locationId, userId }) {
               <button
                 onClick={() => setEditorMode('visual')}
                 className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md transition-colors ${
-                  editorMode === 'visual' ? 'bg-white text-black' : 'text-un1t-light hover:text-white'
+                  editorMode === 'visual' ? 'bg-un1t-white text-un1t-black' : 'text-un1t-light hover:text-un1t-white'
                 }`}
               >
                 <Paintbrush size={12} /> Visual Editor
@@ -307,7 +307,7 @@ export default function CampaignEditor({ campaign, locationId, userId }) {
                   setEditorMode('code')
                 }}
                 className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md transition-colors ${
-                  editorMode === 'code' ? 'bg-white text-black' : 'text-un1t-light hover:text-white'
+                  editorMode === 'code' ? 'bg-un1t-white text-un1t-black' : 'text-un1t-light hover:text-un1t-white'
                 }`}
               >
                 <Code size={12} /> HTML Code
@@ -357,7 +357,7 @@ export default function CampaignEditor({ campaign, locationId, userId }) {
                   value={subject}
                   onChange={e => setSubject(e.target.value)}
                   placeholder="Your subject line — use {{first_name}} for personalisation"
-                  className="w-full bg-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-white placeholder:text-un1t-mid focus:outline-none focus:border-white/40"
+                  className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid"
                 />
               </div>
 
@@ -368,7 +368,7 @@ export default function CampaignEditor({ campaign, locationId, userId }) {
                   value={previewText}
                   onChange={e => setPreviewText(e.target.value)}
                   placeholder="Short text shown in inbox preview (optional)"
-                  className="w-full bg-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-white placeholder:text-un1t-mid focus:outline-none focus:border-white/40"
+                  className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid"
                 />
               </div>
 
@@ -380,7 +380,7 @@ export default function CampaignEditor({ campaign, locationId, userId }) {
                     value={fromName}
                     onChange={e => setFromName(e.target.value)}
                     placeholder="UN1T"
-                    className="w-full bg-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-white placeholder:text-un1t-mid focus:outline-none focus:border-white/40"
+                    className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid"
                   />
                 </div>
                 <div>
@@ -390,7 +390,7 @@ export default function CampaignEditor({ campaign, locationId, userId }) {
                     value={fromEmail}
                     onChange={e => setFromEmail(e.target.value)}
                     placeholder="hello@un1t.ie"
-                    className="w-full bg-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-white placeholder:text-un1t-mid focus:outline-none focus:border-white/40"
+                    className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid"
                   />
                 </div>
               </div>
@@ -402,7 +402,7 @@ export default function CampaignEditor({ campaign, locationId, userId }) {
                   value={replyTo}
                   onChange={e => setReplyTo(e.target.value)}
                   placeholder="Same as From if left empty"
-                  className="w-full bg-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-white placeholder:text-un1t-mid focus:outline-none focus:border-white/40"
+                  className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid"
                 />
               </div>
             </div>
@@ -420,7 +420,7 @@ export default function CampaignEditor({ campaign, locationId, userId }) {
                   ['{{preference_url}}', 'Preference centre link'],
                   ['{{current_year}}', 'Current year'],
                 ].map(([tag, desc]) => (
-                  <div key={tag} className="flex items-center gap-2 p-2 bg-black rounded">
+                  <div key={tag} className="flex items-center gap-2 p-2 bg-un1t-dark rounded">
                     <code className="text-blue-400">{tag}</code>
                     <span className="text-un1t-mid">{desc}</span>
                   </div>

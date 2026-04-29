@@ -93,7 +93,7 @@ export default function TimeOffManager({ user }) {
         </div>
         <button
           onClick={() => setShowForm(true)}
-          className="flex items-center gap-1.5 text-sm px-4 py-2 rounded-lg bg-white text-black font-medium hover:bg-gray-200 transition-colors"
+          className="flex items-center gap-1.5 text-sm px-4 py-2 rounded-lg bg-un1t-white text-un1t-black font-medium hover:bg-un1t-accent transition-colors"
         >
           <Plus size={16} /> Request Time Off
         </button>
@@ -126,14 +126,14 @@ export default function TimeOffManager({ user }) {
         <div className="flex bg-un1t-dark border border-un1t-gray rounded-lg overflow-hidden text-xs">
           <button
             onClick={() => setTab('my')}
-            className={`px-3 py-2 transition-colors ${tab === 'my' ? 'bg-white text-black' : 'text-un1t-light hover:text-white'}`}
+            className={`px-3 py-2 transition-colors ${tab === 'my' ? 'bg-un1t-white text-un1t-black' : 'text-un1t-light hover:text-un1t-white'}`}
           >
             My Requests
           </button>
           {isManager && (
             <button
               onClick={() => setTab('team')}
-              className={`px-3 py-2 transition-colors ${tab === 'team' ? 'bg-white text-black' : 'text-un1t-light hover:text-white'}`}
+              className={`px-3 py-2 transition-colors ${tab === 'team' ? 'bg-un1t-white text-un1t-black' : 'text-un1t-light hover:text-un1t-white'}`}
             >
               Team Requests
             </button>
@@ -145,7 +145,7 @@ export default function TimeOffManager({ user }) {
             <button
               key={f}
               onClick={() => setFilter(f)}
-              className={`px-3 py-1.5 rounded-full transition-colors capitalize ${filter === f ? 'bg-white text-black' : 'bg-un1t-dark border border-un1t-gray text-un1t-light hover:text-white'}`}
+              className={`px-3 py-1.5 rounded-full transition-colors capitalize ${filter === f ? 'bg-un1t-white text-un1t-black' : 'bg-un1t-dark border border-un1t-gray text-un1t-light hover:text-un1t-white'}`}
             >
               {f}
             </button>
@@ -298,7 +298,7 @@ function TimeOffFormModal({ user, allowance, onClose, onSubmit }) {
       <div className="bg-un1t-dark border border-un1t-gray rounded-xl p-6 w-full max-w-md" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-4">
           <h3 className="font-semibold">Request Time Off</h3>
-          <button onClick={onClose} className="text-un1t-light hover:text-white"><X size={18} /></button>
+          <button onClick={onClose} className="text-un1t-light hover:text-un1t-white"><X size={18} /></button>
         </div>
 
         {error && (
@@ -321,7 +321,7 @@ function TimeOffFormModal({ user, allowance, onClose, onSubmit }) {
                     onClick={() => setType(key)}
                     className={`flex flex-col items-center gap-1.5 p-3 rounded-lg border text-xs transition-colors ${
                       type === key
-                        ? 'border-white/40 bg-white/5'
+                        ? 'border-un1t-white/40 bg-un1t-gray/30'
                         : 'border-un1t-gray hover:border-white/20'
                     }`}
                   >
@@ -346,7 +346,7 @@ function TimeOffFormModal({ user, allowance, onClose, onSubmit }) {
                   if (!endDate || e.target.value > endDate) setEndDate(e.target.value)
                 }}
                 min={new Date().toISOString().split('T')[0]}
-                className="w-full bg-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-white"
+                className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
               />
             </div>
             <div>
@@ -357,7 +357,7 @@ function TimeOffFormModal({ user, allowance, onClose, onSubmit }) {
                 value={endDate}
                 onChange={e => setEndDate(e.target.value)}
                 min={startDate || new Date().toISOString().split('T')[0]}
-                className="w-full bg-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-white"
+                className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
               />
             </div>
           </div>
@@ -384,14 +384,14 @@ function TimeOffFormModal({ user, allowance, onClose, onSubmit }) {
               onChange={e => setReason(e.target.value)}
               rows={2}
               placeholder="e.g. Family holiday, doctor's appointment..."
-              className="w-full bg-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-white resize-none"
+              className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white resize-none"
             />
           </div>
 
           <button
             type="submit"
             disabled={!startDate || !endDate || saving}
-            className="w-full bg-white text-black font-medium text-sm py-2.5 rounded-md hover:bg-gray-200 transition-colors disabled:opacity-50"
+            className="w-full bg-un1t-white text-un1t-black font-medium text-sm py-2.5 rounded-md hover:bg-un1t-accent transition-colors disabled:opacity-50"
           >
             {saving ? 'Submitting...' : 'Submit Request'}
           </button>

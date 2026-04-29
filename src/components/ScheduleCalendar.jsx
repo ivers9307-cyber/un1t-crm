@@ -199,7 +199,7 @@ export default function ScheduleCalendar({ user }) {
           {/* Time Off link */}
           <Link
             href="/schedule/time-off"
-            className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg border border-un1t-gray text-un1t-light hover:text-white hover:border-white/30 transition-colors"
+            className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg border border-un1t-gray text-un1t-light hover:text-un1t-white hover:border-un1t-white/30 transition-colors"
           >
             <CalendarOff size={14} /> Time Off
           </Link>
@@ -208,13 +208,13 @@ export default function ScheduleCalendar({ user }) {
           <div className="flex bg-un1t-dark border border-un1t-gray rounded-lg overflow-hidden text-xs">
             <button
               onClick={() => setViewMode('my')}
-              className={`flex items-center gap-1.5 px-3 py-2 transition-colors ${viewMode === 'my' ? 'bg-white text-black' : 'text-un1t-light hover:text-white'}`}
+              className={`flex items-center gap-1.5 px-3 py-2 transition-colors ${viewMode === 'my' ? 'bg-un1t-white text-un1t-black' : 'text-un1t-light hover:text-un1t-white'}`}
             >
               <User size={14} /> My Shifts
             </button>
             <button
               onClick={() => setViewMode('all')}
-              className={`flex items-center gap-1.5 px-3 py-2 transition-colors ${viewMode === 'all' ? 'bg-white text-black' : 'text-un1t-light hover:text-white'}`}
+              className={`flex items-center gap-1.5 px-3 py-2 transition-colors ${viewMode === 'all' ? 'bg-un1t-white text-un1t-black' : 'text-un1t-light hover:text-un1t-white'}`}
             >
               <Users size={14} /> All Staff
             </button>
@@ -225,7 +225,7 @@ export default function ScheduleCalendar({ user }) {
               <button
                 onClick={handleCopyWeek}
                 disabled={copying}
-                className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg border border-un1t-gray text-un1t-light hover:text-white hover:border-white/30 transition-colors disabled:opacity-50"
+                className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg border border-un1t-gray text-un1t-light hover:text-un1t-white hover:border-un1t-white/30 transition-colors disabled:opacity-50"
               >
                 <Copy size={14} /> {copying ? 'Copying...' : 'Copy Last Week'}
               </button>
@@ -247,7 +247,7 @@ export default function ScheduleCalendar({ user }) {
       <div className="flex items-center justify-between mb-4">
         <button
           onClick={() => setWeekStart(addDays(weekStart, -7))}
-          className="p-2 rounded-lg hover:bg-un1t-gray/50 text-un1t-light hover:text-white transition-colors"
+          className="p-2 rounded-lg hover:bg-un1t-gray/50 text-un1t-light hover:text-un1t-white transition-colors"
         >
           <ChevronLeft size={20} />
         </button>
@@ -262,7 +262,7 @@ export default function ScheduleCalendar({ user }) {
         </div>
         <button
           onClick={() => setWeekStart(addDays(weekStart, 7))}
-          className="p-2 rounded-lg hover:bg-un1t-gray/50 text-un1t-light hover:text-white transition-colors"
+          className="p-2 rounded-lg hover:bg-un1t-gray/50 text-un1t-light hover:text-un1t-white transition-colors"
         >
           <ChevronRight size={20} />
         </button>
@@ -284,7 +284,7 @@ export default function ScheduleCalendar({ user }) {
                 {/* Day header */}
                 <div className={`text-center py-2 rounded-t-lg text-xs font-semibold ${isToday ? 'bg-blue-600 text-white' : 'bg-un1t-dark text-un1t-light'}`}>
                   <div>{label}</div>
-                  <div className={`text-lg font-bold ${isToday ? 'text-white' : 'text-white'}`}>{date.getDate()}</div>
+                  <div className={`text-lg font-bold ${isToday ? 'text-white' : 'text-un1t-white'}`}>{date.getDate()}</div>
                 </div>
 
                 {/* Shifts & Time Off */}
@@ -352,7 +352,7 @@ export default function ScheduleCalendar({ user }) {
                           {isMyShift && (
                             <button
                               onClick={() => setSwapModal(shift)}
-                              className="p-1 rounded bg-un1t-dark/80 hover:bg-un1t-gray text-un1t-light hover:text-white"
+                              className="p-1 rounded bg-un1t-dark/80 hover:bg-un1t-gray text-un1t-light hover:text-un1t-white"
                               title="Request swap"
                             >
                               <ArrowLeftRight size={12} />
@@ -376,7 +376,7 @@ export default function ScheduleCalendar({ user }) {
                   {isManager && (
                     <button
                       onClick={() => setShowAddModal({ date: dateStr, dayIndex: i })}
-                      className="w-full py-2 rounded-md border border-dashed border-un1t-gray text-un1t-mid hover:text-white hover:border-white/30 text-xs transition-colors flex items-center justify-center gap-1"
+                      className="w-full py-2 rounded-md border border-dashed border-un1t-gray text-un1t-mid hover:text-un1t-white hover:border-un1t-white/30 text-xs transition-colors flex items-center justify-center gap-1"
                     >
                       <Plus size={12} /> Add
                     </button>
@@ -430,13 +430,13 @@ function AddShiftModal({ date, templates, staff, onAdd, onClose }) {
       <div className="bg-un1t-dark border border-un1t-gray rounded-xl p-6 w-full max-w-md" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-4">
           <h3 className="font-semibold">Add Shift — {dayLabel}</h3>
-          <button onClick={onClose} className="text-un1t-light hover:text-white"><X size={18} /></button>
+          <button onClick={onClose} className="text-un1t-light hover:text-un1t-white"><X size={18} /></button>
         </div>
 
         <div className="space-y-3">
           <div>
             <label className="block text-xs text-un1t-light mb-1">Staff Member *</label>
-            <select value={profileId} onChange={e => setProfileId(e.target.value)} className="w-full bg-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-white">
+            <select value={profileId} onChange={e => setProfileId(e.target.value)} className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white">
               <option value="">Select staff...</option>
               {staff.map(s => (
                 <option key={s.id} value={s.id}>{s.full_name} ({s.role})</option>
@@ -446,7 +446,7 @@ function AddShiftModal({ date, templates, staff, onAdd, onClose }) {
 
           <div>
             <label className="block text-xs text-un1t-light mb-1">Shift *</label>
-            <select value={templateId} onChange={e => setTemplateId(e.target.value)} className="w-full bg-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-white">
+            <select value={templateId} onChange={e => setTemplateId(e.target.value)} className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white">
               <option value="">Select shift...</option>
               {templates.map(t => (
                 <option key={t.id} value={t.id}>{t.name} ({formatTime(t.start_time)}–{formatTime(t.end_time)})</option>
@@ -458,7 +458,7 @@ function AddShiftModal({ date, templates, staff, onAdd, onClose }) {
         <button
           onClick={handleClick}
           disabled={!profileId || !templateId || saving}
-          className="w-full mt-4 bg-white text-black font-medium text-sm py-2.5 rounded-md hover:bg-gray-200 transition-colors disabled:opacity-50"
+          className="w-full mt-4 bg-un1t-white text-un1t-black font-medium text-sm py-2.5 rounded-md hover:bg-un1t-accent transition-colors disabled:opacity-50"
         >
           {saving ? 'Adding...' : 'Add Shift'}
         </button>
@@ -477,7 +477,7 @@ function SwapModal({ shift, onSubmit, onClose }) {
       <div className="bg-un1t-dark border border-un1t-gray rounded-xl p-6 w-full max-w-md" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-4">
           <h3 className="font-semibold">Request Shift Swap</h3>
-          <button onClick={onClose} className="text-un1t-light hover:text-white"><X size={18} /></button>
+          <button onClick={onClose} className="text-un1t-light hover:text-un1t-white"><X size={18} /></button>
         </div>
 
         <div className="bg-black/30 rounded-lg p-3 mb-4 text-sm">
@@ -495,13 +495,13 @@ function SwapModal({ shift, onSubmit, onClose }) {
             onChange={e => setReason(e.target.value)}
             rows={3}
             placeholder="Why do you need to swap this shift?"
-            className="w-full bg-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-white resize-none"
+            className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white resize-none"
           />
         </div>
 
         <button
           onClick={() => onSubmit(shift.id, reason)}
-          className="w-full mt-4 bg-white text-black font-medium text-sm py-2.5 rounded-md hover:bg-gray-200 transition-colors"
+          className="w-full mt-4 bg-un1t-white text-un1t-black font-medium text-sm py-2.5 rounded-md hover:bg-un1t-accent transition-colors"
         >
           Submit Swap Request
         </button>

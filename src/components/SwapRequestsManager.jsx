@@ -58,7 +58,7 @@ export default function SwapRequestsManager({ user }) {
 
   return (
     <div>
-      <Link href="/schedule" className="inline-flex items-center gap-1.5 text-sm text-un1t-light hover:text-white mb-6">
+      <Link href="/schedule" className="inline-flex items-center gap-1.5 text-sm text-un1t-light hover:text-un1t-white mb-6">
         <ArrowLeft size={16} /> Back to Schedule
       </Link>
 
@@ -72,7 +72,7 @@ export default function SwapRequestsManager({ user }) {
             <button
               key={s}
               onClick={() => setFilter(s)}
-              className={`px-3 py-2 transition-colors ${filter === s ? 'bg-white text-black' : 'text-un1t-light hover:text-white'}`}
+              className={`px-3 py-2 transition-colors ${filter === s ? 'bg-un1t-white text-un1t-black' : 'text-un1t-light hover:text-un1t-white'}`}
             >
               {s || 'All'}
             </button>

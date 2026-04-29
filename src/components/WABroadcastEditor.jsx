@@ -116,7 +116,7 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, us
       {/* Top bar */}
       <div className="flex items-center justify-between px-5 py-3 border-b border-un1t-gray bg-un1t-dark shrink-0">
         <div className="flex items-center gap-4">
-          <Link href="/whatsapp/broadcasts" className="text-un1t-light hover:text-white transition-colors">
+          <Link href="/whatsapp/broadcasts" className="text-un1t-light hover:text-un1t-white transition-colors">
             <ArrowLeft size={20} />
           </Link>
           <input
@@ -125,7 +125,7 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, us
             onChange={e => setName(e.target.value)}
             placeholder="Broadcast name..."
             disabled={isSent}
-            className="bg-transparent text-lg font-semibold text-white placeholder:text-un1t-mid focus:outline-none w-64 disabled:opacity-70"
+            className="bg-transparent text-lg font-semibold text-un1t-white placeholder:text-un1t-mid focus:outline-none w-64 disabled:opacity-70"
           />
           {broadcast?.status && (
             <span className={`text-xs px-2 py-0.5 rounded-full ${
@@ -141,7 +141,7 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, us
             <button
               onClick={handleSave}
               disabled={saving}
-              className="flex items-center gap-1.5 text-sm text-un1t-light hover:text-white border border-un1t-gray hover:border-white/30 px-3 py-1.5 rounded-md transition-colors disabled:opacity-50"
+              className="flex items-center gap-1.5 text-sm text-un1t-light hover:text-un1t-white border border-un1t-gray hover:border-un1t-white/30 px-3 py-1.5 rounded-md transition-colors disabled:opacity-50"
             >
               <Save size={14} />
               {saving ? 'Saving...' : 'Save'}
@@ -175,7 +175,7 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, us
               key={t.key}
               onClick={() => setTab(t.key)}
               className={`px-5 py-2.5 text-sm font-medium border-b-2 transition-colors ${
-                tab === t.key ? 'text-white border-white' : 'text-un1t-light border-transparent hover:text-white'
+                tab === t.key ? 'text-un1t-white border-un1t-white' : 'text-un1t-light border-transparent hover:text-un1t-white'
               }`}
             >
               {t.label}
@@ -272,7 +272,7 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, us
                 <select
                   value={templateId}
                   onChange={e => setTemplateId(e.target.value)}
-                  className="w-full bg-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:border-white/40"
+                  className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
                 >
                   <option value="">Select a template...</option>
                   {templates.map(t => (
@@ -305,7 +305,7 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, us
                         <select
                           value={variableMapping[varNum] || ''}
                           onChange={e => setVariableMapping({ ...variableMapping, [varNum]: e.target.value })}
-                          className="flex-1 bg-black border border-un1t-gray rounded-md px-2.5 py-1.5 text-sm text-white focus:outline-none focus:border-white/40"
+                          className="flex-1 bg-un1t-black border border-un1t-gray rounded-md px-2.5 py-1.5 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
                         >
                           <option value="">Select field...</option>
                           {VARIABLE_OPTIONS.map(opt => (
@@ -327,7 +327,7 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, us
                     value={headerMediaUrl}
                     onChange={e => setHeaderMediaUrl(e.target.value)}
                     placeholder="https://..."
-                    className="w-full bg-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-white placeholder:text-un1t-mid focus:outline-none focus:border-white/40"
+                    className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid"
                   />
                 </div>
               )}

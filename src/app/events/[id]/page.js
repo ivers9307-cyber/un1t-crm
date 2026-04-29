@@ -49,7 +49,7 @@ export default async function EventDetailPage({ params }) {
     <div className="p-8">
       {/* Header */}
       <div className="flex items-center gap-3 mb-6">
-        <Link href="/events" className="text-un1t-light hover:text-white transition-colors">
+        <Link href="/events" className="text-un1t-light hover:text-un1t-white transition-colors">
           <ArrowLeft size={20} />
         </Link>
         <div className="flex-1">
@@ -66,7 +66,7 @@ export default async function EventDetailPage({ params }) {
           <EventActions slug={event.slug} eventId={event.id} />
           <Link
             href={`/events/${event.id}/edit`}
-            className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded border border-un1t-gray text-un1t-light hover:text-white hover:border-white/30 transition-colors"
+            className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded border border-un1t-gray text-un1t-light hover:text-un1t-white hover:border-un1t-white/30 transition-colors"
           >
             <Edit size={12} />
             Edit

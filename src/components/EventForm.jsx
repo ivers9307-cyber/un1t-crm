@@ -373,7 +373,7 @@ export default function EventForm({ event, locationId }) {
         <button
           type="button"
           onClick={() => router.push('/events')}
-          className="text-sm text-un1t-light hover:text-white px-4 py-2.5 transition-colors"
+          className="text-sm text-un1t-light hover:text-un1t-white px-4 py-2.5 transition-colors"
         >
           Cancel
         </button>

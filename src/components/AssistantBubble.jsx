@@ -109,7 +109,7 @@ export default function AssistantBubble({ user }) {
             </div>
             <button
               onClick={() => setIsOpen(false)}
-              className="p-1.5 rounded-lg hover:bg-un1t-gray/50 text-un1t-light hover:text-white transition-colors"
+              className="p-1.5 rounded-lg hover:bg-un1t-gray/50 text-un1t-light hover:text-un1t-white transition-colors"
             >
               <X size={18} />
             </button>
@@ -135,7 +135,7 @@ export default function AssistantBubble({ user }) {
                     <button
                       key={i}
                       onClick={() => sendMessage(s)}
-                      className="text-xs px-3 py-1.5 rounded-full border border-un1t-gray text-un1t-light hover:text-white hover:border-white/30 transition-colors"
+                      className="text-xs px-3 py-1.5 rounded-full border border-un1t-gray text-un1t-light hover:text-un1t-white hover:border-un1t-white/30 transition-colors"
                     >
                       {s}
                     </button>
@@ -162,7 +162,7 @@ export default function AssistantBubble({ user }) {
                 </div>
                 {msg.role === 'user' && (
                   <div className="w-7 h-7 rounded-full bg-un1t-gray flex items-center justify-center shrink-0 mt-0.5">
-                    <User size={14} className="text-white" />
+                    <User size={14} className="text-un1t-white" />
                   </div>
                 )}
               </div>
@@ -192,7 +192,7 @@ export default function AssistantBubble({ user }) {
                 onChange={e => setInput(e.target.value)}
                 onKeyDown={handleKeyDown}
                 placeholder="Ask me anything..."
-                className="flex-1 bg-black border border-un1t-gray rounded-lg px-3 py-2 text-sm text-white placeholder:text-un1t-mid focus:outline-none focus:border-white/40"
+                className="flex-1 bg-un1t-black border border-un1t-gray rounded-lg px-3 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid"
                 disabled={loading}
               />
               <button
@@ -220,7 +220,7 @@ export default function AssistantBubble({ user }) {
         }`}
       >
         {isOpen ? (
-          <X size={22} className="text-white" />
+          <X size={22} className="text-un1t-white" />
         ) : (
           <MessageCircle size={22} className="text-white" />
         )}

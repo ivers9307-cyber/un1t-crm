@@ -52,7 +52,7 @@ export default function KanbanBoard({ initialStages, initialDeals }) {
           <div
             key={stage.id}
             className={`shrink-0 w-64 bg-un1t-dark rounded-lg border transition-colors ${
-              isOver ? 'border-white/40' : 'border-un1t-gray'
+              isOver ? 'border-un1t-white/40' : 'border-un1t-gray'
             }`}
             onDragOver={e => { e.preventDefault(); setDragOverStage(stage.id) }}
             onDragLeave={() => setDragOverStage(null)}

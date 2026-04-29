@@ -21,14 +21,14 @@ export default function EventActions({ slug, eventId }) {
         href={`/book/${slug}`}
         target="_blank"
         rel="noopener noreferrer"
-        className="text-xs px-3 py-1.5 rounded border border-un1t-gray text-un1t-light hover:text-white hover:border-white/30 transition-colors flex items-center gap-1.5"
+        className="text-xs px-3 py-1.5 rounded border border-un1t-gray text-un1t-light hover:text-un1t-white hover:border-un1t-white/30 transition-colors flex items-center gap-1.5"
       >
         <ExternalLink size={12} />
         Preview
       </a>
       <button
         onClick={copyEmbed}
-        className="text-xs px-3 py-1.5 rounded border border-un1t-gray text-un1t-light hover:text-white hover:border-white/30 transition-colors flex items-center gap-1.5"
+        className="text-xs px-3 py-1.5 rounded border border-un1t-gray text-un1t-light hover:text-un1t-white hover:border-un1t-white/30 transition-colors flex items-center gap-1.5"
       >
         {copied ? <Check size={12} /> : <Copy size={12} />}
         {copied ? 'Copied!' : 'Embed'}

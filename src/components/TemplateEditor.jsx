@@ -145,7 +145,7 @@ export default function TemplateEditor({ template, locationId, userId }) {
       {/* Top bar */}
       <div className="flex items-center justify-between px-5 py-3 border-b border-un1t-gray bg-un1t-dark shrink-0">
         <div className="flex items-center gap-4">
-          <Link href="/email/templates" className="text-un1t-light hover:text-white transition-colors">
+          <Link href="/email/templates" className="text-un1t-light hover:text-un1t-white transition-colors">
             <ArrowLeft size={20} />
           </Link>
           <input
@@ -153,7 +153,7 @@ export default function TemplateEditor({ template, locationId, userId }) {
             value={name}
             onChange={e => setName(e.target.value)}
             placeholder="Template name..."
-            className="bg-transparent text-lg font-semibold text-white placeholder:text-un1t-mid focus:outline-none w-64"
+            className="bg-transparent text-lg font-semibold text-un1t-white placeholder:text-un1t-mid focus:outline-none w-64"
           />
           <select
             value={category}
@@ -169,7 +169,7 @@ export default function TemplateEditor({ template, locationId, userId }) {
         <button
           onClick={handleSave}
           disabled={saving}
-          className="flex items-center gap-1.5 text-sm bg-white text-black font-medium px-4 py-1.5 rounded-md hover:bg-gray-200 transition-colors disabled:opacity-50"
+          className="flex items-center gap-1.5 text-sm bg-un1t-white text-un1t-black font-medium px-4 py-1.5 rounded-md hover:bg-un1t-accent transition-colors disabled:opacity-50"
         >
           <Save size={14} />
           {saving ? 'Saving...' : 'Save Template'}
@@ -198,7 +198,7 @@ export default function TemplateEditor({ template, locationId, userId }) {
         <button
           onClick={() => setEditorMode('visual')}
           className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md transition-colors ${
-            editorMode === 'visual' ? 'bg-white text-black' : 'text-un1t-light hover:text-white'
+            editorMode === 'visual' ? 'bg-un1t-white text-un1t-black' : 'text-un1t-light hover:text-un1t-white'
           }`}
         >
           <Paintbrush size={12} /> Visual Editor
@@ -213,7 +213,7 @@ export default function TemplateEditor({ template, locationId, userId }) {
             setEditorMode('code')
           }}
           className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md transition-colors ${
-            editorMode === 'code' ? 'bg-white text-black' : 'text-un1t-light hover:text-white'
+            editorMode === 'code' ? 'bg-un1t-white text-un1t-black' : 'text-un1t-light hover:text-un1t-white'
           }`}
         >
           <Code size={12} /> HTML Code

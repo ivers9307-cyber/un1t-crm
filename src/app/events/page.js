@@ -114,7 +114,7 @@ export default async function EventsPage() {
                   <EventActions slug={event.slug} eventId={event.id} />
                   <Link
                     href={`/events/${event.id}`}
-                    className="text-xs px-3 py-1.5 rounded border border-un1t-gray text-un1t-light hover:text-white hover:border-white/30 transition-colors"
+                    className="text-xs px-3 py-1.5 rounded border border-un1t-gray text-un1t-light hover:text-un1t-white hover:border-un1t-white/30 transition-colors"
                   >
                     Manage
                   </Link>

@@ -64,21 +64,21 @@ export default function ResetPasswordPage() {
   }
 
   return (
-    <div className="min-h-screen bg-black flex items-center justify-center p-4">
+    <div className="min-h-screen bg-un1t-black flex items-center justify-center p-4">
       <div className="w-full max-w-sm">
         {/* Logo */}
         <div className="text-center mb-8">
           {branding?.logo_url ? (
             <img src={branding.logo_url} alt={branding.company_name || 'Logo'} className="h-10 mx-auto object-contain" />
           ) : (
-            <h1 className="text-3xl font-bold tracking-wider text-white">{branding?.company_name || 'UN1T'}</h1>
+            <h1 className="text-3xl font-bold tracking-wider text-un1t-white">{branding?.company_name || 'UN1T'}</h1>
           )}
           <p className="text-sm text-gray-500 mt-1">Lead Management</p>
         </div>
 
         <form onSubmit={handleReset} className="bg-un1t-dark border border-un1t-gray rounded-lg p-6 space-y-4">
           <div>
-            <h2 className="text-sm font-semibold text-white mb-1">Set a new password</h2>
+            <h2 className="text-sm font-semibold text-un1t-white mb-1">Set a new password</h2>
             <p className="text-xs text-un1t-light">Enter your new password below.</p>
           </div>
 
@@ -96,7 +96,7 @@ export default function ResetPasswordPage() {
               minLength={8}
               value={password}
               onChange={e => setPassword(e.target.value)}
-              className="w-full bg-black border border-un1t-gray rounded-md px-3 py-2.5 text-sm text-white placeholder:text-un1t-mid focus:outline-none focus:border-white/40"
+              className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2.5 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid"
               placeholder="At least 8 characters"
             />
           </div>
@@ -109,7 +109,7 @@ export default function ResetPasswordPage() {
               minLength={8}
               value={confirmPassword}
               onChange={e => setConfirmPassword(e.target.value)}
-              className="w-full bg-black border border-un1t-gray rounded-md px-3 py-2.5 text-sm text-white placeholder:text-un1t-mid focus:outline-none focus:border-white/40"
+              className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2.5 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid"
               placeholder="Confirm your password"
             />
           </div>
@@ -123,7 +123,7 @@ export default function ResetPasswordPage() {
           <button
             type="submit"
             disabled={loading || !ready}
-            className="w-full bg-white text-black font-medium text-sm py-2.5 rounded-md hover:bg-gray-200 transition-colors disabled:opacity-50"
+            className="w-full bg-un1t-white text-un1t-black font-medium text-sm py-2.5 rounded-md hover:bg-un1t-accent transition-colors disabled:opacity-50"
           >
             {loading ? 'Updating...' : 'Update Password'}
           </button>

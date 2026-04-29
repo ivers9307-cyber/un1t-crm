@@ -75,7 +75,7 @@ export default function ScheduleApprovals({ user }) {
               key={f}
               onClick={() => setFilter(f)}
               className={`px-3 py-1.5 rounded-full transition-colors capitalize ${
-                filter === f ? 'bg-white text-black' : 'bg-un1t-dark border border-un1t-gray text-un1t-light hover:text-white'
+                filter === f ? 'bg-un1t-white text-un1t-black' : 'bg-un1t-dark border border-un1t-gray text-un1t-light hover:text-un1t-white'
               }`}
             >
               {f === 'pending' ? 'Pending' : 'All Requests'}

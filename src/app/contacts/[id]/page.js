@@ -80,7 +80,7 @@ export default async function ContactDetailPage({ params }) {
   return (
     <div className="p-6 max-w-5xl">
       {/* Back link */}
-      <Link href="/contacts" className="inline-flex items-center gap-1.5 text-sm text-un1t-light hover:text-white mb-5">
+      <Link href="/contacts" className="inline-flex items-center gap-1.5 text-sm text-un1t-light hover:text-un1t-white mb-5">
         <ArrowLeft size={16} /> Contacts
       </Link>
 

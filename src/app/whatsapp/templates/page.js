@@ -29,7 +29,7 @@ export default async function WhatsAppTemplatesPage() {
     <div className="p-8">
       <div className="flex items-center justify-between mb-6">
         <div className="flex items-center gap-4">
-          <Link href="/whatsapp" className="text-un1t-light hover:text-white transition-colors">
+          <Link href="/whatsapp" className="text-un1t-light hover:text-un1t-white transition-colors">
             <ArrowLeft size={20} />
           </Link>
           <div>
@@ -40,13 +40,13 @@ export default async function WhatsAppTemplatesPage() {
         <div className="flex gap-2">
           <Link
             href={`/api/whatsapp/templates?location_id=${user.activeLocation?.id}&sync=true`}
-            className="flex items-center gap-2 border border-un1t-gray text-un1t-light hover:text-white hover:border-white/30 text-sm font-medium px-4 py-2.5 rounded-lg transition-colors"
+            className="flex items-center gap-2 border border-un1t-gray text-un1t-light hover:text-un1t-white hover:border-un1t-white/30 text-sm font-medium px-4 py-2.5 rounded-lg transition-colors"
           >
             Sync from Meta
           </Link>
           <Link
             href="/whatsapp/templates/new"
-            className="flex items-center gap-2 bg-white text-black text-sm font-medium px-4 py-2.5 rounded-lg hover:bg-gray-200 transition-colors"
+            className="flex items-center gap-2 bg-un1t-white text-un1t-black text-sm font-medium px-4 py-2.5 rounded-lg hover:bg-un1t-accent transition-colors"
           >
             <Plus size={16} />
             New Template
@@ -63,7 +63,7 @@ export default async function WhatsAppTemplatesPage() {
           </p>
           <Link
             href="/whatsapp/templates/new"
-            className="inline-flex items-center gap-2 bg-white text-black text-sm font-medium px-4 py-2.5 rounded-lg hover:bg-gray-200 transition-colors"
+            className="inline-flex items-center gap-2 bg-un1t-white text-un1t-black text-sm font-medium px-4 py-2.5 rounded-lg hover:bg-un1t-accent transition-colors"
           >
             <Plus size={16} />
             Create Template

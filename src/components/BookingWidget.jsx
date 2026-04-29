@@ -261,7 +261,7 @@ export default function BookingWidget({ slug }) {
                   disabled={!available}
                   onClick={() => setSelectedDate(day)}
                   className={`aspect-square flex items-center justify-center rounded-lg text-sm transition-all
-                    ${selected ? 'text-white font-semibold' : ''}
+                    ${selected ? 'text-un1t-white font-semibold' : ''}
                     ${available && !selected ? 'hover:bg-gray-100 text-gray-900 font-medium' : ''}
                     ${!available ? 'text-gray-300 cursor-not-allowed' : 'cursor-pointer'}
                     ${isToday && !selected ? 'ring-1 ring-gray-300' : ''}
@@ -297,7 +297,7 @@ export default function BookingWidget({ slug }) {
                         onClick={() => setSelectedSlot(slot)}
                         className={`py-2.5 px-3 rounded-lg text-sm font-medium border transition-all
                           ${selected
-                            ? 'text-white border-transparent'
+                            ? 'text-un1t-white border-transparent'
                             : 'border-gray-200 text-gray-700 hover:border-gray-400'
                           }
                         `}
@@ -313,7 +313,7 @@ export default function BookingWidget({ slug }) {
               {selectedSlot && (
                 <button
                   onClick={() => setStep('form')}
-                  className="w-full mt-4 py-3 rounded-lg text-white font-medium text-sm transition-colors"
+                  className="w-full mt-4 py-3 rounded-lg text-un1t-white font-medium text-sm transition-colors"
                   style={{ backgroundColor: event.color }}
                 >
                   Continue
@@ -458,7 +458,7 @@ export default function BookingWidget({ slug }) {
           <button
             type="submit"
             disabled={submitting}
-            className="w-full py-3 rounded-lg text-white font-medium text-sm transition-colors disabled:opacity-60"
+            className="w-full py-3 rounded-lg text-un1t-white font-medium text-sm transition-colors disabled:opacity-60"
             style={{ backgroundColor: event.color }}
           >
             {submitting ? 'Booking...' : 'Confirm Booking'}

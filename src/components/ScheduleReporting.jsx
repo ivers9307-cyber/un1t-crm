@@ -120,7 +120,7 @@ export default function ScheduleReporting({ user }) {
             key={t.key}
             onClick={() => setView(t.key)}
             className={`flex items-center gap-1.5 px-3 py-2 rounded-lg transition-colors ${
-              view === t.key ? 'bg-white text-black' : 'bg-un1t-dark border border-un1t-gray text-un1t-light hover:text-white'
+              view === t.key ? 'bg-un1t-white text-un1t-black' : 'bg-un1t-dark border border-un1t-gray text-un1t-light hover:text-un1t-white'
             }`}
           >
             <t.icon size={14} /> {t.label}
@@ -141,8 +141,8 @@ export default function ScheduleReporting({ user }) {
                   onClick={() => { setSelectedReport(rt.key); setReportResult(null) }}
                   className={`flex flex-col items-center gap-2 p-4 rounded-lg border text-xs transition-colors ${
                     selectedReport === rt.key
-                      ? 'border-white/40 bg-white/5 text-white'
-                      : 'border-un1t-gray bg-un1t-dark text-un1t-light hover:border-white/20 hover:text-white'
+                      ? 'border-un1t-white/40 bg-un1t-gray/30 text-un1t-white'
+                      : 'border-un1t-gray bg-un1t-dark text-un1t-light hover:border-white/20 hover:text-un1t-white'
                   }`}
                 >
                   <Icon size={20} />
@@ -166,7 +166,7 @@ export default function ScheduleReporting({ user }) {
                     type="date"
                     value={periodStart}
                     onChange={e => setPeriodStart(e.target.value)}
-                    className="bg-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-white"
+                    className="bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
                   />
                 </div>
                 <div>
@@ -175,19 +175,19 @@ export default function ScheduleReporting({ user }) {
                     type="date"
                     value={periodEnd}
                     onChange={e => setPeriodEnd(e.target.value)}
-                    className="bg-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-white"
+                    className="bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
                   />
                 </div>
                 <button
                   onClick={generateReport}
                   disabled={generating}
-                  className="flex items-center gap-1.5 px-4 py-2 bg-white text-black text-sm font-medium rounded-md hover:bg-gray-200 transition-colors disabled:opacity-50"
+                  className="flex items-center gap-1.5 px-4 py-2 bg-un1t-white text-un1t-black text-sm font-medium rounded-md hover:bg-un1t-accent transition-colors disabled:opacity-50"
                 >
                   <Play size={14} /> {generating ? 'Generating...' : 'Generate'}
                 </button>
                 <button
                   onClick={() => setShowScheduleModal(selectedReport)}
-                  className="flex items-center gap-1.5 px-4 py-2 border border-un1t-gray text-sm text-un1t-light hover:text-white rounded-md transition-colors"
+                  className="flex items-center gap-1.5 px-4 py-2 border border-un1t-gray text-sm text-un1t-light hover:text-un1t-white rounded-md transition-colors"
                 >
                   <Calendar size={14} /> Schedule
                 </button>
@@ -239,7 +239,7 @@ export default function ScheduleReporting({ user }) {
                     </thead>
                     <tbody>
                       {reportResult.report_data.staff.map((s, i) => (
-                        <tr key={i} className="border-b border-un1t-gray/50 hover:bg-white/5">
+                        <tr key={i} className="border-b border-un1t-gray/50 hover:bg-un1t-gray/30">
                           <td className="px-4 py-3 font-medium">{s.name}</td>
                           <td className="px-4 py-3 text-un1t-light capitalize">{s.role}</td>
                           <td className="px-4 py-3">
@@ -288,7 +288,7 @@ export default function ScheduleReporting({ user }) {
                     </thead>
                     <tbody>
                       {Object.entries(reportResult.report_data.by_staff).map(([name, data]) => (
-                        <tr key={name} className="border-b border-un1t-gray/50 hover:bg-white/5">
+                        <tr key={name} className="border-b border-un1t-gray/50 hover:bg-un1t-gray/30">
                           <td className="px-4 py-3 font-medium">{name}</td>
                           <td className="px-4 py-3 text-right text-green-400">{data.holiday || 0}</td>
                           <td className="px-4 py-3 text-right text-red-400">{data.sick || 0}</td>
@@ -315,7 +315,7 @@ export default function ScheduleReporting({ user }) {
                     </thead>
                     <tbody>
                       {reportResult.report_data.days.map(day => (
-                        <tr key={day.date} className="border-b border-un1t-gray/50 hover:bg-white/5">
+                        <tr key={day.date} className="border-b border-un1t-gray/50 hover:bg-un1t-gray/30">
                           <td className="px-4 py-3 font-medium">
                             {new Date(day.date + 'T00:00:00').toLocaleDateString('en-IE', { weekday: 'short', day: 'numeric', month: 'short' })}
                           </td>
@@ -482,7 +482,7 @@ function ScheduleReportModal({ reportType, locationId, onClose, onSave }) {
       <div className="bg-un1t-dark border border-un1t-gray rounded-xl p-6 w-full max-w-md" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-4">
           <h3 className="font-semibold">Schedule Recurring Report</h3>
-          <button onClick={onClose} className="text-un1t-light hover:text-white"><Plus size={18} className="rotate-45" /></button>
+          <button onClick={onClose} className="text-un1t-light hover:text-un1t-white"><Plus size={18} className="rotate-45" /></button>
         </div>
 
         <div className="space-y-4">
@@ -492,7 +492,7 @@ function ScheduleReportModal({ reportType, locationId, onClose, onSave }) {
               type="text"
               value={name}
               onChange={e => setName(e.target.value)}
-              className="w-full bg-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-white"
+              className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
             />
           </div>
 
@@ -501,7 +501,7 @@ function ScheduleReportModal({ reportType, locationId, onClose, onSave }) {
             <select
               value={frequency}
               onChange={e => setFrequency(e.target.value)}
-              className="w-full bg-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-white"
+              className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
             >
               {FREQ_OPTIONS.map(f => <option key={f.value} value={f.value}>{f.label}</option>)}
             </select>
@@ -513,7 +513,7 @@ function ScheduleReportModal({ reportType, locationId, onClose, onSave }) {
               <select
                 value={dayOfWeek}
                 onChange={e => setDayOfWeek(Number(e.target.value))}
-                className="w-full bg-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-white"
+                className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
               >
                 {DAY_NAMES.map((d, i) => <option key={i} value={i}>{d}</option>)}
               </select>
@@ -529,7 +529,7 @@ function ScheduleReportModal({ reportType, locationId, onClose, onSave }) {
                 max={28}
                 value={dayOfMonth}
                 onChange={e => setDayOfMonth(Number(e.target.value))}
-                className="w-full bg-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-white"
+                className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
               />
             </div>
           )}
@@ -552,7 +552,7 @@ function ScheduleReportModal({ reportType, locationId, onClose, onSave }) {
                   value={emailRecipients}
                   onChange={e => setEmailRecipients(e.target.value)}
                   placeholder="manager@un1t.ie, owner@un1t.ie"
-                  className="w-full bg-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-white"
+                  className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
                 />
               </div>
             )}
@@ -562,7 +562,7 @@ function ScheduleReportModal({ reportType, locationId, onClose, onSave }) {
         <button
           onClick={handleSave}
           disabled={!name || saving}
-          className="w-full mt-5 bg-white text-black font-medium text-sm py-2.5 rounded-md hover:bg-gray-200 transition-colors disabled:opacity-50"
+          className="w-full mt-5 bg-un1t-white text-un1t-black font-medium text-sm py-2.5 rounded-md hover:bg-un1t-accent transition-colors disabled:opacity-50"
         >
           {saving ? 'Saving...' : 'Create Schedule'}
         </button>

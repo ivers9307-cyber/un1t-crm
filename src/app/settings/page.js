@@ -53,7 +53,7 @@ export default async function SettingsPage() {
           </div>
           <Link
             href="/settings/staff/new"
-            className="text-xs bg-white text-black px-3 py-1.5 rounded-md hover:bg-gray-200 transition-colors font-medium"
+            className="text-xs bg-un1t-white text-un1t-black px-3 py-1.5 rounded-md hover:bg-un1t-accent transition-colors font-medium"
           >
             Add Staff
           </Link>
@@ -114,7 +114,7 @@ export default async function SettingsPage() {
           </div>
           <Link
             href="/settings/locations/new"
-            className="text-xs bg-white text-black px-3 py-1.5 rounded-md hover:bg-gray-200 transition-colors font-medium"
+            className="text-xs bg-un1t-white text-un1t-black px-3 py-1.5 rounded-md hover:bg-un1t-accent transition-colors font-medium"
           >
             Add Location
           </Link>
@@ -152,7 +152,7 @@ export default async function SettingsPage() {
           </div>
           <Link
             href="/settings/shifts"
-            className="text-xs bg-white text-black px-3 py-1.5 rounded-md hover:bg-gray-200 transition-colors font-medium"
+            className="text-xs bg-un1t-white text-un1t-black px-3 py-1.5 rounded-md hover:bg-un1t-accent transition-colors font-medium"
           >
             Manage Shifts
           </Link>

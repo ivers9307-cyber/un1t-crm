@@ -85,7 +85,7 @@ export default function PreferenceCentre({ token }) {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-black flex items-center justify-center">
+      <div className="min-h-screen bg-un1t-black flex items-center justify-center">
         <p className="text-un1t-light">Loading preferences...</p>
       </div>
     )
@@ -93,7 +93,7 @@ export default function PreferenceCentre({ token }) {
 
   if (error && !contact) {
     return (
-      <div className="min-h-screen bg-black flex items-center justify-center p-4">
+      <div className="min-h-screen bg-un1t-black flex items-center justify-center p-4">
         <div className="w-full max-w-md text-center">
           <h1 className="text-2xl font-bold tracking-wider mb-8">UN1T</h1>
           <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-8">
@@ -108,7 +108,7 @@ export default function PreferenceCentre({ token }) {
   }
 
   return (
-    <div className="min-h-screen bg-black flex items-center justify-center p-4">
+    <div className="min-h-screen bg-un1t-black flex items-center justify-center p-4">
       <div className="w-full max-w-lg">
         <div className="text-center mb-8">
           <h1 className="text-2xl font-bold tracking-wider">UN1T</h1>
@@ -119,7 +119,7 @@ export default function PreferenceCentre({ token }) {
           {contact && (
             <div className="mb-6 pb-4 border-b border-un1t-gray">
               <p className="text-sm text-un1t-light">
-                Managing preferences for <strong className="text-white">{contact.email}</strong>
+                Managing preferences for <strong className="text-un1t-white">{contact.email}</strong>
               </p>
             </div>
           )}
@@ -132,7 +132,7 @@ export default function PreferenceCentre({ token }) {
             {CHANNELS.map(ch => (
               <div
                 key={ch.key}
-                className="flex items-start justify-between p-4 bg-black rounded-lg border border-un1t-gray"
+                className="flex items-start justify-between p-4 bg-un1t-dark rounded-lg border border-un1t-gray"
               >
                 <div className="flex-1 mr-4">
                   <p className="text-sm font-medium">{ch.label}</p>
@@ -165,7 +165,7 @@ export default function PreferenceCentre({ token }) {
           <button
             onClick={handleSave}
             disabled={saving}
-            className="w-full mt-6 bg-white text-black font-medium py-2.5 rounded-md hover:bg-gray-200 transition-colors disabled:opacity-50"
+            className="w-full mt-6 bg-un1t-white text-un1t-black font-medium py-2.5 rounded-md hover:bg-un1t-accent transition-colors disabled:opacity-50"
           >
             {saving ? 'Saving...' : 'Save Preferences'}
           </button>

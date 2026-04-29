@@ -19,9 +19,9 @@ export default function ActivityToggle({ activityId, done }) {
   return (
     <button onClick={toggle} className="mt-1 shrink-0">
       <div className={`w-5 h-5 rounded border-2 flex items-center justify-center transition-colors ${
-        checked ? 'bg-green-500 border-green-500' : 'border-un1t-mid hover:border-white'
+        checked ? 'bg-green-500 border-green-500' : 'border-un1t-mid hover:border-un1t-white'
       }`}>
-        {checked && <span className="text-white text-xs">&#10003;</span>}
+        {checked && <span className="text-un1t-white text-xs">&#10003;</span>}
       </div>
     </button>
   )

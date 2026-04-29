@@ -103,7 +103,7 @@ export default function LocationForm({ location }) {
             value={name}
             onChange={e => setName(e.target.value)}
             placeholder="UN1T Dublin City"
-            className="w-full bg-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-white placeholder:text-un1t-mid focus:outline-none focus:border-white/40"
+            className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid"
           />
         </div>
 
@@ -114,7 +114,7 @@ export default function LocationForm({ location }) {
             value={address}
             onChange={e => setAddress(e.target.value)}
             placeholder="123 Example St, Dublin 2"
-            className="w-full bg-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-white placeholder:text-un1t-mid focus:outline-none focus:border-white/40"
+            className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid"
           />
         </div>
 
@@ -126,7 +126,7 @@ export default function LocationForm({ location }) {
               value={phone}
               onChange={e => setPhone(e.target.value)}
               placeholder="+353 1 234 5678"
-              className="w-full bg-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-white placeholder:text-un1t-mid focus:outline-none focus:border-white/40"
+              className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid"
             />
           </div>
           <div>
@@ -136,7 +136,7 @@ export default function LocationForm({ location }) {
               value={email}
               onChange={e => setEmail(e.target.value)}
               placeholder="info@un1t.ie"
-              className="w-full bg-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-white placeholder:text-un1t-mid focus:outline-none focus:border-white/40"
+              className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid"
             />
           </div>
         </div>
@@ -147,7 +147,7 @@ export default function LocationForm({ location }) {
             <select
               value={timezone}
               onChange={e => setTimezone(e.target.value)}
-              className="w-full bg-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:border-white/40"
+              className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
             >
               <option value="Europe/Dublin">Europe/Dublin</option>
               <option value="Europe/London">Europe/London</option>
@@ -184,7 +184,7 @@ export default function LocationForm({ location }) {
             value={glofoxBranchId}
             onChange={e => setGlofoxBranchId(e.target.value)}
             placeholder="your-glofox-branch-id"
-            className="w-full bg-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-white placeholder:text-un1t-mid focus:outline-none focus:border-white/40 font-mono"
+            className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid font-mono"
           />
         </div>
 
@@ -195,7 +195,7 @@ export default function LocationForm({ location }) {
             value={glofoxApiKey}
             onChange={e => setGlofoxApiKey(e.target.value)}
             placeholder="••••••••••••••••"
-            className="w-full bg-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-white placeholder:text-un1t-mid focus:outline-none focus:border-white/40 font-mono"
+            className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid font-mono"
           />
         </div>
       </div>
@@ -205,14 +205,14 @@ export default function LocationForm({ location }) {
         <button
           type="submit"
           disabled={saving}
-          className="bg-white text-black text-sm font-medium px-5 py-2.5 rounded-md hover:bg-gray-200 transition-colors disabled:opacity-50"
+          className="bg-un1t-white text-un1t-black text-sm font-medium px-5 py-2.5 rounded-md hover:bg-un1t-accent transition-colors disabled:opacity-50"
         >
           {saving ? 'Saving...' : isEditing ? 'Update Location' : 'Create Location'}
         </button>
         <button
           type="button"
           onClick={() => router.push('/settings')}
-          className="text-sm text-un1t-light hover:text-white transition-colors px-4 py-2.5"
+          className="text-sm text-un1t-light hover:text-un1t-white transition-colors px-4 py-2.5"
         >
           Cancel
         </button>

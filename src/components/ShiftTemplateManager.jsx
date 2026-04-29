@@ -68,7 +68,7 @@ export default function ShiftTemplateManager({ user }) {
 
   return (
     <div>
-      <Link href="/settings" className="inline-flex items-center gap-1.5 text-sm text-un1t-light hover:text-white mb-6">
+      <Link href="/settings" className="inline-flex items-center gap-1.5 text-sm text-un1t-light hover:text-un1t-white mb-6">
         <ArrowLeft size={16} /> Back to Settings
       </Link>
 
@@ -116,7 +116,7 @@ export default function ShiftTemplateManager({ user }) {
               <div className="flex items-center gap-2">
                 <button
                   onClick={() => setShowForm(t)}
-                  className="p-2 rounded hover:bg-un1t-gray/50 text-un1t-light hover:text-white transition-colors"
+                  className="p-2 rounded hover:bg-un1t-gray/50 text-un1t-light hover:text-un1t-white transition-colors"
                   title="Edit"
                 >
                   <Pencil size={16} />
@@ -185,7 +185,7 @@ function TemplateFormModal({ template, onSave, onClose }) {
       <div className="bg-un1t-dark border border-un1t-gray rounded-xl p-6 w-full max-w-md" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-4">
           <h3 className="font-semibold">{template ? 'Edit Shift Template' : 'New Shift Template'}</h3>
-          <button onClick={onClose} className="text-un1t-light hover:text-white"><X size={18} /></button>
+          <button onClick={onClose} className="text-un1t-light hover:text-un1t-white"><X size={18} /></button>
         </div>
 
         <div className="space-y-4">
@@ -196,7 +196,7 @@ function TemplateFormModal({ template, onSave, onClose }) {
               value={name}
               onChange={e => setName(e.target.value)}
               placeholder="e.g. Morning, Afternoon, Evening"
-              className="w-full bg-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-white"
+              className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
             />
           </div>
 
@@ -207,7 +207,7 @@ function TemplateFormModal({ template, onSave, onClose }) {
                 type="time"
                 value={startTime}
                 onChange={e => setStartTime(e.target.value)}
-                className="w-full bg-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-white"
+                className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
               />
             </div>
             <div>
@@ -216,7 +216,7 @@ function TemplateFormModal({ template, onSave, onClose }) {
                 type="time"
                 value={endTime}
                 onChange={e => setEndTime(e.target.value)}
-                className="w-full bg-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-white"
+                className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
               />
             </div>
           </div>
@@ -228,7 +228,7 @@ function TemplateFormModal({ template, onSave, onClose }) {
               value={roleLabel}
               onChange={e => setRoleLabel(e.target.value)}
               placeholder="e.g. Floor Coach, Front Desk (optional)"
-              className="w-full bg-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-white"
+              className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
             />
           </div>
 
@@ -251,7 +251,7 @@ function TemplateFormModal({ template, onSave, onClose }) {
         <button
           onClick={() => name && startTime && endTime && onSave({ name, start_time: startTime, end_time: endTime, color, role_label: roleLabel || null })}
           disabled={!name || !startTime || !endTime}
-          className="w-full mt-5 bg-white text-black font-medium text-sm py-2.5 rounded-md hover:bg-gray-200 transition-colors disabled:opacity-50"
+          className="w-full mt-5 bg-un1t-white text-un1t-black font-medium text-sm py-2.5 rounded-md hover:bg-un1t-accent transition-colors disabled:opacity-50"
         >
           {template ? 'Save Changes' : 'Create Shift Template'}
         </button>

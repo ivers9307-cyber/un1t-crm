@@ -21,7 +21,7 @@ export default async function TemplatesPage() {
     <div className="p-8">
       <div className="flex items-center justify-between mb-6">
         <div className="flex items-center gap-4">
-          <Link href="/email" className="text-un1t-light hover:text-white transition-colors">
+          <Link href="/email" className="text-un1t-light hover:text-un1t-white transition-colors">
             <ArrowLeft size={20} />
           </Link>
           <div>
@@ -31,7 +31,7 @@ export default async function TemplatesPage() {
         </div>
         <Link
           href="/email/templates/new"
-          className="flex items-center gap-2 bg-white text-black text-sm font-medium px-4 py-2.5 rounded-lg hover:bg-gray-200 transition-colors"
+          className="flex items-center gap-2 bg-un1t-white text-un1t-black text-sm font-medium px-4 py-2.5 rounded-lg hover:bg-un1t-accent transition-colors"
         >
           <Plus size={16} />
           New Template
@@ -47,7 +47,7 @@ export default async function TemplatesPage() {
           </p>
           <Link
             href="/email/templates/new"
-            className="inline-flex items-center gap-2 bg-white text-black text-sm font-medium px-4 py-2.5 rounded-lg hover:bg-gray-200 transition-colors"
+            className="inline-flex items-center gap-2 bg-un1t-white text-un1t-black text-sm font-medium px-4 py-2.5 rounded-lg hover:bg-un1t-accent transition-colors"
           >
             <Plus size={16} />
             Create Template
@@ -58,7 +58,7 @@ export default async function TemplatesPage() {
           {templates.map(template => (
             <div
               key={template.id}
-              className="bg-un1t-dark border border-un1t-gray rounded-lg overflow-hidden group hover:border-white/30 transition-colors"
+              className="bg-un1t-dark border border-un1t-gray rounded-lg overflow-hidden group hover:border-un1t-white/30 transition-colors"
             >
               {/* Preview thumbnail */}
               <div className="h-40 bg-un1t-gray/20 flex items-center justify-center border-b border-un1t-gray">
@@ -91,7 +91,7 @@ export default async function TemplatesPage() {
                 <div className="flex items-center gap-2 mt-3">
                   <Link
                     href={`/email/templates/${template.id}`}
-                    className="flex-1 text-center text-xs border border-un1t-gray text-un1t-light hover:text-white hover:border-white/30 px-3 py-1.5 rounded-md transition-colors"
+                    className="flex-1 text-center text-xs border border-un1t-gray text-un1t-light hover:text-un1t-white hover:border-un1t-white/30 px-3 py-1.5 rounded-md transition-colors"
                   >
                     Edit
                   </Link>

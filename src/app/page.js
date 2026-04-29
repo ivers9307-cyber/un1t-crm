@@ -58,7 +58,7 @@ export default async function Dashboard() {
       <div className="bg-un1t-dark border border-un1t-gray rounded-lg">
         <div className="flex items-center justify-between p-5 border-b border-un1t-gray">
           <h3 className="font-semibold">Recent Leads</h3>
-          <Link href="/contacts" className="text-sm text-un1t-light hover:text-white">View all</Link>
+          <Link href="/contacts" className="text-sm text-un1t-light hover:text-un1t-white">View all</Link>
         </div>
         <div className="divide-y divide-un1t-gray">
           {stats.recentLeads.map(lead => (

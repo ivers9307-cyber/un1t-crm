@@ -44,8 +44,8 @@ export default async function ContactsPage({ searchParams }) {
             href={`/contacts${s ? `?status=${s}` : ''}`}
             className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
               status === s
-                ? 'border-white text-white bg-un1t-gray'
-                : 'border-un1t-gray text-un1t-light hover:text-white hover:border-un1t-mid'
+                ? 'border-un1t-white text-un1t-white bg-un1t-gray'
+                : 'border-un1t-gray text-un1t-light hover:text-un1t-white hover:border-un1t-mid'
             }`}
           >
             {s ? s.replace('_', ' ') : 'All'}
@@ -60,7 +60,7 @@ export default async function ContactsPage({ searchParams }) {
           name="q"
           defaultValue={search}
           placeholder="Search by name or email..."
-          className="w-full max-w-md bg-un1t-dark border border-un1t-gray rounded-md px-4 py-2 text-sm text-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid"
+          className="w-full max-w-md bg-un1t-dark border border-un1t-gray rounded-md px-4 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid"
         />
       </form>
 

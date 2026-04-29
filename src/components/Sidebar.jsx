@@ -104,8 +104,8 @@ export default function Sidebar({ user }) {
               className={clsx(
                 'flex items-center gap-3 px-5 py-2.5 text-sm transition-colors',
                 active
-                  ? 'text-white bg-un1t-gray/50 border-l-2 border-white'
-                  : 'text-un1t-light hover:text-white hover:bg-un1t-gray/30 border-l-2 border-transparent'
+                  ? 'text-un1t-white bg-un1t-gray/50 border-l-2 border-un1t-white'
+                  : 'text-un1t-light hover:text-un1t-white hover:bg-un1t-gray/30 border-l-2 border-transparent'
               )}
             >
               <Icon size={18} />
@@ -124,7 +124,7 @@ export default function Sidebar({ user }) {
           </div>
           <button
             onClick={handleLogout}
-            className="p-1.5 text-un1t-light hover:text-white transition-colors rounded hover:bg-un1t-gray/50"
+            className="p-1.5 text-un1t-light hover:text-un1t-white transition-colors rounded hover:bg-un1t-gray/50"
             title="Sign out"
           >
             <LogOut size={16} />

@@ -28,8 +28,8 @@ export default function ScheduleTabs({ user }) {
             onClick={() => setActiveTab(tab.key)}
             className={`flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 transition-colors -mb-px ${
               activeTab === tab.key
-                ? 'border-white text-white'
-                : 'border-transparent text-un1t-light hover:text-white'
+                ? 'border-un1t-white text-un1t-white'
+                : 'border-transparent text-un1t-light hover:text-un1t-white'
             }`}
           >
             <tab.icon size={16} />

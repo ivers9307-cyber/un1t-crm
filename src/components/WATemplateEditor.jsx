@@ -141,7 +141,7 @@ export default function WATemplateEditor({ template, locationId, userId }) {
       {/* Top bar */}
       <div className="flex items-center justify-between px-5 py-3 border-b border-un1t-gray bg-un1t-dark shrink-0">
         <div className="flex items-center gap-4">
-          <Link href="/whatsapp/templates" className="text-un1t-light hover:text-white transition-colors">
+          <Link href="/whatsapp/templates" className="text-un1t-light hover:text-un1t-white transition-colors">
             <ArrowLeft size={20} />
           </Link>
           <h2 className="text-lg font-semibold">
@@ -162,7 +162,7 @@ export default function WATemplateEditor({ template, locationId, userId }) {
         <button
           onClick={handleSave}
           disabled={saving || isSubmitted}
-          className="flex items-center gap-1.5 text-sm bg-white text-black font-medium px-4 py-1.5 rounded-md hover:bg-gray-200 transition-colors disabled:opacity-50"
+          className="flex items-center gap-1.5 text-sm bg-un1t-white text-un1t-black font-medium px-4 py-1.5 rounded-md hover:bg-un1t-accent transition-colors disabled:opacity-50"
         >
           {isEditing ? <Save size={14} /> : <Send size={14} />}
           {saving ? 'Submitting...' : isEditing ? 'Update' : 'Submit to Meta'}
@@ -202,7 +202,7 @@ export default function WATemplateEditor({ template, locationId, userId }) {
                   onChange={e => setName(e.target.value)}
                   placeholder="e.g. welcome_new_member"
                   disabled={isSubmitted}
-                  className="w-full bg-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-white placeholder:text-un1t-mid focus:outline-none focus:border-white/40 disabled:opacity-50"
+                  className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid disabled:opacity-50"
                 />
                 <p className="text-xs text-un1t-mid mt-1">Lowercase letters, numbers, and underscores only</p>
               </div>
@@ -214,7 +214,7 @@ export default function WATemplateEditor({ template, locationId, userId }) {
                     value={category}
                     onChange={e => setCategory(e.target.value)}
                     disabled={isSubmitted}
-                    className="w-full bg-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:border-white/40 disabled:opacity-50"
+                    className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid disabled:opacity-50"
                   >
                     {CATEGORIES.map(c => (
                       <option key={c.value} value={c.value}>{c.label} — {c.description}</option>
@@ -227,7 +227,7 @@ export default function WATemplateEditor({ template, locationId, userId }) {
                     value={language}
                     onChange={e => setLanguage(e.target.value)}
                     disabled={isSubmitted}
-                    className="w-full bg-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:border-white/40 disabled:opacity-50"
+                    className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid disabled:opacity-50"
                   >
                     <option value="en">English</option>
                     <option value="en_US">English (US)</option>
@@ -244,7 +244,7 @@ export default function WATemplateEditor({ template, locationId, userId }) {
                 value={headerFormat}
                 onChange={e => setHeaderFormat(e.target.value)}
                 disabled={isSubmitted}
-                className="bg-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:border-white/40 disabled:opacity-50"
+                className="bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid disabled:opacity-50"
               >
                 {HEADER_FORMATS.map(h => (
                   <option key={h.value} value={h.value}>{h.label}</option>
@@ -259,7 +259,7 @@ export default function WATemplateEditor({ template, locationId, userId }) {
                   placeholder="Header text (max 60 chars)"
                   maxLength={60}
                   disabled={isSubmitted}
-                  className="w-full bg-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-white placeholder:text-un1t-mid focus:outline-none focus:border-white/40 disabled:opacity-50"
+                  className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid disabled:opacity-50"
                 />
               )}
 
@@ -280,7 +280,7 @@ export default function WATemplateEditor({ template, locationId, userId }) {
                 rows={5}
                 maxLength={1024}
                 disabled={isSubmitted}
-                className="w-full bg-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-white placeholder:text-un1t-mid focus:outline-none focus:border-white/40 resize-y disabled:opacity-50"
+                className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid resize-y disabled:opacity-50"
               />
               <p className="text-xs text-un1t-mid">
                 Use {'{{1}}'}, {'{{2}}'}, etc. for variables. Max 1024 characters.
@@ -298,7 +298,7 @@ export default function WATemplateEditor({ template, locationId, userId }) {
                 placeholder="e.g. Reply STOP to unsubscribe"
                 maxLength={60}
                 disabled={isSubmitted}
-                className="w-full bg-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-white placeholder:text-un1t-mid focus:outline-none focus:border-white/40 disabled:opacity-50"
+                className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid disabled:opacity-50"
               />
             </div>
 
@@ -307,14 +307,14 @@ export default function WATemplateEditor({ template, locationId, userId }) {
               <h3 className="font-semibold text-sm text-un1t-light uppercase tracking-wider">Buttons (optional, max 3)</h3>
 
               {buttons.map((btn, i) => (
-                <div key={i} className="flex items-start gap-2 p-3 bg-black rounded-lg border border-un1t-gray">
+                <div key={i} className="flex items-start gap-2 p-3 bg-un1t-dark rounded-lg border border-un1t-gray">
                   <div className="flex-1 space-y-2">
                     <div className="flex gap-2">
                       <select
                         value={btn.type}
                         onChange={e => updateButton(i, { type: e.target.value })}
                         disabled={isSubmitted}
-                        className="bg-un1t-dark border border-un1t-gray rounded-md px-2 py-1.5 text-xs text-white focus:outline-none disabled:opacity-50"
+                        className="bg-un1t-dark border border-un1t-gray rounded-md px-2 py-1.5 text-xs text-un1t-white focus:outline-none disabled:opacity-50"
                       >
                         <option value="QUICK_REPLY">Quick Reply</option>
                         <option value="URL">URL</option>
@@ -327,7 +327,7 @@ export default function WATemplateEditor({ template, locationId, userId }) {
                         placeholder="Button text"
                         maxLength={25}
                         disabled={isSubmitted}
-                        className="flex-1 bg-un1t-dark border border-un1t-gray rounded-md px-2 py-1.5 text-xs text-white placeholder:text-un1t-mid focus:outline-none disabled:opacity-50"
+                        className="flex-1 bg-un1t-dark border border-un1t-gray rounded-md px-2 py-1.5 text-xs text-un1t-white placeholder:text-un1t-mid focus:outline-none disabled:opacity-50"
                       />
                     </div>
                     {btn.type === 'URL' && (
@@ -337,7 +337,7 @@ export default function WATemplateEditor({ template, locationId, userId }) {
                         onChange={e => updateButton(i, { url: e.target.value })}
                         placeholder="https://..."
                         disabled={isSubmitted}
-                        className="w-full bg-un1t-dark border border-un1t-gray rounded-md px-2 py-1.5 text-xs text-white placeholder:text-un1t-mid focus:outline-none disabled:opacity-50"
+                        className="w-full bg-un1t-dark border border-un1t-gray rounded-md px-2 py-1.5 text-xs text-un1t-white placeholder:text-un1t-mid focus:outline-none disabled:opacity-50"
                       />
                     )}
                     {btn.type === 'PHONE_NUMBER' && (
@@ -347,7 +347,7 @@ export default function WATemplateEditor({ template, locationId, userId }) {
                         onChange={e => updateButton(i, { phone_number: e.target.value })}
                         placeholder="+353..."
                         disabled={isSubmitted}
-                        className="w-full bg-un1t-dark border border-un1t-gray rounded-md px-2 py-1.5 text-xs text-white placeholder:text-un1t-mid focus:outline-none disabled:opacity-50"
+                        className="w-full bg-un1t-dark border border-un1t-gray rounded-md px-2 py-1.5 text-xs text-un1t-white placeholder:text-un1t-mid focus:outline-none disabled:opacity-50"
                       />
                     )}
                   </div>
@@ -361,13 +361,13 @@ export default function WATemplateEditor({ template, locationId, userId }) {
 
               {buttons.length < 3 && !isSubmitted && (
                 <div className="flex gap-2">
-                  <button onClick={() => addButton('QUICK_REPLY')} className="text-xs text-un1t-light hover:text-white border border-un1t-gray px-3 py-1.5 rounded-md transition-colors">
+                  <button onClick={() => addButton('QUICK_REPLY')} className="text-xs text-un1t-light hover:text-un1t-white border border-un1t-gray px-3 py-1.5 rounded-md transition-colors">
                     + Quick Reply
                   </button>
-                  <button onClick={() => addButton('URL')} className="text-xs text-un1t-light hover:text-white border border-un1t-gray px-3 py-1.5 rounded-md transition-colors">
+                  <button onClick={() => addButton('URL')} className="text-xs text-un1t-light hover:text-un1t-white border border-un1t-gray px-3 py-1.5 rounded-md transition-colors">
                     + URL Button
                   </button>
-                  <button onClick={() => addButton('PHONE_NUMBER')} className="text-xs text-un1t-light hover:text-white border border-un1t-gray px-3 py-1.5 rounded-md transition-colors">
+                  <button onClick={() => addButton('PHONE_NUMBER')} className="text-xs text-un1t-light hover:text-un1t-white border border-un1t-gray px-3 py-1.5 rounded-md transition-colors">
                     + Call Button
                   </button>
                 </div>
