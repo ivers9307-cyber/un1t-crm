@@ -104,11 +104,6 @@ async function executeTool(toolName, input, context) {
         .lte('shift_date', endDate)
         .order('shift_date')
 
-      // Staff can only see their own shifts
-      if (!MANAGER_ROLES.includes(role)) {
-        query = query.eq('profile_id', userId)
-      }
-
       const { data } = await query
       return {
         shifts: (data || []).map(s => ({
