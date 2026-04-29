@@ -17,10 +17,11 @@ export default function BookingWidget({ slug }) {
 
   // Form state
   const [step, setStep] = useState('calendar') // calendar, form, confirmed
-  const [formData, setFormData] = useState({ name: '', email: '', phone: '' })
+  const [formData, setFormData] = useState({ name: '', email: '', phone: '+353 ' })
   const [customResponses, setCustomResponses] = useState({})
   const [submitting, setSubmitting] = useState(false)
   const [bookingResult, setBookingResult] = useState(null)
+  const [fieldErrors, setFieldErrors] = useState({})
 
   // Load event details
   useEffect(() => {
@@ -87,9 +88,74 @@ export default function BookingWidget({ slug }) {
     setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 1))
   }
 
+  // Format Irish phone: strip spaces, handle 08X → +353 8X
+  function formatIrishPhone(raw) {
+    let digits = raw.replace(/[^\d+]/g, '')
+    // If they typed a local number starting with 0
+    if (digits.startsWith('0')) {
+      digits = '+353' + digits.slice(1)
+    }
+    // If they typed just digits without +353
+    if (digits.match(/^[1-9]/) && !digits.startsWith('+')) {
+      digits = '+353' + digits
+    }
+    // Format: +353 8X XXX XXXX
+    if (digits.startsWith('+353') && digits.length > 4) {
+      const local = digits.slice(4)
+      if (local.length <= 2) return `+353 ${local}`
+      if (local.length <= 5) return `+353 ${local.slice(0, 2)} ${local.slice(2)}`
+      return `+353 ${local.slice(0, 2)} ${local.slice(2, 5)} ${local.slice(5, 9)}`
+    }
+    return raw
+  }
+
+  // Strip to E.164 for storage: +353871234567
+  function phoneToE164(formatted) {
+    const digits = formatted.replace(/[^\d+]/g, '')
+    if (digits.startsWith('+353')) return digits
+    if (digits.startsWith('0')) return '+353' + digits.slice(1)
+    return digits
+  }
+
+  function handlePhoneChange(e) {
+    let val = e.target.value
+    // Don't let them delete the +353 prefix
+    if (!val.startsWith('+353')) {
+      val = '+353 '
+    }
+    setFormData(prev => ({ ...prev, phone: formatIrishPhone(val) }))
+    setFieldErrors(prev => ({ ...prev, phone: null }))
+  }
+
+  function validateEmail(email) {
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
+  }
+
+  function validatePhone(phone) {
+    if (!phone || phone.trim() === '+353' || phone.trim() === '+353 ') return true // optional, empty is fine
+    const e164 = phoneToE164(phone)
+    // Valid Irish mobile: +353 8X XXX XXXX (10 digits after +353 → total 13 chars)
+    // Valid Irish landline: +353 1 XXX XXXX or +353 XX XXX XXXX
+    return /^\+353\d{7,10}$/.test(e164)
+  }
+
+  function validateForm() {
+    const errors = {}
+    if (!formData.name.trim()) errors.name = 'Name is required'
+    if (!formData.email.trim()) errors.email = 'Email is required'
+    else if (!validateEmail(formData.email)) errors.email = 'Please enter a valid email address'
+    if (!validatePhone(formData.phone)) errors.phone = 'Please enter a valid Irish phone number'
+    setFieldErrors(errors)
+    return Object.keys(errors).length === 0
+  }
+
   async function handleSubmit(e) {
     e.preventDefault()
+    if (!validateForm()) return
     setSubmitting(true)
+
+    const phoneE164 = phoneToE164(formData.phone)
+    const phoneToSend = phoneE164 === '+353' ? null : phoneE164
 
     const dateStr = selectedDate.toISOString().split('T')[0]
     const res = await fetch('/api/public/book', {
@@ -101,7 +167,7 @@ export default function BookingWidget({ slug }) {
         start_time: selectedSlot.start,
         customer_name: formData.name,
         customer_email: formData.email,
-        customer_phone: formData.phone || null,
+        customer_phone: phoneToSend,
         custom_responses: customResponses,
         source: 'booking_page',
       }),
@@ -282,10 +348,11 @@ export default function BookingWidget({ slug }) {
               type="text"
               required
               value={formData.name}
-              onChange={e => setFormData(prev => ({ ...prev, name: e.target.value }))}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:border-gray-500 focus:outline-none"
+              onChange={e => { setFormData(prev => ({ ...prev, name: e.target.value })); setFieldErrors(prev => ({ ...prev, name: null })) }}
+              className={`w-full border rounded-lg px-3 py-2.5 text-sm focus:outline-none ${fieldErrors.name ? 'border-red-400 focus:border-red-500' : 'border-gray-300 focus:border-gray-500'}`}
               placeholder="Your name"
             />
+            {fieldErrors.name && <p className="text-xs text-red-500 mt-1">{fieldErrors.name}</p>}
           </div>
 
           <div>
@@ -294,10 +361,12 @@ export default function BookingWidget({ slug }) {
               type="email"
               required
               value={formData.email}
-              onChange={e => setFormData(prev => ({ ...prev, email: e.target.value }))}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:border-gray-500 focus:outline-none"
+              onChange={e => { setFormData(prev => ({ ...prev, email: e.target.value })); setFieldErrors(prev => ({ ...prev, email: null })) }}
+              onBlur={() => { if (formData.email && !validateEmail(formData.email)) setFieldErrors(prev => ({ ...prev, email: 'Please enter a valid email address' })) }}
+              className={`w-full border rounded-lg px-3 py-2.5 text-sm focus:outline-none ${fieldErrors.email ? 'border-red-400 focus:border-red-500' : 'border-gray-300 focus:border-gray-500'}`}
               placeholder="you@example.com"
             />
+            {fieldErrors.email && <p className="text-xs text-red-500 mt-1">{fieldErrors.email}</p>}
           </div>
 
           <div>
@@ -305,10 +374,12 @@ export default function BookingWidget({ slug }) {
             <input
               type="tel"
               value={formData.phone}
-              onChange={e => setFormData(prev => ({ ...prev, phone: e.target.value }))}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:border-gray-500 focus:outline-none"
+              onChange={handlePhoneChange}
+              onBlur={() => { if (!validatePhone(formData.phone)) setFieldErrors(prev => ({ ...prev, phone: 'Please enter a valid Irish phone number (e.g. +353 87 123 4567)' })) }}
+              className={`w-full border rounded-lg px-3 py-2.5 text-sm focus:outline-none ${fieldErrors.phone ? 'border-red-400 focus:border-red-500' : 'border-gray-300 focus:border-gray-500'}`}
               placeholder="+353 87 123 4567"
             />
+            {fieldErrors.phone && <p className="text-xs text-red-500 mt-1">{fieldErrors.phone}</p>}
           </div>
 
           {/* Custom Fields */}
