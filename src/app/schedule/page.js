@@ -1,4 +1,5 @@
 import { getCurrentUser } from '@/lib/auth'
+import { hasPermission } from '@/lib/permissions'
 import { redirect } from 'next/navigation'
 import ScheduleTabs from '@/components/ScheduleTabs'
 
@@ -10,9 +11,7 @@ export default async function SchedulePage() {
   const user = await getCurrentUser()
   if (!user) redirect('/login')
 
-  if (user.role !== 'owner' && user.permissions?.schedule === false) {
-    redirect('/')
-  }
+  if (!hasPermission(user, 'schedule')) redirect('/')
 
   return (
     <div className="p-8">

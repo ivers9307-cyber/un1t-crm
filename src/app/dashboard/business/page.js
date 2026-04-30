@@ -3,6 +3,7 @@
 
 import { redirect } from 'next/navigation'
 import { getCurrentUser } from '@/lib/auth'
+import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { fetchBusinessDashboardData } from '@shared/dashboard-data'
 import {
@@ -15,8 +16,7 @@ export const revalidate = 0
 export default async function BusinessDashboardPage() {
   const user = await getCurrentUser()
   if (!user) redirect('/login')
-  const perms = user.permissions || {}
-  if (user.role !== 'owner' && !perms.dashboard_business) redirect('/dashboard')
+  if (!hasPermission(user, 'dashboard_business')) redirect('/dashboard')
 
   const db = createServerClient()
   const res = await fetchBusinessDashboardData(db, user.activeLocation?.id)

@@ -3,6 +3,7 @@
 import { usePathname } from 'next/navigation'
 import Sidebar from './Sidebar'
 import AssistantBubble from './AssistantBubble'
+import { hasPermission } from '@/lib/permissions'
 
 // Routes that should NOT show the CRM sidebar
 const publicPaths = ['/login', '/book/', '/unsubscribe/', '/preferences/']
@@ -21,7 +22,7 @@ export default function AppShell({ children, user }) {
       <main className="flex-1 overflow-auto">
         {children}
       </main>
-      {user && (user.role === 'owner' || user.permissions?.assistant === true) && <AssistantBubble user={user} />}
+      {hasPermission(user, 'assistant') && <AssistantBubble user={user} />}
     </div>
   )
 }

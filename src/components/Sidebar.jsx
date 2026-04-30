@@ -7,6 +7,7 @@ import { LayoutDashboard, Users, Columns3, CheckSquare, Calendar, BookOpen, Mail
 import { createBrowserClient } from '@/lib/supabase'
 import LocationSwitcher from './LocationSwitcher'
 import clsx from 'clsx'
+import { DEFAULT_WEB_PERMISSIONS_BY_ROLE } from '@shared/permissions'
 
 const roleLabels = {
   owner: 'Owner',
@@ -62,17 +63,26 @@ export default function Sidebar({ user }) {
       .catch(() => {})
   }, [user?.activeLocation?.id])
 
-  // Filter nav based on permissions — owners see everything.
-  //   - The Dashboard link is special: it shows if ANY of the three
-  //     dashboard sub-permissions is true. Sub-view selection happens
-  //     in the segmented control at the top of /dashboard/* pages.
-  //   - Other links use a single permission key.
+  // Permission resolver — explicit user setting wins (true OR false),
+  // missing keys fall back to the role default. This honours an owner
+  // who toggled something off in their own profile (the bug this
+  // commit fixes) without breaking legacy profiles whose JSONB
+  // doesn't yet have a key for newer features (treated as the role
+  // default rather than undefined / hidden).
+  function hasPerm(key) {
+    if (permissions && key in permissions) return permissions[key] === true
+    return DEFAULT_WEB_PERMISSIONS_BY_ROLE[user?.role]?.[key] === true
+  }
+
+  // Filter nav based on permissions. The Dashboard parent shows if
+  // ANY of the three sub-permissions is true. Privileged actions
+  // (staff management, branding, location config) remain owner-only
+  // via separate role gates inside those pages.
   const nav = allNav.filter(item => {
-    if (user?.role === 'owner') return true
     if (item.dashboardGroup) {
-      return DASHBOARD_PERM_KEYS.some(k => permissions[k] === true)
+      return DASHBOARD_PERM_KEYS.some(hasPerm)
     }
-    return permissions[item.permission] !== false
+    return hasPerm(item.permission)
   })
 
   async function handleLogout() {

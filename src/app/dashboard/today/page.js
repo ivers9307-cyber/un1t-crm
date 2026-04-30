@@ -6,6 +6,7 @@
 import { redirect } from 'next/navigation'
 import { Calendar, ArrowLeftRight } from 'lucide-react'
 import { getCurrentUser } from '@/lib/auth'
+import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { fetchPersonalDashboardData } from '@shared/dashboard-data'
 import {
@@ -140,11 +141,8 @@ export default async function PersonalDashboardPage() {
   const user = await getCurrentUser()
   if (!user) redirect('/login')
 
-  // Permission gate (owner bypass is a no-op since they have it set anyway).
-  const perms = user.permissions || {}
-  if (user.role !== 'owner' && !perms.dashboard_personal) {
-    redirect('/dashboard')
-  }
+  // Permission gate — toggle is honoured for every role including owner.
+  if (!hasPermission(user, 'dashboard_personal')) redirect('/dashboard')
 
   const db = createServerClient()
   const res = await fetchPersonalDashboardData(db, user.id, user.activeLocation?.id)

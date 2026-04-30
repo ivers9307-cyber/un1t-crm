@@ -4,6 +4,7 @@
 import { redirect } from 'next/navigation'
 import { Calendar, ArrowLeftRight } from 'lucide-react'
 import { getCurrentUser } from '@/lib/auth'
+import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { fetchStudioDashboardData } from '@shared/dashboard-data'
 import {
@@ -32,8 +33,7 @@ function pretty(key) {
 export default async function StudioDashboardPage() {
   const user = await getCurrentUser()
   if (!user) redirect('/login')
-  const perms = user.permissions || {}
-  if (user.role !== 'owner' && !perms.dashboard_studio) redirect('/dashboard')
+  if (!hasPermission(user, 'dashboard_studio')) redirect('/dashboard')
 
   const db = createServerClient()
   const res = await fetchStudioDashboardData(db, user.activeLocation?.id)

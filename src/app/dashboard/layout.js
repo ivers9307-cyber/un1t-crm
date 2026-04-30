@@ -6,6 +6,7 @@
 
 import { redirect } from 'next/navigation'
 import { getCurrentUser } from '@/lib/auth'
+import { hasPermission } from '@/lib/permissions'
 import DashboardTabs from '@/components/dashboard/DashboardTabs'
 
 const SEGMENTS = [
@@ -18,9 +19,7 @@ export default async function DashboardLayout({ children }) {
   const user = await getCurrentUser()
   if (!user) redirect('/login')
 
-  const perms = user.permissions || {}
-  const isOwner = user.role === 'owner'
-  const visible = SEGMENTS.filter(s => isOwner || perms[s.perm] === true)
+  const visible = SEGMENTS.filter(s => hasPermission(user, s.perm))
 
   return (
     <div className="p-6 max-w-6xl mx-auto">

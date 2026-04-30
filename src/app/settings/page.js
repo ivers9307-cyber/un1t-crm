@@ -1,5 +1,6 @@
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
+import { hasPermission } from '@/lib/permissions'
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
 import { Users, MapPin, Shield, Clock, Palette, CalendarDays } from 'lucide-react'
@@ -11,9 +12,13 @@ export const fetchCache = 'force-no-store'
 
 export default async function SettingsPage() {
   const user = await getCurrentUser()
-  if (!user || (user.role !== 'owner' && user.permissions?.settings !== true)) {
-    redirect('/')
-  }
+  if (!user) redirect('/login')
+  // Permission gate honoured for every role. The page contains
+  // links into staff/* and locations/* sub-pages — those have their
+  // own owner-only role gate independent of this permission, so an
+  // owner who toggles `settings` off still can't accidentally lock
+  // themselves out of admin operations (they navigate via direct URL).
+  if (!hasPermission(user, 'settings')) redirect('/')
 
   const db = createServerClient()
   const [staffRes, locationsRes] = await Promise.all([
