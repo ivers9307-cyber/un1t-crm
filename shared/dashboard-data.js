@@ -78,9 +78,17 @@ export function hourlyRateFor(profile) {
 export async function fetchPersonalDashboardData(supabase, profileId, locationId) {
   if (!profileId) return { success: false, error: 'No profile' }
 
-  const todayIso = isoDate(new Date())
-  const weekStartIso = isoDate(startOfWeek())
-  const weekEndIso = isoDate(endOfWeek())
+  // 14-day window — this Monday → next Sunday — fetched as a single
+  // query and split client-side. Cheaper than two queries.
+  const thisWeekStart = startOfWeek()
+  const thisWeekEnd = endOfWeek()
+  const nextWeekStart = new Date(thisWeekEnd); nextWeekStart.setDate(nextWeekStart.getDate() + 1)
+  const nextWeekEnd = new Date(nextWeekStart); nextWeekEnd.setDate(nextWeekEnd.getDate() + 6); nextWeekEnd.setHours(23, 59, 59, 999)
+
+  const thisWeekStartIso = isoDate(thisWeekStart)
+  const thisWeekEndIso = isoDate(thisWeekEnd)
+  const nextWeekStartIso = isoDate(nextWeekStart)
+  const nextWeekEndIso = isoDate(nextWeekEnd)
 
   const [shifts, swapsTargetingMe, myPendingTimeOff, myConvos] =
     await Promise.all([
@@ -88,8 +96,8 @@ export async function fetchPersonalDashboardData(supabase, profileId, locationId
         .from('shifts')
         .select('id, shift_date, start_time_override, end_time_override, status, published, shift_templates(name, start_time, end_time)')
         .eq('profile_id', profileId)
-        .gte('shift_date', weekStartIso)
-        .lte('shift_date', weekEndIso)
+        .gte('shift_date', thisWeekStartIso)
+        .lte('shift_date', nextWeekEndIso)
         .order('shift_date', { ascending: true }),
 
       supabase
@@ -117,23 +125,39 @@ export async function fetchPersonalDashboardData(supabase, profileId, locationId
   if (shifts.error) return { success: false, error: shifts.error.message }
 
   // Sort by date then start time so "first shift of the day" is index [0].
-  const allShifts = (shifts.data || []).slice().sort((a, b) => {
+  const sortedShifts = (shifts.data || []).slice().sort((a, b) => {
     if (a.shift_date !== b.shift_date) return a.shift_date.localeCompare(b.shift_date)
     const aStart = a.start_time_override || a.shift_templates?.start_time || ''
     const bStart = b.start_time_override || b.shift_templates?.start_time || ''
     return aStart.localeCompare(bStart)
   })
-  const totalHours = allShifts.reduce((sum, s) => sum + shiftDurationHours(s), 0)
+
+  // Split the 14 days into the two week buckets. KPIs (hours / shift
+  // count) are based on THIS week only — that's the metric staff care
+  // about for the current pay period.
+  const thisWeekShifts = sortedShifts.filter(s =>
+    s.shift_date >= thisWeekStartIso && s.shift_date <= thisWeekEndIso
+  )
+  const nextWeekShifts = sortedShifts.filter(s =>
+    s.shift_date >= nextWeekStartIso && s.shift_date <= nextWeekEndIso
+  )
+  const totalHours = thisWeekShifts.reduce((sum, s) => sum + shiftDurationHours(s), 0)
   const unreadInbox = (myConvos.data || []).reduce((sum, c) => sum + (c.unread_count || 0), 0)
 
   return {
     success: true,
     data: {
-      weekShifts: allShifts,
-      shiftsThisWeek: allShifts.length,
+      // This week
+      weekShifts: thisWeekShifts,
+      shiftsThisWeek: thisWeekShifts.length,
       hoursThisWeek: Math.round(totalHours * 10) / 10,
-      weekStartIso,
-      weekEndIso,
+      weekStartIso: thisWeekStartIso,
+      weekEndIso: thisWeekEndIso,
+      // Next week
+      nextWeekShifts,
+      nextWeekStartIso,
+      nextWeekEndIso,
+      // Other
       pendingSwapsForMe: swapsTargetingMe.data || [],
       myPendingTimeOff: myPendingTimeOff.data || [],
       unreadInbox,

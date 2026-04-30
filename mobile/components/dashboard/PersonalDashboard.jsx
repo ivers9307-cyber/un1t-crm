@@ -62,6 +62,86 @@ function buildWeek(weekStartIso, shifts) {
   return days
 }
 
+function rangeLabelFor(startIso, endIso) {
+  const s = new Date(startIso + 'T00:00:00')
+  const e = new Date(endIso + 'T00:00:00')
+  const fmt = d => d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })
+  return `${fmt(s)} – ${fmt(e)}`
+}
+
+// Reusable week-panel renderer. Same shape used for "This week" and
+// "Next week"; they stack vertically on mobile because the screen is
+// too narrow for side-by-side, and visually segment by the title row.
+function WeekPanel({ title, startIso, endIso, shifts }) {
+  const days = buildWeek(startIso, shifts || [])
+  return (
+    <View className="bg-un1t-dark border border-un1t-gray rounded-2xl mb-3 overflow-hidden">
+      <View className="px-4 pt-3 pb-2 flex-row items-baseline justify-between">
+        <Text className="text-xs font-semibold uppercase tracking-wider text-un1t-light">
+          {title}
+        </Text>
+        <Text className="text-xs text-un1t-mid">{rangeLabelFor(startIso, endIso)}</Text>
+      </View>
+      {days.map((day, idx) => {
+        const isLast = idx === days.length - 1
+        return (
+          <View
+            key={day.iso}
+            className={`flex-row px-4 py-2.5 ${!isLast ? 'border-b border-un1t-gray' : ''} ${
+              day.isToday ? 'bg-un1t-gray/30' : ''
+            }`}
+          >
+            <View className="w-14">
+              <Text className={`text-[10px] font-semibold uppercase tracking-wider ${
+                day.isToday ? 'text-un1t-white'
+                : day.isPast ? 'text-un1t-mid'
+                : 'text-un1t-light'
+              }`}>
+                {day.label}
+              </Text>
+              <Text className={`text-base font-semibold ${
+                day.isPast ? 'text-un1t-mid' : 'text-un1t-white'
+              }`}>
+                {day.dayNum}
+              </Text>
+            </View>
+            <View className="flex-1">
+              {day.shifts.length === 0 ? (
+                <Text className={`text-sm ${day.isPast ? 'text-un1t-mid' : 'text-un1t-light'} pt-1`}>
+                  Off
+                </Text>
+              ) : (
+                day.shifts.map((s, i) => (
+                  <View key={s.id} className={i > 0 ? 'mt-1' : ''}>
+                    <View className="flex-row items-center justify-between">
+                      <Text className={`text-sm font-medium ${day.isPast ? 'text-un1t-light' : 'text-un1t-white'}`} numberOfLines={1}>
+                        {s.shift_templates?.name || 'Shift'}
+                      </Text>
+                      {s.published === false && (
+                        <View className="ml-2 px-1.5 py-0.5 rounded bg-amber-500/20">
+                          <Text className="text-[9px] uppercase text-amber-700 font-semibold">Draft</Text>
+                        </View>
+                      )}
+                      {s.status === 'swapped' && (
+                        <View className="ml-2 px-1.5 py-0.5 rounded bg-blue-500/20">
+                          <Text className="text-[9px] uppercase text-blue-700 font-semibold">Swapped</Text>
+                        </View>
+                      )}
+                    </View>
+                    <Text className={`text-xs ${day.isPast ? 'text-un1t-mid' : 'text-un1t-light'}`}>
+                      {shiftTime(s)} · {shiftHours(s)}h
+                    </Text>
+                  </View>
+                ))
+              )}
+            </View>
+          </View>
+        )
+      })}
+    </View>
+  )
+}
+
 export default function PersonalDashboard({ refreshKey }) {
   const { profile, activeLocation } = useAuth()
   const router = useRouter()
@@ -87,87 +167,30 @@ export default function PersonalDashboard({ refreshKey }) {
     )
   }
 
-  const { weekShifts, weekStartIso, weekEndIso, shiftsThisWeek, hoursThisWeek, pendingSwapsForMe, myPendingTimeOff, unreadInbox } = data
-
-  const weekDays = buildWeek(weekStartIso, weekShifts || [])
-  const rangeLabel = (() => {
-    const s = new Date(weekStartIso + 'T00:00:00')
-    const e = new Date(weekEndIso + 'T00:00:00')
-    const fmt = d => d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })
-    return `${fmt(s)} – ${fmt(e)}`
-  })()
+  const {
+    weekShifts, weekStartIso, weekEndIso,
+    nextWeekShifts, nextWeekStartIso, nextWeekEndIso,
+    shiftsThisWeek, hoursThisWeek,
+    pendingSwapsForMe, myPendingTimeOff, unreadInbox,
+  } = data
 
   return (
     <View>
-      {/* Hero — full week view, segmented by day */}
-      <View className="bg-un1t-dark border border-un1t-gray rounded-2xl mb-3 overflow-hidden">
-        <View className="px-4 pt-3 pb-2 flex-row items-baseline justify-between">
-          <Text className="text-xs font-semibold uppercase tracking-wider text-un1t-light">
-            This week
-          </Text>
-          <Text className="text-xs text-un1t-mid">{rangeLabel}</Text>
-        </View>
-        {weekDays.map((day, idx) => {
-          const isLast = idx === weekDays.length - 1
-          return (
-            <View
-              key={day.iso}
-              className={`flex-row px-4 py-2.5 ${!isLast ? 'border-b border-un1t-gray' : ''} ${
-                day.isToday ? 'bg-un1t-gray/30' : ''
-              }`}
-            >
-              {/* Day column on the left */}
-              <View className="w-14">
-                <Text className={`text-[10px] font-semibold uppercase tracking-wider ${
-                  day.isToday ? 'text-un1t-white'
-                  : day.isPast ? 'text-un1t-mid'
-                  : 'text-un1t-light'
-                }`}>
-                  {day.label}
-                </Text>
-                <Text className={`text-base font-semibold ${
-                  day.isPast ? 'text-un1t-mid'
-                  : 'text-un1t-white'
-                }`}>
-                  {day.dayNum}
-                </Text>
-              </View>
-
-              {/* Shifts on the right */}
-              <View className="flex-1">
-                {day.shifts.length === 0 ? (
-                  <Text className={`text-sm ${day.isPast ? 'text-un1t-mid' : 'text-un1t-light'} pt-1`}>
-                    Off
-                  </Text>
-                ) : (
-                  day.shifts.map((s, i) => (
-                    <View key={s.id} className={i > 0 ? 'mt-1' : ''}>
-                      <View className="flex-row items-center justify-between">
-                        <Text className={`text-sm font-medium ${day.isPast ? 'text-un1t-light' : 'text-un1t-white'}`} numberOfLines={1}>
-                          {s.shift_templates?.name || 'Shift'}
-                        </Text>
-                        {s.published === false && (
-                          <View className="ml-2 px-1.5 py-0.5 rounded bg-amber-500/20">
-                            <Text className="text-[9px] uppercase text-amber-700 font-semibold">Draft</Text>
-                          </View>
-                        )}
-                        {s.status === 'swapped' && (
-                          <View className="ml-2 px-1.5 py-0.5 rounded bg-blue-500/20">
-                            <Text className="text-[9px] uppercase text-blue-700 font-semibold">Swapped</Text>
-                          </View>
-                        )}
-                      </View>
-                      <Text className={`text-xs ${day.isPast ? 'text-un1t-mid' : 'text-un1t-light'}`}>
-                        {shiftTime(s)} · {shiftHours(s)}h
-                      </Text>
-                    </View>
-                  ))
-                )}
-              </View>
-            </View>
-          )
-        })}
-      </View>
+      {/* Roster — current week + next week, stacked vertically because
+          a phone is too narrow for two side-by-side weeks. The web
+          equivalent renders these in a 2-col grid. */}
+      <WeekPanel
+        title="This week"
+        startIso={weekStartIso}
+        endIso={weekEndIso}
+        shifts={weekShifts}
+      />
+      <WeekPanel
+        title="Next week"
+        startIso={nextWeekStartIso}
+        endIso={nextWeekEndIso}
+        shifts={nextWeekShifts}
+      />
 
       {/* Top KPIs */}
       <KpiRow>
