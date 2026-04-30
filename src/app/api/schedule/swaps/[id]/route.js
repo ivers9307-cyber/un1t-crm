@@ -4,6 +4,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { swapStatusSchema , MANAGER_ROLES} from '@/lib/schemas'
+import { sendPush } from '@/lib/push'
 
 const SwapReviewSchema = z.object({
   status: swapStatusSchema,
@@ -70,5 +71,22 @@ export async function PUT(request, { params }) {
     .single()
 
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
+
+  // Notify the requester of the decision (approval / rejection by a
+  // manager). Cancellations by the requester themselves don't fan back
+  // out to themselves.
+  if (
+    (body.status === 'approved' || body.status === 'rejected') &&
+    swap.requester_id !== user.id
+  ) {
+    const verb = body.status === 'approved' ? 'approved' : 'declined'
+    sendPush([swap.requester_id], {
+      title: `Swap ${verb}`,
+      body: `Your shift swap request was ${verb}${body.review_note ? ` — “${body.review_note}”` : ''}.`,
+      category: 'swap',
+      data: { type: 'swap_decision', swap_id: swap.id, status: body.status },
+    }).catch(err => console.error('[swaps] decision push failed', err))
+  }
+
   return NextResponse.json({ success: true, data })
 }

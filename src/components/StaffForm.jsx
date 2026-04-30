@@ -45,6 +45,58 @@ const defaultPermissionsByRole = {
 
 const defaultPermissions = defaultPermissionsByRole.staff
 
+// Mobile feature toggles — read by the iOS app on login. Stored under
+// permissions.mobile.<key>. Missing keys are treated as "off" by the
+// app (deny by default), so adding a new feature here doesn't auto-
+// enable it for existing users.
+const allMobilePermissions = [
+  { key: 'schedule',           label: 'Schedule',                 hint: 'View shifts, request time off, swap requests' },
+  { key: 'pipeline',           label: 'Pipeline & Deals',         hint: 'Move deals, log calls, see new leads' },
+  { key: 'whatsapp',           label: 'WhatsApp Inbox',           hint: 'Reply to inbound WhatsApp messages on the go' },
+  { key: 'time_off',           label: 'Time Off Requests',        hint: 'Submit and view leave requests' },
+  { key: 'assistant',          label: 'AI Assistant',             hint: 'Use the in-app assistant from mobile' },
+  { key: 'door_unlock',        label: 'Door Unlock',              hint: 'Unlock UniFi-controlled doors from the phone (requires UniFi door access on)' },
+  { key: 'push_notifications', label: 'Push Notifications',       hint: 'Master switch — turn off to silence everything' },
+  { key: 'notify_time_off',    label: '… Time-off decisions',     hint: 'Notify on approval/decline of own requests, plus inbound requests for managers' },
+  { key: 'notify_schedule',    label: '… Schedule published',     hint: 'Notify when a new week is published' },
+  { key: 'notify_swap',        label: '… Swap requests',          hint: 'Notify on inbound swap requests and responses' },
+  { key: 'notify_lead',        label: '… New leads assigned',     hint: 'Notify when a contact is assigned to you' },
+  { key: 'notify_whatsapp',    label: '… WhatsApp messages',      hint: 'Notify on inbound WhatsApp (subject to inbox permission)' },
+]
+
+const defaultMobilePermissionsByRole = {
+  staff: {
+    schedule: true, pipeline: false, whatsapp: false,
+    time_off: true, assistant: false, door_unlock: false,
+    push_notifications: true,
+    notify_time_off: true, notify_schedule: true, notify_swap: true,
+    notify_lead: false, notify_whatsapp: false,
+  },
+  head_coach: {
+    schedule: true, pipeline: true, whatsapp: true,
+    time_off: true, assistant: true, door_unlock: false,
+    push_notifications: true,
+    notify_time_off: true, notify_schedule: true, notify_swap: true,
+    notify_lead: true, notify_whatsapp: true,
+  },
+  manager: {
+    schedule: true, pipeline: true, whatsapp: true,
+    time_off: true, assistant: true, door_unlock: true,
+    push_notifications: true,
+    notify_time_off: true, notify_schedule: true, notify_swap: true,
+    notify_lead: true, notify_whatsapp: true,
+  },
+  owner: {
+    schedule: true, pipeline: true, whatsapp: true,
+    time_off: true, assistant: true, door_unlock: true,
+    push_notifications: true,
+    notify_time_off: true, notify_schedule: true, notify_swap: true,
+    notify_lead: true, notify_whatsapp: true,
+  },
+}
+
+const defaultMobilePermissions = defaultMobilePermissionsByRole.staff
+
 export default function StaffForm({ staff, locations }) {
   const isEdit = !!staff
   const router = useRouter()
@@ -56,7 +108,8 @@ export default function StaffForm({ staff, locations }) {
     role: staff?.role || 'staff',
     active: staff?.active ?? true,
     location_ids: staff?.location_ids || locations.map(l => l.id),
-    permissions: staff?.permissions || { ...defaultPermissions },
+    permissions: staff?.permissions || { ...defaultPermissions, mobile: { ...defaultMobilePermissions } },
+    mobile_permissions: staff?.permissions?.mobile || { ...defaultMobilePermissions },
     // HR fields
     employment_type: staff?.employment_type || 'fte',
     annual_salary: staff?.annual_salary || '',
@@ -87,6 +140,19 @@ export default function StaffForm({ staff, locations }) {
       ...prev,
       permissions: { ...prev.permissions, [key]: !prev.permissions[key] },
     }))
+  }
+
+  function toggleMobilePermission(key) {
+    setForm(prev => ({
+      ...prev,
+      mobile_permissions: { ...prev.mobile_permissions, [key]: !prev.mobile_permissions[key] },
+    }))
+  }
+
+  function setAllMobilePermissions(on) {
+    const perms = {}
+    allMobilePermissions.forEach(p => { perms[p.key] = on })
+    setForm(prev => ({ ...prev, mobile_permissions: perms }))
   }
 
   function toggleLocation(locId) {
@@ -121,10 +187,19 @@ export default function StaffForm({ staff, locations }) {
     const url = isEdit ? `/api/staff/${staff.id}` : '/api/staff'
     const method = isEdit ? 'PUT' : 'POST'
 
+    // Mobile feature flags are stored under permissions.mobile so the
+    // mobile app can read them in a single fetch alongside the existing
+    // sidebar permissions. We merge here at submit time so the source-of-
+    // truth split (web vs mobile) doesn't bleed into the API/DB shape.
+    const mergedPermissions = {
+      ...form.permissions,
+      mobile: { ...form.mobile_permissions },
+    }
+
     const payload = {
       full_name: form.full_name,
       role: form.role,
-      permissions: form.permissions,
+      permissions: mergedPermissions,
       location_ids: form.location_ids,
       active: form.active,
       employment_type: form.employment_type,
@@ -256,6 +331,11 @@ export default function StaffForm({ staff, locations }) {
                   ...prev,
                   role: newRole,
                   permissions: defaultPermissionsByRole[newRole] || defaultPermissions,
+                  // Reset mobile defaults too — promoting from staff to
+                  // manager should grant mobile pipeline/WhatsApp/etc.,
+                  // and demoting should revoke them. Same logic as the
+                  // sidebar permissions reset above.
+                  mobile_permissions: defaultMobilePermissionsByRole[newRole] || defaultMobilePermissions,
                 }
               })
             }}
@@ -470,6 +550,7 @@ export default function StaffForm({ staff, locations }) {
             <button type="button" onClick={() => setAllPermissions(false)} className="text-xs text-blue-400 hover:text-blue-300">All off</button>
           </div>
         </div>
+        <p className="text-xs text-un1t-light mb-2">Controls what this person sees in the web sidebar.</p>
         <div className="space-y-2">
           {allPermissions.map(perm => (
             <label key={perm.key} className="flex items-center justify-between py-1.5 cursor-pointer">
@@ -483,6 +564,53 @@ export default function StaffForm({ staff, locations }) {
               </button>
             </label>
           ))}
+        </div>
+      </div>
+
+      {/* Mobile Features — read by the iOS app on login. Stored under
+          permissions.mobile.* alongside the web flags so a single fetch
+          gives the mobile app everything it needs. */}
+      <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5">
+        <div className="flex items-center justify-between mb-3">
+          <div>
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light">Mobile App Features</h3>
+            <p className="text-xs text-un1t-light mt-1">
+              Controls what this person sees in the iOS app (independent of web sidebar). Notification rows are silenced if Push Notifications is off.
+            </p>
+          </div>
+          <div className="flex gap-2 shrink-0">
+            <button type="button" onClick={() => setAllMobilePermissions(true)} className="text-xs text-blue-400 hover:text-blue-300">All on</button>
+            <span className="text-un1t-mid">·</span>
+            <button type="button" onClick={() => setAllMobilePermissions(false)} className="text-xs text-blue-400 hover:text-blue-300">All off</button>
+          </div>
+        </div>
+        <div className="space-y-2">
+          {allMobilePermissions.map(perm => {
+            // Notification sub-toggles are visually dimmed (and behaviorally
+            // ignored server-side in src/lib/push.js) when the master
+            // push_notifications flag is off. We don't disable the toggle
+            // outright though — admins might want to pre-configure which
+            // notification types will be on once they re-enable push.
+            const isNotifyRow = perm.key.startsWith('notify_')
+            const dim = isNotifyRow && !form.mobile_permissions.push_notifications
+            return (
+              <label key={perm.key} className={`flex items-center justify-between py-1.5 cursor-pointer ${dim ? 'opacity-50' : ''}`}>
+                <span className="text-sm">
+                  {perm.label}
+                  {perm.hint && (
+                    <span className="block text-xs text-un1t-light">{perm.hint}</span>
+                  )}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => toggleMobilePermission(perm.key)}
+                  className={`w-10 h-5 rounded-full transition-colors shrink-0 ${form.mobile_permissions[perm.key] ? 'bg-green-500' : 'bg-un1t-gray'}`}
+                >
+                  <div className={`w-4 h-4 rounded-full bg-white transition-transform ${form.mobile_permissions[perm.key] ? 'translate-x-5' : 'translate-x-0.5'}`} />
+                </button>
+              </label>
+            )
+          })}
         </div>
       </div>
 

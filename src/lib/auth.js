@@ -1,6 +1,6 @@
 import { createClient } from '@supabase/supabase-js'
 import { createServerClient as createSSRClient } from '@supabase/ssr'
-import { cookies } from 'next/headers'
+import { cookies, headers } from 'next/headers'
 import { NextResponse } from 'next/server'
 
 // Auth-aware server client for SSR pages (reads session from cookies)
@@ -28,10 +28,55 @@ export function createAuthClient() {
   )
 }
 
-// Get current user profile with permissions and location
+// Validate a Supabase JWT (the access_token from a mobile session) and
+// return the corresponding auth user. Used by getCurrentUser() to support
+// the iOS app's Authorization: Bearer <jwt> header without setting cookies.
+// Returns null on any failure (malformed, expired, network blip).
+async function getUserFromBearer() {
+  let auth = ''
+  try {
+    auth = headers().get('authorization') || ''
+  } catch {
+    // headers() throws outside a request scope (e.g. unit tests). Let
+    // the caller fall back to cookie auth.
+    return null
+  }
+  if (!auth.startsWith('Bearer ')) return null
+  const token = auth.slice('Bearer '.length)
+  // Skip the n8n CRM_API_KEY — that path doesn't carry a Supabase user;
+  // routes that need a user under that token use requireApiKey() instead.
+  if (process.env.CRM_API_KEY && token === process.env.CRM_API_KEY) return null
+  try {
+    const sb = createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+    )
+    const { data: { user } } = await sb.auth.getUser(token)
+    return user || null
+  } catch {
+    return null
+  }
+}
+
+// Get current user profile with permissions and location.
+//
+// Auth source priority:
+//   1. Authorization: Bearer <supabase_jwt>  (iOS mobile app)
+//   2. SSR session cookies                   (web browser)
+//
+// In either case, the rest of the function is identical — load the
+// profile, location assignments, and resolve activeLocation. The mobile
+// app sends an `x-active-location` header to override the cookie-based
+// active-location resolution; the cookie path remains untouched.
 export async function getCurrentUser() {
-  const supabase = createAuthClient()
-  const { data: { user } } = await supabase.auth.getUser()
+  // Try Bearer JWT first (mobile). If absent or invalid, fall back to
+  // the cookie-based session (web).
+  let user = await getUserFromBearer()
+  if (!user) {
+    const supabase = createAuthClient()
+    const result = await supabase.auth.getUser()
+    user = result.data.user
+  }
   if (!user) return null
 
   const db = createClient(
@@ -56,16 +101,33 @@ export async function getCurrentUser() {
 
   const locations = (locationLinks || []).map(pl => pl.locations).filter(Boolean)
 
-  // Check for location cookie (set by LocationSwitcher)
+  // Active-location resolution. Priority:
+  //   1. x-active-location header  — set by the mobile app's location switcher
+  //   2. un1t_active_location cookie — set by the web LocationSwitcher
+  //   3. profile_locations.is_default — admin-assigned default
+  //   4. first location in the assignment list
+  //
+  // We validate header / cookie values against the user's actual
+  // assignments — a stale value or malicious header that points at
+  // someone else's location is silently ignored, and the next priority
+  // wins. This keeps the existing IDOR guarantees.
+  let headerLocation = null
+  try {
+    const headerVal = headers().get('x-active-location') || ''
+    headerLocation = headerVal ? locations.find(l => l.id === headerVal) : null
+  } catch {
+    // headers() throws outside a request scope; ignore.
+  }
+
   const cookieStore = cookies()
   const locationCookie = cookieStore.get('un1t_active_location')?.value
   const cookieLocation = locationCookie
     ? locations.find(l => l.id === locationCookie)
     : null
 
-  // Priority: cookie > default assignment > first location
   const defaultLink = (locationLinks || []).find(pl => pl.is_default)
-  const activeLocation = cookieLocation || defaultLink?.locations || locations[0] || null
+  const activeLocation =
+    headerLocation || cookieLocation || defaultLink?.locations || locations[0] || null
 
   return {
     ...profile,

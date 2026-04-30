@@ -21,18 +21,46 @@ export async function middleware(request) {
   const isPublic = publicPaths.some(p => request.nextUrl.pathname.startsWith(p))
   if (isPublic) return NextResponse.next()
 
-  // Allow API requests authenticated with a valid Bearer token (used by n8n
-  // and similar external integrations). The token is validated constant-time
-  // here AND a second time in routes that call requireApiKey() — defense in
-  // depth in case middleware ever regresses. Routes without requireApiKey()
-  // will still see the request as authenticated with no Supabase user, so
-  // they need to handle that explicitly.
+  // Allow API requests authenticated with a valid Bearer token. Two paths:
+  //   1. CRM_API_KEY — used by n8n and similar external integrations. Fixed
+  //      64-char hex, compared constant-time.
+  //   2. Supabase JWT — used by the iOS mobile app. The JWT is the
+  //      `access_token` from a successful Supabase auth session on the
+  //      device. We validate it via `supabase.auth.getUser(token)`, which
+  //      verifies the signature against the project's JWT secret over the
+  //      network (no node:crypto needed — Edge-runtime safe).
+  //
+  // The CRM_API_KEY path is validated constant-time here AND a second time
+  // in routes that call requireApiKey() — defense in depth. Routes without
+  // requireApiKey() will still see the request as authenticated and can
+  // call getCurrentUser() — which itself tries the Bearer header (mobile)
+  // before falling back to cookies (web).
   if (request.nextUrl.pathname.startsWith('/api/')) {
     const auth = request.headers.get('authorization') || ''
     const token = auth.startsWith('Bearer ') ? auth.slice('Bearer '.length) : ''
-    const expected = process.env.CRM_API_KEY
-    if (expected && token && timingSafeEqualEdge(token, expected)) {
-      return NextResponse.next()
+
+    if (token) {
+      // Path 1: CRM_API_KEY (n8n)
+      const expected = process.env.CRM_API_KEY
+      if (expected && timingSafeEqualEdge(token, expected)) {
+        return NextResponse.next()
+      }
+
+      // Path 2: Supabase JWT (mobile app). Use a stripped client (no
+      // cookies) since the JWT is the source of truth. If the token is
+      // malformed or expired, getUser() returns { user: null } and we
+      // fall through to the cookie-session check below.
+      try {
+        const supabaseJwt = createServerClient(
+          process.env.NEXT_PUBLIC_SUPABASE_URL,
+          process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+          { cookies: { getAll: () => [], setAll: () => {} } }
+        )
+        const { data: { user: jwtUser } } = await supabaseJwt.auth.getUser(token)
+        if (jwtUser) return NextResponse.next()
+      } catch {
+        // Network blip or malformed token — fall through.
+      }
     }
   }
 

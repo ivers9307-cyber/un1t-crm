@@ -4,6 +4,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, getUserLocationIds, assertLocationAccess } from '@/lib/auth'
 import { validateBody, uuidLike } from '@/lib/validate'
 import { MANAGER_ROLES } from '@/lib/schemas'
+import { sendPushToRolesAtLocation } from '@/lib/push'
 
 const ISO_DATE = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD')
 
@@ -136,5 +137,22 @@ export async function POST(request) {
   `).single()
 
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
+
+  // Notify owners + managers at the request's location that a new
+  // time-off request needs review. Best-effort — never block the API
+  // response on push delivery.
+  const targetLocation = data.location_id || user.activeLocation?.id
+  if (targetLocation) {
+    const range = data.start_date === data.end_date
+      ? data.start_date
+      : `${data.start_date} – ${data.end_date}`
+    sendPushToRolesAtLocation(targetLocation, ['owner', 'manager'], {
+      title: 'New time-off request',
+      body: `${user.full_name} requested ${data.type} for ${range}.`,
+      category: 'time_off',
+      data: { type: 'time_off_inbound', request_id: data.id },
+    }).catch(err => console.error('[time-off] push failed', err))
+  }
+
   return NextResponse.json({ success: true, data }, { status: 201 })
 }

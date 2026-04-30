@@ -4,6 +4,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess , getUserLocationIds} from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
+import { sendPush, sendPushToRolesAtLocation } from '@/lib/push'
 
 const SwapCreateSchema = z.object({
   requester_shift_id: uuidLike,
@@ -80,5 +81,25 @@ export async function POST(request) {
   }).select().single()
 
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
+
+  // Notify the targeted teammate if one was specified, otherwise alert
+  // managers at the location that an open swap is up for grabs. Either
+  // way, push delivery is best-effort.
+  if (body.target_id) {
+    sendPush([body.target_id], {
+      title: 'New shift swap request',
+      body: `${user.full_name} wants to swap a shift with you. Tap to review.`,
+      category: 'swap',
+      data: { type: 'swap_inbound', swap_id: data.id },
+    }).catch(err => console.error('[swaps] push to target failed', err))
+  } else {
+    sendPushToRolesAtLocation(shift.location_id, ['owner', 'manager', 'head_coach'], {
+      title: 'Open swap request',
+      body: `${user.full_name} posted a shift for swap. Tap to review.`,
+      category: 'swap',
+      data: { type: 'swap_open', swap_id: data.id },
+    }).catch(err => console.error('[swaps] push to managers failed', err))
+  }
+
   return NextResponse.json({ success: true, data }, { status: 201 })
 }

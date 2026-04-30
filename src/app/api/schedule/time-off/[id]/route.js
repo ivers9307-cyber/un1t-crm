@@ -4,6 +4,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { timeOffStatusSchema , MANAGER_ROLES} from '@/lib/schemas'
+import { sendPush } from '@/lib/push'
 
 const TimeOffReviewSchema = z.object({
   status: timeOffStatusSchema,
@@ -66,5 +67,30 @@ export async function PUT(request, { params }) {
     .single()
 
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
+
+  // Notify the requester on a manager decision (approval / rejection).
+  // Cancellations by the requester themselves don't need a push back to
+  // themselves, and a manager-cancellation is handled by the request
+  // being deleted from their inbox naturally.
+  if ((status === 'approved' || status === 'rejected') && existing.profile_id !== user.id) {
+    const verb = status === 'approved' ? 'approved' : 'declined'
+    const range = existing.start_date === existing.end_date
+      ? existing.start_date
+      : `${existing.start_date} – ${existing.end_date}`
+    sendPush([existing.profile_id], {
+      title: `Time off ${verb}`,
+      body: `Your ${existing.type} request for ${range} was ${verb}${review_note ? ` — “${review_note}”` : ''}.`,
+      category: 'time_off',
+      data: {
+        type: 'time_off_decision',
+        request_id: existing.id,
+        status,
+      },
+    }).catch(err => {
+      // Best-effort — never block the API response on push.
+      console.error('[time-off] push failed', err)
+    })
+  }
+
   return NextResponse.json({ success: true, data })
 }

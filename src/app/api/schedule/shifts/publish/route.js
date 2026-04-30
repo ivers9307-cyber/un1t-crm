@@ -4,6 +4,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike, isoDate , MANAGER_ROLES} from '@/lib/schemas'
+import { sendPush } from '@/lib/push'
 
 const PublishSchema = z.object({
   location_id: uuidLike,
@@ -64,6 +65,27 @@ export async function POST(request) {
     }))
 
     await db.from('schedule_notifications').insert(notifications)
+
+    // Push to every assigned staff member. Per-user opt-out is handled
+    // inside sendPush() via permissions.mobile.notify_schedule. We send
+    // one notification per profile, summarising their shift count.
+    const userIds = Object.keys(profileShifts)
+    if (userIds.length) {
+      const range = start_date === end_date
+        ? start_date
+        : `${start_date} – ${end_date}`
+      sendPush(userIds, {
+        title: 'New schedule published',
+        body: `Your shifts for ${range} are live. Tap to view.`,
+        category: 'schedule',
+        data: {
+          type: 'schedule_published',
+          start_date,
+          end_date,
+          location_id,
+        },
+      }).catch(err => console.error('[publish] push failed', err))
+    }
   }
 
   return NextResponse.json({ success: true, published: shifts?.length || 0 })
