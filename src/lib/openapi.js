@@ -120,6 +120,7 @@ const StaffCreate = z.object({
   hourly_rate: money.nullable().optional(),
   contracted_hours_per_week: hours.nullable().optional(),
   annual_leave_entitlement: days.nullable().optional(),
+  overtime_rate: money.nullable().optional(),
 }).openapi('StaffCreate')
 
 const StaffUpdate = StaffCreate.partial().omit({ email: true, password: true })

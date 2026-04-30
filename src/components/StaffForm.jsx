@@ -62,6 +62,7 @@ export default function StaffForm({ staff, locations }) {
     hourly_rate: staff?.hourly_rate || '',
     contracted_hours_per_week: staff?.contracted_hours_per_week ?? 40,
     annual_leave_entitlement: staff?.annual_leave_entitlement ?? 20,
+    overtime_rate: staff?.overtime_rate || '',
   })
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
@@ -107,6 +108,7 @@ export default function StaffForm({ staff, locations }) {
       hourly_rate: form.employment_type === 'contractor' && form.hourly_rate ? Number(form.hourly_rate) : null,
       contracted_hours_per_week: form.employment_type === 'fte' ? Number(form.contracted_hours_per_week) : null,
       annual_leave_entitlement: form.employment_type === 'fte' ? Number(form.annual_leave_entitlement) : null,
+      overtime_rate: form.employment_type === 'fte' && form.overtime_rate ? Number(form.overtime_rate) : null,
     }
 
     if (!isEdit) {
@@ -327,6 +329,23 @@ export default function StaffForm({ staff, locations }) {
                 onChange={e => setForm(prev => ({ ...prev, annual_leave_entitlement: e.target.value }))}
                 className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
               />
+            </div>
+            <div>
+              <label className="block text-sm text-un1t-light mb-1">
+                Overtime Rate (€/hr) <span className="text-un1t-mid">— optional</span>
+              </label>
+              <input
+                type="number"
+                step="0.01"
+                min="0"
+                value={form.overtime_rate}
+                onChange={e => setForm(prev => ({ ...prev, overtime_rate: e.target.value }))}
+                placeholder="e.g. 30.00"
+                className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
+              />
+              <p className="text-xs text-un1t-light mt-1">
+                Hours scheduled above contracted weekly hours pay at this rate. Leave blank to pay overtime at the regular rate (no premium).
+              </p>
             </div>
           </>
         ) : (

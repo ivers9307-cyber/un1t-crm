@@ -1,8 +1,9 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { ChevronLeft, ChevronRight, Copy, Send, Plus, Users, User, Clock, MapPin, X, ArrowLeftRight, CalendarOff, Palmtree, ThermometerSun, Ban } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Copy, Send, Plus, Users, User, Clock, MapPin, X, ArrowLeftRight, CalendarOff, Palmtree, ThermometerSun, Ban, AlertTriangle } from 'lucide-react'
 import Link from 'next/link'
+import { computeWeeklyCost } from '@/lib/payroll'
 
 const TIME_OFF_CONFIG = {
   holiday:     { label: 'Holiday',     color: '#22C55E', icon: Palmtree },
@@ -267,6 +268,62 @@ export default function ScheduleCalendar({ user }) {
           <ChevronRight size={20} />
         </button>
       </div>
+
+      {/* Overtime warning panel — visible whenever any FTE in this week is at
+          or above their contracted hours. Visible to managers (canManage). */}
+      {!loading && canManage(user.role) && (() => {
+        // Build per-staff cost summaries for the visible Mon-Sun week.
+        // staff[] already holds the full profiles incl. HR fields; shifts[]
+        // is the source of truth for hours actually scheduled.
+        const summaries = locationStaff
+          .filter(s => s.employment_type === 'fte' && (s.contracted_hours_per_week || 0) > 0)
+          .map(s => {
+            const own = shifts.filter(sh => sh.profile_id === s.id)
+            const cost = computeWeeklyCost({ shifts: own, profile: s })
+            return { staff: s, cost }
+          })
+          .filter(({ cost }) => cost.actual_hours > 0)
+
+        const overOrAt = summaries.filter(({ cost }) =>
+          cost.actual_hours >= cost.contracted_hours
+        )
+        if (overOrAt.length === 0) return null
+
+        return (
+          <div className="mb-4 rounded-lg border border-amber-500/30 bg-amber-500/5 p-3">
+            <div className="flex items-center gap-2 text-amber-400 font-medium text-sm mb-2">
+              <AlertTriangle size={16} /> Weekly hours notice
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
+              {overOrAt.map(({ staff: s, cost }) => {
+                const isOver = cost.over_threshold
+                return (
+                  <div
+                    key={s.id}
+                    className={`text-xs rounded-md px-2.5 py-1.5 border ${isOver
+                      ? 'border-amber-500/40 bg-amber-500/10 text-amber-200'
+                      : 'border-un1t-gray bg-un1t-dark/40 text-un1t-light'
+                    }`}
+                  >
+                    <span className="font-medium text-un1t-white">{s.full_name}</span>
+                    {' — '}
+                    <span>{cost.actual_hours.toFixed(1)}h / {cost.contracted_hours}h</span>
+                    {isOver && (
+                      <span className="ml-1 font-semibold">
+                        +{cost.overtime_hours.toFixed(1)}h OT
+                      </span>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+            <p className="text-[11px] text-un1t-mid mt-2">
+              FTE staff scheduled at or above their contracted hours for {weekLabel}.
+              Hours over contracted pay at the staff member&apos;s overtime rate (or regular rate if not set).
+            </p>
+          </div>
+        )
+      })()}
 
       {/* Calendar Grid */}
       {loading ? (

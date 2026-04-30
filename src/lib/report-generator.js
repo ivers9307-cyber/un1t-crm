@@ -1,5 +1,6 @@
 // Shared report generation logic — used by both manual generate and cron scheduler
 import { createServerClient } from '@/lib/supabase'
+import { computeWeeklyCost, implicitHourlyRate, mondayOf } from '@/lib/payroll'
 
 /**
  * Generate a report and save it to generated_reports.
@@ -64,76 +65,102 @@ export async function generateReport({ report_type, period_start, period_end, lo
 
     case 'staff_cost': {
       reportName = 'Staff Cost Breakdown'
+      // Pull profiles INCLUDING overtime_rate so OT hours can be costed at
+      // the explicit rate when present.
       const { data: profiles } = await db.from('profiles')
-        .select('id, full_name, role, employment_type, annual_salary, hourly_rate, contracted_hours_per_week')
+        .select('id, full_name, role, employment_type, annual_salary, hourly_rate, contracted_hours_per_week, overtime_rate')
         .eq('active', true)
 
+      // Need start_time_override / end_time_override so we honour overrides
+      // (matches what the schedule UI shows).
       const { data: shifts } = await db.from('shifts')
-        .select('shift_date, profile_id, shift_templates(start_time, end_time)')
+        .select('shift_date, profile_id, start_time_override, end_time_override, shift_templates(start_time, end_time)')
         .eq('location_id', locId)
         .gte('shift_date', period_start)
         .lte('shift_date', period_end)
 
       const profileMap = {}
-      for (const p of (profiles || [])) {
-        let rate = 0
-        if (p.employment_type === 'contractor') {
-          rate = Number(p.hourly_rate) || 0
-        } else if (p.annual_salary && p.contracted_hours_per_week) {
-          rate = Number(p.annual_salary) / (Number(p.contracted_hours_per_week) * 52)
-        }
-        profileMap[p.id] = { ...p, effective_hourly_rate: Math.round(rate * 100) / 100 }
+      for (const p of (profiles || [])) profileMap[p.id] = p
+
+      // Group shifts by (profile, week-monday) so overtime is computed per
+      // week — overtime is a weekly concept, not a period total.
+      const byProfileWeek = new Map() // pid → Map(mondayIso → shifts[])
+      for (const shift of shifts || []) {
+        const profile = profileMap[shift.profile_id]
+        if (!profile) continue
+        const monday = mondayOf(shift.shift_date)
+        if (!byProfileWeek.has(shift.profile_id)) byProfileWeek.set(shift.profile_id, new Map())
+        const weekMap = byProfileWeek.get(shift.profile_id)
+        if (!weekMap.has(monday)) weekMap.set(monday, [])
+        weekMap.get(monday).push(shift)
       }
 
       const staffCosts = {}
-      let totalCost = 0
-      let totalHrs = 0
+      let totalRegularCost = 0
+      let totalOvertimeCost = 0
+      let totalRegularHours = 0
+      let totalOvertimeHours = 0
 
-      for (const shift of (shifts || [])) {
-        const profile = profileMap[shift.profile_id]
-        if (!profile) continue
-        const pid = shift.profile_id
-
-        if (!staffCosts[pid]) {
-          staffCosts[pid] = {
-            name: profile.full_name,
-            role: profile.role,
-            employment_type: profile.employment_type,
-            hourly_rate: profile.effective_hourly_rate,
-            days: {},
-            total_hours: 0,
-            total_cost: 0,
-          }
+      for (const [pid, weekMap] of byProfileWeek) {
+        const profile = profileMap[pid]
+        const entry = {
+          name: profile.full_name,
+          role: profile.role,
+          employment_type: profile.employment_type,
+          regular_rate: Math.round(implicitHourlyRate(profile) * 100) / 100,
+          overtime_rate: Number(profile.overtime_rate) > 0
+            ? Math.round(Number(profile.overtime_rate) * 100) / 100
+            : null,  // null = no premium; OT hours pay at regular rate
+          weeks: {},
+          regular_hours: 0,
+          overtime_hours: 0,
+          regular_cost: 0,
+          overtime_cost: 0,
+          total_cost: 0,
         }
 
-        const start = shift.shift_templates?.start_time
-        const end = shift.shift_templates?.end_time
-        if (start && end) {
-          const [sh, sm] = start.split(':').map(Number)
-          const [eh, em] = end.split(':').map(Number)
-          let hours = (eh + em / 60) - (sh + sm / 60)
-          if (hours < 0) hours += 24
-          const cost = hours * profile.effective_hourly_rate
-
-          if (!staffCosts[pid].days[shift.shift_date]) {
-            staffCosts[pid].days[shift.shift_date] = { hours: 0, cost: 0 }
+        for (const [mondayIso, weekShifts] of weekMap) {
+          const cost = computeWeeklyCost({ shifts: weekShifts, profile })
+          entry.weeks[mondayIso] = {
+            actual_hours: cost.actual_hours,
+            regular_hours: cost.regular_hours,
+            overtime_hours: cost.overtime_hours,
+            regular_cost: cost.regular_cost,
+            overtime_cost: cost.overtime_cost,
+            total_cost: cost.total_cost,
+            over_threshold: cost.over_threshold,
           }
-          staffCosts[pid].days[shift.shift_date].hours += hours
-          staffCosts[pid].days[shift.shift_date].cost += cost
-          staffCosts[pid].total_hours += hours
-          staffCosts[pid].total_cost += cost
-          totalCost += cost
-          totalHrs += hours
+          entry.regular_hours += cost.regular_hours
+          entry.overtime_hours += cost.overtime_hours
+          entry.regular_cost += cost.regular_cost
+          entry.overtime_cost += cost.overtime_cost
+          entry.total_cost += cost.total_cost
         }
+
+        entry.regular_hours = Math.round(entry.regular_hours * 10) / 10
+        entry.overtime_hours = Math.round(entry.overtime_hours * 10) / 10
+        entry.regular_cost = Math.round(entry.regular_cost * 100) / 100
+        entry.overtime_cost = Math.round(entry.overtime_cost * 100) / 100
+        entry.total_cost = Math.round(entry.total_cost * 100) / 100
+
+        staffCosts[pid] = entry
+        totalRegularHours += entry.regular_hours
+        totalOvertimeHours += entry.overtime_hours
+        totalRegularCost += entry.regular_cost
+        totalOvertimeCost += entry.overtime_cost
       }
 
-      Object.values(staffCosts).forEach(s => {
-        s.total_cost = Math.round(s.total_cost * 100) / 100
-        Object.values(s.days).forEach(d => { d.cost = Math.round(d.cost * 100) / 100 })
-      })
-
       reportData = { staff: Object.values(staffCosts) }
-      summary = { total_cost: Math.round(totalCost * 100) / 100, total_hours: Math.round(totalHrs * 10) / 10, staff_count: Object.keys(staffCosts).length, currency: 'EUR' }
+      summary = {
+        total_regular_hours: Math.round(totalRegularHours * 10) / 10,
+        total_overtime_hours: Math.round(totalOvertimeHours * 10) / 10,
+        total_regular_cost: Math.round(totalRegularCost * 100) / 100,
+        total_overtime_cost: Math.round(totalOvertimeCost * 100) / 100,
+        total_cost: Math.round((totalRegularCost + totalOvertimeCost) * 100) / 100,
+        total_hours: Math.round((totalRegularHours + totalOvertimeHours) * 10) / 10,
+        staff_count: Object.keys(staffCosts).length,
+        currency: 'EUR',
+      }
       break
     }
 

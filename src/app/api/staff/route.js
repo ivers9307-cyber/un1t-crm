@@ -22,12 +22,16 @@ const CreateStaffSchema = z.object({
   hourly_rate: money.nullable().optional(),
   contracted_hours_per_week: hours.nullable().optional(),
   annual_leave_entitlement: days.nullable().optional(),
+  overtime_rate: money.nullable().optional(),
 })
 
 // Fields visible to non-admin staff. Compensation, employment type and
 // permissions are intentionally excluded — staff can see who exists but
 // not their HR data.
-const STAFF_PUBLIC_FIELDS = 'id, full_name, email, role, avatar_url, active'
+// Slim fields visible to non-admin staff. Includes employment_type and
+// contracted_hours_per_week so head_coach can see schedule capacity warnings,
+// but excludes salary / hourly_rate / overtime_rate (HR-sensitive).
+const STAFF_PUBLIC_FIELDS = 'id, full_name, email, role, avatar_url, active, employment_type, contracted_hours_per_week'
 
 // GET /api/staff — List staff in the caller's locations.
 //   - owner/manager: full profile + HR fields
@@ -120,6 +124,7 @@ export async function POST(request) {
   if (body.hourly_rate != null) updates.hourly_rate = body.hourly_rate
   if (body.contracted_hours_per_week != null) updates.contracted_hours_per_week = body.contracted_hours_per_week
   if (body.annual_leave_entitlement != null) updates.annual_leave_entitlement = body.annual_leave_entitlement
+  if (body.overtime_rate !== undefined) updates.overtime_rate = body.overtime_rate
 
   await db.from('profiles').update(updates).eq('id', authData.user.id)
 
