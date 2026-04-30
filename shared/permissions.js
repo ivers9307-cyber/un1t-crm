@@ -38,6 +38,7 @@ export const WEB_PERMISSIONS = Object.freeze([
   { key: 'whatsapp',   label: 'WhatsApp' },
   { key: 'schedule',   label: 'Schedule' },
   { key: 'assistant',  label: 'AI Assistant' },
+  { key: 'car_processing', label: 'Car Processing', hint: 'Tesla import tracker (CCF Autos). Off by default — enable per user.' },
   { key: 'settings',   label: 'Settings & Staff Management' },
 ])
 
@@ -47,24 +48,28 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     pipeline: true, contacts: true,
     events: true, bookings: true, activities: true,
     email: false, whatsapp: false, schedule: true, assistant: false, settings: false,
+    car_processing: false,
   },
   head_coach: {
     dashboard_personal: true, dashboard_studio: true, dashboard_business: false,
     pipeline: true, contacts: true,
     events: true, bookings: true, activities: true,
     email: true, whatsapp: true, schedule: true, assistant: true, settings: false,
+    car_processing: false,
   },
   manager: {
     dashboard_personal: true, dashboard_studio: true, dashboard_business: false,
     pipeline: true, contacts: true,
     events: true, bookings: true, activities: true,
     email: true, whatsapp: true, schedule: true, assistant: true, settings: true,
+    car_processing: false,
   },
   owner: {
     dashboard_personal: true, dashboard_studio: true, dashboard_business: true,
     pipeline: true, contacts: true,
     events: true, bookings: true, activities: true,
     email: true, whatsapp: true, schedule: true, assistant: true, settings: true,
+    car_processing: false,   // OFF for owner too — explicit opt-in per profile
   },
 })
 

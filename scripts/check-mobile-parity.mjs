@@ -70,12 +70,13 @@ for (const m of MOBILE_PERMISSIONS) {
 // you ship a web feature that genuinely doesn't make sense on
 // mobile.
 const WEB_ONLY_OK = {
-  contacts:   'Searchable contact list lives only on web for now (mobile uses pipeline drill-in).',
-  events:     'Booking-link / event-type management is admin-only and rare on mobile.',
-  bookings:   'Bookings list lives in the web sidebar; mobile shows no equivalent.',
-  activities: 'Activity log timeline; mobile surfaces this inside deal detail.',
-  email:      'Campaign editor is desktop-only.',
-  settings:   'Staff/branding/billing settings are managed on web.',
+  contacts:       'Searchable contact list lives only on web for now (mobile uses pipeline drill-in).',
+  events:         'Booking-link / event-type management is admin-only and rare on mobile.',
+  bookings:       'Bookings list lives in the web sidebar; mobile shows no equivalent.',
+  activities:     'Activity log timeline; mobile surfaces this inside deal detail.',
+  email:          'Campaign editor is desktop-only.',
+  settings:       'Staff/branding/billing settings are managed on web.',
+  car_processing: 'Tesla import tracker (CCF Autos) — operations workflow with file uploads; not part of mobile gym workflows.',
 }
 
 const webDrift = []

@@ -1,0 +1,122 @@
+'use client'
+
+// Lightweight list rendered on each of the three tab pages. Status
+// is passed in by the parent; the component fetches once on mount
+// and re-fetches when the status changes (i.e. tab switch).
+
+import { useEffect, useState } from 'react'
+import Link from 'next/link'
+import { Car, Plus } from 'lucide-react'
+import { useRouter } from 'next/navigation'
+import { estimatedProfit, completionGaps } from '@/lib/cars'
+
+function fmtMoney(n) {
+  if (n == null) return '—'
+  return new Intl.NumberFormat(undefined, { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 }).format(n)
+}
+
+export default function CarsList({ status, locationId, addButton }) {
+  const [cars, setCars] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(null)
+  const router = useRouter()
+
+  useEffect(() => {
+    setLoading(true)
+    const qs = new URLSearchParams({ status })
+    if (locationId) qs.set('location_id', locationId)
+    fetch(`/api/cars?${qs}`)
+      .then(r => r.json())
+      .then(j => {
+        if (!j.success) {
+          setError(j.error || 'Failed to load')
+          setCars([])
+        } else {
+          setCars(j.data || [])
+        }
+      })
+      .catch(e => setError(String(e)))
+      .finally(() => setLoading(false))
+  }, [status, locationId])
+
+  return (
+    <div>
+      {addButton}
+      {error && (
+        <div className="bg-red-500/10 border border-red-500/30 text-red-400 text-sm rounded-lg p-3 mb-3">
+          {error}
+        </div>
+      )}
+      {loading && !cars.length ? (
+        <p className="text-sm text-un1t-light">Loading…</p>
+      ) : cars.length === 0 ? (
+        <div className="bg-un1t-dark border border-un1t-gray rounded-2xl p-8 text-center">
+          <Car size={28} className="text-un1t-mid mx-auto mb-2" />
+          <p className="text-sm text-un1t-light">
+            {status === 'new'       ? 'No cars in the new queue.'
+            : status === 'pending'  ? 'No cars pending — add buyers from the New tab.'
+            :                          'No completed cars yet.'}
+          </p>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {cars.map(car => {
+            const profit = estimatedProfit(car)
+            const gaps = status === 'pending' ? completionGaps(car) : []
+            return (
+              <Link
+                key={car.id}
+                href={`/cars/${car.id}`}
+                className="block bg-un1t-dark border border-un1t-gray rounded-2xl p-4 hover:border-un1t-mid/50 transition-colors"
+              >
+                <div className="flex items-start gap-4">
+                  <div className="w-10 h-10 rounded-full bg-un1t-gray/40 flex items-center justify-center shrink-0">
+                    <Car size={18} className="text-un1t-white" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                      <span className="text-base font-semibold text-un1t-white">
+                        {car.make || 'Tesla'} {car.model || ''}
+                      </span>
+                      {car.uk_reg && (
+                        <span className="text-xs text-un1t-light">UK · {car.uk_reg}</span>
+                      )}
+                      {car.irish_reg && (
+                        <span className="text-xs text-un1t-light">IE · {car.irish_reg}</span>
+                      )}
+                    </div>
+                    <div className="text-xs text-un1t-light mt-1 flex flex-wrap gap-x-4 gap-y-1">
+                      <span>UK ex-VAT {fmtMoney(car.uk_purchase_price_ex_vat)}</span>
+                      <span>IE inc-VAT {fmtMoney(car.irish_sale_price_inc_vat)}</span>
+                      {profit != null && (
+                        <span className={profit >= 0 ? 'text-green-500 font-medium' : 'text-red-400 font-medium'}>
+                          Est. profit {fmtMoney(profit)}
+                        </span>
+                      )}
+                    </div>
+                    {status === 'pending' && (
+                      <div className="text-xs mt-2">
+                        {gaps.length === 0 ? (
+                          <span className="text-green-500">Ready to complete</span>
+                        ) : (
+                          <span className="text-amber-500">
+                            {gaps.length} item{gaps.length === 1 ? '' : 's'} outstanding
+                          </span>
+                        )}
+                      </div>
+                    )}
+                    {status === 'completed' && car.completed_at && (
+                      <div className="text-xs text-un1t-mid mt-1">
+                        Completed {new Date(car.completed_at).toLocaleDateString()}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </Link>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}

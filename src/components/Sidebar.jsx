@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
-import { LayoutDashboard, Users, Columns3, CheckSquare, Calendar, BookOpen, Mail, MessageCircle, CalendarClock, Settings, LogOut } from 'lucide-react'
+import { LayoutDashboard, Users, Columns3, CheckSquare, Calendar, BookOpen, Mail, MessageCircle, CalendarClock, Settings, LogOut, Car } from 'lucide-react'
 import { createBrowserClient } from '@/lib/supabase'
 import LocationSwitcher from './LocationSwitcher'
 import clsx from 'clsx'
@@ -31,6 +31,7 @@ const allNav = [
   { href: '/email',      label: 'Email',        icon: Mail,            permission: 'email' },
   { href: '/whatsapp',   label: 'WhatsApp',     icon: MessageCircle,   permission: 'whatsapp' },
   { href: '/schedule',   label: 'Schedule',     icon: CalendarClock,   permission: 'schedule' },
+  { href: '/cars',       label: 'Car Processing', icon: Car,           permission: 'car_processing' },
   { href: '/settings',   label: 'Settings',     icon: Settings,        permission: 'settings' },
 ]
 
