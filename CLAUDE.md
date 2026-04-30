@@ -5,13 +5,26 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Build & Dev Commands
 
 ```bash
-npm run dev       # Start dev server (localhost:3000)
-npm run build     # Next.js production build
-npm start         # Start production server
-npm run lint      # ESLint check
+npm run dev         # Start dev server (localhost:3000)
+npm run build       # Next.js production build
+npm start           # Start production server
+npm run lint        # ESLint check
+npm test            # Run vitest suite once
+npm run test:watch  # Re-run tests on file change
 ```
 
-No test framework is configured. Migrations are run manually in Supabase SQL Editor.
+Tests live alongside source as `*.test.js` (Vitest). Currently covers the security-critical lib helpers in `src/lib/` — webhook signatures, audience-filter whitelist, Zod validation, rate limiting, app URL, OpenAPI spec generation. ~85 tests, run in ~1.5s, no DB required (lib helpers are pure).
+
+Migrations are run manually in Supabase SQL Editor.
+
+## API Reference
+
+OpenAPI 3.1 spec is generated from the Zod schemas in `src/lib/schemas.js` via `src/lib/openapi.js` and exposed at:
+
+- `/api/openapi.json` — raw JSON spec (auth required, same as any API route)
+- `/api-docs` — Swagger UI viewer for the spec
+
+When adding a new route or schema, register it in `src/lib/openapi.js` so the spec stays in sync. The cached spec rebuild happens on the first request after deploy; downstream tools (Stoplight, Postman) can re-import freely.
 
 ## Architecture
 
