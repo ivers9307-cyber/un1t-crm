@@ -346,11 +346,28 @@ function BuyerCard({ car, patch, disabled }) {
 function XeroCard({ car, setCar, setError, busy, setBusy, disabled }) {
   async function issue() {
     setBusy(true); setError(null)
-    const res = await fetch(`/api/cars/${car.id}/issue-xero-invoice`, { method: 'POST' })
-    const j = await res.json()
-    setBusy(false)
-    if (!j.success) { setError(j.error || 'Failed'); return }
-    setCar(c => ({ ...c, ...j.data }))
+    try {
+      const res = await fetch(`/api/cars/${car.id}/issue-xero-invoice`, { method: 'POST' })
+      const j = await res.json()
+      if (!j.success) {
+        setError(j.error || 'Failed to issue invoice')
+        return
+      }
+      // Merge the persisted Xero columns onto the car state so the UI
+      // flips to the "issued" branch without needing a full reload.
+      const inv = j.invoice || {}
+      setCar(c => ({
+        ...c,
+        xero_invoice_id: inv.invoiceId || c.xero_invoice_id,
+        xero_invoice_number: inv.invoiceNumber || c.xero_invoice_number,
+        xero_invoice_url: inv.invoiceUrl || c.xero_invoice_url,
+        xero_invoice_issued_at: inv.issuedAt || c.xero_invoice_issued_at,
+      }))
+    } catch (e) {
+      setError(e.message || String(e))
+    } finally {
+      setBusy(false)
+    }
   }
 
   const issued = !!car.xero_invoice_id
@@ -368,12 +385,8 @@ function XeroCard({ car, setCar, setError, busy, setBusy, disabled }) {
           </p>
         ) : (
           <p className="text-xs text-un1t-light mt-1">
-            Issues a Xero invoice for the buyer using the Irish inc-VAT sale price.
-            {!process.env.NEXT_PUBLIC_XERO_CONFIGURED && (
-              <span className="block text-amber-500 mt-1">
-                Xero connection not yet configured — button returns a placeholder error until OAuth is wired up.
-              </span>
-            )}
+            Pushes a sales invoice to Xero (IE 23% VAT) using the Irish ex-VAT sale price.
+            Connect Xero in <a className="underline" href="/settings/integrations">Settings → Integrations</a> first.
           </p>
         )}
       </div>
