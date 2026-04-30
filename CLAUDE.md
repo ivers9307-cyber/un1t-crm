@@ -27,7 +27,9 @@ React 18 + Next.js 14, Tailwind CSS 3.4, Supabase Auth (SSR cookies), Postmark (
 
 **Two Supabase clients** — `createBrowserClient()` uses anon key + SSR cookies (client components). `createServerClient()` uses service role key, bypasses RLS (API routes, cron). Both in `src/lib/supabase.js`.
 
-**Auth flow** — `src/middleware.js` enforces auth on all routes except public paths (`/login`, `/reset-password`, `/book/`, `/api/public/`, `/api/webhooks/`, `/api/cron/`). External integrations (n8n) auth via `x-api-key` header validated against `CRM_API_KEY`. `getCurrentUser()` in `src/lib/auth.js` returns profile + locations + activeLocation.
+**Auth flow** — `src/middleware.js` enforces auth on all routes except public paths (`/login`, `/reset-password`, `/book/`, `/api/public/`, `/api/webhooks/`, `/api/cron/`). External integrations (n8n) authenticate with `Authorization: Bearer <CRM_API_KEY>` — the middleware validates this constant-time with `crypto.timingSafeEqual`-equivalent. `getCurrentUser()` in `src/lib/auth.js` returns profile + locations + activeLocation; `assertLocationAccess(user, locationId)` returns null or a 403 NextResponse for IDOR-prone routes.
+
+**Input validation** — POST/PUT routes that touch HR, money, role, URLs, or the public booking surface validate request bodies via `validateBody(request, schema)` from `src/lib/validate.js` against Zod schemas. Returns 400 with `{ error, issues }` on rejection.
 
 **Role-based access (4 roles)** — owner, manager, head_coach, staff. Stored in `profile_locations.role`. Enforced at 3 layers: sidebar nav filtering, assistant tool filtering, server-side API guards. Staff see full roster (read-only) but only own time-off/holiday data.
 

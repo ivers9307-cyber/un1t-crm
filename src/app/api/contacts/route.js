@@ -60,9 +60,11 @@ export async function GET(request) {
   const minCredits = searchParams.get('min_credits')
   if (minCredits) query = query.gt('trial_credits_remaining', parseInt(minCredits))
 
-  // Pagination
-  const limit = parseInt(searchParams.get('limit') || '100')
-  const offset = parseInt(searchParams.get('offset') || '0')
+  // Pagination — default 50, hard cap at 200 to prevent a caller from
+  // pulling the whole table with ?limit=10000.
+  const requestedLimit = parseInt(searchParams.get('limit') || '50', 10)
+  const limit = Math.min(Math.max(1, Number.isFinite(requestedLimit) ? requestedLimit : 50), 200)
+  const offset = Math.max(0, parseInt(searchParams.get('offset') || '0', 10) || 0)
   query = query.range(offset, offset + limit - 1).order('created_at', { ascending: false })
 
   const { data, error, count } = await query

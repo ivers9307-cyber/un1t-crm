@@ -295,12 +295,20 @@ export async function generateReport({ report_type, period_start, period_end, lo
 /**
  * Calculate the period dates for a scheduled report based on frequency.
  * Weekly = last 7 days, fortnightly = last 14 days, monthly = last calendar month.
+ *
+ * Period boundaries are computed in UTC via toISOString().split('T')[0].
+ * For the default cron at 07:00 UTC (08:00 Dublin in winter / 08:00 BST in
+ * summer), this aligns with the local "yesterday" at the time of run.
+ * If the cron schedule is ever moved earlier than 01:00 UTC, the date
+ * arithmetic could roll back a day in the operator's perception — the
+ * cron schedule should stay at 07:00 UTC unless this function is updated
+ * to use Intl.DateTimeFormat with a configured timezone.
  */
 export function calculatePeriodForSchedule(frequency) {
   const now = new Date()
   let period_start, period_end
 
-  // period_end is always yesterday
+  // period_end is always yesterday (UTC date)
   const yesterday = new Date(now)
   yesterday.setDate(yesterday.getDate() - 1)
   period_end = yesterday.toISOString().split('T')[0]
