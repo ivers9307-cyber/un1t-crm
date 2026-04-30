@@ -1,8 +1,21 @@
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit'
+import { validateBody } from '@/lib/validate'
 
 export const runtime = 'nodejs'
+
+const BookingSchema = z.object({
+  event_type_id: z.string().uuid(),
+  booking_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD'),
+  start_time: z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/, 'Use HH:MM'),
+  customer_name: z.string().min(1).max(200),
+  customer_email: z.string().email().max(320),
+  customer_phone: z.string().max(50).nullable().optional(),
+  custom_responses: z.record(z.string(), z.unknown()).optional(),
+  source: z.string().max(50).optional(),
+})
 
 // POST /api/public/book — Public: create a booking
 // No auth required — this is called from the public booking page
@@ -22,15 +35,9 @@ export async function POST(request) {
     return rateLimitResponse(limit, 'Too many booking attempts. Please wait a few minutes and try again.')
   }
 
-  const body = await request.json()
-
-  // Validate required fields
-  if (!body.event_type_id || !body.booking_date || !body.start_time || !body.customer_name || !body.customer_email) {
-    return NextResponse.json({
-      success: false,
-      error: 'Missing required fields: event_type_id, booking_date, start_time, customer_name, customer_email'
-    }, { status: 400 })
-  }
+  const validation = await validateBody(request, BookingSchema)
+  if (!validation.ok) return validation.response
+  const body = validation.data
 
   // Look up event to calculate end_time
   const { data: event } = await db.from('event_types')

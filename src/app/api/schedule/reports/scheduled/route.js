@@ -1,7 +1,22 @@
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { calculateNextRun } from '@/lib/report-generator'
+import { validateBody } from '@/lib/validate'
+
+const ScheduledReportSchema = z.object({
+  location_id: z.string().uuid().optional(),
+  report_type: z.enum(['staff_hours', 'staff_cost', 'time_off_summary', 'roster_coverage', 'utilisation']),
+  report_name: z.string().min(1).max(200),
+  frequency: z.enum(['once', 'daily', 'weekly', 'monthly']),
+  day_of_week: z.number().int().min(0).max(6).nullable().optional(),
+  day_of_month: z.number().int().min(1).max(31).nullable().optional(),
+  deliver_email: z.boolean().optional(),
+  email_recipients: z.array(z.string().email()).optional(),
+  deliver_notification: z.boolean().optional(),
+  parameters: z.record(z.string(), z.unknown()).optional(),
+})
 
 // GET /api/schedule/reports/scheduled — List scheduled reports
 export async function GET(request) {
@@ -32,13 +47,15 @@ export async function POST(request) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
 
-  const body = await request.json()
-  const db = createServerClient()
+  const validation = await validateBody(request, ScheduledReportSchema)
+  if (!validation.ok) return validation.response
+  const body = validation.data
 
   const locationId = body.location_id || user.activeLocation?.id
   const guard = assertLocationAccess(user, locationId)
   if (guard) return guard
 
+  const db = createServerClient()
   const record = {
     location_id: locationId,
     created_by: user.id,

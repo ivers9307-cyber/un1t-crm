@@ -1,8 +1,35 @@
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
+import { validateBody } from '@/lib/validate'
 
 export const runtime = 'nodejs'
+
+// Input schemas --------------------------------------------------------------
+
+const ROLE = z.enum(['owner', 'manager', 'head_coach', 'staff'])
+const EMPLOYMENT_TYPE = z.enum(['fte', 'contractor', 'casual'])
+
+// Salary/rate fields are stored as DECIMAL — accept reasonable bounds to
+// reject obviously-wrong inputs (negative, NaN, comically large).
+const MONEY = z.number().finite().min(0).max(10_000_000)
+const HOURS = z.number().finite().min(0).max(168)        // hours per week ceiling
+const DAYS = z.number().int().min(0).max(366)            // annual leave days
+
+const CreateStaffSchema = z.object({
+  email: z.string().email(),
+  full_name: z.string().min(1).max(200),
+  password: z.string().min(8).max(200),
+  role: ROLE.optional(),
+  permissions: z.record(z.string(), z.boolean()).optional(),
+  location_ids: z.array(z.string().uuid()).optional(),
+  employment_type: EMPLOYMENT_TYPE.optional(),
+  annual_salary: MONEY.nullable().optional(),
+  hourly_rate: MONEY.nullable().optional(),
+  contracted_hours_per_week: HOURS.nullable().optional(),
+  annual_leave_entitlement: DAYS.nullable().optional(),
+})
 
 // Fields visible to non-admin staff. Compensation, employment type and
 // permissions are intentionally excluded — staff can see who exists but
@@ -58,28 +85,17 @@ export async function POST(request) {
     return NextResponse.json({ success: false, error: 'Forbidden — owner only' }, { status: 403 })
   }
 
-  const body = await request.json()
+  const validation = await validateBody(request, CreateStaffSchema)
+  if (!validation.ok) return validation.response
+  const body = validation.data
+
   const db = createServerClient()
-
-  if (!body.email || !body.full_name || !body.password) {
-    return NextResponse.json({
-      success: false,
-      error: 'email, full_name, and password are required'
-    }, { status: 400 })
-  }
-
-  // If the caller is creating an owner, ensure they're an owner themselves
-  // (already enforced above — owners are the only role allowed here).
-  // Reject unknown roles.
   const role = body.role || 'staff'
-  if (!['owner', 'manager', 'head_coach', 'staff'].includes(role)) {
-    return NextResponse.json({ success: false, error: 'Invalid role' }, { status: 400 })
-  }
 
   // Constrain new staff to the caller's own locations to prevent cross-tenant
   // creation by a future multi-org owner.
   const callerLocationIds = (user.locations || []).map(l => l.id)
-  const requestedLocationIds = Array.isArray(body.location_ids) ? body.location_ids : []
+  const requestedLocationIds = body.location_ids || []
   const invalidLocations = requestedLocationIds.filter(id => !callerLocationIds.includes(id))
   if (invalidLocations.length > 0) {
     return NextResponse.json({

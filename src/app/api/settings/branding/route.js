@@ -1,6 +1,15 @@
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { validateBody } from '@/lib/validate'
+
+const BrandingSchema = z.object({
+  location_id: z.string().uuid().optional(),
+  logo_url: z.string().url().max(2000).nullable().optional(),
+  favicon_url: z.string().url().max(2000).nullable().optional(),
+  company_name: z.string().max(200).nullable().optional(),
+})
 
 // GET /api/settings/branding?location_id=xxx — Get branding for a location
 export async function GET(request) {
@@ -28,12 +37,15 @@ export async function PUT(request) {
     return NextResponse.json({ success: false, error: 'Only owners can update branding' }, { status: 403 })
   }
 
-  const body = await request.json()
-  const db = createServerClient()
+  const validation = await validateBody(request, BrandingSchema)
+  if (!validation.ok) return validation.response
+  const body = validation.data
   const locationId = body.location_id || user.activeLocation?.id
 
   const guard = assertLocationAccess(user, locationId)
   if (guard) return guard
+
+  const db = createServerClient()
 
   const record = {
     location_id: locationId,

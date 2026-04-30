@@ -1,6 +1,21 @@
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { validateBody } from '@/lib/validate'
+
+const TIME = z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/, 'Use HH:MM or HH:MM:SS')
+const HEX_COLOR = z.string().regex(/^#[0-9A-Fa-f]{6}$/, 'Use #RRGGBB hex')
+
+const CreateTemplateSchema = z.object({
+  location_id: z.string().uuid(),
+  name: z.string().min(1).max(100),
+  start_time: TIME,
+  end_time: TIME,
+  color: HEX_COLOR.optional(),
+  role_label: z.string().max(50).nullable().optional(),
+  display_order: z.number().int().min(0).max(1000).optional(),
+})
 
 // GET /api/schedule/templates?location_id=xxx
 export async function GET(request) {
@@ -32,16 +47,14 @@ export async function POST(request) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
 
-  const body = await request.json()
-  const db = createServerClient()
-
-  if (!body.name || !body.start_time || !body.end_time || !body.location_id) {
-    return NextResponse.json({ success: false, error: 'name, start_time, end_time, and location_id are required' }, { status: 400 })
-  }
+  const validation = await validateBody(request, CreateTemplateSchema)
+  if (!validation.ok) return validation.response
+  const body = validation.data
 
   const guard = assertLocationAccess(user, body.location_id)
   if (guard) return guard
 
+  const db = createServerClient()
   const { data, error } = await db.from('shift_templates').insert({
     location_id: body.location_id,
     name: body.name,

@@ -1,6 +1,18 @@
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { validateBody } from '@/lib/validate'
+
+const ISO_DATE = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD')
+
+const TimeOffRequestSchema = z.object({
+  type: z.enum(['holiday', 'sick', 'unpaid', 'other']),
+  start_date: ISO_DATE,
+  end_date: ISO_DATE,
+  reason: z.string().max(2000).nullable().optional(),
+  location_id: z.string().uuid().optional(),
+})
 
 // GET /api/schedule/time-off?location_id=xxx&start_date=xxx&end_date=xxx&status=xxx&profile_id=xxx
 export async function GET(request) {
@@ -56,14 +68,9 @@ export async function POST(request) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
 
-  const body = await request.json()
-  const db = createServerClient()
-
-  const { type, start_date, end_date, reason, location_id } = body
-
-  if (!type || !start_date || !end_date) {
-    return NextResponse.json({ success: false, error: 'type, start_date, and end_date are required' }, { status: 400 })
-  }
+  const validation = await validateBody(request, TimeOffRequestSchema)
+  if (!validation.ok) return validation.response
+  const { type, start_date, end_date, reason, location_id } = validation.data
 
   // If location_id is explicitly passed, it must be one the caller belongs to.
   // Otherwise fall through to user.activeLocation below.
@@ -71,6 +78,8 @@ export async function POST(request) {
     const guard = assertLocationAccess(user, location_id)
     if (guard) return guard
   }
+
+  const db = createServerClient()
 
   // Calculate total days (simple: count calendar days inclusive)
   const start = new Date(start_date + 'T00:00:00')

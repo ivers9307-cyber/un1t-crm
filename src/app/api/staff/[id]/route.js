@@ -1,8 +1,29 @@
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
+import { validateBody } from '@/lib/validate'
 
 export const runtime = 'nodejs'
+
+const ROLE = z.enum(['owner', 'manager', 'head_coach', 'staff'])
+const EMPLOYMENT_TYPE = z.enum(['fte', 'contractor', 'casual'])
+const MONEY = z.number().finite().min(0).max(10_000_000)
+const HOURS = z.number().finite().min(0).max(168)
+const DAYS = z.number().int().min(0).max(366)
+
+const UpdateStaffSchema = z.object({
+  full_name: z.string().min(1).max(200).optional(),
+  role: ROLE.optional(),
+  permissions: z.record(z.string(), z.boolean()).optional(),
+  active: z.boolean().optional(),
+  location_ids: z.array(z.string().uuid()).optional(),
+  employment_type: EMPLOYMENT_TYPE.optional(),
+  annual_salary: MONEY.nullable().optional(),
+  hourly_rate: MONEY.nullable().optional(),
+  contracted_hours_per_week: HOURS.nullable().optional(),
+  annual_leave_entitlement: DAYS.nullable().optional(),
+})
 
 // PUT /api/staff/[id] — Update a staff member. Owner-only.
 // Includes role / salary / employment fields so this endpoint must never
@@ -16,19 +37,13 @@ export async function PUT(request, { params }) {
   }
 
   const { id } = params
-  const body = await request.json()
+  const validation = await validateBody(request, UpdateStaffSchema)
+  if (!validation.ok) return validation.response
+  const body = validation.data
   const db = createServerClient()
-
-  // Validate role if provided
-  if (body.role !== undefined && !['owner', 'manager', 'head_coach', 'staff'].includes(body.role)) {
-    return NextResponse.json({ success: false, error: 'Invalid role' }, { status: 400 })
-  }
 
   // Restrict location assignments to the caller's own locations
   if (body.location_ids !== undefined) {
-    if (!Array.isArray(body.location_ids)) {
-      return NextResponse.json({ success: false, error: 'location_ids must be an array' }, { status: 400 })
-    }
     const callerLocationIds = (user.locations || []).map(l => l.id)
     const invalid = body.location_ids.filter(loc => !callerLocationIds.includes(loc))
     if (invalid.length > 0) {
