@@ -5,12 +5,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Build & Dev Commands
 
 ```bash
-npm run dev         # Start dev server (localhost:3000)
-npm run build       # Next.js production build
-npm start           # Start production server
-npm run lint        # ESLint check
-npm test            # Run vitest suite once
-npm run test:watch  # Re-run tests on file change
+npm run dev                      # Start dev server (localhost:3000)
+npm run build                    # Next.js production build
+npm start                        # Start production server
+npm run lint                     # ESLint check
+npm test                         # Run vitest suite once
+npm run test:watch               # Re-run tests on file change
+npm run check:mobile-parity      # Lint web/mobile feature parity (see "Extending")
 ```
 
 Tests live alongside source as `*.test.js` (Vitest). Currently covers the security-critical lib helpers in `src/lib/` — webhook signatures, audience-filter whitelist, Zod validation, rate limiting, app URL, OpenAPI spec generation, schema invariants. ~85 tests, run in ~1.5s, no DB required (lib helpers are pure).
@@ -290,7 +291,7 @@ The Supabase URL + anon key are the same values used by the web app (in `un1t-cr
 
 ### Per-user mobile feature flags
 
-Stored under `profiles.permissions.mobile.<key>`. JSONB allows arbitrary keys, so adding a new feature is just an entry in `defaultMobilePermissionsByRole` (and a new toggle row in `allMobilePermissions`) inside `src/components/StaffForm.jsx`. Read on mobile via `lib/permissions.js → canMobile(profile, key)`. Defaults to `false` for unknown keys — adding a feature here doesn't auto-enable it for existing users; admins must opt-in per user.
+Stored under `profiles.permissions.mobile.<key>`. JSONB allows arbitrary keys, so adding a new feature is just an entry in `MOBILE_PERMISSIONS` and `DEFAULT_MOBILE_PERMISSIONS_BY_ROLE` inside **`shared/permissions.js`** — the single source of truth imported by both `src/components/StaffForm.jsx` (web admin) and `mobile/lib/permissions.js` (iOS app). Adding the entry there auto-flows everywhere; `npm run check:mobile-parity` enforces that web and mobile permission sets stay aligned. Read on mobile via `lib/permissions.js → canMobile(profile, key)`. Defaults to `false` for unknown keys — adding a feature here doesn't auto-enable it for existing users; admins must opt-in per user.
 
 ### Push notifications
 
@@ -315,7 +316,9 @@ Supabase for database + auth + file storage (`branding` bucket for logos). Migra
 
 ## Extending
 
-**New module pattern:** migration → API routes in `src/app/api/` → service lib in `src/lib/` → pages in `src/app/` → components → update Sidebar nav array → add to assistant prompt → register routes/schemas in `src/lib/openapi.js` → write tests in `src/lib/*.test.js`.
+**New module pattern:** migration → API routes in `src/app/api/` → service lib in `src/lib/` → pages in `src/app/` → components → update Sidebar nav array → add to assistant prompt → register routes/schemas in `src/lib/openapi.js` → write tests in `src/lib/*.test.js` → **add a `WEB_PERMISSIONS` entry in `shared/permissions.js` and update `DEFAULT_WEB_PERMISSIONS_BY_ROLE` for each role** → **decide on the mobile counterpart** (see "Mobile parity" below).
+
+**Mobile parity:** every new web feature requires a deliberate decision: ship the mobile equivalent in the same PR, ship it as a follow-up, or explicitly skip it as web-only. The forcing function is `npm run check:mobile-parity` — fails if a `WEB_PERMISSIONS` entry has no matching `MOBILE_PERMISSIONS` entry (with `webEquivalent: '<web_key>'`) AND isn't listed in the script's `WEB_ONLY_OK` map with a reason. To add a mobile equivalent: append a `MOBILE_PERMISSIONS` entry in `shared/permissions.js` with `webEquivalent: '<key>'`, fill in defaults in `DEFAULT_MOBILE_PERMISSIONS_BY_ROLE` for every role, then add a `<feature>.jsx` screen under `mobile/app/(tabs)/` and reference it from `mobile/app/(tabs)/_layout.jsx`. To deliberately skip: add the web key to `WEB_ONLY_OK` in `scripts/check-mobile-parity.mjs` with a one-line reason. The script runs in ~50ms and gates CI cheaply; run it locally before opening a PR.
 
 **New API route checklist:**
 1. `getCurrentUser()` (or `requireApiKey()` for Bearer-auth routes) at the top.

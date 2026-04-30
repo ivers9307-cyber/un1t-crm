@@ -5,96 +5,17 @@ import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { ArrowLeft, Check, X } from 'lucide-react'
 import { passwordRequirements, validatePasswordComplexity } from '@/lib/schemas'
+import {
+  WEB_PERMISSIONS as allPermissions,
+  DEFAULT_WEB_PERMISSIONS_BY_ROLE as defaultPermissionsByRole,
+  MOBILE_PERMISSIONS as allMobilePermissions,
+  DEFAULT_MOBILE_PERMISSIONS_BY_ROLE as defaultMobilePermissionsByRole,
+} from '@shared/permissions'
 
-const allPermissions = [
-  { key: 'dashboard',  label: 'Dashboard' },
-  { key: 'pipeline',   label: 'Pipeline & Deals' },
-  { key: 'contacts',   label: 'Contacts' },
-  { key: 'events',     label: 'Events' },
-  { key: 'bookings',   label: 'Bookings' },
-  { key: 'activities', label: 'Activities' },
-  { key: 'email',      label: 'Email Marketing' },
-  { key: 'whatsapp',   label: 'WhatsApp' },
-  { key: 'schedule',   label: 'Schedule' },
-  { key: 'assistant',  label: 'AI Assistant' },
-  { key: 'settings',   label: 'Settings & Staff Management' },
-]
-
-const defaultPermissionsByRole = {
-  staff: {
-    dashboard: true, pipeline: true, contacts: true,
-    events: true, bookings: true, activities: true,
-    email: false, whatsapp: false, schedule: true, assistant: false, settings: false,
-  },
-  head_coach: {
-    dashboard: true, pipeline: true, contacts: true,
-    events: true, bookings: true, activities: true,
-    email: true, whatsapp: true, schedule: true, assistant: true, settings: false,
-  },
-  manager: {
-    dashboard: true, pipeline: true, contacts: true,
-    events: true, bookings: true, activities: true,
-    email: true, whatsapp: true, schedule: true, assistant: true, settings: true,
-  },
-  owner: {
-    dashboard: true, pipeline: true, contacts: true,
-    events: true, bookings: true, activities: true,
-    email: true, whatsapp: true, schedule: true, assistant: true, settings: true,
-  },
-}
-
+// Aliases kept for back-compat with the local closures below — same
+// shape as the previous in-file consts so the JSX further down didn't
+// have to change.
 const defaultPermissions = defaultPermissionsByRole.staff
-
-// Mobile feature toggles — read by the iOS app on login. Stored under
-// permissions.mobile.<key>. Missing keys are treated as "off" by the
-// app (deny by default), so adding a new feature here doesn't auto-
-// enable it for existing users.
-const allMobilePermissions = [
-  { key: 'schedule',           label: 'Schedule',                 hint: 'View shifts, request time off, swap requests' },
-  { key: 'pipeline',           label: 'Pipeline & Deals',         hint: 'Move deals, log calls, see new leads' },
-  { key: 'whatsapp',           label: 'WhatsApp Inbox',           hint: 'Reply to inbound WhatsApp messages on the go' },
-  { key: 'time_off',           label: 'Time Off Requests',        hint: 'Submit and view leave requests' },
-  { key: 'assistant',          label: 'AI Assistant',             hint: 'Use the in-app assistant from mobile' },
-  { key: 'door_unlock',        label: 'Door Unlock',              hint: 'Unlock UniFi-controlled doors from the phone (requires UniFi door access on)' },
-  { key: 'push_notifications', label: 'Push Notifications',       hint: 'Master switch — turn off to silence everything' },
-  { key: 'notify_time_off',    label: '… Time-off decisions',     hint: 'Notify on approval/decline of own requests, plus inbound requests for managers' },
-  { key: 'notify_schedule',    label: '… Schedule published',     hint: 'Notify when a new week is published' },
-  { key: 'notify_swap',        label: '… Swap requests',          hint: 'Notify on inbound swap requests and responses' },
-  { key: 'notify_lead',        label: '… New leads assigned',     hint: 'Notify when a contact is assigned to you' },
-  { key: 'notify_whatsapp',    label: '… WhatsApp messages',      hint: 'Notify on inbound WhatsApp (subject to inbox permission)' },
-]
-
-const defaultMobilePermissionsByRole = {
-  staff: {
-    schedule: true, pipeline: false, whatsapp: false,
-    time_off: true, assistant: false, door_unlock: false,
-    push_notifications: true,
-    notify_time_off: true, notify_schedule: true, notify_swap: true,
-    notify_lead: false, notify_whatsapp: false,
-  },
-  head_coach: {
-    schedule: true, pipeline: true, whatsapp: true,
-    time_off: true, assistant: true, door_unlock: false,
-    push_notifications: true,
-    notify_time_off: true, notify_schedule: true, notify_swap: true,
-    notify_lead: true, notify_whatsapp: true,
-  },
-  manager: {
-    schedule: true, pipeline: true, whatsapp: true,
-    time_off: true, assistant: true, door_unlock: true,
-    push_notifications: true,
-    notify_time_off: true, notify_schedule: true, notify_swap: true,
-    notify_lead: true, notify_whatsapp: true,
-  },
-  owner: {
-    schedule: true, pipeline: true, whatsapp: true,
-    time_off: true, assistant: true, door_unlock: true,
-    push_notifications: true,
-    notify_time_off: true, notify_schedule: true, notify_swap: true,
-    notify_lead: true, notify_whatsapp: true,
-  },
-}
-
 const defaultMobilePermissions = defaultMobilePermissionsByRole.staff
 
 export default function StaffForm({ staff, locations }) {
