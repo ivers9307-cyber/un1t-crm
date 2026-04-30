@@ -10,7 +10,7 @@ export async function GET(request) {
   const db = createServerClient()
   const { data, error } = await db
     .from('locations')
-    .select('id, name, slug, address, active, timezone')
+    .select('id, name, slug, address, active, timezone, country')
     .eq('active', true)
     .order('name')
 

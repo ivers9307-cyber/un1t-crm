@@ -34,6 +34,15 @@ export async function GET(request, { params }) {
   const end = searchParams.get('end') || undefined
 
   const db = createServerClient()
+
+  // Look up the location's country — drives which static holiday list
+  // we merge in. Default to 'IE' if the row is somehow missing the field.
+  const { data: locRow } = await db.from('locations')
+    .select('country')
+    .eq('id', params.id)
+    .single()
+  const country = locRow?.country || 'IE'
+
   let query = db.from('location_holidays')
     .select('id, location_id, date, name')
     .eq('location_id', params.id)
@@ -44,8 +53,8 @@ export async function GET(request, { params }) {
   const { data: custom, error } = await query
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
 
-  const merged = mergeHolidays(custom || [], { start, end })
-  return NextResponse.json({ success: true, data: merged })
+  const merged = mergeHolidays(custom || [], { start, end, country })
+  return NextResponse.json({ success: true, data: merged, country })
 }
 
 // POST /api/locations/[id]/holidays — add a custom holiday (manager+).

@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest'
-import { getStaticHolidays, mergeHolidays, indexByDate } from './bank-holidays.js'
+import {
+  getStaticHolidays, mergeHolidays, indexByDate,
+  SUPPORTED_HOLIDAY_COUNTRIES, countryName,
+} from './bank-holidays.js'
 
 describe('getStaticHolidays', () => {
   it('returns the full static list when no range is given', () => {
@@ -14,11 +17,22 @@ describe('getStaticHolidays', () => {
     expect(r.at(-1).date).toBe('2025-12-26')
   })
 
-  it('every entry is tagged source: national and is frozen', () => {
+  it('every entry is tagged source: national, country code, frozen', () => {
     for (const h of getStaticHolidays()) {
       expect(h.source).toBe('national')
+      expect(h.country).toBe('IE')
       expect(Object.isFrozen(h)).toBe(true)
     }
+  })
+
+  it('returns an empty list for a country we do not have data for', () => {
+    expect(getStaticHolidays(undefined, undefined, 'XX')).toEqual([])
+  })
+
+  it('defaults to IE when country is omitted', () => {
+    const a = getStaticHolidays('2025-01-01', '2025-12-31')
+    const b = getStaticHolidays('2025-01-01', '2025-12-31', 'IE')
+    expect(a).toEqual(b)
   })
 
   it('covers the well-known 2025 dates', () => {
@@ -81,6 +95,39 @@ describe('mergeHolidays', () => {
   it('handles null/undefined custom list', () => {
     expect(() => mergeHolidays(null)).not.toThrow()
     expect(() => mergeHolidays(undefined)).not.toThrow()
+  })
+})
+
+describe('mergeHolidays — country selection', () => {
+  it('passes the country through to the static lookup', () => {
+    // No IE holidays for an XX country, but custom entries still come through.
+    const custom = [{ id: 'a', date: '2025-04-18', name: 'Some Day', location_id: 'loc1' }]
+    const r = mergeHolidays(custom, { country: 'XX' })
+    expect(r).toHaveLength(1)
+    expect(r[0].source).toBe('custom')
+  })
+})
+
+describe('SUPPORTED_HOLIDAY_COUNTRIES', () => {
+  it('lists every country we have static data for', () => {
+    expect(SUPPORTED_HOLIDAY_COUNTRIES).toContain('IE')
+  })
+
+  it('is frozen', () => {
+    expect(Object.isFrozen(SUPPORTED_HOLIDAY_COUNTRIES)).toBe(true)
+  })
+})
+
+describe('countryName', () => {
+  it('returns a friendly name for known codes', () => {
+    expect(countryName('IE')).toBe('Ireland')
+    expect(countryName('GB')).toBe('United Kingdom')
+  })
+
+  it('falls back to the code for unknown countries', () => {
+    expect(countryName('XX')).toBe('XX')
+    expect(countryName('')).toBe('')
+    expect(countryName(null)).toBe('')
   })
 })
 

@@ -89,21 +89,55 @@ const STATIC_IRISH_HOLIDAYS = [
   { date: '2030-12-26', name: "St Stephen's Day" },
 ]
 
-// Each entry from the static list is annotated with `source: 'national'` so the
-// schedule UI can distinguish statutory holidays from custom per-location ones
-// (those carry `source: 'custom'`).
-const ANNOTATED_IRISH_HOLIDAYS = Object.freeze(
-  STATIC_IRISH_HOLIDAYS.map(h => Object.freeze({ ...h, source: 'national' }))
+// Each entry from the static list is annotated with `source: 'national'` and
+// `country` so the schedule UI can distinguish statutory holidays from custom
+// per-location ones (those carry `source: 'custom'`).
+const annotate = (country, list) => Object.freeze(
+  list.map(h => Object.freeze({ ...h, source: 'national', country }))
 )
 
+// Country-keyed registry. Add a new country = add a new entry here.
+// Keys are ISO 3166-1 alpha-2 codes (matches locations.country).
+const HOLIDAYS_BY_COUNTRY = Object.freeze({
+  IE: annotate('IE', STATIC_IRISH_HOLIDAYS),
+  // Future: GB, US, DE, etc. Each entry must be sorted ascending by date.
+})
+
 /**
- * Returns the Irish statutory holidays falling within the inclusive date
- * range [start, end] (YYYY-MM-DD strings). Both inputs optional — omit to
- * return the full static list.
+ * The set of country codes we have a static holiday list for.
+ * Use to show a friendly warning if a location's country isn't covered yet.
  */
-export function getStaticHolidays(start, end) {
-  if (!start && !end) return ANNOTATED_IRISH_HOLIDAYS.slice()
-  return ANNOTATED_IRISH_HOLIDAYS.filter(h => {
+export const SUPPORTED_HOLIDAY_COUNTRIES = Object.freeze(Object.keys(HOLIDAYS_BY_COUNTRY))
+
+const COUNTRY_NAMES = Object.freeze({
+  IE: 'Ireland',
+  GB: 'United Kingdom',
+  US: 'United States',
+})
+
+/**
+ * Lookup the human name of a country code (best-effort). Falls back to
+ * the code itself if unknown.
+ */
+export function countryName(code) {
+  return COUNTRY_NAMES[code] || code || ''
+}
+
+/**
+ * Returns the statutory holidays for the given country falling within the
+ * inclusive date range [start, end] (YYYY-MM-DD strings). All inputs
+ * optional. If the country has no static list registered, returns an empty
+ * array (the schedule still works, just no national-holiday badges).
+ *
+ * @param {string} [start]   YYYY-MM-DD inclusive lower bound
+ * @param {string} [end]     YYYY-MM-DD inclusive upper bound
+ * @param {string} [country] ISO 3166-1 alpha-2. Default 'IE'.
+ */
+export function getStaticHolidays(start, end, country = 'IE') {
+  const list = HOLIDAYS_BY_COUNTRY[country]
+  if (!list) return []
+  if (!start && !end) return list.slice()
+  return list.filter(h => {
     if (start && h.date < start) return false
     if (end && h.date > end) return false
     return true
@@ -111,19 +145,19 @@ export function getStaticHolidays(start, end) {
 }
 
 /**
- * Merge static Irish holidays with a list of custom per-location ones.
+ * Merge static national holidays with a list of custom per-location ones.
  * Custom entries are tagged `source: 'custom'` and override the static name
  * if the date matches (gym wants to relabel St Patrick's Day → "Closed all
  * day"). De-duplicated by date.
  *
  * @param {object[]} customList  Each: { id, date, name, location_id }
- * @param {object} [opts]        { start?, end? } date range filter (inclusive)
- * @returns {object[]}  Sorted ascending by date.
+ * @param {object} [opts]        { start?, end?, country? } — country defaults to 'IE'
+ * @returns {object[]}           Sorted ascending by date.
  */
 export function mergeHolidays(customList, opts = {}) {
-  const { start, end } = opts
+  const { start, end, country = 'IE' } = opts
   const byDate = new Map()
-  for (const h of getStaticHolidays(start, end)) {
+  for (const h of getStaticHolidays(start, end, country)) {
     byDate.set(h.date, h)
   }
   for (const c of customList || []) {

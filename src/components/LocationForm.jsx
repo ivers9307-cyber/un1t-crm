@@ -13,6 +13,7 @@ export default function LocationForm({ location }) {
   const [phone, setPhone] = useState(location?.phone || '')
   const [email, setEmail] = useState(location?.email || '')
   const [timezone, setTimezone] = useState(location?.timezone || 'Europe/Dublin')
+  const [country, setCountry] = useState(location?.country || 'IE')
   const [active, setActive] = useState(location?.active !== false)
 
   // Integration settings
@@ -38,6 +39,7 @@ export default function LocationForm({ location }) {
       phone: phone || null,
       email: email || null,
       timezone,
+      country,
       active,
       settings: {
         ...(settings || {}),
@@ -143,6 +145,23 @@ export default function LocationForm({ location }) {
 
         <div className="grid grid-cols-2 gap-4">
           <div>
+            <label className="block text-sm mb-1.5">Country</label>
+            <select
+              value={country}
+              onChange={e => setCountry(e.target.value)}
+              className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
+            >
+              <option value="IE">Ireland (IE)</option>
+              <option value="GB">United Kingdom (GB)</option>
+              <option value="US">United States (US)</option>
+              <option value="DE">Germany (DE)</option>
+              <option value="FR">France (FR)</option>
+              <option value="ES">Spain (ES)</option>
+              <option value="NL">Netherlands (NL)</option>
+            </select>
+            <p className="text-xs text-un1t-mid mt-1">Drives public-holiday list on the schedule. Currently only Ireland has built-in holidays — others can still add custom holidays.</p>
+          </div>
+          <div>
             <label className="block text-sm mb-1.5">Timezone</label>
             <select
               value={timezone}
@@ -152,24 +171,29 @@ export default function LocationForm({ location }) {
               <option value="Europe/Dublin">Europe/Dublin</option>
               <option value="Europe/London">Europe/London</option>
               <option value="Europe/Berlin">Europe/Berlin</option>
+              <option value="Europe/Paris">Europe/Paris</option>
+              <option value="Europe/Madrid">Europe/Madrid</option>
+              <option value="Europe/Amsterdam">Europe/Amsterdam</option>
               <option value="America/New_York">America/New_York</option>
+              <option value="America/Los_Angeles">America/Los_Angeles</option>
             </select>
           </div>
-          {isEditing && (
-            <div>
-              <label className="block text-sm mb-1.5">Status</label>
-              <button
-                type="button"
-                onClick={() => setActive(!active)}
-                className={`px-3 py-2 rounded-md text-sm font-medium transition-colors ${
-                  active ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'
-                }`}
-              >
-                {active ? 'Active' : 'Inactive'}
-              </button>
-            </div>
-          )}
         </div>
+
+        {isEditing && (
+          <div>
+            <label className="block text-sm mb-1.5">Status</label>
+            <button
+              type="button"
+              onClick={() => setActive(!active)}
+              className={`px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+                active ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'
+              }`}
+            >
+              {active ? 'Active' : 'Inactive'}
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Glofox Integration */}
