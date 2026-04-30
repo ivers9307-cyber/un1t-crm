@@ -1,11 +1,15 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 
 // GET /api/schedule/swaps?location_id=xxx&status=pending
 export async function GET(request) {
+  const user = await getCurrentUser()
   const { searchParams } = new URL(request.url)
   const locationId = searchParams.get('location_id')
+  const guard = assertLocationAccess(user, locationId)
+  if (guard) return guard
+
   const status = searchParams.get('status')
   const db = createServerClient()
 
@@ -20,7 +24,13 @@ export async function GET(request) {
     `)
     .order('created_at', { ascending: false })
 
-  if (locationId) query = query.eq('location_id', locationId)
+  if (locationId) {
+    query = query.eq('location_id', locationId)
+  } else {
+    const userLocationIds = (user.locations || []).map(l => l.id)
+    if (userLocationIds.length === 0) return NextResponse.json({ success: true, data: [] })
+    query = query.in('location_id', userLocationIds)
+  }
   if (status) query = query.eq('status', status)
 
   const { data, error } = await query

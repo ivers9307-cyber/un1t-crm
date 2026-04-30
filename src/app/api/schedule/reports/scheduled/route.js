@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { calculateNextRun } from '@/lib/report-generator'
 
 // GET /api/schedule/reports/scheduled — List scheduled reports
@@ -12,8 +12,10 @@ export async function GET(request) {
 
   const { searchParams } = new URL(request.url)
   const locationId = searchParams.get('location_id') || user.activeLocation?.id
-  const db = createServerClient()
+  const guard = assertLocationAccess(user, locationId)
+  if (guard) return guard
 
+  const db = createServerClient()
   const { data, error } = await db.from('scheduled_reports')
     .select('*, profiles:created_by(full_name)')
     .eq('location_id', locationId)
@@ -33,8 +35,12 @@ export async function POST(request) {
   const body = await request.json()
   const db = createServerClient()
 
+  const locationId = body.location_id || user.activeLocation?.id
+  const guard = assertLocationAccess(user, locationId)
+  if (guard) return guard
+
   const record = {
-    location_id: body.location_id || user.activeLocation?.id,
+    location_id: locationId,
     created_by: user.id,
     report_type: body.report_type,
     report_name: body.report_name,
@@ -68,6 +74,16 @@ export async function DELETE(request) {
   if (!id) return NextResponse.json({ success: false, error: 'id is required' }, { status: 400 })
 
   const db = createServerClient()
+
+  // Verify the scheduled report belongs to a location the caller can manage.
+  const { data: report } = await db.from('scheduled_reports')
+    .select('location_id')
+    .eq('id', id)
+    .single()
+  if (!report) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
+  const guard = assertLocationAccess(user, report.location_id)
+  if (guard) return guard
+
   const { error } = await db.from('scheduled_reports')
     .update({ active: false, updated_at: new Date().toISOString() })
     .eq('id', id)

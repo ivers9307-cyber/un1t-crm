@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 
 // POST /api/settings/branding/upload — Upload a logo or favicon image
 export async function POST(request) {
@@ -17,6 +17,9 @@ export async function POST(request) {
   if (!file || !type) {
     return NextResponse.json({ success: false, error: 'file and type are required' }, { status: 400 })
   }
+
+  const guard = assertLocationAccess(user, locationId)
+  if (guard) return guard
 
   // Validate file type
   const allowedTypes = ['image/png', 'image/svg+xml', 'image/x-icon', 'image/vnd.microsoft.icon', 'image/webp']

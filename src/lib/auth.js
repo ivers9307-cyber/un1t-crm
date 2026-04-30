@@ -1,6 +1,7 @@
 import { createClient } from '@supabase/supabase-js'
 import { createServerClient as createSSRClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
+import { NextResponse } from 'next/server'
 
 // Auth-aware server client for SSR pages (reads session from cookies)
 export function createAuthClient() {
@@ -72,4 +73,43 @@ export async function getCurrentUser() {
     locations,
     activeLocation,
   }
+}
+
+/**
+ * Check that `locationId` is one of the locations the caller belongs to.
+ * Use at the top of any session-auth route that takes a location_id from
+ * user input (query string or request body) to prevent IDOR — a user
+ * passing `?location_id=<some other tenant>` and reading their data.
+ *
+ * Bearer-auth routes (n8n) skip this — the API key holder is treated as
+ * a system admin in this app's model.
+ *
+ * Behaviour:
+ *   - user is null              → 401
+ *   - locationId is null/undef  → null (caller said "no specific location",
+ *                                 e.g. listing across all of the user's locations)
+ *   - locationId is allowed     → null (request continues)
+ *   - locationId is forbidden   → 403
+ *
+ * Usage:
+ *   const guard = assertLocationAccess(user, requestedLocationId)
+ *   if (guard) return guard
+ *
+ * @param {{ locations?: Array<{id: string}> } | null} user
+ * @param {string | null | undefined} locationId
+ * @returns {NextResponse | null}
+ */
+export function assertLocationAccess(user, locationId) {
+  if (!user) {
+    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+  }
+  if (!locationId) return null
+  const allowed = (user.locations || []).some(l => l.id === locationId)
+  if (!allowed) {
+    return NextResponse.json(
+      { success: false, error: 'Forbidden — location not in your assignments' },
+      { status: 403 }
+    )
+  }
+  return null
 }

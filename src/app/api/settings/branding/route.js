@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 
 // GET /api/settings/branding?location_id=xxx — Get branding for a location
 export async function GET(request) {
@@ -9,8 +9,10 @@ export async function GET(request) {
 
   const { searchParams } = new URL(request.url)
   const locationId = searchParams.get('location_id') || user.activeLocation?.id
-  const db = createServerClient()
+  const guard = assertLocationAccess(user, locationId)
+  if (guard) return guard
 
+  const db = createServerClient()
   const { data } = await db.from('company_settings')
     .select('*')
     .eq('location_id', locationId)
@@ -29,6 +31,9 @@ export async function PUT(request) {
   const body = await request.json()
   const db = createServerClient()
   const locationId = body.location_id || user.activeLocation?.id
+
+  const guard = assertLocationAccess(user, locationId)
+  if (guard) return guard
 
   const record = {
     location_id: locationId,

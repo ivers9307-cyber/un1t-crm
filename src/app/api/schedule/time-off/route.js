@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 
 // GET /api/schedule/time-off?location_id=xxx&start_date=xxx&end_date=xxx&status=xxx&profile_id=xxx
 export async function GET(request) {
@@ -9,6 +9,9 @@ export async function GET(request) {
 
   const { searchParams } = new URL(request.url)
   const locationId = searchParams.get('location_id')
+  const guard = assertLocationAccess(user, locationId)
+  if (guard) return guard
+
   const startDate = searchParams.get('start_date')
   const endDate = searchParams.get('end_date')
   const status = searchParams.get('status')
@@ -23,7 +26,13 @@ export async function GET(request) {
     `)
     .order('start_date', { ascending: true })
 
-  if (locationId) query = query.eq('location_id', locationId)
+  if (locationId) {
+    query = query.eq('location_id', locationId)
+  } else {
+    const userLocationIds = (user.locations || []).map(l => l.id)
+    if (userLocationIds.length === 0) return NextResponse.json({ success: true, data: [] })
+    query = query.in('location_id', userLocationIds)
+  }
   if (status) query = query.eq('status', status)
 
   // Date range filter — show requests that overlap with the given range
@@ -54,6 +63,13 @@ export async function POST(request) {
 
   if (!type || !start_date || !end_date) {
     return NextResponse.json({ success: false, error: 'type, start_date, and end_date are required' }, { status: 400 })
+  }
+
+  // If location_id is explicitly passed, it must be one the caller belongs to.
+  // Otherwise fall through to user.activeLocation below.
+  if (location_id) {
+    const guard = assertLocationAccess(user, location_id)
+    if (guard) return guard
   }
 
   // Calculate total days (simple: count calendar days inclusive)

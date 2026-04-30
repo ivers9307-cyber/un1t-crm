@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { generateReport } from '@/lib/report-generator'
 
 // GET /api/schedule/reports?location_id=xxx — List generated reports
@@ -12,14 +12,22 @@ export async function GET(request) {
 
   const { searchParams } = new URL(request.url)
   const locationId = searchParams.get('location_id')
-  const db = createServerClient()
+  const guard = assertLocationAccess(user, locationId)
+  if (guard) return guard
 
+  const db = createServerClient()
   let query = db.from('generated_reports')
     .select('*')
     .order('created_at', { ascending: false })
     .limit(50)
 
-  if (locationId) query = query.eq('location_id', locationId)
+  if (locationId) {
+    query = query.eq('location_id', locationId)
+  } else {
+    const userLocationIds = (user.locations || []).map(l => l.id)
+    if (userLocationIds.length === 0) return NextResponse.json({ success: true, data: [] })
+    query = query.in('location_id', userLocationIds)
+  }
 
   const { data, error } = await query
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
@@ -36,6 +44,9 @@ export async function POST(request) {
   const body = await request.json()
   const { report_type, period_start, period_end, location_id } = body
   const locId = location_id || user.activeLocation?.id
+
+  const guard = assertLocationAccess(user, locId)
+  if (guard) return guard
 
   const result = await generateReport({
     report_type,

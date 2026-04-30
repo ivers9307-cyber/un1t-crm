@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 
 // POST /api/schedule/shifts/copy-week
 // Copy all shifts from one week to another
@@ -20,6 +20,9 @@ export async function POST(request) {
       error: 'location_id, source_start, and target_start are required'
     }, { status: 400 })
   }
+
+  const guard = assertLocationAccess(user, location_id)
+  if (guard) return guard
 
   const db = createServerClient()
 

@@ -1,11 +1,15 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 
 // GET /api/schedule/shifts?location_id=xxx&start_date=2026-04-27&end_date=2026-05-03&profile_id=xxx
 export async function GET(request) {
+  const user = await getCurrentUser()
   const { searchParams } = new URL(request.url)
   const locationId = searchParams.get('location_id')
+  const guard = assertLocationAccess(user, locationId)
+  if (guard) return guard
+
   const startDate = searchParams.get('start_date')
   const endDate = searchParams.get('end_date')
   const profileId = searchParams.get('profile_id')
@@ -15,7 +19,16 @@ export async function GET(request) {
     .select('*, shift_templates(*), profiles!profile_id(id, full_name, email, avatar_url, role)')
     .order('shift_date')
 
-  if (locationId) query = query.eq('location_id', locationId)
+  if (locationId) {
+    query = query.eq('location_id', locationId)
+  } else {
+    // No specific location requested — limit to caller's own locations.
+    const userLocationIds = (user.locations || []).map(l => l.id)
+    if (userLocationIds.length === 0) {
+      return NextResponse.json({ success: true, data: [] })
+    }
+    query = query.in('location_id', userLocationIds)
+  }
   if (startDate) query = query.gte('shift_date', startDate)
   if (endDate) query = query.lte('shift_date', endDate)
   if (profileId) query = query.eq('profile_id', profileId)
@@ -37,6 +50,17 @@ export async function POST(request) {
 
   // Support batch creation: body.shifts = [{...}, {...}] or single shift
   const shifts = body.shifts || [body]
+
+  // Reject the whole batch if any shift targets a location the caller
+  // can't write to.
+  const userLocationIds = (user.locations || []).map(l => l.id)
+  const invalidShift = shifts.find(s => !s.location_id || !userLocationIds.includes(s.location_id))
+  if (invalidShift) {
+    return NextResponse.json(
+      { success: false, error: 'Cannot create shift in a location you do not belong to' },
+      { status: 403 }
+    )
+  }
 
   const records = shifts.map(s => ({
     location_id: s.location_id,
