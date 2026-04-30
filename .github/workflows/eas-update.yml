@@ -62,6 +62,57 @@ jobs:
       - name: Install dependencies
         run: npm install --legacy-peer-deps
 
+      # Pre-flight syntax check on every JSX/JS file. ~5 sec. Catches
+      # the most damaging class of bug — a broken bundle being pushed
+      # to every staff member's phone — before we spend a minute
+      # uploading it to Expo's CDN. Falls through if all files parse,
+      # exits non-zero if anything is broken (which fails the job and
+      # skips the publish step below).
+      - name: Babel parse mobile JS/JSX
+        run: |
+          cat > /tmp/parse-check.mjs << 'EOF'
+          import { readFileSync } from 'node:fs'
+          import { readdirSync, statSync } from 'node:fs'
+          import { join } from 'node:path'
+          import { parse } from '@babel/parser'
+
+          function walk(dir, out = []) {
+            for (const e of readdirSync(dir)) {
+              if (e === 'node_modules' || e.startsWith('.')) continue
+              const p = join(dir, e)
+              if (statSync(p).isDirectory()) walk(p, out)
+              else if (/\.(jsx?|mjs|cjs)$/.test(e)) out.push(p)
+            }
+            return out
+          }
+
+          const files = [
+            ...walk('app'),
+            ...walk('lib'),
+            'app.config.js',
+            'babel.config.js',
+            'metro.config.js',
+            'tailwind.config.js',
+          ]
+
+          let bad = 0
+          for (const f of files) {
+            try {
+              parse(readFileSync(f, 'utf8'), {
+                sourceType: 'module',
+                plugins: ['jsx'],
+              })
+            } catch (e) {
+              console.error(`FAIL  ${f}`)
+              console.error(`      ${e.message}`)
+              bad++
+            }
+          }
+          console.log(`Checked ${files.length} files, ${bad} failed.`)
+          process.exit(bad > 0 ? 1 : 0)
+          EOF
+          node /tmp/parse-check.mjs
+
       # Use the commit message as the EAS update note so you can see
       # at a glance which commit a given update came from in the EAS
       # dashboard. Squash newlines to keep the eas-update CLI happy.
