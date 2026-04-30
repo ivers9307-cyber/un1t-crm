@@ -62,6 +62,21 @@ export default ({ config }) => ({
   experiments: {
     typedRoutes: true,
   },
+  // Over-the-air updates via EAS Update. After `eas init`, this URL
+  // is filled in automatically (eas init writes the project ID to
+  // process.env at build time and the GitHub Action substitutes it).
+  // The runtimeVersion policy 'sdkVersion' means each Expo SDK gets
+  // its own update lane — an update built for SDK 54 won't be served
+  // to a phone running an SDK 53 build, preventing native/JS skew.
+  updates: process.env.EAS_PROJECT_ID
+    ? {
+        url: `https://u.expo.dev/${process.env.EAS_PROJECT_ID}`,
+        enabled: true,
+        checkAutomatically: 'ON_LOAD',
+        fallbackToCacheTimeout: 0,
+      }
+    : undefined,
+  runtimeVersion: { policy: 'sdkVersion' },
   extra: {
     supabaseUrl:
       process.env.EXPO_PUBLIC_SUPABASE_URL ||
