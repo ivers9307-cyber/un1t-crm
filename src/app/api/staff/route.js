@@ -5,7 +5,7 @@ import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
 import { validateBody, uuidLike } from '@/lib/validate'
 import {
   roleSchema, employmentTypeSchema, money, hours, days, permissionsSchema,
-  ADMIN_ROLES,
+  ADMIN_ROLES, passwordSchema,
 } from '@/lib/schemas'
 
 export const runtime = 'nodejs'
@@ -13,7 +13,10 @@ export const runtime = 'nodejs'
 const CreateStaffSchema = z.object({
   email: z.string().email(),
   full_name: z.string().min(1).max(200),
-  password: z.string().min(8).max(200),
+  // Mirrors the Supabase project's password-strength settings — keep
+  // this in sync with whatever the Auth dashboard requires so we
+  // surface a clear error before round-tripping to Supabase.
+  password: passwordSchema,
   role: roleSchema.optional(),
   permissions: permissionsSchema.optional(),
   location_ids: z.array(uuidLike).optional(),

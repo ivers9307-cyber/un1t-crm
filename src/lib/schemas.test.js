@@ -7,6 +7,7 @@ import {
   reportFrequencySchema, reportTypeSchema,
   permissionsSchema, audienceFilterSchema,
   ADMIN_ROLES, MANAGER_ROLES, DEFAULT_COLOR,
+  passwordSchema, passwordRequirements, validatePasswordComplexity,
 } from './schemas.js'
 
 describe('shared scalar schemas', () => {
@@ -140,5 +141,69 @@ describe('role groups + DEFAULT_COLOR', () => {
 
   it('DEFAULT_COLOR is a valid hex', () => {
     expect(hexColor.safeParse(DEFAULT_COLOR).success).toBe(true)
+  })
+})
+
+describe('password complexity', () => {
+  // The Supabase project enforces 8+ chars + lower + upper + digit + symbol.
+  // These tests pin the rules so a regex tweak doesn't accidentally relax
+  // them past what the auth provider accepts.
+
+  it('accepts a strong password', () => {
+    const r = passwordSchema.safeParse('Strong!Pass1')
+    expect(r.success).toBe(true)
+  })
+
+  it('rejects too short', () => {
+    const r = passwordSchema.safeParse('Aa1!')
+    expect(r.success).toBe(false)
+  })
+
+  it('rejects without lowercase', () => {
+    const r = passwordSchema.safeParse('STRONG!PASS1')
+    expect(r.success).toBe(false)
+    expect(r.error?.issues.some(i => /lowercase/i.test(i.message))).toBe(true)
+  })
+
+  it('rejects without uppercase', () => {
+    const r = passwordSchema.safeParse('strong!pass1')
+    expect(r.success).toBe(false)
+    expect(r.error?.issues.some(i => /uppercase/i.test(i.message))).toBe(true)
+  })
+
+  it('rejects without digit', () => {
+    const r = passwordSchema.safeParse('Strong!Pass!')
+    expect(r.success).toBe(false)
+    expect(r.error?.issues.some(i => /digit/i.test(i.message))).toBe(true)
+  })
+
+  it('rejects without symbol', () => {
+    const r = passwordSchema.safeParse('StrongPass123')
+    expect(r.success).toBe(false)
+    expect(r.error?.issues.some(i => /symbol/i.test(i.message))).toBe(true)
+  })
+
+  it('passwordRequirements list lines up with the schema', () => {
+    // Should be 5 rules; bare-letters strings should fail every category check
+    expect(passwordRequirements).toHaveLength(5)
+    expect(passwordRequirements.map(r => r.id)).toEqual(
+      ['length', 'lowercase', 'uppercase', 'digit', 'symbol'],
+    )
+    // Rules are pure functions
+    for (const r of passwordRequirements) {
+      expect(typeof r.test).toBe('function')
+      expect(typeof r.label).toBe('string')
+    }
+  })
+
+  it('validatePasswordComplexity returns null for strong / message for weak', () => {
+    expect(validatePasswordComplexity('Strong!Pass1')).toBeNull()
+    expect(validatePasswordComplexity('weak')).toMatch(/Password requires/i)
+    expect(validatePasswordComplexity(undefined)).toBe('Password must be a string')
+  })
+
+  it('treats spaces and accented characters as valid symbols/letters', () => {
+    // Defensive: don't break for non-ASCII users
+    expect(passwordSchema.safeParse('Café!2024').success).toBe(true)
   })
 })

@@ -3,7 +3,8 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { ArrowLeft } from 'lucide-react'
+import { ArrowLeft, Check, X } from 'lucide-react'
+import { passwordRequirements, validatePasswordComplexity } from '@/lib/schemas'
 
 const allPermissions = [
   { key: 'dashboard',  label: 'Dashboard' },
@@ -106,6 +107,15 @@ export default function StaffForm({ staff, locations }) {
   async function handleSubmit(e) {
     e.preventDefault()
     setError(null)
+
+    // Pre-flight password complexity check on create — surfaces the
+    // exact rule that's missing rather than waiting for Supabase to
+    // bounce the request with a generic 'invalid_password' error.
+    if (!isEdit) {
+      const pwError = validatePasswordComplexity(form.password)
+      if (pwError) { setError(pwError); return }
+    }
+
     setSaving(true)
 
     const url = isEdit ? `/api/staff/${staff.id}` : '/api/staff'
@@ -208,8 +218,23 @@ export default function StaffForm({ staff, locations }) {
               value={form.password}
               onChange={e => setForm(prev => ({ ...prev, password: e.target.value }))}
               className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
-              placeholder="Min 8 characters"
+              placeholder="Strong password"
             />
+            {/* Live requirements checklist. Each row turns green ✓ as the
+                user types a character matching that rule. Mirrors the
+                Supabase Auth password-strength settings exactly so the
+                user never gets a confusing rejection from Supabase. */}
+            <ul className="mt-2 space-y-1">
+              {passwordRequirements.map(r => {
+                const ok = r.test(form.password || '')
+                return (
+                  <li key={r.id} className={`flex items-center gap-2 text-xs ${ok ? 'text-green-400' : 'text-un1t-mid'}`}>
+                    {ok ? <Check size={12} /> : <X size={12} />}
+                    <span>{r.label}</span>
+                  </li>
+                )
+              })}
+            </ul>
           </div>
         )}
 

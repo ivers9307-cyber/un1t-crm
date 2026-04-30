@@ -2,7 +2,9 @@
 
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
+import { Check, X } from 'lucide-react'
 import { createBrowserClient } from '@/lib/supabase'
+import { passwordRequirements, validatePasswordComplexity } from '@/lib/schemas'
 
 export default function ResetPasswordPage() {
   const [password, setPassword] = useState('')
@@ -39,10 +41,11 @@ export default function ResetPasswordPage() {
     e.preventDefault()
     setError(null)
 
-    if (password.length < 8) {
-      setError('Password must be at least 8 characters')
-      return
-    }
+    // Mirror the same rules the Supabase Auth dashboard enforces — surface
+    // the missing rule before round-tripping rather than after Supabase
+    // bounces the update with a generic "weak_password" error.
+    const pwError = validatePasswordComplexity(password)
+    if (pwError) { setError(pwError); return }
 
     if (password !== confirmPassword) {
       setError('Passwords do not match')
@@ -97,8 +100,19 @@ export default function ResetPasswordPage() {
               value={password}
               onChange={e => setPassword(e.target.value)}
               className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2.5 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid"
-              placeholder="At least 8 characters"
+              placeholder="Strong password"
             />
+            <ul className="mt-2 space-y-1">
+              {passwordRequirements.map(r => {
+                const ok = r.test(password || '')
+                return (
+                  <li key={r.id} className={`flex items-center gap-2 text-xs ${ok ? 'text-green-400' : 'text-un1t-mid'}`}>
+                    {ok ? <Check size={12} /> : <X size={12} />}
+                    <span>{r.label}</span>
+                  </li>
+                )
+              })}
+            </ul>
           </div>
 
           <div>

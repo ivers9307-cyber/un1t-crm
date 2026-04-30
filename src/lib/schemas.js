@@ -97,6 +97,54 @@ export const reportTypeSchema = z.enum([
 // Permissions — JSONB, opaque values. Don't gate on shape.
 export const permissionsSchema = z.record(z.string(), z.unknown())
 
+// ---------------------------------------------------------------------------
+// PASSWORDS
+// Mirrors the Supabase project's auth-side requirements (set in the
+// Dashboard: Auth > Sign In > Password Strength). If we accept a password
+// that Supabase will reject, the user gets a confusing error from
+// auth.admin.createUser / auth.updateUser. So we validate the same rules
+// up-front, before sending to Supabase.
+//
+// Current org policy:
+//   - 8+ characters
+//   - at least one lowercase letter
+//   - at least one uppercase letter
+//   - at least one digit
+//   - at least one symbol  (anything not a-zA-Z0-9)
+//
+// passwordRequirements is exported so client components can render the same
+// requirement list / live-validate without duplicating regex.
+// ---------------------------------------------------------------------------
+
+export const passwordRequirements = Object.freeze([
+  { id: 'length',    label: 'At least 8 characters',  test: v => v.length >= 8 },
+  { id: 'lowercase', label: 'A lowercase letter',     test: v => /[a-z]/.test(v) },
+  { id: 'uppercase', label: 'An uppercase letter',    test: v => /[A-Z]/.test(v) },
+  { id: 'digit',     label: 'A digit',                test: v => /\d/.test(v) },
+  { id: 'symbol',    label: 'A symbol',               test: v => /[^a-zA-Z0-9]/.test(v) },
+])
+
+/**
+ * Returns null when the password meets every requirement, or a short
+ * human-readable message naming the first failing rule. Used both by
+ * the Zod schema and by client-side form pre-flight.
+ */
+export function validatePasswordComplexity(password) {
+  if (typeof password !== 'string') return 'Password must be a string'
+  for (const r of passwordRequirements) {
+    if (!r.test(password)) return `Password requires: ${r.label.toLowerCase()}`
+  }
+  return null
+}
+
+export const passwordSchema = z.string()
+  .min(8, 'Password must be at least 8 characters')
+  .max(200, 'Password is too long')
+  .refine(v => /[a-z]/.test(v), 'Password must contain a lowercase letter')
+  .refine(v => /[A-Z]/.test(v), 'Password must contain an uppercase letter')
+  .refine(v => /\d/.test(v),    'Password must contain a digit')
+  .refine(v => /[^a-zA-Z0-9]/.test(v), 'Password must contain a symbol')
+
 // Audience filter: { logic: 'and'|'or', filters: [...] }. The actual
 // per-filter validation lives in src/lib/audience-filter.js (because it
 // depends on the field/op whitelist), so here we just shape-check.

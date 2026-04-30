@@ -21,6 +21,7 @@ import {
   timeOffTypeSchema, timeOffStatusSchema, swapStatusSchema,
   reportFrequencySchema, reportTypeSchema,
   permissionsSchema, audienceFilterSchema,
+  passwordSchema,
 } from './schemas.js'
 
 // Wire .openapi() onto Zod so we can decorate inline-defined schemas.
@@ -111,7 +112,10 @@ const BookingCreate = z.object({
 const StaffCreate = z.object({
   email,
   full_name: z.string().min(1).max(200),
-  password: z.string().min(8).max(200),
+  // Password rules mirror Supabase Auth's project settings: 8+ chars,
+  // at least one each of lower, upper, digit, symbol. See passwordSchema
+  // in src/lib/schemas.js for the canonical definition.
+  password: passwordSchema,
   role: roleSchema.optional(),
   permissions: permissionsSchema.optional(),
   location_ids: z.array(uuidLike).optional(),
