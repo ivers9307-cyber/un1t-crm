@@ -13,8 +13,23 @@ import {
   View, Text, ScrollView, Pressable, TextInput, ActivityIndicator,
   Alert, KeyboardAvoidingView, Platform, FlatList,
 } from 'react-native'
-import { useLocalSearchParams, Stack } from 'expo-router'
+import { useLocalSearchParams, useRouter, Stack } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
+
+// Explicit headerLeft so the back chevron is always visible — see the
+// note in pipeline/[dealId].jsx for why this isn't auto-rendered.
+function BackHeaderLeft({ router, label = 'Inbox' }) {
+  return (
+    <Pressable
+      onPress={() => router.back()}
+      hitSlop={12}
+      className="flex-row items-center -ml-1"
+    >
+      <Ionicons name="chevron-back" size={26} color="#111827" />
+      <Text className="text-base text-un1t-white">{label}</Text>
+    </Pressable>
+  )
+}
 import { useAuth } from '../../lib/auth-context'
 import {
   getConversation, listMessages, markConversationRead,
@@ -67,6 +82,7 @@ function Bubble({ msg }) {
 
 export default function Conversation() {
   const { conversationId } = useLocalSearchParams()
+  const router = useRouter()
   const { activeLocation } = useAuth()
   const [conv, setConv] = useState(null)
   const [messages, setMessages] = useState([])
@@ -149,7 +165,12 @@ export default function Conversation() {
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       className="flex-1 bg-un1t-black"
     >
-      <Stack.Screen options={{ title: name }} />
+      <Stack.Screen
+        options={{
+          title: name,
+          headerLeft: () => <BackHeaderLeft router={router} label="Inbox" />,
+        }}
+      />
 
       {loading ? (
         <View className="flex-1 items-center justify-center">

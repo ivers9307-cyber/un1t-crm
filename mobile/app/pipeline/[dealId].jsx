@@ -16,6 +16,23 @@ import {
 } from 'react-native'
 import { useLocalSearchParams, useRouter, Stack } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
+
+// Explicit headerLeft so the back chevron is visible even when this is
+// the only screen in the pipeline/ sub-stack. iOS's auto back-button
+// only appears when the *current* navigator has a previous screen, but
+// here the previous screen lives in the (tabs) navigator one level up.
+function BackHeaderLeft({ router, label = 'Back' }) {
+  return (
+    <Pressable
+      onPress={() => router.back()}
+      hitSlop={12}
+      className="flex-row items-center -ml-1"
+    >
+      <Ionicons name="chevron-back" size={26} color="#111827" />
+      <Text className="text-base text-un1t-white">{label}</Text>
+    </Pressable>
+  )
+}
 import { useAuth } from '../../lib/auth-context'
 import {
   getDeal, listStages, moveDeal, setDealStatus,
@@ -152,7 +169,12 @@ export default function DealDetail() {
   if (loading || !deal) {
     return (
       <View className="flex-1 bg-un1t-black items-center justify-center">
-        <Stack.Screen options={{ title: 'Deal' }} />
+        <Stack.Screen
+          options={{
+            title: 'Deal',
+            headerLeft: () => <BackHeaderLeft router={router} label="Pipeline" />,
+          }}
+        />
         <ActivityIndicator />
       </View>
     )
@@ -174,7 +196,12 @@ export default function DealDetail() {
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       className="flex-1 bg-un1t-black"
     >
-      <Stack.Screen options={{ title: deal.title || 'Deal' }} />
+      <Stack.Screen
+        options={{
+          title: deal.title || 'Deal',
+          headerLeft: () => <BackHeaderLeft router={router} label="Pipeline" />,
+        }}
+      />
 
       <ScrollView
         contentContainerClassName="p-4"
