@@ -2,14 +2,16 @@
 // detail page UI. Single source of truth for "what does this car
 // need before it can be marked complete?".
 
-// Required documents for a car to be promoted to 'completed'.
-// The buyer is expected to have all four invoices on file. 'other'
-// is just a free-form bucket and isn't required.
+// Required documents for a car to be promoted to 'completed'. All
+// of these must have at least one upload before the operator can
+// hit Mark Completed (server-side check in completionGaps()). 'other'
+// is a free-form bucket for anything not listed and isn't required.
 export const REQUIRED_DOCUMENT_TYPES = Object.freeze([
   { key: 'nct_invoice',    label: 'NCT invoice' },
   { key: 'irish_customs',  label: 'Irish customs invoice' },
   { key: 'bca_invoice',    label: 'BCA invoice (incl. VAT)' },
   { key: 'transporter',    label: 'Car transporter invoice' },
+  { key: 'ferry_invoice',  label: 'Ferry invoice' },
 ])
 
 export const ALL_DOCUMENT_TYPES = Object.freeze([
