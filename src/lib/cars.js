@@ -237,3 +237,132 @@ export function profitBreakdown(car, liveRate = null) {
     profit,
   }
 }
+
+// ---------------------------------------------------------------------------
+// Reporting helpers (pure — used by /cars/reports)
+// ---------------------------------------------------------------------------
+//
+// Aggregates a list of cars into the numbers shown on the Reports tab.
+// Pure function, no DB / FX-fetching side-effects — pass the same
+// liveRate that the rest of the page uses so every metric reconciles
+// against what the user sees on individual car detail pages.
+
+const MS_PER_DAY = 1000 * 60 * 60 * 24
+
+function isInRange(iso, sinceIso) {
+  if (!iso) return false
+  if (!sinceIso) return true
+  return new Date(iso) >= new Date(sinceIso)
+}
+
+/**
+ * @param {Array} cars  — every car for the location, all statuses.
+ * @param {{ liveRate?: number, now?: Date }} [opts]
+ * @returns metrics object — see fields below.
+ */
+export function computeReportMetrics(cars, opts = {}) {
+  const list = Array.isArray(cars) ? cars : []
+  const liveRate = opts.liveRate ?? null
+  const now = opts.now ? new Date(opts.now) : new Date()
+
+  const startOfYear = new Date(now.getFullYear(), 0, 1).toISOString()
+  const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString()
+
+  const completed = list.filter(c => c.status === 'completed')
+  const active = list.filter(c => c.status === 'new' || c.status === 'pending')
+
+  // ── Cash position ────────────────────────────────────────────────
+  // Outstanding UK VAT — every car (active OR completed) where HMRC
+  // hasn't paid back yet. Active cars dominate but a completed car
+  // with the toggle still off would also still be owed.
+  const vatOutstanding = list
+    .filter(c => !c.uk_vat_refund_received)
+    .reduce((s, c) => s + Number(c.uk_vat || 0), 0)
+
+  const vatRefundedYtd = list
+    .filter(c => c.uk_vat_refund_received && isInRange(c.uk_vat_refund_received_at, startOfYear))
+    .reduce((s, c) => s + Number(c.uk_vat || 0), 0)
+
+  const vatOutstandingCount = list.filter(c => !c.uk_vat_refund_received && Number(c.uk_vat || 0) > 0).length
+
+  // Active inventory value — cost basis of cars-not-yet-sold, in EUR.
+  // Includes UK ex-VAT (converted) plus every ancillary cost already
+  // booked against the active car. Tells the operator how much cash
+  // is currently parked in the fleet.
+  const inventoryValueEur = active.reduce((s, c) => {
+    const fx = effectiveFxRate(c, liveRate)
+    const uk = Number(c.uk_purchase_price_ex_vat || 0) * fx
+    return s + uk + totalAncillaryCosts(c, liveRate)
+  }, 0)
+
+  // ── YTD performance (completed cars only) ────────────────────────
+  const completedYtd = completed.filter(c => isInRange(c.completed_at, startOfYear))
+  const completedMtd = completed.filter(c => isInRange(c.completed_at, startOfMonth))
+
+  const sumProfit = arr => arr.reduce((s, c) => {
+    const b = profitBreakdown(c, liveRate)
+    return s + (b ? b.profit : 0)
+  }, 0)
+  const sumRevenue = arr => arr.reduce((s, c) => {
+    const split = splitIrishPrice(c)
+    return s + (split.salePrice || 0)
+  }, 0)
+
+  const revenueYtd = sumRevenue(completedYtd)
+  const profitYtd = sumProfit(completedYtd)
+  const profitMtd = sumProfit(completedMtd)
+  const profitMargin = revenueYtd > 0 ? profitYtd / revenueYtd : null
+  const avgProfitPerCar = completedYtd.length ? profitYtd / completedYtd.length : null
+
+  // ── Cycle time ───────────────────────────────────────────────────
+  const cycleDays = completedYtd
+    .filter(c => c.created_at && c.completed_at)
+    .map(c => (new Date(c.completed_at) - new Date(c.created_at)) / MS_PER_DAY)
+  const avgCycleDays = cycleDays.length
+    ? cycleDays.reduce((s, d) => s + d, 0) / cycleDays.length
+    : null
+
+  // ── Cost breakdown YTD (completed cars only — gives a true YTD
+  // P&L slice rather than counting half-paid active deals) ──────────
+  const costBreakdownYtd = COST_FIELDS.map(f => {
+    let totalEur = 0
+    for (const c of completedYtd) {
+      const v = Number(c[f.key] || 0)
+      const fx = effectiveFxRate(c, liveRate)
+      totalEur += f.currency === 'GBP' ? v * fx : v
+    }
+    return { key: f.key, label: f.label, currency: f.currency, totalEur: Math.round(totalEur * 100) / 100 }
+  })
+
+  // ── Active fleet breakdown ───────────────────────────────────────
+  const newCount = list.filter(c => c.status === 'new').length
+  const pendingCount = list.filter(c => c.status === 'pending').length
+
+  return {
+    asOf: now.toISOString(),
+    cash: {
+      vatOutstanding: Math.round(vatOutstanding * 100) / 100,
+      vatOutstandingCount,
+      vatRefundedYtd: Math.round(vatRefundedYtd * 100) / 100,
+      inventoryValueEur: Math.round(inventoryValueEur * 100) / 100,
+    },
+    ytd: {
+      revenue: Math.round(revenueYtd * 100) / 100,
+      profit: Math.round(profitYtd * 100) / 100,
+      profitMargin,
+      avgProfitPerCar: avgProfitPerCar == null ? null : Math.round(avgProfitPerCar * 100) / 100,
+      completedCount: completedYtd.length,
+    },
+    mtd: {
+      profit: Math.round(profitMtd * 100) / 100,
+      completedCount: completedMtd.length,
+    },
+    fleet: {
+      activeCount: active.length,
+      newCount,
+      pendingCount,
+      avgCycleDays: avgCycleDays == null ? null : Math.round(avgCycleDays * 10) / 10,
+    },
+    costBreakdownYtd,
+  }
+}

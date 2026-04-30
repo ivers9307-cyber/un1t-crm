@@ -4,18 +4,20 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import clsx from 'clsx'
 
-// Two-tab layout: Active (new + pending) and Completed (archived).
+// Three-tab layout: Active (new + pending), Completed (archived),
+// Reports (cash/perf/operational metrics across the fleet).
 // The merged Active view shows a status badge per row so the
 // new/pending distinction is still visible at a glance.
 const TABS = [
   { id: 'active',    label: 'Active',    href: '/cars/active'    },
   { id: 'completed', label: 'Completed', href: '/cars/completed' },
+  { id: 'reports',   label: 'Reports',   href: '/cars/reports'   },
 ]
 
 export default function CarTabs() {
   const pathname = usePathname()
   return (
-    <div className="flex p-1 bg-un1t-dark border border-un1t-gray rounded-xl mb-6 max-w-md">
+    <div className="flex p-1 bg-un1t-dark border border-un1t-gray rounded-xl mb-6 max-w-xl">
       {TABS.map(t => {
         const active = pathname === t.href
         return (
