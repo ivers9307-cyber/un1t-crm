@@ -173,7 +173,63 @@ ANTHROPIC_API_KEY=               # for the in-app assistant chat
 CRM_API_KEY=                     # Bearer token for n8n / external integrations
 NEXT_PUBLIC_APP_URL=https://crm.un1tdublin.com
 CRON_SECRET=                     # for Vercel cron auth
+XERO_CLIENT_ID=                  # Xero OAuth 2.0 web app — see "Xero integration"
+XERO_CLIENT_SECRET=
+XERO_REDIRECT_URI=https://crm.un1tdublin.com/api/xero/callback
+XERO_SALES_ACCOUNT_CODE=         # optional, defaults to 200 (Sales). Set if your chart uses a different code.
 ```
+
+## Xero integration
+
+Per-location OAuth 2.0 connection stored in the `xero_connections` table (migration 029). The same Xero login can grant access to multiple tenants (e.g. UN1T Dublin gym + CCF Autos under one user account); each CRM location is bound to one tenant_id explicitly so we know which org to push into.
+
+`src/lib/xero/client.js` is a hand-rolled fetch wrapper around Xero's REST + OAuth endpoints (the official `xero-node` SDK is deliberately avoided — the surface we use is small and the SDK has churn issues against Next.js). All API calls go through `withFreshToken(locationId)` which transparently refreshes the access_token if it expires within 60 seconds and persists the rotated refresh_token (Xero rotates it on every refresh — failure to persist breaks all future refreshes).
+
+`src/lib/xero/invoices.js` implements `issueCarInvoice(car)` — the customer invoice push for completed cars. Wired to `POST /api/cars/[id]/issue-xero-invoice` and the "Issue invoice" button on `CarDetail`.
+
+OAuth routes:
+- `GET /api/xero/connect?location_id=…` — kick off OAuth (sets CSRF cookie, redirects)
+- `GET /api/xero/callback` — exchange code, persist tokens, redirect to /settings/integrations
+- `POST /api/xero/disconnect` — remove the connection row
+- `GET /api/xero/status?location_id=…` — safe subset of the connection row (no tokens) for client UIs
+- `GET /api/xero/debug` — dev-only diagnostic; dumps masked env vars + the exact authorize URL
+
+Settings UI lives at `/settings/integrations` (`XeroLocationCard.jsx`).
+
+### Xero OAuth scopes — granular reference
+
+**Critical context:** Xero deprecated the broad `accounting.transactions` and `accounting.reports.read` scopes on **2 March 2026**. Apps registered on/after that date — **including ours** (registered 30 April 2026) — *cannot* request the broad scopes at all and Xero rejects the auth with a misleading `unauthorized_client / Invalid scope for client` error that doesn't actually name the bad scope. Apps registered before the cutoff have until September 2027 to migrate.
+
+**Always use granular scopes when extending the integration.** Quick lookup table for the new scopes our app can request:
+
+| Granular scope (use this) | Endpoints / use case | Replaces (deprecated) |
+|---|---|---|
+| `accounting.contacts` | Contacts (read+write). **Unchanged** — works for old + new apps. | (n/a) |
+| `accounting.invoices` | Invoices, credit notes, items, purchase orders, quotes, repeating invoices, linked transactions | `accounting.transactions` |
+| `accounting.payments` | Payments, batch payments, overpayments, prepayments | `accounting.transactions` |
+| `accounting.banktransactions` | Bank transactions, bank transfers (reconciled ledger items, NOT bank feeds) | `accounting.transactions` |
+| `accounting.manualjournals` | Manual journal entries | `accounting.transactions` |
+| `accounting.classicexpenses` | Expense claims, receipts (deprecated endpoint) | `accounting.transactions` |
+| `accounting.settings` | Tax rates, tracking categories, branding themes, organisation settings, items | (n/a — unchanged) |
+| `accounting.attachments` | File attachments on invoices/contacts/etc | (n/a — unchanged) |
+| `accounting.budgets` | Budgets | (n/a — unchanged) |
+| `accounting.reports.aged.read` | Aged Payables/Receivables by Contact | `accounting.reports.read` |
+| `accounting.reports.balancesheet.read` | Balance Sheet | `accounting.reports.read` |
+| `accounting.reports.banksummary.read` | Bank Summary | `accounting.reports.read` |
+| `accounting.reports.executivesummary.read` | Executive Summary | `accounting.reports.read` |
+| `accounting.reports.profitandloss.read` | Profit & Loss | `accounting.reports.read` |
+| `accounting.reports.taxreports.read` | GST / BAS reports | `accounting.reports.read` |
+| `accounting.reports.trialbalance.read` | Trial Balance | `accounting.reports.read` |
+| `accounting.journals.read` | Journals | (n/a — unchanged, read-only) |
+| `offline_access` | Issue refresh_token (REQUIRED for any long-lived integration) | (n/a — unchanged) |
+
+Each scope also has a `.read` variant for read-only access (e.g. `accounting.invoices.read`). Items live under both `accounting.invoices` AND `accounting.settings` — if you only touch items, use settings.
+
+Non-Accounting APIs are unaffected by the granular split: `payroll.*`, `files`, `assets`, `projects`, `bankfeeds`, `practicemanager`, `finance`. Add them as-is when you need them.
+
+**Do not include the OIDC scopes** (`openid`, `profile`, `email`) unless we actually start consuming the id_token for Xero-side identity. Including them on apps that haven't explicitly opted into OIDC also throws the same "Invalid scope" error. The user is already authenticated via Supabase — the access_token is all we need.
+
+When adding a new Xero feature, append the relevant granular scope to `XERO_SCOPES` in `src/lib/xero/client.js`. Existing connected locations need to click "Reconnect" to receive the additional scope on their token (scopes are additive). The integration card on `/settings/integrations` shows the current scope grant in `connection.scopes`.
 
 ### Webhook authentication
 
