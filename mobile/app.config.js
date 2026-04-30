@@ -62,7 +62,7 @@ export default ({ config }) => ({
   experiments: {
     typedRoutes: true,
   },
-  // Over-the-air updates via EAS Update — first publish via GitHub Action. The project ID is the public
+  // Over-the-air updates via EAS Update. The project ID is the public
   // identifier of the EAS project at https://expo.dev/projects/<id> —
   // not a secret, safe to commit. The runtimeVersion policy
   // 'sdkVersion' means each Expo SDK gets its own update lane — an
@@ -76,12 +76,19 @@ export default ({ config }) => ({
   },
   runtimeVersion: { policy: 'sdkVersion' },
   extra: {
+    // Supabase URL + anon key are PUBLIC by design — the anon key is
+    // protected by Row-Level Security on the database, not by secrecy
+    // (it's the same key embedded in every browser session at
+    // crm.un1tdublin.com). Hardcoding here means EAS Update / EAS
+    // Build don't need any env vars set — the bundle always has the
+    // right values. Local dev can still override via mobile/.env if
+    // someone needs to point at a staging Supabase project.
     supabaseUrl:
       process.env.EXPO_PUBLIC_SUPABASE_URL ||
-      'https://YOUR-PROJECT.supabase.co',
+      'https://iyvtbjjxdggiadzwwvdj.supabase.co',
     supabaseAnonKey:
       process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ||
-      'YOUR-ANON-KEY',
+      'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Iml5dnRiamp4ZGdnaWFkend3dmRqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzczNzYzOTQsImV4cCI6MjA5Mjk1MjM5NH0.GdUgg4Z3X9Djh57DKEP55yTgkcixualtn8LwEx3P9P8',
     apiBaseUrl:
       process.env.EXPO_PUBLIC_API_BASE_URL ||
       'https://crm.un1tdublin.com',
