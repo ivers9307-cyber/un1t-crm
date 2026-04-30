@@ -282,39 +282,50 @@ export async function DELETE(request, { params }) {
 
   const db = createServerClient()
 
-  // Pull the profile + locations BEFORE deactivating so we can revoke
-  // UniFi access using the still-present links.
+  // Pull the profile + per-location door state BEFORE deactivating
+  // so we can walk every location-level UniFi instance and revoke
+  // independently. Migration 024 split the single profile-level
+  // unifi_door_access flag into per-row columns on profile_locations,
+  // so an ex-employee assigned to two studios needs both revoked.
   const { data: profile } = await db
     .from('profiles')
-    .select('id, unifi_door_access, unifi_user_id, profile_locations(*, locations(*))')
+    .select('id, profile_locations(*, locations(*))')
     .eq('id', id)
     .single()
 
-  // Revoke door access first. If UniFi is unreachable, surface the error
-  // so an owner can retry — better than silently leaving an ex-employee
-  // with active doors. The HTTP 502 makes it clear the deactivation did
-  // not happen.
-  if (profile?.unifi_door_access && profile?.unifi_user_id) {
-    const location = pickDoorLocation(profile)
-    const cfg = location ? getLocationUnifiConfig(location) : null
-    if (cfg?.configured) {
-      try {
-        await revokeUnifiUserPolicies(cfg, profile.unifi_user_id)
-      } catch (e) {
-        const msg = e instanceof UnifiError ? e.message : `UniFi revoke failed: ${e.message || e}`
-        return NextResponse.json({
-          success: false,
-          error: `Could not revoke UniFi door access — ${msg}. Profile not deactivated.`,
-        }, { status: 502 })
-      }
+  // Revoke door access first. If UniFi is unreachable on any
+  // location, surface the error so an owner can retry — better than
+  // silently leaving an ex-employee with active doors. The HTTP 502
+  // makes it clear the deactivation did not happen.
+  for (const link of profile?.profile_locations || []) {
+    if (!link.unifi_door_access || !link.unifi_user_id || !link.locations) continue
+    const cfg = getLocationUnifiConfig(link.locations)
+    if (!cfg.configured) continue
+    try {
+      await revokeUnifiUserPolicies(cfg, link.unifi_user_id)
+    } catch (e) {
+      const msg = e instanceof UnifiError ? e.message : `UniFi revoke failed: ${e.message || e}`
+      return NextResponse.json({
+        success: false,
+        error: `Could not revoke UniFi door access at ${link.locations.name} — ${msg}. Profile not deactivated.`,
+      }, { status: 502 })
     }
   }
 
+  // Mark inactive AND clear all per-location door flags so anyone
+  // querying profile_locations.unifi_door_access immediately sees
+  // the deactivation. The legacy profiles.unifi_door_access flag
+  // is also flipped off for the same reason.
   const { error } = await db
     .from('profiles')
     .update({ active: false, unifi_door_access: false })
     .eq('id', id)
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
+
+  await db
+    .from('profile_locations')
+    .update({ unifi_door_access: false })
+    .eq('profile_id', id)
 
   return NextResponse.json({ success: true })
 }
