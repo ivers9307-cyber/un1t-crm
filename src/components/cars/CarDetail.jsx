@@ -217,6 +217,11 @@ function CarFieldsCard({ car, patch, disabled, liveFxRate, fxFetchedAt }) {
         <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light mb-3">Prices</h3>
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
           <InlineField label="UK ex-VAT (£)"  value={car.uk_purchase_price_ex_vat} type="number" step="0.01" onSave={v => patch({ uk_purchase_price_ex_vat: v ? Number(v) : null })} disabled={disabled} />
+          {/* UK VAT — the amount HMRC owes back. Kept as a reference
+              field so we can report on outstanding refunds across the
+              fleet. The 'UK VAT refund' toggle further down records
+              when it's actually been received. */}
+          <InlineField label="UK VAT (£)"     value={car.uk_vat}                   type="number" step="0.01" onSave={v => patch({ uk_vat: v ? Number(v) : null })} disabled={disabled} />
           {/* IE ex-VAT is the source of truth — editing it patches
               both irish_sale_price_ex_vat and irish_sale_price_inc_vat
               (the latter is the sale-price total, displayed as the
