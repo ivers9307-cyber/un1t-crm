@@ -311,7 +311,7 @@ function CarFieldsCard({ car, patch, disabled }) {
               <> − IE costs €{Math.round(breakdown.ancillaryEur)}</>
             )}
             {' = '}
-            <span className={breakdown.profit >= 0 ? 'text-green-500 font-semibold' : 'text-red-400 font-semibold'}>
+            <span className={breakdown.profit >= 0 ? 'text-green-700 font-bold' : 'text-red-600 font-bold'}>
               €{Math.round(breakdown.profit)}
             </span>
           </div>

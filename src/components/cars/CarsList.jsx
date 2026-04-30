@@ -103,7 +103,7 @@ export default function CarsList({ statuses, locationId, addButton, emptyText })
                       <span>UK ex-VAT {fmtMoney(car.uk_purchase_price_ex_vat)}</span>
                       <span>IE inc-VAT {fmtMoney(car.irish_sale_price_inc_vat)}</span>
                       {profit != null && (
-                        <span className={profit >= 0 ? 'text-green-500 font-medium' : 'text-red-400 font-medium'}>
+                        <span className={profit >= 0 ? 'text-green-700 font-semibold' : 'text-red-600 font-semibold'}>
                           Est. profit {fmtMoney(profit)}
                         </span>
                       )}

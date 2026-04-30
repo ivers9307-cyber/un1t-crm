@@ -227,7 +227,7 @@ export default function AddCarButton({ locationId }) {
             {ancillaryGbp > 0 && <> − UK costs £{Math.round(ancillaryGbp)} (€{Math.round(ancillaryGbp * fx)})</>}
             {ancillaryEur > 0 && <> − IE costs €{Math.round(ancillaryEur)}</>}
             {' '}={' '}
-            <span className={profit >= 0 ? 'text-green-500 font-semibold' : 'text-red-400 font-semibold'}>
+            <span className={profit >= 0 ? 'text-green-700 font-bold' : 'text-red-600 font-bold'}>
               €{Math.round(profit)}
             </span>
           </div>
