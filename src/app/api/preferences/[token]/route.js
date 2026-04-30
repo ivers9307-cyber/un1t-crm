@@ -1,6 +1,15 @@
 import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
 import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit'
+import { validateBody } from '@/lib/validate'
+
+const PreferencesUpdateSchema = z.object({
+  email_marketing: z.boolean().optional(),
+  email_administrative: z.boolean().optional(),
+  whatsapp_marketing: z.boolean().optional(),
+  whatsapp_administrative: z.boolean().optional(),
+})
 
 export const runtime = 'nodejs'
 
@@ -53,7 +62,9 @@ export async function PUT(request, { params }) {
   const limit = await checkRateLimit(db, `preferences:${ip}`, RL)
   if (!limit.allowed) return rateLimitResponse(limit)
 
-  const body = await request.json()
+  const validation = await validateBody(request, PreferencesUpdateSchema)
+  if (!validation.ok) return validation.response
+  const body = validation.data
 
   const { data: pref, error } = await db
     .from('contact_preferences')

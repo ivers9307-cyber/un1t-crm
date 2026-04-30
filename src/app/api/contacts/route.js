@@ -1,13 +1,33 @@
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { requireApiKey } from '@/lib/api-auth'
+import { validateBody } from '@/lib/validate'
+import { uuidLike, email, phone, leadSourceSchema, leadStatusSchema } from '@/lib/schemas'
+
+const ContactCreateSchema = z.object({
+  name: z.string().min(1).max(200),
+  first_name: z.string().max(100).optional(),
+  last_name: z.string().max(100).optional(),
+  email,
+  phone: phone.optional().nullable(),
+  label: z.string().max(100).nullable().optional(),
+  glofox_member_id: z.string().max(100).nullable().optional(),
+  trial_credits_remaining: z.number().int().min(0).max(100).optional(),
+  lead_source: leadSourceSchema.optional(),
+  lead_status: leadStatusSchema.optional(),
+  lead_created_at: z.string().datetime().optional(),
+  location_id: uuidLike.optional(),
+})
 
 // POST /api/contacts — Create a contact (replaces Pipedrive POST /v1/persons)
 export async function POST(request) {
   const authError = requireApiKey(request)
   if (authError) return authError
 
-  const body = await request.json()
+  const validation = await validateBody(request, ContactCreateSchema)
+  if (!validation.ok) return validation.response
+  const body = validation.data
   const db = createServerClient()
 
   const { data, error } = await db.from('contacts').insert({

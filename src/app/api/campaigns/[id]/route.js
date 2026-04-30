@@ -1,6 +1,24 @@
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { requireApiKey } from '@/lib/api-auth'
+import { validateBody } from '@/lib/validate'
+import { uuidLike, email, audienceFilterSchema } from '@/lib/schemas'
+
+const CampaignUpdateSchema = z.object({
+  name: z.string().min(1).max(200).optional(),
+  subject: z.string().max(500).optional(),
+  preview_text: z.string().max(500).nullable().optional(),
+  from_name: z.string().max(100).nullable().optional(),
+  from_email: email.nullable().optional(),
+  reply_to: email.nullable().optional(),
+  design_json: z.unknown().nullable().optional(),
+  html_content: z.string().max(1_000_000).nullable().optional(),
+  audience_filter: audienceFilterSchema,
+  scheduled_at: z.string().datetime().nullable().optional(),
+  template_id: uuidLike.nullable().optional(),
+  status: z.enum(['draft', 'scheduled', 'sending', 'sent', 'cancelled']).optional(),
+})
 
 // GET /api/campaigns/[id] — Get campaign with metrics
 export async function GET(request, { params }) {
@@ -25,16 +43,10 @@ export async function PUT(request, { params }) {
   const authError = requireApiKey(request)
   if (authError) return authError
 
-  const body = await request.json()
+  const validation = await validateBody(request, CampaignUpdateSchema)
+  if (!validation.ok) return validation.response
+  const updates = { ...validation.data }
   const db = createServerClient()
-
-  const updates = {}
-  const allowed = ['name', 'subject', 'preview_text', 'from_name', 'from_email', 'reply_to',
-    'design_json', 'html_content', 'audience_filter', 'scheduled_at', 'template_id', 'status']
-
-  for (const key of allowed) {
-    if (body[key] !== undefined) updates[key] = body[key]
-  }
 
   const { data, error } = await db.from('campaigns')
     .update(updates)

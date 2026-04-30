@@ -1,15 +1,32 @@
 import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
 import { sendTextMessage, sendTemplateMessage, sendMediaMessage, isWindowOpen, markAsRead } from '@/lib/whatsapp'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { validateBody } from '@/lib/validate'
+import { url } from '@/lib/schemas'
+
+const SendMessageSchema = z.object({
+  type: z.enum(['text', 'template', 'image', 'video', 'document', 'audio']).optional(),
+  text: z.string().max(4096).optional(),
+  body: z.string().max(4096).optional(),
+  template_name: z.string().max(200).optional(),
+  template_language: z.string().max(20).optional(),
+  template_components: z.array(z.unknown()).optional(),
+  media_url: url.optional(),
+  caption: z.string().max(1024).optional(),
+  sent_by: z.string().max(200).nullable().optional(),
+})
 
 // POST /api/whatsapp/conversations/[id]/send — send a message in a conversation
 export async function POST(request, { params }) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
 
+  const validation = await validateBody(request, SendMessageSchema)
+  if (!validation.ok) return validation.response
+  const body = validation.data
   const db = createServerClient()
-  const body = await request.json()
 
   // Get conversation
   const { data: conversation, error } = await db.from('whatsapp_conversations')

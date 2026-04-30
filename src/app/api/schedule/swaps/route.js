@@ -1,6 +1,16 @@
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { validateBody } from '@/lib/validate'
+import { uuidLike } from '@/lib/schemas'
+
+const SwapCreateSchema = z.object({
+  requester_shift_id: uuidLike,
+  target_shift_id: uuidLike.nullable().optional(),
+  target_id: uuidLike.nullable().optional(),
+  reason: z.string().max(2000).nullable().optional(),
+})
 
 // GET /api/schedule/swaps?location_id=xxx&status=pending
 export async function GET(request) {
@@ -43,12 +53,10 @@ export async function POST(request) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
 
-  const body = await request.json()
+  const validation = await validateBody(request, SwapCreateSchema)
+  if (!validation.ok) return validation.response
+  const body = validation.data
   const db = createServerClient()
-
-  if (!body.requester_shift_id) {
-    return NextResponse.json({ success: false, error: 'requester_shift_id is required' }, { status: 400 })
-  }
 
   // Verify the requester owns this shift
   const { data: shift } = await db.from('shifts')

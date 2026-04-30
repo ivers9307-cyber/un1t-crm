@@ -1,6 +1,17 @@
 import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { validateBody } from '@/lib/validate'
+import { uuidLike } from '@/lib/schemas'
+
+const SequenceCreateSchema = z.object({
+  name: z.string().min(1).max(200),
+  description: z.string().max(2000).nullable().optional(),
+  trigger_type: z.enum(['manual', 'on_signup', 'on_status_change', 'scheduled']).optional(),
+  trigger_config: z.unknown().optional(),
+  location_id: uuidLike.optional(),
+})
 
 // GET /api/sequences — list sequences
 export async function GET(request) {
@@ -36,7 +47,9 @@ export async function POST(request) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
 
-  const body = await request.json()
+  const validation = await validateBody(request, SequenceCreateSchema)
+  if (!validation.ok) return validation.response
+  const body = validation.data
   const locationId = body.location_id || user.activeLocation?.id
   const guard = assertLocationAccess(user, locationId)
   if (guard) return guard

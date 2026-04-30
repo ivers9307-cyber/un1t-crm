@@ -1,13 +1,23 @@
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
+import { validateBody } from '@/lib/validate'
+import { timeOffStatusSchema } from '@/lib/schemas'
+
+const TimeOffReviewSchema = z.object({
+  status: timeOffStatusSchema,
+  review_note: z.string().max(2000).nullable().optional(),
+})
 
 // PUT /api/schedule/time-off/:id — Approve, reject, or cancel a request
 export async function PUT(request, { params }) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
 
-  const body = await request.json()
+  const validation = await validateBody(request, TimeOffReviewSchema)
+  if (!validation.ok) return validation.response
+  const body = validation.data
   const db = createServerClient()
 
   // Get the existing request

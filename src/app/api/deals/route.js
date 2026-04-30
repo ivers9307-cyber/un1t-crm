@@ -1,13 +1,28 @@
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { requireApiKey } from '@/lib/api-auth'
+import { validateBody } from '@/lib/validate'
+import { uuidLike, dealStatusSchema } from '@/lib/schemas'
+
+const DealCreateSchema = z.object({
+  title: z.string().min(1).max(200),
+  contact_id: uuidLike,
+  stage_id: uuidLike.optional(),
+  stage_slug: z.string().max(100).optional(),
+  status: dealStatusSchema.optional(),
+  value: z.number().finite().min(0).max(10_000_000).optional(),
+  location_id: uuidLike.optional(),
+})
 
 // POST /api/deals — Create a deal (replaces Pipedrive POST /v1/deals)
 export async function POST(request) {
   const authError = requireApiKey(request)
   if (authError) return authError
 
-  const body = await request.json()
+  const validation = await validateBody(request, DealCreateSchema)
+  if (!validation.ok) return validation.response
+  const body = validation.data
   const db = createServerClient()
 
   // Look up stage by slug if stage_slug is provided instead of stage_id

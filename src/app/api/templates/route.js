@@ -1,6 +1,18 @@
 import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { validateBody } from '@/lib/validate'
+import { uuidLike } from '@/lib/schemas'
+
+const TemplateCreateSchema = z.object({
+  name: z.string().min(1).max(200),
+  description: z.string().max(2000).nullable().optional(),
+  category: z.string().max(50).optional(),
+  design_json: z.unknown().nullable().optional(),
+  html_content: z.string().max(1_000_000).optional(),
+  location_id: uuidLike.optional(),
+})
 
 // GET /api/templates — list email templates
 export async function GET(request) {
@@ -36,7 +48,9 @@ export async function POST(request) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
 
-  const body = await request.json()
+  const validation = await validateBody(request, TemplateCreateSchema)
+  if (!validation.ok) return validation.response
+  const body = validation.data
   const locationId = body.location_id || user.activeLocation?.id
   const guard = assertLocationAccess(user, locationId)
   if (guard) return guard

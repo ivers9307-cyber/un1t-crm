@@ -1,6 +1,18 @@
 import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { validateBody } from '@/lib/validate'
+import { uuidLike, audienceFilterSchema, url } from '@/lib/schemas'
+
+const BroadcastCreateSchema = z.object({
+  name: z.string().min(1).max(200),
+  template_id: uuidLike,
+  variable_mapping: z.unknown().optional(),
+  header_media_url: url.nullable().optional(),
+  audience_filter: audienceFilterSchema,
+  location_id: uuidLike.optional(),
+})
 
 // GET /api/whatsapp/broadcasts
 export async function GET(request) {
@@ -36,7 +48,9 @@ export async function POST(request) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
 
-  const body = await request.json()
+  const validation = await validateBody(request, BroadcastCreateSchema)
+  if (!validation.ok) return validation.response
+  const body = validation.data
   const locationId = body.location_id || user.activeLocation?.id
   const guard = assertLocationAccess(user, locationId)
   if (guard) return guard

@@ -1,6 +1,15 @@
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { validateBody } from '@/lib/validate'
+import { uuidLike, isoDate } from '@/lib/schemas'
+
+const CopyWeekSchema = z.object({
+  location_id: uuidLike,
+  source_start: isoDate,
+  target_start: isoDate,
+})
 
 // POST /api/schedule/shifts/copy-week
 // Copy all shifts from one week to another
@@ -11,15 +20,9 @@ export async function POST(request) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
 
-  const body = await request.json()
-  const { location_id, source_start, target_start } = body
-
-  if (!location_id || !source_start || !target_start) {
-    return NextResponse.json({
-      success: false,
-      error: 'location_id, source_start, and target_start are required'
-    }, { status: 400 })
-  }
+  const validation = await validateBody(request, CopyWeekSchema)
+  if (!validation.ok) return validation.response
+  const { location_id, source_start, target_start } = validation.data
 
   const guard = assertLocationAccess(user, location_id)
   if (guard) return guard

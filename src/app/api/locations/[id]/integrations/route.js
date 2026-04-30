@@ -1,6 +1,13 @@
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { requireApiKey } from '@/lib/api-auth'
+import { validateBody } from '@/lib/validate'
+
+const IntegrationsUpdateSchema = z.object({
+  glofox: z.unknown().nullable().optional(),
+  webhooks: z.unknown().nullable().optional(),
+})
 
 // GET /api/locations/[id]/integrations — Get integration credentials for a location
 // Used by n8n to fetch Glofox API keys, webhook URLs, etc. per location
@@ -37,7 +44,9 @@ export async function PUT(request, { params }) {
   const authError = requireApiKey(request)
   if (authError) return authError
 
-  const body = await request.json()
+  const validation = await validateBody(request, IntegrationsUpdateSchema)
+  if (!validation.ok) return validation.response
+  const body = validation.data
   const db = createServerClient()
 
   // Get current settings

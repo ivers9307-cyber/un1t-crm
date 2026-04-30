@@ -1,6 +1,19 @@
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
+import { validateBody } from '@/lib/validate'
+import { timeOfDay, hexColor } from '@/lib/schemas'
+
+const TemplateUpdateSchema = z.object({
+  name: z.string().min(1).max(100).optional(),
+  start_time: timeOfDay.optional(),
+  end_time: timeOfDay.optional(),
+  color: hexColor.optional(),
+  role_label: z.string().max(50).nullable().optional(),
+  active: z.boolean().optional(),
+  display_order: z.number().int().min(0).max(1000).optional(),
+})
 
 // PUT /api/schedule/templates/:id
 export async function PUT(request, { params }) {
@@ -9,17 +22,10 @@ export async function PUT(request, { params }) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
 
-  const body = await request.json()
+  const validation = await validateBody(request, TemplateUpdateSchema)
+  if (!validation.ok) return validation.response
+  const updates = { ...validation.data }
   const db = createServerClient()
-
-  const updates = {}
-  if (body.name !== undefined) updates.name = body.name
-  if (body.start_time !== undefined) updates.start_time = body.start_time
-  if (body.end_time !== undefined) updates.end_time = body.end_time
-  if (body.color !== undefined) updates.color = body.color
-  if (body.role_label !== undefined) updates.role_label = body.role_label
-  if (body.active !== undefined) updates.active = body.active
-  if (body.display_order !== undefined) updates.display_order = body.display_order
 
   const { data, error } = await db.from('shift_templates')
     .update(updates)

@@ -1,6 +1,23 @@
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { requireApiKey } from '@/lib/api-auth'
+import { validateBody } from '@/lib/validate'
+import { hexColor, url } from '@/lib/schemas'
+
+const EventUpdateSchema = z.object({
+  name: z.string().min(1).max(200).optional(),
+  slug: z.string().max(100).optional(),
+  description: z.string().max(5000).nullable().optional(),
+  duration_minutes: z.number().int().min(1).max(1440).optional(),
+  color: hexColor.optional(),
+  availability: z.unknown().optional(),
+  buffer_minutes: z.number().int().min(0).max(1440).optional(),
+  max_advance_days: z.number().int().min(0).max(3650).optional(),
+  custom_fields: z.array(z.unknown()).optional(),
+  webhook_url: url.nullable().optional(),
+  active: z.boolean().optional(),
+})
 
 // GET /api/events/:id — Get single event type with bookings count
 export async function GET(request, { params }) {
@@ -19,15 +36,12 @@ export async function PUT(request, { params }) {
   const authError = requireApiKey(request)
   if (authError) return authError
 
-  const body = await request.json()
+  const validation = await validateBody(request, EventUpdateSchema)
+  if (!validation.ok) return validation.response
+  const body = validation.data
   const db = createServerClient()
 
-  const allowed = ['name', 'slug', 'description', 'duration_minutes', 'color', 'active',
-    'availability', 'buffer_minutes', 'max_advance_days', 'custom_fields', 'webhook_url']
-  const updates = {}
-  for (const key of allowed) {
-    if (body[key] !== undefined) updates[key] = body[key]
-  }
+  const updates = { ...body }
 
   // Re-generate slug if name changed and slug not explicitly set
   if (updates.name && !updates.slug) {

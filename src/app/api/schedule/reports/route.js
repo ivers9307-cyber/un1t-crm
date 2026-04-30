@@ -1,7 +1,17 @@
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { generateReport } from '@/lib/report-generator'
+import { validateBody } from '@/lib/validate'
+import { uuidLike, isoDate, reportTypeSchema } from '@/lib/schemas'
+
+const ReportRunSchema = z.object({
+  report_type: reportTypeSchema,
+  period_start: isoDate,
+  period_end: isoDate,
+  location_id: uuidLike.optional(),
+})
 
 // GET /api/schedule/reports?location_id=xxx — List generated reports
 export async function GET(request) {
@@ -41,8 +51,9 @@ export async function POST(request) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
 
-  const body = await request.json()
-  const { report_type, period_start, period_end, location_id } = body
+  const validation = await validateBody(request, ReportRunSchema)
+  if (!validation.ok) return validation.response
+  const { report_type, period_start, period_end, location_id } = validation.data
   const locId = location_id || user.activeLocation?.id
 
   const guard = assertLocationAccess(user, locId)

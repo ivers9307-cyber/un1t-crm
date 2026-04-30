@@ -1,6 +1,16 @@
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
+import { validateBody } from '@/lib/validate'
+import { uuidLike, days } from '@/lib/schemas'
+
+const AllowanceUpdateSchema = z.object({
+  profile_id: uuidLike,
+  year: z.number().int().min(2020).max(2100),
+  total_days: days.optional(),
+  carried_over: days.optional(),
+})
 
 // GET /api/schedule/allowances?profile_id=xxx&year=2026
 export async function GET(request) {
@@ -58,13 +68,10 @@ export async function PUT(request) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
 
-  const body = await request.json()
-  const { profile_id, year, total_days, carried_over } = body
+  const validation = await validateBody(request, AllowanceUpdateSchema)
+  if (!validation.ok) return validation.response
+  const { profile_id, year, total_days, carried_over } = validation.data
   const db = createServerClient()
-
-  if (!profile_id || !year) {
-    return NextResponse.json({ success: false, error: 'profile_id and year are required' }, { status: 400 })
-  }
 
   const { data, error } = await db.from('staff_allowances')
     .upsert({

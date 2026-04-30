@@ -1,18 +1,38 @@
 import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
+import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { validateBody } from '@/lib/validate'
+
+const StepUpdateSchema = z.object({
+  step_order: z.number().int().min(0).max(1000).optional(),
+  delay_days: z.number().int().min(0).max(365).optional(),
+  delay_hours: z.number().int().min(0).max(23).optional(),
+  subject: z.string().max(500).optional(),
+  html_content: z.string().max(1_000_000).optional(),
+  design_json: z.unknown().nullable().optional(),
+})
+
+async function loadSequenceLocation(db, sequenceId) {
+  const { data } = await db.from('email_sequences')
+    .select('location_id').eq('id', sequenceId).single()
+  return data?.location_id
+}
 
 // PUT /api/sequences/[id]/steps/[stepId]
 export async function PUT(request, { params }) {
-  const db = createServerClient()
-  const body = await request.json()
+  const user = await getCurrentUser()
+  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
 
-  const updates = {}
-  if (body.step_order !== undefined) updates.step_order = body.step_order
-  if (body.delay_days !== undefined) updates.delay_days = body.delay_days
-  if (body.delay_hours !== undefined) updates.delay_hours = body.delay_hours
-  if (body.subject !== undefined) updates.subject = body.subject
-  if (body.html_content !== undefined) updates.html_content = body.html_content
-  if (body.design_json !== undefined) updates.design_json = body.design_json
+  const db = createServerClient()
+  const seqLocation = await loadSequenceLocation(db, params.id)
+  if (!seqLocation) return NextResponse.json({ error: 'Sequence not found' }, { status: 404 })
+  const guard = assertLocationAccess(user, seqLocation)
+  if (guard) return guard
+
+  const validation = await validateBody(request, StepUpdateSchema)
+  if (!validation.ok) return validation.response
+  const updates = { ...validation.data }
 
   const { data, error } = await db.from('sequence_steps')
     .update(updates)
@@ -27,7 +47,15 @@ export async function PUT(request, { params }) {
 
 // DELETE /api/sequences/[id]/steps/[stepId]
 export async function DELETE(request, { params }) {
+  const user = await getCurrentUser()
+  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+
   const db = createServerClient()
+  const seqLocation = await loadSequenceLocation(db, params.id)
+  if (!seqLocation) return NextResponse.json({ error: 'Sequence not found' }, { status: 404 })
+  const guard = assertLocationAccess(user, seqLocation)
+  if (guard) return guard
+
   const { error } = await db.from('sequence_steps')
     .delete()
     .eq('id', params.stepId)

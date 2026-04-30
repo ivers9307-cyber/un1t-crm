@@ -1,6 +1,24 @@
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { requireApiKey } from '@/lib/api-auth'
+import { validateBody } from '@/lib/validate'
+import { uuidLike, hexColor, url } from '@/lib/schemas'
+
+const EventCreateSchema = z.object({
+  name: z.string().min(1).max(200),
+  slug: z.string().max(100).optional(),
+  description: z.string().max(5000).nullable().optional(),
+  duration_minutes: z.number().int().min(1).max(1440).optional(),
+  color: hexColor.optional(),
+  availability: z.unknown().optional(),  // opaque JSON shape, schema lives client-side
+  buffer_minutes: z.number().int().min(0).max(1440).optional(),
+  max_advance_days: z.number().int().min(0).max(3650).optional(),
+  custom_fields: z.array(z.unknown()).optional(),
+  webhook_url: url.nullable().optional(),
+  active: z.boolean().optional(),
+  location_id: uuidLike.optional(),
+})
 
 // GET /api/events — List all event types
 export async function GET(request) {
@@ -27,7 +45,9 @@ export async function POST(request) {
   const authError = requireApiKey(request)
   if (authError) return authError
 
-  const body = await request.json()
+  const validation = await validateBody(request, EventCreateSchema)
+  if (!validation.ok) return validation.response
+  const body = validation.data
   const db = createServerClient()
 
   // Auto-generate slug from name if not provided

@@ -1,7 +1,22 @@
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { SYSTEM_PROMPT, TOOLS } from '@/lib/assistant-prompt'
 import { getCurrentUser } from '@/lib/auth'
+import { validateBody } from '@/lib/validate'
+
+const ChatRequestSchema = z.object({
+  // Anthropic messages array — content can be string or block array, both valid.
+  messages: z.array(z.object({
+    role: z.enum(['user', 'assistant']),
+    content: z.union([z.string(), z.array(z.unknown())]),
+  })).min(1).max(200),
+  // userContext is informational only — server overwrites role/locationId/userId
+  // from the trusted session in the handler.
+  userContext: z.object({
+    currentPage: z.string().max(2000).optional(),
+  }).passthrough().optional(),
+})
 
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages'
 
@@ -292,12 +307,9 @@ export async function POST(request) {
     return NextResponse.json({ error: 'ANTHROPIC_API_KEY not configured' }, { status: 500 })
   }
 
-  const body = await request.json()
-  const { messages, userContext: clientContext } = body
-
-  if (!messages || !Array.isArray(messages)) {
-    return NextResponse.json({ error: 'messages array is required' }, { status: 400 })
-  }
+  const validation = await validateBody(request, ChatRequestSchema)
+  if (!validation.ok) return validation.response
+  const { messages, userContext: clientContext } = validation.data
 
   // Trusted context derived from the session. Display-only hints
   // (currentPage, permissions for UI) can still come from the client.

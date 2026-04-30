@@ -1,8 +1,22 @@
 import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
+import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { validateBody } from '@/lib/validate'
+
+const SequenceUpdateSchema = z.object({
+  name: z.string().min(1).max(200).optional(),
+  description: z.string().max(2000).nullable().optional(),
+  trigger_type: z.enum(['manual', 'on_signup', 'on_status_change', 'scheduled']).optional(),
+  trigger_config: z.unknown().optional(),
+  status: z.enum(['draft', 'active', 'paused', 'archived']).optional(),
+})
 
 // GET /api/sequences/[id]
 export async function GET(request, { params }) {
+  const user = await getCurrentUser()
+  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+
   const db = createServerClient()
   const { data, error } = await db.from('email_sequences')
     .select('*, sequence_steps(*)')
@@ -10,6 +24,9 @@ export async function GET(request, { params }) {
     .single()
 
   if (error) return NextResponse.json({ error: error.message }, { status: 404 })
+
+  const guard = assertLocationAccess(user, data.location_id)
+  if (guard) return guard
 
   // Sort steps by step_order
   if (data.sequence_steps) {
@@ -21,15 +38,23 @@ export async function GET(request, { params }) {
 
 // PUT /api/sequences/[id]
 export async function PUT(request, { params }) {
-  const db = createServerClient()
-  const body = await request.json()
+  const user = await getCurrentUser()
+  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
 
-  const updates = {}
-  if (body.name !== undefined) updates.name = body.name
-  if (body.description !== undefined) updates.description = body.description
-  if (body.trigger_type !== undefined) updates.trigger_type = body.trigger_type
-  if (body.trigger_config !== undefined) updates.trigger_config = body.trigger_config
-  if (body.status !== undefined) updates.status = body.status
+  const db = createServerClient()
+
+  // Verify caller can write to this sequence's location
+  const { data: existing } = await db.from('email_sequences')
+    .select('location_id')
+    .eq('id', params.id)
+    .single()
+  if (!existing) return NextResponse.json({ error: 'Sequence not found' }, { status: 404 })
+  const guard = assertLocationAccess(user, existing.location_id)
+  if (guard) return guard
+
+  const validation = await validateBody(request, SequenceUpdateSchema)
+  if (!validation.ok) return validation.response
+  const updates = { ...validation.data }
 
   const { data, error } = await db.from('email_sequences')
     .update(updates)
@@ -43,7 +68,19 @@ export async function PUT(request, { params }) {
 
 // DELETE /api/sequences/[id]
 export async function DELETE(request, { params }) {
+  const user = await getCurrentUser()
+  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+
   const db = createServerClient()
+
+  const { data: existing } = await db.from('email_sequences')
+    .select('location_id')
+    .eq('id', params.id)
+    .single()
+  if (!existing) return NextResponse.json({ error: 'Sequence not found' }, { status: 404 })
+  const guard = assertLocationAccess(user, existing.location_id)
+  if (guard) return guard
+
   // Delete steps first
   await db.from('sequence_steps').delete().eq('sequence_id', params.id)
   const { error } = await db.from('email_sequences').delete().eq('id', params.id)

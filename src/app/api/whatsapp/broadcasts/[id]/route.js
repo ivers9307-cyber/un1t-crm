@@ -1,8 +1,29 @@
 import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
+import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { validateBody } from '@/lib/validate'
+import { uuidLike, audienceFilterSchema, url } from '@/lib/schemas'
+
+const BroadcastUpdateSchema = z.object({
+  name: z.string().min(1).max(200).optional(),
+  template_id: uuidLike.optional(),
+  variable_mapping: z.unknown().optional(),
+  header_media_url: url.nullable().optional(),
+  audience_filter: audienceFilterSchema,
+  status: z.enum(['draft', 'scheduled', 'sending', 'sent', 'cancelled']).optional(),
+})
+
+async function loadBroadcastLocation(db, id) {
+  const { data } = await db.from('whatsapp_broadcasts').select('location_id').eq('id', id).single()
+  return data?.location_id
+}
 
 // GET /api/whatsapp/broadcasts/[id]
 export async function GET(request, { params }) {
+  const user = await getCurrentUser()
+  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+
   const db = createServerClient()
   const { data, error } = await db.from('whatsapp_broadcasts')
     .select('*, whatsapp_templates(*), whatsapp_broadcast_recipients(*, contacts(name, phone, wa_phone))')
@@ -10,21 +31,27 @@ export async function GET(request, { params }) {
     .single()
 
   if (error) return NextResponse.json({ error: error.message }, { status: 404 })
+
+  const guard = assertLocationAccess(user, data.location_id)
+  if (guard) return guard
+
   return NextResponse.json({ success: true, broadcast: data })
 }
 
 // PUT /api/whatsapp/broadcasts/[id]
 export async function PUT(request, { params }) {
-  const db = createServerClient()
-  const body = await request.json()
+  const user = await getCurrentUser()
+  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
 
-  const updates = {}
-  if (body.name !== undefined) updates.name = body.name
-  if (body.template_id !== undefined) updates.template_id = body.template_id
-  if (body.variable_mapping !== undefined) updates.variable_mapping = body.variable_mapping
-  if (body.header_media_url !== undefined) updates.header_media_url = body.header_media_url
-  if (body.audience_filter !== undefined) updates.audience_filter = body.audience_filter
-  if (body.status !== undefined) updates.status = body.status
+  const db = createServerClient()
+  const loc = await loadBroadcastLocation(db, params.id)
+  if (!loc) return NextResponse.json({ error: 'Broadcast not found' }, { status: 404 })
+  const guard = assertLocationAccess(user, loc)
+  if (guard) return guard
+
+  const validation = await validateBody(request, BroadcastUpdateSchema)
+  if (!validation.ok) return validation.response
+  const updates = { ...validation.data }
 
   const { data, error } = await db.from('whatsapp_broadcasts')
     .update(updates)
@@ -38,7 +65,15 @@ export async function PUT(request, { params }) {
 
 // DELETE /api/whatsapp/broadcasts/[id]
 export async function DELETE(request, { params }) {
+  const user = await getCurrentUser()
+  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+
   const db = createServerClient()
+  const loc = await loadBroadcastLocation(db, params.id)
+  if (!loc) return NextResponse.json({ error: 'Broadcast not found' }, { status: 404 })
+  const guard = assertLocationAccess(user, loc)
+  if (guard) return guard
+
   await db.from('whatsapp_broadcast_recipients').delete().eq('broadcast_id', params.id)
   const { error } = await db.from('whatsapp_broadcasts').delete().eq('id', params.id)
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })

@@ -1,6 +1,19 @@
 import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { validateBody } from '@/lib/validate'
+import { email as emailSchema, phone as phoneSchema, leadStatusSchema } from '@/lib/schemas'
+
+const AddContactSchema = z.object({
+  name: z.string().min(1).max(200).optional(),
+  first_name: z.string().max(100).optional(),
+  email: emailSchema.nullable().optional(),
+  phone: phoneSchema.nullable().optional(),
+  lead_status: leadStatusSchema.optional(),
+  pipeline_stage: z.string().max(100).optional(),
+  add_to_pipeline: z.boolean().optional(),
+})
 
 // POST /api/whatsapp/conversations/[id]/add-contact
 // Promotes an unknown WhatsApp sender to a full contact, optionally adds to pipeline
@@ -8,11 +21,11 @@ export async function POST(request, { params }) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
 
+  const validation = await validateBody(request, AddContactSchema)
+  if (!validation.ok) return validation.response
+  const { name, first_name, email, phone, lead_status, pipeline_stage, add_to_pipeline } = validation.data
   const db = createServerClient()
   const conversationId = params.id
-  const body = await request.json()
-
-  const { name, first_name, email, phone, lead_status, pipeline_stage, add_to_pipeline } = body
 
   try {
     // Get the conversation

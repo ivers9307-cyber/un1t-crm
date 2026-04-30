@@ -1,6 +1,20 @@
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
+import { validateBody } from '@/lib/validate'
+import { uuidLike, isoDate, timeOfDay } from '@/lib/schemas'
+
+const ShiftUpdateSchema = z.object({
+  shift_template_id: uuidLike.optional(),
+  shift_date: isoDate.optional(),
+  start_time_override: timeOfDay.nullable().optional(),
+  end_time_override: timeOfDay.nullable().optional(),
+  role_label: z.string().max(50).nullable().optional(),
+  notes: z.string().max(2000).nullable().optional(),
+  status: z.enum(['scheduled', 'completed', 'cancelled', 'no_show']).optional(),
+  published: z.boolean().optional(),
+})
 
 // PUT /api/schedule/shifts/:id
 export async function PUT(request, { params }) {
@@ -9,20 +23,14 @@ export async function PUT(request, { params }) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
 
-  const body = await request.json()
+  const validation = await validateBody(request, ShiftUpdateSchema)
+  if (!validation.ok) return validation.response
+  const body = validation.data
   const db = createServerClient()
 
-  const updates = {}
-  if (body.shift_template_id !== undefined) updates.shift_template_id = body.shift_template_id
-  if (body.shift_date !== undefined) updates.shift_date = body.shift_date
-  if (body.start_time_override !== undefined) updates.start_time_override = body.start_time_override
-  if (body.end_time_override !== undefined) updates.end_time_override = body.end_time_override
-  if (body.role_label !== undefined) updates.role_label = body.role_label
-  if (body.notes !== undefined) updates.notes = body.notes
-  if (body.status !== undefined) updates.status = body.status
-  if (body.published !== undefined) {
-    updates.published = body.published
-    if (body.published) updates.published_at = new Date().toISOString()
+  const updates = { ...body }
+  if (updates.published === true) {
+    updates.published_at = new Date().toISOString()
   }
 
   const { data, error } = await db.from('shifts')

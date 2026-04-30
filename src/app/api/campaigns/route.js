@@ -1,6 +1,24 @@
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { requireApiKey } from '@/lib/api-auth'
+import { validateBody } from '@/lib/validate'
+import { uuidLike, email, audienceFilterSchema } from '@/lib/schemas'
+
+const CampaignCreateSchema = z.object({
+  location_id: uuidLike,
+  name: z.string().min(1).max(200),
+  subject: z.string().max(500).optional(),
+  preview_text: z.string().max(500).nullable().optional(),
+  from_name: z.string().max(100).nullable().optional(),
+  from_email: email.nullable().optional(),
+  reply_to: email.nullable().optional(),
+  design_json: z.unknown().nullable().optional(),
+  html_content: z.string().max(1_000_000).nullable().optional(),
+  audience_filter: audienceFilterSchema,
+  template_id: uuidLike.nullable().optional(),
+  created_by: uuidLike.nullable().optional(),
+})
 
 // GET /api/campaigns — List campaigns
 export async function GET(request) {
@@ -30,7 +48,9 @@ export async function POST(request) {
   const authError = requireApiKey(request)
   if (authError) return authError
 
-  const body = await request.json()
+  const validation = await validateBody(request, CampaignCreateSchema)
+  if (!validation.ok) return validation.response
+  const body = validation.data
   const db = createServerClient()
 
   const { data, error } = await db.from('campaigns').insert({

@@ -1,6 +1,13 @@
 import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { validateBody } from '@/lib/validate'
+import { uuidLike } from '@/lib/schemas'
+
+const StartConvoSchema = z.object({
+  contact_id: uuidLike,
+})
 
 // POST /api/whatsapp/conversations/start
 // Get or create a conversation for an existing contact
@@ -8,13 +15,10 @@ export async function POST(request) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
 
+  const validation = await validateBody(request, StartConvoSchema)
+  if (!validation.ok) return validation.response
+  const { contact_id } = validation.data
   const db = createServerClient()
-  const body = await request.json()
-  const { contact_id } = body
-
-  if (!contact_id) {
-    return NextResponse.json({ error: 'contact_id is required' }, { status: 400 })
-  }
 
   try {
     // Get the contact

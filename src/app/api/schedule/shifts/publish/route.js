@@ -1,6 +1,16 @@
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { validateBody } from '@/lib/validate'
+import { uuidLike, isoDate } from '@/lib/schemas'
+
+const PublishSchema = z.object({
+  location_id: uuidLike,
+  start_date: isoDate,
+  end_date: isoDate,
+  notify: z.boolean().optional(),
+})
 
 // POST /api/schedule/shifts/publish
 // Publish all shifts for a given week at a location
@@ -11,15 +21,9 @@ export async function POST(request) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
 
-  const body = await request.json()
-  const { location_id, start_date, end_date, notify } = body
-
-  if (!location_id || !start_date || !end_date) {
-    return NextResponse.json({
-      success: false,
-      error: 'location_id, start_date, and end_date are required'
-    }, { status: 400 })
-  }
+  const validation = await validateBody(request, PublishSchema)
+  if (!validation.ok) return validation.response
+  const { location_id, start_date, end_date, notify } = validation.data
 
   const guard = assertLocationAccess(user, location_id)
   if (guard) return guard
