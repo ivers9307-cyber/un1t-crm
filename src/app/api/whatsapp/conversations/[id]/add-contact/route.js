@@ -1,9 +1,13 @@
 import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
+import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 
 // POST /api/whatsapp/conversations/[id]/add-contact
 // Promotes an unknown WhatsApp sender to a full contact, optionally adds to pipeline
 export async function POST(request, { params }) {
+  const user = await getCurrentUser()
+  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+
   const db = createServerClient()
   const conversationId = params.id
   const body = await request.json()
@@ -20,6 +24,10 @@ export async function POST(request, { params }) {
     if (convErr || !conversation) {
       return NextResponse.json({ error: 'Conversation not found' }, { status: 404 })
     }
+
+    // Caller must belong to the conversation's location.
+    const guard = assertLocationAccess(user, conversation.location_id)
+    if (guard) return guard
 
     // If already linked to a contact, return that
     if (conversation.contact_id) {

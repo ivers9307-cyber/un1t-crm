@@ -1,12 +1,19 @@
 import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
 import { createTemplate as createMetaTemplate, getTemplates as getMetaTemplates } from '@/lib/whatsapp'
+import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 
 // GET /api/whatsapp/templates — list templates (syncs with Meta)
 export async function GET(request) {
-  const db = createServerClient()
+  const user = await getCurrentUser()
+  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+
   const { searchParams } = new URL(request.url)
   const locationId = searchParams.get('location_id')
+  const guard = assertLocationAccess(user, locationId)
+  if (guard) return guard
+
+  const db = createServerClient()
   const sync = searchParams.get('sync')  // ?sync=true to refresh from Meta
 
   // If sync requested, fetch from Meta and update local records
@@ -36,7 +43,13 @@ export async function GET(request) {
     .select('*')
     .order('created_at', { ascending: false })
 
-  if (locationId) query = query.eq('location_id', locationId)
+  if (locationId) {
+    query = query.eq('location_id', locationId)
+  } else {
+    const userLocationIds = (user.locations || []).map(l => l.id)
+    if (userLocationIds.length === 0) return NextResponse.json({ success: true, templates: [] })
+    query = query.in('location_id', userLocationIds)
+  }
 
   const status = searchParams.get('status')
   if (status) query = query.eq('status', status)
@@ -49,8 +62,15 @@ export async function GET(request) {
 
 // POST /api/whatsapp/templates — create template and submit to Meta
 export async function POST(request) {
-  const db = createServerClient()
+  const user = await getCurrentUser()
+  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+
   const body = await request.json()
+  const locationId = body.location_id || user.activeLocation?.id
+  const guard = assertLocationAccess(user, locationId)
+  if (guard) return guard
+
+  const db = createServerClient()
 
   try {
     // Submit to Meta
@@ -70,8 +90,8 @@ export async function POST(request) {
       components: body.components || [],
       example_values: body.example_values || {},
       status: metaResult.status || 'PENDING',
-      location_id: body.location_id,
-      created_by: body.created_by,
+      location_id: locationId,
+      created_by: user.id,
     }).select().single()
 
     if (error) throw new Error(error.message)

@@ -1,9 +1,13 @@
 import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
 import { sendTextMessage, sendTemplateMessage, sendMediaMessage, isWindowOpen, markAsRead } from '@/lib/whatsapp'
+import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 
 // POST /api/whatsapp/conversations/[id]/send — send a message in a conversation
 export async function POST(request, { params }) {
+  const user = await getCurrentUser()
+  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+
   const db = createServerClient()
   const body = await request.json()
 
@@ -16,6 +20,10 @@ export async function POST(request, { params }) {
   if (error || !conversation) {
     return NextResponse.json({ error: 'Conversation not found' }, { status: 404 })
   }
+
+  // Caller must belong to the conversation's location.
+  const guard = assertLocationAccess(user, conversation.location_id)
+  if (guard) return guard
 
   const contact = conversation.contacts
   const phone = contact?.wa_phone || conversation.wa_phone

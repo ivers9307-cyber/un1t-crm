@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { SYSTEM_PROMPT, TOOLS } from '@/lib/assistant-prompt'
+import { getCurrentUser } from '@/lib/auth'
 
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages'
 
@@ -277,34 +278,55 @@ async function executeTool(toolName, input, context) {
 }
 
 export async function POST(request) {
+  // Server-side auth — the role and location used for permission checks
+  // MUST come from the session, not from the request body. Trusting
+  // client-supplied userContext.role would let any caller pretend to be
+  // an owner.
+  const user = await getCurrentUser()
+  if (!user) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+
   const apiKey = process.env.ANTHROPIC_API_KEY
   if (!apiKey) {
     return NextResponse.json({ error: 'ANTHROPIC_API_KEY not configured' }, { status: 500 })
   }
 
   const body = await request.json()
-  const { messages, userContext } = body
+  const { messages, userContext: clientContext } = body
 
   if (!messages || !Array.isArray(messages)) {
     return NextResponse.json({ error: 'messages array is required' }, { status: 400 })
   }
 
+  // Trusted context derived from the session. Display-only hints
+  // (currentPage, permissions for UI) can still come from the client.
+  const userContext = {
+    name: user.full_name,
+    role: user.role,
+    userId: user.id,
+    locationId: user.activeLocation?.id || null,
+    locationName: user.activeLocation?.name || 'Unknown',
+    currentPage: clientContext?.currentPage || '/',
+    permissions: user.permissions || {},
+  }
+
   // Build the context-aware system prompt
   const contextBlock = `
 ## Current Session
-- User: ${userContext?.name || 'Unknown'} (${userContext?.role || 'staff'})
-- Current page: ${userContext?.currentPage || '/'}
-- Location: ${userContext?.locationName || 'Unknown'}
-- Location ID: ${userContext?.locationId || 'none'}
-- Permissions: ${JSON.stringify(userContext?.permissions || {})}
+- User: ${userContext.name} (${userContext.role})
+- Current page: ${userContext.currentPage}
+- Location: ${userContext.locationName}
+- Location ID: ${userContext.locationId || 'none'}
+- Permissions: ${JSON.stringify(userContext.permissions)}
 - Today: ${new Date().toISOString().split('T')[0]}
 `
 
   const systemPrompt = SYSTEM_PROMPT + contextBlock
 
-  // Filter tools to only those the user's role permits
-  const userRole = userContext?.role || 'staff'
-  const allowedTools = TOOLS.filter(tool => checkToolPermission(tool.name, userRole))
+  // Filter tools to only those the user's role permits — using the
+  // server-trusted role, not the client-supplied one.
+  const allowedTools = TOOLS.filter(tool => checkToolPermission(tool.name, userContext.role))
 
   // Call Claude API
   let claudeMessages = messages.map(m => ({
@@ -347,14 +369,15 @@ export async function POST(request) {
       // Add Claude's response to messages
       claudeMessages.push({ role: 'assistant', content: claudeData.content })
 
-      // Execute each tool call
+      // Execute each tool call. Context is the trusted server-derived
+      // userContext built from the session — never the raw client input.
       const toolResults = []
       for (const block of claudeData.content) {
         if (block.type === 'tool_use') {
           const result = await executeTool(block.name, block.input, {
-            locationId: userContext?.locationId,
-            userId: userContext?.userId,
-            role: userContext?.role || 'staff',
+            locationId: userContext.locationId,
+            userId: userContext.userId,
+            role: userContext.role,
           })
           toolResults.push({
             type: 'tool_result',
