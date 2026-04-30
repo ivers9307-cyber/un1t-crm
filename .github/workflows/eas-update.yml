@@ -1,0 +1,74 @@
+# Auto-publish JS-only updates to EAS so the iOS app pulls them next
+# time it's opened.
+#
+# Triggers on every push to main that touches mobile/ or shared/.
+# Skips when only web (src/, supabase/, scripts/, CLAUDE.md, etc.)
+# changed — those don't affect the bundle the iPhone is running.
+#
+# How a push lands on a phone:
+#   1. Developer pushes to main.
+#   2. This workflow runs `eas update --branch main` in the mobile/
+#      directory. EAS builds a JS bundle and uploads it to Expo's
+#      CDN under https://u.expo.dev/<EAS_PROJECT_ID>.
+#   3. The iPhone (running Expo Go OR a custom dev build) checks for
+#      updates on launch. If a newer bundle exists for the matching
+#      runtime version, it downloads and applies it.
+#
+# Setup needed (one-time):
+#   - mobile/app.config.js needs `updates.url` set (auto-filled by
+#     `eas init` on first run).
+#   - GitHub repo needs a secret named EXPO_TOKEN — generate one at
+#     https://expo.dev/settings/access-tokens and paste into Settings
+#     -> Secrets and variables -> Actions on this repo.
+
+name: EAS Update
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'mobile/**'
+      - 'shared/**'
+      - '.github/workflows/eas-update.yml'
+
+# Cancel any in-flight update if a newer push lands while this is
+# running — only the latest commit's bundle should ever be live.
+concurrency:
+  group: eas-update-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  update:
+    name: Publish update
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Set up EAS CLI
+        uses: expo/expo-github-action@v8
+        with:
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Install dependencies
+        run: npm install --legacy-peer-deps
+
+      # Use the commit message as the EAS update note so you can see
+      # at a glance which commit a given update came from in the EAS
+      # dashboard. Squash newlines to keep the eas-update CLI happy.
+      - name: Publish update
+        run: |
+          MSG=$(git log -1 --pretty=%s)
+          eas update \
+            --branch main \
+            --message "$MSG" \
+            --non-interactive
