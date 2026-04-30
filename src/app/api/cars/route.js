@@ -26,6 +26,10 @@ const CarCreateSchema = z.object({
   uk_vat: money.nullable().optional(),
   irish_sale_price_inc_vat: money.nullable().optional(),
   irish_sale_price_ex_vat: money.nullable().optional(),
+  // GBP→EUR FX rate for converting UK-leg costs to the EUR
+  // margin calc. Bounded loosely; 0–10 covers any real rate
+  // including post-Brexit volatility scenarios.
+  fx_gbp_to_eur: z.number().finite().min(0).max(10).nullable().optional(),
   // Ancillary cost line items (migration 026). All optional at
   // registration time — operator fills in as they're known.
   uk_transporter_cost: money.nullable().optional(),
@@ -114,6 +118,7 @@ export async function POST(request) {
     uk_vat: body.uk_vat ?? null,
     irish_sale_price_inc_vat: body.irish_sale_price_inc_vat ?? null,
     irish_sale_price_ex_vat: body.irish_sale_price_ex_vat ?? null,
+    fx_gbp_to_eur: body.fx_gbp_to_eur ?? null,
     uk_transporter_cost: body.uk_transporter_cost ?? null,
     ferry_cost: body.ferry_cost ?? null,
     import_customs_cost: body.import_customs_cost ?? null,

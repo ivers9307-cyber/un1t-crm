@@ -45,20 +45,42 @@ export function completionGaps(car) {
 // here as the single source of truth so the form, the inline editor
 // on the detail page, and totalAncillaryCosts() all stay in sync.
 //
-// `additional_costs` is repurposed as the commission payout (the
-// dealer's per-deal commission line); the additional_costs_label
-// column is no longer surfaced in the UI but kept in the schema for
-// historical data.
+// Each entry carries a `currency` so totalAncillaryCosts() and
+// estimatedProfit() can convert GBP costs to EUR using the per-car
+// fx_gbp_to_eur rate before they're added to the EUR-denominated
+// margin. UK transporter is the only GBP cost today (UK leg of the
+// journey) — everything else is paid in Ireland in EUR.
 //
 // Add a new cost type by appending one entry — the UI / profit calc
 // pick it up automatically.
 export const COST_FIELDS = Object.freeze([
-  { key: 'uk_transporter_cost', label: 'UK transporter' },
-  { key: 'ferry_cost',          label: 'Ferry' },
-  { key: 'import_customs_cost', label: 'Import customs' },
-  { key: 'nct_cost',            label: 'NCT' },
-  { key: 'additional_costs',    label: 'Commission payout' },
+  { key: 'uk_transporter_cost', label: 'UK transporter', currency: 'GBP' },
+  { key: 'ferry_cost',          label: 'Ferry',          currency: 'EUR' },
+  { key: 'import_customs_cost', label: 'Import customs', currency: 'EUR' },
+  { key: 'nct_cost',            label: 'NCT',            currency: 'EUR' },
+  { key: 'additional_costs',    label: 'Commission payout', currency: 'EUR' },
 ])
+
+// Default GBP→EUR rate used when a car doesn't yet have an explicit
+// fx_gbp_to_eur set (operator hasn't entered the rate they got).
+// Sensible recent value; UI flags when it's a default vs custom.
+// Bump this when the operator's bank changes its quote for new
+// purchases — it's a soft default, real cars override.
+export const DEFAULT_GBP_TO_EUR = 1.17
+
+// Returns the FX rate to use for a car, falling back to the global
+// default when the per-car field is unset.
+export function effectiveFxRate(car) {
+  const r = Number(car?.fx_gbp_to_eur)
+  return Number.isFinite(r) && r > 0 ? r : DEFAULT_GBP_TO_EUR
+}
+
+// Whether the car is using the global default (true) vs an
+// explicit operator-entered rate (false). Used to decorate the UI.
+export function isUsingDefaultFx(car) {
+  const r = Number(car?.fx_gbp_to_eur)
+  return !(Number.isFinite(r) && r > 0)
+}
 
 // Irish VAT rate. The Irish-side display is split into three values
 // derived from a single source: IE ex-VAT.
@@ -121,32 +143,77 @@ export function splitIrishPrice(car) {
 }
 
 /**
- * Sum of every per-car ancillary cost. NULLs coerce to 0 so a car
- * created before migration 026 (or one whose operator hasn't filled
- * the costs in yet) just contributes nothing to the total — its
- * profit number reflects pre-cost margin.
+ * Sum of every per-car ancillary cost, in EUR. GBP-denominated lines
+ * (currently just UK transporter) are converted using the car's
+ * effectiveFxRate(). NULLs coerce to 0 so a partial entry doesn't
+ * blow up; pre-migration rows simply contribute nothing.
  */
 export function totalAncillaryCosts(car) {
   if (!car) return 0
-  let sum = 0
+  const fx = effectiveFxRate(car)
+  let sumEur = 0
   for (const c of COST_FIELDS) {
-    sum += Number(car[c.key] || 0)
+    const v = Number(car[c.key] || 0)
+    sumEur += c.currency === 'GBP' ? v * fx : v
   }
-  return Math.round(sum * 100) / 100
+  return Math.round(sumEur * 100) / 100
 }
 
 /**
- * Profit estimate. Uses ex-VAT on both sides so the number reflects
- * the operator's margin rather than gross turnover, and subtracts
- * every per-car cost line item (UK transporter, ferry, customs,
- * NCT, additional). Returns null only when both core prices are
- * unset — partial data with one side filled gives a meaningful
- * (if optimistic) preview.
+ * Profit estimate, returned in EUR. UK ex-VAT and any GBP-priced
+ * costs are converted to EUR via the car's FX rate (or the global
+ * default when the per-car rate is unset). Uses ex-VAT on both
+ * sides so the number reflects margin rather than gross turnover.
+ *
+ * Returns null only when both core prices are unset — partial data
+ * with one side filled gives a meaningful (if optimistic) preview.
+ *
+ * For UI breakdowns prefer profitBreakdown(car) — same numbers but
+ * with the intermediate values exposed.
  */
 export function estimatedProfit(car) {
-  const sale = Number(car?.irish_sale_price_ex_vat || 0)
-  const cost = Number(car?.uk_purchase_price_ex_vat || 0)
-  if (!sale && !cost) return null
-  const ancillary = totalAncillaryCosts(car)
-  return Math.round((sale - cost - ancillary) * 100) / 100
+  const b = profitBreakdown(car)
+  return b ? b.profit : null
+}
+
+/**
+ * Decomposed view of the profit calc with each leg shown in EUR.
+ * Returns null when there's nothing meaningful to render. Used by
+ * both the Add Car form's live hint and the detail page's profit
+ * breakdown row.
+ */
+export function profitBreakdown(car) {
+  const saleEur = Number(car?.irish_sale_price_ex_vat || 0)
+  const ukExVatGbp = Number(car?.uk_purchase_price_ex_vat || 0)
+  if (!saleEur && !ukExVatGbp) return null
+
+  const fx = effectiveFxRate(car)
+  const ukExVatEur = Math.round(ukExVatGbp * fx * 100) / 100
+
+  // Split ancillaries into the two currencies for the breakdown
+  // line, then sum to a single EUR figure for the profit number.
+  let ancillaryGbp = 0
+  let ancillaryEur = 0
+  for (const c of COST_FIELDS) {
+    const v = Number(car?.[c.key] || 0)
+    if (c.currency === 'GBP') ancillaryGbp += v
+    else ancillaryEur += v
+  }
+  const ancillaryGbpInEur = Math.round(ancillaryGbp * fx * 100) / 100
+
+  const profit = Math.round(
+    (saleEur - ukExVatEur - ancillaryGbpInEur - ancillaryEur) * 100
+  ) / 100
+
+  return {
+    saleEur: Math.round(saleEur * 100) / 100,
+    ukExVatGbp: Math.round(ukExVatGbp * 100) / 100,
+    ukExVatEur,
+    ancillaryGbp: Math.round(ancillaryGbp * 100) / 100,
+    ancillaryGbpInEur,
+    ancillaryEur: Math.round(ancillaryEur * 100) / 100,
+    fx,
+    isUsingDefaultFx: isUsingDefaultFx(car),
+    profit,
+  }
 }

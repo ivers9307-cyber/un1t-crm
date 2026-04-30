@@ -13,7 +13,7 @@ import { useState, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { ArrowLeft, ChevronRight, Trash2, FileText, Upload, Check, X, AlertCircle, Receipt } from 'lucide-react'
-import { ALL_DOCUMENT_TYPES, REQUIRED_DOCUMENT_TYPES, completionGaps, estimatedProfit, totalAncillaryCosts, COST_FIELDS, applyIrishVat, salePriceToExVat, splitIrishPrice, IRISH_VAT_RATE } from '@/lib/cars'
+import { ALL_DOCUMENT_TYPES, REQUIRED_DOCUMENT_TYPES, completionGaps, profitBreakdown, COST_FIELDS, applyIrishVat, salePriceToExVat, splitIrishPrice, IRISH_VAT_RATE, DEFAULT_GBP_TO_EUR } from '@/lib/cars'
 
 export default function CarDetail({ car: initialCar }) {
   const [car, setCar] = useState(initialCar)
@@ -193,10 +193,7 @@ function StatusBadge({ status }) {
 }
 
 function CarFieldsCard({ car, patch, disabled }) {
-  const profit = estimatedProfit(car)
-  const ancillary = totalAncillaryCosts(car)
-  const sale = Number(car.irish_sale_price_ex_vat || 0)
-  const cost = Number(car.uk_purchase_price_ex_vat || 0)
+  const breakdown = profitBreakdown(car)
   return (
     <div className="bg-un1t-dark border border-un1t-gray rounded-2xl p-5 mb-4 space-y-5">
       <div>
@@ -213,9 +210,17 @@ function CarFieldsCard({ car, patch, disabled }) {
 
       <div>
         <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light mb-3">Prices</h3>
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
           <InlineField label="UK ex-VAT (£)"  value={car.uk_purchase_price_ex_vat} type="number" step="0.01" onSave={v => patch({ uk_purchase_price_ex_vat: v ? Number(v) : null })} disabled={disabled} />
           <InlineField label="UK VAT (£)"     value={car.uk_vat}                   type="number" step="0.01" onSave={v => patch({ uk_vat: v ? Number(v) : null })} disabled={disabled} />
+          <InlineField
+            label="FX £→€"
+            value={car.fx_gbp_to_eur}
+            type="number"
+            step="0.0001"
+            onSave={v => patch({ fx_gbp_to_eur: v ? Number(v) : null })}
+            disabled={disabled}
+          />
           {/* IE ex-VAT is the source of truth — editing it patches
               both irish_sale_price_ex_vat and irish_sale_price_inc_vat
               (the latter is the sale-price total, displayed as the
@@ -277,30 +282,44 @@ function CarFieldsCard({ car, patch, disabled }) {
       <div>
         <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light mb-3">Costs</h3>
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
-          {COST_FIELDS.map(c => (
-            <InlineField
-              key={c.key}
-              label={`${c.label} (€)`}
-              value={car[c.key]}
-              type="number"
-              step="0.01"
-              onSave={v => patch({ [c.key]: v ? Number(v) : null })}
-              disabled={disabled}
-            />
-          ))}
+          {COST_FIELDS.map(c => {
+            const sym = c.currency === 'GBP' ? '£' : '€'
+            return (
+              <InlineField
+                key={c.key}
+                label={`${c.label} (${sym})`}
+                value={car[c.key]}
+                type="number"
+                step="0.01"
+                onSave={v => patch({ [c.key]: v ? Number(v) : null })}
+                disabled={disabled}
+              />
+            )
+          })}
         </div>
       </div>
 
-      {profit != null && (
-        <div className="text-xs text-un1t-light bg-black/30 rounded-md px-3 py-2">
-          {ancillary > 0 ? (
-            <>
-              Sale ex-VAT €{Math.round(sale)} − Purchase ex-VAT €{Math.round(cost)} − Costs €{Math.round(ancillary)} ={' '}
-            </>
-          ) : (
-            <>Estimated profit (ex-VAT both sides): </>
+      {breakdown && (
+        <div className="text-xs text-un1t-light bg-black/30 rounded-md px-3 py-2 space-y-1">
+          <div>
+            Sale €{Math.round(breakdown.saleEur)}
+            {' − '}UK ex-VAT £{Math.round(breakdown.ukExVatGbp)} (€{Math.round(breakdown.ukExVatEur)} @ {breakdown.fx})
+            {breakdown.ancillaryGbp > 0 && (
+              <> − UK costs £{Math.round(breakdown.ancillaryGbp)} (€{Math.round(breakdown.ancillaryGbpInEur)})</>
+            )}
+            {breakdown.ancillaryEur > 0 && (
+              <> − IE costs €{Math.round(breakdown.ancillaryEur)}</>
+            )}
+            {' = '}
+            <span className={breakdown.profit >= 0 ? 'text-green-500 font-semibold' : 'text-red-400 font-semibold'}>
+              €{Math.round(breakdown.profit)}
+            </span>
+          </div>
+          {breakdown.isUsingDefaultFx && (
+            <div className="text-[10px] text-un1t-mid">
+              Using default FX rate {DEFAULT_GBP_TO_EUR} — enter the actual rate in the FX £→€ field for accuracy.
+            </div>
           )}
-          <span className={profit >= 0 ? 'text-green-500 font-semibold' : 'text-red-400 font-semibold'}>€{Math.round(profit)}</span>
         </div>
       )}
     </div>

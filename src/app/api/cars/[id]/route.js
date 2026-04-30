@@ -19,6 +19,9 @@ const CarUpdateSchema = z.object({
   uk_vat: money.nullable().optional(),
   irish_sale_price_inc_vat: money.nullable().optional(),
   irish_sale_price_ex_vat: money.nullable().optional(),
+  // GBP→EUR FX rate (migration 028). Bounded so a typo can't
+  // push the calc into wild territory.
+  fx_gbp_to_eur: z.number().finite().min(0).max(10).nullable().optional(),
   // Ancillary costs — see migration 026 + COST_FIELDS in src/lib/cars.js.
   uk_transporter_cost: money.nullable().optional(),
   ferry_cost: money.nullable().optional(),

@@ -7,7 +7,7 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Plus, X } from 'lucide-react'
-import { applyIrishVat, salePriceToExVat, IRISH_VAT_RATE } from '@/lib/cars'
+import { applyIrishVat, salePriceToExVat, IRISH_VAT_RATE, COST_FIELDS, DEFAULT_GBP_TO_EUR } from '@/lib/cars'
 
 function fmt2(n) {
   if (n == null || n === '') return ''
@@ -25,6 +25,7 @@ export default function AddCarButton({ locationId }) {
     make: 'Tesla', model: '', vehicle_year: '',
     uk_purchase_price_ex_vat: '', uk_vat: '',
     irish_sale_price_inc_vat: '', irish_sale_price_ex_vat: '',
+    fx_gbp_to_eur: '',
     uk_transporter_cost: '',
     ferry_cost: '',
     import_customs_cost: '',
@@ -50,6 +51,7 @@ export default function AddCarButton({ locationId }) {
       uk_vat: n(form.uk_vat),
       irish_sale_price_inc_vat: n(form.irish_sale_price_inc_vat),
       irish_sale_price_ex_vat: n(form.irish_sale_price_ex_vat),
+      fx_gbp_to_eur: n(form.fx_gbp_to_eur),
       uk_transporter_cost: n(form.uk_transporter_cost),
       ferry_cost: n(form.ferry_cost),
       import_customs_cost: n(form.import_customs_cost),
@@ -73,6 +75,7 @@ export default function AddCarButton({ locationId }) {
       make: 'Tesla', model: '', vehicle_year: '',
       uk_purchase_price_ex_vat: '', uk_vat: '',
       irish_sale_price_inc_vat: '', irish_sale_price_ex_vat: '',
+      fx_gbp_to_eur: '',
       uk_transporter_cost: '',
       ferry_cost: '',
       import_customs_cost: '',
@@ -84,18 +87,25 @@ export default function AddCarButton({ locationId }) {
     router.push(`/cars/${j.data.id}`)
   }
 
-  // Live profit calc — mirrors the server-side estimatedProfit() so
-  // what the operator sees in the form matches what the list shows
-  // after save.
-  const sale = Number(form.irish_sale_price_ex_vat || 0)
-  const cost = Number(form.uk_purchase_price_ex_vat || 0)
-  const ancillary =
-    Number(form.uk_transporter_cost || 0)
-    + Number(form.ferry_cost || 0)
+  // Live profit calc — mirrors profitBreakdown() from src/lib/cars.js
+  // so the form preview matches what the list / detail page render
+  // after save. UK ex-VAT and UK transporter are GBP, converted using
+  // the operator-entered FX rate (or DEFAULT_GBP_TO_EUR fallback).
+  const fxNum = Number(form.fx_gbp_to_eur)
+  const fx = Number.isFinite(fxNum) && fxNum > 0 ? fxNum : DEFAULT_GBP_TO_EUR
+  const fxIsDefault = !(Number.isFinite(fxNum) && fxNum > 0)
+  const saleEur = Number(form.irish_sale_price_ex_vat || 0)
+  const ukExVatGbp = Number(form.uk_purchase_price_ex_vat || 0)
+  const ukExVatEur = ukExVatGbp * fx
+  const ancillaryGbp = Number(form.uk_transporter_cost || 0)
+  const ancillaryEur =
+    Number(form.ferry_cost || 0)
     + Number(form.import_customs_cost || 0)
     + Number(form.nct_cost || 0)
     + Number(form.additional_costs || 0)
-  const profit = (sale || cost) ? sale - cost - ancillary : null
+  const profit = (saleEur || ukExVatGbp)
+    ? saleEur - ukExVatEur - (ancillaryGbp * fx) - ancillaryEur
+    : null
 
   if (!open) {
     return (
@@ -136,9 +146,10 @@ export default function AddCarButton({ locationId }) {
       </Section>
 
       <Section title="UK purchase">
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-3 gap-3">
           <Field label="Price ex-VAT (£)" type="number" step="0.01" value={form.uk_purchase_price_ex_vat} onChange={v => setForm(f => ({ ...f, uk_purchase_price_ex_vat: v }))} />
           <Field label="UK VAT (£)" type="number" step="0.01" value={form.uk_vat} onChange={v => setForm(f => ({ ...f, uk_vat: v }))} />
+          <Field label={`FX £→€ (default ${DEFAULT_GBP_TO_EUR})`} type="number" step="0.0001" value={form.fx_gbp_to_eur} onChange={v => setForm(f => ({ ...f, fx_gbp_to_eur: v }))} placeholder={String(DEFAULT_GBP_TO_EUR)} />
         </div>
       </Section>
 
@@ -188,26 +199,43 @@ export default function AddCarButton({ locationId }) {
 
       <Section title="Costs">
         {/* All five cost fields in one evenly-spaced grid so the row
-            doesn't collapse into a wide blank space at the end. */}
+            doesn't collapse into a wide blank space at the end.
+            Currency suffix per field comes from COST_FIELDS so the
+            UK transporter (£) sits next to the EUR-priced rest
+            without ambiguity. */}
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
-          <Field label="UK transporter (€)"   type="number" step="0.01" value={form.uk_transporter_cost} onChange={v => setForm(f => ({ ...f, uk_transporter_cost: v }))} />
-          <Field label="Ferry (€)"            type="number" step="0.01" value={form.ferry_cost}          onChange={v => setForm(f => ({ ...f, ferry_cost: v }))} />
-          <Field label="Import customs (€)"   type="number" step="0.01" value={form.import_customs_cost} onChange={v => setForm(f => ({ ...f, import_customs_cost: v }))} />
-          <Field label="NCT (€)"              type="number" step="0.01" value={form.nct_cost}            onChange={v => setForm(f => ({ ...f, nct_cost: v }))} />
-          <Field label="Commission payout (€)" type="number" step="0.01" value={form.additional_costs}    onChange={v => setForm(f => ({ ...f, additional_costs: v }))} />
+          {COST_FIELDS.map(c => {
+            const sym = c.currency === 'GBP' ? '£' : '€'
+            return (
+              <Field
+                key={c.key}
+                label={`${c.label} (${sym})`}
+                type="number"
+                step="0.01"
+                value={form[c.key]}
+                onChange={v => setForm(f => ({ ...f, [c.key]: v }))}
+              />
+            )
+          })}
         </div>
       </Section>
 
       {profit != null && (
-        <div className="text-xs text-un1t-light bg-black/30 rounded-md px-3 py-2">
-          {ancillary > 0 ? (
-            <>
-              Sale ex-VAT €{Math.round(sale)} − Purchase ex-VAT €{Math.round(cost)} − Costs €{Math.round(ancillary)} ={' '}
-            </>
-          ) : (
-            <>Estimated profit (ex-VAT both sides): </>
+        <div className="text-xs text-un1t-light bg-black/30 rounded-md px-3 py-2 space-y-1">
+          <div>
+            Sale €{Math.round(saleEur)} − UK ex-VAT £{Math.round(ukExVatGbp)} (€{Math.round(ukExVatEur)} @ {fx})
+            {ancillaryGbp > 0 && <> − UK costs £{Math.round(ancillaryGbp)} (€{Math.round(ancillaryGbp * fx)})</>}
+            {ancillaryEur > 0 && <> − IE costs €{Math.round(ancillaryEur)}</>}
+            {' '}={' '}
+            <span className={profit >= 0 ? 'text-green-500 font-semibold' : 'text-red-400 font-semibold'}>
+              €{Math.round(profit)}
+            </span>
+          </div>
+          {fxIsDefault && (
+            <div className="text-[10px] text-un1t-mid">
+              Using default FX rate {DEFAULT_GBP_TO_EUR} — enter the actual rate above for accuracy.
+            </div>
           )}
-          <span className={profit >= 0 ? 'text-green-500 font-semibold' : 'text-red-400 font-semibold'}>€{Math.round(profit)}</span>
         </div>
       )}
 
