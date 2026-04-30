@@ -21,6 +21,20 @@ export default function LocationForm({ location }) {
   const [glofoxBranchId, setGlofoxBranchId] = useState(settings.glofox?.branch_id || '')
   const [glofoxApiKey, setGlofoxApiKey] = useState(settings.glofox?.api_key || '')
 
+  // UniFi Access settings — drives the door-access toggle on staff profiles.
+  // host  : public-facing URL of the UniFi Access controller, including
+  //         port (12445 by default). Use Cloudflare Tunnel or similar so
+  //         it's reachable from Vercel without port-forwarding the LAN.
+  // token : Bearer API token created in Access > Settings > Advanced >
+  //         API Token. Scopes: view:user, edit:user, view:policy.
+  // staff_policy_id   : pre-created policy granting main door + physio.
+  // manager_policy_id : pre-created policy granting all staff doors.
+  const [unifiHost, setUnifiHost] = useState(settings.unifi?.host || '')
+  const [unifiApiToken, setUnifiApiToken] = useState(settings.unifi?.api_token || '')
+  const [unifiStaffPolicyId, setUnifiStaffPolicyId] = useState(settings.unifi?.staff_policy_id || '')
+  const [unifiManagerPolicyId, setUnifiManagerPolicyId] = useState(settings.unifi?.manager_policy_id || '')
+  const [unifiAllowSelfSigned, setUnifiAllowSelfSigned] = useState(settings.unifi?.allow_self_signed === true)
+
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
 
@@ -46,6 +60,15 @@ export default function LocationForm({ location }) {
         glofox: glofoxBranchId || glofoxApiKey ? {
           branch_id: glofoxBranchId || null,
           api_key: glofoxApiKey || null,
+        } : null,
+        // Persist UniFi only when at least one field is set — avoids
+        // writing a stub object on locations that don't use door access.
+        unifi: (unifiHost || unifiApiToken || unifiStaffPolicyId || unifiManagerPolicyId) ? {
+          host: unifiHost || null,
+          api_token: unifiApiToken || null,
+          staff_policy_id: unifiStaffPolicyId || null,
+          manager_policy_id: unifiManagerPolicyId || null,
+          allow_self_signed: unifiAllowSelfSigned,
         } : null,
       },
       updated_at: new Date().toISOString(),
@@ -227,6 +250,83 @@ export default function LocationForm({ location }) {
             className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid font-mono"
           />
         </div>
+      </div>
+
+      {/* UniFi Access Integration */}
+      <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5 space-y-4">
+        <h3 className="font-semibold text-sm text-un1t-light uppercase tracking-wider">UniFi Access (Door Control)</h3>
+        <p className="text-xs text-un1t-mid">
+          Connect this studio&apos;s UniFi Access controller so the door-access toggle on staff profiles can grant or revoke
+          building access. Pre-create two access policies in UniFi (one for staff, one for managers) and paste their IDs below.
+        </p>
+
+        <div>
+          <label className="block text-sm mb-1.5">Controller Host</label>
+          <input
+            type="text"
+            value={unifiHost}
+            onChange={e => setUnifiHost(e.target.value)}
+            placeholder="https://stillorgan-access.un1t.ie:12445"
+            className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid font-mono"
+          />
+          <p className="text-xs text-un1t-mid mt-1">
+            Public URL where the UniFi Access API is reachable. Recommended: expose via Cloudflare Tunnel — no port forwarding required.
+          </p>
+        </div>
+
+        <div>
+          <label className="block text-sm mb-1.5">API Token</label>
+          <input
+            type="password"
+            value={unifiApiToken}
+            onChange={e => setUnifiApiToken(e.target.value)}
+            placeholder="••••••••••••••••"
+            className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid font-mono"
+          />
+          <p className="text-xs text-un1t-mid mt-1">
+            Create in UniFi: Access &gt; Settings &gt; Advanced &gt; API Token. Scopes: <span className="font-mono text-un1t-light">view:user, edit:user, view:policy</span>.
+          </p>
+        </div>
+
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="block text-sm mb-1.5">Staff Policy ID</label>
+            <input
+              type="text"
+              value={unifiStaffPolicyId}
+              onChange={e => setUnifiStaffPolicyId(e.target.value)}
+              placeholder="03895c7f-9f53-4334-..."
+              className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid font-mono"
+            />
+            <p className="text-xs text-un1t-mid mt-1">Main door + physio office</p>
+          </div>
+          <div>
+            <label className="block text-sm mb-1.5">Manager Policy ID</label>
+            <input
+              type="text"
+              value={unifiManagerPolicyId}
+              onChange={e => setUnifiManagerPolicyId(e.target.value)}
+              placeholder="3b6bcb0c-7498-44cf-..."
+              className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid font-mono"
+            />
+            <p className="text-xs text-un1t-mid mt-1">+ main office (manager and above)</p>
+          </div>
+        </div>
+
+        <label className="flex items-start gap-2 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={unifiAllowSelfSigned}
+            onChange={e => setUnifiAllowSelfSigned(e.target.checked)}
+            className="mt-0.5"
+          />
+          <span className="text-xs text-un1t-light">
+            Allow self-signed certificate
+            <span className="block text-un1t-mid">
+              Only enable if the controller is reachable directly (not via Cloudflare Tunnel) and still uses its default UniFi cert.
+            </span>
+          </span>
+        </label>
       </div>
 
       {/* Submit */}

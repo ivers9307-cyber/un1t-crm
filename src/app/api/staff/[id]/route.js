@@ -6,6 +6,10 @@ import { validateBody, uuidLike } from '@/lib/validate'
 import {
   roleSchema, employmentTypeSchema, money, hours, days, permissionsSchema,
 } from '@/lib/schemas'
+import {
+  getLocationUnifiConfig, findOrCreateUnifiUser,
+  syncUnifiUserPolicyForRole, revokeUnifiUserPolicies, UnifiError,
+} from '@/lib/unifi-access'
 
 export const runtime = 'nodejs'
 
@@ -21,7 +25,55 @@ const UpdateStaffSchema = z.object({
   contracted_hours_per_week: hours.nullable().optional(),
   annual_leave_entitlement: days.nullable().optional(),
   overtime_rate: money.nullable().optional(),
+  // UniFi door-access toggle. Server-side this triggers a sync against
+  // the staff member's default location: find-or-create the UniFi user,
+  // then assign the role-appropriate access policy. Toggling off
+  // revokes all policies but keeps unifi_user_id around for fast re-enable.
+  unifi_door_access: z.boolean().optional(),
 })
+
+// Pick the location whose UniFi config drives door access for this profile.
+// Strategy: prefer the profile's default location (is_default=true on
+// profile_locations), fall back to the first one. Profiles assigned to
+// multiple studios still only get access to the studio whose toggle was
+// flipped — managers move someone between studios manually.
+function pickDoorLocation(profile) {
+  const links = profile.profile_locations || []
+  const def = links.find(l => l.is_default) || links[0]
+  return def?.locations || null
+}
+
+// Apply the unifi_door_access toggle. Returns the unifi_user_id that
+// should be persisted (or null if it shouldn't change). Throws UnifiError
+// on failure — caller is expected to surface that to the API consumer
+// without persisting the toggle change in Supabase, so the UI state stays
+// consistent with reality.
+async function applyDoorAccessChange({ profile, location, enable, role }) {
+  const cfg = getLocationUnifiConfig(location)
+  if (!cfg.configured) {
+    throw new UnifiError(
+      'UniFi Access is not configured for this location. Add the host, ' +
+      'API token and policy IDs in Location settings before enabling ' +
+      'door access for staff.'
+    )
+  }
+
+  if (!enable) {
+    // Toggle off — only call UniFi if we have a user id to revoke against.
+    // Skipping the call when unifi_user_id is null avoids an unnecessary
+    // round-trip when door access was never enabled in the first place.
+    if (profile.unifi_user_id) {
+      await revokeUnifiUserPolicies(cfg, profile.unifi_user_id)
+    }
+    return profile.unifi_user_id || null
+  }
+
+  // Toggle on — find-or-create the UniFi user, then assign their role's policy.
+  const unifiUserId = profile.unifi_user_id
+    || await findOrCreateUnifiUser(cfg, profile)
+  await syncUnifiUserPolicyForRole(cfg, unifiUserId, role)
+  return unifiUserId
+}
 
 // PUT /api/staff/[id] — Update a staff member. Owner-only.
 // Includes role / salary / employment fields so this endpoint must never
@@ -82,7 +134,65 @@ export async function PUT(request, { params }) {
     }
   }
 
-  // Fetch updated profile
+  // Re-fetch the freshly-updated profile with its location list. We do
+  // this BEFORE the UniFi sync so the role / location_ids changes from
+  // this request are reflected in the policy we assign.
+  const { data: updatedProfile } = await db
+    .from('profiles')
+    .select('*, profile_locations(*, locations(*))')
+    .eq('id', id)
+    .single()
+
+  // ----- UniFi sync -----
+  // Triggered by:
+  //   1. Explicit toggle in this request (body.unifi_door_access set), OR
+  //   2. A role change while door access is currently enabled — staff →
+  //      manager flips them onto the manager_policy_id automatically.
+  const toggleProvided = body.unifi_door_access !== undefined
+  const desiredEnabled = toggleProvided
+    ? body.unifi_door_access
+    : updatedProfile.unifi_door_access
+  const roleChangedWhileOn =
+    body.role !== undefined &&
+    updatedProfile.unifi_door_access === true &&
+    !toggleProvided
+
+  if (toggleProvided || roleChangedWhileOn) {
+    const location = pickDoorLocation(updatedProfile)
+    if (!location) {
+      return NextResponse.json({
+        success: false,
+        error: 'Cannot toggle door access — staff member is not assigned to any location.',
+      }, { status: 400 })
+    }
+    try {
+      const newUnifiUserId = await applyDoorAccessChange({
+        profile: updatedProfile,
+        location,
+        enable: desiredEnabled,
+        role: updatedProfile.role,
+      })
+      const unifiUpdates = { unifi_door_access: desiredEnabled }
+      // Persist the user id only if we actually got one (find-or-create
+      // path) — don't blank it on toggle-off, we want to remember.
+      if (newUnifiUserId && newUnifiUserId !== updatedProfile.unifi_user_id) {
+        unifiUpdates.unifi_user_id = newUnifiUserId
+      }
+      await db.from('profiles').update(unifiUpdates).eq('id', id)
+    } catch (e) {
+      const msg = e instanceof UnifiError ? e.message : `UniFi sync failed: ${e.message || e}`
+      return NextResponse.json({
+        success: false,
+        error: msg,
+        // Hint to the UI that the rest of the save succeeded but UniFi failed
+        // — the toggle should bounce back to its previous state.
+        unifi_failed: true,
+      }, { status: 502 })
+    }
+  }
+
+  // Final re-fetch so the response reflects unifi_door_access + unifi_user_id
+  // changes as well.
   const { data } = await db
     .from('profiles')
     .select('*, profile_locations(*, locations(*))')
@@ -93,6 +203,9 @@ export async function PUT(request, { params }) {
 }
 
 // DELETE /api/staff/[id] — Soft-delete (deactivate) a staff member. Owner-only.
+//
+// Also revokes any UniFi door-access policies the staff member had — we
+// don't want a deactivated employee still able to walk into the studio.
 export async function DELETE(request, { params }) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
@@ -112,7 +225,39 @@ export async function DELETE(request, { params }) {
   }
 
   const db = createServerClient()
-  const { error } = await db.from('profiles').update({ active: false }).eq('id', id)
+
+  // Pull the profile + locations BEFORE deactivating so we can revoke
+  // UniFi access using the still-present links.
+  const { data: profile } = await db
+    .from('profiles')
+    .select('id, unifi_door_access, unifi_user_id, profile_locations(*, locations(*))')
+    .eq('id', id)
+    .single()
+
+  // Revoke door access first. If UniFi is unreachable, surface the error
+  // so an owner can retry — better than silently leaving an ex-employee
+  // with active doors. The HTTP 502 makes it clear the deactivation did
+  // not happen.
+  if (profile?.unifi_door_access && profile?.unifi_user_id) {
+    const location = pickDoorLocation(profile)
+    const cfg = location ? getLocationUnifiConfig(location) : null
+    if (cfg?.configured) {
+      try {
+        await revokeUnifiUserPolicies(cfg, profile.unifi_user_id)
+      } catch (e) {
+        const msg = e instanceof UnifiError ? e.message : `UniFi revoke failed: ${e.message || e}`
+        return NextResponse.json({
+          success: false,
+          error: `Could not revoke UniFi door access — ${msg}. Profile not deactivated.`,
+        }, { status: 502 })
+      }
+    }
+  }
+
+  const { error } = await db
+    .from('profiles')
+    .update({ active: false, unifi_door_access: false })
+    .eq('id', id)
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
 
   return NextResponse.json({ success: true })
