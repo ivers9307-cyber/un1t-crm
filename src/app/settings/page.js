@@ -2,7 +2,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
-import { Users, MapPin, Shield, Clock, Palette } from 'lucide-react'
+import { Users, MapPin, Shield, Clock, Palette, CalendarDays } from 'lucide-react'
 import BrandingSettings from '@/components/BrandingSettings'
 
 export const dynamic = 'force-dynamic'
@@ -159,6 +159,25 @@ export default async function SettingsPage() {
         </div>
         <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-4">
           <p className="text-sm text-un1t-light">Define named shift templates (Morning, Afternoon, Evening) used when building the weekly roster.</p>
+        </div>
+      </div>
+
+      {/* Bank Holidays Section */}
+      <div className="mb-10">
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-2">
+            <CalendarDays size={18} className="text-un1t-light" />
+            <h3 className="text-lg font-semibold">Bank Holidays</h3>
+          </div>
+          <Link
+            href="/settings/holidays"
+            className="text-xs bg-un1t-white text-un1t-black px-3 py-1.5 rounded-md hover:bg-un1t-accent transition-colors font-medium"
+          >
+            Manage Holidays
+          </Link>
+        </div>
+        <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-4">
+          <p className="text-sm text-un1t-light">Irish public holidays are highlighted on the schedule automatically. Add custom closures (Good Friday, Christmas Eve early-close) per location.</p>
         </div>
       </div>
 

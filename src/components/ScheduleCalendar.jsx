@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { ChevronLeft, ChevronRight, Copy, Send, Plus, Users, User, Clock, MapPin, X, ArrowLeftRight, CalendarOff, Palmtree, ThermometerSun, Ban, AlertTriangle } from 'lucide-react'
 import Link from 'next/link'
 import { computeWeeklyCost } from '@/lib/payroll'
+import { indexByDate } from '@/lib/bank-holidays'
 
 const TIME_OFF_CONFIG = {
   holiday:     { label: 'Holiday',     color: '#22C55E', icon: Palmtree },
@@ -54,6 +55,7 @@ export default function ScheduleCalendar({ user }) {
   const [copying, setCopying] = useState(false)
   const [swapModal, setSwapModal] = useState(null) // shift to swap
   const [timeOff, setTimeOff] = useState([]) // approved time-off for the week
+  const [holidays, setHolidays] = useState([]) // merged static + custom holidays for the week
 
   const locationId = user.activeLocation?.id
   const isManager = canManage(user.role)
@@ -68,17 +70,19 @@ export default function ScheduleCalendar({ user }) {
     const start = formatDate(weekStart)
     const end = formatDate(addDays(weekStart, 6))
 
-    const [shiftsRes, templatesRes, staffRes, timeOffRes] = await Promise.all([
+    const [shiftsRes, templatesRes, staffRes, timeOffRes, holidaysRes] = await Promise.all([
       fetch(`/api/schedule/shifts?location_id=${locationId}&start_date=${start}&end_date=${end}`).then(r => r.json()),
       fetch(`/api/schedule/templates?location_id=${locationId}`).then(r => r.json()),
       fetch('/api/staff').then(r => r.json()),
       fetch(`/api/schedule/time-off?location_id=${locationId}&start_date=${start}&end_date=${end}&status=approved`).then(r => r.json()),
+      fetch(`/api/locations/${locationId}/holidays?start=${start}&end=${end}`).then(r => r.json()),
     ])
 
     setShifts(shiftsRes.data || [])
     setTemplates((templatesRes.data || []).filter(t => t.active))
     setStaff(staffRes.data || [])
     setTimeOff(timeOffRes.data || [])
+    setHolidays(holidaysRes.data || [])
     setLoading(false)
   }, [locationId, weekStart])
 
@@ -330,22 +334,40 @@ export default function ScheduleCalendar({ user }) {
         <div className="text-center py-20 text-un1t-light">Loading roster...</div>
       ) : (
         <div className="grid grid-cols-7 gap-2">
-          {DAY_LABELS.map((label, i) => {
-            const date = addDays(weekStart, i)
-            const dateStr = formatDate(date)
-            const isToday = formatDate(new Date()) === dateStr
-            const dayShifts = shiftsByDay[i]
+          {(() => {
+            // Build a date → holiday lookup once per render so we don't scan
+            // the holidays array per day.
+            const holidayByDate = indexByDate(holidays)
+            return DAY_LABELS.map((label, i) => {
+              const date = addDays(weekStart, i)
+              const dateStr = formatDate(date)
+              const isToday = formatDate(new Date()) === dateStr
+              const dayShifts = shiftsByDay[i]
+              const holiday = holidayByDate.get(dateStr)
 
-            return (
+              // Today wins over holiday for the header colour; otherwise an
+              // amber tint marks holidays at a glance.
+              const headerCls = isToday
+                ? 'bg-blue-600 text-white'
+                : holiday
+                  ? 'bg-amber-500/15 text-amber-300 border border-amber-500/30'
+                  : 'bg-un1t-dark text-un1t-light'
+
+              return (
               <div key={i} className="min-h-[200px]">
                 {/* Day header */}
-                <div className={`text-center py-2 rounded-t-lg text-xs font-semibold ${isToday ? 'bg-blue-600 text-white' : 'bg-un1t-dark text-un1t-light'}`}>
+                <div className={`text-center py-2 rounded-t-lg text-xs font-semibold ${headerCls}`} title={holiday?.name || undefined}>
                   <div>{label}</div>
                   <div className={`text-lg font-bold ${isToday ? 'text-white' : 'text-un1t-white'}`}>{date.getDate()}</div>
+                  {holiday && (
+                    <div className={`mt-0.5 text-[10px] font-medium leading-tight px-1 truncate ${isToday ? 'text-white/80' : 'text-amber-300'}`}>
+                      {holiday.source === 'national' ? '🇮🇪 ' : '🏷 '}{holiday.name}
+                    </div>
+                  )}
                 </div>
 
                 {/* Shifts & Time Off */}
-                <div className="bg-un1t-dark/50 border border-un1t-gray border-t-0 rounded-b-lg p-1.5 space-y-1.5 min-h-[160px]">
+                <div className={`bg-un1t-dark/50 border border-un1t-gray border-t-0 rounded-b-lg p-1.5 space-y-1.5 min-h-[160px] ${holiday ? 'bg-amber-500/[0.04]' : ''}`}>
                   {/* Time-off bars */}
                   {timeOff
                     .filter(t => t.start_date <= dateStr && t.end_date >= dateStr)
@@ -440,8 +462,9 @@ export default function ScheduleCalendar({ user }) {
                   )}
                 </div>
               </div>
-            )
-          })}
+              )
+            })
+          })()}
         </div>
       )}
 

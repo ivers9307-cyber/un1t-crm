@@ -1,0 +1,77 @@
+import { NextResponse } from 'next/server'
+import { z } from 'zod'
+import { createServerClient } from '@/lib/supabase'
+import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { validateBody } from '@/lib/validate'
+import { isoDate, MANAGER_ROLES } from '@/lib/schemas'
+import { mergeHolidays } from '@/lib/bank-holidays'
+
+export const runtime = 'nodejs'
+
+const HolidayCreateSchema = z.object({
+  date: isoDate,
+  name: z.string().min(1).max(200),
+})
+
+// GET /api/locations/[id]/holidays?start=YYYY-MM-DD&end=YYYY-MM-DD
+//
+// Returns the merged static + custom holiday list for the location.
+// Both query params optional; without them the full static list (2025-2030)
+// is returned along with all custom entries.
+//
+// Each holiday in the response has:
+//   { date, name, source: 'national' | 'custom', id?, location_id? }
+// Static (national) holidays have no id; custom ones do.
+export async function GET(request, { params }) {
+  const user = await getCurrentUser()
+  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+
+  const guard = assertLocationAccess(user, params.id)
+  if (guard) return guard
+
+  const { searchParams } = new URL(request.url)
+  const start = searchParams.get('start') || undefined
+  const end = searchParams.get('end') || undefined
+
+  const db = createServerClient()
+  let query = db.from('location_holidays')
+    .select('id, location_id, date, name')
+    .eq('location_id', params.id)
+    .order('date', { ascending: true })
+  if (start) query = query.gte('date', start)
+  if (end) query = query.lte('date', end)
+
+  const { data: custom, error } = await query
+  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+
+  const merged = mergeHolidays(custom || [], { start, end })
+  return NextResponse.json({ success: true, data: merged })
+}
+
+// POST /api/locations/[id]/holidays — add a custom holiday (manager+).
+// Same-date entries override the static name when GET merges them.
+export async function POST(request, { params }) {
+  const user = await getCurrentUser()
+  if (!user || !MANAGER_ROLES.includes(user.role)) {
+    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
+  }
+
+  const guard = assertLocationAccess(user, params.id)
+  if (guard) return guard
+
+  const validation = await validateBody(request, HolidayCreateSchema)
+  if (!validation.ok) return validation.response
+  const { date, name } = validation.data
+
+  const db = createServerClient()
+  const { data, error } = await db.from('location_holidays')
+    .upsert(
+      { location_id: params.id, date, name, created_by: user.id },
+      { onConflict: 'location_id,date' }
+    )
+    .select('id, location_id, date, name')
+    .single()
+
+  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
+  return NextResponse.json({ success: true, data: { ...data, source: 'custom' } }, { status: 201 })
+}

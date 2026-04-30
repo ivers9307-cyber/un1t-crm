@@ -58,6 +58,8 @@ React 18 + Next.js 14, Tailwind CSS 3.4, Supabase Auth (SSR cookies), Postmark (
 
 **Overtime / payroll math** — `src/lib/payroll.js` exposes pure functions used by both the schedule UI (capacity warning) and the `staff_cost` report (cost breakdown). Overtime is a Mon-Sun weekly concept: hours up to `profiles.contracted_hours_per_week` are regular, hours above pay at `profiles.overtime_rate` (or the implicit regular rate if `overtime_rate` is NULL — no premium). FTE-only; contractors are paid `hourly_rate` regardless of total hours. The schedule calendar shows an amber warning panel listing FTE staff at or above their contracted hours for the visible week.
 
+**Bank holidays** — `src/lib/bank-holidays.js` holds Irish statutory public holidays for 2025-2030 as a frozen array (10 holidays/year × 6 years). The schedule calendar fetches `/api/locations/[id]/holidays` which merges this static list with custom per-location entries from the `location_holidays` table (migration 017). Holidays show as amber-tinted day headers with a 🇮🇪 (national) or 🏷 (custom) prefix; tooltip on hover shows the holiday name. Admins manage custom holidays at `/settings/holidays`. Same-date custom entries override the static name (e.g. relabel St Patrick's Day → "Closed all day"). Visual only — no impact on cost calc; managers decide manually whether to swap shifts or pay extra.
+
 ### Modules
 
 | Module | DB Migrations | API Routes | Lib | Key Component |
@@ -105,7 +107,7 @@ Two streams: `broadcast` (marketing, GDPR headers) and `outbound` (transactional
 
 ## Database
 
-16 migrations in `supabase/migrations/`. Key tables:
+17 migrations in `supabase/migrations/`. Key tables:
 
 **Core:** `locations`, `profiles`, `profile_locations` (junction; `profiles.role` holds the role, NOT this junction), `contacts`, `deals` (linked to contacts + stages), `pipeline_stages`, `activities`, `notes`, `webhook_subscriptions`.
 
