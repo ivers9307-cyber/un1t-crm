@@ -1,6 +1,6 @@
 import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccess , getUserLocationIds} from '@/lib/auth'
 
 // GET /api/whatsapp/conversations — list conversations (inbox)
 export async function GET(request) {
@@ -21,13 +21,13 @@ export async function GET(request) {
   if (locationId) {
     query = query.eq('location_id', locationId)
   } else {
-    const userLocationIds = (user.locations || []).map(l => l.id)
+    const userLocationIds = getUserLocationIds(user)
     if (userLocationIds.length === 0) return NextResponse.json({ success: true, conversations: [] })
     query = query.in('location_id', userLocationIds)
   }
 
   const { data, error } = await query
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
 
   return NextResponse.json({ success: true, conversations: data })
 }

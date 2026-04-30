@@ -53,6 +53,17 @@ export const days = z.number().finite().min(0).max(366)
 export const roleSchema = z.enum(['owner', 'manager', 'head_coach', 'staff'])
 export const employmentTypeSchema = z.enum(['fte', 'contractor', 'casual'])
 
+// Role groups for authz checks. Reference these instead of inlining
+// `['owner', 'manager', 'head_coach']` so a future role addition is a
+// one-line change.
+export const ADMIN_ROLES = Object.freeze(['owner', 'manager'])
+export const MANAGER_ROLES = Object.freeze(['owner', 'manager', 'head_coach'])
+
+// Default colour used when a user-created entity (event, shift template)
+// doesn't specify one. Branding-aware components should reference this
+// instead of hardcoding hex values.
+export const DEFAULT_COLOR = '#3B82F6'
+
 // Lead source / status — mirror the values surfaced in AudienceBuilder.jsx.
 export const leadSourceSchema = z.enum([
   'booking', 'meta', 'tiktok', 'walkin', 'referral', 'website', 'whatsapp', 'other',

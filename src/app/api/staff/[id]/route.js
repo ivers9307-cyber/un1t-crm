@@ -1,32 +1,25 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
 import { validateBody, uuidLike } from '@/lib/validate'
+import {
+  roleSchema, employmentTypeSchema, money, hours, days, permissionsSchema,
+} from '@/lib/schemas'
 
 export const runtime = 'nodejs'
 
-const ROLE = z.enum(['owner', 'manager', 'head_coach', 'staff'])
-const EMPLOYMENT_TYPE = z.enum(['fte', 'contractor', 'casual'])
-const MONEY = z.number().finite().min(0).max(10_000_000)
-const HOURS = z.number().finite().min(0).max(168)
-// Annual leave entitlement: NUMERIC(5,1) in the DB, UI step is 0.5, so
-// half-days are valid (e.g. 25.5). Bound at 366 (one year).
-const DAYS = z.number().finite().min(0).max(366)
-
 const UpdateStaffSchema = z.object({
   full_name: z.string().min(1).max(200).optional(),
-  role: ROLE.optional(),
-  // permissions is a JSONB blob — keep validation lenient so legacy or
-  // future shapes (nested groups, string flags) don't trip up edits.
-  permissions: z.record(z.string(), z.unknown()).optional(),
+  role: roleSchema.optional(),
+  permissions: permissionsSchema.optional(),
   active: z.boolean().optional(),
   location_ids: z.array(uuidLike).optional(),
-  employment_type: EMPLOYMENT_TYPE.optional(),
-  annual_salary: MONEY.nullable().optional(),
-  hourly_rate: MONEY.nullable().optional(),
-  contracted_hours_per_week: HOURS.nullable().optional(),
-  annual_leave_entitlement: DAYS.nullable().optional(),
+  employment_type: employmentTypeSchema.optional(),
+  annual_salary: money.nullable().optional(),
+  hourly_rate: money.nullable().optional(),
+  contracted_hours_per_week: hours.nullable().optional(),
+  annual_leave_entitlement: days.nullable().optional(),
 })
 
 // PUT /api/staff/[id] — Update a staff member. Owner-only.
@@ -48,7 +41,7 @@ export async function PUT(request, { params }) {
 
   // Restrict location assignments to the caller's own locations
   if (body.location_ids !== undefined) {
-    const callerLocationIds = (user.locations || []).map(l => l.id)
+    const callerLocationIds = getUserLocationIds(user)
     const invalid = body.location_ids.filter(loc => !callerLocationIds.includes(loc))
     if (invalid.length > 0) {
       return NextResponse.json({

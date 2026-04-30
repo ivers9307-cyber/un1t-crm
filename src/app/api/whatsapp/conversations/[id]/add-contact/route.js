@@ -35,7 +35,7 @@ export async function POST(request, { params }) {
       .single()
 
     if (convErr || !conversation) {
-      return NextResponse.json({ error: 'Conversation not found' }, { status: 404 })
+      return NextResponse.json({ success: false, error: 'Conversation not found' }, { status: 404 })
     }
 
     // Caller must belong to the conversation's location.
@@ -70,7 +70,7 @@ export async function POST(request, { params }) {
 
     if (contactErr) {
       console.error('Failed to create contact:', contactErr)
-      return NextResponse.json({ error: contactErr.message }, { status: 500 })
+      return NextResponse.json({ success: false, error: contactErr.message }, { status: 500 })
     }
 
     // Link the conversation to the new contact
@@ -143,6 +143,6 @@ export async function POST(request, { params }) {
     })
   } catch (err) {
     console.error('Add contact error:', err)
-    return NextResponse.json({ error: err.message }, { status: 500 })
+    return NextResponse.json({ success: false, error: err.message }, { status: 500 })
   }
 }

@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
-import { timeOfDay, hexColor } from '@/lib/schemas'
+import { timeOfDay, hexColor , MANAGER_ROLES} from '@/lib/schemas'
 
 const TemplateUpdateSchema = z.object({
   name: z.string().min(1).max(100).optional(),
@@ -18,7 +18,7 @@ const TemplateUpdateSchema = z.object({
 // PUT /api/schedule/templates/:id
 export async function PUT(request, { params }) {
   const user = await getCurrentUser()
-  if (!user || !['owner', 'manager', 'head_coach'].includes(user.role)) {
+  if (!user || !MANAGER_ROLES.includes(user.role)) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
 
@@ -40,7 +40,7 @@ export async function PUT(request, { params }) {
 // DELETE /api/schedule/templates/:id
 export async function DELETE(request, { params }) {
   const user = await getCurrentUser()
-  if (!user || !['owner', 'manager', 'head_coach'].includes(user.role)) {
+  if (!user || !MANAGER_ROLES.includes(user.role)) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
 

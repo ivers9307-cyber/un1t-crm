@@ -1,9 +1,9 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccess , getUserLocationIds} from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
-import { uuidLike, isoDate, timeOfDay } from '@/lib/schemas'
+import { uuidLike, isoDate, timeOfDay , MANAGER_ROLES} from '@/lib/schemas'
 
 const ShiftCreateSchema = z.object({
   location_id: uuidLike,
@@ -43,7 +43,7 @@ export async function GET(request) {
     query = query.eq('location_id', locationId)
   } else {
     // No specific location requested — limit to caller's own locations.
-    const userLocationIds = (user.locations || []).map(l => l.id)
+    const userLocationIds = getUserLocationIds(user)
     if (userLocationIds.length === 0) {
       return NextResponse.json({ success: true, data: [] })
     }
@@ -61,7 +61,7 @@ export async function GET(request) {
 // POST /api/schedule/shifts — Create a shift (or batch create)
 export async function POST(request) {
   const user = await getCurrentUser()
-  if (!user || !['owner', 'manager', 'head_coach'].includes(user.role)) {
+  if (!user || !MANAGER_ROLES.includes(user.role)) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
 
@@ -75,7 +75,7 @@ export async function POST(request) {
 
   // Reject the whole batch if any shift targets a location the caller
   // can't write to.
-  const userLocationIds = (user.locations || []).map(l => l.id)
+  const userLocationIds = getUserLocationIds(user)
   const invalidShift = shifts.find(s => !s.location_id || !userLocationIds.includes(s.location_id))
   if (invalidShift) {
     return NextResponse.json(

@@ -25,7 +25,7 @@ export async function POST(request) {
     const result = verifySharedSecret(headerToken, expectedToken)
     if (!result.ok) {
       console.warn(`Postmark webhook rejected: ${result.reason}`)
-      return NextResponse.json({ error: 'Invalid token' }, { status: 403 })
+      return NextResponse.json({ success: false, error: 'Invalid token' }, { status: 403 })
     }
   } else {
     console.warn(
@@ -40,7 +40,7 @@ export async function POST(request) {
 
   const messageId = body.MessageID
   if (!messageId) {
-    return NextResponse.json({ error: 'Missing MessageID' }, { status: 400 })
+    return NextResponse.json({ success: false, error: 'Missing MessageID' }, { status: 400 })
   }
 
   const recordType = body.RecordType
@@ -323,6 +323,6 @@ export async function POST(request) {
     return NextResponse.json({ success: true })
   } catch (error) {
     console.error('Postmark webhook error:', error)
-    return NextResponse.json({ error: error.message }, { status: 500 })
+    return NextResponse.json({ success: false, error: error.message }, { status: 500 })
   }
 }

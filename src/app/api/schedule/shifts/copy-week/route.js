@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
-import { uuidLike, isoDate } from '@/lib/schemas'
+import { uuidLike, isoDate , MANAGER_ROLES} from '@/lib/schemas'
 
 const CopyWeekSchema = z.object({
   location_id: uuidLike,
@@ -16,7 +16,7 @@ const CopyWeekSchema = z.object({
 // Body: { location_id, source_start (Mon), target_start (Mon) }
 export async function POST(request) {
   const user = await getCurrentUser()
-  if (!user || !['owner', 'manager', 'head_coach'].includes(user.role)) {
+  if (!user || !MANAGER_ROLES.includes(user.role)) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
 

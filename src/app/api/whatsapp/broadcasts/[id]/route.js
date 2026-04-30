@@ -30,7 +30,7 @@ export async function GET(request, { params }) {
     .eq('id', params.id)
     .single()
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 404 })
+  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 404 })
 
   const guard = assertLocationAccess(user, data.location_id)
   if (guard) return guard
@@ -45,7 +45,7 @@ export async function PUT(request, { params }) {
 
   const db = createServerClient()
   const loc = await loadBroadcastLocation(db, params.id)
-  if (!loc) return NextResponse.json({ error: 'Broadcast not found' }, { status: 404 })
+  if (!loc) return NextResponse.json({ success: false, error: 'Broadcast not found' }, { status: 404 })
   const guard = assertLocationAccess(user, loc)
   if (guard) return guard
 
@@ -59,7 +59,7 @@ export async function PUT(request, { params }) {
     .select()
     .single()
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
   return NextResponse.json({ success: true, broadcast: data })
 }
 
@@ -70,12 +70,12 @@ export async function DELETE(request, { params }) {
 
   const db = createServerClient()
   const loc = await loadBroadcastLocation(db, params.id)
-  if (!loc) return NextResponse.json({ error: 'Broadcast not found' }, { status: 404 })
+  if (!loc) return NextResponse.json({ success: false, error: 'Broadcast not found' }, { status: 404 })
   const guard = assertLocationAccess(user, loc)
   if (guard) return guard
 
   await db.from('whatsapp_broadcast_recipients').delete().eq('broadcast_id', params.id)
   const { error } = await db.from('whatsapp_broadcasts').delete().eq('id', params.id)
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
   return NextResponse.json({ success: true })
 }

@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
-import { uuidLike, days } from '@/lib/schemas'
+import { uuidLike, days , MANAGER_ROLES} from '@/lib/schemas'
 
 const AllowanceUpdateSchema = z.object({
   profile_id: uuidLike,
@@ -23,7 +23,7 @@ export async function GET(request) {
   const db = createServerClient()
 
   // Staff can only view their own allowance
-  if (profileId !== user.id && !['owner', 'manager', 'head_coach'].includes(user.role)) {
+  if (profileId !== user.id && !MANAGER_ROLES.includes(user.role)) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
 

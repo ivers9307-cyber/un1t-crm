@@ -16,14 +16,14 @@ export async function GET(request) {
   const verifyToken = process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN
   if (!verifyToken) {
     console.error('WHATSAPP_WEBHOOK_VERIFY_TOKEN is not set — refusing verification')
-    return NextResponse.json({ error: 'Server misconfigured' }, { status: 500 })
+    return NextResponse.json({ success: false, error: 'Server misconfigured' }, { status: 500 })
   }
 
   if (mode === 'subscribe' && safeEqual(token || '', verifyToken)) {
     return new Response(challenge, { status: 200 })
   }
 
-  return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+  return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
 }
 
 // POST — Incoming messages and status updates from Meta
@@ -42,7 +42,7 @@ export async function POST(request) {
     const result = verifyMetaSignature(rawBody, signature, appSecret)
     if (!result.ok) {
       console.warn(`WhatsApp webhook rejected: ${result.reason}`)
-      return NextResponse.json({ error: 'Invalid signature' }, { status: 403 })
+      return NextResponse.json({ success: false, error: 'Invalid signature' }, { status: 403 })
     }
   } else {
     console.warn(
@@ -55,7 +55,7 @@ export async function POST(request) {
   try {
     body = JSON.parse(rawBody)
   } catch {
-    return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 })
+    return NextResponse.json({ success: false, error: 'Invalid JSON' }, { status: 400 })
   }
 
   const db = createServerClient()

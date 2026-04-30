@@ -27,7 +27,7 @@ export async function GET(request, { params }) {
     .select('*')
     .eq('id', params.id)
     .single()
-  if (error) return NextResponse.json({ error: error.message }, { status: 404 })
+  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 404 })
 
   const guard = assertLocationAccess(user, data.location_id)
   if (guard) return guard
@@ -42,7 +42,7 @@ export async function PUT(request, { params }) {
 
   const db = createServerClient()
   const loc = await loadTemplateLocation(db, params.id)
-  if (!loc) return NextResponse.json({ error: 'Template not found' }, { status: 404 })
+  if (!loc) return NextResponse.json({ success: false, error: 'Template not found' }, { status: 404 })
   const guard = assertLocationAccess(user, loc)
   if (guard) return guard
 
@@ -56,7 +56,7 @@ export async function PUT(request, { params }) {
     .select()
     .single()
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
   return NextResponse.json({ success: true, template: data })
 }
 
@@ -67,11 +67,11 @@ export async function DELETE(request, { params }) {
 
   const db = createServerClient()
   const loc = await loadTemplateLocation(db, params.id)
-  if (!loc) return NextResponse.json({ error: 'Template not found' }, { status: 404 })
+  if (!loc) return NextResponse.json({ success: false, error: 'Template not found' }, { status: 404 })
   const guard = assertLocationAccess(user, loc)
   if (guard) return guard
 
   const { error } = await db.from('email_templates').delete().eq('id', params.id)
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
   return NextResponse.json({ success: true })
 }

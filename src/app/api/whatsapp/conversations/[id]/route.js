@@ -12,7 +12,7 @@ export async function GET(request, { params }) {
     .eq('id', params.id)
     .single()
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 404 })
+  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 404 })
 
   // Get messages
   const { data: messages } = await db.from('whatsapp_messages')

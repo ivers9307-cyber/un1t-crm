@@ -1,7 +1,7 @@
 import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccess , getUserLocationIds} from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike, audienceFilterSchema, url } from '@/lib/schemas'
 
@@ -32,13 +32,13 @@ export async function GET(request) {
   if (locationId) {
     query = query.eq('location_id', locationId)
   } else {
-    const userLocationIds = (user.locations || []).map(l => l.id)
+    const userLocationIds = getUserLocationIds(user)
     if (userLocationIds.length === 0) return NextResponse.json({ success: true, broadcasts: [] })
     query = query.in('location_id', userLocationIds)
   }
 
   const { data, error } = await query
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
 
   return NextResponse.json({ success: true, broadcasts: data })
 }
@@ -67,7 +67,7 @@ export async function POST(request) {
     created_by: user.id,
   }).select().single()
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
 
   return NextResponse.json({ success: true, broadcast: data })
 }

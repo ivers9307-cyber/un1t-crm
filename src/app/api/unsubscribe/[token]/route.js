@@ -28,7 +28,7 @@ export async function POST(request, { params }) {
     .single()
 
   if (error || !pref) {
-    return NextResponse.json({ error: 'Invalid token' }, { status: 404 })
+    return NextResponse.json({ success: false, error: 'Invalid token' }, { status: 404 })
   }
 
   // Unsubscribe from email marketing

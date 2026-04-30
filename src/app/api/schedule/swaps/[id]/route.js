@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
-import { swapStatusSchema } from '@/lib/schemas'
+import { swapStatusSchema , MANAGER_ROLES} from '@/lib/schemas'
 
 const SwapReviewSchema = z.object({
   status: swapStatusSchema,
@@ -32,7 +32,7 @@ export async function PUT(request, { params }) {
   // Staff can cancel their own requests
   if (body.status === 'cancelled' && swap.requester_id === user.id) {
     // Staff cancelling their own request
-  } else if (!['owner', 'manager', 'head_coach'].includes(user.role)) {
+  } else if (!MANAGER_ROLES.includes(user.role)) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
 

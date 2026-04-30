@@ -1,8 +1,9 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { getCurrentUser, getUserLocationIds, assertLocationAccess } from '@/lib/auth'
 import { validateBody, uuidLike } from '@/lib/validate'
+import { MANAGER_ROLES } from '@/lib/schemas'
 
 const ISO_DATE = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD')
 
@@ -41,7 +42,7 @@ export async function GET(request) {
   if (locationId) {
     query = query.eq('location_id', locationId)
   } else {
-    const userLocationIds = (user.locations || []).map(l => l.id)
+    const userLocationIds = getUserLocationIds(user)
     if (userLocationIds.length === 0) return NextResponse.json({ success: true, data: [] })
     query = query.in('location_id', userLocationIds)
   }

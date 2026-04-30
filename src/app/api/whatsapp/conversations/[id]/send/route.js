@@ -35,7 +35,7 @@ export async function POST(request, { params }) {
     .single()
 
   if (error || !conversation) {
-    return NextResponse.json({ error: 'Conversation not found' }, { status: 404 })
+    return NextResponse.json({ success: false, error: 'Conversation not found' }, { status: 404 })
   }
 
   // Caller must belong to the conversation's location.
@@ -46,7 +46,7 @@ export async function POST(request, { params }) {
   const phone = contact?.wa_phone || conversation.wa_phone
 
   if (!phone) {
-    return NextResponse.json({ error: 'No WhatsApp number for this contact' }, { status: 400 })
+    return NextResponse.json({ success: false, error: 'No WhatsApp number for this contact' }, { status: 400 })
   }
 
   try {
@@ -69,6 +69,7 @@ export async function POST(request, { params }) {
       // Media message — 24h window only
       if (!isWindowOpen(conversation)) {
         return NextResponse.json({
+          success: false,
           error: 'The 24-hour messaging window has expired. You can only send approved template messages outside the window.',
           window_expired: true,
         }, { status: 400 })
@@ -79,6 +80,7 @@ export async function POST(request, { params }) {
       // Text message — 24h window only
       if (!isWindowOpen(conversation)) {
         return NextResponse.json({
+          success: false,
           error: 'The 24-hour messaging window has expired. You can only send approved template messages outside the window.',
           window_expired: true,
         }, { status: 400 })
@@ -112,6 +114,6 @@ export async function POST(request, { params }) {
 
     return NextResponse.json({ success: true, messageId: result.messageId })
   } catch (err) {
-    return NextResponse.json({ error: err.message }, { status: 400 })
+    return NextResponse.json({ success: false, error: err.message }, { status: 400 })
   }
 }

@@ -76,6 +76,18 @@ export async function getCurrentUser() {
 }
 
 /**
+ * Returns an array of the user's assigned location IDs. Defensive against
+ * a missing `locations` field. Use when building queries that need to
+ * filter by every location the caller can see.
+ *
+ * @param {{ locations?: Array<{id: string}> } | null} user
+ * @returns {string[]}
+ */
+export function getUserLocationIds(user) {
+  return (user?.locations || []).map(l => l.id)
+}
+
+/**
  * Check that `locationId` is one of the locations the caller belongs to.
  * Use at the top of any session-auth route that takes a location_id from
  * user input (query string or request body) to prevent IDOR — a user

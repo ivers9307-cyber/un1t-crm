@@ -23,7 +23,7 @@ export async function GET(request, { params }) {
     .eq('id', params.id)
     .single()
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 404 })
+  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 404 })
 
   const guard = assertLocationAccess(user, data.location_id)
   if (guard) return guard
@@ -48,7 +48,7 @@ export async function PUT(request, { params }) {
     .select('location_id')
     .eq('id', params.id)
     .single()
-  if (!existing) return NextResponse.json({ error: 'Sequence not found' }, { status: 404 })
+  if (!existing) return NextResponse.json({ success: false, error: 'Sequence not found' }, { status: 404 })
   const guard = assertLocationAccess(user, existing.location_id)
   if (guard) return guard
 
@@ -62,7 +62,7 @@ export async function PUT(request, { params }) {
     .select()
     .single()
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
   return NextResponse.json({ success: true, sequence: data })
 }
 
@@ -77,13 +77,13 @@ export async function DELETE(request, { params }) {
     .select('location_id')
     .eq('id', params.id)
     .single()
-  if (!existing) return NextResponse.json({ error: 'Sequence not found' }, { status: 404 })
+  if (!existing) return NextResponse.json({ success: false, error: 'Sequence not found' }, { status: 404 })
   const guard = assertLocationAccess(user, existing.location_id)
   if (guard) return guard
 
   // Delete steps first
   await db.from('sequence_steps').delete().eq('sequence_id', params.id)
   const { error } = await db.from('email_sequences').delete().eq('id', params.id)
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
   return NextResponse.json({ success: true })
 }

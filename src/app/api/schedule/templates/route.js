@@ -1,18 +1,16 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccess , getUserLocationIds} from '@/lib/auth'
 import { validateBody, uuidLike } from '@/lib/validate'
-
-const TIME = z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/, 'Use HH:MM or HH:MM:SS')
-const HEX_COLOR = z.string().regex(/^#[0-9A-Fa-f]{6}$/, 'Use #RRGGBB hex')
+import { MANAGER_ROLES, timeOfDay, hexColor, DEFAULT_COLOR } from '@/lib/schemas'
 
 const CreateTemplateSchema = z.object({
   location_id: uuidLike,
   name: z.string().min(1).max(100),
-  start_time: TIME,
-  end_time: TIME,
-  color: HEX_COLOR.optional(),
+  start_time: timeOfDay,
+  end_time: timeOfDay,
+  color: hexColor.optional(),
   role_label: z.string().max(50).nullable().optional(),
   display_order: z.number().int().min(0).max(1000).optional(),
 })
@@ -30,7 +28,7 @@ export async function GET(request) {
   if (locationId) {
     query = query.eq('location_id', locationId)
   } else {
-    const userLocationIds = (user.locations || []).map(l => l.id)
+    const userLocationIds = getUserLocationIds(user)
     if (userLocationIds.length === 0) return NextResponse.json({ success: true, data: [] })
     query = query.in('location_id', userLocationIds)
   }
@@ -43,7 +41,7 @@ export async function GET(request) {
 // POST /api/schedule/templates — Create a shift template
 export async function POST(request) {
   const user = await getCurrentUser()
-  if (!user || !['owner', 'manager', 'head_coach'].includes(user.role)) {
+  if (!user || !MANAGER_ROLES.includes(user.role)) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
 
@@ -60,7 +58,7 @@ export async function POST(request) {
     name: body.name,
     start_time: body.start_time,
     end_time: body.end_time,
-    color: body.color || '#3B82F6',
+    color: body.color || DEFAULT_COLOR,
     role_label: body.role_label || null,
     display_order: body.display_order || 0,
   }).select().single()

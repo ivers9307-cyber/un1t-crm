@@ -1,10 +1,10 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccess , getUserLocationIds} from '@/lib/auth'
 import { generateReport } from '@/lib/report-generator'
 import { validateBody } from '@/lib/validate'
-import { uuidLike, isoDate, reportTypeSchema } from '@/lib/schemas'
+import { uuidLike, isoDate, reportTypeSchema , MANAGER_ROLES} from '@/lib/schemas'
 
 const ReportRunSchema = z.object({
   report_type: reportTypeSchema,
@@ -16,7 +16,7 @@ const ReportRunSchema = z.object({
 // GET /api/schedule/reports?location_id=xxx — List generated reports
 export async function GET(request) {
   const user = await getCurrentUser()
-  if (!user || !['owner', 'manager', 'head_coach'].includes(user.role)) {
+  if (!user || !MANAGER_ROLES.includes(user.role)) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
 
@@ -34,7 +34,7 @@ export async function GET(request) {
   if (locationId) {
     query = query.eq('location_id', locationId)
   } else {
-    const userLocationIds = (user.locations || []).map(l => l.id)
+    const userLocationIds = getUserLocationIds(user)
     if (userLocationIds.length === 0) return NextResponse.json({ success: true, data: [] })
     query = query.in('location_id', userLocationIds)
   }
@@ -47,7 +47,7 @@ export async function GET(request) {
 // POST /api/schedule/reports — Generate a report on demand
 export async function POST(request) {
   const user = await getCurrentUser()
-  if (!user || !['owner', 'manager', 'head_coach'].includes(user.role)) {
+  if (!user || !MANAGER_ROLES.includes(user.role)) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
 

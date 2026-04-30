@@ -28,7 +28,7 @@ export async function POST(request) {
       .single()
 
     if (contactErr || !contact) {
-      return NextResponse.json({ error: 'Contact not found' }, { status: 404 })
+      return NextResponse.json({ success: false, error: 'Contact not found' }, { status: 404 })
     }
 
     // Caller must belong to the contact's location.
@@ -37,7 +37,7 @@ export async function POST(request) {
 
     const phone = contact.wa_phone || contact.phone
     if (!phone) {
-      return NextResponse.json({ error: 'Contact has no phone number' }, { status: 400 })
+      return NextResponse.json({ success: false, error: 'Contact has no phone number' }, { status: 400 })
     }
 
     // Normalize phone — strip the + for consistency with Meta's format
@@ -82,7 +82,7 @@ export async function POST(request) {
         return NextResponse.json({ success: true, conversation_id: byPhone.id })
       }
 
-      return NextResponse.json({ error: convErr.message }, { status: 500 })
+      return NextResponse.json({ success: false, error: convErr.message }, { status: 500 })
     }
 
     // Update contact's wa_phone if not set
@@ -95,6 +95,6 @@ export async function POST(request) {
     return NextResponse.json({ success: true, conversation_id: newConv.id })
   } catch (err) {
     console.error('Start conversation error:', err)
-    return NextResponse.json({ error: err.message }, { status: 500 })
+    return NextResponse.json({ success: false, error: err.message }, { status: 500 })
   }
 }

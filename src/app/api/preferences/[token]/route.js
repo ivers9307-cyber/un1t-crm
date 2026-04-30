@@ -35,7 +35,7 @@ export async function GET(request, { params }) {
     .single()
 
   if (error || !pref) {
-    return NextResponse.json({ error: 'Invalid token' }, { status: 404 })
+    return NextResponse.json({ success: false, error: 'Invalid token' }, { status: 404 })
   }
 
   return NextResponse.json({
@@ -73,7 +73,7 @@ export async function PUT(request, { params }) {
     .single()
 
   if (error || !pref) {
-    return NextResponse.json({ error: 'Invalid token' }, { status: 404 })
+    return NextResponse.json({ success: false, error: 'Invalid token' }, { status: 404 })
   }
 
   const allowed = ['email_marketing', 'email_administrative', 'whatsapp_marketing', 'whatsapp_administrative']

@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
-import { timeOffStatusSchema } from '@/lib/schemas'
+import { timeOffStatusSchema , MANAGER_ROLES} from '@/lib/schemas'
 
 const TimeOffReviewSchema = z.object({
   status: timeOffStatusSchema,
@@ -35,11 +35,11 @@ export async function PUT(request, { params }) {
   // Staff can only cancel their own pending requests
   if (user.id === existing.profile_id) {
     if (status !== 'cancelled' || existing.status !== 'pending') {
-      if (!['owner', 'manager', 'head_coach'].includes(user.role)) {
+      if (!MANAGER_ROLES.includes(user.role)) {
         return NextResponse.json({ success: false, error: 'You can only cancel your own pending requests' }, { status: 403 })
       }
     }
-  } else if (!['owner', 'manager', 'head_coach'].includes(user.role)) {
+  } else if (!MANAGER_ROLES.includes(user.role)) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
 
@@ -47,7 +47,7 @@ export async function PUT(request, { params }) {
 
   // If approving or rejecting, record who did it
   if (status === 'approved' || status === 'rejected') {
-    if (!['owner', 'manager', 'head_coach'].includes(user.role)) {
+    if (!MANAGER_ROLES.includes(user.role)) {
       return NextResponse.json({ success: false, error: 'Only managers can approve or reject requests' }, { status: 403 })
     }
     updates.reviewed_by = user.id

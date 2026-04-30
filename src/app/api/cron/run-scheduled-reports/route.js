@@ -13,7 +13,7 @@ export async function GET(request) {
   const cronSecret = process.env.CRON_SECRET
 
   if (cronSecret && authHeader !== `Bearer ${cronSecret}`) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
   }
 
   const db = createServerClient()
@@ -28,7 +28,7 @@ export async function GET(request) {
     .order('next_run_at')
 
   if (fetchError) {
-    return NextResponse.json({ error: fetchError.message }, { status: 500 })
+    return NextResponse.json({ success: false, error: fetchError.message }, { status: 500 })
   }
 
   if (!dueReports || dueReports.length === 0) {

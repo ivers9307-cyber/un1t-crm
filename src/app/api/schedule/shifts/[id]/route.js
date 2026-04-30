@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
-import { uuidLike, isoDate, timeOfDay } from '@/lib/schemas'
+import { uuidLike, isoDate, timeOfDay , MANAGER_ROLES} from '@/lib/schemas'
 
 const ShiftUpdateSchema = z.object({
   shift_template_id: uuidLike.optional(),
@@ -19,7 +19,7 @@ const ShiftUpdateSchema = z.object({
 // PUT /api/schedule/shifts/:id
 export async function PUT(request, { params }) {
   const user = await getCurrentUser()
-  if (!user || !['owner', 'manager', 'head_coach'].includes(user.role)) {
+  if (!user || !MANAGER_ROLES.includes(user.role)) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
 
@@ -46,7 +46,7 @@ export async function PUT(request, { params }) {
 // DELETE /api/schedule/shifts/:id
 export async function DELETE(request, { params }) {
   const user = await getCurrentUser()
-  if (!user || !['owner', 'manager', 'head_coach'].includes(user.role)) {
+  if (!user || !MANAGER_ROLES.includes(user.role)) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
 

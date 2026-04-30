@@ -33,7 +33,7 @@ export async function GET(request, { params }) {
 
   const db = createServerClient()
   const seqLocation = await loadSequenceLocation(db, params.id)
-  if (!seqLocation) return NextResponse.json({ error: 'Sequence not found' }, { status: 404 })
+  if (!seqLocation) return NextResponse.json({ success: false, error: 'Sequence not found' }, { status: 404 })
   const guard = assertLocationAccess(user, seqLocation)
   if (guard) return guard
 
@@ -42,7 +42,7 @@ export async function GET(request, { params }) {
     .eq('sequence_id', params.id)
     .order('step_order', { ascending: true })
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
   return NextResponse.json({ success: true, steps: data })
 }
 
@@ -53,7 +53,7 @@ export async function POST(request, { params }) {
 
   const db = createServerClient()
   const seqLocation = await loadSequenceLocation(db, params.id)
-  if (!seqLocation) return NextResponse.json({ error: 'Sequence not found' }, { status: 404 })
+  if (!seqLocation) return NextResponse.json({ success: false, error: 'Sequence not found' }, { status: 404 })
   const guard = assertLocationAccess(user, seqLocation)
   if (guard) return guard
 
@@ -80,7 +80,7 @@ export async function POST(request, { params }) {
     design_json: body.design_json || null,
   }).select().single()
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
   return NextResponse.json({ success: true, step: data })
 }
 
@@ -91,7 +91,7 @@ export async function PUT(request, { params }) {
 
   const db = createServerClient()
   const seqLocation = await loadSequenceLocation(db, params.id)
-  if (!seqLocation) return NextResponse.json({ error: 'Sequence not found' }, { status: 404 })
+  if (!seqLocation) return NextResponse.json({ success: false, error: 'Sequence not found' }, { status: 404 })
   const guard = assertLocationAccess(user, seqLocation)
   if (guard) return guard
 

@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { requireApiKey } from '@/lib/api-auth'
 import { validateBody } from '@/lib/validate'
-import { uuidLike, hexColor, url } from '@/lib/schemas'
+import { uuidLike, hexColor, url, DEFAULT_COLOR } from '@/lib/schemas'
 
 const EventCreateSchema = z.object({
   name: z.string().min(1).max(200),
@@ -58,7 +58,7 @@ export async function POST(request) {
     slug,
     description: body.description || null,
     duration_minutes: body.duration_minutes || 30,
-    color: body.color || '#3B82F6',
+    color: body.color || DEFAULT_COLOR,
     availability: body.availability || undefined,
     buffer_minutes: body.buffer_minutes || 0,
     max_advance_days: body.max_advance_days || 30,

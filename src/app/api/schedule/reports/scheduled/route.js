@@ -4,6 +4,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { calculateNextRun } from '@/lib/report-generator'
 import { validateBody, uuidLike } from '@/lib/validate'
+import { MANAGER_ROLES } from '@/lib/schemas'
 
 const ScheduledReportSchema = z.object({
   location_id: uuidLike.optional(),
@@ -21,7 +22,7 @@ const ScheduledReportSchema = z.object({
 // GET /api/schedule/reports/scheduled — List scheduled reports
 export async function GET(request) {
   const user = await getCurrentUser()
-  if (!user || !['owner', 'manager', 'head_coach'].includes(user.role)) {
+  if (!user || !MANAGER_ROLES.includes(user.role)) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
 
@@ -43,7 +44,7 @@ export async function GET(request) {
 // POST /api/schedule/reports/scheduled — Create a scheduled report
 export async function POST(request) {
   const user = await getCurrentUser()
-  if (!user || !['owner', 'manager', 'head_coach'].includes(user.role)) {
+  if (!user || !MANAGER_ROLES.includes(user.role)) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
 
@@ -82,7 +83,7 @@ export async function POST(request) {
 // DELETE /api/schedule/reports/scheduled?id=xxx — Deactivate a scheduled report
 export async function DELETE(request) {
   const user = await getCurrentUser()
-  if (!user || !['owner', 'manager', 'head_coach'].includes(user.role)) {
+  if (!user || !MANAGER_ROLES.includes(user.role)) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
 

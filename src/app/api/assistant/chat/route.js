@@ -4,6 +4,7 @@ import { createServerClient } from '@/lib/supabase'
 import { SYSTEM_PROMPT, TOOLS } from '@/lib/assistant-prompt'
 import { getCurrentUser } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
+import { MANAGER_ROLES, ADMIN_ROLES } from '@/lib/schemas'
 
 const ChatRequestSchema = z.object({
   // Anthropic messages array — content can be string or block array, both valid.
@@ -36,9 +37,6 @@ const TOOL_PERMISSIONS = {
   create_activity:      'manager',
   generate_report:      'manager',
 }
-
-const MANAGER_ROLES = ['owner', 'manager', 'head_coach']
-const ADMIN_ROLES = ['owner', 'manager']
 
 function checkToolPermission(toolName, role) {
   const level = TOOL_PERMISSIONS[toolName] || 'admin'
@@ -299,12 +297,12 @@ export async function POST(request) {
   // an owner.
   const user = await getCurrentUser()
   if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
   }
 
   const apiKey = process.env.ANTHROPIC_API_KEY
   if (!apiKey) {
-    return NextResponse.json({ error: 'ANTHROPIC_API_KEY not configured' }, { status: 500 })
+    return NextResponse.json({ success: false, error: 'ANTHROPIC_API_KEY not configured' }, { status: 500 })
   }
 
   const validation = await validateBody(request, ChatRequestSchema)
@@ -371,7 +369,7 @@ export async function POST(request) {
 
     if (!claudeRes.ok) {
       const errText = await claudeRes.text()
-      return NextResponse.json({ error: `Claude API error: ${errText}` }, { status: 500 })
+      return NextResponse.json({ success: false, error: `Claude API error: ${errText}` }, { status: 500 })
     }
 
     const claudeData = await claudeRes.json()
@@ -409,7 +407,7 @@ export async function POST(request) {
   }
 
   if (!finalResponse) {
-    return NextResponse.json({ error: 'Assistant exceeded maximum tool iterations' }, { status: 500 })
+    return NextResponse.json({ success: false, error: 'Assistant exceeded maximum tool iterations' }, { status: 500 })
   }
 
   // Extract text and any navigation actions from the response
