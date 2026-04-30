@@ -111,6 +111,20 @@ describe('mergeHolidays — country selection', () => {
 describe('SUPPORTED_HOLIDAY_COUNTRIES', () => {
   it('lists every country we have static data for', () => {
     expect(SUPPORTED_HOLIDAY_COUNTRIES).toContain('IE')
+    expect(SUPPORTED_HOLIDAY_COUNTRIES).toContain('GB')
+    expect(SUPPORTED_HOLIDAY_COUNTRIES).toContain('DE')
+    expect(SUPPORTED_HOLIDAY_COUNTRIES).toContain('AU')
+    expect(SUPPORTED_HOLIDAY_COUNTRIES).toContain('KW')
+    expect(SUPPORTED_HOLIDAY_COUNTRIES).toContain('MT')
+    expect(SUPPORTED_HOLIDAY_COUNTRIES).toContain('EG')
+    expect(SUPPORTED_HOLIDAY_COUNTRIES).toContain('CY')
+  })
+
+  it('does not include countries we removed from the dropdown', () => {
+    expect(SUPPORTED_HOLIDAY_COUNTRIES).not.toContain('US')
+    expect(SUPPORTED_HOLIDAY_COUNTRIES).not.toContain('FR')
+    expect(SUPPORTED_HOLIDAY_COUNTRIES).not.toContain('ES')
+    expect(SUPPORTED_HOLIDAY_COUNTRIES).not.toContain('NL')
   })
 
   it('is frozen', () => {
@@ -122,12 +136,87 @@ describe('countryName', () => {
   it('returns a friendly name for known codes', () => {
     expect(countryName('IE')).toBe('Ireland')
     expect(countryName('GB')).toBe('United Kingdom')
+    expect(countryName('DE')).toBe('Germany')
+    expect(countryName('AU')).toBe('Australia')
+    expect(countryName('KW')).toBe('Kuwait')
+    expect(countryName('MT')).toBe('Malta')
+    expect(countryName('EG')).toBe('Egypt')
+    expect(countryName('CY')).toBe('Cyprus')
   })
 
   it('falls back to the code for unknown countries', () => {
     expect(countryName('XX')).toBe('XX')
     expect(countryName('')).toBe('')
     expect(countryName(null)).toBe('')
+  })
+})
+
+describe('static lists for new countries', () => {
+  it('UK has standard 8 bank holidays in 2025', () => {
+    const r = getStaticHolidays('2025-01-01', '2025-12-31', 'GB')
+    expect(r).toHaveLength(8)
+    expect(r.find(h => h.name === 'Good Friday').date).toBe('2025-04-18')
+    expect(r.find(h => h.name === 'Boxing Day').date).toBe('2025-12-26')
+  })
+
+  it('Germany has 9 federal holidays in 2025', () => {
+    const r = getStaticHolidays('2025-01-01', '2025-12-31', 'DE')
+    expect(r).toHaveLength(9)
+    expect(r.find(h => h.name === 'German Unity Day').date).toBe('2025-10-03')
+  })
+
+  it('Australia includes Anzac Day and Australia Day in 2026', () => {
+    const r = getStaticHolidays('2026-01-01', '2026-12-31', 'AU')
+    expect(r.find(h => h.name === 'Australia Day').date).toBe('2026-01-26')
+    expect(r.find(h => h.name === 'Anzac Day').date).toBe('2026-04-25')
+  })
+
+  it('Kuwait includes National Day, Liberation Day and Eid in 2025', () => {
+    const r = getStaticHolidays('2025-01-01', '2025-12-31', 'KW')
+    expect(r.find(h => h.name === 'National Day').date).toBe('2025-02-25')
+    expect(r.find(h => h.name === 'Liberation Day').date).toBe('2025-02-26')
+    expect(r.find(h => h.name === 'Eid al-Fitr (Day 1)').date).toBe('2025-03-30')
+  })
+
+  it('Malta includes Republic Day and Sette Giugno', () => {
+    const r = getStaticHolidays('2025-01-01', '2025-12-31', 'MT')
+    expect(r.find(h => h.name === 'Republic Day').date).toBe('2025-12-13')
+    expect(r.find(h => h.name === 'Sette Giugno').date).toBe('2025-06-07')
+  })
+
+  it('Egypt includes Coptic Christmas, Sinai Liberation, Sham El-Nessim', () => {
+    const r = getStaticHolidays('2025-01-01', '2025-12-31', 'EG')
+    expect(r.find(h => h.name === 'Coptic Christmas').date).toBe('2025-01-07')
+    expect(r.find(h => h.name === 'Sinai Liberation Day').date).toBe('2025-04-25')
+    expect(r.find(h => h.name === 'Sham El-Nessim').date).toBe('2025-04-21')
+  })
+
+  it('Cyprus uses Greek Orthodox Easter dates', () => {
+    // 2026 Orthodox Easter falls on April 12 — Good Friday should be April 10.
+    const r = getStaticHolidays('2026-01-01', '2026-12-31', 'CY')
+    expect(r.find(h => h.name === 'Good Friday (Orthodox)').date).toBe('2026-04-10')
+    expect(r.find(h => h.name === 'Easter Monday (Orthodox)').date).toBe('2026-04-13')
+    expect(r.find(h => h.name === 'Ohi Day').date).toBe('2026-10-28')
+  })
+
+  it('every entry across every supported country is annotated and frozen', () => {
+    for (const cc of SUPPORTED_HOLIDAY_COUNTRIES) {
+      const list = getStaticHolidays(undefined, undefined, cc)
+      expect(list.length).toBeGreaterThan(0)
+      for (const h of list) {
+        expect(h.source).toBe('national')
+        expect(h.country).toBe(cc)
+        expect(Object.isFrozen(h)).toBe(true)
+      }
+    }
+  })
+
+  it('has unique dates within each country (no duplicate keys)', () => {
+    for (const cc of SUPPORTED_HOLIDAY_COUNTRIES) {
+      const list = getStaticHolidays(undefined, undefined, cc)
+      const dates = list.map(h => h.date)
+      expect(new Set(dates).size).toBe(dates.length)
+    }
   })
 })
 

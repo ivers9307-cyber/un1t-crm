@@ -153,13 +153,14 @@ export default function LocationForm({ location }) {
             >
               <option value="IE">Ireland (IE)</option>
               <option value="GB">United Kingdom (GB)</option>
-              <option value="US">United States (US)</option>
               <option value="DE">Germany (DE)</option>
-              <option value="FR">France (FR)</option>
-              <option value="ES">Spain (ES)</option>
-              <option value="NL">Netherlands (NL)</option>
+              <option value="AU">Australia (AU)</option>
+              <option value="KW">Kuwait (KW)</option>
+              <option value="MT">Malta (MT)</option>
+              <option value="EG">Egypt (EG)</option>
+              <option value="CY">Cyprus (CY)</option>
             </select>
-            <p className="text-xs text-un1t-mid mt-1">Drives public-holiday list on the schedule. Currently only Ireland has built-in holidays — others can still add custom holidays.</p>
+            <p className="text-xs text-un1t-mid mt-1">Drives the public-holiday list on the schedule. All listed countries have built-in holidays through 2030.</p>
           </div>
           <div>
             <label className="block text-sm mb-1.5">Timezone</label>
@@ -171,11 +172,15 @@ export default function LocationForm({ location }) {
               <option value="Europe/Dublin">Europe/Dublin</option>
               <option value="Europe/London">Europe/London</option>
               <option value="Europe/Berlin">Europe/Berlin</option>
-              <option value="Europe/Paris">Europe/Paris</option>
-              <option value="Europe/Madrid">Europe/Madrid</option>
-              <option value="Europe/Amsterdam">Europe/Amsterdam</option>
-              <option value="America/New_York">America/New_York</option>
-              <option value="America/Los_Angeles">America/Los_Angeles</option>
+              <option value="Europe/Malta">Europe/Malta</option>
+              <option value="Asia/Nicosia">Asia/Nicosia (Cyprus)</option>
+              <option value="Africa/Cairo">Africa/Cairo</option>
+              <option value="Asia/Kuwait">Asia/Kuwait</option>
+              <option value="Australia/Sydney">Australia/Sydney</option>
+              <option value="Australia/Melbourne">Australia/Melbourne</option>
+              <option value="Australia/Brisbane">Australia/Brisbane</option>
+              <option value="Australia/Perth">Australia/Perth</option>
+              <option value="Australia/Adelaide">Australia/Adelaide</option>
             </select>
           </div>
         </div>
