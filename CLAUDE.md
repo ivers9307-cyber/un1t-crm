@@ -75,7 +75,7 @@ React 18 + Next.js 14, Tailwind CSS 3.4, Supabase Auth (SSR cookies), Postmark (
 | Scheduling | 010, 011 | `/api/schedule/*` | — | `ScheduleCalendar.jsx` |
 | HR/Reporting | 012 | `/api/schedule/reports` | `report-generator.js` | `ScheduleReporting.jsx` |
 | Branding | 013 | `/api/settings/branding` | — | `BrandingSettings.jsx` |
-| Security: RLS | 014 | (DB-level only) | — | — |
+| Security: RLS | 014, 020, 021, 022 | (DB-level only) | — | — |
 | Security: Rate limit | 015 | `/api/cron/prune-rate-limits` | `rate-limit.js` | — |
 | Webhooks | (cross-cutting) | `/api/webhooks/postmark`, `/api/webhooks/whatsapp` | `webhook-auth.js` | — |
 | API Reference | (cross-cutting) | `/api/openapi.json`, `/api-docs` | `openapi.js` | — |
@@ -113,7 +113,7 @@ Two streams: `broadcast` (marketing, GDPR headers) and `outbound` (transactional
 
 ## Database
 
-19 migrations in `supabase/migrations/`. Key tables:
+22 migrations in `supabase/migrations/`. Key tables:
 
 **Core:** `locations`, `profiles`, `profile_locations` (junction; `profiles.role` holds the role, NOT this junction), `contacts`, `deals` (linked to contacts + stages), `pipeline_stages`, `activities`, `notes`, `webhook_subscriptions`.
 
@@ -133,17 +133,21 @@ Two streams: `broadcast` (marketing, GDPR headers) and `outbound` (transactional
 
 ### Row Level Security
 
-Migration 014 enforces per-location scoping at the DB layer for all data tables. The model:
+Migrations 014 + 020-022 enforce per-location scoping at the DB layer for all data tables. The model:
 
 - **Service role** (used by every API route, cron, and webhook handler via `createServerClient()`) bypasses RLS — application code is the source of truth for cross-cutting logic. RLS is defence-in-depth.
-- **Authenticated role** (browser-side calls via `createBrowserClient()`, e.g. `KanbanBoard`, `ContactActions`, `CampaignEditor`) is restricted by helper functions defined in 014:
-  - `auth_is_in_location(uuid)` — true if the row's `location_id` is in the caller's `profile_locations`.
-  - `auth_role()`, `auth_is_owner_or_manager()`, `auth_is_owner()` — role checks via `profiles.role`.
-- **Anon role** is allowed only by the explicit public policies in 002 (booking widget) and 013 (branding bucket); migration 014 does not change those.
+- **Authenticated role** (browser-side calls via `createBrowserClient()`, e.g. `KanbanBoard`, `ContactActions`, `CampaignEditor`) is restricted by helper functions in the `private` schema:
+  - `private.auth_is_in_location(uuid)` — true if the row's `location_id` is in the caller's `profile_locations`.
+  - `private.auth_role()`, `private.auth_is_owner_or_manager()`, `private.auth_is_owner()` — role checks via `profiles.role`.
+  - These were originally created in migration 014 in `public`; migration 022 moved them to `private` so PostgREST stops exposing them as `/rest/v1/rpc/*` endpoints. RLS keeps working because authenticated has `USAGE` on the schema and `EXECUTE` on each function (preserved across `ALTER FUNCTION ... SET SCHEMA`). When writing new RLS policies, always reference the `private.` prefix explicitly.
+- **Anon role** has no direct DB access. Migration 021 dropped the legacy `Anon full access` / `Public can ...` policies on `bookings`, `event_types`, `blocked_times`. The public booking widget at `/api/public/*` uses the service role (bypasses RLS). Anon also can't list the `branding` storage bucket (migration 022); public URLs to known files still resolve because the bucket is public.
 - Child tables without a direct `location_id` (`consent_log`, `campaign_recipients`, `sequence_steps`, `sequence_enrollments`, `whatsapp_broadcast_recipients`, `blocked_times`) are scoped through the parent's `location_id`.
 - `pipeline_stages` is read-any-authenticated, write-owner-or-manager. `webhook_subscriptions` is owner-write.
+- `rate_limit_buckets` is service-role-only with an explicit deny-all for anon/authenticated (migration 022). Service role bypasses it; the policy exists for clarity-of-intent.
 
-When adding a new table that holds tenant data, add `location_id UUID REFERENCES locations(id)` and replicate the `_location_scoped` policy pattern from 014. Don't add `USING (true)` policies.
+Migration 014 wrote the policies but never enabled RLS — migration 020 fixed that for the 9 tables it missed (`activities`, `blocked_times`, `bookings`, `contacts`, `deals`, `event_types`, `notes`, `pipeline_stages`, `webhook_subscriptions`). Migration 021 cleaned up `search_path` on 4 trigger/utility functions and revoked RPC access from anon/authenticated on the trigger functions (`handle_new_booking`, `handle_new_user`, `log_*`, `create_contact_preferences`, `rate_limit_hit`, `rls_auto_enable`).
+
+When adding a new table that holds tenant data, add `location_id UUID REFERENCES locations(id)`, run `ENABLE ROW LEVEL SECURITY`, and replicate the `_location_scoped` policy pattern from 014 — referencing the helpers as `private.auth_is_in_location(...)`. Don't add `USING (true)` policies.
 
 ## Environment Variables
 
@@ -253,7 +257,7 @@ Vercel. Crons (in `vercel.json`):
 
 Both crons are protected by `Authorization: Bearer ${CRON_SECRET}`.
 
-Supabase for database + auth + file storage (`branding` bucket for logos). Migrations are applied manually in the Supabase SQL Editor (forward-only; no down migrations).
+Supabase for database + auth + file storage (`branding` bucket for logos). Migrations are forward-only — there are no down migrations. Apply via the Supabase MCP (`apply_migration` tool) or, when MCP is unavailable, paste the SQL into the Supabase Dashboard SQL Editor. After every DDL change, run the security advisor (`get_advisors` MCP tool, type=security) — RLS misses, missing policies, mutable `search_path`, and over-broad grants get flagged immediately.
 
 ## Extending
 
@@ -270,6 +274,6 @@ Supabase for database + auth + file storage (`branding` bucket for logos). Migra
 
 **New cron job:** API route at `src/app/api/cron/[name]/route.js` (auth via `Authorization: Bearer ${CRON_SECRET}`) + entry in `vercel.json` `crons` array.
 
-**New role or role-list change:** Update `roleSchema`, `ADMIN_ROLES`, `MANAGER_ROLES` in `src/lib/schemas.js` (single source of truth) and the `defaultPermissionsByRole` map in `src/components/StaffForm.jsx`. RLS helper functions in migration 014 (`auth_is_owner_or_manager()` etc.) may also need a follow-up migration if the new role has elevated DB-level write access.
+**New role or role-list change:** Update `roleSchema`, `ADMIN_ROLES`, `MANAGER_ROLES` in `src/lib/schemas.js` (single source of truth) and the `defaultPermissionsByRole` map in `src/components/StaffForm.jsx`. The `private.auth_is_owner_or_manager()` / `private.auth_role()` helpers (originally migration 014, moved to `private` schema in 022) may also need a follow-up migration if the new role has elevated DB-level write access.
 
 **New audience filter field:** Add to `AUDIENCE_FIELDS` in `src/lib/audience-filter.js` AND to `FIELD_OPTIONS` in `src/components/AudienceBuilder.jsx`. The whitelist is server-enforced, so missing it on the server side will silently drop the filter.
