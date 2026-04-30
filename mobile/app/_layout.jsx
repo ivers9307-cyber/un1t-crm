@@ -1,11 +1,20 @@
 // Root layout. Wraps the entire app in:
+//   - GestureHandlerRootView (required by react-navigation gestures)
 //   - SafeAreaProvider (so screens respect the iPhone notch / Dynamic Island)
 //   - AuthProvider (Supabase session + bootstrapped profile)
-//   - GestureHandlerRootView (required by react-navigation gestures)
 //
 // expo-router auto-resolves the route tree: anything under app/(auth)/
 // renders without auth, anything under app/(tabs)/ requires auth. The
-// guard logic is in app/(tabs)/_layout.jsx.
+// guard logic lives in app/(tabs)/_layout.jsx.
+//
+// IMPORTANT: in expo-router v6 + react-navigation v7 the splash-screen
+// hide effect MUST live in a separate component from the one that
+// renders <Stack>. If you read useAuth() in the same component that
+// returns <Stack>, the re-render on auth state change can race against
+// the navigation context bootstrap and trip the "Couldn't find the
+// prevent remove context" error. Splitting them — one component that
+// reads auth and triggers the hide, another that returns the Stack —
+// keeps the navigation tree stable across re-renders.
 
 import '../global.css'
 
@@ -20,18 +29,15 @@ import { AuthProvider, useAuth } from '../lib/auth-context'
 // flash of the login screen for already-logged-in users.
 SplashScreen.preventAutoHideAsync()
 
-function RootStack() {
+// Reads auth state and hides the splash. Renders nothing — its only job
+// is to side-effect on the loading flag. Lives outside the navigation
+// tree so its re-renders don't churn the Stack.
+function SplashGate() {
   const { loading } = useAuth()
   useEffect(() => {
     if (!loading) SplashScreen.hideAsync()
   }, [loading])
-
-  return (
-    <Stack screenOptions={{ headerShown: false }}>
-      <Stack.Screen name="(auth)" />
-      <Stack.Screen name="(tabs)" />
-    </Stack>
-  )
+  return null
 }
 
 export default function RootLayout() {
@@ -40,7 +46,11 @@ export default function RootLayout() {
       <SafeAreaProvider>
         <AuthProvider>
           <StatusBar style="dark" />
-          <RootStack />
+          <SplashGate />
+          <Stack screenOptions={{ headerShown: false }}>
+            <Stack.Screen name="(auth)" options={{ headerShown: false }} />
+            <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+          </Stack>
         </AuthProvider>
       </SafeAreaProvider>
     </GestureHandlerRootView>
