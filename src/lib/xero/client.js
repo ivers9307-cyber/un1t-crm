@@ -28,17 +28,26 @@ const REFRESH_BUFFER_MS = 60 * 1000 // refresh if access_token expires in <60s
 
 // Scopes required for v1 (customer invoice push):
 //   accounting.contacts            — find/create the buyer Contact
-//   accounting.transactions        — POST the Invoice
+//   accounting.invoices            — POST the Invoice (granular scope)
 //   offline_access                 — issue a refresh_token
 //
-// We deliberately omit the OIDC scopes (openid/profile/email) — we
-// don't use the id_token for anything (the user is already
-// authenticated against the CRM via Supabase Auth) and including
-// them sometimes triggers Xero's `unauthorized_client / Invalid
-// scope` error on apps that haven't explicitly enabled OIDC.
+// IMPORTANT: as of 2 March 2026 Xero replaced the broad
+// `accounting.transactions` scope with granular scopes. Apps
+// created on/after that date cannot request the broad scope at all
+// and Xero rejects auth with `unauthorized_client / Invalid scope
+// for client`. The granular replacement for invoice endpoints is
+// `accounting.invoices` (covers invoices, credit notes, items,
+// purchase orders, quotes, repeating invoices, linked transactions).
+//
+// `accounting.contacts` is unchanged and still valid for both old
+// and new apps. OIDC scopes (openid/profile/email) are omitted —
+// we don't use the id_token (auth is via Supabase) and including
+// them is another common cause of the same Xero error.
+//
+// Reference: https://www.apideck.com/blog/xero-scopes
 export const XERO_SCOPES = [
   'accounting.contacts',
-  'accounting.transactions',
+  'accounting.invoices',
   'offline_access',
 ]
 
