@@ -38,7 +38,14 @@ import {
   MOBILE_PERMISSIONS,
   WEB_PERMISSION_KEYS,
   MOBILE_PERMISSION_KEYS,
+  CROSS_PLATFORM_DASHBOARD_KEYS,
 } from '../shared/permissions.js'
+
+// Cross-platform keys live in WEB_PERMISSIONS only on disk but
+// satisfy both web and mobile — the mobile Home tab reads them via
+// canDashboard(). Treat them as "implicitly satisfied on mobile" so
+// the linter doesn't complain.
+const CROSS_PLATFORM_SET = new Set(CROSS_PLATFORM_DASHBOARD_KEYS)
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const repoRoot = resolve(__dirname, '..')
@@ -63,7 +70,6 @@ for (const m of MOBILE_PERMISSIONS) {
 // you ship a web feature that genuinely doesn't make sense on
 // mobile.
 const WEB_ONLY_OK = {
-  dashboard:  'Web charts; mobile shows a slim Home tab digest instead.',
   contacts:   'Searchable contact list lives only on web for now (mobile uses pipeline drill-in).',
   events:     'Booking-link / event-type management is admin-only and rare on mobile.',
   bookings:   'Bookings list lives in the web sidebar; mobile shows no equivalent.',
@@ -77,6 +83,7 @@ for (const w of WEB_PERMISSIONS) {
   const has = (mobileByWebKey[w.key] || []).length > 0
   if (has) continue
   if (WEB_ONLY_OK[w.key]) continue
+  if (CROSS_PLATFORM_SET.has(w.key)) continue   // mobile reads it via canDashboard()
   webDrift.push({
     web_key: w.key,
     label: w.label,

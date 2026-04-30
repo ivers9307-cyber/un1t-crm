@@ -24,6 +24,7 @@ export {
   MOBILE_PERMISSIONS,
   MOBILE_PERMISSION_KEYS,
   DEFAULT_MOBILE_PERMISSIONS_BY_ROLE,
+  CROSS_PLATFORM_DASHBOARD_KEYS,
 } from '../../shared/permissions'
 
 /**
@@ -46,4 +47,19 @@ export function hasAnyMobileFeature(profile) {
   const m = profile?.permissions?.mobile
   if (!m || typeof m !== 'object') return false
   return Object.values(m).some(v => v === true)
+}
+
+/**
+ * Cross-platform dashboard permission check. The dashboard sub-views
+ * (`dashboard_personal`, `dashboard_studio`, `dashboard_business`)
+ * live at the TOP LEVEL of profile.permissions, not under .mobile,
+ * so a single admin toggle controls visibility on both web and
+ * mobile. Use this instead of canMobile() for any of those keys.
+ *
+ * @param {object|null|undefined} profile
+ * @param {string} key  one of dashboard_personal | dashboard_studio | dashboard_business
+ * @returns {boolean}
+ */
+export function canDashboard(profile, key) {
+  return profile?.permissions?.[key] === true
 }

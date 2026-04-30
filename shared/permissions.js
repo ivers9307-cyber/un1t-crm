@@ -19,8 +19,16 @@
 // users who can't act on it anyway.
 // ============================================================
 
+// The three dashboard sub-views are CROSS-PLATFORM permissions —
+// they appear in WEB_PERMISSIONS only (no `mobile.` prefix on disk)
+// but both the web sidebar AND the mobile Home tab read them. This
+// lets a single admin toggle in StaffForm control visibility on both
+// devices at once. To check on mobile use `canDashboard(profile, key)`
+// from lib/permissions.js (NOT canMobile() — those are mobile-only).
 export const WEB_PERMISSIONS = Object.freeze([
-  { key: 'dashboard',  label: 'Dashboard' },
+  { key: 'dashboard_personal', label: 'Dashboard · Today',     hint: 'Personal home view — your shifts, swaps, inbox' },
+  { key: 'dashboard_studio',   label: 'Dashboard · Studio',    hint: 'Operational view — leads, members, approvals' },
+  { key: 'dashboard_business', label: 'Dashboard · Business',  hint: 'Owner-level — pipeline, won deals, payroll' },
   { key: 'pipeline',   label: 'Pipeline & Deals' },
   { key: 'contacts',   label: 'Contacts' },
   { key: 'events',     label: 'Events' },
@@ -35,22 +43,26 @@ export const WEB_PERMISSIONS = Object.freeze([
 
 export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
   staff: {
-    dashboard: true, pipeline: true, contacts: true,
+    dashboard_personal: true, dashboard_studio: false, dashboard_business: false,
+    pipeline: true, contacts: true,
     events: true, bookings: true, activities: true,
     email: false, whatsapp: false, schedule: true, assistant: false, settings: false,
   },
   head_coach: {
-    dashboard: true, pipeline: true, contacts: true,
+    dashboard_personal: true, dashboard_studio: true, dashboard_business: false,
+    pipeline: true, contacts: true,
     events: true, bookings: true, activities: true,
     email: true, whatsapp: true, schedule: true, assistant: true, settings: false,
   },
   manager: {
-    dashboard: true, pipeline: true, contacts: true,
+    dashboard_personal: true, dashboard_studio: true, dashboard_business: false,
+    pipeline: true, contacts: true,
     events: true, bookings: true, activities: true,
     email: true, whatsapp: true, schedule: true, assistant: true, settings: true,
   },
   owner: {
-    dashboard: true, pipeline: true, contacts: true,
+    dashboard_personal: true, dashboard_studio: true, dashboard_business: true,
+    pipeline: true, contacts: true,
     events: true, bookings: true, activities: true,
     email: true, whatsapp: true, schedule: true, assistant: true, settings: true,
   },
@@ -76,9 +88,6 @@ export const MOBILE_PERMISSIONS = Object.freeze([
   { key: 'time_off',           label: 'Time Off Requests',        hint: 'Submit and view leave requests',                                webEquivalent: 'schedule' },
   { key: 'assistant',          label: 'AI Assistant',             hint: 'Use the in-app assistant from mobile',                          webEquivalent: 'assistant' },
   { key: 'door_unlock',        label: 'Door Unlock',              hint: 'Unlock UniFi-controlled doors from the phone',                  mobileOnly: true },
-  { key: 'dashboard_personal', label: 'Today dashboard',          hint: 'Personal home view — your shifts, pending swaps, your inbox',   webEquivalent: 'dashboard' },
-  { key: 'dashboard_studio',   label: 'Studio dashboard',         hint: 'Operations view — leads, members, approvals queue',             webEquivalent: 'dashboard' },
-  { key: 'dashboard_business', label: 'Business dashboard',       hint: 'Owner-level view — pipeline, won deals, payroll spend',         webEquivalent: 'dashboard' },
   { key: 'push_notifications', label: 'Push Notifications',       hint: 'Master switch — turn off to silence everything',                mobileOnly: true },
   { key: 'notify_time_off',    label: '… Time-off decisions',     hint: 'Notify on approval/decline of own requests',                    mobileOnly: true, isNotify: true },
   { key: 'notify_schedule',    label: '… Schedule published',     hint: 'Notify when a new week is published',                           mobileOnly: true, isNotify: true },
@@ -91,7 +100,6 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
   staff: {
     schedule: true, pipeline: false, whatsapp: false,
     time_off: true, assistant: false, door_unlock: false,
-    dashboard_personal: true, dashboard_studio: false, dashboard_business: false,
     push_notifications: true,
     notify_time_off: true, notify_schedule: true, notify_swap: true,
     notify_lead: false, notify_whatsapp: false,
@@ -99,7 +107,6 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
   head_coach: {
     schedule: true, pipeline: true, whatsapp: true,
     time_off: true, assistant: true, door_unlock: false,
-    dashboard_personal: true, dashboard_studio: true, dashboard_business: false,
     push_notifications: true,
     notify_time_off: true, notify_schedule: true, notify_swap: true,
     notify_lead: true, notify_whatsapp: true,
@@ -107,7 +114,6 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
   manager: {
     schedule: true, pipeline: true, whatsapp: true,
     time_off: true, assistant: true, door_unlock: true,
-    dashboard_personal: true, dashboard_studio: true, dashboard_business: false,
     push_notifications: true,
     notify_time_off: true, notify_schedule: true, notify_swap: true,
     notify_lead: true, notify_whatsapp: true,
@@ -115,12 +121,21 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
   owner: {
     schedule: true, pipeline: true, whatsapp: true,
     time_off: true, assistant: true, door_unlock: true,
-    dashboard_personal: true, dashboard_studio: true, dashboard_business: true,
     push_notifications: true,
     notify_time_off: true, notify_schedule: true, notify_swap: true,
     notify_lead: true, notify_whatsapp: true,
   },
 })
+
+// Cross-platform dashboard keys — top-level on profiles.permissions,
+// not nested under mobile.* . Listed here so the parity linter knows
+// they're shared by design (no webEquivalent needed since they ARE
+// the web equivalent of themselves).
+export const CROSS_PLATFORM_DASHBOARD_KEYS = Object.freeze([
+  'dashboard_personal',
+  'dashboard_studio',
+  'dashboard_business',
+])
 
 // Convenience exports — saves callers from doing array-to-set work.
 export const WEB_PERMISSION_KEYS = Object.freeze(

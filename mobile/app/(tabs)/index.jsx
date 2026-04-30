@@ -15,11 +15,15 @@ import {
   View, Text, ScrollView, Pressable, RefreshControl,
 } from 'react-native'
 import { useAuth } from '../../lib/auth-context'
-import { canMobile, hasAnyMobileFeature } from '../../lib/permissions'
+import { canDashboard, hasAnyMobileFeature } from '../../lib/permissions'
 import PersonalDashboard from '../../components/dashboard/PersonalDashboard'
 import StudioDashboard from '../../components/dashboard/StudioDashboard'
 import BusinessDashboard from '../../components/dashboard/BusinessDashboard'
 
+// Dashboard segments. The `perm` keys live at the TOP LEVEL of
+// profile.permissions (not under .mobile) so a single admin toggle
+// in StaffForm controls both the web /dashboard/<id> page AND the
+// matching mobile segment.
 const SEGMENTS = [
   { id: 'personal', label: 'Today',    perm: 'dashboard_personal', Component: PersonalDashboard },
   { id: 'studio',   label: 'Studio',   perm: 'dashboard_studio',   Component: StudioDashboard },
@@ -54,7 +58,7 @@ export default function Home() {
 
   // Filter segments to those the user has permission for.
   const available = useMemo(
-    () => SEGMENTS.filter(s => canMobile(profile, s.perm)),
+    () => SEGMENTS.filter(s => canDashboard(profile, s.perm)),
     [profile]
   )
 
