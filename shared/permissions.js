@@ -76,6 +76,9 @@ export const MOBILE_PERMISSIONS = Object.freeze([
   { key: 'time_off',           label: 'Time Off Requests',        hint: 'Submit and view leave requests',                                webEquivalent: 'schedule' },
   { key: 'assistant',          label: 'AI Assistant',             hint: 'Use the in-app assistant from mobile',                          webEquivalent: 'assistant' },
   { key: 'door_unlock',        label: 'Door Unlock',              hint: 'Unlock UniFi-controlled doors from the phone',                  mobileOnly: true },
+  { key: 'dashboard_personal', label: 'Today dashboard',          hint: 'Personal home view — your shifts, pending swaps, your inbox',   webEquivalent: 'dashboard' },
+  { key: 'dashboard_studio',   label: 'Studio dashboard',         hint: 'Operations view — leads, members, approvals queue',             webEquivalent: 'dashboard' },
+  { key: 'dashboard_business', label: 'Business dashboard',       hint: 'Owner-level view — pipeline, won deals, payroll spend',         webEquivalent: 'dashboard' },
   { key: 'push_notifications', label: 'Push Notifications',       hint: 'Master switch — turn off to silence everything',                mobileOnly: true },
   { key: 'notify_time_off',    label: '… Time-off decisions',     hint: 'Notify on approval/decline of own requests',                    mobileOnly: true, isNotify: true },
   { key: 'notify_schedule',    label: '… Schedule published',     hint: 'Notify when a new week is published',                           mobileOnly: true, isNotify: true },
@@ -88,6 +91,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
   staff: {
     schedule: true, pipeline: false, whatsapp: false,
     time_off: true, assistant: false, door_unlock: false,
+    dashboard_personal: true, dashboard_studio: false, dashboard_business: false,
     push_notifications: true,
     notify_time_off: true, notify_schedule: true, notify_swap: true,
     notify_lead: false, notify_whatsapp: false,
@@ -95,6 +99,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
   head_coach: {
     schedule: true, pipeline: true, whatsapp: true,
     time_off: true, assistant: true, door_unlock: false,
+    dashboard_personal: true, dashboard_studio: true, dashboard_business: false,
     push_notifications: true,
     notify_time_off: true, notify_schedule: true, notify_swap: true,
     notify_lead: true, notify_whatsapp: true,
@@ -102,6 +107,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
   manager: {
     schedule: true, pipeline: true, whatsapp: true,
     time_off: true, assistant: true, door_unlock: true,
+    dashboard_personal: true, dashboard_studio: true, dashboard_business: false,
     push_notifications: true,
     notify_time_off: true, notify_schedule: true, notify_swap: true,
     notify_lead: true, notify_whatsapp: true,
@@ -109,6 +115,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
   owner: {
     schedule: true, pipeline: true, whatsapp: true,
     time_off: true, assistant: true, door_unlock: true,
+    dashboard_personal: true, dashboard_studio: true, dashboard_business: true,
     push_notifications: true,
     notify_time_off: true, notify_schedule: true, notify_swap: true,
     notify_lead: true, notify_whatsapp: true,

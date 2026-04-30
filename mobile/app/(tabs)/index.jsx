@@ -1,56 +1,86 @@
-// Home tab. Shows a greeting + active location + a list of "what you
-// can do" cards based on the user's mobile feature flags. If no
-// features are enabled, shows a friendly empty state explaining the
-// admin needs to enable mobile features.
+// Home tab — segmented control hosting up to three dashboards:
+//   - "Today"     → personal view (everyone w/ dashboard_personal)
+//   - "Studio"    → operational view (head_coach+ w/ dashboard_studio)
+//   - "Business"  → owner view (owner w/ dashboard_business)
 //
-// This is also where we'd surface a digest later — upcoming shift,
-// pending swaps to respond to, new leads, etc. For Phase 1 it's just
-// a navigation menu.
+// Only segments the user has permission to see are rendered. Default
+// landing segment is the most-aggregated one available — owners land
+// on Business, managers on Studio, staff on Today. The selection
+// persists across renders within a session via useState.
+//
+// Pull-to-refresh re-fetches whichever dashboard is currently shown.
 
-import { View, Text, ScrollView, Pressable } from 'react-native'
-import { useRouter } from 'expo-router'
-import { Ionicons } from '@expo/vector-icons'
+import { useState, useMemo, useCallback } from 'react'
+import {
+  View, Text, ScrollView, Pressable, RefreshControl,
+} from 'react-native'
 import { useAuth } from '../../lib/auth-context'
 import { canMobile, hasAnyMobileFeature } from '../../lib/permissions'
+import PersonalDashboard from '../../components/dashboard/PersonalDashboard'
+import StudioDashboard from '../../components/dashboard/StudioDashboard'
+import BusinessDashboard from '../../components/dashboard/BusinessDashboard'
 
-function HomeCard({ icon, title, subtitle, onPress }) {
+const SEGMENTS = [
+  { id: 'personal', label: 'Today',    perm: 'dashboard_personal', Component: PersonalDashboard },
+  { id: 'studio',   label: 'Studio',   perm: 'dashboard_studio',   Component: StudioDashboard },
+  { id: 'business', label: 'Business', perm: 'dashboard_business', Component: BusinessDashboard },
+]
+
+function SegmentedControl({ segments, selected, onSelect }) {
   return (
-    <Pressable
-      onPress={onPress}
-      className="bg-un1t-dark border border-un1t-gray rounded-2xl p-4 flex-row items-center mb-3 active:opacity-70"
-    >
-      <View className="w-10 h-10 rounded-full bg-un1t-gray/40 items-center justify-center mr-3">
-        <Ionicons name={icon} size={20} color="#111827" />
-      </View>
-      <View className="flex-1">
-        <Text className="text-base font-semibold text-un1t-white">{title}</Text>
-        {subtitle ? (
-          <Text className="text-sm text-un1t-light">{subtitle}</Text>
-        ) : null}
-      </View>
-      <Ionicons name="chevron-forward" size={18} color="#94A3B8" />
-    </Pressable>
+    <View className="flex-row bg-un1t-dark border border-un1t-gray rounded-xl p-1 mb-4">
+      {segments.map(seg => {
+        const sel = seg.id === selected
+        return (
+          <Pressable
+            key={seg.id}
+            onPress={() => onSelect(seg.id)}
+            className={`flex-1 py-2 rounded-lg ${sel ? 'bg-un1t-white' : ''}`}
+          >
+            <Text className={`text-center text-sm ${sel ? 'text-un1t-black font-semibold' : 'text-un1t-light'}`}>
+              {seg.label}
+            </Text>
+          </Pressable>
+        )
+      })}
+    </View>
   )
 }
 
 export default function Home() {
   const { profile, activeLocation } = useAuth()
-  const router = useRouter()
+  const [refreshKey, setRefreshKey] = useState(0)
+  const [refreshing, setRefreshing] = useState(false)
+
+  // Filter segments to those the user has permission for.
+  const available = useMemo(
+    () => SEGMENTS.filter(s => canMobile(profile, s.perm)),
+    [profile]
+  )
+
+  // Default to the LAST available segment so owners land on Business
+  // (the most-aggregated view), managers on Studio, staff on Today.
+  // Memoize so the user's manual selection persists.
+  const [selected, setSelected] = useState(null)
+  const effectiveSelected = selected || available[available.length - 1]?.id
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true)
+    setRefreshKey(k => k + 1) // bump to force child dashboards to re-fetch
+    // Give the child time to fetch before stopping the spinner.
+    setTimeout(() => setRefreshing(false), 800)
+  }, [])
 
   if (!profile) return null
 
   const firstName = profile.full_name?.split(' ')[0] || 'there'
 
-  return (
-    <ScrollView className="flex-1 bg-un1t-black" contentContainerClassName="p-6">
-      <Text className="text-3xl font-bold text-un1t-white mb-1">Hi {firstName}</Text>
-      <Text className="text-base text-un1t-light mb-6">
-        {activeLocation
-          ? `${activeLocation.name} · ${roleLabel(profile.role)}`
-          : roleLabel(profile.role)}
-      </Text>
-
-      {!hasAnyMobileFeature(profile) ? (
+  // No mobile features at all — show the existing onboarding nudge.
+  if (!hasAnyMobileFeature(profile)) {
+    return (
+      <ScrollView className="flex-1 bg-un1t-black" contentContainerClassName="p-6">
+        <Text className="text-3xl font-bold text-un1t-white mb-1">Hi {firstName}</Text>
+        <Text className="text-base text-un1t-light mb-6">{roleLabel(profile.role)}</Text>
         <View className="bg-un1t-dark border border-un1t-gray rounded-2xl p-5">
           <Text className="text-base font-semibold text-un1t-white mb-1">
             Mobile features off
@@ -61,34 +91,56 @@ export default function Home() {
             WhatsApp from your profile in the web app.
           </Text>
         </View>
-      ) : (
-        <>
-          {canMobile(profile, 'schedule') && (
-            <HomeCard
-              icon="calendar-outline"
-              title="Schedule"
-              subtitle="Your shifts, time off, swap requests"
-              onPress={() => router.push('/(tabs)/schedule')}
-            />
-          )}
-          {canMobile(profile, 'pipeline') && (
-            <HomeCard
-              icon="trending-up-outline"
-              title="Pipeline"
-              subtitle="Deals, contacts, and follow-ups"
-              onPress={() => router.push('/(tabs)/pipeline')}
-            />
-          )}
-          {canMobile(profile, 'whatsapp') && (
-            <HomeCard
-              icon="chatbubble-outline"
-              title="WhatsApp inbox"
-              subtitle="Reply to leads on the go"
-              onPress={() => router.push('/(tabs)/whatsapp')}
-            />
-          )}
-        </>
-      )}
+      </ScrollView>
+    )
+  }
+
+  // No dashboard permissions at all — fall through to a tiny stub
+  // pointing them at the bottom-tab features they can use.
+  if (available.length === 0) {
+    return (
+      <ScrollView className="flex-1 bg-un1t-black" contentContainerClassName="p-6">
+        <Text className="text-3xl font-bold text-un1t-white mb-1">Hi {firstName}</Text>
+        <Text className="text-base text-un1t-light">
+          {activeLocation
+            ? `${activeLocation.name} · ${roleLabel(profile.role)}`
+            : roleLabel(profile.role)}
+        </Text>
+        <Text className="text-sm text-un1t-light mt-6">
+          Use the tabs below to navigate.
+        </Text>
+      </ScrollView>
+    )
+  }
+
+  const currentSegment = available.find(s => s.id === effectiveSelected) || available[0]
+  const Body = currentSegment.Component
+
+  return (
+    <ScrollView
+      className="flex-1 bg-un1t-black"
+      contentContainerClassName="px-4 pt-4 pb-24"
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#111827" />}
+    >
+      {/* Greeting */}
+      <Text className="text-3xl font-bold text-un1t-white">Hi {firstName}</Text>
+      <Text className="text-sm text-un1t-light mb-4">
+        {activeLocation
+          ? `${activeLocation.name} · ${roleLabel(profile.role)}`
+          : roleLabel(profile.role)}
+      </Text>
+
+      {/* Segmented control — only render if user has more than one
+          dashboard. With a single segment, the title above is enough. */}
+      {available.length > 1 ? (
+        <SegmentedControl
+          segments={available}
+          selected={currentSegment.id}
+          onSelect={setSelected}
+        />
+      ) : null}
+
+      <Body refreshKey={refreshKey} />
     </ScrollView>
   )
 }

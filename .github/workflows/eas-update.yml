@@ -91,9 +91,13 @@ jobs:
             return out
           }
 
+          // Walk every conventional source dir. Add new dirs to this
+          // list when you create them (e.g. mobile/hooks/, mobile/utils/).
+          const SOURCE_DIRS = ['app', 'lib', 'components']
           const files = [
-            ...walk('app'),
-            ...walk('lib'),
+            ...SOURCE_DIRS.flatMap(d => {
+              try { return walk(d) } catch { return [] }
+            }),
             'app.config.js',
             'babel.config.js',
             'metro.config.js',
