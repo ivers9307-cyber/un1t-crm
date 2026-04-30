@@ -2,12 +2,12 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit'
-import { validateBody } from '@/lib/validate'
+import { validateBody, uuidLike } from '@/lib/validate'
 
 export const runtime = 'nodejs'
 
 const BookingSchema = z.object({
-  event_type_id: z.string().uuid(),
+  event_type_id: uuidLike,
   booking_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD'),
   start_time: z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/, 'Use HH:MM'),
   customer_name: z.string().min(1).max(200),

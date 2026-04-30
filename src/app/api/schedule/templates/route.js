@@ -2,13 +2,13 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
-import { validateBody } from '@/lib/validate'
+import { validateBody, uuidLike } from '@/lib/validate'
 
 const TIME = z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/, 'Use HH:MM or HH:MM:SS')
 const HEX_COLOR = z.string().regex(/^#[0-9A-Fa-f]{6}$/, 'Use #RRGGBB hex')
 
 const CreateTemplateSchema = z.object({
-  location_id: z.string().uuid(),
+  location_id: uuidLike,
   name: z.string().min(1).max(100),
   start_time: TIME,
   end_time: TIME,

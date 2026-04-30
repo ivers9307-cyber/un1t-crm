@@ -2,10 +2,10 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
-import { validateBody } from '@/lib/validate'
+import { validateBody, uuidLike } from '@/lib/validate'
 
 const BrandingSchema = z.object({
-  location_id: z.string().uuid().optional(),
+  location_id: uuidLike.optional(),
   logo_url: z.string().url().max(2000).nullable().optional(),
   favicon_url: z.string().url().max(2000).nullable().optional(),
   company_name: z.string().max(200).nullable().optional(),

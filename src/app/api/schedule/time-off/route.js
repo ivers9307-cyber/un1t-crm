@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
-import { validateBody } from '@/lib/validate'
+import { validateBody, uuidLike } from '@/lib/validate'
 
 const ISO_DATE = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD')
 
@@ -11,7 +11,7 @@ const TimeOffRequestSchema = z.object({
   start_date: ISO_DATE,
   end_date: ISO_DATE,
   reason: z.string().max(2000).nullable().optional(),
-  location_id: z.string().uuid().optional(),
+  location_id: uuidLike.optional(),
 })
 
 // GET /api/schedule/time-off?location_id=xxx&start_date=xxx&end_date=xxx&status=xxx&profile_id=xxx

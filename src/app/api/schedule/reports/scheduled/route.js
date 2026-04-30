@@ -3,10 +3,10 @@ import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { calculateNextRun } from '@/lib/report-generator'
-import { validateBody } from '@/lib/validate'
+import { validateBody, uuidLike } from '@/lib/validate'
 
 const ScheduledReportSchema = z.object({
-  location_id: z.string().uuid().optional(),
+  location_id: uuidLike.optional(),
   report_type: z.enum(['staff_hours', 'staff_cost', 'time_off_summary', 'roster_coverage', 'utilisation']),
   report_name: z.string().min(1).max(200),
   frequency: z.enum(['once', 'daily', 'weekly', 'monthly']),

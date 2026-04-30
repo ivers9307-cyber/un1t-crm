@@ -127,7 +127,12 @@ export default function StaffForm({ staff, locations }) {
       router.push('/settings')
       router.refresh()
     } else {
-      setError(data.error || 'Failed to save')
+      // Surface per-field validation issues (Zod) so we can see exactly which
+      // field tripped — not just "Invalid request body".
+      const issues = Array.isArray(data.issues) && data.issues.length
+        ? data.issues.map(i => `${i.path || '(root)'}: ${i.message}`).join('; ')
+        : null
+      setError(issues ? `${data.error || 'Failed to save'} — ${issues}` : (data.error || 'Failed to save'))
     }
   }
 

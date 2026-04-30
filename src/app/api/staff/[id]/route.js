@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
-import { validateBody } from '@/lib/validate'
+import { validateBody, uuidLike } from '@/lib/validate'
 
 export const runtime = 'nodejs'
 
@@ -10,14 +10,18 @@ const ROLE = z.enum(['owner', 'manager', 'head_coach', 'staff'])
 const EMPLOYMENT_TYPE = z.enum(['fte', 'contractor', 'casual'])
 const MONEY = z.number().finite().min(0).max(10_000_000)
 const HOURS = z.number().finite().min(0).max(168)
-const DAYS = z.number().int().min(0).max(366)
+// Annual leave entitlement: NUMERIC(5,1) in the DB, UI step is 0.5, so
+// half-days are valid (e.g. 25.5). Bound at 366 (one year).
+const DAYS = z.number().finite().min(0).max(366)
 
 const UpdateStaffSchema = z.object({
   full_name: z.string().min(1).max(200).optional(),
   role: ROLE.optional(),
-  permissions: z.record(z.string(), z.boolean()).optional(),
+  // permissions is a JSONB blob — keep validation lenient so legacy or
+  // future shapes (nested groups, string flags) don't trip up edits.
+  permissions: z.record(z.string(), z.unknown()).optional(),
   active: z.boolean().optional(),
-  location_ids: z.array(z.string().uuid()).optional(),
+  location_ids: z.array(uuidLike).optional(),
   employment_type: EMPLOYMENT_TYPE.optional(),
   annual_salary: MONEY.nullable().optional(),
   hourly_rate: MONEY.nullable().optional(),

@@ -1,4 +1,20 @@
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
+
+/**
+ * UUID-shaped string validator matching Postgres's `uuid` type behaviour.
+ *
+ * Zod 4's built-in `z.string().uuid()` is strict about the RFC 4122 version
+ * digit (only v1-v8), but Postgres's `uuid` type accepts any 36-char hex
+ * string. The seeded Stillorgan location ID (a0000000-0000-0000-0000-000000000001)
+ * is technically not RFC-compliant — version digit is 0 — but is happily
+ * stored and queried by Postgres. Use this validator for any UUID-shaped
+ * input that originates from our DB.
+ */
+export const uuidLike = z.string().regex(
+  /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/,
+  'Must be a 36-character UUID-shaped string'
+)
 
 /**
  * Parse and validate a request body against a Zod schema.
