@@ -60,7 +60,6 @@ export default function CarDetail({ car: initialCar }) {
     router.push('/cars')
   }
 
-  const profit = estimatedProfit(car)
   const gaps = completionGaps(car)
 
   return (
