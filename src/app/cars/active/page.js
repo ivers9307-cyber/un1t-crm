@@ -1,6 +1,7 @@
 import { getCurrentUser } from '@/lib/auth'
 import { redirect } from 'next/navigation'
 import { hasPermission } from '@/lib/permissions'
+import { getCachedGbpToEur } from '@/lib/fx'
 import CarsList from '@/components/cars/CarsList'
 import AddCarButton from '@/components/cars/AddCarButton'
 
@@ -15,11 +16,15 @@ export default async function ActiveCarsPage() {
   if (!user) redirect('/login')
   if (!hasPermission(user, 'car_processing')) redirect('/')
 
+  const fx = await getCachedGbpToEur()
+  const liveFxRate = fx?.rate ?? null
+
   return (
     <CarsList
       statuses={['new', 'pending']}
       locationId={user.activeLocation?.id}
-      addButton={<AddCarButton locationId={user.activeLocation?.id} />}
+      liveFxRate={liveFxRate}
+      addButton={<AddCarButton locationId={user.activeLocation?.id} liveFxRate={liveFxRate} />}
       emptyText="No active cars — start by adding one."
     />
   )

@@ -30,7 +30,7 @@ function StatusBadge({ status }) {
   )
 }
 
-export default function CarsList({ statuses, locationId, addButton, emptyText }) {
+export default function CarsList({ statuses, locationId, addButton, emptyText, liveFxRate = null }) {
   const [cars, setCars] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
@@ -74,7 +74,7 @@ export default function CarsList({ statuses, locationId, addButton, emptyText })
       ) : (
         <div className="space-y-2">
           {cars.map(car => {
-            const profit = estimatedProfit(car)
+            const profit = estimatedProfit(car, liveFxRate)
             const gaps = car.status === 'pending' ? completionGaps(car) : []
             return (
               <Link

@@ -1,0 +1,53 @@
+# Web CI — runs vitest + ESLint on every push to main that touches
+# web code. Catches the class of bug where an import gets removed
+# but a reference to it stays in the file (the 'estimatedProfit is
+# not defined' runtime error that took out /cars/[id]).
+#
+# Mirror of eas-update.yml on the mobile side: same mtime trigger,
+# same fail-fast philosophy. Vercel's build also runs `next lint`
+# transparently, but failing in GitHub Actions surfaces it earlier
+# and means a broken bundle never reaches the queue.
+
+name: Web CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'shared/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.eslintrc.json'
+      - 'vitest.config.js'
+      - 'jsconfig.json'
+      - '.github/workflows/web-ci.yml'
+
+concurrency:
+  group: web-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Test & lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm install --legacy-peer-deps
+
+      - name: Vitest
+        run: npm test
+
+      - name: ESLint
+        run: npm run lint
+
+      - name: Web/mobile parity
+        run: npm run check:mobile-parity

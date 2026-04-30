@@ -61,25 +61,36 @@ export const COST_FIELDS = Object.freeze([
   { key: 'additional_costs',    label: 'Commission payout', currency: 'EUR' },
 ])
 
-// Default GBP→EUR rate used when a car doesn't yet have an explicit
-// fx_gbp_to_eur set (operator hasn't entered the rate they got).
-// Sensible recent value; UI flags when it's a default vs custom.
-// Bump this when the operator's bank changes its quote for new
-// purchases — it's a soft default, real cars override.
+// Last-resort GBP→EUR rate when neither the car nor the live cache
+// has a value. The auto-fetched rate from src/lib/fx.js
+// (api.frankfurter.app, ECB-backed, refreshed every 24h) is the
+// normal source — this constant only kicks in when the upstream is
+// unreachable AND the per-car snapshot is null.
 export const DEFAULT_GBP_TO_EUR = 1.17
 
-// Returns the FX rate to use for a car, falling back to the global
-// default when the per-car field is unset.
-export function effectiveFxRate(car) {
-  const r = Number(car?.fx_gbp_to_eur)
-  return Number.isFinite(r) && r > 0 ? r : DEFAULT_GBP_TO_EUR
+// Returns the FX rate to use for a car. Resolution order:
+//   1. car.fx_gbp_to_eur            — per-car snapshot (set on creation
+//                                      from the live rate, kept stable
+//                                      for the life of the deal)
+//   2. liveRate                     — today's live rate, passed in by
+//                                      the caller (server fetched via
+//                                      src/lib/fx.js)
+//   3. DEFAULT_GBP_TO_EUR           — hard fallback
+export function effectiveFxRate(car, liveRate = null) {
+  const carRate = Number(car?.fx_gbp_to_eur)
+  if (Number.isFinite(carRate) && carRate > 0) return carRate
+  if (Number.isFinite(liveRate) && liveRate > 0) return liveRate
+  return DEFAULT_GBP_TO_EUR
 }
 
-// Whether the car is using the global default (true) vs an
-// explicit operator-entered rate (false). Used to decorate the UI.
-export function isUsingDefaultFx(car) {
-  const r = Number(car?.fx_gbp_to_eur)
-  return !(Number.isFinite(r) && r > 0)
+// Whether the car is using the hardcoded fallback. Returns true only
+// when both the snapshot and the live rate are missing — used to
+// decorate the UI with a "rate unavailable" caveat.
+export function isUsingDefaultFx(car, liveRate = null) {
+  const carRate = Number(car?.fx_gbp_to_eur)
+  if (Number.isFinite(carRate) && carRate > 0) return false
+  if (Number.isFinite(liveRate) && liveRate > 0) return false
+  return true
 }
 
 // Irish VAT rate. The Irish-side display is split into three values
@@ -147,10 +158,14 @@ export function splitIrishPrice(car) {
  * (currently just UK transporter) are converted using the car's
  * effectiveFxRate(). NULLs coerce to 0 so a partial entry doesn't
  * blow up; pre-migration rows simply contribute nothing.
+ *
+ * `liveRate` is optional — if the caller has fetched today's rate
+ * from src/lib/fx.js it's passed through; otherwise we fall through
+ * to DEFAULT_GBP_TO_EUR.
  */
-export function totalAncillaryCosts(car) {
+export function totalAncillaryCosts(car, liveRate = null) {
   if (!car) return 0
-  const fx = effectiveFxRate(car)
+  const fx = effectiveFxRate(car, liveRate)
   let sumEur = 0
   for (const c of COST_FIELDS) {
     const v = Number(car[c.key] || 0)
@@ -171,8 +186,8 @@ export function totalAncillaryCosts(car) {
  * For UI breakdowns prefer profitBreakdown(car) — same numbers but
  * with the intermediate values exposed.
  */
-export function estimatedProfit(car) {
-  const b = profitBreakdown(car)
+export function estimatedProfit(car, liveRate = null) {
+  const b = profitBreakdown(car, liveRate)
   return b ? b.profit : null
 }
 
@@ -181,13 +196,17 @@ export function estimatedProfit(car) {
  * Returns null when there's nothing meaningful to render. Used by
  * both the Add Car form's live hint and the detail page's profit
  * breakdown row.
+ *
+ * `liveRate` is the GBP→EUR rate from src/lib/fx.js (cached for
+ * 24 hours from api.frankfurter.app). When the per-car snapshot is
+ * null this is what's used; otherwise the snapshot wins.
  */
-export function profitBreakdown(car) {
+export function profitBreakdown(car, liveRate = null) {
   const saleEur = Number(car?.irish_sale_price_ex_vat || 0)
   const ukExVatGbp = Number(car?.uk_purchase_price_ex_vat || 0)
   if (!saleEur && !ukExVatGbp) return null
 
-  const fx = effectiveFxRate(car)
+  const fx = effectiveFxRate(car, liveRate)
   const ukExVatEur = Math.round(ukExVatGbp * fx * 100) / 100
 
   // Split ancillaries into the two currencies for the breakdown
@@ -213,7 +232,8 @@ export function profitBreakdown(car) {
     ancillaryGbpInEur,
     ancillaryEur: Math.round(ancillaryEur * 100) / 100,
     fx,
-    isUsingDefaultFx: isUsingDefaultFx(car),
+    isUsingDefaultFx: isUsingDefaultFx(car, liveRate),
+    fxIsCarSnapshot: Number.isFinite(Number(car?.fx_gbp_to_eur)) && Number(car.fx_gbp_to_eur) > 0,
     profit,
   }
 }

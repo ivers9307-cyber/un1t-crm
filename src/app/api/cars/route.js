@@ -11,6 +11,7 @@ import { getCurrentUser, getUserLocationIds, assertLocationAccess } from '@/lib/
 import { hasPermission } from '@/lib/permissions'
 import { validateBody } from '@/lib/validate'
 import { uuidLike, money } from '@/lib/schemas'
+import { getCachedGbpToEur } from '@/lib/fx'
 
 const CarStatus = z.enum(['new', 'pending', 'completed'])
 
@@ -104,6 +105,16 @@ export async function POST(request) {
   const guard = assertLocationAccess(user, locationId)
   if (guard) return guard
 
+  // Snapshot today's live FX rate at car creation so the calc stays
+  // stable for this deal even after the daily refresh moves the
+  // global rate. Body can still override (kept for API parity); when
+  // not provided we fetch from the 24h cache.
+  let snapshotFx = body.fx_gbp_to_eur ?? null
+  if (snapshotFx == null) {
+    const live = await getCachedGbpToEur()
+    if (live?.rate) snapshotFx = live.rate
+  }
+
   const db = createServerClient()
   const { data, error } = await db.from('cars').insert({
     location_id: locationId,
@@ -118,7 +129,7 @@ export async function POST(request) {
     uk_vat: body.uk_vat ?? null,
     irish_sale_price_inc_vat: body.irish_sale_price_inc_vat ?? null,
     irish_sale_price_ex_vat: body.irish_sale_price_ex_vat ?? null,
-    fx_gbp_to_eur: body.fx_gbp_to_eur ?? null,
+    fx_gbp_to_eur: snapshotFx,
     uk_transporter_cost: body.uk_transporter_cost ?? null,
     ferry_cost: body.ferry_cost ?? null,
     import_customs_cost: body.import_customs_cost ?? null,

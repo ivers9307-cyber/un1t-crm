@@ -15,7 +15,7 @@ import Link from 'next/link'
 import { ArrowLeft, ChevronRight, Trash2, FileText, Upload, Check, X, AlertCircle, Receipt } from 'lucide-react'
 import { ALL_DOCUMENT_TYPES, REQUIRED_DOCUMENT_TYPES, completionGaps, profitBreakdown, COST_FIELDS, applyIrishVat, salePriceToExVat, splitIrishPrice, IRISH_VAT_RATE, DEFAULT_GBP_TO_EUR } from '@/lib/cars'
 
-export default function CarDetail({ car: initialCar }) {
+export default function CarDetail({ car: initialCar, liveFxRate = null, fxFetchedAt = null }) {
   const [car, setCar] = useState(initialCar)
   const router = useRouter()
   const [savingField, setSavingField] = useState(null)
@@ -101,7 +101,13 @@ export default function CarDetail({ car: initialCar }) {
         <StatusBadge status={car.status} />
       </div>
 
-      <CarFieldsCard car={car} patch={patch} disabled={car.status === 'completed' || busy} />
+      <CarFieldsCard
+        car={car}
+        patch={patch}
+        disabled={car.status === 'completed' || busy}
+        liveFxRate={liveFxRate}
+        fxFetchedAt={fxFetchedAt}
+      />
 
       {/* New → Pending CTA */}
       {car.status === 'new' && (
@@ -191,8 +197,8 @@ function StatusBadge({ status }) {
   )
 }
 
-function CarFieldsCard({ car, patch, disabled }) {
-  const breakdown = profitBreakdown(car)
+function CarFieldsCard({ car, patch, disabled, liveFxRate, fxFetchedAt }) {
+  const breakdown = profitBreakdown(car, liveFxRate)
   return (
     <div className="bg-un1t-dark border border-un1t-gray rounded-2xl p-5 mb-4 space-y-5">
       <div>
@@ -209,17 +215,8 @@ function CarFieldsCard({ car, patch, disabled }) {
 
       <div>
         <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light mb-3">Prices</h3>
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
           <InlineField label="UK ex-VAT (£)"  value={car.uk_purchase_price_ex_vat} type="number" step="0.01" onSave={v => patch({ uk_purchase_price_ex_vat: v ? Number(v) : null })} disabled={disabled} />
-          <InlineField label="UK VAT (£)"     value={car.uk_vat}                   type="number" step="0.01" onSave={v => patch({ uk_vat: v ? Number(v) : null })} disabled={disabled} />
-          <InlineField
-            label="FX £→€"
-            value={car.fx_gbp_to_eur}
-            type="number"
-            step="0.0001"
-            onSave={v => patch({ fx_gbp_to_eur: v ? Number(v) : null })}
-            disabled={disabled}
-          />
           {/* IE ex-VAT is the source of truth — editing it patches
               both irish_sale_price_ex_vat and irish_sale_price_inc_vat
               (the latter is the sale-price total, displayed as the
@@ -299,10 +296,10 @@ function CarFieldsCard({ car, patch, disabled }) {
       </div>
 
       {breakdown && (
-        <div className="text-xs text-un1t-light bg-black/30 rounded-md px-3 py-2 space-y-1">
-          <div>
+        <div className="bg-un1t-gray/30 border border-un1t-gray rounded-md px-4 py-3 space-y-1">
+          <div className="text-sm text-un1t-white">
             Sale €{Math.round(breakdown.saleEur)}
-            {' − '}UK ex-VAT £{Math.round(breakdown.ukExVatGbp)} (€{Math.round(breakdown.ukExVatEur)} @ {breakdown.fx})
+            {' − '}UK ex-VAT £{Math.round(breakdown.ukExVatGbp)} (€{Math.round(breakdown.ukExVatEur)} @ {breakdown.fx.toFixed(4)})
             {breakdown.ancillaryGbp > 0 && (
               <> − UK costs £{Math.round(breakdown.ancillaryGbp)} (€{Math.round(breakdown.ancillaryGbpInEur)})</>
             )}
@@ -314,11 +311,13 @@ function CarFieldsCard({ car, patch, disabled }) {
               €{Math.round(breakdown.profit)}
             </span>
           </div>
-          {breakdown.isUsingDefaultFx && (
-            <div className="text-[10px] text-un1t-mid">
-              Using default FX rate {DEFAULT_GBP_TO_EUR} — enter the actual rate in the FX £→€ field for accuracy.
-            </div>
-          )}
+          <div className="text-xs text-un1t-light">
+            {breakdown.isUsingDefaultFx
+              ? `FX £→€ ${breakdown.fx} (live rate unavailable — fallback)`
+              : breakdown.fxIsCarSnapshot
+                ? `FX £→€ ${breakdown.fx.toFixed(4)} · snapshot from car creation`
+                : `FX £→€ ${breakdown.fx.toFixed(4)} · auto-updated daily from ECB${fxFetchedAt ? ` (last refresh ${new Date(fxFetchedAt).toLocaleString()})` : ''}`}
+          </div>
         </div>
       )}
     </div>

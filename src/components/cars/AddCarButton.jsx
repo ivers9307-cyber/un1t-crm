@@ -15,7 +15,7 @@ function fmt2(n) {
   return Number.isFinite(num) ? num.toFixed(2) : ''
 }
 
-export default function AddCarButton({ locationId }) {
+export default function AddCarButton({ locationId, liveFxRate = null }) {
   const [open, setOpen] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
@@ -25,7 +25,6 @@ export default function AddCarButton({ locationId }) {
     make: 'Tesla', model: '', vehicle_year: '',
     uk_purchase_price_ex_vat: '', uk_vat: '',
     irish_sale_price_inc_vat: '', irish_sale_price_ex_vat: '',
-    fx_gbp_to_eur: '',
     uk_transporter_cost: '',
     ferry_cost: '',
     import_customs_cost: '',
@@ -51,7 +50,10 @@ export default function AddCarButton({ locationId }) {
       uk_vat: n(form.uk_vat),
       irish_sale_price_inc_vat: n(form.irish_sale_price_inc_vat),
       irish_sale_price_ex_vat: n(form.irish_sale_price_ex_vat),
-      fx_gbp_to_eur: n(form.fx_gbp_to_eur),
+      // FX rate is auto-snapshotted server-side from the live cache
+      // when the car is created (POST /api/cars). The server uses
+      // its own getCachedGbpToEur() so we don't need to send a value
+      // — keeping the body slim avoids accidental overrides.
       uk_transporter_cost: n(form.uk_transporter_cost),
       ferry_cost: n(form.ferry_cost),
       import_customs_cost: n(form.import_customs_cost),
@@ -75,7 +77,6 @@ export default function AddCarButton({ locationId }) {
       make: 'Tesla', model: '', vehicle_year: '',
       uk_purchase_price_ex_vat: '', uk_vat: '',
       irish_sale_price_inc_vat: '', irish_sale_price_ex_vat: '',
-      fx_gbp_to_eur: '',
       uk_transporter_cost: '',
       ferry_cost: '',
       import_customs_cost: '',
@@ -89,11 +90,13 @@ export default function AddCarButton({ locationId }) {
 
   // Live profit calc — mirrors profitBreakdown() from src/lib/cars.js
   // so the form preview matches what the list / detail page render
-  // after save. UK ex-VAT and UK transporter are GBP, converted using
-  // the operator-entered FX rate (or DEFAULT_GBP_TO_EUR fallback).
-  const fxNum = Number(form.fx_gbp_to_eur)
-  const fx = Number.isFinite(fxNum) && fxNum > 0 ? fxNum : DEFAULT_GBP_TO_EUR
-  const fxIsDefault = !(Number.isFinite(fxNum) && fxNum > 0)
+  // after save. UK ex-VAT and UK transporter are GBP, converted via
+  // the auto-fetched daily rate (passed in as `liveFxRate`). When
+  // the upstream is unreachable we fall through to DEFAULT_GBP_TO_EUR.
+  const fx = Number.isFinite(liveFxRate) && liveFxRate > 0
+    ? liveFxRate
+    : DEFAULT_GBP_TO_EUR
+  const fxIsDefault = !(Number.isFinite(liveFxRate) && liveFxRate > 0)
   const saleEur = Number(form.irish_sale_price_ex_vat || 0)
   const ukExVatGbp = Number(form.uk_purchase_price_ex_vat || 0)
   const ukExVatEur = ukExVatGbp * fx
@@ -146,10 +149,9 @@ export default function AddCarButton({ locationId }) {
       </Section>
 
       <Section title="UK purchase">
-        <div className="grid grid-cols-3 gap-3">
+        <div className="grid grid-cols-2 gap-3">
           <Field label="Price ex-VAT (£)" type="number" step="0.01" value={form.uk_purchase_price_ex_vat} onChange={v => setForm(f => ({ ...f, uk_purchase_price_ex_vat: v }))} />
           <Field label="UK VAT (£)" type="number" step="0.01" value={form.uk_vat} onChange={v => setForm(f => ({ ...f, uk_vat: v }))} />
-          <Field label={`FX £→€ (default ${DEFAULT_GBP_TO_EUR})`} type="number" step="0.0001" value={form.fx_gbp_to_eur} onChange={v => setForm(f => ({ ...f, fx_gbp_to_eur: v }))} placeholder={String(DEFAULT_GBP_TO_EUR)} />
         </div>
       </Section>
 
@@ -221,9 +223,9 @@ export default function AddCarButton({ locationId }) {
       </Section>
 
       {profit != null && (
-        <div className="text-xs text-un1t-light bg-black/30 rounded-md px-3 py-2 space-y-1">
-          <div>
-            Sale €{Math.round(saleEur)} − UK ex-VAT £{Math.round(ukExVatGbp)} (€{Math.round(ukExVatEur)} @ {fx})
+        <div className="bg-un1t-gray/30 border border-un1t-gray rounded-md px-4 py-3 space-y-1">
+          <div className="text-sm text-un1t-white">
+            Sale €{Math.round(saleEur)} − UK ex-VAT £{Math.round(ukExVatGbp)} (€{Math.round(ukExVatEur)} @ {fx.toFixed(4)})
             {ancillaryGbp > 0 && <> − UK costs £{Math.round(ancillaryGbp)} (€{Math.round(ancillaryGbp * fx)})</>}
             {ancillaryEur > 0 && <> − IE costs €{Math.round(ancillaryEur)}</>}
             {' '}={' '}
@@ -231,11 +233,11 @@ export default function AddCarButton({ locationId }) {
               €{Math.round(profit)}
             </span>
           </div>
-          {fxIsDefault && (
-            <div className="text-[10px] text-un1t-mid">
-              Using default FX rate {DEFAULT_GBP_TO_EUR} — enter the actual rate above for accuracy.
-            </div>
-          )}
+          <div className="text-xs text-un1t-light">
+            {fxIsDefault
+              ? `FX £→€ ${DEFAULT_GBP_TO_EUR} (live rate unavailable — fallback)`
+              : `FX £→€ ${fx.toFixed(4)} · auto-updated daily from ECB`}
+          </div>
         </div>
       )}
 
