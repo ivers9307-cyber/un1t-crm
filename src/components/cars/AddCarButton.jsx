@@ -7,7 +7,7 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Plus, X } from 'lucide-react'
-import { applyIrishVat, IRISH_VAT_RATE } from '@/lib/cars'
+import { applyIrishVat, salePriceToExVat, IRISH_VAT_RATE } from '@/lib/cars'
 
 function fmt2(n) {
   if (n == null || n === '') return ''
@@ -143,9 +143,10 @@ export default function AddCarButton({ locationId }) {
       </Section>
 
       <Section title="Irish sale">
-        {/* IE ex-VAT is the only editable Irish-side field; the VAT
-            amount and Sale price are both derived from it on the fly
-            so the operator can't enter inconsistent figures. */}
+        {/* Two editable inputs (IE ex-VAT and Sale price) — either
+            one is a valid entry point. Editing either re-computes
+            the other plus the derived IE VAT amount, so the
+            operator never has to do the 23% maths in their head. */}
         <div className="grid grid-cols-3 gap-3">
           <Field
             label="IE ex-VAT (€)"
@@ -155,9 +156,6 @@ export default function AddCarButton({ locationId }) {
             onChange={v => setForm(f => ({
               ...f,
               irish_sale_price_ex_vat: v,
-              // Auto-populate the sale price total (the value stored
-              // in irish_sale_price_inc_vat). VAT amount is rendered
-              // separately below from the same number.
               irish_sale_price_inc_vat:
                 v === '' || v == null ? '' : String(applyIrishVat(v) ?? ''),
             }))}
@@ -171,10 +169,19 @@ export default function AddCarButton({ locationId }) {
             })()}
             hint={`${IRISH_VAT_RATE * 100}% Irish VAT`}
           />
-          <ReadOnlyField
+          <Field
             label="Sale price (€)"
-            value={fmt2(form.irish_sale_price_inc_vat)}
-            hint="ex-VAT + IE VAT"
+            type="number"
+            step="0.01"
+            value={form.irish_sale_price_inc_vat}
+            onChange={v => setForm(f => ({
+              ...f,
+              irish_sale_price_inc_vat: v,
+              // Back-derive ex-VAT from the entered sale price so
+              // the IE VAT cell + downstream profit calc keep up.
+              irish_sale_price_ex_vat:
+                v === '' || v == null ? '' : String(salePriceToExVat(v) ?? ''),
+            }))}
           />
         </div>
       </Section>

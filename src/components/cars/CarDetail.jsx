@@ -13,7 +13,7 @@ import { useState, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { ArrowLeft, ChevronRight, Trash2, FileText, Upload, Check, X, AlertCircle, Receipt } from 'lucide-react'
-import { ALL_DOCUMENT_TYPES, REQUIRED_DOCUMENT_TYPES, completionGaps, estimatedProfit, totalAncillaryCosts, COST_FIELDS, applyIrishVat, splitIrishPrice, IRISH_VAT_RATE } from '@/lib/cars'
+import { ALL_DOCUMENT_TYPES, REQUIRED_DOCUMENT_TYPES, completionGaps, estimatedProfit, totalAncillaryCosts, COST_FIELDS, applyIrishVat, salePriceToExVat, splitIrishPrice, IRISH_VAT_RATE } from '@/lib/cars'
 
 export default function CarDetail({ car: initialCar }) {
   const [car, setCar] = useState(initialCar)
@@ -249,10 +249,27 @@ function CarFieldsCard({ car, patch, disabled }) {
             value={splitIrishPrice(car).vat}
             hint={`${IRISH_VAT_RATE * 100}% Irish VAT`}
           />
-          <DerivedField
+          {/* Sale price is also a valid entry point — saving it
+              back-derives ex-VAT so the IE VAT cell and the profit
+              calc stay coherent. Either field drives the other. */}
+          <InlineField
             label="Sale price (€)"
-            value={splitIrishPrice(car).salePrice}
-            hint="ex-VAT + IE VAT"
+            value={(() => {
+              const split = splitIrishPrice(car)
+              return car.irish_sale_price_inc_vat != null
+                ? car.irish_sale_price_inc_vat
+                : (split.salePrice != null ? split.salePrice : '')
+            })()}
+            type="number"
+            step="0.01"
+            onSave={v => {
+              const sale = v ? Number(v) : null
+              return patch({
+                irish_sale_price_inc_vat: sale,
+                irish_sale_price_ex_vat: salePriceToExVat(sale),
+              })
+            }}
+            disabled={disabled}
           />
         </div>
       </div>

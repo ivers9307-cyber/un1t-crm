@@ -83,6 +83,17 @@ export function applyIrishVat(exVat) {
   return Math.round(n * (1 + IRISH_VAT_RATE) * 100) / 100
 }
 
+// Inverse: given a sale price (inc-VAT total), derive the ex-VAT
+// figure. Used when the operator edits the Sale price field instead
+// of IE ex-VAT — both fields are valid input points and either
+// can drive the other.
+export function salePriceToExVat(salePrice) {
+  if (salePrice == null || salePrice === '') return null
+  const n = Number(salePrice)
+  if (!Number.isFinite(n)) return null
+  return Math.round((n / (1 + IRISH_VAT_RATE)) * 100) / 100
+}
+
 // Single resolver used by every Irish-price renderer. Returns
 // `{ exVat, vat, salePrice }` populated as fully as the inputs
 // allow. ex-VAT wins when both columns hold values; we only fall
