@@ -1,9 +1,10 @@
 // /dashboard — entry. Redirects to the most-aggregated sub-view the
-// user has permission for. If none, a "no dashboards available" stub.
+// user has permission for. If none, a "no dashboards available" stub
+// rendered inside the dashboard layout (which itself sits inside the
+// root AppShell).
 
 import { redirect } from 'next/navigation'
 import { getCurrentUser } from '@/lib/auth'
-import AppShellServer from '@/components/AppShellServer'
 
 export const dynamic = 'force-dynamic'
 
@@ -19,15 +20,12 @@ export default async function DashboardIndex() {
   if (perms.dashboard_studio)              redirect('/dashboard/studio')
   if (perms.dashboard_personal)            redirect('/dashboard/today')
 
+  // Falls back to the layout's chrome (header + segmented control)
+  // with this empty-state message in the body.
   return (
-    <AppShellServer>
-      <div className="p-6 max-w-2xl">
-        <h1 className="text-2xl font-bold text-un1t-white mb-2">Dashboard</h1>
-        <p className="text-sm text-un1t-light">
-          You don&apos;t have access to any dashboards yet. Ask an admin to enable
-          Today, Studio, or Business in your profile.
-        </p>
-      </div>
-    </AppShellServer>
+    <p className="text-sm text-un1t-light">
+      You don&apos;t have access to any dashboards yet. Ask an admin to enable
+      Today, Studio, or Business in your profile.
+    </p>
   )
 }

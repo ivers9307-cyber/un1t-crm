@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
-import { LayoutDashboard, Users, Columns3, CheckSquare, Calendar, BookOpen, Mail, MessageCircle, CalendarClock, Settings, LogOut, ChevronDown, ChevronRight } from 'lucide-react'
+import { LayoutDashboard, Users, Columns3, CheckSquare, Calendar, BookOpen, Mail, MessageCircle, CalendarClock, Settings, LogOut } from 'lucide-react'
 import { createBrowserClient } from '@/lib/supabase'
 import LocationSwitcher from './LocationSwitcher'
 import clsx from 'clsx'
@@ -15,18 +15,13 @@ const roleLabels = {
   staff: 'Staff',
 }
 
-// Dashboard is a parent that expands to its three sub-views. Each
-// sub-view has its own permission flag — the same flag that gates
-// the matching mobile segment (cross-platform). The parent shows in
-// the sidebar if ANY child is permitted.
-const dashboardChildren = [
-  { href: '/dashboard/today',    label: 'Today',    permission: 'dashboard_personal' },
-  { href: '/dashboard/studio',   label: 'Studio',   permission: 'dashboard_studio'   },
-  { href: '/dashboard/business', label: 'Business', permission: 'dashboard_business' },
-]
+// The 3 dashboard sub-permissions — the sidebar Dashboard link is
+// visible if ANY are true. Sub-page selection happens via the
+// segmented control at the top of /dashboard/* pages.
+const DASHBOARD_PERM_KEYS = ['dashboard_personal', 'dashboard_studio', 'dashboard_business']
 
 const allNav = [
-  { type: 'parent', label: 'Dashboard', icon: LayoutDashboard, children: dashboardChildren, basePath: '/dashboard' },
+  { href: '/dashboard',  label: 'Dashboard',   icon: LayoutDashboard, dashboardGroup: true },
   { href: '/pipeline',   label: 'Pipeline',    icon: Columns3,        permission: 'pipeline' },
   { href: '/contacts',   label: 'Contacts',    icon: Users,           permission: 'contacts' },
   { href: '/activities', label: 'Activities',   icon: CheckSquare,     permission: 'activities' },
@@ -67,34 +62,17 @@ export default function Sidebar({ user }) {
       .catch(() => {})
   }, [user?.activeLocation?.id])
 
-  // Filter nav based on permissions — owners see everything. Parent
-  // entries (e.g. Dashboard) survive if any child is permitted; child
-  // lists are filtered down to the permitted ones.
-  function permittedChildren(children) {
-    if (user?.role === 'owner') return children
-    return children.filter(c => permissions[c.permission] === true)
-  }
-  const nav = allNav
-    .map(item => {
-      if (item.type === 'parent') {
-        const visibleChildren = permittedChildren(item.children)
-        if (visibleChildren.length === 0) return null
-        return { ...item, children: visibleChildren }
-      }
-      if (user?.role === 'owner') return item
-      return permissions[item.permission] !== false ? item : null
-    })
-    .filter(Boolean)
-
-  // Auto-expand a parent if the user is currently inside it.
-  const [expanded, setExpanded] = useState(() => {
-    const out = {}
-    for (const item of allNav) {
-      if (item.type === 'parent') {
-        out[item.label] = pathname.startsWith(item.basePath)
-      }
+  // Filter nav based on permissions — owners see everything.
+  //   - The Dashboard link is special: it shows if ANY of the three
+  //     dashboard sub-permissions is true. Sub-view selection happens
+  //     in the segmented control at the top of /dashboard/* pages.
+  //   - Other links use a single permission key.
+  const nav = allNav.filter(item => {
+    if (user?.role === 'owner') return true
+    if (item.dashboardGroup) {
+      return DASHBOARD_PERM_KEYS.some(k => permissions[k] === true)
     }
-    return out
+    return permissions[item.permission] !== false
   })
 
   async function handleLogout() {
@@ -129,55 +107,7 @@ export default function Sidebar({ user }) {
 
       {/* Navigation */}
       <nav className="flex-1 py-4">
-        {nav.map(item => {
-          // Parent entry — header row + indented children.
-          if (item.type === 'parent') {
-            const Icon = item.icon
-            const isOpen = expanded[item.label]
-            const Caret = isOpen ? ChevronDown : ChevronRight
-            const parentActive = pathname.startsWith(item.basePath)
-            return (
-              <div key={item.label}>
-                <button
-                  onClick={() => setExpanded(prev => ({ ...prev, [item.label]: !prev[item.label] }))}
-                  className={clsx(
-                    'w-full flex items-center gap-3 px-5 py-2.5 text-sm transition-colors text-left',
-                    parentActive
-                      ? 'text-un1t-white bg-un1t-gray/50 border-l-2 border-un1t-white'
-                      : 'text-un1t-light hover:text-un1t-white hover:bg-un1t-gray/30 border-l-2 border-transparent'
-                  )}
-                >
-                  <Icon size={18} />
-                  <span className="flex-1">{item.label}</span>
-                  <Caret size={14} />
-                </button>
-                {isOpen && (
-                  <div>
-                    {item.children.map(child => {
-                      const active = pathname === child.href
-                      return (
-                        <Link
-                          key={child.href}
-                          href={child.href}
-                          className={clsx(
-                            'flex items-center px-12 py-2 text-sm transition-colors',
-                            active
-                              ? 'text-un1t-white bg-un1t-gray/40'
-                              : 'text-un1t-light hover:text-un1t-white hover:bg-un1t-gray/20'
-                          )}
-                        >
-                          {child.label}
-                        </Link>
-                      )
-                    })}
-                  </div>
-                )}
-              </div>
-            )
-          }
-
-          // Plain leaf entry.
-          const { href, label, icon: Icon } = item
+        {nav.map(({ href, label, icon: Icon }) => {
           const active = pathname === href || (href !== '/' && pathname.startsWith(href))
           return (
             <Link
