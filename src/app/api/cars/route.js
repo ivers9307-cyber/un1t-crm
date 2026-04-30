@@ -38,6 +38,10 @@ const CarCreateSchema = z.object({
 })
 
 // GET /api/cars?status=new|pending|completed&location_id=...
+//
+// `status` accepts a comma-separated list ('new,pending') so the UI's
+// merged Active tab can fetch new + pending in a single round-trip.
+// Unknown values are silently dropped to avoid 400ing on a UI typo.
 export async function GET(request) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
@@ -46,8 +50,11 @@ export async function GET(request) {
   }
 
   const { searchParams } = new URL(request.url)
-  const statusParam = searchParams.get('status')
-  const status = statusParam && CarStatus.safeParse(statusParam).success ? statusParam : null
+  const statusParam = searchParams.get('status') || ''
+  const statuses = statusParam
+    .split(',')
+    .map(s => s.trim())
+    .filter(s => CarStatus.safeParse(s).success)
   const locationId = searchParams.get('location_id')
 
   const guard = assertLocationAccess(user, locationId)
@@ -63,7 +70,8 @@ export async function GET(request) {
     if (ids.length === 0) return NextResponse.json({ success: true, data: [] })
     query = query.in('location_id', ids)
   }
-  if (status) query = query.eq('status', status)
+  if (statuses.length === 1) query = query.eq('status', statuses[0])
+  else if (statuses.length > 1) query = query.in('status', statuses)
 
   const { data, error } = await query
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })

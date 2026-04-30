@@ -9,5 +9,11 @@ export default async function CompletedCarsPage() {
   const user = await getCurrentUser()
   if (!user) redirect('/login')
   if (!hasPermission(user, 'car_processing')) redirect('/')
-  return <CarsList status="completed" locationId={user.activeLocation?.id} />
+  return (
+    <CarsList
+      statuses={['completed']}
+      locationId={user.activeLocation?.id}
+      emptyText="No completed cars yet."
+    />
+  )
 }

@@ -72,8 +72,11 @@ export default function CarDetail({ car: initialCar }) {
       )}
 
       <div className="flex items-center justify-between mb-4">
-        <Link href={`/cars/${car.status}`} className="inline-flex items-center gap-1.5 text-sm text-un1t-light hover:text-un1t-white">
-          <ArrowLeft size={16} /> Back to {car.status}
+        <Link
+          href={car.status === 'completed' ? '/cars/completed' : '/cars/active'}
+          className="inline-flex items-center gap-1.5 text-sm text-un1t-light hover:text-un1t-white"
+        >
+          <ArrowLeft size={16} /> Back to {car.status === 'completed' ? 'completed' : 'active'}
         </Link>
         <button
           onClick={deleteCar}

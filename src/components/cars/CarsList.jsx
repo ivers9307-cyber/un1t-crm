@@ -1,13 +1,16 @@
 'use client'
 
-// Lightweight list rendered on each of the three tab pages. Status
-// is passed in by the parent; the component fetches once on mount
-// and re-fetches when the status changes (i.e. tab switch).
+// Cars list shared between the Active and Completed tabs.
+//
+// Active passes statuses=['new','pending'] so both kinds of in-flight
+// cars appear in the same list — a per-row badge differentiates them
+// at a glance. Pending rows additionally surface the outstanding-item
+// count from completionGaps(). Completed passes statuses=['completed']
+// alone and surfaces the completion date.
 
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
-import { Car, Plus } from 'lucide-react'
-import { useRouter } from 'next/navigation'
+import { Car } from 'lucide-react'
 import { estimatedProfit, completionGaps } from '@/lib/cars'
 
 function fmtMoney(n) {
@@ -15,15 +18,29 @@ function fmtMoney(n) {
   return new Intl.NumberFormat(undefined, { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 }).format(n)
 }
 
-export default function CarsList({ status, locationId, addButton }) {
+function StatusBadge({ status }) {
+  const cls =
+    status === 'new'       ? 'bg-blue-500/20 text-blue-400'  :
+    status === 'pending'   ? 'bg-amber-500/20 text-amber-500' :
+                              'bg-green-500/20 text-green-500'
+  return (
+    <span className={`px-2 py-0.5 rounded-full text-[10px] uppercase font-semibold tracking-wider ${cls}`}>
+      {status}
+    </span>
+  )
+}
+
+export default function CarsList({ statuses, locationId, addButton, emptyText }) {
   const [cars, setCars] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
-  const router = useRouter()
+
+  // Stable cache key so useEffect re-runs only when statuses change.
+  const statusKey = (Array.isArray(statuses) ? statuses : [statuses]).join(',')
 
   useEffect(() => {
     setLoading(true)
-    const qs = new URLSearchParams({ status })
+    const qs = new URLSearchParams({ status: statusKey })
     if (locationId) qs.set('location_id', locationId)
     fetch(`/api/cars?${qs}`)
       .then(r => r.json())
@@ -37,7 +54,7 @@ export default function CarsList({ status, locationId, addButton }) {
       })
       .catch(e => setError(String(e)))
       .finally(() => setLoading(false))
-  }, [status, locationId])
+  }, [statusKey, locationId])
 
   return (
     <div>
@@ -52,17 +69,13 @@ export default function CarsList({ status, locationId, addButton }) {
       ) : cars.length === 0 ? (
         <div className="bg-un1t-dark border border-un1t-gray rounded-2xl p-8 text-center">
           <Car size={28} className="text-un1t-mid mx-auto mb-2" />
-          <p className="text-sm text-un1t-light">
-            {status === 'new'       ? 'No cars in the new queue.'
-            : status === 'pending'  ? 'No cars pending — add buyers from the New tab.'
-            :                          'No completed cars yet.'}
-          </p>
+          <p className="text-sm text-un1t-light">{emptyText || 'No cars yet.'}</p>
         </div>
       ) : (
         <div className="space-y-2">
           {cars.map(car => {
             const profit = estimatedProfit(car)
-            const gaps = status === 'pending' ? completionGaps(car) : []
+            const gaps = car.status === 'pending' ? completionGaps(car) : []
             return (
               <Link
                 key={car.id}
@@ -78,6 +91,7 @@ export default function CarsList({ status, locationId, addButton }) {
                       <span className="text-base font-semibold text-un1t-white">
                         {car.make || 'Tesla'} {car.model || ''}
                       </span>
+                      <StatusBadge status={car.status} />
                       {car.uk_reg && (
                         <span className="text-xs text-un1t-light">UK · {car.uk_reg}</span>
                       )}
@@ -94,7 +108,7 @@ export default function CarsList({ status, locationId, addButton }) {
                         </span>
                       )}
                     </div>
-                    {status === 'pending' && (
+                    {car.status === 'pending' && (
                       <div className="text-xs mt-2">
                         {gaps.length === 0 ? (
                           <span className="text-green-500">Ready to complete</span>
@@ -105,7 +119,7 @@ export default function CarsList({ status, locationId, addButton }) {
                         )}
                       </div>
                     )}
-                    {status === 'completed' && car.completed_at && (
+                    {car.status === 'completed' && car.completed_at && (
                       <div className="text-xs text-un1t-mid mt-1">
                         Completed {new Date(car.completed_at).toLocaleDateString()}
                       </div>

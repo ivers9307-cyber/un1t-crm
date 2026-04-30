@@ -4,9 +4,11 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import clsx from 'clsx'
 
+// Two-tab layout: Active (new + pending) and Completed (archived).
+// The merged Active view shows a status badge per row so the
+// new/pending distinction is still visible at a glance.
 const TABS = [
-  { id: 'new',       label: 'New',       href: '/cars/new'       },
-  { id: 'pending',   label: 'Pending',   href: '/cars/pending'   },
+  { id: 'active',    label: 'Active',    href: '/cars/active'    },
   { id: 'completed', label: 'Completed', href: '/cars/completed' },
 ]
 
