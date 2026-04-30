@@ -13,7 +13,7 @@ import { useState, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { ArrowLeft, ChevronRight, Trash2, FileText, Upload, Check, X, AlertCircle, Receipt } from 'lucide-react'
-import { ALL_DOCUMENT_TYPES, REQUIRED_DOCUMENT_TYPES, completionGaps, estimatedProfit, totalAncillaryCosts, COST_FIELDS } from '@/lib/cars'
+import { ALL_DOCUMENT_TYPES, REQUIRED_DOCUMENT_TYPES, completionGaps, estimatedProfit, totalAncillaryCosts, COST_FIELDS, applyIrishVat, IRISH_VAT_RATE } from '@/lib/cars'
 
 export default function CarDetail({ car: initialCar }) {
   const [car, setCar] = useState(initialCar)
@@ -216,15 +216,34 @@ function CarFieldsCard({ car, patch, disabled }) {
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           <InlineField label="UK ex-VAT (£)"  value={car.uk_purchase_price_ex_vat} type="number" step="0.01" onSave={v => patch({ uk_purchase_price_ex_vat: v ? Number(v) : null })} disabled={disabled} />
           <InlineField label="UK VAT (£)"     value={car.uk_vat}                   type="number" step="0.01" onSave={v => patch({ uk_vat: v ? Number(v) : null })} disabled={disabled} />
-          <InlineField label="IE inc-VAT (€)" value={car.irish_sale_price_inc_vat} type="number" step="0.01" onSave={v => patch({ irish_sale_price_inc_vat: v ? Number(v) : null })} disabled={disabled} />
-          <InlineField label="IE ex-VAT (€)"  value={car.irish_sale_price_ex_vat}  type="number" step="0.01" onSave={v => patch({ irish_sale_price_ex_vat: v ? Number(v) : null })} disabled={disabled} />
+          {/* IE ex-VAT is the source of truth; saving it auto-
+              recomputes IE inc-VAT at the Irish 23% rate. */}
+          <InlineField
+            label="IE ex-VAT (€)"
+            value={car.irish_sale_price_ex_vat}
+            type="number"
+            step="0.01"
+            onSave={v => {
+              const exVat = v ? Number(v) : null
+              return patch({
+                irish_sale_price_ex_vat: exVat,
+                irish_sale_price_inc_vat: applyIrishVat(exVat),
+              })
+            }}
+            disabled={disabled}
+          />
+          <DerivedField
+            label="IE inc-VAT (€)"
+            value={car.irish_sale_price_inc_vat}
+            hint={`= ex-VAT × ${1 + IRISH_VAT_RATE}`}
+          />
         </div>
       </div>
 
       <div>
         <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light mb-3">Costs</h3>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          {COST_FIELDS.filter(c => !c.hasLabelField).map(c => (
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
+          {COST_FIELDS.map(c => (
             <InlineField
               key={c.key}
               label={`${c.label} (€)`}
@@ -235,25 +254,6 @@ function CarFieldsCard({ car, patch, disabled }) {
               disabled={disabled}
             />
           ))}
-        </div>
-        {/* Additional cost gets a label + value pair */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-3">
-          <div className="md:col-span-3">
-            <InlineField
-              label="Additional cost label"
-              value={car.additional_costs_label}
-              onSave={v => patch({ additional_costs_label: v })}
-              disabled={disabled}
-            />
-          </div>
-          <InlineField
-            label={`${car.additional_costs_label || 'Additional'} (€)`}
-            value={car.additional_costs}
-            type="number"
-            step="0.01"
-            onSave={v => patch({ additional_costs: v ? Number(v) : null })}
-            disabled={disabled}
-          />
         </div>
       </div>
 
@@ -454,6 +454,21 @@ function UploadOne({ disabled, loading, onPick }) {
         <Upload size={12} /> {loading ? 'Uploading…' : 'Upload'}
       </button>
     </>
+  )
+}
+
+// Display-only field for derived values (IE inc-VAT, computed from
+// IE ex-VAT × 1.23). Doesn't accept user input — saving the source
+// field above auto-patches this one too.
+function DerivedField({ label, value, hint }) {
+  return (
+    <div className="text-left w-full opacity-90">
+      <div className="text-xs text-un1t-light">{label}</div>
+      <div className={`text-sm ${value == null || value === '' ? 'text-un1t-mid italic' : 'text-un1t-white'}`}>
+        {value == null || value === '' ? '—' : Number(value).toFixed(2)}
+      </div>
+      {hint && <div className="text-[10px] text-un1t-mid">{hint}</div>}
+    </div>
   )
 }
 

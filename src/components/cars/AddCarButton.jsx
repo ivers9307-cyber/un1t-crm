@@ -7,6 +7,7 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Plus, X } from 'lucide-react'
+import { applyIrishVat, IRISH_VAT_RATE } from '@/lib/cars'
 
 export default function AddCarButton({ locationId }) {
   const [open, setOpen] = useState(false)
@@ -22,8 +23,7 @@ export default function AddCarButton({ locationId }) {
     ferry_cost: '',
     import_customs_cost: '',
     nct_cost: '',
-    additional_costs: '',
-    additional_costs_label: '',
+    additional_costs: '',     // 'Commission payout' — see COST_FIELDS
     notes: '',
   })
 
@@ -49,7 +49,8 @@ export default function AddCarButton({ locationId }) {
       import_customs_cost: n(form.import_customs_cost),
       nct_cost: n(form.nct_cost),
       additional_costs: n(form.additional_costs),
-      additional_costs_label: form.additional_costs_label || null,
+      // additional_costs_label intentionally NOT sent — repurposed
+      // as Commission payout, label hardcoded in COST_FIELDS.
       location_id: locationId,
     }
     const res = await fetch('/api/cars', {
@@ -71,7 +72,6 @@ export default function AddCarButton({ locationId }) {
       import_customs_cost: '',
       nct_cost: '',
       additional_costs: '',
-      additional_costs_label: '',
       notes: '',
     })
     router.refresh()
@@ -138,23 +138,38 @@ export default function AddCarButton({ locationId }) {
 
       <Section title="Irish sale">
         <div className="grid grid-cols-2 gap-3">
-          <Field label="Sale inc-VAT (€)" type="number" step="0.01" value={form.irish_sale_price_inc_vat} onChange={v => setForm(f => ({ ...f, irish_sale_price_inc_vat: v }))} />
-          <Field label="Sale ex-VAT (€)" type="number" step="0.01" value={form.irish_sale_price_ex_vat} onChange={v => setForm(f => ({ ...f, irish_sale_price_ex_vat: v }))} />
+          {/* IE ex-VAT first because IE inc-VAT is derived from it. */}
+          <Field
+            label="Sale ex-VAT (€)"
+            type="number"
+            step="0.01"
+            value={form.irish_sale_price_ex_vat}
+            onChange={v => setForm(f => ({
+              ...f,
+              irish_sale_price_ex_vat: v,
+              // Auto-populate inc-VAT at the Irish 23% rate. Stored
+              // as a string so it round-trips through the form input.
+              irish_sale_price_inc_vat:
+                v === '' || v == null ? '' : String(applyIrishVat(v) ?? ''),
+            }))}
+          />
+          <ReadOnlyField
+            label="Sale inc-VAT (€)"
+            value={form.irish_sale_price_inc_vat}
+            hint={`Auto = ex-VAT × ${1 + IRISH_VAT_RATE}`}
+          />
         </div>
       </Section>
 
       <Section title="Costs">
-        <div className="grid grid-cols-2 gap-3">
+        {/* All five cost fields in one evenly-spaced grid so the row
+            doesn't collapse into a wide blank space at the end. */}
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
           <Field label="UK transporter (€)"   type="number" step="0.01" value={form.uk_transporter_cost} onChange={v => setForm(f => ({ ...f, uk_transporter_cost: v }))} />
           <Field label="Ferry (€)"            type="number" step="0.01" value={form.ferry_cost}          onChange={v => setForm(f => ({ ...f, ferry_cost: v }))} />
           <Field label="Import customs (€)"   type="number" step="0.01" value={form.import_customs_cost} onChange={v => setForm(f => ({ ...f, import_customs_cost: v }))} />
           <Field label="NCT (€)"              type="number" step="0.01" value={form.nct_cost}            onChange={v => setForm(f => ({ ...f, nct_cost: v }))} />
-        </div>
-        <div className="grid grid-cols-3 gap-3">
-          <div className="col-span-2">
-            <Field label="Additional cost label" value={form.additional_costs_label} onChange={v => setForm(f => ({ ...f, additional_costs_label: v }))} placeholder="e.g. Detailing, tyres" />
-          </div>
-          <Field label="Additional (€)" type="number" step="0.01" value={form.additional_costs} onChange={v => setForm(f => ({ ...f, additional_costs: v }))} />
+          <Field label="Commission payout (€)" type="number" step="0.01" value={form.additional_costs}    onChange={v => setForm(f => ({ ...f, additional_costs: v }))} />
         </div>
       </Section>
 
@@ -214,6 +229,21 @@ function Field({ label, value, onChange, type = 'text', placeholder, step }) {
         placeholder={placeholder}
         className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
       />
+    </div>
+  )
+}
+
+// Display-only field for derived values (e.g. IE inc-VAT, computed
+// from the ex-VAT input above it). Greyed-out background distinguishes
+// it from editable fields.
+function ReadOnlyField({ label, value, hint }) {
+  return (
+    <div>
+      <label className="block text-xs text-un1t-light mb-1">{label}</label>
+      <div className="w-full bg-un1t-gray/30 border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white">
+        {value === '' || value == null ? <span className="text-un1t-mid">—</span> : value}
+      </div>
+      {hint && <p className="text-[10px] text-un1t-mid mt-0.5">{hint}</p>}
     </div>
   )
 }

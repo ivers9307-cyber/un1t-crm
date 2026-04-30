@@ -45,6 +45,11 @@ export function completionGaps(car) {
 // here as the single source of truth so the form, the inline editor
 // on the detail page, and totalAncillaryCosts() all stay in sync.
 //
+// `additional_costs` is repurposed as the commission payout (the
+// dealer's per-deal commission line); the additional_costs_label
+// column is no longer surfaced in the UI but kept in the schema for
+// historical data.
+//
 // Add a new cost type by appending one entry — the UI / profit calc
 // pick it up automatically.
 export const COST_FIELDS = Object.freeze([
@@ -52,8 +57,19 @@ export const COST_FIELDS = Object.freeze([
   { key: 'ferry_cost',          label: 'Ferry' },
   { key: 'import_customs_cost', label: 'Import customs' },
   { key: 'nct_cost',            label: 'NCT' },
-  { key: 'additional_costs',    label: 'Additional', hasLabelField: true },
+  { key: 'additional_costs',    label: 'Commission payout' },
 ])
+
+// Irish VAT rate. IE inc-VAT prices are computed from IE ex-VAT
+// at this rate so the operator only enters the ex-VAT figure once.
+export const IRISH_VAT_RATE = 0.23
+
+export function applyIrishVat(exVat) {
+  if (exVat == null || exVat === '') return null
+  const n = Number(exVat)
+  if (!Number.isFinite(n)) return null
+  return Math.round(n * (1 + IRISH_VAT_RATE) * 100) / 100
+}
 
 /**
  * Sum of every per-car ancillary cost. NULLs coerce to 0 so a car
