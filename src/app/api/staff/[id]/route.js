@@ -1,11 +1,43 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
+import { getCurrentUser } from '@/lib/auth'
 
-// PUT /api/staff/[id] — Update a staff member's profile, role, permissions, or locations
+export const runtime = 'nodejs'
+
+// PUT /api/staff/[id] — Update a staff member. Owner-only.
+// Includes role / salary / employment fields so this endpoint must never
+// be reachable without owner authentication. Manager-level edits (e.g.
+// shift availability) live elsewhere.
 export async function PUT(request, { params }) {
+  const user = await getCurrentUser()
+  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+  if (user.role !== 'owner') {
+    return NextResponse.json({ success: false, error: 'Forbidden — owner only' }, { status: 403 })
+  }
+
   const { id } = params
   const body = await request.json()
   const db = createServerClient()
+
+  // Validate role if provided
+  if (body.role !== undefined && !['owner', 'manager', 'head_coach', 'staff'].includes(body.role)) {
+    return NextResponse.json({ success: false, error: 'Invalid role' }, { status: 400 })
+  }
+
+  // Restrict location assignments to the caller's own locations
+  if (body.location_ids !== undefined) {
+    if (!Array.isArray(body.location_ids)) {
+      return NextResponse.json({ success: false, error: 'location_ids must be an array' }, { status: 400 })
+    }
+    const callerLocationIds = (user.locations || []).map(l => l.id)
+    const invalid = body.location_ids.filter(loc => !callerLocationIds.includes(loc))
+    if (invalid.length > 0) {
+      return NextResponse.json({
+        success: false,
+        error: 'Cannot assign staff to a location you do not belong to',
+      }, { status: 403 })
+    }
+  }
 
   // Update profile fields
   const profileUpdates = {}
@@ -47,12 +79,26 @@ export async function PUT(request, { params }) {
   return NextResponse.json({ success: true, data })
 }
 
-// DELETE /api/staff/[id] — Deactivate a staff member
+// DELETE /api/staff/[id] — Soft-delete (deactivate) a staff member. Owner-only.
 export async function DELETE(request, { params }) {
-  const { id } = params
-  const db = createServerClient()
+  const user = await getCurrentUser()
+  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+  if (user.role !== 'owner') {
+    return NextResponse.json({ success: false, error: 'Forbidden — owner only' }, { status: 403 })
+  }
 
-  // Soft delete — deactivate rather than remove
+  const { id } = params
+
+  // Don't let an owner deactivate themselves — that would lock them out and
+  // potentially leave the org with no active owner.
+  if (id === user.id) {
+    return NextResponse.json({
+      success: false,
+      error: 'Cannot deactivate your own account',
+    }, { status: 400 })
+  }
+
+  const db = createServerClient()
   const { error } = await db.from('profiles').update({ active: false }).eq('id', id)
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
 
