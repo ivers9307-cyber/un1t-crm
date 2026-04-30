@@ -62,20 +62,18 @@ export default ({ config }) => ({
   experiments: {
     typedRoutes: true,
   },
-  // Over-the-air updates via EAS Update. After `eas init`, this URL
-  // is filled in automatically (eas init writes the project ID to
-  // process.env at build time and the GitHub Action substitutes it).
-  // The runtimeVersion policy 'sdkVersion' means each Expo SDK gets
-  // its own update lane — an update built for SDK 54 won't be served
-  // to a phone running an SDK 53 build, preventing native/JS skew.
-  updates: process.env.EAS_PROJECT_ID
-    ? {
-        url: `https://u.expo.dev/${process.env.EAS_PROJECT_ID}`,
-        enabled: true,
-        checkAutomatically: 'ON_LOAD',
-        fallbackToCacheTimeout: 0,
-      }
-    : undefined,
+  // Over-the-air updates via EAS Update. The project ID is the public
+  // identifier of the EAS project at https://expo.dev/projects/<id> —
+  // not a secret, safe to commit. The runtimeVersion policy
+  // 'sdkVersion' means each Expo SDK gets its own update lane — an
+  // update built for SDK 54 won't be served to a phone running an
+  // SDK 53 build, preventing native/JS skew.
+  updates: {
+    url: 'https://u.expo.dev/6256a4d8-03ff-4898-9d47-b4de6c9c20e1',
+    enabled: true,
+    checkAutomatically: 'ON_LOAD',
+    fallbackToCacheTimeout: 0,
+  },
   runtimeVersion: { policy: 'sdkVersion' },
   extra: {
     supabaseUrl:
@@ -87,11 +85,11 @@ export default ({ config }) => ({
     apiBaseUrl:
       process.env.EXPO_PUBLIC_API_BASE_URL ||
       'https://crm.un1tdublin.com',
-    // Filled in by EAS after the iOS project is created. Required for
-    // production push notifications via APNs. Until set, Expo Go uses
-    // Expo's own push channel for dev.
+    // EAS project ID — used by `eas update` to know where to publish,
+    // and by Expo Notifications.getExpoPushTokenAsync() to scope push
+    // tokens to this project once we're off Expo Go's shared channel.
     eas: {
-      projectId: process.env.EAS_PROJECT_ID,
+      projectId: '6256a4d8-03ff-4898-9d47-b4de6c9c20e1',
     },
   },
 })
