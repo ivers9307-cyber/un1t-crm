@@ -1,5 +1,6 @@
 import { createServerClient } from './supabase'
 import { getAppUrl } from './app-url'
+import { applyAudienceFilter } from './audience-filter'
 
 const POSTMARK_API_URL = 'https://api.postmarkapp.com'
 
@@ -196,58 +197,10 @@ export function buildAudienceQuery(db, filter, locationId) {
   // Exclude bounced/complained contacts
   query = query.not('email_status', 'in', '("bounced","complained")')
 
-  if (!filter?.filters?.length) return query
-
-  for (const f of filter.filters) {
-    switch (f.op) {
-      case 'eq':
-        query = query.eq(f.field, f.value)
-        break
-      case 'neq':
-        query = query.neq(f.field, f.value)
-        break
-      case 'gt':
-        query = query.gt(f.field, f.value)
-        break
-      case 'lt':
-        query = query.lt(f.field, f.value)
-        break
-      case 'gte':
-        query = query.gte(f.field, f.value)
-        break
-      case 'lte':
-        query = query.lte(f.field, f.value)
-        break
-      case 'contains':
-        query = query.ilike(f.field, `%${f.value}%`)
-        break
-      case 'not_contains':
-        query = query.not(f.field, 'ilike', `%${f.value}%`)
-        break
-      case 'is_null':
-        query = query.is(f.field, null)
-        break
-      case 'is_not_null':
-        query = query.not(f.field, 'is', null)
-        break
-      case 'days_since_gt': {
-        const cutoff = new Date()
-        cutoff.setDate(cutoff.getDate() - parseInt(f.value))
-        query = query.lt(f.field, cutoff.toISOString())
-        break
-      }
-      case 'days_since_lt': {
-        const cutoff = new Date()
-        cutoff.setDate(cutoff.getDate() - parseInt(f.value))
-        query = query.gte(f.field, cutoff.toISOString())
-        break
-      }
-      default:
-        break
-    }
-  }
-
-  return query
+  // Apply user-supplied filters via the whitelisted helper. Throws
+  // InvalidAudienceFilterError if the filter contains an unknown field
+  // or unsupported operator — let it bubble up so the caller returns 400.
+  return applyAudienceFilter(query, filter)
 }
 
 // ============================================================

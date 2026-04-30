@@ -23,8 +23,17 @@ export async function GET(request, { params }) {
   const guard = assertLocationAccess(user, campaign.location_id)
   if (guard) return guard
 
-  // Count matching contacts
-  const query = buildAudienceQuery(db, campaign.audience_filter, campaign.location_id)
+  // Count matching contacts. buildAudienceQuery throws
+  // InvalidAudienceFilterError if the saved filter contains an unknown
+  // field or unsupported operator (e.g. after a downgrade or a manually
+  // edited record). Surface it as a 400 so the user sees what's wrong.
+  let query
+  try {
+    query = buildAudienceQuery(db, campaign.audience_filter, campaign.location_id)
+  } catch (err) {
+    return NextResponse.json({ success: false, error: err.message }, { status: 400 })
+  }
+
   const { count, error } = await query.select('id', { count: 'exact', head: true })
 
   if (error) {

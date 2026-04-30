@@ -1,4 +1,5 @@
 import { createServerClient } from './supabase'
+import { applyAudienceFilter } from './audience-filter'
 
 const META_API_VERSION = 'v21.0'
 const META_API_URL = `https://graph.facebook.com/${META_API_VERSION}`
@@ -255,56 +256,9 @@ export function buildWhatsAppAudience(db, filter, locationId) {
     .neq('wa_status', 'blocked')
     .neq('wa_status', 'opted_out')
 
-  if (!filter?.filters?.length) return query
-
-  for (const f of filter.filters) {
-    switch (f.op) {
-      case 'eq':
-        query = query.eq(f.field, f.value)
-        break
-      case 'neq':
-        query = query.neq(f.field, f.value)
-        break
-      case 'gt':
-        query = query.gt(f.field, f.value)
-        break
-      case 'lt':
-        query = query.lt(f.field, f.value)
-        break
-      case 'gte':
-        query = query.gte(f.field, f.value)
-        break
-      case 'lte':
-        query = query.lte(f.field, f.value)
-        break
-      case 'contains':
-        query = query.ilike(f.field, `%${f.value}%`)
-        break
-      case 'not_contains':
-        query = query.not(f.field, 'ilike', `%${f.value}%`)
-        break
-      case 'is_null':
-        query = query.is(f.field, null)
-        break
-      case 'not_null':
-        query = query.not(f.field, 'is', null)
-        break
-      case 'days_since_gt': {
-        const cutoff = new Date()
-        cutoff.setDate(cutoff.getDate() - parseInt(f.value))
-        query = query.lt(f.field, cutoff.toISOString())
-        break
-      }
-      case 'days_since_lt': {
-        const cutoff = new Date()
-        cutoff.setDate(cutoff.getDate() - parseInt(f.value))
-        query = query.gte(f.field, cutoff.toISOString())
-        break
-      }
-    }
-  }
-
-  return query
+  // Apply user-supplied filters via the whitelisted helper. Throws
+  // InvalidAudienceFilterError on unknown field or unsupported op.
+  return applyAudienceFilter(query, filter)
 }
 
 /**
