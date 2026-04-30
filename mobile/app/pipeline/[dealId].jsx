@@ -86,6 +86,7 @@ export default function DealDetail() {
   const [notes, setNotes] = useState([])
   const [loading, setLoading] = useState(true)
   const [logText, setLogText] = useState('')
+  const [logKind, setLogKind] = useState('note')   // 'note' | 'call' | 'email' | 'meeting'
   const [submittingLog, setSubmittingLog] = useState(false)
 
   const refresh = useCallback(async () => {
@@ -136,34 +137,47 @@ export default function DealDetail() {
     )
   }
 
-  async function logNote() {
+  // Save the typed log entry as either a Note (free-form) or an
+  // Activity (call/email/meeting with the typed text as the body).
+  // The user picks the kind via the segmented buttons above the
+  // input — the row no longer fires-and-forgets, so they get a
+  // chance to write what was discussed before saving.
+  async function saveLog() {
     if (!logText.trim()) return
     setSubmittingLog(true)
-    const res = await createNote({
-      contactId: deal.contact_id,
-      dealId: deal.id,
-      content: logText.trim(),
-      locationId: activeLocation?.id,
-    })
+
+    let res
+    if (logKind === 'note') {
+      res = await createNote({
+        contactId: deal.contact_id,
+        dealId: deal.id,
+        content: logText.trim(),
+        locationId: activeLocation?.id,
+      })
+    } else {
+      // First line (or first 100 chars) of the body becomes the
+      // activity subject so the timeline preview is meaningful;
+      // full body lives on `note`.
+      const trimmed = logText.trim()
+      const subject = trimmed.split('\n')[0].slice(0, 120)
+      res = await logActivity({
+        contactId: deal.contact_id,
+        dealId: deal.id,
+        type: logKind,
+        subject,
+        note: trimmed,
+        locationId: activeLocation?.id,
+      })
+    }
+
     setSubmittingLog(false)
     if (!res.success) {
-      Alert.alert('Couldn’t save note', res.error)
+      Alert.alert('Couldn’t save', res.error)
       return
     }
     setLogText('')
+    setLogKind('note')
     refresh()
-  }
-
-  async function quickLog(type) {
-    const res = await logActivity({
-      contactId: deal.contact_id,
-      dealId: deal.id,
-      type,
-      subject: type === 'call' ? 'Logged call' : type === 'email' ? 'Logged email' : 'Note',
-      locationId: activeLocation?.id,
-    })
-    if (!res.success) Alert.alert('Couldn’t log', res.error)
-    else refresh()
   }
 
   if (loading || !deal) {
@@ -271,36 +285,53 @@ export default function DealDetail() {
           </View>
         </Section>
 
-        {/* Quick log */}
+        {/* Log activity — type picker + composer. The 4 buttons act
+            as a segmented control: tapping one selects that kind, but
+            nothing saves until the user taps the Save button below.
+            The placeholder text + save-button label both reflect the
+            current selection so it's obvious what's about to happen. */}
         <Section title="Log activity">
           <View className="flex-row mb-2">
             {[
-              { type: 'call', icon: 'call-outline', label: 'Call' },
-              { type: 'email', icon: 'mail-outline', label: 'Email' },
-              { type: 'meeting', icon: 'people-outline', label: 'Meeting' },
-            ].map(b => (
-              <Pressable
-                key={b.type}
-                onPress={() => quickLog(b.type)}
-                className="flex-1 mr-2 py-2.5 rounded-xl bg-un1t-dark border border-un1t-gray flex-row items-center justify-center active:opacity-70"
-              >
-                <Ionicons name={b.icon} size={14} color="#111827" />
-                <Text className="text-xs font-medium text-un1t-white ml-1">{b.label}</Text>
-              </Pressable>
-            ))}
+              { kind: 'note',    icon: 'document-text-outline', label: 'Note' },
+              { kind: 'call',    icon: 'call-outline',          label: 'Call' },
+              { kind: 'email',   icon: 'mail-outline',          label: 'Email' },
+              { kind: 'meeting', icon: 'people-outline',        label: 'Meeting' },
+            ].map(t => {
+              const sel = logKind === t.kind
+              return (
+                <Pressable
+                  key={t.kind}
+                  onPress={() => setLogKind(t.kind)}
+                  className={`flex-1 mr-2 py-2.5 rounded-xl flex-row items-center justify-center border active:opacity-70 ${
+                    sel ? 'bg-un1t-white border-un1t-white' : 'bg-un1t-dark border-un1t-gray'
+                  }`}
+                >
+                  <Ionicons name={t.icon} size={14} color={sel ? '#FFFFFF' : '#111827'} />
+                  <Text className={`text-xs font-medium ml-1 ${sel ? 'text-un1t-black' : 'text-un1t-white'}`}>
+                    {t.label}
+                  </Text>
+                </Pressable>
+              )
+            })}
           </View>
           <View className="bg-un1t-dark border border-un1t-gray rounded-xl">
             <TextInput
               value={logText}
               onChangeText={setLogText}
               multiline
-              placeholder="Add a note…"
+              placeholder={
+                logKind === 'note'    ? 'Add a note…' :
+                logKind === 'call'    ? 'What was discussed on the call?' :
+                logKind === 'email'   ? 'Summary of the email…' :
+                                        'Summary of the meeting…'
+              }
               placeholderTextColor="#94A3B8"
               className="px-4 py-3 text-base text-un1t-white min-h-[80px]"
               textAlignVertical="top"
             />
             <Pressable
-              onPress={logNote}
+              onPress={saveLog}
               disabled={!logText.trim() || submittingLog}
               className={`m-2 py-2.5 rounded-lg items-center ${
                 logText.trim() && !submittingLog ? 'bg-un1t-white' : 'bg-un1t-gray'
@@ -309,7 +340,9 @@ export default function DealDetail() {
               {submittingLog ? (
                 <ActivityIndicator />
               ) : (
-                <Text className="text-un1t-black font-semibold text-sm">Save note</Text>
+                <Text className="text-un1t-black font-semibold text-sm">
+                  Save {logKind === 'note' ? 'note' : logKind}
+                </Text>
               )}
             </Pressable>
           </View>
