@@ -13,7 +13,7 @@ import { useState, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { ArrowLeft, ChevronRight, Trash2, FileText, Upload, Check, X, AlertCircle, Receipt } from 'lucide-react'
-import { ALL_DOCUMENT_TYPES, REQUIRED_DOCUMENT_TYPES, completionGaps, estimatedProfit } from '@/lib/cars'
+import { ALL_DOCUMENT_TYPES, REQUIRED_DOCUMENT_TYPES, completionGaps, estimatedProfit, totalAncillaryCosts, COST_FIELDS } from '@/lib/cars'
 
 export default function CarDetail({ car: initialCar }) {
   const [car, setCar] = useState(initialCar)
@@ -191,25 +191,80 @@ function StatusBadge({ status }) {
 
 function CarFieldsCard({ car, patch, disabled }) {
   const profit = estimatedProfit(car)
+  const ancillary = totalAncillaryCosts(car)
+  const sale = Number(car.irish_sale_price_ex_vat || 0)
+  const cost = Number(car.uk_purchase_price_ex_vat || 0)
   return (
-    <div className="bg-un1t-dark border border-un1t-gray rounded-2xl p-5 mb-4">
-      <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light mb-3">Vehicle & prices</h3>
-      <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-        <InlineField label="UK reg"      value={car.uk_reg}        onSave={v => patch({ uk_reg: v })} disabled={disabled} />
-        <InlineField label="Irish reg"   value={car.irish_reg}     onSave={v => patch({ irish_reg: v })} disabled={disabled} />
-        <InlineField label="VIN"         value={car.vin}           onSave={v => patch({ vin: v })} disabled={disabled} />
-        <InlineField label="Make"        value={car.make}          onSave={v => patch({ make: v })} disabled={disabled} />
-        <InlineField label="Model"       value={car.model}         onSave={v => patch({ model: v })} disabled={disabled} />
-        <InlineField label="Year"        value={car.vehicle_year}  type="number" onSave={v => patch({ vehicle_year: v ? Number(v) : null })} disabled={disabled} />
-        <InlineField label="UK ex-VAT (£)" value={car.uk_purchase_price_ex_vat} type="number" step="0.01" onSave={v => patch({ uk_purchase_price_ex_vat: v ? Number(v) : null })} disabled={disabled} />
-        <InlineField label="UK VAT (£)"    value={car.uk_vat}                   type="number" step="0.01" onSave={v => patch({ uk_vat: v ? Number(v) : null })} disabled={disabled} />
-        <InlineField label="IE inc-VAT (€)" value={car.irish_sale_price_inc_vat} type="number" step="0.01" onSave={v => patch({ irish_sale_price_inc_vat: v ? Number(v) : null })} disabled={disabled} />
-        <InlineField label="IE ex-VAT (€)"  value={car.irish_sale_price_ex_vat}  type="number" step="0.01" onSave={v => patch({ irish_sale_price_ex_vat: v ? Number(v) : null })} disabled={disabled} />
+    <div className="bg-un1t-dark border border-un1t-gray rounded-2xl p-5 mb-4 space-y-5">
+      <div>
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light mb-3">Vehicle</h3>
+        <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+          <InlineField label="UK reg"      value={car.uk_reg}        onSave={v => patch({ uk_reg: v })} disabled={disabled} />
+          <InlineField label="Irish reg"   value={car.irish_reg}     onSave={v => patch({ irish_reg: v })} disabled={disabled} />
+          <InlineField label="VIN"         value={car.vin}           onSave={v => patch({ vin: v })} disabled={disabled} />
+          <InlineField label="Make"        value={car.make}          onSave={v => patch({ make: v })} disabled={disabled} />
+          <InlineField label="Model"       value={car.model}         onSave={v => patch({ model: v })} disabled={disabled} />
+          <InlineField label="Year"        value={car.vehicle_year}  type="number" onSave={v => patch({ vehicle_year: v ? Number(v) : null })} disabled={disabled} />
+        </div>
       </div>
+
+      <div>
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light mb-3">Prices</h3>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <InlineField label="UK ex-VAT (£)"  value={car.uk_purchase_price_ex_vat} type="number" step="0.01" onSave={v => patch({ uk_purchase_price_ex_vat: v ? Number(v) : null })} disabled={disabled} />
+          <InlineField label="UK VAT (£)"     value={car.uk_vat}                   type="number" step="0.01" onSave={v => patch({ uk_vat: v ? Number(v) : null })} disabled={disabled} />
+          <InlineField label="IE inc-VAT (€)" value={car.irish_sale_price_inc_vat} type="number" step="0.01" onSave={v => patch({ irish_sale_price_inc_vat: v ? Number(v) : null })} disabled={disabled} />
+          <InlineField label="IE ex-VAT (€)"  value={car.irish_sale_price_ex_vat}  type="number" step="0.01" onSave={v => patch({ irish_sale_price_ex_vat: v ? Number(v) : null })} disabled={disabled} />
+        </div>
+      </div>
+
+      <div>
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light mb-3">Costs</h3>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          {COST_FIELDS.filter(c => !c.hasLabelField).map(c => (
+            <InlineField
+              key={c.key}
+              label={`${c.label} (€)`}
+              value={car[c.key]}
+              type="number"
+              step="0.01"
+              onSave={v => patch({ [c.key]: v ? Number(v) : null })}
+              disabled={disabled}
+            />
+          ))}
+        </div>
+        {/* Additional cost gets a label + value pair */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-3">
+          <div className="md:col-span-3">
+            <InlineField
+              label="Additional cost label"
+              value={car.additional_costs_label}
+              onSave={v => patch({ additional_costs_label: v })}
+              disabled={disabled}
+            />
+          </div>
+          <InlineField
+            label={`${car.additional_costs_label || 'Additional'} (€)`}
+            value={car.additional_costs}
+            type="number"
+            step="0.01"
+            onSave={v => patch({ additional_costs: v ? Number(v) : null })}
+            disabled={disabled}
+          />
+        </div>
+      </div>
+
       {profit != null && (
-        <p className="text-xs text-un1t-light mt-3 px-1">
-          Estimated profit (ex-VAT both sides): <span className={profit >= 0 ? 'text-green-500 font-semibold' : 'text-red-400 font-semibold'}>€{Math.round(profit)}</span>
-        </p>
+        <div className="text-xs text-un1t-light bg-black/30 rounded-md px-3 py-2">
+          {ancillary > 0 ? (
+            <>
+              Sale ex-VAT €{Math.round(sale)} − Purchase ex-VAT €{Math.round(cost)} − Costs €{Math.round(ancillary)} ={' '}
+            </>
+          ) : (
+            <>Estimated profit (ex-VAT both sides): </>
+          )}
+          <span className={profit >= 0 ? 'text-green-500 font-semibold' : 'text-red-400 font-semibold'}>€{Math.round(profit)}</span>
+        </div>
       )}
     </div>
   )

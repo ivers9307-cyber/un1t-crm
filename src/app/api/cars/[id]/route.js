@@ -19,6 +19,13 @@ const CarUpdateSchema = z.object({
   uk_vat: money.nullable().optional(),
   irish_sale_price_inc_vat: money.nullable().optional(),
   irish_sale_price_ex_vat: money.nullable().optional(),
+  // Ancillary costs — see migration 026 + COST_FIELDS in src/lib/cars.js.
+  uk_transporter_cost: money.nullable().optional(),
+  ferry_cost: money.nullable().optional(),
+  import_customs_cost: money.nullable().optional(),
+  nct_cost: money.nullable().optional(),
+  additional_costs: money.nullable().optional(),
+  additional_costs_label: z.string().max(120).nullable().optional(),
   buyer_name: z.string().max(200).nullable().optional(),
   buyer_email: z.string().email().max(320).nullable().optional()
     .or(z.literal('').transform(() => null)),

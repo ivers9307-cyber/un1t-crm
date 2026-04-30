@@ -39,14 +39,47 @@ export function completionGaps(car) {
   return gaps
 }
 
+// Per-car ancillary cost line items captured at registration. Listed
+// here as the single source of truth so the form, the inline editor
+// on the detail page, and totalAncillaryCosts() all stay in sync.
+//
+// Add a new cost type by appending one entry — the UI / profit calc
+// pick it up automatically.
+export const COST_FIELDS = Object.freeze([
+  { key: 'uk_transporter_cost', label: 'UK transporter' },
+  { key: 'ferry_cost',          label: 'Ferry' },
+  { key: 'import_customs_cost', label: 'Import customs' },
+  { key: 'nct_cost',            label: 'NCT' },
+  { key: 'additional_costs',    label: 'Additional', hasLabelField: true },
+])
+
 /**
- * Profit estimate from the operator-entered prices. We use the
- * ex-VAT figures on both sides so the number reflects the operator's
- * margin rather than gross turnover.
+ * Sum of every per-car ancillary cost. NULLs coerce to 0 so a car
+ * created before migration 026 (or one whose operator hasn't filled
+ * the costs in yet) just contributes nothing to the total — its
+ * profit number reflects pre-cost margin.
+ */
+export function totalAncillaryCosts(car) {
+  if (!car) return 0
+  let sum = 0
+  for (const c of COST_FIELDS) {
+    sum += Number(car[c.key] || 0)
+  }
+  return Math.round(sum * 100) / 100
+}
+
+/**
+ * Profit estimate. Uses ex-VAT on both sides so the number reflects
+ * the operator's margin rather than gross turnover, and subtracts
+ * every per-car cost line item (UK transporter, ferry, customs,
+ * NCT, additional). Returns null only when both core prices are
+ * unset — partial data with one side filled gives a meaningful
+ * (if optimistic) preview.
  */
 export function estimatedProfit(car) {
   const sale = Number(car?.irish_sale_price_ex_vat || 0)
   const cost = Number(car?.uk_purchase_price_ex_vat || 0)
-  if (!sale || !cost) return null
-  return Math.round((sale - cost) * 100) / 100
+  if (!sale && !cost) return null
+  const ancillary = totalAncillaryCosts(car)
+  return Math.round((sale - cost - ancillary) * 100) / 100
 }

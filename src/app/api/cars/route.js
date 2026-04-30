@@ -26,6 +26,14 @@ const CarCreateSchema = z.object({
   uk_vat: money.nullable().optional(),
   irish_sale_price_inc_vat: money.nullable().optional(),
   irish_sale_price_ex_vat: money.nullable().optional(),
+  // Ancillary cost line items (migration 026). All optional at
+  // registration time — operator fills in as they're known.
+  uk_transporter_cost: money.nullable().optional(),
+  ferry_cost: money.nullable().optional(),
+  import_customs_cost: money.nullable().optional(),
+  nct_cost: money.nullable().optional(),
+  additional_costs: money.nullable().optional(),
+  additional_costs_label: z.string().max(120).nullable().optional(),
   notes: z.string().max(20_000).nullable().optional(),
 })
 
@@ -98,6 +106,12 @@ export async function POST(request) {
     uk_vat: body.uk_vat ?? null,
     irish_sale_price_inc_vat: body.irish_sale_price_inc_vat ?? null,
     irish_sale_price_ex_vat: body.irish_sale_price_ex_vat ?? null,
+    uk_transporter_cost: body.uk_transporter_cost ?? null,
+    ferry_cost: body.ferry_cost ?? null,
+    import_customs_cost: body.import_customs_cost ?? null,
+    nct_cost: body.nct_cost ?? null,
+    additional_costs: body.additional_costs ?? null,
+    additional_costs_label: body.additional_costs_label || null,
     notes: body.notes || null,
     created_by: user.id,
   }).select().single()

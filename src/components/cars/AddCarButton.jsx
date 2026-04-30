@@ -18,6 +18,12 @@ export default function AddCarButton({ locationId }) {
     make: 'Tesla', model: '', vehicle_year: '',
     uk_purchase_price_ex_vat: '', uk_vat: '',
     irish_sale_price_inc_vat: '', irish_sale_price_ex_vat: '',
+    uk_transporter_cost: '',
+    ferry_cost: '',
+    import_customs_cost: '',
+    nct_cost: '',
+    additional_costs: '',
+    additional_costs_label: '',
     notes: '',
   })
 
@@ -38,6 +44,12 @@ export default function AddCarButton({ locationId }) {
       uk_vat: n(form.uk_vat),
       irish_sale_price_inc_vat: n(form.irish_sale_price_inc_vat),
       irish_sale_price_ex_vat: n(form.irish_sale_price_ex_vat),
+      uk_transporter_cost: n(form.uk_transporter_cost),
+      ferry_cost: n(form.ferry_cost),
+      import_customs_cost: n(form.import_customs_cost),
+      nct_cost: n(form.nct_cost),
+      additional_costs: n(form.additional_costs),
+      additional_costs_label: form.additional_costs_label || null,
       location_id: locationId,
     }
     const res = await fetch('/api/cars', {
@@ -54,17 +66,30 @@ export default function AddCarButton({ locationId }) {
       make: 'Tesla', model: '', vehicle_year: '',
       uk_purchase_price_ex_vat: '', uk_vat: '',
       irish_sale_price_inc_vat: '', irish_sale_price_ex_vat: '',
+      uk_transporter_cost: '',
+      ferry_cost: '',
+      import_customs_cost: '',
+      nct_cost: '',
+      additional_costs: '',
+      additional_costs_label: '',
       notes: '',
     })
     router.refresh()
     router.push(`/cars/${j.data.id}`)
   }
 
-  // Compute live profit hint as the user types — the same number the
-  // list view will show after save.
+  // Live profit calc — mirrors the server-side estimatedProfit() so
+  // what the operator sees in the form matches what the list shows
+  // after save.
   const sale = Number(form.irish_sale_price_ex_vat || 0)
   const cost = Number(form.uk_purchase_price_ex_vat || 0)
-  const profit = sale && cost ? sale - cost : null
+  const ancillary =
+    Number(form.uk_transporter_cost || 0)
+    + Number(form.ferry_cost || 0)
+    + Number(form.import_customs_cost || 0)
+    + Number(form.nct_cost || 0)
+    + Number(form.additional_costs || 0)
+  const profit = (sale || cost) ? sale - cost - ancillary : null
 
   if (!open) {
     return (
@@ -118,9 +143,31 @@ export default function AddCarButton({ locationId }) {
         </div>
       </Section>
 
+      <Section title="Costs">
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="UK transporter (€)"   type="number" step="0.01" value={form.uk_transporter_cost} onChange={v => setForm(f => ({ ...f, uk_transporter_cost: v }))} />
+          <Field label="Ferry (€)"            type="number" step="0.01" value={form.ferry_cost}          onChange={v => setForm(f => ({ ...f, ferry_cost: v }))} />
+          <Field label="Import customs (€)"   type="number" step="0.01" value={form.import_customs_cost} onChange={v => setForm(f => ({ ...f, import_customs_cost: v }))} />
+          <Field label="NCT (€)"              type="number" step="0.01" value={form.nct_cost}            onChange={v => setForm(f => ({ ...f, nct_cost: v }))} />
+        </div>
+        <div className="grid grid-cols-3 gap-3">
+          <div className="col-span-2">
+            <Field label="Additional cost label" value={form.additional_costs_label} onChange={v => setForm(f => ({ ...f, additional_costs_label: v }))} placeholder="e.g. Detailing, tyres" />
+          </div>
+          <Field label="Additional (€)" type="number" step="0.01" value={form.additional_costs} onChange={v => setForm(f => ({ ...f, additional_costs: v }))} />
+        </div>
+      </Section>
+
       {profit != null && (
         <div className="text-xs text-un1t-light bg-black/30 rounded-md px-3 py-2">
-          Estimated profit (ex-VAT both sides): <span className={profit >= 0 ? 'text-green-500 font-semibold' : 'text-red-400 font-semibold'}>€{Math.round(profit)}</span>
+          {ancillary > 0 ? (
+            <>
+              Sale ex-VAT €{Math.round(sale)} − Purchase ex-VAT €{Math.round(cost)} − Costs €{Math.round(ancillary)} ={' '}
+            </>
+          ) : (
+            <>Estimated profit (ex-VAT both sides): </>
+          )}
+          <span className={profit >= 0 ? 'text-green-500 font-semibold' : 'text-red-400 font-semibold'}>€{Math.round(profit)}</span>
         </div>
       )}
 
