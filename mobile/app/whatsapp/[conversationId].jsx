@@ -15,6 +15,8 @@ import {
 } from 'react-native'
 import { useLocalSearchParams, useRouter, Stack } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
+import { useHeaderHeight } from '@react-navigation/elements'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 
 // Explicit headerLeft so the back chevron is always visible — see the
 // note in pipeline/[dealId].jsx for why this isn't auto-rendered.
@@ -84,6 +86,8 @@ export default function Conversation() {
   const { conversationId } = useLocalSearchParams()
   const router = useRouter()
   const { activeLocation } = useAuth()
+  const headerHeight = useHeaderHeight()
+  const insets = useSafeAreaInsets()
   const [conv, setConv] = useState(null)
   const [messages, setMessages] = useState([])
   const [loading, setLoading] = useState(true)
@@ -162,7 +166,12 @@ export default function Conversation() {
 
   return (
     <KeyboardAvoidingView
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      // 'padding' on iOS reflows the layout so the composer stays
+      // pinned just above the keyboard. We feed it the actual header
+      // height so the offset accounts for the navigation bar — without
+      // this the composer ends up underneath the keyboard.
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      keyboardVerticalOffset={Platform.OS === 'ios' ? headerHeight : 0}
       className="flex-1 bg-un1t-black"
     >
       <Stack.Screen
@@ -196,8 +205,14 @@ export default function Conversation() {
             {messages.map(m => <Bubble key={m.id} msg={m} />)}
           </ScrollView>
 
-          {/* Composer */}
-          <View className="border-t border-un1t-gray bg-un1t-black px-3 py-2 flex-row items-end">
+          {/* Composer — bottom padding accounts for the home-indicator
+              safe area when the keyboard is closed, but collapses to 8
+              when the keyboard is open (KeyboardAvoidingView replaces
+              the inset). */}
+          <View
+            className="border-t border-un1t-gray bg-un1t-black px-3 pt-2 flex-row items-end"
+            style={{ paddingBottom: Math.max(insets.bottom, 8) }}
+          >
             <Pressable
               onPress={pickTemplate}
               className="w-10 h-10 rounded-full bg-un1t-dark border border-un1t-gray items-center justify-center mr-2 active:opacity-70"
