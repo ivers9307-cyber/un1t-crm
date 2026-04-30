@@ -68,11 +68,16 @@ jobs:
       # uploading it to Expo's CDN. Falls through if all files parse,
       # exits non-zero if anything is broken (which fails the job and
       # skips the publish step below).
+      #
+      # Script lives INSIDE mobile/ (not /tmp) so Node's module
+      # resolver walks up into mobile/node_modules and finds
+      # @babel/parser. Running it from /tmp/ would fail with
+      # 'Cannot find module @babel/parser' even though the package
+      # is installed.
       - name: Babel parse mobile JS/JSX
         run: |
-          cat > /tmp/parse-check.mjs << 'EOF'
-          import { readFileSync } from 'node:fs'
-          import { readdirSync, statSync } from 'node:fs'
+          cat > parse-check.mjs << 'EOF'
+          import { readFileSync, readdirSync, statSync } from 'node:fs'
           import { join } from 'node:path'
           import { parse } from '@babel/parser'
 
@@ -111,7 +116,8 @@ jobs:
           console.log(`Checked ${files.length} files, ${bad} failed.`)
           process.exit(bad > 0 ? 1 : 0)
           EOF
-          node /tmp/parse-check.mjs
+          node parse-check.mjs
+          rm -f parse-check.mjs
 
       # Use the commit message as the EAS update note so you can see
       # at a glance which commit a given update came from in the EAS

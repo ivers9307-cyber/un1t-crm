@@ -9,3 +9,5 @@ web-build/
 .DS_Store
 ios/
 android/
+# Generated scratch script created by the EAS Update CI step.
+parse-check.mjs
