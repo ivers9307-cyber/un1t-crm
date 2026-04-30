@@ -2,6 +2,7 @@ import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
 import { refreshWindow } from '@/lib/whatsapp'
 import { verifyMetaSignature, safeEqual } from '@/lib/webhook-auth'
+import { sendPush, sendPushToRolesAtLocation } from '@/lib/push'
 
 // Force Node.js runtime — we use node:crypto for HMAC verification.
 export const runtime = 'nodejs'
@@ -253,6 +254,44 @@ async function handleIncomingMessage(db, message, contacts, phoneNumberId) {
     last_message_preview: body?.substring(0, 100) || `[${messageType}]`,
     unread_count: (currentConv?.unread_count || 0) + 1,
   }).eq('id', conversationId)
+
+  // Push notification fan-out for inbound WhatsApp.
+  //   - If the conversation is assigned to a specific user, push to them.
+  //   - Otherwise push to owners + managers + head coaches at the location.
+  // Per-user opt-in is gated by permissions.mobile.notify_whatsapp inside
+  // sendPush(). Best-effort — never throw out of the webhook handler.
+  try {
+    const { data: conv } = await db.from('whatsapp_conversations')
+      .select('assigned_to, location_id, contacts(name, first_name, wa_profile_name)')
+      .eq('id', conversationId)
+      .single()
+    const senderLabel = conv?.contacts?.name
+      || conv?.contacts?.first_name
+      || conv?.contacts?.wa_profile_name
+      || senderName
+      || 'a contact'
+    const preview = body?.substring(0, 140) || `[${messageType}]`
+    const payload = {
+      title: `WhatsApp · ${senderLabel}`,
+      body: preview,
+      category: 'whatsapp',
+      data: {
+        type: 'whatsapp_inbound',
+        conversation_id: conversationId,
+      },
+    }
+    if (conv?.assigned_to) {
+      await sendPush([conv.assigned_to], payload)
+    } else if (conv?.location_id) {
+      await sendPushToRolesAtLocation(
+        conv.location_id,
+        ['owner', 'manager', 'head_coach'],
+        payload
+      )
+    }
+  } catch (err) {
+    console.error('[whatsapp webhook] push failed', err)
+  }
 }
 
 async function handleStatusUpdate(db, status) {

@@ -4,6 +4,7 @@ import { createServerClient } from '@/lib/supabase'
 import { requireApiKey } from '@/lib/api-auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike, email, phone, leadSourceSchema, leadStatusSchema } from '@/lib/schemas'
+import { sendPushToRolesAtLocation } from '@/lib/push'
 
 const ContactCreateSchema = z.object({
   name: z.string().min(1).max(200),
@@ -47,6 +48,26 @@ export async function POST(request) {
 
   if (error) {
     return NextResponse.json({ success: false, error: error.message }, { status: 400 })
+  }
+
+  // Push notification: a new lead has landed. Fan out to managers /
+  // head-coaches at the contact's location. Per-user opt-in via
+  // permissions.mobile.notify_lead inside sendPush(). Best-effort.
+  if (data.location_id) {
+    const sourceLabel = data.lead_source ? ` from ${data.lead_source}` : ''
+    sendPushToRolesAtLocation(
+      data.location_id,
+      ['owner', 'manager', 'head_coach'],
+      {
+        title: 'New lead',
+        body: `${data.name}${sourceLabel}. Tap to view.`,
+        category: 'lead',
+        data: {
+          type: 'lead_new',
+          contact_id: data.id,
+        },
+      }
+    ).catch(err => console.error('[contacts] push failed', err))
   }
 
   // Return in a shape similar to Pipedrive for easy n8n migration

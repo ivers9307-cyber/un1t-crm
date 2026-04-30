@@ -282,7 +282,10 @@ The Supabase URL + anon key are the same values used by the web app (in `un1t-cr
 | `app/(auth)/login.jsx` | Email/password sign-in via `signInWithPassword`. |
 | `app/(tabs)/_layout.jsx` | Bottom tabs. Tabs are conditionally enabled by `permissions.mobile.<key>` — `href: null` removes a tab. Registers Expo push token if `permissions.mobile.push_notifications` is on. |
 | `app/(tabs)/index.jsx` | Home — greeting, active-location header, navigation cards based on enabled mobile features. |
-| `app/(tabs)/{schedule,pipeline,whatsapp}.jsx` | Per-module screens. Phase 2/4/5 fill these in. |
+| `app/(tabs)/schedule.jsx` | Week strip + day picker + shifts list, time-off banner, long-press to post for swap, floating Request Time Off button. |
+| `app/(tabs)/pipeline.jsx` | Stage strip with deal counts + open-deal list. Tap a deal to open `app/pipeline/[dealId].jsx` — contact card, stage move, log activity, mark won/lost, timeline. |
+| `app/(tabs)/whatsapp.jsx` | Inbox: conversations sorted by last message, unread badges, 24h window indicator. Tap to open `app/whatsapp/[conversationId].jsx` — iMessage-style bubbles, text composer, template picker for closed-window sends. |
+| `app/schedule/time-off-new.jsx` | Modal — type segmented control, date stepper, reason field. |
 | `app/(tabs)/more.jsx` | iOS-style settings list — account, location switcher, sign out. |
 
 ### Per-user mobile feature flags
