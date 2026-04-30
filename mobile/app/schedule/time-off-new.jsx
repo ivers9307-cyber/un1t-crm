@@ -17,6 +17,7 @@ import {
   Alert, KeyboardAvoidingView, Platform,
 } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
+import { useHeaderHeight } from '@react-navigation/elements'
 import { useAuth } from '../../lib/auth-context'
 import { createTimeOffRequest } from '../../lib/schedule-api'
 import { isoDate, addDays } from '../../lib/dates'
@@ -35,6 +36,7 @@ function dateMath(iso, days) {
 export default function TimeOffNew() {
   const { activeLocation } = useAuth()
   const router = useRouter()
+  const headerHeight = useHeaderHeight()
   const today = isoDate(new Date())
   const [type, setType] = useState('holiday')
   const [start, setStart] = useState(today)
@@ -65,7 +67,8 @@ export default function TimeOffNew() {
 
   return (
     <KeyboardAvoidingView
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      keyboardVerticalOffset={Platform.OS === 'ios' ? headerHeight : 0}
       className="flex-1 bg-un1t-black"
     >
       <Stack.Screen
