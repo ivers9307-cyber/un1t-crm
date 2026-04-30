@@ -62,7 +62,7 @@ export default ({ config }) => ({
   experiments: {
     typedRoutes: true,
   },
-  // Over-the-air updates via EAS Update. The project ID is the public
+  // Over-the-air updates via EAS Update — first publish via GitHub Action. The project ID is the public
   // identifier of the EAS project at https://expo.dev/projects/<id> —
   // not a secret, safe to commit. The runtimeVersion policy
   // 'sdkVersion' means each Expo SDK gets its own update lane — an
