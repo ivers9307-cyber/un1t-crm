@@ -1,11 +1,24 @@
 import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
+import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit'
+import { getRequestOrigin } from '@/lib/app-url'
+
+export const runtime = 'nodejs'
+
+// 10 attempts per IP per 15 minutes. The token is a UUID (122 bits of
+// entropy), so brute force is hopeless even without a limiter — this mainly
+// slows down a misconfigured email client looping on the unsubscribe URL.
+const RL = { max: 10, windowMs: 15 * 60_000 }
 
 // One-click unsubscribe (used by List-Unsubscribe header)
 // POST /api/unsubscribe/[token]
 export async function POST(request, { params }) {
   const db = createServerClient()
   const { token } = params
+
+  const ip = getClientIp(request)
+  const limit = await checkRateLimit(db, `unsubscribe:${ip}`, RL)
+  if (!limit.allowed) return rateLimitResponse(limit)
 
   // Find the contact preference by token
   const { data: pref, error } = await db
@@ -42,9 +55,10 @@ export async function POST(request, { params }) {
   return NextResponse.json({ success: true, message: 'Unsubscribed successfully' })
 }
 
-// GET redirects to preference centre
+// GET redirects to preference centre. Use the request's own origin so the
+// redirect always lands on the same domain the user typed — no env var
+// dependency, no chance of redirecting to a stale domain.
 export async function GET(request, { params }) {
   const { token } = params
-  const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://crm.un1t.ie'
-  return NextResponse.redirect(`${baseUrl}/preferences/${token}`)
+  return NextResponse.redirect(`${getRequestOrigin(request)}/preferences/${token}`)
 }

@@ -1,4 +1,5 @@
 import { createServerClient } from './supabase'
+import { getAppUrl } from './app-url'
 
 const POSTMARK_API_URL = 'https://api.postmarkapp.com'
 
@@ -285,7 +286,10 @@ export async function sendCampaign(campaignId) {
     return { sent: 0 }
   }
 
-  const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://crm.un1t.ie'
+  // Throws if NEXT_PUBLIC_APP_URL is unset — campaign emails embed
+  // unsubscribe URLs that recipients click from their inbox; if the env var
+  // is wrong every recipient lands on a dead domain. Fail fast.
+  const baseUrl = getAppUrl()
 
   // Prepare batch emails
   const emailBatch = contacts.map(contact => {

@@ -1,10 +1,40 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
+import { verifySharedSecret } from '@/lib/webhook-auth'
+
+// Force Node.js runtime so node:crypto is available for the timing-safe compare.
+export const runtime = 'nodejs'
 
 // POST /api/webhooks/postmark — Handle Postmark delivery webhooks
-// Configure in Postmark: Settings → Webhooks → Add webhook → point to this URL
-// Events: Delivery, Bounce, SpamComplaint, Open, Click
+//
+// Authentication: Postmark doesn't natively HMAC-sign webhooks. We require
+// a shared-secret token sent in the `X-Webhook-Token` header. Configure
+// either:
+//   1. Custom header: in Postmark → Webhooks → Custom Headers, add
+//      `X-Webhook-Token: <POSTMARK_WEBHOOK_TOKEN>`. (preferred)
+//   2. Basic Auth in URL: not used here, but supported by Postmark.
+//
+// During rollout, if POSTMARK_WEBHOOK_TOKEN is unset, the request is accepted
+// with a loud warning. Set the env var to activate enforcement.
+//
+// Events: Delivery, Bounce, SpamComplaint, Open, Click, SubscriptionChange
 export async function POST(request) {
+  const expectedToken = process.env.POSTMARK_WEBHOOK_TOKEN
+  if (expectedToken) {
+    const headerToken = request.headers.get('x-webhook-token')
+    const result = verifySharedSecret(headerToken, expectedToken)
+    if (!result.ok) {
+      console.warn(`Postmark webhook rejected: ${result.reason}`)
+      return NextResponse.json({ error: 'Invalid token' }, { status: 403 })
+    }
+  } else {
+    console.warn(
+      '[security] POSTMARK_WEBHOOK_TOKEN is not set — accepting Postmark webhook ' +
+      'without authentication. Set the env var (and a matching X-Webhook-Token ' +
+      'header in Postmark) to enable enforcement.'
+    )
+  }
+
   const body = await request.json()
   const db = createServerClient()
 
@@ -285,7 +315,9 @@ export async function POST(request) {
       }
 
       default:
-        console.log(`Unhandled Postmark webhook type: ${recordType}`)
+        if (process.env.NODE_ENV !== 'production') {
+          console.log(`Unhandled Postmark webhook type: ${recordType}`)
+        }
     }
 
     return NextResponse.json({ success: true })

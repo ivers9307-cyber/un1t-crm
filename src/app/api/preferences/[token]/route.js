@@ -1,10 +1,23 @@
 import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
+import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit'
+
+export const runtime = 'nodejs'
+
+// 20 attempts per IP per 15 minutes. The preference centre legitimately
+// sends a few requests per session (load + toggle a few channels), so this
+// is more lenient than the unsubscribe endpoint while still blunting any
+// brute-force enumeration.
+const RL = { max: 20, windowMs: 15 * 60_000 }
 
 // GET /api/preferences/[token] — fetch current preferences
 export async function GET(request, { params }) {
   const db = createServerClient()
   const { token } = params
+
+  const ip = getClientIp(request)
+  const limit = await checkRateLimit(db, `preferences:${ip}`, RL)
+  if (!limit.allowed) return rateLimitResponse(limit)
 
   const { data: pref, error } = await db
     .from('contact_preferences')
@@ -35,6 +48,11 @@ export async function GET(request, { params }) {
 export async function PUT(request, { params }) {
   const db = createServerClient()
   const { token } = params
+
+  const ip = getClientIp(request)
+  const limit = await checkRateLimit(db, `preferences:${ip}`, RL)
+  if (!limit.allowed) return rateLimitResponse(limit)
+
   const body = await request.json()
 
   const { data: pref, error } = await db
@@ -50,7 +68,6 @@ export async function PUT(request, { params }) {
   const allowed = ['email_marketing', 'email_administrative', 'whatsapp_marketing', 'whatsapp_administrative']
   const updates = {}
   const logEntries = []
-  const ip = request.headers.get('x-forwarded-for') || request.headers.get('x-real-ip') || null
 
   for (const channel of allowed) {
     if (typeof body[channel] === 'boolean' && body[channel] !== pref[channel]) {

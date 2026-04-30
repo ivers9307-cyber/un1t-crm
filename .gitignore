@@ -2,3 +2,6 @@ node_modules/
 .next/
 .env
 .env.local
+
+# Internal review/session artefacts — not source
+_review/

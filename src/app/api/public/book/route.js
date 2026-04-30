@@ -1,5 +1,8 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
+import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit'
+
+export const runtime = 'nodejs'
 
 // POST /api/public/book — Public: create a booking
 // No auth required — this is called from the public booking page
@@ -8,8 +11,18 @@ import { createServerClient } from '@/lib/supabase'
 //   2. Creates a deal at "New Lead" stage
 //   3. Fires the event's webhook URL (for n8n)
 export async function POST(request) {
-  const body = await request.json()
   const db = createServerClient()
+
+  // 5 booking attempts per IP per 15 minutes — generous enough that a real
+  // user retrying after a typo or a lost slot won't hit it, tight enough
+  // that scripted booking spam is throttled.
+  const ip = getClientIp(request)
+  const limit = await checkRateLimit(db, `book:${ip}`, { max: 5, windowMs: 15 * 60_000 })
+  if (!limit.allowed) {
+    return rateLimitResponse(limit, 'Too many booking attempts. Please wait a few minutes and try again.')
+  }
+
+  const body = await request.json()
 
   // Validate required fields
   if (!body.event_type_id || !body.booking_date || !body.start_time || !body.customer_name || !body.customer_email) {

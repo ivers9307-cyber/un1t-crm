@@ -61,7 +61,7 @@ Two streams: `broadcast` (marketing, GDPR headers) and `outbound` (transactional
 
 ## Database
 
-13 migrations in `supabase/migrations/`. Key tables:
+15 migrations in `supabase/migrations/`. Key tables:
 
 **Core:** locations, profiles, profile_locations (junction with role), contacts, deals (linked to contacts + stages), activities, notes.
 
@@ -75,7 +75,23 @@ Two streams: `broadcast` (marketing, GDPR headers) and `outbound` (transactional
 
 **Reporting:** generated_reports, scheduled_reports.
 
+**Infrastructure:** rate_limit_buckets (fixed-window counter for public endpoints, pruned daily by `/api/cron/prune-rate-limits`).
+
 **Settings:** company_settings (logo_url, favicon_url, company_name per location).
+
+### Row Level Security
+
+Migration 014 enforces per-location scoping at the DB layer for all data tables. The model:
+
+- **Service role** (used by every API route, cron, and webhook handler via `createServerClient()`) bypasses RLS — application code is the source of truth for cross-cutting logic.
+- **Authenticated role** (browser-side calls via `createBrowserClient()`, e.g. `KanbanBoard`, `ContactActions`, `CampaignEditor`) is restricted by helper functions defined in 014:
+  - `auth_is_in_location(uuid)` — true if the row's `location_id` is in the caller's `profile_locations`.
+  - `auth_role()`, `auth_is_owner_or_manager()`, `auth_is_owner()` — role checks via `profiles.role`.
+- **Anon role** is allowed only by the explicit public policies in 002 (booking widget) and 013 (branding bucket); migration 014 does not change those.
+- Child tables without a direct `location_id` (`consent_log`, `campaign_recipients`, `sequence_steps`, `sequence_enrollments`, `whatsapp_broadcast_recipients`, `blocked_times`) are scoped through the parent's `location_id`.
+- `pipeline_stages` is read-any-authenticated, write-owner-or-manager. `webhook_subscriptions` is owner-write.
+
+When adding a new table that holds tenant data, add `location_id UUID REFERENCES locations(id)` and replicate the `_location_scoped` policy pattern from 014. Don't add `USING (true)` policies.
 
 ## Environment Variables
 
@@ -85,13 +101,36 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=
 SUPABASE_SERVICE_ROLE_KEY=
 POSTMARK_API_KEY=
 POSTMARK_FROM_EMAIL=hello@un1t.ie
+POSTMARK_WEBHOOK_TOKEN=          # shared secret sent in X-Webhook-Token by Postmark
 WHATSAPP_ACCESS_TOKEN=
 WHATSAPP_PHONE_NUMBER_ID=
-WHATSAPP_BUSINESS_ACCOUNT_ID=  # optional
-CRM_API_KEY=                    # for n8n webhook auth
+WHATSAPP_BUSINESS_ACCOUNT_ID=    # optional
+WHATSAPP_WEBHOOK_VERIFY_TOKEN=   # for Meta GET subscription handshake
+WHATSAPP_APP_SECRET=             # for X-Hub-Signature-256 verification on POST
+CRM_API_KEY=                     # for n8n webhook auth
 NEXT_PUBLIC_APP_URL=https://crm.un1t.ie
-CRON_SECRET=                    # for Vercel cron auth
+CRON_SECRET=                     # for Vercel cron auth
 ```
+
+### Webhook authentication
+
+`src/lib/webhook-auth.js` provides `verifyMetaSignature()` (HMAC-SHA256 over the raw body, used by `/api/webhooks/whatsapp`) and `verifySharedSecret()` (constant-time token compare, used by `/api/webhooks/postmark`). Both routes set `export const runtime = 'nodejs'` so `node:crypto` is available.
+
+Rollout pattern: if the relevant secret env var is unset, the webhook is accepted with a `[security]` warning logged. Once the secret is configured (Meta App Secret / Postmark custom header), enforcement activates automatically — invalid signatures get a 403. **Always set both secrets in production.**
+
+When adding a new webhook handler, read the body with `await request.text()` first (verify HMAC), then `JSON.parse()` — calling `request.json()` consumes the body and the re-serialised JSON won't byte-match the signed payload.
+
+### Rate limiting
+
+`src/lib/rate-limit.js` provides `checkRateLimit(db, key, { max, windowMs })` backed by the `rate_limit_buckets` table (migration 015). Currently wired to:
+
+- `POST /api/public/book` — 5/15 min per IP
+- `POST /api/unsubscribe/[token]` — 10/15 min per IP
+- `GET/PUT /api/preferences/[token]` — 20/15 min per IP
+
+The limiter is fail-open (DB error → request allowed, warning logged) so a Supabase blip can't take down the booking flow. Routes call `getClientIp(request)` to derive the bucket key from `x-forwarded-for`. Cron `/api/cron/prune-rate-limits` deletes expired buckets nightly at 03:30 UTC.
+
+Add a new public endpoint? Wire the limiter at the top of the handler with a unique bucket prefix (`book:`, `unsubscribe:`, etc.) and `export const runtime = 'nodejs'` so `node:crypto` is available transitively.
 
 ## RBAC Matrix
 

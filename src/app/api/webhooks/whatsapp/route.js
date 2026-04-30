@@ -1,6 +1,10 @@
 import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
 import { refreshWindow } from '@/lib/whatsapp'
+import { verifyMetaSignature, safeEqual } from '@/lib/webhook-auth'
+
+// Force Node.js runtime — we use node:crypto for HMAC verification.
+export const runtime = 'nodejs'
 
 // GET — Meta webhook verification (required for setup)
 export async function GET(request) {
@@ -9,9 +13,13 @@ export async function GET(request) {
   const token = searchParams.get('hub.verify_token')
   const challenge = searchParams.get('hub.challenge')
 
-  const verifyToken = process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN || 'un1t_wa_verify'
+  const verifyToken = process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN
+  if (!verifyToken) {
+    console.error('WHATSAPP_WEBHOOK_VERIFY_TOKEN is not set — refusing verification')
+    return NextResponse.json({ error: 'Server misconfigured' }, { status: 500 })
+  }
 
-  if (mode === 'subscribe' && token === verifyToken) {
+  if (mode === 'subscribe' && safeEqual(token || '', verifyToken)) {
     return new Response(challenge, { status: 200 })
   }
 
@@ -20,12 +28,43 @@ export async function GET(request) {
 
 // POST — Incoming messages and status updates from Meta
 export async function POST(request) {
-  const body = await request.json()
+  // Read the raw body FIRST — HMAC must be computed over the exact bytes
+  // Meta sent. Reading it via request.json() would consume the body and
+  // re-serialising would not byte-match.
+  const rawBody = await request.text()
+  const signature = request.headers.get('x-hub-signature-256')
+  const appSecret = process.env.WHATSAPP_APP_SECRET
+
+  // If the App Secret is configured, enforce signature verification.
+  // If it's not yet configured, log loudly so the misconfiguration is visible
+  // but accept the request (rollout-safe — set the secret to activate enforcement).
+  if (appSecret) {
+    const result = verifyMetaSignature(rawBody, signature, appSecret)
+    if (!result.ok) {
+      console.warn(`WhatsApp webhook rejected: ${result.reason}`)
+      return NextResponse.json({ error: 'Invalid signature' }, { status: 403 })
+    }
+  } else {
+    console.warn(
+      '[security] WHATSAPP_APP_SECRET is not set — accepting WhatsApp webhook ' +
+      'without signature verification. Set the env var to enable enforcement.'
+    )
+  }
+
+  let body
+  try {
+    body = JSON.parse(rawBody)
+  } catch {
+    return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 })
+  }
+
   const db = createServerClient()
 
   try {
     const entries = body.entry || []
-    console.log('WhatsApp webhook received:', JSON.stringify(body).substring(0, 500))
+    if (process.env.NODE_ENV !== 'production') {
+      console.log('WhatsApp webhook received:', rawBody.substring(0, 500))
+    }
 
     for (const entry of entries) {
       const changes = entry.changes || []
@@ -38,7 +77,6 @@ export async function POST(request) {
 
         // Handle incoming messages
         if (value.messages) {
-          console.log('Processing incoming messages:', value.messages.length)
           for (const message of value.messages) {
             await handleIncomingMessage(db, message, value.contacts, phoneNumberId)
           }
