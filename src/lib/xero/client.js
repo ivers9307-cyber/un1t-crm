@@ -27,14 +27,16 @@ const XERO_API_BASE = 'https://api.xero.com/api.xro/2.0'
 const REFRESH_BUFFER_MS = 60 * 1000 // refresh if access_token expires in <60s
 
 // Scopes required for v1 (customer invoice push):
-//   openid profile email           — identity, returned in id_token
 //   accounting.contacts            — find/create the buyer Contact
 //   accounting.transactions        — POST the Invoice
 //   offline_access                 — issue a refresh_token
+//
+// We deliberately omit the OIDC scopes (openid/profile/email) — we
+// don't use the id_token for anything (the user is already
+// authenticated against the CRM via Supabase Auth) and including
+// them sometimes triggers Xero's `unauthorized_client / Invalid
+// scope` error on apps that haven't explicitly enabled OIDC.
 export const XERO_SCOPES = [
-  'openid',
-  'profile',
-  'email',
   'accounting.contacts',
   'accounting.transactions',
   'offline_access',
