@@ -196,11 +196,20 @@ export default function StaffForm({ staff, locations }) {
             value={form.role}
             onChange={e => {
               const newRole = e.target.value
-              setForm(prev => ({
-                ...prev,
-                role: newRole,
-                permissions: isEdit ? prev.permissions : (defaultPermissionsByRole[newRole] || defaultPermissions),
-              }))
+              setForm(prev => {
+                if (prev.role === newRole) return prev
+                // Always apply the new role's defaults — both on create and on
+                // edit. Without this, demoting an owner to staff would leave
+                // their owner-era `permissions` JSONB intact, which makes the
+                // sidebar still show admin links (the click-through 403s, but
+                // the UX is misleading). Manual permission tweaks below still
+                // override whatever this sets.
+                return {
+                  ...prev,
+                  role: newRole,
+                  permissions: defaultPermissionsByRole[newRole] || defaultPermissions,
+                }
+              })
             }}
             className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
           >
@@ -209,6 +218,9 @@ export default function StaffForm({ staff, locations }) {
             <option value="manager">Manager</option>
             <option value="owner">Owner / Admin</option>
           </select>
+          <p className="text-xs text-un1t-light mt-1">
+            Changing role resets permissions to that role's defaults. You can fine-tune individually below.
+          </p>
         </div>
 
         {isEdit && (
