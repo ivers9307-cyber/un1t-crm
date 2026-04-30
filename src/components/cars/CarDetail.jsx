@@ -13,7 +13,7 @@ import { useState, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { ArrowLeft, ChevronRight, Trash2, FileText, Upload, Check, X, AlertCircle, Receipt } from 'lucide-react'
-import { ALL_DOCUMENT_TYPES, REQUIRED_DOCUMENT_TYPES, completionGaps, estimatedProfit, totalAncillaryCosts, COST_FIELDS, applyIrishVat, IRISH_VAT_RATE } from '@/lib/cars'
+import { ALL_DOCUMENT_TYPES, REQUIRED_DOCUMENT_TYPES, completionGaps, estimatedProfit, totalAncillaryCosts, COST_FIELDS, applyIrishVat, splitIrishPrice, IRISH_VAT_RATE } from '@/lib/cars'
 
 export default function CarDetail({ car: initialCar }) {
   const [car, setCar] = useState(initialCar)
@@ -213,14 +213,26 @@ function CarFieldsCard({ car, patch, disabled }) {
 
       <div>
         <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light mb-3">Prices</h3>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
           <InlineField label="UK ex-VAT (£)"  value={car.uk_purchase_price_ex_vat} type="number" step="0.01" onSave={v => patch({ uk_purchase_price_ex_vat: v ? Number(v) : null })} disabled={disabled} />
           <InlineField label="UK VAT (£)"     value={car.uk_vat}                   type="number" step="0.01" onSave={v => patch({ uk_vat: v ? Number(v) : null })} disabled={disabled} />
-          {/* IE ex-VAT is the source of truth; saving it auto-
-              recomputes IE inc-VAT at the Irish 23% rate. */}
+          {/* IE ex-VAT is the source of truth — editing it patches
+              both irish_sale_price_ex_vat and irish_sale_price_inc_vat
+              (the latter is the sale-price total, displayed as the
+              third Irish field below). The remaining two cells show
+              the VAT amount and Sale price both derived from this. */}
           <InlineField
             label="IE ex-VAT (€)"
-            value={car.irish_sale_price_ex_vat}
+            value={(() => {
+              // Show stored ex-VAT directly when present; for legacy
+              // rows that only have inc-VAT, show the back-derived
+              // value so the operator sees something sensible until
+              // they save (which writes both columns).
+              const split = splitIrishPrice(car)
+              return car.irish_sale_price_ex_vat != null
+                ? car.irish_sale_price_ex_vat
+                : (split.exVat != null ? split.exVat : '')
+            })()}
             type="number"
             step="0.01"
             onSave={v => {
@@ -233,9 +245,14 @@ function CarFieldsCard({ car, patch, disabled }) {
             disabled={disabled}
           />
           <DerivedField
-            label="IE inc-VAT (€)"
-            value={car.irish_sale_price_inc_vat}
-            hint={`= ex-VAT × ${1 + IRISH_VAT_RATE}`}
+            label="IE VAT (€)"
+            value={splitIrishPrice(car).vat}
+            hint={`${IRISH_VAT_RATE * 100}% Irish VAT`}
+          />
+          <DerivedField
+            label="Sale price (€)"
+            value={splitIrishPrice(car).salePrice}
+            hint="ex-VAT + IE VAT"
           />
         </div>
       </div>

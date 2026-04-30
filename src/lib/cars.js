@@ -60,15 +60,53 @@ export const COST_FIELDS = Object.freeze([
   { key: 'additional_costs',    label: 'Commission payout' },
 ])
 
-// Irish VAT rate. IE inc-VAT prices are computed from IE ex-VAT
-// at this rate so the operator only enters the ex-VAT figure once.
+// Irish VAT rate. The Irish-side display is split into three values
+// derived from a single source: IE ex-VAT.
+//
+//   IE ex-VAT     editable, source of truth
+//   IE VAT        ex-VAT × 0.23     (just the VAT amount)
+//   Sale price    ex-VAT × 1.23     (also persisted as
+//                                    irish_sale_price_inc_vat in the
+//                                    DB — that column is the sale
+//                                    price total)
+//
+// Backwards-compat: legacy rows entered only the sale price (in the
+// old "IE inc-VAT" field). For those, splitIrishPrice() derives
+// ex-VAT from the sale price so all three values still show.
 export const IRISH_VAT_RATE = 0.23
 
+// Returns sale price (= ex-VAT × 1.23) given a number/string ex-VAT.
 export function applyIrishVat(exVat) {
   if (exVat == null || exVat === '') return null
   const n = Number(exVat)
   if (!Number.isFinite(n)) return null
   return Math.round(n * (1 + IRISH_VAT_RATE) * 100) / 100
+}
+
+// Single resolver used by every Irish-price renderer. Returns
+// `{ exVat, vat, salePrice }` populated as fully as the inputs
+// allow. ex-VAT wins when both columns hold values; we only fall
+// back to deriving from sale price (the legacy path) when ex-VAT is
+// null but sale price isn't.
+export function splitIrishPrice(car) {
+  let exVat = car?.irish_sale_price_ex_vat != null && car.irish_sale_price_ex_vat !== ''
+    ? Number(car.irish_sale_price_ex_vat) : null
+  let salePrice = car?.irish_sale_price_inc_vat != null && car.irish_sale_price_inc_vat !== ''
+    ? Number(car.irish_sale_price_inc_vat) : null
+
+  if (exVat != null && Number.isFinite(exVat)) {
+    // ex-VAT wins. Recompute sale price so the two stay consistent
+    // even if the stored DB value drifted (legacy hand-edits).
+    salePrice = Math.round(exVat * (1 + IRISH_VAT_RATE) * 100) / 100
+  } else if (salePrice != null && Number.isFinite(salePrice)) {
+    // Legacy row — derive ex-VAT from the entered sale price.
+    exVat = Math.round((salePrice / (1 + IRISH_VAT_RATE)) * 100) / 100
+  } else {
+    return { exVat: null, vat: null, salePrice: null }
+  }
+
+  const vat = Math.round((salePrice - exVat) * 100) / 100
+  return { exVat, vat, salePrice }
 }
 
 /**

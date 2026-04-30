@@ -9,6 +9,12 @@ import { useRouter } from 'next/navigation'
 import { Plus, X } from 'lucide-react'
 import { applyIrishVat, IRISH_VAT_RATE } from '@/lib/cars'
 
+function fmt2(n) {
+  if (n == null || n === '') return ''
+  const num = Number(n)
+  return Number.isFinite(num) ? num.toFixed(2) : ''
+}
+
 export default function AddCarButton({ locationId }) {
   const [open, setOpen] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -137,26 +143,38 @@ export default function AddCarButton({ locationId }) {
       </Section>
 
       <Section title="Irish sale">
-        <div className="grid grid-cols-2 gap-3">
-          {/* IE ex-VAT first because IE inc-VAT is derived from it. */}
+        {/* IE ex-VAT is the only editable Irish-side field; the VAT
+            amount and Sale price are both derived from it on the fly
+            so the operator can't enter inconsistent figures. */}
+        <div className="grid grid-cols-3 gap-3">
           <Field
-            label="Sale ex-VAT (€)"
+            label="IE ex-VAT (€)"
             type="number"
             step="0.01"
             value={form.irish_sale_price_ex_vat}
             onChange={v => setForm(f => ({
               ...f,
               irish_sale_price_ex_vat: v,
-              // Auto-populate inc-VAT at the Irish 23% rate. Stored
-              // as a string so it round-trips through the form input.
+              // Auto-populate the sale price total (the value stored
+              // in irish_sale_price_inc_vat). VAT amount is rendered
+              // separately below from the same number.
               irish_sale_price_inc_vat:
                 v === '' || v == null ? '' : String(applyIrishVat(v) ?? ''),
             }))}
           />
           <ReadOnlyField
-            label="Sale inc-VAT (€)"
-            value={form.irish_sale_price_inc_vat}
-            hint={`Auto = ex-VAT × ${1 + IRISH_VAT_RATE}`}
+            label="IE VAT (€)"
+            value={(() => {
+              const ex = Number(form.irish_sale_price_ex_vat)
+              if (!Number.isFinite(ex) || form.irish_sale_price_ex_vat === '') return ''
+              return fmt2(ex * IRISH_VAT_RATE)
+            })()}
+            hint={`${IRISH_VAT_RATE * 100}% Irish VAT`}
+          />
+          <ReadOnlyField
+            label="Sale price (€)"
+            value={fmt2(form.irish_sale_price_inc_vat)}
+            hint="ex-VAT + IE VAT"
           />
         </div>
       </Section>
