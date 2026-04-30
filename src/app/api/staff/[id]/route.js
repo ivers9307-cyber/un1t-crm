@@ -25,51 +25,60 @@ const UpdateStaffSchema = z.object({
   contracted_hours_per_week: hours.nullable().optional(),
   annual_leave_entitlement: days.nullable().optional(),
   overtime_rate: money.nullable().optional(),
-  // UniFi door-access toggle. Server-side this triggers a sync against
-  // the staff member's default location: find-or-create the UniFi user,
-  // then assign the role-appropriate access policy. Toggling off
-  // revokes all policies but keeps unifi_user_id around for fast re-enable.
+  // UniFi door-access — per-location now. Map of location_id → bool.
+  // Server-side, each entry triggers an independent UniFi sync against
+  // that location's UniFi instance. Locations not present in the map
+  // are left as-is (no toggle = no change).
+  unifi_door_access_per_location: z.record(uuidLike, z.boolean()).optional(),
+  // Legacy single-toggle field. Still accepted from older clients —
+  // applied to the staff member's default location for backwards-compat.
   unifi_door_access: z.boolean().optional(),
 })
 
-// Pick the location whose UniFi config drives door access for this profile.
-// Strategy: prefer the profile's default location (is_default=true on
-// profile_locations), fall back to the first one. Profiles assigned to
-// multiple studios still only get access to the studio whose toggle was
-// flipped — managers move someone between studios manually.
-function pickDoorLocation(profile) {
+// Pick the staff member's default location from their profile_locations
+// list. Used only for backwards-compat with the legacy single-toggle
+// `unifi_door_access` field — newer clients send the per-location map.
+function pickDefaultLocation(profile) {
   const links = profile.profile_locations || []
   const def = links.find(l => l.is_default) || links[0]
   return def?.locations || null
 }
 
-// Apply the unifi_door_access toggle. Returns the unifi_user_id that
-// should be persisted (or null if it shouldn't change). Throws UnifiError
-// on failure — caller is expected to surface that to the API consumer
-// without persisting the toggle change in Supabase, so the UI state stays
-// consistent with reality.
-async function applyDoorAccessChange({ profile, location, enable, role }) {
+// Apply a per-location door-access toggle. Returns the unifi_user_id
+// that should be persisted on the profile_locations row (or null if
+// nothing should change).
+//
+// `existingUnifiUserId` is the per-location UniFi user id we already
+// have stored for this (profile, location) pair, if any.
+//
+// Throws UnifiError on failure — the caller surfaces the message to
+// the API consumer without persisting the toggle change in
+// profile_locations, so the UI state stays consistent with reality.
+//
+// Toggle-off semantics: best-effort. If UniFi is configured AND we
+// have a user id to revoke, do it. Otherwise just persist the toggle
+// — there's nothing to revoke and the user's intent should be
+// honoured. (This was the bug that blocked the whole staff form from
+// saving when a location had no UniFi config.)
+async function applyDoorAccessChange({ profile, location, enable, role, existingUnifiUserId }) {
   const cfg = getLocationUnifiConfig(location)
-  if (!cfg.configured) {
-    throw new UnifiError(
-      'UniFi Access is not configured for this location. Add the host, ' +
-      'API token and policy IDs in Location settings before enabling ' +
-      'door access for staff.'
-    )
-  }
 
   if (!enable) {
-    // Toggle off — only call UniFi if we have a user id to revoke against.
-    // Skipping the call when unifi_user_id is null avoids an unnecessary
-    // round-trip when door access was never enabled in the first place.
-    if (profile.unifi_user_id) {
-      await revokeUnifiUserPolicies(cfg, profile.unifi_user_id)
+    if (cfg.configured && existingUnifiUserId) {
+      await revokeUnifiUserPolicies(cfg, existingUnifiUserId)
     }
-    return profile.unifi_user_id || null
+    return existingUnifiUserId || null
   }
 
-  // Toggle on — find-or-create the UniFi user, then assign their role's policy.
-  const unifiUserId = profile.unifi_user_id
+  // Toggle ON requires a fully-configured UniFi instance for THIS location.
+  if (!cfg.configured) {
+    throw new UnifiError(
+      `UniFi Access is not configured for ${location.name || 'this location'}. ` +
+      `Add the host, API token and policy IDs in Location settings before ` +
+      `enabling door access here.`
+    )
+  }
+  const unifiUserId = existingUnifiUserId
     || await findOrCreateUnifiUser(cfg, profile)
   await syncUnifiUserPolicyForRole(cfg, unifiUserId, role)
   return unifiUserId
@@ -143,52 +152,99 @@ export async function PUT(request, { params }) {
     .eq('id', id)
     .single()
 
-  // ----- UniFi sync -----
-  // Triggered by:
-  //   1. Explicit toggle in this request (body.unifi_door_access set), OR
-  //   2. A role change while door access is currently enabled — staff →
-  //      manager flips them onto the manager_policy_id automatically.
-  const toggleProvided = body.unifi_door_access !== undefined
-  const desiredEnabled = toggleProvided
-    ? body.unifi_door_access
-    : updatedProfile.unifi_door_access
-  const roleChangedWhileOn =
-    body.role !== undefined &&
-    updatedProfile.unifi_door_access === true &&
-    !toggleProvided
+  // ----- UniFi sync (per-location) -----
+  //
+  // Build a desired-state map keyed by location_id from:
+  //   1. Explicit per-location map in this request
+  //      (body.unifi_door_access_per_location), OR
+  //   2. Legacy single-toggle (body.unifi_door_access) applied to the
+  //      profile's default location only (back-compat for older clients), OR
+  //   3. Role change while ANY location row has door access on — re-sync
+  //      that location's policy so a promotion/demotion auto-flips to the
+  //      right access level.
+  //
+  // Locations not present in the desired-state map are left as-is.
+  const desiredByLocation = {}
+  let toggleProvided = false
 
-  if (toggleProvided || roleChangedWhileOn) {
-    const location = pickDoorLocation(updatedProfile)
-    if (!location) {
-      return NextResponse.json({
-        success: false,
-        error: 'Cannot toggle door access — staff member is not assigned to any location.',
-      }, { status: 400 })
+  if (body.unifi_door_access_per_location) {
+    toggleProvided = true
+    for (const [locId, enabled] of Object.entries(body.unifi_door_access_per_location)) {
+      desiredByLocation[locId] = !!enabled
     }
-    try {
-      const newUnifiUserId = await applyDoorAccessChange({
-        profile: updatedProfile,
-        location,
-        enable: desiredEnabled,
-        role: updatedProfile.role,
-      })
-      const unifiUpdates = { unifi_door_access: desiredEnabled }
-      // Persist the user id only if we actually got one (find-or-create
-      // path) — don't blank it on toggle-off, we want to remember.
-      if (newUnifiUserId && newUnifiUserId !== updatedProfile.unifi_user_id) {
-        unifiUpdates.unifi_user_id = newUnifiUserId
+  }
+
+  if (body.unifi_door_access !== undefined && !body.unifi_door_access_per_location) {
+    // Legacy path — apply to the default location only.
+    toggleProvided = true
+    const def = pickDefaultLocation(updatedProfile)
+    if (def && desiredByLocation[def.id] === undefined) {
+      desiredByLocation[def.id] = !!body.unifi_door_access
+    }
+  }
+
+  if (body.role !== undefined && !toggleProvided) {
+    // Role change re-sync — only for currently-enabled rows.
+    for (const link of updatedProfile.profile_locations || []) {
+      if (link.unifi_door_access === true && link.locations) {
+        desiredByLocation[link.location_id] = true
       }
-      await db.from('profiles').update(unifiUpdates).eq('id', id)
-    } catch (e) {
-      const msg = e instanceof UnifiError ? e.message : `UniFi sync failed: ${e.message || e}`
+    }
+  }
+
+  // Walk each (location_id, desired) entry, calling that location's
+  // UniFi instance independently. Failures on one location don't roll
+  // back successful syncs on other locations — staff form save is
+  // best-effort overall, and surfaces the first failure to the user.
+  if (Object.keys(desiredByLocation).length) {
+    const linksByLocation = Object.fromEntries(
+      (updatedProfile.profile_locations || []).map(l => [l.location_id, l])
+    )
+    const errors = []
+    for (const [locId, desired] of Object.entries(desiredByLocation)) {
+      const link = linksByLocation[locId]
+      if (!link || !link.locations) continue // staff isn't even assigned here, skip silently
+      try {
+        const newUnifiUserId = await applyDoorAccessChange({
+          profile: updatedProfile,
+          location: link.locations,
+          enable: desired,
+          role: updatedProfile.role,
+          existingUnifiUserId: link.unifi_user_id,
+        })
+        const updates = {
+          unifi_door_access: desired,
+          unifi_synced_at: new Date().toISOString(),
+        }
+        if (newUnifiUserId && newUnifiUserId !== link.unifi_user_id) {
+          updates.unifi_user_id = newUnifiUserId
+        }
+        await db.from('profile_locations')
+          .update(updates)
+          .eq('profile_id', id)
+          .eq('location_id', locId)
+      } catch (e) {
+        errors.push(e instanceof UnifiError ? e.message : `UniFi sync failed at ${link.locations.name}: ${e.message || e}`)
+      }
+    }
+    if (errors.length) {
       return NextResponse.json({
         success: false,
-        error: msg,
-        // Hint to the UI that the rest of the save succeeded but UniFi failed
-        // — the toggle should bounce back to its previous state.
+        error: errors.join(' '),
         unifi_failed: true,
       }, { status: 502 })
     }
+
+    // Keep the legacy profiles.unifi_door_access flag in sync as
+    // "any location enabled" so older readers don't get stale data.
+    const { data: refreshedLinks } = await db
+      .from('profile_locations')
+      .select('unifi_door_access')
+      .eq('profile_id', id)
+    const anyOn = (refreshedLinks || []).some(l => l.unifi_door_access === true)
+    await db.from('profiles')
+      .update({ unifi_door_access: anyOn })
+      .eq('id', id)
   }
 
   // Final re-fetch so the response reflects unifi_door_access + unifi_user_id

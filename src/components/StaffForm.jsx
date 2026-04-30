@@ -38,22 +38,21 @@ export default function StaffForm({ staff, locations }) {
     contracted_hours_per_week: staff?.contracted_hours_per_week ?? 40,
     annual_leave_entitlement: staff?.annual_leave_entitlement ?? 20,
     overtime_rate: staff?.overtime_rate || '',
-    // UniFi door access — only meaningful in edit mode (need a saved
-    // profile + existing location assignment for the server-side sync).
-    unifi_door_access: staff?.unifi_door_access ?? false,
+    // UniFi door access per location. Map keyed by location_id with
+    // boolean values. Only meaningful in edit mode (we need a saved
+    // profile + existing profile_locations row for the server-side sync).
+    door_access_by_location: { ...(staff?.door_access_by_location || {}) },
   })
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
 
-  // Door-access toggle context. Picks the same "default" location the
-  // server uses (first in the list) and checks whether that location has
-  // UniFi configured. If not, the toggle is disabled with a hint.
-  const doorLocation = locations.find(l => form.location_ids.includes(l.id)) || null
-  const unifiCfg = doorLocation?.settings?.unifi || {}
-  const unifiConfigured = Boolean(
-    unifiCfg.host && unifiCfg.api_token &&
-    unifiCfg.staff_policy_id && unifiCfg.manager_policy_id
-  )
+  function isUnifiConfigured(loc) {
+    const cfg = loc?.settings?.unifi || {}
+    return Boolean(
+      cfg.host && cfg.api_token &&
+      cfg.staff_policy_id && cfg.manager_policy_id
+    )
+  }
   const isManagerRole = form.role === 'owner' || form.role === 'manager'
 
   function togglePermission(key) {
@@ -131,11 +130,23 @@ export default function StaffForm({ staff, locations }) {
       overtime_rate: form.employment_type === 'fte' && form.overtime_rate ? Number(form.overtime_rate) : null,
     }
 
-    // Only send the UniFi toggle on edit. Create flow doesn't have a
-    // saved profile / location assignment yet; door access is enabled
-    // post-save once the staffer is set up.
+    // Only send door access on edit. Create flow doesn't have a saved
+    // profile / location assignment yet; door access is enabled
+    // post-save once the staffer is set up. Per-location map (one
+    // toggle per assigned location) — server iterates each entry and
+    // syncs that location's UniFi instance independently.
     if (isEdit) {
-      payload.unifi_door_access = form.unifi_door_access
+      // Filter to locations the staffer is currently assigned to —
+      // sending toggles for unassigned locations would be ignored
+      // server-side anyway, but stripping them keeps the wire payload
+      // tight and avoids ambiguity.
+      const filtered = {}
+      for (const locId of form.location_ids) {
+        if (form.door_access_by_location[locId] !== undefined) {
+          filtered[locId] = !!form.door_access_by_location[locId]
+        }
+      }
+      payload.unifi_door_access_per_location = filtered
     }
 
     if (!isEdit) {
@@ -305,52 +316,70 @@ export default function StaffForm({ staff, locations }) {
         </div>
       </div>
 
-      {/* Door Access (UniFi) */}
+      {/* Door Access (UniFi) — one row per assigned location. Each
+          location has its own UniFi instance, so each row is gated
+          by THAT location's UniFi config and toggled independently. */}
       {isEdit && (
         <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5 space-y-3">
-          <div className="flex items-center justify-between">
-            <div>
-              <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light">Door Access</h3>
-              <p className="text-xs text-un1t-light mt-1">
-                {doorLocation
-                  ? <>Syncs to UniFi Access for <span className="text-un1t-white">{doorLocation.name}</span></>
-                  : 'Assign this person to a location first'}
-              </p>
-            </div>
-            <button
-              type="button"
-              disabled={!unifiConfigured || !doorLocation}
-              onClick={() => setForm(prev => ({ ...prev, unifi_door_access: !prev.unifi_door_access }))}
-              className={`w-10 h-5 rounded-full transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
-                form.unifi_door_access ? 'bg-green-500' : 'bg-un1t-gray'
-              }`}
-              title={!unifiConfigured ? 'Configure UniFi in Location settings to enable this' : ''}
-            >
-              <div className={`w-4 h-4 rounded-full bg-white transition-transform ${
-                form.unifi_door_access ? 'translate-x-5' : 'translate-x-0.5'
-              }`} />
-            </button>
+          <div>
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light">Door Access</h3>
+            <p className="text-xs text-un1t-light mt-1">
+              {form.location_ids.length === 0
+                ? 'Assign this person to a location first'
+                : `Toggle per location · syncs to UniFi Access`}
+            </p>
           </div>
 
-          {!unifiConfigured && doorLocation && (
-            <div className="rounded-md border border-amber-500/30 bg-amber-500/5 p-3 text-xs text-amber-300">
-              UniFi Access isn&apos;t configured for {doorLocation.name} yet — set
-              the host, API token and policy IDs on the location before
-              enabling door access for staff.
-            </div>
-          )}
+          {form.location_ids.map(locId => {
+            const loc = locations.find(l => l.id === locId)
+            if (!loc) return null
+            const configured = isUnifiConfigured(loc)
+            const enabled = !!form.door_access_by_location[locId]
+            return (
+              <div key={locId} className="border border-un1t-gray/50 rounded-md p-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-medium text-un1t-white">{loc.name}</div>
+                    <div className="text-xs text-un1t-light">
+                      {configured
+                        ? (isManagerRole ? 'Manager access (main door + physio + main office)' : 'Staff access (main door + physio)')
+                        : 'UniFi not configured for this location'}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={!configured}
+                    onClick={() => setForm(prev => ({
+                      ...prev,
+                      door_access_by_location: {
+                        ...prev.door_access_by_location,
+                        [locId]: !enabled,
+                      },
+                    }))}
+                    className={`w-10 h-5 rounded-full transition-colors disabled:opacity-40 disabled:cursor-not-allowed shrink-0 ml-3 ${
+                      enabled ? 'bg-green-500' : 'bg-un1t-gray'
+                    }`}
+                    title={!configured ? `Configure UniFi for ${loc.name} first` : ''}
+                  >
+                    <div className={`w-4 h-4 rounded-full bg-white transition-transform ${
+                      enabled ? 'translate-x-5' : 'translate-x-0.5'
+                    }`} />
+                  </button>
+                </div>
+                {!configured && (
+                  <div className="mt-2 text-xs text-amber-300">
+                    Set the host, API token and policy IDs in {loc.name}&apos;s
+                    Location settings before enabling door access here.
+                  </div>
+                )}
+              </div>
+            )
+          })}
 
-          {unifiConfigured && (
-            <div className="text-xs text-un1t-light bg-black/30 rounded-md px-3 py-2">
-              {isManagerRole ? (
-                <>Will be granted <span className="text-un1t-white font-medium">Manager</span> access (main door, physio office, main office).</>
-              ) : (
-                <>Will be granted <span className="text-un1t-white font-medium">Staff</span> access (main door, physio office).</>
-              )}
-              <span className="block mt-1 text-un1t-mid">
-                Role-based — promoting to Manager automatically upgrades door access on save.
-              </span>
-            </div>
+          {form.location_ids.length > 0 && (
+            <p className="text-xs text-un1t-mid">
+              Role-based — promoting to Manager auto-upgrades any enabled location to manager-level access on save.
+            </p>
           )}
         </div>
       )}
