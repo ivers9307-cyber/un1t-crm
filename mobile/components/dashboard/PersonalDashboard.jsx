@@ -1,10 +1,10 @@
 // "Today" — personal dashboard rendered on the Home tab for everyone
-// (gated by permissions.mobile.dashboard_personal, default: all roles).
+// (gated by permissions.dashboard_personal, default: all roles).
 //
-// Surfaces what only this user cares about: their next shift, their
-// week's hours, swap requests aimed at them, their pending time-off
-// requests, and any WhatsApp conversations assigned to them with
-// unread messages.
+// Hero is a week view of YOUR shifts grouped by day — every day Mon
+// through Sun is shown so you can scan your week at a glance. Days
+// with no shifts say "Off". Today is highlighted. Past days are
+// dimmed.
 
 import { View, Text, ActivityIndicator } from 'react-native'
 import { useState, useEffect, useCallback } from 'react'
@@ -15,17 +15,51 @@ import {
   KpiCard, KpiRow, SectionHeader, PendingRow, ListCard,
 } from './cards'
 
-function formatShiftWhen(shift) {
-  if (!shift) return null
-  const d = new Date(shift.shift_date + 'T00:00:00')
-  const today = new Date(); today.setHours(0, 0, 0, 0)
-  const tomorrow = new Date(today); tomorrow.setDate(tomorrow.getDate() + 1)
+function shiftTime(shift) {
   const start = (shift.start_time_override || shift.shift_templates?.start_time || '').slice(0, 5)
   const end = (shift.end_time_override || shift.shift_templates?.end_time || '').slice(0, 5)
-  let dayLabel = d.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })
-  if (d.getTime() === today.getTime()) dayLabel = 'Today'
-  if (d.getTime() === tomorrow.getTime()) dayLabel = 'Tomorrow'
-  return `${dayLabel} · ${start} – ${end}`
+  return `${start} – ${end}`
+}
+
+function shiftHours(shift) {
+  const start = shift.start_time_override || shift.shift_templates?.start_time
+  const end = shift.end_time_override || shift.shift_templates?.end_time
+  if (!start || !end) return 0
+  const [sh, sm] = start.split(':').map(Number)
+  const [eh, em] = end.split(':').map(Number)
+  let mins = eh * 60 + em - (sh * 60 + sm)
+  if (mins < 0) mins += 24 * 60
+  return Math.round((mins / 60) * 10) / 10
+}
+
+function isoDate(d) {
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
+
+function buildWeek(weekStartIso, shifts) {
+  const start = new Date(weekStartIso + 'T00:00:00')
+  const todayIso = isoDate(new Date())
+  const days = []
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(start)
+    d.setDate(start.getDate() + i)
+    const iso = isoDate(d)
+    const daysShifts = shifts.filter(s => s.shift_date === iso)
+    days.push({
+      date: d,
+      iso,
+      label: d.toLocaleDateString(undefined, { weekday: 'short' }).toUpperCase(),
+      dayNum: d.getDate(),
+      monthLabel: d.toLocaleDateString(undefined, { month: 'short' }),
+      isToday: iso === todayIso,
+      isPast: iso < todayIso,
+      shifts: daysShifts,
+    })
+  }
+  return days
 }
 
 export default function PersonalDashboard({ refreshKey }) {
@@ -53,25 +87,87 @@ export default function PersonalDashboard({ refreshKey }) {
     )
   }
 
-  const { nextShift, shiftsThisWeek, hoursThisWeek, pendingSwapsForMe, myPendingTimeOff, unreadInbox } = data
+  const { weekShifts, weekStartIso, weekEndIso, shiftsThisWeek, hoursThisWeek, pendingSwapsForMe, myPendingTimeOff, unreadInbox } = data
+
+  const weekDays = buildWeek(weekStartIso, weekShifts || [])
+  const rangeLabel = (() => {
+    const s = new Date(weekStartIso + 'T00:00:00')
+    const e = new Date(weekEndIso + 'T00:00:00')
+    const fmt = d => d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })
+    return `${fmt(s)} – ${fmt(e)}`
+  })()
 
   return (
     <View>
-      {/* Hero — next shift */}
-      {nextShift ? (
-        <View className="bg-un1t-white rounded-2xl p-4 mb-3">
-          <Text className="text-xs uppercase tracking-wider text-un1t-mid">Your next shift</Text>
-          <Text className="text-lg font-bold text-un1t-black mt-1">
-            {nextShift.shift_templates?.name || 'Shift'}
+      {/* Hero — full week view, segmented by day */}
+      <View className="bg-un1t-dark border border-un1t-gray rounded-2xl mb-3 overflow-hidden">
+        <View className="px-4 pt-3 pb-2 flex-row items-baseline justify-between">
+          <Text className="text-xs font-semibold uppercase tracking-wider text-un1t-light">
+            This week
           </Text>
-          <Text className="text-sm text-un1t-light mt-0.5">{formatShiftWhen(nextShift)}</Text>
+          <Text className="text-xs text-un1t-mid">{rangeLabel}</Text>
         </View>
-      ) : (
-        <View className="bg-un1t-dark border border-un1t-gray rounded-2xl p-4 mb-3">
-          <Text className="text-xs uppercase tracking-wider text-un1t-light">Your next shift</Text>
-          <Text className="text-base text-un1t-white mt-1">No upcoming shifts this week.</Text>
-        </View>
-      )}
+        {weekDays.map((day, idx) => {
+          const isLast = idx === weekDays.length - 1
+          return (
+            <View
+              key={day.iso}
+              className={`flex-row px-4 py-2.5 ${!isLast ? 'border-b border-un1t-gray' : ''} ${
+                day.isToday ? 'bg-un1t-gray/30' : ''
+              }`}
+            >
+              {/* Day column on the left */}
+              <View className="w-14">
+                <Text className={`text-[10px] font-semibold uppercase tracking-wider ${
+                  day.isToday ? 'text-un1t-white'
+                  : day.isPast ? 'text-un1t-mid'
+                  : 'text-un1t-light'
+                }`}>
+                  {day.label}
+                </Text>
+                <Text className={`text-base font-semibold ${
+                  day.isPast ? 'text-un1t-mid'
+                  : 'text-un1t-white'
+                }`}>
+                  {day.dayNum}
+                </Text>
+              </View>
+
+              {/* Shifts on the right */}
+              <View className="flex-1">
+                {day.shifts.length === 0 ? (
+                  <Text className={`text-sm ${day.isPast ? 'text-un1t-mid' : 'text-un1t-light'} pt-1`}>
+                    Off
+                  </Text>
+                ) : (
+                  day.shifts.map((s, i) => (
+                    <View key={s.id} className={i > 0 ? 'mt-1' : ''}>
+                      <View className="flex-row items-center justify-between">
+                        <Text className={`text-sm font-medium ${day.isPast ? 'text-un1t-light' : 'text-un1t-white'}`} numberOfLines={1}>
+                          {s.shift_templates?.name || 'Shift'}
+                        </Text>
+                        {s.published === false && (
+                          <View className="ml-2 px-1.5 py-0.5 rounded bg-amber-500/20">
+                            <Text className="text-[9px] uppercase text-amber-700 font-semibold">Draft</Text>
+                          </View>
+                        )}
+                        {s.status === 'swapped' && (
+                          <View className="ml-2 px-1.5 py-0.5 rounded bg-blue-500/20">
+                            <Text className="text-[9px] uppercase text-blue-700 font-semibold">Swapped</Text>
+                          </View>
+                        )}
+                      </View>
+                      <Text className={`text-xs ${day.isPast ? 'text-un1t-mid' : 'text-un1t-light'}`}>
+                        {shiftTime(s)} · {shiftHours(s)}h
+                      </Text>
+                    </View>
+                  ))
+                )}
+              </View>
+            </View>
+          )
+        })}
+      </View>
 
       {/* Top KPIs */}
       <KpiRow>

@@ -116,18 +116,24 @@ export async function fetchPersonalDashboardData(supabase, profileId, locationId
 
   if (shifts.error) return { success: false, error: shifts.error.message }
 
-  const allShifts = shifts.data || []
-  const upcomingShifts = allShifts.filter(s => s.shift_date >= todayIso)
-  const nextShift = upcomingShifts[0] || null
+  // Sort by date then start time so "first shift of the day" is index [0].
+  const allShifts = (shifts.data || []).slice().sort((a, b) => {
+    if (a.shift_date !== b.shift_date) return a.shift_date.localeCompare(b.shift_date)
+    const aStart = a.start_time_override || a.shift_templates?.start_time || ''
+    const bStart = b.start_time_override || b.shift_templates?.start_time || ''
+    return aStart.localeCompare(bStart)
+  })
   const totalHours = allShifts.reduce((sum, s) => sum + shiftDurationHours(s), 0)
   const unreadInbox = (myConvos.data || []).reduce((sum, c) => sum + (c.unread_count || 0), 0)
 
   return {
     success: true,
     data: {
-      nextShift,
+      weekShifts: allShifts,
       shiftsThisWeek: allShifts.length,
       hoursThisWeek: Math.round(totalHours * 10) / 10,
+      weekStartIso,
+      weekEndIso,
       pendingSwapsForMe: swapsTargetingMe.data || [],
       myPendingTimeOff: myPendingTimeOff.data || [],
       unreadInbox,
