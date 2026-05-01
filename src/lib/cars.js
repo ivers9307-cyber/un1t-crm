@@ -25,11 +25,12 @@ export const ALL_DOCUMENT_TYPES = Object.freeze([
  * 'completed'. Empty array means the car is ready to close.
  *
  * Required document types must both EXIST and have been forwarded
- * to Xero (xero_file_id populated) — Xero auto-bill OCR turns each
- * forwarded file into a draft Bill, so requiring the forward
- * guarantees the AP side of every car is captured before close.
+ * to Xero (xero_sent_at populated) — the document → Xero email is
+ * what triggers the auto-OCR'd draft Bill, so requiring the
+ * forward guarantees the AP side of every car is captured before
+ * close.
  *
- * @param {{ buyer_name?: string, xero_invoice_id?: string, uk_vat_refund_received?: boolean, car_documents?: {doc_type: string, xero_file_id?: string}[] }} car
+ * @param {{ buyer_name?: string, xero_invoice_id?: string, uk_vat_refund_received?: boolean, car_documents?: {doc_type: string, xero_sent_at?: string}[] }} car
  * @returns {string[]}
  */
 export function completionGaps(car) {
@@ -51,8 +52,8 @@ export function completionGaps(car) {
       continue
     }
     // At least one of the uploaded docs of this type must have
-    // been forwarded to Xero.
-    const anySent = docs.some(d => d.xero_file_id)
+    // been forwarded to Xero (email sent successfully).
+    const anySent = docs.some(d => d.xero_sent_at)
     if (!anySent) gaps.push(`${req.label} — send to Xero`)
   }
   return gaps

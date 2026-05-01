@@ -594,7 +594,7 @@ function DocumentsCard({ car, setCar, setError, disabled }) {
         {ALL_DOCUMENT_TYPES.map(t => {
           const docs = (car.car_documents || []).filter(d => d.doc_type === t.key)
           const required = REQUIRED_DOCUMENT_TYPES.some(r => r.key === t.key)
-          const anySentToXero = docs.some(d => d.xero_file_id)
+          const anySentToXero = docs.some(d => d.xero_sent_at)
           // Status badge: required + nothing uploaded → Required (amber);
           // required + uploaded but not sent → Send to Xero (amber);
           // required + at least one sent → Sent (green); optional rows
@@ -625,8 +625,8 @@ function DocumentsCard({ car, setCar, setError, disabled }) {
                         <span className="truncate">{d.filename}</span>
                       </button>
                       <div className="flex items-center gap-1 shrink-0">
-                        {d.xero_file_id ? (
-                          <span className="inline-flex items-center gap-1 text-[10px] uppercase text-green-500" title={d.xero_sent_at ? `Sent ${new Date(d.xero_sent_at).toLocaleString()}` : 'Sent to Xero'}>
+                        {d.xero_sent_at ? (
+                          <span className="inline-flex items-center gap-1 text-[10px] uppercase text-green-500" title={`Sent ${new Date(d.xero_sent_at).toLocaleString()}`}>
                             <Check size={11} /> Sent
                           </span>
                         ) : !disabled && (

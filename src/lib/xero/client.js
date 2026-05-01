@@ -46,16 +46,15 @@ const REFRESH_BUFFER_MS = 60 * 1000 // refresh if access_token expires in <60s
 //
 // Reference: https://www.apideck.com/blog/xero-scopes
 //
-// `files` is needed for the bills push — we POST uploaded supplier
-// docs to Xero's Files Inbox and Xero's auto-bill OCR turns them
-// into draft Bills. Without this scope the Files API returns 403.
-// Existing connected locations need to click "Reconnect" once
-// after this scope is added to grant it.
+// We deliberately DON'T request the `files` scope. The bills auto-
+// forward uses Xero's per-org Email-to-Bills address (sent via
+// Postmark), which is server-side and needs no Xero scope at all.
+// This avoids the dependency on the Files Inbox + per-org "Convert
+// files to bills" toggle.
 export const XERO_SCOPES = [
   'accounting.contacts',
   'accounting.invoices',
   'accounting.settings',  // GET /BrandingThemes for the "Car" theme
-  'files',                // POST PDF to Xero Files Inbox (auto-bill)
   'offline_access',
 ]
 

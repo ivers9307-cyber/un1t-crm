@@ -139,7 +139,7 @@ describe('completionGaps', () => {
       uk_vat_refund_received: true,
       car_documents: REQUIRED_DOCUMENT_TYPES.map(r => ({
         doc_type: r.key,
-        xero_file_id: 'xf_1',
+        xero_sent_at: '2026-05-01T08:00:00Z',
       })),
       ...overrides,
     }
@@ -166,7 +166,7 @@ describe('completionGaps', () => {
     const gaps = completionGaps(fullCar({
       car_documents: REQUIRED_DOCUMENT_TYPES
         .filter(r => r.key !== 'ferry_invoice')
-        .map(r => ({ doc_type: r.key, xero_file_id: 'xf_1' })),
+        .map(r => ({ doc_type: r.key, xero_sent_at: '2026-05-01T08:00:00Z' })),
     }))
     expect(gaps).toContain('Ferry invoice')
   })
@@ -175,7 +175,7 @@ describe('completionGaps', () => {
     const gaps = completionGaps(fullCar({
       car_documents: REQUIRED_DOCUMENT_TYPES.map(r => ({
         doc_type: r.key,
-        xero_file_id: r.key === 'transporter' ? null : 'xf_1',
+        xero_sent_at: r.key === 'transporter' ? null : '2026-05-01T08:00:00Z',
       })),
     }))
     expect(gaps).toContain('Car transporter invoice — send to Xero')
@@ -183,8 +183,8 @@ describe('completionGaps', () => {
 
   it('treats multiple uploads of the same type — at least one sent — as satisfied', () => {
     const docs = REQUIRED_DOCUMENT_TYPES.flatMap(r => [
-      { doc_type: r.key, xero_file_id: null },              // wrong upload
-      { doc_type: r.key, xero_file_id: 'xf_real' },         // the right one
+      { doc_type: r.key, xero_sent_at: null },                  // failed send attempt
+      { doc_type: r.key, xero_sent_at: '2026-05-01T08:00:00Z' }, // successful one
     ])
     expect(completionGaps(fullCar({ car_documents: docs }))).toEqual([])
   })

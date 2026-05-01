@@ -28,7 +28,7 @@ export default async function IntegrationsPage({ searchParams }) {
 
   const { data: connections } = await db
     .from('xero_connections')
-    .select('location_id, tenant_name, tenant_type, connected_at, last_refreshed_at, expires_at, scopes')
+    .select('location_id, tenant_name, tenant_type, connected_at, last_refreshed_at, expires_at, scopes, bills_email_address')
     .in('location_id', memberLocationIds.length ? memberLocationIds : ['00000000-0000-0000-0000-000000000000'])
 
   const byLoc = new Map((connections || []).map(c => [c.location_id, c]))
