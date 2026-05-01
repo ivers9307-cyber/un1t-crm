@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
 import { ArrowLeft, ArrowLeftRight, Check, X, AlertCircle } from 'lucide-react'
 
@@ -35,7 +35,7 @@ export default function SwapRequestsManager({ user }) {
   const locationId = user.activeLocation?.id
   const isManager = canManage(user.role)
 
-  async function fetchRequests() {
+  const fetchRequests = useCallback(async () => {
     if (!locationId) return
     setLoading(true)
     const url = `/api/schedule/swaps?location_id=${locationId}${filter ? `&status=${filter}` : ''}`
@@ -43,9 +43,9 @@ export default function SwapRequestsManager({ user }) {
     const data = await res.json()
     setRequests(data.data || [])
     setLoading(false)
-  }
+  }, [locationId, filter])
 
-  useEffect(() => { fetchRequests() }, [locationId, filter])
+  useEffect(() => { fetchRequests() }, [fetchRequests])
 
   async function handleAction(id, status, note) {
     await fetch(`/api/schedule/swaps/${id}`, {

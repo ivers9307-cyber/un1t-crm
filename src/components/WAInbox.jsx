@@ -1,10 +1,10 @@
 'use client'
 
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import Link from 'next/link'
 import {
   ArrowLeft, Send, MessageCircle, Clock, CheckCheck,
-  Check, Image, FileText, Mic, AlertCircle, RefreshCw,
+  Check, Image as ImageIcon, FileText, Mic, AlertCircle, RefreshCw,
   UserPlus, X, UserCheck, LayoutTemplate
 } from 'lucide-react'
 
@@ -33,8 +33,8 @@ function StatusIcon({ status }) {
 
 function MessageTypeIcon({ type }) {
   switch (type) {
-    case 'image': return <Image size={12} className="inline mr-1" />
-    case 'video': return <Image size={12} className="inline mr-1" />
+    case 'image': return <ImageIcon size={12} className="inline mr-1" />
+    case 'video': return <ImageIcon size={12} className="inline mr-1" />
     case 'document': return <FileText size={12} className="inline mr-1" />
     case 'audio': return <Mic size={12} className="inline mr-1" />
     default: return null
@@ -73,13 +73,35 @@ export default function WAInbox({ locationId, userId, initialConversationId }) {
   const messagesEndRef = useRef(null)
   const pollRef = useRef(null)
 
+  const fetchConversations = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/whatsapp/conversations?location_id=${locationId}`)
+      const data = await res.json()
+      if (data.success) setConversations(data.conversations)
+    } catch (err) {
+      console.error('Failed to fetch conversations:', err)
+    } finally {
+      setLoading(false)
+    }
+  }, [locationId])
+
+  const fetchTemplates = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/whatsapp/templates?location_id=${locationId}&status=APPROVED`)
+      const data = await res.json()
+      if (data.success) setTemplates(data.templates || [])
+    } catch (err) {
+      console.error('Failed to fetch templates:', err)
+    }
+  }, [locationId])
+
   // Load conversations
   useEffect(() => {
     fetchConversations()
     fetchTemplates()
     pollRef.current = setInterval(fetchConversations, 10000)
     return () => clearInterval(pollRef.current)
-  }, [locationId])
+  }, [locationId, fetchConversations, fetchTemplates])
 
   // Load messages when conversation selected
   useEffect(() => {
@@ -93,18 +115,6 @@ export default function WAInbox({ locationId, userId, initialConversationId }) {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
-
-  async function fetchConversations() {
-    try {
-      const res = await fetch(`/api/whatsapp/conversations?location_id=${locationId}`)
-      const data = await res.json()
-      if (data.success) setConversations(data.conversations)
-    } catch (err) {
-      console.error('Failed to fetch conversations:', err)
-    } finally {
-      setLoading(false)
-    }
-  }
 
   async function fetchMessages(convId) {
     try {
@@ -185,16 +195,6 @@ export default function WAInbox({ locationId, userId, initialConversationId }) {
       alert('Failed to add contact')
     } finally {
       setAddingContact(false)
-    }
-  }
-
-  async function fetchTemplates() {
-    try {
-      const res = await fetch(`/api/whatsapp/templates?location_id=${locationId}&status=APPROVED`)
-      const data = await res.json()
-      if (data.success) setTemplates(data.templates || [])
-    } catch (err) {
-      console.error('Failed to fetch templates:', err)
     }
   }
 

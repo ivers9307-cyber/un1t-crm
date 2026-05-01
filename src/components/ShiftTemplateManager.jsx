@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
 import { ArrowLeft, Plus, Clock, Pencil, Trash2, X } from 'lucide-react'
 
@@ -21,16 +21,16 @@ export default function ShiftTemplateManager({ user }) {
   const [showForm, setShowForm] = useState(false) // false, 'new', or template object for editing
   const locationId = user.activeLocation?.id
 
-  async function fetchTemplates() {
+  const fetchTemplates = useCallback(async () => {
     if (!locationId) return
     setLoading(true)
     const res = await fetch(`/api/schedule/templates?location_id=${locationId}`)
     const data = await res.json()
     setTemplates(data.data || [])
     setLoading(false)
-  }
+  }, [locationId])
 
-  useEffect(() => { fetchTemplates() }, [locationId])
+  useEffect(() => { fetchTemplates() }, [fetchTemplates])
 
   async function handleSave(formData) {
     const isEdit = typeof showForm === 'object'

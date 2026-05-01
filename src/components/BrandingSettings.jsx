@@ -1,7 +1,9 @@
 'use client'
 
 import { useState, useEffect, useRef } from 'react'
-import { Image, Upload, Trash2, Check } from 'lucide-react'
+// `Image` is renamed to ImageIcon so eslint-plugin-jsx-a11y doesn't
+// confuse it with an HTML <img> element and demand an alt prop.
+import { Image as ImageIcon, Upload, Trash2, Check } from 'lucide-react'
 
 export default function BrandingSettings({ user }) {
   const [settings, setSettings] = useState(null)
@@ -165,7 +167,7 @@ export default function BrandingSettings({ user }) {
             {settings?.logo_url ? (
               <img src={settings.logo_url} alt="Logo" className="max-w-full max-h-full object-contain" />
             ) : (
-              <Image size={20} className="text-un1t-mid" />
+              <ImageIcon size={20} className="text-un1t-mid" />
             )}
           </div>
 
@@ -210,7 +212,7 @@ export default function BrandingSettings({ user }) {
             {settings?.favicon_url ? (
               <img src={settings.favicon_url} alt="Favicon" className="w-8 h-8 object-contain" />
             ) : (
-              <Image size={16} className="text-un1t-mid" />
+              <ImageIcon size={16} className="text-un1t-mid" />
             )}
           </div>
 

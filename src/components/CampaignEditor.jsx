@@ -94,6 +94,9 @@ export default function CampaignEditor({ campaign, locationId, userId }) {
         window.unlayer.loadDesign(designJson)
       }
     }
+    // designJson is intentionally NOT a dep — re-loading it after the
+    // user starts editing would clobber their in-progress changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [unlayerLoaded, tab, editorMode])
 
   // Get HTML and design JSON from Unlayer
@@ -192,7 +195,7 @@ export default function CampaignEditor({ campaign, locationId, userId }) {
   }
 
   // Fetch audience count
-  async function refreshAudienceCount() {
+  const refreshAudienceCount = useCallback(async () => {
     if (!campaignId) return
 
     try {
@@ -202,11 +205,11 @@ export default function CampaignEditor({ campaign, locationId, userId }) {
     } catch (err) {
       console.error('Failed to get audience count:', err)
     }
-  }
+  }, [campaignId])
 
   useEffect(() => {
     if (campaignId) refreshAudienceCount()
-  }, [campaignId, audienceFilter])
+  }, [campaignId, audienceFilter, refreshAudienceCount])
 
   const tabs = [
     { key: 'design', label: 'Design', icon: Paintbrush },

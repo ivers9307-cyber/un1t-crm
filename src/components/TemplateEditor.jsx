@@ -69,6 +69,9 @@ export default function TemplateEditor({ template, locationId, userId }) {
         window.unlayer.loadDesign(designJson)
       }
     }
+    // designJson is intentionally NOT a dep — re-loading it after the
+    // user starts editing would clobber their in-progress changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [unlayerLoaded, editorMode])
 
   const exportFromUnlayer = useCallback(() => {

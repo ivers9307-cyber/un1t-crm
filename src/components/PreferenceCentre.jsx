@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 
 const CHANNELS = [
   {
@@ -33,11 +33,7 @@ export default function PreferenceCentre({ token }) {
   const [contact, setContact] = useState(null)
   const [prefs, setPrefs] = useState({})
 
-  useEffect(() => {
-    fetchPreferences()
-  }, [token])
-
-  async function fetchPreferences() {
+  const fetchPreferences = useCallback(async () => {
     try {
       const res = await fetch(`/api/preferences/${token}`)
       const data = await res.json()
@@ -52,7 +48,11 @@ export default function PreferenceCentre({ token }) {
     } finally {
       setLoading(false)
     }
-  }
+  }, [token])
+
+  useEffect(() => {
+    fetchPreferences()
+  }, [fetchPreferences])
 
   async function handleSave() {
     setSaving(true)
