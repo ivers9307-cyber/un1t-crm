@@ -4,6 +4,7 @@ import { redirect, notFound } from 'next/navigation'
 import { ToggleRight } from 'lucide-react'
 import LocationForm from '@/components/LocationForm'
 import LocationFeatures from '@/components/LocationFeatures'
+import CarDepositSettings from '@/components/CarDepositSettings'
 
 export const dynamic = 'force-dynamic'
 
@@ -36,6 +37,8 @@ export default async function EditLocationPage({ params }) {
         </div>
         <LocationFeatures location={location} />
       </section>
+
+      <CarDepositSettings location={location} />
     </div>
   )
 }

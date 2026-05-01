@@ -16,12 +16,13 @@ import Link from 'next/link'
 import { ArrowLeft, ChevronRight, Trash2, Check, AlertCircle, Search } from 'lucide-react'
 import { completionGaps, profitBreakdown, COST_FIELDS, applyIrishVat, salePriceToExVat, splitIrishPrice, IRISH_VAT_RATE } from '@/lib/cars'
 
-// XeroCard + DocumentsCard only render when the car is in pending or
-// completed state. Dynamic-import them so new-status car detail loads
-// don't ship ~330 lines of Xero/document JS in the initial bundle —
-// the chunks fetch on demand the first time a pending car is opened.
+// XeroCard + DocumentsCard + DepositCard only render when the car is
+// in pending or completed state. Dynamic-import them so new-status
+// car detail loads don't ship the chunks in the initial bundle —
+// they fetch on demand the first time a pending car is opened.
 const XeroCard = dynamic(() => import('./XeroCard'), { ssr: true })
 const DocumentsCard = dynamic(() => import('./DocumentsCard'), { ssr: true })
+const DepositCard = dynamic(() => import('./DepositCard'), { ssr: true })
 
 export default function CarDetail({ car: initialCar, liveFxRate = null, fxFetchedAt = null }) {
   const [car, setCar] = useState(initialCar)
@@ -137,6 +138,7 @@ export default function CarDetail({ car: initialCar, liveFxRate = null, fxFetche
       {(car.status === 'pending' || car.status === 'completed') && (
         <>
           <BuyerCard car={car} patch={patch} disabled={car.status === 'completed' || busy} />
+          <DepositCard car={car} setCar={setCar} setError={setError} disabled={car.status === 'completed'} />
           <XeroCard car={car} setCar={setCar} setError={setError} busy={busy} setBusy={setBusy} disabled={car.status === 'completed'} />
           <UkVatRefundCard car={car} patch={patch} disabled={car.status === 'completed' || busy} />
           <DocumentsCard car={car} setCar={setCar} setError={setError} disabled={car.status === 'completed'} />
