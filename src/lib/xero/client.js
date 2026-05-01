@@ -45,9 +45,17 @@ const REFRESH_BUFFER_MS = 60 * 1000 // refresh if access_token expires in <60s
 // them is another common cause of the same Xero error.
 //
 // Reference: https://www.apideck.com/blog/xero-scopes
+//
+// `files` is needed for the bills push — we POST uploaded supplier
+// docs to Xero's Files Inbox and Xero's auto-bill OCR turns them
+// into draft Bills. Without this scope the Files API returns 403.
+// Existing connected locations need to click "Reconnect" once
+// after this scope is added to grant it.
 export const XERO_SCOPES = [
   'accounting.contacts',
   'accounting.invoices',
+  'accounting.settings',  // GET /BrandingThemes for the "Car" theme
+  'files',                // POST PDF to Xero Files Inbox (auto-bill)
   'offline_access',
 ]
 
@@ -196,8 +204,19 @@ export async function withFreshToken(locationId) {
     if (upErr) throw new XeroError(`Failed to persist refreshed Xero token: ${upErr.message}`)
   }
 
-  // Authenticated fetch helper. `path` is appended to XERO_API_BASE.
-  // Body is JSON-stringified if provided as an object.
+  // Authenticated fetch helper. `path` is appended to XERO_API_BASE
+  // unless it's a full URL (some endpoints — Files, Identity — sit
+  // on different bases and we pass the absolute URL).
+  //
+  // Body handling:
+  //   - object → JSON-stringified, Content-Type defaults to JSON
+  //   - URLSearchParams / Buffer / FormData → passed through as-is
+  //
+  // Response handling:
+  //   - opts.responseType === 'buffer' → returns raw Uint8Array
+  //     (used by PDF download from /Invoices/{id} with Accept:
+  //     application/pdf)
+  //   - default → JSON-parsed response body, or text if not JSON
   const xfetch = async (path, opts = {}) => {
     const url = path.startsWith('http') ? path : `${XERO_API_BASE}${path}`
     const headers = {
@@ -207,11 +226,25 @@ export async function withFreshToken(locationId) {
       ...(opts.headers || {}),
     }
     let body = opts.body
-    if (body && typeof body === 'object' && !(body instanceof URLSearchParams) && !(body instanceof Buffer)) {
+    const isPassthroughBody = body && (
+      body instanceof URLSearchParams
+      || body instanceof Buffer
+      || body instanceof Uint8Array
+      || (typeof FormData !== 'undefined' && body instanceof FormData)
+    )
+    if (body && typeof body === 'object' && !isPassthroughBody) {
       headers['Content-Type'] = headers['Content-Type'] || 'application/json'
       body = JSON.stringify(body)
     }
     const res = await fetch(url, { ...opts, headers, body })
+    if (opts.responseType === 'buffer') {
+      if (!res.ok) {
+        const text = await res.text().catch(() => '')
+        throw new XeroError(`Xero ${res.status} on ${path}`, { status: res.status, body: text })
+      }
+      const ab = await res.arrayBuffer()
+      return new Uint8Array(ab)
+    }
     const text = await res.text()
     let json = null
     try { json = text ? JSON.parse(text) : null } catch { /* not json */ }

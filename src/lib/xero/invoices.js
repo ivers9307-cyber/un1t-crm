@@ -1,33 +1,88 @@
-// Customer invoice push for completed cars.
+// Customer invoice push for completed cars (v2).
 //
-// Flow:
-//   1. Resolve buyer to a Xero Contact — find by email if present,
-//      else by name. Create a new contact if neither matches.
-//   2. Build the Invoice payload — single line item priced at IE
-//      ex-VAT, with tax type OUTPUT2 (Irish 23% standard rate). The
-//      sale currency is EUR. Reference + LineItem.Description tie the
-//      invoice back to the car for human cross-checking.
-//   3. POST to /Invoices, capture the returned InvoiceID, InvoiceNumber
-//      and OnlineInvoiceUrl, write them onto the car row.
+// Flow on issue:
+//   1. validateInvoiceFields(car)        — bail early with a clear
+//                                          error if anything's missing
+//   2. resolveBrandingThemeId(xfetch)    — find the "Car" theme by
+//                                          name (overridable via
+//                                          XERO_BRANDING_THEME_NAME)
+//   3. upsertContact()                   — find by email → name →
+//                                          create. If matched but
+//                                          no email on file, patch
+//                                          the email in so Xero can
+//                                          actually email the buyer.
+//   4. POST /Invoices                    — AUTHORISED, with branding
+//   5. POST /Invoices/{id}/Email         — Xero emails the invoice
+//                                          using the contact's email
+//   6. GET /Invoices/{id} (Accept: pdf)  — download the PDF
+//   7. Upload PDF → Supabase Storage     — private bucket
+//                                          car-documents, key
+//                                          cars/{id}/xero-invoice-{n}.pdf
+//   8. caller persists every column      — incl. xero_invoice_amount
+//                                          for drift detection
 //
-// Side effects: also flips xero_invoice_issued_at — the existing
-// completion gate in completionGaps() flips green automatically.
+// Void & reissue:
+//   voidCarInvoice(car) PUTs the existing invoice with Status: VOIDED.
+//   Caller then clears the xero_invoice_* columns and (optionally)
+//   calls issueCarInvoice(car) again. UI surfaces the button when
+//   current irish_sale_price_ex_vat differs from
+//   car.xero_invoice_amount.
 
 import { withFreshToken, XeroError } from './client'
+import { createServerClient } from '@/lib/supabase'
 
-// IE 23% VAT, output side. Xero's tax type code; valid for cars sold
-// to consumers from a Republic of Ireland tenant. If the seller is
-// VAT-registered in another jurisdiction this would need to change.
-const IE_OUTPUT_VAT = 'OUTPUT2'
+const IE_OUTPUT_VAT = 'OUTPUT2'                 // Irish 23% standard rate
+const STORAGE_BUCKET = 'car-documents'
+
+// Branding theme name — overridable via env if the user renames it
+// in Xero. Defaults to "Car" per the Xero org's existing theme.
+const BRANDING_THEME_NAME = process.env.XERO_BRANDING_THEME_NAME || 'Car'
 
 function escapeWhereString(str) {
-  // Xero's WHERE param is single-quoted. Escape internal quotes.
   return String(str).replace(/'/g, "''")
 }
 
+// ── Validation ──────────────────────────────────────────────────
+//
+// Returns an array of human-readable error strings — empty array
+// means good to push. Surfaces both individually-missing fields and
+// shape errors (e.g. ex-VAT must be > 0).
+export function validateInvoiceFields(car) {
+  const errors = []
+  if (!car) return ['No car provided.']
+  if (!car.location_id) errors.push('Car has no location assigned.')
+  if (!car.buyer_name || !String(car.buyer_name).trim()) {
+    errors.push('Buyer name is required.')
+  }
+  if (!car.buyer_email || !String(car.buyer_email).trim()) {
+    errors.push('Buyer email is required (used to email the invoice).')
+  }
+  const exVat = Number(car.irish_sale_price_ex_vat)
+  if (!Number.isFinite(exVat) || exVat <= 0) {
+    errors.push('IE ex-VAT sale price must be set and greater than zero.')
+  }
+  return errors
+}
+
+// ── Branding theme resolution ───────────────────────────────────
+async function resolveBrandingThemeId(xfetch, name = BRANDING_THEME_NAME) {
+  if (!name) return null
+  try {
+    const json = await xfetch('/BrandingThemes')
+    const themes = json?.BrandingThemes || []
+    const match = themes.find(t => (t.Name || '').toLowerCase() === name.toLowerCase())
+    return match?.BrandingThemeID || null
+  } catch (e) {
+    // Theme lookup failure shouldn't block the invoice — Xero will
+    // fall back to the org's default. Surface a warning in the
+    // structured response so the UI can show it.
+    console.warn(`[xero] Could not resolve branding theme "${name}": ${e.message}`)
+    return null
+  }
+}
+
+// ── Contact handling ────────────────────────────────────────────
 async function findContact(xfetch, { email, name }) {
-  // Prefer email match — unique enough for our buyers. Fall back to
-  // exact-name match (case-insensitive on Xero's side).
   if (email) {
     const where = encodeURIComponent(`EmailAddress="${escapeWhereString(email)}"`)
     const json = await xfetch(`/Contacts?where=${where}`).catch(e => {
@@ -50,8 +105,24 @@ async function findContact(xfetch, { email, name }) {
 async function upsertContact(xfetch, { name, email, phone, address }) {
   if (!name) throw new XeroError('Buyer name is required to create a Xero invoice.')
   const existing = await findContact(xfetch, { email, name })
-  if (existing) return existing
 
+  if (existing) {
+    // Backfill the email on the matched contact if it's missing —
+    // we need it for the invoice email step. Skip if Xero already
+    // has one (don't overwrite — could be different and the
+    // accountant's choice).
+    const existingEmail = existing.EmailAddress || null
+    if (!existingEmail && email) {
+      const updated = await xfetch('/Contacts', {
+        method: 'POST',
+        body: { Contacts: [{ ContactID: existing.ContactID, EmailAddress: email }] },
+      })
+      return updated?.Contacts?.[0] || existing
+    }
+    return existing
+  }
+
+  // Create
   const payload = {
     Contacts: [{
       Name: name,
@@ -64,15 +135,9 @@ async function upsertContact(xfetch, { name, email, phone, address }) {
   return json?.Contacts?.[0]
 }
 
-// Map a car row into a Xero Invoice payload. Sale currency is EUR.
-// Description includes UK reg + VIN so the buyer / accountant can
-// cross-reference the deal.
-function buildInvoicePayload(car, contactId) {
+// ── Invoice payload ─────────────────────────────────────────────
+function buildInvoicePayload(car, contactId, brandingThemeId) {
   const exVat = Number(car.irish_sale_price_ex_vat || 0)
-  if (!exVat) {
-    throw new XeroError('IE ex-VAT must be set before issuing a Xero invoice.')
-  }
-
   const description = [
     'Tesla',
     car.make || '',
@@ -84,25 +149,26 @@ function buildInvoicePayload(car, contactId) {
   ].filter(Boolean).join(' ').trim()
 
   const today = new Date()
-  const dueDate = new Date(today.getTime() + 7 * 24 * 60 * 60 * 1000) // Net 7
+  const dueDate = new Date(today.getTime() + 7 * 24 * 60 * 60 * 1000)
   const fmt = d => d.toISOString().slice(0, 10)
 
   return {
     Invoices: [{
-      Type: 'ACCREC',                           // Accounts Receivable
+      Type: 'ACCREC',
       Contact: { ContactID: contactId },
       Date: fmt(today),
       DueDate: fmt(dueDate),
-      LineAmountTypes: 'Exclusive',             // amounts excl VAT
+      LineAmountTypes: 'Exclusive',
       Reference: car.uk_reg || car.vin || `Car ${car.id}`,
       CurrencyCode: 'EUR',
-      Status: 'AUTHORISED',                     // ready to send (not draft)
+      Status: 'AUTHORISED',
+      ...(brandingThemeId ? { BrandingThemeID: brandingThemeId } : {}),
       LineItems: [{
         Description: description || 'Tesla import — vehicle',
         Quantity: 1,
         UnitAmount: exVat,
         TaxType: IE_OUTPUT_VAT,
-        AccountCode: process.env.XERO_SALES_ACCOUNT_CODE || '200', // 200 = Sales (default chart)
+        AccountCode: process.env.XERO_SALES_ACCOUNT_CODE || '200',
       }],
       Url: process.env.NEXT_PUBLIC_APP_URL
         ? `${process.env.NEXT_PUBLIC_APP_URL}/cars/${car.id}`
@@ -111,21 +177,37 @@ function buildInvoicePayload(car, contactId) {
   }
 }
 
-/**
- * Issue a customer sales invoice for the given car.
- * @param {object} car   Car row (must include buyer_*, irish_sale_price_ex_vat)
- * @returns {{ invoiceId, invoiceNumber, invoiceUrl, issuedAt }}
- */
+// ── PDF storage ─────────────────────────────────────────────────
+async function uploadInvoicePdf({ carId, invoiceNumber, bytes }) {
+  const db = createServerClient()
+  const safeNumber = String(invoiceNumber || 'unknown').replace(/[^A-Za-z0-9_-]/g, '_')
+  const path = `cars/${carId}/xero-invoice-${safeNumber}.pdf`
+  const { error } = await db.storage.from(STORAGE_BUCKET).upload(path, bytes, {
+    contentType: 'application/pdf',
+    upsert: true,
+  })
+  if (error) {
+    // Persisting the PDF is best-effort — the invoice is already in
+    // Xero. Log and let the caller decide how to surface it.
+    console.warn(`[xero] PDF upload failed for car ${carId}: ${error.message}`)
+    return null
+  }
+  return path
+}
+
+// ── Public: issue ───────────────────────────────────────────────
 export async function issueCarInvoice(car) {
-  if (!car) throw new XeroError('No car provided.')
-  if (!car.location_id) throw new XeroError('Car has no location_id.')
-  if (!car.buyer_name) throw new XeroError('Buyer name is required before issuing an invoice.')
+  const errors = validateInvoiceFields(car)
+  if (errors.length) {
+    throw new XeroError(errors.join(' '))
+  }
 
   const { xfetch, conn } = await withFreshToken(car.location_id)
+  const brandingThemeId = await resolveBrandingThemeId(xfetch)
 
   const contact = await upsertContact(xfetch, {
     name: car.buyer_name,
-    email: car.buyer_email || null,
+    email: car.buyer_email,
     phone: car.buyer_phone || null,
     address: car.buyer_address || null,
   })
@@ -133,29 +215,77 @@ export async function issueCarInvoice(car) {
     throw new XeroError('Failed to resolve a Xero Contact for the buyer.')
   }
 
-  const payload = buildInvoicePayload(car, contact.ContactID)
-  const json = await xfetch('/Invoices', { method: 'POST', body: payload })
-  const inv = json?.Invoices?.[0]
+  const payload = buildInvoicePayload(car, contact.ContactID, brandingThemeId)
+  const created = await xfetch('/Invoices', { method: 'POST', body: payload })
+  const inv = created?.Invoices?.[0]
   if (!inv?.InvoiceID) {
-    throw new XeroError('Xero returned no invoice id.', { body: json })
+    throw new XeroError('Xero returned no invoice id.', { body: created })
   }
 
-  // Build a deep-link to the invoice in Xero. There is no public
-  // /Invoices/<id> URL we can construct from REST output that goes to
-  // the org's web UI directly — the OnlineInvoiceUrl Xero returns is
-  // the customer-facing pay-invoice link, which is what we want for
-  // emailing the buyer. We store both shapes so the operator can pick.
-  const onlineInvoiceUrl = inv.Url || null
+  // Email — empty body uses the contact's primary email + Xero's
+  // default branded template. 204 No Content on success.
+  let emailedAt = null
+  let emailError = null
+  try {
+    await xfetch(`/Invoices/${inv.InvoiceID}/Email`, { method: 'POST', body: {} })
+    emailedAt = new Date().toISOString()
+  } catch (e) {
+    emailError = e.message
+  }
+
+  // PDF — Accept: application/pdf returns the binary payload.
+  let pdfPath = null
+  try {
+    const bytes = await xfetch(`/Invoices/${inv.InvoiceID}`, {
+      headers: { Accept: 'application/pdf' },
+      responseType: 'buffer',
+    })
+    pdfPath = await uploadInvoicePdf({
+      carId: car.id,
+      invoiceNumber: inv.InvoiceNumber,
+      bytes,
+    })
+  } catch (e) {
+    console.warn(`[xero] PDF download failed for invoice ${inv.InvoiceNumber}: ${e.message}`)
+  }
+
   const editorUrl = `https://go.xero.com/AccountsReceivable/Edit.aspx?InvoiceID=${inv.InvoiceID}`
 
   return {
     invoiceId: inv.InvoiceID,
     invoiceNumber: inv.InvoiceNumber,
     invoiceUrl: editorUrl,
-    onlineInvoiceUrl,
+    onlineInvoiceUrl: inv.Url || null,
+    pdfPath,
+    issuedAt: new Date().toISOString(),
+    amount: Number(car.irish_sale_price_ex_vat),
+    brandingThemeId: brandingThemeId || null,
+    emailedAt,
+    emailError,
     contactId: contact.ContactID,
     contactName: contact.Name,
     tenantId: conn.tenant_id,
-    issuedAt: new Date().toISOString(),
   }
+}
+
+// ── Public: void ────────────────────────────────────────────────
+//
+// Voids the existing Xero invoice on the car. Caller is responsible
+// for clearing the xero_invoice_* columns afterwards (and, for the
+// reissue path, calling issueCarInvoice again).
+export async function voidCarInvoice(car) {
+  if (!car?.xero_invoice_id) throw new XeroError('No Xero invoice on this car to void.')
+  if (!car.location_id) throw new XeroError('Car has no location_id.')
+
+  const { xfetch } = await withFreshToken(car.location_id)
+  const payload = {
+    Invoices: [{
+      InvoiceID: car.xero_invoice_id,
+      Status: 'VOIDED',
+    }],
+  }
+  // POST /Invoices with the InvoiceID + Status:VOIDED is Xero's
+  // documented void path (PUT also works but POST mirrors create).
+  await xfetch('/Invoices', { method: 'POST', body: payload })
+  return { voidedInvoiceId: car.xero_invoice_id, voidedAt: new Date().toISOString() }
 }

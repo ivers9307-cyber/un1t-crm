@@ -24,7 +24,12 @@ export const ALL_DOCUMENT_TYPES = Object.freeze([
  * outstanding before this car can be moved from 'pending' to
  * 'completed'. Empty array means the car is ready to close.
  *
- * @param {{ buyer_name?: string, xero_invoice_id?: string, uk_vat_refund_received?: boolean, car_documents?: {doc_type: string}[] }} car
+ * Required document types must both EXIST and have been forwarded
+ * to Xero (xero_file_id populated) — Xero auto-bill OCR turns each
+ * forwarded file into a draft Bill, so requiring the forward
+ * guarantees the AP side of every car is captured before close.
+ *
+ * @param {{ buyer_name?: string, xero_invoice_id?: string, uk_vat_refund_received?: boolean, car_documents?: {doc_type: string, xero_file_id?: string}[] }} car
  * @returns {string[]}
  */
 export function completionGaps(car) {
@@ -34,9 +39,21 @@ export function completionGaps(car) {
   if (!car.xero_invoice_id) gaps.push('Xero customer invoice issued')
   if (!car.uk_vat_refund_received) gaps.push('UK VAT refund received')
 
-  const presentTypes = new Set((car.car_documents || []).map(d => d.doc_type))
+  const docsByType = new Map()
+  for (const d of car.car_documents || []) {
+    if (!docsByType.has(d.doc_type)) docsByType.set(d.doc_type, [])
+    docsByType.get(d.doc_type).push(d)
+  }
   for (const req of REQUIRED_DOCUMENT_TYPES) {
-    if (!presentTypes.has(req.key)) gaps.push(req.label)
+    const docs = docsByType.get(req.key) || []
+    if (docs.length === 0) {
+      gaps.push(req.label)
+      continue
+    }
+    // At least one of the uploaded docs of this type must have
+    // been forwarded to Xero.
+    const anySent = docs.some(d => d.xero_file_id)
+    if (!anySent) gaps.push(`${req.label} — send to Xero`)
   }
   return gaps
 }

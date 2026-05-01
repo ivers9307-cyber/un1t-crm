@@ -6,12 +6,14 @@
 import { describe, it, expect } from 'vitest'
 import {
   computeReportMetrics,
+  completionGaps,
   effectiveFxRate,
   profitBreakdown,
   splitIrishPrice,
   applyIrishVat,
   salePriceToExVat,
   totalAncillaryCosts,
+  REQUIRED_DOCUMENT_TYPES,
   DEFAULT_GBP_TO_EUR,
   IRISH_VAT_RATE,
 } from './cars.js'
@@ -126,6 +128,65 @@ describe('totalAncillaryCosts', () => {
   it('sums GBP + EUR lines into EUR via the FX rate', () => {
     // 500 GBP × 1.20 + 300 + 200 + 50 + 0 = 600 + 550 = 1150
     expect(totalAncillaryCosts(carCompleted())).toBe(1150)
+  })
+})
+
+describe('completionGaps', () => {
+  function fullCar(overrides = {}) {
+    return {
+      buyer_name: 'Acme Ltd',
+      xero_invoice_id: 'inv-1',
+      uk_vat_refund_received: true,
+      car_documents: REQUIRED_DOCUMENT_TYPES.map(r => ({
+        doc_type: r.key,
+        xero_file_id: 'xf_1',
+      })),
+      ...overrides,
+    }
+  }
+
+  it('returns empty for a car with everything in place', () => {
+    expect(completionGaps(fullCar())).toEqual([])
+  })
+
+  it('flags missing buyer + xero invoice + vat refund', () => {
+    const gaps = completionGaps(fullCar({
+      buyer_name: null,
+      xero_invoice_id: null,
+      uk_vat_refund_received: false,
+    }))
+    expect(gaps).toEqual(expect.arrayContaining([
+      'Buyer details',
+      'Xero customer invoice issued',
+      'UK VAT refund received',
+    ]))
+  })
+
+  it('flags a required doc type that has not been uploaded at all', () => {
+    const gaps = completionGaps(fullCar({
+      car_documents: REQUIRED_DOCUMENT_TYPES
+        .filter(r => r.key !== 'ferry_invoice')
+        .map(r => ({ doc_type: r.key, xero_file_id: 'xf_1' })),
+    }))
+    expect(gaps).toContain('Ferry invoice')
+  })
+
+  it('flags an uploaded-but-not-sent doc with the "send to Xero" suffix', () => {
+    const gaps = completionGaps(fullCar({
+      car_documents: REQUIRED_DOCUMENT_TYPES.map(r => ({
+        doc_type: r.key,
+        xero_file_id: r.key === 'transporter' ? null : 'xf_1',
+      })),
+    }))
+    expect(gaps).toContain('Car transporter invoice — send to Xero')
+  })
+
+  it('treats multiple uploads of the same type — at least one sent — as satisfied', () => {
+    const docs = REQUIRED_DOCUMENT_TYPES.flatMap(r => [
+      { doc_type: r.key, xero_file_id: null },              // wrong upload
+      { doc_type: r.key, xero_file_id: 'xf_real' },         // the right one
+    ])
+    expect(completionGaps(fullCar({ car_documents: docs }))).toEqual([])
   })
 })
 

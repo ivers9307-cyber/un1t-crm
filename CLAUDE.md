@@ -231,6 +231,23 @@ Non-Accounting APIs are unaffected by the granular split: `payroll.*`, `files`, 
 
 When adding a new Xero feature, append the relevant granular scope to `XERO_SCOPES` in `src/lib/xero/client.js`. Existing connected locations need to click "Reconnect" to receive the additional scope on their token (scopes are additive). The integration card on `/settings/integrations` shows the current scope grant in `connection.scopes`.
 
+### Xero invoice push (v2) + bills auto-forward
+
+`src/lib/xero/invoices.js` — `issueCarInvoice(car)` validates required fields, resolves the "Car" branding theme by name (overridable via `XERO_BRANDING_THEME_NAME`), upserts the buyer Contact (find-by-email → name → create; backfills missing email if matched), POSTs the AUTHORISED invoice, calls `/Invoices/{id}/Email` to email it, downloads the PDF via `Accept: application/pdf` and uploads to Supabase Storage at `cars/{id}/xero-invoice-{number}.pdf`. `voidCarInvoice(car)` POSTs the invoice with `Status: VOIDED`. `validateInvoiceFields(car)` is exported and mirrored client-side in `XeroCard` so the button can be disabled before the round-trip.
+
+Routes:
+- `POST /api/cars/[id]/issue-xero-invoice` — full issue flow
+- `POST /api/cars/[id]/void-xero-invoice?reissue=true` — void + optional reissue (typical use: sale price drifted)
+- `GET  /api/cars/[id]/xero-invoice-pdf` — 5-min signed URL for the saved PDF
+
+The "Void & reissue" button only appears in `XeroCard` when `irish_sale_price_ex_vat` differs from `xero_invoice_amount` (the snapshot taken at issue time). Native `confirm()` for the warning to keep the implementation tight.
+
+`src/lib/xero/files.js` — `sendCarDocumentToXero(documentId)` resolves the Xero org's Inbox folder via `GET /Folders`, downloads the PDF bytes from Supabase Storage, and POSTs them as multipart form-data to `POST /Folders/{inboxId}` (Files API at `https://api.xero.com/files.xro/1.0`). Xero's auto-bill OCR (Hubdoc-derived) then turns the file into a draft Bill in **Business → Bills to pay → Draft**, extracting supplier/amount/line items automatically. The user-side prerequisite is enabling "Convert files to bills" in **Xero → Files → Inbox → Settings**; without it the file lands in the Inbox but has to be promoted to a bill manually.
+
+Route: `POST /api/cars/[id]/documents/[docId]/send-to-xero`. Persists `xero_file_id` + `xero_sent_at` on the `car_documents` row. `completionGaps()` requires every required-doc-type to have at least one upload that's been sent to Xero (label suffix: " — send to Xero" when uploaded but not yet forwarded), so the operator can't promote a car to completed until the AP side is captured.
+
+The `files` scope is added to `XERO_SCOPES`. Existing connected locations need a one-time Reconnect to grant it (scopes are additive — old grants stay).
+
 ### Webhook authentication
 
 `src/lib/webhook-auth.js` provides `verifyMetaSignature()` (HMAC-SHA256 over the raw body, used by `/api/webhooks/whatsapp`) and `verifySharedSecret()` (constant-time token compare, used by `/api/webhooks/postmark`). Both routes set `export const runtime = 'nodejs'` so `node:crypto` is available.

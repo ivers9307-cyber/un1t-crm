@@ -1,14 +1,18 @@
 // POST /api/cars/[id]/issue-xero-invoice
-// Pushes a Xero customer invoice for the car and writes the resulting
-// xero_invoice_* fields back to the row. The detail-page button calls
-// this; the API also flips xero_invoice_issued_at so the existing
-// completion gate in completionGaps() automatically un-blocks.
+//
+// Pre-flight validation → upsert Contact in Xero → create Invoice
+// (AUTHORISED, "Car" branding theme) → email it to the buyer →
+// download PDF and store in Supabase → persist all metadata.
+//
+// All happens inside a single API call so the UI flips state in
+// one round-trip. Errors at intermediate steps return 4xx/5xx with
+// a clear message.
 
 import { NextResponse } from 'next/server'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
-import { issueCarInvoice } from '@/lib/xero/invoices'
+import { issueCarInvoice, validateInvoiceFields } from '@/lib/xero/invoices'
 import { XeroError } from '@/lib/xero/client'
 
 export const runtime = 'nodejs'
@@ -22,10 +26,7 @@ export async function POST(_request, { params }) {
 
   const db = createServerClient()
   const { data: car, error: loadErr } = await db
-    .from('cars')
-    .select('*')
-    .eq('id', params.id)
-    .single()
+    .from('cars').select('*').eq('id', params.id).single()
   if (loadErr || !car) {
     return NextResponse.json({ success: false, error: 'Car not found' }, { status: 404 })
   }
@@ -35,8 +36,19 @@ export async function POST(_request, { params }) {
   if (car.xero_invoice_id) {
     return NextResponse.json({
       success: false,
-      error: `Invoice already issued (${car.xero_invoice_number || car.xero_invoice_id}). Void it in Xero first if you need to re-issue.`,
+      error: `Invoice already issued (${car.xero_invoice_number || car.xero_invoice_id}). Use Void & reissue if the price has changed.`,
     }, { status: 409 })
+  }
+
+  // Hard-block on missing fields so the operator sees what to fix
+  // before the (slow) Xero round-trip starts.
+  const fieldErrors = validateInvoiceFields(car)
+  if (fieldErrors.length) {
+    return NextResponse.json({
+      success: false,
+      error: fieldErrors.join(' '),
+      fieldErrors,
+    }, { status: 400 })
   }
 
   try {
@@ -46,13 +58,16 @@ export async function POST(_request, { params }) {
       xero_invoice_id: result.invoiceId,
       xero_invoice_number: result.invoiceNumber,
       xero_invoice_url: result.invoiceUrl,
+      xero_invoice_online_url: result.onlineInvoiceUrl,
+      xero_invoice_pdf_path: result.pdfPath,
+      xero_invoice_amount: result.amount,
+      xero_invoice_branding_id: result.brandingThemeId,
+      xero_invoice_emailed_at: result.emailedAt,
       xero_invoice_issued_at: result.issuedAt,
+      xero_invoice_issue_count: (car.xero_invoice_issue_count || 0) + 1,
     }).eq('id', car.id)
 
     if (upErr) {
-      // The invoice IS in Xero at this point, but we couldn't persist
-      // the link — surface that explicitly so the operator can paste
-      // the number/URL manually rather than thinking it failed.
       return NextResponse.json({
         success: false,
         error: `Invoice created in Xero (${result.invoiceNumber}) but DB update failed: ${upErr.message}`,
