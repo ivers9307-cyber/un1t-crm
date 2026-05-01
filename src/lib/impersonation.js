@@ -82,7 +82,7 @@ export async function startImpersonation({ masterProfile, targetUserId, reason, 
   })
   if (insErr) throw new Error(`Failed to start impersonation log: ${insErr.message}`)
 
-  // Set the cookie.
+  // Set the impersonation cookie.
   cookies().set(IMPERSONATE_COOKIE, targetUserId, {
     httpOnly: true,
     sameSite: 'lax',
@@ -90,6 +90,14 @@ export async function startImpersonation({ masterProfile, targetUserId, reason, 
     maxAge: ONE_DAY_SECONDS,
     path: '/',
   })
+
+  // Clear the master's active-location cookie so the impersonated
+  // user lands at THEIR default location rather than wherever the
+  // master was last viewing. Without this, a target user who happens
+  // to be assigned to the same location as the master sees that
+  // location's feature gate (often quite different from their own
+  // default's), which is misleading for "view as user" debugging.
+  cookies().set('un1t_active_location', '', { maxAge: 0, path: '/' })
 
   return { targetUserId, targetName: target.full_name, targetRole: target.role }
 }
@@ -108,4 +116,11 @@ export async function stopImpersonation({ masterUserId }) {
     .is('ended_at', null)
 
   cookies().set(IMPERSONATE_COOKIE, '', { maxAge: 0, path: '/' })
+  // Also clear any stale active-location cookie that was leftover
+  // from the impersonated user's preferred location — masters
+  // returning to their own session should land on their own default
+  // rather than wherever the target was. (Master sees every location
+  // anyway via auth_is_master, so the worst case is "wrong default
+  // pre-selected".)
+  cookies().set('un1t_active_location', '', { maxAge: 0, path: '/' })
 }
