@@ -8,6 +8,7 @@ import { passwordRequirements, validatePasswordComplexity } from '@/lib/schemas'
 import {
   WEB_PERMISSIONS as allPermissions,
   DEFAULT_WEB_PERMISSIONS_BY_ROLE as defaultPermissionsByRole,
+  isFeatureGatedByLocation,
   MOBILE_PERMISSIONS as allMobilePermissions,
   DEFAULT_MOBILE_PERMISSIONS_BY_ROLE as defaultMobilePermissionsByRole,
 } from '@shared/permissions'
@@ -60,6 +61,20 @@ export default function StaffForm({ staff, locations, callerRole = 'owner' }) {
       ...prev,
       permissions: { ...prev.permissions, [key]: !prev.permissions[key] },
     }))
+  }
+
+  // For a given feature key, return the names of the user's
+  // currently-assigned locations that have it explicitly disabled in
+  // their location.features map (mig 032). Empty array → not gated
+  // off anywhere → toggle works normally. Used to render an inline
+  // "(off at X)" hint next to permission toggles so admins know why
+  // flipping the toggle won't actually grant access.
+  function disabledAtLocationNames(key) {
+    if (!isFeatureGatedByLocation(key)) return []
+    const assignedIds = new Set(form.location_ids || [])
+    return locations
+      .filter(l => assignedIds.has(l.id) && l.features?.[key] === false)
+      .map(l => l.name)
   }
 
   function toggleMobilePermission(key) {
@@ -517,18 +532,30 @@ export default function StaffForm({ staff, locations, callerRole = 'owner' }) {
         </div>
         <p className="text-xs text-un1t-light mb-2">Controls what this person sees in the web sidebar.</p>
         <div className="space-y-2">
-          {allPermissions.map(perm => (
-            <label key={perm.key} className="flex items-center justify-between py-1.5 cursor-pointer">
-              <span className="text-sm">{perm.label}</span>
-              <button
-                type="button"
-                onClick={() => togglePermission(perm.key)}
-                className={`w-10 h-5 rounded-full transition-colors ${form.permissions[perm.key] ? 'bg-green-500' : 'bg-un1t-gray'}`}
-              >
-                <div className={`w-4 h-4 rounded-full bg-white transition-transform ${form.permissions[perm.key] ? 'translate-x-5' : 'translate-x-0.5'}`} />
-              </button>
-            </label>
-          ))}
+          {allPermissions.map(perm => {
+            const offAt = disabledAtLocationNames(perm.key)
+            const offAtAssigned = offAt.length > 0
+            return (
+              <label key={perm.key} className={`flex items-center justify-between py-1.5 cursor-pointer ${offAtAssigned ? 'opacity-60' : ''}`}>
+                <span className="text-sm">
+                  {perm.label}
+                  {offAtAssigned && (
+                    <span className="block text-[11px] text-amber-500 mt-0.5">
+                      Off at location: {offAt.join(', ')} — toggle has no effect there
+                    </span>
+                  )}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => togglePermission(perm.key)}
+                  className={`w-10 h-5 rounded-full transition-colors shrink-0 ${form.permissions[perm.key] ? 'bg-green-500' : 'bg-un1t-gray'}`}
+                  title={offAtAssigned ? `Disabled at ${offAt.join(', ')}. Edit the location's Features section to enable.` : ''}
+                >
+                  <div className={`w-4 h-4 rounded-full bg-white transition-transform ${form.permissions[perm.key] ? 'translate-x-5' : 'translate-x-0.5'}`} />
+                </button>
+              </label>
+            )
+          })}
         </div>
       </div>
 
@@ -558,18 +585,26 @@ export default function StaffForm({ staff, locations, callerRole = 'owner' }) {
             // notification types will be on once they re-enable push.
             const isNotifyRow = perm.key.startsWith('notify_')
             const dim = isNotifyRow && !form.mobile_permissions.push_notifications
+            const offAt = disabledAtLocationNames(perm.key)
+            const offAtAssigned = offAt.length > 0
             return (
-              <label key={perm.key} className={`flex items-center justify-between py-1.5 cursor-pointer ${dim ? 'opacity-50' : ''}`}>
+              <label key={perm.key} className={`flex items-center justify-between py-1.5 cursor-pointer ${dim || offAtAssigned ? 'opacity-60' : ''}`}>
                 <span className="text-sm">
                   {perm.label}
                   {perm.hint && (
                     <span className="block text-xs text-un1t-light">{perm.hint}</span>
+                  )}
+                  {offAtAssigned && (
+                    <span className="block text-[11px] text-amber-500 mt-0.5">
+                      Off at location: {offAt.join(', ')} — toggle has no effect there
+                    </span>
                   )}
                 </span>
                 <button
                   type="button"
                   onClick={() => toggleMobilePermission(perm.key)}
                   className={`w-10 h-5 rounded-full transition-colors shrink-0 ${form.mobile_permissions[perm.key] ? 'bg-green-500' : 'bg-un1t-gray'}`}
+                  title={offAtAssigned ? `Disabled at ${offAt.join(', ')}. Edit the location's Features section to enable.` : ''}
                 >
                   <div className={`w-4 h-4 rounded-full bg-white transition-transform ${form.mobile_permissions[perm.key] ? 'translate-x-5' : 'translate-x-0.5'}`} />
                 </button>

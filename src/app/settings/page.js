@@ -251,6 +251,16 @@ export default async function SettingsPage() {
         </div>
 
         <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-4 space-y-4">
+          <Link
+            href="/account/access-history"
+            className="flex items-center justify-between hover:bg-un1t-gray/20 -m-4 p-4 rounded-lg transition-colors"
+          >
+            <div>
+              <p className="text-sm font-medium">Account access history</p>
+              <p className="text-xs text-un1t-light mt-0.5">See every time a master account has signed in as you</p>
+            </div>
+            <span className="text-xs text-un1t-light">View →</span>
+          </Link>
           <div className="flex items-center justify-between">
             <div>
               <p className="text-sm font-medium">Two-Factor Authentication</p>
