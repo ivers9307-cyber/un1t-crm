@@ -1,8 +1,14 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, beforeAll } from 'vitest'
 import { getOpenApiSpec } from './openapi.js'
 
 describe('getOpenApiSpec', () => {
-  const spec = getOpenApiSpec()
+  // getOpenApiSpec became async (mig of May 2026 wraps it in
+  // unstable_cache so the spec survives lambda cold starts). The shape
+  // of the resolved object hasn't changed.
+  let spec
+  beforeAll(async () => {
+    spec = await getOpenApiSpec()
+  })
 
   it('produces a 3.1 spec with the expected info block', () => {
     expect(spec.openapi).toBe('3.1.0')
@@ -55,8 +61,8 @@ describe('getOpenApiSpec', () => {
     }
   })
 
-  it('caches the spec object across calls (same reference)', () => {
-    expect(getOpenApiSpec()).toBe(spec)
+  it('caches the spec object across calls (same reference)', async () => {
+    expect(await getOpenApiSpec()).toBe(spec)
   })
 
   it('serialises to valid JSON without circular refs', () => {

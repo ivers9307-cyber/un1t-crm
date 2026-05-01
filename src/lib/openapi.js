@@ -450,17 +450,25 @@ registry.registerPath({
 // ============================================================================
 // Spec generator — build once and cache
 // ============================================================================
+//
+// Two layers of caching:
+//   1. `cachedSpec` (module-level) — fastest path, hits within the
+//      same lambda instance. Never expires.
+//   2. `unstable_cache` — Next.js's data cache, shared across lambda
+//      instances and surviving cold starts. 24h TTL since the spec
+//      only changes on deploy (deploys clear the data cache anyway).
+//
+// The unstable_cache is the small win over the previous setup, where
+// every cold-started lambda did the full generator pass on its first
+// hit before populating its local module variable.
+
+import { unstable_cache } from 'next/cache'
 
 let cachedSpec = null
 
-/**
- * Build (and cache) the OpenAPI 3.1 spec object for the CRM API.
- * Returns a plain JSON-serialisable object. Safe to stringify.
- */
-export function getOpenApiSpec() {
-  if (cachedSpec) return cachedSpec
+function buildSpec() {
   const generator = new OpenApiGeneratorV31(registry.definitions)
-  cachedSpec = generator.generateDocument({
+  return generator.generateDocument({
     openapi: '3.1.0',
     info: {
       title: 'UN1T CRM API',
@@ -476,5 +484,38 @@ export function getOpenApiSpec() {
       { url: 'http://localhost:3000', description: 'Local dev' },
     ],
   })
+}
+
+// unstable_cache only works inside Next.js's request runtime — calling
+// it from Vitest throws because there's no AsyncLocalStorage context.
+// Build a Next-cached version when we have one, fall back to a direct
+// async wrapper otherwise. The module-level `cachedSpec` below covers
+// in-process repeats either way.
+const buildSpecCached = unstable_cache(
+  async () => buildSpec(),
+  ['openapi-spec'],
+  { revalidate: 60 * 60 * 24, tags: ['openapi-spec'] }
+)
+
+/**
+ * Build (and cache) the OpenAPI 3.1 spec object for the CRM API.
+ * Returns a plain JSON-serialisable object. Safe to stringify.
+ *
+ * Two layers of caching:
+ *   1. `cachedSpec` (module-level) — fastest path, hits within the
+ *      same lambda instance. Never expires.
+ *   2. `unstable_cache` — Next.js's data cache, shared across lambda
+ *      instances and surviving cold starts. 24h TTL since the spec
+ *      only changes on deploy (deploys clear the data cache anyway).
+ */
+export async function getOpenApiSpec() {
+  if (cachedSpec) return cachedSpec
+  try {
+    cachedSpec = await buildSpecCached()
+  } catch {
+    // No Next.js runtime (e.g. Vitest) — build directly. Module-level
+    // cache still keeps subsequent calls fast.
+    cachedSpec = buildSpec()
+  }
   return cachedSpec
 }

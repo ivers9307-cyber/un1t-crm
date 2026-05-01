@@ -13,7 +13,7 @@ export const runtime = 'nodejs'
 // authenticated user is fine. Swagger UI / Redoc / Stoplight Studio can
 // point at this URL directly.
 export async function GET() {
-  const spec = getOpenApiSpec()
+  const spec = await getOpenApiSpec()
   return NextResponse.json(spec, {
     headers: {
       // Cache for 5 minutes — spec changes only on deploy

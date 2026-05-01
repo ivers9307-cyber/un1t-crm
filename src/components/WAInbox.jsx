@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react'
 import Link from 'next/link'
+import { createBrowserClient } from '@/lib/supabase'
 import {
   ArrowLeft, Send, MessageCircle, Clock, CheckCheck,
   Check, Image as ImageIcon, FileText, Mic, AlertCircle, RefreshCw,
@@ -71,7 +72,16 @@ export default function WAInbox({ locationId, userId, initialConversationId }) {
   const [templateVars, setTemplateVars] = useState({})
   const [sendingTemplate, setSendingTemplate] = useState(false)
   const messagesEndRef = useRef(null)
+  // Slow heartbeat — safety net for cases where Realtime drops a row
+  // event (network blip, reconnect race). 60s is plenty given that
+  // Realtime catches the live cases. Previously this was a 10s poll
+  // doing all the work; mig 042 published the WhatsApp tables to
+  // supabase_realtime so we get push events for free.
   const pollRef = useRef(null)
+  // The selected-conversation id changes; the realtime subscription
+  // needs the latest value when handling a message event without
+  // re-subscribing on every selection. ref carries it across renders.
+  const selectedIdRef = useRef(initialConversationId || null)
 
   const fetchConversations = useCallback(async () => {
     try {
@@ -95,16 +105,54 @@ export default function WAInbox({ locationId, userId, initialConversationId }) {
     }
   }, [locationId])
 
-  // Load conversations
+  // Initial load + 60s heartbeat (a backstop for missed realtime events).
   useEffect(() => {
     fetchConversations()
     fetchTemplates()
-    pollRef.current = setInterval(fetchConversations, 10000)
+    pollRef.current = setInterval(fetchConversations, 60000)
     return () => clearInterval(pollRef.current)
   }, [locationId, fetchConversations, fetchTemplates])
 
-  // Load messages when conversation selected
+  // Realtime subscription — push updates instead of polling. RLS scopes
+  // events to rows the user can read, so the per-location filter is
+  // already enforced server-side. We listen on:
+  //   - whatsapp_conversations: new conversations + assignment / status
+  //     changes for the conversation list (left panel).
+  //   - whatsapp_messages: new inbound + outbound messages. If the
+  //     event belongs to the open conversation, refresh its message
+  //     list; in either case refresh the conversation list so unread
+  //     counts and last-message previews update.
   useEffect(() => {
+    if (!locationId) return
+    const supabase = createBrowserClient()
+    const channel = supabase
+      .channel(`wa-inbox-${locationId}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'whatsapp_conversations' },
+        () => { fetchConversations() }
+      )
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'whatsapp_messages' },
+        (payload) => {
+          fetchConversations()
+          const convId = payload?.new?.conversation_id
+          if (convId && convId === selectedIdRef.current) {
+            fetchMessages(convId)
+          }
+        }
+      )
+      .subscribe()
+    return () => { supabase.removeChannel(channel) }
+  }, [locationId, fetchConversations])
+
+  // Load messages when conversation selected. Also mirror selectedId
+  // into the ref so the realtime handler can branch on the currently
+  // open conversation without re-subscribing every time the user
+  // clicks a different thread.
+  useEffect(() => {
+    selectedIdRef.current = selectedId
     if (selectedId) {
       fetchMessages(selectedId)
       setShowAddContact(false)
