@@ -96,7 +96,12 @@ export default function ImpersonatePicker() {
       </button>
 
       {open && (
-        <div className="absolute left-2 right-2 mt-1 bg-un1t-dark border border-un1t-gray rounded-lg shadow-xl z-50 max-h-[60vh] flex flex-col">
+        // Anchored ABOVE the trigger because the picker lives at the
+        // bottom of the sidebar — opening downward gets clipped by
+        // the viewport. bottom-full + mb-1 puts it directly above
+        // the button; max-h-[60vh] + overflow-auto on the inner
+        // list keeps it scrollable when the user list is long.
+        <div className="absolute left-2 right-2 bottom-full mb-1 bg-un1t-dark border border-un1t-gray rounded-lg shadow-xl z-50 max-h-[60vh] flex flex-col">
           <div className="p-2 border-b border-un1t-gray">
             <div className="flex items-center gap-2 bg-un1t-black border border-un1t-gray rounded-md px-2 py-1">
               <Search size={12} className="text-un1t-light" />
