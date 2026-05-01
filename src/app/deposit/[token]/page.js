@@ -1,6 +1,7 @@
 // Public car-deposit page. No auth — the token in the URL is the
-// only credential. Static-shell-friendly: page itself does no DB
-// work, the client component fetches via the public API.
+// only credential. Lives at /deposit/<token> rather than under /cars/
+// so it doesn't inherit the /cars/layout.js auth gate (which would
+// redirect anonymous buyers to /login).
 
 import CarDepositPage from '@/components/CarDepositPage'
 

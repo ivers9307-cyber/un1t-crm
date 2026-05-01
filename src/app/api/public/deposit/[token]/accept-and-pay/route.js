@@ -133,7 +133,7 @@ export async function POST(request, { params }) {
         description: `Car deposit — ${carLabel}`,
         captureMode: 'AUTOMATIC',
         // redirect_url still set so the hosted-page fallback works.
-        redirectUrl: `${baseUrl}/cars/deposit/${car.deposit_token}/return`,
+        redirectUrl: `${baseUrl}/deposit/${car.deposit_token}/return`,
         metadata: {
           car_id: car.id,
           location_id: car.location_id,

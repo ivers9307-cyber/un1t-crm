@@ -145,7 +145,7 @@ export default function DepositCard({ car, setCar, setError, disabled, defaultAm
 
           {hasLink && (
             <a
-              href={`${DEPOSIT_BASE_URL}/cars/deposit/${car.deposit_token}`}
+              href={`${DEPOSIT_BASE_URL}/deposit/${car.deposit_token}`}
               target="_blank"
               rel="noreferrer"
               className="text-xs text-blue-400 hover:underline inline-flex items-center gap-1"
@@ -187,6 +187,8 @@ function ExpiryHint({ expiresAt }) {
 
 function extractTokenFromLink(link) {
   if (!link) return null
-  const m = link.match(/\/cars\/deposit\/([^/?#]+)/)
+  // Match either the new /deposit/<token> or the legacy /cars/deposit/<token>
+  // form so this keeps working even if a server is mid-rollout.
+  const m = link.match(/\/(?:cars\/)?deposit\/([^/?#]+)/)
   return m ? m[1] : null
 }

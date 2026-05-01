@@ -107,7 +107,7 @@ export async function POST(request, { params }) {
   // a misconfigured deploy still produces working links.
   let baseUrl
   try { baseUrl = getDepositBaseUrl() } catch { baseUrl = getRequestOrigin(request) }
-  const link = `${baseUrl}/cars/deposit/${token}`
+  const link = `${baseUrl}/deposit/${token}`
   const carLabel = [car.make, car.model, car.uk_reg || car.irish_reg].filter(Boolean).join(' ').trim() || 'your Tesla'
   const buyerFirstName = (car.buyer_name || '').split(' ')[0] || 'there'
 

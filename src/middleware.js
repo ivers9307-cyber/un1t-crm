@@ -23,7 +23,7 @@ const PAY_HOST = process.env.PAY_HOSTNAME || 'pay.ccfautos.com'
 
 // Paths exposed on the pay.* hostname. Tightly scoped on purpose —
 // adding a new public path here is a deliberate decision.
-const PAY_HOST_ALLOWED = ['/cars/deposit/', '/api/public/deposit/']
+const PAY_HOST_ALLOWED = ['/deposit/', '/api/public/deposit/']
 
 export async function middleware(request) {
   const hostname = request.headers.get('host') || ''
@@ -51,7 +51,7 @@ export async function middleware(request) {
 
   // ── CRM hostname (default) — existing behaviour ──────────────────
   // Public routes that don't require auth
-  const publicPaths = ['/login', '/reset-password', '/book/', '/api/public/', '/unsubscribe/', '/preferences/', '/api/unsubscribe/', '/api/preferences/', '/api/webhooks/', '/api/cron/', '/cars/deposit/']
+  const publicPaths = ['/login', '/reset-password', '/book/', '/api/public/', '/unsubscribe/', '/preferences/', '/api/unsubscribe/', '/api/preferences/', '/api/webhooks/', '/api/cron/', '/deposit/']
   const isPublic = publicPaths.some(p => request.nextUrl.pathname.startsWith(p))
   if (isPublic) return NextResponse.next()
 
