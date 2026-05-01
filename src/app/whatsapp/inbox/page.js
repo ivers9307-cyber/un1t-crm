@@ -1,18 +1,9 @@
-import { getCurrentUser } from '@/lib/auth'
 import { redirect } from 'next/navigation'
-import WAInbox from '@/components/WAInbox'
 
 export const dynamic = 'force-dynamic'
 
-export default async function InboxPage({ searchParams }) {
-  const user = await getCurrentUser()
-  if (!user) redirect('/login')
-
-  return (
-    <WAInbox
-      locationId={user.activeLocation?.id}
-      userId={user.id}
-      initialConversationId={searchParams?.c || null}
-    />
-  )
+// Redirect to /communications/inbox, preserving any ?c=<id> query.
+export default function InboxRedirect({ searchParams }) {
+  const c = searchParams?.c
+  redirect(c ? `/communications/inbox?c=${encodeURIComponent(c)}` : '/communications/inbox')
 }

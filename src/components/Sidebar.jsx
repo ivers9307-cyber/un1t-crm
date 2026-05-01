@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
-import { LayoutDashboard, Users, Columns3, CheckSquare, Calendar, BookOpen, Mail, MessageCircle, CalendarClock, Settings, LogOut, Car } from 'lucide-react'
+import { LayoutDashboard, Users, Columns3, CheckSquare, Calendar, BookOpen, MessagesSquare, CalendarClock, Settings, LogOut, Car } from 'lucide-react'
 import { createBrowserClient } from '@/lib/supabase'
 import LocationSwitcher from './LocationSwitcher'
 import ImpersonatePicker from './ImpersonatePicker'
@@ -30,8 +30,12 @@ const allNav = [
   { href: '/activities', label: 'Activities',   icon: CheckSquare,     permission: 'activities' },
   { href: '/events',     label: 'Events',       icon: Calendar,        permission: 'events' },
   { href: '/bookings',   label: 'Bookings',     icon: BookOpen,        permission: 'bookings' },
-  { href: '/email',      label: 'Email',        icon: Mail,            permission: 'email' },
-  { href: '/whatsapp',   label: 'WhatsApp',     icon: MessageCircle,   permission: 'whatsapp' },
+  // Single Communications entry replacing the old Email + WhatsApp.
+  // Visible if the user has EITHER permission — sub-tabs inside the
+  // hub gate themselves further. Marked with a custom check function
+  // since it ORs two permissions instead of requiring one.
+  { href: '/communications', label: 'Communications', icon: MessagesSquare,
+    anyPermission: ['email', 'whatsapp'] },
   { href: '/schedule',   label: 'Schedule',     icon: CalendarClock,   permission: 'schedule' },
   { href: '/cars',       label: 'Car Processing', icon: Car,           permission: 'car_processing' },
   { href: '/settings',   label: 'Settings',     icon: Settings,        permission: 'settings' },
@@ -75,14 +79,16 @@ export default function Sidebar({ user }) {
   // hides everything except Car Processing for non-master users).
   const hasPerm = (key) => hasPermission(user, key)
 
-  // Filter nav based on permissions. The Dashboard parent shows if
-  // ANY of the three sub-permissions is true. Privileged actions
-  // (staff management, branding, location config) remain owner-only
-  // via separate role gates inside those pages.
+  // Filter nav based on permissions. Three matching modes:
+  //   - dashboardGroup: any of dashboard_personal/studio/business
+  //   - anyPermission: any of the listed keys (e.g. communications
+  //     shows if either email OR whatsapp is held)
+  //   - permission (default): the single key listed
+  // Privileged actions (staff management, branding, location config)
+  // remain owner-only via separate role gates inside those pages.
   const nav = allNav.filter(item => {
-    if (item.dashboardGroup) {
-      return DASHBOARD_PERM_KEYS.some(hasPerm)
-    }
+    if (item.dashboardGroup) return DASHBOARD_PERM_KEYS.some(hasPerm)
+    if (item.anyPermission) return item.anyPermission.some(hasPerm)
     return hasPerm(item.permission)
   })
 

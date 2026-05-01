@@ -1,0 +1,165 @@
+// /communications/templates — combined email + WhatsApp templates.
+//
+// Single page with a channel filter at the top. Email and WhatsApp
+// templates have very different shapes (HTML/JSON vs Meta-approved
+// template+variables) so the editor links go to their respective
+// existing /email/templates/new and /whatsapp/templates/new paths.
+
+import Link from 'next/link'
+import { redirect } from 'next/navigation'
+import { Plus, FileText, Mail, MessageCircle } from 'lucide-react'
+import { createServerClient } from '@/lib/supabase'
+import { getCurrentUser } from '@/lib/auth'
+import { hasPermission } from '@/lib/permissions'
+
+export const dynamic = 'force-dynamic'
+
+export default async function TemplatesListPage({ searchParams }) {
+  const user = await getCurrentUser()
+  if (!user) redirect('/login')
+  const canEmail = hasPermission(user, 'email')
+  const canWhatsapp = hasPermission(user, 'whatsapp')
+  if (!canEmail && !canWhatsapp) redirect('/communications')
+
+  // Filter: 'all' | 'email' | 'whatsapp'. Default 'all' when both
+  // perms present, else lock to the one available.
+  const requested = searchParams?.channel
+  const channel = canEmail && canWhatsapp
+    ? (requested === 'email' || requested === 'whatsapp' ? requested : 'all')
+    : (canEmail ? 'email' : 'whatsapp')
+
+  const db = createServerClient()
+  const locationId = user.activeLocation?.id
+
+  const [emailRes, waRes] = await Promise.all([
+    canEmail && (channel === 'all' || channel === 'email')
+      ? db.from('email_templates').select('id, name, subject, updated_at').eq('location_id', locationId).order('updated_at', { ascending: false })
+      : Promise.resolve({ data: [] }),
+    canWhatsapp && (channel === 'all' || channel === 'whatsapp')
+      ? db.from('whatsapp_templates').select('id, name, category, language, status, updated_at').eq('location_id', locationId).order('updated_at', { ascending: false })
+      : Promise.resolve({ data: [] }),
+  ])
+
+  const filters = [
+    canEmail && canWhatsapp && { key: 'all', label: 'All' },
+    canEmail && { key: 'email', label: 'Email' },
+    canWhatsapp && { key: 'whatsapp', label: 'WhatsApp' },
+  ].filter(Boolean)
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-4">
+        <div>
+          <h2 className="text-lg font-semibold">Templates</h2>
+          <p className="text-xs text-un1t-light mt-0.5">Reusable email + WhatsApp content</p>
+        </div>
+        <div className="flex gap-2">
+          {canEmail && (
+            <Link
+              href="/email/templates/new"
+              className="flex items-center gap-2 bg-un1t-white text-un1t-black text-sm font-medium px-3 py-2 rounded-lg hover:bg-un1t-accent transition-colors"
+            >
+              <Plus size={14} /> Email
+            </Link>
+          )}
+          {canWhatsapp && (
+            <Link
+              href="/whatsapp/templates/new"
+              className="flex items-center gap-2 bg-un1t-white text-un1t-black text-sm font-medium px-3 py-2 rounded-lg hover:bg-un1t-accent transition-colors"
+            >
+              <Plus size={14} /> WhatsApp
+            </Link>
+          )}
+        </div>
+      </div>
+
+      {filters.length > 1 && (
+        <div className="flex gap-2 mb-4">
+          {filters.map(f => (
+            <Link
+              key={f.key}
+              href={`/communications/templates${f.key !== 'all' ? `?channel=${f.key}` : ''}`}
+              className={`text-xs px-3 py-1.5 rounded-full transition-colors ${
+                channel === f.key
+                  ? 'bg-un1t-white text-un1t-black'
+                  : 'border border-un1t-gray text-un1t-light hover:text-un1t-white hover:border-un1t-white/30'
+              }`}
+            >
+              {f.label}
+            </Link>
+          ))}
+        </div>
+      )}
+
+      {(channel === 'all' || channel === 'email') && (emailRes.data?.length ?? 0) > 0 && (
+        <section className="mb-6">
+          {channel === 'all' && (
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light mb-2 inline-flex items-center gap-2">
+              <Mail size={12} /> Email
+            </h3>
+          )}
+          <div className="bg-un1t-dark border border-un1t-gray rounded-2xl divide-y divide-un1t-gray">
+            {emailRes.data.map(t => (
+              <Link
+                key={`e-${t.id}`}
+                href={`/email/templates/${t.id}`}
+                className="flex items-center justify-between px-5 py-3 hover:bg-un1t-gray/20"
+              >
+                <div className="flex items-center gap-4 min-w-0">
+                  <div className="w-9 h-9 rounded-lg bg-blue-500/15 flex items-center justify-center shrink-0">
+                    <Mail size={16} className="text-blue-400" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium truncate">{t.name}</p>
+                    <p className="text-xs text-un1t-light truncate">{t.subject || 'No subject'}</p>
+                  </div>
+                </div>
+                <span className="text-[11px] text-un1t-mid">{new Date(t.updated_at).toLocaleDateString()}</span>
+              </Link>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {(channel === 'all' || channel === 'whatsapp') && (waRes.data?.length ?? 0) > 0 && (
+        <section className="mb-6">
+          {channel === 'all' && (
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light mb-2 inline-flex items-center gap-2">
+              <MessageCircle size={12} /> WhatsApp
+            </h3>
+          )}
+          <div className="bg-un1t-dark border border-un1t-gray rounded-2xl divide-y divide-un1t-gray">
+            {waRes.data.map(t => (
+              <Link
+                key={`w-${t.id}`}
+                href={`/whatsapp/templates/${t.id}`}
+                className="flex items-center justify-between px-5 py-3 hover:bg-un1t-gray/20"
+              >
+                <div className="flex items-center gap-4 min-w-0">
+                  <div className="w-9 h-9 rounded-lg bg-green-500/15 flex items-center justify-center shrink-0">
+                    <MessageCircle size={16} className="text-green-400" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium truncate">{t.name}</p>
+                    <p className="text-xs text-un1t-light truncate">
+                      {t.category} · {t.language} · <span className={t.status === 'APPROVED' ? 'text-green-500' : 'text-un1t-mid'}>{t.status}</span>
+                    </p>
+                  </div>
+                </div>
+                <span className="text-[11px] text-un1t-mid">{new Date(t.updated_at).toLocaleDateString()}</span>
+              </Link>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {((emailRes.data?.length ?? 0) === 0) && ((waRes.data?.length ?? 0) === 0) && (
+        <div className="bg-un1t-dark border border-un1t-gray rounded-2xl p-10 text-center">
+          <FileText size={32} className="mx-auto mb-3 text-un1t-light" />
+          <h3 className="text-base font-semibold mb-2">No templates yet</h3>
+          <p className="text-sm text-un1t-light">Create your first reusable email or WhatsApp template using the buttons above.</p>
+        </div>
+      )}
+    </div>
+  )
+}
