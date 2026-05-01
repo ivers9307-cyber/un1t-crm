@@ -7,10 +7,6 @@
     {
       "path": "/api/cron/prune-rate-limits",
       "schedule": "30 3 * * *"
-    },
-    {
-      "path": "/api/cron/run-sequences",
-      "schedule": "*/5 * * * *"
     }
   ]
 }
