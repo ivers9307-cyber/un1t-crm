@@ -356,6 +356,54 @@ export function computeReportMetrics(cars, opts = {}) {
   const newCount = list.filter(c => c.status === 'new').length
   const pendingCount = list.filter(c => c.status === 'pending').length
 
+  // ── Reports v2: rolling 12-month performance + oldest VAT ────────
+  //
+  // monthlyPerformance: 12 buckets ending at the current month,
+  // including months with zero activity. Each bucket carries
+  // completedCount / revenue / profit / vatRefunded so the UI can
+  // render a chart + table from a single array.
+  const months = []
+  for (let i = 11; i >= 0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1)
+    const startIso = d.toISOString()
+    const endIso = new Date(d.getFullYear(), d.getMonth() + 1, 1).toISOString()
+    const completedInMonth = completed.filter(c =>
+      c.completed_at && c.completed_at >= startIso && c.completed_at < endIso)
+    const refundedInMonth = list.filter(c =>
+      c.uk_vat_refund_received
+      && c.uk_vat_refund_received_at
+      && c.uk_vat_refund_received_at >= startIso
+      && c.uk_vat_refund_received_at < endIso)
+    months.push({
+      key: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`,
+      label: d.toLocaleDateString(undefined, { month: 'short', year: '2-digit' }),
+      completedCount: completedInMonth.length,
+      revenue: Math.round(sumRevenue(completedInMonth) * 100) / 100,
+      profit: Math.round(sumProfit(completedInMonth) * 100) / 100,
+      ukVatRefunded: Math.round(
+        refundedInMonth.reduce((s, c) => s + Number(c.uk_vat || 0), 0) * 100,
+      ) / 100,
+    })
+  }
+
+  // oldestOutstandingVat: the longest-unrefunded UK VAT row across
+  // every status. Surfaces "HMRC has been sitting on £X for Y days"
+  // — useful for nudging your accountant to chase.
+  const outstandingRows = list
+    .filter(c => !c.uk_vat_refund_received && Number(c.uk_vat || 0) > 0 && c.created_at)
+    .map(c => ({
+      car_id: c.id,
+      uk_reg: c.uk_reg,
+      vin: c.vin,
+      make: c.make,
+      model: c.model,
+      uk_vat: Number(c.uk_vat),
+      created_at: c.created_at,
+      ageDays: Math.floor((now.getTime() - new Date(c.created_at).getTime()) / MS_PER_DAY),
+    }))
+    .sort((a, b) => a.created_at.localeCompare(b.created_at)) // oldest first
+  const oldestOutstandingVat = outstandingRows[0] || null
+
   return {
     asOf: now.toISOString(),
     cash: {
@@ -382,5 +430,9 @@ export function computeReportMetrics(cars, opts = {}) {
       avgCycleDays: avgCycleDays == null ? null : Math.round(avgCycleDays * 10) / 10,
     },
     costBreakdownYtd,
+    // v2 additions
+    monthlyPerformance: months,
+    oldestOutstandingVat,
+    outstandingVatList: outstandingRows.slice(0, 50),
   }
 }
