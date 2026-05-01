@@ -14,7 +14,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { createOrder, RevolutError } from '@/lib/revolut'
+import { createOrder, getOrder, RevolutError } from '@/lib/revolut'
 import { getAppUrl, getRequestOrigin } from '@/lib/app-url'
 
 export const runtime = 'nodejs'
@@ -75,14 +75,35 @@ export async function POST(request, { params }) {
     deposit_status: car.deposit_status === 'paid' ? 'paid' : 'terms_accepted',
   }
 
-  // 2. Revolut order. Reuse if we already created one for this token
-  //    AND we still have a checkout URL to hand back. (We don't
-  //    GET-verify the order's state with Revolut here — adds a round
-  //    trip. If the URL is stale Revolut shows its own error page.)
+  // 2. Revolut order. We return three handles to the frontend so it
+  //    can drive the embedded card field (createCardField from the
+  //    @revolut/checkout SDK):
+  //      - public_id:    the SDK token, from the order response
+  //      - checkout_url: hosted-page fallback if the SDK fails to load
+  //      - order_id:     for our own audit trail
+  //    Reuse the existing order if one already exists for this token
+  //    AND we still have a public_id (i.e. it was created post-this-
+  //    refactor). Older deposits may only have a checkout_url; in
+  //    that case we'd need to recreate to get a fresh token, but
+  //    that's a rare migration case — leave it for now.
   let checkoutUrl = car.deposit_revolut_checkout_url
   let orderId = car.deposit_revolut_order_id
+  let publicId = null
 
-  if (!checkoutUrl) {
+  // For an existing order, re-fetch from Revolut to get the public_id
+  // (we don't store it locally). Cheap — one extra GET on a retry.
+  if (orderId && checkoutUrl && car.deposit_status !== 'paid') {
+    try {
+      const existing = await getOrder(orderId)
+      publicId = existing?.public_id || null
+    } catch {
+      // If the order is gone (rare) fall through and create a new one.
+      orderId = null
+      checkoutUrl = null
+    }
+  }
+
+  if (!publicId) {
     let baseUrl
     try { baseUrl = getAppUrl() } catch { baseUrl = getRequestOrigin(request) }
     const amountMinor = Math.round(Number(car.deposit_amount || 500) * 100)
@@ -93,6 +114,7 @@ export async function POST(request, { params }) {
         currency: 'EUR',
         description: `Car deposit — ${carLabel}`,
         captureMode: 'AUTOMATIC',
+        // redirect_url still set so the hosted-page fallback works.
         redirectUrl: `${baseUrl}/cars/deposit/${car.deposit_token}/return`,
         metadata: {
           car_id: car.id,
@@ -101,9 +123,10 @@ export async function POST(request, { params }) {
         },
         idempotencyKey: `deposit-${car.deposit_token}`,
       })
+      publicId = order?.public_id
       checkoutUrl = order?.checkout_url
       orderId = order?.id
-      if (!checkoutUrl) throw new Error('Revolut returned no checkout URL')
+      if (!publicId) throw new Error('Revolut returned no public_id')
       acceptanceUpdates.deposit_revolut_order_id = orderId
       acceptanceUpdates.deposit_revolut_checkout_url = checkoutUrl
     } catch (e) {
@@ -122,7 +145,8 @@ export async function POST(request, { params }) {
 
   return NextResponse.json({
     success: true,
-    checkout_url: checkoutUrl,
+    public_id: publicId,        // SDK token for createCardField()
+    checkout_url: checkoutUrl,  // hosted-page fallback
     order_id: orderId,
   })
 }
