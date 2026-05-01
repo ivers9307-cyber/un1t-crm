@@ -34,6 +34,7 @@ export default async function PipelinePage() {
       <KanbanBoard
         initialStages={stagesRes.data || []}
         initialDeals={dealsRes.data || []}
+        locationId={locationId}
       />
     </div>
   )

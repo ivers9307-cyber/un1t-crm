@@ -16,7 +16,7 @@ const stageColors = {
   returning_member: '#6366F1',
 }
 
-export default function KanbanBoard({ initialStages, initialDeals }) {
+export default function KanbanBoard({ initialStages, initialDeals, locationId }) {
   const [deals, setDeals] = useState(initialDeals)
   const [draggedDeal, setDraggedDeal] = useState(null)
   const [dragOverStage, setDragOverStage] = useState(null)
@@ -77,7 +77,7 @@ export default function KanbanBoard({ initialStages, initialDeals }) {
                   onDragEnd={() => { setDraggedDeal(null); setDragOverStage(null) }}
                   className={`${draggedDeal?.id === deal.id ? 'opacity-40' : ''}`}
                 >
-                  <DealCard deal={deal} />
+                  <DealCard deal={deal} locationId={locationId} />
                 </div>
               ))}
             </div>

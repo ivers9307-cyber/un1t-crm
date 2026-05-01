@@ -1,12 +1,13 @@
 'use client'
 
 import { useState } from 'react'
-import { Plus } from 'lucide-react'
+import { Plus, Mail } from 'lucide-react'
 import { createBrowserClient } from '@/lib/supabase'
 import { useRouter } from 'next/navigation'
+import SequencePicker from './SequencePicker'
 
 export default function ContactActions({ contactId, locationId }) {
-  const [showForm, setShowForm] = useState(null) // 'note' | 'activity' | null
+  const [showForm, setShowForm] = useState(null) // 'note' | 'activity' | 'sequence' | null
   const [saving, setSaving] = useState(false)
   const router = useRouter()
   const db = createBrowserClient()
@@ -51,6 +52,10 @@ export default function ContactActions({ contactId, locationId }) {
           className="text-xs px-2.5 py-1 rounded border border-un1t-gray text-un1t-light hover:text-un1t-white hover:border-un1t-mid flex items-center gap-1">
           <Plus size={12} /> Activity
         </button>
+        <button onClick={() => setShowForm(showForm === 'sequence' ? null : 'sequence')}
+          className="text-xs px-2.5 py-1 rounded border border-un1t-gray text-un1t-light hover:text-un1t-white hover:border-un1t-mid flex items-center gap-1">
+          <Mail size={12} /> Sequence
+        </button>
       </div>
 
       {showForm === 'note' && (
@@ -65,6 +70,17 @@ export default function ContactActions({ contactId, locationId }) {
             </button>
           </div>
         </form>
+      )}
+
+      {showForm === 'sequence' && (
+        <div className="absolute right-0 top-10 z-10">
+          <SequencePicker
+            contactIds={[contactId]}
+            locationId={locationId}
+            variant="popover"
+            onClose={() => setShowForm(null)}
+          />
+        </div>
       )}
 
       {showForm === 'activity' && (
