@@ -56,10 +56,12 @@ export default function Home() {
   const [refreshKey, setRefreshKey] = useState(0)
   const [refreshing, setRefreshing] = useState(false)
 
-  // Filter segments to those the user has permission for.
+  // Filter segments to those the user has permission for at the
+  // active location. Location-level feature gate (migration 032)
+  // is honoured by canDashboard's third arg.
   const available = useMemo(
-    () => SEGMENTS.filter(s => canDashboard(profile, s.perm)),
-    [profile]
+    () => SEGMENTS.filter(s => canDashboard(profile, s.perm, activeLocation)),
+    [profile, activeLocation]
   )
 
   // Default to the LAST available segment so owners land on Business
@@ -80,7 +82,9 @@ export default function Home() {
   const firstName = profile.full_name?.split(' ')[0] || 'there'
 
   // No mobile features at all — show the existing onboarding nudge.
-  if (!hasAnyMobileFeature(profile)) {
+  // Honours the location gate so a user whose features are all
+  // disabled at this studio sees the same nudge.
+  if (!hasAnyMobileFeature(profile, activeLocation)) {
     return (
       <ScrollView className="flex-1 bg-un1t-black" contentContainerClassName="p-6">
         <Text className="text-3xl font-bold text-un1t-white mb-1">Hi {firstName}</Text>

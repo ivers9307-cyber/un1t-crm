@@ -1,7 +1,9 @@
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { redirect, notFound } from 'next/navigation'
+import { ToggleRight } from 'lucide-react'
 import LocationForm from '@/components/LocationForm'
+import LocationFeatures from '@/components/LocationFeatures'
 
 export const dynamic = 'force-dynamic'
 
@@ -23,6 +25,14 @@ export default async function EditLocationPage({ params }) {
       <h2 className="text-2xl font-bold mb-1">Edit Location</h2>
       <p className="text-sm text-un1t-light mb-6">Update {location.name} details and integrations</p>
       <LocationForm location={location} />
+
+      <section className="mt-10">
+        <div className="flex items-center gap-2 mb-3">
+          <ToggleRight size={16} className="text-un1t-light" />
+          <h3 className="text-lg font-semibold">Features</h3>
+        </div>
+        <LocationFeatures location={location} />
+      </section>
     </div>
   )
 }

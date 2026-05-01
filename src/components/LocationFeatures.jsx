@@ -1,0 +1,143 @@
+'use client'
+
+// Per-location feature gates (migration 032). Owner-only edit.
+//
+// Toggling a feature OFF here disables it for every user at this
+// location, regardless of their role default or per-user permission.
+// Notification preferences (notify_*) are NOT location-gated — they
+// stay user-controlled — and are filtered out below.
+//
+// Save model: each toggle writes the full features map back to the
+// row. We use the browser Supabase client; RLS restricts updates to
+// location members, and the page itself is owner-gated by the
+// settings → locations route.
+
+import { useState } from 'react'
+import { useRouter } from 'next/navigation'
+import { Check, AlertCircle } from 'lucide-react'
+import { createBrowserClient } from '@/lib/supabase'
+import { WEB_PERMISSIONS, MOBILE_PERMISSIONS, isFeatureGatedByLocation } from '@shared/permissions'
+
+// Resolve current state of a key — explicit false → off, anything
+// else (true OR missing) → on. Mirrors isFeatureEnabledAtLocation
+// in shared/permissions.js (kept inline so the toggle UI is fully
+// self-contained).
+function isOn(features, key) {
+  return features?.[key] !== false
+}
+
+function FeatureToggle({ on, onToggle, busy, label, hint }) {
+  return (
+    <div className="flex items-start justify-between gap-3 py-2">
+      <div className="flex-1 min-w-0">
+        <div className="text-sm text-un1t-white">{label}</div>
+        {hint && <div className="text-[11px] text-un1t-light mt-0.5">{hint}</div>}
+      </div>
+      <button
+        type="button"
+        onClick={onToggle}
+        disabled={busy}
+        className={`shrink-0 w-10 h-5 rounded-full transition-colors disabled:opacity-40 ${on ? 'bg-green-500' : 'bg-un1t-gray'}`}
+        aria-pressed={on}
+      >
+        <div className={`w-4 h-4 rounded-full bg-white transition-transform ${on ? 'translate-x-5' : 'translate-x-0.5'}`} />
+      </button>
+    </div>
+  )
+}
+
+export default function LocationFeatures({ location }) {
+  const router = useRouter()
+  const [features, setFeatures] = useState(location.features || {})
+  const [busyKey, setBusyKey] = useState(null)
+  const [error, setError] = useState(null)
+  const [savedAt, setSavedAt] = useState(null)
+
+  const db = createBrowserClient()
+
+  // Filter out notification keys — those are personal preferences,
+  // not something a location admin should override.
+  const webFeatures = WEB_PERMISSIONS.filter(p => isFeatureGatedByLocation(p.key))
+  const mobileFeatures = MOBILE_PERMISSIONS.filter(p => isFeatureGatedByLocation(p.key))
+
+  async function toggle(key) {
+    setBusyKey(key); setError(null)
+    const next = { ...features, [key]: !isOn(features, key) }
+    // Optimistic update — revert on failure.
+    setFeatures(next)
+    try {
+      const { error: upErr } = await db
+        .from('locations')
+        .update({ features: next, updated_at: new Date().toISOString() })
+        .eq('id', location.id)
+      if (upErr) {
+        setError(upErr.message)
+        setFeatures(features) // revert
+        return
+      }
+      setSavedAt(new Date())
+      // Refresh server components so the gate takes effect immediately
+      // for the operator (their own activeLocation will pick up the
+      // new features map on next render).
+      router.refresh()
+    } finally {
+      setBusyKey(null)
+    }
+  }
+
+  return (
+    <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5 space-y-5">
+      <div>
+        <p className="text-xs text-un1t-light">
+          Toggle features off to hide them for every user at this location.
+          User-level permissions and role defaults are still applied <em>within</em> the features that are on.
+        </p>
+        {error && (
+          <div className="mt-3 bg-red-500/10 border border-red-500/30 text-red-400 text-xs rounded-md p-2 flex items-start gap-2">
+            <AlertCircle size={12} className="mt-0.5" /> {error}
+          </div>
+        )}
+        {savedAt && !error && (
+          <div className="mt-3 text-[11px] text-green-500 inline-flex items-center gap-1">
+            <Check size={11} /> Saved at {savedAt.toLocaleTimeString()}
+          </div>
+        )}
+      </div>
+
+      <section>
+        <h4 className="text-xs font-semibold uppercase tracking-wider text-un1t-light mb-2">Web features</h4>
+        <div className="divide-y divide-un1t-gray/40 border border-un1t-gray rounded-md px-3">
+          {webFeatures.map(f => (
+            <FeatureToggle
+              key={`web-${f.key}`}
+              on={isOn(features, f.key)}
+              onToggle={() => toggle(f.key)}
+              busy={busyKey === f.key}
+              label={f.label}
+              hint={f.hint}
+            />
+          ))}
+        </div>
+      </section>
+
+      <section>
+        <h4 className="text-xs font-semibold uppercase tracking-wider text-un1t-light mb-2">Mobile features</h4>
+        <p className="text-[11px] text-un1t-light mb-2">
+          Notification preferences (per-user) are intentionally not listed here.
+        </p>
+        <div className="divide-y divide-un1t-gray/40 border border-un1t-gray rounded-md px-3">
+          {mobileFeatures.map(f => (
+            <FeatureToggle
+              key={`mobile-${f.key}`}
+              on={isOn(features, f.key)}
+              onToggle={() => toggle(f.key)}
+              busy={busyKey === f.key}
+              label={f.label}
+              hint={f.hint}
+            />
+          ))}
+        </div>
+      </section>
+    </div>
+  )
+}

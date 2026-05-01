@@ -142,6 +142,49 @@ export const CROSS_PLATFORM_DASHBOARD_KEYS = Object.freeze([
   'dashboard_business',
 ])
 
+// ============================================================
+// Per-location feature gate
+//
+// Migration 032 added `locations.features` (JSONB). Owners flip
+// individual feature keys to false on a per-location basis to
+// disable that feature for everyone at that studio, regardless of
+// per-user permissions or role defaults.
+//
+// Resolution: missing key OR explicit true → ENABLED at location;
+//             explicit false                → DENIED at location.
+//
+// User-level notification preferences (notify_*) remain user-only
+// even when the parent feature is enabled at location level — the
+// owner shouldn't dictate which alerts a user wants. NOTIFY_KEYS
+// is the set we exempt; isFeatureGatedByLocation() answers the
+// gating question for any given key.
+// ============================================================
+
+export const NOTIFY_KEYS = Object.freeze(
+  MOBILE_PERMISSIONS.filter(p => p.isNotify).map(p => p.key)
+)
+
+export function isFeatureGatedByLocation(key) {
+  // Notification preferences are personal — never location-gated.
+  return !NOTIFY_KEYS.includes(key)
+}
+
+/**
+ * Returns true iff this feature key is enabled at the given location
+ * (or the location object is null/undefined — defensive default
+ * matches "no location info → don't block").
+ *
+ * @param {{features?: object} | null | undefined} location
+ * @param {string} key
+ */
+export function isFeatureEnabledAtLocation(location, key) {
+  if (!isFeatureGatedByLocation(key)) return true
+  const features = location?.features || {}
+  // Missing key OR explicit true → enabled.
+  // Only an explicit `false` denies.
+  return features[key] !== false
+}
+
 // Convenience exports — saves callers from doing array-to-set work.
 export const WEB_PERMISSION_KEYS = Object.freeze(
   WEB_PERMISSIONS.map(p => p.key)

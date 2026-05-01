@@ -18,13 +18,13 @@ import { canMobile } from '../../lib/permissions'
 import { registerForPushNotifications } from '../../lib/push-register'
 
 export default function TabsLayout() {
-  const { session, profile, loading } = useAuth()
+  const { session, profile, activeLocation, loading } = useAuth()
   const pushRegistered = useRef(false)
 
   useEffect(() => {
     if (
       profile &&
-      canMobile(profile, 'push_notifications') &&
+      canMobile(profile, 'push_notifications', activeLocation) &&
       !pushRegistered.current
     ) {
       pushRegistered.current = true
@@ -32,16 +32,17 @@ export default function TabsLayout() {
         // Best-effort — never block the UI on push registration.
       })
     }
-  }, [profile])
+  }, [profile, activeLocation])
 
   if (loading) return null
   if (!session) return <Redirect href="/(auth)/login" />
 
   // Sensible defaults for users whose admin hasn't enabled anything yet:
   // Home + More remain visible so they can see their info and sign out.
-  const showSchedule = canMobile(profile, 'schedule')
-  const showPipeline = canMobile(profile, 'pipeline')
-  const showWhatsapp = canMobile(profile, 'whatsapp')
+  // Location gate (mig 032) honoured via canMobile's third arg.
+  const showSchedule = canMobile(profile, 'schedule', activeLocation)
+  const showPipeline = canMobile(profile, 'pipeline', activeLocation)
+  const showWhatsapp = canMobile(profile, 'whatsapp', activeLocation)
 
   return (
     <Tabs

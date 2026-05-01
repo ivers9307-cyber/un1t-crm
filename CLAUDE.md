@@ -284,6 +284,28 @@ Add a new public endpoint? Wire the limiter at the top of the handler with a uni
 | Manage staff (create / edit / deactivate) | ✓ | ✗ | ✗ | ✗ |
 | Settings / branding | ✓ | ✗ | ✗ | ✗ |
 | Assistant tools (write actions) | varies — see `TOOL_PERMISSIONS` in `src/app/api/assistant/chat/route.js` |
+| Edit per-location feature gates (Settings → Locations → Features) | ✓ | ✗ | ✗ | ✗ |
+
+### Per-location feature gates (migration 032)
+
+Each location row has a `features JSONB` column that gates feature visibility for every user at that location. Three-tier resolution in `hasPermission(user, key)`:
+
+1. **Location gate** — `user.activeLocation.features[key] === false` → DENIED. Notification keys (`notify_*` + anything in `NOTIFY_KEYS`) are exempt — those stay personal.
+2. **User override** — `user.permissions[key] === true | false` → that wins.
+3. **Role default** — fall back to `DEFAULT_WEB_PERMISSIONS_BY_ROLE[role][key]`.
+
+Same logic mirrored in `mobile/lib/permissions.js` (`canMobile`, `canDashboard`, `hasAnyMobileFeature` all take `activeLocation` as the third arg). The mobile `/api/mobile/me` endpoint serialises `features` onto every location.
+
+**Default state.** A row with `features = {}` (the column default) means every feature is enabled — this preserves existing behaviour for all rows post-migration. Owners opt OUT of features they don't want at a particular studio by toggling them off in Settings → Locations → [location] → Features.
+
+**Owner-only.** Editing `locations.features` is gated by the existing `user.role === 'owner'` check on the location edit page. RLS allows location members to UPDATE the row generally, but the UI for the Features section only renders for owners.
+
+**Helpers (`shared/permissions.js`):**
+- `isFeatureEnabledAtLocation(location, key)` — primary gate check
+- `isFeatureGatedByLocation(key)` — false for notification keys (always personal)
+- `NOTIFY_KEYS` — derived from `MOBILE_PERMISSIONS.filter(p => p.isNotify)`
+
+Multi-location users: `activeLocation` determines which gate applies. Switching locations re-evaluates everything.
 
 ## Coding conventions
 

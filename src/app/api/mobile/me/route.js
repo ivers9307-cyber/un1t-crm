@@ -43,6 +43,11 @@ export async function GET() {
         name: l.name,
         slug: l.slug,
         country: l.country || null,
+        // Per-location feature gate (migration 032). Mobile reads
+        // this via canMobile()/canDashboard() so a feature switched
+        // off at the user's active location is hidden from every
+        // user there regardless of role default.
+        features: l.features || {},
       })),
       activeLocation: user.activeLocation
         ? {
@@ -50,6 +55,7 @@ export async function GET() {
             name: user.activeLocation.name,
             slug: user.activeLocation.slug,
             country: user.activeLocation.country || null,
+            features: user.activeLocation.features || {},
           }
         : null,
     },
