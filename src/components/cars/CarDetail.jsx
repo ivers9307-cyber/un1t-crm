@@ -9,10 +9,10 @@
 //               completionGaps() — UI mirrors the API check.
 //   completed → read-only summary
 
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { ArrowLeft, ChevronRight, Trash2, FileText, Upload, Check, X, AlertCircle, Receipt, Send, RefreshCw, FileDown } from 'lucide-react'
+import { ArrowLeft, ChevronRight, Trash2, FileText, Upload, Check, X, AlertCircle, Receipt, Send, RefreshCw, FileDown, Search } from 'lucide-react'
 import { ALL_DOCUMENT_TYPES, REQUIRED_DOCUMENT_TYPES, completionGaps, profitBreakdown, COST_FIELDS, applyIrishVat, salePriceToExVat, splitIrishPrice, IRISH_VAT_RATE, DEFAULT_GBP_TO_EUR } from '@/lib/cars'
 
 export default function CarDetail({ car: initialCar, liveFxRate = null, fxFetchedAt = null }) {
@@ -332,13 +332,131 @@ function CarFieldsCard({ car, patch, disabled, liveFxRate, fxFetchedAt }) {
 function BuyerCard({ car, patch, disabled }) {
   return (
     <div className="bg-un1t-dark border border-un1t-gray rounded-2xl p-5 mb-4">
-      <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light mb-3">Buyer</h3>
+      <div className="flex items-center justify-between mb-3 gap-2">
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light">Buyer</h3>
+        {!disabled && <XeroContactSearch carId={car.id} onPick={c => patch(c)} />}
+      </div>
       <div className="space-y-2">
         <InlineField label="Name"    value={car.buyer_name}    onSave={v => patch({ buyer_name: v })} disabled={disabled} />
         <InlineField label="Email"   value={car.buyer_email}   onSave={v => patch({ buyer_email: v })} disabled={disabled} />
         <InlineField label="Phone"   value={car.buyer_phone}   onSave={v => patch({ buyer_phone: v })} disabled={disabled} />
         <InlineField label="Address" value={car.buyer_address} multiline onSave={v => patch({ buyer_address: v })} disabled={disabled} />
       </div>
+    </div>
+  )
+}
+
+// Live search-as-you-type against the location's Xero org. Type 2+
+// chars → debounced fetch → dropdown of matching Xero contacts.
+// Picking one patches buyer_name / email / phone / address in a
+// single PATCH so the operator doesn't have to copy/paste from
+// Xero. Manual entry still works — just don't pick from the list.
+function XeroContactSearch({ carId, onPick }) {
+  const [open, setOpen] = useState(false)
+  const [query, setQuery] = useState('')
+  const [results, setResults] = useState([])
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState(null)
+  const inputRef = useRef(null)
+  const ref = useRef(null)
+
+  // Close on outside click.
+  useEffect(() => {
+    if (!open) return
+    function onClick(e) {
+      if (ref.current && !ref.current.contains(e.target)) setOpen(false)
+    }
+    document.addEventListener('mousedown', onClick)
+    return () => document.removeEventListener('mousedown', onClick)
+  }, [open])
+
+  // Debounced search — 300ms after typing stops, 2+ chars required.
+  useEffect(() => {
+    if (!open) return
+    const q = query.trim()
+    if (q.length < 2) { setResults([]); setError(null); return }
+    const id = setTimeout(async () => {
+      setLoading(true); setError(null)
+      try {
+        const res = await fetch(`/api/cars/${carId}/xero-contact-search?q=${encodeURIComponent(q)}`)
+        const j = await res.json()
+        if (j.success) setResults(j.contacts || [])
+        else setError(j.error || 'Search failed')
+      } catch (e) {
+        setError(e.message)
+      } finally {
+        setLoading(false)
+      }
+    }, 300)
+    return () => clearTimeout(id)
+  }, [query, open, carId])
+
+  function pick(c) {
+    onPick({
+      buyer_name: c.name || null,
+      buyer_email: c.email || null,
+      buyer_phone: c.phone || null,
+      buyer_address: c.address || null,
+    })
+    setOpen(false)
+    setQuery('')
+    setResults([])
+  }
+
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        type="button"
+        onClick={() => {
+          setOpen(o => !o)
+          // Focus the input on next tick so it works on first click.
+          setTimeout(() => inputRef.current?.focus(), 0)
+        }}
+        className="text-xs inline-flex items-center gap-1 px-2 py-1 rounded-md bg-un1t-gray/40 text-un1t-light hover:bg-un1t-gray hover:text-un1t-white"
+        title="Search existing Xero customers and pre-fill the buyer fields"
+      >
+        <Search size={11} /> Lookup in Xero
+      </button>
+
+      {open && (
+        <div className="absolute right-0 top-full mt-1 w-80 bg-un1t-dark border border-un1t-gray rounded-lg shadow-xl z-40">
+          <div className="p-2 border-b border-un1t-gray">
+            <input
+              ref={inputRef}
+              value={query}
+              onChange={e => setQuery(e.target.value)}
+              placeholder="Search by name or email…"
+              className="w-full bg-un1t-black border border-un1t-gray rounded-md px-2.5 py-1.5 text-xs text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-light"
+            />
+          </div>
+          <div className="max-h-72 overflow-auto">
+            {loading && <p className="px-3 py-2 text-xs text-un1t-light">Searching Xero…</p>}
+            {error && <p className="px-3 py-2 text-xs text-red-400">{error}</p>}
+            {!loading && !error && query.trim().length < 2 && (
+              <p className="px-3 py-2 text-xs text-un1t-light">Type 2+ characters to search.</p>
+            )}
+            {!loading && !error && query.trim().length >= 2 && results.length === 0 && (
+              <p className="px-3 py-2 text-xs text-un1t-light">
+                No matches. Type the buyer&rsquo;s details manually below — they&rsquo;ll be created in Xero on Issue Invoice.
+              </p>
+            )}
+            {results.map(c => (
+              <button
+                key={c.id}
+                onClick={() => pick(c)}
+                className="block w-full text-left px-3 py-2 hover:bg-un1t-gray/40 border-b border-un1t-gray/40 last:border-0"
+              >
+                <div className="text-sm text-un1t-white truncate">{c.name}</div>
+                <div className="text-[11px] text-un1t-light truncate">
+                  {c.email || '(no email)'}
+                  {c.phone && <> · {c.phone}</>}
+                </div>
+                {c.address && <div className="text-[11px] text-un1t-mid truncate">{c.address}</div>}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   )
 }
