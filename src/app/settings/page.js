@@ -3,7 +3,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
-import { Users, MapPin, Shield, Clock, Palette, CalendarDays, Plug } from 'lucide-react'
+import { Users, MapPin, Shield, Clock, Palette, CalendarDays, Plug, UserCog } from 'lucide-react'
 import BrandingSettings from '@/components/BrandingSettings'
 
 export const dynamic = 'force-dynamic'
@@ -187,6 +187,29 @@ export default async function SettingsPage() {
           <p className="text-sm text-un1t-light">Irish public holidays are highlighted on the schedule automatically. Add custom closures (Good Friday, Christmas Eve early-close) per location.</p>
         </div>
       </div>
+
+      {/* Master tools — view-as-user picker. Visible only to masters
+          (or someone currently impersonating, so they can switch
+          targets from this page too). */}
+      {(user.role === 'master' || user.impersonatingFrom) && (
+        <div className="mb-10">
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-2">
+              <UserCog size={18} className="text-amber-400" />
+              <h3 className="text-lg font-semibold">Master tools</h3>
+            </div>
+            <Link
+              href="/settings/impersonate"
+              className="text-xs bg-amber-500 text-un1t-black px-3 py-1.5 rounded-md hover:bg-amber-400 transition-colors font-medium"
+            >
+              View as user
+            </Link>
+          </div>
+          <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5">
+            <p className="text-sm text-un1t-light">Sign in as another user to debug their experience. Every session is audited.</p>
+          </div>
+        </div>
+      )}
 
       {/* Integrations Section */}
       <div className="mb-10">

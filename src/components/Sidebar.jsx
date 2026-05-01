@@ -6,10 +6,12 @@ import { usePathname, useRouter } from 'next/navigation'
 import { LayoutDashboard, Users, Columns3, CheckSquare, Calendar, BookOpen, Mail, MessageCircle, CalendarClock, Settings, LogOut, Car } from 'lucide-react'
 import { createBrowserClient } from '@/lib/supabase'
 import LocationSwitcher from './LocationSwitcher'
+import ImpersonatePicker from './ImpersonatePicker'
 import clsx from 'clsx'
 import { DEFAULT_WEB_PERMISSIONS_BY_ROLE } from '@shared/permissions'
 
 const roleLabels = {
+  master: 'Master',
   owner: 'Owner',
   manager: 'Manager',
   head_coach: 'Head Coach',
@@ -137,6 +139,16 @@ export default function Sidebar({ user }) {
           )
         })}
       </nav>
+
+      {/* Master-only impersonation picker. Visible while a real
+          master session is active, OR while currently impersonating
+          (so the master can cycle to a different user without
+          stopping first). */}
+      {(user?.role === 'master' || user?.impersonatingFrom) && (
+        <div className="border-t border-un1t-gray py-2">
+          <ImpersonatePicker />
+        </div>
+      )}
 
       {/* User + Logout */}
       <div className="border-t border-un1t-gray p-4">

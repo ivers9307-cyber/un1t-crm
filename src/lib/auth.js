@@ -84,20 +84,54 @@ export async function getCurrentUser() {
     process.env.SUPABASE_SERVICE_ROLE_KEY
   )
 
-  // Get profile
-  const { data: profile } = await db
+  // Get the REAL profile first (the underlying logged-in user).
+  const { data: realProfile } = await db
     .from('profiles')
     .select('*')
     .eq('id', user.id)
     .single()
 
-  if (!profile) return null
+  if (!realProfile) return null
 
-  // Get assigned locations
+  // Master impersonation (mig 035). If a `un1t_impersonate` cookie
+  // is set AND the underlying session belongs to a master, swap to
+  // the target profile so the rest of the app sees what they'd see.
+  // The original master identity is exposed as `impersonatingFrom`
+  // so the banner / debug tools can show it.
+  let profile = realProfile
+  let impersonatingFrom = null
+  if (realProfile.role === 'master') {
+    // Lazy import to avoid pulling next/headers into non-RSC contexts
+    // that import from this module.
+    const { readImpersonationCookie } = await import('./impersonation.js')
+    const targetId = readImpersonationCookie()
+    if (targetId && targetId !== realProfile.id) {
+      const { data: target } = await db
+        .from('profiles')
+        .select('*')
+        .eq('id', targetId)
+        .single()
+      if (target) {
+        profile = target
+        impersonatingFrom = {
+          masterId: realProfile.id,
+          masterName: realProfile.full_name,
+          masterEmail: realProfile.email,
+        }
+      }
+    }
+  }
+
+  // Get assigned locations — keyed off the EFFECTIVE profile id
+  // (the impersonated user's, when an impersonation cookie is in
+  // effect). The master's own profile_locations rows aren't loaded
+  // here because they're irrelevant to the experience we're trying
+  // to replicate.
+  const effectiveProfileId = profile.id
   const { data: locationLinks } = await db
     .from('profile_locations')
     .select('*, locations(*)')
-    .eq('profile_id', user.id)
+    .eq('profile_id', effectiveProfileId)
 
   let locations = (locationLinks || []).map(pl => pl.locations).filter(Boolean)
 
@@ -149,6 +183,11 @@ export async function getCurrentUser() {
     user,
     locations,
     activeLocation,
+    // Set when a master is impersonating another user. The banner
+    // + the API endpoints / sidebar entries read this to show the
+    // 'Stop impersonating' UI and to know who the real caller is
+    // for audit purposes.
+    impersonatingFrom,
   }
 }
 
