@@ -18,7 +18,7 @@ export async function GET(_request, { params }) {
     .select(`
       id, make, model, vehicle_year, uk_reg, irish_reg,
       buyer_name,
-      deposit_token, deposit_amount, deposit_status,
+      deposit_token, deposit_token_expires_at, deposit_amount, deposit_status,
       deposit_terms_accepted_at, deposit_paid_at, deposit_paid_amount,
       locations ( id, name, car_deposit_terms, car_deposit_terms_version )
     `)
@@ -27,6 +27,20 @@ export async function GET(_request, { params }) {
 
   if (!car) {
     return NextResponse.json({ success: false, error: 'Invalid deposit link' }, { status: 404 })
+  }
+
+  // Token expiry — paid deposits stay viewable indefinitely so the
+  // buyer can come back to their receipt. Unpaid expired tokens
+  // return 410 Gone with a specific code so the UI can show a
+  // 'link expired, please ask for a new one' state.
+  if (car.deposit_status !== 'paid' && car.deposit_token_expires_at) {
+    if (new Date(car.deposit_token_expires_at).getTime() <= Date.now()) {
+      return NextResponse.json({
+        success: false,
+        error: 'This deposit link has expired. Please ask the dealer to send you a new one.',
+        code: 'TOKEN_EXPIRED',
+      }, { status: 410 })
+    }
   }
 
   const carLabel = [car.make, car.model, car.vehicle_year]

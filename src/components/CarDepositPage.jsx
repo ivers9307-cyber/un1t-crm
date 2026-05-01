@@ -51,6 +51,7 @@ const REVOLUT_MODE = process.env.NEXT_PUBLIC_REVOLUT_MODE === 'prod' ? 'prod' : 
 export default function CarDepositPage({ token }) {
   const [data, setData] = useState(null)
   const [loadError, setLoadError] = useState(null)
+  const [loadErrorCode, setLoadErrorCode] = useState(null)
   const [accepted, setAccepted] = useState(false)
 
   // 'idle' → 'creating' (POST in flight) → 'card' (field mounted) →
@@ -70,8 +71,12 @@ export default function CarDepositPage({ token }) {
       .then(r => r.json())
       .then(j => {
         if (cancelled) return
-        if (!j.success) setLoadError(j.error || 'Could not load deposit page')
-        else setData(j)
+        if (!j.success) {
+          setLoadError(j.error || 'Could not load deposit page')
+          setLoadErrorCode(j.code || null)
+        } else {
+          setData(j)
+        }
       })
       .catch(e => !cancelled && setLoadError(e.message || 'Network error'))
     return () => { cancelled = true }
@@ -150,7 +155,11 @@ export default function CarDepositPage({ token }) {
       if (!j.success) {
         setPhase('idle')
         setPhaseError(j.error || 'Could not start payment')
-        if (j.code === 'TERMS_VERSION_MISMATCH') window.location.reload()
+        // Either case: the page state is now stale. Reload so the
+        // buyer sees the new terms / the expired-link message.
+        if (j.code === 'TERMS_VERSION_MISMATCH' || j.code === 'TOKEN_EXPIRED') {
+          window.location.reload()
+        }
         return
       }
       if (!j.public_id) {
@@ -184,11 +193,24 @@ export default function CarDepositPage({ token }) {
 
   // ── Render ─────────────────────────────────────────────────────
   if (loadError) {
+    // Expired tokens get a slightly softer treatment — amber, with
+    // explicit ask-the-dealer copy. Other errors stay red.
+    const isExpired = loadErrorCode === 'TOKEN_EXPIRED'
+    const cls = isExpired
+      ? 'bg-amber-50 border-amber-200 text-amber-800'
+      : 'bg-red-50 border-red-200 text-red-700'
     return (
       <Centered>
-        <div className="bg-red-50 border border-red-200 rounded-xl p-6 text-red-700 text-center">
+        <div className={`border rounded-xl p-6 text-center ${cls}`}>
           <AlertCircle className="mx-auto mb-2" size={28} />
-          <p className="font-semibold">{loadError}</p>
+          <p className="font-semibold">
+            {isExpired ? 'This deposit link has expired' : loadError}
+          </p>
+          {isExpired && (
+            <p className="text-sm mt-1">
+              Deposit links are valid for 24 hours. Please contact the dealer to receive a new link.
+            </p>
+          )}
         </div>
       </Centered>
     )

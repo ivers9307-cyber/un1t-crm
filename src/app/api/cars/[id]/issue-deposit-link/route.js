@@ -67,17 +67,34 @@ export async function POST(request, { params }) {
   }
 
   const amount = parsed.data.amount ?? Number(car.deposit_amount) ?? Number(car.locations?.car_deposit_default_amount) ?? 500
-  const token = car.deposit_token || randomUUID()
 
-  // Persist the token + amount + reset status so this issue act
-  // becomes the new source of truth. Acceptance / payment columns
+  // Rotate the token on every issue (mig 047). Each link expires 24h
+  // after this issue, and reissuing invalidates the previous URL —
+  // limits the blast radius if a link is forwarded somewhere it
+  // shouldn't be. Once a deposit is paid, leave the token alone so
+  // the receipt page on the public URL keeps working.
+  const isAlreadyPaid = car.deposit_status === 'paid'
+  const token = isAlreadyPaid && car.deposit_token ? car.deposit_token : randomUUID()
+  const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000
+  const expiresAt = isAlreadyPaid ? car.deposit_token_expires_at : new Date(Date.now() + TWENTY_FOUR_HOURS_MS).toISOString()
+
+  // Persist the token + expiry + amount + reset status so this issue
+  // act becomes the new source of truth. Acceptance / payment columns
   // are NOT cleared — those represent historical evidence for any
   // previous successful deposit that we don't want to lose.
+  // Token rotation also invalidates any in-flight Revolut order id
+  // since it was created against the old token's idempotency key.
   const updates = {
     deposit_token: token,
+    deposit_token_expires_at: expiresAt,
     deposit_amount: amount,
-    deposit_status: car.deposit_status === 'paid' ? 'paid' : 'sent',
+    deposit_status: isAlreadyPaid ? 'paid' : 'sent',
     deposit_link_sent_at: new Date().toISOString(),
+    // Wipe the cached Revolut order so accept-and-pay creates a fresh
+    // one (different idempotency key now). Skipped for already-paid
+    // cars so the receipt links stay intact.
+    deposit_revolut_order_id: isAlreadyPaid ? car.deposit_revolut_order_id : null,
+    deposit_revolut_checkout_url: isAlreadyPaid ? car.deposit_revolut_checkout_url : null,
   }
 
   // Build the link, then dispatch through both channels in parallel
@@ -168,12 +185,33 @@ export async function POST(request, { params }) {
   updates.deposit_link_sent_via = sentVia.join(',')
   await db.from('cars').update(updates).eq('id', car.id)
 
+  // Drop a system note on the car timeline so the operator can copy
+  // the link back later (testing, manual reshare, etc.). Best-effort —
+  // a notes-table failure shouldn't fail the issue flow itself.
+  try {
+    const expiryHint = expiresAt
+      ? ` (expires ${new Date(expiresAt).toLocaleString('en-IE')})`
+      : ''
+    const channelsHint = sentVia.length ? ` Sent via ${sentVia.join(' + ')}.` : ''
+    const errsHint = errors.length ? ` Issues: ${errors.join('; ')}.` : ''
+    await db.from('car_notes').insert({
+      car_id: car.id,
+      location_id: car.location_id,
+      kind: 'system',
+      created_by: user.id,
+      content: `Deposit link issued — €${amount.toFixed(2)}.${channelsHint}${errsHint}\n${link}${expiryHint}`,
+    })
+  } catch (e) {
+    console.warn(`[issue-deposit-link] failed to write car_notes entry: ${e.message}`)
+  }
+
   return NextResponse.json({
     success: true,
     sent_via: sentVia,
     errors,                  // partial failures (email ok, WA failed) — surface but don't block
     link,                    // operator may also copy/share manually
     amount,
+    expires_at: expiresAt,
   })
 }
 

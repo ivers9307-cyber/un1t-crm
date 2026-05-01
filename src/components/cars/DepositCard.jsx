@@ -49,7 +49,10 @@ export default function DepositCard({ car, setCar, setError, disabled, defaultAm
       // Reflect the new state locally so the card updates without a page reload.
       setCar(c => ({
         ...c,
-        deposit_token: c.deposit_token || extractTokenFromLink(j.link),
+        // Token rotates on each issue (mig 047). Pick it from the
+        // returned link rather than reusing the cached value.
+        deposit_token: extractTokenFromLink(j.link) || c.deposit_token,
+        deposit_token_expires_at: j.expires_at || c.deposit_token_expires_at,
         deposit_amount: j.amount,
         deposit_status: c.deposit_status === 'paid' ? 'paid' : 'sent',
         deposit_link_sent_at: new Date().toISOString(),
@@ -128,6 +131,9 @@ export default function DepositCard({ car, setCar, setError, disabled, defaultAm
                   </span>
                 ))}</>
               )}
+              {car.deposit_token_expires_at && (
+                <ExpiryHint expiresAt={car.deposit_token_expires_at} />
+              )}
             </p>
           )}
 
@@ -156,6 +162,21 @@ export default function DepositCard({ car, setCar, setError, disabled, defaultAm
 
 function Check({ inline }) {
   return <CheckCircle2 size={inline ? 14 : 18} className="inline-block text-green-500 mr-1" />
+}
+
+// Renders ' · expires in 22h' or ' · expired' so the operator knows
+// at a glance whether the buyer can still use the link. 24h validity
+// stamped at issue time.
+function ExpiryHint({ expiresAt }) {
+  const expiresMs = new Date(expiresAt).getTime()
+  const remainingMs = expiresMs - Date.now()
+  if (remainingMs <= 0) {
+    return <span className="ml-2 text-amber-400">· expired</span>
+  }
+  const hours = Math.floor(remainingMs / (60 * 60 * 1000))
+  const mins = Math.floor((remainingMs % (60 * 60 * 1000)) / (60 * 1000))
+  const label = hours >= 1 ? `${hours}h ${mins}m` : `${mins}m`
+  return <span className="ml-2 text-un1t-light">· expires in {label}</span>
 }
 
 function extractTokenFromLink(link) {

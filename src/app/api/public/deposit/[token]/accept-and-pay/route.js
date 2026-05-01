@@ -38,8 +38,9 @@ export async function POST(request, { params }) {
   const { data: car } = await db
     .from('cars')
     .select(`
-      id, make, model, location_id, deposit_token, deposit_amount,
-      deposit_status, deposit_revolut_order_id, deposit_revolut_checkout_url,
+      id, make, model, location_id, deposit_token, deposit_token_expires_at,
+      deposit_amount, deposit_status,
+      deposit_revolut_order_id, deposit_revolut_checkout_url,
       locations ( id, car_deposit_terms_version )
     `)
     .eq('deposit_token', params.token)
@@ -47,6 +48,19 @@ export async function POST(request, { params }) {
 
   if (!car) {
     return NextResponse.json({ success: false, error: 'Invalid deposit link' }, { status: 404 })
+  }
+
+  // Reject expired tokens — same rule as the GET endpoint. Paid
+  // deposits stay valid (won't reach this branch anyway, the next
+  // check 409s on already-paid).
+  if (car.deposit_status !== 'paid' && car.deposit_token_expires_at) {
+    if (new Date(car.deposit_token_expires_at).getTime() <= Date.now()) {
+      return NextResponse.json({
+        success: false,
+        error: 'This deposit link has expired. Please ask the dealer to send you a new one.',
+        code: 'TOKEN_EXPIRED',
+      }, { status: 410 })
+    }
   }
 
   const currentVersion = car.locations?.car_deposit_terms_version || 1

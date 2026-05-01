@@ -23,6 +23,10 @@ import { completionGaps, profitBreakdown, COST_FIELDS, applyIrishVat, salePriceT
 const XeroCard = dynamic(() => import('./XeroCard'), { ssr: true })
 const DocumentsCard = dynamic(() => import('./DocumentsCard'), { ssr: true })
 const DepositCard = dynamic(() => import('./DepositCard'), { ssr: true })
+// NotesCard renders for every status — manual notes are useful from
+// day one (description, condition, internal flags) — so it's NOT
+// inside the status-gated block below.
+const NotesCard = dynamic(() => import('./NotesCard'), { ssr: true })
 
 export default function CarDetail({ car: initialCar, liveFxRate = null, fxFetchedAt = null }) {
   const [car, setCar] = useState(initialCar)
@@ -116,6 +120,11 @@ export default function CarDetail({ car: initialCar, liveFxRate = null, fxFetche
         liveFxRate={liveFxRate}
         fxFetchedAt={fxFetchedAt}
       />
+
+      {/* Notes — visible for every status. System notes (e.g. deposit
+          link issued) appear here automatically alongside operator-
+          typed entries. */}
+      <NotesCard carId={car.id} />
 
       {/* New → Pending CTA */}
       {car.status === 'new' && (
