@@ -50,14 +50,32 @@ export const days = z.number().finite().min(0).max(366)
 
 // Roles + employment types — keep in sync with profiles.role and the
 // employment_type CHECK constraint.
-export const roleSchema = z.enum(['owner', 'manager', 'head_coach', 'staff'])
+//
+// Ordered from most-privileged → least:
+//   master       Platform-level super-admin (mig 033). Only role that
+//                can create new locations or new owner/master accounts.
+//                RLS treats master as a member of every location.
+//   owner        Studio-level admin. Full control of locations they
+//                belong to, but cannot create new locations or new
+//                owner/master accounts.
+//   manager      Day-to-day ops admin (schedule, pipeline, settings).
+//   head_coach   Senior trainer.
+//   staff        Trainer / front-desk.
+export const roleSchema = z.enum(['master', 'owner', 'manager', 'head_coach', 'staff'])
 export const employmentTypeSchema = z.enum(['fte', 'contractor', 'casual'])
 
 // Role groups for authz checks. Reference these instead of inlining
 // `['owner', 'manager', 'head_coach']` so a future role addition is a
-// one-line change.
-export const ADMIN_ROLES = Object.freeze(['owner', 'manager'])
-export const MANAGER_ROLES = Object.freeze(['owner', 'manager', 'head_coach'])
+// one-line change. Master is implicitly in every group via the
+// hasPermission() short-circuit + RLS — no explicit listing needed.
+export const ADMIN_ROLES = Object.freeze(['master', 'owner', 'manager'])
+export const MANAGER_ROLES = Object.freeze(['master', 'owner', 'manager', 'head_coach'])
+
+// Roles that can be assigned BY a master.
+export const MASTER_ASSIGNABLE_ROLES = Object.freeze(['master', 'owner', 'manager', 'head_coach', 'staff'])
+// Roles that can be assigned by an owner (NOT owner or master — only
+// a master can grant those).
+export const OWNER_ASSIGNABLE_ROLES = Object.freeze(['manager', 'head_coach', 'staff'])
 
 // Default colour used when a user-created entity (event, shift template)
 // doesn't specify one. Branding-aware components should reference this

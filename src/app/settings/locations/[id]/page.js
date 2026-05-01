@@ -9,7 +9,10 @@ export const dynamic = 'force-dynamic'
 
 export default async function EditLocationPage({ params }) {
   const user = await getCurrentUser()
-  if (!user || user.role !== 'owner') redirect('/')
+  // Master OR owner can edit existing locations. Master sees every
+  // location automatically; owners see locations they're members of
+  // (RLS already enforces row visibility).
+  if (!user || (user.role !== 'master' && user.role !== 'owner')) redirect('/')
 
   const db = createServerClient()
   const { data: location } = await db

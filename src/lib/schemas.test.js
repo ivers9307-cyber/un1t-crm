@@ -129,8 +129,11 @@ describe('audienceFilterSchema', () => {
 })
 
 describe('role groups + DEFAULT_COLOR', () => {
-  it('ADMIN_ROLES is owner+manager only', () => {
-    expect(ADMIN_ROLES).toEqual(['owner', 'manager'])
+  it('ADMIN_ROLES includes master + owner + manager', () => {
+    // Master added in mig 033 — platform super-admin sits above
+    // owner. Both have full admin powers; owner is studio-scoped,
+    // master is global.
+    expect(ADMIN_ROLES).toEqual(['master', 'owner', 'manager'])
     expect(Object.isFrozen(ADMIN_ROLES)).toBe(true)
   })
 

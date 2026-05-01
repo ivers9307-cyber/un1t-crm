@@ -129,6 +129,21 @@ describe('per-location feature gate (isFeatureEnabledAtLocation)', () => {
   })
 })
 
+describe('master role bypass (mig 033)', () => {
+  it('master is granted any web key regardless of location, user perms, or role default', () => {
+    const master = {
+      role: 'master',
+      // Even with everything explicitly turned OFF, master still gets through.
+      activeLocation: { features: { pipeline: false, schedule: false, settings: false } },
+      permissions: { pipeline: false, settings: false, car_processing: false },
+    }
+    expect(hasPermission(master, 'pipeline')).toBe(true)
+    expect(hasPermission(master, 'settings')).toBe(true)
+    expect(hasPermission(master, 'car_processing')).toBe(true)
+    expect(hasPermission(master, 'unknown_future_feature_key')).toBe(true)
+  })
+})
+
 describe('hasPermission three-tier resolution', () => {
   // Helpers to build user-shaped fixtures.
   const baseLoc = { id: 'loc1', features: {} }

@@ -77,12 +77,18 @@ export async function GET() {
   return NextResponse.json({ success: true, data })
 }
 
-// POST /api/staff — Create a new staff member. Owner-only.
+// POST /api/staff — Create a new staff member. Owner or master.
+//
+// Role assignment rules (mig 033):
+//   master  → can grant any role: master, owner, manager, head_coach, staff
+//   owner   → can grant non-elevated roles only: manager, head_coach, staff
+//             (cannot mint owners or masters)
+//   anyone else → 403
 export async function POST(request) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  if (user.role !== 'owner') {
-    return NextResponse.json({ success: false, error: 'Forbidden — owner only' }, { status: 403 })
+  if (user.role !== 'owner' && user.role !== 'master') {
+    return NextResponse.json({ success: false, error: 'Forbidden — owner or master only' }, { status: 403 })
   }
 
   const validation = await validateBody(request, CreateStaffSchema)
@@ -92,16 +98,30 @@ export async function POST(request) {
   const db = createServerClient()
   const role = body.role || 'staff'
 
-  // Constrain new staff to the caller's own locations to prevent cross-tenant
-  // creation by a future multi-org owner.
-  const callerLocationIds = getUserLocationIds(user)
-  const requestedLocationIds = body.location_ids || []
-  const invalidLocations = requestedLocationIds.filter(id => !callerLocationIds.includes(id))
-  if (invalidLocations.length > 0) {
+  // Only a master can create owner or master accounts. Owners
+  // creating staff are capped at manager/head_coach/staff.
+  if ((role === 'master' || role === 'owner') && user.role !== 'master') {
     return NextResponse.json({
       success: false,
-      error: 'Cannot assign staff to a location you do not belong to',
+      error: `Only a master account can create users with role '${role}'. Contact your platform admin.`,
     }, { status: 403 })
+  }
+
+  // Constrain new staff to the caller's own locations to prevent cross-tenant
+  // creation by a future multi-org owner. Masters skip this check —
+  // getUserLocationIds() already returns every location for them, but
+  // we short-circuit explicitly so future role-shape changes don't
+  // accidentally narrow master's reach.
+  const requestedLocationIds = body.location_ids || []
+  if (user.role !== 'master') {
+    const callerLocationIds = getUserLocationIds(user)
+    const invalidLocations = requestedLocationIds.filter(id => !callerLocationIds.includes(id))
+    if (invalidLocations.length > 0) {
+      return NextResponse.json({
+        success: false,
+        error: 'Cannot assign staff to a location you do not belong to',
+      }, { status: 403 })
+    }
   }
 
   // Create auth user — the DB trigger will auto-create the profile

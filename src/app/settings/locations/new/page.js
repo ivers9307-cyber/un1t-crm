@@ -6,7 +6,9 @@ export const dynamic = 'force-dynamic'
 
 export default async function NewLocationPage() {
   const user = await getCurrentUser()
-  if (!user || user.role !== 'owner') redirect('/')
+  // Master only — only the platform admin can mint new locations
+  // (mig 033). Owners are studio-level admins.
+  if (!user || user.role !== 'master') redirect('/')
 
   return (
     <div className="p-8 max-w-2xl">

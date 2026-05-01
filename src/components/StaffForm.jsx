@@ -18,7 +18,7 @@ import {
 const defaultPermissions = defaultPermissionsByRole.staff
 const defaultMobilePermissions = defaultMobilePermissionsByRole.staff
 
-export default function StaffForm({ staff, locations }) {
+export default function StaffForm({ staff, locations, callerRole = 'owner' }) {
   const isEdit = !!staff
   const router = useRouter()
 
@@ -276,10 +276,25 @@ export default function StaffForm({ staff, locations }) {
             <option value="staff">Staff</option>
             <option value="head_coach">Head Coach</option>
             <option value="manager">Manager</option>
-            <option value="owner">Owner / Admin</option>
+            {/* Owner + master roles can ONLY be granted by a master.
+                Owners editing staff see manager/head_coach/staff only.
+                Existing owners/masters being edited still show their
+                current role even if the caller can't grant it. */}
+            {callerRole === 'master' && <option value="owner">Owner / Studio Admin</option>}
+            {callerRole === 'master' && <option value="master">Master / Platform Admin</option>}
+            {/* Backstop: render the staff's current role disabled if
+                the caller can't grant it, so the dropdown value isn't
+                misleadingly hidden. */}
+            {callerRole !== 'master' && (form.role === 'owner' || form.role === 'master') && (
+              <option value={form.role} disabled>
+                {form.role === 'owner' ? 'Owner / Studio Admin' : 'Master / Platform Admin'} (master-only)
+              </option>
+            )}
           </select>
           <p className="text-xs text-un1t-light mt-1">
-            Changing role resets permissions to that role's defaults. You can fine-tune individually below.
+            {callerRole === 'master'
+              ? 'Master can grant any role. Changing role resets permissions to that role’s defaults; fine-tune below.'
+              : 'Owners can grant Manager, Head Coach, or Staff. Granting Owner / Master requires a master account.'}
           </p>
         </div>
 

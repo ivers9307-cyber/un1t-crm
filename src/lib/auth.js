@@ -99,7 +99,22 @@ export async function getCurrentUser() {
     .select('*, locations(*)')
     .eq('profile_id', user.id)
 
-  const locations = (locationLinks || []).map(pl => pl.locations).filter(Boolean)
+  let locations = (locationLinks || []).map(pl => pl.locations).filter(Boolean)
+
+  // Master role bypasses profile_locations — they see every active
+  // location automatically. profile_locations rows for masters are
+  // optional (used for the default-location preference if any) but
+  // not required to grant access. RLS already short-circuits via
+  // private.auth_is_master() — this just makes the in-memory user
+  // object reflect the same reality.
+  if (profile.role === 'master') {
+    const { data: allLocs } = await db
+      .from('locations')
+      .select('*')
+      .eq('active', true)
+      .order('name')
+    locations = allLocs || locations
+  }
 
   // Active-location resolution. Priority:
   //   1. x-active-location header  — set by the mobile app's location switcher

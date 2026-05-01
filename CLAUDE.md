@@ -286,6 +286,29 @@ Add a new public endpoint? Wire the limiter at the top of the handler with a uni
 | Assistant tools (write actions) | varies — see `TOOL_PERMISSIONS` in `src/app/api/assistant/chat/route.js` |
 | Edit per-location feature gates (Settings → Locations → Features) | ✓ | ✗ | ✗ | ✗ |
 
+### Master role (migration 033)
+
+Platform-level super-admin role added above `owner`. Granted to `richard@richardivers.com` automatically on migration. Multiple masters allowed — they can promote each other.
+
+**Powers** (enforced server-side at every gate):
+- Create new locations (`/settings/locations/new` is master-only; "Add Location" button on Settings hub hidden from non-masters)
+- Create or promote staff to `owner` or `master` (POST `/api/staff` returns 403 to non-masters trying to grant either role)
+- Bypass the location-feature gate AND any per-user permission denial — `hasPermission(user, key)` short-circuits to `true` for `user.role === 'master'`. Same on mobile (`canMobile`, `canDashboard`, `hasAnyMobileFeature` all short-circuit)
+- See and modify every location's data — RLS helper `private.auth_is_in_location(loc_id)` short-circuits via `private.auth_is_master()`, and `getCurrentUser()` returns every active location instead of just the user's `profile_locations` rows when role is master
+
+**Owners are now studio-scoped:** they can fully manage locations they belong to (edit settings, create staff at non-elevated roles), but can't mint new locations or new owner/master accounts. The role hierarchy is `master → owner → manager → head_coach → staff`.
+
+**Helpers (`src/lib/schemas.js`):**
+- `roleSchema` — Zod enum, includes `'master'`
+- `MASTER_ASSIGNABLE_ROLES` — `['master','owner','manager','head_coach','staff']`
+- `OWNER_ASSIGNABLE_ROLES` — `['manager','head_coach','staff']`
+- `ADMIN_ROLES` — `['master','owner','manager']` (existing constant; master added)
+- `MANAGER_ROLES` — `['master','owner','manager','head_coach']`
+
+**RLS:** instead of touching every policy, we updated `private.auth_is_in_location(loc_id)` to OR with `private.auth_is_master()`. Existing policies that use that helper now grant master access transparently.
+
+**StaffForm UI** filters the role dropdown by `callerRole` prop. Owners only see Manager/Head Coach/Staff options; masters see all five. If editing an existing owner/master from a non-master account, the current role renders as a disabled option ("(master-only)") so the dropdown value isn't misleadingly hidden.
+
 ### Per-location feature gates (migration 032)
 
 Each location row has a `features JSONB` column that gates feature visibility for every user at that location. Three-tier resolution in `hasPermission(user, key)`:

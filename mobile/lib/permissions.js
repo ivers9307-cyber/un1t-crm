@@ -46,6 +46,8 @@ export {
  */
 export function canMobile(profile, key, activeLocation = null) {
   if (!profile) return false
+  // Master bypasses every gate (mig 033).
+  if (profile.role === 'master') return true
   if (!isFeatureEnabledAtLocation(activeLocation, key)) return false
   const m = profile.permissions?.mobile
   if (!m || typeof m !== 'object') return false
@@ -58,6 +60,7 @@ export function canMobile(profile, key, activeLocation = null) {
  * admin" nudge on Home.
  */
 export function hasAnyMobileFeature(profile, activeLocation = null) {
+  if (profile?.role === 'master') return true
   const m = profile?.permissions?.mobile
   if (!m || typeof m !== 'object') return false
   return Object.entries(m).some(([k, v]) =>
@@ -81,6 +84,7 @@ export function hasAnyMobileFeature(profile, activeLocation = null) {
  * @returns {boolean}
  */
 export function canDashboard(profile, key, activeLocation = null) {
+  if (profile?.role === 'master') return true
   if (!isFeatureEnabledAtLocation(activeLocation, key)) return false
   return profile?.permissions?.[key] === true
 }

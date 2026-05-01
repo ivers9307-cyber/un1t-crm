@@ -31,6 +31,11 @@ import { DEFAULT_WEB_PERMISSIONS_BY_ROLE, isFeatureEnabledAtLocation } from '@sh
 export function hasPermission(user, key) {
   if (!user) return false
 
+  // Master role bypasses every gate (mig 033). Platform super-admin
+  // sees and edits everything regardless of location feature flags
+  // or per-user permission overrides.
+  if (user.role === 'master') return true
+
   // Tier 1: location gate.
   if (!isFeatureEnabledAtLocation(user.activeLocation, key)) return false
 

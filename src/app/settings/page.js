@@ -117,12 +117,14 @@ export default async function SettingsPage() {
             <h3 className="text-lg font-semibold">Locations</h3>
             <span className="text-xs bg-un1t-gray text-un1t-light px-2 py-0.5 rounded-full ml-1">{locations.length}</span>
           </div>
-          <Link
-            href="/settings/locations/new"
-            className="text-xs bg-un1t-white text-un1t-black px-3 py-1.5 rounded-md hover:bg-un1t-accent transition-colors font-medium"
-          >
-            Add Location
-          </Link>
+          {user.role === 'master' && (
+            <Link
+              href="/settings/locations/new"
+              className="text-xs bg-un1t-white text-un1t-black px-3 py-1.5 rounded-md hover:bg-un1t-accent transition-colors font-medium"
+            >
+              Add Location
+            </Link>
+          )}
         </div>
 
         <div className="bg-un1t-dark border border-un1t-gray rounded-lg divide-y divide-un1t-gray">

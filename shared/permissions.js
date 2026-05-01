@@ -43,6 +43,17 @@ export const WEB_PERMISSIONS = Object.freeze([
 ])
 
 export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
+  // Platform super-admin (mig 033) — every web feature on by default.
+  // hasPermission() also short-circuits to true for master regardless
+  // of these values, so this map is mainly here for completeness +
+  // the parity / shared-permissions tests that iterate every role.
+  master: {
+    dashboard_personal: true, dashboard_studio: true, dashboard_business: true,
+    pipeline: true, contacts: true,
+    events: true, bookings: true, activities: true,
+    email: true, whatsapp: true, schedule: true, assistant: true, settings: true,
+    car_processing: true,
+  },
   staff: {
     dashboard_personal: true, dashboard_studio: false, dashboard_business: false,
     pipeline: true, contacts: true,
@@ -102,6 +113,15 @@ export const MOBILE_PERMISSIONS = Object.freeze([
 ])
 
 export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
+  // Platform super-admin (mig 033) — every mobile feature on. canMobile
+  // also short-circuits true for master regardless of these values.
+  master: {
+    schedule: true, pipeline: true, whatsapp: true,
+    time_off: true, assistant: true, door_unlock: true,
+    push_notifications: true,
+    notify_time_off: true, notify_schedule: true, notify_swap: true,
+    notify_lead: true, notify_whatsapp: true,
+  },
   staff: {
     schedule: true, pipeline: false, whatsapp: false,
     time_off: true, assistant: false, door_unlock: false,
