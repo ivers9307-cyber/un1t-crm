@@ -79,7 +79,16 @@ export default function EventForm({ event, locationId }) {
     if (waTemplates === null) {
       fetch(`/api/whatsapp/templates?location_id=${encodeURIComponent(locationId)}&status=APPROVED`)
         .then(r => r.json())
-        .then(j => setWaTemplates(j.success ? (j.templates || []) : []))
+        .then(j => {
+          const all = j.success ? (j.templates || []) : []
+          // Reminders are utility messages — exclude MARKETING templates
+          // from the picker. Sending a marketing template under a
+          // transactional pretext is a Meta policy violation and the
+          // runner refuses them at send time anyway. AUTHENTICATION is
+          // technically allowed but rarely useful for a reminder; keep
+          // it in the list for completeness.
+          setWaTemplates(all.filter(t => t.category !== 'MARKETING'))
+        })
         .catch(() => setWaTemplates([]))
     }
   }, [reminderEnabled, locationId, emailTemplates, waTemplates])
@@ -406,7 +415,10 @@ export default function EventForm({ event, locationId }) {
         </div>
         <p className="text-xs text-un1t-light">
           Send a one-shot reminder to each booking before it starts. The cron checks every 5 minutes;
-          actual send time is within ±1 hour of the configured offset.
+          actual send time is within ±1 hour of the configured offset. Reminders are treated as
+          <span className="text-un1t-white"> transactional / utility</span> messages —
+          marketing opt-outs are ignored, but contacts who've opted out of
+          <em> administrative</em> messages won't receive them.
         </p>
 
         {reminderEnabled && (
@@ -495,7 +507,12 @@ export default function EventForm({ event, locationId }) {
 
             {reminderChannel === 'whatsapp' && (
               <div>
-                <label className="block text-sm mb-1.5">WhatsApp template (utility, approved)</label>
+                <label className="block text-sm mb-1.5">WhatsApp template (UTILITY only, approved)</label>
+                <p className="text-[11px] text-un1t-mid mb-1.5">
+                  Marketing templates are excluded — Meta requires reminders be sent under the
+                  utility category. Author your reminder template with category=UTILITY in
+                  Communications → Templates.
+                </p>
                 <select
                   value={reminderWaTemplateId}
                   onChange={e => setReminderWaTemplateId(e.target.value)}

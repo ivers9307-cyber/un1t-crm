@@ -77,14 +77,19 @@ export async function runEventReminderSends() {
 
     // Bookings needing a reminder for this event type. The partial
     // index idx_bookings_reminder_pending makes this cheap. We pull
-    // the contact join (when present) so we have first_name / phone
-    // for merge tags; falls back to customer_* on the booking row.
+    // the contact + their preferences for the consent / status checks
+    // below; falls back to customer_* on the booking row when there's
+    // no contact (booking captured before a contact row was created).
     const { data: bookings } = await db
       .from('bookings')
       .select(`
         id, contact_id, customer_name, customer_email, customer_phone,
         booking_date, start_time,
-        contacts ( first_name, last_name, name, email, phone, wa_phone )
+        contacts (
+          first_name, last_name, name, email, phone, wa_phone,
+          email_status, wa_status,
+          contact_preferences ( email_administrative, whatsapp_administrative )
+        )
       `)
       .eq('event_type_id', ev.id)
       .eq('status', 'confirmed')
@@ -96,24 +101,34 @@ export async function runEventReminderSends() {
       const bookingMs = new Date(`${booking.booking_date}T${booking.start_time}Z`).getTime()
       if (bookingMs < lo.getTime() || bookingMs > hi.getTime()) continue
 
+      let outcome
       try {
         if (ev.reminder_channel === 'email') {
-          await sendEmailReminder(db, booking, ev)
+          outcome = await sendEmailReminder(db, booking, ev)
         } else if (ev.reminder_channel === 'whatsapp') {
-          await sendWhatsappReminder(db, booking, ev)
+          outcome = await sendWhatsappReminder(db, booking, ev)
         } else {
-          stats.skipped++
-          continue
+          outcome = { status: 'skipped', reason: 'no_channel' }
         }
-        await db
-          .from('bookings')
-          .update({ reminder_sent_at: new Date().toISOString() })
-          .eq('id', booking.id)
-        stats.sent++
       } catch (e) {
         console.warn(`[event-reminders] failed for booking ${booking.id}: ${e.message}`)
         stats.failed++
+        // Don't stamp — leave it for the next tick to retry. Hard
+        // errors (provider down, template missing) usually recover.
+        continue
       }
+
+      // Always stamp on a final outcome (sent OR deliberately skipped).
+      // Skips are intentional — opted out, hard-bounced, etc — and
+      // should not be retried every 5 min for the rest of the
+      // booking's life. The stamp removes them from the partial index.
+      await db
+        .from('bookings')
+        .update({ reminder_sent_at: new Date().toISOString() })
+        .eq('id', booking.id)
+
+      if (outcome.status === 'sent') stats.sent++
+      else stats.skipped++
     }
   }
 
@@ -124,6 +139,28 @@ async function sendEmailReminder(db, booking, ev) {
   if (!ev.reminder_email_template_id) {
     throw new Error('Event has reminder_channel=email but no reminder_email_template_id set')
   }
+
+  // Consent + hard-signal checks. Reminders are administrative
+  // (transactional) — the user's marketing opt-out doesn't block
+  // them, but their administrative opt-out does, and we never send
+  // to addresses Postmark has already marked bounced/complained.
+  // For walk-up bookings with no contact row we have no preferences
+  // to check; fall back to "send" since the booking itself is the
+  // implicit consent for reminders about it.
+  const c = booking.contacts
+  if (c?.email_status && ['bounced', 'complained', 'unsubscribed'].includes(c.email_status)) {
+    return { status: 'skipped', reason: `email_status=${c.email_status}` }
+  }
+  const prefs = c?.contact_preferences
+  // contact_preferences is one-to-one but Supabase returns it as an
+  // array via the embed. Tolerate both shapes.
+  const adminConsent = Array.isArray(prefs)
+    ? prefs[0]?.email_administrative
+    : prefs?.email_administrative
+  if (adminConsent === false) {
+    return { status: 'skipped', reason: 'opted_out_administrative_email' }
+  }
+
   const { data: tpl } = await db
     .from('email_templates')
     .select('subject, html_content')
@@ -132,7 +169,7 @@ async function sendEmailReminder(db, booking, ev) {
   if (!tpl) throw new Error('Email template not found')
 
   const to = booking.contacts?.email || booking.customer_email
-  if (!to) throw new Error('No email address available for booking')
+  if (!to) return { status: 'skipped', reason: 'no_email_address' }
 
   // Contact-shaped object so applyMergeTags works whether there's a
   // joined contact row or only the booking's customer_* fields.
@@ -163,12 +200,30 @@ async function sendEmailReminder(db, booking, ev) {
     locationId: ev.location_id,
     tag: 'event-reminder',
   })
+  return { status: 'sent' }
 }
 
 async function sendWhatsappReminder(db, booking, ev) {
   if (!ev.reminder_whatsapp_template_id) {
     throw new Error('Event has reminder_channel=whatsapp but no reminder_whatsapp_template_id set')
   }
+
+  // Consent + hard-signal checks. Same logic as the email path:
+  // marketing opt-out doesn't block utility messages, but
+  // administrative opt-out does, and a blocked / opted-out wa_status
+  // means Meta will reject anyway.
+  const c = booking.contacts
+  if (c?.wa_status && ['blocked', 'opted_out'].includes(c.wa_status)) {
+    return { status: 'skipped', reason: `wa_status=${c.wa_status}` }
+  }
+  const prefs = c?.contact_preferences
+  const adminConsent = Array.isArray(prefs)
+    ? prefs[0]?.whatsapp_administrative
+    : prefs?.whatsapp_administrative
+  if (adminConsent === false) {
+    return { status: 'skipped', reason: 'opted_out_administrative_whatsapp' }
+  }
+
   const { data: tpl } = await db
     .from('whatsapp_templates')
     .select('name, language, components, status, category')
@@ -176,9 +231,15 @@ async function sendWhatsappReminder(db, booking, ev) {
     .single()
   if (!tpl) throw new Error('WhatsApp template not found')
   if (tpl.status !== 'APPROVED') throw new Error(`WhatsApp template '${tpl.name}' is not approved (${tpl.status})`)
+  // Belt-and-braces: even though the picker filters to UTILITY/AUTHENTICATION,
+  // a marketing template here would be a Meta policy violation (sending a
+  // marketing message under a utility pretext). Refuse at runtime too.
+  if (tpl.category === 'MARKETING') {
+    throw new Error(`WhatsApp template '${tpl.name}' is MARKETING category — reminders must use UTILITY or AUTHENTICATION templates`)
+  }
 
   const phone = booking.contacts?.wa_phone || booking.contacts?.phone || booking.customer_phone
-  if (!phone) throw new Error('No phone number available for booking')
+  if (!phone) return { status: 'skipped', reason: 'no_phone_number' }
 
   const components = fillReminderTemplate(tpl, booking, ev)
 
@@ -193,6 +254,7 @@ async function sendWhatsappReminder(db, booking, ev) {
   } catch (e) {
     console.warn(`[event-reminders] WA conversation log skipped: ${e.message}`)
   }
+  return { status: 'sent' }
 }
 
 /**
