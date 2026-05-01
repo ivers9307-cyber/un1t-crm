@@ -11,6 +11,11 @@ const TemplateUpdateSchema = z.object({
   components: z.array(z.unknown()).optional(),
   example_values: z.unknown().optional(),
   status: z.enum(['PENDING', 'APPROVED', 'REJECTED', 'PAUSED']).optional(),
+  // Media-header upload fields (mig 045) — see notes on the create
+  // route for what these are.
+  header_media_handle: z.string().max(500).nullable().optional(),
+  header_media_url: z.string().url().max(2000).nullable().optional(),
+  header_media_path: z.string().max(500).nullable().optional(),
 })
 
 async function loadTemplateLocation(db, id) {

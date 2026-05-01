@@ -1,9 +1,16 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { ArrowLeft, Save, Send, Trash2 } from 'lucide-react'
+import { ArrowLeft, Save, Send, Trash2, Upload, FileText, Video, X } from 'lucide-react'
+
+// Meta's published caps (May 2026). Same for every template category.
+const MEDIA_LIMITS = {
+  IMAGE:    { mimes: 'image/jpeg,image/png',          accept: '.jpg,.jpeg,.png',  maxMb: 5,   label: 'JPG or PNG, max 5 MB' },
+  VIDEO:    { mimes: 'video/mp4,video/3gpp',          accept: '.mp4,.3gp',        maxMb: 16,  label: 'MP4 or 3GPP, max 16 MB' },
+  DOCUMENT: { mimes: 'application/pdf',               accept: '.pdf',             maxMb: 100, label: 'PDF, max 100 MB' },
+}
 
 const CATEGORIES = [
   { value: 'MARKETING', label: 'Marketing', description: 'Promotions, offers, updates' },
@@ -43,13 +50,73 @@ export default function WATemplateEditor({ template, locationId, userId }) {
   const [footerText, setFooterText] = useState(existingFooter?.text || '')
   const [buttons, setButtons] = useState(existingButtons?.buttons || [])
 
+  // Header media — handle is what Meta needs at template-approval time;
+  // url is what we feed Meta at SEND time. Both come back from
+  // /api/whatsapp/templates/upload-media in one round trip.
+  const [mediaHandle, setMediaHandle] = useState(template?.header_media_handle || null)
+  const [mediaUrl, setMediaUrl] = useState(template?.header_media_url || null)
+  const [mediaPath, setMediaPath] = useState(template?.header_media_path || null)
+  const [mediaName, setMediaName] = useState('')
+  const [uploading, setUploading] = useState(false)
+  const [uploadError, setUploadError] = useState(null)
+  const fileInputRef = useRef(null)
+
+  async function handleMediaUpload(e) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setUploading(true)
+    setUploadError(null)
+    try {
+      const fd = new FormData()
+      fd.append('file', file)
+      fd.append('format', headerFormat)
+      if (locationId) fd.append('location_id', locationId)
+      const res = await fetch('/api/whatsapp/templates/upload-media', { method: 'POST', body: fd })
+      const j = await res.json()
+      if (!j.success) {
+        setUploadError(j.error || 'Upload failed')
+        return
+      }
+      setMediaHandle(j.handle)
+      setMediaUrl(j.url)
+      setMediaPath(j.path)
+      setMediaName(j.file_name)
+      if (j.meta_error) {
+        // Storage upload worked but Meta upload didn't — surface so the
+        // operator knows the template won't pass approval until they
+        // retry. Picker stays so they can re-upload.
+        setUploadError(`Meta upload failed (handle missing): ${j.meta_error}. Try again or contact support.`)
+      }
+    } catch (err) {
+      setUploadError(err.message || 'Network error')
+    } finally {
+      setUploading(false)
+      if (fileInputRef.current) fileInputRef.current.value = ''
+    }
+  }
+
+  function clearMedia() {
+    setMediaHandle(null)
+    setMediaUrl(null)
+    setMediaPath(null)
+    setMediaName('')
+    setUploadError(null)
+  }
+
   function buildComponents() {
     const components = []
 
     if (headerFormat !== 'NONE') {
       const header = { type: 'HEADER', format: headerFormat }
-      if (headerFormat === 'TEXT') header.text = headerText
-      else header.example = { header_handle: ['https://example.com/placeholder'] }
+      if (headerFormat === 'TEXT') {
+        header.text = headerText
+      } else if (mediaHandle) {
+        // Real handle from Meta's Resumable Upload API. Required for
+        // IMAGE / VIDEO / DOCUMENT headers — Meta needs an actual
+        // example asset to review the template, a placeholder URL
+        // gets the template rejected.
+        header.example = { header_handle: [mediaHandle] }
+      }
       components.push(header)
     }
 
@@ -81,6 +148,10 @@ export default function WATemplateEditor({ template, locationId, userId }) {
       setError('Template name and body text are required')
       return
     }
+    if (['IMAGE', 'VIDEO', 'DOCUMENT'].includes(headerFormat) && !mediaHandle) {
+      setError(`A ${headerFormat.toLowerCase()} file must be uploaded before submitting — Meta requires a real example asset for media headers.`)
+      return
+    }
 
     // Meta requires lowercase with underscores only
     const cleanName = name.toLowerCase().replace(/[^a-z0-9_]/g, '_')
@@ -96,6 +167,11 @@ export default function WATemplateEditor({ template, locationId, userId }) {
         components: buildComponents(),
         location_id: locationId,
         created_by: userId,
+        // Persist the upload metadata so runtime sends can reach the
+        // media without operators having to re-supply a URL each time.
+        header_media_handle: mediaHandle,
+        header_media_url: mediaUrl,
+        header_media_path: mediaPath,
       }
 
       const url = isEditing ? `/api/whatsapp/templates/${template.id}` : '/api/whatsapp/templates'
@@ -264,9 +340,69 @@ export default function WATemplateEditor({ template, locationId, userId }) {
               )}
 
               {['IMAGE', 'VIDEO', 'DOCUMENT'].includes(headerFormat) && (
-                <p className="text-xs text-un1t-mid">
-                  Media will be provided when sending the broadcast. A placeholder URL is submitted for approval.
-                </p>
+                <div className="space-y-2">
+                  <p className="text-xs text-un1t-mid">
+                    Meta requires a real example asset for {headerFormat.toLowerCase()} headers — a placeholder URL gets the template rejected.
+                    The file you upload here is BOTH submitted for approval AND used at send time as the default media.
+                  </p>
+
+                  {!mediaUrl ? (
+                    <>
+                      <input
+                        ref={fileInputRef}
+                        type="file"
+                        accept={MEDIA_LIMITS[headerFormat].accept}
+                        onChange={handleMediaUpload}
+                        disabled={isSubmitted || uploading}
+                        className="hidden"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => fileInputRef.current?.click()}
+                        disabled={isSubmitted || uploading}
+                        className="inline-flex items-center gap-2 text-sm bg-un1t-black border border-un1t-gray hover:border-un1t-mid text-un1t-white px-3 py-2 rounded-md transition-colors disabled:opacity-50"
+                      >
+                        <Upload size={14} />
+                        {uploading ? 'Uploading…' : `Upload ${headerFormat.toLowerCase()}`}
+                      </button>
+                      <p className="text-[11px] text-un1t-mid">
+                        Requirement: <span className="text-un1t-light">{MEDIA_LIMITS[headerFormat].label}</span>.
+                        Same caps for every template category — Meta limits per file type, not per category.
+                      </p>
+                    </>
+                  ) : (
+                    <div className="flex items-center gap-2 p-2.5 bg-un1t-black border border-un1t-gray rounded-md">
+                      {headerFormat === 'IMAGE' && mediaUrl && (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={mediaUrl} alt="" className="w-10 h-10 object-cover rounded" />
+                      )}
+                      {headerFormat === 'VIDEO' && <Video size={20} className="text-un1t-light" />}
+                      {headerFormat === 'DOCUMENT' && <FileText size={20} className="text-un1t-light" />}
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm text-un1t-white truncate">
+                          {mediaName || mediaPath?.split('/').pop() || 'Uploaded'}
+                        </div>
+                        <div className="text-[11px] text-un1t-mid truncate">
+                          {mediaHandle ? 'Ready for Meta approval' : 'Uploaded — Meta handle missing, retry needed'}
+                        </div>
+                      </div>
+                      {!isSubmitted && (
+                        <button
+                          type="button"
+                          onClick={clearMedia}
+                          className="text-un1t-mid hover:text-red-400 p-1"
+                          title="Remove and re-upload"
+                        >
+                          <X size={14} />
+                        </button>
+                      )}
+                    </div>
+                  )}
+
+                  {uploadError && (
+                    <p className="text-xs text-red-400">{uploadError}</p>
+                  )}
+                </div>
               )}
             </div>
 

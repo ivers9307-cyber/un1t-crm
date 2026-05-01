@@ -158,6 +158,61 @@ export async function markAsRead(messageId) {
 // ============================================================
 
 /**
+ * Upload a media asset via Meta's Resumable Upload API and return the
+ * `header_handle` ('h:...') string used in template approval payloads.
+ *
+ * Required env: WHATSAPP_APP_ID (the Meta App ID, NOT the business
+ * account ID). The handle is ONLY useful for template approval —
+ * runtime sends use a normal public media URL via the messaging API.
+ *
+ * Two-step protocol per Meta docs:
+ *   1. POST {app-id}/uploads?file_length&file_type → { id: 'upload:...' }
+ *   2. POST {upload-id} with binary body + file_offset header → { h: 'handle' }
+ *
+ * @param {Buffer} bytes
+ * @param {string} mimeType
+ * @returns {Promise<string>} the header handle to use in example.header_handle
+ */
+export async function uploadMediaForTemplate(bytes, mimeType) {
+  const { token } = getConfig()
+  const appId = process.env.WHATSAPP_APP_ID
+  if (!appId) {
+    throw new Error('WHATSAPP_APP_ID is not configured. Set the Meta App ID in environment variables.')
+  }
+
+  // Step 1 — create upload session.
+  const sessionRes = await fetch(
+    `${META_API_URL}/${appId}/uploads?file_length=${bytes.length}&file_type=${encodeURIComponent(mimeType)}`,
+    {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+    }
+  )
+  const sessionJson = await sessionRes.json()
+  if (sessionJson.error || !sessionJson.id) {
+    throw new Error(sessionJson.error?.message || 'Failed to start Meta upload session')
+  }
+
+  // Step 2 — POST the bytes against the session id. Auth header here
+  // uses 'OAuth' scheme, NOT 'Bearer' — this is a Meta quirk for
+  // the resumable upload endpoint specifically.
+  const uploadRes = await fetch(`${META_API_URL}/${sessionJson.id}`, {
+    method: 'POST',
+    headers: {
+      Authorization: `OAuth ${token}`,
+      file_offset: '0',
+      'Content-Type': mimeType,
+    },
+    body: bytes,
+  })
+  const uploadJson = await uploadRes.json()
+  if (uploadJson.error || !uploadJson.h) {
+    throw new Error(uploadJson.error?.message || 'Meta upload returned no handle')
+  }
+  return uploadJson.h
+}
+
+/**
  * Create a message template (submits to Meta for approval)
  */
 export async function createTemplate({ name, category, language, components }) {

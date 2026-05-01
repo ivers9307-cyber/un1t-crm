@@ -13,6 +13,12 @@ const WaTemplateCreateSchema = z.object({
   components: z.array(z.unknown()),
   example_values: z.unknown().optional(),
   location_id: uuidLike.optional(),
+  // Media-header upload metadata (mig 045). header_handle goes into
+  // the components.example.header_handle for approval; header_url is
+  // the public URL the messaging API fetches at send time.
+  header_media_handle: z.string().max(500).nullable().optional(),
+  header_media_url: z.string().url().max(2000).nullable().optional(),
+  header_media_path: z.string().max(500).nullable().optional(),
 })
 
 // GET /api/whatsapp/templates — list templates (syncs with Meta)
@@ -106,6 +112,9 @@ export async function POST(request) {
       status: metaResult.status || 'PENDING',
       location_id: locationId,
       created_by: user.id,
+      header_media_handle: body.header_media_handle || null,
+      header_media_url: body.header_media_url || null,
+      header_media_path: body.header_media_path || null,
     }).select().single()
 
     if (error) throw new Error(error.message)
