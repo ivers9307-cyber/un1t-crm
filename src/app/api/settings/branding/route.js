@@ -30,11 +30,11 @@ export async function GET(request) {
   return NextResponse.json({ success: true, data: data || null })
 }
 
-// PUT /api/settings/branding — Update branding (owner only)
+// PUT /api/settings/branding — Update branding (owner or master)
 export async function PUT(request) {
   const user = await getCurrentUser()
-  if (!user || user.role !== 'owner') {
-    return NextResponse.json({ success: false, error: 'Only owners can update branding' }, { status: 403 })
+  if (!user || (user.role !== 'owner' && user.role !== 'master')) {
+    return NextResponse.json({ success: false, error: 'Only owners or master can update branding' }, { status: 403 })
   }
 
   const validation = await validateBody(request, BrandingSchema)

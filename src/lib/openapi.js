@@ -316,11 +316,11 @@ registry.registerPath({
   path: '/api/staff',
   tags: ['Staff'],
   security: [{ CookieAuth: [] }],
-  summary: 'Create a staff member (owner only)',
+  summary: 'Create a staff member (owner or master)',
   request: { body: { content: { 'application/json': { schema: StaffCreate } } } },
   responses: {
     201: { description: 'Staff created' },
-    403: { description: 'Forbidden — owner only', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — owner or master', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -329,14 +329,14 @@ registry.registerPath({
   path: '/api/staff/{id}',
   tags: ['Staff'],
   security: [{ CookieAuth: [] }],
-  summary: 'Update a staff member (owner only)',
+  summary: 'Update a staff member (owner or master)',
   request: {
     params: z.object({ id: uuidLike }),
     body: { content: { 'application/json': { schema: StaffUpdate } } },
   },
   responses: {
     200: { description: 'Staff updated' },
-    403: { description: 'Forbidden — owner only', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — owner or master', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 

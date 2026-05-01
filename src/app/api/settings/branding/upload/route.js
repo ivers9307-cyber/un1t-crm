@@ -5,8 +5,8 @@ import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 // POST /api/settings/branding/upload — Upload a logo or favicon image
 export async function POST(request) {
   const user = await getCurrentUser()
-  if (!user || user.role !== 'owner') {
-    return NextResponse.json({ success: false, error: 'Only owners can upload branding' }, { status: 403 })
+  if (!user || (user.role !== 'owner' && user.role !== 'master')) {
+    return NextResponse.json({ success: false, error: 'Only owners or master can upload branding' }, { status: 403 })
   }
 
   const formData = await request.formData()

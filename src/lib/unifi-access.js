@@ -60,12 +60,13 @@ export function getLocationUnifiConfig(location) {
 
 /**
  * Map a CRM role to the UniFi access-policy ID for that role at a given
- * location. Manager+ get full-access (manager_policy_id), everyone else
- * gets the staff policy. Mirrors MANAGER_ROLES in src/lib/schemas.js.
+ * location. Master/Owner/Manager get full-access (manager_policy_id),
+ * everyone else gets the staff policy. Mirrors MANAGER_ROLES in
+ * src/lib/schemas.js (master added in mig 033).
  */
 export function policyIdForRole(cfg, role) {
   if (!cfg?.configured) return null
-  return role === 'owner' || role === 'manager'
+  return role === 'master' || role === 'owner' || role === 'manager'
     ? cfg.managerPolicyId
     : cfg.staffPolicyId
 }

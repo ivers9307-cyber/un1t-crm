@@ -86,13 +86,17 @@ async function applyDoorAccessChange({ profile, location, enable, role, existing
 
 // PUT /api/staff/[id] — Update a staff member. Owner-only.
 // Includes role / salary / employment fields so this endpoint must never
-// be reachable without owner authentication. Manager-level edits (e.g.
-// shift availability) live elsewhere.
+// be reachable without owner-or-master authentication. Manager-level
+// edits (e.g. shift availability) live elsewhere.
+//
+// Role-grant rule (mig 033): owners can never set role to 'owner' or
+// 'master' — that requires a master account. Enforced below alongside
+// the basic auth check.
 export async function PUT(request, { params }) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  if (user.role !== 'owner') {
-    return NextResponse.json({ success: false, error: 'Forbidden — owner only' }, { status: 403 })
+  if (user.role !== 'owner' && user.role !== 'master') {
+    return NextResponse.json({ success: false, error: 'Forbidden — owner or master only' }, { status: 403 })
   }
 
   const { id } = params
@@ -101,8 +105,19 @@ export async function PUT(request, { params }) {
   const body = validation.data
   const db = createServerClient()
 
-  // Restrict location assignments to the caller's own locations
-  if (body.location_ids !== undefined) {
+  // Role-grant guard: only a master can grant 'owner' or 'master'.
+  if (body.role && (body.role === 'owner' || body.role === 'master') && user.role !== 'master') {
+    return NextResponse.json({
+      success: false,
+      error: `Only a master account can promote a user to '${body.role}'.`,
+    }, { status: 403 })
+  }
+
+  // Restrict location assignments to the caller's own locations.
+  // Master skips this — getUserLocationIds returns every location for
+  // them, but we short-circuit explicitly so future role-shape
+  // changes don't accidentally narrow master's reach.
+  if (body.location_ids !== undefined && user.role !== 'master') {
     const callerLocationIds = getUserLocationIds(user)
     const invalid = body.location_ids.filter(loc => !callerLocationIds.includes(loc))
     if (invalid.length > 0) {
@@ -258,15 +273,16 @@ export async function PUT(request, { params }) {
   return NextResponse.json({ success: true, data })
 }
 
-// DELETE /api/staff/[id] — Soft-delete (deactivate) a staff member. Owner-only.
+// DELETE /api/staff/[id] — Soft-delete (deactivate) a staff member.
+// Owner-or-master only.
 //
 // Also revokes any UniFi door-access policies the staff member had — we
 // don't want a deactivated employee still able to walk into the studio.
 export async function DELETE(request, { params }) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  if (user.role !== 'owner') {
-    return NextResponse.json({ success: false, error: 'Forbidden — owner only' }, { status: 403 })
+  if (user.role !== 'owner' && user.role !== 'master') {
+    return NextResponse.json({ success: false, error: 'Forbidden — owner or master only' }, { status: 403 })
   }
 
   const { id } = params

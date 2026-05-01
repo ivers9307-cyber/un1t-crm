@@ -207,8 +207,8 @@ export default async function SettingsPage() {
         </div>
       </div>
 
-      {/* Branding Section — Owner only */}
-      {user.role === 'owner' && (
+      {/* Branding Section — Owner or master */}
+      {(user.role === 'owner' || user.role === 'master') && (
         <div className="mb-10">
           <div className="flex items-center gap-2 mb-4">
             <Palette size={18} className="text-un1t-light" />
