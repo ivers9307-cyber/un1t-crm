@@ -8,7 +8,7 @@ import { createBrowserClient } from '@/lib/supabase'
 import LocationSwitcher from './LocationSwitcher'
 import ImpersonatePicker from './ImpersonatePicker'
 import clsx from 'clsx'
-import { DEFAULT_WEB_PERMISSIONS_BY_ROLE } from '@shared/permissions'
+import { hasPermission } from '@/lib/permissions'
 
 const roleLabels = {
   master: 'Master',
@@ -40,7 +40,6 @@ const allNav = [
 export default function Sidebar({ user }) {
   const pathname = usePathname()
   const router = useRouter()
-  const permissions = user?.permissions || {}
   const [branding, setBranding] = useState(null)
 
   // Load branding (logo) for current location
@@ -66,16 +65,15 @@ export default function Sidebar({ user }) {
       .catch(() => {})
   }, [user?.activeLocation?.id])
 
-  // Permission resolver — explicit user setting wins (true OR false),
-  // missing keys fall back to the role default. This honours an owner
-  // who toggled something off in their own profile (the bug this
-  // commit fixes) without breaking legacy profiles whose JSONB
-  // doesn't yet have a key for newer features (treated as the role
-  // default rather than undefined / hidden).
-  function hasPerm(key) {
-    if (permissions && key in permissions) return permissions[key] === true
-    return DEFAULT_WEB_PERMISSIONS_BY_ROLE[user?.role]?.[key] === true
-  }
+  // Permission resolver — same three-tier check as the server uses
+  // (src/lib/permissions.js#hasPermission):
+  //   1. master bypass         (mig 033)
+  //   2. location feature gate (mig 032)
+  //   3. user override → role default
+  // Calling the shared helper instead of a local copy keeps the
+  // sidebar honest about location-disabled features (e.g. CCF Autos
+  // hides everything except Car Processing for non-master users).
+  const hasPerm = (key) => hasPermission(user, key)
 
   // Filter nav based on permissions. The Dashboard parent shows if
   // ANY of the three sub-permissions is true. Privileged actions
