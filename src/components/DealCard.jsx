@@ -100,14 +100,23 @@ export default function DealCard({ deal, locationId }) {
         </div>
       )}
 
+      {/* Modal-style picker — anchoring as a popover doesn't work because
+          the kanban columns are only 256px wide; a 320px popover spills
+          past the column edge and gets clipped by the sidebar. Fixed
+          centred overlay floats above everything regardless of layout. */}
       {picker && contact.id && (
-        <div className="absolute right-0 top-8 z-30" onClick={(e) => e.stopPropagation()}>
-          <SequencePicker
-            contactIds={[contact.id]}
-            locationId={locationId}
-            variant="popover"
-            onClose={() => setPicker(false)}
-          />
+        <div
+          className="fixed inset-0 z-50 bg-black/60 flex items-start justify-center pt-24 px-4"
+          onClick={() => setPicker(false)}
+        >
+          <div onClick={(e) => e.stopPropagation()}>
+            <SequencePicker
+              contactIds={[contact.id]}
+              locationId={locationId}
+              variant="modal"
+              onClose={() => setPicker(false)}
+            />
+          </div>
         </div>
       )}
     </div>
