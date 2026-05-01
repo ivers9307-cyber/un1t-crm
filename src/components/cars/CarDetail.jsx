@@ -433,9 +433,18 @@ function XeroCard({ car, setCar, setError, busy, setBusy, disabled }) {
           <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light">Customer invoice (Xero)</h3>
           {issued ? (
             <div className="text-sm text-un1t-white mt-1 space-y-1">
-              <div>
+              <div className="flex flex-wrap items-center gap-2">
                 <Check size={14} className="inline-block text-green-500 mr-1" />
-                Issued · {car.xero_invoice_number || car.xero_invoice_id} · €{issuedAmount.toFixed(2)}
+                <span>Issued · {car.xero_invoice_number || car.xero_invoice_id} · €{issuedAmount.toFixed(2)}</span>
+                {/* Paid status from Xero webhook (mig 040). PAID = green chip,
+                    VOIDED = red, anything else (DRAFT/SUBMITTED/AUTHORISED) = subtle. */}
+                {car.xero_invoice_paid_at
+                  ? <span className="text-[10px] uppercase font-semibold bg-green-500/20 text-green-400 px-2 py-0.5 rounded-full" title={`Paid ${new Date(car.xero_invoice_paid_at).toLocaleString()}${car.xero_invoice_amount_paid ? ` · €${Number(car.xero_invoice_amount_paid).toFixed(2)}` : ''}`}>Paid</span>
+                  : car.xero_invoice_status === 'VOIDED'
+                    ? <span className="text-[10px] uppercase font-semibold bg-red-500/20 text-red-400 px-2 py-0.5 rounded-full">Voided</span>
+                    : car.xero_invoice_status
+                      ? <span className="text-[10px] uppercase font-semibold bg-un1t-gray/40 text-un1t-light px-2 py-0.5 rounded-full">{car.xero_invoice_status}</span>
+                      : <span className="text-[10px] uppercase font-semibold bg-amber-500/20 text-amber-400 px-2 py-0.5 rounded-full">Awaiting payment</span>}
               </div>
               <div className="text-xs text-un1t-light flex flex-wrap gap-x-3 gap-y-1">
                 {car.xero_invoice_url && (
@@ -584,9 +593,39 @@ function DocumentsCard({ car, setCar, setError, disabled }) {
     }
   }
 
+  // "Send all unsent" — finds every uploaded doc that hasn't been
+  // forwarded to Xero yet and pushes them sequentially. Useful at
+  // the end of the registration process when you've uploaded
+  // multiple docs in one sitting and don't want to click through
+  // each row. Skips errors silently per-row (errors surface on the
+  // individual rows via xero_send_error from the existing flow).
+  async function sendAllUnsent() {
+    setError(null)
+    const unsent = (car.car_documents || []).filter(d => !d.xero_sent_at)
+    for (const d of unsent) {
+      // Sequential — Xero rate-limits per-org and we'd rather not
+      // hammer Postmark either. Each takes <1s typically.
+      await sendToXero(d.id)
+    }
+  }
+
+  const unsentCount = (car.car_documents || []).filter(d => !d.xero_sent_at).length
+
   return (
     <div className="bg-un1t-dark border border-un1t-gray rounded-2xl p-5 mb-4">
-      <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light mb-3">Documents & invoices</h3>
+      <div className="flex items-center justify-between mb-3 gap-3">
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light">Documents & invoices</h3>
+        {!disabled && unsentCount > 0 && (
+          <button
+            onClick={sendAllUnsent}
+            disabled={sendingDocId !== null}
+            className="text-xs inline-flex items-center gap-1 px-3 py-1 rounded-md bg-un1t-white text-un1t-black font-semibold hover:bg-un1t-accent disabled:opacity-50"
+            title="Forward every uploaded document that hasn't been sent to Xero yet"
+          >
+            <Send size={11} /> Send all to Xero ({unsentCount})
+          </button>
+        )}
+      </div>
       <p className="text-xs text-un1t-light mb-3">
         Required uploads must be sent to Xero (auto-billed via Xero&rsquo;s OCR) before this car can be marked completed.
       </p>
