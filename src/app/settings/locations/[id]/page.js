@@ -27,7 +27,7 @@ export default async function EditLocationPage({ params }) {
     <div className="p-8 max-w-2xl">
       <h2 className="text-2xl font-bold mb-1">Edit Location</h2>
       <p className="text-sm text-un1t-light mb-6">Update {location.name} details and integrations</p>
-      <LocationForm location={location} />
+      <LocationForm location={location} callerRole={user.role} />
 
       <section className="mt-10">
         <div className="flex items-center gap-2 mb-3">

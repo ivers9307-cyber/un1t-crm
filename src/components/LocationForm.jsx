@@ -4,9 +4,13 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createBrowserClient } from '@/lib/supabase'
 
-export default function LocationForm({ location }) {
+export default function LocationForm({ location, callerRole = 'owner' }) {
   const router = useRouter()
   const isEditing = !!location
+  // UniFi controller config (host, token, policy IDs) is master-only
+  // — mig 034 enforces this at the DB layer too. Owners managing
+  // their own location never see or submit these fields.
+  const canEditUnifi = callerRole === 'master'
 
   const [name, setName] = useState(location?.name || '')
   const [address, setAddress] = useState(location?.address || '')
@@ -61,15 +65,20 @@ export default function LocationForm({ location }) {
           branch_id: glofoxBranchId || null,
           api_key: glofoxApiKey || null,
         } : null,
-        // Persist UniFi only when at least one field is set — avoids
-        // writing a stub object on locations that don't use door access.
-        unifi: (unifiHost || unifiApiToken || unifiStaffPolicyId || unifiManagerPolicyId) ? {
-          host: unifiHost || null,
-          api_token: unifiApiToken || null,
-          staff_policy_id: unifiStaffPolicyId || null,
-          manager_policy_id: unifiManagerPolicyId || null,
-          allow_self_signed: unifiAllowSelfSigned,
-        } : null,
+        // UniFi controller config is master-only (mig 034 enforces
+        // at the DB layer). For non-masters, preserve whatever is
+        // already on the row by passing the existing settings.unifi
+        // object through unchanged — the trigger rejects ANY change
+        // including writing a `null`.
+        unifi: canEditUnifi
+          ? ((unifiHost || unifiApiToken || unifiStaffPolicyId || unifiManagerPolicyId) ? {
+              host: unifiHost || null,
+              api_token: unifiApiToken || null,
+              staff_policy_id: unifiStaffPolicyId || null,
+              manager_policy_id: unifiManagerPolicyId || null,
+              allow_self_signed: unifiAllowSelfSigned,
+            } : null)
+          : (settings.unifi || null),
       },
       updated_at: new Date().toISOString(),
     }
@@ -252,7 +261,11 @@ export default function LocationForm({ location }) {
         </div>
       </div>
 
-      {/* UniFi Access Integration */}
+      {/* UniFi Access Integration — master only (mig 034). Owners
+          configure who has door access via the per-staff toggles in
+          Settings → Staff, but the controller credentials are
+          platform infrastructure managed by master. */}
+      {canEditUnifi && (
       <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5 space-y-4">
         <h3 className="font-semibold text-sm text-un1t-light uppercase tracking-wider">UniFi Access (Door Control)</h3>
         <p className="text-xs text-un1t-mid">
@@ -328,6 +341,7 @@ export default function LocationForm({ location }) {
           </span>
         </label>
       </div>
+      )}
 
       {/* Submit */}
       <div className="flex gap-3">
