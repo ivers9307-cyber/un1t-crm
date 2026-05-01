@@ -18,6 +18,11 @@
 
 import { createServerClient } from '@/lib/supabase'
 import { sendTransactionalEmail, applyMergeTags } from '@/lib/postmark'
+import {
+  sendTemplateMessage,
+  buildTemplateComponents,
+  getOrCreateConversation,
+} from '@/lib/whatsapp'
 
 const MAX_ERRORS = 5
 const PROCESS_BATCH_SIZE = 100
@@ -164,9 +169,15 @@ async function nextStepForEnrollment(db, enrollment) {
 
 function nextStepDelayMs(step) {
   if (!step) return 0
+  // The schema carries three delay fields (added at different migration
+  // points); the API writes days+hours, mig 005 originally wrote
+  // minutes. Sum all three so however the row was written, we honour
+  // the intent.
+  const days = Number(step.delay_days || 0)
+  const hours = Number(step.delay_hours || 0)
   const minutes = Number(step.delay_minutes || 0)
-  if (!Number.isFinite(minutes) || minutes < 0) return 0
-  return minutes * 60_000
+  const ms = (days * 24 * 60 + hours * 60 + minutes) * 60_000
+  return Number.isFinite(ms) && ms >= 0 ? ms : 0
 }
 
 // ── Internal: send a single email step ───────────────────────────
@@ -217,6 +228,70 @@ async function sendEmailStep(db, { enrollment, step, sequence, contact }) {
         sequence_step_id: step.id,
       })
       .eq('postmark_message_id', result.messageId)
+  }
+
+  // Bump per-step metric.
+  await db.rpc('increment_step_sent', { p_step_id: step.id }).catch(() => {})
+
+  return result?.messageId || null
+}
+
+// ── Internal: send a single WhatsApp template step ──────────────
+
+async function sendWhatsappStep(db, { step, sequence, contact }) {
+  if (!step.whatsapp_template_id) {
+    throw new Error('WhatsApp step has no template_id.')
+  }
+  if (!contact?.wa_phone) {
+    throw new Error('Contact has no WhatsApp phone number — cannot send WhatsApp step.')
+  }
+
+  // Resolve the template; must be APPROVED to send.
+  const { data: template } = await db
+    .from('whatsapp_templates')
+    .select('*')
+    .eq('id', step.whatsapp_template_id)
+    .single()
+  if (!template) throw new Error('WhatsApp template not found.')
+  if (template.status !== 'APPROVED') {
+    throw new Error(`WhatsApp template "${template.name}" is ${template.status}, not APPROVED — cannot send.`)
+  }
+  if (template.location_id !== sequence.location_id) {
+    throw new Error('WhatsApp template belongs to a different location than the sequence.')
+  }
+
+  // Variable mapping resolution mirrors the broadcasts flow exactly.
+  const variableMapping = step.whatsapp_variables || {}
+  const components = buildTemplateComponents(
+    template,
+    contact,
+    variableMapping,
+    step.whatsapp_header_media_url || null
+  )
+
+  const result = await sendTemplateMessage(
+    contact.wa_phone,
+    template.name,
+    template.language,
+    components
+  )
+
+  // Log to whatsapp_messages so the inbox + analytics see it.
+  // Conversation is upserted via the helper to attribute correctly.
+  const conversationId = await getOrCreateConversation(db, contact, sequence.location_id)
+  if (conversationId && result?.messageId) {
+    await db.from('whatsapp_messages').insert({
+      conversation_id: conversationId,
+      contact_id: contact.id,
+      location_id: sequence.location_id,
+      wa_message_id: result.messageId,
+      direction: 'outbound',
+      message_type: 'template',
+      template_name: template.name,
+      template_variables: variableMapping,
+      status: 'sent',
+      sent_at: new Date().toISOString(),
+    })
   }
 
   // Bump per-step metric.
@@ -303,9 +378,7 @@ export async function runSequences({ now = new Date() } = {}) {
       } else if (step.step_type === 'email' || !step.step_type) {
         sendId = await sendEmailStep(db, { enrollment, step, sequence, contact })
       } else if (step.step_type === 'whatsapp') {
-        // Phase 2b — not yet implemented. Record and move on so
-        // sequences with mixed steps don't block on this branch.
-        throw new Error('WhatsApp step support arrives in Phase 2b.')
+        sendId = await sendWhatsappStep(db, { enrollment, step, sequence, contact })
       } else {
         throw new Error(`Unknown step_type "${step.step_type}".`)
       }
@@ -313,7 +386,7 @@ export async function runSequences({ now = new Date() } = {}) {
       // Compute the next fire time based on the FOLLOWING step's delay.
       const followingStep = await db
         .from('sequence_steps')
-        .select('delay_minutes')
+        .select('delay_days, delay_hours, delay_minutes')
         .eq('sequence_id', sequence.id)
         .eq('step_order', step.step_order + 1)
         .maybeSingle()

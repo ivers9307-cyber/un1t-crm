@@ -3,14 +3,22 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
+import { uuidLike } from '@/lib/schemas'
 
 const StepUpdateSchema = z.object({
   step_order: z.number().int().min(0).max(1000).optional(),
   delay_days: z.number().int().min(0).max(365).optional(),
   delay_hours: z.number().int().min(0).max(23).optional(),
+  step_type: z.enum(['email', 'whatsapp', 'wait']).optional(),
+  // Email step content
   subject: z.string().max(500).optional(),
   html_content: z.string().max(1_000_000).optional(),
   design_json: z.unknown().nullable().optional(),
+  template_id: uuidLike.nullable().optional(),
+  // WhatsApp step content (mig 039)
+  whatsapp_template_id: uuidLike.nullable().optional(),
+  whatsapp_variables: z.record(z.string()).nullable().optional(),
+  whatsapp_header_media_url: z.string().url().max(2000).nullable().optional(),
 })
 
 async function loadSequenceLocation(db, sequenceId) {

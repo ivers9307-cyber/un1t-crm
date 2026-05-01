@@ -375,9 +375,11 @@ export async function sendBroadcast(broadcastId) {
 }
 
 /**
- * Build template components with contact-specific variable substitution
+ * Build template components with contact-specific variable
+ * substitution. Exported so the sequence runner can reuse the
+ * exact same resolution logic used by broadcasts.
  */
-function buildTemplateComponents(template, contact, variableMapping, headerMediaUrl) {
+export function buildTemplateComponents(template, contact, variableMapping, headerMediaUrl) {
   const components = []
   const templateComponents = template.components || []
 
@@ -422,9 +424,11 @@ function buildTemplateComponents(template, contact, variableMapping, headerMedia
 }
 
 /**
- * Get or create a conversation for a contact
+ * Get or create a conversation for a contact. Exported so the
+ * sequence runner can attribute its outbound messages to the
+ * right conversation row.
  */
-async function getOrCreateConversation(db, contact, locationId) {
+export async function getOrCreateConversation(db, contact, locationId) {
   const { data: existing } = await db.from('whatsapp_conversations')
     .select('id')
     .eq('location_id', locationId)

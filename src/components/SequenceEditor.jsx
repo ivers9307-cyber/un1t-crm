@@ -1,11 +1,11 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import {
   ArrowLeft, Save, Plus, Trash2, ChevronDown, ChevronUp,
-  Play, Pause, Clock, Mail, Zap, GripVertical
+  Play, Pause, Clock, Mail, MessageCircle, Hourglass, Zap, GripVertical, AlertCircle
 } from 'lucide-react'
 
 const TRIGGER_TYPES = [
@@ -16,15 +16,45 @@ const TRIGGER_TYPES = [
   { value: 'tag_added',       label: 'Tag Added',            description: 'Triggered when a tag is added to a contact' },
 ]
 
-function StepCard({ step, index, onUpdate, onDelete, onMoveUp, onMoveDown, isFirst, isLast }) {
+// Per-step icon/colour by channel.
+const CHANNEL_CONFIG = {
+  email:    { icon: Mail,          color: 'bg-blue-500/20 text-blue-400',   label: 'Email' },
+  whatsapp: { icon: MessageCircle, color: 'bg-green-500/20 text-green-400', label: 'WhatsApp' },
+  wait:     { icon: Hourglass,     color: 'bg-un1t-gray/40 text-un1t-light', label: 'Wait' },
+}
+
+// Pull {{1}}, {{2}}... placeholders out of a WhatsApp template's
+// BODY component so we can render one input per variable.
+function whatsappBodyVariables(template) {
+  if (!template) return []
+  const body = (template.components || []).find(c => c.type === 'BODY')
+  if (!body?.text) return []
+  const matches = body.text.match(/\{\{\d+\}\}/g) || []
+  // Dedupe + sort numerically.
+  const set = new Set(matches.map(m => m.match(/\d+/)[0]))
+  return [...set].sort((a, b) => Number(a) - Number(b))
+}
+
+function StepCard({ step, index, onUpdate, onDelete, onMoveUp, onMoveDown, isFirst, isLast, whatsappTemplates }) {
   const [expanded, setExpanded] = useState(false)
+  const stepType = step.step_type || 'email'
+  const config = CHANNEL_CONFIG[stepType] || CHANNEL_CONFIG.email
+  const StepIcon = config.icon
+
+  const selectedWaTemplate = stepType === 'whatsapp' && step.whatsapp_template_id
+    ? whatsappTemplates.find(t => t.id === step.whatsapp_template_id)
+    : null
+  const waVariables = selectedWaTemplate ? whatsappBodyVariables(selectedWaTemplate) : []
+
+  // Header label depends on channel.
+  let headerLabel
+  if (stepType === 'wait') headerLabel = `Wait ${step.delay_days || 0}d ${step.delay_hours || 0}h`
+  else if (stepType === 'whatsapp') headerLabel = selectedWaTemplate?.name || `WhatsApp step ${index + 1}`
+  else headerLabel = step.subject || `Step ${index + 1}`
 
   return (
     <div className="relative">
-      {/* Connector line */}
-      {!isFirst && (
-        <div className="absolute left-6 -top-4 w-px h-4 bg-un1t-gray" />
-      )}
+      {!isFirst && <div className="absolute left-6 -top-4 w-px h-4 bg-un1t-gray" />}
 
       <div className="bg-un1t-dark border border-un1t-gray rounded-lg overflow-hidden">
         {/* Step header */}
@@ -33,51 +63,51 @@ function StepCard({ step, index, onUpdate, onDelete, onMoveUp, onMoveDown, isFir
           onClick={() => setExpanded(!expanded)}
         >
           <div className="flex items-center gap-1 text-un1t-mid">
-            <button
-              onClick={e => { e.stopPropagation(); onMoveUp() }}
-              disabled={isFirst}
-              className="p-0.5 hover:text-un1t-white disabled:opacity-30 transition-colors"
-            >
+            <button onClick={e => { e.stopPropagation(); onMoveUp() }} disabled={isFirst} className="p-0.5 hover:text-un1t-white disabled:opacity-30">
               <ChevronUp size={12} />
             </button>
-            <button
-              onClick={e => { e.stopPropagation(); onMoveDown() }}
-              disabled={isLast}
-              className="p-0.5 hover:text-un1t-white disabled:opacity-30 transition-colors"
-            >
+            <button onClick={e => { e.stopPropagation(); onMoveDown() }} disabled={isLast} className="p-0.5 hover:text-un1t-white disabled:opacity-30">
               <ChevronDown size={12} />
             </button>
           </div>
 
-          <div className="w-8 h-8 rounded-full bg-un1t-gray/30 flex items-center justify-center text-xs font-bold text-un1t-light">
-            {index + 1}
+          <div className={`w-8 h-8 rounded-full ${config.color} flex items-center justify-center`}>
+            <StepIcon size={14} />
           </div>
 
           <div className="flex-1 min-w-0">
-            <p className="text-sm font-medium truncate">
-              {step.subject || `Step ${index + 1}`}
-            </p>
+            <p className="text-sm font-medium truncate">{headerLabel}</p>
             <p className="text-xs text-un1t-mid">
               <Clock size={10} className="inline mr-1" />
-              Wait {step.delay_days || 0}d {step.delay_hours || 0}h then send
+              Wait {step.delay_days || 0}d {step.delay_hours || 0}h
+              {stepType !== 'wait' && ' then send'}
+              {' · '}{config.label}
             </p>
           </div>
 
-          <button
-            onClick={e => { e.stopPropagation(); onDelete() }}
-            className="p-1.5 text-un1t-mid hover:text-red-400 transition-colors"
-          >
+          <button onClick={e => { e.stopPropagation(); onDelete() }} className="p-1.5 text-un1t-mid hover:text-red-400">
             <Trash2 size={14} />
           </button>
 
           {expanded ? <ChevronUp size={16} className="text-un1t-light" /> : <ChevronDown size={16} className="text-un1t-light" />}
         </div>
 
-        {/* Expanded content */}
         {expanded && (
           <div className="border-t border-un1t-gray p-4 space-y-4">
-            {/* Delay */}
-            <div className="flex items-center gap-4">
+            {/* Channel + delay row */}
+            <div className="flex flex-wrap items-end gap-4">
+              <div>
+                <label className="block text-xs text-un1t-light mb-1">Channel</label>
+                <select
+                  value={stepType}
+                  onChange={e => onUpdate({ step_type: e.target.value })}
+                  className="bg-un1t-black border border-un1t-gray rounded-md px-3 py-1.5 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
+                >
+                  <option value="email">Email</option>
+                  <option value="whatsapp">WhatsApp</option>
+                  <option value="wait">Wait (delay only)</option>
+                </select>
+              </div>
               <div>
                 <label className="block text-xs text-un1t-light mb-1">Delay (days)</label>
                 <input
@@ -99,37 +129,114 @@ function StepCard({ step, index, onUpdate, onDelete, onMoveUp, onMoveDown, isFir
                   className="bg-un1t-black border border-un1t-gray rounded-md px-2.5 py-1.5 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid w-20"
                 />
               </div>
-              <p className="text-xs text-un1t-mid mt-5">
+              <p className="text-xs text-un1t-mid pb-2">
                 {index === 0 ? 'after enrollment' : 'after previous step'}
               </p>
             </div>
 
-            {/* Subject */}
-            <div>
-              <label className="block text-xs text-un1t-light mb-1">Subject Line</label>
-              <input
-                type="text"
-                value={step.subject || ''}
-                onChange={e => onUpdate({ subject: e.target.value })}
-                placeholder="Email subject — use {{first_name}} for personalisation"
-                className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid"
-              />
-            </div>
+            {/* Email step content */}
+            {stepType === 'email' && (
+              <>
+                <div>
+                  <label className="block text-xs text-un1t-light mb-1">Subject Line</label>
+                  <input
+                    type="text"
+                    value={step.subject || ''}
+                    onChange={e => onUpdate({ subject: e.target.value })}
+                    placeholder="Email subject — use {{first_name}} for personalisation"
+                    className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-un1t-light mb-1">Email HTML</label>
+                  <textarea
+                    value={step.html_content || ''}
+                    onChange={e => onUpdate({ html_content: e.target.value })}
+                    placeholder="Paste your HTML email content here..."
+                    rows={8}
+                    className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-green-400 font-mono placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid resize-y"
+                  />
+                  <p className="text-xs text-un1t-mid mt-1">
+                    Merge tags: {'{{first_name}}'}, {'{{name}}'}, {'{{email}}'}, {'{{unsubscribe_url}}'}
+                  </p>
+                </div>
+              </>
+            )}
 
-            {/* HTML Content */}
-            <div>
-              <label className="block text-xs text-un1t-light mb-1">Email HTML</label>
-              <textarea
-                value={step.html_content || ''}
-                onChange={e => onUpdate({ html_content: e.target.value })}
-                placeholder="Paste your HTML email content here..."
-                rows={8}
-                className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-green-400 font-mono placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid resize-y"
-              />
-              <p className="text-xs text-un1t-mid mt-1">
-                Merge tags: {'{{first_name}}'}, {'{{name}}'}, {'{{email}}'}, {'{{unsubscribe_url}}'}
-              </p>
-            </div>
+            {/* WhatsApp step content */}
+            {stepType === 'whatsapp' && (
+              <>
+                <div>
+                  <label className="block text-xs text-un1t-light mb-1">WhatsApp Template (Meta-approved)</label>
+                  <select
+                    value={step.whatsapp_template_id || ''}
+                    onChange={e => onUpdate({
+                      whatsapp_template_id: e.target.value || null,
+                      whatsapp_variables: {}, // reset on template change
+                    })}
+                    className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
+                  >
+                    <option value="">— Select a template —</option>
+                    {whatsappTemplates.map(t => (
+                      <option key={t.id} value={t.id} disabled={t.status !== 'APPROVED'}>
+                        {t.name} ({t.language}, {t.status})
+                      </option>
+                    ))}
+                  </select>
+                  {whatsappTemplates.length === 0 && (
+                    <p className="mt-1 text-[11px] text-amber-500 inline-flex items-center gap-1">
+                      <AlertCircle size={11} /> No WhatsApp templates yet — create one under Communications → Templates first.
+                    </p>
+                  )}
+                </div>
+
+                {selectedWaTemplate && (
+                  <div className="bg-un1t-black/50 border border-un1t-gray rounded-md p-3 space-y-2">
+                    <p className="text-[11px] uppercase tracking-wider text-un1t-light">Template body preview</p>
+                    <p className="text-xs text-un1t-mid whitespace-pre-wrap">
+                      {(selectedWaTemplate.components || []).find(c => c.type === 'BODY')?.text || '(no body text)'}
+                    </p>
+                  </div>
+                )}
+
+                {waVariables.length > 0 && (
+                  <div>
+                    <label className="block text-xs text-un1t-light mb-1">Variable mapping</label>
+                    <p className="text-[11px] text-un1t-mid mb-2">
+                      Type a contact field name (<code>first_name</code>, <code>name</code>, <code>email</code>, <code>phone</code>) or a literal value.
+                    </p>
+                    <div className="space-y-2">
+                      {waVariables.map(num => (
+                        <div key={num} className="flex items-center gap-2">
+                          <span className="text-xs text-un1t-light w-12">{`{{${num}}}`}</span>
+                          <input
+                            type="text"
+                            value={(step.whatsapp_variables || {})[num] || ''}
+                            onChange={e => onUpdate({
+                              whatsapp_variables: {
+                                ...(step.whatsapp_variables || {}),
+                                [num]: e.target.value,
+                              },
+                            })}
+                            placeholder={num === '1' ? 'e.g. first_name' : 'field name or literal text'}
+                            className="flex-1 bg-un1t-black border border-un1t-gray rounded-md px-3 py-1.5 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid"
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+
+            {/* Wait step has no content beyond the delay configured above. */}
+            {stepType === 'wait' && (
+              <div className="bg-un1t-black/40 border border-un1t-gray rounded-md p-3">
+                <p className="text-xs text-un1t-light">
+                  Wait steps just hold the contact for the delay above before the next step fires. Useful between channels (e.g. WhatsApp → wait 2 days → email follow-up).
+                </p>
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -147,6 +254,22 @@ export default function SequenceEditor({ sequence, locationId, userId }) {
   const [triggerConfig, setTriggerConfig] = useState(sequence?.trigger_config || {})
   const [status, setStatus] = useState(sequence?.status || 'draft')
   const [steps, setSteps] = useState(sequence?.sequence_steps || [])
+  const [whatsappTemplates, setWhatsappTemplates] = useState([])
+
+  // Lazy-load the location's WhatsApp templates so the StepCard
+  // can offer a dropdown when a step is set to channel=whatsapp.
+  // Templates are tied to a single location via location_id, so no
+  // need to refetch when individual steps change.
+  useEffect(() => {
+    if (!locationId) return
+    fetch(`/api/whatsapp/templates?location_id=${locationId}`)
+      .then(r => r.ok ? r.json() : { success: false })
+      .then(j => {
+        if (j.success && Array.isArray(j.data)) setWhatsappTemplates(j.data)
+        else if (j.success && Array.isArray(j.templates)) setWhatsappTemplates(j.templates)
+      })
+      .catch(() => {})
+  }, [locationId])
   const [sequenceId, setSequenceId] = useState(sequence?.id || null)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
@@ -227,8 +350,10 @@ export default function SequenceEditor({ sequence, locationId, userId }) {
       step_order: nextOrder,
       delay_days: nextOrder === 1 ? 0 : 1,
       delay_hours: 0,
+      step_type: 'email',
       subject: '',
       html_content: '',
+      whatsapp_variables: {},
     }])
   }
 
@@ -440,6 +565,7 @@ export default function SequenceEditor({ sequence, locationId, userId }) {
                   onMoveDown={() => moveStep(index, 1)}
                   isFirst={index === 0}
                   isLast={index === steps.length - 1}
+                  whatsappTemplates={whatsappTemplates}
                 />
               ))}
             </div>

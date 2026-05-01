@@ -9,9 +9,19 @@ const StepShape = z.object({
   step_order: z.number().int().min(0).max(1000).optional(),
   delay_days: z.number().int().min(0).max(365).optional(),
   delay_hours: z.number().int().min(0).max(23).optional(),
+  // Channel selector. 'wait' = no send, just the delay before the
+  // following step. Defaults to 'email' for back-compat with rows
+  // pre-mig 039 that didn't set step_type explicitly.
+  step_type: z.enum(['email', 'whatsapp', 'wait']).optional(),
+  // Email step content
   subject: z.string().max(500).optional(),
   html_content: z.string().max(1_000_000).optional(),
   design_json: z.unknown().nullable().optional(),
+  template_id: uuidLike.nullable().optional(),
+  // WhatsApp step content (mig 039)
+  whatsapp_template_id: uuidLike.nullable().optional(),
+  whatsapp_variables: z.record(z.string()).nullable().optional(),
+  whatsapp_header_media_url: z.string().url().max(2000).nullable().optional(),
 })
 
 const StepCreateSchema = StepShape
@@ -70,14 +80,22 @@ export async function POST(request, { params }) {
 
   const nextOrder = existing?.length ? existing[0].step_order + 1 : 1
 
+  const stepType = body.step_type || 'email'
   const { data, error } = await db.from('sequence_steps').insert({
     sequence_id: params.id,
     step_order: body.step_order ?? nextOrder,
     delay_days: body.delay_days ?? 1,
     delay_hours: body.delay_hours ?? 0,
-    subject: body.subject || '',
-    html_content: body.html_content || '',
-    design_json: body.design_json || null,
+    step_type: stepType,
+    // Email fields (only meaningful when step_type=email)
+    subject: stepType === 'email' ? (body.subject || '') : '',
+    html_content: stepType === 'email' ? (body.html_content || '') : '',
+    design_json: stepType === 'email' ? (body.design_json || null) : null,
+    template_id: stepType === 'email' ? (body.template_id || null) : null,
+    // WhatsApp fields (only meaningful when step_type=whatsapp)
+    whatsapp_template_id: stepType === 'whatsapp' ? (body.whatsapp_template_id || null) : null,
+    whatsapp_variables: stepType === 'whatsapp' ? (body.whatsapp_variables || {}) : {},
+    whatsapp_header_media_url: stepType === 'whatsapp' ? (body.whatsapp_header_media_url || null) : null,
   }).select().single()
 
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
@@ -100,15 +118,24 @@ export async function PUT(request, { params }) {
   const { steps } = validation.data
 
   for (const step of steps) {
+    // Build update payload incrementally so undefined fields aren't
+    // written (lets the bulk-reorder path leave content untouched).
+    const updates = {
+      step_order: step.step_order,
+      delay_days: step.delay_days,
+      delay_hours: step.delay_hours,
+    }
+    if (step.step_type !== undefined) updates.step_type = step.step_type
+    if (step.subject !== undefined) updates.subject = step.subject
+    if (step.html_content !== undefined) updates.html_content = step.html_content
+    if (step.design_json !== undefined) updates.design_json = step.design_json
+    if (step.template_id !== undefined) updates.template_id = step.template_id
+    if (step.whatsapp_template_id !== undefined) updates.whatsapp_template_id = step.whatsapp_template_id
+    if (step.whatsapp_variables !== undefined) updates.whatsapp_variables = step.whatsapp_variables
+    if (step.whatsapp_header_media_url !== undefined) updates.whatsapp_header_media_url = step.whatsapp_header_media_url
+
     await db.from('sequence_steps')
-      .update({
-        step_order: step.step_order,
-        delay_days: step.delay_days,
-        delay_hours: step.delay_hours,
-        subject: step.subject,
-        html_content: step.html_content,
-        design_json: step.design_json,
-      })
+      .update(updates)
       .eq('id', step.id)
       .eq('sequence_id', params.id)  // also constrain by parent so cross-sequence writes can't sneak through
   }
