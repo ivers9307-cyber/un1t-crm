@@ -24,7 +24,7 @@ import {
   buildTemplateComponents,
   getOrCreateConversation,
 } from '@/lib/whatsapp'
-import { getAppUrl, getRequestOrigin } from '@/lib/app-url'
+import { getDepositBaseUrl, getRequestOrigin } from '@/lib/app-url'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -101,11 +101,12 @@ export async function POST(request, { params }) {
   // (operator chose 'send to both'). We don't fail the whole call if
   // ONE channel errors — surface the per-channel result so the UI
   // can show e.g. "Email sent ✓ · WhatsApp failed: template missing".
-  // Prefer the configured app URL (so emails sent from a preview
-  // deploy still link back to the canonical domain). Fall back to the
-  // incoming request origin if NEXT_PUBLIC_APP_URL isn't set.
+  // Buyer-facing deposit links use the dedicated payment domain
+  // (DEPOSIT_BASE_URL). Falls back to NEXT_PUBLIC_APP_URL if unset,
+  // and finally to the incoming request origin as a last resort so
+  // a misconfigured deploy still produces working links.
   let baseUrl
-  try { baseUrl = getAppUrl() } catch { baseUrl = getRequestOrigin(request) }
+  try { baseUrl = getDepositBaseUrl() } catch { baseUrl = getRequestOrigin(request) }
   const link = `${baseUrl}/cars/deposit/${token}`
   const carLabel = [car.make, car.model, car.uk_reg || car.irish_reg].filter(Boolean).join(' ').trim() || 'your Tesla'
   const buyerFirstName = (car.buyer_name || '').split(' ')[0] || 'there'

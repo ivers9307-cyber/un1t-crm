@@ -35,3 +35,28 @@ export function getAppUrl() {
 export function getRequestOrigin(request) {
   return new URL(request.url).origin
 }
+
+/**
+ * Returns the base URL to use when generating BUYER-FACING deposit links —
+ * the public car-deposit pages. Distinct from the CRM origin so we can host
+ * payment pages on a dedicated brand-appropriate domain (e.g.
+ * pay.ccfautos.com) while the operator app stays on crm.un1tdublin.com.
+ *
+ * Resolution order:
+ *   1. DEPOSIT_BASE_URL env var (production: the dedicated payment domain)
+ *   2. NEXT_PUBLIC_APP_URL fallback (so a misconfigured deploy still works)
+ *
+ * Throws if neither is set so a misconfigured deploy fails loudly.
+ *
+ * @returns {string} no trailing slash
+ */
+export function getDepositBaseUrl() {
+  const raw = process.env.DEPOSIT_BASE_URL || process.env.NEXT_PUBLIC_APP_URL
+  if (!raw) {
+    throw new Error(
+      'No deposit base URL configured. Set DEPOSIT_BASE_URL (preferred — e.g. ' +
+      'https://pay.ccfautos.com) or NEXT_PUBLIC_APP_URL.'
+    )
+  }
+  return raw.replace(/\/+$/, '')
+}

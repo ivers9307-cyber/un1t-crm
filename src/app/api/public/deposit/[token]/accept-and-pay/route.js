@@ -15,7 +15,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { createOrder, getOrder, RevolutError } from '@/lib/revolut'
-import { getAppUrl, getRequestOrigin } from '@/lib/app-url'
+import { getDepositBaseUrl, getRequestOrigin } from '@/lib/app-url'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -118,8 +118,12 @@ export async function POST(request, { params }) {
   }
 
   if (!publicId) {
+    // Revolut redirects the buyer here after the hosted-page fallback
+    // path. Must be the same domain the buyer started on so it doesn't
+    // look like a phishing bounce. getDepositBaseUrl is the deposit
+    // domain (pay.ccfautos.com); request origin is a final safety net.
     let baseUrl
-    try { baseUrl = getAppUrl() } catch { baseUrl = getRequestOrigin(request) }
+    try { baseUrl = getDepositBaseUrl() } catch { baseUrl = getRequestOrigin(request) }
     const amountMinor = Math.round(Number(car.deposit_amount || 500) * 100)
     const carLabel = [car.make, car.model].filter(Boolean).join(' ') || 'Tesla'
     try {

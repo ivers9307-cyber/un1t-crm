@@ -15,7 +15,41 @@ function timingSafeEqualEdge(a, b) {
   return mismatch === 0
 }
 
+// Hostname of the dedicated payment subdomain (e.g. pay.ccfautos.com).
+// On this hostname ONLY the buyer-facing deposit pages + their backing
+// public API are reachable; every other path is blocked so the CRM
+// itself isn't accessible from the customer-facing brand.
+const PAY_HOST = process.env.PAY_HOSTNAME || 'pay.ccfautos.com'
+
+// Paths exposed on the pay.* hostname. Tightly scoped on purpose —
+// adding a new public path here is a deliberate decision.
+const PAY_HOST_ALLOWED = ['/cars/deposit/', '/api/public/deposit/']
+
 export async function middleware(request) {
+  const hostname = request.headers.get('host') || ''
+
+  // ── Pay subdomain isolation ──────────────────────────────────────
+  // Anything that reaches us on pay.* and isn't a deposit path is
+  // 404'd (don't redirect — leaking the CRM domain would defeat the
+  // brand isolation). The Next.js notFound() page renders generically.
+  if (hostname === PAY_HOST || hostname.startsWith(`${PAY_HOST}:`)) {
+    const path = request.nextUrl.pathname
+    const allowed = PAY_HOST_ALLOWED.some(p => path.startsWith(p))
+    // Allow Next's framework assets (_next/static, _next/image, etc.)
+    // and the favicon — without these the deposit page itself can't
+    // load CSS / JS / images.
+    const isFrameworkAsset = path.startsWith('/_next/')
+      || path === '/favicon.ico'
+      || path === '/robots.txt'
+    if (!allowed && !isFrameworkAsset) {
+      return new NextResponse('Not found', { status: 404 })
+    }
+    // Deposit paths on pay.* are unconditionally public — skip the
+    // CRM auth gate below.
+    return NextResponse.next()
+  }
+
+  // ── CRM hostname (default) — existing behaviour ──────────────────
   // Public routes that don't require auth
   const publicPaths = ['/login', '/reset-password', '/book/', '/api/public/', '/unsubscribe/', '/preferences/', '/api/unsubscribe/', '/api/preferences/', '/api/webhooks/', '/api/cron/', '/cars/deposit/']
   const isPublic = publicPaths.some(p => request.nextUrl.pathname.startsWith(p))

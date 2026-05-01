@@ -20,6 +20,12 @@ const STATUS_META = {
   refunded:        { label: 'Refunded',        cls: 'bg-purple-500/20 text-purple-400', icon: RefreshCw },
 }
 
+// Client-side mirror of getDepositBaseUrl(). Configured at deploy time —
+// used to build absolute preview links so the operator opens the page
+// on the same hostname the buyer would (pay.ccfautos.com), not the CRM
+// host. Falls back to a relative path which still works on either domain.
+const DEPOSIT_BASE_URL = process.env.NEXT_PUBLIC_DEPOSIT_BASE_URL || ''
+
 export default function DepositCard({ car, setCar, setError, disabled, defaultAmount = 500 }) {
   const [busy, setBusy] = useState(false)
   const [override, setOverride] = useState(
@@ -139,7 +145,7 @@ export default function DepositCard({ car, setCar, setError, disabled, defaultAm
 
           {hasLink && (
             <a
-              href={`/cars/deposit/${car.deposit_token}`}
+              href={`${DEPOSIT_BASE_URL}/cars/deposit/${car.deposit_token}`}
               target="_blank"
               rel="noreferrer"
               className="text-xs text-blue-400 hover:underline inline-flex items-center gap-1"
