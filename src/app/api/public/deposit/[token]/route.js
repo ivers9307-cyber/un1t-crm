@@ -45,7 +45,10 @@ export async function GET(_request, { params }) {
 
   const carLabel = [car.make, car.model, car.vehicle_year]
     .filter(Boolean).join(' ').trim() || 'Tesla'
-  const reg = car.irish_reg || car.uk_reg || null
+  // Buyer-facing — only show the Irish reg they'll actually drive
+  // away with. UK reg is internal to our import workflow and would
+  // confuse the buyer (or worse, look like a different car).
+  const reg = car.irish_reg || null
 
   return NextResponse.json({
     success: true,

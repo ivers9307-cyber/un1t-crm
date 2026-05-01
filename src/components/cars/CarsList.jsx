@@ -92,12 +92,12 @@ export default function CarsList({ statuses, locationId, addButton, emptyText, l
                         {car.make || 'Tesla'} {car.model || ''}
                       </span>
                       <StatusBadge status={car.status} />
-                      {car.uk_reg && (
-                        <span className="text-xs text-un1t-light">UK · {car.uk_reg}</span>
-                      )}
-                      {car.irish_reg && (
-                        <span className="text-xs text-un1t-light">IE · {car.irish_reg}</span>
-                      )}
+                      <span className={`text-xs ${car.uk_reg ? 'text-un1t-light' : 'text-un1t-mid italic'}`}>
+                        UK · {car.uk_reg || 'not set'}
+                      </span>
+                      <span className={`text-xs ${car.irish_reg ? 'text-un1t-light' : 'text-un1t-mid italic'}`}>
+                        IE · {car.irish_reg || 'not set'}
+                      </span>
                     </div>
                     <div className="text-xs text-un1t-light mt-1 flex flex-wrap gap-x-4 gap-y-1">
                       <span>UK ex-VAT {fmtMoney(car.uk_purchase_price_ex_vat)}</span>
