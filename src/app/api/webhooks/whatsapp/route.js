@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server'
 import { refreshWindow } from '@/lib/whatsapp'
 import { verifyMetaSignature, safeEqual } from '@/lib/webhook-auth'
 import { sendPush, sendPushToRolesAtLocation } from '@/lib/push'
+import { MANAGER_ROLES } from '@/lib/schemas'
 
 // Force Node.js runtime — we use node:crypto for HMAC verification.
 export const runtime = 'nodejs'
@@ -285,7 +286,7 @@ async function handleIncomingMessage(db, message, contacts, _phoneNumberId) {
     } else if (conv?.location_id) {
       await sendPushToRolesAtLocation(
         conv.location_id,
-        ['owner', 'manager', 'head_coach'],
+        MANAGER_ROLES,
         payload
       )
     }

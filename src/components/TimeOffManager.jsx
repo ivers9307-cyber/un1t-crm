@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { CalendarOff, Plus, Check, X, Palmtree, ThermometerSun, Ban } from 'lucide-react'
+import { MANAGER_ROLES } from '@/lib/schemas'
 
 const TYPE_CONFIG = {
   holiday:     { label: 'Holiday',     color: '#22C55E', bg: '#22C55E20', icon: Palmtree },
@@ -24,7 +25,7 @@ export default function TimeOffManager({ user }) {
   const [filter, setFilter] = useState('all') // 'all', 'pending', 'approved'
   const [tab, setTab] = useState('my') // 'my' or 'team' (team only for managers)
 
-  const isManager = ['owner', 'manager', 'head_coach'].includes(user.role)
+  const isManager = MANAGER_ROLES.includes(user.role)
   const locationId = user.activeLocation?.id
 
   const fetchData = useCallback(async () => {

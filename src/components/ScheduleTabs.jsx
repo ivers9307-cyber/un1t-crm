@@ -5,8 +5,9 @@ import { CalendarClock, CheckCircle, BarChart3 } from 'lucide-react'
 import ScheduleCalendar from './ScheduleCalendar'
 import ScheduleApprovals from './ScheduleApprovals'
 import ScheduleReporting from './ScheduleReporting'
+import { MANAGER_ROLES } from '@/lib/schemas'
 
-const canManage = (role) => ['owner', 'manager', 'head_coach'].includes(role)
+const canManage = (role) => MANAGER_ROLES.includes(role)
 
 export default function ScheduleTabs({ user }) {
   const [activeTab, setActiveTab] = useState('schedule')

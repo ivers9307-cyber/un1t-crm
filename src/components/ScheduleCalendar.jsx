@@ -5,6 +5,7 @@ import { ChevronLeft, ChevronRight, Copy, Send, Plus, Users, User, Clock, X, Arr
 import Link from 'next/link'
 import { computeWeeklyCost } from '@/lib/payroll'
 import { indexByDate } from '@/lib/bank-holidays'
+import { MANAGER_ROLES } from '@/lib/schemas'
 
 const TIME_OFF_CONFIG = {
   holiday:     { label: 'Holiday',     color: '#22C55E', icon: Palmtree },
@@ -13,7 +14,7 @@ const TIME_OFF_CONFIG = {
 }
 
 const DAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
-const canManage = (role) => ['owner', 'manager', 'head_coach'].includes(role)
+const canManage = (role) => MANAGER_ROLES.includes(role)
 
 function getMonday(date) {
   const d = new Date(date)

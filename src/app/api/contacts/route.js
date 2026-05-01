@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { requireApiKey } from '@/lib/api-auth'
 import { validateBody } from '@/lib/validate'
-import { uuidLike, email, phone, leadSourceSchema, leadStatusSchema } from '@/lib/schemas'
+import { uuidLike, email, phone, leadSourceSchema, leadStatusSchema, MANAGER_ROLES } from '@/lib/schemas'
 import { sendPushToRolesAtLocation } from '@/lib/push'
 
 const ContactCreateSchema = z.object({
@@ -57,7 +57,7 @@ export async function POST(request) {
     const sourceLabel = data.lead_source ? ` from ${data.lead_source}` : ''
     sendPushToRolesAtLocation(
       data.location_id,
-      ['owner', 'manager', 'head_coach'],
+      MANAGER_ROLES,
       {
         title: 'New lead',
         body: `${data.name}${sourceLabel}. Tap to view.`,

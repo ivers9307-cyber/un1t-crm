@@ -3,8 +3,9 @@
 import { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
 import { ArrowLeft, ArrowLeftRight, Check, X, AlertCircle } from 'lucide-react'
+import { MANAGER_ROLES } from '@/lib/schemas'
 
-const canManage = (role) => ['owner', 'manager', 'head_coach'].includes(role)
+const canManage = (role) => MANAGER_ROLES.includes(role)
 
 function formatTime(time) {
   if (!time) return ''

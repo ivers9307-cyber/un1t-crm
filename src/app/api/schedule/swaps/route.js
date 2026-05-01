@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess , getUserLocationIds} from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
-import { uuidLike } from '@/lib/schemas'
+import { uuidLike, MANAGER_ROLES } from '@/lib/schemas'
 import { sendPush, sendPushToRolesAtLocation } from '@/lib/push'
 
 const SwapCreateSchema = z.object({
@@ -93,7 +93,7 @@ export async function POST(request) {
       data: { type: 'swap_inbound', swap_id: data.id },
     }).catch(err => console.error('[swaps] push to target failed', err))
   } else {
-    sendPushToRolesAtLocation(shift.location_id, ['owner', 'manager', 'head_coach'], {
+    sendPushToRolesAtLocation(shift.location_id, MANAGER_ROLES, {
       title: 'Open swap request',
       body: `${user.full_name} posted a shift for swap. Tap to review.`,
       category: 'swap',
