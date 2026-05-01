@@ -1,9 +1,9 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { createBrowserClient } from '@/lib/supabase'
-import { Plus, Trash2 } from 'lucide-react'
+import { Plus, Trash2, Bell, Mail, MessageCircle } from 'lucide-react'
 
 const DAYS = [
   { key: 'mon', label: 'Monday' },
@@ -50,6 +50,39 @@ export default function EventForm({ event, locationId }) {
   const [customFields, setCustomFields] = useState(event?.custom_fields || [])
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
+
+  // Reminder config (mig 044). The runner in lib/event-reminders.js
+  // picks up every booking ~minutesBefore before its start time and
+  // sends one message via the chosen channel. Stored on the
+  // event_type itself so each event can have its own reminder
+  // policy without authoring a sequence.
+  const [reminderEnabled, setReminderEnabled] = useState(!!event?.reminder_enabled)
+  const [reminderMinutesBefore, setReminderMinutesBefore] = useState(event?.reminder_minutes_before ?? 1440) // 24h default
+  const [reminderChannel, setReminderChannel] = useState(event?.reminder_channel || 'email')
+  const [reminderEmailTemplateId, setReminderEmailTemplateId] = useState(event?.reminder_email_template_id || '')
+  const [reminderEmailSubject, setReminderEmailSubject] = useState(event?.reminder_email_subject || '')
+  const [reminderWaTemplateId, setReminderWaTemplateId] = useState(event?.reminder_whatsapp_template_id || '')
+
+  // Template lists for the picker. Loaded once when reminders are
+  // toggled on (skip the network round-trip when not needed).
+  const [emailTemplates, setEmailTemplates] = useState(null)
+  const [waTemplates, setWaTemplates] = useState(null)
+
+  useEffect(() => {
+    if (!reminderEnabled || !locationId) return
+    if (emailTemplates === null) {
+      fetch(`/api/templates?location_id=${encodeURIComponent(locationId)}`)
+        .then(r => r.json())
+        .then(j => setEmailTemplates(j.success ? (j.templates || []) : []))
+        .catch(() => setEmailTemplates([]))
+    }
+    if (waTemplates === null) {
+      fetch(`/api/whatsapp/templates?location_id=${encodeURIComponent(locationId)}&status=APPROVED`)
+        .then(r => r.json())
+        .then(j => setWaTemplates(j.success ? (j.templates || []) : []))
+        .catch(() => setWaTemplates([]))
+    }
+  }, [reminderEnabled, locationId, emailTemplates, waTemplates])
 
   function toggleDay(day) {
     setAvailability(prev => ({
@@ -108,6 +141,15 @@ export default function EventForm({ event, locationId }) {
       custom_fields: customFields.filter(f => f.label.trim()),
       webhook_url: webhookUrl || null,
       active: true,
+      // Reminder fields. When disabled we still write the channel /
+      // template ids so the operator's last config is preserved if
+      // they re-enable later.
+      reminder_enabled: reminderEnabled,
+      reminder_minutes_before: reminderEnabled ? Number(reminderMinutesBefore) || null : null,
+      reminder_channel: reminderEnabled ? reminderChannel : null,
+      reminder_email_template_id: reminderEnabled && reminderChannel === 'email' ? (reminderEmailTemplateId || null) : null,
+      reminder_email_subject: reminderEnabled && reminderChannel === 'email' ? (reminderEmailSubject || null) : null,
+      reminder_whatsapp_template_id: reminderEnabled && reminderChannel === 'whatsapp' ? (reminderWaTemplateId || null) : null,
       ...(locationId && !isEditing ? { location_id: locationId } : {}),
     }
 
@@ -342,6 +384,143 @@ export default function EventForm({ event, locationId }) {
                 </div>
               </div>
             ))}
+          </div>
+        )}
+      </div>
+
+      {/* Reminder */}
+      <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5 space-y-4">
+        <div className="flex items-center justify-between gap-3">
+          <h3 className="font-semibold text-sm text-un1t-light uppercase tracking-wider flex items-center gap-2">
+            <Bell size={14} /> Reminder
+          </h3>
+          <label className="text-sm flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={reminderEnabled}
+              onChange={e => setReminderEnabled(e.target.checked)}
+              className="cursor-pointer"
+            />
+            <span>Enabled</span>
+          </label>
+        </div>
+        <p className="text-xs text-un1t-light">
+          Send a one-shot reminder to each booking before it starts. The cron checks every 5 minutes;
+          actual send time is within ±1 hour of the configured offset.
+        </p>
+
+        {reminderEnabled && (
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm mb-1.5">Send this many minutes before</label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    min={1}
+                    value={reminderMinutesBefore}
+                    onChange={e => setReminderMinutesBefore(parseInt(e.target.value) || 0)}
+                    className="w-32 bg-un1t-black border border-un1t-gray rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+                  />
+                  <span className="text-xs text-un1t-light">
+                    minutes ({Math.round(reminderMinutesBefore / 60 * 10) / 10}h)
+                  </span>
+                </div>
+                <p className="text-[11px] text-un1t-mid mt-1">Common: 1440 = 24h, 120 = 2h, 60 = 1h</p>
+              </div>
+              <div>
+                <label className="block text-sm mb-1.5">Channel</label>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setReminderChannel('email')}
+                    className={`flex-1 px-3 py-2 rounded-lg text-sm flex items-center justify-center gap-2 transition-colors ${
+                      reminderChannel === 'email'
+                        ? 'bg-un1t-white text-un1t-black border border-un1t-white'
+                        : 'border border-un1t-gray text-un1t-light hover:text-un1t-white hover:border-un1t-mid'
+                    }`}
+                  >
+                    <Mail size={14} /> Email
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setReminderChannel('whatsapp')}
+                    className={`flex-1 px-3 py-2 rounded-lg text-sm flex items-center justify-center gap-2 transition-colors ${
+                      reminderChannel === 'whatsapp'
+                        ? 'bg-un1t-white text-un1t-black border border-un1t-white'
+                        : 'border border-un1t-gray text-un1t-light hover:text-un1t-white hover:border-un1t-mid'
+                    }`}
+                  >
+                    <MessageCircle size={14} /> WhatsApp
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {reminderChannel === 'email' && (
+              <div className="space-y-3">
+                <div>
+                  <label className="block text-sm mb-1.5">Email template</label>
+                  <select
+                    value={reminderEmailTemplateId}
+                    onChange={e => setReminderEmailTemplateId(e.target.value)}
+                    className="w-full bg-un1t-black border border-un1t-gray rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+                  >
+                    <option value="">— Select a template —</option>
+                    {(emailTemplates || []).map(t => (
+                      <option key={t.id} value={t.id}>{t.name}</option>
+                    ))}
+                  </select>
+                  {emailTemplates && emailTemplates.length === 0 && (
+                    <p className="text-[11px] text-amber-400 mt-1">
+                      No email templates yet — create one in Communications → Templates first.
+                    </p>
+                  )}
+                </div>
+                <div>
+                  <label className="block text-sm mb-1.5">Subject (optional override)</label>
+                  <input
+                    type="text"
+                    value={reminderEmailSubject}
+                    onChange={e => setReminderEmailSubject(e.target.value)}
+                    placeholder="Defaults to the template subject, or 'Reminder: <event name>'"
+                    className="w-full bg-un1t-black border border-un1t-gray rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+                  />
+                  <p className="text-[11px] text-un1t-mid mt-1">
+                    Available merge tags: {'{{first_name}}'}, {'{{event_name}}'}, {'{{event_time}}'}
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {reminderChannel === 'whatsapp' && (
+              <div>
+                <label className="block text-sm mb-1.5">WhatsApp template (utility, approved)</label>
+                <select
+                  value={reminderWaTemplateId}
+                  onChange={e => setReminderWaTemplateId(e.target.value)}
+                  className="w-full bg-un1t-black border border-un1t-gray rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+                >
+                  <option value="">— Select a template —</option>
+                  {(waTemplates || []).map(t => (
+                    <option key={t.id} value={t.id}>
+                      {t.name}{t.category ? ` · ${t.category.toLowerCase()}` : ''}
+                    </option>
+                  ))}
+                </select>
+                {waTemplates && waTemplates.length === 0 && (
+                  <p className="text-[11px] text-amber-400 mt-1">
+                    No approved WhatsApp templates yet — create + submit one in Communications → Templates first.
+                  </p>
+                )}
+                <p className="text-[11px] text-un1t-mid mt-2">
+                  Body variables fill in this order: <code>{'{{1}}'}</code>=first name,
+                  {' '}<code>{'{{2}}'}</code>=event name,
+                  {' '}<code>{'{{3}}'}</code>=date + time,
+                  {' '}<code>{'{{4}}'}</code>=date.
+                </p>
+              </div>
+            )}
           </div>
         )}
       </div>
