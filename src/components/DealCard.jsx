@@ -29,15 +29,19 @@ export default function DealCard({ deal, locationId }) {
 
   const [menuOpen, setMenuOpen] = useState(false)
   const [picker, setPicker] = useState(false)
+  // Two refs — the trigger button + the dropdown panel. The outside-click
+  // handler must skip closing if the click lands in either, otherwise
+  // mousedown closes the menu before the menu item's click can fire and
+  // setPicker(true) never runs (was the v1 bug).
+  const buttonRef = useRef(null)
   const menuRef = useRef(null)
 
-  // Close menu on outside click. The picker has its own dismiss button.
   useEffect(() => {
     if (!menuOpen) return
     function onClick(e) {
-      if (menuRef.current && !menuRef.current.contains(e.target)) {
-        setMenuOpen(false)
-      }
+      if (buttonRef.current?.contains(e.target)) return
+      if (menuRef.current?.contains(e.target)) return
+      setMenuOpen(false)
     }
     document.addEventListener('mousedown', onClick)
     return () => document.removeEventListener('mousedown', onClick)
@@ -58,7 +62,7 @@ export default function DealCard({ deal, locationId }) {
           <p className="text-sm font-medium truncate flex-1">{deal.title}</p>
           {contact.id && (
             <button
-              ref={menuRef}
+              ref={buttonRef}
               onClick={(e) => { e.stopPropagation(); setMenuOpen(o => !o) }}
               className="shrink-0 text-un1t-light hover:text-un1t-white p-0.5 -m-0.5 rounded"
               title="Actions"
@@ -86,7 +90,7 @@ export default function DealCard({ deal, locationId }) {
       </div>
 
       {menuOpen && (
-        <div className="absolute right-1 top-8 z-20 bg-un1t-dark border border-un1t-gray rounded-md shadow-lg py-1 min-w-[160px]">
+        <div ref={menuRef} className="absolute right-1 top-8 z-20 bg-un1t-dark border border-un1t-gray rounded-md shadow-lg py-1 min-w-[160px]">
           <button
             onClick={(e) => { e.stopPropagation(); setMenuOpen(false); setPicker(true) }}
             className="w-full text-left px-3 py-1.5 text-xs text-un1t-white hover:bg-un1t-gray/40"
