@@ -1,5 +1,6 @@
 import './globals.css'
 import AppShellServer from '@/components/AppShellServer'
+import { SpeedInsights } from '@vercel/speed-insights/next'
 
 export const metadata = {
   title: 'UN1T CRM',
@@ -11,6 +12,7 @@ export default function RootLayout({ children }) {
     <html lang="en">
       <body>
         <AppShellServer>{children}</AppShellServer>
+        <SpeedInsights />
       </body>
     </html>
   )
