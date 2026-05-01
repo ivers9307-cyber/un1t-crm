@@ -18,11 +18,43 @@
 
 import { createServerClient } from '@/lib/supabase'
 import { sendTransactionalEmail, applyMergeTags } from '@/lib/postmark'
+import { applyAudienceFilter, InvalidAudienceFilterError } from '@/lib/audience-filter'
 import {
   sendTemplateMessage,
   buildTemplateComponents,
   getOrCreateConversation,
 } from '@/lib/whatsapp'
+
+/**
+ * Returns true if a given contact would match a sequence's
+ * audience_filter (the same filter shape campaigns + broadcasts use).
+ * Implemented as a single-row reachability check — applies the filter
+ * to a 1-row query and asks Postgres whether the row survives.
+ *
+ * Sequences with no filter (the common case) match everyone.
+ *
+ * @param {string} contactId
+ * @param {object | null | undefined} filter — { logic, filters: [{ field, op, value }] }
+ * @returns {Promise<boolean>}
+ */
+async function contactMatchesSequenceAudience(contactId, filter) {
+  if (!filter?.filters?.length) return true
+  const db = createServerClient()
+  let query = db.from('contacts')
+    .select('id', { count: 'exact', head: true })
+    .eq('id', contactId)
+  try {
+    query = applyAudienceFilter(query, filter)
+  } catch (e) {
+    if (e instanceof InvalidAudienceFilterError) {
+      console.warn(`[sequences] sequence has invalid audience_filter, treating as no-match: ${e.message}`)
+      return false
+    }
+    throw e
+  }
+  const { count } = await query
+  return (count ?? 0) > 0
+}
 
 const MAX_ERRORS = 5
 const PROCESS_BATCH_SIZE = 100
@@ -135,6 +167,111 @@ export async function triggerSequencesForBooking(bookingId) {
     // Don't propagate — booking creation must never fail because
     // of a sequence trigger. Logged for cron/operator review.
     console.warn(`[sequences] booking trigger failed for ${bookingId}: ${e.message}`)
+  }
+}
+
+/**
+ * Called from PUT /api/contacts/[id] when a contact's lead_status
+ * value actually changes. Finds every active sequence with
+ * trigger_type='status_change' for the contact's location whose
+ * trigger_config matches:
+ *   - cfg.to_status   (optional)  — only fire when status flipped TO this value
+ *   - cfg.from_status (optional)  — only fire when status flipped FROM this value
+ * Empty config = fire on any status change. Sequence's audience_filter
+ * (if set) is then evaluated against the contact — non-matches skip.
+ *
+ * Best-effort — errors are swallowed so the contact update isn't
+ * blocked by a sequence enrol failure.
+ *
+ * @param {string} contactId
+ * @param {string|null} oldStatus
+ * @param {string|null} newStatus
+ */
+export async function triggerSequencesForStatusChange(contactId, oldStatus, newStatus) {
+  if (oldStatus === newStatus) return
+  const db = createServerClient()
+  try {
+    const { data: contact } = await db
+      .from('contacts')
+      .select('id, location_id')
+      .eq('id', contactId)
+      .single()
+    if (!contact) return
+
+    const { data: sequences } = await db
+      .from('email_sequences')
+      .select('id, trigger_config, audience_filter')
+      .eq('location_id', contact.location_id)
+      .eq('trigger_type', 'status_change')
+      .eq('status', 'active')
+    if (!sequences || sequences.length === 0) return
+
+    for (const seq of sequences) {
+      const cfg = seq.trigger_config || {}
+      if (cfg.to_status && cfg.to_status !== newStatus) continue
+      if (cfg.from_status && cfg.from_status !== oldStatus) continue
+      const matches = await contactMatchesSequenceAudience(contactId, seq.audience_filter)
+      if (!matches) continue
+      await enrolContacts({
+        sequenceId: seq.id,
+        contactIds: [contactId],
+        sourceType: 'status_change',
+        sourceRef: `${oldStatus || 'null'}→${newStatus || 'null'}`,
+      })
+    }
+  } catch (e) {
+    console.warn(`[sequences] status_change trigger failed for ${contactId}: ${e.message}`)
+  }
+}
+
+/**
+ * Called from PUT /api/contacts/[id] when one or more new tags appear
+ * on a contact (set difference: new - old). Finds every active
+ * sequence with trigger_type='tag_added' whose trigger_config.tag
+ * matches one of the newly-added tags. Audience filter (if set) is
+ * then evaluated against the contact — non-matches skip.
+ *
+ * Best-effort — errors swallowed.
+ *
+ * @param {string} contactId
+ * @param {string[]} addedTags
+ */
+export async function triggerSequencesForTagsAdded(contactId, addedTags) {
+  if (!Array.isArray(addedTags) || addedTags.length === 0) return
+  const db = createServerClient()
+  try {
+    const { data: contact } = await db
+      .from('contacts')
+      .select('id, location_id')
+      .eq('id', contactId)
+      .single()
+    if (!contact) return
+
+    const { data: sequences } = await db
+      .from('email_sequences')
+      .select('id, trigger_config, audience_filter')
+      .eq('location_id', contact.location_id)
+      .eq('trigger_type', 'tag_added')
+      .eq('status', 'active')
+    if (!sequences || sequences.length === 0) return
+
+    const addedSet = new Set(addedTags)
+    for (const seq of sequences) {
+      const cfg = seq.trigger_config || {}
+      // cfg.tag is required for tag_added triggers — a sequence with no
+      // configured tag would otherwise fire on every tag mutation.
+      if (!cfg.tag || !addedSet.has(cfg.tag)) continue
+      const matches = await contactMatchesSequenceAudience(contactId, seq.audience_filter)
+      if (!matches) continue
+      await enrolContacts({
+        sequenceId: seq.id,
+        contactIds: [contactId],
+        sourceType: 'tag_added',
+        sourceRef: cfg.tag,
+      })
+    }
+  } catch (e) {
+    console.warn(`[sequences] tag_added trigger failed for ${contactId}: ${e.message}`)
   }
 }
 

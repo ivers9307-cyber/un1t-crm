@@ -4,6 +4,7 @@ import { createServerClient } from '@/lib/supabase'
 import { requireApiKey } from '@/lib/api-auth'
 import { validateBody } from '@/lib/validate'
 import { email, phone, leadSourceSchema, leadStatusSchema } from '@/lib/schemas'
+import { triggerSequencesForStatusChange, triggerSequencesForTagsAdded } from '@/lib/sequences'
 
 const ContactUpdateSchema = z.object({
   name: z.string().min(1).max(200).optional(),
@@ -16,6 +17,11 @@ const ContactUpdateSchema = z.object({
   trial_credits_remaining: z.number().int().min(0).max(100).optional(),
   lead_source: leadSourceSchema.optional(),
   lead_status: leadStatusSchema.optional(),
+  // tags is a TEXT[] in Postgres. Frontend code that wants to "add a tag"
+  // fetches current tags, appends, and PUTs the full new array. Sequence
+  // tag_added triggers (sequences.js) fire on the set difference of
+  // (new − old) — we compute that here after the update lands.
+  tags: z.array(z.string().min(1).max(64)).max(50).optional(),
 })
 
 // PUT /api/contacts/:id — Update a contact (replaces Pipedrive PUT /v1/persons/:id)
@@ -29,6 +35,16 @@ export async function PUT(request, { params }) {
   const body = validation.data
   const db = createServerClient()
 
+  // Read the old row first so we can detect lead_status flips and
+  // tag additions for the sequence triggers below. One extra round
+  // trip on every contact update; cheap (PK lookup) and only on
+  // mutations, not reads.
+  const { data: oldRow } = await db
+    .from('contacts')
+    .select('lead_status, tags')
+    .eq('id', id)
+    .single()
+
   // Only forward keys actually present (Zod with .optional() leaves undefined keys out).
   const updates = {}
   for (const [key, value] of Object.entries(body)) {
@@ -39,6 +55,26 @@ export async function PUT(request, { params }) {
 
   if (error) {
     return NextResponse.json({ success: false, error: error.message }, { status: 400 })
+  }
+
+  // Fire sequence triggers AFTER the update lands. Both helpers are
+  // best-effort and swallow their own errors so a sequence misconfig
+  // can't fail a legit contact mutation. We don't await — the
+  // response can ship while the triggers run; enrolments land in
+  // sequence_enrollments and the next cron tick picks them up.
+  if (oldRow) {
+    if (typeof body.lead_status !== 'undefined' && body.lead_status !== oldRow.lead_status) {
+      triggerSequencesForStatusChange(id, oldRow.lead_status, body.lead_status)
+        .catch(e => console.warn(`[contacts.PUT] status_change trigger error for ${id}: ${e.message}`))
+    }
+    if (Array.isArray(body.tags)) {
+      const oldTags = new Set(oldRow.tags || [])
+      const added = body.tags.filter(t => !oldTags.has(t))
+      if (added.length > 0) {
+        triggerSequencesForTagsAdded(id, added)
+          .catch(e => console.warn(`[contacts.PUT] tag_added trigger error for ${id}: ${e.message}`))
+      }
+    }
   }
 
   return NextResponse.json({ success: true, data })

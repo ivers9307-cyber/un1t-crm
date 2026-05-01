@@ -7,7 +7,11 @@ import { validateBody } from '@/lib/validate'
 const SequenceUpdateSchema = z.object({
   name: z.string().min(1).max(200).optional(),
   description: z.string().max(2000).nullable().optional(),
-  trigger_type: z.enum(['manual', 'on_signup', 'on_status_change', 'scheduled']).optional(),
+  // Must match what the runner (lib/sequences.js) handles AND the
+  // editor offers (SequenceEditor.jsx TRIGGER_TYPES).
+  trigger_type: z.enum([
+    'manual', 'booking_created', 'status_change', 'event_reminder', 'tag_added',
+  ]).optional(),
   trigger_config: z.unknown().optional(),
   status: z.enum(['draft', 'active', 'paused', 'archived']).optional(),
 })

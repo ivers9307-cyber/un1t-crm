@@ -8,7 +8,13 @@ import { uuidLike } from '@/lib/schemas'
 const SequenceCreateSchema = z.object({
   name: z.string().min(1).max(200),
   description: z.string().max(2000).nullable().optional(),
-  trigger_type: z.enum(['manual', 'on_signup', 'on_status_change', 'scheduled']).optional(),
+  // Must match what the runner (lib/sequences.js) handles AND the
+  // editor offers (SequenceEditor.jsx TRIGGER_TYPES). The previous
+  // enum had stale draft values ('on_signup' / 'on_status_change')
+  // that would silently reject legitimate sequences from the editor.
+  trigger_type: z.enum([
+    'manual', 'booking_created', 'status_change', 'event_reminder', 'tag_added',
+  ]).optional(),
   trigger_config: z.unknown().optional(),
   location_id: uuidLike.optional(),
 })
