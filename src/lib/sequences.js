@@ -225,6 +225,103 @@ export async function triggerSequencesForStatusChange(contactId, oldStatus, newS
 }
 
 /**
+ * Cron-driven trigger for event_reminder sequences. Called from
+ * /api/cron/run-sequences alongside runSequences(). For each active
+ * sequence with trigger_type='event_reminder', finds bookings whose
+ * start time is approximately N hours away (where N comes from
+ * trigger_config.hours_before) and enrols the booking's contact.
+ *
+ * Dedup: source_ref = booking.id, checked across ALL statuses (not
+ * just active) so a contact who's already in this sequence for this
+ * booking — even if it's already completed or exited — won't be
+ * re-enrolled. Different bookings get separate enrolments.
+ *
+ * Timezone note: booking_date + start_time are stored as a naïve
+ * date + time pair. We compose them and treat the result as UTC.
+ * The studio is in Dublin (UTC in winter, UTC+1 in summer), so
+ * around DST transitions the comparison can drift by up to an
+ * hour — the 1-hour tolerance window absorbs that. operators
+ * configure hours_before in coarse units (24h, 2h, etc.) so a
+ * ±1h fire-time error is acceptable for "send roughly N hours
+ * before the event".
+ *
+ * @returns {Promise<{fired: number, skipped: number}>}
+ */
+export async function runEventReminderTriggers() {
+  const db = createServerClient()
+  const stats = { fired: 0, skipped: 0 }
+
+  const { data: sequences } = await db
+    .from('email_sequences')
+    .select('id, location_id, trigger_config, audience_filter')
+    .eq('trigger_type', 'event_reminder')
+    .eq('status', 'active')
+  if (!sequences?.length) return stats
+
+  const now = Date.now()
+  const TOLERANCE_MS = 60 * 60 * 1000  // ±1h — see TZ note above
+
+  for (const seq of sequences) {
+    const cfg = seq.trigger_config || {}
+    const hoursBefore = Number(cfg.hours_before)
+    if (!Number.isFinite(hoursBefore) || hoursBefore < 0) continue
+
+    const targetMs = now + hoursBefore * 3600_000
+    const lo = new Date(targetMs - TOLERANCE_MS)
+    const hi = new Date(targetMs + TOLERANCE_MS)
+
+    // Wide date filter then exact in-window check below — the date
+    // filter is just to avoid pulling the entire bookings table.
+    const { data: bookings } = await db
+      .from('bookings')
+      .select('id, contact_id, booking_date, start_time, event_type_id')
+      .eq('location_id', seq.location_id)
+      .eq('status', 'confirmed')
+      .gte('booking_date', lo.toISOString().slice(0, 10))
+      .lte('booking_date', hi.toISOString().slice(0, 10))
+
+    for (const booking of (bookings || [])) {
+      if (!booking.contact_id) continue
+      const bookingMs = new Date(`${booking.booking_date}T${booking.start_time}Z`).getTime()
+      if (bookingMs < lo.getTime() || bookingMs > hi.getTime()) continue
+
+      // Optional event_type_id scope — empty means "any event type".
+      if (cfg.event_type_id && cfg.event_type_id !== booking.event_type_id) continue
+
+      // Dedup across ALL enrollment statuses on (sequence, contact, booking).
+      // Don't re-enrol the same person for the same booking even if
+      // they've already completed or exited from this sequence.
+      const { data: existing } = await db
+        .from('sequence_enrollments')
+        .select('id')
+        .eq('sequence_id', seq.id)
+        .eq('contact_id', booking.contact_id)
+        .eq('source_ref', booking.id)
+        .limit(1)
+        .maybeSingle()
+      if (existing) { stats.skipped++; continue }
+
+      const matchesAudience = await contactMatchesSequenceAudience(booking.contact_id, seq.audience_filter)
+      if (!matchesAudience) continue
+
+      try {
+        await enrolContacts({
+          sequenceId: seq.id,
+          contactIds: [booking.contact_id],
+          sourceType: 'event_reminder',
+          sourceRef: booking.id,
+        })
+        stats.fired++
+      } catch (e) {
+        console.warn(`[sequences] event_reminder enrol failed for booking ${booking.id}: ${e.message}`)
+      }
+    }
+  }
+
+  return stats
+}
+
+/**
  * Called from PUT /api/contacts/[id] when one or more new tags appear
  * on a contact (set difference: new - old). Finds every active
  * sequence with trigger_type='tag_added' whose trigger_config.tag

@@ -19,7 +19,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import Link from 'next/link'
-import { Filter, X } from 'lucide-react'
+import { Filter, X, Save, Bookmark, Trash2 } from 'lucide-react'
 import AudienceBuilder from './AudienceBuilder'
 import ContactsTable from './ContactsTable'
 
@@ -45,6 +45,81 @@ export default function ContactsView({
   const [count, setCount] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
+
+  // Saved segments — list loaded once on mount. State for the small
+  // "Save segment" inline form sits next to it so the inline 'X'
+  // dismiss can clear both.
+  const [segments, setSegments] = useState([])
+  const [activeSegmentId, setActiveSegmentId] = useState(null)
+  const [savingSegment, setSavingSegment] = useState(false)
+  const [showSaveForm, setShowSaveForm] = useState(false)
+  const [segmentName, setSegmentName] = useState('')
+  const [segmentError, setSegmentError] = useState(null)
+
+  const loadSegments = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/contacts/segments?location_id=${encodeURIComponent(locationId)}`)
+      const json = await res.json()
+      if (json.success) setSegments(json.segments || [])
+    } catch {
+      // Silent — saved segments are an enhancement, not a critical path.
+    }
+  }, [locationId])
+
+  useEffect(() => { loadSegments() }, [loadSegments])
+
+  function applySegment(segment) {
+    setFilter(segment.filter)
+    setActiveSegmentId(segment.id)
+    setShowAdvanced(true)
+  }
+
+  async function saveCurrent() {
+    if (!segmentName.trim()) {
+      setSegmentError('Name is required')
+      return
+    }
+    setSavingSegment(true)
+    setSegmentError(null)
+    try {
+      const res = await fetch('/api/contacts/segments', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: segmentName.trim(),
+          filter: filter || { logic: 'and', filters: [] },
+          location_id: locationId,
+        }),
+      })
+      const json = await res.json()
+      if (!json.success) {
+        setSegmentError(json.error || 'Save failed')
+        return
+      }
+      setSegments(prev => [...prev, json.segment].sort((a, b) => a.name.localeCompare(b.name)))
+      setActiveSegmentId(json.segment.id)
+      setSegmentName('')
+      setShowSaveForm(false)
+    } finally {
+      setSavingSegment(false)
+    }
+  }
+
+  async function deleteSegment(segmentId) {
+    if (!confirm('Delete this saved segment?')) return
+    try {
+      const res = await fetch(`/api/contacts/segments/${segmentId}`, { method: 'DELETE' })
+      const json = await res.json()
+      if (!json.success) {
+        alert(json.error || 'Delete failed')
+        return
+      }
+      setSegments(prev => prev.filter(s => s.id !== segmentId))
+      if (activeSegmentId === segmentId) setActiveSegmentId(null)
+    } catch (e) {
+      alert(e.message || 'Network error')
+    }
+  }
 
   // We're "active" (using the API path) whenever the operator has
   // either added an advanced filter row OR typed in the search box.
@@ -118,6 +193,16 @@ export default function ContactsView({
   function clearAdvanced() {
     setFilter(null)
     setShowAdvanced(false)
+    setActiveSegmentId(null)
+    setShowSaveForm(false)
+  }
+
+  // When the user edits filters by hand, drop the "active segment"
+  // highlight — they're working on a derived/dirty version now and
+  // would need to overwrite the segment to persist their changes.
+  function handleFilterChange(next) {
+    setFilter(next)
+    setActiveSegmentId(null)
   }
 
   return (
@@ -183,14 +268,99 @@ export default function ContactsView({
         />
       </form>
 
+      {/* Saved segments chip strip — visible whenever any segments
+          exist OR the advanced panel is open (so a fresh user can
+          discover the feature). Click to apply; X to delete. */}
+      {(segments.length > 0 || showAdvanced) && (
+        <div className="mb-3 flex gap-2 flex-wrap items-center">
+          {segments.length > 0 && (
+            <span className="text-[11px] uppercase tracking-wider text-un1t-mid font-semibold flex items-center gap-1">
+              <Bookmark size={11} /> Saved
+            </span>
+          )}
+          {segments.map(s => {
+            const isActive = activeSegmentId === s.id
+            return (
+              <span
+                key={s.id}
+                className={`group inline-flex items-center gap-1 rounded-full border text-xs transition-colors ${
+                  isActive
+                    ? 'border-un1t-white bg-un1t-gray text-un1t-white'
+                    : 'border-un1t-gray text-un1t-light hover:text-un1t-white hover:border-un1t-mid'
+                }`}
+              >
+                <button
+                  onClick={() => applySegment(s)}
+                  className="px-3 py-1.5"
+                  title={s.description || 'Apply this saved segment'}
+                >
+                  {s.name}
+                </button>
+                <button
+                  onClick={() => deleteSegment(s.id)}
+                  className="pr-2 text-un1t-mid hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity"
+                  title="Delete segment"
+                >
+                  <Trash2 size={11} />
+                </button>
+              </span>
+            )
+          })}
+        </div>
+      )}
+
       {/* Advanced filter panel — only renders when toggled open. */}
       {showAdvanced && (
-        <div className="mb-5 bg-un1t-dark border border-un1t-gray rounded-lg p-4">
+        <div className="mb-5 bg-un1t-dark border border-un1t-gray rounded-lg p-4 space-y-3">
           <AudienceBuilder
             filter={filter}
-            onChange={(next) => setFilter(next)}
+            onChange={handleFilterChange}
             audienceCount={apiActive ? count : null}
           />
+
+          {/* Save-as-segment row. Only visible when there's at least
+              one filter row to save. */}
+          {filterRowCount > 0 && (
+            <div className="pt-3 border-t border-un1t-gray flex items-center gap-2">
+              {showSaveForm ? (
+                <>
+                  <input
+                    type="text"
+                    autoFocus
+                    value={segmentName}
+                    onChange={(e) => setSegmentName(e.target.value)}
+                    placeholder="Segment name (e.g. Cold leads with low credits)"
+                    className="flex-1 bg-un1t-black border border-un1t-gray rounded-md px-3 py-1.5 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid"
+                    onKeyDown={(e) => { if (e.key === 'Enter') saveCurrent() }}
+                  />
+                  <button
+                    onClick={saveCurrent}
+                    disabled={savingSegment}
+                    className="text-xs px-3 py-1.5 rounded-md bg-un1t-white text-un1t-black font-semibold hover:bg-un1t-accent disabled:opacity-50"
+                  >
+                    {savingSegment ? 'Saving…' : 'Save'}
+                  </button>
+                  <button
+                    onClick={() => { setShowSaveForm(false); setSegmentName(''); setSegmentError(null) }}
+                    className="text-xs text-un1t-light hover:text-un1t-white"
+                  >
+                    Cancel
+                  </button>
+                </>
+              ) : (
+                <button
+                  onClick={() => setShowSaveForm(true)}
+                  className="text-xs flex items-center gap-1.5 text-un1t-light hover:text-un1t-white"
+                >
+                  <Save size={12} /> Save as segment
+                </button>
+              )}
+            </div>
+          )}
+
+          {segmentError && (
+            <p className="text-xs text-red-400">{segmentError}</p>
+          )}
         </div>
       )}
 
