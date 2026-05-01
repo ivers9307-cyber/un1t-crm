@@ -205,19 +205,8 @@ async function executeTool(toolName, input, context) {
     }
 
     case 'generate_report': {
-      // Call the reports generation endpoint internally
-      const res = await fetch(`${process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'}/api/schedule/reports`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          report_type: input.report_type,
-          period_start: input.period_start,
-          period_end: input.period_end,
-          location_id: locationId,
-        }),
-      })
-      // Since we can't easily call the internal API with auth context,
-      // generate inline instead
+      // We can't easily call /api/schedule/reports internally with the
+      // caller's auth context, so generate the report inline here.
       const reportType = input.report_type
       const periodStart = input.period_start
       const periodEnd = input.period_end

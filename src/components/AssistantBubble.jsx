@@ -16,7 +16,7 @@ export default function AssistantBubble({ user }) {
   const [messages, setMessages] = useState([])
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
-  const [hasInteracted, setHasInteracted] = useState(false)
+  const [, setHasInteracted] = useState(false)
   const messagesEndRef = useRef(null)
   const inputRef = useRef(null)
   const pathname = usePathname()

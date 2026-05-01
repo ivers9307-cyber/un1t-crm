@@ -13,12 +13,11 @@ import { useState, useRef, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { ArrowLeft, ChevronRight, Trash2, FileText, Upload, Check, X, AlertCircle, Receipt, Send, RefreshCw, FileDown, Search } from 'lucide-react'
-import { ALL_DOCUMENT_TYPES, REQUIRED_DOCUMENT_TYPES, completionGaps, profitBreakdown, COST_FIELDS, applyIrishVat, salePriceToExVat, splitIrishPrice, IRISH_VAT_RATE, DEFAULT_GBP_TO_EUR } from '@/lib/cars'
+import { ALL_DOCUMENT_TYPES, REQUIRED_DOCUMENT_TYPES, completionGaps, profitBreakdown, COST_FIELDS, applyIrishVat, salePriceToExVat, splitIrishPrice, IRISH_VAT_RATE } from '@/lib/cars'
 
 export default function CarDetail({ car: initialCar, liveFxRate = null, fxFetchedAt = null }) {
   const [car, setCar] = useState(initialCar)
   const router = useRouter()
-  const [savingField, setSavingField] = useState(null)
   const [error, setError] = useState(null)
   const [busy, setBusy] = useState(false)
 
@@ -659,7 +658,6 @@ function UkVatRefundCard({ car, patch, disabled }) {
 }
 
 function DocumentsCard({ car, setCar, setError, disabled }) {
-  const fileRef = useRef(null)
   const [uploadingType, setUploadingType] = useState(null)
   const [sendingDocId, setSendingDocId] = useState(null)
 

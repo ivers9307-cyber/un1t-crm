@@ -182,7 +182,7 @@ function nextStepDelayMs(step) {
 
 // ── Internal: send a single email step ───────────────────────────
 
-async function sendEmailStep(db, { enrollment, step, sequence, contact }) {
+async function sendEmailStep(db, { enrollment: _enrollment, step, sequence, contact }) {
   if (!contact?.email) {
     throw new Error('Contact has no email address — cannot send email step.')
   }

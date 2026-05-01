@@ -1,14 +1,11 @@
 'use client'
 
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { useRouter } from 'next/navigation'
 import { ArrowLeft, Save, Code, Paintbrush } from 'lucide-react'
 import Link from 'next/link'
 
 export default function TemplateEditor({ template, locationId, userId }) {
-  const router = useRouter()
   const editorRef = useRef(null)
-  const isEditing = !!template
 
   const [name, setName] = useState(template?.name || '')
   const [description, setDescription] = useState(template?.description || '')

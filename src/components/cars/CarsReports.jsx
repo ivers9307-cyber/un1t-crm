@@ -13,7 +13,7 @@
 // through both call sites server-side.
 
 import Link from 'next/link'
-import { Banknote, TrendingUp, Activity, AlertCircle, BarChart3, History, Hourglass, Download } from 'lucide-react'
+import { Banknote, TrendingUp, Activity, AlertCircle, BarChart3, Hourglass, Download } from 'lucide-react'
 
 function fmtEur(n, opts = {}) {
   if (n == null || !Number.isFinite(Number(n))) return '—'

@@ -5,7 +5,7 @@ import Link from 'next/link'
 import {
   ArrowLeft, Send, MessageCircle, Clock, CheckCheck,
   Check, Image, FileText, Mic, AlertCircle, RefreshCw,
-  UserPlus, X, UserCheck, ChevronDown, LayoutTemplate
+  UserPlus, X, UserCheck, LayoutTemplate
 } from 'lucide-react'
 
 function formatTime(dateStr) {

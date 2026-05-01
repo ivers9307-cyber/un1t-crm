@@ -1,14 +1,13 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { ArrowLeft, Save, Send, Users, Eye, CheckCircle2, XCircle } from 'lucide-react'
+import { ArrowLeft, Save, Send, Users, CheckCircle2, XCircle } from 'lucide-react'
 import AudienceBuilder from './AudienceBuilder'
 
 export default function WABroadcastEditor({ broadcast, templates, locationId, userId }) {
   const router = useRouter()
-  const isEditing = !!broadcast
   const isSent = broadcast?.status === 'sent'
 
   const [name, setName] = useState(broadcast?.name || '')

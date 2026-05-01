@@ -1,7 +1,7 @@
 import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { sendTextMessage, sendTemplateMessage, sendMediaMessage, isWindowOpen, markAsRead } from '@/lib/whatsapp'
+import { sendTextMessage, sendTemplateMessage, sendMediaMessage, isWindowOpen } from '@/lib/whatsapp'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { url } from '@/lib/schemas'

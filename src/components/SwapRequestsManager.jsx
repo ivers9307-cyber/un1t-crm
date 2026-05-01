@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
-import { ArrowLeft, ArrowLeftRight, Check, X, Clock, AlertCircle } from 'lucide-react'
+import { ArrowLeft, ArrowLeftRight, Check, X, AlertCircle } from 'lucide-react'
 
 const canManage = (role) => ['owner', 'manager', 'head_coach'].includes(role)
 

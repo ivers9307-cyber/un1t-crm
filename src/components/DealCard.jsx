@@ -1,7 +1,7 @@
 'use client'
 
 import Link from 'next/link'
-import { User, Clock } from 'lucide-react'
+import { User } from 'lucide-react'
 
 const statusColors = {
   active_trial: 'border-l-green-500',

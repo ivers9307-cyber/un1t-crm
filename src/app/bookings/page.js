@@ -2,7 +2,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
-import { Calendar, Clock, User, Mail } from 'lucide-react'
+import { Calendar, Clock, Mail } from 'lucide-react'
 import BookingStatusToggle from '@/components/BookingStatusToggle'
 
 export const dynamic = 'force-dynamic'
@@ -38,11 +38,6 @@ function formatTime(time) {
   const ampm = hour >= 12 ? 'PM' : 'AM'
   const h12 = hour % 12 || 12
   return `${h12}:${m} ${ampm}`
-}
-
-function formatDate(dateStr) {
-  const d = new Date(dateStr + 'T00:00:00')
-  return d.toLocaleDateString('en-IE', { weekday: 'short', month: 'short', day: 'numeric' })
 }
 
 export default async function BookingsPage({ searchParams }) {

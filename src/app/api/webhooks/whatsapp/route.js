@@ -99,7 +99,7 @@ export async function POST(request) {
   return NextResponse.json({ success: true })
 }
 
-async function handleIncomingMessage(db, message, contacts, phoneNumberId) {
+async function handleIncomingMessage(db, message, contacts, _phoneNumberId) {
   const senderPhone = message.from  // E.164 format
   const messageId = message.id
   const timestamp = message.timestamp ? new Date(parseInt(message.timestamp) * 1000) : new Date()

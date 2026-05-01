@@ -5,7 +5,7 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import {
   ArrowLeft, Mail, Eye, MousePointerClick, AlertTriangle,
-  Ban, Clock, Send, CheckCircle2, XCircle, Users, FileEdit, ExternalLink
+  Ban, Send, CheckCircle2, XCircle, Users
 } from 'lucide-react'
 
 const recipientStatusConfig = {
@@ -31,7 +31,7 @@ function StatCard({ icon: Icon, label, value, subValue, color }) {
   )
 }
 
-export default function CampaignDetail({ campaign, recipients = [], locationId, userId }) {
+export default function CampaignDetail({ campaign, recipients = [], locationId: _locationId, userId: _userId }) {
   const router = useRouter()
   const [tab, setTab] = useState('overview')  // overview, recipients, preview
   const isDraft = campaign.status === 'draft'

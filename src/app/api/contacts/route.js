@@ -108,7 +108,7 @@ export async function GET(request) {
   const offset = Math.max(0, parseInt(searchParams.get('offset') || '0', 10) || 0)
   query = query.range(offset, offset + limit - 1).order('created_at', { ascending: false })
 
-  const { data, error, count } = await query
+  const { data, error } = await query
 
   if (error) {
     return NextResponse.json({ success: false, error: error.message }, { status: 400 })

@@ -1,10 +1,10 @@
 import { describe, it, expect } from 'vitest'
 import {
-  uuidLike, isoDate, timeOfDay, hexColor, email, phone, url,
+  isoDate, timeOfDay, hexColor, email, url,
   money, hours, days,
-  roleSchema, employmentTypeSchema, leadSourceSchema, leadStatusSchema,
-  dealStatusSchema, timeOffTypeSchema, timeOffStatusSchema,
-  reportFrequencySchema, reportTypeSchema,
+  roleSchema, employmentTypeSchema, leadStatusSchema,
+  dealStatusSchema,
+  reportFrequencySchema,
   permissionsSchema, audienceFilterSchema,
   ADMIN_ROLES, MANAGER_ROLES, DEFAULT_COLOR,
   passwordSchema, passwordRequirements, validatePasswordComplexity,

@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { BarChart3, Clock, Euro, CalendarOff, Users, TrendingUp, Play, Calendar, Plus, FileText, Download, Bell, Mail, Repeat, Trash2 } from 'lucide-react'
+import { Clock, Euro, CalendarOff, Users, TrendingUp, Play, Calendar, Plus, FileText, Bell, Mail, Repeat } from 'lucide-react'
 
 const REPORT_TYPES = [
   { key: 'staff_hours',     label: 'Staff Hours Worked',    icon: Clock,       description: 'Total hours worked per staff member with daily breakdown' },

@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { ArrowLeft, Save, Send, Plus, Trash2 } from 'lucide-react'
+import { ArrowLeft, Save, Send, Trash2 } from 'lucide-react'
 
 const CATEGORIES = [
   { value: 'MARKETING', label: 'Marketing', description: 'Promotions, offers, updates' },

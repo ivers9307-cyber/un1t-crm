@@ -20,7 +20,7 @@ export default function BookingWidget({ slug }) {
   const [formData, setFormData] = useState({ name: '', email: '', phone: '+353 ' })
   const [customResponses, setCustomResponses] = useState({})
   const [submitting, setSubmitting] = useState(false)
-  const [bookingResult, setBookingResult] = useState(null)
+  const [, setBookingResult] = useState(null)
   const [fieldErrors, setFieldErrors] = useState({})
 
   // Load event details

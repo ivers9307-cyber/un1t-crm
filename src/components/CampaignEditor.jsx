@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { createBrowserClient } from '@/lib/supabase'
-import { ArrowLeft, Save, Send, Eye, Users, Code, Paintbrush } from 'lucide-react'
+import { ArrowLeft, Save, Send, Users, Code, Paintbrush } from 'lucide-react'
 import AudienceBuilder from './AudienceBuilder'
 import Link from 'next/link'
 
@@ -11,7 +11,6 @@ export default function CampaignEditor({ campaign, locationId, userId }) {
   const router = useRouter()
   const db = createBrowserClient()
   const editorRef = useRef(null)
-  const isEditing = !!campaign
 
   const [tab, setTab] = useState('design')  // design, code, audience, settings
   const [name, setName] = useState(campaign?.name || '')

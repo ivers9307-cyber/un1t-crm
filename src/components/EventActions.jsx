@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import { ExternalLink, Copy, Check } from 'lucide-react'
 
-export default function EventActions({ slug, eventId }) {
+export default function EventActions({ slug, eventId: _eventId }) {
   const [copied, setCopied] = useState(false)
 
   const bookingUrl = `${window?.location?.origin || ''}/book/${slug}`

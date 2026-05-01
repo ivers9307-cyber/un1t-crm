@@ -1,11 +1,10 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import {
   ArrowLeft, Save, Plus, Trash2, ChevronDown, ChevronUp,
-  Play, Pause, Clock, Mail, MessageCircle, Hourglass, Zap, GripVertical, AlertCircle
+  Play, Pause, Clock, Mail, MessageCircle, Hourglass, Zap, AlertCircle
 } from 'lucide-react'
 
 const TRIGGER_TYPES = [
@@ -245,8 +244,6 @@ function StepCard({ step, index, onUpdate, onDelete, onMoveUp, onMoveDown, isFir
 }
 
 export default function SequenceEditor({ sequence, locationId, userId }) {
-  const router = useRouter()
-  const isEditing = !!sequence
 
   const [name, setName] = useState(sequence?.name || '')
   const [description, setDescription] = useState(sequence?.description || '')
@@ -392,8 +389,6 @@ export default function SequenceEditor({ sequence, locationId, userId }) {
       })
     }
   }
-
-  const selectedTrigger = TRIGGER_TYPES.find(t => t.value === triggerType)
 
   return (
     <div className="flex flex-col h-screen">

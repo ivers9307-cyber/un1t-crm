@@ -1,6 +1,6 @@
 import { createServerClient } from '@/lib/supabase'
 import Link from 'next/link'
-import { ArrowLeft, Edit, Calendar, Clock, ExternalLink, Users } from 'lucide-react'
+import { ArrowLeft, Edit } from 'lucide-react'
 import EventActions from '@/components/EventActions'
 import BookingStatusToggle from '@/components/BookingStatusToggle'
 
@@ -43,7 +43,6 @@ export default async function EventDetailPage({ params }) {
   }
 
   const upcoming = bookings.filter(b => b.status === 'confirmed' && b.booking_date >= new Date().toISOString().split('T')[0])
-  const past = bookings.filter(b => b.status !== 'confirmed' || b.booking_date < new Date().toISOString().split('T')[0])
 
   return (
     <div className="p-8">

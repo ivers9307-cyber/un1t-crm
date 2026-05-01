@@ -2,7 +2,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
-import { Mail, Phone, ChevronRight } from 'lucide-react'
+import { ChevronRight } from 'lucide-react'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0

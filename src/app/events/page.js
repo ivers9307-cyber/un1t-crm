@@ -2,7 +2,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
-import { Plus, ExternalLink, Copy, Calendar, Clock, Users } from 'lucide-react'
+import { Plus, Calendar, Clock, Users } from 'lucide-react'
 import EventActions from '@/components/EventActions'
 
 export const dynamic = 'force-dynamic'

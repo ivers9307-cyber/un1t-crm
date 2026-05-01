@@ -14,7 +14,7 @@ import {
   extendZodWithOpenApi,
 } from '@asteasolutions/zod-to-openapi'
 import {
-  uuidLike, isoDate, timeOfDay, hexColor, email, phone, url,
+  uuidLike, isoDate, timeOfDay, email, phone,
   money, hours, days,
   roleSchema, employmentTypeSchema,
   leadSourceSchema, leadStatusSchema, dealStatusSchema,

@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { CalendarOff, Plus, Check, X, Clock, Palmtree, ThermometerSun, Ban, ChevronDown } from 'lucide-react'
+import { CalendarOff, Plus, Check, X, Palmtree, ThermometerSun, Ban } from 'lucide-react'
 
 const TYPE_CONFIG = {
   holiday:     { label: 'Holiday',     color: '#22C55E', bg: '#22C55E20', icon: Palmtree },
