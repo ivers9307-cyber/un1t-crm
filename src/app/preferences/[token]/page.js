@@ -1,6 +1,9 @@
 import PreferenceCentre from '@/components/PreferenceCentre'
 
-export const dynamic = 'force-dynamic'
+// Public, no auth, no server data fetch — let Next.js render a static
+// shell that PreferenceCentre then hydrates client-side.
+export const dynamicParams = true
+export const revalidate = 3600
 
 export const metadata = {
   title: 'Communication Preferences — UN1T',

@@ -65,19 +65,21 @@ export async function generateReport({ report_type, period_start, period_end, lo
 
     case 'staff_cost': {
       reportName = 'Staff Cost Breakdown'
-      // Pull profiles INCLUDING overtime_rate so OT hours can be costed at
-      // the explicit rate when present.
-      const { data: profiles } = await db.from('profiles')
-        .select('id, full_name, role, employment_type, annual_salary, hourly_rate, contracted_hours_per_week, overtime_rate')
-        .eq('active', true)
-
-      // Need start_time_override / end_time_override so we honour overrides
-      // (matches what the schedule UI shows).
-      const { data: shifts } = await db.from('shifts')
-        .select('shift_date, profile_id, start_time_override, end_time_override, shift_templates(start_time, end_time)')
-        .eq('location_id', locId)
-        .gte('shift_date', period_start)
-        .lte('shift_date', period_end)
+      // Pull profiles + shifts in parallel — they're independent queries
+      // and serial awaits used to roughly double the cron runtime.
+      // Profiles include overtime_rate so OT hours can be costed at the
+      // explicit rate when present. Shifts include start/end overrides
+      // so we honour the same hours the schedule UI shows.
+      const [{ data: profiles }, { data: shifts }] = await Promise.all([
+        db.from('profiles')
+          .select('id, full_name, role, employment_type, annual_salary, hourly_rate, contracted_hours_per_week, overtime_rate')
+          .eq('active', true),
+        db.from('shifts')
+          .select('shift_date, profile_id, start_time_override, end_time_override, shift_templates(start_time, end_time)')
+          .eq('location_id', locId)
+          .gte('shift_date', period_start)
+          .lte('shift_date', period_end),
+      ])
 
       const profileMap = {}
       for (const p of (profiles || [])) profileMap[p.id] = p
@@ -193,18 +195,20 @@ export async function generateReport({ report_type, period_start, period_end, lo
 
     case 'roster_coverage': {
       reportName = 'Roster Coverage'
-      const { data: shifts } = await db.from('shifts')
-        .select('shift_date, profile_id, shift_templates(name)')
-        .eq('location_id', locId)
-        .gte('shift_date', period_start)
-        .lte('shift_date', period_end)
-
-      const { data: timeOff } = await db.from('time_off_requests')
-        .select('start_date, end_date, profile_id, type, profiles!profile_id(full_name)')
-        .eq('location_id', locId)
-        .eq('status', 'approved')
-        .lte('start_date', period_end)
-        .gte('end_date', period_start)
+      // shifts and approved time-off are independent — fetch in parallel.
+      const [{ data: shifts }, { data: timeOff }] = await Promise.all([
+        db.from('shifts')
+          .select('shift_date, profile_id, shift_templates(name)')
+          .eq('location_id', locId)
+          .gte('shift_date', period_start)
+          .lte('shift_date', period_end),
+        db.from('time_off_requests')
+          .select('start_date, end_date, profile_id, type, profiles!profile_id(full_name)')
+          .eq('location_id', locId)
+          .eq('status', 'approved')
+          .lte('start_date', period_end)
+          .gte('end_date', period_start),
+      ])
 
       const days = {}
       const start = new Date(period_start + 'T00:00:00')
@@ -248,15 +252,17 @@ export async function generateReport({ report_type, period_start, period_end, lo
 
     case 'utilisation': {
       reportName = 'Staff Utilisation'
-      const { data: profiles } = await db.from('profiles')
-        .select('id, full_name, role, employment_type, contracted_hours_per_week')
-        .eq('active', true)
-
-      const { data: shifts } = await db.from('shifts')
-        .select('shift_date, profile_id, shift_templates(start_time, end_time)')
-        .eq('location_id', locId)
-        .gte('shift_date', period_start)
-        .lte('shift_date', period_end)
+      // profiles + shifts are independent — fetch in parallel.
+      const [{ data: profiles }, { data: shifts }] = await Promise.all([
+        db.from('profiles')
+          .select('id, full_name, role, employment_type, contracted_hours_per_week')
+          .eq('active', true),
+        db.from('shifts')
+          .select('shift_date, profile_id, shift_templates(start_time, end_time)')
+          .eq('location_id', locId)
+          .gte('shift_date', period_start)
+          .lte('shift_date', period_end),
+      ])
 
       const periodStartD = new Date(period_start + 'T00:00:00')
       const periodEndD = new Date(period_end + 'T00:00:00')

@@ -1,7 +1,15 @@
+import * as React from 'react'
 import { createClient } from '@supabase/supabase-js'
 import { createServerClient as createSSRClient } from '@supabase/ssr'
 import { cookies, headers } from 'next/headers'
 import { NextResponse } from 'next/server'
+
+// React 18's `cache()` is only exported from the server build of react.
+// In the Vitest (Node) environment we get the client build which omits
+// it, so fall back to identity. In production Next.js renders server
+// components against react/server which has cache, so the dedupe
+// behaviour we actually want kicks in there.
+const cache = typeof React.cache === 'function' ? React.cache : (fn) => fn
 
 // Auth-aware server client for SSR pages (reads session from cookies)
 export function createAuthClient() {
@@ -68,7 +76,12 @@ async function getUserFromBearer() {
 // profile, location assignments, and resolve activeLocation. The mobile
 // app sends an `x-active-location` header to override the cookie-based
 // active-location resolution; the cookie path remains untouched.
-export async function getCurrentUser() {
+// Wrapped in React.cache() so it dedupes within a single request render.
+// Layouts + pages + nested server components that call getCurrentUser()
+// now share the same Promise instead of each running the auth lookup
+// from scratch. On a typical page that meant 2-3x the same 3-5 query
+// roundtrip; now it's once per request.
+export const getCurrentUser = cache(async function getCurrentUser() {
   // Try Bearer JWT first (mobile). If absent or invalid, fall back to
   // the cookie-based session (web).
   let user = await getUserFromBearer()
@@ -84,12 +97,15 @@ export async function getCurrentUser() {
     process.env.SUPABASE_SERVICE_ROLE_KEY
   )
 
-  // Get the REAL profile first (the underlying logged-in user).
-  const { data: realProfile } = await db
-    .from('profiles')
-    .select('*')
-    .eq('id', user.id)
-    .single()
+  // Profile fetch + lazy impersonation cookie import in parallel.
+  // We can't fetch the impersonation TARGET in parallel because we
+  // don't know whether to fetch it until realProfile is loaded
+  // (only masters can impersonate), but the cookie read is cheap and
+  // doesn't depend on the profile fetch.
+  const [{ data: realProfile }, { readImpersonationCookie }] = await Promise.all([
+    db.from('profiles').select('*').eq('id', user.id).single(),
+    import('./impersonation.js'),
+  ])
 
   if (!realProfile) return null
 
@@ -101,9 +117,6 @@ export async function getCurrentUser() {
   let profile = realProfile
   let impersonatingFrom = null
   if (realProfile.role === 'master') {
-    // Lazy import to avoid pulling next/headers into non-RSC contexts
-    // that import from this module.
-    const { readImpersonationCookie } = await import('./impersonation.js')
     const targetId = readImpersonationCookie()
     if (targetId && targetId !== realProfile.id) {
       const { data: target } = await db
@@ -127,27 +140,33 @@ export async function getCurrentUser() {
   // effect). The master's own profile_locations rows aren't loaded
   // here because they're irrelevant to the experience we're trying
   // to replicate.
+  //
+  // For masters we ALSO need every active location (mig 035 explainer
+  // below). Fire both in parallel — masters see every active location
+  // regardless of profile_locations, but the rows are still fetched
+  // for the is_default flag used by active-location resolution.
   const effectiveProfileId = profile.id
-  const { data: locationLinks } = await db
+  const linksPromise = db
     .from('profile_locations')
     .select('*, locations(*)')
     .eq('profile_id', effectiveProfileId)
+  const allLocsPromise = profile.role === 'master'
+    ? db.from('locations').select('*').eq('active', true).order('name')
+    : Promise.resolve({ data: null })
+
+  const [{ data: locationLinks }, { data: allLocs }] = await Promise.all([
+    linksPromise,
+    allLocsPromise,
+  ])
 
   let locations = (locationLinks || []).map(pl => pl.locations).filter(Boolean)
 
   // Master role bypasses profile_locations — they see every active
-  // location automatically. profile_locations rows for masters are
-  // optional (used for the default-location preference if any) but
-  // not required to grant access. RLS already short-circuits via
+  // location automatically. RLS already short-circuits via
   // private.auth_is_master() — this just makes the in-memory user
   // object reflect the same reality.
-  if (profile.role === 'master') {
-    const { data: allLocs } = await db
-      .from('locations')
-      .select('*')
-      .eq('active', true)
-      .order('name')
-    locations = allLocs || locations
+  if (profile.role === 'master' && allLocs) {
+    locations = allLocs
   }
 
   // Active-location resolution. Priority:
@@ -189,7 +208,7 @@ export async function getCurrentUser() {
     // for audit purposes.
     impersonatingFrom,
   }
-}
+})
 
 /**
  * Returns an array of the user's assigned location IDs. Defensive against
