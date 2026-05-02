@@ -214,6 +214,41 @@ export async function fetchUnstaffedBlocksThisWeek(supabase, locationIds) {
 }
 
 // ============================================================
+// Pending roster approvals — count of draft rosters waiting on
+// owner sign-off at locations where the viewer can approve.
+//
+// Roster v2 phase 5 follow-up. The /schedule/approvals page is
+// linkable from email + the schedule, but owners shouldn't have
+// to remember to check. This chip on the Today tab surfaces the
+// count whenever they log in.
+//
+// Visibility: only counts drafts at locations where the viewer
+// is OWNER (or master). A manager who happens to land on the
+// Today tab won't see "5 approvals waiting" for things they
+// can't act on.
+//
+// `ownerLocationIds` is the array of location IDs where the
+// caller is an owner. For master, pass every accessible
+// location; the function doesn't try to second-guess the
+// caller's per-location role.
+// ============================================================
+
+export async function fetchPendingRosterApprovalsCount(supabase, ownerLocationIds) {
+  if (!ownerLocationIds || ownerLocationIds.length === 0) {
+    return { success: true, data: { count: 0 } }
+  }
+
+  const { count, error } = await supabase
+    .from('rosters')
+    .select('id', { count: 'exact', head: true })
+    .eq('status', 'draft')
+    .in('location_id', ownerLocationIds)
+
+  if (error) return { success: false, error: error.message }
+  return { success: true, data: { count: count || 0 } }
+}
+
+// ============================================================
 // Profile cost-data completeness — manager-facing warning that
 // surfaces staff at the manager's locations missing the data
 // the phase 4 cost panel needs.

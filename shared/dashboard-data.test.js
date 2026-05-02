@@ -6,7 +6,7 @@
 // in the phase 4 panel.
 
 import { describe, it, expect, vi } from 'vitest'
-import { fetchIncompletePayProfiles } from './dashboard-data'
+import { fetchIncompletePayProfiles, fetchPendingRosterApprovalsCount } from './dashboard-data'
 
 function mockSupabaseFor(rows) {
   return {
@@ -102,5 +102,45 @@ describe('fetchIncompletePayProfiles', () => {
     const res = await fetchIncompletePayProfiles(supabase, ['loc1'])
     expect(res.data.count).toBe(30)
     expect(res.data.sample).toHaveLength(20)
+  })
+})
+
+describe('fetchPendingRosterApprovalsCount', () => {
+  function mockCountResult(count, error = null) {
+    return {
+      from: vi.fn().mockReturnValue({
+        select: vi.fn().mockReturnValue({
+          eq: vi.fn().mockReturnValue({
+            in: vi.fn().mockResolvedValue({ count, error }),
+          }),
+        }),
+      }),
+    }
+  }
+
+  it('returns zero count when ownerLocationIds is empty (does not query)', async () => {
+    const supabase = { from: vi.fn() }
+    const res = await fetchPendingRosterApprovalsCount(supabase, [])
+    expect(res).toEqual({ success: true, data: { count: 0 } })
+    expect(supabase.from).not.toHaveBeenCalled()
+  })
+
+  it('returns the supabase count when called with locations', async () => {
+    const supabase = mockCountResult(3)
+    const res = await fetchPendingRosterApprovalsCount(supabase, ['loc1', 'loc2'])
+    expect(res).toEqual({ success: true, data: { count: 3 } })
+  })
+
+  it('treats null count as zero (Supabase head:true returns null when no rows)', async () => {
+    const supabase = mockCountResult(null)
+    const res = await fetchPendingRosterApprovalsCount(supabase, ['loc1'])
+    expect(res.data.count).toBe(0)
+  })
+
+  it('surfaces the error when supabase returns one', async () => {
+    const supabase = mockCountResult(0, { message: 'permission denied' })
+    const res = await fetchPendingRosterApprovalsCount(supabase, ['loc1'])
+    expect(res.success).toBe(false)
+    expect(res.error).toBe('permission denied')
   })
 })

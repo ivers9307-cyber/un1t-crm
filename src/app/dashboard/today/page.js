@@ -5,11 +5,16 @@
 
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
-import { Calendar, ArrowLeftRight, AlertCircle, AlertTriangle } from 'lucide-react'
+import { Calendar, ArrowLeftRight, AlertCircle, AlertTriangle, ClipboardCheck } from 'lucide-react'
 import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
-import { fetchPersonalDashboardData, fetchUnstaffedBlocksThisWeek, fetchIncompletePayProfiles } from '@shared/dashboard-data'
+import {
+  fetchPersonalDashboardData,
+  fetchUnstaffedBlocksThisWeek,
+  fetchIncompletePayProfiles,
+  fetchPendingRosterApprovalsCount,
+} from '@shared/dashboard-data'
 import { pickLocationColor } from '@shared/location-colors'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import {
@@ -177,21 +182,34 @@ export default async function PersonalDashboardPage() {
     pendingSwapsForMe, myPendingTimeOff, unreadInbox,
   } = res.data
 
-  // Roster v2 phase 2 + 3 — manager-facing alerts.
-  // Master sees the same chips across all assigned locations.
+  // Roster v2 phases 2 + 3 + 5 — manager / owner alerts.
+  // Master sees these chips across all assigned locations.
   const isManager = user.role === 'master' || MANAGER_ROLES.includes(user.role)
+  // Owner-only chip: pending roster approvals. Master counts as owner
+  // for approval purposes; otherwise the user is "owner-somewhere"
+  // if any of their per-location assignments has role='owner'.
+  const ownerLocationIds = user.role === 'master'
+    ? (user.locations || []).map(l => l.id)
+    : Object.entries(user.rolesByLocation || {})
+        .filter(([, role]) => role === 'owner')
+        .map(([id]) => id)
+  const isOwnerSomewhere = ownerLocationIds.length > 0
+
   let unstaffedCount = 0
   let incompletePay = { count: 0, sample: [] }
-  if (isManager) {
+  let pendingApprovals = 0
+  if (isManager || isOwnerSomewhere) {
     const locIds = user.role === 'master'
       ? (user.locations || []).map(l => l.id)
       : getUserLocationIds(user)
-    const [unstaffedRes, payRes] = await Promise.all([
+    const [unstaffedRes, payRes, approvalsRes] = await Promise.all([
       fetchUnstaffedBlocksThisWeek(db, locIds),
       fetchIncompletePayProfiles(db, locIds),
+      isOwnerSomewhere ? fetchPendingRosterApprovalsCount(db, ownerLocationIds) : Promise.resolve({ success: true, data: { count: 0 } }),
     ])
     if (unstaffedRes.success) unstaffedCount = unstaffedRes.data.count
     if (payRes.success) incompletePay = payRes.data
+    if (approvalsRes.success) pendingApprovals = approvalsRes.data.count
   }
 
   // Show the per-shift location chip only when the user is assigned
@@ -230,6 +248,29 @@ export default async function PersonalDashboardPage() {
           href={unreadInbox > 0 ? '/whatsapp' : undefined}
         />
       </KpiRow>
+
+      {/* Roster v2 phase 5 — pending roster approvals for owners.
+          Most operationally urgent of the three roster chips
+          (it's actively blocking staff from seeing their schedule),
+          so it goes first in the alert stack. */}
+      {isOwnerSomewhere && pendingApprovals > 0 && (
+        <Link
+          href="/schedule/approvals"
+          className="block mt-3 p-3 rounded-lg border border-blue-500/40 bg-blue-500/10 hover:bg-blue-500/15 transition-colors"
+        >
+          <div className="flex items-start gap-3">
+            <ClipboardCheck size={16} className="text-blue-300 mt-0.5 flex-shrink-0" />
+            <div className="flex-1 min-w-0">
+              <div className="text-sm font-medium text-blue-100">
+                {pendingApprovals} roster{pendingApprovals === 1 ? '' : 's'} waiting for approval
+              </div>
+              <div className="text-xs text-blue-100/80 mt-0.5">
+                Manager-submitted draft{pendingApprovals === 1 ? '' : 's'} over budget. Staff can&apos;t see their shifts until you approve.
+              </div>
+            </div>
+          </div>
+        </Link>
+      )}
 
       {/* Roster v2 phase 2 — unstaffed-block alert for managers/owners.
           Empty future shift_blocks across the user's locations;
