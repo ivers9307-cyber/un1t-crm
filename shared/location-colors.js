@@ -38,8 +38,7 @@ export const LOCATION_CHIP_PALETTE = Object.freeze([
   { key: 'pink',    bg: 'bg-pink-500/20',    text: 'text-pink-700'    },
 ])
 
-// FNV-1a 32-bit. Stable, fast, no deps. Good enough distribution
-// across the palette for UUID-shaped inputs.
+// FNV-1a 32-bit. Stable, fast, no deps.
 function fnv1a(str) {
   let h = 0x811c9dc5
   for (let i = 0; i < str.length; i++) {
@@ -54,11 +53,21 @@ function fnv1a(str) {
 /**
  * Pick a stable palette entry for a location.
  *
+ * Why the bit mixing? Direct `hash % 10` can produce pathological
+ * collisions where 3 unrelated UUIDs all land on the same index
+ * because their decimal representations happen to share the same
+ * last digit. We hit exactly that with 3 real UUIDs in production
+ * (Hatch / Stillorgan / CCF Autos all → index 7). XOR-folding the
+ * upper 16 bits into the lower 16 before the modulo breaks that
+ * pattern by ensuring every input byte influences the final index.
+ *
  * @param {string | null | undefined} locationId
  * @returns {{ key: string, bg: string, text: string }}
  */
 export function pickLocationColor(locationId) {
   if (!locationId) return LOCATION_CHIP_PALETTE[0]
-  const idx = fnv1a(String(locationId)) % LOCATION_CHIP_PALETTE.length
-  return LOCATION_CHIP_PALETTE[idx]
+  const h = fnv1a(String(locationId))
+  // XOR-fold high bits into low bits so the modulo sees full mixing.
+  const mixed = (h ^ (h >>> 16)) >>> 0
+  return LOCATION_CHIP_PALETTE[mixed % LOCATION_CHIP_PALETTE.length]
 }
