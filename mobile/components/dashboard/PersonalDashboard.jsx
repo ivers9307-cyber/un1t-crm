@@ -11,6 +11,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'expo-router'
 import { useAuth } from '../../lib/auth-context'
 import { fetchPersonalDashboard } from '../../lib/dashboard-api'
+import { pickLocationColor } from '../../../shared/location-colors'
 import {
   KpiCard, KpiRow, SectionHeader, PendingRow, ListCard,
 } from './cards'
@@ -135,13 +136,19 @@ function WeekPanel({ title, startIso, endIso, shifts, showLocation }) {
                       <Text className={`text-xs ${day.isPast ? 'text-un1t-mid' : 'text-un1t-light'}`}>
                         {shiftTime(s)} · {shiftHours(s)}h
                       </Text>
-                      {showLocation && s.locations?.name && (
-                        <View className="ml-1.5 px-1.5 py-0.5 rounded bg-un1t-gray/60">
-                          <Text className="text-[9px] uppercase tracking-wider text-un1t-light">
-                            {s.locations.name}
-                          </Text>
-                        </View>
-                      )}
+                      {showLocation && s.locations?.name && (() => {
+                        // Per-location accent — same palette as web
+                        // (shared/location-colors.js) so the chip looks
+                        // consistent across devices.
+                        const c = pickLocationColor(s.locations.id || s.location_id)
+                        return (
+                          <View className={`ml-1.5 px-1.5 py-0.5 rounded ${c.bg} ${day.isPast ? 'opacity-60' : ''}`}>
+                            <Text className={`text-[9px] uppercase tracking-wider ${c.text}`}>
+                              {s.locations.name}
+                            </Text>
+                          </View>
+                        )
+                      })()}
                     </View>
                   </View>
                 ))

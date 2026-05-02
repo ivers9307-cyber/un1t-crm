@@ -9,6 +9,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { fetchPersonalDashboardData } from '@shared/dashboard-data'
+import { pickLocationColor } from '@shared/location-colors'
 import {
   KpiCard, KpiRow, SectionHeader, ListCard, PendingRow,
 } from '@/components/dashboard/Cards'
@@ -128,11 +129,18 @@ function WeekPanel({ title, startIso, endIso, shifts, showLocation }) {
                     </div>
                     <div className={`text-xs flex items-center gap-1.5 flex-wrap ${day.isPast ? 'text-un1t-mid' : 'text-un1t-light'}`}>
                       <span>{shiftTime(s)} · {shiftHours(s)}h</span>
-                      {showLocation && s.locations?.name && (
-                        <span className="px-1.5 py-0.5 rounded bg-un1t-gray/60 text-un1t-light text-[10px] uppercase tracking-wider whitespace-nowrap">
-                          {s.locations.name}
-                        </span>
-                      )}
+                      {showLocation && s.locations?.name && (() => {
+                        // Per-location accent colour so chips for
+                        // different gyms don't blur into one another.
+                        // Past-day chips use the same palette but
+                        // softer to keep the past row visually muted.
+                        const c = pickLocationColor(s.locations.id || s.location_id)
+                        return (
+                          <span className={`px-1.5 py-0.5 rounded text-[10px] uppercase tracking-wider whitespace-nowrap ${c.bg} ${c.text} ${day.isPast ? 'opacity-60' : ''}`}>
+                            {s.locations.name}
+                          </span>
+                        )
+                      })()}
                     </div>
                   </div>
                 ))
