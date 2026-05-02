@@ -46,37 +46,65 @@ export async function GET(request) {
   const db = createServerClient()
   const nowIso = new Date().toISOString()
 
-  // Pull due broadcasts. Service-role client bypasses RLS so all
-  // locations are scanned in one query — exactly what we want for
-  // a global cron.
-  const { data: due, error } = await db
-    .from('sms_broadcasts')
-    .select('id, name, location_id, scheduled_at')
-    .eq('status', 'scheduled')
-    .lte('scheduled_at', nowIso)
-    .order('scheduled_at', { ascending: true })
-    .limit(20) // cap per-tick fanout — anything beyond rolls to the next tick
+  // Pull rows the cron should work on:
+  //   - scheduled with scheduled_at <= now: just-due, kick off.
+  //   - sending: a previous tick (or a sync send) processed a chunk
+  //     and parked the row here for resume. Phase 5B chunked-resume.
+  // Service-role client bypasses RLS so all locations are scanned in
+  // one query — exactly what we want for a global cron.
+  const [scheduled, resuming] = await Promise.all([
+    db.from('sms_broadcasts')
+      .select('id, name, location_id, scheduled_at, status')
+      .eq('status', 'scheduled')
+      .lte('scheduled_at', nowIso)
+      .order('scheduled_at', { ascending: true })
+      .limit(10),
+    db.from('sms_broadcasts')
+      .select('id, name, location_id, scheduled_at, status')
+      .eq('status', 'sending')
+      .order('updated_at', { ascending: true })
+      .limit(10),
+  ])
 
-  if (error) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+  if (scheduled.error) {
+    return NextResponse.json({ success: false, error: scheduled.error.message }, { status: 500 })
+  }
+  if (resuming.error) {
+    return NextResponse.json({ success: false, error: resuming.error.message }, { status: 500 })
   }
 
-  const stats = { found: due?.length || 0, sent: 0, failed: 0, errors: [] }
+  const due = [...(scheduled.data || []), ...(resuming.data || [])]
 
-  for (const row of (due || [])) {
+  const stats = {
+    found: due.length,
+    finished: 0,
+    in_progress: 0,
+    sent: 0,
+    failed: 0,
+    errors: [],
+  }
+
+  // Per-tick chunk size. Set so a single broadcast can't monopolise
+  // the tick — 200 recipients * 25/sec rate limit = ~8 seconds best
+  // case, well inside the 60s ceiling. Larger broadcasts spread
+  // across multiple ticks (5 min apart by the cron schedule).
+  const CHUNK = 200
+
+  for (const row of due) {
     try {
-      const result = await sendBroadcast(row.id)
+      const result = await sendBroadcast(row.id, { maxRecipients: CHUNK })
       stats.sent += result.sent
       stats.failed += result.failed
+      if (result.status === 'sent') stats.finished++
+      else stats.in_progress++
     } catch (e) {
       const msg = e?.message || String(e)
       console.warn(`[cron run-sms-broadcasts] broadcast ${row.id} (${row.name}) failed: ${msg}`)
       stats.errors.push({ broadcast_id: row.id, error: msg })
-      // Don't transition the broadcast to anything special — leave
-      // it in whatever state sendBroadcast left it in (likely
-      // 'sending' if it threw mid-loop). Manual cleanup if needed.
-      // The next cron tick won't re-pick it because we filter on
-      // status='scheduled'.
+      // Don't transition the broadcast — leave it in whatever state
+      // sendBroadcast left it in. The next tick will pick it up
+      // again from the recipients table's NOT-IN filter, so a
+      // mid-chunk crash isn't a permanent stuck state.
     }
   }
 

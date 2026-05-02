@@ -23,6 +23,16 @@ const CHANNELS = [
     label: 'Administrative WhatsApp',
     description: 'Booking reminders, schedule changes, and account updates via WhatsApp',
   },
+  {
+    key: 'sms_marketing',
+    label: 'SMS Marketing',
+    description: 'Promotions and offers via text message',
+  },
+  {
+    key: 'sms_administrative',
+    label: 'Administrative SMS',
+    description: 'Booking reminders and account updates via text message',
+  },
 ]
 
 export default function PreferenceCentre({ token }) {

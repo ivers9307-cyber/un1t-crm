@@ -33,7 +33,12 @@ export async function POST(request, { params }) {
   if (guard) return guard
 
   try {
-    const result = await sendBroadcast(params.id)
+    // Manual "Send now" — process up to 500 recipients in this
+    // request. Anything beyond rolls to the cron (which picks up
+    // status='sending' rows every 5 min, Phase 5B). 500 was picked
+    // empirically: at the 25 sends/sec rate limit + per-call
+    // overhead, ~500 fits inside Vercel's 60s ceiling on Pro.
+    const result = await sendBroadcast(params.id, { maxRecipients: 500 })
     return NextResponse.json({ success: true, ...result })
   } catch (err) {
     console.error('[sms/broadcasts/send]', err)

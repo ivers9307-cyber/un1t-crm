@@ -30,11 +30,18 @@ import { applyMergeTags } from '@/lib/postmark'
  * @returns {object} a Supabase query builder. Caller awaits it.
  */
 export function buildSmsAudience(db, filter, locationId) {
+  // Inner-join contact_preferences so we filter on sms_marketing in
+  // the same query (mig 064). Mirrors buildWhatsAppAudience' use of
+  // !inner. Contacts without a preferences row are excluded — same
+  // semantics as the WA broadcast path; the trigger from mig 005
+  // creates a row on every new contact so this only excludes legacy
+  // rows that pre-date the preferences table.
   let query = db
     .from('contacts')
-    .select('id, name, first_name, last_name, email, phone, lead_status, sms_status, location_id')
+    .select('id, name, first_name, last_name, email, phone, lead_status, sms_status, location_id, contact_preferences!inner(sms_marketing)')
     .eq('location_id', locationId)
     .eq('sms_status', 'active')
+    .eq('contact_preferences.sms_marketing', true)
     .not('phone', 'is', null)
 
   return applyAudienceFilter(query, filter)
@@ -48,21 +55,34 @@ const RATE_LIMIT_BATCH = 25
 const RATE_LIMIT_PAUSE_MS = 1000
 
 /**
- * Send a broadcast end-to-end. Synchronous from the caller's
- * perspective — mirrors whatsapp.js#sendBroadcast — but the loop
- * yields to setTimeout once per batch so a long send doesn't block
- * the event loop.
+ * Send a broadcast — chunked + resumable (Phase 5B / mig 060+).
  *
- * Idempotency-ish: if called twice on the same broadcast id, the
- * second call short-circuits because the status will already have
- * moved off 'draft'. Recipients are uniquely keyed (broadcast_id,
- * contact_id), so the table-level unique constraint also blocks
- * duplicate per-contact inserts.
+ * The loop processes up to `maxRecipients` contacts per call. If
+ * more remain, the broadcast stays in 'sending' state and the next
+ * cron tick (or another manual call) picks up where this left off,
+ * skipping contacts already in sms_broadcast_recipients via a
+ * NOT-IN filter. When the audience is exhausted, the broadcast
+ * finalises as 'sent' with the cumulative totals.
+ *
+ * This makes broadcasts to >500 recipients viable on Vercel without
+ * tripping the serverless timeout. Smaller broadcasts (default cap
+ * stays generous) finish in one call exactly as before.
+ *
+ * Idempotency: if the broadcast is already 'sent' or 'cancelled',
+ * we throw early. Recipients are uniquely keyed (broadcast_id,
+ * contact_id) at the DB level, so a duplicate insert from a
+ * concurrent run is rejected by the constraint instead of producing
+ * a double-send.
  *
  * @param {string} broadcastId
- * @returns {Promise<{ sent: number, failed: number, recipients: number }>}
+ * @param {object} [opts]
+ * @param {number} [opts.maxRecipients=Infinity]  Cap recipients
+ *        processed in this call. Cron passes a small number
+ *        (default 200); manual send-now passes Infinity to finish
+ *        in one shot when possible.
+ * @returns {Promise<{ sent: number, failed: number, recipients: number, remaining: number, status: string }>}
  */
-export async function sendBroadcast(broadcastId) {
+export async function sendBroadcast(broadcastId, { maxRecipients = Infinity } = {}) {
   const db = createServerClient()
 
   // Pull broadcast + the per-location sender ID in one round-trip.
@@ -88,8 +108,11 @@ export async function sendBroadcast(broadcastId) {
   if (!broadcast.locations) throw new Error('Broadcast location is missing')
 
   // Move to 'sending' before iterating so a duplicate POST /send
-  // can't kick off two parallel sends.
-  await db.from('sms_broadcasts').update({ status: 'sending' }).eq('id', broadcastId)
+  // can't kick off two parallel sends. If the broadcast was already
+  // 'sending' (resumed from a previous chunk), this is a no-op.
+  if (broadcast.status !== 'sending') {
+    await db.from('sms_broadcasts').update({ status: 'sending' }).eq('id', broadcastId)
+  }
 
   // Resolve audience.
   const { data: contacts, error: cErr } = await buildSmsAudience(
@@ -105,14 +128,34 @@ export async function sendBroadcast(broadcastId) {
       total_sent: 0,
       total_failed: 0,
     }).eq('id', broadcastId)
-    return { sent: 0, failed: 0, recipients: 0 }
+    return { sent: 0, failed: 0, recipients: 0, remaining: 0, status: 'sent' }
   }
+
+  // Exclude contacts already processed (sent OR failed) from a
+  // previous chunk — the unique (broadcast_id, contact_id)
+  // constraint would reject duplicates anyway, but skipping them
+  // up-front saves the Twilio call. The recipients table is
+  // typically small (only THIS broadcast's rows), so this query
+  // is cheap.
+  const { data: alreadyDone } = await db
+    .from('sms_broadcast_recipients')
+    .select('contact_id')
+    .eq('broadcast_id', broadcastId)
+  const doneSet = new Set((alreadyDone || []).map(r => r.contact_id))
+  const remaining = contacts.filter(c => !doneSet.has(c.id))
+
+  // Cap by chunk size. The cap defaults to Infinity for sync
+  // send-now; cron passes a small number to share Twilio rate
+  // limits with deposit / ad-hoc traffic.
+  const chunk = Number.isFinite(maxRecipients)
+    ? remaining.slice(0, maxRecipients)
+    : remaining
 
   let sentCount = 0
   let failedCount = 0
 
-  for (let i = 0; i < contacts.length; i++) {
-    const contact = contacts[i]
+  for (let i = 0; i < chunk.length; i++) {
+    const contact = chunk[i]
 
     // Apply merge tags per recipient — same tag set as ad-hoc and
     // email (first_name, name, location_name, etc.).
@@ -171,18 +214,38 @@ export async function sendBroadcast(broadcastId) {
 
     // Yield to the event loop every batch so a long broadcast
     // doesn't block other requests on this Vercel worker.
-    if ((i + 1) % RATE_LIMIT_BATCH === 0 && i + 1 < contacts.length) {
+    if ((i + 1) % RATE_LIMIT_BATCH === 0 && i + 1 < chunk.length) {
       await new Promise(r => setTimeout(r, RATE_LIMIT_PAUSE_MS))
     }
   }
 
+  // Recompute totals from the table — the chunk we just processed
+  // adds to whatever previous chunks already wrote.
+  const { data: allDone } = await db
+    .from('sms_broadcast_recipients')
+    .select('status')
+    .eq('broadcast_id', broadcastId)
+  const cumulativeSent = (allDone || []).filter(r => r.status === 'sent').length
+  const cumulativeFailed = (allDone || []).filter(r => r.status === 'failed').length
+
+  // Decide finalisation: if we exhausted the audience, mark sent.
+  // Otherwise leave in 'sending' for the next tick to continue.
+  const stillRemaining = remaining.length - chunk.length
+  const isComplete = stillRemaining === 0
+
   await db.from('sms_broadcasts').update({
-    status: 'sent',
-    sent_at: new Date().toISOString(),
+    status: isComplete ? 'sent' : 'sending',
+    sent_at: isComplete ? new Date().toISOString() : null,
     total_recipients: contacts.length,
-    total_sent: sentCount,
-    total_failed: failedCount,
+    total_sent: cumulativeSent,
+    total_failed: cumulativeFailed,
   }).eq('id', broadcastId)
 
-  return { sent: sentCount, failed: failedCount, recipients: contacts.length }
+  return {
+    sent: sentCount,
+    failed: failedCount,
+    recipients: contacts.length,
+    remaining: stillRemaining,
+    status: isComplete ? 'sent' : 'sending',
+  }
 }

@@ -81,21 +81,50 @@ export default async function CommunicationsHub() {
     draftBroadcasts = drafts || 0
   }
 
-  // SMS stats (mig 060)
-  let smsSent = 0, smsDraftBroadcasts = 0
+  // SMS stats (mig 060 + Phase 5C analytics).
+  //
+  // total_sent / total_failed at the broadcast level give us a fast
+  // location-scoped view without scanning recipients. Recipient
+  // counts (cross-location) would need a join via sms_broadcasts,
+  // and that's expensive on the hub — keep the cheap path.
+  let smsSent = 0, smsFailed = 0, smsSent30d = 0, smsDraftBroadcasts = 0, smsScheduled = 0
   if (canSms && locationId) {
-    const [{ count: sent }, { count: drafts }] = await Promise.all([
-      db.from('sms_broadcast_recipients')
-        .select('id', { count: 'exact', head: true })
-        .eq('status', 'sent'),
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
+    const [
+      { data: totals },
+      { data: last30 },
+      { count: drafts },
+      { count: scheduled },
+    ] = await Promise.all([
+      db.from('sms_broadcasts')
+        .select('total_sent, total_failed')
+        .eq('location_id', locationId)
+        .in('status', ['sent', 'sending']),
+      db.from('sms_broadcasts')
+        .select('total_sent')
+        .eq('location_id', locationId)
+        .eq('status', 'sent')
+        .gte('sent_at', thirtyDaysAgo),
       db.from('sms_broadcasts')
         .select('id', { count: 'exact', head: true })
         .eq('location_id', locationId)
         .eq('status', 'draft'),
+      db.from('sms_broadcasts')
+        .select('id', { count: 'exact', head: true })
+        .eq('location_id', locationId)
+        .eq('status', 'scheduled'),
     ])
-    smsSent = sent || 0
+    smsSent = (totals || []).reduce((acc, b) => acc + (b.total_sent || 0), 0)
+    smsFailed = (totals || []).reduce((acc, b) => acc + (b.total_failed || 0), 0)
+    smsSent30d = (last30 || []).reduce((acc, b) => acc + (b.total_sent || 0), 0)
     smsDraftBroadcasts = drafts || 0
+    smsScheduled = scheduled || 0
   }
+  // Failure rate as a percentage — only meaningful when we've sent
+  // anything. Hide otherwise to avoid a stat that says "NaN%".
+  const smsFailureRate = (smsSent + smsFailed) > 0
+    ? Math.round((smsFailed / (smsSent + smsFailed)) * 100)
+    : null
 
   return (
     <div>
@@ -115,7 +144,17 @@ export default async function CommunicationsHub() {
           </>
         )}
         {canSms && (
-          <StatCard label="SMS sent" value={smsSent.toLocaleString()} icon={MessageSquare} accent={smsSent > 0 ? 'text-cyan-400' : undefined} />
+          <>
+            <StatCard label="SMS sent" value={smsSent.toLocaleString()} icon={MessageSquare} accent={smsSent > 0 ? 'text-cyan-400' : undefined} />
+            <StatCard label="SMS · last 30 days" value={smsSent30d.toLocaleString()} accent={smsSent30d > 0 ? 'text-cyan-400' : undefined} />
+            {smsFailureRate !== null && (
+              <StatCard
+                label="SMS failure rate"
+                value={`${smsFailureRate}%`}
+                accent={smsFailureRate > 5 ? 'text-red-400' : 'text-un1t-light'}
+              />
+            )}
+          </>
         )}
       </div>
 
@@ -155,7 +194,13 @@ export default async function CommunicationsHub() {
             icon={MessageSquare}
             color="bg-cyan-500/20 text-cyan-400"
             title="SMS broadcasts"
-            desc={smsDraftBroadcasts > 0 ? `${smsDraftBroadcasts} draft${smsDraftBroadcasts === 1 ? '' : 's'} pending` : 'Freeform SMS to filtered audiences'}
+            desc={
+              smsScheduled > 0
+                ? `${smsScheduled} scheduled, ${smsDraftBroadcasts} draft${smsDraftBroadcasts === 1 ? '' : 's'}`
+                : smsDraftBroadcasts > 0
+                  ? `${smsDraftBroadcasts} draft${smsDraftBroadcasts === 1 ? '' : 's'} pending`
+                  : 'Freeform SMS to filtered audiences'
+            }
           />
         )}
         {canWhatsapp && (

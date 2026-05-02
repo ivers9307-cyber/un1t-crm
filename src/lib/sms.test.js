@@ -35,7 +35,9 @@ describe('buildSmsAudience', () => {
     expect(calls[1].method).toBe('select')
     expect(calls[2]).toEqual({ method: 'eq', args: ['location_id', 'loc-uuid'] })
     expect(calls[3]).toEqual({ method: 'eq', args: ['sms_status', 'active'] })
-    expect(calls[4]).toEqual({ method: 'not', args: ['phone', 'is', null] })
+    // Mig 064 — also gates on the marketing opt-in.
+    expect(calls[4]).toEqual({ method: 'eq', args: ['contact_preferences.sms_marketing', true] })
+    expect(calls[5]).toEqual({ method: 'not', args: ['phone', 'is', null] })
   })
 
   it('select() includes phone + sms_status + identity fields needed by the send loop', () => {
@@ -51,6 +53,9 @@ describe('buildSmsAudience', () => {
     expect(cols).toContain('name')
     expect(cols).toContain('lead_status')
     expect(cols).toContain('location_id')
+    // Mig 064 — inner-join the preferences table so sms_marketing
+    // can be filtered in the same query.
+    expect(cols).toContain('contact_preferences!inner(sms_marketing)')
   })
 
   it('passes through to applyAudienceFilter for user filters (no field-name leakage)', () => {

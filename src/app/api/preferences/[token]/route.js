@@ -9,6 +9,9 @@ const PreferencesUpdateSchema = z.object({
   email_administrative: z.boolean().optional(),
   whatsapp_marketing: z.boolean().optional(),
   whatsapp_administrative: z.boolean().optional(),
+  // SMS toggles (mig 063 added administrative; mig 064 added marketing).
+  sms_marketing: z.boolean().optional(),
+  sms_administrative: z.boolean().optional(),
 })
 
 export const runtime = 'nodejs'
@@ -49,6 +52,8 @@ export async function GET(request, { params }) {
       email_administrative: pref.email_administrative,
       whatsapp_marketing: pref.whatsapp_marketing,
       whatsapp_administrative: pref.whatsapp_administrative,
+      sms_marketing: pref.sms_marketing,
+      sms_administrative: pref.sms_administrative,
     },
   })
 }
@@ -76,7 +81,11 @@ export async function PUT(request, { params }) {
     return NextResponse.json({ success: false, error: 'Invalid token' }, { status: 404 })
   }
 
-  const allowed = ['email_marketing', 'email_administrative', 'whatsapp_marketing', 'whatsapp_administrative']
+  const allowed = [
+    'email_marketing', 'email_administrative',
+    'whatsapp_marketing', 'whatsapp_administrative',
+    'sms_marketing', 'sms_administrative',
+  ]
   const updates = {}
   const logEntries = []
 
