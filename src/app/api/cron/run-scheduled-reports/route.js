@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { generateReport, calculatePeriodForSchedule, calculateNextRun } from '@/lib/report-generator'
+import { stampHeartbeat } from '@/lib/cron-heartbeat'
 
 /**
  * GET /api/cron/run-scheduled-reports
@@ -32,6 +33,7 @@ export async function GET(request) {
   }
 
   if (!dueReports || dueReports.length === 0) {
+    await stampHeartbeat('run-scheduled-reports')
     return NextResponse.json({ success: true, message: 'No reports due', processed: 0 })
   }
 
@@ -116,6 +118,10 @@ export async function GET(request) {
       })
     }
   }
+
+  // Heartbeat after the loop — even if individual reports errored, the cron
+  // tick itself ran end-to-end. Per-report errors are surfaced in `results`.
+  await stampHeartbeat('run-scheduled-reports')
 
   return NextResponse.json({
     success: true,

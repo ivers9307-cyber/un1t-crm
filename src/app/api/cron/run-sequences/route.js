@@ -8,6 +8,7 @@
 import { NextResponse } from 'next/server'
 import { runSequences, runEventReminderTriggers } from '@/lib/sequences'
 import { runEventReminderSends } from '@/lib/event-reminders'
+import { stampHeartbeat } from '@/lib/cron-heartbeat'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -44,6 +45,9 @@ export async function GET(request) {
 
   try {
     const stats = await runSequences()
+    // Heartbeat AFTER all three phases ran. If runSequences threw we
+    // skip the stamp — that's the signal a downstream alert needs.
+    await stampHeartbeat('run-sequences')
     return NextResponse.json({
       success: true,
       stats,

@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
+import { stampHeartbeat } from '@/lib/cron-heartbeat'
 
 export const runtime = 'nodejs'
 
@@ -33,5 +34,6 @@ export async function GET(request) {
     return NextResponse.json({ success: false, error: error.message }, { status: 500 })
   }
 
+  await stampHeartbeat('prune-rate-limits')
   return NextResponse.json({ success: true, deleted: count ?? 0 })
 }

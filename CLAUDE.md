@@ -92,6 +92,7 @@ React 18 + Next.js 14, Tailwind CSS 3.4, Supabase Auth (SSR cookies), Postmark (
 | Sequence runner + triggers | 005, 037, 038, 039 | `/api/cron/run-sequences`, `/api/sequences/[id]/enrol` | `sequences.js`, `event-reminders.js` | `SequencePicker.jsx`, `SequenceEditor.jsx` |
 | Saved contact segments | 043 | `/api/contacts/segments`, `/api/contacts/search` (POST) | — | `ContactsView.jsx` (advanced filter + saved segments) |
 | Per-event reminders | 044 | (cron-driven) | `event-reminders.js` | `EventForm.jsx` (Reminder section) |
+| Cron monitoring | 053, 054 | `/api/cron/health-check` | `cron-heartbeat.js` | — (operator queries `cron_health` view) |
 
 ### Shared library helpers (`src/lib/`)
 
@@ -117,6 +118,7 @@ React 18 + Next.js 14, Tailwind CSS 3.4, Supabase Auth (SSR cookies), Postmark (
 | `twilio.js` | Twilio SMS client — single `sendSms({ to, body, from })` helper, Basic auth. Sender defaults to alphanumeric ID `CCFautos` (Ireland's only viable A2P route — Twilio's Irish long codes are voice-only). `toE164Ireland()` normaliser handles common formats (`087…`, `+353…`, bare `87…`). |
 | `sequences.js` | Sequence runner — `enrolContacts()`, `runSequences()` (cron), `triggerSequencesForBooking()`, `triggerSequencesForStatusChange()`, `triggerSequencesForTagsAdded()`, `runEventReminderTriggers()` (sequence-based event reminders). Audience filter respected via `contactMatchesSequenceAudience()`. |
 | `event-reminders.js` | Per-event single-shot reminder runner — `runEventReminderSends()`. Reads `event_types.reminder_*` fields, finds bookings ~N min away, sends via email (Postmark transactional) or WhatsApp UTILITY template. Respects `email_administrative` / `whatsapp_administrative` consent flags (NOT marketing flags — reminders are transactional). Stamps `bookings.reminder_sent_at` for dedup. |
+| `cron-heartbeat.js` | `stampHeartbeat(name)` — best-effort UPDATE of `cron_heartbeats.last_ok_at` called by every `/api/cron/*` route on the success path. Never throws, never blocks. Pairs with the `cron_health` view (mig 053) and `/api/cron/health-check` route to give external uptime monitors a single URL that 503s when any cron is stale. |
 
 ### Email system (`src/lib/postmark.js`)
 
@@ -468,9 +470,23 @@ Vercel. Crons (in `vercel.json`):
 - `/api/cron/prune-rate-limits` — daily 03:30 UTC. Deletes expired `rate_limit_buckets` rows.
 - `/api/cron/run-sequences` — every 5 minutes via **pg_cron + pg_net** (Vercel Hobby plan caps at 2 crons; rest run from inside Postgres — see migration 038). Phases per tick: (1) `runEventReminderSends()` for per-event single-shot reminders, (2) `runEventReminderTriggers()` for sequence-based event reminder triggers, (3) `runSequences()` to fire due steps. Each phase is independent so a failure in one doesn't stop the others. Auth via a `private.app_config` row holding the same shared secret value Vercel uses for the other crons.
 
-Both Vercel-hosted crons are protected by `Authorization: Bearer ${CRON_SECRET}`. The pg_cron-driven hits use the same secret read from `private.app_config`.
+Both Vercel-hosted crons are protected by `Authorization: Bearer ${CRON_SECRET}`. The pg_cron-driven hits use the same secret read from `private.app_config`. **Both sides must hold the same value** — see "Cron monitoring" below for what happens when they drift.
+
+### Cron monitoring (mig 053, 054)
+
+`public.cron_heartbeats` (one row per cron name) is stamped via `stampHeartbeat(name)` in `src/lib/cron-heartbeat.js` on every successful tick. The `public.cron_health` view (security_invoker = on, RLS-respecting) computes `is_stale` live as `NOW() - last_ok_at > expected_interval + grace`. `/api/cron/health-check` reads the view and returns **200** when every cron is fresh, **503** when any is stale — auth-gated by `CRON_SECRET`.
+
+External uptime monitors (UptimeRobot, Better Stack, Pingdom — anything that supports HTTP monitors with custom headers) ping `/api/cron/health-check` every few minutes with `Authorization: Bearer ${CRON_SECRET}` and alert on any non-2xx. One URL covers all crons; no per-cron monitor config needed. Vercel Hobby has no native log-based alerting, so external pingers are the right primitive.
+
+Why this exists: on **2026-05-01 14:41 UTC** the `CRON_SECRET` on Vercel drifted from the value stamped into `private.app_config.cron_secret` used by pg_cron via pg_net. `/api/cron/run-sequences` silently 401'd every 5 minutes for ~22 hours. We caught it by chance — there were no due enrolments during the window, so the customer impact was zero, but it could just as easily have been a launch. The heartbeat → view → health-check → external monitor chain means the next drift surfaces within minutes.
+
+When adding a new cron, add a row to `public.cron_heartbeats` (name, expected_interval_seconds, grace_seconds) in the same migration that creates the cron, and call `stampHeartbeat(name)` on the success path of the route. The health-check picks it up automatically.
+
+### Database
 
 Supabase for database + auth + file storage (`branding` bucket for logos). Migrations are forward-only — there are no down migrations. Apply via the Supabase MCP (`apply_migration` tool) or, when MCP is unavailable, paste the SQL into the Supabase Dashboard SQL Editor. After every DDL change, run the security advisor (`get_advisors` MCP tool, type=security) — RLS misses, missing policies, mutable `search_path`, and over-broad grants get flagged immediately.
+
+**Views default to SECURITY DEFINER on Supabase.** Any view created in a migration is owned by the postgres role and runs with its permissions, which bypasses RLS on the underlying tables. The advisor catches this; the fix is `ALTER VIEW <name> SET (security_invoker = on)` (or `WITH (security_invoker=on)` on creation). Mig 054 fixed this for `cron_health`. Always set `security_invoker = on` on new views unless there's a specific reason not to.
 
 ## Extending
 
@@ -699,6 +715,10 @@ Things to watch but NOT act on without measurement:
 
 - **WhatsApp template categories are policy, not just labels.** Sending a MARKETING template under a transactional pretext (e.g. as a reminder) is a Meta policy violation that gets accounts in trouble. Reminder + utility flows refuse MARKETING templates at the picker AND at runtime as a backstop.
 
+- **Two-sided secrets need monitoring.** When a secret has to match between two systems we control (Vercel `CRON_SECRET` + `private.app_config.cron_secret`), drift is silent and only surfaces when something downstream notices. The fix isn't "be careful when rotating" — it's "the system tells us within minutes when something stops working". Pattern: every cron writes a heartbeat on success, a view computes is_stale, a single health-check endpoint 503s when anything is stale, an external monitor pings the endpoint. See "Cron monitoring" under Deployment.
+
+- **Supabase views default to SECURITY DEFINER.** Any view created in a migration runs with the postgres role's permissions and bypasses RLS on the underlying tables. The advisor (`get_advisors` MCP, type=security) catches it as an ERROR-level lint. Always include `WITH (security_invoker = on)` on `CREATE VIEW`, or follow up with `ALTER VIEW ... SET (security_invoker = on)`.
+
 ## Roadmap & backlog
 
 Mirror of the Cowork task list — kept here as the durable record so that a fresh session has the context even when the task list is cleared. Add new ideas as they come up; mark items as done with the corresponding commit/migration when shipped.
@@ -707,6 +727,7 @@ Mirror of the Cowork task list — kept here as the durable record so that a fre
 
 | # | Item | Notes |
 |---|------|-------|
+| 57 | Cron heartbeat + health-check + external monitor | Migs 053, 054. `cron_heartbeats` table stamped by every `/api/cron/*` route via `stampHeartbeat(name)` from `src/lib/cron-heartbeat.js`. `cron_health` view (`security_invoker = on`) flags is_stale. `/api/cron/health-check` returns 200/503 for an external monitor (UptimeRobot etc.) to ping. Caught and root-caused after the May 1 cron-secret drift. |
 | 56 | Per-location RLS precision | Mig 052. Tightened `pipeline_stages`, `webhook_subscriptions`, `profile_locations`, and `locations` policies to use the new per-location helpers. `profiles "Admins can manage profiles"` is master-only at RLS; API enforces per-location ownership for non-masters. |
 | 55 | Per-location roles + StaffForm wizard | Mig 051. `profile_locations.role` (CHECK enforces no `master` at the per-location level). `getCurrentUser()` returns `rolesByLocation` + active-location-aware `user.role`. New helpers: `get_user_role_at`, `auth_is_owner_at`, `auth_is_admin_at`, `auth_is_manager_at`. Latent `public.auth_role()` typo in `auth_is_owner` / `auth_is_owner_or_manager` fixed at the same time. StaffForm rewritten as a per-location card wizard. Staff API routes accept `assignments[]` + optional `is_master`. |
 | 54 | Master honours per-location feature gate | `17c5213`. Master sidebar now collapses at locations with features off. `settings` is the only escape-hatch key on web. |
