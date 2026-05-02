@@ -1,23 +1,24 @@
 'use client'
 
-// Public-facing deposit page. Inline payment via Revolut's
-// `createCardField` SDK — buyer never leaves our domain. The card
-// details render in a Revolut-controlled iframe so PCI scope stays
-// minimal; the SDK handles 3DS / SCA in a popup transparently.
+// Public-facing deposit page using Revolut's Embedded Checkout
+// widget. Buyer never leaves our domain. The widget handles cards +
+// Apple Pay + Google Pay + Revolut Pay automatically, plus 3DS / SCA
+// transparently. Card details enter Revolut-controlled iframes so
+// PCI scope stays minimal.
 //
-// Flow:
-//   1. Page loads → fetch deposit data → render T&Cs + accept checkbox
-//   2. Buyer ticks accept → 'Continue to payment' button enables
-//   3. Click → POST /accept-and-pay → backend records consent +
-//      creates a Revolut order, returns public_id
-//   4. embed.js dynamically injected (NEXT_PUBLIC_REVOLUT_MODE picks
-//      sandbox vs prod). RevolutCheckout(public_id, mode).createCardField()
-//      mounts the card iframe in our target div.
-//   5. Buyer enters card details → clicks 'Pay €X' → cardField.submit()
-//   6. SDK runs the auth flow (3DS popup if required) → onSuccess /
-//      onError / onCancel callback. We refetch the deposit data on
-//      success — the webhook is the authoritative state source but
-//      typically lands within seconds.
+// Flow (verified against merchant-2026-03-12.yaml + @revolut/checkout
+// SDK source):
+//   1. Page loads → fetch deposit data → render T&Cs + checkbox
+//   2. Buyer ticks accept → widget mounts in the payment area below
+//   3. Buyer picks a payment method, enters details, clicks the
+//      widget's own pay button
+//   4. Widget calls our `createOrder` callback → we POST to
+//      accept-and-pay (records consent + creates Revolut order on the
+//      server) → return { publicId: orderToken } to the widget
+//   5. Widget processes the payment (handling 3DS as needed) →
+//      onSuccess callback fires → we refetch deposit data → show
+//      receipt inline. The webhook is still authoritative for the
+//      database flip.
 
 import { useEffect, useRef, useState } from 'react'
 import { Lock, CheckCircle2, AlertCircle, ExternalLink } from 'lucide-react'
@@ -27,8 +28,8 @@ const SDK_URLS = {
   prod: 'https://merchant.revolut.com/embed.js',
 }
 
-// Cache the loaded SDK promise so multiple mounts (or remounts via
-// React StrictMode in dev) share one script tag.
+// Cache the loader promise so React StrictMode (or remounts) share a
+// single script tag.
 let sdkPromise = null
 function loadRevolutSdk(mode) {
   if (typeof window === 'undefined') return Promise.reject(new Error('SSR'))
@@ -47,6 +48,7 @@ function loadRevolutSdk(mode) {
 }
 
 const REVOLUT_MODE = process.env.NEXT_PUBLIC_REVOLUT_MODE === 'prod' ? 'prod' : 'sandbox'
+const REVOLUT_PUBLIC_KEY = process.env.NEXT_PUBLIC_REVOLUT_PUBLIC_KEY || ''
 
 export default function CarDepositPage({ token }) {
   const [data, setData] = useState(null)
@@ -54,15 +56,15 @@ export default function CarDepositPage({ token }) {
   const [loadErrorCode, setLoadErrorCode] = useState(null)
   const [accepted, setAccepted] = useState(false)
 
-  // 'idle' → 'creating' (POST in flight) → 'card' (field mounted) →
-  // 'paying' (cardField.submit() in flight) → 'paid' (success) | 'error'
+  // 'idle' | 'mounting' | 'ready' | 'paying' | 'paid' | 'error'
   const [phase, setPhase] = useState('idle')
   const [phaseError, setPhaseError] = useState(null)
-  const [order, setOrder] = useState(null)        // { public_id, checkout_url, order_id }
-  const [cardField, setCardField] = useState(null)
-  const [cardComplete, setCardComplete] = useState(false)
+  // Hosted-page fallback URL — populated after the first createOrder
+  // call so we have something to give the buyer if the widget glitches.
+  const [hostedFallbackUrl, setHostedFallbackUrl] = useState(null)
 
-  const cardFieldRef = useRef(null)
+  const widgetTargetRef = useRef(null)
+  const widgetInstanceRef = useRef(null)
 
   // ── Initial deposit-data fetch ─────────────────────────────────
   useEffect(() => {
@@ -82,51 +84,83 @@ export default function CarDepositPage({ token }) {
     return () => { cancelled = true }
   }, [token])
 
-  // ── Mount the card field once we have a public_id ──────────────
+  // ── Mount the embedded checkout widget once terms are accepted ──
   useEffect(() => {
-    if (!order?.public_id || cardField || !cardFieldRef.current) return
+    if (!accepted || !data || !widgetTargetRef.current || widgetInstanceRef.current) return
+    if (data.status === 'paid') return
     let destroyed = false
-    let instance = null
-    let field = null
+
+    if (!REVOLUT_PUBLIC_KEY) {
+      setPhase('error')
+      setPhaseError('Payment widget is not configured (NEXT_PUBLIC_REVOLUT_PUBLIC_KEY missing).')
+      return
+    }
+
+    setPhase('mounting')
+    setPhaseError(null)
 
     loadRevolutSdk(REVOLUT_MODE)
-      .then((RC) => RC(order.public_id, REVOLUT_MODE))
-      .then((rc) => {
+      .then((RC) => {
         if (destroyed) return
-        instance = rc
-        field = rc.createCardField({
-          target: cardFieldRef.current,
-          theme: 'light',
-          hidePostcodeField: false,
-          // Status callback drives the 'Pay' button enable state.
-          onStatusChange: (status) => {
-            if (destroyed) return
-            setCardComplete(!!status.completed && !status.invalid)
+        // SDK source (embeddedCheckoutLoader.js) shows embeddedCheckout
+        // is exposed as a static method on the loaded RevolutCheckout
+        // function. Returns an instance with .destroy().
+        const instance = RC.embeddedCheckout({
+          publicToken: REVOLUT_PUBLIC_KEY,
+          mode: REVOLUT_MODE,
+          locale: 'auto',
+          target: widgetTargetRef.current,
+          // SDK calls this when the buyer submits payment in the widget.
+          // We POST to our backend, which records the T&C acceptance
+          // (terms_version + IP + timestamp) and creates the Revolut
+          // order. The SDK expects { publicId: <order-token> }.
+          createOrder: async () => {
+            const res = await fetch(
+              `/api/public/deposit/${encodeURIComponent(token)}/accept-and-pay`,
+              {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ terms_version: data.terms.version }),
+              }
+            )
+            const j = await res.json()
+            if (!j.success) {
+              if (j.code === 'TERMS_VERSION_MISMATCH' || j.code === 'TOKEN_EXPIRED') {
+                window.location.reload()
+              }
+              throw new Error(j.error || 'Could not create order')
+            }
+            // Save the hosted URL so the small fallback link shows
+            // up after the first attempted submit.
+            if (j.checkout_url) setHostedFallbackUrl(j.checkout_url)
+            // The SDK keeps using `publicId` as the field name even
+            // though the API renamed the underlying value to `token`.
+            return { publicId: j.public_id }
           },
-          onSuccess: () => {
+          onSuccess: ({ orderId }) => {
             if (destroyed) return
             setPhase('paid')
-            // Refetch the deposit data — the webhook usually has
-            // landed by now and reflects 'paid' status. If not, the
-            // success view falls back to the SDK callback signal.
+            // Refetch to render the receipt — webhook usually has
+            // landed by now and reflects 'paid' status.
             fetch(`/api/public/deposit/${encodeURIComponent(token)}`)
               .then(r => r.json())
               .then(j => { if (!destroyed && j.success) setData(j) })
               .catch(() => {})
           },
-          onError: (err) => {
+          onError: ({ error, orderId: _orderId }) => {
             if (destroyed) return
             setPhase('error')
-            setPhaseError(err?.message || 'Payment failed. Please try again.')
+            setPhaseError(error?.message || 'Payment failed. Please try again.')
           },
-          onCancel: () => {
+          onCancel: ({ orderId: _orderId }) => {
             if (destroyed) return
-            setPhase('card')   // back to the card field, ready to retry
+            // Buyer dismissed without paying — back to ready state.
+            setPhase('ready')
             setPhaseError(null)
           },
         })
-        setCardField(field)
-        setPhase('card')
+        widgetInstanceRef.current = instance
+        setPhase('ready')
       })
       .catch((err) => {
         if (destroyed) return
@@ -136,65 +170,13 @@ export default function CarDepositPage({ token }) {
 
     return () => {
       destroyed = true
-      try { field?.destroy?.() } catch {}
-      try { instance?.destroy?.() } catch {}
+      try { widgetInstanceRef.current?.destroy?.() } catch {}
+      widgetInstanceRef.current = null
     }
-  }, [order?.public_id, cardField, token])
-
-  // ── Actions ────────────────────────────────────────────────────
-  async function continueToPayment() {
-    setPhase('creating')
-    setPhaseError(null)
-    try {
-      const res = await fetch(`/api/public/deposit/${encodeURIComponent(token)}/accept-and-pay`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ terms_version: data.terms.version }),
-      })
-      const j = await res.json()
-      if (!j.success) {
-        setPhase('idle')
-        setPhaseError(j.error || 'Could not start payment')
-        // Either case: the page state is now stale. Reload so the
-        // buyer sees the new terms / the expired-link message.
-        if (j.code === 'TERMS_VERSION_MISMATCH' || j.code === 'TOKEN_EXPIRED') {
-          window.location.reload()
-        }
-        return
-      }
-      if (!j.public_id) {
-        // Backend talked to Revolut but got no token — fall back to
-        // the hosted page so the buyer isn't stuck.
-        if (j.checkout_url) {
-          window.location.href = j.checkout_url
-          return
-        }
-        setPhase('idle')
-        setPhaseError('Payment provider returned no token')
-        return
-      }
-      setOrder(j)   // triggers the mount effect above
-    } catch (e) {
-      setPhase('idle')
-      setPhaseError(e.message || 'Network error')
-    }
-  }
-
-  function pay() {
-    if (!cardField) return
-    setPhase('paying')
-    setPhaseError(null)
-    cardField.submit({
-      // Pre-fill the cardholder name where we know it. Phone/email
-      // are optional and we don't always have them on the buyer side.
-      name: data?.car?.buyer_name || undefined,
-    })
-  }
+  }, [accepted, data, token])
 
   // ── Render ─────────────────────────────────────────────────────
   if (loadError) {
-    // Expired tokens get a slightly softer treatment — amber, with
-    // explicit ask-the-dealer copy. Other errors stay red.
     const isExpired = loadErrorCode === 'TOKEN_EXPIRED'
     const cls = isExpired
       ? 'bg-amber-50 border-amber-200 text-amber-800'
@@ -217,7 +199,7 @@ export default function CarDepositPage({ token }) {
   }
   if (!data) return <Centered><p className="text-gray-500">Loading…</p></Centered>
 
-  // Already paid (DB-confirmed via webhook, OR SDK onSuccess just fired).
+  // Already paid (DB-confirmed via webhook OR SDK onSuccess just fired).
   if (data.status === 'paid' || phase === 'paid') {
     const amount = data.paid_amount ?? data.amount
     return (
@@ -247,7 +229,6 @@ export default function CarDepositPage({ token }) {
   return (
     <Centered>
       <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-6 sm:p-8">
-        {/* Title */}
         <h1 className="text-2xl sm:text-3xl font-bold text-gray-900 mb-1">Tesla Car Deposit</h1>
         <p className="text-sm text-gray-600 mb-6">
           Secure the <strong>{data.car.label}{data.car.reg ? ` (${data.car.reg})` : ''}</strong> with a
@@ -271,7 +252,7 @@ export default function CarDepositPage({ token }) {
               type="checkbox"
               checked={accepted}
               onChange={(e) => setAccepted(e.target.checked)}
-              disabled={phase !== 'idle'}
+              disabled={phase === 'mounting' || phase === 'paying'}
               className="mt-1 cursor-pointer"
             />
             <span className="text-sm text-gray-800">
@@ -281,47 +262,31 @@ export default function CarDepositPage({ token }) {
           </label>
         </section>
 
-        {/* Payment */}
+        {/* Payment widget */}
         <section>
           <h2 className="text-sm font-semibold uppercase tracking-wider text-gray-500 mb-2">Payment</h2>
           <p className="text-xs text-gray-500 mb-3 inline-flex items-center gap-1">
             <Lock size={11} /> Secure payment via Revolut. Card details go directly to Revolut — they never touch our servers.
           </p>
 
-          {phase === 'idle' && (
-            <button
-              onClick={continueToPayment}
-              disabled={!accepted || !data.terms.text}
-              className="w-full bg-black text-white font-semibold py-3 px-5 rounded-lg hover:bg-gray-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-            >
-              Continue to payment
-            </button>
+          {!accepted && (
+            <div className="text-xs text-gray-500 italic">
+              Accept the terms above to load the payment options.
+            </div>
           )}
 
-          {phase === 'creating' && (
-            <button disabled className="w-full bg-black text-white font-semibold py-3 px-5 rounded-lg opacity-60">
-              Preparing secure payment…
-            </button>
+          {accepted && phase === 'mounting' && (
+            <div className="text-xs text-gray-500">Loading payment options…</div>
           )}
 
-          {/* Card field is mounted here once we have a public_id.
-              Always rendered (display:none when not on the card phase)
-              so the ref is stable for the SDK. */}
+          {/* The widget's mount point. Always rendered after acceptance
+              so the ref is stable for the SDK; min-height prevents
+              layout jank while the iframe negotiates its size. */}
           <div
-            ref={cardFieldRef}
-            className="mt-2 mb-3 min-h-[120px]"
-            style={{ display: phase === 'card' || phase === 'paying' || phase === 'error' ? 'block' : 'none' }}
+            ref={widgetTargetRef}
+            className="mt-2"
+            style={{ minHeight: accepted ? 320 : 0, display: accepted ? 'block' : 'none' }}
           />
-
-          {(phase === 'card' || phase === 'paying' || phase === 'error') && (
-            <button
-              onClick={pay}
-              disabled={phase === 'paying' || !cardComplete}
-              className="w-full bg-black text-white font-semibold py-3 px-5 rounded-lg hover:bg-gray-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-            >
-              {phase === 'paying' ? 'Processing payment…' : `Pay €${data.amount.toFixed(2)} deposit`}
-            </button>
-          )}
 
           {phaseError && (
             <p className="text-xs text-red-600 mt-3 inline-flex items-start gap-1">
@@ -329,13 +294,14 @@ export default function CarDepositPage({ token }) {
             </p>
           )}
 
-          {/* Hosted-page fallback link. Always available once we have
-              an order created — useful if the SDK iframe glitches on
-              the buyer's network or device. */}
-          {order?.checkout_url && phase !== 'paid' && (
+          {/* Hosted-page fallback link — only appears after we've
+              attempted to create an order at least once (so we have
+              the URL). Useful escape hatch if the embedded widget
+              misbehaves on a particular buyer's network. */}
+          {hostedFallbackUrl && phase !== 'paid' && (
             <p className="mt-4 text-center">
               <a
-                href={order.checkout_url}
+                href={hostedFallbackUrl}
                 className="text-xs text-gray-500 hover:text-gray-700 inline-flex items-center gap-1"
               >
                 <ExternalLink size={11} /> Pay on Revolut's site instead
