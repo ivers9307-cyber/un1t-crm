@@ -467,8 +467,8 @@ EAS Build for App Store / TestFlight (`eas build --platform ios`). The Vercel-de
 
 Vercel Pro. Crons (all in `vercel.json` — Pro removes the Hobby 2-cron cap and `>= once-per-day` schedule restriction):
 
-- `/api/cron/run-scheduled-reports` — daily 07:00 **Europe/Dublin** (DST-stable). Generates due `scheduled_reports`.
-- `/api/cron/prune-rate-limits` — daily 03:30 **Europe/Dublin**. Deletes expired `rate_limit_buckets` rows.
+- `/api/cron/run-scheduled-reports` — daily 07:00 UTC (= 07:00 Dublin in winter, 08:00 in summer — `vercel.json` doesn't accept a `timezone` field; use the Vercel dashboard if you ever need DST-stable scheduling). Generates due `scheduled_reports`.
+- `/api/cron/prune-rate-limits` — daily 03:30 UTC. Deletes expired `rate_limit_buckets` rows.
 - `/api/cron/run-sms-broadcasts` — every 5 minutes. Picks up scheduled-due AND in-flight 'sending' rows, dispatches via `sendBroadcast` with chunk size 1000 per tick (Pro 300s ceiling).
 - `/api/cron/run-sequences` — every 5 minutes. Three phases per tick: (1) `runEventReminderSends()` for per-event single-shot reminders, (2) `runEventReminderTriggers()` for sequence-based event reminder triggers, (3) `runSequences()` to fire due steps. Each phase is independent so a failure in one doesn't stop the others. **Migrated from pg_cron + pg_net to Vercel Crons** once we moved to Pro — eliminates the dual-source-of-truth for `CRON_SECRET` that caused the May 1 silent-401 incident (see Cron monitoring below). The legacy `private.app_config.cron_secret` row is retired; Vercel env is the only source.
 
