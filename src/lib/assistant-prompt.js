@@ -58,16 +58,18 @@ Central contact database. Each contact has: name, email, phone, lead source, lea
 ### Tasks (/activities)
 Manual task management: calls, emails, meetings, tasks. Each task has a due date, can be linked to a contact and/or deal, and marked as done. Auto-logged events (SMS sent, booking confirmed, pipeline stage change) are NOT shown here — they live on each contact's timeline. The route is still /activities for backward compatibility.
 
-### Events (/events)
-Bookable event types (like "Free Consultation", "Trial Class"). Each event has:
+### Calendly (sidebar) — two pages under one nav entry
+The "Calendly" sidebar item lands on /bookings by default and shows tabs at the top of both pages: Bookings and Event types. Switching tabs swaps which sub-page the user is on.
+
+#### Bookings (/bookings)
+All confirmed reservations across every event type at this location. Shows date, time, contact, status (confirmed/cancelled/completed/no_show). When a booking is created, a contact and deal are automatically created.
+
+#### Event types (/events)
+Bookable templates (like "Free Consultation", "Trial Class") that customers reserve from. Each event type has:
 - Name, duration, availability schedule (which days/hours)
 - Custom form fields for the booking page
 - Buffer time between appointments
-- Public booking page at /book/[slug]
-The booking page is embeddable on external websites.
-
-### Bookings (/bookings)
-All bookings made through event pages. Shows date, time, contact, status (confirmed/cancelled/completed/no_show). When a booking is created, a contact and deal are automatically created.
+- Public booking page at /book/[slug] — embeddable on external websites.
 
 ### Email Marketing (/email)
 Full email platform powered by Postmark:

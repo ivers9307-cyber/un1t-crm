@@ -4,6 +4,7 @@ import { redirect } from 'next/navigation'
 import Link from 'next/link'
 import { Plus, Calendar, Clock, Users } from 'lucide-react'
 import EventActions from '@/components/EventActions'
+import CalendlyTabs from '@/components/CalendlyTabs'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
@@ -44,10 +45,11 @@ export default async function EventsPage() {
 
   return (
     <div className="p-8">
+      <CalendlyTabs />
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h2 className="text-2xl font-bold">Events</h2>
-          <p className="text-sm text-un1t-light mt-1">Create bookable events and embed them on your website</p>
+          <h2 className="text-2xl font-bold">Event types</h2>
+          <p className="text-sm text-un1t-light mt-1">Bookable templates customers reserve from. Configure once, reuse on every booking page.</p>
         </div>
         <Link
           href="/events/new"

@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
-import { LayoutDashboard, Users, Columns3, CheckSquare, Calendar, BookOpen, MessagesSquare, CalendarClock, Settings, LogOut, Car } from 'lucide-react'
+import { LayoutDashboard, Users, Columns3, CheckSquare, Calendar, MessagesSquare, CalendarClock, Settings, LogOut, Car } from 'lucide-react'
 import { createBrowserClient } from '@/lib/supabase'
 import LocationSwitcher from './LocationSwitcher'
 import ImpersonatePicker from './ImpersonatePicker'
@@ -28,8 +28,17 @@ const allNav = [
   { href: '/pipeline',   label: 'Pipeline',    icon: Columns3,        permission: 'pipeline' },
   { href: '/contacts',   label: 'Contacts',    icon: Users,           permission: 'contacts' },
   { href: '/activities', label: 'Tasks',        icon: CheckSquare,     permission: 'activities' },
-  { href: '/events',     label: 'Events',       icon: Calendar,        permission: 'events' },
-  { href: '/bookings',   label: 'Bookings',     icon: BookOpen,        permission: 'bookings' },
+  // Single "Calendly" entry replacing the old Events + Bookings.
+  // The hub lands on /bookings (the high-frequency operational
+  // view — "what's booked today / coming up") with a tab strip
+  // at the top of both /bookings and /events that lets the
+  // operator switch between booking types and reservations.
+  // anyPermission means visible if EITHER permission is granted;
+  // extraActivePaths keeps the nav item highlighted when the
+  // user is on /events as well as /bookings.
+  { href: '/bookings',   label: 'Calendly',     icon: Calendar,
+    anyPermission: ['events', 'bookings'],
+    extraActivePaths: ['/events'] },
   // Single Communications entry replacing the old Email + WhatsApp.
   // Visible if the user has EITHER permission — sub-tabs inside the
   // hub gate themselves further. Marked with a custom check function
@@ -124,8 +133,13 @@ export default function Sidebar({ user }) {
 
       {/* Navigation */}
       <nav className="flex-1 py-4">
-        {nav.map(({ href, label, icon: Icon }) => {
-          const active = pathname === href || (href !== '/' && pathname.startsWith(href))
+        {nav.map(({ href, label, icon: Icon, extraActivePaths }) => {
+          // Active when the URL matches the entry's href OR any of
+          // the merged-feature aliases (e.g. /events highlights the
+          // Calendly entry that points at /bookings).
+          const active = pathname === href
+            || (href !== '/' && pathname.startsWith(href))
+            || (extraActivePaths || []).some(p => pathname.startsWith(p))
           return (
             <Link
               key={href}

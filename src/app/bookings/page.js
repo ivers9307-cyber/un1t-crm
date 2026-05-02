@@ -4,6 +4,7 @@ import { redirect } from 'next/navigation'
 import Link from 'next/link'
 import { Calendar, Clock, Mail } from 'lucide-react'
 import BookingStatusToggle from '@/components/BookingStatusToggle'
+import CalendlyTabs from '@/components/CalendlyTabs'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
@@ -58,10 +59,11 @@ export default async function BookingsPage({ searchParams }) {
 
   return (
     <div className="p-8">
+      <CalendlyTabs />
       <div className="flex items-center justify-between mb-6">
         <div>
           <h2 className="text-2xl font-bold">Bookings</h2>
-          <p className="text-sm text-un1t-light mt-1">All bookings across your events</p>
+          <p className="text-sm text-un1t-light mt-1">Confirmed reservations across every event type at this location.</p>
         </div>
       </div>
 
