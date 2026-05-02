@@ -72,7 +72,10 @@ function rangeLabelFor(startIso, endIso) {
 // Reusable week-panel renderer. Same shape used for "This week" and
 // "Next week"; they stack vertically on mobile because the screen is
 // too narrow for side-by-side, and visually segment by the title row.
-function WeekPanel({ title, startIso, endIso, shifts }) {
+// `showLocation` controls whether each shift row renders a small
+// location chip; only shown for staff assigned to 2+ locations so
+// single-location users don't see redundant chrome.
+function WeekPanel({ title, startIso, endIso, shifts, showLocation }) {
   const days = buildWeek(startIso, shifts || [])
   return (
     <View className="bg-un1t-dark border border-un1t-gray rounded-2xl mb-3 overflow-hidden">
@@ -128,9 +131,18 @@ function WeekPanel({ title, startIso, endIso, shifts }) {
                         </View>
                       )}
                     </View>
-                    <Text className={`text-xs ${day.isPast ? 'text-un1t-mid' : 'text-un1t-light'}`}>
-                      {shiftTime(s)} · {shiftHours(s)}h
-                    </Text>
+                    <View className="flex-row items-center flex-wrap">
+                      <Text className={`text-xs ${day.isPast ? 'text-un1t-mid' : 'text-un1t-light'}`}>
+                        {shiftTime(s)} · {shiftHours(s)}h
+                      </Text>
+                      {showLocation && s.locations?.name && (
+                        <View className="ml-1.5 px-1.5 py-0.5 rounded bg-un1t-gray/60">
+                          <Text className="text-[9px] uppercase tracking-wider text-un1t-light">
+                            {s.locations.name}
+                          </Text>
+                        </View>
+                      )}
+                    </View>
                   </View>
                 ))
               )}
@@ -143,10 +155,13 @@ function WeekPanel({ title, startIso, endIso, shifts }) {
 }
 
 export default function PersonalDashboard({ refreshKey }) {
-  const { profile, activeLocation } = useAuth()
+  const { profile, activeLocation, locations } = useAuth()
   const router = useRouter()
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
+  // Show per-shift location chip only when the user is assigned to
+  // 2+ locations — otherwise it's redundant.
+  const showLocation = (locations || []).length > 1
 
   const load = useCallback(async () => {
     if (!profile) return
@@ -184,12 +199,14 @@ export default function PersonalDashboard({ refreshKey }) {
         startIso={weekStartIso}
         endIso={weekEndIso}
         shifts={weekShifts}
+        showLocation={showLocation}
       />
       <WeekPanel
         title="Next week"
         startIso={nextWeekStartIso}
         endIso={nextWeekEndIso}
         shifts={nextWeekShifts}
+        showLocation={showLocation}
       />
 
       {/* Top KPIs */}

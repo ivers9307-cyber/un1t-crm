@@ -92,9 +92,13 @@ export async function fetchPersonalDashboardData(supabase, profileId, locationId
 
   const [shifts, swapsTargetingMe, myPendingTimeOff, myConvos] =
     await Promise.all([
+      // Cross-location query — filtered by profile_id only. Multi-
+      // location staff see every shift they're assigned to, anywhere.
+      // The locations() join lets the UI render a small chip on each
+      // row so users can tell which gym a shift belongs to.
       supabase
         .from('shifts')
-        .select('id, shift_date, start_time_override, end_time_override, status, published, shift_templates(name, start_time, end_time)')
+        .select('id, shift_date, start_time_override, end_time_override, status, published, location_id, shift_templates(name, start_time, end_time), locations:location_id(id, name)')
         .eq('profile_id', profileId)
         .gte('shift_date', thisWeekStartIso)
         .lte('shift_date', nextWeekEndIso)

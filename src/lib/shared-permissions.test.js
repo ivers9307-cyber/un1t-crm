@@ -21,6 +21,9 @@ import {
   isFeatureEnabledAtLocation,
   isFeatureGatedByLocation,
   NOTIFY_KEYS,
+  LANDING_PREFERENCE_VALUES,
+  LANDING_PREFERENCE_TARGETS,
+  resolveLandingPreference,
 } from '@shared/permissions'
 import { hasPermission } from './permissions.js'
 
@@ -222,5 +225,41 @@ describe('hasPermission three-tier resolution', () => {
     // (The web hasPermission falls through to role default for unknown
     // keys, which returns undefined → false, so we just assert no crash.)
     expect(() => hasPermission(user, 'notify_swap')).not.toThrow()
+  })
+})
+
+describe('landing preference resolver', () => {
+  it('LANDING_PREFERENCE_VALUES contains the four expected values', () => {
+    expect(LANDING_PREFERENCE_VALUES).toEqual(['auto', 'personal', 'studio', 'business'])
+  })
+
+  it('LANDING_PREFERENCE_TARGETS maps each non-auto value to a route + permission', () => {
+    for (const v of LANDING_PREFERENCE_VALUES) {
+      if (v === 'auto') continue
+      const t = LANDING_PREFERENCE_TARGETS[v]
+      expect(t, `target for ${v}`).toBeDefined()
+      expect(t.route).toMatch(/^\/dashboard\//)
+      expect(t.perm).toMatch(/^dashboard_/)
+    }
+  })
+
+  it('resolveLandingPreference returns "auto" when permissions are missing', () => {
+    expect(resolveLandingPreference(null)).toBe('auto')
+    expect(resolveLandingPreference(undefined)).toBe('auto')
+    expect(resolveLandingPreference({})).toBe('auto')
+    expect(resolveLandingPreference({ permissions: {} })).toBe('auto')
+  })
+
+  it('resolveLandingPreference passes through known values', () => {
+    expect(resolveLandingPreference({ permissions: { landing_preference: 'personal' } })).toBe('personal')
+    expect(resolveLandingPreference({ permissions: { landing_preference: 'studio' } })).toBe('studio')
+    expect(resolveLandingPreference({ permissions: { landing_preference: 'business' } })).toBe('business')
+    expect(resolveLandingPreference({ permissions: { landing_preference: 'auto' } })).toBe('auto')
+  })
+
+  it('resolveLandingPreference defends against unknown / non-string values', () => {
+    expect(resolveLandingPreference({ permissions: { landing_preference: 'bogus' } })).toBe('auto')
+    expect(resolveLandingPreference({ permissions: { landing_preference: 42 } })).toBe('auto')
+    expect(resolveLandingPreference({ permissions: { landing_preference: null } })).toBe('auto')
   })
 })
