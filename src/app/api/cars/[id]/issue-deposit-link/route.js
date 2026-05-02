@@ -19,7 +19,7 @@ import { randomUUID } from 'node:crypto'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
-import { sendSms, TwilioError } from '@/lib/twilio'
+import { sendLocationSms, TwilioError } from '@/lib/twilio'
 import { getDepositBaseUrl, getRequestOrigin } from '@/lib/app-url'
 
 export const runtime = 'nodejs'
@@ -48,7 +48,7 @@ export async function POST(request, { params }) {
   const db = createServerClient()
   const { data: car } = await db
     .from('cars')
-    .select('*, locations(id, name, car_deposit_default_amount)')
+    .select('*, locations(id, name, car_deposit_default_amount, twilio_alpha_sender_id)')
     .eq('id', params.id)
     .single()
   if (!car) return NextResponse.json({ success: false, error: 'Car not found' }, { status: 404 })
@@ -108,9 +108,14 @@ export async function POST(request, { params }) {
   // operators care about cost.
   const smsBody = `Hi ${buyerFirstName}, your €${amount.toFixed(2)} Tesla Car Deposit for ${carLabel}: ${link} (link valid 24h)`
 
+  // Sender is resolved from car.locations.twilio_alpha_sender_id
+  // (mig 059) — falls back to TWILIO_FROM env then the literal
+  // 'CCFautos' if neither is set. CCF Autos's location row has
+  // 'CCFautos' so behaviour is unchanged unless an admin edits it
+  // in Settings → Locations → SMS.
   let smsResult = null
   try {
-    smsResult = await sendSms({ to: car.buyer_phone, body: smsBody })
+    smsResult = await sendLocationSms({ location: car.locations, to: car.buyer_phone, body: smsBody })
   } catch (e) {
     const status = e instanceof TwilioError && e.status ? Math.min(Math.max(e.status, 400), 599) : 500
     return NextResponse.json({

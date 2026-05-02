@@ -5,9 +5,10 @@
 //   1. Default deposit amount (overridable per-car at issue time)
 //   2. Terms & conditions text (the buyer must accept this verbatim)
 //
-// SMS delivery itself is configured globally via TWILIO_* env vars
-// (one Twilio account, one alpha sender ID) — no per-location knob
-// for that.
+// SMS credentials are global TWILIO_* env vars (one Twilio account
+// for the whole org), but the alpha SENDER ID is per-location as of
+// mig 059 — set in the SMS (Twilio) section higher up on this same
+// settings page. The deposit-link route reads it via sendLocationSms.
 //
 // Saving the terms text bumps locations.car_deposit_terms_version
 // server-side so any in-flight buyer's accept-and-pay POST will be
