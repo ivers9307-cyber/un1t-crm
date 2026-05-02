@@ -24,6 +24,7 @@ import Link from 'next/link'
 import { computeWeeklyCost } from '@/lib/payroll'
 import { indexByDate } from '@/lib/bank-holidays'
 import { MANAGER_ROLES } from '@/lib/schemas'
+import RosterSummaryPanel from './RosterSummaryPanel'
 
 const TIME_OFF_CONFIG = {
   holiday:     { label: 'Holiday',     color: '#22C55E', icon: Palmtree },
@@ -805,6 +806,17 @@ export default function ScheduleCalendar({ user }) {
             })
           })()}
         </div>
+      )}
+
+      {/* Roster v2 phase 4 — week + month summary. Manager-only. */}
+      {!loading && isManager && (
+        <RosterSummaryPanel
+          blocks={blocks}
+          staff={locationStaff}
+          weekStart={weekStart}
+          monthStart={monthStart}
+          location={user.activeLocation}
+        />
       )}
 
       {/* Assign Coach Popover */}

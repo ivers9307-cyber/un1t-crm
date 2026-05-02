@@ -27,6 +27,13 @@ export default function LocationForm({ location, callerRole = 'owner' }) {
   // alphanumeric chars per Twilio carrier rules).
   const [smsSenderId, setSmsSenderId] = useState(location?.twilio_alpha_sender_id || '')
 
+  // Roster v2 phase 4 — monthly contractor labour budget (mig 071).
+  // Stored as numeric euros; null = not configured. FTE labour
+  // is NOT counted against this — only contractor hours × rate.
+  const [contractorBudget, setContractorBudget] = useState(
+    location?.monthly_contractor_budget_eur != null ? String(location.monthly_contractor_budget_eur) : ''
+  )
+
   // Integration settings
   const settings = location?.settings || {}
   const [glofoxBranchId, setGlofoxBranchId] = useState(settings.glofox?.branch_id || '')
@@ -81,6 +88,13 @@ export default function LocationForm({ location, callerRole = 'owner' }) {
       active,
       // mig 059 — null = fall back to TWILIO_FROM env in the send path.
       twilio_alpha_sender_id: smsSenderId.trim() || null,
+      // mig 071 — null = not configured (summary panel shows total
+      // spend without an over/under chip). 0 IS valid and means
+      // "no contractor labour allowed", which the panel will treat
+      // as "always over budget".
+      monthly_contractor_budget_eur: contractorBudget.trim() === ''
+        ? null
+        : (Number.isFinite(Number(contractorBudget)) ? Number(contractorBudget) : null),
       settings: {
         ...(settings || {}),
         glofox: glofoxBranchId || glofoxApiKey ? {
@@ -280,6 +294,32 @@ export default function LocationForm({ location, callerRole = 'owner' }) {
           <p className="text-[11px] text-un1t-mid mt-1">
             Max 11 chars, alphanumeric only (no spaces or punctuation).
             Some carriers require pre-registration of branded sender IDs — check Twilio's regional guidelines for IE/UK before going live.
+          </p>
+        </div>
+      </div>
+
+      {/* Roster v2 phase 4 — Monthly contractor labour budget (mig 071).
+          FTE labour is sunk cost and doesn't count; this ceiling
+          tracks contractor hours × hourly_rate for the month. */}
+      <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5 space-y-4">
+        <h3 className="font-semibold text-sm text-un1t-light uppercase tracking-wider">Coaching Budget</h3>
+        <p className="text-xs text-un1t-mid">
+          Monthly euro ceiling for <strong>contractor</strong> labour at this location. FTE coaches are sunk cost and don&apos;t count against this. Leave blank if you don&apos;t want to track a budget — the schedule summary will still show the spend total.
+        </p>
+
+        <div>
+          <label className="block text-sm mb-1.5">Monthly contractor budget (€)</label>
+          <input
+            type="number"
+            min={0}
+            step={50}
+            value={contractorBudget}
+            onChange={e => setContractorBudget(e.target.value)}
+            placeholder="e.g. 2500"
+            className="w-48 bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid"
+          />
+          <p className="text-[11px] text-un1t-mid mt-1">
+            Phase 5 will add an owner-approval gate when a published roster exceeds this budget. Right now the summary panel below the schedule is read-only / advisory.
           </p>
         </div>
       </div>
