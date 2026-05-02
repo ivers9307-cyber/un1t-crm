@@ -94,9 +94,14 @@ export function toE164Ireland(raw) {
  * @param {string} args.to    — destination phone (any reasonable format; normalised to E.164)
  * @param {string} args.body  — message body. Keep < 160 chars to stay in one segment.
  * @param {string} [args.from] — override sender. Defaults to TWILIO_FROM env.
+ * @param {string} [args.statusCallback] — public URL Twilio POSTs to as
+ *        the message lifecycle progresses (queued → sent → delivered /
+ *        undelivered / failed). Used by broadcasts to populate the
+ *        delivery analytics (mig 065). Optional — sends without a
+ *        callback still succeed; we just don't get carrier-side updates.
  * @returns {Promise<{sid: string, status: string, to: string, from: string}>}
  */
-export async function sendSms({ to, body, from }) {
+export async function sendSms({ to, body, from, statusCallback }) {
   if (!to) throw new TwilioError('sendSms: `to` is required', 400)
   if (!body) throw new TwilioError('sendSms: `body` is required', 400)
 
@@ -109,6 +114,12 @@ export async function sendSms({ to, body, from }) {
   params.set('To', normalisedTo)
   params.set('From', sender)
   params.set('Body', body)
+  if (statusCallback) {
+    // Twilio POSTs to this URL with form-encoded MessageSid +
+    // MessageStatus + (on failure) ErrorCode / ErrorMessage. See
+    // /api/webhooks/twilio/status for the receiving end.
+    params.set('StatusCallback', statusCallback)
+  }
 
   const res = await fetch(`${TWILIO_BASE}/Accounts/${accountSid}/Messages.json`, {
     method: 'POST',
@@ -192,9 +203,14 @@ export function validateAlphaSenderId(value) {
  * @param {{ twilio_alpha_sender_id?: string | null } | null} args.location  Full location row (or at least the sender field).
  * @param {string} args.to    — destination phone (any reasonable format; normalised to E.164).
  * @param {string} args.body  — message body. Keep < 160 chars to stay in one segment.
+ * @param {string} [args.statusCallback] — public URL Twilio POSTs to with
+ *        delivery lifecycle updates. Broadcasts pass one keyed by
+ *        broadcast_id + recipient_id so the webhook can locate the row;
+ *        ad-hoc / sequence / event-reminder sends omit it (they don't
+ *        have a recipient row to update).
  * @returns {Promise<{sid: string, status: string, to: string, from: string}>}
  */
-export async function sendLocationSms({ location, to, body }) {
+export async function sendLocationSms({ location, to, body, statusCallback }) {
   const from = getLocationSenderId(location)
-  return sendSms({ to, body, from })
+  return sendSms({ to, body, from, statusCallback })
 }

@@ -18,6 +18,24 @@ import { createServerClient } from '@/lib/supabase'
 import { applyAudienceFilter } from '@/lib/audience-filter'
 import { sendLocationSms, TwilioError } from '@/lib/twilio'
 import { applyMergeTags } from '@/lib/postmark'
+import { getAppUrl } from '@/lib/app-url'
+
+// Build the URL Twilio will POST status updates to. Includes broadcast
+// + recipient identifiers as query params so the webhook can locate
+// the row in O(1). Phase 5D / mig 065.
+function buildStatusCallback(broadcastId, contactId) {
+  // getAppUrl() throws if NEXT_PUBLIC_APP_URL is unset — for SMS
+  // delivery tracking we treat that as a hard requirement (the
+  // callback URL has to be publicly reachable; localhost won't do).
+  // Catch + return null so the broadcast still sends; we just lose
+  // delivery telemetry.
+  try {
+    const base = getAppUrl()
+    return `${base}/api/webhooks/twilio/status?b=${broadcastId}&c=${contactId}`
+  } catch {
+    return null
+  }
+}
 
 /**
  * Build a Supabase query for the SMS audience at a location, applying
@@ -168,6 +186,10 @@ export async function sendBroadcast(broadcastId, { maxRecipients = Infinity } = 
         location: broadcast.locations,
         to: contact.phone,
         body: renderedBody,
+        // Phase 5D / mig 065 — Twilio POSTs delivery updates here.
+        // Falls back to no-tracking if NEXT_PUBLIC_APP_URL isn't set
+        // (e.g. local dev without a tunnel).
+        statusCallback: buildStatusCallback(broadcastId, contact.id),
       })
 
       // Per-recipient row. Unique constraint on (broadcast_id,

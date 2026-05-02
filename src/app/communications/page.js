@@ -87,7 +87,7 @@ export default async function CommunicationsHub() {
   // location-scoped view without scanning recipients. Recipient
   // counts (cross-location) would need a join via sms_broadcasts,
   // and that's expensive on the hub — keep the cheap path.
-  let smsSent = 0, smsFailed = 0, smsSent30d = 0, smsDraftBroadcasts = 0, smsScheduled = 0
+  let smsSent = 0, smsDelivered = 0, smsFailed = 0, smsSent30d = 0, smsDraftBroadcasts = 0, smsScheduled = 0
   if (canSms && locationId) {
     const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
     const [
@@ -97,7 +97,7 @@ export default async function CommunicationsHub() {
       { count: scheduled },
     ] = await Promise.all([
       db.from('sms_broadcasts')
-        .select('total_sent, total_failed')
+        .select('total_sent, total_delivered, total_failed')
         .eq('location_id', locationId)
         .in('status', ['sent', 'sending']),
       db.from('sms_broadcasts')
@@ -115,11 +115,18 @@ export default async function CommunicationsHub() {
         .eq('status', 'scheduled'),
     ])
     smsSent = (totals || []).reduce((acc, b) => acc + (b.total_sent || 0), 0)
+    smsDelivered = (totals || []).reduce((acc, b) => acc + (b.total_delivered || 0), 0)
     smsFailed = (totals || []).reduce((acc, b) => acc + (b.total_failed || 0), 0)
     smsSent30d = (last30 || []).reduce((acc, b) => acc + (b.total_sent || 0), 0)
     smsDraftBroadcasts = drafts || 0
     smsScheduled = scheduled || 0
   }
+  // Delivery rate as a percentage of sent (mig 065 — only meaningful
+  // when carriers report DLRs; alpha-sender routes in IE/UK
+  // under-report so this number floors below the real rate).
+  const smsDeliveryRate = smsSent > 0
+    ? Math.round((smsDelivered / smsSent) * 100)
+    : null
   // Failure rate as a percentage — only meaningful when we've sent
   // anything. Hide otherwise to avoid a stat that says "NaN%".
   const smsFailureRate = (smsSent + smsFailed) > 0
@@ -147,6 +154,13 @@ export default async function CommunicationsHub() {
           <>
             <StatCard label="SMS sent" value={smsSent.toLocaleString()} icon={MessageSquare} accent={smsSent > 0 ? 'text-cyan-400' : undefined} />
             <StatCard label="SMS · last 30 days" value={smsSent30d.toLocaleString()} accent={smsSent30d > 0 ? 'text-cyan-400' : undefined} />
+            {smsDeliveryRate !== null && (
+              <StatCard
+                label="Delivered (carrier-confirmed)"
+                value={`${smsDeliveryRate}%`}
+                accent={smsDeliveryRate >= 70 ? 'text-emerald-400' : 'text-amber-400'}
+              />
+            )}
             {smsFailureRate !== null && (
               <StatCard
                 label="SMS failure rate"

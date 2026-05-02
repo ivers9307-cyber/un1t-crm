@@ -446,7 +446,7 @@ export default function SMSBroadcastEditor({ broadcast, recipients = [], locatio
 
       {tab === 'results' && (
         <div className="space-y-4">
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
             <div className="bg-un1t-dark border border-un1t-gray rounded-2xl p-4">
               <div className="text-xs text-un1t-light uppercase tracking-wider">Recipients</div>
               <div className="text-2xl font-bold mt-1">{broadcast?.total_recipients ?? 0}</div>
@@ -459,11 +459,32 @@ export default function SMSBroadcastEditor({ broadcast, recipients = [], locatio
             </div>
             <div className="bg-un1t-dark border border-un1t-gray rounded-2xl p-4">
               <div className="text-xs text-un1t-light uppercase tracking-wider flex items-center gap-1.5">
+                <CheckCircle2 size={12} className="text-emerald-400" /> Delivered
+              </div>
+              <div className="text-2xl font-bold mt-1 text-emerald-400">{broadcast?.total_delivered ?? 0}</div>
+              <div className="text-[10px] text-un1t-mid mt-1">carrier-confirmed</div>
+            </div>
+            <div className="bg-un1t-dark border border-un1t-gray rounded-2xl p-4">
+              <div className="text-xs text-un1t-light uppercase tracking-wider flex items-center gap-1.5">
+                <XCircle size={12} className="text-amber-400" /> Undelivered
+              </div>
+              <div className="text-2xl font-bold mt-1 text-amber-400">{broadcast?.total_undelivered ?? 0}</div>
+              <div className="text-[10px] text-un1t-mid mt-1">carrier rejected</div>
+            </div>
+            <div className="bg-un1t-dark border border-un1t-gray rounded-2xl p-4">
+              <div className="text-xs text-un1t-light uppercase tracking-wider flex items-center gap-1.5">
                 <XCircle size={12} className="text-red-400" /> Failed
               </div>
               <div className="text-2xl font-bold mt-1 text-red-400">{broadcast?.total_failed ?? 0}</div>
             </div>
           </div>
+
+          {/* Caveat — alpha sender IDs in IE/UK have unreliable
+              carrier DLRs. Sent count is accurate; delivered count
+              under-reports because some carriers never report. */}
+          <p className="text-[11px] text-un1t-mid">
+            <strong className="text-un1t-light">Note on delivered:</strong> some IE/UK carriers don't return delivery receipts for alpha sender IDs. A message in <span className="text-un1t-white">sent</span> state but not <span className="text-un1t-white">delivered</span> has very likely arrived — we just didn't get confirmation back.
+          </p>
 
           {recipients.length > 0 && (
             <div className="bg-un1t-dark border border-un1t-gray rounded-2xl divide-y divide-un1t-gray">
@@ -474,9 +495,17 @@ export default function SMSBroadcastEditor({ broadcast, recipients = [], locatio
                     {r.contact_id.slice(0, 8)}…
                   </div>
                   <div className="flex items-center gap-2">
-                    {r.status === 'sent' ? (
-                      <span className="flex items-center gap-1 text-green-400 text-xs">
+                    {r.status === 'delivered' ? (
+                      <span className="flex items-center gap-1 text-emerald-400 text-xs">
+                        <CheckCircle2 size={12} /> Delivered
+                      </span>
+                    ) : r.status === 'sent' ? (
+                      <span className="flex items-center gap-1 text-green-400 text-xs" title="Twilio accepted; awaiting delivery receipt">
                         <CheckCircle2 size={12} /> Sent
+                      </span>
+                    ) : r.status === 'undelivered' ? (
+                      <span className="flex items-center gap-1 text-amber-400 text-xs" title={r.error_message}>
+                        <XCircle size={12} /> Undelivered
                       </span>
                     ) : r.status === 'failed' ? (
                       <span className="flex items-center gap-1 text-red-400 text-xs" title={r.error_message}>
