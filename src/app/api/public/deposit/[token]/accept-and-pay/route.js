@@ -104,12 +104,14 @@ export async function POST(request, { params }) {
   let orderId = car.deposit_revolut_order_id
   let publicId = null
 
-  // For an existing order, re-fetch from Revolut to get the public_id
+  // For an existing order, re-fetch from Revolut to get the SDK token
   // (we don't store it locally). Cheap — one extra GET on a retry.
+  // Field name varies by API version: older returns `public_id`,
+  // newer (2024+) returns `token`. Accept either.
   if (orderId && checkoutUrl && car.deposit_status !== 'paid') {
     try {
       const existing = await getOrder(orderId)
-      publicId = existing?.public_id || null
+      publicId = existing?.token || existing?.public_id || null
     } catch {
       // If the order is gone (rare) fall through and create a new one.
       orderId = null
@@ -143,10 +145,19 @@ export async function POST(request, { params }) {
         },
         idempotencyKey: `deposit-${car.deposit_token}`,
       })
-      publicId = order?.public_id
+      // Field name varies by API version: older returns `public_id`,
+      // newer (2024+) returns `token`. Accept either.
+      publicId = order?.token || order?.public_id
       checkoutUrl = order?.checkout_url
       orderId = order?.id
-      if (!publicId) throw new Error('Revolut returned no public_id')
+      if (!publicId) {
+        // Log the keys we DID get so we can adjust without guessing.
+        console.warn(
+          `[deposit accept-and-pay] Revolut order created but no token / public_id in response. ` +
+          `Keys returned: ${Object.keys(order || {}).join(', ')}`
+        )
+        throw new Error('Revolut returned no SDK token (token/public_id field missing)')
+      }
       acceptanceUpdates.deposit_revolut_order_id = orderId
       acceptanceUpdates.deposit_revolut_checkout_url = checkoutUrl
     } catch (e) {
