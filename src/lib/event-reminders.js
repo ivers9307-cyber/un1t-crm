@@ -90,7 +90,7 @@ export async function runEventReminderSends() {
       .from('bookings')
       .select(`
         id, contact_id, customer_name, customer_email, customer_phone,
-        booking_date, start_time,
+        booking_date, start_time, skip_reminder,
         contacts (
           first_name, last_name, name, email, phone, wa_phone,
           email_status, wa_status, sms_status,
@@ -106,6 +106,21 @@ export async function runEventReminderSends() {
     for (const booking of (bookings || [])) {
       const bookingMs = new Date(`${booking.booking_date}T${booking.start_time}Z`).getTime()
       if (bookingMs < lo.getTime() || bookingMs > hi.getTime()) continue
+
+      // mig 075: per-booking override. Operator flipped a flag on
+      // this specific booking saying "don't remind this person".
+      // Short-circuit before consent / channel checks. We still
+      // stamp reminder_sent_at so the booking drops out of the
+      // partial index — otherwise we'd revisit it every tick for
+      // the rest of its life.
+      if (booking.skip_reminder) {
+        await db
+          .from('bookings')
+          .update({ reminder_sent_at: new Date().toISOString() })
+          .eq('id', booking.id)
+        stats.skipped++
+        continue
+      }
 
       let outcome
       try {

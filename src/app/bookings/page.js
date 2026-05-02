@@ -4,6 +4,7 @@ import { redirect } from 'next/navigation'
 import Link from 'next/link'
 import { Calendar, Clock, Mail } from 'lucide-react'
 import BookingStatusToggle from '@/components/BookingStatusToggle'
+import BookingSkipReminderToggle from '@/components/BookingSkipReminderToggle'
 import CalendlyTabs from '@/components/CalendlyTabs'
 
 export const dynamic = 'force-dynamic'
@@ -142,7 +143,7 @@ export default async function BookingsPage({ searchParams }) {
                   </div>
                 </div>
 
-                <div className="flex items-center gap-3">
+                <div className="flex items-center gap-2">
                   {booking.contacts?.id && (
                     <Link
                       href={`/contacts/${booking.contacts.id}`}
@@ -151,6 +152,12 @@ export default async function BookingsPage({ searchParams }) {
                       Contact
                     </Link>
                   )}
+                  <BookingSkipReminderToggle
+                    bookingId={booking.id}
+                    skipReminder={booking.skip_reminder}
+                    reminderSentAt={booking.reminder_sent_at}
+                    bookingDate={booking.booking_date}
+                  />
                   <BookingStatusToggle bookingId={booking.id} currentStatus={booking.status} />
                 </div>
               </div>
