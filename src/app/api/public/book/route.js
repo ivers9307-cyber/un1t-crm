@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit'
 import { validateBody, uuidLike } from '@/lib/validate'
+import { validateCustomResponses } from '@/lib/booking-validation'
 
 export const runtime = 'nodejs'
 
@@ -39,14 +40,29 @@ export async function POST(request) {
   if (!validation.ok) return validation.response
   const body = validation.data
 
-  // Look up event to calculate end_time
+  // Look up event to calculate end_time and validate custom_responses
+  // against the event's declared custom_fields. Tier 2 of the Calendly
+  // alignment — previously we accepted any shape because Zod only
+  // validated the wrapper.
   const { data: event } = await db.from('event_types')
-    .select('duration_minutes')
+    .select('duration_minutes, custom_fields')
     .eq('id', body.event_type_id)
     .single()
 
   if (!event) {
     return NextResponse.json({ success: false, error: 'Event type not found' }, { status: 404 })
+  }
+
+  // Validate custom_responses against the event's custom_fields:
+  //   - required fields must be non-empty
+  //   - dropdown / radio fields: value must be in options[]
+  //   - checkbox fields: must be boolean (or 'true'/'false' strings)
+  // Unknown response keys (fields removed from the event since the
+  // booking form was loaded) are tolerated rather than rejected so a
+  // mid-flight schema change doesn't break the customer's booking.
+  const customFieldsErr = validateCustomResponses(event.custom_fields, body.custom_responses)
+  if (customFieldsErr) {
+    return NextResponse.json({ success: false, error: customFieldsErr, field: 'custom_responses' }, { status: 400 })
   }
 
   // Calculate end time
