@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { ChevronLeft, ChevronRight, Copy, Send, Plus, Users, User, Clock, X, ArrowLeftRight, CalendarOff, Palmtree, ThermometerSun, Ban, AlertTriangle } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Copy, Send, Plus, Users, User, Clock, X, ArrowLeftRight, CalendarOff, Palmtree, ThermometerSun, Ban, AlertTriangle, CalendarDays, CalendarRange } from 'lucide-react'
 import Link from 'next/link'
 import { computeWeeklyCost } from '@/lib/payroll'
 import { indexByDate } from '@/lib/bank-holidays'
@@ -35,6 +35,33 @@ function addDays(date, days) {
   return d
 }
 
+// Month-view helpers (Phase: monthly schedule + copy-last-month).
+// We intentionally treat months as 6-row x 7-col grids — always 42
+// cells, padded with leading + trailing days from neighbouring
+// months. That gives a stable layout regardless of month length and
+// matches the Google / Apple calendar convention users expect.
+
+function getMonthStart(date) {
+  const d = new Date(date)
+  d.setDate(1)
+  d.setHours(0, 0, 0, 0)
+  return d
+}
+
+function addMonths(date, months) {
+  const d = new Date(date)
+  d.setMonth(d.getMonth() + months)
+  return d
+}
+
+function getMonthGridRange(monthStart) {
+  // Grid starts on the Monday of the week containing the 1st, ends
+  // 41 days later (6 weeks × 7). Always 42 cells.
+  const start = getMonday(monthStart)
+  const end = addDays(start, 41)
+  return { start, end }
+}
+
 function formatTime(time) {
   if (!time) return ''
   const [h, m] = time.split(':')
@@ -46,6 +73,11 @@ function formatTime(time) {
 
 export default function ScheduleCalendar({ user }) {
   const [weekStart, setWeekStart] = useState(() => getMonday(new Date()))
+  const [monthStart, setMonthStart] = useState(() => getMonthStart(new Date()))
+  // 'week' | 'month'. Week is the original detailed-grid view;
+  // month is a 6×7 calendar overview with shift counts per day,
+  // click-through to the corresponding week.
+  const [viewType, setViewType] = useState('week')
   const [shifts, setShifts] = useState([])
   const [templates, setTemplates] = useState([])
   const [staff, setStaff] = useState([])
@@ -55,21 +87,34 @@ export default function ScheduleCalendar({ user }) {
   const [publishing, setPublishing] = useState(false)
   const [copying, setCopying] = useState(false)
   const [swapModal, setSwapModal] = useState(null) // shift to swap
-  const [timeOff, setTimeOff] = useState([]) // approved time-off for the week
-  const [holidays, setHolidays] = useState([]) // merged static + custom holidays for the week
+  const [timeOff, setTimeOff] = useState([]) // approved time-off for the visible range
+  const [holidays, setHolidays] = useState([]) // merged static + custom holidays for the visible range
 
   const locationId = user.activeLocation?.id
   const isManager = canManage(user.role)
 
+  // Visible-range derivation. Week mode: Mon–Sun. Month mode: the
+  // 42-day grid that starts on the Monday of the week containing
+  // the 1st. The fetch callback derives its own copy from the
+  // primitive deps (weekStart/monthStart/viewType) so the lint
+  // exhaustive-deps rule can verify it; here we keep the
+  // render-time labels + the month-grid object the JSX consumes.
   const weekEnd = addDays(weekStart, 6)
   const weekLabel = `${weekStart.toLocaleDateString('en-IE', { day: 'numeric', month: 'short' })} – ${weekEnd.toLocaleDateString('en-IE', { day: 'numeric', month: 'short', year: 'numeric' })}`
+  const monthGrid = getMonthGridRange(monthStart)
+  const monthLabel = monthStart.toLocaleDateString('en-IE', { month: 'long', year: 'numeric' })
 
   const fetchData = useCallback(async () => {
     if (!locationId) return
     setLoading(true)
 
-    const start = formatDate(weekStart)
-    const end = formatDate(addDays(weekStart, 6))
+    // Fetch range follows the visible window: 7 days for week view,
+    // 42 days for month view. Derived inside the callback so the
+    // dependency array stays primitive (lint can verify it).
+    const innerStart = viewType === 'month' ? getMonthGridRange(monthStart).start : weekStart
+    const innerEnd = viewType === 'month' ? getMonthGridRange(monthStart).end : addDays(weekStart, 6)
+    const start = formatDate(innerStart)
+    const end = formatDate(innerEnd)
 
     const [shiftsRes, templatesRes, staffRes, timeOffRes, holidaysRes] = await Promise.all([
       fetch(`/api/schedule/shifts?location_id=${locationId}&start_date=${start}&end_date=${end}`).then(r => r.json()),
@@ -85,7 +130,7 @@ export default function ScheduleCalendar({ user }) {
     setTimeOff(timeOffRes.data || [])
     setHolidays(holidaysRes.data || [])
     setLoading(false)
-  }, [locationId, weekStart])
+  }, [locationId, viewType, weekStart, monthStart])
 
   useEffect(() => { fetchData() }, [fetchData])
 
@@ -176,6 +221,33 @@ export default function ScheduleCalendar({ user }) {
     else alert(data.error || 'Failed to copy week')
   }
 
+  async function handleCopyMonth() {
+    const prevMonthStart = addMonths(monthStart, -1)
+    const sourceLabel = prevMonthStart.toLocaleDateString('en-IE', { month: 'long', year: 'numeric' })
+    if (!confirm(`Copy last month's roster (${sourceLabel}) to ${monthLabel}?`)) return
+    setCopying(true)
+    const res = await fetch('/api/schedule/shifts/copy-month', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        location_id: locationId,
+        source_month_start: formatDate(prevMonthStart),
+        target_month_start: formatDate(monthStart),
+      }),
+    })
+    const data = await res.json()
+    setCopying(false)
+    if (data.success) {
+      const skipped = data.skipped || 0
+      if (skipped > 0) {
+        alert(`Copied ${data.copied} shifts. ${skipped} skipped (day-of-month doesn't exist in target — usually Jan 31 → Feb).`)
+      }
+      fetchData()
+    } else {
+      alert(data.error || 'Failed to copy month')
+    }
+  }
+
   async function handleSwapRequest(shiftId, reason) {
     const res = await fetch('/api/schedule/swaps', {
       method: 'POST',
@@ -210,7 +282,7 @@ export default function ScheduleCalendar({ user }) {
             <CalendarOff size={14} /> Time Off
           </Link>
 
-          {/* View toggle */}
+          {/* My-shifts vs All-staff filter */}
           <div className="flex bg-un1t-dark border border-un1t-gray rounded-lg overflow-hidden text-xs">
             <button
               onClick={() => setViewMode('my')}
@@ -226,16 +298,52 @@ export default function ScheduleCalendar({ user }) {
             </button>
           </div>
 
+          {/* Week-vs-Month view toggle. Switching to month re-fetches
+              42 days; switching back to week pins to the Monday of
+              the week containing the currently-selected month-start
+              so the user lands somewhere sensible. */}
+          <div className="flex bg-un1t-dark border border-un1t-gray rounded-lg overflow-hidden text-xs">
+            <button
+              onClick={() => {
+                if (viewType === 'month') {
+                  // Coming from month view — pick the Monday of the
+                  // week containing the focused month-start.
+                  setWeekStart(getMonday(monthStart))
+                }
+                setViewType('week')
+              }}
+              className={`flex items-center gap-1.5 px-3 py-2 transition-colors ${viewType === 'week' ? 'bg-un1t-white text-un1t-black' : 'text-un1t-light hover:text-un1t-white'}`}
+            >
+              <CalendarDays size={14} /> Week
+            </button>
+            <button
+              onClick={() => {
+                if (viewType === 'week') {
+                  // Going to month view — focus the month containing
+                  // the current week.
+                  setMonthStart(getMonthStart(weekStart))
+                }
+                setViewType('month')
+              }}
+              className={`flex items-center gap-1.5 px-3 py-2 transition-colors ${viewType === 'month' ? 'bg-un1t-white text-un1t-black' : 'text-un1t-light hover:text-un1t-white'}`}
+            >
+              <CalendarRange size={14} /> Month
+            </button>
+          </div>
+
           {isManager && (
             <>
               <button
-                onClick={handleCopyWeek}
+                onClick={viewType === 'month' ? handleCopyMonth : handleCopyWeek}
                 disabled={copying}
                 className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg border border-un1t-gray text-un1t-light hover:text-un1t-white hover:border-un1t-white/30 transition-colors disabled:opacity-50"
               >
-                <Copy size={14} /> {copying ? 'Copying...' : 'Copy Last Week'}
+                <Copy size={14} /> {copying ? 'Copying...' : viewType === 'month' ? 'Copy Last Month' : 'Copy Last Week'}
               </button>
-              {unpublishedCount > 0 && (
+              {/* Publish targets the focused WEEK only — keep it
+                  out of month view to avoid the surprise of
+                  publishing-this-week-when-you-meant-this-month. */}
+              {viewType === 'week' && unpublishedCount > 0 && (
                 <button
                   onClick={handlePublish}
                   disabled={publishing}
@@ -249,25 +357,37 @@ export default function ScheduleCalendar({ user }) {
         </div>
       </div>
 
-      {/* Week Navigation */}
+      {/* Range Navigation. Steps by week or month depending on the
+          active view. The "Today" link snaps to the current week
+          / month accordingly. */}
       <div className="flex items-center justify-between mb-4">
         <button
-          onClick={() => setWeekStart(addDays(weekStart, -7))}
+          onClick={() => {
+            if (viewType === 'month') setMonthStart(addMonths(monthStart, -1))
+            else setWeekStart(addDays(weekStart, -7))
+          }}
           className="p-2 rounded-lg hover:bg-un1t-gray/50 text-un1t-light hover:text-un1t-white transition-colors"
         >
           <ChevronLeft size={20} />
         </button>
         <div className="text-center">
-          <span className="font-semibold">{weekLabel}</span>
+          <span className="font-semibold">{viewType === 'month' ? monthLabel : weekLabel}</span>
           <button
-            onClick={() => setWeekStart(getMonday(new Date()))}
+            onClick={() => {
+              const now = new Date()
+              if (viewType === 'month') setMonthStart(getMonthStart(now))
+              else setWeekStart(getMonday(now))
+            }}
             className="ml-3 text-xs text-blue-400 hover:text-blue-300"
           >
             Today
           </button>
         </div>
         <button
-          onClick={() => setWeekStart(addDays(weekStart, 7))}
+          onClick={() => {
+            if (viewType === 'month') setMonthStart(addMonths(monthStart, 1))
+            else setWeekStart(addDays(weekStart, 7))
+          }}
           className="p-2 rounded-lg hover:bg-un1t-gray/50 text-un1t-light hover:text-un1t-white transition-colors"
         >
           <ChevronRight size={20} />
@@ -333,6 +453,104 @@ export default function ScheduleCalendar({ user }) {
       {/* Calendar Grid */}
       {loading ? (
         <div className="text-center py-20 text-un1t-light">Loading roster...</div>
+      ) : viewType === 'month' ? (
+        // ── MONTH VIEW ──
+        // 6 × 7 calendar grid. Each cell renders the date number + a
+        // shift count badge + up to 3 chip previews. Cells from
+        // adjacent months render dimmed. Click any cell to jump to
+        // the week view containing that date.
+        <div>
+          <div className="grid grid-cols-7 gap-1.5 mb-1.5">
+            {DAY_LABELS.map(label => (
+              <div key={label} className="text-[11px] font-semibold text-un1t-light uppercase tracking-wider text-center py-1">
+                {label}
+              </div>
+            ))}
+          </div>
+          <div className="grid grid-cols-7 gap-1.5">
+            {(() => {
+              const holidayByDate = indexByDate(holidays)
+              const todayStr = formatDate(new Date())
+              const focusedMonth = monthStart.getMonth()
+              const cells = []
+              for (let i = 0; i < 42; i++) {
+                const date = addDays(monthGrid.start, i)
+                const dateStr = formatDate(date)
+                const dayShifts = shifts
+                  .filter(s => s.shift_date === dateStr)
+                  .filter(s => viewMode === 'all' || s.profile_id === user.id)
+                const dayTimeOff = timeOff.filter(t => t.start_date <= dateStr && t.end_date >= dateStr)
+                const inFocusedMonth = date.getMonth() === focusedMonth
+                const isToday = dateStr === todayStr
+                const holiday = holidayByDate.get(dateStr)
+                cells.push(
+                  <button
+                    key={dateStr}
+                    type="button"
+                    onClick={() => {
+                      // Drill down — switch to week view for the
+                      // week containing this date. The user can
+                      // then add / edit shifts using the existing
+                      // detailed UI.
+                      setWeekStart(getMonday(date))
+                      setViewType('week')
+                    }}
+                    className={`text-left bg-un1t-dark border rounded-md p-1.5 min-h-[88px] transition-colors hover:border-un1t-white/30 ${
+                      inFocusedMonth ? 'border-un1t-gray' : 'border-un1t-gray/50 opacity-60'
+                    } ${isToday ? 'ring-1 ring-blue-400/50' : ''} ${holiday ? 'bg-amber-500/[0.06]' : ''}`}
+                  >
+                    <div className="flex items-center justify-between mb-1">
+                      <span className={`text-xs font-semibold ${isToday ? 'text-blue-400' : inFocusedMonth ? 'text-un1t-white' : 'text-un1t-mid'}`}>
+                        {date.getDate()}
+                      </span>
+                      {dayShifts.length > 0 && (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-un1t-gray/60 text-un1t-light">
+                          {dayShifts.length}
+                        </span>
+                      )}
+                    </div>
+                    {holiday && (
+                      <div className="text-[9px] text-amber-500 mb-1 truncate" title={holiday.name}>
+                        {holiday.name}
+                      </div>
+                    )}
+                    <div className="space-y-0.5">
+                      {dayShifts.slice(0, 3).map(shift => {
+                        const tmpl = shift.shift_templates || {}
+                        return (
+                          <div
+                            key={shift.id}
+                            className="text-[10px] truncate rounded px-1 py-0.5"
+                            style={{ backgroundColor: (tmpl.color || '#3B82F6') + '20', color: tmpl.color || '#3B82F6' }}
+                            title={`${shift.profiles?.full_name || 'Unknown'} · ${formatTime(shift.start_time_override || tmpl.start_time)}–${formatTime(shift.end_time_override || tmpl.end_time)}`}
+                          >
+                            {shift.profiles?.full_name?.split(' ')[0] || '?'} {formatTime(shift.start_time_override || tmpl.start_time)}
+                          </div>
+                        )
+                      })}
+                      {dayShifts.length > 3 && (
+                        <div className="text-[10px] text-un1t-mid">+{dayShifts.length - 3} more</div>
+                      )}
+                      {dayTimeOff.slice(0, 1).map(t => {
+                        const conf = TIME_OFF_CONFIG[t.type] || TIME_OFF_CONFIG.unavailable
+                        return (
+                          <div
+                            key={`to-${t.id}`}
+                            className="text-[10px] truncate rounded px-1 py-0.5"
+                            style={{ backgroundColor: conf.color + '18', color: conf.color }}
+                          >
+                            {t.profiles?.full_name?.split(' ')[0]} {conf.label}
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </button>
+                )
+              }
+              return cells
+            })()}
+          </div>
+        </div>
       ) : (
         <div className="grid grid-cols-7 gap-2">
           {(() => {

@@ -77,7 +77,7 @@ React 18 + Next.js 14, Tailwind CSS 3.4, Supabase Auth (SSR cookies), Postmark (
 | Multi-tenant Auth | 004, 009 | `/api/locations`, `/api/staff` | `auth.js` | `LocationSwitcher.jsx`, `StaffForm.jsx` |
 | Email Marketing | 005, 006 | `/api/campaigns`, `/api/templates`, `/api/sequences`, `/api/preferences/[token]`, `/api/unsubscribe/[token]` | `postmark.js`, `audience-filter.js` | `CampaignEditor.jsx`, `TemplateEditor.jsx`, `AudienceBuilder.jsx` |
 | WhatsApp | 007, 008 | `/api/whatsapp/*` | `whatsapp.js`, `audience-filter.js` | `WAInbox.jsx`, `WABroadcastEditor.jsx` |
-| Scheduling | 010, 011 | `/api/schedule/*` | — | `ScheduleCalendar.jsx` |
+| Scheduling | 010, 011 | `/api/schedule/*` (incl. `/copy-week` and `/copy-month`) | — | `ScheduleCalendar.jsx` (week + month views, view toggle in header, copy-last-week / copy-last-month buttons context-aware on the active view) |
 | HR/Reporting | 012 | `/api/schedule/reports` | `report-generator.js` | `ScheduleReporting.jsx` |
 | Branding | 013 | `/api/settings/branding` | — | `BrandingSettings.jsx` |
 | Security: RLS | 014, 020, 021, 022 | (DB-level only) | — | — |
