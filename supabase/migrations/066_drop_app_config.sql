@@ -1,0 +1,26 @@
+-- 066 — drop private.app_config (orphaned by Vercel cron migration)
+--
+-- Background: private.app_config held two rows:
+--   cron_secret    — the same shared secret as Vercel's CRON_SECRET env
+--   cron_base_url  — the public URL pg_cron used to call Vercel routes
+-- These were exclusively used by the pg_cron + pg_net path that
+-- invoked /api/cron/run-sequences every 5 minutes.
+--
+-- That path was the workaround for Vercel Hobby's 2-cron cap. After
+-- upgrading to Pro we moved run-sequences to native Vercel Crons (see
+-- vercel.json), unscheduled the pg_cron job, and verified Vercel cron
+-- alone keeps the heartbeat fresh. The table is now dead weight:
+--   - cron.unschedule('run-sequences') ran successfully
+--   - cron.job is empty
+--   - no remaining functions / views / triggers reference it
+--   - no FK / dependency objects against it
+--
+-- Dropping it removes the second source of truth that caused the
+-- May 1 silent-401 incident — there is now nowhere for CRON_SECRET
+-- to drift to.
+--
+-- The `private` schema is preserved (it still hosts the auth_is_*
+-- helpers used by RLS — auth_is_master, auth_is_in_location,
+-- auth_is_owner_at, etc.).
+
+drop table if exists private.app_config;

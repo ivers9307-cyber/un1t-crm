@@ -752,7 +752,7 @@ These are not commitments, just durable notes so we don't re-derive them every s
 
 **Comms / delivery hardening**
 - Register `CCFautos` as a Sender ID (not just alphanumeric) with Twilio's IE compliance team — improves deliverability past Vodafone/Three filters.
-- Add an SMS delivery webhook (`MessageStatus=delivered|failed`) to mirror the Postmark + Meta event capture pattern. Currently we only know "Twilio accepted the request", not "the phone got it".
+- ~~Add an SMS delivery webhook (`MessageStatus=delivered|failed`) to mirror the Postmark + Meta event capture pattern.~~ — **shipped in Phase 5D / mig 065** (`/api/webhooks/twilio/status`, signature-verified, idempotent). `sms_broadcast_recipients.status` now goes `pending → sent → delivered | undelivered | failed` with timestamps.
 - Postmark webhook signing — verify shared secret on every event before trusting it (today we accept-with-warning if the env var is unset, which was meant to be a rollout-only fallback).
 
 **Deposits / payments**
@@ -774,6 +774,7 @@ These are not commitments, just durable notes so we don't re-derive them every s
 - ~~Cron consolidation strategy when we cross 2 crons (Vercel Hobby cap)~~ — **resolved by upgrading to Pro**. All crons live in `vercel.json` now; `pg_cron + pg_net` retired.
 - React Server Components audit pass #2 — components touched after the first audit may have re-introduced `'use client'` unnecessarily.
 - Move car photos to Supabase Storage signed URLs (today they're public-bucket URLs, fine for inventory but limits the option to gate gallery views).
+- Upgrade Next.js 14.2 → 16.x and clear outstanding `npm audit` advisories. Five Next.js CVEs surface from `npm audit`; most are mitigated by Vercel's hosted runtime (cache-poisoning, image-optimisation, SSRF-via-middleware) or don't apply to our config (no `rewrites`, no `remotePatterns`, no self-hosting). The practically-applicable one is **CVE-2024-... DoS via React Server Components** — low risk for our traffic volume but still worth closing. The fix path is `npm audit fix --force` which jumps to `next@16.2.4` (major). Treat as a focused PR, **not** bundled with feature work: 14→16 spans two majors so expect router/middleware breaking changes (params now async, `headers()`/`cookies()` async, `next/image` defaults moved). Plan: branch → upgrade → run full test suite → smoke-test cron routes + Twilio webhooks + middleware multi-domain rewrite → deploy preview → merge.
 
 **Multi-brand / platform**
 - Factor the multi-domain middleware so adding a third brand (e.g. another car business or a partner gym) is a config row, not new code.
