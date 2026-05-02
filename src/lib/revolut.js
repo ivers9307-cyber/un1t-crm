@@ -1,19 +1,25 @@
 // Revolut Merchant API client. Used for the car deposit flow:
-//   1. createOrder() — build a hosted-checkout order, returns the URL
-//      we redirect the buyer to.
-//   2. getOrder() — server-side check after a buyer returns from the
-//      checkout, before we trust the webhook to land.
+//   1. createOrder() — creates an order; returns { id, token,
+//      checkout_url, state, ... }. `token` is what we hand to the
+//      Web SDK (createCardField) to mount the inline card field.
+//      `checkout_url` is the hosted-page fallback.
+//   2. getOrder() — server-side check after a buyer returns from
+//      the checkout, before we trust the webhook to land.
 //   3. refundOrder() — manual goodwill refunds (the deposit T&Cs
 //      say non-refundable, but we still want the capability).
+//      Note: refunds create a NEW order with type='refund' linked
+//      via related_order_id; the original order stays 'completed'.
 //   4. verifyWebhookSignature() — HMAC-SHA256 validation of the
 //      `Revolut-Signature` header on incoming webhook POSTs.
 //
 // Auth: Bearer <secret>. Same shape for sandbox and prod, just
 // different keys + base URL.
 //
-// Refs: https://developer.revolut.com/docs/merchant
-//       https://github.com/revolut-engineering/revolut-openapi
-//         (yaml/merchant-2026-03-12.yaml)
+// All field names + enum values verified against
+// https://github.com/revolut-engineering/revolut-openapi
+//   yaml/merchant-2026-03-12.yaml (the version pinned in the
+//   Revolut-Api-Version header). Order.state values are LOWERCASE.
+//   capture_mode values are LOWERCASE ('automatic' / 'manual').
 
 import { createHmac, timingSafeEqual } from 'node:crypto'
 

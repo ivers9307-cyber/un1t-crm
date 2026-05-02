@@ -74,11 +74,18 @@ export async function POST(request) {
   }
   if (!order) return NextResponse.json({ success: true, skipped: 'order_missing' })
 
+  // Order states per Revolut Merchant API spec (merchant-2026-03-12.yaml,
+  // schema Order-State): pending, processing, authorised, completed,
+  // cancelled, failed. We flip our deposit_status only on terminal
+  // states. Note: there is NO 'refunded' order state — refunds create
+  // a NEW order with type=refund linked via related_order_id; the
+  // original order's state stays 'completed'. Refund handling would
+  // need a separate flow (not webhook-driven) if we ever build it.
   const updates = {}
-  const state = String(order.state || '').toUpperCase()
+  const state = String(order.state || '').toLowerCase()
 
   switch (state) {
-    case 'COMPLETED':
+    case 'completed':
       updates.deposit_status = 'paid'
       if (!car.deposit_paid_at) {
         updates.deposit_paid_at = new Date().toISOString()
@@ -89,18 +96,13 @@ export async function POST(request) {
         updates.deposit_paid_amount = Number(order.amount) / 100
       }
       break
-    case 'CANCELLED':
+    case 'cancelled':
       updates.deposit_status = 'cancelled'
       break
-    case 'FAILED':
-    case 'PAYMENT_DECLINED':
+    case 'failed':
       updates.deposit_status = 'failed'
       break
-    case 'REFUNDED':
-      updates.deposit_status = 'refunded'
-      break
-    // Other transient states (PENDING, AUTHORISED, PROCESSING) — no
-    // change. We only flip on terminal outcomes.
+    // Transient states (pending / processing / authorised) — no change.
     default:
       return NextResponse.json({ success: true, ignored_state: state })
   }

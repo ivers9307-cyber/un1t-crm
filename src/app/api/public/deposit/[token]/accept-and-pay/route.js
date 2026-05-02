@@ -106,12 +106,12 @@ export async function POST(request, { params }) {
 
   // For an existing order, re-fetch from Revolut to get the SDK token
   // (we don't store it locally). Cheap — one extra GET on a retry.
-  // Field name varies by API version: older returns `public_id`,
-  // newer (2024+) returns `token`. Accept either.
+  // Spec: Order schema returns the SDK token under `token` (verified
+  // in merchant-2026-03-12.yaml, schema Order-Token).
   if (orderId && checkoutUrl && car.deposit_status !== 'paid') {
     try {
       const existing = await getOrder(orderId)
-      publicId = existing?.token || existing?.public_id || null
+      publicId = existing?.token || null
     } catch {
       // If the order is gone (rare) fall through and create a new one.
       orderId = null
@@ -145,18 +145,18 @@ export async function POST(request, { params }) {
         },
         idempotencyKey: `deposit-${car.deposit_token}`,
       })
-      // Field name varies by API version: older returns `public_id`,
-      // newer (2024+) returns `token`. Accept either.
-      publicId = order?.token || order?.public_id
+      // Spec field is `token` (Order schema, merchant-2026-03-12.yaml).
+      publicId = order?.token
       checkoutUrl = order?.checkout_url
       orderId = order?.id
       if (!publicId) {
-        // Log the keys we DID get so we can adjust without guessing.
+        // Log the keys we DID get so a future API change is obvious
+        // in Vercel logs without needing to attach a debugger.
         console.warn(
-          `[deposit accept-and-pay] Revolut order created but no token / public_id in response. ` +
+          `[deposit accept-and-pay] Revolut order created without 'token'. ` +
           `Keys returned: ${Object.keys(order || {}).join(', ')}`
         )
-        throw new Error('Revolut returned no SDK token (token/public_id field missing)')
+        throw new Error('Revolut returned no SDK token')
       }
       acceptanceUpdates.deposit_revolut_order_id = orderId
       acceptanceUpdates.deposit_revolut_checkout_url = checkoutUrl
