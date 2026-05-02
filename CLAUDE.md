@@ -87,6 +87,11 @@ React 18 + Next.js 14, Tailwind CSS 3.4, Supabase Auth (SSR cookies), Postmark (
 | Bank holidays | 017, 018 | `/api/locations/[id]/holidays` | `bank-holidays.js` | `HolidayManager.jsx` |
 | UniFi Access | 019 | (toggle on `/api/staff/[id]`) | `unifi-access.js` | `StaffForm.jsx`, `LocationForm.jsx` |
 | Mobile (iOS) | 023 | `/api/mobile/me`, `/api/mobile/device-tokens` | `push.js` | `StaffForm.jsx` (Mobile Features panel); Expo app in `mobile/` |
+| Cars (processing) | 025 | `/api/cars`, `/api/cars/[id]/*` | `cars.js`, `fx.js` | `CarDetail.jsx`, `CarsList.jsx`, `CarsReports.jsx` |
+| Cars deposit (Revolut) | 040, 044, 046, 047 | `/api/cars/[id]/issue-deposit-link`, `/api/public/deposit/[token]/*`, `/api/webhooks/revolut`, `/api/cars/[id]/notes` | `revolut.js`, `twilio.js`, `event-reminders.js` | `DepositCard.jsx`, `NotesCard.jsx`, `CarDepositPage.jsx`, `CarDepositSettings.jsx` |
+| Sequence runner + triggers | 005, 037, 038, 039 | `/api/cron/run-sequences`, `/api/sequences/[id]/enrol` | `sequences.js`, `event-reminders.js` | `SequencePicker.jsx`, `SequenceEditor.jsx` |
+| Saved contact segments | 043 | `/api/contacts/segments`, `/api/contacts/search` (POST) | — | `ContactsView.jsx` (advanced filter + saved segments) |
+| Per-event reminders | 044 | (cron-driven) | `event-reminders.js` | `EventForm.jsx` (Reminder section) |
 
 ### Shared library helpers (`src/lib/`)
 
@@ -108,6 +113,10 @@ React 18 + Next.js 14, Tailwind CSS 3.4, Supabase Auth (SSR cookies), Postmark (
 | `openapi.js` | OpenAPI 3.1 registry + spec generator from Zod schemas |
 | `bank-holidays.js` | Country-keyed static holiday lists (IE/GB/DE/AU/KW/MT/EG/CY through 2030); `mergeHolidays()` blends static + custom per-location entries |
 | `unifi-access.js` | UniFi Developer API client — `findOrCreateUnifiUser()`, `syncUnifiUserPolicyForRole()`, `revokeUnifiUserPolicies()`. Uses undici dispatcher with `rejectUnauthorized:false` only when `allow_self_signed` is set on the location |
+| `revolut.js` | Revolut Merchant API client — `createOrder()`, `getOrder()`, `refundOrder()`, `verifyWebhookSignature()`. Bearer auth with `Revolut-Api-Version` header pinned to 2026-03-12. **All field names + enum values verified against `merchant-2026-03-12.yaml`** in the revolut-openapi repo — `Order.state` and `capture_mode` are LOWERCASE; the SDK token field on the order response is `token` (was `public_id` in the deprecated endpoint). |
+| `twilio.js` | Twilio SMS client — single `sendSms({ to, body, from })` helper, Basic auth. Sender defaults to alphanumeric ID `CCFautos` (Ireland's only viable A2P route — Twilio's Irish long codes are voice-only). `toE164Ireland()` normaliser handles common formats (`087…`, `+353…`, bare `87…`). |
+| `sequences.js` | Sequence runner — `enrolContacts()`, `runSequences()` (cron), `triggerSequencesForBooking()`, `triggerSequencesForStatusChange()`, `triggerSequencesForTagsAdded()`, `runEventReminderTriggers()` (sequence-based event reminders). Audience filter respected via `contactMatchesSequenceAudience()`. |
+| `event-reminders.js` | Per-event single-shot reminder runner — `runEventReminderSends()`. Reads `event_types.reminder_*` fields, finds bookings ~N min away, sends via email (Postmark transactional) or WhatsApp UTILITY template. Respects `email_administrative` / `whatsapp_administrative` consent flags (NOT marketing flags — reminders are transactional). Stamps `bookings.reminder_sent_at` for dedup. |
 
 ### Email system (`src/lib/postmark.js`)
 
@@ -136,6 +145,10 @@ Two streams: `broadcast` (marketing, GDPR headers) and `outbound` (transactional
 **Infrastructure:** `rate_limit_buckets` (fixed-window counter for public endpoints, pruned daily by `/api/cron/prune-rate-limits` at 03:30 UTC).
 
 **Settings:** `company_settings` (logo_url, favicon_url, company_name per location).
+
+**Cars (import workflow):** `cars` — full Tesla-import row (UK + Irish prices, statuses, Xero linkage, deposit fields, buyer details). `car_documents` — uploaded docs per car (V5C, invoice, etc.) with `xero_sent_at` / `xero_send_error` for Bills auto-forward. `car_notes` — per-car timeline of operator-typed and system-generated notes (mig 047); RLS-scoped via denormalised `location_id`.
+
+**Saved contact segments:** `contact_segments` (mig 043) — operator-saved AudienceBuilder filters for the /contacts page. `filter` JSONB shape matches `campaigns.audience_filter` so a segment can later be promoted into a campaign/sequence audience without transformation.
 
 ### Row Level Security
 
@@ -177,6 +190,24 @@ XERO_CLIENT_ID=                  # Xero OAuth 2.0 web app — see "Xero integrat
 XERO_CLIENT_SECRET=
 XERO_REDIRECT_URI=https://crm.un1tdublin.com/api/xero/callback
 XERO_SALES_ACCOUNT_CODE=         # optional, defaults to 200 (Sales). Set if your chart uses a different code.
+
+# Revolut Merchant — see "Revolut Merchant integration"
+REVOLUT_API_KEY=                 # Secret API key (sk_live_... or sk_sandbox_...)
+REVOLUT_API_BASE_URL=            # https://merchant.revolut.com (prod) or https://sandbox-merchant.revolut.com
+REVOLUT_WEBHOOK_SECRET=          # signing_secret returned when creating /api/webhooks
+REVOLUT_API_VERSION=2026-03-12   # optional; default in src/lib/revolut.js
+NEXT_PUBLIC_REVOLUT_MODE=        # 'prod' | 'sandbox' — must match REVOLUT_API_BASE_URL
+NEXT_PUBLIC_REVOLUT_PUBLIC_KEY=  # Public API key (pk_live_... or pk_sandbox_...) for the embedded checkout widget
+
+# Twilio SMS — see "Twilio integration"
+TWILIO_ACCOUNT_SID=
+TWILIO_AUTH_TOKEN=
+TWILIO_FROM=CCFautos             # alphanumeric ID (Ireland) OR E.164 number OR Messaging Service SID
+
+# Buyer-facing payment domain — see "Pay subdomain"
+DEPOSIT_BASE_URL=https://pay.ccfautos.com           # used server-side when generating deposit links
+NEXT_PUBLIC_DEPOSIT_BASE_URL=https://pay.ccfautos.com  # client-side mirror for operator preview links
+PAY_HOSTNAME=pay.ccfautos.com    # middleware uses this to gate which paths are public on the pay host
 ```
 
 ## Xero integration
@@ -429,8 +460,9 @@ Vercel. Crons (in `vercel.json`):
 
 - `/api/cron/run-scheduled-reports` — daily 07:00 UTC. Generates due `scheduled_reports`.
 - `/api/cron/prune-rate-limits` — daily 03:30 UTC. Deletes expired `rate_limit_buckets` rows.
+- `/api/cron/run-sequences` — every 5 minutes via **pg_cron + pg_net** (Vercel Hobby plan caps at 2 crons; rest run from inside Postgres — see migration 038). Phases per tick: (1) `runEventReminderSends()` for per-event single-shot reminders, (2) `runEventReminderTriggers()` for sequence-based event reminder triggers, (3) `runSequences()` to fire due steps. Each phase is independent so a failure in one doesn't stop the others. Auth via a `private.app_config` row holding the same shared secret value Vercel uses for the other crons.
 
-Both crons are protected by `Authorization: Bearer ${CRON_SECRET}`.
+Both Vercel-hosted crons are protected by `Authorization: Bearer ${CRON_SECRET}`. The pg_cron-driven hits use the same secret read from `private.app_config`.
 
 Supabase for database + auth + file storage (`branding` bucket for logos). Migrations are forward-only — there are no down migrations. Apply via the Supabase MCP (`apply_migration` tool) or, when MCP is unavailable, paste the SQL into the Supabase Dashboard SQL Editor. After every DDL change, run the security advisor (`get_advisors` MCP tool, type=security) — RLS misses, missing policies, mutable `search_path`, and over-broad grants get flagged immediately.
 
@@ -454,3 +486,209 @@ Supabase for database + auth + file storage (`branding` bucket for logos). Migra
 **New role or role-list change:** Update `roleSchema`, `ADMIN_ROLES`, `MANAGER_ROLES` in `src/lib/schemas.js` (single source of truth) and the `defaultPermissionsByRole` map in `src/components/StaffForm.jsx`. The `private.auth_is_owner_or_manager()` / `private.auth_role()` helpers (originally migration 014, moved to `private` schema in 022) may also need a follow-up migration if the new role has elevated DB-level write access.
 
 **New audience filter field:** Add to `AUDIENCE_FIELDS` in `src/lib/audience-filter.js` AND to `FIELD_OPTIONS` in `src/components/AudienceBuilder.jsx`. The whitelist is server-enforced, so missing it on the server side will silently drop the filter.
+
+## Multi-vendor comms architecture
+
+Three providers, each doing what it's best at — kept deliberately split rather than consolidated under one vendor:
+
+| Channel | Provider | Why this one |
+|---|---|---|
+| Transactional + broadcast email | **Postmark** | Best-in-class deliverability for transactional. Two streams (`outbound`, `broadcast`) with separate suppression lists + reputation. |
+| WhatsApp (one-way + two-way + templates) | **Meta WhatsApp Cloud API** (direct) | ~30-50% cheaper per conversation than going through a BSP like Twilio. We're already past the integration cost. |
+| SMS | **Twilio** | The only viable SMS provider for Ireland (long codes are voice-only there — see "Twilio integration"). |
+
+**Why not consolidate everything under Twilio (SendGrid + Twilio WhatsApp + Twilio SMS):** Postmark beats SendGrid on transactional deliverability; Twilio adds margin on top of Meta's wholesale WA price; vendor concentration means a Twilio outage takes everything down at once. The "one bill" appeal isn't worth the migration cost + per-message cost increase + deliverability hit. Revisit only if managing three vendor relationships becomes more than ~30min/month of operational pain.
+
+**Each path correctly gates by use-case context:**
+
+| Send path | Code | Template restriction | Consent flag checked |
+|---|---|---|---|
+| WhatsApp broadcasts (`/communications/broadcasts`) | `lib/whatsapp.js → sendBroadcast` | None (any APPROVED template) | `whatsapp_marketing` |
+| Sequence WA steps (runner) | `lib/sequences.js → sendWhatsappStep` | None (operator chooses per step) | inherits sequence audience filter |
+| Per-event reminders (`event_types.reminder_*`) | `lib/event-reminders.js → sendWhatsappReminder` | UTILITY / AUTHENTICATION only — refused at runtime if MARKETING | `whatsapp_administrative` |
+| Email broadcasts (`/communications/campaigns`) | `lib/postmark.js → sendCampaign` | (n/a) | `email_marketing` (broadcast stream) |
+| Email sequences | `lib/sequences.js → sendEmailStep` | (n/a) | inherits sequence audience filter (transactional stream) |
+| Per-event email reminders | `lib/event-reminders.js → sendEmailReminder` | (n/a) | `email_administrative` (transactional stream) |
+| Deposit-link delivery (cars) | `lib/twilio.js → sendSms` | (n/a — alphanumeric sender, one-way) | (n/a — buyer just submitted booking; implicit) |
+
+**Reminders are administrative, not marketing.** `contact_preferences` separates the two — schema has `email_marketing` + `email_administrative` (and the WA equivalents). Reminder code paths check ONLY the `_administrative` flag; opting out of marketing doesn't stop reminders. Hard signals (`email_status` bounced/complained, `wa_status` blocked/opted_out) cause reminders to skip AND stamp `reminder_sent_at` so the cron doesn't retry forever — only true infra failures stay un-stamped for retry.
+
+## Twilio integration
+
+`src/lib/twilio.js` is the single SMS helper. Used by the deposit-link issue flow; designed to be reused for any future transactional SMS.
+
+**Sender for Ireland.** Twilio's Irish (`+353`) long codes are **voice-only** — the Irish mobile carriers (Vodafone, Three, Eir) don't accept A2P SMS over them. Three viable senders:
+
+| Sender | Cost | Reply support | When to use |
+|---|---|---|---|
+| Alphanumeric ID `CCFautos` (default) | Free | One-way only | Most utility messages — branded, instantly recognisable |
+| UK long code (`+44…`) | ~€1/mo + per-SMS | Two-way | Only if you specifically need replies |
+| Irish short code (e.g. `50500`) | €800+/mo + per-SMS | Two-way | Only at very high volume (banks / Glofox use these) |
+
+Set via `TWILIO_FROM` env. Twilio infers the sender type from the value's shape — alphanumeric ID, E.164 number, or `MGxxx...` Messaging Service SID all go in the same field.
+
+**Trial-account gotcha.** Twilio trial accounts can ONLY send to phone numbers verified in the console (Phone Numbers → Manage → Verified Caller IDs). Adding billing flips the account to paid status and lifts the restriction. Alphanumeric senders are blocked entirely on trial accounts — you must upgrade before testing the alpha sender even works.
+
+**Vodafone IE alpha sender filtering.** Some carriers (Vodafone IE specifically) silently drop unregistered alphanumeric senders. Register `CCFautos` in Twilio Console → Messaging → Senders → Alphanumeric Sender IDs (1-2 business day approval) to avoid this. Three IE and Eir generally accept unregistered alpha senders.
+
+**Diagnostics.** Every SMS the issue endpoint sends inserts a system note on the car (`car_notes` table) with the Twilio SID. Operators paste the SID into Twilio Console → Monitor → Logs → Messaging when a customer says "I never got the SMS" — the log shows delivered / failed / queued + the carrier-specific error code.
+
+**E.164 normalisation.** `toE164Ireland(raw)` is a best-effort helper that handles the common Irish formats operators type (`087 1234567`, `0871234567`, `+353…`, bare `87…`). Falls back to passing the input through unchanged so Twilio gets a chance to reject explicitly with a helpful error code.
+
+## Revolut Merchant integration
+
+Used for car deposit payments. **All field names + enum values are verified against `merchant-2026-03-12.yaml`** in the [revolut-openapi](https://github.com/revolut-engineering/revolut-openapi) repo, NOT against my pre-existing knowledge — there are gotchas if you don't read the spec for the version you've pinned.
+
+**API key shape.** Two keys per environment, both generated in Revolut Business → APIs → Merchant API:
+
+- **Secret key** (`sk_live_...` / `sk_sandbox_...`) — `REVOLUT_API_KEY`. Server-side only. `Authorization: Bearer <secret>` on every API call.
+- **Public key** (`pk_live_...` / `pk_sandbox_...`) — `NEXT_PUBLIC_REVOLUT_PUBLIC_KEY`. Exposed to the browser bundle (intentional — Revolut's docs explicitly say "the Public key is provided with payment methods at checkout"). Used to initialise the embedded checkout widget on the client.
+
+**API version pinning.** Every request sends `Revolut-Api-Version: 2026-03-12` (configurable via `REVOLUT_API_VERSION`, default in `lib/revolut.js`). When updating to a newer version, **read the changelog AND the OpenAPI spec for that version's enum values** — Revolut has shifted enum casing between versions (e.g. `capture_mode` was upper-snake in older versions, lowercase in newer; the SDK token field renamed from `public_id` to `token`).
+
+**Spec-verified facts.** All values lowercase in the current pinned version:
+
+- `Order.state` enum: `pending`, `processing`, `authorised`, `completed`, `cancelled`, `failed`. **There is NO `refunded` order state** — refunds create a NEW order with `type='refund'` linked via `related_order_id`; the original order's state stays `completed`.
+- `capture_mode` enum: `automatic` (default if omitted), `manual`. **Omit the field entirely unless you specifically want manual capture** — sidesteps any future enum-casing changes.
+- Order response field for the SDK token: **`token`** (was `public_id` in the deprecated endpoint — don't fall back to `public_id` for new code).
+- Webhook signature header: `Revolut-Signature` (multiple `v1=<hex>` candidates separated by commas — any match wins; supports rotation).
+- Webhook timestamp header: `Revolut-Request-Timestamp` (Unix milliseconds; reject anything older than 5 min).
+- Webhook events for orders: `ORDER_COMPLETED`, `ORDER_AUTHORISED`, `ORDER_CANCELLED`, `ORDER_FAILED`, `ORDER_PAYMENT_DECLINED`, `ORDER_PAYMENT_FAILED` (+ several others for subscriptions / payouts / disputes we don't use).
+- Webhook payload discriminator field: `event` (string).
+- Webhook payload order id field: `order_id` (snake_case).
+
+**Sandbox vs prod.** Completely separate accounts with separate dashboards, separate API keys, separate webhook secrets. Toggle three env vars together: `REVOLUT_API_KEY` (`sk_sandbox_*` ↔ `sk_live_*`), `REVOLUT_API_BASE_URL` (`https://sandbox-merchant.revolut.com` ↔ `https://merchant.revolut.com`), `NEXT_PUBLIC_REVOLUT_MODE` (`sandbox` ↔ `prod`). **All three must match.** A mismatch causes the SDK to silently fail (iframe loads but renders blank) because the SDK can't validate a prod token against sandbox infrastructure or vice versa. Use Vercel's per-environment env scoping to keep Preview pointing at sandbox while Production takes real money.
+
+**Webhook setup (production).** The webhook UI doesn't surface in every Revolut Business dashboard layout. Cleanest path is the API:
+
+```bash
+curl -X POST https://merchant.revolut.com/api/webhooks \
+  -H "Authorization: Bearer YOUR_LIVE_REVOLUT_API_KEY" \
+  -H "Revolut-Api-Version: 2026-03-12" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "url": "https://crm.un1tdublin.com/api/webhooks/revolut",
+    "events": ["ORDER_COMPLETED", "ORDER_AUTHORISED", "ORDER_PAYMENT_DECLINED", "ORDER_PAYMENT_FAILED"]
+  }'
+```
+
+Returns `{ id, url, events, signing_secret }`. The `signing_secret` (starts `wsk_`) goes into Vercel as `REVOLUT_WEBHOOK_SECRET`. **Spec note:** unlike the legacy API, `signing_secret` is included in ALL webhook responses (not just creation), so a `GET /api/webhooks/{id}` will retrieve it later. Rotate via `POST /api/webhooks/{id}/rotate-signing-secret`.
+
+**Webhook IPs to allowlist** (per spec, line 13871): production `35.246.21.235`, `34.89.70.170`. Sandbox `35.242.130.242`, `35.242.162.241`.
+
+**Embedded checkout (current widget).** `RevolutCheckout.embeddedCheckout({ publicToken, target, createOrder, onSuccess, onError, onCancel })` mounts a widget inline on our page that handles cards + Apple Pay + Google Pay + Revolut Pay automatically. The order is created on SUBMIT (via the SDK's `createOrder` callback hitting our `/accept-and-pay` endpoint), NOT on page load — drops abandoned-order count in the merchant dashboard. SDK source: `node_modules/@revolut/checkout/esm/embeddedCheckoutLoader.js` confirms `RevolutCheckout.embeddedCheckout` is exposed as a static method on the loaded global. **Don't use the older `createCardField` path** — it's the legacy single-payment-method API.
+
+**Webhook handler is idempotent.** `runs `getOrder(orderId)` to fetch fresh state rather than trusting payload state (Revolut docs explicitly warn payload state can be stale during retries). `paid_at` only stamps if not already set, so duplicate webhook deliveries don't reset the timestamp. Always returns 200 even on unrecognised events so Revolut doesn't auto-disable the hook.
+
+## Pay subdomain (`pay.ccfautos.com`)
+
+Buyer-facing deposit pages live on a separate hostname from the CRM. Same Vercel project — multi-domain via hostname-aware middleware. The CRM stays at `crm.un1tdublin.com`; everything except the deposit pages + their backing public API is 404'd on the pay hostname so buyers never see CRM URLs.
+
+**Implementation.** `src/middleware.js` checks `request.headers.get('host')` first thing:
+
+- If hostname matches `PAY_HOSTNAME` (env, defaults to `pay.ccfautos.com`):
+  - Allow `/deposit/*` and `/api/public/deposit/*` through unauthenticated
+  - Allow `/_next/*`, `/favicon.ico`, `/robots.txt` (framework assets)
+  - 404 everything else (don't redirect — that would leak the CRM URL)
+- Otherwise (CRM hostname) — existing auth logic runs.
+
+**Critical layout gotcha:** the deposit page lives at `src/app/deposit/[token]/page.js`, NOT under `/cars/deposit/`. Reason: `src/app/cars/layout.js` runs `getCurrentUser()` + `redirect('/login')` for unauthenticated visitors, and that fires BEFORE the page renders even if middleware allows the route. Anything under `/cars/*` inherits that auth gate. Public buyer pages must live OUTSIDE the `/cars` route segment.
+
+**URL generation.** `src/lib/app-url.js → getDepositBaseUrl()` is the canonical helper for buyer-facing deposit links. Reads `DEPOSIT_BASE_URL`, falls back to `NEXT_PUBLIC_APP_URL`. Three places use it: `/api/cars/[id]/issue-deposit-link` (the link in the SMS), `/api/public/deposit/[token]/accept-and-pay` (Revolut's `redirect_url` so the hosted-page fallback bounces back to the same domain the buyer started on), and `DepositCard.jsx` ('View public deposit page' operator preview link via `NEXT_PUBLIC_DEPOSIT_BASE_URL`).
+
+**DNS setup.** CNAME `pay.ccfautos.com → cname.vercel-dns.com`. Add the domain in Vercel → Settings → Domains. SSL auto-provisioned within ~1 minute of DNS resolving.
+
+## Cars deposit feature
+
+End-to-end flow: operator clicks one button on a car → buyer gets an SMS with a tokenised link → opens `pay.ccfautos.com/deposit/<token>` → reads T&Cs → ticks accept → Revolut embedded checkout widget mounts inline → buyer pays via card / Apple Pay / Google Pay / Revolut Pay → webhook flips the car to **Deposit paid** with audit trail.
+
+**Schema (mig 044, 046, 047).** `cars` row gets:
+- `deposit_token` (UUID, unique, indexed) — the public URL key. **Rotates on every issue.**
+- `deposit_token_expires_at` — 24h from last issue. Public endpoints reject expired tokens with HTTP 410 + `{ code: 'TOKEN_EXPIRED' }`.
+- `deposit_amount` — per-car override of `locations.car_deposit_default_amount` (default €500).
+- `deposit_link_sent_at` + `deposit_link_sent_via` (`'sms'` only after the Twilio switch).
+- `deposit_terms_accepted_at` + `_ip` + `_version` — evidence trail. Version snapshot at acceptance time so if the operator edits T&Cs later, the buyer's accepted version is preserved.
+- `deposit_revolut_order_id` + `_checkout_url` — Revolut order linkage.
+- `deposit_status` — `null → sent → terms_accepted → paid` (terminal happy path; `cancelled`, `failed`, `refunded` for sad paths).
+- `deposit_paid_at` + `deposit_paid_amount`.
+
+`locations` gets `car_deposit_default_amount`, `car_deposit_terms` (operator-editable text), `car_deposit_terms_version` (bumped server-side every time the wording changes), `car_deposit_whatsapp_template_id` (unused after the Twilio switch — kept in schema for now, can be dropped in a follow-up mig).
+
+**Token rotation.** Every call to `/api/cars/[id]/issue-deposit-link` generates a fresh `deposit_token` (unless the deposit is already paid — then keeps the existing token so the receipt URL stays valid). Old URLs become 404s. Limits the blast radius if a link is forwarded somewhere it shouldn't be. Same call also sets `deposit_token_expires_at = NOW() + 24h` and clears any in-flight Revolut order linkage so the next accept-and-pay creates a fresh order under the new token's idempotency key.
+
+**System notes (mig 047).** `car_notes` table holds two kinds of entries: `manual` (operator-typed) and `system` (auto-generated). Every `issue-deposit-link` call inserts a system note with the URL + the Twilio SID for cross-referencing in Twilio's logs. The note's URL renders as a clickable link with a copy-to-clipboard button in the UI — exactly the affordance an operator needs when they want to copy / re-test / re-share a link without re-clicking the issue button. RLS-scoped via denormalised `location_id`.
+
+**Public page (`src/app/deposit/[token]/page.js`).** Renders `<CarDepositPage>` (a client component). Page loads → fetches deposit data → renders T&Cs + accept checkbox → ticks accept → mounts the Revolut embedded checkout widget → buyer submits → SDK calls `createOrder` callback which POSTs to `/api/public/deposit/[token]/accept-and-pay` → endpoint records the consent (timestamp + IP + terms version snapshot) and creates the Revolut order → returns the order token → SDK takes payment → `onSuccess` fires → page refetches deposit data → green confirmation card. The webhook is the authoritative DB-flip; the SDK callback is just for instant UX feedback.
+
+**Operator UI.** `DepositCard.jsx` (dynamic-imported into `CarDetail.jsx`) shows the status badge, amount input, **Send / Resend deposit link** button, expiry countdown ("expires in 22h 14m"), and a 'View public page' preview link. `CarDepositSettings.jsx` (in `/settings/locations/[id]`) exposes the default amount + terms textarea — saving with changed terms bumps the version automatically.
+
+**Concurrency.** Each car is fully isolated end-to-end (`deposit_token`, `deposit_revolut_order_id`, `deposit_revolut_checkout_url`, idempotency key all keyed off the car). 4-5 simultaneous deposits work without contention — Postgres serializes UPDATEs naturally on different rows, Vercel scales horizontally per request, Revolut webhooks land in different car rows. Only edge case: two operators issuing the same car at the exact same moment would race — easy to fix with row-level lock if it ever matters.
+
+## Comms automation
+
+Three runners share the same cron tick (`/api/cron/run-sequences` every 5 min via pg_cron):
+
+1. **`runEventReminderSends()`** — single-shot reminders attached to event types. Reads `event_types.reminder_*` fields, finds bookings approximately `reminder_minutes_before` away (±1h DST-tolerant window), sends one message via the chosen channel (email or WA UTILITY template), stamps `bookings.reminder_sent_at`. Cheapest path for "send a 24h reminder before each booking" without authoring a sequence. Configured per-event in `EventForm.jsx` (Reminder section).
+
+2. **`runEventReminderTriggers()`** — sequence-based event reminders. For each active sequence with `trigger_type='event_reminder'`, finds bookings ~hours_before away and creates a sequence enrollment. Use this when you need a multi-step reminder flow (24h + 2h + day-of); the simple per-event path covers single-shot.
+
+3. **`runSequences()`** — picks up due enrollments (`status='active' AND next_step_at <= now()`) and sends the next step (email via Postmark, WhatsApp via template, or wait). Failure-counted per enrollment with auto-pause after 5 consecutive errors.
+
+**Sequence triggers (4 types, all in `lib/sequences.js`):**
+
+| Trigger | Fired by | trigger_config | sourceRef |
+|---|---|---|---|
+| `manual` | `enrolContacts()` direct call (UI: SequencePicker on contact detail / pipeline / contact list bulk) | (none) | `'ui'` |
+| `booking_created` | `triggerSequencesForBooking(bookingId)` from `/api/public/book` | `event_type_id?` | booking id |
+| `status_change` | `triggerSequencesForStatusChange(contactId, oldStatus, newStatus)` from `PUT /api/contacts/[id]` | `from_status?`, `to_status?` | `'<old>→<new>'` |
+| `tag_added` | `triggerSequencesForTagsAdded(contactId, addedTags)` from `PUT /api/contacts/[id]` | `tag` (required) | the added tag |
+| `event_reminder` | `runEventReminderTriggers()` cron | `hours_before`, `event_type_id?` | booking id (idempotent across cron ticks) |
+
+All triggers respect the sequence's `audience_filter` via `contactMatchesSequenceAudience(contactId, filter)` — single-row reachability check using `applyAudienceFilter` so the same field/op allowlist as campaigns + broadcasts applies. All triggers are best-effort (errors swallowed + logged) so they can never fail the upstream user mutation.
+
+**Sequence enrolment UI.** `SequencePicker.jsx` is a shared component used in three places: contact detail page (popover, next to + Note / + Activity), pipeline deal cards (3-dots menu → centred modal), and contact list (bulk select with sticky action bar → centred modal). Lists every active sequence at the location with trigger-type chips so operators can pick a manual or automated sequence ad-hoc.
+
+**Saved contact segments (mig 043).** Operator builds an advanced filter on `/contacts` page using the existing `AudienceBuilder`, then saves as a named segment. Stored in `contact_segments` with the same JSON shape as `campaigns.audience_filter` — easy to promote a segment into a campaign / sequence audience later. CRUD via `POST /api/contacts/segments`, `PUT/DELETE /api/contacts/segments/[id]`. UI in `ContactsView.jsx` renders saved segments as chips above the AudienceBuilder; clicking applies the filter, hovering shows a delete X.
+
+## Performance posture
+
+Audit ran in May 2026 captured several wins worth knowing about:
+
+- **`getCurrentUser()` is wrapped in React.cache()** (`src/lib/auth.js`) so multiple server components in one request share a single auth lookup. Falls back to identity in the test environment (where react/server build isn't loaded).
+- **Auth queries parallelised** — profile fetch + impersonation cookie load + (master only) all-locations fetch run concurrently. Saves a roundtrip per page load on every authenticated route.
+- **`report-generator.js` queries parallelised** via `Promise.all` for staff_cost / roster_coverage / utilisation. Roughly halved the heaviest cron.
+- **`bookings(location_id, booking_date DESC)` index** (mig 041) — every bookings query filters by location, the original mig 002 only indexed contact/event/date/status. Was a full-scan that worsened with table size.
+- **`contacts(location_id, lead_status) WHERE lead_status IS NOT NULL`** partial index for the pipeline.
+- **Public pages statically rendered** — `/book/[slug]`, `/preferences/[token]`, `/unsubscribe/[token]`, `/deposit/[token]` all dropped reflexive `force-dynamic`. Vercel serves a CDN-cached HTML shell instead of running a server render every load.
+- **`CarDetail.jsx` code-split** — `XeroCard`, `DocumentsCard`, `DepositCard`, `NotesCard` are dynamic-imported and only rendered for cars in pending/completed status. New-status car detail loads don't ship that JS.
+- **`WAInbox` uses Supabase Realtime, not polling** (mig 042 publishes `whatsapp_conversations` + `whatsapp_messages`). 60s heartbeat poll kept as a safety net for missed events. Was previously 10s polling = ~432k requests/day at 50 active users.
+- **OpenAPI spec cached via `unstable_cache`** with 24h revalidate so cold-started lambdas don't rebuild the spec from scratch. Module-level `cachedSpec` still handles within-lambda hits. Falls back to direct generation in Vitest where there's no Next runtime.
+
+Things to watch but NOT act on without measurement:
+
+- **WAInbox 60s heartbeat** — wait a few weeks of real Realtime data before deciding whether to drop the heartbeat. If nothing's missed, push to 5min or remove.
+- **`'use client'` audit** — 46 components marked client; some likely don't need it. Modest bundle wins, low ROI, no measurement yet.
+
+## Lessons learned
+
+**Read vendor docs for the version you've pinned.** When integrating a third-party API (Revolut, Twilio, Stripe, etc.), always parse the OpenAPI spec / SDK source for the EXACT version you're targeting before writing client code. Don't work from cached knowledge of an older version. Two specific cases that bit on the Revolut integration: `capture_mode` enum casing (changed from `AUTOMATIC` upper-snake to lowercase `automatic` between versions) and the SDK token field name (`public_id` deprecated, replaced by `token`). Both produced misleading error messages that cost a round-trip with the user to fix. The OpenAPI spec is authoritative — if the docs page is a JS-rendered SPA that doesn't fetch cleanly, get the YAML from the vendor's openapi GitHub repo instead.
+
+**Per-vendor specifics that bit hard:**
+
+- **Twilio's Irish long codes are voice-only.** All Irish providers (not just Twilio) face this — the carriers don't accept A2P SMS over local Irish numbers. Alphanumeric sender IDs are the canonical solution for sending SMS to Ireland from a non-Irish entity. Don't waste time looking for Irish SMS-capable numbers in any provider's catalog.
+
+- **Revolut sandbox vs prod is fully separate** — separate dashboards (`business-sandbox.revolut.com` vs `business.revolut.com`), separate API keys, separate webhook secrets. Mismatching env vars across the trio (`REVOLUT_API_KEY`, `REVOLUT_API_BASE_URL`, `NEXT_PUBLIC_REVOLUT_MODE`) causes the SDK iframe to silently render blank instead of throwing a clear error.
+
+- **Twilio trial accounts can only send to verified numbers** (Phone Numbers → Manage → Verified Caller IDs). Adding a payment method flips to paid and lifts the restriction. Alphanumeric senders are blocked entirely on trial.
+
+- **Vercel doesn't auto-redeploy on env-var changes.** Every time the user changes a Vercel env var, they need to manually redeploy. Document this in instructions.
+
+- **Layout auth gates run before pages.** Anything under `src/app/<segment>/` inherits the layout's auth check. Public pages must live OUTSIDE any auth-gated segment — see the deposit page move from `/cars/deposit/[token]` to `/deposit/[token]` in mig of May 2026.
+
+- **Postgres webhook retries should never reset state.** Webhook handlers must be idempotent. Always check "is this state already final?" before stamping timestamps. Always return 200 for unrecognised events so the upstream provider doesn't auto-disable the hook (Revolut, Stripe, Postmark all do this).
+
+- **AppShell has its own publicPaths allowlist** (`src/components/AppShell.jsx`) separate from middleware. Adding a new public-facing page requires adding it to BOTH the middleware auth allowlist AND the AppShell sidebar-suppression list, otherwise the buyer either gets bounced to login OR sees the CRM sidebar.
+
+- **Both consent flag families exist for a reason.** `email_marketing` / `whatsapp_marketing` (broadcasts) vs `email_administrative` / `whatsapp_administrative` (transactional). Reminder code paths check the `_administrative` flag; opting out of marketing should never block a booking reminder.
+
+- **WhatsApp template categories are policy, not just labels.** Sending a MARKETING template under a transactional pretext (e.g. as a reminder) is a Meta policy violation that gets accounts in trouble. Reminder + utility flows refuse MARKETING templates at the picker AND at runtime as a backstop.
