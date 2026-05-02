@@ -154,16 +154,23 @@ export default function Sidebar({ user }) {
         </div>
       )}
 
-      {/* User + Logout */}
+      {/* User + Logout. Click the name/role block to jump to /account
+          for self-service preferences (default landing page, access
+          history, …). The sign-out button stays a sibling so muscle
+          memory is unchanged. */}
       <div className="border-t border-un1t-gray p-4">
-        <div className="flex items-center justify-between">
-          <div className="min-w-0">
+        <div className="flex items-center justify-between gap-2">
+          <Link
+            href="/account"
+            className="min-w-0 flex-1 -m-1 p-1 rounded hover:bg-un1t-gray/40 transition-colors"
+            title="Account preferences"
+          >
             <p className="text-sm font-medium truncate">{user?.full_name || 'User'}</p>
             <p className="text-xs text-un1t-light truncate">{roleLabels[user?.role] || user?.role || ''}</p>
-          </div>
+          </Link>
           <button
             onClick={handleLogout}
-            className="p-1.5 text-un1t-light hover:text-un1t-white transition-colors rounded hover:bg-un1t-gray/50"
+            className="p-1.5 text-un1t-light hover:text-un1t-white transition-colors rounded hover:bg-un1t-gray/50 shrink-0"
             title="Sign out"
           >
             <LogOut size={16} />

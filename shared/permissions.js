@@ -212,3 +212,55 @@ export const WEB_PERMISSION_KEYS = Object.freeze(
 export const MOBILE_PERMISSION_KEYS = Object.freeze(
   MOBILE_PERMISSIONS.map(p => p.key)
 )
+
+// ============================================================
+// Default landing-page preference
+//
+// Stored under profiles.permissions.landing_preference. Honoured by
+// /dashboard/page.js (web) and the Home tab segmented control
+// (mobile/app/(tabs)/index.jsx). When unset OR set to 'auto' the
+// existing role-based fallback applies (Business → Studio → Today
+// for whichever the user has permission to see).
+//
+// 'personal' here matches the dashboard_personal permission key —
+// kept short for storage and URL-friendliness. Same for studio and
+// business.
+//
+// Validation: any value not in LANDING_PREFERENCE_VALUES is treated
+// as 'auto' by the resolver (defensive). The /account form and the
+// /api/me/preferences route both reject unknown values up front so
+// junk never lands in the JSONB.
+// ============================================================
+
+export const LANDING_PREFERENCE_VALUES = Object.freeze([
+  'auto', 'personal', 'studio', 'business',
+])
+
+export const LANDING_PREFERENCE_OPTIONS = Object.freeze([
+  { value: 'auto',     label: 'Smart default',    hint: 'Lands on the most-aggregated dashboard you have access to (Business → Studio → Today)' },
+  { value: 'personal', label: 'Today',            hint: 'Your shifts across all locations, swap requests, inbox', perm: 'dashboard_personal' },
+  { value: 'studio',   label: 'Studio',           hint: 'Operational view for the active location', perm: 'dashboard_studio' },
+  { value: 'business', label: 'Business',         hint: 'Owner-level view for the active location',  perm: 'dashboard_business' },
+])
+
+// Map preference → { route, perm } used by the redirect logic.
+export const LANDING_PREFERENCE_TARGETS = Object.freeze({
+  personal: { route: '/dashboard/today',    perm: 'dashboard_personal' },
+  studio:   { route: '/dashboard/studio',   perm: 'dashboard_studio'   },
+  business: { route: '/dashboard/business', perm: 'dashboard_business' },
+})
+
+/**
+ * Resolve a user's landing preference to a known value, or 'auto'.
+ * Pure helper — no permission check; the caller is responsible for
+ * verifying the user actually has the dashboard permission before
+ * redirecting (see /dashboard/page.js).
+ *
+ * @param {{permissions?: object} | null | undefined} user
+ * @returns {'auto'|'personal'|'studio'|'business'}
+ */
+export function resolveLandingPreference(user) {
+  const raw = user?.permissions?.landing_preference
+  if (typeof raw !== 'string') return 'auto'
+  return LANDING_PREFERENCE_VALUES.includes(raw) ? raw : 'auto'
+}

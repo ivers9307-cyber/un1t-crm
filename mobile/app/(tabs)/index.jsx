@@ -16,6 +16,7 @@ import {
 } from 'react-native'
 import { useAuth } from '../../lib/auth-context'
 import { canDashboard, hasAnyMobileFeature } from '../../lib/permissions'
+import { resolveLandingPreference } from '../../../shared/permissions'
 import PersonalDashboard from '../../components/dashboard/PersonalDashboard'
 import StudioDashboard from '../../components/dashboard/StudioDashboard'
 import BusinessDashboard from '../../components/dashboard/BusinessDashboard'
@@ -64,11 +65,23 @@ export default function Home() {
     [profile, activeLocation]
   )
 
-  // Default to the LAST available segment so owners land on Business
-  // (the most-aggregated view), managers on Studio, staff on Today.
-  // Memoize so the user's manual selection persists.
+  // Initial-segment resolution (in priority order):
+  //   1. The user's saved landing preference
+  //      (profile.permissions.landing_preference, set in /account on
+  //      web — flows here via /api/mobile/me) IF that segment is
+  //      available at the active location.
+  //   2. Smart default — last available segment, so owners land on
+  //      Business, managers on Studio, staff on Today.
+  // Once the user taps a different segment in this session, their
+  // tap wins until logout / reload.
+  const preferredId = useMemo(() => {
+    const pref = resolveLandingPreference(profile)
+    if (pref === 'auto') return null
+    const match = available.find(s => s.id === pref)
+    return match ? match.id : null
+  }, [profile, available])
   const [selected, setSelected] = useState(null)
-  const effectiveSelected = selected || available[available.length - 1]?.id
+  const effectiveSelected = selected || preferredId || available[available.length - 1]?.id
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true)

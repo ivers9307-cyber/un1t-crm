@@ -69,7 +69,10 @@ function rangeLabelFor(startIso, endIso) {
 }
 
 // Reusable week panel — same JSX for "This week" and "Next week".
-function WeekPanel({ title, startIso, endIso, shifts }) {
+// `showLocation` controls whether each shift row renders a small
+// location chip; we only show it for users with 2+ assigned
+// locations to avoid redundant chrome for single-location staff.
+function WeekPanel({ title, startIso, endIso, shifts, showLocation }) {
   const days = buildWeek(startIso, shifts || [])
   return (
     <div className="bg-un1t-dark border border-un1t-gray rounded-2xl overflow-hidden">
@@ -123,8 +126,13 @@ function WeekPanel({ title, startIso, endIso, shifts }) {
                         </span>
                       )}
                     </div>
-                    <div className={`text-xs ${day.isPast ? 'text-un1t-mid' : 'text-un1t-light'}`}>
-                      {shiftTime(s)} · {shiftHours(s)}h
+                    <div className={`text-xs flex items-center gap-1.5 flex-wrap ${day.isPast ? 'text-un1t-mid' : 'text-un1t-light'}`}>
+                      <span>{shiftTime(s)} · {shiftHours(s)}h</span>
+                      {showLocation && s.locations?.name && (
+                        <span className="px-1.5 py-0.5 rounded bg-un1t-gray/60 text-un1t-light text-[10px] uppercase tracking-wider whitespace-nowrap">
+                          {s.locations.name}
+                        </span>
+                      )}
                     </div>
                   </div>
                 ))
@@ -159,6 +167,11 @@ export default async function PersonalDashboardPage() {
     pendingSwapsForMe, myPendingTimeOff, unreadInbox,
   } = res.data
 
+  // Show the per-shift location chip only when the user is assigned
+  // to 2+ locations — otherwise it's redundant clutter for staff
+  // who only ever work at one gym.
+  const showLocation = (user.locations || []).length > 1
+
   return (
     <>
       {/* Roster — current + next week, side-by-side on md+ screens,
@@ -169,12 +182,14 @@ export default async function PersonalDashboardPage() {
           startIso={weekStartIso}
           endIso={weekEndIso}
           shifts={weekShifts}
+          showLocation={showLocation}
         />
         <WeekPanel
           title="Next week"
           startIso={nextWeekStartIso}
           endIso={nextWeekEndIso}
           shifts={nextWeekShifts}
+          showLocation={showLocation}
         />
       </div>
 
