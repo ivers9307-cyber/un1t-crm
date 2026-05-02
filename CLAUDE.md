@@ -696,3 +696,64 @@ Things to watch but NOT act on without measurement:
 - **Both consent flag families exist for a reason.** `email_marketing` / `whatsapp_marketing` (broadcasts) vs `email_administrative` / `whatsapp_administrative` (transactional). Reminder code paths check the `_administrative` flag; opting out of marketing should never block a booking reminder.
 
 - **WhatsApp template categories are policy, not just labels.** Sending a MARKETING template under a transactional pretext (e.g. as a reminder) is a Meta policy violation that gets accounts in trouble. Reminder + utility flows refuse MARKETING templates at the picker AND at runtime as a backstop.
+
+## Roadmap & backlog
+
+Mirror of the Cowork task list — kept here as the durable record so that a fresh session has the context even when the task list is cleared. Add new ideas as they come up; mark items as done with the corresponding commit/migration when shipped.
+
+### Done (latest first)
+
+| # | Item | Notes |
+|---|------|-------|
+| 54 | Master honours per-location feature gate | `17c5213`. Master sidebar now collapses at locations with features off. `settings` is the only escape-hatch key on web. |
+| 53 | Switch to Revolut Embedded Checkout widget | Replaced deprecated `createCardField` with `RC.embeddedCheckout({publicToken, target, createOrder, onSuccess, onError, onCancel})`. Cards + Apple/Google/Revolut Pay in one mount. |
+| 52 | Switch deposit delivery to SMS via Twilio | Email + WhatsApp delivery removed. Sender = alphanumeric `CCFautos` (Irish long codes are voice-only). |
+| 51 | Pay subdomain (`pay.ccfautos.com`) | Hostname-aware middleware on the same Vercel project. Only `/deposit/*` and `/api/public/deposit/*` reachable on the pay host. |
+| 50 | Car notes + 24 h deposit link expiry | Token rotation on every send. |
+| 49 | Embedded Revolut card field | Initial implementation, later replaced by full Embedded Checkout in #53. |
+| 44–48 | Cars deposit feature end-to-end | Schema, API routes, public buyer page, car-detail Deposit section + per-location terms. |
+| 43 | WA template media upload + Meta approval | Resumable Upload API, real submission to Meta (not local-only stub). |
+| 41–42 | Per-event reminders + utility/marketing semantics | Reminder runner refuses MARKETING templates. |
+| 39–40 | Sequence event_reminder runner + saved segments | |
+| 38 | Sequence triggers: status_change + tag_added | |
+| 36–37 | Sequence enrolment UI + advanced contact filtering | |
+| 28–34 | Performance pass | Master gates in handlers, `bookings(location_id)` index, parallel report queries, `force-dynamic` audit, CarDetail split, WAInbox → Realtime, OpenAPI cache. |
+
+### Backlog — picked up when relevant
+
+These are not commitments, just durable notes so we don't re-derive them every session.
+
+**Comms / delivery hardening**
+- Register `CCFautos` as a Sender ID (not just alphanumeric) with Twilio's IE compliance team — improves deliverability past Vodafone/Three filters.
+- Add an SMS delivery webhook (`MessageStatus=delivered|failed`) to mirror the Postmark + Meta event capture pattern. Currently we only know "Twilio accepted the request", not "the phone got it".
+- Postmark webhook signing — verify shared secret on every event before trusting it (today we accept-with-warning if the env var is unset, which was meant to be a rollout-only fallback).
+
+**Deposits / payments**
+- Refund UI on the car-detail Deposit section — the lib helper (`refundOrder`) is wired, just no front-end. Useful for the rare goodwill case despite "non-refundable" T&Cs.
+- Multi-currency support for deposits (today EUR-only). UK customers buying RHD stock would value GBP.
+- Surface the buyer-side payment-method icons (cards / Apple Pay / Google Pay / Revolut Pay) on the deposit page above the widget so the buyer knows what to expect before clicking pay.
+- Email receipt to buyer on `deposit.paid` webhook — currently we only display the in-page receipt. A Postmark transactional email gives them something to forward to insurance/finance.
+
+**Permissions / multi-tenant**
+- Master "all locations at a glance" admin page — shows every location's feature toggles in one matrix so a master can flip CCF Autos vs UN1T configs without clicking through each location.
+- API-route-level test for the location gate (not just the helper). The helper has 20 tests; the routes that consume it are still trusted by inspection.
+- Extend `MOBILE_PERMISSION_KEYS` iteration in `hasAnyMobileFeature` to also evaluate cross-platform `dashboard_*` keys so the empty-state Home tab on mobile is correct for master at a partial-features location.
+
+**Sequences / segments**
+- New trigger: `segment_added` / `segment_removed` so saved segments can drive sequence enrolment alongside the existing `status_change` + `tag_added` triggers.
+- "Preview enrolments" before committing a sequence — show the candidate contact list so an operator can spot-check before turning the runner loose.
+
+**Performance / infrastructure**
+- Cron consolidation strategy when we cross 2 crons (Vercel Hobby cap). Either upgrade plan, fan out from a single dispatcher cron, or move scheduled work into pg_cron + pg_net entirely.
+- React Server Components audit pass #2 — components touched after the first audit may have re-introduced `'use client'` unnecessarily.
+- Move car photos to Supabase Storage signed URLs (today they're public-bucket URLs, fine for inventory but limits the option to gate gallery views).
+
+**Multi-brand / platform**
+- Factor the multi-domain middleware so adding a third brand (e.g. another car business or a partner gym) is a config row, not new code.
+- Brand-aware AppShell — pull header logo + favicon + theme tokens off the active location so CCF Autos visitors at `crm.un1tdublin.com` see car-brand chrome, not gym chrome, without separate deployments.
+
+### Process notes
+
+- Backlog items move to in-progress as a numbered task in Cowork before implementation starts.
+- Lessons learned from each shipped task get rolled into the relevant CLAUDE.md section (Coding conventions, Lessons learned, Multi-vendor comms, etc.) — not into this list.
+- This list is intentionally not a project plan — no dates, no commitments. It's a durable scratchpad.
