@@ -23,6 +23,59 @@
 import { shiftHours, implicitHourlyRate } from './payroll'
 import { addDays, formatDate } from './roster'
 
+// Roster v2 phase 6 — leave-aware availability.
+//
+// For utilisation purposes, an FTE who's on holiday Mon-Wed
+// can't be expected to fill their full contracted weekly hours.
+// We subtract leave-day equivalents from the denominator so
+// the "underused / on-target / overtime" bands stay meaningful.
+//
+// Convention: contracted_hours_per_week is treated as a Mon-Fri
+// working contract (5 working days). Each weekday in approved
+// leave subtracts (contracted_hours_per_week / 5) hours. Weekend
+// leave doesn't reduce availability — the contract didn't count
+// it in the first place.
+//
+// Half-days aren't honoured here; we'd need a `hours_per_day`
+// or similar on time_off_requests for that. The error from
+// treating a half-day as a full day is small and conservative
+// (slightly over-counts leave → slightly under-counts
+// expected hours → rooster shows the coach as more utilised
+// than reality). Operators will spot it and we can refine.
+export function leaveHoursInWeek({ timeOff, profileId, weekStart, contractedHoursPerWeek }) {
+  if (!contractedHoursPerWeek || contractedHoursPerWeek <= 0) return 0
+  if (!timeOff || timeOff.length === 0) return 0
+
+  const start = weekStart instanceof Date ? weekStart : new Date(weekStart)
+  start.setHours(0, 0, 0, 0)
+  const startIso = formatDate(start)
+  const endIso = formatDate(addDays(start, 6))
+
+  const perDay = contractedHoursPerWeek / 5
+  let weekdaysOnLeave = 0
+
+  for (const req of timeOff) {
+    if (req.profile_id !== profileId) continue
+    if (req.status !== 'approved') continue
+
+    // Overlap range of leave with the week.
+    const overlapStart = req.start_date > startIso ? req.start_date : startIso
+    const overlapEnd = req.end_date < endIso ? req.end_date : endIso
+    if (overlapStart > overlapEnd) continue
+
+    // Walk each day in the overlap and tick weekdays.
+    let cursor = new Date(overlapStart + 'T00:00:00')
+    const stop = new Date(overlapEnd + 'T00:00:00')
+    while (cursor <= stop) {
+      const dow = cursor.getDay() // 0 Sun .. 6 Sat
+      if (dow >= 1 && dow <= 5) weekdaysOnLeave++
+      cursor = addDays(cursor, 1)
+    }
+  }
+
+  return Math.min(weekdaysOnLeave * perDay, contractedHoursPerWeek)
+}
+
 /**
  * Flatten a list of blocks into one virtual "shift" per (block,
  * assignment). Mirrors the legacy shifts shape just enough that
@@ -67,14 +120,25 @@ function sumHoursForProfile(rows, profileId, startIso, endIso) {
  * Returns per-coach FTE utilisation rows + a contractor spend
  * roll-up for the visible week.
  *
+ * @param {object[]} [args.timeOff]  Approved time_off_requests
+ *   covering the visible window. When supplied (Roster v2
+ *   phase 6), each FTE row's denominator is reduced by the
+ *   profile's leave-day equivalents this week — so a coach
+ *   who's off Mon-Wed shows full utilisation against the
+ *   remaining 2 days, not "underused vs the full 30h
+ *   contract".
+ *
  * @returns {{
  *   weekStartIso: string,
  *   weekEndIso: string,
  *   fte: Array<{
  *     profile_id: string, full_name: string,
- *     allocated_hours: number, contracted_hours: number,
+ *     allocated_hours: number,
+ *     contracted_hours: number,
+ *     leave_hours: number,
+ *     effective_contracted_hours: number,
  *     utilisation_pct: number | null,
- *     status: 'underused' | 'on_target' | 'overtime' | 'no_contract'
+ *     status: 'underused' | 'on_target' | 'overtime' | 'no_contract' | 'on_leave'
  *   }>,
  *   contractorWeekCostEur: number,
  *   blockCount: number,
@@ -82,7 +146,7 @@ function sumHoursForProfile(rows, profileId, startIso, endIso) {
  *   incompleteProfileNames: string[]
  * }}
  */
-export function summarizeWeek({ blocks, staff, weekStart, today = new Date() }) {
+export function summarizeWeek({ blocks, staff, weekStart, timeOff = [], today = new Date() }) {
   const start = weekStart instanceof Date ? weekStart : new Date(weekStart)
   const end = addDays(start, 6)
   const startIso = formatDate(start)
@@ -109,19 +173,43 @@ export function summarizeWeek({ blocks, staff, weekStart, today = new Date() }) 
       if (!hasPay || contracted <= 0) {
         incompleteProfileNames.push(s.full_name)
       }
-      const status = contracted <= 0
-        ? 'no_contract'
-        : allocated > contracted
-          ? 'overtime'
-          : allocated >= contracted * 0.95
-            ? 'on_target'
-            : 'underused'
+      const leaveHours = leaveHoursInWeek({
+        timeOff,
+        profileId: s.id,
+        weekStart: start,
+        contractedHoursPerWeek: contracted,
+      })
+      const effectiveContracted = Math.max(0, contracted - leaveHours)
+
+      // Status thresholds:
+      //   no_contract → contracted = 0 (no comparator)
+      //   on_leave    → leave consumed the entire week (effective = 0)
+      //                 but the coach was rostered anyway. Distinct
+      //                 from overtime because the cause is a roster
+      //                 bug (assigned during approved leave) rather
+      //                 than a workload signal.
+      //   overtime    → allocated > effective contracted
+      //   on_target   → allocated >= effective contracted * 0.95
+      //   underused   → otherwise
+      let status
+      if (contracted <= 0) status = 'no_contract'
+      else if (effectiveContracted <= 0) status = 'on_leave'
+      else if (allocated > effectiveContracted) status = 'overtime'
+      else if (allocated >= effectiveContracted * 0.95) status = 'on_target'
+      else status = 'underused'
+
+      const utilisationPct = effectiveContracted > 0
+        ? Math.round((allocated / effectiveContracted) * 100)
+        : (allocated > 0 ? 999 : null) // sentinel for "rostered while on full leave"
+
       fteSummaries.push({
         profile_id: s.id,
         full_name: s.full_name,
         allocated_hours: round1(allocated),
         contracted_hours: contracted,
-        utilisation_pct: contracted > 0 ? Math.round((allocated / contracted) * 100) : null,
+        leave_hours: round1(leaveHours),
+        effective_contracted_hours: round1(effectiveContracted),
+        utilisation_pct: utilisationPct,
         status,
       })
     } else if (s.employment_type === 'contractor') {
@@ -133,9 +221,10 @@ export function summarizeWeek({ blocks, staff, weekStart, today = new Date() }) 
     }
   }
 
-  // Sort FTE: overtime first, then underused, then on-target. Helps
-  // the manager scan the panel for problems first.
-  const order = { overtime: 0, no_contract: 1, underused: 2, on_target: 3 }
+  // Sort FTE: rostered-while-on-leave first (red flag), then
+  // overtime, then no_contract, underused, on-target. Helps the
+  // manager scan the panel for problems first.
+  const order = { on_leave: 0, overtime: 1, no_contract: 2, underused: 3, on_target: 4 }
   fteSummaries.sort((a, b) => order[a.status] - order[b.status])
 
   const blockCount = weekBlocks.length

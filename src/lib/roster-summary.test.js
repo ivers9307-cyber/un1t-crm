@@ -1,7 +1,7 @@
 // Roster v2 phase 4 — summary helper tests.
 
 import { describe, it, expect } from 'vitest'
-import { summarizeWeek, summarizeMonth } from './roster-summary'
+import { summarizeWeek, summarizeMonth, leaveHoursInWeek } from './roster-summary'
 
 // Helper: build a block with N assigned coaches.
 function block({ id, date, start, end, max = 15, coaches = [] }) {
@@ -169,6 +169,166 @@ describe('summarizeWeek', () => {
     expect(names[0]).toBe('Alpha') // overtime
     expect(names[1]).toBe('Gamma') // no_contract
     expect(names[2]).toBe('Beta')  // underused
+  })
+})
+
+describe('leaveHoursInWeek (phase 6)', () => {
+  // 2026-05-04 = Monday. Mon-Fri only count.
+  const weekStart = new Date('2026-05-04T00:00:00')
+  const fte30 = 30 // contracted hours per week → 6h/day
+
+  it('returns 0 when contracted hours is 0', () => {
+    expect(leaveHoursInWeek({
+      timeOff: [{ profile_id: 's1', status: 'approved', start_date: '2026-05-04', end_date: '2026-05-08' }],
+      profileId: 's1', weekStart, contractedHoursPerWeek: 0,
+    })).toBe(0)
+  })
+
+  it('returns 0 with no time-off rows', () => {
+    expect(leaveHoursInWeek({ timeOff: [], profileId: 's1', weekStart, contractedHoursPerWeek: fte30 })).toBe(0)
+  })
+
+  it('subtracts 6h × 3 weekdays = 18h for Mon-Wed approved holiday', () => {
+    const r = leaveHoursInWeek({
+      timeOff: [{ profile_id: 's1', status: 'approved', start_date: '2026-05-04', end_date: '2026-05-06' }],
+      profileId: 's1', weekStart, contractedHoursPerWeek: fte30,
+    })
+    expect(r).toBe(18)
+  })
+
+  it('caps the deduction at the contracted hours (full-week leave)', () => {
+    const r = leaveHoursInWeek({
+      timeOff: [{ profile_id: 's1', status: 'approved', start_date: '2026-05-04', end_date: '2026-05-10' }],
+      profileId: 's1', weekStart, contractedHoursPerWeek: fte30,
+    })
+    expect(r).toBe(30)
+  })
+
+  it('weekend leave (Sat-Sun) deducts nothing', () => {
+    const r = leaveHoursInWeek({
+      timeOff: [{ profile_id: 's1', status: 'approved', start_date: '2026-05-09', end_date: '2026-05-10' }],
+      profileId: 's1', weekStart, contractedHoursPerWeek: fte30,
+    })
+    expect(r).toBe(0)
+  })
+
+  it('ignores other profiles', () => {
+    const r = leaveHoursInWeek({
+      timeOff: [{ profile_id: 'someone-else', status: 'approved', start_date: '2026-05-04', end_date: '2026-05-08' }],
+      profileId: 's1', weekStart, contractedHoursPerWeek: fte30,
+    })
+    expect(r).toBe(0)
+  })
+
+  it('ignores pending or rejected time-off', () => {
+    const r = leaveHoursInWeek({
+      timeOff: [
+        { profile_id: 's1', status: 'pending',  start_date: '2026-05-04', end_date: '2026-05-08' },
+        { profile_id: 's1', status: 'rejected', start_date: '2026-05-05', end_date: '2026-05-06' },
+      ],
+      profileId: 's1', weekStart, contractedHoursPerWeek: fte30,
+    })
+    expect(r).toBe(0)
+  })
+
+  it('handles a leave range that overlaps only partially with the week', () => {
+    // Apr 30 (Thu) – May 5 (Tue): only Mon May 4 + Tue May 5 fall in the visible week
+    const r = leaveHoursInWeek({
+      timeOff: [{ profile_id: 's1', status: 'approved', start_date: '2026-04-30', end_date: '2026-05-05' }],
+      profileId: 's1', weekStart, contractedHoursPerWeek: fte30,
+    })
+    expect(r).toBe(12) // 2 weekdays × 6h
+  })
+})
+
+describe('summarizeWeek leave-awareness (phase 6)', () => {
+  const weekStart = new Date('2026-05-04T00:00:00')
+  const sarahFte = {
+    id: 'sarah', full_name: 'Sarah FTE', active: true,
+    employment_type: 'fte',
+    contracted_hours_per_week: 30,
+    annual_salary: 39000,
+    hourly_rate: null,
+  }
+
+  function block({ id, date, start, end, coaches = [] }) {
+    return {
+      id,
+      location_id: 'loc1',
+      block_date: date,
+      start_time: start,
+      end_time: end,
+      max_coaches: 15,
+      shift_templates: { start_time: start, end_time: end },
+      shift_assignments: coaches.map((p, i) => ({
+        id: `a-${id}-${i}`, profile_id: p, profiles: { id: p, full_name: p },
+      })),
+    }
+  }
+
+  it('drops the denominator by leave hours (Sarah on holiday Mon-Wed)', () => {
+    const blocks = [
+      block({ id: 'b1', date: '2026-05-07', start: '09:00', end: '15:00', coaches: ['sarah'] }), // Thu 6h
+      block({ id: 'b2', date: '2026-05-08', start: '09:00', end: '15:00', coaches: ['sarah'] }), // Fri 6h
+    ]
+    const timeOff = [
+      { profile_id: 'sarah', status: 'approved', start_date: '2026-05-04', end_date: '2026-05-06' },
+    ]
+    const r = summarizeWeek({ blocks, staff: [sarahFte], weekStart, timeOff })
+    const row = r.fte[0]
+    expect(row.allocated_hours).toBe(12)
+    expect(row.contracted_hours).toBe(30)
+    expect(row.leave_hours).toBe(18)
+    expect(row.effective_contracted_hours).toBe(12)
+    expect(row.utilisation_pct).toBe(100)
+    expect(row.status).toBe('on_target')
+  })
+
+  it('flags status=on_leave when rostered during full-week leave', () => {
+    const blocks = [
+      block({ id: 'b1', date: '2026-05-04', start: '09:00', end: '11:00', coaches: ['sarah'] }),
+    ]
+    const timeOff = [
+      { profile_id: 'sarah', status: 'approved', start_date: '2026-05-04', end_date: '2026-05-10' },
+    ]
+    const r = summarizeWeek({ blocks, staff: [sarahFte], weekStart, timeOff })
+    const row = r.fte[0]
+    expect(row.status).toBe('on_leave')
+    expect(row.leave_hours).toBe(30)
+    expect(row.effective_contracted_hours).toBe(0)
+  })
+
+  it('on_leave rows sort to the top (loudest red)', () => {
+    const sarahA = { ...sarahFte, id: 'a', full_name: 'Alpha' }
+    const sarahB = { ...sarahFte, id: 'b', full_name: 'Beta' }
+    const sarahC = { ...sarahFte, id: 'c', full_name: 'Charlie' }
+    const blocks = [
+      block({ id: 'b1', date: '2026-05-04', start: '09:00', end: '12:00', coaches: ['a'] }), // Alpha — 3h, on full leave → on_leave
+      // Beta — full overtime: 7 days × 5h = 35h
+      ...Array.from({ length: 7 }, (_, i) => {
+        const d = new Date(weekStart); d.setDate(d.getDate() + i)
+        return block({ id: `bt${i}`, date: d.toISOString().slice(0, 10), start: '09:00', end: '14:00', coaches: ['b'] })
+      }),
+      block({ id: 'c1', date: '2026-05-04', start: '09:00', end: '14:00', coaches: ['c'] }), // Charlie — 5h underused
+    ]
+    const timeOff = [
+      { profile_id: 'a', status: 'approved', start_date: '2026-05-04', end_date: '2026-05-10' },
+    ]
+    const r = summarizeWeek({ blocks, staff: [sarahA, sarahB, sarahC], weekStart, timeOff })
+    expect(r.fte[0].full_name).toBe('Alpha')   // on_leave
+    expect(r.fte[1].full_name).toBe('Beta')    // overtime
+    expect(r.fte[2].full_name).toBe('Charlie') // underused
+  })
+
+  it('omitting timeOff entirely keeps phase-4 behaviour', () => {
+    const blocks = [
+      block({ id: 'b1', date: '2026-05-04', start: '09:00', end: '14:00', coaches: ['sarah'] }), // 5h
+    ]
+    const r = summarizeWeek({ blocks, staff: [sarahFte], weekStart })
+    const row = r.fte[0]
+    expect(row.leave_hours).toBe(0)
+    expect(row.effective_contracted_hours).toBe(30)
+    expect(row.status).toBe('underused')
   })
 })
 

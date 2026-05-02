@@ -16,10 +16,13 @@ import { TrendingUp, TrendingDown, AlertTriangle, Wallet } from 'lucide-react'
 import { summarizeWeek, summarizeMonth } from '@/lib/roster-summary'
 
 const STATUS_STYLES = {
-  overtime:    { bar: 'bg-red-500',    label: 'Over hours',     text: 'text-red-300' },
-  on_target:   { bar: 'bg-emerald-500', label: 'On target',      text: 'text-emerald-300' },
-  underused:   { bar: 'bg-amber-500',   label: 'Underused',      text: 'text-amber-300' },
-  no_contract: { bar: 'bg-un1t-mid',    label: 'No contract',    text: 'text-un1t-light' },
+  // Rostered during fully-approved leave — the loudest red, this
+  // is a roster bug, not a workload signal.
+  on_leave:    { bar: 'bg-red-600',     label: 'Rostered on leave', text: 'text-red-300' },
+  overtime:    { bar: 'bg-red-500',     label: 'Over hours',        text: 'text-red-300' },
+  on_target:   { bar: 'bg-emerald-500', label: 'On target',         text: 'text-emerald-300' },
+  underused:   { bar: 'bg-amber-500',   label: 'Underused',         text: 'text-amber-300' },
+  no_contract: { bar: 'bg-un1t-mid',    label: 'No contract',       text: 'text-un1t-light' },
 }
 
 function formatEur(amount) {
@@ -35,11 +38,12 @@ function monthLabel(iso) {
   return new Date(y, m - 1, 1).toLocaleDateString('en-IE', { month: 'long', year: 'numeric' })
 }
 
-export default function RosterSummaryPanel({ blocks, staff, weekStart, monthStart, location }) {
+export default function RosterSummaryPanel({ blocks, staff, weekStart, monthStart, location, timeOff }) {
   const week = summarizeWeek({
     blocks,
     staff,
     weekStart,
+    timeOff,
   })
   const month = summarizeMonth({
     blocks,
@@ -71,23 +75,45 @@ export default function RosterSummaryPanel({ blocks, staff, weekStart, monthStar
             {week.fte.map(row => {
               const style = STATUS_STYLES[row.status] || STATUS_STYLES.underused
               const pct = row.utilisation_pct
+              const onLeave = row.leave_hours > 0
               // Cap the visual bar at 100% so an over-hours coach
               // doesn't break the layout, but show the real number.
-              const barWidthPct = pct == null ? 0 : Math.min(pct, 100)
+              // Phase 6: when leave reduces effective contract,
+              // the bar's denominator is the EFFECTIVE figure
+              // (so 21h on a 30h contract w/ 9h leave reads as
+              // 100% — the coach is fully utilised against their
+              // available hours).
+              const barWidthPct = (() => {
+                if (pct == null) return 0
+                if (pct >= 999) return 100   // sentinel — rostered while on full leave
+                return Math.min(pct, 100)
+              })()
+              const denomLabel = row.contracted_hours > 0 && row.effective_contracted_hours !== row.contracted_hours
+                ? `${row.effective_contracted_hours}h (of ${row.contracted_hours}h)`
+                : row.contracted_hours > 0
+                  ? `${row.contracted_hours}h`
+                  : null
               return (
                 <div key={row.profile_id}>
-                  <div className="flex items-center justify-between text-xs mb-1">
+                  <div className="flex items-center justify-between text-xs mb-1 gap-2">
                     <span className="font-medium text-un1t-white truncate">{row.full_name}</span>
-                    <span className={`flex-shrink-0 ${style.text}`}>
+                    <span className={`flex-shrink-0 text-right ${style.text}`}>
                       {row.allocated_hours}h
-                      {row.contracted_hours > 0 && ` / ${row.contracted_hours}h`}
-                      {pct != null && ` · ${pct}%`}
+                      {denomLabel && ` / ${denomLabel}`}
+                      {pct != null && pct < 999 && ` · ${pct}%`}
                     </span>
                   </div>
                   <div className="h-1.5 bg-un1t-gray/40 rounded overflow-hidden">
                     <div className={`h-full ${style.bar}`} style={{ width: `${barWidthPct}%` }} />
                   </div>
-                  <div className={`text-[10px] mt-0.5 ${style.text}`}>{style.label}</div>
+                  <div className={`text-[10px] mt-0.5 flex items-center justify-between gap-2 ${style.text}`}>
+                    <span>{style.label}</span>
+                    {onLeave && (
+                      <span className="text-un1t-light">
+                        {row.leave_hours}h on leave this week
+                      </span>
+                    )}
+                  </div>
                 </div>
               )
             })}

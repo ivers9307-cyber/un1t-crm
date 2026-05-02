@@ -854,6 +854,7 @@ export default function ScheduleCalendar({ user }) {
       )}
 
       {/* Roster v2 phase 4 — week + month summary. Manager-only. */}
+      {/* Phase 6: passes `timeOff` so FTE utilisation is leave-aware. */}
       {!loading && isManager && (
         <RosterSummaryPanel
           blocks={blocks}
@@ -861,6 +862,7 @@ export default function ScheduleCalendar({ user }) {
           weekStart={weekStart}
           monthStart={monthStart}
           location={user.activeLocation}
+          timeOff={timeOff}
         />
       )}
 
