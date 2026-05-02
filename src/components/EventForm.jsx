@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { createBrowserClient } from '@/lib/supabase'
-import { Plus, Trash2, Bell, Mail, MessageCircle } from 'lucide-react'
+import { Plus, Trash2, Bell, Mail, MessageCircle, MessageSquare } from 'lucide-react'
 
 const DAYS = [
   { key: 'mon', label: 'Monday' },
@@ -62,6 +62,7 @@ export default function EventForm({ event, locationId }) {
   const [reminderEmailTemplateId, setReminderEmailTemplateId] = useState(event?.reminder_email_template_id || '')
   const [reminderEmailSubject, setReminderEmailSubject] = useState(event?.reminder_email_subject || '')
   const [reminderWaTemplateId, setReminderWaTemplateId] = useState(event?.reminder_whatsapp_template_id || '')
+  const [reminderSmsBody, setReminderSmsBody] = useState(event?.reminder_sms_body || '')
 
   // Template lists for the picker. Loaded once when reminders are
   // toggled on (skip the network round-trip when not needed).
@@ -159,6 +160,7 @@ export default function EventForm({ event, locationId }) {
       reminder_email_template_id: reminderEnabled && reminderChannel === 'email' ? (reminderEmailTemplateId || null) : null,
       reminder_email_subject: reminderEnabled && reminderChannel === 'email' ? (reminderEmailSubject || null) : null,
       reminder_whatsapp_template_id: reminderEnabled && reminderChannel === 'whatsapp' ? (reminderWaTemplateId || null) : null,
+      reminder_sms_body: reminderEnabled && reminderChannel === 'sms' ? (reminderSmsBody || null) : null,
       ...(locationId && !isEditing ? { location_id: locationId } : {}),
     }
 
@@ -465,6 +467,17 @@ export default function EventForm({ event, locationId }) {
                   >
                     <MessageCircle size={14} /> WhatsApp
                   </button>
+                  <button
+                    type="button"
+                    onClick={() => setReminderChannel('sms')}
+                    className={`flex-1 px-3 py-2 rounded-lg text-sm flex items-center justify-center gap-2 transition-colors ${
+                      reminderChannel === 'sms'
+                        ? 'bg-un1t-white text-un1t-black border border-un1t-white'
+                        : 'border border-un1t-gray text-un1t-light hover:text-un1t-white hover:border-un1t-mid'
+                    }`}
+                  >
+                    <MessageSquare size={14} /> SMS
+                  </button>
                 </div>
               </div>
             </div>
@@ -535,6 +548,35 @@ export default function EventForm({ event, locationId }) {
                   {' '}<code>{'{{2}}'}</code>=event name,
                   {' '}<code>{'{{3}}'}</code>=date + time,
                   {' '}<code>{'{{4}}'}</code>=date.
+                </p>
+              </div>
+            )}
+
+            {reminderChannel === 'sms' && (
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="block text-sm">SMS body</label>
+                  <span className={`text-[11px] ${reminderSmsBody.length > 160 ? 'text-amber-500' : 'text-un1t-light'}`}>
+                    {reminderSmsBody.length} chars
+                    {reminderSmsBody.length > 0 && (
+                      <> · {reminderSmsBody.length <= 160 ? 1 : Math.ceil(reminderSmsBody.length / 153)} segment{reminderSmsBody.length <= 160 ? '' : 's'}</>
+                    )}
+                  </span>
+                </div>
+                <textarea
+                  value={reminderSmsBody}
+                  onChange={e => setReminderSmsBody(e.target.value)}
+                  rows={4}
+                  maxLength={1600}
+                  placeholder="Hi {{first_name}}, just a reminder for {{event_name}} at {{event_time}}. See you at {{location_name}}."
+                  className="w-full bg-un1t-black border border-un1t-gray rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none resize-y"
+                />
+                <p className="text-[11px] text-un1t-mid mt-2">
+                  Merge tags: <code>{'{{first_name}}'}</code>, <code>{'{{name}}'}</code>,
+                  {' '}<code>{'{{event_name}}'}</code>, <code>{'{{event_time}}'}</code>,
+                  {' '}<code>{'{{location_name}}'}</code>.
+                  Sender ID is set per-location in <span className="text-un1t-light">Settings → Locations → SMS</span>.
+                  Single-segment SMS fits 160 chars; longer messages cost more (153 chars per concatenated segment).
                 </p>
               </div>
             )}

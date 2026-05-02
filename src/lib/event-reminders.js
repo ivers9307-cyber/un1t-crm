@@ -15,6 +15,7 @@
 import { createServerClient } from '@/lib/supabase'
 import { sendTransactionalEmail, applyMergeTags } from '@/lib/postmark'
 import { sendTemplateMessage, getOrCreateConversation } from '@/lib/whatsapp'
+import { sendLocationSms, TwilioError } from '@/lib/twilio'
 
 // ±1h covers Dublin DST drift cleanly. Operators set reminder time in
 // coarse units (24h, 2h) so a ±1h fire-time window is acceptable.
@@ -87,8 +88,8 @@ export async function runEventReminderSends() {
         booking_date, start_time,
         contacts (
           first_name, last_name, name, email, phone, wa_phone,
-          email_status, wa_status,
-          contact_preferences ( email_administrative, whatsapp_administrative )
+          email_status, wa_status, sms_status,
+          contact_preferences ( email_administrative, whatsapp_administrative, sms_administrative )
         )
       `)
       .eq('event_type_id', ev.id)
@@ -107,6 +108,8 @@ export async function runEventReminderSends() {
           outcome = await sendEmailReminder(db, booking, ev)
         } else if (ev.reminder_channel === 'whatsapp') {
           outcome = await sendWhatsappReminder(db, booking, ev)
+        } else if (ev.reminder_channel === 'sms') {
+          outcome = await sendSmsReminder(db, booking, ev)
         } else {
           outcome = { status: 'skipped', reason: 'no_channel' }
         }
@@ -258,12 +261,109 @@ async function sendWhatsappReminder(db, booking, ev) {
 }
 
 /**
+ * SMS event-reminder send (mig 063). The third channel after email
+ * and whatsapp. Same shape:
+ *   1. Reject if reminder_sms_body is missing on the event_type.
+ *   2. Skip if contact has sms_status = opted_out / invalid (not an
+ *      error — leave reminder_sent_at unset and let the runner stamp
+ *      it on the next tick to remove from the partial index).
+ *   3. Skip if contact_preferences.sms_administrative === false.
+ *   4. Apply merge tags (incl. event_name + event_time extras),
+ *      send via sendLocationSms using the event_type's location's
+ *      alpha sender ID.
+ *   5. Write an activities row of type='sms_sent' so the contact
+ *      timeline records it (same shape as broadcasts + ad-hoc).
+ */
+async function sendSmsReminder(db, booking, ev) {
+  if (!ev.reminder_sms_body) {
+    throw new Error('Event has reminder_channel=sms but no reminder_sms_body set')
+  }
+
+  const c = booking.contacts
+  if (c?.sms_status && c.sms_status !== 'active') {
+    return { status: 'skipped', reason: `sms_status=${c.sms_status}` }
+  }
+  const prefs = c?.contact_preferences
+  const adminConsent = Array.isArray(prefs)
+    ? prefs[0]?.sms_administrative
+    : prefs?.sms_administrative
+  if (adminConsent === false) {
+    return { status: 'skipped', reason: 'opted_out_administrative_sms' }
+  }
+
+  const phone = booking.contacts?.phone || booking.customer_phone
+  if (!phone) return { status: 'skipped', reason: 'no_phone_number' }
+
+  // Resolve the event_type's location for the alpha sender ID
+  // (mig 059). One round-trip per booking is fine — these crons are
+  // low-volume by design (10s of bookings per tick at most).
+  const { data: location } = await db
+    .from('locations')
+    .select('id, name, twilio_alpha_sender_id')
+    .eq('id', ev.location_id)
+    .single()
+  if (!location) {
+    throw new Error('Event location not found — cannot resolve SMS sender.')
+  }
+
+  // Contact-shaped object so applyMergeTagsWithExtras works whether
+  // there's a joined contact row or only the booking's customer_*
+  // fields. Mirrors the email reminder path.
+  const mergeContact = booking.contacts || {
+    name: booking.customer_name,
+    first_name: booking.customer_name?.split(' ')[0],
+    email: booking.customer_email,
+    phone: booking.customer_phone,
+  }
+
+  const extras = {
+    event_name: ev.name,
+    event_time: fmtBookingTime(booking.booking_date, booking.start_time),
+    location_name: location.name || '',
+  }
+
+  const renderedBody = applyMergeTagsWithExtras(ev.reminder_sms_body, mergeContact, extras)
+
+  let twilioResult
+  try {
+    twilioResult = await sendLocationSms({
+      location,
+      to: phone,
+      body: renderedBody,
+    })
+  } catch (e) {
+    const msg = e instanceof TwilioError
+      ? `Twilio ${e.code || e.status || ''}: ${e.message}`.trim()
+      : (e?.message || 'SMS send failed')
+    throw new Error(msg)
+  }
+
+  // Activity timeline entry. Same shape as broadcast + sequence-step
+  // + ad-hoc sends so the contact page renders consistently.
+  if (booking.contact_id) {
+    await db.from('activities').insert({
+      contact_id: booking.contact_id,
+      location_id: ev.location_id,
+      type: 'sms_sent',
+      subject: `SMS reminder: ${ev.name}`,
+      note: renderedBody,
+    })
+  }
+
+  return { status: 'sent', sid: twilioResult?.sid || null }
+}
+
+/**
  * Standard merge-tag substitution + a few event-reminder-specific
  * extras the regular postmark.applyMergeTags doesn't know about.
  */
 function applyMergeTagsWithExtras(html, contact, extras) {
   // Apply the standard tags first (handles {{first_name}} etc).
-  let out = applyMergeTags(html, contact, {})
+  // Pass extras.location_name through to applyMergeTags so the
+  // standard {{location_name}} tag works for SMS reminders too.
+  let out = applyMergeTags(html, contact, {
+    location_name: extras.location_name || '',
+  })
   out = out.replaceAll('{{event_name}}', extras.event_name || '')
   out = out.replaceAll('{{event_time}}', extras.event_time || '')
   return out
