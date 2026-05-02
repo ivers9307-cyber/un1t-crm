@@ -1,6 +1,6 @@
 // /communications — landing/hub.
 //
-// Combined snapshot of both email + WhatsApp activity for the
+// Combined snapshot of email, WhatsApp, and SMS activity for the
 // current location. Cards link into the sub-tabs. Stats only
 // show for channels the user has permission for.
 
@@ -8,7 +8,7 @@ import Link from 'next/link'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
-import { Mail, MessageCircle, Megaphone, Repeat, FileText, Inbox } from 'lucide-react'
+import { Mail, MessageCircle, MessageSquare, Megaphone, Repeat, FileText, Inbox } from 'lucide-react'
 
 export const dynamic = 'force-dynamic'
 
@@ -43,6 +43,7 @@ export default async function CommunicationsHub() {
   const user = await getCurrentUser()
   const canEmail = hasPermission(user, 'email')
   const canWhatsapp = hasPermission(user, 'whatsapp')
+  const canSms = hasPermission(user, 'sms')
 
   const db = createServerClient()
   const locationId = user.activeLocation?.id
@@ -80,6 +81,22 @@ export default async function CommunicationsHub() {
     draftBroadcasts = drafts || 0
   }
 
+  // SMS stats (mig 060)
+  let smsSent = 0, smsDraftBroadcasts = 0
+  if (canSms && locationId) {
+    const [{ count: sent }, { count: drafts }] = await Promise.all([
+      db.from('sms_broadcast_recipients')
+        .select('id', { count: 'exact', head: true })
+        .eq('status', 'sent'),
+      db.from('sms_broadcasts')
+        .select('id', { count: 'exact', head: true })
+        .eq('location_id', locationId)
+        .eq('status', 'draft'),
+    ])
+    smsSent = sent || 0
+    smsDraftBroadcasts = drafts || 0
+  }
+
   return (
     <div>
       {/* Stats row */}
@@ -96,6 +113,9 @@ export default async function CommunicationsHub() {
             <StatCard label="Unread WhatsApp" value={unreadConvos} icon={Inbox} accent={unreadConvos > 0 ? 'text-amber-400' : undefined} />
             {!canEmail && <StatCard label="Draft broadcasts" value={draftBroadcasts} icon={Megaphone} />}
           </>
+        )}
+        {canSms && (
+          <StatCard label="SMS sent" value={smsSent.toLocaleString()} icon={MessageSquare} accent={smsSent > 0 ? 'text-cyan-400' : undefined} />
         )}
       </div>
 
@@ -127,6 +147,15 @@ export default async function CommunicationsHub() {
             color="bg-blue-500/20 text-blue-400"
             title="Campaigns"
             desc="One-off email blasts"
+          />
+        )}
+        {canSms && (
+          <ActionCard
+            href="/communications/sms/broadcasts"
+            icon={MessageSquare}
+            color="bg-cyan-500/20 text-cyan-400"
+            title="SMS broadcasts"
+            desc={smsDraftBroadcasts > 0 ? `${smsDraftBroadcasts} draft${smsDraftBroadcasts === 1 ? '' : 's'} pending` : 'Freeform SMS to filtered audiences'}
           />
         )}
         {canWhatsapp && (
