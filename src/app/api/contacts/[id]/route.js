@@ -5,6 +5,7 @@ import { requireApiKey } from '@/lib/api-auth'
 import { validateBody } from '@/lib/validate'
 import { email, phone, leadSourceSchema, leadStatusSchema } from '@/lib/schemas'
 import { triggerSequencesForStatusChange, triggerSequencesForTagsAdded } from '@/lib/sequences'
+import { logPipelineEvent } from '@/lib/activity-events'
 
 const ContactUpdateSchema = z.object({
   name: z.string().min(1).max(200).optional(),
@@ -38,10 +39,12 @@ export async function PUT(request, { params }) {
   // Read the old row first so we can detect lead_status flips and
   // tag additions for the sequence triggers below. One extra round
   // trip on every contact update; cheap (PK lookup) and only on
-  // mutations, not reads.
+  // mutations, not reads. location_id is also pulled here so the
+  // activities phase-1 pipeline-event writer can stamp the right
+  // tenant on its timeline row.
   const { data: oldRow } = await db
     .from('contacts')
-    .select('lead_status, tags')
+    .select('lead_status, tags, location_id')
     .eq('id', id)
     .single()
 
@@ -66,6 +69,15 @@ export async function PUT(request, { params }) {
     if (typeof body.lead_status !== 'undefined' && body.lead_status !== oldRow.lead_status) {
       triggerSequencesForStatusChange(id, oldRow.lead_status, body.lead_status)
         .catch(e => console.warn(`[contacts.PUT] status_change trigger error for ${id}: ${e.message}`))
+
+      // Activities revamp phase 1 (mig 073) — log the stage change
+      // to the contact's timeline. Best-effort, fire-and-forget.
+      logPipelineEvent(db, {
+        contactId: id,
+        locationId: oldRow.location_id,
+        oldStatus: oldRow.lead_status,
+        newStatus: body.lead_status,
+      }).catch(e => console.warn(`[contacts.PUT] pipeline-event log failed for ${id}: ${e.message}`))
     }
     if (Array.isArray(body.tags)) {
       const oldTags = new Set(oldRow.tags || [])
