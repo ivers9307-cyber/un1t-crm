@@ -27,7 +27,7 @@ const allNav = [
   { href: '/dashboard',  label: 'Dashboard',   icon: LayoutDashboard, dashboardGroup: true },
   { href: '/pipeline',   label: 'Pipeline',    icon: Columns3,        permission: 'pipeline' },
   { href: '/contacts',   label: 'Contacts',    icon: Users,           permission: 'contacts' },
-  { href: '/activities', label: 'Activities',   icon: CheckSquare,     permission: 'activities' },
+  { href: '/activities', label: 'Tasks',        icon: CheckSquare,     permission: 'activities' },
   { href: '/events',     label: 'Events',       icon: Calendar,        permission: 'events' },
   { href: '/bookings',   label: 'Bookings',     icon: BookOpen,        permission: 'bookings' },
   // Single Communications entry replacing the old Email + WhatsApp.

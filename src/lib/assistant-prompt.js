@@ -52,11 +52,11 @@ Drag deals between stages. Click a deal to see details. Each deal is linked to a
 ### Contacts (/contacts)
 Central contact database. Each contact has: name, email, phone, lead source, lead status, Glofox member ID, trial credits remaining.
 - Lead sources: booking, meta, tiktok, walkin, referral, website, whatsapp
-- Contact detail page shows: timeline (all activities, emails, WhatsApp messages), notes, deals, bookings
+- Contact detail page shows: timeline (all events, SMS / emails / WhatsApp / pipeline changes), open tasks, notes, deals, bookings
 - Search contacts by name or email
 
-### Activities (/activities)
-Task management: calls, emails, meetings, tasks. Each activity has a due date, can be linked to a contact and/or deal, and marked as done.
+### Tasks (/activities)
+Manual task management: calls, emails, meetings, tasks. Each task has a due date, can be linked to a contact and/or deal, and marked as done. Auto-logged events (SMS sent, booking confirmed, pipeline stage change) are NOT shown here — they live on each contact's timeline. The route is still /activities for backward compatibility.
 
 ### Events (/events)
 Bookable event types (like "Free Consultation", "Trial Class"). Each event has:
