@@ -228,11 +228,14 @@ export default async function ContactDetailPage({ params }) {
             </div>
           )}
 
-          {/* Pending Activities */}
+          {/* Open tasks — manual to-dos only (mig 073).
+              Auto-logged events live on the timeline on the right. */}
           <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-4">
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light mb-3">Activities</h3>
-            {activities.filter(a => !a.done).length === 0 && <p className="text-sm text-un1t-mid">No pending activities</p>}
-            {activities.filter(a => !a.done).map(a => (
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light mb-3">Open tasks</h3>
+            {activities.filter(a => a.kind === 'task' && !a.done).length === 0 && (
+              <p className="text-sm text-un1t-mid">No open tasks</p>
+            )}
+            {activities.filter(a => a.kind === 'task' && !a.done).map(a => (
               <div key={a.id} className="flex items-start gap-2 py-2 border-b border-un1t-gray last:border-0">
                 <CheckSquare size={14} className="text-un1t-mid mt-0.5 shrink-0" />
                 <div>

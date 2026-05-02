@@ -1,3 +1,15 @@
+// /activities — Tasks list.
+//
+// Activities revamp phase 1 (mig 073). This page now filters
+// kind='task' so the upcoming/overdue/done filters mean
+// something. Auto-logged events (SMS sent, booking confirmed,
+// roster published) live on the contact-detail timeline; they
+// don't pollute this list.
+//
+// Phase 2 will add an "Add task" button at the top of this
+// page so it works as a standalone task tracker, not just a
+// contact-detail companion.
+
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { redirect } from 'next/navigation'
@@ -21,6 +33,7 @@ export default async function ActivitiesPage({ searchParams }) {
   let query = db.from('activities')
     .select('*, contacts(id, name)')
     .eq('location_id', user.activeLocation?.id)
+    .eq('kind', 'task')   // mig 073 — exclude auto-logged events
     .order('due_date', { ascending: true })
     .limit(100)
 
@@ -39,7 +52,13 @@ export default async function ActivitiesPage({ searchParams }) {
 
   return (
     <div className="p-6">
-      <h2 className="text-2xl font-bold mb-5">Activities</h2>
+      <div className="flex items-baseline justify-between mb-1">
+        <h2 className="text-2xl font-bold">Tasks</h2>
+        <span className="text-xs text-un1t-light">
+          Auto-logged events (SMS / bookings / rosters) live on each contact&apos;s timeline.
+        </span>
+      </div>
+      <p className="text-sm text-un1t-light mb-5">Manual follow-ups, calls and reminders.</p>
 
       <div className="flex gap-2 mb-5">
         {filters.map(f => (
@@ -59,7 +78,9 @@ export default async function ActivitiesPage({ searchParams }) {
 
       <div className="bg-un1t-dark border border-un1t-gray rounded-lg divide-y divide-un1t-gray">
         {(!activities || activities.length === 0) && (
-          <p className="text-sm text-un1t-mid text-center py-12">No activities found.</p>
+          <p className="text-sm text-un1t-mid text-center py-12">
+            No tasks {filter === 'all' ? 'yet' : `in ${filter}`}. Tasks get added from the contact detail page.
+          </p>
         )}
         {(activities || []).map(a => {
           const Icon = typeIcons[a.type] || CheckSquare
@@ -75,10 +96,10 @@ export default async function ActivitiesPage({ searchParams }) {
                 'bg-yellow-500/20'
               }`}>
                 <Icon size={14} className={
-                  a.type === 'call' ? 'text-blue-400' :
-                  a.type === 'email' ? 'text-purple-400' :
-                  a.type === 'meeting' ? 'text-green-400' :
-                  'text-yellow-400'
+                  a.type === 'call' ? 'text-blue-700' :
+                  a.type === 'email' ? 'text-purple-700' :
+                  a.type === 'meeting' ? 'text-green-700' :
+                  'text-yellow-700'
                 } />
               </div>
               <div className="flex-1 min-w-0">
@@ -92,7 +113,7 @@ export default async function ActivitiesPage({ searchParams }) {
               </div>
               <div className="text-right shrink-0">
                 {a.due_date && (
-                  <p className={`text-xs flex items-center gap-1 ${isOverdue ? 'text-red-400' : 'text-un1t-light'}`}>
+                  <p className={`text-xs flex items-center gap-1 ${isOverdue ? 'text-red-700 font-medium' : 'text-un1t-light'}`}>
                     <Clock size={10} /> {a.due_date} {a.due_time || ''}
                   </p>
                 )}

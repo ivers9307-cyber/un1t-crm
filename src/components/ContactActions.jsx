@@ -44,6 +44,7 @@ export default function ContactActions({ contactId, locationId, canSms = false, 
       contact_id: contactId,
       subject: fd.get('subject'),
       type: fd.get('type') || 'call',
+      kind: 'task',  // mig 073 — manual form always creates a task
       due_date: fd.get('due_date') || null,
       due_time: fd.get('due_time') || null,
       note: fd.get('note') || null,
