@@ -134,6 +134,7 @@ export default function ScheduleCalendar({ user }) {
   const [publishing, setPublishing] = useState(false)
   const [copying, setCopying] = useState(false)
   const [swapModal, setSwapModal] = useState(null) // legacy shift-shaped row to swap
+  const [publishModal, setPublishModal] = useState(null) // { periodStart, periodEnd }
   const [timeOff, setTimeOff] = useState([])
   const [holidays, setHolidays] = useState([])
 
@@ -256,21 +257,65 @@ export default function ScheduleCalendar({ user }) {
     }
   }
 
-  async function handlePublish() {
-    if (!confirm('Publish the roster for this week? Staff will be able to see their shifts.')) return
-    setPublishing(true)
-    await fetch('/api/schedule/shifts/publish', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        location_id: locationId,
-        start_date: formatDate(weekStart),
-        end_date: formatDate(weekEnd),
-        notify: true,
-      }),
+  // Phase 5 publish: opens the modal, which then calls
+  // submitPublish({ force_over_budget }). The modal handles the
+  // owner-confirms-over-budget retry flow itself.
+  function handlePublishClick() {
+    setPublishModal({
+      periodStart: formatDate(weekStart),
+      periodEnd: formatDate(weekEnd),
     })
-    setPublishing(false)
-    fetchData()
+  }
+
+  async function submitPublish({ periodStart, periodEnd, forceOverBudget }) {
+    setPublishing(true)
+    try {
+      const res = await fetch('/api/schedule/rosters', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          location_id: locationId,
+          period_start: periodStart,
+          period_end: periodEnd,
+          force_over_budget: !!forceOverBudget,
+        }),
+      })
+      const data = await res.json()
+      // 409 with `over_budget_confirmation_required` is not a
+      // real error — it's the modal's signal to show the
+      // confirmation step. The modal will call us back with
+      // forceOverBudget=true.
+      if (!data.success && data.error === 'over_budget_confirmation_required') {
+        return { confirmRequired: true, impact: data.impact }
+      }
+      if (!data.success) {
+        alert(data.error || 'Publish failed')
+        return { error: data.error }
+      }
+      // Tell mobile + staff the roster is live, same as before.
+      // The legacy /api/schedule/shifts/publish route handled
+      // notifications; we trigger that here as a follow-up so
+      // the comm pattern stays consistent.
+      if (!data.needs_approval) {
+        await fetch('/api/schedule/shifts/publish', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            location_id: locationId,
+            start_date: periodStart,
+            end_date: periodEnd,
+            notify: true,
+          }),
+        })
+      }
+      setPublishModal(null)
+      fetchData()
+      return data.needs_approval
+        ? { needsApproval: true }
+        : { published: true, impact: data.impact }
+    } finally {
+      setPublishing(false)
+    }
   }
 
   async function handleCopyWeek() {
@@ -402,7 +447,7 @@ export default function ScheduleCalendar({ user }) {
               </button>
               {viewType === 'week' && (
                 <button
-                  onClick={handlePublish}
+                  onClick={handlePublishClick}
                   disabled={publishing}
                   className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white transition-colors disabled:opacity-50"
                 >
@@ -847,6 +892,18 @@ export default function ScheduleCalendar({ user }) {
           onClose={() => setSwapModal(null)}
         />
       )}
+
+      {/* Publish Roster Modal — phase 5 */}
+      {publishModal && (
+        <PublishRosterModal
+          locationId={locationId}
+          isOwner={user.role === 'master' || user.role === 'owner'}
+          period={publishModal}
+          onSubmit={submitPublish}
+          onClose={() => setPublishModal(null)}
+          publishing={publishing}
+        />
+      )}
     </div>
   )
 }
@@ -941,6 +998,181 @@ function CreateBlockModal({ date, templates, onCreate, onClose }) {
         >
           {saving ? 'Adding...' : 'Add Slot'}
         </button>
+      </div>
+    </div>
+  )
+}
+
+// Roster v2 phase 5 — publish modal with budget impact preview
+// + owner-confirm-over-budget retry flow.
+//
+// Open lifecycle:
+//   1. Component mounts with the period (Mon-Sun by default).
+//      It fetches the budget impact via a "dry run" — POST to
+//      /api/schedule/rosters with force_over_budget=false; the
+//      server may return 409 with an `impact` payload, which we
+//      render verbatim. (Avoids replicating the cost math
+//      client-side.)
+//      We do this lazily on a hook in render so the user sees
+//      a "calculating…" state.
+//   2. Operator clicks Publish:
+//      - Under budget OR owner-confirms-over → submitPublish
+//        with force=true → roster created, modal closes.
+//      - Manager clicks "Request approval" → submitPublish
+//        with force=false → status='draft', modal shows
+//        approval-pending message, owner is emailed.
+function PublishRosterModal({ locationId, isOwner, period, onSubmit, onClose, publishing }) {
+  const [impact, setImpact] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [submitResult, setSubmitResult] = useState(null)
+
+  useEffect(() => {
+    let cancelled = false
+    async function loadPreview() {
+      try {
+        const res = await fetch('/api/schedule/rosters', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            location_id: locationId,
+            period_start: period.periodStart,
+            period_end: period.periodEnd,
+            dry_run: true,
+          }),
+        })
+        const data = await res.json()
+        if (cancelled) return
+        if (!data.success) {
+          setSubmitResult({ error: data.error || 'Failed to load preview' })
+        } else {
+          setImpact(data.impact)
+        }
+      } catch (e) {
+        if (!cancelled) setSubmitResult({ error: e.message })
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    }
+    loadPreview()
+    return () => { cancelled = true }
+  }, [locationId, period.periodStart, period.periodEnd])
+
+  async function handleConfirm() {
+    const result = await onSubmit({
+      periodStart: period.periodStart,
+      periodEnd: period.periodEnd,
+      forceOverBudget: true,
+    })
+    if (result?.needsApproval) {
+      setSubmitResult({ needsApproval: true })
+    }
+  }
+
+  const overBudget = impact?.overBudget
+  const fmtEur = n => n == null
+    ? '—'
+    : new Intl.NumberFormat('en-IE', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 }).format(n)
+
+  return (
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={onClose}>
+      <div className="bg-un1t-dark border border-un1t-gray rounded-xl p-6 w-full max-w-lg" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="font-semibold">Publish roster</h3>
+          <button onClick={onClose} className="text-un1t-light hover:text-un1t-white"><X size={18} /></button>
+        </div>
+
+        <div className="bg-black/30 rounded-lg p-3 mb-4 text-sm">
+          <div className="text-un1t-light text-xs">Period</div>
+          <div className="font-medium">{period.periodStart} – {period.periodEnd}</div>
+        </div>
+
+        {loading && (
+          <div className="text-center py-6 text-sm text-un1t-light">Calculating budget impact…</div>
+        )}
+
+        {!loading && submitResult?.needsApproval && (
+          <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-4 text-sm">
+            <div className="font-medium text-amber-200 mb-1">Approval requested</div>
+            <p className="text-amber-100/80 text-xs">
+              The roster is held in draft. Owners at this location have been emailed and can approve it from <span className="font-medium">Schedule → Approvals</span>. Staff won&apos;t see their shifts until an owner signs off.
+            </p>
+          </div>
+        )}
+
+        {!loading && submitResult?.error && (
+          <div className="rounded-lg border border-red-500/40 bg-red-500/10 p-4 text-sm text-red-200">
+            {submitResult.error}
+          </div>
+        )}
+
+        {!loading && impact && !submitResult && (
+          <>
+            <div className="grid grid-cols-2 gap-3 mb-4 text-sm">
+              <div className="rounded-lg border border-un1t-gray p-3">
+                <div className="text-[10px] uppercase tracking-wider text-un1t-light">Blocks in period</div>
+                <div className="text-xl font-semibold">{impact.blockCount}</div>
+              </div>
+              <div className="rounded-lg border border-un1t-gray p-3">
+                <div className="text-[10px] uppercase tracking-wider text-un1t-light">Period contractor cost</div>
+                <div className="text-xl font-semibold">{fmtEur(impact.periodProjectedEur)}</div>
+              </div>
+              <div className="rounded-lg border border-un1t-gray p-3 col-span-2">
+                <div className="text-[10px] uppercase tracking-wider text-un1t-light">Month total after publish (vs budget)</div>
+                <div className={`text-xl font-semibold ${overBudget ? 'text-red-300' : 'text-un1t-white'}`}>
+                  {fmtEur(impact.monthProjectedTotalEur)}
+                  <span className="text-xs text-un1t-light font-normal ml-2">
+                    of {fmtEur(impact.monthlyBudgetEur)}
+                  </span>
+                </div>
+                {overBudget && (
+                  <div className="text-xs text-red-300 mt-1">
+                    {fmtEur(impact.overrunEur)} over the monthly contractor budget.
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {overBudget && !isOwner && (
+              <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-100/90 mb-4">
+                Publishing this will exceed the monthly contractor budget. As a manager, you can&apos;t publish over budget directly — clicking below will create a draft and email the owners for approval.
+              </div>
+            )}
+
+            {overBudget && isOwner && (
+              <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-100/90 mb-4">
+                As an owner, you can publish over budget. Your approval will be recorded against the roster row.
+              </div>
+            )}
+
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={onClose}
+                className="px-3 py-2 rounded-md text-sm border border-un1t-gray text-un1t-light hover:text-un1t-white hover:border-un1t-white/30"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleConfirm}
+                disabled={publishing}
+                className={`px-3 py-2 rounded-md text-sm font-medium text-white disabled:opacity-50 ${
+                  overBudget && isOwner
+                    ? 'bg-red-600 hover:bg-red-500'
+                    : overBudget
+                      ? 'bg-amber-600 hover:bg-amber-500'
+                      : 'bg-blue-600 hover:bg-blue-500'
+                }`}
+              >
+                {publishing
+                  ? 'Working…'
+                  : overBudget && isOwner
+                    ? `Publish €${Math.round(impact.overrunEur)} over budget`
+                    : overBudget
+                      ? 'Request owner approval'
+                      : 'Publish'}
+              </button>
+            </div>
+          </>
+        )}
       </div>
     </div>
   )
