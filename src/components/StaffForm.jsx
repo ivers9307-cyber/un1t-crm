@@ -19,7 +19,6 @@ import {
 const defaultPermissions = defaultPermissionsByRole.staff
 const defaultMobilePermissions = defaultMobilePermissionsByRole.staff
 
-const ROLE_PRECEDENCE = { owner: 1, manager: 2, head_coach: 3, staff: 4 }
 const ROLE_LABELS = {
   owner: 'Owner / Studio Admin',
   manager: 'Manager',
@@ -63,16 +62,41 @@ export default function StaffForm({
     [callerOwnerLocationIds]
   )
 
+  // Build a populated permissions blob for an assignment of `role`.
+  // Each new assignment starts at the role default; admin can flip
+  // individual toggles afterwards. The full blob is sent on save so
+  // the per-location override is explicit (even if it matches the
+  // default at write time — keeps StaffForm's UX simple).
+  function defaultPermsForRole(role) {
+    const web = defaultPermissionsByRole[role] || defaultPermissions
+    const mob = defaultMobilePermissionsByRole[role] || defaultMobilePermissions
+    return { ...web, mobile: { ...mob } }
+  }
+
+  // Hydrate per-assignment permissions from the staff payload. If the
+  // server returned the assignment with a non-empty permissions blob,
+  // use that. Empty {} → fall back to role defaults so toggles render
+  // truthfully (admin sees what the user effectively gets, can flip
+  // individual ones to override).
+  const initialAssignments = (staff?.assignments || []).map(a => ({
+    ...a,
+    permissions: a.permissions && Object.keys(a.permissions).length > 0
+      ? {
+          ...a.permissions,
+          mobile: { ...(a.permissions.mobile || defaultMobilePermissionsByRole[a.role] || defaultMobilePermissions) },
+        }
+      : defaultPermsForRole(a.role),
+  }))
+
   const [form, setForm] = useState({
     full_name: staff?.full_name || '',
     email: staff?.email || '',
     password: '',
     is_master: !!staff?.is_master,
     active: staff?.active ?? true,
-    // assignments: [{ location_id, role, is_default, unifi_door_access }]
-    assignments: staff?.assignments || [],
-    permissions: staff?.permissions || { ...defaultPermissions, mobile: { ...defaultMobilePermissions } },
-    mobile_permissions: staff?.permissions?.mobile || { ...defaultMobilePermissions },
+    // assignments: [{ location_id, role, is_default, unifi_door_access, permissions }]
+    // permissions is per-assignment (mig 058) — see defaultPermsForRole above.
+    assignments: initialAssignments,
     employment_type: staff?.employment_type || 'fte',
     annual_salary: staff?.annual_salary || '',
     hourly_rate: staff?.hourly_rate || '',
@@ -82,6 +106,21 @@ export default function StaffForm({
   })
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
+
+  // Which assignment's permissions are currently being edited. Set
+  // to the first editable assignment's location_id by default; the
+  // tab strip above the permissions sections lets the admin switch.
+  const firstEditableId = (form.assignments.find(a => callerScope.has(a.location_id)) || form.assignments[0])?.location_id
+  const [selectedPermLocationId, setSelectedPermLocationId] = useState(firstEditableId || null)
+  // Keep selectedPermLocationId in sync if assignments change underneath us.
+  if (selectedPermLocationId && !form.assignments.some(a => a.location_id === selectedPermLocationId)) {
+    const fallback = form.assignments[0]?.location_id || null
+    if (fallback !== selectedPermLocationId) setSelectedPermLocationId(fallback)
+  }
+  const selectedAssignment = form.assignments.find(a => a.location_id === selectedPermLocationId) || null
+  const selectedLocationName = locations.find(l => l.id === selectedPermLocationId)?.name || ''
+  const selectedPerms = selectedAssignment?.permissions || defaultPermsForRole('staff')
+  const selectedMobilePerms = selectedPerms.mobile || {}
 
   // Computed view of the assignments — split into editable (caller can
   // touch) and read-only (caller is not owner at that location, so the
@@ -95,12 +134,6 @@ export default function StaffForm({
   const addableLocations = locations
     .filter(l => callerScope.has(l.id) && !assignedIds.has(l.id))
 
-  // Highest role across editable assignments — drives the
-  // role-default reset for permissions when assignments change.
-  const highestEditableRole = editableAssignments
-    .map(a => a.role)
-    .sort((a, b) => (ROLE_PRECEDENCE[a] || 99) - (ROLE_PRECEDENCE[b] || 99))[0]
-
   function isUnifiConfigured(loc) {
     const cfg = loc?.settings?.unifi || {}
     return Boolean(
@@ -109,60 +142,120 @@ export default function StaffForm({
     )
   }
 
-  function disabledAtLocationNames(key) {
-    if (!isFeatureGatedByLocation(key)) return []
-    return locations
-      .filter(l => assignedIds.has(l.id) && l.features?.[key] === false)
-      .map(l => l.name)
-  }
-
-  function togglePermission(key) {
+  // All toggle helpers now operate on the SELECTED assignment's
+  // permissions (per-assignment, mig 058). Switching the tab strip
+  // above the permissions sections rebinds the helpers to a
+  // different assignment — same toggle logic, different scope.
+  function patchSelectedPerms(patch) {
+    if (!selectedPermLocationId) return
     setForm(prev => ({
       ...prev,
-      permissions: { ...prev.permissions, [key]: !prev.permissions[key] },
+      assignments: prev.assignments.map(a =>
+        a.location_id === selectedPermLocationId
+          ? { ...a, permissions: { ...a.permissions, ...patch } }
+          : a
+      ),
     }))
+  }
+  function patchSelectedMobilePerms(patch) {
+    if (!selectedPermLocationId) return
+    setForm(prev => ({
+      ...prev,
+      assignments: prev.assignments.map(a =>
+        a.location_id === selectedPermLocationId
+          ? {
+              ...a,
+              permissions: {
+                ...a.permissions,
+                mobile: { ...(a.permissions?.mobile || {}), ...patch },
+              },
+            }
+          : a
+      ),
+    }))
+  }
+  function togglePermission(key) {
+    patchSelectedPerms({ [key]: !selectedPerms[key] })
   }
   function toggleMobilePermission(key) {
-    setForm(prev => ({
-      ...prev,
-      mobile_permissions: { ...prev.mobile_permissions, [key]: !prev.mobile_permissions[key] },
-    }))
+    patchSelectedMobilePerms({ [key]: !selectedMobilePerms[key] })
   }
   function setAllMobilePermissions(on) {
     const perms = {}
     allMobilePermissions.forEach(p => { perms[p.key] = on })
-    setForm(prev => ({ ...prev, mobile_permissions: perms }))
+    if (!selectedPermLocationId) return
+    setForm(prev => ({
+      ...prev,
+      assignments: prev.assignments.map(a =>
+        a.location_id === selectedPermLocationId
+          ? { ...a, permissions: { ...a.permissions, mobile: perms } }
+          : a
+      ),
+    }))
   }
   function setAllPermissions(on) {
     const perms = {}
     allPermissions.forEach(p => { perms[p.key] = on })
-    setForm(prev => ({ ...prev, permissions: perms }))
-  }
-
-  // Reset role-default permissions when the highest editable role
-  // changes (e.g. promoting a staff to manager grants manager defaults).
-  // We track the "previous highest role" via a useState shadow so the
-  // user's manual permission tweaks aren't overwritten on every render.
-  const [lastHighestRole, setLastHighestRole] = useState(highestEditableRole)
-  if (highestEditableRole && highestEditableRole !== lastHighestRole) {
-    setLastHighestRole(highestEditableRole)
+    if (!selectedPermLocationId) return
     setForm(prev => ({
       ...prev,
-      permissions: defaultPermissionsByRole[highestEditableRole] || defaultPermissions,
-      mobile_permissions: defaultMobilePermissionsByRole[highestEditableRole] || defaultMobilePermissions,
+      assignments: prev.assignments.map(a =>
+        a.location_id === selectedPermLocationId
+          ? {
+              ...a,
+              permissions: { ...perms, mobile: a.permissions?.mobile || {} },
+            }
+          : a
+      ),
     }))
+  }
+
+  // Reset an assignment's permissions to the role default whenever
+  // its role changes (e.g. promoting a staff to manager grants
+  // manager defaults at THAT location only). Per-assignment shadow
+  // map keyed by location_id so manual tweaks aren't overwritten on
+  // every render.
+  const [lastRoleByLocation, setLastRoleByLocation] = useState(() => {
+    const m = {}
+    for (const a of (staff?.assignments || [])) m[a.location_id] = a.role
+    return m
+  })
+  for (const a of form.assignments) {
+    if (a.role && a.role !== lastRoleByLocation[a.location_id]) {
+      // Schedule the reset for next render to avoid mid-render mutation
+      // of two pieces of state. Functional setState in a microtask.
+      Promise.resolve().then(() => {
+        setLastRoleByLocation(prev => ({ ...prev, [a.location_id]: a.role }))
+        setForm(prev => ({
+          ...prev,
+          assignments: prev.assignments.map(x =>
+            x.location_id === a.location_id
+              ? { ...x, permissions: defaultPermsForRole(a.role) }
+              : x
+          ),
+        }))
+      })
+    }
   }
 
   function addAssignment(locationId) {
     setForm(prev => {
+      const role = allowedRoles.includes('staff') ? 'staff' : allowedRoles[0]
       const next = [...prev.assignments, {
         location_id: locationId,
-        role: allowedRoles.includes('staff') ? 'staff' : allowedRoles[0],
+        role,
         is_default: prev.assignments.length === 0,
         unifi_door_access: false,
+        // Per-location permissions (mig 058) — start at the role
+        // default for the chosen role; admin can flip individual
+        // toggles afterwards via the permissions tab strip.
+        permissions: defaultPermsForRole(role),
       }]
       return { ...prev, assignments: next }
     })
+    // Auto-select the newly-added assignment so the permissions
+    // tab strip surfaces it without an extra click.
+    setSelectedPermLocationId(locationId)
   }
 
   function removeAssignment(locationId) {
@@ -212,16 +305,20 @@ export default function StaffForm({
     const url = isEdit ? `/api/staff/${staff.id}` : '/api/staff'
     const method = isEdit ? 'PUT' : 'POST'
 
-    const mergedPermissions = {
-      ...form.permissions,
-      mobile: { ...form.mobile_permissions },
-    }
-
+    // Per-location permissions (mig 058). Each assignment carries its
+    // own permissions blob (web flat + mobile sub-object). The server
+    // writes them to profile_locations.permissions; profile.permissions
+    // is no longer read by hasPermission().
     const payload = {
       full_name: form.full_name,
       is_master: form.is_master,
-      assignments: form.assignments,
-      permissions: mergedPermissions,
+      assignments: form.assignments.map(a => ({
+        location_id: a.location_id,
+        role: a.role,
+        is_default: !!a.is_default,
+        unifi_door_access: !!a.unifi_door_access,
+        permissions: a.permissions || {},
+      })),
       active: form.active,
       employment_type: form.employment_type,
       annual_salary: form.employment_type === 'fte' && form.annual_salary ? Number(form.annual_salary) : null,
@@ -614,52 +711,101 @@ export default function StaffForm({
         )}
       </div>
 
-      {/* Permissions (web sidebar) */}
-      <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5">
-        <div className="flex items-center justify-between mb-3">
-          <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light">Feature Permissions</h3>
-          <div className="flex gap-2">
-            <button type="button" onClick={() => setAllPermissions(true)} className="text-xs text-blue-400 hover:text-blue-300">All on</button>
-            <span className="text-un1t-mid">·</span>
-            <button type="button" onClick={() => setAllPermissions(false)} className="text-xs text-blue-400 hover:text-blue-300">All off</button>
+      {/* Per-location permissions tab strip (mig 058). Lets the
+          admin pick WHICH assignment they're editing — permissions
+          are per-location now, so there's one toggle list per
+          location the user is assigned to. */}
+      {form.assignments.length > 0 && (
+        <div className="bg-un1t-dark border border-un1t-gray rounded-lg overflow-hidden">
+          <div className="px-5 pt-4 pb-2 border-b border-un1t-gray">
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light">Feature Permissions</h3>
+            <p className="text-xs text-un1t-light mt-1">
+              Per-location permissions — pick a studio below to set what this person sees there.
+              Empty toggles fall back to the role default for their role at that studio.
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-1 px-3 pt-3">
+            {form.assignments.map(a => {
+              const loc = locations.find(l => l.id === a.location_id)
+              const isSelected = a.location_id === selectedPermLocationId
+              const isReadOnly = !callerScope.has(a.location_id)
+              return (
+                <button
+                  key={a.location_id}
+                  type="button"
+                  onClick={() => setSelectedPermLocationId(a.location_id)}
+                  className={`px-3 py-1.5 text-xs rounded-md border transition-colors ${
+                    isSelected
+                      ? 'bg-un1t-white text-un1t-black border-un1t-white font-medium'
+                      : 'bg-un1t-black text-un1t-light border-un1t-gray hover:text-un1t-white'
+                  }`}
+                  title={isReadOnly ? "You don't manage this location — view only" : ''}
+                >
+                  {loc?.name || 'Unknown'}
+                  <span className="ml-1.5 text-[10px] opacity-70 uppercase">{a.role}</span>
+                </button>
+              )
+            })}
+          </div>
+
+          {/* Web sidebar permissions for the selected assignment */}
+          <div className="px-5 pt-4 pb-3">
+            <div className="flex items-center justify-between mb-3">
+              <h4 className="text-xs font-semibold uppercase tracking-wider text-un1t-light">
+                Web sidebar — {selectedLocationName || '(pick a location)'}
+              </h4>
+              <div className="flex gap-2">
+                <button type="button" onClick={() => setAllPermissions(true)} className="text-xs text-blue-400 hover:text-blue-300">All on</button>
+                <span className="text-un1t-mid">·</span>
+                <button type="button" onClick={() => setAllPermissions(false)} className="text-xs text-blue-400 hover:text-blue-300">All off</button>
+              </div>
+            </div>
+            <div className="space-y-2">
+              {allPermissions.map(perm => {
+                // Only flag the LOCATION gate at the currently
+                // selected location — toggling a per-location
+                // override has no effect if the location itself
+                // disabled the feature.
+                const selectedLoc = locations.find(l => l.id === selectedPermLocationId)
+                const offHere = isFeatureGatedByLocation(perm.key) && selectedLoc?.features?.[perm.key] === false
+                return (
+                  <label key={perm.key} className={`flex items-center justify-between py-1.5 cursor-pointer ${offHere ? 'opacity-60' : ''}`}>
+                    <span className="text-sm">
+                      {perm.label}
+                      {offHere && (
+                        <span className="block text-[11px] text-amber-500 mt-0.5">
+                          Off at this location — toggle has no effect until enabled in Location Features
+                        </span>
+                      )}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => togglePermission(perm.key)}
+                      disabled={!selectedPermLocationId}
+                      className={`w-10 h-5 rounded-full transition-colors shrink-0 ${selectedPerms[perm.key] ? 'bg-green-500' : 'bg-un1t-gray'} ${!selectedPermLocationId ? 'opacity-50 cursor-not-allowed' : ''}`}
+                      title={offHere ? `Disabled at this location. Edit Location Features to enable.` : ''}
+                    >
+                      <div className={`w-4 h-4 rounded-full bg-white transition-transform ${selectedPerms[perm.key] ? 'translate-x-5' : 'translate-x-0.5'}`} />
+                    </button>
+                  </label>
+                )
+              })}
+            </div>
           </div>
         </div>
-        <p className="text-xs text-un1t-light mb-2">Controls what this person sees in the web sidebar. User-level — applies at every studio they're assigned to.</p>
-        <div className="space-y-2">
-          {allPermissions.map(perm => {
-            const offAt = disabledAtLocationNames(perm.key)
-            const offAtAssigned = offAt.length > 0
-            return (
-              <label key={perm.key} className={`flex items-center justify-between py-1.5 cursor-pointer ${offAtAssigned ? 'opacity-60' : ''}`}>
-                <span className="text-sm">
-                  {perm.label}
-                  {offAtAssigned && (
-                    <span className="block text-[11px] text-amber-500 mt-0.5">
-                      Off at location: {offAt.join(', ')} — toggle has no effect there
-                    </span>
-                  )}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => togglePermission(perm.key)}
-                  className={`w-10 h-5 rounded-full transition-colors shrink-0 ${form.permissions[perm.key] ? 'bg-green-500' : 'bg-un1t-gray'}`}
-                  title={offAtAssigned ? `Disabled at ${offAt.join(', ')}. Edit the location's Features section to enable.` : ''}
-                >
-                  <div className={`w-4 h-4 rounded-full bg-white transition-transform ${form.permissions[perm.key] ? 'translate-x-5' : 'translate-x-0.5'}`} />
-                </button>
-              </label>
-            )
-          })}
-        </div>
-      </div>
+      )}
 
-      {/* Mobile Features */}
+      {/* Mobile Features (per-location, scoped to the currently
+          selected tab above). */}
+      {form.assignments.length > 0 && (
       <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5">
         <div className="flex items-center justify-between mb-3">
           <div>
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light">Mobile App Features</h3>
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light">
+              Mobile App Features — {selectedLocationName || '(pick a location)'}
+            </h3>
             <p className="text-xs text-un1t-light mt-1">
-              Controls what this person sees in the iOS app (independent of web sidebar). Notification rows are silenced if Push Notifications is off.
+              Controls what this person sees in the iOS app at the selected studio. Notification rows are silenced if Push Notifications is off.
             </p>
           </div>
           <div className="flex gap-2 shrink-0">
@@ -671,35 +817,37 @@ export default function StaffForm({
         <div className="space-y-2">
           {allMobilePermissions.map(perm => {
             const isNotifyRow = perm.key.startsWith('notify_')
-            const dim = isNotifyRow && !form.mobile_permissions.push_notifications
-            const offAt = disabledAtLocationNames(perm.key)
-            const offAtAssigned = offAt.length > 0
+            const dim = isNotifyRow && !selectedMobilePerms.push_notifications
+            const selectedLoc = locations.find(l => l.id === selectedPermLocationId)
+            const offHere = isFeatureGatedByLocation(perm.key) && selectedLoc?.features?.[perm.key] === false
             return (
-              <label key={perm.key} className={`flex items-center justify-between py-1.5 cursor-pointer ${dim || offAtAssigned ? 'opacity-60' : ''}`}>
+              <label key={perm.key} className={`flex items-center justify-between py-1.5 cursor-pointer ${dim || offHere ? 'opacity-60' : ''}`}>
                 <span className="text-sm">
                   {perm.label}
                   {perm.hint && (
                     <span className="block text-xs text-un1t-light">{perm.hint}</span>
                   )}
-                  {offAtAssigned && (
+                  {offHere && (
                     <span className="block text-[11px] text-amber-500 mt-0.5">
-                      Off at location: {offAt.join(', ')} — toggle has no effect there
+                      Off at this location — toggle has no effect until enabled in Location Features
                     </span>
                   )}
                 </span>
                 <button
                   type="button"
                   onClick={() => toggleMobilePermission(perm.key)}
-                  className={`w-10 h-5 rounded-full transition-colors shrink-0 ${form.mobile_permissions[perm.key] ? 'bg-green-500' : 'bg-un1t-gray'}`}
-                  title={offAtAssigned ? `Disabled at ${offAt.join(', ')}. Edit the location's Features section to enable.` : ''}
+                  disabled={!selectedPermLocationId}
+                  className={`w-10 h-5 rounded-full transition-colors shrink-0 ${selectedMobilePerms[perm.key] ? 'bg-green-500' : 'bg-un1t-gray'} ${!selectedPermLocationId ? 'opacity-50 cursor-not-allowed' : ''}`}
+                  title={offHere ? `Disabled at this location. Edit Location Features to enable.` : ''}
                 >
-                  <div className={`w-4 h-4 rounded-full bg-white transition-transform ${form.mobile_permissions[perm.key] ? 'translate-x-5' : 'translate-x-0.5'}`} />
+                  <div className={`w-4 h-4 rounded-full bg-white transition-transform ${selectedMobilePerms[perm.key] ? 'translate-x-5' : 'translate-x-0.5'}`} />
                 </button>
               </label>
             )
           })}
         </div>
       </div>
+      )}
 
       <button
         type="submit"

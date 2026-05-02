@@ -70,12 +70,20 @@ export const employmentTypeSchema = z.enum(['fte', 'contractor', 'casual'])
 export const locationRoleSchema = z.enum(['owner', 'manager', 'head_coach', 'staff'])
 
 // Per-location assignment shape used by the staff API. One row per
-// location the user belongs to, each carrying its own role + flags.
+// location the user belongs to, each carrying its own role, flags,
+// and (mig 058) its own permission overrides.
 export const assignmentSchema = z.object({
   location_id: uuidLike,
   role: locationRoleSchema,
   is_default: z.boolean().optional(),
   unifi_door_access: z.boolean().optional(),
+  // Per-location user permission overrides (mig 058). Empty `{}` =
+  // "use the role default at this assignment's role". Top-level
+  // keys mirror WEB_PERMISSIONS; nested `mobile` sub-object mirrors
+  // MOBILE_PERMISSIONS. Validation is intentionally loose so adding
+  // a new permission key isn't a schema change here — same shape as
+  // permissionsSchema below.
+  permissions: z.record(z.string(), z.unknown()).optional(),
 })
 
 // Role groups for authz checks. Reference these instead of inlining

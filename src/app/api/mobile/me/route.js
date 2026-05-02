@@ -3,9 +3,8 @@
 // Called by the iOS app immediately after login to retrieve everything it
 // needs in a single round-trip:
 //   - Profile (id, name, role)
-//   - Assigned locations + active location
-//   - permissions.mobile.* (which tabs to show)
-//   - permissions.* (web flags, in case the app ever surfaces them)
+//   - Assigned locations + active location, each with its per-location
+//     permissions blob (mig 058)
 //
 // Auth: Supabase JWT in Authorization header (handled by middleware +
 // getCurrentUser()'s Bearer fallback).
@@ -28,6 +27,11 @@ export async function GET() {
   // `role` here is the active-location role (mig 051) — switching
   // active location via the x-active-location header on the next
   // request flips it.
+  //
+  // `permissions` is no longer returned at the profile level (mig
+  // 058). The user-override layer is per-location now and lives on
+  // each location's assignment row, returned alongside the location
+  // below.
   const safeProfile = {
     id: user.id,
     full_name: user.full_name,
@@ -35,12 +39,17 @@ export async function GET() {
     role: user.role,
     isMaster: !!user.isMaster,
     avatar_url: user.avatar_url || null,
-    permissions: user.permissions || {},
     // Per-location roles (mig 051). The mobile app reads this when
     // the user switches active location locally, so role-default
     // resolution can flip without a /me refetch.
     rolesByLocation: user.rolesByLocation || {},
   }
+
+  // Per-location permissions (mig 058) — merge each location with
+  // its assignment's permissions blob so the mobile app's canMobile
+  // / canDashboard helpers can resolve per-location overrides
+  // without an additional round-trip.
+  const assignmentsByLocation = user.assignmentsByLocation || {}
 
   return NextResponse.json({
     success: true,
@@ -56,6 +65,10 @@ export async function GET() {
         // off at the user's active location is hidden from every
         // user there regardless of role default.
         features: l.features || {},
+        // Per-location user override (migration 058). Empty `{}` →
+        // role default applies. Master users have empty here too
+        // and short-circuit to true after the location gate.
+        permissions: assignmentsByLocation[l.id]?.permissions || {},
       })),
       activeLocation: user.activeLocation
         ? {
@@ -64,6 +77,7 @@ export async function GET() {
             slug: user.activeLocation.slug,
             country: user.activeLocation.country || null,
             features: user.activeLocation.features || {},
+            permissions: user.activeAssignment?.permissions || {},
           }
         : null,
     },

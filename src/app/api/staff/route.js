@@ -200,6 +200,9 @@ export async function POST(request) {
       // On create we just persist the requested state and let the next
       // PUT do the door provisioning.
       unifi_door_access: !!a.unifi_door_access,
+      // Per-location user overrides (mig 058). Empty {} → role
+      // defaults apply at this assignment's role.
+      permissions: a.permissions || {},
     }))
     const { error: insertError } = await db.from('profile_locations').insert(links)
     if (insertError) {

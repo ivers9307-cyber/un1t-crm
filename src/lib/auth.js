@@ -274,6 +274,27 @@ export const getCurrentUser = cache(async function getCurrentUser() {
     activeLocationId: activeLocation?.id,
   })
 
+  // Per-location user permission overrides (mig 058). The user-level
+  // override layer moved off profile.permissions (profile-wide) onto
+  // profile_locations.permissions (per-assignment) so an owner at
+  // one location and staff at another doesn't get owner-level toggles
+  // leaked to the staff location. hasPermission() reads
+  // `activeAssignment.permissions` at tier 2 instead of the old
+  // `profile.permissions`.
+  const assignmentsByLocation = {}
+  for (const link of (locationLinks || [])) {
+    if (!link?.location_id) continue
+    assignmentsByLocation[link.location_id] = {
+      role: link.role,
+      permissions: link.permissions || {},
+      is_default: !!link.is_default,
+      unifi_door_access: !!link.unifi_door_access,
+    }
+  }
+  const activeAssignment = activeLocation?.id
+    ? assignmentsByLocation[activeLocation.id] || null
+    : null
+
   return {
     ...profile,
     user,
@@ -281,6 +302,13 @@ export const getCurrentUser = cache(async function getCurrentUser() {
     activeLocation,
     // { [location_id]: role } — never includes 'master' (CHECK constraint).
     rolesByLocation,
+    // Full per-location assignment data including the per-location
+    // permissions blob (mig 058). Server resolution helpers read
+    // from `activeAssignment.permissions`; client code that needs
+    // "what would I see at location X" can read from
+    // `assignmentsByLocation[X]`.
+    assignmentsByLocation,
+    activeAssignment,
     // Active-location role — flips when the user switches location.
     role: activeLocationRole,
     // Original global value, for callers that need canonical/highest role.

@@ -219,11 +219,18 @@ export async function PUT(request, { params }) {
       }
       for (const link of (targetBefore.profile_locations || [])) {
         if (!callerScope.has(link.location_id)) {
+          // Preserve every field of locations the caller can't touch
+          // — role, is_default, door access, AND the existing
+          // permissions blob (mig 058). Without this preservation,
+          // an owner editing one location of a multi-location user
+          // would silently zero out per-location overrides set by
+          // someone else at other locations.
           desired.push({
             location_id: link.location_id,
             role: link.role,
             is_default: link.is_default,
             unifi_door_access: link.unifi_door_access,
+            permissions: link.permissions || {},
           })
         }
       }
@@ -304,6 +311,9 @@ export async function PUT(request, { params }) {
         unifi_door_access: wantsDoor,
         unifi_synced_at: new Date().toISOString(),
         unifi_user_id: unifiUserId,
+        // Per-location user overrides (mig 058). Default to {} when
+        // not provided so existing role-default behaviour kicks in.
+        permissions: a.permissions || {},
       }
 
       if (existing) {

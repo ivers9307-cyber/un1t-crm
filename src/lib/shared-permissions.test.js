@@ -177,13 +177,17 @@ describe('master role gating (mig 033 + location-gate honour)', () => {
   })
 })
 
-describe('hasPermission three-tier resolution', () => {
-  // Helpers to build user-shaped fixtures.
+describe('hasPermission three-tier resolution (mig 058: per-location override)', () => {
+  // Helpers to build user-shaped fixtures. Resolution now reads from
+  // user.activeAssignment.permissions (per-location), not from
+  // user.permissions (profile-wide). The fixture defaults to manager
+  // role at a permissive location with empty per-location permissions
+  // (i.e. role default applies).
   const baseLoc = { id: 'loc1', features: {} }
   const u = (overrides = {}) => ({
     role: 'manager',
-    permissions: {},
     activeLocation: baseLoc,
+    activeAssignment: { permissions: {} },
     ...overrides,
   })
 
@@ -191,39 +195,81 @@ describe('hasPermission three-tier resolution', () => {
     expect(hasPermission(null, 'pipeline')).toBe(false)
   })
 
-  it('tier 1: location features[key]=false denies regardless of user override', () => {
+  it('tier 1: location features[key]=false denies regardless of override', () => {
     const user = u({
       activeLocation: { features: { pipeline: false } },
-      permissions: { pipeline: true }, // user said yes; location wins
+      activeAssignment: { permissions: { pipeline: true } }, // user said yes; location wins
     })
     expect(hasPermission(user, 'pipeline')).toBe(false)
   })
 
-  it('tier 2: user override === true grants when location is permissive', () => {
-    expect(hasPermission(u({ permissions: { car_processing: true } }), 'car_processing')).toBe(true)
+  it('tier 2: per-location override === true grants when location is permissive', () => {
+    expect(hasPermission(
+      u({ activeAssignment: { permissions: { car_processing: true } } }),
+      'car_processing',
+    )).toBe(true)
   })
 
-  it('tier 2: user override === false denies even if role default is true', () => {
-    expect(hasPermission(u({ role: 'manager', permissions: { schedule: false } }), 'schedule')).toBe(false)
+  it('tier 2: per-location override === false denies even if role default is true', () => {
+    expect(hasPermission(
+      u({ role: 'manager', activeAssignment: { permissions: { schedule: false } } }),
+      'schedule',
+    )).toBe(false)
   })
 
-  it('tier 3: falls back to role default when no user override', () => {
+  it('tier 3: falls back to role default when no per-location override', () => {
     expect(hasPermission(u({ role: 'staff' }), 'schedule')).toBe(true)         // staff default
     expect(hasPermission(u({ role: 'staff' }), 'car_processing')).toBe(false)  // staff default false
     expect(hasPermission(u({ role: 'owner' }), 'settings')).toBe(true)         // owner default
   })
 
+  it('per-location override does NOT leak across locations', () => {
+    // Garrett-like fixture: same user, different active locations, same
+    // active-assignment-shaped data. The per-location override at A
+    // shouldn't grant the feature at B (B's assignment has empty {}).
+    const atOwnerLoc = u({
+      role: 'owner',
+      activeLocation: { id: 'A', features: {} },
+      activeAssignment: { permissions: { dashboard_business: true } },
+    })
+    const atStaffLoc = u({
+      role: 'staff',
+      activeLocation: { id: 'B', features: {} },
+      activeAssignment: { permissions: {} }, // empty -> role default
+    })
+    expect(hasPermission(atOwnerLoc, 'dashboard_business')).toBe(true)         // owner override at A
+    expect(hasPermission(atStaffLoc, 'dashboard_business')).toBe(false)        // staff role default at B
+  })
+
+  it('profile-wide user.permissions is NO LONGER read (mig 058)', () => {
+    // If something stale on the user object still has the old
+    // profile-wide permissions blob, hasPermission must ignore it.
+    const user = u({
+      role: 'staff',
+      // Old shape lives on as a back-compat field — explicitly NOT
+      // a basis for granting permission anymore.
+      permissions: { dashboard_business: true, settings: true },
+      activeAssignment: { permissions: {} },
+    })
+    expect(hasPermission(user, 'dashboard_business')).toBe(false) // staff default
+    expect(hasPermission(user, 'settings')).toBe(false)           // staff default
+  })
+
+  it('missing activeAssignment falls through to role default (no crash)', () => {
+    const user = u({ role: 'staff', activeAssignment: null })
+    expect(() => hasPermission(user, 'schedule')).not.toThrow()
+    expect(hasPermission(user, 'schedule')).toBe(true)            // staff default
+  })
+
   it('notification keys ignore the location gate (still go to user/role)', () => {
     const user = u({
       activeLocation: { features: { notify_swap: false } }, // ignored
-      permissions: { mobile: { notify_swap: true } },
+      activeAssignment: { permissions: { mobile: { notify_swap: true } } },
     })
     // hasPermission is web-only (web sidebar), notify_* are mobile-only —
     // covered by the mobile canMobile() check. But verify that even if
     // a notify_* key showed up in the web check, the location wouldn't
     // gate it.
-    // (The web hasPermission falls through to role default for unknown
-    // keys, which returns undefined → false, so we just assert no crash.)
     expect(() => hasPermission(user, 'notify_swap')).not.toThrow()
   })
 })

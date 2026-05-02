@@ -7,9 +7,15 @@
 //      of role or per-user override. Notification preferences
 //      (notify_*) are exempt from this gate (see
 //      isFeatureGatedByLocation in shared/permissions.js).
-//   2. USER override — permissions[key] === true | false → that wins.
+//   2. PER-LOCATION USER override (migration 058) — explicit
+//      true/false in the active assignment's permissions blob wins.
+//      The override layer used to live on profiles.permissions
+//      (profile-wide), which leaked privileges across locations for
+//      mixed-role users (owner@A, staff@B → got owner toggles at B).
+//      It now lives on profile_locations.permissions and is read
+//      from `user.activeAssignment.permissions`.
 //   3. ROLE default — fall back to DEFAULT_WEB_PERMISSIONS_BY_ROLE
-//      for the user's role.
+//      for the user's role at the active location.
 //
 // Owners are NOT special-cased here — if an owner toggles a feature
 // off on their own profile (or off at their location), the toggle is
@@ -28,14 +34,19 @@
 // 2 + 3 — no point making a master tick boxes for themselves once
 // the location says yes.
 //
-// Multi-location users: their `activeLocation` is what determines
-// the location-gate. Switching active location can change which
-// features the same user can access.
+// Multi-location users: BOTH `activeLocation` (gate) and
+// `activeAssignment` (override + role) follow the active location,
+// so switching location can change which features the same user
+// can access.
 
 import { DEFAULT_WEB_PERMISSIONS_BY_ROLE, isFeatureEnabledAtLocation } from '@shared/permissions'
 
 /**
- * @param {{role: string, permissions?: object, activeLocation?: {features?: object}} | null | undefined} user
+ * @param {{
+ *   role: string,
+ *   activeLocation?: {features?: object},
+ *   activeAssignment?: {permissions?: object} | null,
+ * } | null | undefined} user
  * @param {string} key  e.g. 'dashboard_personal', 'pipeline', 'settings'
  * @returns {boolean}
  */
@@ -56,10 +67,12 @@ export function hasPermission(user, key) {
   // per-user permission entries.
   if (user.role === 'master') return true
 
-  // Tier 2: user override.
-  const perms = user.permissions || {}
+  // Tier 2: per-location user override (mig 058). Read from the
+  // active assignment, NOT from profile.permissions — the latter
+  // would leak across locations.
+  const perms = user.activeAssignment?.permissions || {}
   if (key in perms) return perms[key] === true
 
-  // Tier 3: role default.
+  // Tier 3: role default at the active-location role.
   return DEFAULT_WEB_PERMISSIONS_BY_ROLE[user.role]?.[key] === true
 }
