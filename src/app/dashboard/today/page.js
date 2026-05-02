@@ -4,12 +4,14 @@
 // Permission: dashboard_personal (cross-platform).
 
 import { redirect } from 'next/navigation'
-import { Calendar, ArrowLeftRight } from 'lucide-react'
-import { getCurrentUser } from '@/lib/auth'
+import Link from 'next/link'
+import { Calendar, ArrowLeftRight, AlertCircle } from 'lucide-react'
+import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
-import { fetchPersonalDashboardData } from '@shared/dashboard-data'
+import { fetchPersonalDashboardData, fetchUnstaffedBlocksThisWeek } from '@shared/dashboard-data'
 import { pickLocationColor } from '@shared/location-colors'
+import { MANAGER_ROLES } from '@/lib/schemas'
 import {
   KpiCard, KpiRow, SectionHeader, ListCard, PendingRow,
 } from '@/components/dashboard/Cards'
@@ -175,6 +177,19 @@ export default async function PersonalDashboardPage() {
     pendingSwapsForMe, myPendingTimeOff, unreadInbox,
   } = res.data
 
+  // Roster v2 phase 2 — unstaffed-block alert for managers/owners.
+  // Master sees the same chip across all assigned locations; staff
+  // / head_coach without `dashboard_studio` won't see it.
+  const isManager = user.role === 'master' || MANAGER_ROLES.includes(user.role)
+  let unstaffedCount = 0
+  if (isManager) {
+    const locIds = user.role === 'master'
+      ? (user.locations || []).map(l => l.id)
+      : getUserLocationIds(user)
+    const unstaffedRes = await fetchUnstaffedBlocksThisWeek(db, locIds)
+    if (unstaffedRes.success) unstaffedCount = unstaffedRes.data.count
+  }
+
   // Show the per-shift location chip only when the user is assigned
   // to 2+ locations — otherwise it's redundant clutter for staff
   // who only ever work at one gym.
@@ -211,6 +226,29 @@ export default async function PersonalDashboardPage() {
           href={unreadInbox > 0 ? '/whatsapp' : undefined}
         />
       </KpiRow>
+
+      {/* Roster v2 phase 2 — unstaffed-block alert for managers/owners.
+          Empty future shift_blocks across the user's locations;
+          customers will be in the studio either way, so loud surfacing
+          here matches the "demand window" model. */}
+      {isManager && unstaffedCount > 0 && (
+        <Link
+          href="/schedule"
+          className="block mt-3 p-3 rounded-lg border border-red-500/40 bg-red-500/10 hover:bg-red-500/15 transition-colors"
+        >
+          <div className="flex items-start gap-3">
+            <AlertCircle size={16} className="text-red-400 mt-0.5 flex-shrink-0" />
+            <div className="flex-1 min-w-0">
+              <div className="text-sm font-medium text-red-200">
+                {unstaffedCount} unstaffed block{unstaffedCount === 1 ? '' : 's'} this week
+              </div>
+              <div className="text-xs text-red-100/80 mt-0.5">
+                Demand windows with no coach assigned. Click to open the schedule.
+              </div>
+            </div>
+          </div>
+        </Link>
+      )}
 
       <SectionHeader title="Swap requests for you" count={pendingSwapsForMe.length} />
       <ListCard empty={pendingSwapsForMe.length === 0} emptyText="No swap requests waiting on you.">

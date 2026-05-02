@@ -2,9 +2,18 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
-import { ArrowLeft, Plus, Clock, Pencil, Trash2, X } from 'lucide-react'
+import { ArrowLeft, Plus, Clock, Pencil, Trash2, X, AlertCircle, Users } from 'lucide-react'
 
 const PRESET_COLORS = ['#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899', '#06B6D4', '#F97316']
+const DAY_OPTIONS = [
+  { code: 'mon', label: 'Mon' },
+  { code: 'tue', label: 'Tue' },
+  { code: 'wed', label: 'Wed' },
+  { code: 'thu', label: 'Thu' },
+  { code: 'fri', label: 'Fri' },
+  { code: 'sat', label: 'Sat' },
+  { code: 'sun', label: 'Sun' },
+]
 
 function formatTime(time) {
   if (!time) return ''
@@ -13,6 +22,15 @@ function formatTime(time) {
   const suffix = hour >= 12 ? 'pm' : 'am'
   const display = hour > 12 ? hour - 12 : hour === 0 ? 12 : hour
   return m === '00' ? `${display}${suffix}` : `${display}:${m}${suffix}`
+}
+
+function formatDays(days) {
+  if (!days || days.length === 0) return null
+  const order = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun']
+  return order
+    .filter(d => days.includes(d))
+    .map(d => d.charAt(0).toUpperCase() + d.slice(1))
+    .join(', ')
 }
 
 export default function ShiftTemplateManager({ user }) {
@@ -52,6 +70,14 @@ export default function ShiftTemplateManager({ user }) {
     if (data.success) {
       setShowForm(false)
       fetchTemplates()
+      // If the API generated blocks, surface the count so the
+      // operator knows their schedule is ready to staff.
+      if (data.generated?.inserted > 0) {
+        // Use a non-blocking inline pattern via the template list
+        // (rebuilt on next render). The transient toast pattern
+        // isn't wired across the codebase yet — keeping this simple.
+        console.info(`Generated ${data.generated.inserted} blocks for the next 8 weeks.`)
+      }
     } else {
       alert(data.error || 'Failed to save')
     }
@@ -65,6 +91,7 @@ export default function ShiftTemplateManager({ user }) {
 
   const activeTemplates = templates.filter(t => t.active)
   const inactiveTemplates = templates.filter(t => !t.active)
+  const templatesWithoutDays = activeTemplates.filter(t => !t.days_of_week || t.days_of_week.length === 0)
 
   return (
     <div>
@@ -75,7 +102,7 @@ export default function ShiftTemplateManager({ user }) {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h2 className="text-2xl font-bold">Shift Templates</h2>
-          <p className="text-sm text-un1t-light mt-1">{user.activeLocation?.name} — Define your named shifts</p>
+          <p className="text-sm text-un1t-light mt-1">{user.activeLocation?.name} — Define your demand windows (when the studio needs coaches)</p>
         </div>
         <button
           onClick={() => setShowForm('new')}
@@ -84,6 +111,20 @@ export default function ShiftTemplateManager({ user }) {
           <Plus size={16} /> New Shift
         </button>
       </div>
+
+      {templatesWithoutDays.length > 0 && (
+        <div className="mb-4 flex items-start gap-3 p-3 rounded-lg border border-amber-500/40 bg-amber-500/10 text-sm">
+          <AlertCircle size={16} className="text-amber-400 mt-0.5 flex-shrink-0" />
+          <div>
+            <div className="font-medium text-amber-200">
+              {templatesWithoutDays.length} template{templatesWithoutDays.length === 1 ? '' : 's'} without applicable days
+            </div>
+            <div className="text-xs text-amber-100/80 mt-0.5">
+              Edit each template to set which weekdays it should apply to. No blocks are generated until at least one day is selected.
+            </div>
+          </div>
+        </div>
+      )}
 
       {loading ? (
         <div className="text-center py-12 text-un1t-light">Loading templates...</div>
@@ -101,36 +142,47 @@ export default function ShiftTemplateManager({ user }) {
         </div>
       ) : (
         <div className="grid gap-3">
-          {activeTemplates.map(t => (
-            <div key={t.id} className="bg-un1t-dark border border-un1t-gray rounded-lg p-4 flex items-center justify-between">
-              <div className="flex items-center gap-4">
-                <div className="w-3 h-10 rounded-full" style={{ backgroundColor: t.color }} />
-                <div>
-                  <div className="font-semibold">{t.name}</div>
-                  <div className="text-sm text-un1t-light flex items-center gap-3 mt-0.5">
-                    <span className="flex items-center gap-1"><Clock size={12} /> {formatTime(t.start_time)} – {formatTime(t.end_time)}</span>
-                    {t.role_label && <span>Default role: {t.role_label}</span>}
+          {activeTemplates.map(t => {
+            const daysLabel = formatDays(t.days_of_week)
+            const max = t.max_coaches || 15
+            const noDays = !daysLabel
+            return (
+              <div key={t.id} className="bg-un1t-dark border border-un1t-gray rounded-lg p-4 flex items-center justify-between">
+                <div className="flex items-center gap-4">
+                  <div className="w-3 h-10 rounded-full" style={{ backgroundColor: t.color }} />
+                  <div>
+                    <div className="font-semibold">{t.name}</div>
+                    <div className="text-sm text-un1t-light flex items-center gap-3 mt-0.5 flex-wrap">
+                      <span className="flex items-center gap-1"><Clock size={12} /> {formatTime(t.start_time)} – {formatTime(t.end_time)}</span>
+                      <span className="flex items-center gap-1"><Users size={12} /> up to {max} {max === 1 ? 'coach' : 'coaches'}</span>
+                      {noDays ? (
+                        <span className="text-amber-300 text-xs">No days set</span>
+                      ) : (
+                        <span>{daysLabel}</span>
+                      )}
+                      {t.role_label && <span>Default: {t.role_label}</span>}
+                    </div>
                   </div>
                 </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setShowForm(t)}
+                    className="p-2 rounded hover:bg-un1t-gray/50 text-un1t-light hover:text-un1t-white transition-colors"
+                    title="Edit"
+                  >
+                    <Pencil size={16} />
+                  </button>
+                  <button
+                    onClick={() => handleDeactivate(t.id)}
+                    className="p-2 rounded hover:bg-red-500/20 text-un1t-light hover:text-red-400 transition-colors"
+                    title="Deactivate"
+                  >
+                    <Trash2 size={16} />
+                  </button>
+                </div>
               </div>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => setShowForm(t)}
-                  className="p-2 rounded hover:bg-un1t-gray/50 text-un1t-light hover:text-un1t-white transition-colors"
-                  title="Edit"
-                >
-                  <Pencil size={16} />
-                </button>
-                <button
-                  onClick={() => handleDeactivate(t.id)}
-                  className="p-2 rounded hover:bg-red-500/20 text-un1t-light hover:text-red-400 transition-colors"
-                  title="Deactivate"
-                >
-                  <Trash2 size={16} />
-                </button>
-              </div>
-            </div>
-          ))}
+            )
+          })}
 
           {inactiveTemplates.length > 0 && (
             <div className="mt-4">
@@ -179,16 +231,34 @@ function TemplateFormModal({ template, onSave, onClose }) {
   const [endTime, setEndTime] = useState(template?.end_time?.slice(0, 5) || '14:00')
   const [color, setColor] = useState(template?.color || '#3B82F6')
   const [roleLabel, setRoleLabel] = useState(template?.role_label || '')
+  const [days, setDays] = useState(template?.days_of_week || [])
+  const [maxCoaches, setMaxCoaches] = useState(template?.max_coaches || 15)
+
+  function toggleDay(code) {
+    setDays(prev => prev.includes(code) ? prev.filter(d => d !== code) : [...prev, code])
+  }
+
+  function selectAllWeek() {
+    setDays(['mon', 'tue', 'wed', 'thu', 'fri'])
+  }
+
+  function selectAll() {
+    setDays(['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'])
+  }
+
+  function clearAll() {
+    setDays([])
+  }
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={onClose}>
-      <div className="bg-un1t-dark border border-un1t-gray rounded-xl p-6 w-full max-w-md" onClick={e => e.stopPropagation()}>
+      <div className="bg-un1t-dark border border-un1t-gray rounded-xl p-6 w-full max-w-lg" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-4">
           <h3 className="font-semibold">{template ? 'Edit Shift Template' : 'New Shift Template'}</h3>
           <button onClick={onClose} className="text-un1t-light hover:text-un1t-white"><X size={18} /></button>
         </div>
 
-        <div className="space-y-4">
+        <div className="space-y-4 max-h-[70vh] overflow-y-auto pr-1">
           <div>
             <label className="block text-xs text-un1t-light mb-1">Name *</label>
             <input
@@ -222,6 +292,56 @@ function TemplateFormModal({ template, onSave, onClose }) {
           </div>
 
           <div>
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="text-xs text-un1t-light">Days this shift applies to *</label>
+              <div className="flex items-center gap-2 text-[11px]">
+                <button type="button" onClick={selectAllWeek} className="text-blue-400 hover:text-blue-300">Mon–Fri</button>
+                <span className="text-un1t-mid">·</span>
+                <button type="button" onClick={selectAll} className="text-blue-400 hover:text-blue-300">All</button>
+                <span className="text-un1t-mid">·</span>
+                <button type="button" onClick={clearAll} className="text-un1t-light hover:text-un1t-white">Clear</button>
+              </div>
+            </div>
+            <div className="grid grid-cols-7 gap-1.5">
+              {DAY_OPTIONS.map(d => {
+                const selected = days.includes(d.code)
+                return (
+                  <button
+                    key={d.code}
+                    type="button"
+                    onClick={() => toggleDay(d.code)}
+                    className={`py-2 rounded text-xs font-medium border transition-colors ${
+                      selected
+                        ? 'bg-blue-600 border-blue-500 text-white'
+                        : 'bg-un1t-black border-un1t-gray text-un1t-light hover:border-un1t-mid'
+                    }`}
+                  >
+                    {d.label}
+                  </button>
+                )
+              })}
+            </div>
+            <p className="text-[11px] text-un1t-light mt-1.5">
+              When you save, blocks for the next 8 weeks are generated for these days. Existing blocks aren&apos;t touched.
+            </p>
+          </div>
+
+          <div>
+            <label className="block text-xs text-un1t-light mb-1">Maximum coaches per shift *</label>
+            <input
+              type="number"
+              min={1}
+              max={50}
+              value={maxCoaches}
+              onChange={e => setMaxCoaches(Math.max(1, Math.min(50, parseInt(e.target.value || '1', 10))))}
+              className="w-32 bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
+            />
+            <p className="text-[11px] text-un1t-light mt-1.5">
+              How many coaches can be assigned to this slot. Set high enough to cover an &ldquo;all-hands&rdquo; day.
+            </p>
+          </div>
+
+          <div>
             <label className="block text-xs text-un1t-light mb-1">Default Role / Position</label>
             <input
               type="text"
@@ -234,7 +354,7 @@ function TemplateFormModal({ template, onSave, onClose }) {
 
           <div>
             <label className="block text-xs text-un1t-light mb-2">Colour</label>
-            <div className="flex gap-2">
+            <div className="flex gap-2 flex-wrap">
               {PRESET_COLORS.map(c => (
                 <button
                   key={c}
@@ -249,7 +369,20 @@ function TemplateFormModal({ template, onSave, onClose }) {
         </div>
 
         <button
-          onClick={() => name && startTime && endTime && onSave({ name, start_time: startTime, end_time: endTime, color, role_label: roleLabel || null })}
+          onClick={() =>
+            name &&
+            startTime &&
+            endTime &&
+            onSave({
+              name,
+              start_time: startTime,
+              end_time: endTime,
+              color,
+              role_label: roleLabel || null,
+              days_of_week: days,
+              max_coaches: maxCoaches,
+            })
+          }
           disabled={!name || !startTime || !endTime}
           className="w-full mt-5 bg-un1t-white text-un1t-black font-medium text-sm py-2.5 rounded-md hover:bg-un1t-accent transition-colors disabled:opacity-50"
         >

@@ -1,7 +1,25 @@
 'use client'
 
+// Roster v2 phase 2 — calendar now reads from /api/schedule/blocks
+// (block-shaped data with nested shift_assignments) instead of the
+// legacy flat /api/schedule/shifts. Each block renders as a single
+// card showing template + time + capacity badge + assigned coaches.
+// Empty future blocks get a red unstaffed flag.
+//
+// The legacy public.shifts table is still kept in sync via the
+// mig 068 + mig 069 bidirectional triggers, so mobile + reports
+// keep working unchanged.
+//
+// Writes:
+//   - Assign coach: POST /api/schedule/blocks/[id]/assignments
+//   - Remove coach: DELETE /api/schedule/assignments/[id]
+//   - Remove block: DELETE /api/schedule/blocks/[id]   (rare)
+// Copy-week / copy-month / publish still hit /api/schedule/shifts/*
+// which writes to public.shifts; the reverse trigger propagates
+// those writes back into shift_blocks/shift_assignments.
+
 import { useState, useEffect, useCallback } from 'react'
-import { ChevronLeft, ChevronRight, Copy, Send, Plus, Users, User, Clock, X, ArrowLeftRight, CalendarOff, Palmtree, ThermometerSun, Ban, AlertTriangle, CalendarDays, CalendarRange } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Copy, Send, Plus, Users, User, Clock, X, ArrowLeftRight, CalendarOff, Palmtree, ThermometerSun, Ban, AlertTriangle, AlertCircle, CalendarDays, CalendarRange } from 'lucide-react'
 import Link from 'next/link'
 import { computeWeeklyCost } from '@/lib/payroll'
 import { indexByDate } from '@/lib/bank-holidays'
@@ -35,12 +53,6 @@ function addDays(date, days) {
   return d
 }
 
-// Month-view helpers (Phase: monthly schedule + copy-last-month).
-// We intentionally treat months as 6-row x 7-col grids — always 42
-// cells, padded with leading + trailing days from neighbouring
-// months. That gives a stable layout regardless of month length and
-// matches the Google / Apple calendar convention users expect.
-
 function getMonthStart(date) {
   const d = new Date(date)
   d.setDate(1)
@@ -55,8 +67,6 @@ function addMonths(date, months) {
 }
 
 function getMonthGridRange(monthStart) {
-  // Grid starts on the Monday of the week containing the 1st, ends
-  // 41 days later (6 weeks × 7). Always 42 cells.
   const start = getMonday(monthStart)
   const end = addDays(start, 41)
   return { start, end }
@@ -71,34 +81,65 @@ function formatTime(time) {
   return m === '00' ? `${display}${suffix}` : `${display}:${m}${suffix}`
 }
 
+// Roster v2: a block is "unstaffed" when it has zero assignments
+// AND its date is today or later. Past blocks may legitimately
+// have empty assignments (coaches called out, never replaced) —
+// flagging those is noise.
+function isBlockUnstaffedFuture(block, todayStr) {
+  if ((block.shift_assignments?.length || 0) > 0) return false
+  return block.block_date >= todayStr
+}
+
+// Adapter — flatten a list of blocks-with-assignments into the
+// legacy shift-row shape. Used by the payroll cost calculator
+// (which expects one row per coach-day) without rewriting it.
+function flattenBlocksToShifts(blocks) {
+  const rows = []
+  for (const block of blocks) {
+    const tpl = block.shift_templates || {}
+    for (const a of block.shift_assignments || []) {
+      rows.push({
+        id: a.id,
+        block_id: block.id,
+        location_id: block.location_id,
+        profile_id: a.profile_id,
+        shift_template_id: block.template_id,
+        shift_date: block.block_date,
+        start_time_override: block.start_time !== tpl.start_time ? block.start_time : null,
+        end_time_override: block.end_time !== tpl.end_time ? block.end_time : null,
+        role_label: tpl.role_label || null,
+        notes: a.notes || block.notes || null,
+        status: a.status,
+        published: true, // assignments are always live in the new model
+        shift_templates: tpl,
+        profiles: a.profiles,
+      })
+    }
+  }
+  return rows
+}
+
 export default function ScheduleCalendar({ user }) {
   const [weekStart, setWeekStart] = useState(() => getMonday(new Date()))
   const [monthStart, setMonthStart] = useState(() => getMonthStart(new Date()))
-  // 'week' | 'month'. Week is the original detailed-grid view;
-  // month is a 6×7 calendar overview with shift counts per day,
-  // click-through to the corresponding week.
   const [viewType, setViewType] = useState('week')
-  const [shifts, setShifts] = useState([])
+  const [blocks, setBlocks] = useState([])
   const [templates, setTemplates] = useState([])
   const [staff, setStaff] = useState([])
   const [loading, setLoading] = useState(true)
   const [viewMode, setViewMode] = useState('all') // 'my' or 'all'
-  const [showAddModal, setShowAddModal] = useState(null) // { date, dayIndex }
+  const [assignTarget, setAssignTarget] = useState(null) // { block } when picking a coach
+  const [createTarget, setCreateTarget] = useState(null) // { date } when adding an ad-hoc block
   const [publishing, setPublishing] = useState(false)
   const [copying, setCopying] = useState(false)
-  const [swapModal, setSwapModal] = useState(null) // shift to swap
-  const [timeOff, setTimeOff] = useState([]) // approved time-off for the visible range
-  const [holidays, setHolidays] = useState([]) // merged static + custom holidays for the visible range
+  const [swapModal, setSwapModal] = useState(null) // legacy shift-shaped row to swap
+  const [timeOff, setTimeOff] = useState([])
+  const [holidays, setHolidays] = useState([])
 
   const locationId = user.activeLocation?.id
   const isManager = canManage(user.role)
+  const todayStr = formatDate(new Date())
 
-  // Visible-range derivation. Week mode: Mon–Sun. Month mode: the
-  // 42-day grid that starts on the Monday of the week containing
-  // the 1st. The fetch callback derives its own copy from the
-  // primitive deps (weekStart/monthStart/viewType) so the lint
-  // exhaustive-deps rule can verify it; here we keep the
-  // render-time labels + the month-grid object the JSX consumes.
   const weekEnd = addDays(weekStart, 6)
   const weekLabel = `${weekStart.toLocaleDateString('en-IE', { day: 'numeric', month: 'short' })} – ${weekEnd.toLocaleDateString('en-IE', { day: 'numeric', month: 'short', year: 'numeric' })}`
   const monthGrid = getMonthGridRange(monthStart)
@@ -108,23 +149,20 @@ export default function ScheduleCalendar({ user }) {
     if (!locationId) return
     setLoading(true)
 
-    // Fetch range follows the visible window: 7 days for week view,
-    // 42 days for month view. Derived inside the callback so the
-    // dependency array stays primitive (lint can verify it).
     const innerStart = viewType === 'month' ? getMonthGridRange(monthStart).start : weekStart
     const innerEnd = viewType === 'month' ? getMonthGridRange(monthStart).end : addDays(weekStart, 6)
     const start = formatDate(innerStart)
     const end = formatDate(innerEnd)
 
-    const [shiftsRes, templatesRes, staffRes, timeOffRes, holidaysRes] = await Promise.all([
-      fetch(`/api/schedule/shifts?location_id=${locationId}&start_date=${start}&end_date=${end}`).then(r => r.json()),
+    const [blocksRes, templatesRes, staffRes, timeOffRes, holidaysRes] = await Promise.all([
+      fetch(`/api/schedule/blocks?location_id=${locationId}&start_date=${start}&end_date=${end}`).then(r => r.json()),
       fetch(`/api/schedule/templates?location_id=${locationId}`).then(r => r.json()),
       fetch('/api/staff').then(r => r.json()),
       fetch(`/api/schedule/time-off?location_id=${locationId}&start_date=${start}&end_date=${end}&status=approved`).then(r => r.json()),
       fetch(`/api/locations/${locationId}/holidays?start=${start}&end=${end}`).then(r => r.json()),
     ])
 
-    setShifts(shiftsRes.data || [])
+    setBlocks(blocksRes.data || [])
     setTemplates((templatesRes.data || []).filter(t => t.active))
     setStaff(staffRes.data || [])
     setTimeOff(timeOffRes.data || [])
@@ -139,50 +177,82 @@ export default function ScheduleCalendar({ user }) {
     s.active && (s.profile_locations || []).some(pl => pl.location_id === locationId)
   )
 
-  // Group shifts by day
-  const shiftsByDay = DAY_LABELS.map((_, i) => {
+  // Group blocks by day for the week view. "My" view filters to
+  // blocks where the user has an assignment.
+  const blocksByDay = DAY_LABELS.map((_, i) => {
     const date = formatDate(addDays(weekStart, i))
-    const dayShifts = shifts.filter(s => s.shift_date === date)
-    if (viewMode === 'my') {
-      return dayShifts.filter(s => s.profile_id === user.id)
-    }
-    return dayShifts
+    const dayBlocks = blocks
+      .filter(b => b.block_date === date)
+      .filter(b => {
+        if (viewMode === 'all') return true
+        return (b.shift_assignments || []).some(a => a.profile_id === user.id)
+      })
+      .sort((a, b) => (a.start_time || '').localeCompare(b.start_time || ''))
+    return dayBlocks
   })
 
-  // Count unpublished shifts
-  const unpublishedCount = shifts.filter(s => !s.published).length
+  // Legacy-shape shifts for the payroll calculator + the swap-request
+  // modal (which still hits POST /api/schedule/swaps with a shift id).
+  const flatShifts = flattenBlocksToShifts(blocks)
 
-  async function handleAddShift(profileId, templateId, date) {
-    try {
-      const res = await fetch('/api/schedule/shifts', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          location_id: locationId,
-          profile_id: profileId,
-          shift_template_id: templateId,
-          shift_date: date,
-        }),
-      })
-      const data = await res.json()
-      if (data.success) {
-        if (data.warnings && data.warnings.length > 0) {
-          alert('Shift added with warning:\n\n' + data.warnings.join('\n'))
-        }
-        setShowAddModal(null)
-        fetchData()
-      } else {
-        alert(data.error || 'Failed to add shift')
+  // Unstaffed-block count for the publish toolbar — surfaces "you
+  // still have empty slots" as a friction signal before publishing.
+  const unstaffedThisWeek = blocks.filter(b => {
+    const inWeek = b.block_date >= formatDate(weekStart) && b.block_date <= formatDate(weekEnd)
+    return inWeek && isBlockUnstaffedFuture(b, todayStr)
+  }).length
+
+  async function handleAssignCoach(blockId, profileId) {
+    const res = await fetch(`/api/schedule/blocks/${blockId}/assignments`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ profile_id: profileId }),
+    })
+    const data = await res.json()
+    if (data.success) {
+      if (data.warnings?.length > 0) {
+        alert('Assigned with warning:\n\n' + data.warnings.join('\n'))
       }
-    } catch (err) {
-      alert('Failed to add shift: ' + err.message)
+      setAssignTarget(null)
+      fetchData()
+    } else {
+      alert(data.error || 'Failed to assign coach')
     }
   }
 
-  async function handleDeleteShift(shiftId) {
-    if (!confirm('Remove this shift?')) return
-    await fetch(`/api/schedule/shifts/${shiftId}`, { method: 'DELETE' })
-    fetchData()
+  async function handleUnassign(assignmentId) {
+    if (!confirm('Remove this coach from the shift?')) return
+    const res = await fetch(`/api/schedule/assignments/${assignmentId}`, { method: 'DELETE' })
+    const data = await res.json()
+    if (data.success) fetchData()
+    else alert(data.error || 'Failed to remove')
+  }
+
+  async function handleDeleteBlock(blockId) {
+    if (!confirm('Delete this entire shift slot? Any assigned coaches are removed too. (The template will regenerate it on next save unless you remove the matching weekday from the template.)')) return
+    const res = await fetch(`/api/schedule/blocks/${blockId}`, { method: 'DELETE' })
+    const data = await res.json()
+    if (data.success) fetchData()
+    else alert(data.error || 'Failed to delete block')
+  }
+
+  async function handleCreateBlock(date, templateId) {
+    const res = await fetch('/api/schedule/blocks', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        location_id: locationId,
+        template_id: templateId,
+        block_date: date,
+      }),
+    })
+    const data = await res.json()
+    if (data.success) {
+      setCreateTarget(null)
+      fetchData()
+    } else {
+      alert(data.error || 'Failed to add slot')
+    }
   }
 
   async function handlePublish() {
@@ -206,6 +276,9 @@ export default function ScheduleCalendar({ user }) {
     const prevWeekStart = addDays(weekStart, -7)
     if (!confirm(`Copy last week's roster (${formatDate(prevWeekStart)}) to this week?`)) return
     setCopying(true)
+    // Legacy endpoint still writes to public.shifts; mig 069's
+    // reverse trigger propagates the writes back into
+    // shift_blocks + shift_assignments.
     const res = await fetch('/api/schedule/shifts/copy-week', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -274,7 +347,6 @@ export default function ScheduleCalendar({ user }) {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          {/* Time Off link */}
           <Link
             href="/schedule/time-off"
             className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg border border-un1t-gray text-un1t-light hover:text-un1t-white hover:border-un1t-white/30 transition-colors"
@@ -282,7 +354,6 @@ export default function ScheduleCalendar({ user }) {
             <CalendarOff size={14} /> Time Off
           </Link>
 
-          {/* My-shifts vs All-staff filter */}
           <div className="flex bg-un1t-dark border border-un1t-gray rounded-lg overflow-hidden text-xs">
             <button
               onClick={() => setViewMode('my')}
@@ -298,18 +369,10 @@ export default function ScheduleCalendar({ user }) {
             </button>
           </div>
 
-          {/* Week-vs-Month view toggle. Switching to month re-fetches
-              42 days; switching back to week pins to the Monday of
-              the week containing the currently-selected month-start
-              so the user lands somewhere sensible. */}
           <div className="flex bg-un1t-dark border border-un1t-gray rounded-lg overflow-hidden text-xs">
             <button
               onClick={() => {
-                if (viewType === 'month') {
-                  // Coming from month view — pick the Monday of the
-                  // week containing the focused month-start.
-                  setWeekStart(getMonday(monthStart))
-                }
+                if (viewType === 'month') setWeekStart(getMonday(monthStart))
                 setViewType('week')
               }}
               className={`flex items-center gap-1.5 px-3 py-2 transition-colors ${viewType === 'week' ? 'bg-un1t-white text-un1t-black' : 'text-un1t-light hover:text-un1t-white'}`}
@@ -318,11 +381,7 @@ export default function ScheduleCalendar({ user }) {
             </button>
             <button
               onClick={() => {
-                if (viewType === 'week') {
-                  // Going to month view — focus the month containing
-                  // the current week.
-                  setMonthStart(getMonthStart(weekStart))
-                }
+                if (viewType === 'week') setMonthStart(getMonthStart(weekStart))
                 setViewType('month')
               }}
               className={`flex items-center gap-1.5 px-3 py-2 transition-colors ${viewType === 'month' ? 'bg-un1t-white text-un1t-black' : 'text-un1t-light hover:text-un1t-white'}`}
@@ -340,16 +399,13 @@ export default function ScheduleCalendar({ user }) {
               >
                 <Copy size={14} /> {copying ? 'Copying...' : viewType === 'month' ? 'Copy Last Month' : 'Copy Last Week'}
               </button>
-              {/* Publish targets the focused WEEK only — keep it
-                  out of month view to avoid the surprise of
-                  publishing-this-week-when-you-meant-this-month. */}
-              {viewType === 'week' && unpublishedCount > 0 && (
+              {viewType === 'week' && (
                 <button
                   onClick={handlePublish}
                   disabled={publishing}
                   className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white transition-colors disabled:opacity-50"
                 >
-                  <Send size={14} /> {publishing ? 'Publishing...' : `Publish (${unpublishedCount})`}
+                  <Send size={14} /> {publishing ? 'Publishing...' : 'Publish'}
                 </button>
               )}
             </>
@@ -357,9 +413,7 @@ export default function ScheduleCalendar({ user }) {
         </div>
       </div>
 
-      {/* Range Navigation. Steps by week or month depending on the
-          active view. The "Today" link snaps to the current week
-          / month accordingly. */}
+      {/* Range Navigation */}
       <div className="flex items-center justify-between mb-4">
         <button
           onClick={() => {
@@ -394,16 +448,27 @@ export default function ScheduleCalendar({ user }) {
         </button>
       </div>
 
-      {/* Overtime warning panel — visible whenever any FTE in this week is at
-          or above their contracted hours. Visible to managers (canManage). */}
+      {/* Unstaffed-blocks summary — week view only, manager only */}
+      {!loading && isManager && viewType === 'week' && unstaffedThisWeek > 0 && (
+        <div className="mb-4 flex items-start gap-3 p-3 rounded-lg border border-red-500/40 bg-red-500/10 text-sm">
+          <AlertCircle size={16} className="text-red-400 mt-0.5 flex-shrink-0" />
+          <div>
+            <div className="font-medium text-red-200">
+              {unstaffedThisWeek} unstaffed block{unstaffedThisWeek === 1 ? '' : 's'} this week
+            </div>
+            <div className="text-xs text-red-100/80 mt-0.5">
+              Demand windows with no coach assigned. Customers will be in the studio either way — assign coaches or remove the block.
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Overtime warning panel */}
       {!loading && canManage(user.role) && (() => {
-        // Build per-staff cost summaries for the visible Mon-Sun week.
-        // staff[] already holds the full profiles incl. HR fields; shifts[]
-        // is the source of truth for hours actually scheduled.
         const summaries = locationStaff
           .filter(s => s.employment_type === 'fte' && (s.contracted_hours_per_week || 0) > 0)
           .map(s => {
-            const own = shifts.filter(sh => sh.profile_id === s.id)
+            const own = flatShifts.filter(sh => sh.profile_id === s.id)
             const cost = computeWeeklyCost({ shifts: own, profile: s })
             return { staff: s, cost }
           })
@@ -444,7 +509,6 @@ export default function ScheduleCalendar({ user }) {
             </div>
             <p className="text-[11px] text-un1t-mid mt-2">
               FTE staff scheduled at or above their contracted hours for {weekLabel}.
-              Hours over contracted pay at the staff member&apos;s overtime rate (or regular rate if not set).
             </p>
           </div>
         )
@@ -455,10 +519,10 @@ export default function ScheduleCalendar({ user }) {
         <div className="text-center py-20 text-un1t-light">Loading roster...</div>
       ) : viewType === 'month' ? (
         // ── MONTH VIEW ──
-        // 6 × 7 calendar grid. Each cell renders the date number + a
-        // shift count badge + up to 3 chip previews. Cells from
-        // adjacent months render dimmed. Click any cell to jump to
-        // the week view containing that date.
+        // Renders a 6x7 grid; each cell shows the date + count of
+        // assignments + count of unstaffed blocks. Clicking drills
+        // into the week view. Roster v2: separately surfaces empty
+        // blocks as a red badge.
         <div>
           <div className="grid grid-cols-7 gap-1.5 mb-1.5">
             {DAY_LABELS.map(label => (
@@ -470,28 +534,27 @@ export default function ScheduleCalendar({ user }) {
           <div className="grid grid-cols-7 gap-1.5">
             {(() => {
               const holidayByDate = indexByDate(holidays)
-              const todayStr = formatDate(new Date())
               const focusedMonth = monthStart.getMonth()
               const cells = []
               for (let i = 0; i < 42; i++) {
                 const date = addDays(monthGrid.start, i)
                 const dateStr = formatDate(date)
-                const dayShifts = shifts
-                  .filter(s => s.shift_date === dateStr)
-                  .filter(s => viewMode === 'all' || s.profile_id === user.id)
+                const dayBlocks = blocks.filter(b => b.block_date === dateStr)
+                const visibleBlocks = viewMode === 'all'
+                  ? dayBlocks
+                  : dayBlocks.filter(b => (b.shift_assignments || []).some(a => a.profile_id === user.id))
                 const dayTimeOff = timeOff.filter(t => t.start_date <= dateStr && t.end_date >= dateStr)
                 const inFocusedMonth = date.getMonth() === focusedMonth
                 const isToday = dateStr === todayStr
                 const holiday = holidayByDate.get(dateStr)
+                const totalAssignmentCount = visibleBlocks.reduce((sum, b) => sum + (b.shift_assignments?.length || 0), 0)
+                const unstaffedCount = visibleBlocks.filter(b => isBlockUnstaffedFuture(b, todayStr)).length
+
                 cells.push(
                   <button
                     key={dateStr}
                     type="button"
                     onClick={() => {
-                      // Drill down — switch to week view for the
-                      // week containing this date. The user can
-                      // then add / edit shifts using the existing
-                      // detailed UI.
                       setWeekStart(getMonday(date))
                       setViewType('week')
                     }}
@@ -503,11 +566,18 @@ export default function ScheduleCalendar({ user }) {
                       <span className={`text-xs font-semibold ${isToday ? 'text-blue-400' : inFocusedMonth ? 'text-un1t-white' : 'text-un1t-mid'}`}>
                         {date.getDate()}
                       </span>
-                      {dayShifts.length > 0 && (
-                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-un1t-gray/60 text-un1t-light">
-                          {dayShifts.length}
-                        </span>
-                      )}
+                      <div className="flex items-center gap-1">
+                        {unstaffedCount > 0 && (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-500/20 text-red-300" title={`${unstaffedCount} unstaffed`}>
+                            !{unstaffedCount}
+                          </span>
+                        )}
+                        {totalAssignmentCount > 0 && (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-un1t-gray/60 text-un1t-light">
+                            {totalAssignmentCount}
+                          </span>
+                        )}
+                      </div>
                     </div>
                     {holiday && (
                       <div className="text-[9px] text-amber-500 mb-1 truncate" title={holiday.name}>
@@ -515,21 +585,23 @@ export default function ScheduleCalendar({ user }) {
                       </div>
                     )}
                     <div className="space-y-0.5">
-                      {dayShifts.slice(0, 3).map(shift => {
-                        const tmpl = shift.shift_templates || {}
+                      {visibleBlocks.slice(0, 3).map(b => {
+                        const tmpl = b.shift_templates || {}
+                        const count = b.shift_assignments?.length || 0
+                        const unstaffed = isBlockUnstaffedFuture(b, todayStr)
                         return (
                           <div
-                            key={shift.id}
-                            className="text-[10px] truncate rounded px-1 py-0.5"
+                            key={b.id}
+                            className={`text-[10px] truncate rounded px-1 py-0.5 ${unstaffed ? 'border border-red-500/40' : ''}`}
                             style={{ backgroundColor: (tmpl.color || '#3B82F6') + '20', color: tmpl.color || '#3B82F6' }}
-                            title={`${shift.profiles?.full_name || 'Unknown'} · ${formatTime(shift.start_time_override || tmpl.start_time)}–${formatTime(shift.end_time_override || tmpl.end_time)}`}
+                            title={`${tmpl.name || 'Shift'} · ${formatTime(b.start_time)}–${formatTime(b.end_time)} · ${count}/${b.max_coaches}`}
                           >
-                            {shift.profiles?.full_name?.split(' ')[0] || '?'} {formatTime(shift.start_time_override || tmpl.start_time)}
+                            {formatTime(b.start_time)} {count}/{b.max_coaches}
                           </div>
                         )
                       })}
-                      {dayShifts.length > 3 && (
-                        <div className="text-[10px] text-un1t-mid">+{dayShifts.length - 3} more</div>
+                      {visibleBlocks.length > 3 && (
+                        <div className="text-[10px] text-un1t-mid">+{visibleBlocks.length - 3} more</div>
                       )}
                       {dayTimeOff.slice(0, 1).map(t => {
                         const conf = TIME_OFF_CONFIG[t.type] || TIME_OFF_CONFIG.unavailable
@@ -552,20 +624,22 @@ export default function ScheduleCalendar({ user }) {
           </div>
         </div>
       ) : (
+        // ── WEEK VIEW ──
+        // Roster v2: one card per BLOCK. Each card shows the
+        // template colour + name + time + capacity badge + a list
+        // of assigned coaches (or an empty-state with a red flag
+        // for future unstaffed demand windows). Click opens the
+        // assign popover.
         <div className="grid grid-cols-7 gap-2">
           {(() => {
-            // Build a date → holiday lookup once per render so we don't scan
-            // the holidays array per day.
             const holidayByDate = indexByDate(holidays)
             return DAY_LABELS.map((label, i) => {
               const date = addDays(weekStart, i)
               const dateStr = formatDate(date)
               const isToday = formatDate(new Date()) === dateStr
-              const dayShifts = shiftsByDay[i]
+              const dayBlocks = blocksByDay[i]
               const holiday = holidayByDate.get(dateStr)
 
-              // Today wins over holiday for the header colour; otherwise an
-              // amber tint marks holidays at a glance.
               const headerCls = isToday
                 ? 'bg-blue-600 text-white'
                 : holiday
@@ -573,128 +647,183 @@ export default function ScheduleCalendar({ user }) {
                   : 'bg-un1t-dark text-un1t-light'
 
               return (
-              <div key={i} className="min-h-[200px]">
-                {/* Day header */}
-                <div className={`text-center py-2 rounded-t-lg text-xs font-semibold ${headerCls}`} title={holiday?.name || undefined}>
-                  <div>{label}</div>
-                  <div className={`text-lg font-bold ${isToday ? 'text-white' : 'text-un1t-white'}`}>{date.getDate()}</div>
-                  {holiday && (
-                    <div className={`mt-0.5 text-[10px] font-medium leading-tight px-1 truncate ${isToday ? 'text-white/80' : 'text-amber-300'}`}>
-                      {holiday.source === 'national' ? '🇮🇪 ' : '🏷 '}{holiday.name}
-                    </div>
-                  )}
-                </div>
+                <div key={i} className="min-h-[200px]">
+                  <div className={`text-center py-2 rounded-t-lg text-xs font-semibold ${headerCls}`} title={holiday?.name || undefined}>
+                    <div>{label}</div>
+                    <div className={`text-lg font-bold ${isToday ? 'text-white' : 'text-un1t-white'}`}>{date.getDate()}</div>
+                    {holiday && (
+                      <div className={`mt-0.5 text-[10px] font-medium leading-tight px-1 truncate ${isToday ? 'text-white/80' : 'text-amber-300'}`}>
+                        {holiday.source === 'national' ? '🇮🇪 ' : '🏷 '}{holiday.name}
+                      </div>
+                    )}
+                  </div>
 
-                {/* Shifts & Time Off */}
-                <div className={`bg-un1t-dark/50 border border-un1t-gray border-t-0 rounded-b-lg p-1.5 space-y-1.5 min-h-[160px] ${holiday ? 'bg-amber-500/[0.04]' : ''}`}>
-                  {/* Time-off bars */}
-                  {timeOff
-                    .filter(t => t.start_date <= dateStr && t.end_date >= dateStr)
-                    .filter(t => viewMode === 'all' || t.profile_id === user.id)
-                    .map(t => {
-                      const conf = TIME_OFF_CONFIG[t.type] || TIME_OFF_CONFIG.unavailable
-                      const Icon = conf.icon
+                  <div className={`bg-un1t-dark/50 border border-un1t-gray border-t-0 rounded-b-lg p-1.5 space-y-1.5 min-h-[160px] ${holiday ? 'bg-amber-500/[0.04]' : ''}`}>
+                    {/* Time-off bars */}
+                    {timeOff
+                      .filter(t => t.start_date <= dateStr && t.end_date >= dateStr)
+                      .filter(t => viewMode === 'all' || t.profile_id === user.id)
+                      .map(t => {
+                        const conf = TIME_OFF_CONFIG[t.type] || TIME_OFF_CONFIG.unavailable
+                        const Icon = conf.icon
+                        return (
+                          <div
+                            key={`to-${t.id}`}
+                            className="rounded-md px-2 py-1.5 text-xs flex items-center gap-1.5"
+                            style={{ backgroundColor: conf.color + '18', borderLeft: `3px solid ${conf.color}` }}
+                          >
+                            <Icon size={12} style={{ color: conf.color }} />
+                            <span className="font-medium truncate" style={{ color: conf.color }}>
+                              {t.profiles?.full_name} — {conf.label}
+                            </span>
+                          </div>
+                        )
+                      })
+                    }
+
+                    {dayBlocks.length === 0 && timeOff.filter(t => t.start_date <= dateStr && t.end_date >= dateStr).length === 0 && (
+                      <div className="text-center py-6 text-xs text-un1t-mid">No shifts</div>
+                    )}
+
+                    {dayBlocks.map(block => {
+                      const tmpl = block.shift_templates || {}
+                      const assignments = block.shift_assignments || []
+                      const count = assignments.length
+                      const max = block.max_coaches || 15
+                      const unstaffed = isBlockUnstaffedFuture(block, todayStr)
+                      const myAssignment = assignments.find(a => a.profile_id === user.id)
+                      const blockColor = tmpl.color || '#3B82F6'
+                      const atCapacity = count >= max
+
                       return (
                         <div
-                          key={`to-${t.id}`}
-                          className="rounded-md px-2 py-1.5 text-xs flex items-center gap-1.5"
-                          style={{ backgroundColor: conf.color + '18', borderLeft: `3px solid ${conf.color}` }}
+                          key={block.id}
+                          className={`rounded-md p-2 text-xs relative group ${myAssignment ? 'ring-1 ring-blue-400/50' : ''} ${unstaffed ? 'border border-red-500/50' : ''}`}
+                          style={{ backgroundColor: unstaffed ? '#7F1D1D20' : blockColor + '20', borderLeft: `3px solid ${unstaffed ? '#EF4444' : blockColor}` }}
                         >
-                          <Icon size={12} style={{ color: conf.color }} />
-                          <span className="font-medium truncate" style={{ color: conf.color }}>
-                            {t.profiles?.full_name} — {conf.label}
-                          </span>
+                          <div className="flex items-center justify-between gap-1">
+                            <div className="font-semibold truncate" style={{ color: unstaffed ? '#FCA5A5' : 'inherit' }}>
+                              {tmpl.name || 'Shift'}
+                            </div>
+                            <span
+                              className={`text-[10px] px-1.5 py-0.5 rounded font-medium flex-shrink-0 ${
+                                unstaffed
+                                  ? 'bg-red-500/20 text-red-300'
+                                  : atCapacity
+                                    ? 'bg-un1t-gray/60 text-un1t-white'
+                                    : ''
+                              }`}
+                              style={!unstaffed && !atCapacity ? { backgroundColor: blockColor + '30', color: blockColor } : undefined}
+                            >
+                              {count}/{max}
+                            </span>
+                          </div>
+                          <div className="text-un1t-light mt-0.5 flex items-center gap-1">
+                            <Clock size={10} />
+                            {formatTime(block.start_time)}–{formatTime(block.end_time)}
+                          </div>
+
+                          {/* Assigned coaches list */}
+                          {count === 0 ? (
+                            <div className="mt-1.5 text-[11px] text-red-300 italic">
+                              {unstaffed ? 'Unstaffed — assign a coach' : 'No coach (past)'}
+                            </div>
+                          ) : (
+                            <div className="mt-1.5 space-y-0.5">
+                              {assignments.map(a => {
+                                const isMe = a.profile_id === user.id
+                                return (
+                                  <div key={a.id} className="flex items-center justify-between gap-1 text-[11px]">
+                                    <span className={`truncate ${isMe ? 'text-blue-300 font-medium' : 'text-un1t-white'}`}>
+                                      {a.profiles?.full_name || 'Unknown'}
+                                    </span>
+                                    {(isManager || isMe) && (
+                                      <button
+                                        onClick={(e) => { e.stopPropagation(); handleUnassign(a.id) }}
+                                        className="opacity-0 group-hover:opacity-100 text-un1t-mid hover:text-red-400 flex-shrink-0"
+                                        title="Remove coach"
+                                      >
+                                        <X size={10} />
+                                      </button>
+                                    )}
+                                  </div>
+                                )
+                              })}
+                            </div>
+                          )}
+
+                          {/* Action row */}
+                          <div className="mt-1.5 flex items-center justify-end gap-1">
+                            {myAssignment && (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  // Swap modal expects a legacy shift-shaped row
+                                  const shiftShape = flatShifts.find(fs => fs.id === myAssignment.id)
+                                  if (shiftShape) setSwapModal(shiftShape)
+                                }}
+                                className="text-[10px] text-un1t-light hover:text-un1t-white"
+                                title="Request swap"
+                              >
+                                <ArrowLeftRight size={11} />
+                              </button>
+                            )}
+                            {isManager && !atCapacity && (
+                              <button
+                                onClick={() => setAssignTarget({ block })}
+                                className="text-[10px] text-blue-400 hover:text-blue-300 px-1.5 py-0.5 rounded border border-blue-500/30 hover:border-blue-500/60"
+                              >
+                                + Assign
+                              </button>
+                            )}
+                            {isManager && (
+                              <button
+                                onClick={() => handleDeleteBlock(block.id)}
+                                className="opacity-0 group-hover:opacity-100 text-un1t-mid hover:text-red-400"
+                                title="Remove this shift slot"
+                              >
+                                <X size={11} />
+                              </button>
+                            )}
+                          </div>
                         </div>
                       )
-                    })
-                  }
+                    })}
 
-                  {dayShifts.length === 0 && timeOff.filter(t => t.start_date <= dateStr && t.end_date >= dateStr).length === 0 && (
-                    <div className="text-center py-6 text-xs text-un1t-mid">No shifts</div>
-                  )}
-
-                  {dayShifts.map(shift => {
-                    const tmpl = shift.shift_templates || {}
-                    const startTime = shift.start_time_override || tmpl.start_time
-                    const endTime = shift.end_time_override || tmpl.end_time
-                    const isMyShift = shift.profile_id === user.id
-
-                    return (
-                      <div
-                        key={shift.id}
-                        className={`rounded-md p-2 text-xs relative group ${isMyShift ? 'ring-1 ring-blue-400/50' : ''}`}
-                        style={{ backgroundColor: (tmpl.color || '#3B82F6') + '20', borderLeft: `3px solid ${tmpl.color || '#3B82F6'}` }}
+                    {/* Add ad-hoc block button (manager only) */}
+                    {isManager && (
+                      <button
+                        onClick={() => setCreateTarget({ date: dateStr })}
+                        className="w-full py-2 rounded-md border border-dashed border-un1t-gray text-un1t-mid hover:text-un1t-white hover:border-un1t-white/30 text-xs transition-colors flex items-center justify-center gap-1"
                       >
-                        <div className="font-semibold truncate">{shift.profiles?.full_name || 'Unknown'}</div>
-                        <div className="text-un1t-light mt-0.5 flex items-center gap-1">
-                          <Clock size={10} />
-                          {formatTime(startTime)}–{formatTime(endTime)}
-                        </div>
-                        {shift.role_label && (
-                          <div className="text-un1t-light mt-0.5">{shift.role_label}</div>
-                        )}
-                        {shift.notes && (
-                          <div className="text-un1t-mid mt-0.5 truncate" title={shift.notes}>{shift.notes}</div>
-                        )}
-                        {tmpl.name && (
-                          <div className="mt-1 inline-block px-1.5 py-0.5 rounded text-[10px] font-medium" style={{ backgroundColor: (tmpl.color || '#3B82F6') + '30', color: tmpl.color || '#3B82F6' }}>
-                            {tmpl.name}
-                          </div>
-                        )}
-                        {!shift.published && (
-                          <div className="absolute top-1 right-1 w-2 h-2 rounded-full bg-yellow-400" title="Unpublished" />
-                        )}
-
-                        {/* Actions (hover) */}
-                        <div className="absolute top-1 right-1 hidden group-hover:flex gap-1">
-                          {isMyShift && (
-                            <button
-                              onClick={() => setSwapModal(shift)}
-                              className="p-1 rounded bg-un1t-dark/80 hover:bg-un1t-gray text-un1t-light hover:text-un1t-white"
-                              title="Request swap"
-                            >
-                              <ArrowLeftRight size={12} />
-                            </button>
-                          )}
-                          {isManager && (
-                            <button
-                              onClick={() => handleDeleteShift(shift.id)}
-                              className="p-1 rounded bg-un1t-dark/80 hover:bg-red-500/30 text-un1t-light hover:text-red-400"
-                              title="Remove shift"
-                            >
-                              <X size={12} />
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    )
-                  })}
-
-                  {/* Add shift button */}
-                  {isManager && (
-                    <button
-                      onClick={() => setShowAddModal({ date: dateStr, dayIndex: i })}
-                      className="w-full py-2 rounded-md border border-dashed border-un1t-gray text-un1t-mid hover:text-un1t-white hover:border-un1t-white/30 text-xs transition-colors flex items-center justify-center gap-1"
-                    >
-                      <Plus size={12} /> Add
-                    </button>
-                  )}
+                        <Plus size={12} /> Add Slot
+                      </button>
+                    )}
+                  </div>
                 </div>
-              </div>
               )
             })
           })()}
         </div>
       )}
 
-      {/* Add Shift Modal */}
-      {showAddModal && (
-        <AddShiftModal
-          date={showAddModal.date}
-          templates={templates}
+      {/* Assign Coach Popover */}
+      {assignTarget && (
+        <AssignCoachModal
+          block={assignTarget.block}
           staff={locationStaff}
-          onAdd={handleAddShift}
-          onClose={() => setShowAddModal(null)}
+          onAssign={(profileId) => handleAssignCoach(assignTarget.block.id, profileId)}
+          onClose={() => setAssignTarget(null)}
+        />
+      )}
+
+      {/* Add Block (ad-hoc) Modal */}
+      {createTarget && (
+        <CreateBlockModal
+          date={createTarget.date}
+          templates={templates}
+          onCreate={(templateId) => handleCreateBlock(createTarget.date, templateId)}
+          onClose={() => setCreateTarget(null)}
         />
       )}
 
@@ -710,17 +839,18 @@ export default function ScheduleCalendar({ user }) {
   )
 }
 
-function AddShiftModal({ date, templates, staff, onAdd, onClose }) {
+function AssignCoachModal({ block, staff, onAssign, onClose }) {
   const [profileId, setProfileId] = useState('')
-  const [templateId, setTemplateId] = useState('')
   const [saving, setSaving] = useState(false)
-
-  const dayLabel = new Date(date + 'T00:00:00').toLocaleDateString('en-IE', { weekday: 'long', day: 'numeric', month: 'long' })
+  const tmpl = block.shift_templates || {}
+  const assignedIds = new Set((block.shift_assignments || []).map(a => a.profile_id))
+  const available = staff.filter(s => !assignedIds.has(s.id))
+  const dayLabel = new Date(block.block_date + 'T00:00:00').toLocaleDateString('en-IE', { weekday: 'long', day: 'numeric', month: 'long' })
 
   async function handleClick() {
-    if (!profileId || !templateId) return
+    if (!profileId) return
     setSaving(true)
-    await onAdd(profileId, templateId, date)
+    await onAssign(profileId)
     setSaving(false)
   }
 
@@ -728,38 +858,76 @@ function AddShiftModal({ date, templates, staff, onAdd, onClose }) {
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={onClose}>
       <div className="bg-un1t-dark border border-un1t-gray rounded-xl p-6 w-full max-w-md" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-4">
-          <h3 className="font-semibold">Add Shift — {dayLabel}</h3>
+          <h3 className="font-semibold">Assign Coach</h3>
           <button onClick={onClose} className="text-un1t-light hover:text-un1t-white"><X size={18} /></button>
         </div>
-
-        <div className="space-y-3">
-          <div>
-            <label className="block text-xs text-un1t-light mb-1">Staff Member *</label>
-            <select value={profileId} onChange={e => setProfileId(e.target.value)} className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white">
-              <option value="">Select staff...</option>
-              {staff.map(s => (
-                <option key={s.id} value={s.id}>{s.full_name} ({s.role})</option>
-              ))}
-            </select>
-          </div>
-
-          <div>
-            <label className="block text-xs text-un1t-light mb-1">Shift *</label>
-            <select value={templateId} onChange={e => setTemplateId(e.target.value)} className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white">
-              <option value="">Select shift...</option>
-              {templates.map(t => (
-                <option key={t.id} value={t.id}>{t.name} ({formatTime(t.start_time)}–{formatTime(t.end_time)})</option>
-              ))}
-            </select>
+        <div className="bg-black/30 rounded-lg p-3 mb-4 text-sm">
+          <div className="font-medium">{tmpl.name || 'Shift'} — {dayLabel}</div>
+          <div className="text-un1t-light text-xs mt-1">
+            {formatTime(block.start_time)}–{formatTime(block.end_time)} · {(block.shift_assignments?.length || 0)}/{block.max_coaches} assigned
           </div>
         </div>
-
+        <div>
+          <label className="block text-xs text-un1t-light mb-1">Coach *</label>
+          <select value={profileId} onChange={e => setProfileId(e.target.value)} className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white">
+            <option value="">Select coach...</option>
+            {available.map(s => (
+              <option key={s.id} value={s.id}>{s.full_name} ({s.role})</option>
+            ))}
+          </select>
+          {available.length === 0 && (
+            <p className="text-[11px] text-un1t-light mt-1.5">All staff already assigned to this slot.</p>
+          )}
+        </div>
         <button
           onClick={handleClick}
-          disabled={!profileId || !templateId || saving}
+          disabled={!profileId || saving}
           className="w-full mt-4 bg-un1t-white text-un1t-black font-medium text-sm py-2.5 rounded-md hover:bg-un1t-accent transition-colors disabled:opacity-50"
         >
-          {saving ? 'Adding...' : 'Add Shift'}
+          {saving ? 'Assigning...' : 'Assign Coach'}
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function CreateBlockModal({ date, templates, onCreate, onClose }) {
+  const [templateId, setTemplateId] = useState('')
+  const [saving, setSaving] = useState(false)
+  const dayLabel = new Date(date + 'T00:00:00').toLocaleDateString('en-IE', { weekday: 'long', day: 'numeric', month: 'long' })
+
+  async function handleClick() {
+    if (!templateId) return
+    setSaving(true)
+    await onCreate(templateId)
+    setSaving(false)
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={onClose}>
+      <div className="bg-un1t-dark border border-un1t-gray rounded-xl p-6 w-full max-w-md" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="font-semibold">Add Shift Slot — {dayLabel}</h3>
+          <button onClick={onClose} className="text-un1t-light hover:text-un1t-white"><X size={18} /></button>
+        </div>
+        <p className="text-xs text-un1t-light mb-3">
+          Adds a one-off block for this day. To make a slot recur, edit the template and add this weekday to its days_of_week.
+        </p>
+        <div>
+          <label className="block text-xs text-un1t-light mb-1">Template *</label>
+          <select value={templateId} onChange={e => setTemplateId(e.target.value)} className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white">
+            <option value="">Select template...</option>
+            {templates.map(t => (
+              <option key={t.id} value={t.id}>{t.name} ({formatTime(t.start_time)}–{formatTime(t.end_time)})</option>
+            ))}
+          </select>
+        </div>
+        <button
+          onClick={handleClick}
+          disabled={!templateId || saving}
+          className="w-full mt-4 bg-un1t-white text-un1t-black font-medium text-sm py-2.5 rounded-md hover:bg-un1t-accent transition-colors disabled:opacity-50"
+        >
+          {saving ? 'Adding...' : 'Add Slot'}
         </button>
       </div>
     </div>
@@ -768,7 +936,6 @@ function AddShiftModal({ date, templates, staff, onAdd, onClose }) {
 
 function SwapModal({ shift, onSubmit, onClose }) {
   const [reason, setReason] = useState('')
-
   const tmpl = shift.shift_templates || {}
 
   return (
@@ -778,7 +945,6 @@ function SwapModal({ shift, onSubmit, onClose }) {
           <h3 className="font-semibold">Request Shift Swap</h3>
           <button onClick={onClose} className="text-un1t-light hover:text-un1t-white"><X size={18} /></button>
         </div>
-
         <div className="bg-black/30 rounded-lg p-3 mb-4 text-sm">
           <div className="font-medium">{tmpl.name} — {new Date(shift.shift_date + 'T00:00:00').toLocaleDateString('en-IE', { weekday: 'long', day: 'numeric', month: 'long' })}</div>
           <div className="text-un1t-light text-xs mt-1">
@@ -786,7 +952,6 @@ function SwapModal({ shift, onSubmit, onClose }) {
             {shift.role_label && ` · ${shift.role_label}`}
           </div>
         </div>
-
         <div>
           <label className="block text-xs text-un1t-light mb-1">Reason (optional)</label>
           <textarea
@@ -797,14 +962,12 @@ function SwapModal({ shift, onSubmit, onClose }) {
             className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white resize-none"
           />
         </div>
-
         <button
           onClick={() => onSubmit(shift.id, reason)}
           className="w-full mt-4 bg-un1t-white text-un1t-black font-medium text-sm py-2.5 rounded-md hover:bg-un1t-accent transition-colors"
         >
           Submit Swap Request
         </button>
-        <p className="text-xs text-un1t-mid mt-2 text-center">A manager will review your request</p>
       </div>
     </div>
   )
