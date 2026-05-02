@@ -24,6 +24,10 @@ export const AUDIENCE_FIELDS = Object.freeze({
   email_status:              { type: 'select',  ops: ['eq', 'neq'] },
   lead_source:               { type: 'select',  ops: ['eq', 'neq'] },
   wa_status:                 { type: 'select',  ops: ['eq', 'neq'] },
+  // contacts.sms_status (mig 059) — mirrors wa_status. Used by the
+  // upcoming SMS broadcasts/sequences/automations to filter out
+  // opted-out / invalid recipients in audience builders.
+  sms_status:                 { type: 'select',  ops: ['eq', 'neq'] },
   label:                     { type: 'text',    ops: ['eq', 'neq', 'contains', 'not_contains', 'is_null', 'is_not_null', 'not_null'] },
   tags:                      { type: 'text',    ops: ['eq', 'neq', 'contains', 'not_contains', 'is_null', 'is_not_null', 'not_null'] },
   glofox_member_id:          { type: 'text',    ops: ['eq', 'neq', 'is_null', 'is_not_null', 'not_null'] },

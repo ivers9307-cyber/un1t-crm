@@ -2,6 +2,8 @@ import { createServerClient } from '@/lib/supabase'
 import { notFound } from 'next/navigation'
 import Link from 'next/link'
 import { ArrowLeft, Mail, Phone, Calendar, MessageSquare, CheckSquare, Clock, BookOpen, ArrowRight, MessageCircle } from 'lucide-react'
+import { getCurrentUser } from '@/lib/auth'
+import { hasPermission } from '@/lib/permissions'
 import ContactActions from '@/components/ContactActions'
 import StartWhatsAppButton from '@/components/StartWhatsAppButton'
 
@@ -28,10 +30,15 @@ const activityIcons = {
   pipeline: { bg: 'bg-emerald-500/20', color: 'text-emerald-400', label: 'Pipeline' },
   whatsapp_sent: { bg: 'bg-green-500/20', color: 'text-green-400', label: 'WhatsApp Sent' },
   whatsapp_received: { bg: 'bg-green-500/20', color: 'text-green-300', label: 'WhatsApp Received' },
+  // mig 059 — ad-hoc and (later) sequence/broadcast SMS sends.
+  // No 'sms_received' counterpart yet; alpha sender IDs are
+  // send-only in IE/UK/EU.
+  sms_sent: { bg: 'bg-cyan-500/20', color: 'text-cyan-400', label: 'SMS Sent' },
 }
 
 export default async function ContactDetailPage({ params }) {
   const db = createServerClient()
+  const user = await getCurrentUser()
   const { id } = params
 
   const [contactRes, dealsRes, notesRes, activitiesRes, bookingsRes, waConvRes] = await Promise.all([
@@ -246,7 +253,13 @@ export default async function ContactDetailPage({ params }) {
           <div className="bg-un1t-dark border border-un1t-gray rounded-lg">
             <div className="flex items-center justify-between p-4 border-b border-un1t-gray">
               <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light">Timeline</h3>
-              <ContactActions contactId={contact.id} locationId={contact.location_id} />
+              <ContactActions
+                contactId={contact.id}
+                locationId={contact.location_id}
+                canSms={hasPermission(user, 'sms')}
+                hasPhone={!!contact.phone}
+                smsBlocked={contact.sms_status && contact.sms_status !== 'active'}
+              />
             </div>
             <div className="divide-y divide-un1t-gray">
               {timeline.length === 0 && (

@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createBrowserClient } from '@/lib/supabase'
+import { validateAlphaSenderId } from '@/lib/twilio'
 
 export default function LocationForm({ location, callerRole = 'owner' }) {
   const router = useRouter()
@@ -19,6 +20,12 @@ export default function LocationForm({ location, callerRole = 'owner' }) {
   const [timezone, setTimezone] = useState(location?.timezone || 'Europe/Dublin')
   const [country, setCountry] = useState(location?.country || 'IE')
   const [active, setActive] = useState(location?.active !== false)
+
+  // Twilio alpha sender ID (mig 059) — per-location branded sender
+  // shown on recipients' phones. Empty string = use the global
+  // TWILIO_FROM env fallback. Validation runs on save (max 11
+  // alphanumeric chars per Twilio carrier rules).
+  const [smsSenderId, setSmsSenderId] = useState(location?.twilio_alpha_sender_id || '')
 
   // Integration settings
   const settings = location?.settings || {}
@@ -50,6 +57,19 @@ export default function LocationForm({ location, callerRole = 'owner' }) {
     const db = createBrowserClient()
     const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '')
 
+    // Validate the SMS sender ID app-side before sending. Twilio
+    // rejects non-conforming alpha sender IDs at send time, but
+    // catching it here gives a clean inline error instead of a
+    // delivery failure later.
+    if (smsSenderId) {
+      const senderError = validateAlphaSenderId(smsSenderId)
+      if (senderError) {
+        setError(`SMS sender ID: ${senderError}`)
+        setSaving(false)
+        return
+      }
+    }
+
     const payload = {
       name,
       slug,
@@ -59,6 +79,8 @@ export default function LocationForm({ location, callerRole = 'owner' }) {
       timezone,
       country,
       active,
+      // mig 059 — null = fall back to TWILIO_FROM env in the send path.
+      twilio_alpha_sender_id: smsSenderId.trim() || null,
       settings: {
         ...(settings || {}),
         glofox: glofoxBranchId || glofoxApiKey ? {
@@ -231,6 +253,35 @@ export default function LocationForm({ location, callerRole = 'owner' }) {
             </button>
           </div>
         )}
+      </div>
+
+      {/* SMS (Twilio) — per-location alpha sender ID (mig 059). The
+          actual Twilio account credentials live in env vars (one
+          account, multiple branded sender IDs). The sender ID set
+          here is what shows on recipients' phones at this location. */}
+      <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5 space-y-4">
+        <h3 className="font-semibold text-sm text-un1t-light uppercase tracking-wider">SMS (Twilio)</h3>
+        <p className="text-xs text-un1t-mid">
+          Branded sender ID shown on recipients' phones for SMS sent from this location.
+          Leave blank to use the global default.
+        </p>
+
+        <div>
+          <label className="block text-sm mb-1.5">Alpha Sender ID</label>
+          <input
+            type="text"
+            value={smsSenderId}
+            onChange={e => setSmsSenderId(e.target.value)}
+            placeholder="e.g. UN1T or UN1THATCH"
+            maxLength={11}
+            pattern="[A-Za-z0-9]*"
+            className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid font-mono"
+          />
+          <p className="text-[11px] text-un1t-mid mt-1">
+            Max 11 chars, alphanumeric only (no spaces or punctuation).
+            Some carriers require pre-registration of branded sender IDs — check Twilio's regional guidelines for IE/UK before going live.
+          </p>
+        </div>
       </div>
 
       {/* Glofox Integration */}

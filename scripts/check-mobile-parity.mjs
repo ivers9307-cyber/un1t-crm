@@ -75,6 +75,7 @@ const WEB_ONLY_OK = {
   bookings:       'Bookings list lives in the web sidebar; mobile shows no equivalent.',
   activities:     'Activity log timeline; mobile surfaces this inside deal detail.',
   email:          'Campaign editor is desktop-only.',
+  sms:            'SMS broadcasts/sequences/automations + ad-hoc sends from the contact profile are web-only — alpha sender ID is configured per-location in Location Settings (mig 059). No mobile SMS UI by design.',
   settings:       'Staff/branding/billing settings are managed on web.',
   car_processing: 'Tesla import tracker (CCF Autos) — operations workflow with file uploads; not part of mobile gym workflows.',
 }
