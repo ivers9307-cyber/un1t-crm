@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import {
   ArrowLeft, Save, Plus, Trash2, ChevronDown, ChevronUp,
-  Play, Pause, Clock, Mail, MessageCircle, Hourglass, Zap, AlertCircle
+  Play, Pause, Clock, Mail, MessageCircle, MessageSquare, Hourglass, Zap, AlertCircle
 } from 'lucide-react'
 
 const TRIGGER_TYPES = [
@@ -19,7 +19,17 @@ const TRIGGER_TYPES = [
 const CHANNEL_CONFIG = {
   email:    { icon: Mail,          color: 'bg-blue-500/20 text-blue-400',   label: 'Email' },
   whatsapp: { icon: MessageCircle, color: 'bg-green-500/20 text-green-400', label: 'WhatsApp' },
+  sms:      { icon: MessageSquare, color: 'bg-cyan-500/20 text-cyan-400',   label: 'SMS' },
   wait:     { icon: Hourglass,     color: 'bg-un1t-gray/40 text-un1t-light', label: 'Wait' },
+}
+
+// Same segment math used by SMSBroadcastEditor — single GSM7
+// fits 160 chars; multi-segment is 153 per segment.
+function smsSegmentInfo(text) {
+  const len = text?.length || 0
+  if (len === 0) return { len: 0, segments: 0 }
+  if (len <= 160) return { len, segments: 1 }
+  return { len, segments: Math.ceil(len / 153) }
 }
 
 // Pull {{1}}, {{2}}... placeholders out of a WhatsApp template's
@@ -49,7 +59,10 @@ function StepCard({ step, index, onUpdate, onDelete, onMoveUp, onMoveDown, isFir
   let headerLabel
   if (stepType === 'wait') headerLabel = `Wait ${step.delay_days || 0}d ${step.delay_hours || 0}h`
   else if (stepType === 'whatsapp') headerLabel = selectedWaTemplate?.name || `WhatsApp step ${index + 1}`
+  else if (stepType === 'sms') headerLabel = (step.sms_body && step.sms_body.length > 40 ? step.sms_body.slice(0, 40) + '…' : step.sms_body) || `SMS step ${index + 1}`
   else headerLabel = step.subject || `Step ${index + 1}`
+
+  const smsSeg = stepType === 'sms' ? smsSegmentInfo(step.sms_body || '') : null
 
   return (
     <div className="relative">
@@ -104,6 +117,7 @@ function StepCard({ step, index, onUpdate, onDelete, onMoveUp, onMoveDown, isFir
                 >
                   <option value="email">Email</option>
                   <option value="whatsapp">WhatsApp</option>
+                  <option value="sms">SMS</option>
                   <option value="wait">Wait (delay only)</option>
                 </select>
               </div>
@@ -226,6 +240,33 @@ function StepCard({ step, index, onUpdate, onDelete, onMoveUp, onMoveDown, isFir
                   </div>
                 )}
               </>
+            )}
+
+            {/* SMS step (mig 062). Freeform body sent via Twilio,
+                using the sequence's location's per-location alpha
+                sender ID (mig 059). Same merge tags as email + ad-hoc. */}
+            {stepType === 'sms' && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="block text-xs text-un1t-light">SMS body</label>
+                  {smsSeg && (
+                    <span className={`text-[11px] ${smsSeg.segments > 1 ? 'text-amber-500' : 'text-un1t-light'}`}>
+                      {smsSeg.len} chars · {smsSeg.segments} segment{smsSeg.segments === 1 ? '' : 's'}
+                    </span>
+                  )}
+                </div>
+                <textarea
+                  value={step.sms_body || ''}
+                  onChange={e => onUpdate({ sms_body: e.target.value })}
+                  rows={4}
+                  maxLength={1600}
+                  placeholder="Hi {{first_name}}, just a reminder your trial expires in 2 days at {{location_name}}."
+                  className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid resize-y"
+                />
+                <p className="text-[11px] text-un1t-mid">
+                  Merge tags: <code className="text-un1t-light">{'{{first_name}}'}</code>, <code className="text-un1t-light">{'{{name}}'}</code>, <code className="text-un1t-light">{'{{location_name}}'}</code>. Sender ID is set per-location in <Link href="/settings" className="underline">Location Settings</Link>.
+                </p>
+              </div>
             )}
 
             {/* Wait step has no content beyond the delay configured above. */}

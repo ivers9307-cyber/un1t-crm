@@ -19,7 +19,11 @@ const PatchSchema = z.object({
   body: z.string().min(1).max(1600).optional(),
   audience_filter: audienceFilterSchema.optional(),
   scheduled_at: z.string().datetime({ offset: true }).nullable().optional(),
-  status: z.enum(['draft', 'cancelled']).optional(), // only these are user-settable
+  // User-settable status transitions only:
+  //   draft -> scheduled  (requires scheduled_at to be set + future)
+  //   scheduled -> draft  (un-schedule)
+  //   draft|scheduled -> cancelled  (abort)
+  status: z.enum(['draft', 'scheduled', 'cancelled']).optional(),
 }).strict()
 
 async function loadBroadcast(db, id) {
@@ -76,17 +80,34 @@ export async function PATCH(request, { params }) {
   const guard = assertLocationAccess(user, broadcast.location_id)
   if (guard) return guard
 
-  // State machine: only drafts are editable. 'cancelled' is reachable
-  // from draft only (you can't un-cancel and you can't cancel a sent
-  // broadcast).
-  if (broadcast.status !== 'draft') {
+  // State machine. Editable from 'draft' or 'scheduled'. Going to
+  // 'scheduled' requires a future scheduled_at — set it in the same
+  // PATCH or have it already on the row. Sending and sent are
+  // immutable (sent is audit history).
+  if (broadcast.status !== 'draft' && broadcast.status !== 'scheduled') {
     return NextResponse.json({
       success: false,
-      error: `Broadcast is in '${broadcast.status}' state — only drafts are editable`,
+      error: `Broadcast is in '${broadcast.status}' state — only drafts and scheduled broadcasts are editable`,
     }, { status: 409 })
   }
-  if (patch.status && patch.status !== 'cancelled' && patch.status !== 'draft') {
-    return NextResponse.json({ success: false, error: 'Invalid status transition' }, { status: 400 })
+
+  // Validate the transition before writing.
+  if (patch.status === 'scheduled') {
+    const nextScheduledAt = patch.scheduled_at !== undefined
+      ? patch.scheduled_at
+      : broadcast.scheduled_at
+    if (!nextScheduledAt) {
+      return NextResponse.json({
+        success: false,
+        error: 'scheduled_at is required to schedule a broadcast',
+      }, { status: 400 })
+    }
+    if (new Date(nextScheduledAt).getTime() <= Date.now()) {
+      return NextResponse.json({
+        success: false,
+        error: 'scheduled_at must be in the future',
+      }, { status: 400 })
+    }
   }
 
   const { data, error: updErr } = await db.from('sms_broadcasts')
@@ -114,13 +135,15 @@ export async function DELETE(request, { params }) {
   const guard = assertLocationAccess(user, broadcast.location_id)
   if (guard) return guard
 
-  // Don't permanently delete sent broadcasts — they're audit history.
-  // Cascade DELETE on recipients would also wipe per-contact send
-  // results, which we want to keep.
-  if (broadcast.status === 'sent' || broadcast.status === 'sending') {
+  // Don't permanently delete sent / sending / scheduled broadcasts —
+  // sent is audit history; sending shouldn't be touched mid-loop;
+  // scheduled is queued and should be unscheduled (-> draft) before
+  // deletion. Cascade DELETE on recipients would also wipe
+  // per-contact send results, which we want to keep.
+  if (broadcast.status === 'sent' || broadcast.status === 'sending' || broadcast.status === 'scheduled') {
     return NextResponse.json({
       success: false,
-      error: `Cannot delete broadcasts in '${broadcast.status}' state — use cancel for drafts only`,
+      error: `Cannot delete broadcasts in '${broadcast.status}' state — un-schedule first if needed`,
     }, { status: 409 })
   }
 

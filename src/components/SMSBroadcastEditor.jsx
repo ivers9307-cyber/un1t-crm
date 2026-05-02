@@ -16,7 +16,7 @@ import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import {
   ArrowLeft, Save, Send, Users, MessageSquare,
-  CheckCircle2, XCircle, Trash2, Ban,
+  CheckCircle2, XCircle, Trash2, Ban, Calendar, Clock,
 } from 'lucide-react'
 import AudienceBuilder from './AudienceBuilder'
 
@@ -35,11 +35,31 @@ const MERGE_TAGS = [
   { tag: '{{location_name}}', label: 'Location' },
 ]
 
+// Convert ISO 8601 to the format datetime-local expects (yyyy-MM-ddTHH:mm).
+// Hardcoded to LOCAL time — datetime-local has no tz, so what the
+// user picks is interpreted in their browser's tz, then we serialise
+// back to ISO with the local offset before sending.
+function isoToLocalDatetime(iso) {
+  if (!iso) return ''
+  const d = new Date(iso)
+  const pad = n => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+function localDatetimeToIso(local) {
+  if (!local) return null
+  // new Date() interprets local-form strings in the browser's tz.
+  return new Date(local).toISOString()
+}
+
 export default function SMSBroadcastEditor({ broadcast, recipients = [], locationId, locationSenderId, userId: _userId }) {
   const router = useRouter()
   const isSent = broadcast?.status === 'sent'
   const isSending = broadcast?.status === 'sending'
+  const isScheduled = broadcast?.status === 'scheduled'
   const isCancelled = broadcast?.status === 'cancelled'
+  // 'scheduled' is editable (un-schedule first via the same UI), so
+  // the lock applies only to terminal/in-flight states.
   const isLocked = isSent || isSending || isCancelled
 
   const [name, setName] = useState(broadcast?.name || '')
@@ -47,9 +67,13 @@ export default function SMSBroadcastEditor({ broadcast, recipients = [], locatio
   const [audienceFilter, setAudienceFilter] = useState(
     broadcast?.audience_filter || { filters: [], logic: 'and' }
   )
+  const [scheduledAtLocal, setScheduledAtLocal] = useState(
+    isoToLocalDatetime(broadcast?.scheduled_at)
+  )
   const [broadcastId, setBroadcastId] = useState(broadcast?.id || null)
   const [saving, setSaving] = useState(false)
   const [sending, setSending] = useState(false)
+  const [scheduling, setScheduling] = useState(false)
   const [error, setError] = useState(null)
   const [tab, setTab] = useState(isLocked ? 'results' : 'setup')
 
@@ -63,10 +87,12 @@ export default function SMSBroadcastEditor({ broadcast, recipients = [], locatio
     setSaving(true)
     setError(null)
     try {
+      const scheduledIso = localDatetimeToIso(scheduledAtLocal)
       const payload = {
         name: name || 'Untitled SMS Broadcast',
         body,
         audience_filter: audienceFilter,
+        scheduled_at: scheduledIso,
         location_id: locationId,
       }
 
@@ -75,7 +101,12 @@ export default function SMSBroadcastEditor({ broadcast, recipients = [], locatio
         res = await fetch(`/api/sms/broadcasts/${broadcastId}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name: payload.name, body: payload.body, audience_filter: payload.audience_filter }),
+          body: JSON.stringify({
+            name: payload.name,
+            body: payload.body,
+            audience_filter: payload.audience_filter,
+            scheduled_at: scheduledIso,
+          }),
         })
       } else {
         res = await fetch('/api/sms/broadcasts', {
@@ -95,6 +126,55 @@ export default function SMSBroadcastEditor({ broadcast, recipients = [], locatio
       setError(e.message)
     } finally {
       setSaving(false)
+    }
+  }
+
+  async function handleSchedule() {
+    if (!broadcastId) {
+      setError('Save the draft first before scheduling.')
+      return
+    }
+    if (!scheduledAtLocal) {
+      setError('Pick a date and time before scheduling.')
+      return
+    }
+    const iso = localDatetimeToIso(scheduledAtLocal)
+    if (new Date(iso).getTime() <= Date.now()) {
+      setError('Scheduled time must be in the future.')
+      return
+    }
+    setScheduling(true)
+    setError(null)
+    try {
+      const res = await fetch(`/api/sms/broadcasts/${broadcastId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'scheduled', scheduled_at: iso }),
+      })
+      const data = await res.json()
+      if (!data.success) throw new Error(data.error || 'Schedule failed')
+      router.refresh()
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setScheduling(false)
+    }
+  }
+
+  async function handleUnschedule() {
+    if (!broadcastId) return
+    if (!confirm('Un-schedule this broadcast? It will return to draft state.')) return
+    try {
+      const res = await fetch(`/api/sms/broadcasts/${broadcastId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'draft' }),
+      })
+      const data = await res.json()
+      if (!data.success) throw new Error(data.error || 'Un-schedule failed')
+      router.refresh()
+    } catch (e) {
+      setError(e.message)
     }
   }
 
@@ -260,22 +340,62 @@ export default function SMSBroadcastEditor({ broadcast, recipients = [], locatio
             <AudienceBuilder
               value={audienceFilter}
               onChange={setAudienceFilter}
+              disabled={isLocked || isScheduled}
+            />
+          </div>
+
+          {/* Schedule (mig 061). Setting a future time + clicking
+              "Schedule" parks the broadcast in 'scheduled' state for
+              the cron to pick up. Leave blank to send immediately
+              via the "Send now" button below. */}
+          <div className="bg-un1t-dark border border-un1t-gray rounded-2xl p-5">
+            <div className="flex items-center gap-2 mb-3">
+              <Calendar size={16} className="text-un1t-light" />
+              <h3 className="text-sm font-semibold">Schedule (optional)</h3>
+              {isScheduled && (
+                <span className="text-[11px] px-2 py-0.5 rounded bg-amber-500/20 text-amber-400 ml-auto flex items-center gap-1">
+                  <Clock size={10} /> Queued for{' '}
+                  {broadcast?.scheduled_at
+                    ? new Date(broadcast.scheduled_at).toLocaleString()
+                    : '?'}
+                </span>
+              )}
+            </div>
+            <p className="text-xs text-un1t-light mb-3">
+              Pick a future date + time, then click <span className="text-un1t-white">Schedule send</span>. The cron picks up scheduled broadcasts every 5 minutes. Leave blank to send immediately.
+            </p>
+            <input
+              type="datetime-local"
+              value={scheduledAtLocal}
+              onChange={e => setScheduledAtLocal(e.target.value)}
               disabled={isLocked}
+              min={isoToLocalDatetime(new Date().toISOString())}
+              className="bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid disabled:opacity-60"
             />
           </div>
 
           {/* Action bar */}
           {!isLocked && (
             <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
-              <div className="flex gap-2">
-                <button
-                  onClick={handleSave}
-                  disabled={saving || !body.trim()}
-                  className="flex items-center gap-1.5 text-sm bg-un1t-gray text-un1t-white px-4 py-2 rounded-md hover:bg-un1t-gray/70 disabled:opacity-50"
-                >
-                  <Save size={14} /> {saving ? 'Saving…' : 'Save draft'}
-                </button>
-                {broadcastId && (
+              <div className="flex gap-2 flex-wrap">
+                {!isScheduled && (
+                  <button
+                    onClick={handleSave}
+                    disabled={saving || !body.trim()}
+                    className="flex items-center gap-1.5 text-sm bg-un1t-gray text-un1t-white px-4 py-2 rounded-md hover:bg-un1t-gray/70 disabled:opacity-50"
+                  >
+                    <Save size={14} /> {saving ? 'Saving…' : 'Save draft'}
+                  </button>
+                )}
+                {isScheduled && (
+                  <button
+                    onClick={handleUnschedule}
+                    className="flex items-center gap-1.5 text-sm bg-un1t-gray text-un1t-white px-4 py-2 rounded-md hover:bg-un1t-gray/70"
+                  >
+                    <Ban size={14} /> Un-schedule
+                  </button>
+                )}
+                {broadcastId && !isScheduled && (
                   <button
                     onClick={handleCancel}
                     className="flex items-center gap-1.5 text-sm bg-un1t-gray/40 text-un1t-light px-3 py-2 rounded-md hover:text-un1t-white"
@@ -283,7 +403,7 @@ export default function SMSBroadcastEditor({ broadcast, recipients = [], locatio
                     <Ban size={14} /> Cancel draft
                   </button>
                 )}
-                {broadcastId && (
+                {broadcastId && !isScheduled && (
                   <button
                     onClick={handleDelete}
                     className="flex items-center gap-1.5 text-sm text-red-400 px-3 py-2 rounded-md hover:bg-red-500/10"
@@ -292,14 +412,27 @@ export default function SMSBroadcastEditor({ broadcast, recipients = [], locatio
                   </button>
                 )}
               </div>
-              <button
-                onClick={handleSend}
-                disabled={sending || !broadcastId || !body.trim()}
-                className="flex items-center gap-1.5 text-sm bg-un1t-white text-un1t-black font-medium px-4 py-2 rounded-md hover:bg-un1t-accent disabled:opacity-50"
-                title={!broadcastId ? 'Save the draft first' : ''}
-              >
-                <Send size={14} /> {sending ? 'Sending…' : 'Send now'}
-              </button>
+              <div className="flex gap-2">
+                {!isScheduled && scheduledAtLocal && broadcastId && (
+                  <button
+                    onClick={handleSchedule}
+                    disabled={scheduling || !body.trim()}
+                    className="flex items-center gap-1.5 text-sm bg-un1t-gray text-un1t-white px-4 py-2 rounded-md hover:bg-un1t-gray/70 disabled:opacity-50"
+                  >
+                    <Calendar size={14} /> {scheduling ? 'Scheduling…' : 'Schedule send'}
+                  </button>
+                )}
+                {!isScheduled && (
+                  <button
+                    onClick={handleSend}
+                    disabled={sending || !broadcastId || !body.trim()}
+                    className="flex items-center gap-1.5 text-sm bg-un1t-white text-un1t-black font-medium px-4 py-2 rounded-md hover:bg-un1t-accent disabled:opacity-50"
+                    title={!broadcastId ? 'Save the draft first' : ''}
+                  >
+                    <Send size={14} /> {sending ? 'Sending…' : 'Send now'}
+                  </button>
+                )}
+              </div>
             </div>
           )}
           {isLocked && (

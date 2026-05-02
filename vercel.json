@@ -7,6 +7,10 @@
     {
       "path": "/api/cron/prune-rate-limits",
       "schedule": "30 3 * * *"
+    },
+    {
+      "path": "/api/cron/run-sms-broadcasts",
+      "schedule": "*/5 * * * *"
     }
   ]
 }

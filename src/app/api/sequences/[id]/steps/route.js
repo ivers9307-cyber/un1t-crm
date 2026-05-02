@@ -12,7 +12,7 @@ const StepShape = z.object({
   // Channel selector. 'wait' = no send, just the delay before the
   // following step. Defaults to 'email' for back-compat with rows
   // pre-mig 039 that didn't set step_type explicitly.
-  step_type: z.enum(['email', 'whatsapp', 'wait']).optional(),
+  step_type: z.enum(['email', 'whatsapp', 'sms', 'wait']).optional(),
   // Email step content
   subject: z.string().max(500).optional(),
   html_content: z.string().max(1_000_000).optional(),
@@ -22,6 +22,8 @@ const StepShape = z.object({
   whatsapp_template_id: uuidLike.nullable().optional(),
   whatsapp_variables: z.record(z.string()).nullable().optional(),
   whatsapp_header_media_url: z.string().url().max(2000).nullable().optional(),
+  // SMS step content (mig 062). Same 1600-char hard cap as broadcasts.
+  sms_body: z.string().max(1600).nullable().optional(),
 })
 
 const StepCreateSchema = StepShape
@@ -96,6 +98,8 @@ export async function POST(request, { params }) {
     whatsapp_template_id: stepType === 'whatsapp' ? (body.whatsapp_template_id || null) : null,
     whatsapp_variables: stepType === 'whatsapp' ? (body.whatsapp_variables || {}) : {},
     whatsapp_header_media_url: stepType === 'whatsapp' ? (body.whatsapp_header_media_url || null) : null,
+    // SMS field (mig 062 — only meaningful when step_type=sms)
+    sms_body: stepType === 'sms' ? (body.sms_body || null) : null,
   }).select().single()
 
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
@@ -133,6 +137,7 @@ export async function PUT(request, { params }) {
     if (step.whatsapp_template_id !== undefined) updates.whatsapp_template_id = step.whatsapp_template_id
     if (step.whatsapp_variables !== undefined) updates.whatsapp_variables = step.whatsapp_variables
     if (step.whatsapp_header_media_url !== undefined) updates.whatsapp_header_media_url = step.whatsapp_header_media_url
+    if (step.sms_body !== undefined) updates.sms_body = step.sms_body
 
     await db.from('sequence_steps')
       .update(updates)

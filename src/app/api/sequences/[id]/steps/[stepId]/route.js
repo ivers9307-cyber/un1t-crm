@@ -9,7 +9,7 @@ const StepUpdateSchema = z.object({
   step_order: z.number().int().min(0).max(1000).optional(),
   delay_days: z.number().int().min(0).max(365).optional(),
   delay_hours: z.number().int().min(0).max(23).optional(),
-  step_type: z.enum(['email', 'whatsapp', 'wait']).optional(),
+  step_type: z.enum(['email', 'whatsapp', 'sms', 'wait']).optional(),
   // Email step content
   subject: z.string().max(500).optional(),
   html_content: z.string().max(1_000_000).optional(),
@@ -19,6 +19,8 @@ const StepUpdateSchema = z.object({
   whatsapp_template_id: uuidLike.nullable().optional(),
   whatsapp_variables: z.record(z.string()).nullable().optional(),
   whatsapp_header_media_url: z.string().url().max(2000).nullable().optional(),
+  // SMS step content (mig 062)
+  sms_body: z.string().max(1600).nullable().optional(),
 })
 
 async function loadSequenceLocation(db, sequenceId) {

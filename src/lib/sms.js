@@ -75,8 +75,15 @@ export async function sendBroadcast(broadcastId) {
     .single()
 
   if (bErr || !broadcast) throw new Error('Broadcast not found')
-  if (broadcast.status !== 'draft' && broadcast.status !== 'sending') {
-    throw new Error(`Broadcast is in '${broadcast.status}' state — only drafts can be sent`)
+  // Allowed entry states:
+  //   - draft     : user clicked "Send now" in the UI.
+  //   - scheduled : cron picked it up at scheduled_at.
+  //   - sending   : an earlier crash left it stuck — let a manual
+  //                 retry resume (idempotent at the recipients level
+  //                 thanks to the unique (broadcast_id, contact_id)
+  //                 constraint).
+  if (broadcast.status !== 'draft' && broadcast.status !== 'scheduled' && broadcast.status !== 'sending') {
+    throw new Error(`Broadcast is in '${broadcast.status}' state — only draft / scheduled / sending can be sent`)
   }
   if (!broadcast.locations) throw new Error('Broadcast location is missing')
 

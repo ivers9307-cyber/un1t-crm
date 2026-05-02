@@ -24,6 +24,7 @@ import {
   buildTemplateComponents,
   getOrCreateConversation,
 } from '@/lib/whatsapp'
+import { sendLocationSms, TwilioError } from '@/lib/twilio'
 
 /**
  * Returns true if a given contact would match a sequence's
@@ -534,6 +535,69 @@ async function sendWhatsappStep(db, { step, sequence, contact }) {
   return result?.messageId || null
 }
 
+// ── Step sender: SMS (mig 062) ─────────────────────────────────────
+
+async function sendSmsStep(db, { step, sequence, contact }) {
+  if (!step.sms_body) {
+    throw new Error('SMS step has no sms_body.')
+  }
+  if (!contact?.phone) {
+    throw new Error('Contact has no phone number — cannot send SMS step.')
+  }
+  // Mirrors the broadcast and ad-hoc send-side gate. Opted-out
+  // contacts are silently skipped at the audience layer for
+  // broadcasts, but for sequences a contact may have opted out
+  // mid-flow. Throwing here causes the standard sequence error
+  // path to log + retry / pause the enrollment after MAX_ERRORS.
+  if (contact.sms_status && contact.sms_status !== 'active') {
+    throw new Error(`Contact's sms_status is '${contact.sms_status}' — refusing to send.`)
+  }
+
+  // Resolve the sequence's location so we get the right alpha
+  // sender ID (mig 059). Sequences are pinned to one location, so
+  // every enrolment in this sequence sends from the same sender.
+  const { data: location } = await db
+    .from('locations')
+    .select('id, name, twilio_alpha_sender_id')
+    .eq('id', sequence.location_id)
+    .single()
+  if (!location) {
+    throw new Error('Sequence location not found — cannot resolve SMS sender.')
+  }
+
+  // Apply merge tags. Same set as email + ad-hoc SMS (first_name,
+  // name, location_name, etc.).
+  const renderedBody = applyMergeTags(step.sms_body, contact, {
+    location_name: location.name || '',
+  })
+
+  let result
+  try {
+    result = await sendLocationSms({ location, to: contact.phone, body: renderedBody })
+  } catch (e) {
+    const msg = e instanceof TwilioError
+      ? `Twilio ${e.code || e.status || ''}: ${e.message}`.trim()
+      : (e?.message || 'SMS send failed')
+    throw new Error(msg)
+  }
+
+  // Activity timeline entry. Same shape as the broadcast + ad-hoc
+  // send paths (type='sms_sent', cyan chip in the contact page's
+  // activityIcons map).
+  await db.from('activities').insert({
+    contact_id: contact.id,
+    location_id: sequence.location_id,
+    type: 'sms_sent',
+    subject: `SMS sequence step: ${sequence.name || 'Untitled sequence'}`,
+    note: renderedBody,
+  })
+
+  // Bump per-step metric.
+  await db.rpc('increment_step_sent', { p_step_id: step.id }).catch(() => {})
+
+  return result?.sid || null
+}
+
 // ── Public: process due enrollments (called by the cron) ─────────
 
 /**
@@ -613,6 +677,8 @@ export async function runSequences({ now = new Date() } = {}) {
         sendId = await sendEmailStep(db, { enrollment, step, sequence, contact })
       } else if (step.step_type === 'whatsapp') {
         sendId = await sendWhatsappStep(db, { enrollment, step, sequence, contact })
+      } else if (step.step_type === 'sms') {
+        sendId = await sendSmsStep(db, { enrollment, step, sequence, contact })
       } else {
         throw new Error(`Unknown step_type "${step.step_type}".`)
       }

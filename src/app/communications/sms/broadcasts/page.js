@@ -7,7 +7,7 @@
 
 import Link from 'next/link'
 import { redirect } from 'next/navigation'
-import { Plus, MessageSquare, Send, FileEdit, Clock, Ban } from 'lucide-react'
+import { Plus, MessageSquare, Send, FileEdit, Clock, Ban, Calendar } from 'lucide-react'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
@@ -16,6 +16,7 @@ export const dynamic = 'force-dynamic'
 
 const statusConfig = {
   draft:     { label: 'Draft',     color: 'bg-gray-500/20 text-gray-400',     icon: FileEdit },
+  scheduled: { label: 'Scheduled', color: 'bg-amber-500/20 text-amber-400',   icon: Calendar },
   sending:   { label: 'Sending',   color: 'bg-yellow-500/20 text-yellow-400', icon: Clock },
   sent:      { label: 'Sent',      color: 'bg-green-500/20 text-green-400',   icon: Send },
   cancelled: { label: 'Cancelled', color: 'bg-red-500/20 text-red-400',       icon: Ban },
