@@ -324,8 +324,12 @@ Platform-level super-admin role added above `owner`. Granted to `richard@richard
 **Powers** (enforced server-side at every gate):
 - Create new locations (`/settings/locations/new` is master-only; "Add Location" button on Settings hub hidden from non-masters)
 - Create or promote staff to `owner` or `master` (POST `/api/staff` returns 403 to non-masters trying to grant either role)
-- Bypass the location-feature gate AND any per-user permission denial — `hasPermission(user, key)` short-circuits to `true` for `user.role === 'master'`. Same on mobile (`canMobile`, `canDashboard`, `hasAnyMobileFeature` all short-circuit)
+- Bypass per-user permission denials — `hasPermission(user, key)` returns `true` for any role-default + user-permission denial once `user.role === 'master'`. Same on mobile (`canMobile`, `canDashboard` skip the per-user check for master)
 - See and modify every location's data — RLS helper `private.auth_is_in_location(loc_id)` short-circuits via `private.auth_is_master()`, and `getCurrentUser()` returns every active location instead of just the user's `profile_locations` rows when role is master
+
+**Master honours the location feature gate.** The location-level toggle (Settings → Locations → Features) applies to master too — if a location has `pipeline: false`, no one at that location sees the Pipeline link, master included. Without this, "disabled at this location" wouldn't really mean disabled. (This is by design — it's how multi-tenant studios that share one master account keep operationally distinct sidebars.) The single exception is the `settings` key on web: master always sees the Settings sidebar entry as an escape hatch so they can navigate to `/settings/locations/[id]` to flip features back on. Without that, a master at a location with settings turned off would have no way back into the per-location feature toggles. Mobile has no feature-toggle UI so no escape hatch is needed there.
+
+Switching active location re-evaluates the gate, so a master toggling between locations sees a different sidebar at each one. CCF Autos (cars-only) shows just Cars; UN1T Dublin (full gym) shows the full sidebar. Both visible to the same master account.
 
 **Owners are now studio-scoped:** they can fully manage locations they belong to (edit settings, create staff at non-elevated roles), but can't mint new locations or new owner/master accounts. The role hierarchy is `master → owner → manager → head_coach → staff`.
 
@@ -344,8 +348,8 @@ Platform-level super-admin role added above `owner`. Granted to `richard@richard
 
 Each location row has a `features JSONB` column that gates feature visibility for every user at that location. Three-tier resolution in `hasPermission(user, key)`:
 
-1. **Location gate** — `user.activeLocation.features[key] === false` → DENIED. Notification keys (`notify_*` + anything in `NOTIFY_KEYS`) are exempt — those stay personal.
-2. **User override** — `user.permissions[key] === true | false` → that wins.
+1. **Location gate** — `user.activeLocation.features[key] === false` → DENIED for everyone, including master (only exception: master + `key === 'settings'` on web, which is the escape hatch back to the feature toggles). Notification keys (`notify_*` + anything in `NOTIFY_KEYS`) are exempt — those stay personal.
+2. **User override** — `user.permissions[key] === true | false` → that wins. Master skips this tier (and tier 3) once tier 1 passes.
 3. **Role default** — fall back to `DEFAULT_WEB_PERMISSIONS_BY_ROLE[role][key]`.
 
 Same logic mirrored in `mobile/lib/permissions.js` (`canMobile`, `canDashboard`, `hasAnyMobileFeature` all take `activeLocation` as the third arg). The mobile `/api/mobile/me` endpoint serialises `features` onto every location.

@@ -129,16 +129,46 @@ describe('per-location feature gate (isFeatureEnabledAtLocation)', () => {
   })
 })
 
-describe('master role bypass (mig 033)', () => {
-  it('master is granted any web key regardless of location, user perms, or role default', () => {
+describe('master role gating (mig 033 + location-gate honour)', () => {
+  it('master honours the per-location feature gate just like everyone else', () => {
+    // CCF Autos scenario: location has every feature off except
+    // car_processing. A master at that location should NOT see the
+    // off features in the sidebar — otherwise "disabled at location"
+    // is meaningless.
     const master = {
       role: 'master',
-      // Even with everything explicitly turned OFF, master still gets through.
-      activeLocation: { features: { pipeline: false, schedule: false, settings: false } },
-      permissions: { pipeline: false, settings: false, car_processing: false },
+      activeLocation: {
+        features: { pipeline: false, schedule: false, car_processing: true },
+      },
+      permissions: {},
+    }
+    expect(hasPermission(master, 'pipeline')).toBe(false)
+    expect(hasPermission(master, 'schedule')).toBe(false)
+    expect(hasPermission(master, 'car_processing')).toBe(true)
+  })
+
+  it("master's 'settings' key is the escape hatch — visible even when location turns settings off", () => {
+    // Without this, a master at a location with settings disabled
+    // would have no way back into the per-location feature toggles
+    // from the sidebar. Settings is the ONLY key with this exemption.
+    const master = {
+      role: 'master',
+      activeLocation: { features: { settings: false, pipeline: false } },
+      permissions: {},
+    }
+    expect(hasPermission(master, 'settings')).toBe(true)
+    expect(hasPermission(master, 'pipeline')).toBe(false) // still gated
+  })
+
+  it('master bypasses tier 2 + 3 once the location gate passes', () => {
+    // No user override, no role-default lookup needed — once the
+    // location says yes, master sees the feature.
+    const master = {
+      role: 'master',
+      activeLocation: { features: {} }, // default-on
+      permissions: {}, // empty — would deny a non-master without role default
     }
     expect(hasPermission(master, 'pipeline')).toBe(true)
-    expect(hasPermission(master, 'settings')).toBe(true)
     expect(hasPermission(master, 'car_processing')).toBe(true)
     expect(hasPermission(master, 'unknown_future_feature_key')).toBe(true)
   })

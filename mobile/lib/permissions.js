@@ -8,10 +8,16 @@
 // Three-tier resolution (mirrors src/lib/permissions.js on the web):
 //   1. LOCATION gate (migration 032) — activeLocation.features[key]
 //      explicitly false → DENIED for everyone at that location,
-//      regardless of role default or per-user mobile permission.
-//      Notification preferences (notify_*) are exempt — see
-//      isFeatureGatedByLocation in shared/permissions.js.
+//      regardless of role default or per-user mobile permission. This
+//      gate applies to MASTER too — if a location has a feature off,
+//      it's off, full stop. (The web has a small escape hatch on the
+//      'settings' key so a master can navigate to flip features back
+//      on; mobile has no feature-toggle UI, so no escape hatch is
+//      needed here.) Notification preferences (notify_*) are exempt —
+//      see isFeatureGatedByLocation in shared/permissions.js.
 //   2. USER override — permissions.mobile[key] === true → granted.
+//      Master bypasses this tier (once tier 1 passes, master sees it
+//      without needing per-user permission entries).
 //   3. ROLE default is implicit on mobile: profile.permissions.mobile
 //      is the source of truth (already populated server-side from
 //      DEFAULT_MOBILE_PERMISSIONS_BY_ROLE at create-staff time).
@@ -25,7 +31,7 @@
 // permissions.mobile object, in which case every key returns false
 // and the user lands on the Home tab with everything else hidden.
 
-import { isFeatureEnabledAtLocation } from '../../shared/permissions'
+import { isFeatureEnabledAtLocation, MOBILE_PERMISSION_KEYS } from '../../shared/permissions'
 
 // Re-export the shared definitions so screens that need labels/hints
 // (e.g. a future in-app notification preferences page) can import
@@ -46,9 +52,12 @@ export {
  */
 export function canMobile(profile, key, activeLocation = null) {
   if (!profile) return false
-  // Master bypasses every gate (mig 033).
-  if (profile.role === 'master') return true
+  // Tier 1: location gate. Applies to ALL roles including master —
+  // if the location has the feature off, it's off for everyone there.
   if (!isFeatureEnabledAtLocation(activeLocation, key)) return false
+  // Master bypasses tiers 2 + 3 — once the location says yes, master
+  // sees it without needing a per-user permission entry.
+  if (profile.role === 'master') return true
   const m = profile.permissions?.mobile
   if (!m || typeof m !== 'object') return false
   return m[key] === true
@@ -60,7 +69,12 @@ export function canMobile(profile, key, activeLocation = null) {
  * admin" nudge on Home.
  */
 export function hasAnyMobileFeature(profile, activeLocation = null) {
-  if (profile?.role === 'master') return true
+  // Master: any key the location still has on counts. We can't simply
+  // return true without checking the location, because a master at a
+  // location with everything mobile-disabled has no mobile features.
+  if (profile?.role === 'master') {
+    return MOBILE_PERMISSION_KEYS.some(k => isFeatureEnabledAtLocation(activeLocation, k))
+  }
   const m = profile?.permissions?.mobile
   if (!m || typeof m !== 'object') return false
   return Object.entries(m).some(([k, v]) =>
@@ -84,7 +98,9 @@ export function hasAnyMobileFeature(profile, activeLocation = null) {
  * @returns {boolean}
  */
 export function canDashboard(profile, key, activeLocation = null) {
-  if (profile?.role === 'master') return true
+  // Tier 1: location gate. Applies to ALL roles including master.
   if (!isFeatureEnabledAtLocation(activeLocation, key)) return false
+  // Master bypasses the per-user permission check.
+  if (profile?.role === 'master') return true
   return profile?.permissions?.[key] === true
 }
