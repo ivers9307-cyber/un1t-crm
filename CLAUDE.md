@@ -414,6 +414,42 @@ export async function POST(request) {
 
 **No new `console.log` in production paths.** Either remove, gate behind `if (process.env.NODE_ENV !== 'production')`, or use `console.error` for genuine error paths so Vercel captures them.
 
+**Light theme palette — text on light cards.** The codebase migrated to a light theme; `un1t-dark` (#F7F8FA) is a near-white card background, not the dark name suggests. Status text on these cards needs the **-700 ramp**, not -300. The dark-theme-tuned values (`text-amber-300`, `text-red-300`, `text-blue-100`) look washed-out and unreadable against the light surface.
+
+| Use case | Class |
+|---|---|
+| Status text on light card / banner | `text-{red,amber,emerald,blue}-700` |
+| Heavy emphasis (header in alert chip) | `text-{red,amber,blue}-800` |
+| Icons next to that text | `text-{red,amber,blue}-600` |
+| Bar fills / saturated backgrounds | `bg-{red,amber,emerald}-500` (unchanged — solid swatches OK) |
+| Tinted background (10-20% opacity) | `bg-{red,amber}-500/10` (unchanged) |
+
+The `RosterSummaryPanel` `STATUS_STYLES` map is the canonical reference. If a new alert chip looks pale in a screenshot, this is almost always why.
+
+**Git operations from terminal — zsh + bracketed paths.** Next.js dynamic-route paths contain `[id]`, `[token]`, `[slug]` etc. Zsh treats `[…]` as a glob character class and aborts the entire command with `zsh: no matches found:` if nothing matches the literal directory name. This silently breaks `git add`, leaving the staging area empty even though earlier files in the same line *looked* like they staged.
+
+Three safe forms when scripting git operations from zsh:
+
+```bash
+# 1. Single-quote the bracketed path
+git add 'src/app/contacts/[id]/page.js'
+
+# 2. Disable glob expansion for one command
+noglob git add src/app/contacts/[id]/page.js src/lib/foo.js
+
+# 3. Stage by directory or use git add -A on a clean staging buffer
+git add src/app/contacts/ src/lib/foo.js
+```
+
+**Git lock files when an IDE watches the repo.** The `fatal: cannot lock ref 'HEAD': … HEAD.lock: File exists` error usually isn't a real concurrent process — it's an IDE git extension (VS Code, Cursor, GitHub Desktop) racing with a manual `git commit` and leaving stale `.lock` files behind. Recipe:
+
+```bash
+# Find every stale lock under .git/ in one shot
+find .git -name '*.lock' -delete
+```
+
+If the locks come back immediately, an IDE is actively re-creating them. Quit the IDE (Cmd-Q, not just close window) before retrying. Both gotchas have bitten us multiple times — burn them in.
+
 ## Mobile app (`mobile/`)
 
 The iOS app is an Expo (React Native) project living in `mobile/` as a sibling to `src/`. Single repo, separate `package.json` (Expo can't share Next's deps), shared schemas/constants imported via relative paths from `../src/lib/schemas.js`. NativeWind re-exports the same `un1t-*` Tailwind tokens used on web.
