@@ -721,6 +721,83 @@ Things to watch but NOT act on without measurement:
 
 - **Supabase views default to SECURITY DEFINER.** Any view created in a migration runs with the postgres role's permissions and bypasses RLS on the underlying tables. The advisor (`get_advisors` MCP, type=security) catches it as an ERROR-level lint. Always include `WITH (security_invoker = on)` on `CREATE VIEW`, or follow up with `ALTER VIEW ... SET (security_invoker = on)`.
 
+## Roster v2 — shift template restructure
+
+Active roadmap (May 2026). The schedule today is shift-as-coach-row: a template is "a thing a coach does", and editing the schedule means moving coach rows around. Roster v2 inverts that — templates become **demand windows** ("9:30–10:30 mon–fri, up to 15 coaches"), and the schedule is the **fulfilment layer** where operators assign coaches into those windows week by week.
+
+### The model
+
+```
+shift_template
+  ├─ start_time, end_time
+  ├─ days_of_week text[]               ← new (e.g. {mon,tue,wed,thu,fri})
+  ├─ max_coaches smallint default 15   ← new, configurable per template
+  └─ location_id
+
+shift_block (instance of a template on a specific date)
+  ├─ template_id
+  ├─ location_id
+  ├─ date
+  ├─ start_time, end_time              ← snapshot from template at generation time
+  ├─ max_coaches                       ← snapshot
+  └─ roster_id                         ← phase 5
+
+shift_assignment (n:m — multiple coaches per block)
+  ├─ block_id
+  ├─ profile_id
+  └─ created_at, created_by
+
+profile (extended in phase 3)
+  ├─ employment_type 'fte' | 'contractor'
+  ├─ contracted_weekly_hours numeric   ← FTE only (CHECK)
+  └─ hourly_rate numeric
+
+locations (extended in phase 4)
+  └─ monthly_contractor_budget_eur numeric
+
+rosters (phase 5 — the publish-state container)
+  ├─ location_id, period_start, period_end
+  ├─ status 'draft' | 'published'
+  ├─ published_by, published_at
+  └─ over_budget_approval_by, over_budget_approval_at
+```
+
+A block exists once the template + date combination becomes a candidate week — even with zero assignments. **An empty block is a problem to flag, not a row to suppress.** Customers will be in the studio either way; the system has to surface "no coach is going to be here for the 9:30 class" loud and early.
+
+### Locked decisions (don't re-derive)
+
+- **FTE is sunk cost.** FTE coaches don't count against the contractor budget. The whole point of an FTE is that they're paid whether or not they coach a specific session — costing their shifts in euros against a budget creates the wrong incentive ("don't roster Sarah, she's expensive"). FTE side is tracked in **hours utilisation** (allocated / contracted), not euros.
+- **Contractor euros are the only number that hits the budget.** `monthly_contractor_budget_eur` on the location is a **ceiling** for the variable spend. Calc: sum(contractor block hours × hourly_rate) for the month being viewed.
+- **One budget field, not two.** No FTE budget. The FTE target is implicit ("get to 100% utilisation of contracted hours where possible").
+- **Default capacity = 15.** Not magic — just "high enough that any conceivable all-hands shift fits". Configurable per template, no hard cap.
+- **Empty-block flag = red marker on the calendar cell + count badge on the Today tab for managers/owners.** Operators and coaches don't get the alert. The alert addresses owner/manager liability; staff can't fix it.
+- **Publish gate is owner-only when over budget.** Manager can publish a draft if projected contractor spend ≤ budget. Over budget → owner approval required, recorded on the roster row (who, when).
+- **Leave is phase 6.** Until then, FTE availability = `contracted_weekly_hours`, leave-blind. Don't try to derive leave from whatever ad-hoc system exists today.
+
+### Phase plan
+
+| Phase | Scope | Migrations | Ships independently? |
+|---|---|---|---|
+| 1 | Data model: `shift_templates.days_of_week`, `shift_templates.max_coaches`, new `shift_blocks` + `shift_assignments` tables. Backfill: each existing shift → block + 1 assignment. RLS mirrors current shift policies. | 067 | Yes — schedule keeps working, structure switched underneath. |
+| 2 | Template editor (multi-day picker + capacity field). ScheduleCalendar renders blocks with "n / max" badge + red marker on empty future blocks. Coach assign/unassign popover. Today-tab unstaffed-block badge for owner/manager. | — | Yes — operators can plan with the new model. |
+| 3 | Profile employment fields (`employment_type`, `contracted_weekly_hours`, `hourly_rate`). StaffForm "Employment & cost" section, owner+master only. Backfill: existing coaches default contractor + null rate. | 068 | Yes — captures data, no UI consequences yet. |
+| 4 | Week summary panel below ScheduleCalendar: per-coach FTE utilisation bars, contractor euro spend (visible month) vs `monthly_contractor_budget_eur`, empty-block count, unassigned-block list. Read-only / advisory. | 069 | Yes — surfaces the numbers, no enforcement. |
+| 5 | `rosters` table + draft/published state. "Publish" action on the calendar. Over-budget publish requires owner approval (recorded on roster row). Email notify owner when manager-published roster needs approval. | 070 | Last — depends on 4. |
+| 6 (deferred) | Leave-aware FTE availability. Subtract approved leave hours from contracted_weekly_hours in the utilisation calc. Needs a leave data source first. | — | Deferred. |
+
+### Open questions to revisit at each phase boundary
+
+- **Editing a template's `days_of_week`.** Phase 1 default: only future blocks (date >= today) regenerate; past blocks freeze. Confirm at phase 2 when the editor lands.
+- **Coach in multiple blocks at the same time.** Phase 2 should warn ("Sarah is already on the 9:30 Hatch block this morning") but not hard-block — sometimes a coach floats across two studios on adjacent slots.
+- **Block-level capacity override.** Phase 1 stores `max_coaches` on the block as a snapshot of the template at generation time. Whether a specific block can be overridden post-generation (e.g. drop one Friday's max from 15 → 8) is a phase 2 UX call.
+
+### Conventions
+
+- All Roster v2 migrations land between mig 067 and mig 070 — reserve those numbers now so we don't fight for them mid-phase.
+- Profile employment fields go on `profiles`, not `profile_locations` — a coach's `hourly_rate` follows them across studios. (If a coach is paid differently at different studios, that's phase 3.5 and we'll add `profile_locations.hourly_rate_override`.)
+- `shift_blocks` is the new source of truth for the schedule. Anything that today queries `shifts` (reports, mobile schedule view, Today tab) will be pointed at `shift_blocks` + `shift_assignments` joined back to profiles. Do this in phase 1 alongside the migration so there's never a moment where two readers disagree.
+- `over_budget_approval_by` on the roster row is the audit trail for the May 1-style "why did we spend €X over budget last month?" question. Keep it forever; never null-out.
+
 ## Roadmap & backlog
 
 Mirror of the Cowork task list — kept here as the durable record so that a fresh session has the context even when the task list is cleared. Add new ideas as they come up; mark items as done with the corresponding commit/migration when shipped.
