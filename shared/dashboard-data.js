@@ -214,6 +214,77 @@ export async function fetchUnstaffedBlocksThisWeek(supabase, locationIds) {
 }
 
 // ============================================================
+// Profile cost-data completeness — manager-facing warning that
+// surfaces staff at the manager's locations missing the data
+// the phase 4 cost panel needs.
+//
+// Roster v2 phase 3. The columns themselves
+// (employment_type, contracted_hours_per_week, hourly_rate,
+// annual_salary) all pre-existed; this fetcher just rolls up
+// "who's incomplete" so the operator can fix it.
+//
+// Returns at most 20 names — enough to surface the pattern,
+// not enough to overwhelm the chip if 200 contractors are
+// missing rates after a bulk import.
+// ============================================================
+
+export async function fetchIncompletePayProfiles(supabase, locationIds) {
+  if (!locationIds || locationIds.length === 0) {
+    return { success: true, data: { count: 0, sample: [] } }
+  }
+
+  // Pull profiles assigned to any of the operator's locations
+  // and check the cost-data completeness rule:
+  //   FTE        → annual_salary OR hourly_rate must be set,
+  //                AND contracted_hours_per_week > 0
+  //   Contractor → hourly_rate must be set
+  // Inactive profiles are excluded — they don't get rostered.
+  const { data, error } = await supabase
+    .from('profile_locations')
+    .select('profiles:profile_id(id, full_name, active, employment_type, hourly_rate, annual_salary, contracted_hours_per_week)')
+    .in('location_id', locationIds)
+
+  if (error) return { success: false, error: error.message }
+
+  const seen = new Set()
+  const incomplete = []
+  for (const row of data || []) {
+    const p = row.profiles
+    if (!p || !p.active) continue
+    if (seen.has(p.id)) continue
+    seen.add(p.id)
+
+    const isFte = p.employment_type === 'fte'
+    const isContractor = p.employment_type === 'contractor'
+    const hasFtePay = (Number(p.annual_salary) > 0) || (Number(p.hourly_rate) > 0)
+    const hasFteHours = Number(p.contracted_hours_per_week) > 0
+    const hasContractorRate = Number(p.hourly_rate) > 0
+
+    const missing = isFte
+      ? (!hasFtePay || !hasFteHours)
+      : isContractor
+        ? !hasContractorRate
+        : false
+
+    if (missing) {
+      incomplete.push({
+        id: p.id,
+        name: p.full_name,
+        employment_type: p.employment_type,
+      })
+    }
+  }
+
+  return {
+    success: true,
+    data: {
+      count: incomplete.length,
+      sample: incomplete.slice(0, 20),
+    },
+  }
+}
+
+// ============================================================
 // Studio — operational view for managers + head coaches.
 // Leads / members / approvals queue. No financial data.
 // ============================================================

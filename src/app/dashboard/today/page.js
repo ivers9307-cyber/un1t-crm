@@ -5,11 +5,11 @@
 
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
-import { Calendar, ArrowLeftRight, AlertCircle } from 'lucide-react'
+import { Calendar, ArrowLeftRight, AlertCircle, AlertTriangle } from 'lucide-react'
 import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
-import { fetchPersonalDashboardData, fetchUnstaffedBlocksThisWeek } from '@shared/dashboard-data'
+import { fetchPersonalDashboardData, fetchUnstaffedBlocksThisWeek, fetchIncompletePayProfiles } from '@shared/dashboard-data'
 import { pickLocationColor } from '@shared/location-colors'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import {
@@ -177,17 +177,21 @@ export default async function PersonalDashboardPage() {
     pendingSwapsForMe, myPendingTimeOff, unreadInbox,
   } = res.data
 
-  // Roster v2 phase 2 — unstaffed-block alert for managers/owners.
-  // Master sees the same chip across all assigned locations; staff
-  // / head_coach without `dashboard_studio` won't see it.
+  // Roster v2 phase 2 + 3 — manager-facing alerts.
+  // Master sees the same chips across all assigned locations.
   const isManager = user.role === 'master' || MANAGER_ROLES.includes(user.role)
   let unstaffedCount = 0
+  let incompletePay = { count: 0, sample: [] }
   if (isManager) {
     const locIds = user.role === 'master'
       ? (user.locations || []).map(l => l.id)
       : getUserLocationIds(user)
-    const unstaffedRes = await fetchUnstaffedBlocksThisWeek(db, locIds)
+    const [unstaffedRes, payRes] = await Promise.all([
+      fetchUnstaffedBlocksThisWeek(db, locIds),
+      fetchIncompletePayProfiles(db, locIds),
+    ])
     if (unstaffedRes.success) unstaffedCount = unstaffedRes.data.count
+    if (payRes.success) incompletePay = payRes.data
   }
 
   // Show the per-shift location chip only when the user is assigned
@@ -244,6 +248,33 @@ export default async function PersonalDashboardPage() {
               </div>
               <div className="text-xs text-red-100/80 mt-0.5">
                 Demand windows with no coach assigned. Click to open the schedule.
+              </div>
+            </div>
+          </div>
+        </Link>
+      )}
+
+      {/* Roster v2 phase 3 — pay-data completeness for managers.
+          Phase 4's cost panel zero-costs anyone whose employment
+          fields are missing, which silently understates labour
+          spend. Surfacing here gives the operator a chance to fix
+          before the budget panel goes live in mig 071. */}
+      {isManager && incompletePay.count > 0 && (
+        <Link
+          href="/settings/staff"
+          className="block mt-3 p-3 rounded-lg border border-amber-500/40 bg-amber-500/10 hover:bg-amber-500/15 transition-colors"
+        >
+          <div className="flex items-start gap-3">
+            <AlertTriangle size={16} className="text-amber-400 mt-0.5 flex-shrink-0" />
+            <div className="flex-1 min-w-0">
+              <div className="text-sm font-medium text-amber-200">
+                {incompletePay.count} staff member{incompletePay.count === 1 ? '' : 's'} missing pay data
+              </div>
+              <div className="text-xs text-amber-100/80 mt-0.5">
+                {incompletePay.sample.slice(0, 3).map(p => p.name).join(', ')}
+                {incompletePay.count > 3 && ` and ${incompletePay.count - 3} more`}
+                {' — '}
+                without a rate or contracted hours, their shifts cost €0 in the budget panel.
               </div>
             </div>
           </div>
