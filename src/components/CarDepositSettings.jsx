@@ -1,19 +1,20 @@
 'use client'
 
 // Per-location car-deposit settings. Lives at the bottom of
-// /settings/locations/[id]. Three things to configure:
+// /settings/locations/[id]. Two things to configure:
 //   1. Default deposit amount (overridable per-car at issue time)
 //   2. Terms & conditions text (the buyer must accept this verbatim)
-//   3. WhatsApp UTILITY template that delivers the link (must be
-//      authored + Meta-approved separately in Communications →
-//      Templates).
+//
+// SMS delivery itself is configured globally via TWILIO_* env vars
+// (one Twilio account, one alpha sender ID) — no per-location knob
+// for that.
 //
 // Saving the terms text bumps locations.car_deposit_terms_version
 // server-side so any in-flight buyer's accept-and-pay POST will be
 // rejected and the page will reload with the new copy.
 
-import { useState, useEffect } from 'react'
-import { Banknote, FileText, MessageCircle, Save } from 'lucide-react'
+import { useState } from 'react'
+import { Banknote, FileText, Save } from 'lucide-react'
 import { createBrowserClient } from '@/lib/supabase'
 
 export default function CarDepositSettings({ location }) {
@@ -21,25 +22,10 @@ export default function CarDepositSettings({ location }) {
     location.car_deposit_default_amount != null ? Number(location.car_deposit_default_amount) : 500
   )
   const [terms, setTerms] = useState(location.car_deposit_terms || DEFAULT_TERMS)
-  const [waTemplateId, setWaTemplateId] = useState(location.car_deposit_whatsapp_template_id || '')
-  const [waTemplates, setWaTemplates] = useState([])
 
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [error, setError] = useState(null)
-
-  useEffect(() => {
-    fetch(`/api/whatsapp/templates?location_id=${encodeURIComponent(location.id)}&status=APPROVED`)
-      .then(r => r.json())
-      .then(j => {
-        const all = j.success ? (j.templates || []) : []
-        // Restrict picker to UTILITY / AUTHENTICATION — same logic as
-        // the per-event reminder picker. The deposit link is a
-        // transactional / utility message.
-        setWaTemplates(all.filter(t => t.category !== 'MARKETING'))
-      })
-      .catch(() => setWaTemplates([]))
-  }, [location.id])
 
   async function handleSave() {
     setSaving(true); setSaved(false); setError(null)
@@ -51,7 +37,6 @@ export default function CarDepositSettings({ location }) {
     const updates = {
       car_deposit_default_amount: defaultAmount || null,
       car_deposit_terms: trimmedTerms || null,
-      car_deposit_whatsapp_template_id: waTemplateId || null,
     }
     // Bump the version IFF the wording actually changed. That's the
     // signal the public page uses to reject stale buyers.
@@ -80,8 +65,8 @@ export default function CarDepositSettings({ location }) {
         </span>
       </div>
       <p className="text-xs text-un1t-light mb-4">
-        Powers the &lsquo;Send deposit link&rsquo; button on each car. Buyers receive a tokenised URL
-        with these terms; on accept, payment is taken via Revolut Merchant.
+        Powers the &lsquo;Send deposit link&rsquo; button on each car. Buyers receive a tokenised
+        URL via SMS (Twilio) with these terms; on accept, payment is taken via Revolut Merchant.
       </p>
 
       <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5 space-y-5">
@@ -114,31 +99,6 @@ export default function CarDepositSettings({ location }) {
           <p className="text-[11px] text-un1t-mid mt-1">
             Plain text or markdown. Saving any change bumps the terms version &mdash; in-flight buyers
             on the public page will be asked to refresh and re-read before paying.
-          </p>
-        </div>
-
-        <div>
-          <label className="block text-sm mb-1.5 flex items-center gap-1.5">
-            <MessageCircle size={12} /> WhatsApp template (UTILITY, approved)
-          </label>
-          <select
-            value={waTemplateId}
-            onChange={(e) => setWaTemplateId(e.target.value)}
-            className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
-          >
-            <option value="">— None: send by email only —</option>
-            {waTemplates.map(t => (
-              <option key={t.id} value={t.id}>
-                {t.name}{t.category ? ` · ${t.category.toLowerCase()}` : ''}
-              </option>
-            ))}
-          </select>
-          <p className="text-[11px] text-un1t-mid mt-1">
-            Body should accept variables in this order: <code>{'{{1}}'}</code>=name,
-            {' '}<code>{'{{2}}'}</code>=amount,
-            {' '}<code>{'{{3}}'}</code>=car description,
-            {' '}<code>{'{{4}}'}</code>=deposit link. Author + submit it in
-            Communications &rarr; WhatsApp Templates.
           </p>
         </div>
 
