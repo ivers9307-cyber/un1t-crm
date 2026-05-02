@@ -137,7 +137,7 @@ export default function CarDepositPage({ token }) {
             // though the API renamed the underlying value to `token`.
             return { publicId: j.public_id }
           },
-          onSuccess: ({ orderId }) => {
+          onSuccess: ({ orderId: _orderId }) => {
             if (destroyed) return
             setPhase('paid')
             // Refetch to render the receipt — webhook usually has
