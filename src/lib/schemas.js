@@ -64,6 +64,20 @@ export const days = z.number().finite().min(0).max(366)
 export const roleSchema = z.enum(['master', 'owner', 'manager', 'head_coach', 'staff'])
 export const employmentTypeSchema = z.enum(['fte', 'contractor', 'casual'])
 
+// Per-location role schema (mig 051). master never appears at the
+// per-location level — it's a platform-wide flag on profiles.role.
+// The CHECK constraint on profile_locations.role enforces this.
+export const locationRoleSchema = z.enum(['owner', 'manager', 'head_coach', 'staff'])
+
+// Per-location assignment shape used by the staff API. One row per
+// location the user belongs to, each carrying its own role + flags.
+export const assignmentSchema = z.object({
+  location_id: uuidLike,
+  role: locationRoleSchema,
+  is_default: z.boolean().optional(),
+  unifi_door_access: z.boolean().optional(),
+})
+
 // Role groups for authz checks. Reference these instead of inlining
 // `['owner', 'manager', 'head_coach']` so a future role addition is a
 // one-line change. Master is implicitly in every group via the
@@ -71,11 +85,14 @@ export const employmentTypeSchema = z.enum(['fte', 'contractor', 'casual'])
 export const ADMIN_ROLES = Object.freeze(['master', 'owner', 'manager'])
 export const MANAGER_ROLES = Object.freeze(['master', 'owner', 'manager', 'head_coach'])
 
-// Roles that can be assigned BY a master.
-export const MASTER_ASSIGNABLE_ROLES = Object.freeze(['master', 'owner', 'manager', 'head_coach', 'staff'])
-// Roles that can be assigned by an owner (NOT owner or master — only
-// a master can grant those).
-export const OWNER_ASSIGNABLE_ROLES = Object.freeze(['manager', 'head_coach', 'staff'])
+// Per-location roles a master can grant at any location. Master itself
+// is set via the separate `is_master` flag, not as a per-location role.
+export const MASTER_ASSIGNABLE_ROLES = Object.freeze(['owner', 'manager', 'head_coach', 'staff'])
+// Per-location roles an owner-at-X can grant at X. Mig 051 expanded
+// this to include 'owner' — owner-at-Hatch can now mint another
+// owner-at-Hatch (no longer a platform-level promotion since per-
+// location roles are independent).
+export const OWNER_ASSIGNABLE_ROLES = Object.freeze(['owner', 'manager', 'head_coach', 'staff'])
 
 // Default colour used when a user-created entity (event, shift template)
 // doesn't specify one. Branding-aware components should reference this

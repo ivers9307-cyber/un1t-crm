@@ -2,14 +2,23 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
-import { validateBody, uuidLike } from '@/lib/validate'
+import { validateBody } from '@/lib/validate'
 import {
-  roleSchema, employmentTypeSchema, money, hours, days, permissionsSchema,
-  ADMIN_ROLES, passwordSchema,
+  employmentTypeSchema, money, hours, days, permissionsSchema,
+  ADMIN_ROLES, passwordSchema, assignmentSchema,
+  OWNER_ASSIGNABLE_ROLES, MASTER_ASSIGNABLE_ROLES,
 } from '@/lib/schemas'
 
 export const runtime = 'nodejs'
 
+// Per-location-roles aware shape (mig 051). Each assignment carries
+// its own role at its own location — same user can be owner at Hatch
+// and head_coach at Stillorgan.
+//
+// `is_master` is the ONLY way to mark a user as platform-wide master;
+// set ONLY by other masters. `assignments[].role` cannot be 'master'
+// (CHECK constraint blocks it on the DB side; locationRoleSchema
+// blocks it here).
 const CreateStaffSchema = z.object({
   email: z.string().email(),
   full_name: z.string().min(1).max(200),
@@ -17,9 +26,9 @@ const CreateStaffSchema = z.object({
   // this in sync with whatever the Auth dashboard requires so we
   // surface a clear error before round-tripping to Supabase.
   password: passwordSchema,
-  role: roleSchema.optional(),
+  is_master: z.boolean().optional(),
+  assignments: z.array(assignmentSchema).optional(),
   permissions: permissionsSchema.optional(),
-  location_ids: z.array(uuidLike).optional(),
   employment_type: employmentTypeSchema.optional(),
   annual_salary: money.nullable().optional(),
   hourly_rate: money.nullable().optional(),
@@ -28,9 +37,6 @@ const CreateStaffSchema = z.object({
   overtime_rate: money.nullable().optional(),
 })
 
-// Fields visible to non-admin staff. Compensation, employment type and
-// permissions are intentionally excluded — staff can see who exists but
-// not their HR data.
 // Slim fields visible to non-admin staff. Includes employment_type and
 // contracted_hours_per_week so head_coach can see schedule capacity warnings,
 // but excludes salary / hourly_rate / overtime_rate (HR-sensitive).
@@ -65,7 +71,7 @@ export async function GET() {
   const isAdmin = ADMIN_ROLES.includes(user.role)
   const selectClause = isAdmin
     ? '*, profile_locations(*, locations(*))'
-    : `${STAFF_PUBLIC_FIELDS}, profile_locations(location_id, locations(id, name, slug))`
+    : `${STAFF_PUBLIC_FIELDS}, profile_locations(location_id, role, locations(id, name, slug))`
 
   const { data, error } = await db
     .from('profiles')
@@ -77,70 +83,96 @@ export async function GET() {
   return NextResponse.json({ success: true, data })
 }
 
-// POST /api/staff — Create a new staff member. Owner or master.
+// POST /api/staff — Create a new staff member.
 //
-// Role assignment rules (mig 033):
-//   master  → can grant any role: master, owner, manager, head_coach, staff
-//   owner   → can grant non-elevated roles only: manager, head_coach, staff
-//             (cannot mint owners or masters)
-//   anyone else → 403
+// Authorization (mig 051 per-location roles):
+//   master       → can mint another master, can assign any role at any location
+//   owner-at-X   → can assign any role (incl. 'owner') at locations where
+//                  they themselves are owner. Cannot mint a master. Cannot
+//                  assign at locations they're not owner at.
+//   anyone else  → 403
 export async function POST(request) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  if (user.role !== 'owner' && user.role !== 'master') {
-    return NextResponse.json({ success: false, error: 'Forbidden — owner or master only' }, { status: 403 })
+
+  // Caller must be owner-or-master AT THE CURRENT ACTIVE LOCATION
+  // (or platform-wide master). user.role is now the active-location
+  // role (mig 051).
+  if (!user.isMaster && user.role !== 'owner') {
+    return NextResponse.json({
+      success: false,
+      error: 'Forbidden — must be an owner at this location (or a master) to create staff',
+    }, { status: 403 })
   }
 
   const validation = await validateBody(request, CreateStaffSchema)
   if (!validation.ok) return validation.response
   const body = validation.data
 
-  const db = createServerClient()
-  const role = body.role || 'staff'
-
-  // Only a master can create owner or master accounts. Owners
-  // creating staff are capped at manager/head_coach/staff.
-  if ((role === 'master' || role === 'owner') && user.role !== 'master') {
+  // Master flag: only another master can grant it.
+  if (body.is_master && !user.isMaster) {
     return NextResponse.json({
       success: false,
-      error: `Only a master account can create users with role '${role}'. Contact your platform admin.`,
+      error: 'Only a master account can create another master.',
     }, { status: 403 })
   }
 
-  // Constrain new staff to the caller's own locations to prevent cross-tenant
-  // creation by a future multi-org owner. Masters skip this check —
-  // getUserLocationIds() already returns every location for them, but
-  // we short-circuit explicitly so future role-shape changes don't
-  // accidentally narrow master's reach.
-  const requestedLocationIds = body.location_ids || []
-  if (user.role !== 'master') {
-    const callerLocationIds = getUserLocationIds(user)
-    const invalidLocations = requestedLocationIds.filter(id => !callerLocationIds.includes(id))
-    if (invalidLocations.length > 0) {
+  // Validate every requested assignment against the caller's permissions.
+  // - Master can assign at any location, any role in MASTER_ASSIGNABLE_ROLES.
+  // - Owner can only assign at locations where they themselves are owner,
+  //   roles limited to OWNER_ASSIGNABLE_ROLES (which now includes 'owner'
+  //   per the 051 design).
+  const assignments = body.assignments || []
+  const allowedRoles = user.isMaster ? MASTER_ASSIGNABLE_ROLES : OWNER_ASSIGNABLE_ROLES
+
+  for (const a of assignments) {
+    if (!allowedRoles.includes(a.role)) {
       return NextResponse.json({
         success: false,
-        error: 'Cannot assign staff to a location you do not belong to',
+        error: `Role '${a.role}' cannot be granted by ${user.isMaster ? 'master' : 'owner'}.`,
       }, { status: 403 })
+    }
+    if (!user.isMaster) {
+      const callerRoleHere = user.rolesByLocation?.[a.location_id]
+      if (callerRoleHere !== 'owner') {
+        return NextResponse.json({
+          success: false,
+          error: 'You can only assign staff at locations where you are an owner.',
+        }, { status: 403 })
+      }
     }
   }
 
-  // Create auth user — the DB trigger will auto-create the profile
+  const db = createServerClient()
+
+  // Create auth user — the DB trigger auto-creates the profile row.
   const { data: authData, error: authError } = await db.auth.admin.createUser({
     email: body.email,
     password: body.password,
     email_confirm: true,
     user_metadata: {
       full_name: body.full_name,
-      role,
     },
   })
-
   if (authError) {
     return NextResponse.json({ success: false, error: authError.message }, { status: 400 })
   }
 
-  // Update profile with role and HR fields (trigger creates with defaults)
-  const updates = { role }
+  const newUserId = authData.user.id
+
+  // Profile updates. profiles.role:
+  //   - 'master' if is_master flag is set (platform admin)
+  //   - otherwise the HIGHEST per-location role across assignments,
+  //     so legacy callers reading profiles.role get a sensible value
+  //     (the new RLS helpers in mig 051 already prefer per-location
+  //     data over profiles.role, so this is effectively cosmetic).
+  const ROLE_PRECEDENCE = { owner: 1, manager: 2, head_coach: 3, staff: 4 }
+  const highestRole = assignments
+    .map(a => a.role)
+    .sort((a, b) => (ROLE_PRECEDENCE[a] || 99) - (ROLE_PRECEDENCE[b] || 99))[0]
+  const profileRole = body.is_master ? 'master' : (highestRole || 'staff')
+
+  const updates = { role: profileRole }
   if (body.permissions) updates.permissions = body.permissions
   if (body.employment_type) updates.employment_type = body.employment_type
   if (body.annual_salary != null) updates.annual_salary = body.annual_salary
@@ -149,26 +181,37 @@ export async function POST(request) {
   if (body.annual_leave_entitlement != null) updates.annual_leave_entitlement = body.annual_leave_entitlement
   if (body.overtime_rate !== undefined) updates.overtime_rate = body.overtime_rate
 
-  await db.from('profiles').update(updates).eq('id', authData.user.id)
+  await db.from('profiles').update(updates).eq('id', newUserId)
 
-  // Assign to locations if specified
-  if (requestedLocationIds.length > 0) {
-    // Clear auto-assigned location first
-    await db.from('profile_locations').delete().eq('profile_id', authData.user.id)
+  // Insert assignments. The trigger that auto-created the profile may
+  // also have inserted a default profile_locations row — clear first
+  // so we have full control over what lands.
+  await db.from('profile_locations').delete().eq('profile_id', newUserId)
 
-    const locationLinks = requestedLocationIds.map((loc_id, i) => ({
-      profile_id: authData.user.id,
-      location_id: loc_id,
-      is_default: i === 0,
+  if (assignments.length > 0) {
+    const hasExplicitDefault = assignments.some(a => a.is_default)
+    const links = assignments.map((a, i) => ({
+      profile_id: newUserId,
+      location_id: a.location_id,
+      role: a.role,
+      is_default: hasExplicitDefault ? !!a.is_default : i === 0,
+      // unifi_door_access is the toggle stamp; the actual UniFi sync
+      // happens on edit (PUT) so we have a saved profile to work with.
+      // On create we just persist the requested state and let the next
+      // PUT do the door provisioning.
+      unifi_door_access: !!a.unifi_door_access,
     }))
-    await db.from('profile_locations').insert(locationLinks)
+    const { error: insertError } = await db.from('profile_locations').insert(links)
+    if (insertError) {
+      return NextResponse.json({ success: false, error: insertError.message }, { status: 400 })
+    }
   }
 
   // Fetch the complete profile
   const { data: profile } = await db
     .from('profiles')
     .select('*, profile_locations(*, locations(*))')
-    .eq('id', authData.user.id)
+    .eq('id', newUserId)
     .single()
 
   return NextResponse.json({ success: true, data: profile }, { status: 201 })

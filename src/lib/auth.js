@@ -11,6 +11,58 @@ import { NextResponse } from 'next/server'
 // behaviour we actually want kicks in there.
 const cache = typeof React.cache === 'function' ? React.cache : (fn) => fn
 
+// Per-location role precedence — owner highest, staff lowest. Master
+// is platform-wide and not in this scale; handled separately.
+const ROLE_PRECEDENCE = Object.freeze({
+  owner: 1, manager: 2, head_coach: 3, staff: 4,
+})
+
+/**
+ * Build the rolesByLocation map from raw profile_locations rows.
+ * Pure helper — exported for testability of the role-derivation logic
+ * separately from the IO-heavy getCurrentUser() pipeline.
+ *
+ * @param {Array<{location_id?: string, role?: string}>|null|undefined} locationLinks
+ * @returns {Record<string,string>}
+ */
+export function buildRolesByLocation(locationLinks) {
+  const m = {}
+  for (const link of (locationLinks || [])) {
+    if (link?.location_id && link?.role) {
+      m[link.location_id] = link.role
+    }
+  }
+  return m
+}
+
+/**
+ * Resolve the effective role for the current request.
+ *
+ *   - master users:  always 'master'
+ *   - non-master:    role at the active location, falling back to the
+ *                    user's highest assignment role (back-compat for
+ *                    callers that read `user.role` without location
+ *                    context), and finally to profiles.role for users
+ *                    with no per-location assignments yet.
+ *
+ * Pure helper — exported for tests.
+ *
+ * @param {object} args
+ * @param {{role?: string} | null | undefined} args.profile
+ * @param {Record<string,string>} args.rolesByLocation
+ * @param {string | null | undefined} args.activeLocationId
+ * @returns {string | undefined}
+ */
+export function resolveActiveLocationRole({ profile, rolesByLocation, activeLocationId }) {
+  if (profile?.role === 'master') return 'master'
+  if (activeLocationId && rolesByLocation[activeLocationId]) {
+    return rolesByLocation[activeLocationId]
+  }
+  const highest = Object.values(rolesByLocation || {})
+    .sort((a, b) => (ROLE_PRECEDENCE[a] || 99) - (ROLE_PRECEDENCE[b] || 99))[0]
+  return highest || profile?.role
+}
+
 // Auth-aware server client for SSR pages (reads session from cookies)
 export function createAuthClient() {
   const cookieStore = cookies()
@@ -161,6 +213,12 @@ export const getCurrentUser = cache(async function getCurrentUser() {
 
   let locations = (locationLinks || []).map(pl => pl.locations).filter(Boolean)
 
+  // Per-location roles (mig 051). Build a {location_id → role} map
+  // straight from the profile_locations rows. master is platform-wide
+  // and lives separately on profiles.role (CHECK constraint blocks it
+  // from appearing as a per-location role).
+  const rolesByLocation = buildRolesByLocation(locationLinks)
+
   // Master role bypasses profile_locations — they see every active
   // location automatically. RLS already short-circuits via
   // private.auth_is_master() — this just makes the in-memory user
@@ -197,11 +255,37 @@ export const getCurrentUser = cache(async function getCurrentUser() {
   const activeLocation =
     headerLocation || cookieLocation || defaultLink?.locations || locations[0] || null
 
+  // Resolve effective role for THIS request (mig 051):
+  //   - master:        always 'master' (platform-wide)
+  //   - non-master:    role at the active location, fallback to
+  //                    highest assignment role (so legacy callers
+  //                    reading user.role without location context
+  //                    get the same answer pre-mig-051), final
+  //                    fallback to profiles.role.
+  //
+  // Override `role` AFTER the spread of `...profile` so `user.role`
+  // is the active-location-aware value. Original global value is
+  // preserved on `user.profileRole` for the rare caller that wants
+  // canonical/highest role without location context.
+  const isMaster = profile.role === 'master'
+  const activeLocationRole = resolveActiveLocationRole({
+    profile,
+    rolesByLocation,
+    activeLocationId: activeLocation?.id,
+  })
+
   return {
     ...profile,
     user,
     locations,
     activeLocation,
+    // { [location_id]: role } — never includes 'master' (CHECK constraint).
+    rolesByLocation,
+    // Active-location role — flips when the user switches location.
+    role: activeLocationRole,
+    // Original global value, for callers that need canonical/highest role.
+    profileRole: profile.role,
+    isMaster,
     // Set when a master is impersonating another user. The banner
     // + the API endpoints / sidebar entries read this to show the
     // 'Stop impersonating' UI and to know who the real caller is

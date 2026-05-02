@@ -25,13 +25,21 @@ export async function GET() {
   }
 
   // Strip server-only fields. The mobile app should never see these.
+  // `role` here is the active-location role (mig 051) — switching
+  // active location via the x-active-location header on the next
+  // request flips it.
   const safeProfile = {
     id: user.id,
     full_name: user.full_name,
     email: user.email,
     role: user.role,
+    isMaster: !!user.isMaster,
     avatar_url: user.avatar_url || null,
     permissions: user.permissions || {},
+    // Per-location roles (mig 051). The mobile app reads this when
+    // the user switches active location locally, so role-default
+    // resolution can flip without a /me refetch.
+    rolesByLocation: user.rolesByLocation || {},
   }
 
   return NextResponse.json({

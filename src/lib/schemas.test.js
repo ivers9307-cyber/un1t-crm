@@ -2,11 +2,13 @@ import { describe, it, expect } from 'vitest'
 import {
   isoDate, timeOfDay, hexColor, email, url,
   money, hours, days,
-  roleSchema, employmentTypeSchema, leadStatusSchema,
+  roleSchema, locationRoleSchema, assignmentSchema,
+  employmentTypeSchema, leadStatusSchema,
   dealStatusSchema,
   reportFrequencySchema,
   permissionsSchema, audienceFilterSchema,
   ADMIN_ROLES, MANAGER_ROLES, DEFAULT_COLOR,
+  MASTER_ASSIGNABLE_ROLES, OWNER_ASSIGNABLE_ROLES,
   passwordSchema, passwordRequirements, validatePasswordComplexity,
 } from './schemas.js'
 
@@ -144,6 +146,86 @@ describe('role groups + DEFAULT_COLOR', () => {
 
   it('DEFAULT_COLOR is a valid hex', () => {
     expect(hexColor.safeParse(DEFAULT_COLOR).success).toBe(true)
+  })
+})
+
+// ============================================================
+// Per-location roles (mig 051)
+// ============================================================
+
+describe('locationRoleSchema (per-location, no master)', () => {
+  it('accepts the four per-location roles', () => {
+    expect(locationRoleSchema.safeParse('owner').success).toBe(true)
+    expect(locationRoleSchema.safeParse('manager').success).toBe(true)
+    expect(locationRoleSchema.safeParse('head_coach').success).toBe(true)
+    expect(locationRoleSchema.safeParse('staff').success).toBe(true)
+  })
+
+  it('REJECTS master at the per-location level', () => {
+    // master lives on profiles.role (platform-wide). The DB CHECK
+    // constraint on profile_locations.role enforces this; the
+    // schema is the matching client-side guard.
+    expect(locationRoleSchema.safeParse('master').success).toBe(false)
+  })
+
+  it('rejects garbage', () => {
+    expect(locationRoleSchema.safeParse('admin').success).toBe(false)
+    expect(locationRoleSchema.safeParse('').success).toBe(false)
+    expect(locationRoleSchema.safeParse(null).success).toBe(false)
+  })
+})
+
+describe('assignmentSchema', () => {
+  const validUuid = '11111111-1111-1111-1111-111111111111'
+
+  it('accepts the minimum valid shape', () => {
+    const r = assignmentSchema.safeParse({ location_id: validUuid, role: 'staff' })
+    expect(r.success).toBe(true)
+  })
+
+  it('accepts the full shape with optional flags', () => {
+    const r = assignmentSchema.safeParse({
+      location_id: validUuid,
+      role: 'owner',
+      is_default: true,
+      unifi_door_access: false,
+    })
+    expect(r.success).toBe(true)
+  })
+
+  it('rejects missing location_id', () => {
+    expect(assignmentSchema.safeParse({ role: 'staff' }).success).toBe(false)
+  })
+
+  it('rejects missing role', () => {
+    expect(assignmentSchema.safeParse({ location_id: validUuid }).success).toBe(false)
+  })
+
+  it('rejects role=master (matches the DB CHECK)', () => {
+    expect(assignmentSchema.safeParse({ location_id: validUuid, role: 'master' }).success).toBe(false)
+  })
+
+  it('rejects bad uuid', () => {
+    expect(assignmentSchema.safeParse({ location_id: 'not-a-uuid', role: 'staff' }).success).toBe(false)
+  })
+})
+
+describe('OWNER_ASSIGNABLE_ROLES + MASTER_ASSIGNABLE_ROLES (mig 051 semantics)', () => {
+  it('OWNER_ASSIGNABLE_ROLES now includes owner — owner-at-X can mint another owner-at-X', () => {
+    // Pre-mig-051 this was studio-only-non-elevated. Per-location
+    // roles changed the calculus: granting "owner at this studio"
+    // is no longer a platform-level promotion, so an owner can grant it.
+    expect(OWNER_ASSIGNABLE_ROLES).toContain('owner')
+    expect(OWNER_ASSIGNABLE_ROLES).toEqual(['owner', 'manager', 'head_coach', 'staff'])
+    expect(Object.isFrozen(OWNER_ASSIGNABLE_ROLES)).toBe(true)
+  })
+
+  it('MASTER_ASSIGNABLE_ROLES no longer includes master — set via is_master flag, not as a per-location role', () => {
+    // The is_master boolean on the staff API body is the only way
+    // to mint a master, and only an existing master can set it.
+    expect(MASTER_ASSIGNABLE_ROLES).not.toContain('master')
+    expect(MASTER_ASSIGNABLE_ROLES).toEqual(['owner', 'manager', 'head_coach', 'staff'])
+    expect(Object.isFrozen(MASTER_ASSIGNABLE_ROLES)).toBe(true)
   })
 })
 

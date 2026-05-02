@@ -37,7 +37,7 @@ React 18 + Next.js 14, Tailwind CSS 3.4, Supabase Auth (SSR cookies), Postmark (
 
 ### Key Architectural Patterns
 
-**Multi-tenancy via location scoping** — Every data query filters by `location_id`. Users belong to locations via `profile_locations` junction table. Active location resolved from cookie (`un1t_active_location`) → `is_default` flag → first location.
+**Multi-tenancy via location scoping** — Every data query filters by `location_id`. Users belong to locations via `profile_locations` junction table, **each row carrying its own role** (mig 051). The same user can be `owner` at Hatch Street and `head_coach` at Stillorgan with independent rights at each. Active location resolved from cookie (`un1t_active_location`) → `is_default` flag → first location. `getCurrentUser()` returns `rolesByLocation: { [loc_id]: role }` plus `user.role` (the role at the *active* location, or `'master'` for platform admins). The original global value is still on `user.profileRole` for the rare caller that wants the canonical/highest role without location context.
 
 **Two Supabase clients** — `createBrowserClient()` uses anon key + SSR cookies (client components). `createServerClient()` uses service role key, bypasses RLS (API routes, cron). Both in `src/lib/supabase.js`.
 
@@ -331,18 +331,20 @@ Platform-level super-admin role added above `owner`. Granted to `richard@richard
 
 Switching active location re-evaluates the gate, so a master toggling between locations sees a different sidebar at each one. CCF Autos (cars-only) shows just Cars; UN1T Dublin (full gym) shows the full sidebar. Both visible to the same master account.
 
-**Owners are now studio-scoped:** they can fully manage locations they belong to (edit settings, create staff at non-elevated roles), but can't mint new locations or new owner/master accounts. The role hierarchy is `master → owner → manager → head_coach → staff`.
+**Owners are now studio-scoped (mig 051):** they can fully manage the studios they're owner at (edit settings, create staff with any per-location role *at that studio* including another owner-at-that-studio), but can't mint new locations, mint masters, or manage assignments at studios they're not owner at. The hierarchy is `master (platform) → per-location role (owner > manager > head_coach > staff)`.
 
 **Helpers (`src/lib/schemas.js`):**
-- `roleSchema` — Zod enum, includes `'master'`
-- `MASTER_ASSIGNABLE_ROLES` — `['master','owner','manager','head_coach','staff']`
-- `OWNER_ASSIGNABLE_ROLES` — `['manager','head_coach','staff']`
-- `ADMIN_ROLES` — `['master','owner','manager']` (existing constant; master added)
+- `roleSchema` — Zod enum, includes `'master'` (used for `profiles.role`)
+- `locationRoleSchema` — Zod enum, per-location only: `['owner','manager','head_coach','staff']` (no master)
+- `assignmentSchema` — `{ location_id, role, is_default?, unifi_door_access? }` for the staff API
+- `MASTER_ASSIGNABLE_ROLES` — `['owner','manager','head_coach','staff']` (per-location). Master itself granted via the separate `is_master` flag.
+- `OWNER_ASSIGNABLE_ROLES` — `['owner','manager','head_coach','staff']` (mig 051: owner-at-X can grant another owner-at-X — no longer a platform-level promotion)
+- `ADMIN_ROLES` — `['master','owner','manager']`
 - `MANAGER_ROLES` — `['master','owner','manager','head_coach']`
 
-**RLS:** instead of touching every policy, we updated `private.auth_is_in_location(loc_id)` to OR with `private.auth_is_master()`. Existing policies that use that helper now grant master access transparently.
+**RLS:** `private.auth_is_in_location(loc_id)` OR-shorts via `private.auth_is_master()` — membership policies grant master automatically. Mig 052 added per-location helpers (`auth_is_owner_at(loc)`, `auth_is_admin_at(loc)`, `auth_is_manager_at(loc)`) and switched `pipeline_stages`, `webhook_subscriptions`, `profile_locations`, and `locations` policies to use them, so e.g. an owner-at-Hatch can no longer modify `pipeline_stages` rows that belong to Stillorgan via the authenticated channel. `profiles "Admins can manage profiles"` is master-only at the RLS layer (per-location ownership of a user-level row doesn't have a clean RLS expression); the API enforces per-location authorization for non-master callers.
 
-**StaffForm UI** filters the role dropdown by `callerRole` prop. Owners only see Manager/Head Coach/Staff options; masters see all five. If editing an existing owner/master from a non-master account, the current role renders as a disabled option ("(master-only)") so the dropdown value isn't misleadingly hidden.
+**StaffForm UI (wizard since mig 051):** Per-location cards instead of a single role dropdown. Each card has its own role + UniFi door-access toggle + default flag. Caller props `callerIsMaster` + `callerOwnerLocationIds` gate which cards are editable; assignments at locations the caller isn't owner at render read-only ("Owner of that studio can edit"). Master callers also see a `Master / Platform Admin` toggle in its own panel above the assignments wizard.
 
 ### Per-location feature gates (migration 032)
 
@@ -705,6 +707,8 @@ Mirror of the Cowork task list — kept here as the durable record so that a fre
 
 | # | Item | Notes |
 |---|------|-------|
+| 56 | Per-location RLS precision | Mig 052. Tightened `pipeline_stages`, `webhook_subscriptions`, `profile_locations`, and `locations` policies to use the new per-location helpers. `profiles "Admins can manage profiles"` is master-only at RLS; API enforces per-location ownership for non-masters. |
+| 55 | Per-location roles + StaffForm wizard | Mig 051. `profile_locations.role` (CHECK enforces no `master` at the per-location level). `getCurrentUser()` returns `rolesByLocation` + active-location-aware `user.role`. New helpers: `get_user_role_at`, `auth_is_owner_at`, `auth_is_admin_at`, `auth_is_manager_at`. Latent `public.auth_role()` typo in `auth_is_owner` / `auth_is_owner_or_manager` fixed at the same time. StaffForm rewritten as a per-location card wizard. Staff API routes accept `assignments[]` + optional `is_master`. |
 | 54 | Master honours per-location feature gate | `17c5213`. Master sidebar now collapses at locations with features off. `settings` is the only escape-hatch key on web. |
 | 53 | Switch to Revolut Embedded Checkout widget | Replaced deprecated `createCardField` with `RC.embeddedCheckout({publicToken, target, createOrder, onSuccess, onError, onCancel})`. Cards + Apple/Google/Revolut Pay in one mount. |
 | 52 | Switch deposit delivery to SMS via Twilio | Email + WhatsApp delivery removed. Sender = alphanumeric `CCFautos` (Irish long codes are voice-only). |

@@ -1,10 +1,11 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
-import { validateBody, uuidLike } from '@/lib/validate'
+import { getCurrentUser } from '@/lib/auth'
+import { validateBody } from '@/lib/validate'
 import {
-  roleSchema, employmentTypeSchema, money, hours, days, permissionsSchema,
+  employmentTypeSchema, money, hours, days, permissionsSchema,
+  assignmentSchema, OWNER_ASSIGNABLE_ROLES, MASTER_ASSIGNABLE_ROLES,
 } from '@/lib/schemas'
 import {
   getLocationUnifiConfig, findOrCreateUnifiUser,
@@ -15,51 +16,31 @@ export const runtime = 'nodejs'
 
 const UpdateStaffSchema = z.object({
   full_name: z.string().min(1).max(200).optional(),
-  role: roleSchema.optional(),
+  is_master: z.boolean().optional(),
+  // The full per-location assignment set the user should have AFTER
+  // this update. If omitted, assignments are left unchanged. If
+  // provided, assignments diff against the existing rows — added
+  // rows are inserted, removed rows are deleted (with UniFi revoke
+  // if door access was on), updated rows have their role / unifi
+  // toggle synced.
+  assignments: z.array(assignmentSchema).optional(),
   permissions: permissionsSchema.optional(),
   active: z.boolean().optional(),
-  location_ids: z.array(uuidLike).optional(),
   employment_type: employmentTypeSchema.optional(),
   annual_salary: money.nullable().optional(),
   hourly_rate: money.nullable().optional(),
   contracted_hours_per_week: hours.nullable().optional(),
   annual_leave_entitlement: days.nullable().optional(),
   overtime_rate: money.nullable().optional(),
-  // UniFi door-access — per-location now. Map of location_id → bool.
-  // Server-side, each entry triggers an independent UniFi sync against
-  // that location's UniFi instance. Locations not present in the map
-  // are left as-is (no toggle = no change).
-  unifi_door_access_per_location: z.record(uuidLike, z.boolean()).optional(),
-  // Legacy single-toggle field. Still accepted from older clients —
-  // applied to the staff member's default location for backwards-compat.
-  unifi_door_access: z.boolean().optional(),
 })
-
-// Pick the staff member's default location from their profile_locations
-// list. Used only for backwards-compat with the legacy single-toggle
-// `unifi_door_access` field — newer clients send the per-location map.
-function pickDefaultLocation(profile) {
-  const links = profile.profile_locations || []
-  const def = links.find(l => l.is_default) || links[0]
-  return def?.locations || null
-}
 
 // Apply a per-location door-access toggle. Returns the unifi_user_id
 // that should be persisted on the profile_locations row (or null if
 // nothing should change).
 //
-// `existingUnifiUserId` is the per-location UniFi user id we already
-// have stored for this (profile, location) pair, if any.
-//
 // Throws UnifiError on failure — the caller surfaces the message to
 // the API consumer without persisting the toggle change in
 // profile_locations, so the UI state stays consistent with reality.
-//
-// Toggle-off semantics: best-effort. If UniFi is configured AND we
-// have a user id to revoke, do it. Otherwise just persist the toggle
-// — there's nothing to revoke and the user's intent should be
-// honoured. (This was the bug that blocked the whole staff form from
-// saving when a location had no UniFi config.)
 async function applyDoorAccessChange({ profile, location, enable, role, existingUnifiUserId }) {
   const cfg = getLocationUnifiConfig(location)
 
@@ -84,19 +65,28 @@ async function applyDoorAccessChange({ profile, location, enable, role, existing
   return unifiUserId
 }
 
-// PUT /api/staff/[id] — Update a staff member. Owner-only.
-// Includes role / salary / employment fields so this endpoint must never
-// be reachable without owner-or-master authentication. Manager-level
-// edits (e.g. shift availability) live elsewhere.
+// PUT /api/staff/[id] — Update a staff member.
 //
-// Role-grant rule (mig 033): owners can never set role to 'owner' or
-// 'master' — that requires a master account. Enforced below alongside
-// the basic auth check.
+// Authorization (mig 051):
+//   master       → can edit any user, can grant/revoke master flag,
+//                  can manage assignments at any location.
+//   owner-at-X   → can edit users assigned to X, but ONLY their X
+//                  assignment (not their other locations). Cannot
+//                  grant/revoke master. Cannot mint another owner
+//                  outside of X.
+//
+// The request's `assignments` array is the desired-state for the
+// caller's REACHABLE subset of the user's assignments. Master
+// gets the full set; owners only see/manipulate the assignments at
+// their own locations.
 export async function PUT(request, { params }) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  if (user.role !== 'owner' && user.role !== 'master') {
-    return NextResponse.json({ success: false, error: 'Forbidden — owner or master only' }, { status: 403 })
+  if (!user.isMaster && user.role !== 'owner') {
+    return NextResponse.json({
+      success: false,
+      error: 'Forbidden — must be an owner at this location (or a master) to edit staff',
+    }, { status: 403 })
   }
 
   const { id } = params
@@ -105,33 +95,77 @@ export async function PUT(request, { params }) {
   const body = validation.data
   const db = createServerClient()
 
-  // Role-grant guard: only a master can grant 'owner' or 'master'.
-  if (body.role && (body.role === 'owner' || body.role === 'master') && user.role !== 'master') {
+  // Master-flag guard: only a master can grant or revoke master.
+  if (body.is_master !== undefined && !user.isMaster) {
     return NextResponse.json({
       success: false,
-      error: `Only a master account can promote a user to '${body.role}'.`,
+      error: 'Only a master account can grant or revoke the master flag.',
     }, { status: 403 })
   }
 
-  // Restrict location assignments to the caller's own locations.
-  // Master skips this — getUserLocationIds returns every location for
-  // them, but we short-circuit explicitly so future role-shape
-  // changes don't accidentally narrow master's reach.
-  if (body.location_ids !== undefined && user.role !== 'master') {
-    const callerLocationIds = getUserLocationIds(user)
-    const invalid = body.location_ids.filter(loc => !callerLocationIds.includes(loc))
-    if (invalid.length > 0) {
+  // Pull the target's existing assignments BEFORE any changes so we
+  // can diff for UniFi revokes and authorization.
+  const { data: targetBefore } = await db
+    .from('profiles')
+    .select('*, profile_locations(*, locations(*))')
+    .eq('id', id)
+    .single()
+
+  if (!targetBefore) {
+    return NextResponse.json({ success: false, error: 'Profile not found' }, { status: 404 })
+  }
+
+  // Owners can only edit users they share a location with — and even
+  // then only the assignments at locations where the caller is owner.
+  if (!user.isMaster) {
+    const callerOwnerLocations = new Set(
+      Object.entries(user.rolesByLocation || {})
+        .filter(([, r]) => r === 'owner')
+        .map(([loc]) => loc)
+    )
+    const targetLocations = (targetBefore.profile_locations || []).map(l => l.location_id)
+    const overlap = targetLocations.some(l => callerOwnerLocations.has(l))
+    if (!overlap) {
       return NextResponse.json({
         success: false,
-        error: 'Cannot assign staff to a location you do not belong to',
+        error: 'You can only edit staff assigned to a location where you are an owner.',
       }, { status: 403 })
+    }
+    // Validate every assignment in the request body is at one of the
+    // caller's owner-locations (and uses an OWNER_ASSIGNABLE_ROLES role).
+    if (body.assignments) {
+      for (const a of body.assignments) {
+        if (!callerOwnerLocations.has(a.location_id)) {
+          return NextResponse.json({
+            success: false,
+            error: 'You can only manage assignments at locations where you are an owner.',
+          }, { status: 403 })
+        }
+        if (!OWNER_ASSIGNABLE_ROLES.includes(a.role)) {
+          return NextResponse.json({
+            success: false,
+            error: `Role '${a.role}' cannot be granted by an owner.`,
+          }, { status: 403 })
+        }
+      }
+    }
+  } else if (body.assignments) {
+    // Master path: still validate role values.
+    for (const a of body.assignments) {
+      if (!MASTER_ASSIGNABLE_ROLES.includes(a.role)) {
+        return NextResponse.json({
+          success: false,
+          error: `Role '${a.role}' is not a valid per-location role.`,
+        }, { status: 403 })
+      }
     }
   }
 
-  // Update profile fields
+  // Apply profile-level updates (full_name, HR fields, master flag,
+  // permissions, active). profiles.role is recomputed AFTER assignment
+  // updates so it reflects the final state.
   const profileUpdates = {}
   if (body.full_name !== undefined) profileUpdates.full_name = body.full_name
-  if (body.role !== undefined) profileUpdates.role = body.role
   if (body.permissions !== undefined) profileUpdates.permissions = body.permissions
   if (body.active !== undefined) profileUpdates.active = body.active
   if (body.employment_type !== undefined) profileUpdates.employment_type = body.employment_type
@@ -139,155 +173,216 @@ export async function PUT(request, { params }) {
   if (body.hourly_rate !== undefined) profileUpdates.hourly_rate = body.hourly_rate
   if (body.contracted_hours_per_week !== undefined) profileUpdates.contracted_hours_per_week = body.contracted_hours_per_week
   if (body.annual_leave_entitlement !== undefined) profileUpdates.annual_leave_entitlement = body.annual_leave_entitlement
+  if (body.overtime_rate !== undefined) profileUpdates.overtime_rate = body.overtime_rate
 
   if (Object.keys(profileUpdates).length > 0) {
     const { error } = await db.from('profiles').update(profileUpdates).eq('id', id)
     if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
   }
 
-  // Update location assignments
-  if (body.location_ids !== undefined) {
-    await db.from('profile_locations').delete().eq('profile_id', id)
-    if (body.location_ids.length > 0) {
-      const links = body.location_ids.map((loc_id, i) => ({
-        profile_id: id,
-        location_id: loc_id,
-        is_default: i === 0,
-      }))
-      await db.from('profile_locations').insert(links)
-    }
-  }
-
-  // Re-fetch the freshly-updated profile with its location list. We do
-  // this BEFORE the UniFi sync so the role / location_ids changes from
-  // this request are reflected in the policy we assign.
-  const { data: updatedProfile } = await db
-    .from('profiles')
-    .select('*, profile_locations(*, locations(*))')
-    .eq('id', id)
-    .single()
-
-  // ----- UniFi sync (per-location) -----
+  // ----- Assignment diff -----
   //
-  // Build a desired-state map keyed by location_id from:
-  //   1. Explicit per-location map in this request
-  //      (body.unifi_door_access_per_location), OR
-  //   2. Legacy single-toggle (body.unifi_door_access) applied to the
-  //      profile's default location only (back-compat for older clients), OR
-  //   3. Role change while ANY location row has door access on — re-sync
-  //      that location's policy so a promotion/demotion auto-flips to the
-  //      right access level.
+  // The body's `assignments` array is the DESIRED-STATE for the
+  // caller's reachable subset:
+  //   - master: full desired-state (every location for the user)
+  //   - owner: desired-state at THE OWNER'S OWN owner-locations only.
+  //     Assignments at other locations are preserved from the
+  //     existing row — owner can't see them, can't change them.
   //
-  // Locations not present in the desired-state map are left as-is.
-  const desiredByLocation = {}
-  let toggleProvided = false
+  // Steps:
+  //   1. Compute the FULL desired list (caller's subset + preserved rest)
+  //   2. Diff against existing rows
+  //   3. Apply: delete-with-revoke / insert / update + UniFi sync
+  let unifiErrors = []
+  if (body.assignments !== undefined) {
+    const callerScope = user.isMaster
+      ? null
+      : new Set(
+          Object.entries(user.rolesByLocation || {})
+            .filter(([, r]) => r === 'owner')
+            .map(([loc]) => loc)
+        )
 
-  if (body.unifi_door_access_per_location) {
-    toggleProvided = true
-    for (const [locId, enabled] of Object.entries(body.unifi_door_access_per_location)) {
-      desiredByLocation[locId] = !!enabled
-    }
-  }
-
-  if (body.unifi_door_access !== undefined && !body.unifi_door_access_per_location) {
-    // Legacy path — apply to the default location only.
-    toggleProvided = true
-    const def = pickDefaultLocation(updatedProfile)
-    if (def && desiredByLocation[def.id] === undefined) {
-      desiredByLocation[def.id] = !!body.unifi_door_access
-    }
-  }
-
-  if (body.role !== undefined && !toggleProvided) {
-    // Role change re-sync — only for currently-enabled rows.
-    for (const link of updatedProfile.profile_locations || []) {
-      if (link.unifi_door_access === true && link.locations) {
-        desiredByLocation[link.location_id] = true
-      }
-    }
-  }
-
-  // Walk each (location_id, desired) entry, calling that location's
-  // UniFi instance independently. Failures on one location don't roll
-  // back successful syncs on other locations — staff form save is
-  // best-effort overall, and surfaces the first failure to the user.
-  if (Object.keys(desiredByLocation).length) {
-    const linksByLocation = Object.fromEntries(
-      (updatedProfile.profile_locations || []).map(l => [l.location_id, l])
+    const existingByLocation = Object.fromEntries(
+      (targetBefore.profile_locations || []).map(l => [l.location_id, l])
     )
-    const errors = []
-    for (const [locId, desired] of Object.entries(desiredByLocation)) {
-      const link = linksByLocation[locId]
-      if (!link || !link.locations) continue // staff isn't even assigned here, skip silently
-      try {
-        const newUnifiUserId = await applyDoorAccessChange({
-          profile: updatedProfile,
-          location: link.locations,
-          enable: desired,
-          role: updatedProfile.role,
-          existingUnifiUserId: link.unifi_user_id,
-        })
-        const updates = {
-          unifi_door_access: desired,
-          unifi_synced_at: new Date().toISOString(),
+
+    // Build the FULL desired list. Master replaces every row with the
+    // body. Owner replaces only their owned-locations subset and
+    // preserves rows at locations they don't own.
+    const desired = []
+    if (user.isMaster) {
+      for (const a of body.assignments) desired.push(a)
+    } else {
+      for (const a of body.assignments) {
+        if (callerScope.has(a.location_id)) desired.push(a)
+      }
+      for (const link of (targetBefore.profile_locations || [])) {
+        if (!callerScope.has(link.location_id)) {
+          desired.push({
+            location_id: link.location_id,
+            role: link.role,
+            is_default: link.is_default,
+            unifi_door_access: link.unifi_door_access,
+          })
         }
-        if (newUnifiUserId && newUnifiUserId !== link.unifi_user_id) {
-          updates.unifi_user_id = newUnifiUserId
-        }
-        await db.from('profile_locations')
-          .update(updates)
-          .eq('profile_id', id)
-          .eq('location_id', locId)
-      } catch (e) {
-        errors.push(e instanceof UnifiError ? e.message : `UniFi sync failed at ${link.locations.name}: ${e.message || e}`)
       }
     }
-    if (errors.length) {
-      return NextResponse.json({
-        success: false,
-        error: errors.join(' '),
-        unifi_failed: true,
-      }, { status: 502 })
+
+    // Promote one is_default if none set.
+    if (desired.length > 0 && !desired.some(a => a.is_default)) {
+      desired[0].is_default = true
+    }
+    // Ensure exactly one is_default.
+    let seenDefault = false
+    for (const a of desired) {
+      if (a.is_default) {
+        if (seenDefault) a.is_default = false
+        else seenDefault = true
+      }
     }
 
-    // Keep the legacy profiles.unifi_door_access flag in sync as
-    // "any location enabled" so older readers don't get stale data.
-    const { data: refreshedLinks } = await db
-      .from('profile_locations')
-      .select('unifi_door_access')
-      .eq('profile_id', id)
-    const anyOn = (refreshedLinks || []).some(l => l.unifi_door_access === true)
-    await db.from('profiles')
-      .update({ unifi_door_access: anyOn })
-      .eq('id', id)
+    const desiredIds = new Set(desired.map(a => a.location_id))
+
+    // 1. Revoke + delete rows that are no longer in the desired set.
+    for (const link of (targetBefore.profile_locations || [])) {
+      if (desiredIds.has(link.location_id)) continue
+      if (link.unifi_door_access && link.unifi_user_id && link.locations) {
+        const cfg = getLocationUnifiConfig(link.locations)
+        if (cfg.configured) {
+          try {
+            await revokeUnifiUserPolicies(cfg, link.unifi_user_id)
+          } catch (e) {
+            const msg = e instanceof UnifiError ? e.message : `UniFi revoke failed: ${e.message || e}`
+            unifiErrors.push(`${link.locations.name}: ${msg}`)
+          }
+        }
+      }
+      await db.from('profile_locations')
+        .delete()
+        .eq('profile_id', id)
+        .eq('location_id', link.location_id)
+    }
+
+    // 2. Insert new rows + update existing rows. UniFi sync happens
+    //    as part of the iteration so we capture role + door-access
+    //    intent in one pass.
+    for (const a of desired) {
+      const existing = existingByLocation[a.location_id]
+      const wantsDoor = !!a.unifi_door_access
+
+      // Do the UniFi sync against THIS location with the role this
+      // user will have AT THIS location. Critically, the role is
+      // a.role (per-location) — not profiles.role.
+      let unifiUserId = existing?.unifi_user_id || null
+      const locationRow = existing?.locations
+      if (locationRow) {
+        try {
+          unifiUserId = await applyDoorAccessChange({
+            profile: targetBefore,
+            location: locationRow,
+            enable: wantsDoor,
+            role: a.role,
+            existingUnifiUserId: unifiUserId,
+          })
+        } catch (e) {
+          const msg = e instanceof UnifiError
+            ? e.message
+            : `UniFi sync failed at ${locationRow.name || 'location'}: ${e.message || e}`
+          unifiErrors.push(msg)
+          // Don't apply the door toggle change for this location, but
+          // DO still apply role + is_default change. The toggle stays
+          // at its previous state so UI / DB / UniFi don't diverge.
+        }
+      }
+
+      const row = {
+        profile_id: id,
+        location_id: a.location_id,
+        role: a.role,
+        is_default: !!a.is_default,
+        unifi_door_access: wantsDoor,
+        unifi_synced_at: new Date().toISOString(),
+        unifi_user_id: unifiUserId,
+      }
+
+      if (existing) {
+        await db.from('profile_locations')
+          .update(row)
+          .eq('profile_id', id)
+          .eq('location_id', a.location_id)
+      } else {
+        await db.from('profile_locations').insert(row)
+      }
+    }
   }
 
-  // Final re-fetch so the response reflects unifi_door_access + unifi_user_id
-  // changes as well.
-  const { data } = await db
+  // ----- Recompute profiles.role + master flag -----
+  //
+  // profiles.role: 'master' if is_master is set OR the existing flag
+  // says so AND nothing changed it; otherwise the highest role across
+  // current assignments.
+  const { data: refreshed } = await db
     .from('profiles')
     .select('*, profile_locations(*, locations(*))')
     .eq('id', id)
     .single()
 
-  return NextResponse.json({ success: true, data })
+  const currentMaster = body.is_master !== undefined ? body.is_master : refreshed.role === 'master'
+  const ROLE_PRECEDENCE = { owner: 1, manager: 2, head_coach: 3, staff: 4 }
+  const highest = (refreshed.profile_locations || [])
+    .map(l => l.role)
+    .sort((a, b) => (ROLE_PRECEDENCE[a] || 99) - (ROLE_PRECEDENCE[b] || 99))[0]
+  const newProfileRole = currentMaster ? 'master' : (highest || refreshed.role || 'staff')
+  if (newProfileRole !== refreshed.role) {
+    await db.from('profiles').update({ role: newProfileRole }).eq('id', id)
+  }
+
+  // Keep legacy profiles.unifi_door_access flag in sync so older
+  // readers don't get stale data.
+  const anyDoorOn = (refreshed.profile_locations || []).some(l => l.unifi_door_access === true)
+  if (anyDoorOn !== refreshed.unifi_door_access) {
+    await db.from('profiles').update({ unifi_door_access: anyDoorOn }).eq('id', id)
+  }
+
+  // If any UniFi sync failed, surface it. The DB writes that succeeded
+  // before the failure are kept (they're independent per-location).
+  if (unifiErrors.length) {
+    return NextResponse.json({
+      success: false,
+      error: unifiErrors.join(' '),
+      unifi_failed: true,
+    }, { status: 502 })
+  }
+
+  // Final re-fetch for the response.
+  const { data: final } = await db
+    .from('profiles')
+    .select('*, profile_locations(*, locations(*))')
+    .eq('id', id)
+    .single()
+
+  return NextResponse.json({ success: true, data: final })
 }
 
 // DELETE /api/staff/[id] — Soft-delete (deactivate) a staff member.
-// Owner-or-master only.
+// master + owner-at-any-of-their-locations.
 //
-// Also revokes any UniFi door-access policies the staff member had — we
+// Revokes any UniFi door-access policies the staff member had — we
 // don't want a deactivated employee still able to walk into the studio.
 export async function DELETE(request, { params }) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  if (user.role !== 'owner' && user.role !== 'master') {
-    return NextResponse.json({ success: false, error: 'Forbidden — owner or master only' }, { status: 403 })
+  if (!user.isMaster && user.role !== 'owner') {
+    return NextResponse.json({
+      success: false,
+      error: 'Forbidden — must be an owner at this location (or a master) to deactivate staff',
+    }, { status: 403 })
   }
 
   const { id } = params
 
-  // Don't let an owner deactivate themselves — that would lock them out and
+  // Don't let a user deactivate themselves — that would lock them out and
   // potentially leave the org with no active owner.
   if (id === user.id) {
     return NextResponse.json({
@@ -298,16 +393,28 @@ export async function DELETE(request, { params }) {
 
   const db = createServerClient()
 
-  // Pull the profile + per-location door state BEFORE deactivating
-  // so we can walk every location-level UniFi instance and revoke
-  // independently. Migration 024 split the single profile-level
-  // unifi_door_access flag into per-row columns on profile_locations,
-  // so an ex-employee assigned to two studios needs both revoked.
   const { data: profile } = await db
     .from('profiles')
     .select('id, profile_locations(*, locations(*))')
     .eq('id', id)
     .single()
+
+  // Owners must overlap with the target on at least one location.
+  if (!user.isMaster) {
+    const callerOwnerLocations = new Set(
+      Object.entries(user.rolesByLocation || {})
+        .filter(([, r]) => r === 'owner')
+        .map(([loc]) => loc)
+    )
+    const targetLocations = (profile?.profile_locations || []).map(l => l.location_id)
+    const overlap = targetLocations.some(l => callerOwnerLocations.has(l))
+    if (!overlap) {
+      return NextResponse.json({
+        success: false,
+        error: 'You can only deactivate staff assigned to a location where you are an owner.',
+      }, { status: 403 })
+    }
+  }
 
   // Revoke door access first. If UniFi is unreachable on any
   // location, surface the error so an owner can retry — better than

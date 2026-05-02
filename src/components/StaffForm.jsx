@@ -1,10 +1,13 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { ArrowLeft, Check, X } from 'lucide-react'
-import { passwordRequirements, validatePasswordComplexity } from '@/lib/schemas'
+import { ArrowLeft, Check, X, Plus, Trash2, Crown } from 'lucide-react'
+import {
+  passwordRequirements, validatePasswordComplexity,
+  OWNER_ASSIGNABLE_ROLES, MASTER_ASSIGNABLE_ROLES,
+} from '@/lib/schemas'
 import {
   WEB_PERMISSIONS as allPermissions,
   DEFAULT_WEB_PERMISSIONS_BY_ROLE as defaultPermissionsByRole,
@@ -13,39 +16,90 @@ import {
   DEFAULT_MOBILE_PERMISSIONS_BY_ROLE as defaultMobilePermissionsByRole,
 } from '@shared/permissions'
 
-// Aliases kept for back-compat with the local closures below — same
-// shape as the previous in-file consts so the JSX further down didn't
-// have to change.
 const defaultPermissions = defaultPermissionsByRole.staff
 const defaultMobilePermissions = defaultMobilePermissionsByRole.staff
 
-export default function StaffForm({ staff, locations, callerRole = 'owner' }) {
+const ROLE_PRECEDENCE = { owner: 1, manager: 2, head_coach: 3, staff: 4 }
+const ROLE_LABELS = {
+  owner: 'Owner / Studio Admin',
+  manager: 'Manager',
+  head_coach: 'Head Coach',
+  staff: 'Staff',
+}
+
+/**
+ * Wizard-style staff form (mig 051 per-location roles).
+ *
+ * The user can be assigned to multiple locations, each with its OWN
+ * role + door access + default flag. Master is a separate platform-
+ * wide flag — owners can't grant or revoke it.
+ *
+ * Authorization in the UI mirrors the server-side checks:
+ *   master:  can grant master flag, add/edit any location, any role
+ *   owner:   can NOT grant master, can only add/edit assignments at
+ *            locations they themselves are owner at, role limited
+ *            to OWNER_ASSIGNABLE_ROLES (which includes 'owner' per
+ *            mig 051 — owner-at-X can mint another owner-at-X).
+ *
+ * Assignments at locations the caller is NOT owner at are shown
+ * read-only (so an owner can see "this person is also at Stillorgan
+ * as head_coach" but can't edit that row). The server preserves
+ * those rows on save.
+ */
+export default function StaffForm({
+  staff,
+  locations,
+  callerIsMaster = false,
+  callerOwnerLocationIds = [],
+}) {
   const isEdit = !!staff
   const router = useRouter()
+
+  // Master can grant any role (incl. another master flag); owner
+  // can grant any per-location role (including owner) but not master.
+  const allowedRoles = callerIsMaster ? MASTER_ASSIGNABLE_ROLES : OWNER_ASSIGNABLE_ROLES
+  const callerScope = useMemo(
+    () => new Set(callerOwnerLocationIds),
+    [callerOwnerLocationIds]
+  )
 
   const [form, setForm] = useState({
     full_name: staff?.full_name || '',
     email: staff?.email || '',
     password: '',
-    role: staff?.role || 'staff',
+    is_master: !!staff?.is_master,
     active: staff?.active ?? true,
-    location_ids: staff?.location_ids || locations.map(l => l.id),
+    // assignments: [{ location_id, role, is_default, unifi_door_access }]
+    assignments: staff?.assignments || [],
     permissions: staff?.permissions || { ...defaultPermissions, mobile: { ...defaultMobilePermissions } },
     mobile_permissions: staff?.permissions?.mobile || { ...defaultMobilePermissions },
-    // HR fields
     employment_type: staff?.employment_type || 'fte',
     annual_salary: staff?.annual_salary || '',
     hourly_rate: staff?.hourly_rate || '',
     contracted_hours_per_week: staff?.contracted_hours_per_week ?? 40,
     annual_leave_entitlement: staff?.annual_leave_entitlement ?? 20,
     overtime_rate: staff?.overtime_rate || '',
-    // UniFi door access per location. Map keyed by location_id with
-    // boolean values. Only meaningful in edit mode (we need a saved
-    // profile + existing profile_locations row for the server-side sync).
-    door_access_by_location: { ...(staff?.door_access_by_location || {}) },
   })
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
+
+  // Computed view of the assignments — split into editable (caller can
+  // touch) and read-only (caller is not owner at that location, so the
+  // row is preserved server-side without modification).
+  const editableAssignments = form.assignments.filter(a => callerScope.has(a.location_id))
+  const readOnlyAssignments = form.assignments.filter(a => !callerScope.has(a.location_id))
+
+  // Locations the caller could ADD to this user that aren't already
+  // assigned. Master gets every location; owner gets only their owned ones.
+  const assignedIds = new Set(form.assignments.map(a => a.location_id))
+  const addableLocations = locations
+    .filter(l => callerScope.has(l.id) && !assignedIds.has(l.id))
+
+  // Highest role across editable assignments — drives the
+  // role-default reset for permissions when assignments change.
+  const highestEditableRole = editableAssignments
+    .map(a => a.role)
+    .sort((a, b) => (ROLE_PRECEDENCE[a] || 99) - (ROLE_PRECEDENCE[b] || 99))[0]
 
   function isUnifiConfigured(loc) {
     const cfg = loc?.settings?.unifi || {}
@@ -54,7 +108,13 @@ export default function StaffForm({ staff, locations, callerRole = 'owner' }) {
       cfg.staff_policy_id && cfg.manager_policy_id
     )
   }
-  const isManagerRole = form.role === 'owner' || form.role === 'manager'
+
+  function disabledAtLocationNames(key) {
+    if (!isFeatureGatedByLocation(key)) return []
+    return locations
+      .filter(l => assignedIds.has(l.id) && l.features?.[key] === false)
+      .map(l => l.name)
+  }
 
   function togglePermission(key) {
     setForm(prev => ({
@@ -62,59 +122,89 @@ export default function StaffForm({ staff, locations, callerRole = 'owner' }) {
       permissions: { ...prev.permissions, [key]: !prev.permissions[key] },
     }))
   }
-
-  // For a given feature key, return the names of the user's
-  // currently-assigned locations that have it explicitly disabled in
-  // their location.features map (mig 032). Empty array → not gated
-  // off anywhere → toggle works normally. Used to render an inline
-  // "(off at X)" hint next to permission toggles so admins know why
-  // flipping the toggle won't actually grant access.
-  function disabledAtLocationNames(key) {
-    if (!isFeatureGatedByLocation(key)) return []
-    const assignedIds = new Set(form.location_ids || [])
-    return locations
-      .filter(l => assignedIds.has(l.id) && l.features?.[key] === false)
-      .map(l => l.name)
-  }
-
   function toggleMobilePermission(key) {
     setForm(prev => ({
       ...prev,
       mobile_permissions: { ...prev.mobile_permissions, [key]: !prev.mobile_permissions[key] },
     }))
   }
-
   function setAllMobilePermissions(on) {
     const perms = {}
     allMobilePermissions.forEach(p => { perms[p.key] = on })
     setForm(prev => ({ ...prev, mobile_permissions: perms }))
   }
-
-  function toggleLocation(locId) {
-    setForm(prev => ({
-      ...prev,
-      location_ids: prev.location_ids.includes(locId)
-        ? prev.location_ids.filter(id => id !== locId)
-        : [...prev.location_ids, locId],
-    }))
-  }
-
   function setAllPermissions(on) {
     const perms = {}
     allPermissions.forEach(p => { perms[p.key] = on })
     setForm(prev => ({ ...prev, permissions: perms }))
   }
 
+  // Reset role-default permissions when the highest editable role
+  // changes (e.g. promoting a staff to manager grants manager defaults).
+  // We track the "previous highest role" via a useState shadow so the
+  // user's manual permission tweaks aren't overwritten on every render.
+  const [lastHighestRole, setLastHighestRole] = useState(highestEditableRole)
+  if (highestEditableRole && highestEditableRole !== lastHighestRole) {
+    setLastHighestRole(highestEditableRole)
+    setForm(prev => ({
+      ...prev,
+      permissions: defaultPermissionsByRole[highestEditableRole] || defaultPermissions,
+      mobile_permissions: defaultMobilePermissionsByRole[highestEditableRole] || defaultMobilePermissions,
+    }))
+  }
+
+  function addAssignment(locationId) {
+    setForm(prev => {
+      const next = [...prev.assignments, {
+        location_id: locationId,
+        role: allowedRoles.includes('staff') ? 'staff' : allowedRoles[0],
+        is_default: prev.assignments.length === 0,
+        unifi_door_access: false,
+      }]
+      return { ...prev, assignments: next }
+    })
+  }
+
+  function removeAssignment(locationId) {
+    setForm(prev => {
+      const remaining = prev.assignments.filter(a => a.location_id !== locationId)
+      // Promote a new default if we just removed the default-flagged one
+      if (remaining.length > 0 && !remaining.some(a => a.is_default)) {
+        // Prefer an editable assignment as the new default, else the first
+        const idx = remaining.findIndex(a => callerScope.has(a.location_id))
+        const promoteIdx = idx >= 0 ? idx : 0
+        remaining[promoteIdx] = { ...remaining[promoteIdx], is_default: true }
+      }
+      return { ...prev, assignments: remaining }
+    })
+  }
+
+  function updateAssignment(locationId, patch) {
+    setForm(prev => ({
+      ...prev,
+      assignments: prev.assignments.map(a => {
+        if (a.location_id !== locationId) {
+          // If we're setting a new default, others must clear theirs
+          if (patch.is_default) return { ...a, is_default: false }
+          return a
+        }
+        return { ...a, ...patch }
+      }),
+    }))
+  }
+
   async function handleSubmit(e) {
     e.preventDefault()
     setError(null)
 
-    // Pre-flight password complexity check on create — surfaces the
-    // exact rule that's missing rather than waiting for Supabase to
-    // bounce the request with a generic 'invalid_password' error.
     if (!isEdit) {
       const pwError = validatePasswordComplexity(form.password)
       if (pwError) { setError(pwError); return }
+    }
+
+    if (form.assignments.length === 0 && !form.is_master) {
+      setError('Assign this person to at least one studio (or grant the master flag).')
+      return
     }
 
     setSaving(true)
@@ -122,10 +212,6 @@ export default function StaffForm({ staff, locations, callerRole = 'owner' }) {
     const url = isEdit ? `/api/staff/${staff.id}` : '/api/staff'
     const method = isEdit ? 'PUT' : 'POST'
 
-    // Mobile feature flags are stored under permissions.mobile so the
-    // mobile app can read them in a single fetch alongside the existing
-    // sidebar permissions. We merge here at submit time so the source-of-
-    // truth split (web vs mobile) doesn't bleed into the API/DB shape.
     const mergedPermissions = {
       ...form.permissions,
       mobile: { ...form.mobile_permissions },
@@ -133,9 +219,9 @@ export default function StaffForm({ staff, locations, callerRole = 'owner' }) {
 
     const payload = {
       full_name: form.full_name,
-      role: form.role,
+      is_master: form.is_master,
+      assignments: form.assignments,
       permissions: mergedPermissions,
-      location_ids: form.location_ids,
       active: form.active,
       employment_type: form.employment_type,
       annual_salary: form.employment_type === 'fte' && form.annual_salary ? Number(form.annual_salary) : null,
@@ -143,25 +229,6 @@ export default function StaffForm({ staff, locations, callerRole = 'owner' }) {
       contracted_hours_per_week: form.employment_type === 'fte' ? Number(form.contracted_hours_per_week) : null,
       annual_leave_entitlement: form.employment_type === 'fte' ? Number(form.annual_leave_entitlement) : null,
       overtime_rate: form.employment_type === 'fte' && form.overtime_rate ? Number(form.overtime_rate) : null,
-    }
-
-    // Only send door access on edit. Create flow doesn't have a saved
-    // profile / location assignment yet; door access is enabled
-    // post-save once the staffer is set up. Per-location map (one
-    // toggle per assigned location) — server iterates each entry and
-    // syncs that location's UniFi instance independently.
-    if (isEdit) {
-      // Filter to locations the staffer is currently assigned to —
-      // sending toggles for unassigned locations would be ignored
-      // server-side anyway, but stripping them keeps the wire payload
-      // tight and avoids ambiguity.
-      const filtered = {}
-      for (const locId of form.location_ids) {
-        if (form.door_access_by_location[locId] !== undefined) {
-          filtered[locId] = !!form.door_access_by_location[locId]
-        }
-      }
-      payload.unifi_door_access_per_location = filtered
     }
 
     if (!isEdit) {
@@ -182,8 +249,6 @@ export default function StaffForm({ staff, locations, callerRole = 'owner' }) {
       router.push('/settings')
       router.refresh()
     } else {
-      // Surface per-field validation issues (Zod) so we can see exactly which
-      // field tripped — not just "Invalid request body".
       const issues = Array.isArray(data.issues) && data.issues.length
         ? data.issues.map(i => `${i.path || '(root)'}: ${i.message}`).join('; ')
         : null
@@ -203,7 +268,7 @@ export default function StaffForm({ staff, locations, callerRole = 'owner' }) {
         </div>
       )}
 
-      {/* Basic Info */}
+      {/* Account Details */}
       <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5 space-y-4">
         <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light">Account Details</h3>
 
@@ -242,10 +307,6 @@ export default function StaffForm({ staff, locations, callerRole = 'owner' }) {
               className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
               placeholder="Strong password"
             />
-            {/* Live requirements checklist. Each row turns green ✓ as the
-                user types a character matching that rule. Mirrors the
-                Supabase Auth password-strength settings exactly so the
-                user never gets a confusing rejection from Supabase. */}
             <ul className="mt-2 space-y-1">
               {passwordRequirements.map(r => {
                 const ok = r.test(form.password || '')
@@ -259,59 +320,6 @@ export default function StaffForm({ staff, locations, callerRole = 'owner' }) {
             </ul>
           </div>
         )}
-
-        <div>
-          <label className="block text-sm text-un1t-light mb-1">Role</label>
-          <select
-            value={form.role}
-            onChange={e => {
-              const newRole = e.target.value
-              setForm(prev => {
-                if (prev.role === newRole) return prev
-                // Always apply the new role's defaults — both on create and on
-                // edit. Without this, demoting an owner to staff would leave
-                // their owner-era `permissions` JSONB intact, which makes the
-                // sidebar still show admin links (the click-through 403s, but
-                // the UX is misleading). Manual permission tweaks below still
-                // override whatever this sets.
-                return {
-                  ...prev,
-                  role: newRole,
-                  permissions: defaultPermissionsByRole[newRole] || defaultPermissions,
-                  // Reset mobile defaults too — promoting from staff to
-                  // manager should grant mobile pipeline/WhatsApp/etc.,
-                  // and demoting should revoke them. Same logic as the
-                  // sidebar permissions reset above.
-                  mobile_permissions: defaultMobilePermissionsByRole[newRole] || defaultMobilePermissions,
-                }
-              })
-            }}
-            className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
-          >
-            <option value="staff">Staff</option>
-            <option value="head_coach">Head Coach</option>
-            <option value="manager">Manager</option>
-            {/* Owner + master roles can ONLY be granted by a master.
-                Owners editing staff see manager/head_coach/staff only.
-                Existing owners/masters being edited still show their
-                current role even if the caller can't grant it. */}
-            {callerRole === 'master' && <option value="owner">Owner / Studio Admin</option>}
-            {callerRole === 'master' && <option value="master">Master / Platform Admin</option>}
-            {/* Backstop: render the staff's current role disabled if
-                the caller can't grant it, so the dropdown value isn't
-                misleadingly hidden. */}
-            {callerRole !== 'master' && (form.role === 'owner' || form.role === 'master') && (
-              <option value={form.role} disabled>
-                {form.role === 'owner' ? 'Owner / Studio Admin' : 'Master / Platform Admin'} (master-only)
-              </option>
-            )}
-          </select>
-          <p className="text-xs text-un1t-light mt-1">
-            {callerRole === 'master'
-              ? 'Master can grant any role. Changing role resets permissions to that role’s defaults; fine-tune below.'
-              : 'Owners can grant Manager, Head Coach, or Staff. Granting Owner / Master requires a master account.'}
-          </p>
-        </div>
 
         {isEdit && (
           <div className="flex items-center gap-3">
@@ -327,92 +335,178 @@ export default function StaffForm({ staff, locations, callerRole = 'owner' }) {
         )}
       </div>
 
-      {/* Locations */}
-      <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5">
-        <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light mb-3">Location Access</h3>
-        <div className="space-y-2">
-          {locations.map(loc => (
-            <label key={loc.id} className="flex items-center gap-3 py-1.5 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={form.location_ids.includes(loc.id)}
-                onChange={() => toggleLocation(loc.id)}
-                className="rounded border-un1t-gray"
-              />
-              <span className="text-sm">{loc.name}</span>
-              <span className="text-xs text-un1t-light">{loc.slug}</span>
-            </label>
-          ))}
-        </div>
-      </div>
-
-      {/* Door Access (UniFi) — one row per assigned location. Each
-          location has its own UniFi instance, so each row is gated
-          by THAT location's UniFi config and toggled independently. */}
-      {isEdit && (
-        <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5 space-y-3">
-          <div>
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light">Door Access</h3>
-            <p className="text-xs text-un1t-light mt-1">
-              {form.location_ids.length === 0
-                ? 'Assign this person to a location first'
-                : `Toggle per location · syncs to UniFi Access`}
-            </p>
+      {/* Master Account flag — only master callers can set this */}
+      {callerIsMaster && (
+        <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <div className="flex items-center gap-2">
+                <Crown size={14} className="text-amber-400" />
+                <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light">Master / Platform Admin</h3>
+              </div>
+              <p className="text-xs text-un1t-light mt-1">
+                Platform-wide super-admin. Can create new locations, mint other masters,
+                see every studio regardless of assignments. Independent of per-location roles below.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setForm(prev => ({ ...prev, is_master: !prev.is_master }))}
+              className={`w-10 h-5 rounded-full transition-colors shrink-0 ${form.is_master ? 'bg-amber-500' : 'bg-un1t-gray'}`}
+            >
+              <div className={`w-4 h-4 rounded-full bg-white transition-transform ${form.is_master ? 'translate-x-5' : 'translate-x-0.5'}`} />
+            </button>
           </div>
+        </div>
+      )}
 
-          {form.location_ids.map(locId => {
-            const loc = locations.find(l => l.id === locId)
-            if (!loc) return null
-            const configured = isUnifiConfigured(loc)
-            const enabled = !!form.door_access_by_location[locId]
-            return (
-              <div key={locId} className="border border-un1t-gray/50 rounded-md p-3">
+      {/* Studio Assignments — the wizard */}
+      <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5 space-y-4">
+        <div>
+          <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light">Studio Assignments</h3>
+          <p className="text-xs text-un1t-light mt-1">
+            One row per studio. Each studio carries its OWN role and door access — owner at one studio,
+            head coach at another is fine. Mark one as default to land them there on login.
+          </p>
+        </div>
+
+        {/* Editable cards */}
+        {editableAssignments.map(a => {
+          const loc = locations.find(l => l.id === a.location_id)
+          if (!loc) return null
+          const configured = isUnifiConfigured(loc)
+          const isManagerRole = a.role === 'owner' || a.role === 'manager'
+          return (
+            <div key={a.location_id} className="border border-un1t-gray/70 rounded-lg p-4 space-y-3">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-sm font-semibold text-un1t-white">{loc.name}</div>
+                  <div className="text-xs text-un1t-light">{loc.slug}</div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => removeAssignment(a.location_id)}
+                  className="text-un1t-light hover:text-red-400 shrink-0"
+                  title="Remove this assignment"
+                >
+                  <Trash2 size={16} />
+                </button>
+              </div>
+
+              <div>
+                <label className="block text-xs text-un1t-light mb-1">Role at this studio</label>
+                <select
+                  value={a.role}
+                  onChange={e => updateAssignment(a.location_id, { role: e.target.value })}
+                  className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
+                >
+                  {allowedRoles.map(r => (
+                    <option key={r} value={r}>{ROLE_LABELS[r]}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="text-sm">Default studio</div>
+                  <div className="text-xs text-un1t-light">Lands here on login</div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => updateAssignment(a.location_id, { is_default: true })}
+                  disabled={a.is_default}
+                  className={`w-10 h-5 rounded-full transition-colors disabled:opacity-100 ${a.is_default ? 'bg-blue-500' : 'bg-un1t-gray hover:bg-un1t-mid'}`}
+                >
+                  <div className={`w-4 h-4 rounded-full bg-white transition-transform ${a.is_default ? 'translate-x-5' : 'translate-x-0.5'}`} />
+                </button>
+              </div>
+
+              {/* Door Access — gated by location-level UniFi config + edit mode */}
+              {isEdit && (
                 <div className="flex items-center justify-between">
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm font-medium text-un1t-white">{loc.name}</div>
+                  <div className="min-w-0">
+                    <div className="text-sm">Door Access</div>
                     <div className="text-xs text-un1t-light">
                       {configured
-                        ? (isManagerRole ? 'Manager access (main door + physio + main office)' : 'Staff access (main door + physio)')
+                        ? (isManagerRole ? 'Manager access (main + physio + office)' : 'Staff access (main + physio)')
                         : 'UniFi not configured for this location'}
                     </div>
                   </div>
                   <button
                     type="button"
                     disabled={!configured}
-                    onClick={() => setForm(prev => ({
-                      ...prev,
-                      door_access_by_location: {
-                        ...prev.door_access_by_location,
-                        [locId]: !enabled,
-                      },
-                    }))}
-                    className={`w-10 h-5 rounded-full transition-colors disabled:opacity-40 disabled:cursor-not-allowed shrink-0 ml-3 ${
-                      enabled ? 'bg-green-500' : 'bg-un1t-gray'
+                    onClick={() => updateAssignment(a.location_id, { unifi_door_access: !a.unifi_door_access })}
+                    className={`w-10 h-5 rounded-full transition-colors disabled:opacity-40 disabled:cursor-not-allowed shrink-0 ${
+                      a.unifi_door_access ? 'bg-green-500' : 'bg-un1t-gray'
                     }`}
                     title={!configured ? `Configure UniFi for ${loc.name} first` : ''}
                   >
                     <div className={`w-4 h-4 rounded-full bg-white transition-transform ${
-                      enabled ? 'translate-x-5' : 'translate-x-0.5'
+                      a.unifi_door_access ? 'translate-x-5' : 'translate-x-0.5'
                     }`} />
                   </button>
                 </div>
-                {!configured && (
-                  <div className="mt-2 text-xs text-amber-300">
-                    Set the host, API token and policy IDs in {loc.name}&apos;s
-                    Location settings before enabling door access here.
-                  </div>
-                )}
-              </div>
-            )
-          })}
+              )}
+              {!configured && a.unifi_door_access && (
+                <div className="text-xs text-amber-300">
+                  UniFi not configured for {loc.name}. Set it up in Location settings before enabling door access.
+                </div>
+              )}
+            </div>
+          )
+        })}
 
-          {form.location_ids.length > 0 && (
-            <p className="text-xs text-un1t-mid">
-              Role-based — promoting to Manager auto-upgrades any enabled location to manager-level access on save.
-            </p>
-          )}
-        </div>
-      )}
+        {/* Read-only cards (owner caller looking at staff also assigned elsewhere) */}
+        {readOnlyAssignments.length > 0 && (
+          <div className="space-y-2">
+            <div className="text-xs text-un1t-light uppercase tracking-wider">Other studios (read-only)</div>
+            {readOnlyAssignments.map(a => {
+              const loc = locations.find(l => l.id === a.location_id)
+              return (
+                <div key={a.location_id} className="border border-un1t-gray/40 bg-black/20 rounded-md px-3 py-2 flex items-center justify-between text-sm">
+                  <div>
+                    <span className="text-un1t-white">{loc?.name || a.location_id}</span>
+                    <span className="text-un1t-light ml-2">— {ROLE_LABELS[a.role] || a.role}</span>
+                  </div>
+                  <span className="text-xs text-un1t-mid">
+                    Owner of that studio can edit
+                  </span>
+                </div>
+              )
+            })}
+          </div>
+        )}
+
+        {/* Add another */}
+        {addableLocations.length > 0 && (
+          <div>
+            <label className="block text-xs text-un1t-light mb-1">Add a studio</label>
+            <div className="flex gap-2">
+              <select
+                value=""
+                onChange={e => { if (e.target.value) addAssignment(e.target.value) }}
+                className="flex-1 bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
+              >
+                <option value="">— Pick a studio —</option>
+                {addableLocations.map(l => (
+                  <option key={l.id} value={l.id}>{l.name}</option>
+                ))}
+              </select>
+              <span className="inline-flex items-center text-un1t-mid">
+                <Plus size={16} />
+              </span>
+            </div>
+          </div>
+        )}
+
+        {form.assignments.length === 0 && (
+          <p className="text-xs text-amber-400">
+            {form.is_master
+              ? 'Master account — can see all studios via platform bypass even with no explicit assignment.'
+              : 'No assignments yet. Pick at least one studio above.'}
+          </p>
+        )}
+      </div>
 
       {/* HR / Employment Details */}
       <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5 space-y-4">
@@ -520,7 +614,7 @@ export default function StaffForm({ staff, locations, callerRole = 'owner' }) {
         )}
       </div>
 
-      {/* Permissions */}
+      {/* Permissions (web sidebar) */}
       <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5">
         <div className="flex items-center justify-between mb-3">
           <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light">Feature Permissions</h3>
@@ -530,7 +624,7 @@ export default function StaffForm({ staff, locations, callerRole = 'owner' }) {
             <button type="button" onClick={() => setAllPermissions(false)} className="text-xs text-blue-400 hover:text-blue-300">All off</button>
           </div>
         </div>
-        <p className="text-xs text-un1t-light mb-2">Controls what this person sees in the web sidebar.</p>
+        <p className="text-xs text-un1t-light mb-2">Controls what this person sees in the web sidebar. User-level — applies at every studio they're assigned to.</p>
         <div className="space-y-2">
           {allPermissions.map(perm => {
             const offAt = disabledAtLocationNames(perm.key)
@@ -559,9 +653,7 @@ export default function StaffForm({ staff, locations, callerRole = 'owner' }) {
         </div>
       </div>
 
-      {/* Mobile Features — read by the iOS app on login. Stored under
-          permissions.mobile.* alongside the web flags so a single fetch
-          gives the mobile app everything it needs. */}
+      {/* Mobile Features */}
       <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5">
         <div className="flex items-center justify-between mb-3">
           <div>
@@ -578,11 +670,6 @@ export default function StaffForm({ staff, locations, callerRole = 'owner' }) {
         </div>
         <div className="space-y-2">
           {allMobilePermissions.map(perm => {
-            // Notification sub-toggles are visually dimmed (and behaviorally
-            // ignored server-side in src/lib/push.js) when the master
-            // push_notifications flag is off. We don't disable the toggle
-            // outright though — admins might want to pre-configure which
-            // notification types will be on once they re-enable push.
             const isNotifyRow = perm.key.startsWith('notify_')
             const dim = isNotifyRow && !form.mobile_permissions.push_notifications
             const offAt = disabledAtLocationNames(perm.key)
