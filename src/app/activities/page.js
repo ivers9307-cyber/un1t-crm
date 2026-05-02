@@ -1,10 +1,14 @@
 // /activities — Tasks list.
 //
-// Activities revamp phase 1 (mig 073). This page now filters
+// Activities revamp phase 1 (mig 073). This page filters
 // kind='task' so the upcoming/overdue/done filters mean
 // something. Auto-logged events (SMS sent, booking confirmed,
 // roster published) live on the contact-detail timeline; they
 // don't pollute this list.
+//
+// Filter tabs (left → right): Today, Overdue, Upcoming, Done,
+// All. Tab labels include a live count so an empty queue is
+// visible before you click.
 //
 // Phase 2 will add an "Add task" button at the top of this
 // page so it works as a standalone task tracker, not just a
@@ -28,26 +32,41 @@ export default async function ActivitiesPage({ searchParams }) {
   if (!user) redirect('/login')
 
   const db = createServerClient()
-  const filter = searchParams?.filter || 'upcoming'
+  const filter = searchParams?.filter || 'today'   // default tab → Today
 
-  let query = db.from('activities')
+  // Fetch all tasks for the location once, then bucket in JS.
+  // Volume is low (one location's open + recent tasks), and the
+  // tab counts need a complete picture, not a filtered slice.
+  // Cap at 500 as a sanity bound — well above realistic open
+  // task counts for a single location.
+  const { data: allTasks = [] } = await db.from('activities')
     .select('*, contacts(id, name)')
     .eq('location_id', user.activeLocation?.id)
-    .eq('kind', 'task')   // mig 073 — exclude auto-logged events
+    .eq('kind', 'task')
     .order('due_date', { ascending: true })
-    .limit(100)
+    .limit(500)
 
-  if (filter === 'upcoming') query = query.eq('done', false)
-  else if (filter === 'overdue') query = query.eq('done', false).lt('due_date', new Date().toISOString().split('T')[0])
-  else if (filter === 'done') query = query.eq('done', true)
+  const todayIso = new Date().toISOString().split('T')[0]
 
-  const { data: activities } = await query
+  // Bucket each task into the tab(s) it belongs to. The tabs are
+  // mutually exclusive for !done tasks (Today | Overdue | Upcoming
+  // are time-disjoint), but Done covers a different axis. All =
+  // every task regardless.
+  const buckets = {
+    today:    (allTasks || []).filter(t => !t.done && t.due_date === todayIso),
+    overdue:  (allTasks || []).filter(t => !t.done && t.due_date && t.due_date < todayIso),
+    upcoming: (allTasks || []).filter(t => !t.done && t.due_date && t.due_date > todayIso),
+    done:     (allTasks || []).filter(t => t.done),
+    all:      allTasks || [],
+  }
+  const visible = buckets[filter] || []
 
   const filters = [
+    { key: 'today',    label: 'Today' },
+    { key: 'overdue',  label: 'Overdue' },
     { key: 'upcoming', label: 'Upcoming' },
-    { key: 'overdue', label: 'Overdue' },
-    { key: 'done', label: 'Done' },
-    { key: 'all', label: 'All' },
+    { key: 'done',     label: 'Done' },
+    { key: 'all',      label: 'All' },
   ]
 
   return (
@@ -60,31 +79,51 @@ export default async function ActivitiesPage({ searchParams }) {
       </div>
       <p className="text-sm text-un1t-light mb-5">Manual follow-ups, calls and reminders.</p>
 
-      <div className="flex gap-2 mb-5">
-        {filters.map(f => (
-          <Link
-            key={f.key}
-            href={`/activities?filter=${f.key}`}
-            className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
-              filter === f.key
-                ? 'border-un1t-white text-un1t-white bg-un1t-gray'
-                : 'border-un1t-gray text-un1t-light hover:text-un1t-white hover:border-un1t-mid'
-            }`}
-          >
-            {f.label}
-          </Link>
-        ))}
+      <div className="flex gap-2 mb-5 flex-wrap">
+        {filters.map(f => {
+          const count = buckets[f.key]?.length ?? 0
+          const active = filter === f.key
+          // Overdue is the one tab where a non-zero count is a
+          // problem signal — colour the badge red so it pops even
+          // when the tab isn't selected.
+          const isOverdueWithItems = f.key === 'overdue' && count > 0
+          return (
+            <Link
+              key={f.key}
+              href={`/activities?filter=${f.key}`}
+              className={`text-xs px-3 py-1.5 rounded-full border transition-colors flex items-center gap-1.5 ${
+                active
+                  ? 'border-un1t-white text-un1t-white bg-un1t-gray'
+                  : 'border-un1t-gray text-un1t-light hover:text-un1t-white hover:border-un1t-mid'
+              }`}
+            >
+              <span>{f.label}</span>
+              <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${
+                isOverdueWithItems
+                  ? 'bg-red-500/20 text-red-700'
+                  : active
+                    ? 'bg-un1t-black/40 text-un1t-white'
+                    : 'bg-un1t-gray/40 text-un1t-light'
+              }`}>{count}</span>
+            </Link>
+          )
+        })}
       </div>
 
       <div className="bg-un1t-dark border border-un1t-gray rounded-lg divide-y divide-un1t-gray">
-        {(!activities || activities.length === 0) && (
+        {visible.length === 0 && (
           <p className="text-sm text-un1t-mid text-center py-12">
-            No tasks {filter === 'all' ? 'yet' : `in ${filter}`}. Tasks get added from the contact detail page.
+            {filter === 'today'   && 'No tasks due today.'}
+            {filter === 'overdue' && 'Nothing overdue. 🎉'}
+            {filter === 'upcoming' && 'No upcoming tasks.'}
+            {filter === 'done' && 'No completed tasks yet.'}
+            {filter === 'all' && 'No tasks yet. Tasks get added from the contact detail page.'}
           </p>
         )}
-        {(activities || []).map(a => {
+        {visible.map(a => {
           const Icon = typeIcons[a.type] || CheckSquare
-          const isOverdue = !a.done && a.due_date && new Date(a.due_date) < new Date(new Date().toDateString())
+          const isOverdue = !a.done && a.due_date && a.due_date < todayIso
+          const isToday = !a.done && a.due_date === todayIso
 
           return (
             <div key={a.id} className={`flex items-start gap-3 p-4 ${a.done ? 'opacity-50' : ''}`}>
@@ -113,7 +152,11 @@ export default async function ActivitiesPage({ searchParams }) {
               </div>
               <div className="text-right shrink-0">
                 {a.due_date && (
-                  <p className={`text-xs flex items-center gap-1 ${isOverdue ? 'text-red-700 font-medium' : 'text-un1t-light'}`}>
+                  <p className={`text-xs flex items-center gap-1 ${
+                    isOverdue ? 'text-red-700 font-medium'
+                    : isToday ? 'text-blue-700 font-medium'
+                    : 'text-un1t-light'
+                  }`}>
                     <Clock size={10} /> {a.due_date} {a.due_time || ''}
                   </p>
                 )}
