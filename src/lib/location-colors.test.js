@@ -55,4 +55,14 @@ describe('pickLocationColor', () => {
       expect(p.text).toMatch(/^text-[a-z]+-\d+$/)
     }
   })
+
+  it('text uses a -700 saturation (light-theme readable, matches DRAFT badge)', () => {
+    // Tunes against the existing convention in src/ (e.g. DRAFT
+    // badges use `text-amber-700` over `bg-amber-500/20`). If we
+    // ever switch to dark theme this assertion is the canary that
+    // says "go retune".
+    for (const p of LOCATION_CHIP_PALETTE) {
+      expect(p.text).toMatch(/-700$/)
+    }
+  })
 })

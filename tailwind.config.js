@@ -1,6 +1,10 @@
 /** @type {import('tailwindcss').Config} */
 module.exports = {
-  content: ['./src/**/*.{js,jsx}'],
+  // `shared/` is included so Tailwind picks up class strings used by
+  // shared helpers (e.g. shared/location-colors.js — chip palette
+  // imported by both web and mobile). Without this entry the JIT
+  // compiler never sees those classes and they render unstyled.
+  content: ['./src/**/*.{js,jsx}', './shared/**/*.{js,jsx}'],
   theme: {
     extend: {
       colors: {
