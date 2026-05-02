@@ -30,12 +30,12 @@ import { stampHeartbeat } from '@/lib/cron-heartbeat'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-// Vercel default is 10s on Hobby, 60s on Pro. Bump to give headroom
-// for a single tick to dispatch multiple broadcasts. The synchronous
-// nature of sendBroadcast means a long broadcast can still hit this
-// ceiling — Phase 2.6 (chunked resumable send) is the next iteration
-// for very large audiences.
-export const maxDuration = 60
+// Vercel Pro ceiling is 300s. Combined with the chunked-resume
+// model (Phase 5B) this lets a single tick dispatch up to ~1000
+// recipients before yielding to the next tick (Twilio caps us at
+// 25 sends/sec on alpha senders, so 1000 ≈ 40s of throughput plus
+// headroom for slow Twilio responses).
+export const maxDuration = 300
 
 export async function GET(request) {
   const auth = request.headers.get('authorization') || ''
@@ -84,11 +84,12 @@ export async function GET(request) {
     errors: [],
   }
 
-  // Per-tick chunk size. Set so a single broadcast can't monopolise
-  // the tick — 200 recipients * 25/sec rate limit = ~8 seconds best
-  // case, well inside the 60s ceiling. Larger broadcasts spread
-  // across multiple ticks (5 min apart by the cron schedule).
-  const CHUNK = 200
+  // Per-tick chunk size. Pro tier ceiling is 300s; Twilio caps
+  // alpha senders at ~25 sends/sec; 1000 recipients ≈ 40s of
+  // throughput plus headroom for slow Twilio responses and the
+  // per-tick fanout to multiple broadcasts. Larger broadcasts
+  // spread across multiple ticks (5 min apart).
+  const CHUNK = 1000
 
   for (const row of due) {
     try {

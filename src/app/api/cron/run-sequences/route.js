@@ -12,6 +12,13 @@ import { stampHeartbeat } from '@/lib/cron-heartbeat'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
+// Vercel Pro ceiling. Three phases run sequentially per tick
+// (event-reminder sends, event_reminder triggers, runSequences).
+// Each batches internally (PROCESS_BATCH_SIZE = 100 in
+// sequences.js), but a busy 5-min window with hundreds of due
+// enrollments + reminders can exceed the Pro default. 300s gives
+// plenty of headroom.
+export const maxDuration = 300
 
 export async function GET(request) {
   const auth = request.headers.get('authorization') || ''

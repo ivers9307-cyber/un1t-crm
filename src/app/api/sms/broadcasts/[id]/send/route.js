@@ -13,9 +13,11 @@ import { sendBroadcast } from '@/lib/sms'
 
 export const runtime = 'nodejs'
 
-// Vercel default is 10s on the Hobby plan, 60s on Pro. Bump to give
-// the loop room. If your account is on Pro, raise this further.
-export const maxDuration = 60
+// Vercel Pro ceiling is 300s. The chunk-and-resume model (Phase 5B)
+// means anything bigger rolls to the cron, but raising this lets the
+// manual "Send now" finish broadcasts up to ~2000 recipients in one
+// shot instead of punting after ~500.
+export const maxDuration = 300
 
 export async function POST(request, { params }) {
   const user = await getCurrentUser()
@@ -33,12 +35,11 @@ export async function POST(request, { params }) {
   if (guard) return guard
 
   try {
-    // Manual "Send now" — process up to 500 recipients in this
-    // request. Anything beyond rolls to the cron (which picks up
-    // status='sending' rows every 5 min, Phase 5B). 500 was picked
-    // empirically: at the 25 sends/sec rate limit + per-call
-    // overhead, ~500 fits inside Vercel's 60s ceiling on Pro.
-    const result = await sendBroadcast(params.id, { maxRecipients: 500 })
+    // Manual "Send now" — process up to 2000 recipients in this
+    // request on the Pro tier (300s ceiling). At Twilio's 25/sec
+    // rate limit that's ~80s of throughput plus headroom; bigger
+    // audiences chunk-resume via the every-5-min cron (Phase 5B).
+    const result = await sendBroadcast(params.id, { maxRecipients: 2000 })
     return NextResponse.json({ success: true, ...result })
   } catch (err) {
     console.error('[sms/broadcasts/send]', err)

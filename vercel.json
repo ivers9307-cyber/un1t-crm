@@ -2,14 +2,20 @@
   "crons": [
     {
       "path": "/api/cron/run-scheduled-reports",
-      "schedule": "0 7 * * *"
+      "schedule": "0 7 * * *",
+      "timezone": "Europe/Dublin"
     },
     {
       "path": "/api/cron/prune-rate-limits",
-      "schedule": "30 3 * * *"
+      "schedule": "30 3 * * *",
+      "timezone": "Europe/Dublin"
     },
     {
       "path": "/api/cron/run-sms-broadcasts",
+      "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/cron/run-sequences",
       "schedule": "*/5 * * * *"
     }
   ]
