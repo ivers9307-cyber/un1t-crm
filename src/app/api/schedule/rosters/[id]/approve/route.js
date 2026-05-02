@@ -8,6 +8,7 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
+import { notifyStaffOfPublish } from '@/lib/roster-notify'
 
 export async function POST(_request, { params }) {
   const user = await getCurrentUser()
@@ -80,13 +81,30 @@ export async function POST(_request, { params }) {
     .gte('block_date', roster.period_start)
     .lte('block_date', roster.period_end)
 
-  await db
+  // Capture the just-flipped shifts so we can fire staff
+  // notifications (email + push) — same fan-out the normal
+  // publish path uses. Without this, an owner-approved draft
+  // would publish silently to staff.
+  const { data: flippedShifts } = await db
     .from('shifts')
     .update({ published: true, published_at: nowIso })
     .eq('location_id', roster.location_id)
     .gte('shift_date', roster.period_start)
     .lte('shift_date', roster.period_end)
     .eq('published', false)
+    .select('id, profile_id, location_id, shift_date')
+
+  // Best-effort notify — wrapped so a Postmark/push hiccup
+  // doesn't roll back the approval.
+  try {
+    await notifyStaffOfPublish(db, flippedShifts || [], {
+      startDate: roster.period_start,
+      endDate: roster.period_end,
+      locationId: roster.location_id,
+    })
+  } catch (e) {
+    console.warn(`[rosters/approve] staff notify failed: ${e.message}`)
+  }
 
   return NextResponse.json({ success: true, data: updated })
 }

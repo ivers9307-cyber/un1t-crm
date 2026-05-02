@@ -4,7 +4,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike, isoDate , MANAGER_ROLES} from '@/lib/schemas'
-import { sendPush } from '@/lib/push'
+import { notifyStaffOfPublish } from '@/lib/roster-notify'
 
 const PublishSchema = z.object({
   location_id: uuidLike,
@@ -42,50 +42,15 @@ export async function POST(request) {
 
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
 
-  // If notify requested, log notification records (actual sending via Postmark/WhatsApp
-  // can be triggered by n8n watching this table or a separate cron)
-  if (notify && shifts && shifts.length > 0) {
-    // Group shifts by profile to send one notification per person
-    const profileShifts = {}
-    for (const s of shifts) {
-      if (!profileShifts[s.profile_id]) profileShifts[s.profile_id] = []
-      profileShifts[s.profile_id].push(s)
-    }
-
-    const notifications = Object.entries(profileShifts).map(([profileId, pShifts]) => ({
-      profile_id: profileId,
-      shift_id: pShifts[0].id,
-      type: 'roster_published',
-      channel: 'email',
-      metadata: {
-        week_start: start_date,
-        week_end: end_date,
-        shift_count: pShifts.length,
-      },
-    }))
-
-    await db.from('schedule_notifications').insert(notifications)
-
-    // Push to every assigned staff member. Per-user opt-out is handled
-    // inside sendPush() via permissions.mobile.notify_schedule. We send
-    // one notification per profile, summarising their shift count.
-    const userIds = Object.keys(profileShifts)
-    if (userIds.length) {
-      const range = start_date === end_date
-        ? start_date
-        : `${start_date} – ${end_date}`
-      sendPush(userIds, {
-        title: 'New schedule published',
-        body: `Your shifts for ${range} are live. Tap to view.`,
-        category: 'schedule',
-        data: {
-          type: 'schedule_published',
-          start_date,
-          end_date,
-          location_id,
-        },
-      }).catch(err => console.error('[publish] push failed', err))
-    }
+  // Single notify path shared with the rosters approve route
+  // (src/lib/roster-notify.js). Best-effort: a Postmark / push
+  // hiccup never rolls back a publish that's already on disk.
+  if (notify) {
+    await notifyStaffOfPublish(db, shifts || [], {
+      startDate: start_date,
+      endDate: end_date,
+      locationId: location_id,
+    })
   }
 
   return NextResponse.json({ success: true, published: shifts?.length || 0 })
