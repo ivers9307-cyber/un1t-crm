@@ -100,7 +100,13 @@ export async function createOrder({
   amount,
   currency = 'EUR',
   description,
-  captureMode = 'AUTOMATIC',
+  // captureMode left undefined by default — the Revolut API defaults
+  // to automatic capture, and the enum value has shifted between API
+  // versions ('AUTOMATIC' upper-snake on older, lowercase on newer).
+  // Sending the wrong casing throws 'Invalid capture mode'. Omitting
+  // the field sidesteps the compatibility issue entirely. Pass an
+  // explicit value only if you want manual capture (auth-only).
+  captureMode,
   redirectUrl,
   metadata,
   idempotencyKey,
@@ -111,8 +117,8 @@ export async function createOrder({
   const body = {
     amount: Math.round(amount),
     currency,
-    capture_mode: captureMode,
   }
+  if (captureMode) body.capture_mode = captureMode
   if (description) body.description = description
   if (redirectUrl) body.redirect_url = redirectUrl
   if (metadata && Object.keys(metadata).length > 0) body.metadata = metadata

@@ -131,7 +131,9 @@ export async function POST(request, { params }) {
         amount: amountMinor,
         currency: 'EUR',
         description: `Car deposit — ${carLabel}`,
-        captureMode: 'AUTOMATIC',
+        // captureMode omitted — Revolut defaults to automatic capture,
+        // which is what we want, AND the enum casing varies by API
+        // version so omitting avoids a 'Invalid capture mode' error.
         // redirect_url still set so the hosted-page fallback works.
         redirectUrl: `${baseUrl}/deposit/${car.deposit_token}/return`,
         metadata: {
