@@ -1,6 +1,12 @@
 // Per-event reminder runner. Sends a single reminder N minutes before
-// each booking's start time, delivered as either an email or a WhatsApp
-// utility template — whichever the event_type was configured with.
+// each booking's start time, delivered as either an email or an SMS
+// — whichever the event_type was configured with.
+//
+// WhatsApp was supported as a third channel earlier on but was retired
+// in mig 074: WhatsApp templates are reserved for explicit campaigns,
+// not transactional reminders. The DB now CHECKs reminder_channel ∈
+// {'email', 'sms'} so the case is unreachable; the runner short-
+// circuits anything else to a clean skip.
 //
 // Cron-driven: invoked from /api/cron/run-sequences alongside the
 // sequence runner. Dedup is via bookings.reminder_sent_at — the partial
@@ -14,7 +20,6 @@
 
 import { createServerClient } from '@/lib/supabase'
 import { sendTransactionalEmail, applyMergeTags } from '@/lib/postmark'
-import { sendTemplateMessage, getOrCreateConversation } from '@/lib/whatsapp'
 import { sendLocationSms, TwilioError } from '@/lib/twilio'
 
 // ±1h covers Dublin DST drift cleanly. Operators set reminder time in
@@ -61,7 +66,7 @@ export async function runEventReminderSends() {
       id, name, location_id,
       reminder_minutes_before, reminder_channel,
       reminder_email_template_id, reminder_email_subject,
-      reminder_whatsapp_template_id
+      reminder_sms_body
     `)
     .eq('reminder_enabled', true)
   if (!events?.length) return stats
@@ -106,12 +111,14 @@ export async function runEventReminderSends() {
       try {
         if (ev.reminder_channel === 'email') {
           outcome = await sendEmailReminder(db, booking, ev)
-        } else if (ev.reminder_channel === 'whatsapp') {
-          outcome = await sendWhatsappReminder(db, booking, ev)
         } else if (ev.reminder_channel === 'sms') {
           outcome = await sendSmsReminder(db, booking, ev)
         } else {
-          outcome = { status: 'skipped', reason: 'no_channel' }
+          // mig 074 retired WhatsApp; the DB CHECK now excludes it.
+          // Any other value (incl. legacy 'whatsapp' that somehow
+          // survives) lands here as a clean skip — no error, no
+          // re-attempt, no half-sent message.
+          outcome = { status: 'skipped', reason: `unsupported_channel:${ev.reminder_channel || 'none'}` }
         }
       } catch (e) {
         console.warn(`[event-reminders] failed for booking ${booking.id}: ${e.message}`)
@@ -206,63 +213,9 @@ async function sendEmailReminder(db, booking, ev) {
   return { status: 'sent' }
 }
 
-async function sendWhatsappReminder(db, booking, ev) {
-  if (!ev.reminder_whatsapp_template_id) {
-    throw new Error('Event has reminder_channel=whatsapp but no reminder_whatsapp_template_id set')
-  }
-
-  // Consent + hard-signal checks. Same logic as the email path:
-  // marketing opt-out doesn't block utility messages, but
-  // administrative opt-out does, and a blocked / opted-out wa_status
-  // means Meta will reject anyway.
-  const c = booking.contacts
-  if (c?.wa_status && ['blocked', 'opted_out'].includes(c.wa_status)) {
-    return { status: 'skipped', reason: `wa_status=${c.wa_status}` }
-  }
-  const prefs = c?.contact_preferences
-  const adminConsent = Array.isArray(prefs)
-    ? prefs[0]?.whatsapp_administrative
-    : prefs?.whatsapp_administrative
-  if (adminConsent === false) {
-    return { status: 'skipped', reason: 'opted_out_administrative_whatsapp' }
-  }
-
-  const { data: tpl } = await db
-    .from('whatsapp_templates')
-    .select('name, language, components, status, category')
-    .eq('id', ev.reminder_whatsapp_template_id)
-    .single()
-  if (!tpl) throw new Error('WhatsApp template not found')
-  if (tpl.status !== 'APPROVED') throw new Error(`WhatsApp template '${tpl.name}' is not approved (${tpl.status})`)
-  // Belt-and-braces: even though the picker filters to UTILITY/AUTHENTICATION,
-  // a marketing template here would be a Meta policy violation (sending a
-  // marketing message under a utility pretext). Refuse at runtime too.
-  if (tpl.category === 'MARKETING') {
-    throw new Error(`WhatsApp template '${tpl.name}' is MARKETING category — reminders must use UTILITY or AUTHENTICATION templates`)
-  }
-
-  const phone = booking.contacts?.wa_phone || booking.contacts?.phone || booking.customer_phone
-  if (!phone) return { status: 'skipped', reason: 'no_phone_number' }
-
-  const components = fillReminderTemplate(tpl, booking, ev)
-
-  await sendTemplateMessage(phone, tpl.name, tpl.language || 'en', components)
-
-  // Log the outbound message against the contact's conversation if
-  // we have one. Best-effort — failure here doesn't block the send.
-  try {
-    if (booking.contact_id && booking.contacts) {
-      await getOrCreateConversation(db, booking.contacts, ev.location_id)
-    }
-  } catch (e) {
-    console.warn(`[event-reminders] WA conversation log skipped: ${e.message}`)
-  }
-  return { status: 'sent' }
-}
-
 /**
- * SMS event-reminder send (mig 063). The third channel after email
- * and whatsapp. Same shape:
+ * SMS event-reminder send (mig 063). One of two surviving channels
+ * after mig 074 retired WhatsApp. Same shape as the email path:
  *   1. Reject if reminder_sms_body is missing on the event_type.
  *   2. Skip if contact has sms_status = opted_out / invalid (not an
  *      error — leave reminder_sent_at unset and let the runner stamp
@@ -369,53 +322,7 @@ function applyMergeTagsWithExtras(html, contact, extras) {
   return out
 }
 
-/**
- * Fill a WhatsApp template's BODY variables ({{1}}, {{2}}, ...) using
- * a fixed convention for event reminders:
- *   {{1}} = first_name        (or contact.name first word, or 'there')
- *   {{2}} = event name        (event_types.name)
- *   {{3}} = event time        (Dublin local "Mon 12 May 14:00")
- *   {{4}} = event date        (Dublin local "Mon 12 May")
- *
- * Templates with no variables are sent as-is. Templates with more than
- * 4 variables get the extras filled with a single space (Meta rejects
- * empty strings) — operators should redesign or use a richer flow if
- * they need more dynamic fields.
- */
-function fillReminderTemplate(template, booking, ev) {
-  const components = []
-  const bodyComp = (template.components || []).find(c => c.type === 'BODY')
-  if (!bodyComp?.text) return components
-
-  const varMatches = bodyComp.text.match(/\{\{\d+\}\}/g) || []
-  if (varMatches.length === 0) return components
-
-  const dt = new Date(`${booking.booking_date}T${booking.start_time}Z`)
-  let dateStr, timeStr
-  try {
-    dateStr = dt.toLocaleDateString('en-IE', {
-      timeZone: 'Europe/Dublin', weekday: 'short', day: 'numeric', month: 'short',
-    })
-    timeStr = dt.toLocaleTimeString('en-IE', {
-      timeZone: 'Europe/Dublin', hour: '2-digit', minute: '2-digit',
-    })
-  } catch {
-    dateStr = booking.booking_date
-    timeStr = booking.start_time
-  }
-
-  const firstName =
-    booking.contacts?.first_name
-    || booking.contacts?.name?.split(' ')[0]
-    || booking.customer_name?.split(' ')[0]
-    || 'there'
-
-  const values = [firstName, ev.name, `${dateStr} ${timeStr}`, dateStr]
-  const parameters = varMatches.map((_, i) => ({
-    type: 'text',
-    text: values[i] || ' ',
-  }))
-  components.push({ type: 'body', parameters })
-
-  return components
-}
+// fillReminderTemplate (the WhatsApp body-variable filler) was
+// retired with the WhatsApp branch in mig 074. Email + SMS render
+// merge tags via applyMergeTags() / mergeReminderBody() above and
+// don't need the {{1}}/{{2}}/{{3}}/{{4}} positional convention.

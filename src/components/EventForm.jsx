@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { createBrowserClient } from '@/lib/supabase'
-import { Plus, Trash2, Bell, Mail, MessageCircle, MessageSquare } from 'lucide-react'
+import { Plus, Trash2, Bell, Mail, MessageSquare } from 'lucide-react'
 
 const DAYS = [
   { key: 'mon', label: 'Monday' },
@@ -58,16 +58,19 @@ export default function EventForm({ event, locationId }) {
   // policy without authoring a sequence.
   const [reminderEnabled, setReminderEnabled] = useState(!!event?.reminder_enabled)
   const [reminderMinutesBefore, setReminderMinutesBefore] = useState(event?.reminder_minutes_before ?? 1440) // 24h default
-  const [reminderChannel, setReminderChannel] = useState(event?.reminder_channel || 'email')
+  // mig 074: WhatsApp removed as a reminder channel. If a legacy
+  // event_type loaded here ever had reminder_channel='whatsapp',
+  // fall through to 'email' so the picker doesn't show a phantom
+  // selection. The DB CHECK now rejects 'whatsapp' on save.
+  const initialChannel = event?.reminder_channel === 'whatsapp' ? 'email' : (event?.reminder_channel || 'email')
+  const [reminderChannel, setReminderChannel] = useState(initialChannel)
   const [reminderEmailTemplateId, setReminderEmailTemplateId] = useState(event?.reminder_email_template_id || '')
   const [reminderEmailSubject, setReminderEmailSubject] = useState(event?.reminder_email_subject || '')
-  const [reminderWaTemplateId, setReminderWaTemplateId] = useState(event?.reminder_whatsapp_template_id || '')
   const [reminderSmsBody, setReminderSmsBody] = useState(event?.reminder_sms_body || '')
 
-  // Template lists for the picker. Loaded once when reminders are
-  // toggled on (skip the network round-trip when not needed).
+  // Template list for the email picker. Loaded once when reminders
+  // are toggled on (skip the network round-trip when not needed).
   const [emailTemplates, setEmailTemplates] = useState(null)
-  const [waTemplates, setWaTemplates] = useState(null)
 
   useEffect(() => {
     if (!reminderEnabled || !locationId) return
@@ -77,22 +80,7 @@ export default function EventForm({ event, locationId }) {
         .then(j => setEmailTemplates(j.success ? (j.templates || []) : []))
         .catch(() => setEmailTemplates([]))
     }
-    if (waTemplates === null) {
-      fetch(`/api/whatsapp/templates?location_id=${encodeURIComponent(locationId)}&status=APPROVED`)
-        .then(r => r.json())
-        .then(j => {
-          const all = j.success ? (j.templates || []) : []
-          // Reminders are utility messages — exclude MARKETING templates
-          // from the picker. Sending a marketing template under a
-          // transactional pretext is a Meta policy violation and the
-          // runner refuses them at send time anyway. AUTHENTICATION is
-          // technically allowed but rarely useful for a reminder; keep
-          // it in the list for completeness.
-          setWaTemplates(all.filter(t => t.category !== 'MARKETING'))
-        })
-        .catch(() => setWaTemplates([]))
-    }
-  }, [reminderEnabled, locationId, emailTemplates, waTemplates])
+  }, [reminderEnabled, locationId, emailTemplates])
 
   function toggleDay(day) {
     setAvailability(prev => ({
@@ -159,7 +147,10 @@ export default function EventForm({ event, locationId }) {
       reminder_channel: reminderEnabled ? reminderChannel : null,
       reminder_email_template_id: reminderEnabled && reminderChannel === 'email' ? (reminderEmailTemplateId || null) : null,
       reminder_email_subject: reminderEnabled && reminderChannel === 'email' ? (reminderEmailSubject || null) : null,
-      reminder_whatsapp_template_id: reminderEnabled && reminderChannel === 'whatsapp' ? (reminderWaTemplateId || null) : null,
+      // mig 074: WhatsApp removed as a reminder channel. We still
+      // null this on save so legacy rows that had a template id
+      // get cleared out as operators re-save their event types.
+      reminder_whatsapp_template_id: null,
       reminder_sms_body: reminderEnabled && reminderChannel === 'sms' ? (reminderSmsBody || null) : null,
       ...(locationId && !isEditing ? { location_id: locationId } : {}),
     }
@@ -458,17 +449,6 @@ export default function EventForm({ event, locationId }) {
                   </button>
                   <button
                     type="button"
-                    onClick={() => setReminderChannel('whatsapp')}
-                    className={`flex-1 px-3 py-2 rounded-lg text-sm flex items-center justify-center gap-2 transition-colors ${
-                      reminderChannel === 'whatsapp'
-                        ? 'bg-un1t-white text-un1t-black border border-un1t-white'
-                        : 'border border-un1t-gray text-un1t-light hover:text-un1t-white hover:border-un1t-mid'
-                    }`}
-                  >
-                    <MessageCircle size={14} /> WhatsApp
-                  </button>
-                  <button
-                    type="button"
                     onClick={() => setReminderChannel('sms')}
                     className={`flex-1 px-3 py-2 rounded-lg text-sm flex items-center justify-center gap-2 transition-colors ${
                       reminderChannel === 'sms'
@@ -515,40 +495,6 @@ export default function EventForm({ event, locationId }) {
                     Available merge tags: {'{{first_name}}'}, {'{{event_name}}'}, {'{{event_time}}'}
                   </p>
                 </div>
-              </div>
-            )}
-
-            {reminderChannel === 'whatsapp' && (
-              <div>
-                <label className="block text-sm mb-1.5">WhatsApp template (UTILITY only, approved)</label>
-                <p className="text-[11px] text-un1t-mid mb-1.5">
-                  Marketing templates are excluded — Meta requires reminders be sent under the
-                  utility category. Author your reminder template with category=UTILITY in
-                  Communications → Templates.
-                </p>
-                <select
-                  value={reminderWaTemplateId}
-                  onChange={e => setReminderWaTemplateId(e.target.value)}
-                  className="w-full bg-un1t-black border border-un1t-gray rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
-                >
-                  <option value="">— Select a template —</option>
-                  {(waTemplates || []).map(t => (
-                    <option key={t.id} value={t.id}>
-                      {t.name}{t.category ? ` · ${t.category.toLowerCase()}` : ''}
-                    </option>
-                  ))}
-                </select>
-                {waTemplates && waTemplates.length === 0 && (
-                  <p className="text-[11px] text-amber-400 mt-1">
-                    No approved WhatsApp templates yet — create + submit one in Communications → Templates first.
-                  </p>
-                )}
-                <p className="text-[11px] text-un1t-mid mt-2">
-                  Body variables fill in this order: <code>{'{{1}}'}</code>=first name,
-                  {' '}<code>{'{{2}}'}</code>=event name,
-                  {' '}<code>{'{{3}}'}</code>=date + time,
-                  {' '}<code>{'{{4}}'}</code>=date.
-                </p>
               </div>
             )}
 
@@ -606,7 +552,7 @@ export default function EventForm({ event, locationId }) {
           disabled={saving || !name.trim()}
           className="bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-sm font-medium px-6 py-2.5 rounded-lg transition-colors"
         >
-          {saving ? 'Saving...' : isEditing ? 'Save Changes' : 'Create Event'}
+          {saving ? 'Saving...' : isEditing ? 'Save Changes' : 'Create event type'}
         </button>
         <button
           type="button"

@@ -23,7 +23,7 @@ export default async function EditEventPage({ params }) {
 
   return (
     <div className="p-8 max-w-3xl">
-      <h2 className="text-2xl font-bold mb-2">Edit Event</h2>
+      <h2 className="text-2xl font-bold mb-2">Edit event type</h2>
       <p className="text-sm text-un1t-light mb-6">Update {event.name}</p>
       <EventForm event={event} locationId={user.activeLocation?.id} />
     </div>

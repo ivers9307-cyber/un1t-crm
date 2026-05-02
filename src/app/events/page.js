@@ -56,7 +56,7 @@ export default async function EventsPage() {
           className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium px-4 py-2.5 rounded-lg transition-colors"
         >
           <Plus size={16} />
-          New Event
+          New event type
         </Link>
       </div>
 
