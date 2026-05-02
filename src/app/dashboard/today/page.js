@@ -259,12 +259,12 @@ export default async function PersonalDashboardPage() {
           className="block mt-3 p-3 rounded-lg border border-blue-500/40 bg-blue-500/10 hover:bg-blue-500/15 transition-colors"
         >
           <div className="flex items-start gap-3">
-            <ClipboardCheck size={16} className="text-blue-300 mt-0.5 flex-shrink-0" />
+            <ClipboardCheck size={16} className="text-blue-600 mt-0.5 flex-shrink-0" />
             <div className="flex-1 min-w-0">
-              <div className="text-sm font-medium text-blue-100">
+              <div className="text-sm font-medium text-blue-800">
                 {pendingApprovals} roster{pendingApprovals === 1 ? '' : 's'} waiting for approval
               </div>
-              <div className="text-xs text-blue-100/80 mt-0.5">
+              <div className="text-xs text-blue-700/90 mt-0.5">
                 Manager-submitted draft{pendingApprovals === 1 ? '' : 's'} over budget. Staff can&apos;t see their shifts until you approve.
               </div>
             </div>
@@ -282,12 +282,12 @@ export default async function PersonalDashboardPage() {
           className="block mt-3 p-3 rounded-lg border border-red-500/40 bg-red-500/10 hover:bg-red-500/15 transition-colors"
         >
           <div className="flex items-start gap-3">
-            <AlertCircle size={16} className="text-red-400 mt-0.5 flex-shrink-0" />
+            <AlertCircle size={16} className="text-red-600 mt-0.5 flex-shrink-0" />
             <div className="flex-1 min-w-0">
-              <div className="text-sm font-medium text-red-200">
+              <div className="text-sm font-medium text-red-700">
                 {unstaffedCount} unstaffed block{unstaffedCount === 1 ? '' : 's'} this week
               </div>
-              <div className="text-xs text-red-100/80 mt-0.5">
+              <div className="text-xs text-red-700/80 mt-0.5">
                 Demand windows with no coach assigned. Click to open the schedule.
               </div>
             </div>
@@ -306,12 +306,12 @@ export default async function PersonalDashboardPage() {
           className="block mt-3 p-3 rounded-lg border border-amber-500/40 bg-amber-500/10 hover:bg-amber-500/15 transition-colors"
         >
           <div className="flex items-start gap-3">
-            <AlertTriangle size={16} className="text-amber-400 mt-0.5 flex-shrink-0" />
+            <AlertTriangle size={16} className="text-amber-600 mt-0.5 flex-shrink-0" />
             <div className="flex-1 min-w-0">
-              <div className="text-sm font-medium text-amber-200">
+              <div className="text-sm font-medium text-amber-800">
                 {incompletePay.count} staff member{incompletePay.count === 1 ? '' : 's'} missing pay data
               </div>
-              <div className="text-xs text-amber-100/80 mt-0.5">
+              <div className="text-xs text-amber-700/90 mt-0.5">
                 {incompletePay.sample.slice(0, 3).map(p => p.name).join(', ')}
                 {incompletePay.count > 3 && ` and ${incompletePay.count - 3} more`}
                 {' — '}

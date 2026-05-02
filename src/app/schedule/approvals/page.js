@@ -88,7 +88,7 @@ export default async function RosterApprovalsPage() {
                       Submitted by {requesterRoleAtLocation}
                       {' · '}
                       Projected {formatEur(d.projected_contractor_eur)} of {formatEur(d.budget_at_publish_eur)} budget
-                      {overrun > 0 && <span className="text-red-300 font-medium"> ({formatEur(overrun)} over)</span>}
+                      {overrun > 0 && <span className="text-red-700 font-medium"> ({formatEur(overrun)} over)</span>}
                     </div>
                     {d.notes && (
                       <p className="text-xs text-un1t-light mt-2 italic">&ldquo;{d.notes}&rdquo;</p>

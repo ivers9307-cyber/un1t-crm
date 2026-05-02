@@ -497,12 +497,12 @@ export default function ScheduleCalendar({ user }) {
       {/* Unstaffed-blocks summary — week view only, manager only */}
       {!loading && isManager && viewType === 'week' && unstaffedThisWeek > 0 && (
         <div className="mb-4 flex items-start gap-3 p-3 rounded-lg border border-red-500/40 bg-red-500/10 text-sm">
-          <AlertCircle size={16} className="text-red-400 mt-0.5 flex-shrink-0" />
+          <AlertCircle size={16} className="text-red-600 mt-0.5 flex-shrink-0" />
           <div>
-            <div className="font-medium text-red-200">
+            <div className="font-medium text-red-700">
               {unstaffedThisWeek} unstaffed block{unstaffedThisWeek === 1 ? '' : 's'} this week
             </div>
-            <div className="text-xs text-red-100/80 mt-0.5">
+            <div className="text-xs text-red-700/80 mt-0.5">
               Demand windows with no coach assigned. Customers will be in the studio either way — assign coaches or remove the block.
             </div>
           </div>
@@ -537,7 +537,7 @@ export default function ScheduleCalendar({ user }) {
                   <div
                     key={s.id}
                     className={`text-xs rounded-md px-2.5 py-1.5 border ${isOver
-                      ? 'border-amber-500/40 bg-amber-500/10 text-amber-200'
+                      ? 'border-amber-500/40 bg-amber-500/10 text-amber-700'
                       : 'border-un1t-gray bg-un1t-dark/40 text-un1t-light'
                     }`}
                   >
@@ -1094,15 +1094,15 @@ function PublishRosterModal({ locationId, isOwner, period, onSubmit, onClose, pu
 
         {!loading && submitResult?.needsApproval && (
           <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-4 text-sm">
-            <div className="font-medium text-amber-200 mb-1">Approval requested</div>
-            <p className="text-amber-100/80 text-xs">
+            <div className="font-medium text-amber-800 mb-1">Approval requested</div>
+            <p className="text-amber-700/90 text-xs">
               The roster is held in draft. Owners at this location have been emailed and can approve it from <span className="font-medium">Schedule → Approvals</span>. Staff won&apos;t see their shifts until an owner signs off.
             </p>
           </div>
         )}
 
         {!loading && submitResult?.error && (
-          <div className="rounded-lg border border-red-500/40 bg-red-500/10 p-4 text-sm text-red-200">
+          <div className="rounded-lg border border-red-500/40 bg-red-500/10 p-4 text-sm text-red-700">
             {submitResult.error}
           </div>
         )}
@@ -1120,14 +1120,14 @@ function PublishRosterModal({ locationId, isOwner, period, onSubmit, onClose, pu
               </div>
               <div className="rounded-lg border border-un1t-gray p-3 col-span-2">
                 <div className="text-[10px] uppercase tracking-wider text-un1t-light">Month total after publish (vs budget)</div>
-                <div className={`text-xl font-semibold ${overBudget ? 'text-red-300' : 'text-un1t-white'}`}>
+                <div className={`text-xl font-semibold ${overBudget ? 'text-red-700' : 'text-un1t-white'}`}>
                   {fmtEur(impact.monthProjectedTotalEur)}
                   <span className="text-xs text-un1t-light font-normal ml-2">
                     of {fmtEur(impact.monthlyBudgetEur)}
                   </span>
                 </div>
                 {overBudget && (
-                  <div className="text-xs text-red-300 mt-1">
+                  <div className="text-xs text-red-700 mt-1">
                     {fmtEur(impact.overrunEur)} over the monthly contractor budget.
                   </div>
                 )}
@@ -1135,13 +1135,13 @@ function PublishRosterModal({ locationId, isOwner, period, onSubmit, onClose, pu
             </div>
 
             {overBudget && !isOwner && (
-              <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-100/90 mb-4">
+              <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-700 mb-4">
                 Publishing this will exceed the monthly contractor budget. As a manager, you can&apos;t publish over budget directly — clicking below will create a draft and email the owners for approval.
               </div>
             )}
 
             {overBudget && isOwner && (
-              <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-100/90 mb-4">
+              <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-700 mb-4">
                 As an owner, you can publish over budget. Your approval will be recorded against the roster row.
               </div>
             )}

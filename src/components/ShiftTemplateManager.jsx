@@ -114,12 +114,12 @@ export default function ShiftTemplateManager({ user }) {
 
       {templatesWithoutDays.length > 0 && (
         <div className="mb-4 flex items-start gap-3 p-3 rounded-lg border border-amber-500/40 bg-amber-500/10 text-sm">
-          <AlertCircle size={16} className="text-amber-400 mt-0.5 flex-shrink-0" />
+          <AlertCircle size={16} className="text-amber-600 mt-0.5 flex-shrink-0" />
           <div>
-            <div className="font-medium text-amber-200">
+            <div className="font-medium text-amber-800">
               {templatesWithoutDays.length} template{templatesWithoutDays.length === 1 ? '' : 's'} without applicable days
             </div>
-            <div className="text-xs text-amber-100/80 mt-0.5">
+            <div className="text-xs text-amber-700/90 mt-0.5">
               Edit each template to set which weekdays it should apply to. No blocks are generated until at least one day is selected.
             </div>
           </div>
@@ -156,7 +156,7 @@ export default function ShiftTemplateManager({ user }) {
                       <span className="flex items-center gap-1"><Clock size={12} /> {formatTime(t.start_time)} – {formatTime(t.end_time)}</span>
                       <span className="flex items-center gap-1"><Users size={12} /> up to {max} {max === 1 ? 'coach' : 'coaches'}</span>
                       {noDays ? (
-                        <span className="text-amber-300 text-xs">No days set</span>
+                        <span className="text-amber-700 text-xs">No days set</span>
                       ) : (
                         <span>{daysLabel}</span>
                       )}

@@ -15,13 +15,18 @@
 import { TrendingUp, TrendingDown, AlertTriangle, Wallet } from 'lucide-react'
 import { summarizeWeek, summarizeMonth } from '@/lib/roster-summary'
 
+// Text colours use the -700 ramp so they read clearly against
+// the light card background (un1t-dark = #F7F8FA). The -300
+// variants we'd use on a dark theme look washed-out here. Same
+// retune we did for shared/location-colors.js after the light-
+// theme migration.
 const STATUS_STYLES = {
   // Rostered during fully-approved leave — the loudest red, this
   // is a roster bug, not a workload signal.
-  on_leave:    { bar: 'bg-red-600',     label: 'Rostered on leave', text: 'text-red-300' },
-  overtime:    { bar: 'bg-red-500',     label: 'Over hours',        text: 'text-red-300' },
-  on_target:   { bar: 'bg-emerald-500', label: 'On target',         text: 'text-emerald-300' },
-  underused:   { bar: 'bg-amber-500',   label: 'Underused',         text: 'text-amber-300' },
+  on_leave:    { bar: 'bg-red-600',     label: 'Rostered on leave', text: 'text-red-700' },
+  overtime:    { bar: 'bg-red-500',     label: 'Over hours',        text: 'text-red-700' },
+  on_target:   { bar: 'bg-emerald-500', label: 'On target',         text: 'text-emerald-700' },
+  underused:   { bar: 'bg-amber-500',   label: 'Underused',         text: 'text-amber-700' },
   no_contract: { bar: 'bg-un1t-mid',    label: 'No contract',       text: 'text-un1t-light' },
 }
 
@@ -121,8 +126,8 @@ export default function RosterSummaryPanel({ blocks, staff, weekStart, monthStar
         )}
 
         {week.incompleteProfileNames.length > 0 && (
-          <div className="mt-3 pt-3 border-t border-un1t-gray flex items-start gap-2 text-[11px] text-amber-200">
-            <AlertTriangle size={12} className="mt-0.5 flex-shrink-0" />
+          <div className="mt-3 pt-3 border-t border-un1t-gray flex items-start gap-2 text-[11px] text-amber-700">
+            <AlertTriangle size={12} className="mt-0.5 flex-shrink-0 text-amber-600" />
             <span>
               Pay data missing for {week.incompleteProfileNames.slice(0, 3).join(', ')}
               {week.incompleteProfileNames.length > 3 && ` and ${week.incompleteProfileNames.length - 3} more`}
@@ -140,7 +145,7 @@ export default function RosterSummaryPanel({ blocks, staff, weekStart, monthStar
             Contractor spend — {monthLabel(month.monthStartIso)}
           </h3>
           {month.utilisationPct != null && (
-            <span className={`text-[11px] font-medium ${month.overBudget ? 'text-red-300' : 'text-un1t-light'}`}>
+            <span className={`text-[11px] font-medium ${month.overBudget ? 'text-red-700' : 'text-un1t-light'}`}>
               {month.utilisationPct}% of budget
             </span>
           )}
@@ -149,7 +154,7 @@ export default function RosterSummaryPanel({ blocks, staff, weekStart, monthStar
         <div className="grid grid-cols-2 gap-3 mb-3">
           <div>
             <div className="text-[10px] uppercase tracking-wider text-un1t-light">Spent</div>
-            <div className={`text-xl font-semibold ${month.overBudget ? 'text-red-300' : 'text-un1t-white'}`}>
+            <div className={`text-xl font-semibold ${month.overBudget ? 'text-red-700' : 'text-un1t-white'}`}>
               {formatEur(month.contractorCostEur)}
             </div>
           </div>
@@ -170,7 +175,7 @@ export default function RosterSummaryPanel({ blocks, staff, weekStart, monthStar
               />
             </div>
             <div className="mt-2 flex items-center justify-between text-[11px]">
-              <span className={month.overBudget ? 'text-red-300 font-medium' : 'text-un1t-light'}>
+              <span className={month.overBudget ? 'text-red-700 font-medium' : 'text-un1t-light'}>
                 {month.overBudget
                   ? <><TrendingDown size={11} className="inline mr-1" /> {formatEur(Math.abs(month.remainingEur))} over</>
                   : `${formatEur(month.remainingEur)} remaining`}
