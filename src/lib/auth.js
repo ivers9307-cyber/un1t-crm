@@ -205,10 +205,19 @@ export const getCurrentUser = cache(async function getCurrentUser() {
   const allLocsPromise = profile.role === 'master'
     ? db.from('locations').select('*').eq('active', true).order('name')
     : Promise.resolve({ data: null })
+  // Organizations (mig 079). Master sees every active org; non-master
+  // sees the orgs whose locations they're a member of (resolved
+  // server-side from locationLinks once that fetch resolves — no
+  // separate query needed for non-masters because RLS would do the
+  // same join anyway).
+  const allOrgsPromise = profile.role === 'master'
+    ? db.from('organizations').select('*').eq('active', true).order('name')
+    : Promise.resolve({ data: null })
 
-  const [{ data: locationLinks }, { data: allLocs }] = await Promise.all([
+  const [{ data: locationLinks }, { data: allLocs }, { data: allOrgs }] = await Promise.all([
     linksPromise,
     allLocsPromise,
+    allOrgsPromise,
   ])
 
   let locations = (locationLinks || []).map(pl => pl.locations).filter(Boolean)
@@ -225,6 +234,32 @@ export const getCurrentUser = cache(async function getCurrentUser() {
   // object reflect the same reality.
   if (profile.role === 'master' && allLocs) {
     locations = allLocs
+  }
+
+  // Organizations (mig 079). Surface as a {org_id → row} map so
+  // callers can look up an org's name/slug from a location's
+  // organization_id without a second round-trip. For master we use
+  // the dedicated allOrgs fetch (covers orgs they don't have any
+  // location assignments in — important for the admin matrix);
+  // for non-master we derive from location memberships, since RLS
+  // would yield the same set anyway and we already have the data.
+  const organizationsById = {}
+  if (profile.role === 'master' && allOrgs) {
+    for (const org of allOrgs) organizationsById[org.id] = org
+  } else {
+    // Non-master: fetch orgs referenced by any of their locations.
+    // We need the full org row (name, slug) for the UI; the locations
+    // only carry organization_id. Single query, indexed lookup.
+    const orgIds = Array.from(
+      new Set(locations.map(l => l?.organization_id).filter(Boolean))
+    )
+    if (orgIds.length > 0) {
+      const { data: memberOrgs } = await db
+        .from('organizations')
+        .select('*')
+        .in('id', orgIds)
+      for (const org of (memberOrgs || [])) organizationsById[org.id] = org
+    }
   }
 
   // Active-location resolution. Priority:
@@ -295,11 +330,22 @@ export const getCurrentUser = cache(async function getCurrentUser() {
     ? assignmentsByLocation[activeLocation.id] || null
     : null
 
+  // Active organization mirrors active location — useful for any UI
+  // that wants to badge "you're operating inside CCF Autos right now".
+  const activeOrganization = activeLocation?.organization_id
+    ? organizationsById[activeLocation.organization_id] || null
+    : null
+
   return {
     ...profile,
     user,
     locations,
     activeLocation,
+    // { [org_id]: org row } — every org reachable by this caller.
+    // Master sees every active org (mig 079); non-master sees only
+    // orgs whose locations they're a member of.
+    organizationsById,
+    activeOrganization,
     // { [location_id]: role } — never includes 'master' (CHECK constraint).
     rolesByLocation,
     // Full per-location assignment data including the per-location
