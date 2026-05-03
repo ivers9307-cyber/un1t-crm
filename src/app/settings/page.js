@@ -3,7 +3,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
-import { Users, MapPin, Shield, Clock, Palette, CalendarDays, Plug, UserCog, LayoutGrid } from 'lucide-react'
+import { Users, MapPin, Shield, Clock, Palette, CalendarDays, Plug, UserCog, LayoutGrid, FileClock } from 'lucide-react'
 import BrandingSettings from '@/components/BrandingSettings'
 
 export const dynamic = 'force-dynamic'
@@ -205,6 +205,12 @@ export default async function SettingsPage() {
                 className="text-xs bg-un1t-white text-un1t-black px-3 py-1.5 rounded-md hover:bg-un1t-accent transition-colors font-medium inline-flex items-center gap-1.5"
               >
                 <LayoutGrid size={12} /> Platform admin
+              </Link>
+              <Link
+                href="/admin/audit-log"
+                className="text-xs bg-un1t-white text-un1t-black px-3 py-1.5 rounded-md hover:bg-un1t-accent transition-colors font-medium inline-flex items-center gap-1.5"
+              >
+                <FileClock size={12} /> Audit log
               </Link>
               <Link
                 href="/settings/impersonate"
