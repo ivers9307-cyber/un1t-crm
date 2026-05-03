@@ -15,7 +15,7 @@
 // rejected and the page will reload with the new copy.
 
 import { useState } from 'react'
-import { Banknote, FileText, Save } from 'lucide-react'
+import { Banknote, FileText, MessageSquare, Save } from 'lucide-react'
 import { createBrowserClient } from '@/lib/supabase'
 
 export default function CarDepositSettings({ location }) {
@@ -23,6 +23,9 @@ export default function CarDepositSettings({ location }) {
     location.car_deposit_default_amount != null ? Number(location.car_deposit_default_amount) : 500
   )
   const [terms, setTerms] = useState(location.car_deposit_terms || DEFAULT_TERMS)
+  const [receiptSmsEnabled, setReceiptSmsEnabled] = useState(
+    Boolean(location.car_deposit_receipt_sms_enabled)
+  )
 
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
@@ -38,6 +41,7 @@ export default function CarDepositSettings({ location }) {
     const updates = {
       car_deposit_default_amount: defaultAmount || null,
       car_deposit_terms: trimmedTerms || null,
+      car_deposit_receipt_sms_enabled: receiptSmsEnabled,
     }
     // Bump the version IFF the wording actually changed. That's the
     // signal the public page uses to reject stale buyers.
@@ -101,6 +105,27 @@ export default function CarDepositSettings({ location }) {
             Plain text or markdown. Saving any change bumps the terms version &mdash; in-flight buyers
             on the public page will be asked to refresh and re-read before paying.
           </p>
+        </div>
+
+        <div>
+          <label className="flex items-start gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={receiptSmsEnabled}
+              onChange={(e) => setReceiptSmsEnabled(e.target.checked)}
+              className="mt-0.5"
+            />
+            <span className="flex-1">
+              <span className="block text-sm flex items-center gap-1.5">
+                <MessageSquare size={12} /> Send buyer a receipt SMS when their deposit is paid
+              </span>
+              <span className="block text-[11px] text-un1t-mid mt-0.5">
+                Fired by the Revolut webhook on ORDER_COMPLETED. Confirms the captured amount and
+                the car. Skipped if the buyer has no phone number on file. Each send is logged as a
+                system note on the car so you can verify delivery (or fetch the Twilio SID).
+              </span>
+            </span>
+          </label>
         </div>
 
         {error && (

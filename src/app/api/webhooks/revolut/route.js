@@ -25,6 +25,7 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { verifyWebhookSignature, getOrder } from '@/lib/revolut'
+import { sendDepositReceiptSms } from '@/lib/deposit-receipts'
 
 export const runtime = 'nodejs'
 
@@ -50,7 +51,16 @@ export async function POST(request) {
   const db = createServerClient()
   const { data: car } = await db
     .from('cars')
-    .select('id, location_id, deposit_token, deposit_status, deposit_paid_at')
+    .select(`
+      id, location_id, deposit_token, deposit_status, deposit_paid_at,
+      deposit_amount, deposit_paid_amount, deposit_receipt_sent_at,
+      buyer_phone, buyer_name, make, model, irish_reg,
+      locations (
+        id, name,
+        car_deposit_receipt_sms_enabled,
+        twilio_alpha_sender_id
+      )
+    `)
     .eq('deposit_revolut_order_id', orderId)
     .maybeSingle()
   if (!car) {
@@ -110,7 +120,35 @@ export async function POST(request) {
   if (Object.keys(updates).length > 0) {
     await db.from('cars').update(updates).eq('id', car.id)
   }
-  return NextResponse.json({ success: true, applied: updates })
+
+  // Fire-and-forget receipt SMS to the buyer when the deposit lands.
+  // Best-effort — SMS / DB hiccups never affect the webhook response,
+  // because the deposit_status update above is the authoritative
+  // signal and the receipt is a customer-facing courtesy on top.
+  // Three gates inside sendDepositReceiptSms (location toggle,
+  // already-sent stamp, no-buyer-phone) skip cheaply; only successful
+  // sends stamp deposit_receipt_sent_at, so a Twilio outage during
+  // one webhook delivery can be picked up by the next retry.
+  let receiptResult = null
+  if (state === 'completed') {
+    try {
+      // Merge the just-applied update into the car snapshot so the
+      // body builder sees the actual captured amount even though we
+      // haven't refetched.
+      const carForReceipt = { ...car, ...updates }
+      receiptResult = await sendDepositReceiptSms({
+        db,
+        car: carForReceipt,
+        location: car.locations,
+        actorId: null, // webhook — no operator session
+      })
+    } catch (e) {
+      console.warn(`[revolut-webhook] receipt SMS error for car ${car.id}: ${e?.message || e}`)
+      receiptResult = { status: 'failed', reason: 'unhandled_exception' }
+    }
+  }
+
+  return NextResponse.json({ success: true, applied: updates, receipt: receiptResult })
 }
 
 // Revolut dashboard hits GET on the URL when configuring the
