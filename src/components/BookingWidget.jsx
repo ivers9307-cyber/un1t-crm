@@ -209,11 +209,11 @@ export default function BookingWidget({ slug }) {
   const accent = event.color || '#111827'
 
   return (
-    <div className="w-full max-w-5xl bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
-      <div className={`grid ${showSlotsColumn ? 'md:grid-cols-[260px_1fr_220px]' : 'md:grid-cols-[260px_1fr]'} divide-y md:divide-y-0 md:divide-x divide-gray-200`}>
+    <div className="w-full max-w-3xl bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+      <div className={`grid ${showSlotsColumn ? 'md:grid-cols-[220px_1fr_180px]' : 'md:grid-cols-[220px_1fr]'} divide-y md:divide-y-0 md:divide-x divide-gray-200`}>
 
         {/* ───── Sidebar: event info + location ───── */}
-        <aside className="p-6 space-y-4">
+        <aside className="p-5 space-y-4">
           <div className="flex items-center gap-2">
             <div
               className="w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0"
@@ -254,7 +254,7 @@ export default function BookingWidget({ slug }) {
         </aside>
 
         {/* ───── Calendar / form / confirmation pane ───── */}
-        <div className="p-6">
+        <div className="p-5">
           {error && step !== 'confirmed' && (
             <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg p-3 mb-4">
               {error}
@@ -289,45 +289,51 @@ export default function BookingWidget({ slug }) {
                 </button>
               </div>
 
-              <div className="grid grid-cols-7 gap-1 mb-1">
+              <div className="grid grid-cols-7 mb-1">
                 {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map(d => (
-                  <div key={d} className="text-center text-[10px] font-medium uppercase text-gray-400 py-1">{d}</div>
+                  <div key={d} className="text-center text-[10px] font-medium uppercase tracking-wider text-gray-400 py-1">{d}</div>
                 ))}
               </div>
 
-              <div className="grid grid-cols-7 gap-1">
+              {/* Calendar grid. Each grid cell is the full click
+                  target (generous for mobile taps), but the visible
+                  circle is a fixed 32px chip centred inside. The
+                  Calendly look — chip is clearly smaller than the
+                  cell, lets the whole calendar shrink down. */}
+              <div className="grid grid-cols-7">
                 {days.map((day, i) => {
-                  if (!day) return <div key={`empty-${i}`} className="aspect-square" />
+                  if (!day) return <div key={`empty-${i}`} className="h-9" />
                   const available = isAvailableDay(day)
                   const selected = selectedDate && day.toDateString() === selectedDate.toDateString()
                   const isToday = day.toDateString() === new Date().toDateString()
 
-                  // Compact circle aesthetic. Selected = filled accent.
-                  // Available = subtle accent ring + bold text. Inactive
-                  // = quiet gray text, no chrome at all.
                   return (
                     <button
                       key={day.toISOString()}
                       disabled={!available}
                       onClick={() => setSelectedDate(day)}
-                      className={`aspect-square flex items-center justify-center rounded-full text-sm transition-all
-                        ${selected ? 'text-white font-semibold' : ''}
-                        ${available && !selected ? 'text-gray-900 font-medium hover:bg-gray-100' : ''}
-                        ${!available ? 'text-gray-300' : 'cursor-pointer'}
+                      className={`h-9 flex items-center justify-center text-sm transition-colors group
+                        ${!available ? 'cursor-default' : 'cursor-pointer'}
                       `}
-                      style={
-                        selected
-                          ? { backgroundColor: accent }
-                          : available
-                            ? { backgroundColor: accent + '12' }
-                            : undefined
-                      }
                     >
-                      <span className="relative">
+                      <span
+                        className={`relative inline-flex items-center justify-center w-8 h-8 rounded-full transition-colors
+                          ${selected ? 'text-white font-semibold' : ''}
+                          ${available && !selected ? 'text-gray-900 font-medium group-hover:bg-gray-100' : ''}
+                          ${!available ? 'text-gray-300' : ''}
+                        `}
+                        style={
+                          selected
+                            ? { backgroundColor: accent }
+                            : available
+                              ? { backgroundColor: accent + '12' }
+                              : undefined
+                        }
+                      >
                         {day.getDate()}
                         {isToday && !selected && (
                           <span
-                            className="absolute -bottom-1.5 left-1/2 -translate-x-1/2 w-1 h-1 rounded-full"
+                            className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-1 h-1 rounded-full"
                             style={{ backgroundColor: accent }}
                           />
                         )}
@@ -515,7 +521,7 @@ export default function BookingWidget({ slug }) {
 
         {/* ───── Slot column (only when a date is selected) ───── */}
         {showSlotsColumn && (
-          <aside className="p-6">
+          <aside className="p-5">
             <div className="text-sm font-semibold text-gray-900 mb-3">
               {selectedDate.toLocaleDateString('en-IE', { weekday: 'long' })}, {selectedDate.toLocaleDateString('en-IE', { day: 'numeric', month: 'long' })}
             </div>
