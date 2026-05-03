@@ -3,9 +3,10 @@ import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
+import { getAppUrl } from '@/lib/app-url'
 import {
   employmentTypeSchema, money, hours, days, permissionsSchema,
-  ADMIN_ROLES, passwordSchema, assignmentSchema,
+  ADMIN_ROLES, assignmentSchema,
   OWNER_ASSIGNABLE_ROLES, MASTER_ASSIGNABLE_ROLES,
 } from '@/lib/schemas'
 
@@ -19,13 +20,13 @@ export const runtime = 'nodejs'
 // set ONLY by other masters. `assignments[].role` cannot be 'master'
 // (CHECK constraint blocks it on the DB side; locationRoleSchema
 // blocks it here).
+// Password is no longer accepted on staff create — new users receive
+// an invitation email and set their own password via /reset-password.
+// Reduces blast radius of admin compromise (no admin ever sees a user's
+// password) and matches the standard SaaS onboarding pattern.
 const CreateStaffSchema = z.object({
   email: z.string().email(),
   full_name: z.string().min(1).max(200),
-  // Mirrors the Supabase project's password-strength settings — keep
-  // this in sync with whatever the Auth dashboard requires so we
-  // surface a clear error before round-tripping to Supabase.
-  password: passwordSchema,
   is_master: z.boolean().optional(),
   assignments: z.array(assignmentSchema).optional(),
   permissions: permissionsSchema.optional(),
@@ -145,16 +146,44 @@ export async function POST(request) {
 
   const db = createServerClient()
 
-  // Create auth user — the DB trigger auto-creates the profile row.
-  const { data: authData, error: authError } = await db.auth.admin.createUser({
-    email: body.email,
-    password: body.password,
-    email_confirm: true,
-    user_metadata: {
-      full_name: body.full_name,
-    },
-  })
+  // Invite the user via Supabase Auth — sends an invitation email with a
+  // magic link that takes the user to /reset-password to set their initial
+  // password. The DB trigger auto-creates the profile row from the new auth
+  // user. The admin never sees a password and the user owns their credential
+  // from the moment it's set.
+  //
+  // The Supabase invite email template is configured in the Supabase
+  // dashboard (Auth → Email Templates → Invite User). To customise the
+  // copy / branding, edit it there. Future enhancement: swap to a Postmark-
+  // sent invite email via `auth.admin.generateLink({ type: 'invite' })` for
+  // full template control — not needed for v1.
+  let appUrl
+  try {
+    appUrl = getAppUrl()
+  } catch {
+    // getAppUrl throws if NEXT_PUBLIC_APP_URL is unset. The redirect is
+    // optional here — Supabase will use its dashboard-configured default
+    // Site URL — so swallow rather than fail the create.
+    appUrl = null
+  }
+  const { data: authData, error: authError } = await db.auth.admin.inviteUserByEmail(
+    body.email,
+    {
+      data: { full_name: body.full_name },
+      ...(appUrl ? { redirectTo: `${appUrl}/reset-password` } : {}),
+    }
+  )
   if (authError) {
+    // Most common case: a user with this email already exists in auth.
+    // Surface a clean message that suggests the reset-password flow
+    // instead of leaking the raw Supabase error.
+    if (/already (registered|exists|been registered)/i.test(authError.message || '')) {
+      return NextResponse.json({
+        success: false,
+        error: 'A user with this email already exists. Use "Send password reset" on their profile to give them a fresh login link.',
+        code: 'user_exists',
+      }, { status: 409 })
+    }
     return NextResponse.json({ success: false, error: authError.message }, { status: 400 })
   }
 

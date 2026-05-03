@@ -3,9 +3,8 @@
 import { useState, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { ArrowLeft, Check, X, Plus, Trash2, Crown } from 'lucide-react'
+import { ArrowLeft, Plus, Trash2, Crown, KeyRound, AlertCircle, Loader2 } from 'lucide-react'
 import {
-  passwordRequirements, validatePasswordComplexity,
   OWNER_ASSIGNABLE_ROLES, MASTER_ASSIGNABLE_ROLES,
 } from '@/lib/schemas'
 import {
@@ -91,7 +90,6 @@ export default function StaffForm({
   const [form, setForm] = useState({
     full_name: staff?.full_name || '',
     email: staff?.email || '',
-    password: '',
     is_master: !!staff?.is_master,
     active: staff?.active ?? true,
     // assignments: [{ location_id, role, is_default, unifi_door_access, permissions }]
@@ -290,11 +288,6 @@ export default function StaffForm({
     e.preventDefault()
     setError(null)
 
-    if (!isEdit) {
-      const pwError = validatePasswordComplexity(form.password)
-      if (pwError) { setError(pwError); return }
-    }
-
     if (form.assignments.length === 0 && !form.is_master) {
       setError('Assign this person to at least one studio (or grant the master flag).')
       return
@@ -330,7 +323,9 @@ export default function StaffForm({
 
     if (!isEdit) {
       payload.email = form.email
-      payload.password = form.password
+      // No password — Supabase Auth sends an invitation email and the
+      // new user sets their own credential at /reset-password. The admin
+      // never handles the password.
     }
 
     const res = await fetch(url, {
@@ -393,28 +388,12 @@ export default function StaffForm({
         </div>
 
         {!isEdit && (
-          <div>
-            <label className="block text-sm text-un1t-light mb-1">Password *</label>
-            <input
-              type="password"
-              required
-              minLength={8}
-              value={form.password}
-              onChange={e => setForm(prev => ({ ...prev, password: e.target.value }))}
-              className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
-              placeholder="Strong password"
-            />
-            <ul className="mt-2 space-y-1">
-              {passwordRequirements.map(r => {
-                const ok = r.test(form.password || '')
-                return (
-                  <li key={r.id} className={`flex items-center gap-2 text-xs ${ok ? 'text-green-400' : 'text-un1t-mid'}`}>
-                    {ok ? <Check size={12} /> : <X size={12} />}
-                    <span>{r.label}</span>
-                  </li>
-                )
-              })}
-            </ul>
+          <div className="bg-un1t-black/40 border border-un1t-gray rounded-md p-3 text-xs text-un1t-light">
+            <div className="font-medium text-un1t-white mb-1">Password</div>
+            On save, an invitation email goes to <span className="font-mono">{form.email || 'this address'}</span>.
+            The new user clicks the link to set their own password — nobody on this side ever sees it.
+            If they miss the email or the link expires, you can resend at any time using the
+            &ldquo;Send password reset&rdquo; button on their profile.
           </div>
         )}
 
@@ -429,6 +408,10 @@ export default function StaffForm({
               <div className={`w-4 h-4 rounded-full bg-white transition-transform ${form.active ? 'translate-x-5' : 'translate-x-0.5'}`} />
             </button>
           </div>
+        )}
+
+        {isEdit && staff?.id && (
+          <SendPasswordResetButton staffId={staff.id} email={form.email} />
         )}
       </div>
 
@@ -857,5 +840,95 @@ export default function StaffForm({
         {saving ? 'Saving...' : isEdit ? 'Save Changes' : 'Create Team Member'}
       </button>
     </form>
+  )
+}
+
+// "Send password reset" — fires the standard Supabase recovery email
+// via /api/staff/[id]/send-password-reset. Confirmation prompt is
+// inline rather than a modal because this is low-risk (worst case the
+// user gets an extra email they can ignore). Useful for: re-sending
+// a missed invite, helping a user who forgot their password, or
+// rotating credentials after suspected compromise.
+function SendPasswordResetButton({ staffId, email }) {
+  const [state, setState] = useState('idle')   // 'idle' | 'confirming' | 'sending' | 'sent' | 'error'
+  const [error, setError] = useState(null)
+
+  async function send() {
+    setState('sending')
+    setError(null)
+    try {
+      const res = await fetch(`/api/staff/${staffId}/send-password-reset`, {
+        method: 'POST',
+      })
+      const data = await res.json()
+      if (!res.ok || data.success === false) {
+        throw new Error(data.error || `Send failed (${res.status})`)
+      }
+      setState('sent')
+    } catch (e) {
+      setState('error')
+      setError(e.message || 'Send failed')
+    }
+  }
+
+  if (state === 'sent') {
+    return (
+      <div className="text-xs text-green-700 bg-green-500/10 border border-green-500/30 rounded-md p-2 inline-flex items-center gap-2">
+        <KeyRound size={12} />
+        Password reset email sent to {email}.
+      </div>
+    )
+  }
+
+  if (state === 'confirming') {
+    return (
+      <div className="bg-un1t-black/40 border border-un1t-gray rounded-md p-3 space-y-2">
+        <div className="text-xs text-un1t-light">
+          Send a password reset email to <span className="font-mono text-un1t-white">{email}</span>?
+          They&apos;ll receive a link to set a new password and any existing session won&apos;t change
+          until they actually use it.
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={send}
+            className="text-xs bg-un1t-white text-un1t-black px-3 py-1.5 rounded-md hover:bg-un1t-accent font-medium inline-flex items-center gap-1.5"
+          >
+            <KeyRound size={11} /> Send
+          </button>
+          <button
+            type="button"
+            onClick={() => { setState('idle'); setError(null) }}
+            className="text-xs text-un1t-light hover:text-un1t-white"
+          >
+            Cancel
+          </button>
+        </div>
+        {error && (
+          <div className="text-xs text-red-700 inline-flex items-start gap-1.5">
+            <AlertCircle size={11} className="mt-0.5 shrink-0" /> {error}
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-1">
+      <button
+        type="button"
+        onClick={() => setState('confirming')}
+        disabled={state === 'sending'}
+        className="text-xs text-un1t-light hover:text-un1t-white inline-flex items-center gap-1.5 disabled:opacity-40"
+      >
+        {state === 'sending' ? <Loader2 size={11} className="animate-spin" /> : <KeyRound size={11} />}
+        {state === 'sending' ? 'Sending…' : 'Send password reset email'}
+      </button>
+      {error && state === 'error' && (
+        <div className="text-xs text-red-700 inline-flex items-start gap-1.5">
+          <AlertCircle size={11} className="mt-0.5 shrink-0" /> {error}
+        </div>
+      )}
+    </div>
   )
 }

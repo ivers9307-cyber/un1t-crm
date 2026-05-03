@@ -12,6 +12,14 @@ export default function ResetPasswordPage() {
   const [error, setError] = useState(null)
   const [loading, setLoading] = useState(false)
   const [ready, setReady] = useState(false)
+  // Whether this visit is from a fresh invite (no prior sign-ins) vs a
+  // recovery flow (existing user resetting). Detected from the URL hash
+  // type that Supabase adds to its emailed links: `#type=invite` for
+  // inviteUserByEmail, `#type=recovery` for resetPasswordForEmail.
+  // Falls back to 'recovery' framing — the safer default if detection
+  // ever fails (a user resetting an existing password sees the right
+  // wording; an invitee sees slightly off but functional wording).
+  const [flowType, setFlowType] = useState('recovery')
   const [branding, setBranding] = useState(null)
   const router = useRouter()
 
@@ -23,18 +31,36 @@ export default function ResetPasswordPage() {
   }, [])
 
   useEffect(() => {
-    // Supabase automatically picks up the recovery token from the URL hash
-    // when the user clicks the reset link. We just need to wait for the session.
+    // Detect whether we arrived here from an invite or a recovery link.
+    // The hash format Supabase produces is e.g.
+    //   #access_token=...&token_type=bearer&type=recovery
+    // — `type` is the field we want.
+    if (typeof window !== 'undefined' && window.location.hash) {
+      const hash = window.location.hash.replace(/^#/, '')
+      const params = new URLSearchParams(hash)
+      const t = params.get('type')
+      if (t === 'invite') setFlowType('invite')
+      else if (t === 'recovery') setFlowType('recovery')
+    }
+
+    // Supabase automatically picks up the token from the URL hash on page
+    // load and (for invites) signs the user in. We wait for either:
+    //   - PASSWORD_RECOVERY event (recovery flow — Supabase fires this
+    //     specifically so the app knows to surface a password form)
+    //   - SIGNED_IN event (invite flow — magic link signs the user in
+    //     immediately; they then need to set their initial password)
+    //   - An existing session (the token was already exchanged on a
+    //     prior render of this same page)
     const supabase = createBrowserClient()
-    supabase.auth.onAuthStateChange((event) => {
-      if (event === 'PASSWORD_RECOVERY') {
+    const { data: sub } = supabase.auth.onAuthStateChange((event) => {
+      if (event === 'PASSWORD_RECOVERY' || event === 'SIGNED_IN') {
         setReady(true)
       }
     })
-    // Also check if we already have a session (token already processed)
     supabase.auth.getSession().then(({ data }) => {
       if (data.session) setReady(true)
     })
+    return () => sub?.subscription?.unsubscribe?.()
   }, [])
 
   async function handleReset(e) {
@@ -81,13 +107,21 @@ export default function ResetPasswordPage() {
 
         <form onSubmit={handleReset} className="bg-un1t-dark border border-un1t-gray rounded-lg p-6 space-y-4">
           <div>
-            <h2 className="text-sm font-semibold text-un1t-white mb-1">Set a new password</h2>
-            <p className="text-xs text-un1t-light">Enter your new password below.</p>
+            <h2 className="text-sm font-semibold text-un1t-white mb-1">
+              {flowType === 'invite' ? 'Welcome — set your password' : 'Set a new password'}
+            </h2>
+            <p className="text-xs text-un1t-light">
+              {flowType === 'invite'
+                ? 'Pick a password for your account. You\'ll use this with your email to sign in from now on.'
+                : 'Enter your new password below.'}
+            </p>
           </div>
 
           {!ready && (
             <div className="bg-yellow-500/10 border border-yellow-500/30 text-yellow-400 text-xs rounded-md p-3">
-              Verifying your reset link... If this persists, request a new link from the login page.
+              {flowType === 'invite'
+                ? 'Verifying your invitation… If this persists, ask the person who invited you to send a fresh link.'
+                : 'Verifying your reset link… If this persists, request a new link from the login page.'}
             </div>
           )}
 
@@ -139,7 +173,9 @@ export default function ResetPasswordPage() {
             disabled={loading || !ready}
             className="w-full bg-un1t-white text-un1t-black font-medium text-sm py-2.5 rounded-md hover:bg-un1t-accent transition-colors disabled:opacity-50"
           >
-            {loading ? 'Updating...' : 'Update Password'}
+            {loading
+              ? (flowType === 'invite' ? 'Setting…' : 'Updating…')
+              : (flowType === 'invite' ? 'Set Password & Sign In' : 'Update Password')}
           </button>
         </form>
 
