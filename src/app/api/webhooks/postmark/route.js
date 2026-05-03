@@ -8,30 +8,82 @@ export const runtime = 'nodejs'
 // POST /api/webhooks/postmark — Handle Postmark delivery webhooks
 //
 // Authentication: Postmark doesn't natively HMAC-sign webhooks. We require
-// a shared-secret token sent in the `X-Webhook-Token` header. Configure
-// either:
-//   1. Custom header: in Postmark → Webhooks → Custom Headers, add
-//      `X-Webhook-Token: <POSTMARK_WEBHOOK_TOKEN>`. (preferred)
-//   2. Basic Auth in URL: not used here, but supported by Postmark.
+// a shared-secret token sent in the `X-Webhook-Token` header. Configure in
+// Postmark → Servers → [server] → Webhooks → Custom Headers:
+//   `X-Webhook-Token: <POSTMARK_WEBHOOK_TOKEN>`
+// Each webhook URL on each server needs the header.
 //
-// During rollout, if POSTMARK_WEBHOOK_TOKEN is unset, the request is accepted
-// with a loud warning. Set the env var to activate enforcement.
+// Token rotation: set POSTMARK_WEBHOOK_TOKEN_PREVIOUS to the old value while
+// you flip every Postmark webhook config to the new one; both are accepted in
+// the meantime. Unset PREVIOUS once rotation is complete.
+//
+// Failure modes:
+//   - POSTMARK_WEBHOOK_TOKEN unset → 500 (Postmark retries 5xx for ~24h, so a
+//     redeploy with the var set picks up missed events)
+//   - X-Webhook-Token header missing or wrong → 403 (Postmark won't retry 4xx,
+//     which is what we want for a deliberately-rogue caller)
 //
 // Events: Delivery, Bounce, SpamComplaint, Open, Click, SubscriptionChange
+
+/**
+ * Pure auth-gate predicate, exported so the route test can exercise enforcement
+ * without standing up the full Supabase mock. Mirrors the pattern used in
+ * src/app/api/webhooks/twilio/status/route.js.
+ *
+ * @param {object} args
+ * @param {string|null} args.headerValue        Value of x-webhook-token header.
+ * @param {string|undefined} args.primarySecret POSTMARK_WEBHOOK_TOKEN.
+ * @param {string|undefined} args.previousSecret POSTMARK_WEBHOOK_TOKEN_PREVIOUS (rotation).
+ * @returns {{ ok: true, matched: 'primary' | 'previous' }
+ *          | { ok: false, status: 403 | 500, reason: string }}
+ */
+export function verifyPostmarkRequest({ headerValue, primarySecret, previousSecret }) {
+  if (!primarySecret) {
+    // Misconfiguration on our side — fail with 5xx so Postmark retries once
+    // we've fixed the env var, instead of losing the event silently.
+    return { ok: false, status: 500, reason: 'missing_secret' }
+  }
+  if (!headerValue) {
+    return { ok: false, status: 403, reason: 'missing_header' }
+  }
+
+  const primary = verifySharedSecret(headerValue, primarySecret)
+  if (primary.ok) return { ok: true, matched: 'primary' }
+
+  if (previousSecret) {
+    const previous = verifySharedSecret(headerValue, previousSecret)
+    if (previous.ok) return { ok: true, matched: 'previous' }
+  }
+
+  return { ok: false, status: 403, reason: 'token_mismatch' }
+}
+
 export async function POST(request) {
-  const expectedToken = process.env.POSTMARK_WEBHOOK_TOKEN
-  if (expectedToken) {
-    const headerToken = request.headers.get('x-webhook-token')
-    const result = verifySharedSecret(headerToken, expectedToken)
-    if (!result.ok) {
-      console.warn(`Postmark webhook rejected: ${result.reason}`)
-      return NextResponse.json({ success: false, error: 'Invalid token' }, { status: 403 })
+  const auth = verifyPostmarkRequest({
+    headerValue: request.headers.get('x-webhook-token'),
+    primarySecret: process.env.POSTMARK_WEBHOOK_TOKEN,
+    previousSecret: process.env.POSTMARK_WEBHOOK_TOKEN_PREVIOUS,
+  })
+  if (!auth.ok) {
+    if (auth.reason === 'missing_secret') {
+      console.error(
+        '[security] POSTMARK_WEBHOOK_TOKEN is not set — refusing Postmark webhook ' +
+        'with 500 so Postmark retries once the env var is configured.'
+      )
+    } else {
+      console.warn(`[security] Postmark webhook rejected: ${auth.reason}`)
     }
-  } else {
+    return NextResponse.json(
+      { success: false, error: auth.reason },
+      { status: auth.status }
+    )
+  }
+  if (auth.matched === 'previous') {
+    // Loud signal so we notice and finish the rotation rather than leaving the
+    // old token live indefinitely.
     console.warn(
-      '[security] POSTMARK_WEBHOOK_TOKEN is not set — accepting Postmark webhook ' +
-      'without authentication. Set the env var (and a matching X-Webhook-Token ' +
-      'header in Postmark) to enable enforcement.'
+      '[security] Postmark webhook accepted via POSTMARK_WEBHOOK_TOKEN_PREVIOUS — ' +
+      'finish rotating Postmark custom headers to the new token, then unset PREVIOUS.'
     )
   }
 
