@@ -7,10 +7,10 @@
 //      (per-location role changes, removals, additions, master toggle).
 //   2. Master column is single-click toggle with confirmation modal.
 //      The at-least-one-master guard is enforced by the API and DB
---      trigger; the UI also calls it out upfront.
+//      trigger; the UI also calls it out upfront.
 //   3. Multi-select row checkboxes + sticky bulk action bar at the
---      bottom: pick N users, choose target location and role (or
---      'remove'), apply in one API call.
+//      bottom: pick N users, choose target location and role (or
+//      'remove'), apply in one API call.
 //
 // Read-only fallback signals: if `currentMasterCount === 1`, the
 // master toggle for that single master shows a warning tooltip on hover.

@@ -11,10 +11,10 @@
 //   - Sets profiles.role = the supplied fallback role (default 'staff').
 //   - Calls wouldLeaveZeroMasters BEFORE the UPDATE so the user gets a
 //     clean error message ("Promote another user to master first") rather
---    than a raw Postgres trigger error from the DB-layer guard.
+//     than a raw Postgres trigger error from the DB-layer guard.
 //   - The DB trigger (private.guard_at_least_one_master) is the
 //     unconditional second line of defence — if a future code path
---    forgets to call this guard, the trigger still rejects the operation
+//     forgets to call this guard, the trigger still rejects the operation
 //     and surfaces a check_violation error.
 //
 // Audit: master_promote / master_demote entries written to

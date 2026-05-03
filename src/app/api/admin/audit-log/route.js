@@ -7,7 +7,7 @@
 //   location_id?        Filter to a specific location.
 //   action?             Filter to a single action type
 //                       (assignment_create / _update / _delete /
---                       master_promote / _demote / profile_*).
+//                       master_promote / _demote / profile_*).
 //   from?               ISO 8601 — only entries created at or after.
 //   to?                 ISO 8601 — only entries created at or before.
 //   page?               1-indexed (default 1).
