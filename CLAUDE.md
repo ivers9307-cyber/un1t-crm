@@ -808,6 +808,59 @@ Things to watch but NOT act on without measurement:
 - **WAInbox 60s heartbeat** — wait a few weeks of real Realtime data before deciding whether to drop the heartbeat. If nothing's missed, push to 5min or remove.
 - **`'use client'` audit** — 46 components marked client; some likely don't need it. Modest bundle wins, low ROI, no measurement yet.
 
+## Working from Cowork (Claude sandbox notes)
+
+When Claude is operating on this repo from inside Cowork mode, it runs in an isolated Linux sandbox that bind-mounts the host's `/Users/richardivers/code/` at `/sessions/<sandbox-id>/mnt/code/`. The sandbox has filesystem and tool restrictions that aren't obvious from the README, and we hit all of them during the May 3 2026 session. This section is the durable record so future Claude doesn't re-derive (and re-fail at) any of them.
+
+**The sandbox can read and write files but cannot `unlink()` by default.** First-time symptom: `rm` fails with `Operation not permitted` (EPERM, not EACCES — important, because EPERM means "the operation isn't allowed for this user" rather than "permissions deny it"). Files the sandbox just created with `touch` and 0600 perms still can't be removed. This is a deliberate Cowork safety guardrail at the bind-mount layer — `chmod`, `chown`, `chflags`, ACL edits do nothing because the restriction is above the host filesystem. **The fix is `mcp__cowork__allow_cowork_file_delete`** — call it with the path Claude was trying to delete, the user gets an approval prompt scoped to a directory (`code` in our case), and from that point forward `unlink()` works for everything under the approved dir. This unblocks not just `rm` but also `git gc`, `git reset --hard`, `git checkout` of a branch with deleted files, etc. — anything that needs to delete files. **Default response when an `rm` fails should be to call this tool, not to tell the user it's impossible.**
+
+**`git push` from the sandbox needs explicit credential setup** — the sandbox `HOME` is `/sessions/<sandbox-id>/`, has no `~/.gitconfig`, no `~/.ssh`, no `gh` CLI, and no credential helper. Default `git push` over HTTPS fails with `could not read Username for 'https://github.com'`. The pattern that works (committed-on-disk PAT + sandbox-only credential helper):
+
+1. Fine-grained PAT lives at `/Users/richardivers/code/.github-pat` (one level above the repo, so it's outside `un1t-crm/` and can't accidentally be committed). 0600 perms. **Never moves into the repo, never enters chat history, never goes into a remote URL.** From inside the sandbox the same file is at `/sessions/<sandbox-id>/mnt/code/.github-pat`.
+2. PAT permissions for the un1t-crm repo specifically (do NOT grant "All repositories" scope):
+
+   | Permission | Level | Why |
+   |---|---|---|
+   | Metadata | Read | Required, auto-added |
+   | Contents | Read and write | Push commits, create branches, fetch history |
+   | Pull requests | Read and write | Open / comment / merge PRs |
+   | Actions | Read | See CI status before suggesting merges (optional but cheap) |
+
+   Skip Issues, Workflows (the `.yml` files), Secrets, Variables, Webhooks, Pages, Discussions, Deployments, Codespaces, Packages. Account-level permissions all "No access". Token expiration: 90 days, set a calendar reminder to rotate.
+
+3. Credential helper script in sandbox `/tmp` (sandbox-only path so it never affects the user's terminal git):
+
+   ```bash
+   cat > /tmp/git-cred-helper.sh <<'EOF'
+   #!/bin/sh
+   case "$1" in
+     get)
+       echo "username=x-access-token"
+       printf "password=%s\n" "$(tr -d '\n' < /sessions/<sandbox-id>/mnt/code/.github-pat)"
+       ;;
+   esac
+   EOF
+   chmod +x /tmp/git-cred-helper.sh
+   ```
+
+4. Push with the helper inline (avoids persisting any credential config to `.git/config`, which would break the user's terminal git):
+
+   ```bash
+   git -c credential.helper="/tmp/git-cred-helper.sh" push origin main 2>&1 | sed 's|github_pat_[A-Za-z0-9_]*|github_pat_REDACTED|g'
+   ```
+
+   The `sed` filter is belt-and-braces in case git ever logs the URL with creds in an error path. Real PAT tokens start with `github_pat_` (fine-grained) or `ghp_` (classic) — both should be redacted before output is shown to the user.
+
+**Each Cowork session is a fresh sandbox.** `/tmp/git-cred-helper.sh` doesn't survive between sessions. Recreate it on demand at the start of any session that needs to push. The sandbox ID also changes between sessions, so `/sessions/<sandbox-id>/...` paths can't be hard-coded — derive from `pwd` or `$HOME` at runtime.
+
+**GitHub MCP server (api.githubcopilot.com/mcp/) does NOT support dynamic client registration.** Calling `mcp__plugin_engineering_github__authenticate` returns `Incompatible auth server: does not support dynamic client registration. Ask the user to run /mcp and authenticate manually.` This isn't fixable from Claude's side — the user has to type `/mcp` in Cowork chat to open the manual auth panel. Even after that, the real GitHub tools (`create_or_update_file`, `push_files`, `get_file_contents`, etc.) didn't appear in Claude's deferred-tool list during our session — possibly a tool-list refresh issue, possibly the manual flow didn't actually complete the handshake. **The PAT-based push above is the working alternative and doesn't depend on the GitHub MCP server at all.** Revisit GitHub MCP only if the use case calls for API-shaped operations (PR review workflows, issue triage) that are awkward over plain git.
+
+**Common `mobile/eas.json` clutter in `git status`.** It's been there since before any of this work — unrelated to anything Claude has touched, leave it alone. If `git status` shows it as untracked, it's not a regression.
+
+**Auto-pack runs in the background after fetches now that delete works.** You'll see `Auto packing the repository in background for optimum performance` after a `git fetch`. Harmless — it's git's normal `gc --auto` doing housekeeping, which was previously blocked by the no-unlink restriction. Don't react to it.
+
+**If you're using Claude Code (CLI) instead of Cowork, none of this applies.** Claude Code runs natively in the user's terminal with their actual `~/.gitconfig`, `~/.ssh`, and `gh` CLI — `git push` just works. The sandbox-specific knobs (PAT helper, file-delete permission tool) are Cowork-only operational concerns.
+
 ## Lessons learned
 
 **Read vendor docs for the version you've pinned.** When integrating a third-party API (Revolut, Twilio, Stripe, etc.), always parse the OpenAPI spec / SDK source for the EXACT version you're targeting before writing client code. Don't work from cached knowledge of an older version. Two specific cases that bit on the Revolut integration: `capture_mode` enum casing (changed from `AUTOMATIC` upper-snake to lowercase `automatic` between versions) and the SDK token field name (`public_id` deprecated, replaced by `token`). Both produced misleading error messages that cost a round-trip with the user to fix. The OpenAPI spec is authoritative — if the docs page is a JS-rendered SPA that doesn't fetch cleanly, get the YAML from the vendor's openapi GitHub repo instead.
@@ -835,6 +888,8 @@ Things to watch but NOT act on without measurement:
 - **Two-sided secrets need monitoring.** When a secret has to match between two systems we control (Vercel `CRON_SECRET` + `private.app_config.cron_secret`), drift is silent and only surfaces when something downstream notices. The fix isn't "be careful when rotating" — it's "the system tells us within minutes when something stops working". Pattern: every cron writes a heartbeat on success, a view computes is_stale, a single health-check endpoint 503s when anything is stale, an external monitor pings the endpoint. See "Cron monitoring" under Deployment.
 
 - **Supabase views default to SECURITY DEFINER.** Any view created in a migration runs with the postgres role's permissions and bypasses RLS on the underlying tables. The advisor (`get_advisors` MCP, type=security) catches it as an ERROR-level lint. Always include `WITH (security_invoker = on)` on `CREATE VIEW`, or follow up with `ALTER VIEW ... SET (security_invoker = on)`.
+
+- **Cowork sandbox has filesystem and auth restrictions worth knowing about.** Specifically: it can't `unlink()` files by default (fix via `mcp__cowork__allow_cowork_file_delete` — don't tell the user it's impossible), it has no GitHub credentials so `git push` needs an explicit PAT + credential helper setup, and the GitHub MCP server doesn't support DCR so the auto-OAuth flow can't be initiated by Claude. Full operational guide and the working-pattern recipe are in the "Working from Cowork (Claude sandbox notes)" section above. None of this applies if using Claude Code in the user's terminal — it's Cowork-specific.
 
 ## Roster v2 — shift template restructure
 
