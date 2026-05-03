@@ -110,14 +110,37 @@ export default function BookingWidget({ slug }) {
     return days
   }
 
-  function isAvailableDay(date) {
+  // Separate the two reasons a date might not be bookable so the UI
+  // can render them differently:
+  //   - "beyond advance window" — date is real but bookings haven't
+  //     opened yet for it; show a friendly "check back on YYYY-MM-DD"
+  //     message instead of the generic "No times available."
+  //   - "wrong day of week" — the event simply doesn't run that day;
+  //     stays as the standard greyed-out non-clickable cell.
+  function isWithinAdvanceWindow(date) {
     if (!event || !date) return false
     const today = new Date(); today.setHours(0, 0, 0, 0)
     if (date < today) return false
-    const maxDate = new Date(today); maxDate.setDate(maxDate.getDate() + (event.max_advance_days || 30))
-    if (date > maxDate) return false
+    const maxDate = new Date(today)
+    maxDate.setDate(maxDate.getDate() + (event.max_advance_days || 30))
+    return date <= maxDate
+  }
+  function isAvailableForDayOfWeek(date) {
+    if (!event || !date) return false
     const dayNames = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat']
     return !!event.availability[dayNames[date.getDay()]]
+  }
+  function isAvailableDay(date) {
+    return isWithinAdvanceWindow(date) && isAvailableForDayOfWeek(date)
+  }
+  // Returns the date at which this otherwise-valid day becomes
+  // bookable (today + (date − today) − max_advance_days), formatted
+  // for the slots-column message.
+  function bookingsOpenOn(date) {
+    if (!event || !date) return null
+    const opens = new Date(date)
+    opens.setDate(opens.getDate() - (event.max_advance_days || 30))
+    return opens
   }
 
   function prevMonth() {
@@ -358,12 +381,22 @@ export default function BookingWidget({ slug }) {
                   const available = isAvailableDay(day)
                   const selected = selectedDate && day.toDateString() === selectedDate.toDateString()
                   const isToday = day.toDateString() === new Date().toDateString()
+                  // Visual distinction: a Monday beyond max_advance_days
+                  // shouldn't look like an "available Monday" with a tinted
+                  // chip. Render it like a non-availability day (no tint,
+                  // muted text) so the calendar honestly reflects what the
+                  // user can click.
+                  const beyondWindow = isAvailableForDayOfWeek(day) && !isWithinAdvanceWindow(day)
+                  const titleHint = beyondWindow
+                    ? `Bookings open ${(event.max_advance_days || 30)} days in advance`
+                    : undefined
 
                   return (
                     <button
                       key={day.toISOString()}
                       disabled={!available}
                       onClick={() => setSelectedDate(day)}
+                      title={titleHint}
                       className={`h-9 flex items-center justify-center text-sm transition-colors group
                         ${!available ? 'cursor-default' : 'cursor-pointer'}
                       `}
@@ -666,7 +699,26 @@ export default function BookingWidget({ slug }) {
                 <div className="animate-spin w-5 h-5 border-2 border-gray-200 border-t-gray-700 rounded-full mx-auto" />
               </div>
             ) : slots.length === 0 ? (
-              <p className="text-sm text-gray-400 py-4">No times available.</p>
+              // Two reasons slots can be empty: bookings haven't opened
+              // yet for this date (within max_advance_days), vs the day
+              // is genuinely unavailable / fully booked. Distinguish so
+              // the customer doesn't think the event is full.
+              isAvailableForDayOfWeek(selectedDate) && !isWithinAdvanceWindow(selectedDate) ? (
+                <div className="py-4 text-sm text-gray-500 space-y-1">
+                  <p>Bookings haven&apos;t opened for this date yet.</p>
+                  {(() => {
+                    const opens = bookingsOpenOn(selectedDate)
+                    if (!opens) return null
+                    return (
+                      <p className="text-xs text-gray-400">
+                        Check back from {opens.toLocaleDateString('en-IE', { weekday: 'long', day: 'numeric', month: 'long' })}.
+                      </p>
+                    )
+                  })()}
+                </div>
+              ) : (
+                <p className="text-sm text-gray-400 py-4">No times available.</p>
+              )
             ) : (
               <div className="space-y-2 max-h-[420px] overflow-y-auto pr-1">
                 {slots.map(slot => {
