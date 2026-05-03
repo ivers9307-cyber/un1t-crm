@@ -17,6 +17,7 @@
 import { createServerClient } from '@/lib/supabase'
 import AdminFeatureMatrix from '@/components/AdminFeatureMatrix'
 import AdminAccessMatrix from '@/components/AdminAccessMatrix'
+import AddOrganizationButton from '@/components/AddOrganizationButton'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
@@ -55,10 +56,13 @@ export default async function AdminMatrixPage() {
 
   return (
     <div className="p-8 max-w-7xl">
-      <h2 className="text-2xl font-bold mb-1">Platform admin</h2>
+      <div className="flex items-start justify-between gap-4 mb-2">
+        <h2 className="text-2xl font-bold">Platform admin</h2>
+        <AddOrganizationButton />
+      </div>
       <p className="text-sm text-un1t-light mb-8">
         Master-only view across every organization, location, and user. Feature toggles edit
-        inline; user assignments link out to the per-staff editor.
+        inline; user assignments are managed via the access matrix.
       </p>
 
       <section className="mb-12">

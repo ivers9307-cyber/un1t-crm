@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation'
 import { createBrowserClient } from '@/lib/supabase'
 import { validateAlphaSenderId } from '@/lib/twilio'
 
-export default function LocationForm({ location, callerRole = 'owner' }) {
+export default function LocationForm({ location, callerRole = 'owner', organizations = [] }) {
   const router = useRouter()
   const isEditing = !!location
   // UniFi controller config (host, token, policy IDs) is master-only
@@ -20,6 +20,14 @@ export default function LocationForm({ location, callerRole = 'owner' }) {
   const [timezone, setTimezone] = useState(location?.timezone || 'Europe/Dublin')
   const [country, setCountry] = useState(location?.country || 'IE')
   const [active, setActive] = useState(location?.active !== false)
+  // Organization (mig 079) — required for new locations. Shown read-only
+  // when editing because moving a location between orgs is rare and
+  // risky (would change RLS visibility for every member at the
+  // destination org). If a real cross-org move is needed, do it via
+  // SQL with intent.
+  const [organizationId, setOrganizationId] = useState(
+    location?.organization_id || (organizations[0]?.id ?? '')
+  )
 
   // Twilio alpha sender ID (mig 059) — per-location branded sender
   // shown on recipients' phones. Empty string = use the global
@@ -64,6 +72,15 @@ export default function LocationForm({ location, callerRole = 'owner' }) {
     const db = createBrowserClient()
     const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '')
 
+    // mig 079 — every location must belong to an organization. The
+    // dropdown is required for new locations; for edits it's read-only
+    // and we fall back to the existing value.
+    if (!isEditing && !organizationId) {
+      setError('Pick an organization for this location.')
+      setSaving(false)
+      return
+    }
+
     // Validate the SMS sender ID app-side before sending. Twilio
     // rejects non-conforming alpha sender IDs at send time, but
     // catching it here gives a clean inline error instead of a
@@ -86,6 +103,10 @@ export default function LocationForm({ location, callerRole = 'owner' }) {
       timezone,
       country,
       active,
+      // mig 079 — every location belongs to an organization. For edits
+      // we preserve the existing org (read-only in the UI); for creates
+      // we use the picker value (required, validated above).
+      organization_id: isEditing ? location.organization_id : organizationId,
       // mig 059 — null = fall back to TWILIO_FROM env in the send path.
       twilio_alpha_sender_id: smsSenderId.trim() || null,
       // mig 071 — null = not configured (summary panel shows total
@@ -164,6 +185,31 @@ export default function LocationForm({ location, callerRole = 'owner' }) {
       {/* Basic Info */}
       <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5 space-y-4">
         <h3 className="font-semibold text-sm text-un1t-light uppercase tracking-wider">Location Details</h3>
+
+        {/* Organization picker (mig 079). Required when creating; read-only when editing. */}
+        {organizations.length > 0 && (
+          <div>
+            <label className="block text-sm mb-1.5">Organization *</label>
+            {isEditing ? (
+              <div className="w-full bg-un1t-black/60 border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-light">
+                {organizations.find(o => o.id === location?.organization_id)?.name || '—'}
+                <span className="ml-2 text-[11px] text-un1t-mid">(read-only — moving locations between orgs is rare; do via SQL with intent)</span>
+              </div>
+            ) : (
+              <select
+                required
+                value={organizationId}
+                onChange={e => setOrganizationId(e.target.value)}
+                className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
+              >
+                <option value="">Pick an organization…</option>
+                {organizations.map(o => (
+                  <option key={o.id} value={o.id}>{o.name}</option>
+                ))}
+              </select>
+            )}
+          </div>
+        )}
 
         <div>
           <label className="block text-sm mb-1.5">Name *</label>

@@ -16,11 +16,12 @@ export default async function EditLocationPage({ params }) {
   if (!user || (user.role !== 'master' && user.role !== 'owner')) redirect('/')
 
   const db = createServerClient()
-  const { data: location } = await db
-    .from('locations')
-    .select('*')
-    .eq('id', params.id)
-    .single()
+  const [{ data: location }, { data: organizations }] = await Promise.all([
+    db.from('locations').select('*').eq('id', params.id).single(),
+    // Orgs powers the read-only org display in LocationForm (mig 079).
+    // Fetched even on edit so the form can resolve organization_id → name.
+    db.from('organizations').select('*').eq('active', true).order('name'),
+  ])
 
   if (!location) notFound()
 
@@ -28,7 +29,7 @@ export default async function EditLocationPage({ params }) {
     <div className="p-8 max-w-2xl">
       <h2 className="text-2xl font-bold mb-1">Edit Location</h2>
       <p className="text-sm text-un1t-light mb-6">Update {location.name} details and integrations</p>
-      <LocationForm location={location} callerRole={user.role} />
+      <LocationForm location={location} callerRole={user.role} organizations={organizations || []} />
 
       <section className="mt-10">
         <div className="flex items-center gap-2 mb-3">
