@@ -450,6 +450,65 @@ find .git -name '*.lock' -delete
 
 If the locks come back immediately, an IDE is actively re-creating them. Quit the IDE (Cmd-Q, not just close window) before retrying. Both gotchas have bitten us multiple times — burn them in.
 
+**Fire-and-forget side effects after a primary write.** Sending an email/SMS/push as a follow-up to a write (booking → confirmation, contact stage change → activity log, manager publish over budget → email owners) MUST NOT block or fail the primary response. The pattern across the codebase:
+
+```js
+// Primary write — return early on failure.
+const { data, error } = await db.from('bookings').insert(...).select().single()
+if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
+
+// Side effect — best-effort, swallows its own errors.
+let sideEffectResult = null
+try {
+  const { sendBookingConfirmation } = await import('@/lib/booking-confirmations')
+  sideEffectResult = await sendBookingConfirmation(db, data.id)
+} catch (e) {
+  console.warn(`[booking] confirmation send error: ${e?.message || e}`)
+}
+
+return NextResponse.json({ success: true, data, confirmation: sideEffectResult })
+```
+
+Three rules:
+1. The helper itself catches + logs internally so a `console.warn` is the worst the caller sees.
+2. The route's `try/catch` is a belt-and-braces second line — covers the unlikely "helper crashed before its own try ran" case.
+3. The side-effect result rides along on the response when it has a value (e.g. `{ confirmation: { sent: ['email'], skipped: [] } }`), so the UI can surface "we emailed you" if it ever wants to. Don't make the response shape *depend* on the side effect succeeding.
+
+Codebase examples to copy from: `/api/public/book` (booking → confirmation), `/api/contacts/[id] PUT` (status change → pipeline-event activity log), `/api/schedule/rosters POST` (over-budget manager publish → owner notification email).
+
+**Multi-channel send gate convention.** Whenever a feature pushes a message that can go via email AND/OR SMS (booking confirmation, reminders), the channels run *independently* in their own `try/catch` rather than bailing on the first failure. The aggregation rule is consistent everywhere:
+
+| Outcome of any one channel | Effect on the others | Aggregate status |
+|---|---|---|
+| `sent` | other channels still run | counted in `channels_sent[]` |
+| `skipped` (consent / status / no-data) | other channels still run | listed in `skipped[]` with reason |
+| `failed` (provider error, template missing) | other channels still run; aggregate is `failed` IF nothing else sent | runner doesn't record the dedup row → retries next tick |
+
+This is what `event-reminders.js` (mig 076) does for reminders and `booking-confirmations.js` (mig 077) does for confirmations. Email-down does not take SMS down. Partial sends count as `sent`, not `partial_failure`, because the operator's intent ("notify the customer somehow") was satisfied.
+
+The per-channel gate set is stable across the codebase — copy it verbatim when adding a new send path:
+
+```js
+// Email gate
+if (c?.email_status && ['bounced', 'complained', 'unsubscribed'].includes(c.email_status)) return skip
+if (admin_email_consent === false) return skip
+if (!to) return skip
+
+// SMS gate
+if (c?.sms_status && c.sms_status !== 'active') return skip
+if (admin_sms_consent === false) return skip
+if (!phone) return skip
+```
+
+**Deprecated columns kept on disk.** When a feature gets a new schema (e.g. mig 076 moved single-reminder columns on `event_types` to a multi-row `event_type_reminders` table), the old columns are NOT dropped in the same migration. Instead:
+
+1. Migration adds new tables / columns + backfills from the old shape.
+2. Old columns get a `COMMENT ON COLUMN ... 'DEPRECATED (mig N)'` so the next person on the codebase sees they're stale.
+3. Code (runner + form + writers) stops reading the old columns. Forms also stop *writing* them on save, so re-saved rows blank out their stale values.
+4. A separate cleanup migration much later (after we're confident the new path is bedded in) drops the columns.
+
+Why: a single migration that drops + replaces is irreversible; a two-stage migration lets us roll back the code change without DB-side action if the new path proves wrong. Examples in the codebase: `event_types.reminder_*` (mig 076 deprecates, no cleanup yet), `public.shifts` (mig 067 deprecates in favour of `shift_blocks` + `shift_assignments`, mig 068 + 069 keep it auto-populated via triggers, no cleanup yet).
+
 ## Mobile app (`mobile/`)
 
 The iOS app is an Expo (React Native) project living in `mobile/` as a sibling to `src/`. Single repo, separate `package.json` (Expo can't share Next's deps), shared schemas/constants imported via relative paths from `../src/lib/schemas.js`. NativeWind re-exports the same `un1t-*` Tailwind tokens used on web.
@@ -565,13 +624,22 @@ Three providers, each doing what it's best at — kept deliberately split rather
 |---|---|---|---|
 | WhatsApp broadcasts (`/communications/broadcasts`) | `lib/whatsapp.js → sendBroadcast` | None (any APPROVED template) | `whatsapp_marketing` |
 | Sequence WA steps (runner) | `lib/sequences.js → sendWhatsappStep` | None (operator chooses per step) | inherits sequence audience filter |
-| Per-event reminders (`event_types.reminder_*`) | `lib/event-reminders.js → sendWhatsappReminder` | UTILITY / AUTHENTICATION only — refused at runtime if MARKETING | `whatsapp_administrative` |
 | Email broadcasts (`/communications/campaigns`) | `lib/postmark.js → sendCampaign` | (n/a) | `email_marketing` (broadcast stream) |
 | Email sequences | `lib/sequences.js → sendEmailStep` | (n/a) | inherits sequence audience filter (transactional stream) |
-| Per-event email reminders | `lib/event-reminders.js → sendEmailReminder` | (n/a) | `email_administrative` (transactional stream) |
-| Deposit-link delivery (cars) | `lib/twilio.js → sendSms` | (n/a — alphanumeric sender, one-way) | (n/a — buyer just submitted booking; implicit) |
+| SMS broadcasts (`/communications/sms/broadcasts`) | `lib/sms.js → sendBroadcast` | (n/a) | `sms_marketing` |
+| Sequence SMS steps (runner) | `lib/sequences.js → sendSmsStep` | (n/a) | inherits sequence audience filter |
+| Per-event email reminders (mig 076) | `lib/event-reminders.js → sendEmailReminder` | (n/a) | `email_administrative` (transactional stream) |
+| Per-event SMS reminders (mig 076) | `lib/event-reminders.js → sendSmsReminder` | (n/a) | `sms_administrative` |
+| Booking confirmation email (mig 077) | `lib/booking-confirmations.js → sendEmailConfirmation` | (n/a) | `email_administrative` |
+| Booking confirmation SMS (mig 077) | `lib/booking-confirmations.js → sendSmsConfirmation` | (n/a) | `sms_administrative` |
+| Booking cancellation email (mig 074) | `/api/bookings/[id]/cancel` route | (n/a) | `email_administrative` |
+| Roster approval-request email (mig 072) | `lib/roster-email.js` | (n/a) | (n/a — internal staff notification) |
+| Deposit-link delivery (cars) | `lib/twilio.js → sendLocationSms` | (n/a — alphanumeric sender, one-way) | (n/a — buyer just submitted booking; implicit) |
+| Ad-hoc contact SMS (`/api/contacts/[id]/sms`) | `lib/twilio.js → sendLocationSms` | (n/a) | (n/a — operator-initiated, single recipient) |
 
-**Reminders are administrative, not marketing.** `contact_preferences` separates the two — schema has `email_marketing` + `email_administrative` (and the WA equivalents). Reminder code paths check ONLY the `_administrative` flag; opting out of marketing doesn't stop reminders. Hard signals (`email_status` bounced/complained, `wa_status` blocked/opted_out) cause reminders to skip AND stamp `reminder_sent_at` so the cron doesn't retry forever — only true infra failures stay un-stamped for retry.
+**Reminders are administrative, not marketing.** `contact_preferences` separates the two — schema has `email_marketing` + `email_administrative` (and the WA / SMS equivalents). Reminder + confirmation + cancellation code paths check ONLY the `_administrative` flag; opting out of marketing doesn't stop them. Hard signals (`email_status` bounced/complained, `sms_status ≠ active`, `wa_status` blocked/opted_out) cause reminders to skip AND record the skip (mig 076: `booking_reminder_sends`; mig 044 legacy: `bookings.reminder_sent_at`) so the cron doesn't retry forever — only true infra failures stay un-recorded for retry.
+
+**WhatsApp is no longer used for transactional reminders.** Mig 074 retired the WA branch from `event-reminders.js` and added a CHECK constraint enforcing `event_types.reminder_channel ∈ {email, sms}`. Mig 076 carried that forward to `event_type_reminders.channels`. Mig 077 inherits the same restriction. The reasoning: WhatsApp templates are reserved for explicit campaigns (where the operator's chosen audience opted into marketing), not for transactional pushes that a CRM-side rule decides to fire. Customers who get a transactional WA message they didn't consent to flag the conversation, which counts against the WABA quality rating, which throttles future broadcast capacity.
 
 ## Twilio integration
 
@@ -686,13 +754,21 @@ End-to-end flow: operator clicks one button on a car → buyer gets an SMS with 
 
 ## Comms automation
 
-Three runners share the same cron tick (`/api/cron/run-sequences` every 5 min via Vercel Crons — see Deployment):
+Three cron runners + two synchronous send paths, all anchored on the booking lifecycle. Cron tick is `/api/cron/run-sequences` every 5 min via Vercel Crons — see Deployment.
 
-1. **`runEventReminderSends()`** — single-shot reminders attached to event types. Reads `event_types.reminder_*` fields, finds bookings approximately `reminder_minutes_before` away (±1h DST-tolerant window), sends one message via the chosen channel (email or WA UTILITY template), stamps `bookings.reminder_sent_at`. Cheapest path for "send a 24h reminder before each booking" without authoring a sequence. Configured per-event in `EventForm.jsx` (Reminder section).
+**Cron runners:**
 
-2. **`runEventReminderTriggers()`** — sequence-based event reminders. For each active sequence with `trigger_type='event_reminder'`, finds bookings ~hours_before away and creates a sequence enrollment. Use this when you need a multi-step reminder flow (24h + 2h + day-of); the simple per-event path covers single-shot.
+1. **`runEventReminderSends()`** — multi-reminder runner (mig 076). Reads `event_type_reminders` rows (1..N per event_type), finds bookings approximately `minutes_before` away (±1h DST-tolerant window), runs each channel in `reminder.channels[]` (email + sms, or one of them) independently, dedups via `booking_reminder_sends` UNIQUE(booking_id, reminder_id). Stamps legacy `bookings.reminder_sent_at` on first send for back-compat with the partial index from mig 044. Honours `bookings.skip_reminder` (mig 075) as the operator override that beats every other gate. Configured per-event in `EventForm.jsx` → Reminders section (multi-row list, hours input, per-row channel multi-select).
 
-3. **`runSequences()`** — picks up due enrollments (`status='active' AND next_step_at <= now()`) and sends the next step (email via Postmark, WhatsApp via template, or wait). Failure-counted per enrollment with auto-pause after 5 consecutive errors.
+2. **`runEventReminderTriggers()`** — sequence-based event reminders. For each active sequence with `trigger_type='event_reminder'`, finds bookings ~hours_before away and creates a sequence enrollment. Use this when the reminder flow is more complex than "send X channel(s) once at offset Y" (e.g. branching based on lead_status). The simpler per-event path covers most cases.
+
+3. **`runSequences()`** — picks up due enrollments (`status='active' AND next_step_at <= now()`) and sends the next step (email via Postmark, WhatsApp via template, SMS via `sendLocationSms`, or wait). Failure-counted per enrollment with auto-pause after 5 consecutive errors.
+
+**Synchronous send paths (fired at the moment of the user action, not a cron):**
+
+4. **`sendBookingConfirmation(db, bookingId)`** — mig 077. One-shot at booking creation. Reads `event_types.confirmation_*` columns, runs each configured channel independently, writes a `kind='event'` activity to the contact timeline. Called from `/api/public/book` as a fire-and-forget side-effect — Postmark/Twilio failure never breaks the customer's success response.
+
+5. **`/api/bookings/[id]/cancel`** — mig 074. Operator-initiated cancellation, optional Postmark email to the customer with their reason. Same `email_administrative` opt-out gate as confirmations + reminders. Trigger from mig 074 logs the status flip as a `kind='event'` activity automatically; the route doesn't double-log.
 
 **Sequence triggers (4 types, all in `lib/sequences.js`):**
 
