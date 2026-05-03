@@ -16,6 +16,15 @@ const BookingSchema = z.object({
   customer_phone: z.string().max(50).nullable().optional(),
   custom_responses: z.record(z.string(), z.unknown()).optional(),
   source: z.string().max(50).optional(),
+  // Race tracking — team capture (mig 081). Optional in the request
+  // shape; required server-side only if the event is_timed_event.
+  // Validated against event.allowed_team_sizes after the event lookup.
+  team_name: z.string().min(1).max(200).optional(),
+  team_size: z.number().int().positive().max(50).optional(),
+  team_members: z.array(z.object({
+    name: z.string().min(1).max(200),
+    email: z.string().email().max(320).nullable().optional(),
+  })).max(50).optional(),
 })
 
 // POST /api/public/book — Public: create a booking
@@ -43,14 +52,43 @@ export async function POST(request) {
   // Look up event to calculate end_time and validate custom_responses
   // against the event's declared custom_fields. Tier 2 of the Calendly
   // alignment — previously we accepted any shape because Zod only
-  // validated the wrapper.
+  // validated the wrapper. mig 081 added is_timed_event +
+  // allowed_team_sizes + location_id (already on the row) so we can
+  // validate team capture against the event's race config.
   const { data: event } = await db.from('event_types')
-    .select('duration_minutes, custom_fields')
+    .select('duration_minutes, custom_fields, is_timed_event, allowed_team_sizes, location_id')
     .eq('id', body.event_type_id)
     .single()
 
   if (!event) {
     return NextResponse.json({ success: false, error: 'Event type not found' }, { status: 404 })
+  }
+
+  // Race tracking — server-side validation of team fields when the
+  // event is_timed_event. The widget enforces these client-side too,
+  // but a non-widget caller (curl, scraper) could bypass.
+  if (event.is_timed_event) {
+    if (!body.team_name) {
+      return NextResponse.json({ success: false, error: 'team_name is required for timed events.' }, { status: 400 })
+    }
+    if (!body.team_size) {
+      return NextResponse.json({ success: false, error: 'team_size is required for timed events.' }, { status: 400 })
+    }
+    const allowed = Array.isArray(event.allowed_team_sizes) ? event.allowed_team_sizes : null
+    if (allowed && allowed.length > 0 && !allowed.includes(body.team_size)) {
+      return NextResponse.json({
+        success: false,
+        error: `team_size must be one of ${allowed.join(', ')} for this event.`,
+      }, { status: 400 })
+    }
+    const memberCount = Array.isArray(body.team_members) ? body.team_members.length : 0
+    // Captain is the booker — members 2..N are in team_members.
+    if (memberCount !== body.team_size - 1) {
+      return NextResponse.json({
+        success: false,
+        error: `Expected ${body.team_size - 1} team_members for a team of ${body.team_size} (captain is the booker).`,
+      }, { status: 400 })
+    }
   }
 
   // Validate custom_responses against the event's custom_fields:
@@ -98,6 +136,86 @@ export async function POST(request) {
 
   if (error) {
     return NextResponse.json({ success: false, error: error.message }, { status: 400 })
+  }
+
+  // Race tracking — find-or-create the team + insert team_members
+  // (captain + N−1 others) and link the booking. Same find-or-create
+  // semantics ensureTeamForBooking uses (UNIQUE on location_id + name)
+  // so a returning team auto-links. Best-effort with respect to
+  // member rows — a partial failure here doesn't roll back the booking
+  // because the team can be reconstructed from booking data later.
+  if (event.is_timed_event && body.team_name) {
+    try {
+      const teamName = body.team_name.trim()
+      // Find by (location, name) first.
+      const { data: foundTeam } = await db
+        .from('teams')
+        .select('id, captain_contact_id')
+        .eq('location_id', event.location_id)
+        .eq('name', teamName)
+        .maybeSingle()
+
+      let teamId
+      if (foundTeam) {
+        teamId = foundTeam.id
+        // Update size to whatever this booking specified — most recent
+        // booking wins. (Realistically a returning team uses the same
+        // size each time; if they don't, the latest is the right call.)
+        await db.from('teams').update({ size: body.team_size }).eq('id', teamId)
+      } else {
+        const { data: insertedTeam, error: teamErr } = await db
+          .from('teams')
+          .insert({
+            location_id: event.location_id,
+            name: teamName,
+            size: body.team_size,
+            captain_contact_id: data.contact_id || null,
+          })
+          .select('id')
+          .single()
+        if (teamErr) throw teamErr
+        teamId = insertedTeam.id
+      }
+
+      // Link the booking.
+      await db.from('bookings').update({ team_id: teamId }).eq('id', data.id)
+      data.team_id = teamId
+
+      // Refresh team_members for THIS booking's team composition. A
+      // returning team's roster might differ from last time; clear
+      // and re-insert keeps the team_members snapshot current per
+      // booking. If this turns out to lose history we want, a
+      // booking_team_members table per booking is the right shape.
+      await db.from('team_members').delete().eq('team_id', teamId)
+      const memberRows = []
+      // Captain — has a contact_id from the trigger that just ran.
+      memberRows.push({
+        team_id: teamId,
+        contact_id: data.contact_id || null,
+        name: body.customer_name,
+        email: body.customer_email.toLowerCase().trim(),
+        role: 'captain',
+      })
+      for (const m of (body.team_members || [])) {
+        memberRows.push({
+          team_id: teamId,
+          contact_id: null, // members don't get auto-promoted to contacts in v1
+          name: m.name,
+          email: m.email || null,
+          role: 'member',
+        })
+      }
+      if (memberRows.length > 0) {
+        const { error: membersErr } = await db.from('team_members').insert(memberRows)
+        if (membersErr) {
+          console.warn(`[booking] team_members insert failed for team ${teamId}: ${membersErr.message}`)
+        }
+      }
+    } catch (e) {
+      // Don't fail the booking — team can be reconstructed by the
+      // race-control UI on first race-start via ensureTeamForBooking.
+      console.warn(`[booking] team setup failed for booking ${data.id}: ${e?.message || e}`)
+    }
   }
 
   // Fire booking_created triggers for active sequences. Best-effort —
