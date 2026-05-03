@@ -962,7 +962,7 @@ These are not commitments, just durable notes so we don't re-derive them every s
 - ~~Postmark webhook signing — verify shared secret on every event before trusting it (today we accept-with-warning if the env var is unset, which was meant to be a rollout-only fallback).~~ — **shipped** (#83). Strict enforcement, rotation env var, route-level test.
 
 **Deposits / payments**
-- Refund UI on the car-detail Deposit section — the lib helper (`refundOrder`) is wired, just no front-end. Useful for the rare goodwill case despite "non-refundable" T&Cs.
+- ~~Refund UI on the car-detail Deposit section.~~ — **dropped**. CCF Autos deposits are non-refundable and that policy isn't changing, so the operator-facing button would be unused. The `refundOrder()` lib helper in `src/lib/revolut.js` stays — it's the right primitive to reach for if/when the gym side of the business introduces payments (memberships, class packs, retail) where partial/full refunds ARE part of the customer journey. Revisit the UI question then; the lib doesn't need touching now.
 - Multi-currency support for deposits (today EUR-only). UK customers buying RHD stock would value GBP.
 - Surface the buyer-side payment-method icons (cards / Apple Pay / Google Pay / Revolut Pay) on the deposit page above the widget so the buyer knows what to expect before clicking pay.
 - Email receipt to buyer on `deposit.paid` webhook — currently we only display the in-page receipt. A Postmark transactional email gives them something to forward to insurance/finance.
