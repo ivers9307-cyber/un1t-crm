@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { createBrowserClient } from '@/lib/supabase'
-import { Plus, Trash2, Bell, Mail, MessageSquare } from 'lucide-react'
+import { Plus, Trash2, Bell, Check, Mail, MessageSquare } from 'lucide-react'
 
 const DAYS = [
   { key: 'mon', label: 'Monday' },
@@ -51,6 +51,26 @@ export default function EventForm({ event, locationId }) {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
 
+  // Confirmation config (mig 077 — booking confirmation flow).
+  // One-shot message sent at booking creation time. Same channel
+  // set as reminders (email + sms). Stored as columns on
+  // event_types since confirmations are singular per event_type.
+  const [confirmationEnabled, setConfirmationEnabled] = useState(!!event?.confirmation_enabled)
+  const [confirmationChannels, setConfirmationChannels] = useState(
+    Array.isArray(event?.confirmation_channels) && event.confirmation_channels.length > 0
+      ? event.confirmation_channels
+      : ['email']
+  )
+  const [confirmationEmailTemplateId, setConfirmationEmailTemplateId] = useState(event?.confirmation_email_template_id || '')
+  const [confirmationEmailSubject, setConfirmationEmailSubject] = useState(event?.confirmation_email_subject || '')
+  const [confirmationSmsBody, setConfirmationSmsBody] = useState(event?.confirmation_sms_body || '')
+
+  function toggleConfirmationChannel(channel) {
+    setConfirmationChannels(prev => prev.includes(channel)
+      ? prev.filter(c => c !== channel)
+      : [...prev, channel])
+  }
+
   // Reminders config (mig 076 — multi-reminder).
   // Each reminder is { _localId|id, hours_before, channels[], email_*, sms_body, active }.
   // _localId is a client-only stable key for new rows that
@@ -90,8 +110,10 @@ export default function EventForm({ event, locationId }) {
   }, [isEditing, event?.id])
 
   // Email templates loaded lazily — only when at least one
-  // reminder includes email.
-  const anyEmail = reminders.some(r => r.channels?.includes('email'))
+  // reminder OR the confirmation includes email.
+  const anyEmail =
+    reminders.some(r => r.channels?.includes('email'))
+    || (confirmationEnabled && confirmationChannels.includes('email'))
   useEffect(() => {
     if (!anyEmail || !locationId) return
     if (emailTemplates === null) {
@@ -183,6 +205,13 @@ export default function EventForm({ event, locationId }) {
     // deprecated; the runner doesn't read them. We stop
     // populating them here too. (A re-saved row gets its old
     // values blanked via update — fine, since they're stale.)
+    //
+    // mig 077 — confirmation lives directly on event_types
+    // (singular per booking, doesn't need its own table).
+    // Channel-specific fields are nulled out when their channel
+    // isn't selected so old values don't leak through after a
+    // channel toggle.
+    const confirmationActive = confirmationEnabled && confirmationChannels.length > 0
     const payload = {
       name,
       slug,
@@ -195,6 +224,17 @@ export default function EventForm({ event, locationId }) {
       custom_fields: customFields.filter(f => f.label.trim()),
       webhook_url: webhookUrl || null,
       active: true,
+      confirmation_enabled: confirmationActive,
+      confirmation_channels: confirmationActive ? confirmationChannels : null,
+      confirmation_email_template_id:
+        confirmationActive && confirmationChannels.includes('email')
+          ? (confirmationEmailTemplateId || null) : null,
+      confirmation_email_subject:
+        confirmationActive && confirmationChannels.includes('email')
+          ? (confirmationEmailSubject || null) : null,
+      confirmation_sms_body:
+        confirmationActive && confirmationChannels.includes('sms')
+          ? (confirmationSmsBody || null) : null,
       ...(locationId && !isEditing ? { location_id: locationId } : {}),
     }
 
@@ -465,6 +505,141 @@ export default function EventForm({ event, locationId }) {
                 </div>
               </div>
             ))}
+          </div>
+        )}
+      </div>
+
+      {/* Booking confirmation (mig 077). One-shot message sent at
+          booking creation time. Per-event-type config — singular
+          (vs reminders which are multi-row). */}
+      <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5 space-y-4">
+        <div className="flex items-center justify-between gap-3">
+          <h3 className="font-semibold text-sm text-un1t-light uppercase tracking-wider flex items-center gap-2">
+            <Check size={14} /> Booking confirmation
+          </h3>
+          <label className="text-sm flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={confirmationEnabled}
+              onChange={e => setConfirmationEnabled(e.target.checked)}
+              className="cursor-pointer"
+            />
+            <span>Enabled</span>
+          </label>
+        </div>
+        <p className="text-xs text-un1t-light">
+          Sent immediately when a customer submits a booking, before any reminders fire.
+          Treated as a transactional / utility message — administrative opt-out is honoured,
+          marketing opt-out isn&apos;t. Same channel set as reminders (email + SMS).
+        </p>
+
+        {confirmationEnabled && (
+          <div className="space-y-3">
+            <div>
+              <label className="block text-sm mb-1.5">Channels</label>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => toggleConfirmationChannel('email')}
+                  className={`flex-1 px-3 py-2 rounded-lg text-sm flex items-center justify-center gap-2 transition-colors ${
+                    confirmationChannels.includes('email')
+                      ? 'bg-un1t-white text-un1t-black border border-un1t-white'
+                      : 'border border-un1t-gray text-un1t-light hover:text-un1t-white hover:border-un1t-mid'
+                  }`}
+                >
+                  <Mail size={14} /> Email
+                </button>
+                <button
+                  type="button"
+                  onClick={() => toggleConfirmationChannel('sms')}
+                  className={`flex-1 px-3 py-2 rounded-lg text-sm flex items-center justify-center gap-2 transition-colors ${
+                    confirmationChannels.includes('sms')
+                      ? 'bg-un1t-white text-un1t-black border border-un1t-white'
+                      : 'border border-un1t-gray text-un1t-light hover:text-un1t-white hover:border-un1t-mid'
+                  }`}
+                >
+                  <MessageSquare size={14} /> SMS
+                </button>
+              </div>
+              <p className="text-[11px] text-un1t-mid mt-1">
+                Pick one or both. Both = a separate email and SMS go out at booking time.
+              </p>
+            </div>
+
+            {confirmationChannels.includes('email') && (
+              <div className="space-y-3 border-t border-un1t-gray/50 pt-3">
+                <div className="text-[11px] text-un1t-light uppercase tracking-wider flex items-center gap-1.5">
+                  <Mail size={11} /> Email
+                </div>
+                <div>
+                  <label className="block text-sm mb-1.5">Email template</label>
+                  <select
+                    value={confirmationEmailTemplateId}
+                    onChange={e => setConfirmationEmailTemplateId(e.target.value)}
+                    className="w-full bg-un1t-black border border-un1t-gray rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+                  >
+                    <option value="">— Select a template —</option>
+                    {(emailTemplates || []).map(t => (
+                      <option key={t.id} value={t.id}>{t.name}</option>
+                    ))}
+                  </select>
+                  {emailTemplates && emailTemplates.length === 0 && (
+                    <p className="text-[11px] text-amber-700 mt-1">
+                      No email templates yet — create one in Communications → Templates first.
+                    </p>
+                  )}
+                </div>
+                <div>
+                  <label className="block text-sm mb-1.5">Subject (optional override)</label>
+                  <input
+                    type="text"
+                    value={confirmationEmailSubject}
+                    onChange={e => setConfirmationEmailSubject(e.target.value)}
+                    placeholder="Defaults to the template subject, or 'Booking confirmed: <event name>'"
+                    className="w-full bg-un1t-black border border-un1t-gray rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+                  />
+                  <p className="text-[11px] text-un1t-mid mt-1">
+                    Merge tags: {'{{first_name}}'}, {'{{event_name}}'}, {'{{event_time}}'}
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {confirmationChannels.includes('sms') && (
+              <div className="space-y-2 border-t border-un1t-gray/50 pt-3">
+                <div className="text-[11px] text-un1t-light uppercase tracking-wider flex items-center gap-1.5">
+                  <MessageSquare size={11} /> SMS
+                </div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="block text-sm">SMS body</label>
+                  <span className={`text-[11px] ${confirmationSmsBody.length > 160 ? 'text-amber-700' : 'text-un1t-light'}`}>
+                    {confirmationSmsBody.length} chars
+                    {confirmationSmsBody.length > 0 && (
+                      <> · {confirmationSmsBody.length <= 160 ? 1 : Math.ceil(confirmationSmsBody.length / 153)} segment{confirmationSmsBody.length <= 160 ? '' : 's'}</>
+                    )}
+                  </span>
+                </div>
+                <textarea
+                  value={confirmationSmsBody}
+                  onChange={e => setConfirmationSmsBody(e.target.value)}
+                  rows={3}
+                  maxLength={1600}
+                  placeholder="Hi {{first_name}}, your {{event_name}} on {{event_time}} is confirmed. See you at {{location_name}}."
+                  className="w-full bg-un1t-black border border-un1t-gray rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none resize-y"
+                />
+                <p className="text-[11px] text-un1t-mid">
+                  Merge tags: <code>{'{{first_name}}'}</code>, <code>{'{{name}}'}</code>,
+                  {' '}<code>{'{{event_name}}'}</code>, <code>{'{{event_time}}'}</code>,
+                  {' '}<code>{'{{location_name}}'}</code>.
+                </p>
+              </div>
+            )}
+
+            {confirmationChannels.length === 0 && (
+              <p className="text-[11px] text-amber-700 border-t border-un1t-gray/50 pt-3">
+                Pick at least one channel — confirmation won&apos;t be sent without one.
+              </p>
+            )}
           </div>
         )}
       </div>

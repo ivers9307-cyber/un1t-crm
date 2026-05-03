@@ -110,9 +110,22 @@ export async function POST(request) {
     console.warn(`[booking] sequence trigger error: ${e?.message || e}`)
   }
 
+  // Fire the per-event_type confirmation message (mig 077). Best-
+  // effort: a Postmark or Twilio hiccup never breaks the customer's
+  // success response; the on-page confirmation still shows. The
+  // helper writes its own activity row + handles channel gates.
+  let confirmation = null
+  try {
+    const { sendBookingConfirmation } = await import('@/lib/booking-confirmations')
+    confirmation = await sendBookingConfirmation(db, data.id)
+  } catch (e) {
+    console.warn(`[booking] confirmation send error: ${e?.message || e}`)
+  }
+
   return NextResponse.json({
     success: true,
     data,
+    confirmation,
     message: 'Booking confirmed! You will receive a confirmation shortly.'
   })
 }
