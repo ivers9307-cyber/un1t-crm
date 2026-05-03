@@ -51,36 +51,87 @@ export default function EventForm({ event, locationId }) {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
 
-  // Reminder config (mig 044). The runner in lib/event-reminders.js
-  // picks up every booking ~minutesBefore before its start time and
-  // sends one message via the chosen channel. Stored on the
-  // event_type itself so each event can have its own reminder
-  // policy without authoring a sequence.
-  const [reminderEnabled, setReminderEnabled] = useState(!!event?.reminder_enabled)
-  const [reminderMinutesBefore, setReminderMinutesBefore] = useState(event?.reminder_minutes_before ?? 1440) // 24h default
-  // mig 074: WhatsApp removed as a reminder channel. If a legacy
-  // event_type loaded here ever had reminder_channel='whatsapp',
-  // fall through to 'email' so the picker doesn't show a phantom
-  // selection. The DB CHECK now rejects 'whatsapp' on save.
-  const initialChannel = event?.reminder_channel === 'whatsapp' ? 'email' : (event?.reminder_channel || 'email')
-  const [reminderChannel, setReminderChannel] = useState(initialChannel)
-  const [reminderEmailTemplateId, setReminderEmailTemplateId] = useState(event?.reminder_email_template_id || '')
-  const [reminderEmailSubject, setReminderEmailSubject] = useState(event?.reminder_email_subject || '')
-  const [reminderSmsBody, setReminderSmsBody] = useState(event?.reminder_sms_body || '')
+  // Reminders config (mig 076 — multi-reminder).
+  // Each reminder is { _localId|id, hours_before, channels[], email_*, sms_body, active }.
+  // _localId is a client-only stable key for new rows that
+  // haven't been persisted yet. The PUT endpoint mints a real
+  // id once the row lands.
+  const [reminders, setReminders] = useState([])
+  const [remindersLoaded, setRemindersLoaded] = useState(!isEditing)
 
-  // Template list for the email picker. Loaded once when reminders
-  // are toggled on (skip the network round-trip when not needed).
+  // Email template list for the picker(s). One fetch shared
+  // across all reminder rows.
   const [emailTemplates, setEmailTemplates] = useState(null)
 
+  // Load existing reminders on edit. New events start empty
+  // (operator clicks "Add reminder" to create the first one).
   useEffect(() => {
-    if (!reminderEnabled || !locationId) return
+    if (!isEditing || !event?.id) return
+    let cancelled = false
+    fetch(`/api/events/${event.id}/reminders`)
+      .then(r => r.json())
+      .then(j => {
+        if (cancelled) return
+        if (j.success && Array.isArray(j.data)) {
+          setReminders(j.data.map(r => ({
+            id: r.id,
+            hours_before: Math.round((r.minutes_before || 0) / 60 * 10) / 10,
+            channels: Array.isArray(r.channels) ? r.channels : [],
+            email_template_id: r.email_template_id || '',
+            email_subject: r.email_subject || '',
+            sms_body: r.sms_body || '',
+            active: r.active !== false,
+          })))
+        }
+        setRemindersLoaded(true)
+      })
+      .catch(() => setRemindersLoaded(true))
+    return () => { cancelled = true }
+  }, [isEditing, event?.id])
+
+  // Email templates loaded lazily — only when at least one
+  // reminder includes email.
+  const anyEmail = reminders.some(r => r.channels?.includes('email'))
+  useEffect(() => {
+    if (!anyEmail || !locationId) return
     if (emailTemplates === null) {
       fetch(`/api/templates?location_id=${encodeURIComponent(locationId)}`)
         .then(r => r.json())
         .then(j => setEmailTemplates(j.success ? (j.templates || []) : []))
         .catch(() => setEmailTemplates([]))
     }
-  }, [reminderEnabled, locationId, emailTemplates])
+  }, [anyEmail, locationId, emailTemplates])
+
+  function addReminder() {
+    setReminders(prev => [...prev, {
+      _localId: typeof crypto !== 'undefined' ? crypto.randomUUID() : `tmp-${Date.now()}-${prev.length}`,
+      hours_before: 24,
+      channels: ['email'],
+      email_template_id: '',
+      email_subject: '',
+      sms_body: '',
+      active: true,
+    }])
+  }
+
+  function updateReminder(idx, patch) {
+    setReminders(prev => prev.map((r, i) => i === idx ? { ...r, ...patch } : r))
+  }
+
+  function removeReminder(idx) {
+    setReminders(prev => prev.filter((_, i) => i !== idx))
+  }
+
+  function toggleReminderChannel(idx, channel) {
+    setReminders(prev => prev.map((r, i) => {
+      if (i !== idx) return r
+      const has = r.channels?.includes(channel)
+      const next = has
+        ? r.channels.filter(c => c !== channel)
+        : [...(r.channels || []), channel]
+      return { ...r, channels: next }
+    }))
+  }
 
   function toggleDay(day) {
     setAvailability(prev => ({
@@ -127,6 +178,11 @@ export default function EventForm({ event, locationId }) {
     const db = createBrowserClient()
     const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '')
 
+    // mig 076 — reminder config moved to event_type_reminders.
+    // event_types.reminder_* columns are still on disk but
+    // deprecated; the runner doesn't read them. We stop
+    // populating them here too. (A re-saved row gets its old
+    // values blanked via update — fine, since they're stale.)
     const payload = {
       name,
       slug,
@@ -139,19 +195,6 @@ export default function EventForm({ event, locationId }) {
       custom_fields: customFields.filter(f => f.label.trim()),
       webhook_url: webhookUrl || null,
       active: true,
-      // Reminder fields. When disabled we still write the channel /
-      // template ids so the operator's last config is preserved if
-      // they re-enable later.
-      reminder_enabled: reminderEnabled,
-      reminder_minutes_before: reminderEnabled ? Number(reminderMinutesBefore) || null : null,
-      reminder_channel: reminderEnabled ? reminderChannel : null,
-      reminder_email_template_id: reminderEnabled && reminderChannel === 'email' ? (reminderEmailTemplateId || null) : null,
-      reminder_email_subject: reminderEnabled && reminderChannel === 'email' ? (reminderEmailSubject || null) : null,
-      // mig 074: WhatsApp removed as a reminder channel. We still
-      // null this on save so legacy rows that had a template id
-      // get cleared out as operators re-save their event types.
-      reminder_whatsapp_template_id: null,
-      reminder_sms_body: reminderEnabled && reminderChannel === 'sms' ? (reminderSmsBody || null) : null,
       ...(locationId && !isEditing ? { location_id: locationId } : {}),
     }
 
@@ -166,6 +209,42 @@ export default function EventForm({ event, locationId }) {
       setError(result.error.message)
       setSaving(false)
       return
+    }
+
+    // Sync reminders via PUT /api/events/[id]/reminders. The
+    // endpoint takes the full set; server diffs against existing
+    // rows. New rows on the form (no id, just _localId) get
+    // server-issued ids back.
+    const eventId = result.data?.id || event?.id
+    if (eventId) {
+      try {
+        const reminderPayload = reminders
+          .filter(r => Array.isArray(r.channels) && r.channels.length > 0)
+          .map(r => ({
+            id: r.id,           // omitted for new rows; server treats as insert
+            hours_before: Number(r.hours_before) || 0,
+            channels: r.channels,
+            email_template_id: r.channels.includes('email') ? (r.email_template_id || null) : null,
+            email_subject: r.channels.includes('email') ? (r.email_subject || null) : null,
+            sms_body: r.channels.includes('sms') ? (r.sms_body || null) : null,
+            active: r.active !== false,
+          }))
+        const resp = await fetch(`/api/events/${eventId}/reminders`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ reminders: reminderPayload }),
+        })
+        const json = await resp.json()
+        if (!json.success) {
+          setError(`Saved event but reminder sync failed: ${json.error || 'unknown'}`)
+          setSaving(false)
+          return
+        }
+      } catch (e) {
+        setError(`Saved event but reminder sync failed: ${e.message}`)
+        setSaving(false)
+        return
+      }
     }
 
     router.push('/events')
@@ -390,144 +469,186 @@ export default function EventForm({ event, locationId }) {
         )}
       </div>
 
-      {/* Reminder */}
+      {/* Reminders — multi-reminder (mig 076) */}
       <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5 space-y-4">
         <div className="flex items-center justify-between gap-3">
           <h3 className="font-semibold text-sm text-un1t-light uppercase tracking-wider flex items-center gap-2">
-            <Bell size={14} /> Reminder
+            <Bell size={14} /> Reminders
           </h3>
-          <label className="text-sm flex items-center gap-2 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={reminderEnabled}
-              onChange={e => setReminderEnabled(e.target.checked)}
-              className="cursor-pointer"
-            />
-            <span>Enabled</span>
-          </label>
+          <button
+            type="button"
+            onClick={addReminder}
+            className="text-xs px-2.5 py-1.5 rounded-md border border-un1t-gray text-un1t-light hover:text-un1t-white hover:border-un1t-white/30 flex items-center gap-1"
+          >
+            <Plus size={12} /> Add reminder
+          </button>
         </div>
         <p className="text-xs text-un1t-light">
-          Send a one-shot reminder to each booking before it starts. The cron checks every 5 minutes;
-          actual send time is within ±1 hour of the configured offset. Reminders are treated as
-          <span className="text-un1t-white"> transactional / utility</span> messages —
-          marketing opt-outs are ignored, but contacts who've opted out of
-          <em> administrative</em> messages won't receive them.
+          Set as many reminders as you want — e.g. 24h email + 2h SMS + day-of both.
+          Each reminder picks its own channels (email, SMS, or both). Reminders are
+          treated as <span className="text-un1t-white">transactional / utility</span>
+          messages — marketing opt-outs are ignored, but contacts who've opted out of
+          <em> administrative</em> messages won&apos;t receive them. The cron checks every 5
+          minutes; actual send time is within ±1 hour of the configured offset.
         </p>
 
-        {reminderEnabled && (
-          <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm mb-1.5">Send this many minutes before</label>
-                <div className="flex items-center gap-2">
-                  <input
-                    type="number"
-                    min={1}
-                    value={reminderMinutesBefore}
-                    onChange={e => setReminderMinutesBefore(parseInt(e.target.value) || 0)}
-                    className="w-32 bg-un1t-black border border-un1t-gray rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
-                  />
-                  <span className="text-xs text-un1t-light">
-                    minutes ({Math.round(reminderMinutesBefore / 60 * 10) / 10}h)
-                  </span>
-                </div>
-                <p className="text-[11px] text-un1t-mid mt-1">Common: 1440 = 24h, 120 = 2h, 60 = 1h</p>
-              </div>
-              <div>
-                <label className="block text-sm mb-1.5">Channel</label>
-                <div className="flex gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setReminderChannel('email')}
-                    className={`flex-1 px-3 py-2 rounded-lg text-sm flex items-center justify-center gap-2 transition-colors ${
-                      reminderChannel === 'email'
-                        ? 'bg-un1t-white text-un1t-black border border-un1t-white'
-                        : 'border border-un1t-gray text-un1t-light hover:text-un1t-white hover:border-un1t-mid'
-                    }`}
-                  >
-                    <Mail size={14} /> Email
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setReminderChannel('sms')}
-                    className={`flex-1 px-3 py-2 rounded-lg text-sm flex items-center justify-center gap-2 transition-colors ${
-                      reminderChannel === 'sms'
-                        ? 'bg-un1t-white text-un1t-black border border-un1t-white'
-                        : 'border border-un1t-gray text-un1t-light hover:text-un1t-white hover:border-un1t-mid'
-                    }`}
-                  >
-                    <MessageSquare size={14} /> SMS
-                  </button>
-                </div>
-              </div>
-            </div>
+        {!remindersLoaded && (
+          <p className="text-xs text-un1t-mid italic">Loading reminders…</p>
+        )}
 
-            {reminderChannel === 'email' && (
-              <div className="space-y-3">
-                <div>
-                  <label className="block text-sm mb-1.5">Email template</label>
-                  <select
-                    value={reminderEmailTemplateId}
-                    onChange={e => setReminderEmailTemplateId(e.target.value)}
-                    className="w-full bg-un1t-black border border-un1t-gray rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
-                  >
-                    <option value="">— Select a template —</option>
-                    {(emailTemplates || []).map(t => (
-                      <option key={t.id} value={t.id}>{t.name}</option>
-                    ))}
-                  </select>
-                  {emailTemplates && emailTemplates.length === 0 && (
-                    <p className="text-[11px] text-amber-400 mt-1">
-                      No email templates yet — create one in Communications → Templates first.
-                    </p>
-                  )}
-                </div>
-                <div>
-                  <label className="block text-sm mb-1.5">Subject (optional override)</label>
-                  <input
-                    type="text"
-                    value={reminderEmailSubject}
-                    onChange={e => setReminderEmailSubject(e.target.value)}
-                    placeholder="Defaults to the template subject, or 'Reminder: <event name>'"
-                    className="w-full bg-un1t-black border border-un1t-gray rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
-                  />
-                  <p className="text-[11px] text-un1t-mid mt-1">
-                    Available merge tags: {'{{first_name}}'}, {'{{event_name}}'}, {'{{event_time}}'}
-                  </p>
-                </div>
-              </div>
-            )}
-
-            {reminderChannel === 'sms' && (
-              <div>
-                <div className="flex items-center justify-between mb-1.5">
-                  <label className="block text-sm">SMS body</label>
-                  <span className={`text-[11px] ${reminderSmsBody.length > 160 ? 'text-amber-500' : 'text-un1t-light'}`}>
-                    {reminderSmsBody.length} chars
-                    {reminderSmsBody.length > 0 && (
-                      <> · {reminderSmsBody.length <= 160 ? 1 : Math.ceil(reminderSmsBody.length / 153)} segment{reminderSmsBody.length <= 160 ? '' : 's'}</>
-                    )}
-                  </span>
-                </div>
-                <textarea
-                  value={reminderSmsBody}
-                  onChange={e => setReminderSmsBody(e.target.value)}
-                  rows={4}
-                  maxLength={1600}
-                  placeholder="Hi {{first_name}}, just a reminder for {{event_name}} at {{event_time}}. See you at {{location_name}}."
-                  className="w-full bg-un1t-black border border-un1t-gray rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none resize-y"
-                />
-                <p className="text-[11px] text-un1t-mid mt-2">
-                  Merge tags: <code>{'{{first_name}}'}</code>, <code>{'{{name}}'}</code>,
-                  {' '}<code>{'{{event_name}}'}</code>, <code>{'{{event_time}}'}</code>,
-                  {' '}<code>{'{{location_name}}'}</code>.
-                  Sender ID is set per-location in <span className="text-un1t-light">Settings → Locations → SMS</span>.
-                  Single-segment SMS fits 160 chars; longer messages cost more (153 chars per concatenated segment).
-                </p>
-              </div>
-            )}
+        {remindersLoaded && reminders.length === 0 && (
+          <div className="border border-dashed border-un1t-gray rounded-md p-4 text-center text-xs text-un1t-mid">
+            No reminders configured. Click <strong>Add reminder</strong> to send one (or many) before each booking.
           </div>
         )}
+
+        {remindersLoaded && reminders.map((r, idx) => {
+          const hasEmail = r.channels?.includes('email')
+          const hasSms = r.channels?.includes('sms')
+          const smsLen = (r.sms_body || '').length
+          return (
+            <div
+              key={r.id || r._localId || idx}
+              className="border border-un1t-gray/70 rounded-lg p-4 space-y-3 bg-un1t-black/30"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex items-center gap-2 text-sm">
+                  <span className="text-un1t-light text-xs uppercase tracking-wider">Reminder {idx + 1}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => removeReminder(idx)}
+                  className="p-1.5 rounded hover:bg-red-500/20 text-un1t-light hover:text-red-700"
+                  title="Remove this reminder"
+                >
+                  <Trash2 size={14} />
+                </button>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm mb-1.5">Send this many hours before</label>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="number"
+                      min={0}
+                      step={0.5}
+                      value={r.hours_before ?? 24}
+                      onChange={e => updateReminder(idx, { hours_before: parseFloat(e.target.value) || 0 })}
+                      className="w-28 bg-un1t-black border border-un1t-gray rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+                    />
+                    <span className="text-xs text-un1t-light">hours</span>
+                  </div>
+                  <p className="text-[11px] text-un1t-mid mt-1">Common: 24 = day before · 2 = couple of hours before · 0.5 = 30 min before</p>
+                </div>
+                <div>
+                  <label className="block text-sm mb-1.5">Channels</label>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => toggleReminderChannel(idx, 'email')}
+                      className={`flex-1 px-3 py-2 rounded-lg text-sm flex items-center justify-center gap-2 transition-colors ${
+                        hasEmail
+                          ? 'bg-un1t-white text-un1t-black border border-un1t-white'
+                          : 'border border-un1t-gray text-un1t-light hover:text-un1t-white hover:border-un1t-mid'
+                      }`}
+                    >
+                      <Mail size={14} /> Email
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => toggleReminderChannel(idx, 'sms')}
+                      className={`flex-1 px-3 py-2 rounded-lg text-sm flex items-center justify-center gap-2 transition-colors ${
+                        hasSms
+                          ? 'bg-un1t-white text-un1t-black border border-un1t-white'
+                          : 'border border-un1t-gray text-un1t-light hover:text-un1t-white hover:border-un1t-mid'
+                      }`}
+                    >
+                      <MessageSquare size={14} /> SMS
+                    </button>
+                  </div>
+                  <p className="text-[11px] text-un1t-mid mt-1">Pick one or both. Both = a separate email and SMS go out at the same offset.</p>
+                </div>
+              </div>
+
+              {hasEmail && (
+                <div className="space-y-3 border-t border-un1t-gray/50 pt-3">
+                  <div className="text-[11px] text-un1t-light uppercase tracking-wider flex items-center gap-1.5">
+                    <Mail size={11} /> Email
+                  </div>
+                  <div>
+                    <label className="block text-sm mb-1.5">Email template</label>
+                    <select
+                      value={r.email_template_id || ''}
+                      onChange={e => updateReminder(idx, { email_template_id: e.target.value })}
+                      className="w-full bg-un1t-black border border-un1t-gray rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+                    >
+                      <option value="">— Select a template —</option>
+                      {(emailTemplates || []).map(t => (
+                        <option key={t.id} value={t.id}>{t.name}</option>
+                      ))}
+                    </select>
+                    {emailTemplates && emailTemplates.length === 0 && (
+                      <p className="text-[11px] text-amber-700 mt-1">
+                        No email templates yet — create one in Communications → Templates first.
+                      </p>
+                    )}
+                  </div>
+                  <div>
+                    <label className="block text-sm mb-1.5">Subject (optional override)</label>
+                    <input
+                      type="text"
+                      value={r.email_subject || ''}
+                      onChange={e => updateReminder(idx, { email_subject: e.target.value })}
+                      placeholder="Defaults to the template subject, or 'Reminder: <event name>'"
+                      className="w-full bg-un1t-black border border-un1t-gray rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+                    />
+                    <p className="text-[11px] text-un1t-mid mt-1">
+                      Merge tags: {'{{first_name}}'}, {'{{event_name}}'}, {'{{event_time}}'}
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {hasSms && (
+                <div className="space-y-2 border-t border-un1t-gray/50 pt-3">
+                  <div className="text-[11px] text-un1t-light uppercase tracking-wider flex items-center gap-1.5">
+                    <MessageSquare size={11} /> SMS
+                  </div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="block text-sm">SMS body</label>
+                    <span className={`text-[11px] ${smsLen > 160 ? 'text-amber-700' : 'text-un1t-light'}`}>
+                      {smsLen} chars
+                      {smsLen > 0 && (
+                        <> · {smsLen <= 160 ? 1 : Math.ceil(smsLen / 153)} segment{smsLen <= 160 ? '' : 's'}</>
+                      )}
+                    </span>
+                  </div>
+                  <textarea
+                    value={r.sms_body || ''}
+                    onChange={e => updateReminder(idx, { sms_body: e.target.value })}
+                    rows={3}
+                    maxLength={1600}
+                    placeholder="Hi {{first_name}}, just a reminder for {{event_name}} at {{event_time}}. See you at {{location_name}}."
+                    className="w-full bg-un1t-black border border-un1t-gray rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none resize-y"
+                  />
+                  <p className="text-[11px] text-un1t-mid">
+                    Merge tags: <code>{'{{first_name}}'}</code>, <code>{'{{name}}'}</code>,
+                    {' '}<code>{'{{event_name}}'}</code>, <code>{'{{event_time}}'}</code>,
+                    {' '}<code>{'{{location_name}}'}</code>.
+                    Sender ID is set per-location in <span className="text-un1t-light">Settings → Locations → SMS</span>.
+                  </p>
+                </div>
+              )}
+
+              {!hasEmail && !hasSms && (
+                <p className="text-[11px] text-amber-700">
+                  Pick at least one channel above. A reminder with no channels is ignored on save.
+                </p>
+              )}
+            </div>
+          )
+        })}
       </div>
 
       {/* Webhook (n8n) */}

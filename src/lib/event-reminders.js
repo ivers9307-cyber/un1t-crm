@@ -1,22 +1,25 @@
-// Per-event reminder runner. Sends a single reminder N minutes before
-// each booking's start time, delivered as either an email or an SMS
-// — whichever the event_type was configured with.
+// Per-event reminder runner. Mig 076 — multi-reminder.
 //
-// WhatsApp was supported as a third channel earlier on but was retired
-// in mig 074: WhatsApp templates are reserved for explicit campaigns,
-// not transactional reminders. The DB now CHECKs reminder_channel ∈
-// {'email', 'sms'} so the case is unreachable; the runner short-
-// circuits anything else to a clean skip.
+// Each event_type can have N reminders configured (24h email,
+// 2h SMS, day-of email + SMS, etc). Each reminder lives in
+// event_type_reminders with its own channels[], offset and
+// template/body. Per-(booking, reminder) sends are tracked in
+// booking_reminder_sends so the runner doesn't re-fire the
+// same reminder if a tick takes longer than 5 minutes.
 //
-// Cron-driven: invoked from /api/cron/run-sequences alongside the
-// sequence runner. Dedup is via bookings.reminder_sent_at — the partial
-// index idx_bookings_reminder_pending (mig 044) keeps the working set
-// small.
+// Channels: 'email' and 'sms' only. WhatsApp was retired in
+// mig 074; the DB CHECK on event_type_reminders.channels
+// rejects anything outside {email, sms}.
 //
-// This is the simple single-shot path. The sequence-based event_reminder
-// trigger remains available for multi-step reminder flows (24h + 2h +
-// day-of), but most events just need one message and shouldn't require
-// an operator to author a sequence to get it.
+// Cron-driven: invoked from /api/cron/run-sequences alongside
+// the sequence runner. Two queries per reminder per tick (the
+// in-window bookings list, and the already-sent set against
+// THIS reminder). Volume stays low — typical operator has
+// <10 reminders × <100 in-window bookings per tick.
+//
+// Legacy bookings.reminder_sent_at is still stamped on the
+// FIRST send for any booking, so old surfaces that read it
+// (e.g. BookingSkipReminderToggle's hide rule) keep working.
 
 import { createServerClient } from '@/lib/supabase'
 import { sendTransactionalEmail, applyMergeTags } from '@/lib/postmark'
@@ -57,35 +60,37 @@ export async function runEventReminderSends() {
   const db = createServerClient()
   const stats = { sent: 0, skipped: 0, failed: 0 }
 
-  // Pull every event_type with reminders enabled. Small table —
-  // typically a handful of rows per location, no need to filter
-  // further at this stage.
-  const { data: events } = await db
-    .from('event_types')
+  // Pull every active reminder + the parent event_type's
+  // location + name. Small table.
+  const { data: reminders } = await db
+    .from('event_type_reminders')
     .select(`
-      id, name, location_id,
-      reminder_minutes_before, reminder_channel,
-      reminder_email_template_id, reminder_email_subject,
-      reminder_sms_body
+      id, minutes_before, channels,
+      email_template_id, email_subject, sms_body,
+      event_types!inner ( id, name, location_id )
     `)
-    .eq('reminder_enabled', true)
-  if (!events?.length) return stats
+    .eq('active', true)
+  if (!reminders?.length) return stats
 
   const now = Date.now()
 
-  for (const ev of events) {
-    if (!Number.isFinite(ev.reminder_minutes_before) || ev.reminder_minutes_before < 0) continue
-    if (!ev.reminder_channel) continue
+  for (const reminder of reminders) {
+    if (!Number.isFinite(reminder.minutes_before) || reminder.minutes_before < 0) continue
+    const channels = Array.isArray(reminder.channels) ? reminder.channels : []
+    if (channels.length === 0) continue
 
-    const targetMs = now + ev.reminder_minutes_before * 60_000
+    const et = reminder.event_types
+    if (!et) continue   // shouldn't happen — !inner join — but defensive
+
+    const targetMs = now + reminder.minutes_before * 60_000
     const lo = new Date(targetMs - TOLERANCE_MS)
     const hi = new Date(targetMs + TOLERANCE_MS)
 
-    // Bookings needing a reminder for this event type. The partial
-    // index idx_bookings_reminder_pending makes this cheap. We pull
-    // the contact + their preferences for the consent / status checks
-    // below; falls back to customer_* on the booking row when there's
-    // no contact (booking captured before a contact row was created).
+    // Eligible bookings — confirmed, in the time window. We don't
+    // pre-filter on already-sent here because PostgREST doesn't
+    // model "missing row in a sibling table" cleanly; instead
+    // we pull the in-window set then look up sends for THIS
+    // reminder in a second query.
     const { data: bookings } = await db
       .from('bookings')
       .select(`
@@ -97,62 +102,126 @@ export async function runEventReminderSends() {
           contact_preferences ( email_administrative, whatsapp_administrative, sms_administrative )
         )
       `)
-      .eq('event_type_id', ev.id)
+      .eq('event_type_id', et.id)
       .eq('status', 'confirmed')
-      .is('reminder_sent_at', null)
       .gte('booking_date', lo.toISOString().slice(0, 10))
       .lte('booking_date', hi.toISOString().slice(0, 10))
 
-    for (const booking of (bookings || [])) {
+    if (!bookings?.length) continue
+
+    // Already-sent set for this specific reminder. UNIQUE
+    // (booking_id, reminder_id) on booking_reminder_sends means
+    // we can rely on this lookup for dedup.
+    const bookingIds = bookings.map(b => b.id)
+    const { data: alreadySent } = await db
+      .from('booking_reminder_sends')
+      .select('booking_id')
+      .eq('reminder_id', reminder.id)
+      .in('booking_id', bookingIds)
+    const sentBookingIds = new Set((alreadySent || []).map(s => s.booking_id))
+
+    // Build the per-reminder context once. Channel functions
+    // accept this rather than the legacy event_type shape so
+    // they're decoupled from the table layout.
+    const ctx = {
+      reminderId: reminder.id,
+      eventName: et.name,
+      locationId: et.location_id,
+      emailTemplateId: reminder.email_template_id,
+      emailSubject: reminder.email_subject,
+      smsBody: reminder.sms_body,
+    }
+
+    for (const booking of bookings) {
       const bookingMs = new Date(`${booking.booking_date}T${booking.start_time}Z`).getTime()
       if (bookingMs < lo.getTime() || bookingMs > hi.getTime()) continue
+      if (sentBookingIds.has(booking.id)) continue
 
-      // mig 075: per-booking override. Operator flipped a flag on
-      // this specific booking saying "don't remind this person".
-      // Short-circuit before consent / channel checks. We still
-      // stamp reminder_sent_at so the booking drops out of the
-      // partial index — otherwise we'd revisit it every tick for
-      // the rest of its life.
+      // mig 075: per-booking override. Operator flipped a flag
+      // on this specific booking. Short-circuit before any
+      // channel logic.
       if (booking.skip_reminder) {
-        await db
-          .from('bookings')
-          .update({ reminder_sent_at: new Date().toISOString() })
-          .eq('id', booking.id)
+        await db.from('booking_reminder_sends').insert({
+          booking_id: booking.id,
+          reminder_id: reminder.id,
+          status: 'skipped',
+          reason: 'operator_skip_reminder',
+        })
+        await stampLegacyReminderSentAt(db, booking.id)
         stats.skipped++
         continue
       }
 
-      let outcome
-      try {
-        if (ev.reminder_channel === 'email') {
-          outcome = await sendEmailReminder(db, booking, ev)
-        } else if (ev.reminder_channel === 'sms') {
-          outcome = await sendSmsReminder(db, booking, ev)
-        } else {
-          // mig 074 retired WhatsApp; the DB CHECK now excludes it.
-          // Any other value (incl. legacy 'whatsapp' that somehow
-          // survives) lands here as a clean skip — no error, no
-          // re-attempt, no half-sent message.
-          outcome = { status: 'skipped', reason: `unsupported_channel:${ev.reminder_channel || 'none'}` }
+      // Run each channel independently. A channel that opts out
+      // (admin opt-out, no phone number, etc.) doesn't block
+      // the other one — partial sends are normal here.
+      const channelOutcomes = []
+      let anyHardError = null
+      for (const channel of channels) {
+        try {
+          if (channel === 'email') {
+            channelOutcomes.push({ channel, ...await sendEmailReminder(db, booking, ctx) })
+          } else if (channel === 'sms') {
+            channelOutcomes.push({ channel, ...await sendSmsReminder(db, booking, ctx) })
+          } else {
+            channelOutcomes.push({ channel, status: 'skipped', reason: `unsupported_channel:${channel}` })
+          }
+        } catch (e) {
+          // Hard error on this channel — record but don't poison
+          // the other one. Email-down doesn't have to take SMS
+          // down too.
+          console.warn(`[event-reminders] ${channel} failed for booking ${booking.id} reminder ${reminder.id}: ${e.message}`)
+          channelOutcomes.push({ channel, status: 'failed', reason: e.message })
+          anyHardError = e.message
         }
-      } catch (e) {
-        console.warn(`[event-reminders] failed for booking ${booking.id}: ${e.message}`)
+      }
+
+      const channelsSent = channelOutcomes.filter(o => o.status === 'sent').map(o => o.channel)
+      const allSentOrSkipped = channelOutcomes.every(o => o.status !== 'failed')
+      const anySent = channelsSent.length > 0
+
+      // Outcome aggregation:
+      //   any channel sent → 'sent' (partial sends count as sent)
+      //   no channel sent + every channel skipped (consent / no
+      //     contact info) → 'skipped'
+      //   any channel had a hard error → 'failed'; we DON'T write
+      //     the dedup row, so the runner retries on the next tick
+      let aggregatedStatus, aggregatedReason
+      if (anySent) {
+        aggregatedStatus = 'sent'
+      } else if (allSentOrSkipped) {
+        aggregatedStatus = 'skipped'
+        aggregatedReason = channelOutcomes.map(o => `${o.channel}:${o.reason || 'unknown'}`).join('; ')
+      } else {
+        aggregatedStatus = 'failed'
+        aggregatedReason = anyHardError
+      }
+
+      if (aggregatedStatus === 'failed') {
+        // Don't insert a send row → next tick will retry. This
+        // matches the legacy runner's "don't stamp reminder_sent_at
+        // on failure" semantic.
         stats.failed++
-        // Don't stamp — leave it for the next tick to retry. Hard
-        // errors (provider down, template missing) usually recover.
         continue
       }
 
-      // Always stamp on a final outcome (sent OR deliberately skipped).
-      // Skips are intentional — opted out, hard-bounced, etc — and
-      // should not be retried every 5 min for the rest of the
-      // booking's life. The stamp removes them from the partial index.
-      await db
-        .from('bookings')
-        .update({ reminder_sent_at: new Date().toISOString() })
-        .eq('id', booking.id)
+      await db.from('booking_reminder_sends').insert({
+        booking_id: booking.id,
+        reminder_id: reminder.id,
+        status: aggregatedStatus,
+        channels_sent: channelsSent,
+        reason: aggregatedReason || null,
+      })
 
-      if (outcome.status === 'sent') stats.sent++
+      // Legacy stamp on first send so old readers (the partial
+      // index, the BookingSkipReminderToggle hide rule) see a
+      // truthy "any reminder fired" signal. Idempotent — re-
+      // stamping just overwrites the timestamp.
+      if (aggregatedStatus === 'sent') {
+        await stampLegacyReminderSentAt(db, booking.id)
+      }
+
+      if (aggregatedStatus === 'sent') stats.sent++
       else stats.skipped++
     }
   }
@@ -160,9 +229,15 @@ export async function runEventReminderSends() {
   return stats
 }
 
-async function sendEmailReminder(db, booking, ev) {
-  if (!ev.reminder_email_template_id) {
-    throw new Error('Event has reminder_channel=email but no reminder_email_template_id set')
+async function stampLegacyReminderSentAt(db, bookingId) {
+  await db.from('bookings')
+    .update({ reminder_sent_at: new Date().toISOString() })
+    .eq('id', bookingId)
+}
+
+async function sendEmailReminder(db, booking, ctx) {
+  if (!ctx.emailTemplateId) {
+    throw new Error('Reminder channel=email but no email_template_id set on the reminder')
   }
 
   // Consent + hard-signal checks. Reminders are administrative
@@ -177,8 +252,6 @@ async function sendEmailReminder(db, booking, ev) {
     return { status: 'skipped', reason: `email_status=${c.email_status}` }
   }
   const prefs = c?.contact_preferences
-  // contact_preferences is one-to-one but Supabase returns it as an
-  // array via the embed. Tolerate both shapes.
   const adminConsent = Array.isArray(prefs)
     ? prefs[0]?.email_administrative
     : prefs?.email_administrative
@@ -189,15 +262,13 @@ async function sendEmailReminder(db, booking, ev) {
   const { data: tpl } = await db
     .from('email_templates')
     .select('subject, html_content')
-    .eq('id', ev.reminder_email_template_id)
+    .eq('id', ctx.emailTemplateId)
     .single()
   if (!tpl) throw new Error('Email template not found')
 
   const to = booking.contacts?.email || booking.customer_email
   if (!to) return { status: 'skipped', reason: 'no_email_address' }
 
-  // Contact-shaped object so applyMergeTags works whether there's a
-  // joined contact row or only the booking's customer_* fields.
   const mergeContact = booking.contacts || {
     name: booking.customer_name,
     first_name: booking.customer_name?.split(' ')[0],
@@ -206,14 +277,12 @@ async function sendEmailReminder(db, booking, ev) {
   }
 
   const extras = {
-    event_name: ev.name,
+    event_name: ctx.eventName,
     event_time: fmtBookingTime(booking.booking_date, booking.start_time),
   }
 
-  // Subject precedence: template subject > event-level fallback >
-  // a sensible default. Apply merge tags to whichever wins.
   const rawSubject =
-    (tpl.subject?.trim() || ev.reminder_email_subject?.trim() || `Reminder: ${ev.name}`)
+    (tpl.subject?.trim() || ctx.emailSubject?.trim() || `Reminder: ${ctx.eventName}`)
   const subject = applyMergeTagsWithExtras(rawSubject, mergeContact, extras)
   const htmlBody = applyMergeTagsWithExtras(tpl.html_content || '', mergeContact, extras)
 
@@ -222,29 +291,28 @@ async function sendEmailReminder(db, booking, ev) {
     subject,
     htmlBody,
     contactId: booking.contact_id || null,
-    locationId: ev.location_id,
+    locationId: ctx.locationId,
     tag: 'event-reminder',
   })
   return { status: 'sent' }
 }
 
 /**
- * SMS event-reminder send (mig 063). One of two surviving channels
- * after mig 074 retired WhatsApp. Same shape as the email path:
- *   1. Reject if reminder_sms_body is missing on the event_type.
- *   2. Skip if contact has sms_status = opted_out / invalid (not an
- *      error — leave reminder_sent_at unset and let the runner stamp
- *      it on the next tick to remove from the partial index).
+ * SMS event-reminder send. One of two channels (mig 074 retired
+ * WhatsApp). Mig 076: reminder config now comes from a per-row
+ * ctx object, not the legacy event_types columns.
+ *
+ *   1. Reject if smsBody is missing on the reminder.
+ *   2. Skip if contact has sms_status != active.
  *   3. Skip if contact_preferences.sms_administrative === false.
- *   4. Apply merge tags (incl. event_name + event_time extras),
- *      send via sendLocationSms using the event_type's location's
- *      alpha sender ID.
+ *   4. Apply merge tags, send via sendLocationSms using the
+ *      event_type's location's alpha sender ID.
  *   5. Write an activities row of type='sms_sent' so the contact
- *      timeline records it (same shape as broadcasts + ad-hoc).
+ *      timeline records it.
  */
-async function sendSmsReminder(db, booking, ev) {
-  if (!ev.reminder_sms_body) {
-    throw new Error('Event has reminder_channel=sms but no reminder_sms_body set')
+async function sendSmsReminder(db, booking, ctx) {
+  if (!ctx.smsBody) {
+    throw new Error('Reminder channel=sms but no sms_body set on the reminder')
   }
 
   const c = booking.contacts
@@ -264,19 +332,16 @@ async function sendSmsReminder(db, booking, ev) {
 
   // Resolve the event_type's location for the alpha sender ID
   // (mig 059). One round-trip per booking is fine — these crons are
-  // low-volume by design (10s of bookings per tick at most).
+  // low-volume by design.
   const { data: location } = await db
     .from('locations')
     .select('id, name, twilio_alpha_sender_id')
-    .eq('id', ev.location_id)
+    .eq('id', ctx.locationId)
     .single()
   if (!location) {
     throw new Error('Event location not found — cannot resolve SMS sender.')
   }
 
-  // Contact-shaped object so applyMergeTagsWithExtras works whether
-  // there's a joined contact row or only the booking's customer_*
-  // fields. Mirrors the email reminder path.
   const mergeContact = booking.contacts || {
     name: booking.customer_name,
     first_name: booking.customer_name?.split(' ')[0],
@@ -285,12 +350,12 @@ async function sendSmsReminder(db, booking, ev) {
   }
 
   const extras = {
-    event_name: ev.name,
+    event_name: ctx.eventName,
     event_time: fmtBookingTime(booking.booking_date, booking.start_time),
     location_name: location.name || '',
   }
 
-  const renderedBody = applyMergeTagsWithExtras(ev.reminder_sms_body, mergeContact, extras)
+  const renderedBody = applyMergeTagsWithExtras(ctx.smsBody, mergeContact, extras)
 
   let twilioResult
   try {
@@ -311,9 +376,10 @@ async function sendSmsReminder(db, booking, ev) {
   if (booking.contact_id) {
     await db.from('activities').insert({
       contact_id: booking.contact_id,
-      location_id: ev.location_id,
+      location_id: ctx.locationId,
       type: 'sms_sent',
-      subject: `SMS reminder: ${ev.name}`,
+      kind: 'event',
+      subject: `SMS reminder: ${ctx.eventName}`,
       note: renderedBody,
     })
   }
