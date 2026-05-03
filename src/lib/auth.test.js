@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest'
-import { buildRolesByLocation, resolveActiveLocationRole } from './auth.js'
+import {
+  buildRolesByLocation,
+  resolveActiveLocationRole,
+  assertLocationAccess,
+  getUserLocationIds,
+} from './auth.js'
 
 // Per-location roles landed in mig 051. The IO-heavy getCurrentUser()
 // pipeline is hard to unit test (Supabase calls, Next cookies/headers)
@@ -150,5 +155,136 @@ describe('resolveActiveLocationRole', () => {
       rolesByLocation: { hatch: 'master' },  // hypothetically
       activeLocationId: 'hatch',
     })).toBe('master')
+  })
+})
+
+// ─── assertLocationAccess + getUserLocationIds ──────────────────────────
+// These two together form the IDOR prevention layer for any session-auth
+// route that accepts a location_id from user input. The helper itself is
+// pure (just constructs NextResponse objects); the tests pin every branch
+// so a regression here surfaces in CI before it ships to production.
+//
+// Master visibility is handled upstream — getCurrentUser populates
+// user.locations with every active location for masters (mig 033), so
+// the helper's `(user.locations).some(...)` check correctly returns true
+// for any location a master attempts to access. No master-specific code
+// path is needed in the helper itself.
+
+describe('assertLocationAccess', () => {
+  // user.locations is the canonical place this helper reads from.
+  const userWithLocations = {
+    id: 'profile-1',
+    locations: [
+      { id: 'loc-hatch', name: 'Hatch Street' },
+      { id: 'loc-stillorgan', name: 'Stillorgan' },
+    ],
+  }
+
+  it('returns 401 when the user is null', async () => {
+    const r = assertLocationAccess(null, 'loc-hatch')
+    expect(r).not.toBeNull()
+    expect(r.status).toBe(401)
+    const body = await r.json()
+    expect(body).toEqual({ success: false, error: 'Unauthorized' })
+  })
+
+  it('returns 401 when the user is undefined', async () => {
+    const r = assertLocationAccess(undefined, 'loc-hatch')
+    expect(r.status).toBe(401)
+  })
+
+  it('returns null (request continues) when locationId is null', () => {
+    // Some routes accept "no location filter" meaning "across all my
+    // locations" — that's NOT an IDOR risk because the route is then
+    // expected to scope to user.locations[*].id itself.
+    expect(assertLocationAccess(userWithLocations, null)).toBeNull()
+    expect(assertLocationAccess(userWithLocations, undefined)).toBeNull()
+    expect(assertLocationAccess(userWithLocations, '')).toBeNull()
+  })
+
+  it('returns null when the locationId is one the user belongs to', () => {
+    expect(assertLocationAccess(userWithLocations, 'loc-hatch')).toBeNull()
+    expect(assertLocationAccess(userWithLocations, 'loc-stillorgan')).toBeNull()
+  })
+
+  it('returns 403 when the locationId is not in the user’s assignments (IDOR attempt)', async () => {
+    const r = assertLocationAccess(userWithLocations, 'loc-some-other-tenant')
+    expect(r).not.toBeNull()
+    expect(r.status).toBe(403)
+    const body = await r.json()
+    expect(body.success).toBe(false)
+    expect(body.error).toMatch(/Forbidden/)
+    expect(body.error).toMatch(/not in your assignments/)
+  })
+
+  it('returns 403 when user has no locations at all', async () => {
+    // A user whose only assignment was deleted / deactivated. Every
+    // location access should be denied except the no-locationId pass-
+    // through case.
+    const noLoc = { id: 'p2', locations: [] }
+    const r = assertLocationAccess(noLoc, 'loc-anything')
+    expect(r.status).toBe(403)
+  })
+
+  it('handles missing user.locations field defensively (treats as empty)', async () => {
+    const noField = { id: 'p3' }
+    const r = assertLocationAccess(noField, 'loc-anything')
+    expect(r.status).toBe(403)
+  })
+
+  it('master users with all-locations populated pass naturally', () => {
+    // Master gets every active location loaded into user.locations by
+    // getCurrentUser (mig 033). The helper does no master-specific
+    // checking — the array membership test handles it correctly.
+    const master = {
+      id: 'master-1',
+      role: 'master',
+      locations: [
+        { id: 'loc-hatch' },
+        { id: 'loc-stillorgan' },
+        { id: 'loc-ccf' },
+      ],
+    }
+    expect(assertLocationAccess(master, 'loc-ccf')).toBeNull()
+    expect(assertLocationAccess(master, 'loc-stillorgan')).toBeNull()
+  })
+
+  it('handles location entries without an id field (treats as non-match)', () => {
+    // getCurrentUser produces well-formed { id, name, ... } entries
+    // for every location, so a missing id is never observed in practice.
+    // But: a defensive check makes sure the helper doesn't accidentally
+    // PASS when an entry without an id happens to be in the array.
+    // (NULL entries are not handled — getCurrentUser never produces them
+    // — and would correctly throw to signal bad upstream data.)
+    const odd = { id: 'p4', locations: [{ id: 'loc-real' }, { name: 'no-id' }] }
+    expect(assertLocationAccess(odd, 'loc-real')).toBeNull()
+    // The id-less entry should NOT match anything.
+    const r = assertLocationAccess(odd, 'no-id')
+    expect(r.status).toBe(403)
+  })
+})
+
+describe('getUserLocationIds', () => {
+  it('returns [] for null/undefined user', () => {
+    expect(getUserLocationIds(null)).toEqual([])
+    expect(getUserLocationIds(undefined)).toEqual([])
+  })
+
+  it('returns [] when user has no locations field', () => {
+    expect(getUserLocationIds({ id: 'p1' })).toEqual([])
+  })
+
+  it('returns [] for empty locations array', () => {
+    expect(getUserLocationIds({ id: 'p1', locations: [] })).toEqual([])
+  })
+
+  it('returns the ids of every assigned location, in order', () => {
+    expect(getUserLocationIds({
+      id: 'p1',
+      locations: [
+        { id: 'loc-hatch', name: 'Hatch' },
+        { id: 'loc-stillorgan', name: 'Stillorgan' },
+      ],
+    })).toEqual(['loc-hatch', 'loc-stillorgan'])
   })
 })
