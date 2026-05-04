@@ -17,6 +17,10 @@ export default function CommunicationsTabs({ canEmail, canWhatsapp }) {
     canEmail    && { id: 'campaigns',  label: 'Campaigns',  href: '/communications/campaigns' },
     canWhatsapp && { id: 'broadcasts', label: 'Broadcasts', href: '/communications/broadcasts' },
     (canEmail || canWhatsapp) && { id: 'templates', label: 'Templates', href: '/communications/templates' },
+    // Segments tab (mig 085, moved from top-level /segments). Same
+    // permission gate as the broadcast tabs since segments only
+    // matter when you can actually send to them.
+    (canEmail || canWhatsapp) && { id: 'segments',  label: 'Segments',  href: '/communications/segments' },
   ].filter(Boolean)
 
   return (

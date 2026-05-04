@@ -7,7 +7,7 @@ import { ArrowLeft, Save, Send, Users, Code, Paintbrush } from 'lucide-react'
 import AudienceBuilder from './AudienceBuilder'
 import Link from 'next/link'
 
-export default function CampaignEditor({ campaign, locationId, userId }) {
+export default function CampaignEditor({ campaign, locationId, userId, initialAudienceFilter = null }) {
   const router = useRouter()
   const db = createBrowserClient()
   const editorRef = useRef(null)
@@ -20,7 +20,9 @@ export default function CampaignEditor({ campaign, locationId, userId }) {
   const [fromEmail, setFromEmail] = useState(campaign?.from_email || '')
   const [replyTo, setReplyTo] = useState(campaign?.reply_to || '')
   const [audienceFilter, setAudienceFilter] = useState(
-    campaign?.audience_filter || { filters: [], logic: 'and' }
+    // Precedence: existing draft > deep-link preset (e.g. ?segment=race_completed
+    // from /communications/segments) > empty.
+    campaign?.audience_filter || initialAudienceFilter || { filters: [], logic: 'and' }
   )
   const [htmlContent, setHtmlContent] = useState(campaign?.html_content || '')
   const [designJson, setDesignJson] = useState(campaign?.design_json || null)

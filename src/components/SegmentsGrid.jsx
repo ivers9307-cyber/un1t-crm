@@ -1,18 +1,18 @@
 'use client'
 
 // SegmentsGrid — card grid of every known tag with active count
-// + send-broadcast hook. Mig 085.
+// + per-channel deep-link broadcast hooks. Mig 085 / Phase 3.
 //
-// "Send broadcast" links to the existing communications hub with a
-// pre-baked tag filter — the operator picks the channel (email /
-// SMS / WhatsApp) inside the composer. The contact_tags filter is
-// hooked into AudienceBuilder via a future tag field; for v1 the
-// link drops the operator into /communications and they can scope
-// manually until the AudienceBuilder gains a tag selector.
+// Each card has two channel-specific quick-broadcast links: Email
+// (jumps to /email/campaigns/new?segment=<tag>) and SMS (jumps to
+// /communications/sms/broadcasts/new?segment=<tag>). Both composer
+// pages read the ?segment param and pre-populate the AudienceBuilder
+// with `{ field: 'tag', op: 'eq', value: <tag> }` so the operator
+// doesn't have to re-pick it.
 
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
-import { Loader2, AlertCircle, Tag, Send, Users } from 'lucide-react'
+import { Loader2, AlertCircle, Tag, Mail, MessageSquare, Users } from 'lucide-react'
 
 export default function SegmentsGrid() {
   const [data, setData] = useState(null)
@@ -63,13 +63,23 @@ export default function SegmentsGrid() {
             </span>
           </div>
           <p className="text-xs text-un1t-light flex-1">{s.description}</p>
-          <div className="mt-3 flex items-center justify-between gap-2">
-            <Link
-              href={`/communications?segment=${encodeURIComponent(s.tag)}`}
-              className="text-xs text-un1t-white hover:text-un1t-accent inline-flex items-center gap-1"
-            >
-              <Send size={11} /> Broadcast
-            </Link>
+          <div className="mt-3 pt-3 border-t border-un1t-gray flex items-center justify-between gap-2">
+            <div className="flex items-center gap-3">
+              <Link
+                href={`/email/campaigns/new?segment=${encodeURIComponent(s.tag)}`}
+                className="text-xs text-un1t-white hover:text-un1t-accent inline-flex items-center gap-1"
+                title={`Start an email campaign targeting ${s.tag}`}
+              >
+                <Mail size={11} /> Email
+              </Link>
+              <Link
+                href={`/communications/sms/broadcasts/new?segment=${encodeURIComponent(s.tag)}`}
+                className="text-xs text-un1t-white hover:text-un1t-accent inline-flex items-center gap-1"
+                title={`Start an SMS broadcast targeting ${s.tag}`}
+              >
+                <MessageSquare size={11} /> SMS
+              </Link>
+            </div>
             <Link
               href={`/contacts?tag=${encodeURIComponent(s.tag)}`}
               className="text-xs text-un1t-light hover:text-un1t-white"

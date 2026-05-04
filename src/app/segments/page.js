@@ -1,29 +1,14 @@
-// /segments — operator view of every tag-defined audience with
-// active counts. Click a card to broadcast to that segment via the
-// existing email/WhatsApp/SMS broadcast composer (mig 085).
+// Legacy redirect — /segments was the original Phase 2 entry, but
+// segments now live as a tab inside /communications (closer to
+// where operators actually use them: configuring broadcasts).
+//
+// Anyone with a bookmark or an old deep-link from elsewhere in the
+// app lands here and hops over to the new home.
 
 import { redirect } from 'next/navigation'
-import { getCurrentUser } from '@/lib/auth'
-import { MANAGER_ROLES } from '@/lib/schemas'
-import SegmentsGrid from '@/components/SegmentsGrid'
 
 export const dynamic = 'force-dynamic'
-export const revalidate = 0
 
-export default async function SegmentsPage() {
-  const user = await getCurrentUser()
-  if (!user) redirect('/login')
-  if (!MANAGER_ROLES.includes(user.role)) redirect('/')
-
-  return (
-    <div className="p-6 max-w-5xl mx-auto">
-      <header className="mb-6">
-        <h1 className="text-2xl font-semibold text-un1t-white">Segments</h1>
-        <p className="text-sm text-un1t-light mt-1">
-          Tag-defined audiences for retargeting. Tags update automatically as orders complete and races run.
-        </p>
-      </header>
-      <SegmentsGrid />
-    </div>
-  )
+export default function SegmentsRedirectPage() {
+  redirect('/communications/segments')
 }

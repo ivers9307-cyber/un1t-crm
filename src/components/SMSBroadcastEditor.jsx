@@ -52,7 +52,7 @@ function localDatetimeToIso(local) {
   return new Date(local).toISOString()
 }
 
-export default function SMSBroadcastEditor({ broadcast, recipients = [], locationId, locationSenderId, userId: _userId }) {
+export default function SMSBroadcastEditor({ broadcast, recipients = [], locationId, locationSenderId, userId: _userId, initialAudienceFilter = null }) {
   const router = useRouter()
   const isSent = broadcast?.status === 'sent'
   const isSending = broadcast?.status === 'sending'
@@ -65,7 +65,9 @@ export default function SMSBroadcastEditor({ broadcast, recipients = [], locatio
   const [name, setName] = useState(broadcast?.name || '')
   const [body, setBody] = useState(broadcast?.body || '')
   const [audienceFilter, setAudienceFilter] = useState(
-    broadcast?.audience_filter || { filters: [], logic: 'and' }
+    // Precedence: existing draft > deep-link preset (e.g. ?segment=race_completed
+    // from /communications/segments) > empty.
+    broadcast?.audience_filter || initialAudienceFilter || { filters: [], logic: 'and' }
   )
   const [scheduledAtLocal, setScheduledAtLocal] = useState(
     isoToLocalDatetime(broadcast?.scheduled_at)
