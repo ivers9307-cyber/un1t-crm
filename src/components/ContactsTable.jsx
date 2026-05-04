@@ -13,9 +13,10 @@
 
 import { useState, useMemo } from 'react'
 import Link from 'next/link'
-import { ChevronRight, Mail, X, GitMerge } from 'lucide-react'
+import { ChevronRight, Mail, X, GitMerge, Trash2 } from 'lucide-react'
 import SequencePicker from './SequencePicker'
 import ContactMergeModal from './ContactMergeModal'
+import ContactBulkDeleteModal from './ContactBulkDeleteModal'
 
 const statusBadge = {
   active_trial: 'bg-green-500/20 text-green-400',
@@ -25,12 +26,13 @@ const statusBadge = {
   returning:    'bg-indigo-500/20 text-indigo-400',
 }
 
-export default function ContactsTable({ contacts, locationId, canMerge = false }) {
+export default function ContactsTable({ contacts, locationId, canMerge = false, canDelete = false }) {
   // Set<contactId>. Set so toggle is O(1) and resilient to the contact
   // list changing under us (filter / search updates).
   const [selectedIds, setSelectedIds] = useState(() => new Set())
   const [pickerOpen, setPickerOpen] = useState(false)
   const [mergeOpen, setMergeOpen] = useState(false)
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false)
 
   const allIds = useMemo(() => contacts.map(c => c.id), [contacts])
   const allSelected = allIds.length > 0 && allIds.every(id => selectedIds.has(id))
@@ -88,6 +90,19 @@ export default function ContactsTable({ contacts, locationId, canMerge = false }
               <GitMerge size={12} /> Merge
             </button>
           )}
+          {/* Bulk delete — head_coach+ (= MANAGER_ROLES). Same
+              cascade rules as the per-contact delete; whatsapp
+              history blocks come back as per-row "blocked" entries
+              in the response, NOT a hard fail of the whole batch. */}
+          {canDelete && (
+            <button
+              onClick={() => setBulkDeleteOpen(true)}
+              className="text-xs px-3 py-1.5 rounded-md border border-red-500/40 text-red-700 hover:bg-red-500/10 flex items-center gap-1.5"
+              title="Delete selected contacts"
+            >
+              <Trash2 size={12} /> Delete
+            </button>
+          )}
         </div>
       )}
 
@@ -96,6 +111,14 @@ export default function ContactsTable({ contacts, locationId, canMerge = false }
           contactIds={selectedIdsArray}
           contacts={contacts.filter(c => selectedIds.has(c.id))}
           onClose={() => setMergeOpen(false)}
+        />
+      )}
+
+      {bulkDeleteOpen && (
+        <ContactBulkDeleteModal
+          contacts={contacts.filter(c => selectedIds.has(c.id))}
+          onClose={() => setBulkDeleteOpen(false)}
+          onDeleted={clearSelection}
         />
       )}
 

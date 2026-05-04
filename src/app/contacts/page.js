@@ -29,6 +29,10 @@ export default async function ContactsPage({ searchParams }) {
   const { data: contacts } = await query
 
   const canCreate = MANAGER_ROLES.includes(user.role)
+  // Delete + bulk-delete: head_coach / manager / owner / master
+  // (= MANAGER_ROLES). Merge stays owner+ since folding two contacts
+  // into one is irreversible and a higher bar than removing a row.
+  const canDelete = MANAGER_ROLES.includes(user.role)
   const canMerge = user.role === 'owner' || user.role === 'master'
 
   return (
@@ -50,6 +54,7 @@ export default async function ContactsPage({ searchParams }) {
         initialStatus={status}
         initialSearch={search}
         canMerge={canMerge}
+        canDelete={canDelete}
       />
     </div>
   )

@@ -110,7 +110,12 @@ export default async function ContactDetailPage({ params }) {
           <ContactEditDeleteActions
             contact={contact}
             canEdit={MANAGER_ROLES.includes(user?.role)}
-            canDelete={user?.role === 'owner' || user?.role === 'master'}
+            // Per the Nov 2026 widening: head_coach / manager / owner /
+            // master can delete a contact (= MANAGER_ROLES). Same set
+            // as canEdit since both are equally reversible-impact —
+            // a wrongly-deleted contact is reconstructed from email
+            // + history just like a wrongly-edited one.
+            canDelete={MANAGER_ROLES.includes(user?.role)}
           />
           <StartWhatsAppButton
             contactId={contact.id}

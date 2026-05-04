@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { requireApiKey, requireApiKeyOrManager } from '@/lib/api-auth'
 import { validateBody } from '@/lib/validate'
-import { email, phone, leadSourceSchema, leadStatusSchema } from '@/lib/schemas'
+import { email, phone, leadSourceSchema, leadStatusSchema, MANAGER_ROLES } from '@/lib/schemas'
 import { triggerSequencesForStatusChange, triggerSequencesForTagsAdded } from '@/lib/sequences'
 import { logPipelineEvent } from '@/lib/activity-events'
 import { getCurrentUser } from '@/lib/auth'
@@ -112,19 +112,21 @@ export async function GET(request, { params }) {
   return NextResponse.json({ success: true, data })
 }
 
-// DELETE /api/contacts/:id — owner-only hard delete.
+// DELETE /api/contacts/:id — hard delete.
 //
 // Uses the cookie auth path (n8n shouldn't be issuing destructive
-// deletes — kept off the API-key surface). Cascades the rows
-// listed in CASCADE_TABLES; SET-NULL tables keep the row with the
-// FK nulled (history preserved). If the contact still has
-// whatsapp_* rows (NO ACTION) the delete will fail at the DB
-// layer — caller should merge into another contact first.
+// deletes — kept off the API-key surface). Permission widened
+// (Nov 2026) from owner+ to MANAGER_ROLES (head_coach / manager /
+// owner / master). Cascades the rows listed in CASCADE_TABLES;
+// SET-NULL tables keep the row with the FK nulled (history
+// preserved). If the contact still has whatsapp_* rows (NO ACTION)
+// the delete will fail at the DB layer — caller should merge into
+// another contact first.
 export async function DELETE(_request, { params }) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  if (user.role !== 'owner' && user.role !== 'master') {
-    return NextResponse.json({ success: false, error: 'Owner or master required' }, { status: 403 })
+  if (!MANAGER_ROLES.includes(user.role)) {
+    return NextResponse.json({ success: false, error: 'Head coach, manager, owner, or master required' }, { status: 403 })
   }
 
   const db = createServerClient()
