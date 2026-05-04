@@ -157,14 +157,14 @@ export default function RaceDisplayBoard({ slug }) {
           <div className="text-5xl font-bold tracking-tight truncate">{race.name}</div>
           {dateLabel && <div className="text-2xl opacity-60 mt-2">{dateLabel}</div>}
         </div>
-        <div className="flex items-center justify-center gap-10 min-h-[80px]">
+        <div className="flex items-center justify-center gap-10 min-h-[96px]">
           {(race.tv_logos || []).map((src, i) => (
             // eslint-disable-next-line @next/next/no-img-element
             <img
               key={`${src}-${i}`}
               src={src}
               alt=""
-              className="max-h-24 max-w-[220px] object-contain"
+              className="max-h-[115px] max-w-[264px] object-contain"
             />
           ))}
         </div>
