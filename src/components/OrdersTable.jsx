@@ -9,7 +9,7 @@
 // status, date, retry-chain pill if applicable.
 
 import { useEffect, useState } from 'react'
-import { Loader2, AlertCircle, Search, RefreshCw, X } from 'lucide-react'
+import { Loader2, AlertCircle, Search, RefreshCw, X, Undo2, Check as CheckIcon } from 'lucide-react'
 
 const STATUS_TABS = [
   { id: 'completed', label: 'Completed', accent: 'emerald' },
@@ -179,10 +179,13 @@ export default function OrdersTable() {
                 <th className="text-left px-3 py-2">Source</th>
                 <th className="text-right px-3 py-2">Amount</th>
                 <th className="text-left px-3 py-2">Status</th>
+                <th className="text-right px-3 py-2"></th>
               </tr>
             </thead>
             <tbody>
-              {rows.map((row) => <OrderRow key={row.id} row={row} />)}
+              {rows.map((row) => (
+                <OrderRow key={row.id} row={row} onRefunded={load} />
+              ))}
             </tbody>
           </table>
         </div>
@@ -213,7 +216,7 @@ export default function OrdersTable() {
   )
 }
 
-function OrderRow({ row }) {
+function OrderRow({ row, onRefunded }) {
   const dt = row.created_at ? new Date(row.created_at) : null
   const dateLabel = dt ? dt.toLocaleString('en-IE', {
     timeZone: 'Europe/Dublin',
@@ -226,6 +229,36 @@ function OrderRow({ row }) {
   const sourceDetail = row.source_type === 'race_registration'
     ? '' // race name lookup would require extra join; future enhancement
     : [meta.car_make, meta.car_model, meta.irish_reg].filter(Boolean).join(' ')
+
+  // Refund button is only meaningful on completed Revolut orders.
+  const canRefund = row.status === 'completed' && row.payment_provider === 'revolut'
+  const [confirming, setConfirming] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [refundError, setRefundError] = useState(null)
+
+  async function handleRefund() {
+    setBusy(true)
+    setRefundError(null)
+    try {
+      const r = await fetch(`/api/orders/${row.id}/refund`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      })
+      const j = await r.json()
+      if (!r.ok || j.success === false) {
+        setRefundError(j.error || `Refund failed (${r.status})`)
+        setBusy(false)
+        return
+      }
+      setConfirming(false)
+      setBusy(false)
+      onRefunded?.()
+    } catch (e) {
+      setRefundError(e.message || 'Network error')
+      setBusy(false)
+    }
+  }
 
   return (
     <tr className="border-t border-un1t-gray hover:bg-un1t-gray/10">
@@ -248,6 +281,45 @@ function OrderRow({ row }) {
       <td className="px-3 py-2 text-right font-mono tabular-nums">{amount}</td>
       <td className="px-3 py-2">
         <StatusPill status={row.status} />
+      </td>
+      <td className="px-3 py-2 text-right whitespace-nowrap">
+        {canRefund && !confirming && (
+          <button
+            type="button"
+            onClick={() => setConfirming(true)}
+            className="text-[11px] text-un1t-light hover:text-purple-700 inline-flex items-center gap-1"
+            title="Issue a full refund via Revolut"
+          >
+            <Undo2 size={11} /> Refund
+          </button>
+        )}
+        {canRefund && confirming && (
+          <div className="inline-flex items-center gap-1.5">
+            <span className="text-[11px] text-un1t-light">Refund {amount}?</span>
+            <button
+              type="button"
+              onClick={handleRefund}
+              disabled={busy}
+              className="text-[11px] bg-purple-600 hover:bg-purple-700 text-white px-2 py-0.5 rounded inline-flex items-center gap-1 disabled:opacity-40"
+            >
+              {busy ? <Loader2 size={10} className="animate-spin" /> : <CheckIcon size={10} />}
+              {busy ? 'Refunding…' : 'Confirm'}
+            </button>
+            <button
+              type="button"
+              onClick={() => { setConfirming(false); setRefundError(null) }}
+              disabled={busy}
+              className="text-[11px] text-un1t-light hover:text-un1t-white"
+            >
+              Cancel
+            </button>
+          </div>
+        )}
+        {refundError && (
+          <div className="text-[11px] text-red-700 mt-1 max-w-[200px] truncate" title={refundError}>
+            {refundError}
+          </div>
+        )}
       </td>
     </tr>
   )
