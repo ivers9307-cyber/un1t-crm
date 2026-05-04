@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
-import { LayoutDashboard, Users, Columns3, CheckSquare, Calendar, MessagesSquare, CalendarClock, Settings, LogOut, Car, Flag } from 'lucide-react'
+import { LayoutDashboard, Users, Columns3, CheckSquare, Calendar, MessagesSquare, CalendarClock, Settings, LogOut, Car, Flag, Receipt, Tag } from 'lucide-react'
 import { createBrowserClient } from '@/lib/supabase'
 import LocationSwitcher from './LocationSwitcher'
 import ImpersonatePicker from './ImpersonatePicker'
@@ -52,6 +52,13 @@ const allNav = [
   // dedicated 'races' permission key.
   { href: '/races',      label: 'Races',        icon: Flag,            permission: 'events' },
   { href: '/cars',       label: 'Car Processing', icon: Car,           permission: 'car_processing' },
+  // Orders + Segments (mig 085) — both surfaces span all revenue
+  // streams. Gated on either an events or car_processing permission
+  // since both feed the orders ledger.
+  { href: '/orders',     label: 'Orders',       icon: Receipt,
+    anyPermission: ['events', 'car_processing'] },
+  { href: '/segments',   label: 'Segments',     icon: Tag,
+    anyPermission: ['email', 'whatsapp'] },
   { href: '/settings',   label: 'Settings',     icon: Settings,        permission: 'settings' },
 ]
 

@@ -21,6 +21,8 @@ import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { sendLocationSms, TwilioError } from '@/lib/twilio'
 import { getDepositBaseUrl, getRequestOrigin } from '@/lib/app-url'
+import { syncOrderFromCarDeposit } from '@/lib/orders'
+import { emitEvent, EVENT_TYPES } from '@/lib/contact-events'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -126,6 +128,27 @@ export async function POST(request, { params }) {
 
   updates.deposit_link_sent_via = 'sms'
   await db.from('cars').update(updates).eq('id', car.id)
+
+  // Project into the generic orders ledger (mig 085) so the
+  // /orders Pending tab shows this even before the buyer pays.
+  // Best-effort — never breaks the issue flow.
+  try {
+    const carForOrders = { ...car, ...updates, deposit_amount: amount }
+    await syncOrderFromCarDeposit({ db, car: carForOrders })
+    if (car.buyer_email) {
+      await emitEvent({
+        db,
+        eventType: EVENT_TYPES.ORDER_CREATED,
+        contactEmail: car.buyer_email,
+        locationId: car.location_id,
+        sourceType: 'car_deposit',
+        sourceId: car.id,
+        metadata: { amount_cents: Math.round(amount * 100), currency: 'EUR' },
+      })
+    }
+  } catch (e) {
+    console.warn(`[issue-deposit-link] orders/events sync failed for car ${car.id}: ${e?.message || e}`)
+  }
 
   // Drop a system note on the car timeline so the operator can copy
   // the link back later (testing, manual reshare, etc.). Best-effort —

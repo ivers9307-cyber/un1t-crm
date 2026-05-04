@@ -26,6 +26,8 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { verifyWebhookSignature, getOrder } from '@/lib/revolut'
 import { sendDepositReceiptSms } from '@/lib/deposit-receipts'
+import { syncOrderFromCarDeposit } from '@/lib/orders'
+import { emitEvent, EVENT_TYPES } from '@/lib/contact-events'
 
 export const runtime = 'nodejs'
 
@@ -119,6 +121,40 @@ export async function POST(request) {
 
   if (Object.keys(updates).length > 0) {
     await db.from('cars').update(updates).eq('id', car.id)
+  }
+
+  // Project the cars deposit state into the generic orders ledger
+  // and emit a contact_events row for the matching transition.
+  // Best-effort — orders/events failures must not affect the
+  // receipt-SMS step or the webhook 200.
+  try {
+    const carForOrders = { ...car, ...updates }
+    await syncOrderFromCarDeposit({ db, car: carForOrders })
+    const evMap = {
+      completed: EVENT_TYPES.ORDER_COMPLETED,
+      failed: EVENT_TYPES.ORDER_FAILED,
+      cancelled: EVENT_TYPES.ORDER_ABANDONED,
+    }
+    const evType = evMap[state]
+    if (evType && car.buyer_email) {
+      await emitEvent({
+        db,
+        eventType: evType,
+        contactEmail: car.buyer_email,
+        contactId: null, // cars buyers aren't linked to contacts in v1
+        locationId: car.location_id,
+        sourceType: 'car_deposit',
+        sourceId: car.id,
+        metadata: {
+          amount_cents: Number.isFinite(order.amount) ? order.amount : null,
+          car_make: car.make,
+          car_model: car.model,
+          irish_reg: car.irish_reg,
+        },
+      })
+    }
+  } catch (e) {
+    console.warn(`[revolut-webhook] orders/events sync failed for car ${car.id}: ${e?.message || e}`)
   }
 
   // Fire-and-forget receipt SMS to the buyer when the deposit lands.

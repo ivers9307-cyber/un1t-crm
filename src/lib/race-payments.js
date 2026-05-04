@@ -24,6 +24,8 @@
 // would land.
 
 import { createOrder, getOrder } from './revolut'
+import { syncOrderFromRacePayment } from './orders'
+import { emitEvent, applyTagRules, EVENT_TYPES } from './contact-events'
 
 /**
  * Resolve which Revolut credentials to use for race payments. For
@@ -91,6 +93,36 @@ export async function createRacePayment({ db, race, registration, captain, prici
     await db.from('race_registrations')
       .update({ active_payment_id: row.id, status: 'confirmed' })
       .eq('id', registration.id)
+    // Project into orders + emit lifecycle events (mig 085).
+    // Best-effort — orders/events failures must not break the
+    // payment write that's already committed.
+    try {
+      await syncOrderFromRacePayment({ db, payment: row })
+      await emitEvent({
+        db,
+        eventType: EVENT_TYPES.RACE_REGISTERED,
+        contactEmail: captain.email,
+        contactId: registration.contact_id || null,
+        locationId: race.location_id,
+        sourceType: 'race_registration',
+        sourceId: row.id,
+      })
+      await emitEvent({
+        db,
+        eventType: EVENT_TYPES.ORDER_COMPLETED,
+        contactEmail: captain.email,
+        contactId: registration.contact_id || null,
+        locationId: race.location_id,
+        sourceType: 'race_registration',
+        sourceId: row.id,
+        metadata: { amount_cents: 0, free: true },
+      })
+      if (registration.contact_id) {
+        await applyTagRules({ db, contactId: registration.contact_id })
+      }
+    } catch (e) {
+      console.warn(`[race-payments] orders/events sync (free) failed: ${e?.message || e}`)
+    }
     return { payment: row, checkout: { token: null, url: null, free: true } }
   }
 
@@ -137,6 +169,37 @@ export async function createRacePayment({ db, race, registration, captain, prici
   await db.from('race_registrations')
     .update({ active_payment_id: row.id })
     .eq('id', registration.id)
+
+  // Project into orders + emit lifecycle events (mig 085). The
+  // race_payments row is already committed, so any failure here is
+  // logged-and-ignored.
+  try {
+    await syncOrderFromRacePayment({ db, payment: row })
+    await emitEvent({
+      db,
+      eventType: EVENT_TYPES.ORDER_CREATED,
+      contactEmail: captain.email,
+      contactId: registration.contact_id || null,
+      locationId: race.location_id,
+      sourceType: 'race_registration',
+      sourceId: row.id,
+      metadata: { amount_cents: amount, currency },
+    })
+    await emitEvent({
+      db,
+      eventType: EVENT_TYPES.RACE_REGISTERED,
+      contactEmail: captain.email,
+      contactId: registration.contact_id || null,
+      locationId: race.location_id,
+      sourceType: 'race_registration',
+      sourceId: row.id,
+    })
+    if (registration.contact_id) {
+      await applyTagRules({ db, contactId: registration.contact_id })
+    }
+  } catch (e) {
+    console.warn(`[race-payments] orders/events sync (paid) failed: ${e?.message || e}`)
+  }
 
   return {
     payment: row,
@@ -226,6 +289,37 @@ export async function markRacePaymentStatus({ db, payment, revolutState, revolut
       .update({ status: 'confirmed' })
       .eq('id', payment.race_registration_id)
       .eq('status', 'pending_payment') // don't clobber operator edits
+  }
+
+  // Project into orders + emit lifecycle event (mig 085).
+  // Best-effort — the payment update is already committed.
+  try {
+    const refreshed = { ...payment, ...updates }
+    await syncOrderFromRacePayment({ db, payment: refreshed })
+    const eventTypeByStatus = {
+      completed: EVENT_TYPES.ORDER_COMPLETED,
+      failed: EVENT_TYPES.ORDER_FAILED,
+      abandoned: EVENT_TYPES.ORDER_ABANDONED,
+    }
+    const evType = eventTypeByStatus[updates.status]
+    if (evType) {
+      const locId = payment.race?.location_id || null
+      await emitEvent({
+        db,
+        eventType: evType,
+        contactEmail: payment.contact_email,
+        contactId: payment.contact_id || null,
+        locationId: locId,
+        sourceType: 'race_registration',
+        sourceId: payment.id,
+        metadata: { amount_cents: refreshed.amount_cents, currency: payment.currency },
+      })
+      if (payment.contact_id) {
+        await applyTagRules({ db, contactId: payment.contact_id })
+      }
+    }
+  } catch (e) {
+    console.warn(`[race-payments] orders/events sync (status) failed: ${e?.message || e}`)
   }
 
   return { applied: updates, state_changed: true }
