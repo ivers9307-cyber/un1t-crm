@@ -1,10 +1,9 @@
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { redirect } from 'next/navigation'
-import Link from 'next/link'
-import { Plus } from 'lucide-react'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import ContactsView from '@/components/ContactsView'
+import ContactsHeaderActions from '@/components/ContactsHeaderActions'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
@@ -31,22 +30,17 @@ export default async function ContactsPage({ searchParams }) {
   const canCreate = MANAGER_ROLES.includes(user.role)
   // Delete + bulk-delete: head_coach / manager / owner / master
   // (= MANAGER_ROLES). Merge stays owner+ since folding two contacts
-  // into one is irreversible and a higher bar than removing a row.
+  // into one is irreversible. CSV import is master-only — touches
+  // many rows at once and is the obvious GDPR audit surface.
   const canDelete = MANAGER_ROLES.includes(user.role)
   const canMerge = user.role === 'owner' || user.role === 'master'
+  const canImport = user.isMaster || user.role === 'master'
 
   return (
     <div className="p-6">
       <div className="flex items-center justify-between mb-5">
         <h2 className="text-2xl font-bold">Contacts</h2>
-        {canCreate && (
-          <Link
-            href="/contacts/new"
-            className="inline-flex items-center gap-2 bg-un1t-white text-un1t-black text-sm font-medium px-4 py-2 rounded-lg hover:bg-un1t-accent transition-colors"
-          >
-            <Plus size={16} /> New contact
-          </Link>
-        )}
+        <ContactsHeaderActions canCreate={canCreate} canImport={canImport} />
       </div>
       <ContactsView
         initialContacts={contacts || []}
