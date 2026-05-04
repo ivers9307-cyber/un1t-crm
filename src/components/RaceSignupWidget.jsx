@@ -50,10 +50,11 @@ export default function RaceSignupWidget({ slug }) {
         const initial = [...sizes].sort((a, b) => a - b)[0]
         setTeamSize(initial)
         // If there's only one wave, auto-pick it. If there are
-        // multiple, the user picks below. We only auto-select
-        // available waves (capacity remaining > 0 OR unlimited).
+        // multiple, the user picks below. We only auto-select waves
+        // that aren't full. Public API only exposes is_full, not raw
+        // numbers, so capacity stays operator-only.
         const waves = Array.isArray(j.data.waves) ? j.data.waves : []
-        const available = waves.filter((w) => w.capacity == null || (w.remaining_capacity ?? 0) > 0)
+        const available = waves.filter((w) => !w.is_full)
         if (waves.length === 1 && available.length === 1) {
           setWaveId(waves[0].id)
         } else if (available.length === 1) {
@@ -225,16 +226,16 @@ export default function RaceSignupWidget({ slug }) {
 
           <form onSubmit={handleSubmit} className="space-y-4">
             <fieldset disabled={isClosed} className="space-y-4">
-              {/* Wave picker (mig 083). Each wave = a start time + capacity.
-                  Single-wave races still render this so the customer sees
-                  what time they're locked into; auto-selected on load. */}
+              {/* Wave picker (mig 083). Public-facing: capacity numbers
+                  are deliberately hidden — only "Full" vs "Available"
+                  status is exposed. Operator capacity tracking lives
+                  inside the CRM /races index. */}
               {Array.isArray(race.waves) && race.waves.length > 0 && (
                 <div>
                   <label className="block text-xs font-medium text-gray-700 mb-1">Pick your wave *</label>
                   <div className="space-y-2">
                     {race.waves.map((w) => {
-                      const remaining = w.remaining_capacity
-                      const full = w.capacity != null && remaining === 0
+                      const full = !!w.is_full
                       const selected = waveId === w.id
                       const time = (w.start_time || '').slice(0, 5)
                       return (
@@ -256,13 +257,9 @@ export default function RaceSignupWidget({ slug }) {
                               <span className="text-sm font-semibold text-gray-900">{time}</span>
                               {w.label && <span className="ml-2 text-xs text-gray-600">{w.label}</span>}
                             </div>
-                            <div className="text-[11px] text-gray-500">
-                              {w.capacity == null
-                                ? 'Open'
-                                : full
-                                  ? 'Full'
-                                  : `${remaining} of ${w.capacity} spots left`}
-                            </div>
+                            {full && (
+                              <div className="text-[11px] text-gray-500">Full</div>
+                            )}
                           </div>
                         </button>
                       )

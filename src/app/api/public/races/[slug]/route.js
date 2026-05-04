@@ -28,16 +28,19 @@ export async function GET(_request, { params }) {
     return NextResponse.json({ success: false, error: 'Race not found' }, { status: 404 })
   }
 
-  // Per-wave remaining capacity (mig 083). One COUNT per wave is fine
-  // for v1 (waves per race < ~10 in any realistic event); a single
-  // grouped query would shave a roundtrip but the polling cadence
-  // here is once-per-page-load so it doesn't matter.
-  const waves = (data.waves || []).slice().sort((a, b) =>
+  // Per-wave fullness (mig 083; capacity numbers hidden from public).
+  // Public callers only need to know whether each wave is bookable —
+  // exposing exact "X of Y spots remaining" is operator-only data
+  // (visible inside the CRM /races index). Strip raw capacity +
+  // remaining numbers from the response shape; surface a boolean
+  // is_full instead. One COUNT per wave is fine for v1 (waves per
+  // race < ~10 in any realistic event).
+  const wavesIn = (data.waves || []).slice().sort((a, b) =>
     (a.display_order ?? 0) - (b.display_order ?? 0) || (a.start_time || '').localeCompare(b.start_time || '')
   )
-  const wavesWithCounts = []
-  for (const w of waves) {
-    let remaining = null
+  const publicWaves = []
+  for (const w of wavesIn) {
+    let isFull = false
     if (w.capacity != null) {
       const { count } = await db
         .from('race_registrations')
@@ -45,27 +48,40 @@ export async function GET(_request, { params }) {
         .eq('race_event_id', data.id)
         .eq('wave_id', w.id)
         .eq('status', 'confirmed')
-      remaining = Math.max(0, w.capacity - (count || 0))
+      isFull = (count || 0) >= w.capacity
     }
-    wavesWithCounts.push({ ...w, remaining_capacity: remaining })
+    // Strip capacity from the per-wave object — only id, start_time,
+    // label, display_order, is_full leave the building.
+    publicWaves.push({
+      id: w.id,
+      start_time: w.start_time,
+      label: w.label,
+      display_order: w.display_order,
+      is_full: isFull,
+    })
   }
 
   // Registration window state — saves the public form a round-trip.
   const now = Date.now()
   const opensAt = data.registration_opens_at ? Date.parse(data.registration_opens_at) : null
   const closesAt = data.registration_closes_at ? Date.parse(data.registration_closes_at) : null
-  // Race is "full" when every capped wave has zero remaining. Waves
-  // with NULL capacity (unlimited) keep the race open.
-  const allWavesFull = wavesWithCounts.length > 0 && wavesWithCounts.every(
-    (w) => w.capacity != null && w.remaining_capacity === 0
-  )
+  // Race is "full" when every wave with a cap is full AND there are
+  // no uncapped waves to absorb. (An unlimited wave keeps the race
+  // open even if every other wave is full.)
+  const hasUncapped = wavesIn.some((w) => w.capacity == null)
+  const allCappedFull = publicWaves.length > 0 && !hasUncapped && publicWaves.every((w) => w.is_full)
   let registration_state = 'open'
   if (opensAt && now < opensAt) registration_state = 'not_yet_open'
   else if (closesAt && now > closesAt) registration_state = 'closed'
-  else if (allWavesFull) registration_state = 'full'
+  else if (allCappedFull) registration_state = 'full'
 
+  // Strip the race-level deprecated capacity from the public response
+  // too (defensive; the field is supposed to be deprecated but it
+  // could still be on existing rows).
+  // eslint-disable-next-line no-unused-vars
+  const { capacity: _omit, ...racePublic } = data
   return NextResponse.json({
     success: true,
-    data: { ...data, waves: wavesWithCounts, registration_state },
+    data: { ...racePublic, waves: publicWaves, registration_state },
   })
 }
