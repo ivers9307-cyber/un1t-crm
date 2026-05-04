@@ -13,7 +13,7 @@ const StepShape = z.object({
   // following step. Defaults to 'email' for back-compat with rows
   // pre-mig 039 that didn't set step_type explicitly. Mig 087 adds
   // apply_tag / update_field / internal_task — all use `config`.
-  step_type: z.enum(['email', 'whatsapp', 'sms', 'wait', 'apply_tag', 'update_field', 'internal_task', 'webhook']).optional(),
+  step_type: z.enum(['email', 'whatsapp', 'sms', 'wait', 'apply_tag', 'update_field', 'internal_task', 'webhook', 'branch']).optional(),
   // Email step content
   subject: z.string().max(500).optional(),
   html_content: z.string().max(1_000_000).optional(),
@@ -107,9 +107,11 @@ export async function POST(request, { params }) {
     whatsapp_header_media_url: stepType === 'whatsapp' ? (body.whatsapp_header_media_url || null) : null,
     // SMS field (mig 062 — only meaningful when step_type=sms)
     sms_body: stepType === 'sms' ? (body.sms_body || null) : null,
-    // Mig 087 — generic config for apply_tag / update_field /
-    // internal_task. Whitelisted server-side at runtime.
-    config: ['apply_tag', 'update_field', 'internal_task', 'webhook'].includes(stepType)
+    // Mig 087+ generic config bag. Mig 091 added 'branch' which
+    // also uses config (predicate + then/else_step_order). Anything
+    // outside this list gets {} so a stray config payload on an
+    // email step doesn't leak into the runner's hot path.
+    config: ['apply_tag', 'update_field', 'internal_task', 'webhook', 'branch'].includes(stepType)
       ? (body.config || {})
       : {},
   }).select().single()

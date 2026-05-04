@@ -1146,6 +1146,10 @@ export async function runSequences({ now = new Date() } = {}) {
 
       // Branch by step type.
       let sendId = null
+      // Mig 091: a branch step jumps the cursor instead of advancing
+      // to step_order + 1. branchTargetOrder, when non-null, replaces
+      // the standard "+1" lookup below.
+      let branchTargetOrder = null
       if (step.step_type === 'wait') {
         // Wait step has no send — just advance with the delay.
         sendId = null
@@ -1177,16 +1181,24 @@ export async function runSequences({ now = new Date() } = {}) {
         // retry/pause logic kicks in.
         await webhookStep(db, { step, contact, sequence, enrollment })
         sendId = null
+      } else if (step.step_type === 'branch') {
+        // Mig 091 / Tier 3E. No send. Pick the target step_order
+        // based on the predicate; the cursor jumps below.
+        branchTargetOrder = await processBranchStep(db, { step, contact })
+        sendId = null
       } else {
         throw new Error(`Unknown step_type "${step.step_type}".`)
       }
 
       // Compute the next fire time based on the FOLLOWING step's delay.
+      // For a branch, "following" = the chosen branch target. For all
+      // other step types, "following" = step_order + 1.
+      const followingOrder = branchTargetOrder ?? step.step_order + 1
       const followingStep = await db
         .from('sequence_steps')
         .select('delay_days, delay_hours, delay_minutes')
         .eq('sequence_id', sequence.id)
-        .eq('step_order', step.step_order + 1)
+        .eq('step_order', followingOrder)
         .maybeSingle()
       // Mig 088: test mode — accelerate delays to a fixed N seconds.
       // metadata.test=true on the enrolment is the marker.
@@ -1209,8 +1221,13 @@ export async function runSequences({ now = new Date() } = {}) {
       }
       const newStatus = followingStep.data ? 'active' : 'completed'
 
+      // Mig 091: cursor lands on (followingOrder - 1) so the next
+      // tick picks up step at followingOrder. For non-branch steps
+      // followingOrder == step.step_order + 1, so this is identical
+      // to the previous behaviour. For a branch it implements the
+      // jump.
       await db.from('sequence_enrollments').update({
-        current_step_order: step.step_order,
+        current_step_order: followingOrder - 1,
         next_step_at: nextFireAt,
         status: newStatus,
         last_processed_at: now.toISOString(),
@@ -1425,6 +1442,108 @@ async function updateFieldStep(db, { step, contact }) {
       console.warn(`[sequences] update_field cascade trigger failed: ${e.message}`)
     }
   }
+}
+
+// ── branch step (mig 091 / Tier 3E) ──────────────────────────────
+//
+// A branch step doesn't send anything — it picks one of two
+// continuation points based on a predicate over the contact, and
+// returns the chosen step_order. The runner uses that to advance
+// the enrolment cursor.
+//
+// Predicate types:
+//   - has_tag         { tag }           — contact has the active tag
+//   - field_equals    { field, value }  — contact[field] === value
+//   - field_in        { field, values } — contact[field] is in the list
+//
+// Allowed fields mirror update_field's whitelist plus a couple of
+// read-only ones that operators commonly want to fork on. Anything
+// outside the allow-list throws so a malicious config can't be used
+// to probe arbitrary contact columns via the predicate.
+//
+// Pointer defaults: when then_step_order or else_step_order are
+// missing/invalid, default to "step_order + 1" for then (proceed
+// normally) and "step_order + 2" for else (skip the next step).
+// This makes the simplest branch — "send follow-up if matched, skip
+// it otherwise" — a one-line config: { predicate }.
+//
+// Loop guard: the runner refuses to jump backwards. then_step_order
+// or else_step_order must be > the branch's own step_order. This
+// rules out infinite loops while we don't have a per-enrolment loop
+// counter; revisit if real loop patterns show up.
+const BRANCH_FIELD_WHITELIST = new Set([
+  'lead_status',
+  'label',
+  'email_status',
+  'sms_status',
+  'marketing_opt_in',
+])
+
+export async function evaluateBranchPredicate(db, { contact, predicate }) {
+  if (!predicate || typeof predicate !== 'object') {
+    throw new Error('branch step: config.predicate is required')
+  }
+  const type = String(predicate.type || '').trim()
+
+  if (type === 'has_tag') {
+    const tag = String(predicate.tag || '').trim()
+    if (!tag) throw new Error('branch has_tag: tag is required')
+    const { data, error } = await db
+      .from('contact_tags')
+      .select('id')
+      .eq('contact_id', contact.id)
+      .eq('tag', tag)
+      .is('removed_at', null)
+      .limit(1)
+    if (error) throw new Error(`branch has_tag: ${error.message}`)
+    return Boolean(data && data.length > 0)
+  }
+
+  if (type === 'field_equals') {
+    const field = String(predicate.field || '').trim()
+    if (!BRANCH_FIELD_WHITELIST.has(field)) {
+      throw new Error(`branch field_equals: field "${field}" is not allowed`)
+    }
+    return contact[field] === predicate.value
+  }
+
+  if (type === 'field_in') {
+    const field = String(predicate.field || '').trim()
+    if (!BRANCH_FIELD_WHITELIST.has(field)) {
+      throw new Error(`branch field_in: field "${field}" is not allowed`)
+    }
+    const values = Array.isArray(predicate.values) ? predicate.values : []
+    if (values.length === 0) {
+      throw new Error('branch field_in: values must be a non-empty array')
+    }
+    return values.includes(contact[field])
+  }
+
+  throw new Error(`branch step: unknown predicate type "${type}"`)
+}
+
+/**
+ * Resolve where the runner should land next after evaluating a
+ * branch step. Returns the chosen step_order (always > the branch's
+ * own step_order). Falls back to sensible defaults when the config
+ * doesn't specify a pointer.
+ */
+export async function processBranchStep(db, { step, contact }) {
+  const cfg = step.config || {}
+  const branchOrder = step.step_order
+  const matched = await evaluateBranchPredicate(db, {
+    contact,
+    predicate: cfg.predicate,
+  })
+  const rawTarget = matched ? cfg.then_step_order : cfg.else_step_order
+  const fallback = matched ? branchOrder + 1 : branchOrder + 2
+  const target = Number.isInteger(rawTarget) ? rawTarget : fallback
+  if (target <= branchOrder) {
+    throw new Error(
+      `branch step: target step_order (${target}) must be greater than the branch's own step_order (${branchOrder}); refusing to loop backwards`,
+    )
+  }
+  return target
 }
 
 /**

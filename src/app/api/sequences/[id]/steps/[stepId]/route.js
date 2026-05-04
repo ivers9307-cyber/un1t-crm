@@ -9,7 +9,11 @@ const StepUpdateSchema = z.object({
   step_order: z.number().int().min(0).max(1000).optional(),
   delay_days: z.number().int().min(0).max(365).optional(),
   delay_hours: z.number().int().min(0).max(23).optional(),
-  step_type: z.enum(['email', 'whatsapp', 'sms', 'wait']).optional(),
+  // Mig 087 (apply_tag/update_field/internal_task), 089 (webhook),
+  // and 091 (branch) added new step types — keep this enum in sync
+  // with the create-route enum so individual-step PUTs aren't more
+  // restrictive than the bulk PUT.
+  step_type: z.enum(['email', 'whatsapp', 'sms', 'wait', 'apply_tag', 'update_field', 'internal_task', 'webhook', 'branch']).optional(),
   // Email step content
   subject: z.string().max(500).optional(),
   html_content: z.string().max(1_000_000).optional(),
@@ -21,6 +25,9 @@ const StepUpdateSchema = z.object({
   whatsapp_header_media_url: z.string().url().max(2000).nullable().optional(),
   // SMS step content (mig 062)
   sms_body: z.string().max(1600).nullable().optional(),
+  // Mig 087+ generic step config bag (apply_tag, update_field,
+  // internal_task, branch).
+  config: z.record(z.unknown()).nullable().optional(),
 })
 
 async function loadSequenceLocation(db, sequenceId) {

@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import {
   ArrowLeft, Save, Plus, Trash2, ChevronDown, ChevronUp,
-  Play, Pause, Clock, Mail, MessageCircle, MessageSquare, Hourglass, Zap, AlertCircle
+  Play, Pause, Clock, Mail, MessageCircle, MessageSquare, Hourglass, Zap, AlertCircle, GitBranch
 } from 'lucide-react'
 
 const TRIGGER_TYPES = [
@@ -29,6 +29,7 @@ const CHANNEL_CONFIG = {
   whatsapp: { icon: MessageCircle, color: 'bg-green-500/20 text-green-400', label: 'WhatsApp' },
   sms:      { icon: MessageSquare, color: 'bg-cyan-500/20 text-cyan-400',   label: 'SMS' },
   wait:     { icon: Hourglass,     color: 'bg-un1t-gray/40 text-un1t-light', label: 'Wait' },
+  branch:   { icon: GitBranch,     color: 'bg-purple-500/20 text-purple-700', label: 'Branch' },
 }
 
 // Same segment math used by SMSBroadcastEditor — single GSM7
@@ -68,6 +69,15 @@ function StepCard({ step, index, onUpdate, onDelete, onMoveUp, onMoveDown, isFir
   if (stepType === 'wait') headerLabel = `Wait ${step.delay_days || 0}d ${step.delay_hours || 0}h`
   else if (stepType === 'whatsapp') headerLabel = selectedWaTemplate?.name || `WhatsApp step ${index + 1}`
   else if (stepType === 'sms') headerLabel = (step.sms_body && step.sms_body.length > 40 ? step.sms_body.slice(0, 40) + '…' : step.sms_body) || `SMS step ${index + 1}`
+  else if (stepType === 'branch') {
+    // Mig 091: render the predicate inline so the operator can see
+    // the shape without expanding.
+    const p = step.config?.predicate
+    if (p?.type === 'has_tag' && p.tag) headerLabel = `Branch: has tag "${p.tag}"`
+    else if (p?.type === 'field_equals' && p.field) headerLabel = `Branch: ${p.field} = ${JSON.stringify(p.value ?? '')}`
+    else if (p?.type === 'field_in' && p.field) headerLabel = `Branch: ${p.field} ∈ […]`
+    else headerLabel = `Branch (predicate not configured)`
+  }
   else headerLabel = step.subject || `Step ${index + 1}`
 
   const smsSeg = stepType === 'sms' ? smsSegmentInfo(step.sms_body || '') : null
@@ -155,6 +165,7 @@ function StepCard({ step, index, onUpdate, onDelete, onMoveUp, onMoveDown, isFir
                   <option value="update_field">Update field</option>
                   <option value="internal_task">Create internal task</option>
                   <option value="webhook">Webhook (HTTPS)</option>
+                  <option value="branch">Branch (if / else)</option>
                 </select>
               </div>
               <div>
@@ -461,6 +472,125 @@ function StepCard({ step, index, onUpdate, onDelete, onMoveUp, onMoveDown, isFir
                 </p>
               </div>
             )}
+
+            {/* branch step (mig 091 / Tier 3E). Predicate selects one
+                of two continuation step orders. Defaults are sensible
+                ("if matched proceed normally, otherwise skip 1 step")
+                so the operator can leave the pointers blank for the
+                most common shape. */}
+            {stepType === 'branch' && (() => {
+              const cfg = step.config || {}
+              const predicate = cfg.predicate || { type: 'has_tag' }
+              const ownOrder = step.step_order || (index + 1)
+              const setPredicate = (next) => onUpdate({
+                config: { ...cfg, predicate: { ...predicate, ...next } },
+              })
+              const setPointer = (key, raw) => {
+                const v = raw === '' ? null : parseInt(raw)
+                onUpdate({ config: { ...cfg, [key]: Number.isFinite(v) ? v : null } })
+              }
+              return (
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-xs text-un1t-light mb-1">If predicate is…</label>
+                    <select
+                      value={predicate.type || 'has_tag'}
+                      onChange={e => setPredicate({ type: e.target.value })}
+                      className="bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
+                    >
+                      <option value="has_tag">Has tag</option>
+                      <option value="field_equals">Field equals</option>
+                      <option value="field_in">Field is one of</option>
+                    </select>
+                  </div>
+
+                  {predicate.type === 'has_tag' && (
+                    <div>
+                      <label className="block text-xs text-un1t-light mb-1">Tag</label>
+                      <input
+                        type="text"
+                        value={predicate.tag || ''}
+                        onChange={e => setPredicate({ tag: e.target.value })}
+                        placeholder="e.g. race_completed"
+                        className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
+                      />
+                    </div>
+                  )}
+
+                  {(predicate.type === 'field_equals' || predicate.type === 'field_in') && (
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-xs text-un1t-light mb-1">Field</label>
+                        <select
+                          value={predicate.field || 'lead_status'}
+                          onChange={e => setPredicate({ field: e.target.value })}
+                          className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
+                        >
+                          <option value="lead_status">lead_status</option>
+                          <option value="label">label</option>
+                          <option value="email_status">email_status</option>
+                          <option value="sms_status">sms_status</option>
+                          <option value="marketing_opt_in">marketing_opt_in</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-xs text-un1t-light mb-1">
+                          {predicate.type === 'field_in' ? 'Values (comma-sep)' : 'Value'}
+                        </label>
+                        {predicate.type === 'field_in' ? (
+                          <input
+                            type="text"
+                            value={Array.isArray(predicate.values) ? predicate.values.join(', ') : ''}
+                            onChange={e => setPredicate({
+                              values: e.target.value.split(',').map(s => s.trim()).filter(Boolean),
+                            })}
+                            placeholder="member, returning"
+                            className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
+                          />
+                        ) : (
+                          <input
+                            type="text"
+                            value={predicate.value ?? ''}
+                            onChange={e => setPredicate({ value: e.target.value })}
+                            placeholder="member"
+                            className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
+                          />
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs text-un1t-light mb-1">Then jump to step</label>
+                      <input
+                        type="number"
+                        min={ownOrder + 1}
+                        value={cfg.then_step_order ?? ''}
+                        onChange={e => setPointer('then_step_order', e.target.value)}
+                        placeholder={`${ownOrder + 1} (next step)`}
+                        className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-un1t-light mb-1">Else jump to step</label>
+                      <input
+                        type="number"
+                        min={ownOrder + 1}
+                        value={cfg.else_step_order ?? ''}
+                        onChange={e => setPointer('else_step_order', e.target.value)}
+                        placeholder={`${ownOrder + 2} (skip 1)`}
+                        className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
+                      />
+                    </div>
+                  </div>
+
+                  <p className="text-[11px] text-un1t-mid">
+                    Branch steps don&apos;t send anything — they reroute the contact based on a check. Step orders must be greater than this branch&apos;s own order ({ownOrder}); the runner refuses backwards jumps to keep enrolments from looping.
+                  </p>
+                </div>
+              )
+            })()}
           </div>
         )}
       </div>
