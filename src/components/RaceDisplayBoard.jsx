@@ -74,31 +74,38 @@ export default function RaceDisplayBoard({ slug }) {
     return () => clearInterval(id)
   }, [])
 
-  // Auto-rotate screens every ROTATION_MS. Resets the timer if the
-  // operator taps the screen.
+  // Auto-rotate screens every ROTATION_MS. Key on a stable boolean
+  // so the polling-driven `data` updates every 2s don't tear down
+  // and rebuild the interval (that bug meant the screen never
+  // rotated — interval kept restarting before it could fire).
+  const hasData = !!data
   useEffect(() => {
-    if (!data) return
+    if (!hasData) return
     const id = setInterval(() => setScreen((s) => (s + 1) % 2), ROTATION_MS)
     return () => clearInterval(id)
-  }, [data, screen])
+  }, [hasData])
 
   // Compute "now" in server time so the active-team timer is honest.
-  const serverNowMs = useMemo(() => {
-    if (!clockSync.server || !clockSync.browser) return Date.now()
-    return clockSync.server + (Date.now() - clockSync.browser)
-    // tick included so the memo recomputes every render — cheap.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [clockSync.server, clockSync.browser, tick])
+  // Plain const (no useMemo) — we WANT this to recompute every
+  // render so the 500ms tick state actually advances the live timer.
+  // The previous useMemo froze it between polls. `tick` is referenced
+  // here only so the lint dep checker sees the dependency on the
+  // ticker.
+  void tick
+  const serverNowMs = (!clockSync.server || !clockSync.browser)
+    ? Date.now()
+    : clockSync.server + (Date.now() - clockSync.browser)
 
-  // Sort active by longest elapsed first (most likely to finish next).
+  // Sort active by longest elapsed first (= earliest start_at first,
+  // since they're all running). Equivalent without needing serverNowMs.
   const activeSorted = useMemo(() => {
     if (!data?.active) return []
     return data.active.slice().sort((a, b) => {
-      const ea = a.race_started_at ? serverNowMs - Date.parse(a.race_started_at) : 0
-      const eb = b.race_started_at ? serverNowMs - Date.parse(b.race_started_at) : 0
-      return eb - ea
+      const sa = a.race_started_at ? Date.parse(a.race_started_at) : Infinity
+      const sb = b.race_started_at ? Date.parse(b.race_started_at) : Infinity
+      return sa - sb
     })
-  }, [data, serverNowMs])
+  }, [data])
 
   // Sort completed by finish time (fastest first).
   const completedSorted = useMemo(() => {
