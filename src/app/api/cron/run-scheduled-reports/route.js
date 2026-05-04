@@ -3,6 +3,9 @@ import { createServerClient } from '@/lib/supabase'
 import { generateReport, calculatePeriodForSchedule, calculateNextRun } from '@/lib/report-generator'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 
+export const runtime = 'nodejs'
+export const dynamic = 'force-dynamic'
+
 /**
  * GET /api/cron/run-scheduled-reports
  * Called by Vercel Cron (or manually) to execute any scheduled reports that are due.
