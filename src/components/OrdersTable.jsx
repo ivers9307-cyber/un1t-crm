@@ -9,6 +9,7 @@
 // status, date, retry-chain pill if applicable.
 
 import { useEffect, useState } from 'react'
+import { useRouter } from 'next/navigation'
 import { Loader2, AlertCircle, Search, RefreshCw, X, Undo2, Check as CheckIcon } from 'lucide-react'
 
 const STATUS_TABS = [
@@ -217,6 +218,7 @@ export default function OrdersTable() {
 }
 
 function OrderRow({ row, onRefunded }) {
+  const router = useRouter()
   const dt = row.created_at ? new Date(row.created_at) : null
   const dateLabel = dt ? dt.toLocaleString('en-IE', {
     timeZone: 'Europe/Dublin',
@@ -235,6 +237,14 @@ function OrderRow({ row, onRefunded }) {
   const [confirming, setConfirming] = useState(false)
   const [busy, setBusy] = useState(false)
   const [refundError, setRefundError] = useState(null)
+
+  function navigateToDetail(e) {
+    // Don't navigate when the operator's interacting with the
+    // refund control or its confirm/cancel buttons.
+    if (confirming) return
+    if (e.target.closest('button')) return
+    router.push(`/orders/${row.id}`)
+  }
 
   async function handleRefund() {
     setBusy(true)
@@ -261,7 +271,10 @@ function OrderRow({ row, onRefunded }) {
   }
 
   return (
-    <tr className="border-t border-un1t-gray hover:bg-un1t-gray/10">
+    <tr
+      className="border-t border-un1t-gray hover:bg-un1t-gray/10 cursor-pointer"
+      onClick={navigateToDetail}
+    >
       <td className="px-3 py-2 text-un1t-light whitespace-nowrap">{dateLabel}</td>
       <td className="px-3 py-2">
         <div className="text-un1t-white">{row.contact_name || row.contact_email}</div>
