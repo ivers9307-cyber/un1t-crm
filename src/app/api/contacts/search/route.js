@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { requireApiKey } from '@/lib/api-auth'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
-import { applyAudienceFilter, InvalidAudienceFilterError } from '@/lib/audience-filter'
+import { applyAudienceFilterAsync, InvalidAudienceFilterError } from '@/lib/audience-filter'
 import { audienceFilterSchema } from '@/lib/schemas'
 
 export const runtime = 'nodejs'
@@ -111,8 +111,9 @@ export async function POST(request) {
   }
 
   try {
-    listQuery = applyAudienceFilter(listQuery, parsed.data.filter)
-    countQuery = applyAudienceFilter(countQuery, parsed.data.filter)
+    // Async path supports the new `tag` field (Phase 3 — mig 085).
+    listQuery = await applyAudienceFilterAsync({ db, query: listQuery, filter: parsed.data.filter, locationId })
+    countQuery = await applyAudienceFilterAsync({ db, query: countQuery, filter: parsed.data.filter, locationId })
   } catch (e) {
     if (e instanceof InvalidAudienceFilterError) {
       return NextResponse.json({ success: false, error: e.message }, { status: 400 })

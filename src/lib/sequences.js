@@ -18,7 +18,7 @@
 
 import { createServerClient } from '@/lib/supabase'
 import { sendTransactionalEmail, applyMergeTags } from '@/lib/postmark'
-import { applyAudienceFilter, InvalidAudienceFilterError } from '@/lib/audience-filter'
+import { applyAudienceFilterAsync, InvalidAudienceFilterError } from '@/lib/audience-filter'
 import {
   sendTemplateMessage,
   buildTemplateComponents,
@@ -41,11 +41,20 @@ import { sendLocationSms, TwilioError } from '@/lib/twilio'
 async function contactMatchesSequenceAudience(contactId, filter) {
   if (!filter?.filters?.length) return true
   const db = createServerClient()
+  // Look up the contact's location so tag-filter resolution can be
+  // location-scoped (cheaper than scanning contact_tags org-wide).
+  const { data: contact } = await db.from('contacts').select('location_id').eq('id', contactId).maybeSingle()
   let query = db.from('contacts')
     .select('id', { count: 'exact', head: true })
     .eq('id', contactId)
   try {
-    query = applyAudienceFilter(query, filter)
+    // Async path supports the new `tag` field (Phase 3 — mig 085).
+    query = await applyAudienceFilterAsync({
+      db,
+      query,
+      filter,
+      locationId: contact?.location_id || null,
+    })
   } catch (e) {
     if (e instanceof InvalidAudienceFilterError) {
       console.warn(`[sequences] sequence has invalid audience_filter, treating as no-match: ${e.message}`)

@@ -1,5 +1,6 @@
 'use client'
 
+import { useEffect, useState } from 'react'
 import { Plus, Trash2, Users } from 'lucide-react'
 
 const FIELD_OPTIONS = [
@@ -10,7 +11,11 @@ const FIELD_OPTIONS = [
   { value: 'lead_source',           label: 'Lead Source',           type: 'select',
     options: ['booking', 'meta', 'tiktok', 'walkin', 'referral', 'website', 'whatsapp', 'other'] },
   { value: 'label',                 label: 'Label',                 type: 'text' },
-  { value: 'tags',                  label: 'Tag',                   type: 'text' },
+  { value: 'tags',                  label: 'Free-text tag',         type: 'text' },
+  // Phase 3 (mig 085): machine-derived retargeting tags. Resolved
+  // server-side via contact_tags. The select options are loaded
+  // dynamically from /api/segments at mount time.
+  { value: 'tag',                   label: 'Segment tag',           type: 'tag-select' },
   { value: 'total_emails_sent',     label: 'Emails Sent',           type: 'number' },
   { value: 'total_emails_opened',   label: 'Emails Opened',         type: 'number' },
   { value: 'trial_credits_remaining', label: 'Trial Credits Left',  type: 'number' },
@@ -25,6 +30,12 @@ const OPS_BY_TYPE = {
   select:  [
     { value: 'eq',  label: 'is' },
     { value: 'neq', label: 'is not' },
+  ],
+  // tag-select uses the same eq/neq semantics as select but pulls
+  // its options dynamically from /api/segments.
+  'tag-select': [
+    { value: 'eq',  label: 'has tag' },
+    { value: 'neq', label: 'does not have tag' },
   ],
   text:    [
     { value: 'eq',           label: 'equals' },
@@ -64,6 +75,21 @@ function needsValue(op) {
 export default function AudienceBuilder({ filter, onChange, audienceCount }) {
   const filters = filter?.filters || []
   const logic = filter?.logic || 'and'
+
+  // Tag options loaded once at mount from /api/segments (Phase 3,
+  // mig 085). Only fetched if the user actually opens a tag-select
+  // row — keeps the page free for callers that don't use tags.
+  const [tagOptions, setTagOptions] = useState(null)
+  const usesTagField = filters.some(f => f.field === 'tag')
+  useEffect(() => {
+    if (!usesTagField || tagOptions !== null) return
+    let cancelled = false
+    fetch('/api/segments').then(r => r.json()).then(j => {
+      if (!cancelled && j?.success) setTagOptions(j.data || [])
+      else if (!cancelled) setTagOptions([])
+    }).catch(() => { if (!cancelled) setTagOptions([]) })
+    return () => { cancelled = true }
+  }, [usesTagField, tagOptions])
 
   function updateFilter(newFilters, newLogic) {
     onChange({ filters: newFilters, logic: newLogic || logic })
@@ -174,6 +200,19 @@ export default function AudienceBuilder({ filter, onChange, audienceCount }) {
                 >
                   {fieldConfig.options?.map(opt => (
                     <option key={opt} value={opt}>{opt.replace(/_/g, ' ')}</option>
+                  ))}
+                </select>
+              ) : showValue && fieldConfig.type === 'tag-select' ? (
+                <select
+                  value={f.value || ''}
+                  onChange={e => updateRow(index, { value: e.target.value })}
+                  className="bg-un1t-black border border-un1t-gray rounded-md px-2.5 py-1.5 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid flex-1"
+                >
+                  <option value="">— pick a tag —</option>
+                  {(tagOptions || []).map(opt => (
+                    <option key={opt.tag} value={opt.tag}>
+                      {opt.tag} ({opt.count})
+                    </option>
                   ))}
                 </select>
               ) : showValue && fieldConfig.type === 'number' ? (

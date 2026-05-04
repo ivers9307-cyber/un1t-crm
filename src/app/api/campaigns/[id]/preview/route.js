@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
-import { buildAudienceQuery } from '@/lib/postmark'
+import { buildAudienceQueryAsync } from '@/lib/postmark'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 
 // GET /api/campaigns/[id]/preview — Get audience count preview
@@ -29,7 +29,7 @@ export async function GET(request, { params }) {
   // edited record). Surface it as a 400 so the user sees what's wrong.
   let query
   try {
-    query = buildAudienceQuery(db, campaign.audience_filter, campaign.location_id)
+    query = await buildAudienceQueryAsync(db, campaign.audience_filter, campaign.location_id)
   } catch (err) {
     return NextResponse.json({ success: false, error: err.message }, { status: 400 })
   }

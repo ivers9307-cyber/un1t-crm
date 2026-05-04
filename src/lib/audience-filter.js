@@ -54,6 +54,13 @@ export const AUDIENCE_FIELDS = Object.freeze({
   lead_created_at:           { type: 'date',    ops: ['eq', 'neq', 'gt', 'lt', 'gte', 'lte', 'is_null', 'is_not_null', 'not_null', 'days_since_gt', 'days_since_lt'] },
   last_emailed_at:           { type: 'date',    ops: ['eq', 'neq', 'gt', 'lt', 'gte', 'lte', 'is_null', 'is_not_null', 'not_null', 'days_since_gt', 'days_since_lt'] },
   last_wa_message_at:        { type: 'date',    ops: ['eq', 'neq', 'gt', 'lt', 'gte', 'lte', 'is_null', 'is_not_null', 'not_null', 'days_since_gt', 'days_since_lt'] },
+
+  // Machine-derived retargeting tags (mig 085). 'tag' compares
+  // against contact_tags.tag where removed_at IS NULL. Resolved
+  // ASYNC by resolveTagFilters() which pre-fetches the matching
+  // contact_ids and the caller injects them as an `id IN (…)`
+  // constraint on the contacts query.
+  tag:                       { type: 'tag',     ops: ['eq', 'neq'] },
 })
 
 const NUMERIC_OPS = new Set(['gt', 'lt', 'gte', 'lte', 'days_since_gt', 'days_since_lt'])
@@ -95,6 +102,14 @@ export function applyAudienceFilter(query, filter) {
     if (!fieldConfig.ops.includes(op)) {
       throw new InvalidAudienceFilterError(`Operator "${op}" is not allowed on field "${field}"`)
     }
+
+    // 'tag' is a virtual field — it doesn't exist as a column on
+    // contacts. resolveTagFilters() must be called first, which
+    // pre-fetches the matching contact_ids and the caller injects
+    // them as a contacts.id constraint. Skip the tag entries here
+    // so the scalar-filter loop doesn't try to apply them as
+    // `query.eq('tag', ...)`.
+    if (fieldConfig.type === 'tag') continue
 
     // Parse + validate value where required.
     let v = value
@@ -158,4 +173,93 @@ export function applyAudienceFilter(query, filter) {
   }
 
   return query
+}
+
+/**
+ * Resolve any `tag` filters in the audience filter into a contacts.id
+ * constraint (Phase 3 — mig 085 retargeting).
+ *
+ * Tags live on contact_tags (one row per active tag, soft-deleted via
+ * removed_at). The audience filter UI exposes `tag eq X` and
+ * `tag neq X` — translated here into `contacts.id IN (…)` and
+ * `contacts.id NOT IN (…)` respectively. Multiple tag clauses combine
+ * with AND inside a single audience filter.
+ *
+ * Returns the modified query. NULL/empty tag list still applies the
+ * constraint (so an `eq` against an unknown tag yields zero rows
+ * rather than silently matching everything).
+ *
+ * @param {object} args
+ * @param {SupabaseClient} args.db
+ * @param {object} args.query     contacts query already scoped by location
+ * @param {object|null} args.filter
+ * @param {string|null} args.locationId   tightens the contact_tags lookup
+ * @returns {Promise<object>}     the modified query
+ */
+export async function resolveTagFilters({ db, query, filter, locationId }) {
+  if (!filter?.filters?.length) return query
+
+  // Collect the AND-combined positive (eq) and negative (neq) tags.
+  const positives = []
+  const negatives = []
+  for (const f of filter.filters) {
+    const cfg = AUDIENCE_FIELDS[f?.field]
+    if (!cfg || cfg.type !== 'tag') continue
+    if (typeof f.value !== 'string' || !f.value.trim()) {
+      throw new InvalidAudienceFilterError('tag filter requires a non-empty string value')
+    }
+    const tag = f.value.trim()
+    if (f.op === 'eq') positives.push(tag)
+    else if (f.op === 'neq') negatives.push(tag)
+  }
+  if (positives.length === 0 && negatives.length === 0) return query
+
+  // Helper: list of contact_ids currently tagged with `tag` at the
+  // given location (or all locations if locationId is null).
+  async function contactIdsForTag(tag) {
+    let q = db.from('contact_tags').select('contact_id').eq('tag', tag).is('removed_at', null)
+    if (locationId) q = q.eq('location_id', locationId)
+    const { data, error } = await q
+    if (error) throw new InvalidAudienceFilterError(`tag lookup failed: ${error.message}`)
+    return Array.from(new Set((data || []).map(r => r.contact_id).filter(Boolean)))
+  }
+
+  // Positives: intersect across all (AND combine). The first list
+  // seeds; subsequent tags filter down. Empty intersection = no rows.
+  let allowed = null
+  for (const tag of positives) {
+    const ids = await contactIdsForTag(tag)
+    allowed = allowed === null ? new Set(ids) : new Set([...allowed].filter(x => ids.includes(x)))
+    if (allowed.size === 0) {
+      // Force an unsatisfiable predicate so the count comes back 0.
+      return query.eq('id', '00000000-0000-0000-0000-000000000000')
+    }
+  }
+  if (allowed && allowed.size > 0) {
+    query = query.in('id', [...allowed])
+  }
+
+  // Negatives: subtract. Use NOT IN (…) — but Supabase JS doesn't
+  // support `.not('id', 'in', […])` cleanly across all client
+  // versions. Use the OR-string `id.not.in.(…)` form via .or().
+  for (const tag of negatives) {
+    const ids = await contactIdsForTag(tag)
+    if (ids.length === 0) continue // nothing to exclude
+    // `id=not.in.(uuid1,uuid2,…)` is the PostgREST URL form. The JS
+    // client supports it via the negation chain on .not().
+    query = query.not('id', 'in', `(${ids.join(',')})`)
+  }
+
+  return query
+}
+
+/**
+ * Convenience wrapper: resolve tag filters AND apply scalar filters
+ * in one call. Use this in async contexts (most route handlers
+ * already are). Existing sync callers continue using
+ * applyAudienceFilter directly until they need tag support.
+ */
+export async function applyAudienceFilterAsync({ db, query, filter, locationId }) {
+  query = await resolveTagFilters({ db, query, filter, locationId })
+  return applyAudienceFilter(query, filter)
 }

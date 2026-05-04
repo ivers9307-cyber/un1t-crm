@@ -1,6 +1,6 @@
 import { createServerClient } from './supabase'
 import { getAppUrl } from './app-url'
-import { applyAudienceFilter } from './audience-filter'
+import { applyAudienceFilter, applyAudienceFilterAsync } from './audience-filter'
 
 const POSTMARK_API_URL = 'https://api.postmarkapp.com'
 
@@ -200,7 +200,26 @@ export function buildAudienceQuery(db, filter, locationId) {
   // Apply user-supplied filters via the whitelisted helper. Throws
   // InvalidAudienceFilterError if the filter contains an unknown field
   // or unsupported operator — let it bubble up so the caller returns 400.
+  // NOTE: this sync version cannot resolve `tag` filters. Use
+  // buildAudienceQueryAsync below if the filter may contain tags
+  // (Phase 3 — segments).
   return applyAudienceFilter(query, filter)
+}
+
+/**
+ * Async sibling of buildAudienceQuery — supports the `tag` field
+ * (Phase 3 retargeting). Use from any async caller that handles
+ * an audience filter from the UI; the AudienceBuilder may contain
+ * tag clauses now.
+ */
+export async function buildAudienceQueryAsync(db, filter, locationId) {
+  let query = db
+    .from('contacts')
+    .select('*, contact_preferences!inner(*)')
+    .eq('location_id', locationId)
+    .eq('contact_preferences.email_marketing', true)
+  query = query.not('email_status', 'in', '("bounced","complained")')
+  return applyAudienceFilterAsync({ db, query, filter, locationId })
 }
 
 // ============================================================
@@ -229,8 +248,8 @@ export async function sendCampaign(campaignId) {
   // Update status to sending
   await db.from('campaigns').update({ status: 'sending' }).eq('id', campaignId)
 
-  // Get audience
-  const audienceQuery = buildAudienceQuery(db, campaign.audience_filter, campaign.location_id)
+  // Get audience — async to support tag-based segments (Phase 3).
+  const audienceQuery = await buildAudienceQueryAsync(db, campaign.audience_filter, campaign.location_id)
   const { data: contacts, error: contactError } = await audienceQuery
 
   if (contactError) throw new Error(`Audience query failed: ${contactError.message}`)
