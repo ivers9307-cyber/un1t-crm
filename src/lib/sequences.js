@@ -383,6 +383,187 @@ export async function triggerSequencesForTagsAdded(contactId, addedTags) {
 }
 
 /**
+ * Anniversary trigger (Tier 2A).
+ *
+ * Cron-driven. For each active sequence with
+ * trigger_type='anniversary', enrol contacts whose
+ * trigger_config.from_field timestamp is approximately
+ * trigger_config.days_after days ago.
+ *
+ * trigger_config:
+ *   - from_field: 'lead_created_at' | 'last_emailed_at' (default lead_created_at)
+ *   - days_after: number (required)
+ *
+ * Dedup: source_ref is `${from_field}:${days_after}` so a contact
+ * isn't re-enrolled in the same sequence on the same anniversary.
+ * Different anniversaries (different sequences or different
+ * days_after) are independent enrolments.
+ *
+ * Tolerance ±12 hours so a daily cron fires per contact, not 24×.
+ */
+export async function runAnniversaryTriggers() {
+  const db = createServerClient()
+  const stats = { fired: 0, skipped: 0 }
+  const ALLOWED_FIELDS = new Set(['lead_created_at', 'last_emailed_at'])
+
+  const { data: sequences } = await db
+    .from('email_sequences')
+    .select('id, location_id, trigger_config, audience_filter')
+    .eq('trigger_type', 'anniversary')
+    .eq('status', 'active')
+  if (!sequences?.length) return stats
+
+  const TOLERANCE_MS = 12 * 60 * 60 * 1000  // ±12h
+  const now = Date.now()
+
+  for (const seq of sequences) {
+    const cfg = seq.trigger_config || {}
+    const fromField = ALLOWED_FIELDS.has(cfg.from_field) ? cfg.from_field : 'lead_created_at'
+    const daysAfter = Number(cfg.days_after)
+    if (!Number.isFinite(daysAfter) || daysAfter < 0) continue
+
+    const targetMs = now - daysAfter * 24 * 3600_000
+    const lo = new Date(targetMs - TOLERANCE_MS)
+    const hi = new Date(targetMs + TOLERANCE_MS)
+    const sourceRef = `${fromField}:${daysAfter}`
+
+    const { data: contacts } = await db
+      .from('contacts')
+      .select(`id, ${fromField}`)
+      .eq('location_id', seq.location_id)
+      .gte(fromField, lo.toISOString())
+      .lte(fromField, hi.toISOString())
+      .limit(500)
+
+    for (const c of (contacts || [])) {
+      if (!c.id) continue
+      // Audience filter check (per-contact).
+      const matches = await contactMatchesSequenceAudience(c.id, seq.audience_filter)
+      if (!matches) continue
+      // Dedup across all statuses on (sequence, contact, anniversary).
+      const { data: existing } = await db
+        .from('sequence_enrollments')
+        .select('id')
+        .eq('sequence_id', seq.id)
+        .eq('contact_id', c.id)
+        .eq('source_type', 'anniversary')
+        .eq('source_ref', sourceRef)
+        .limit(1)
+      if (existing?.length) { stats.skipped++; continue }
+      await enrolContacts({
+        sequenceId: seq.id,
+        contactIds: [c.id],
+        sourceType: 'anniversary',
+        sourceRef,
+      })
+      stats.fired++
+    }
+  }
+  return stats
+}
+
+/**
+ * Inactivity trigger (Tier 2A).
+ *
+ * Cron-driven. For each active sequence with
+ * trigger_type='inactivity', enrol contacts who haven't been
+ * "active" in trigger_config.days_inactive days.
+ *
+ * trigger_config:
+ *   - signal: 'last_emailed_at' | 'last_email_open_at' | 'last_booking_at' (default last_emailed_at)
+ *   - days_inactive: number (required)
+ *
+ * Dedup: source_ref = `${signal}:${days_inactive}`. Same as
+ * anniversary — different signals or thresholds are independent.
+ *
+ * Implementation note: 'last_booking_at' is materialised on the
+ * fly via the bookings table since contacts.last_booking_at isn't
+ * a stored column today. last_emailed_at + last_email_open_at ARE
+ * stored on contacts.
+ */
+export async function runInactivityTriggers() {
+  const db = createServerClient()
+  const stats = { fired: 0, skipped: 0 }
+  const SIGNAL_FIELDS = {
+    last_emailed_at: 'last_emailed_at',
+    last_email_open_at: 'last_email_open_at',
+  }
+
+  const { data: sequences } = await db
+    .from('email_sequences')
+    .select('id, location_id, trigger_config, audience_filter')
+    .eq('trigger_type', 'inactivity')
+    .eq('status', 'active')
+  if (!sequences?.length) return stats
+
+  const now = Date.now()
+  for (const seq of sequences) {
+    const cfg = seq.trigger_config || {}
+    const signal = cfg.signal || 'last_emailed_at'
+    const days = Number(cfg.days_inactive)
+    if (!Number.isFinite(days) || days <= 0) continue
+    const cutoff = new Date(now - days * 24 * 3600_000).toISOString()
+    const sourceRef = `${signal}:${days}`
+
+    let candidates = []
+    if (SIGNAL_FIELDS[signal]) {
+      // Stored signal — direct query on contacts.
+      const field = SIGNAL_FIELDS[signal]
+      const { data } = await db
+        .from('contacts')
+        .select('id')
+        .eq('location_id', seq.location_id)
+        .lt(field, cutoff)
+        .limit(500)
+      candidates = data || []
+    } else if (signal === 'last_booking_at') {
+      // Derived signal — find contacts at the location whose most
+      // recent booking is older than the cutoff. Pull recent
+      // bookings and find which contacts DON'T appear → they're
+      // the inactive ones. Capped at 500 contacts per location.
+      const { data: contacts } = await db
+        .from('contacts')
+        .select('id')
+        .eq('location_id', seq.location_id)
+        .limit(500)
+      const ids = (contacts || []).map((c) => c.id)
+      if (ids.length === 0) continue
+      const { data: recent } = await db
+        .from('bookings')
+        .select('contact_id')
+        .in('contact_id', ids)
+        .gte('booking_date', cutoff.slice(0, 10))
+      const recentSet = new Set((recent || []).map((b) => b.contact_id))
+      candidates = ids.filter((id) => !recentSet.has(id)).map((id) => ({ id }))
+    } else {
+      continue // unknown signal
+    }
+
+    for (const c of candidates) {
+      const matches = await contactMatchesSequenceAudience(c.id, seq.audience_filter)
+      if (!matches) continue
+      const { data: existing } = await db
+        .from('sequence_enrollments')
+        .select('id')
+        .eq('sequence_id', seq.id)
+        .eq('contact_id', c.id)
+        .eq('source_type', 'inactivity')
+        .eq('source_ref', sourceRef)
+        .limit(1)
+      if (existing?.length) { stats.skipped++; continue }
+      await enrolContacts({
+        sequenceId: seq.id,
+        contactIds: [c.id],
+        sourceType: 'inactivity',
+        sourceRef,
+      })
+      stats.fired++
+    }
+  }
+  return stats
+}
+
+/**
  * Race-registered trigger (Tier 1A).
  *
  * Called from /api/public/races/[slug]/register and from
@@ -952,6 +1133,12 @@ export async function runSequences({ now = new Date() } = {}) {
         // assignee_user_id, due_offset_minutes }.
         await internalTaskStep(db, { step, contact, sequence })
         sendId = null
+      } else if (step.step_type === 'webhook') {
+        // Mig 089: outbound HTTP. Config: { url, method, headers,
+        // payload_template }. Throws on non-2xx so the runner's
+        // retry/pause logic kicks in.
+        await webhookStep(db, { step, contact, sequence, enrollment })
+        sendId = null
       } else {
         throw new Error(`Unknown step_type "${step.step_type}".`)
       }
@@ -971,9 +1158,16 @@ export async function runSequences({ now = new Date() } = {}) {
         : 60
       let nextFireAt = null
       if (followingStep.data) {
-        nextFireAt = isTest
-          ? new Date(now.getTime() + accelSeconds * 1000).toISOString()
-          : new Date(now.getTime() + nextStepDelayMs(followingStep.data)).toISOString()
+        const rawNext = isTest
+          ? new Date(now.getTime() + accelSeconds * 1000)
+          : new Date(now.getTime() + nextStepDelayMs(followingStep.data))
+        // Mig 089: respect the per-sequence send window. Test
+        // enrolments bypass the window so QA isn't blocked by
+        // weekend/night hours.
+        const clamped = isTest
+          ? rawNext
+          : clampToSendWindow(rawNext, sequence.send_window || null)
+        nextFireAt = clamped.toISOString()
       }
       const newStatus = followingStep.data ? 'active' : 'completed'
 
@@ -1009,6 +1203,60 @@ export async function runSequences({ now = new Date() } = {}) {
   }
 
   return stats
+}
+
+// ─── Tier 2B: send-window helper (mig 089) ───────────────────────
+
+/**
+ * Push a UTC timestamp forward to the next acceptable slot in the
+ * sequence's send window. Returns the original timestamp if no
+ * window configured or already inside the window.
+ *
+ * Window is interpreted in Europe/Dublin local time. skip_days
+ * uses 0=Sunday … 6=Saturday convention (JavaScript getDay()).
+ *
+ * @param {Date} candidate
+ * @param {object|null} window  { start_hour, end_hour, skip_days }
+ * @returns {Date}
+ */
+function clampToSendWindow(candidate, window) {
+  if (!window) return candidate
+  const startH = Number.isFinite(window.start_hour) ? window.start_hour : null
+  const endH = Number.isFinite(window.end_hour) ? window.end_hour : null
+  const skipDays = Array.isArray(window.skip_days) ? window.skip_days.map(Number) : []
+  if (startH == null && endH == null && skipDays.length === 0) return candidate
+
+  // Iterate at most ~14 days forward — operators won't configure
+  // an empty window in practice, but bound it defensively.
+  let attempt = new Date(candidate.getTime())
+  for (let i = 0; i < 14 * 24; i++) {
+    // Use Intl to get the local hour + dow in Europe/Dublin without
+    // fighting Date's local-tz coupling. getParts gives strings.
+    const parts = new Intl.DateTimeFormat('en-GB', {
+      timeZone: 'Europe/Dublin',
+      hour: 'numeric',
+      hourCycle: 'h23',
+      weekday: 'short',
+    }).formatToParts(attempt)
+    const hourStr = parts.find((p) => p.type === 'hour')?.value || '0'
+    const dowStr = parts.find((p) => p.type === 'weekday')?.value || ''
+    const localHour = Number(hourStr) || 0
+    // Map en-GB short weekday to 0-6 (Sun=0).
+    const DOW_MAP = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 }
+    const localDow = DOW_MAP[dowStr] ?? 0
+
+    const dayOk = !skipDays.includes(localDow)
+    let hourOk = true
+    if (startH != null && localHour < startH) hourOk = false
+    if (endH != null && localHour >= endH) hourOk = false
+
+    if (dayOk && hourOk) return attempt
+
+    // Advance one hour at a time. Cheap loop bounded above.
+    attempt = new Date(attempt.getTime() + 60 * 60_000)
+  }
+  // Fallback: return what we have rather than loop forever.
+  return attempt
 }
 
 // ─── Tier 1C: goal-tracking helper (mig 088) ─────────────────────
@@ -1138,6 +1386,79 @@ async function updateFieldStep(db, { step, contact }) {
     } catch (e) {
       console.warn(`[sequences] update_field cascade trigger failed: ${e.message}`)
     }
+  }
+}
+
+/**
+ * webhook step (mig 089 / Tier 2C). POSTs (or other method) to a
+ * configured URL with contact context. config:
+ *   - url            (required, must be HTTPS)
+ *   - method         (default POST)
+ *   - headers        (record<string,string>, optional)
+ *   - payload        (object, optional — defaults to a sensible
+ *                     contact + sequence summary)
+ *
+ * No retry beyond what the runner already does (5 fails → pause).
+ * Operators can build on top with a wait-step + condition step
+ * if they need fancier logic.
+ *
+ * Security: URL must start with https:// to prevent accidental
+ * plain-HTTP exfil. No HMAC signing in v1 — operators should use
+ * a per-endpoint API key in the headers if they need it.
+ */
+async function webhookStep(_db, { step, contact, sequence, enrollment }) {
+  const cfg = step.config || {}
+  const url = String(cfg.url || '').trim()
+  if (!url) throw new Error('webhook step: config.url is required')
+  if (!url.startsWith('https://')) {
+    throw new Error('webhook step: url must start with https:// for security')
+  }
+  const method = String(cfg.method || 'POST').toUpperCase()
+  if (!['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
+    throw new Error(`webhook step: method "${method}" not supported`)
+  }
+
+  // Default payload: contact + sequence + enrolment context. Operators
+  // can override by setting cfg.payload — anything serialisable goes.
+  const defaultPayload = {
+    contact: {
+      id: contact.id,
+      name: contact.name,
+      email: contact.email,
+      phone: contact.phone,
+      lead_status: contact.lead_status,
+      location_id: contact.location_id,
+    },
+    sequence: {
+      id: sequence.id,
+      name: sequence.name,
+    },
+    enrolment: {
+      id: enrollment.id,
+      step_order: step.step_order,
+    },
+    fired_at: new Date().toISOString(),
+  }
+  const payload = cfg.payload && typeof cfg.payload === 'object'
+    ? cfg.payload
+    : defaultPayload
+
+  const headers = {
+    'content-type': 'application/json',
+    'user-agent': 'un1t-sequences-webhook/1.0',
+    ...(cfg.headers && typeof cfg.headers === 'object' ? cfg.headers : {}),
+  }
+  const body = method === 'GET' ? undefined : JSON.stringify(payload)
+
+  let res
+  try {
+    res = await fetch(url, { method, headers, body })
+  } catch (e) {
+    throw new Error(`webhook fetch failed: ${e.message || e}`)
+  }
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    throw new Error(`webhook returned ${res.status}: ${text.slice(0, 200)}`)
   }
 }
 

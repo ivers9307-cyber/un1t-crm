@@ -14,9 +14,11 @@ const SequenceUpdateSchema = z.object({
     'event_reminder', 'tag_added',
     'race_registered', 'race_finished',
     'order_completed', 'order_failed', 'order_abandoned',
+    'anniversary', 'inactivity',
   ]).optional(),
   trigger_config: z.unknown().optional(),
   goal_config: z.unknown().nullable().optional(),
+  send_window: z.unknown().nullable().optional(),
   status: z.enum(['draft', 'active', 'paused', 'archived']).optional(),
 })
 

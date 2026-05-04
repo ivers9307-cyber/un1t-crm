@@ -19,6 +19,8 @@ const TRIGGER_TYPES = [
   { value: 'order_completed',  label: 'Order Completed',    description: 'Triggered when a paid order (race or car deposit) lands' },
   { value: 'order_failed',     label: 'Order Failed',       description: 'Triggered when a payment fails — perfect for retry-recovery' },
   { value: 'order_abandoned',  label: 'Order Abandoned',    description: 'Triggered when a buyer abandons checkout — cart-recovery sequences' },
+  { value: 'anniversary',      label: 'Anniversary',        description: 'Triggered N days after a contact field (lead_created_at, last_emailed_at)' },
+  { value: 'inactivity',       label: 'Inactivity',         description: 'Triggered when a contact has been inactive for N days — win-back sequences' },
 ]
 
 // Per-step icon/colour by channel.
@@ -128,6 +130,7 @@ function StepCard({ step, index, onUpdate, onDelete, onMoveUp, onMoveDown, isFir
                   <option value="apply_tag">Apply tag</option>
                   <option value="update_field">Update field</option>
                   <option value="internal_task">Create internal task</option>
+                  <option value="webhook">Webhook (HTTPS)</option>
                 </select>
               </div>
               <div>
@@ -397,6 +400,43 @@ function StepCard({ step, index, onUpdate, onDelete, onMoveUp, onMoveDown, isFir
                 </p>
               </div>
             )}
+
+            {/* webhook step (mig 089). HTTPS only, no signing — pass
+                an Authorization header in config.headers if your
+                endpoint needs it. */}
+            {stepType === 'webhook' && (
+              <div className="space-y-2">
+                <div className="grid grid-cols-[1fr_auto] gap-2 items-end">
+                  <div>
+                    <label className="block text-xs text-un1t-light mb-1">URL (https only)</label>
+                    <input
+                      type="url"
+                      value={step.config?.url || ''}
+                      onChange={e => onUpdate({ config: { ...(step.config || {}), url: e.target.value } })}
+                      placeholder="https://hook.example.com/un1t-sequence"
+                      className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-un1t-light mb-1">Method</label>
+                    <select
+                      value={step.config?.method || 'POST'}
+                      onChange={e => onUpdate({ config: { ...(step.config || {}), method: e.target.value } })}
+                      className="bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
+                    >
+                      <option value="POST">POST</option>
+                      <option value="PUT">PUT</option>
+                      <option value="PATCH">PATCH</option>
+                      <option value="GET">GET</option>
+                      <option value="DELETE">DELETE</option>
+                    </select>
+                  </div>
+                </div>
+                <p className="text-[11px] text-un1t-mid">
+                  Default payload includes contact + sequence + enrolment context. To override, supply a custom payload object via the API. For auth, include an <code>Authorization</code> header in <code>config.headers</code>.
+                </p>
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -411,6 +451,7 @@ export default function SequenceEditor({ sequence, locationId, userId }) {
   const [triggerType, setTriggerType] = useState(sequence?.trigger_type || 'manual')
   const [triggerConfig, setTriggerConfig] = useState(sequence?.trigger_config || {})
   const [goalConfig, setGoalConfig] = useState(sequence?.goal_config || null)
+  const [sendWindow, setSendWindow] = useState(sequence?.send_window || null)
   const [status, setStatus] = useState(sequence?.status || 'draft')
   const [steps, setSteps] = useState(sequence?.sequence_steps || [])
   const [testStatus, setTestStatus] = useState(null) // { ok, message }
@@ -446,6 +487,7 @@ export default function SequenceEditor({ sequence, locationId, userId }) {
         trigger_type: triggerType,
         trigger_config: triggerConfig,
         goal_config: goalConfig,
+        send_window: sendWindow,
         status,
         location_id: locationId,
         created_by: userId,
@@ -769,6 +811,91 @@ export default function SequenceEditor({ sequence, locationId, userId }) {
                 <p className="text-xs text-un1t-mid sm:col-span-2 self-center">
                   Triggers when this contact creates ANY booking. (Per-event-type filter coming soon.)
                 </p>
+              )}
+            </div>
+          </div>
+
+          {/* Send window (mig 089). Optional. Push message-step
+              fires forward to land within the configured local-time
+              window — avoids 3am SMS pings. Skip days are
+              0=Sunday … 6=Saturday. Non-message steps (apply_tag,
+              update_field, internal_task, webhook) ignore this. */}
+          <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5">
+            <h3 className="font-semibold text-sm text-un1t-light uppercase tracking-wider mb-3">
+              Send window <span className="text-xs text-un1t-mid normal-case font-normal">(optional, Europe/Dublin time)</span>
+            </h3>
+            <p className="text-xs text-un1t-mid mb-3">
+              Pushes message-step fires forward to land within the chosen window. Test mode bypasses for QA.
+            </p>
+            <div className="flex flex-wrap items-end gap-3">
+              <div>
+                <label className="block text-xs text-un1t-light mb-1">Start hour</label>
+                <input
+                  type="number"
+                  min="0"
+                  max="23"
+                  value={sendWindow?.start_hour ?? ''}
+                  onChange={e => {
+                    const v = e.target.value === '' ? null : parseInt(e.target.value)
+                    setSendWindow({ ...(sendWindow || {}), start_hour: v })
+                  }}
+                  placeholder="9"
+                  className="bg-un1t-black border border-un1t-gray rounded-md px-2.5 py-1.5 text-sm text-un1t-white w-20 focus:outline-none focus:border-un1t-mid"
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-un1t-light mb-1">End hour (excl.)</label>
+                <input
+                  type="number"
+                  min="0"
+                  max="24"
+                  value={sendWindow?.end_hour ?? ''}
+                  onChange={e => {
+                    const v = e.target.value === '' ? null : parseInt(e.target.value)
+                    setSendWindow({ ...(sendWindow || {}), end_hour: v })
+                  }}
+                  placeholder="17"
+                  className="bg-un1t-black border border-un1t-gray rounded-md px-2.5 py-1.5 text-sm text-un1t-white w-20 focus:outline-none focus:border-un1t-mid"
+                />
+              </div>
+              <div className="flex-1 min-w-[200px]">
+                <label className="block text-xs text-un1t-light mb-1">Skip days</label>
+                <div className="flex gap-1 flex-wrap">
+                  {[
+                    { v: 0, l: 'Sun' }, { v: 1, l: 'Mon' }, { v: 2, l: 'Tue' },
+                    { v: 3, l: 'Wed' }, { v: 4, l: 'Thu' }, { v: 5, l: 'Fri' },
+                    { v: 6, l: 'Sat' },
+                  ].map(d => {
+                    const skipDays = Array.isArray(sendWindow?.skip_days) ? sendWindow.skip_days : []
+                    const on = skipDays.includes(d.v)
+                    return (
+                      <button
+                        key={d.v}
+                        type="button"
+                        onClick={() => {
+                          const next = on ? skipDays.filter(x => x !== d.v) : [...skipDays, d.v]
+                          setSendWindow({ ...(sendWindow || {}), skip_days: next })
+                        }}
+                        className={`text-[11px] px-2 py-1 rounded-md border ${
+                          on
+                            ? 'border-amber-500/50 bg-amber-500/10 text-amber-700'
+                            : 'border-un1t-gray text-un1t-light hover:border-un1t-mid'
+                        }`}
+                      >
+                        {d.l}
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+              {sendWindow && Object.keys(sendWindow).length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setSendWindow(null)}
+                  className="text-[11px] text-un1t-light hover:text-un1t-white"
+                >
+                  Clear
+                </button>
               )}
             </div>
           </div>

@@ -6,7 +6,12 @@
 // the dev server requires the same bearer.
 
 import { NextResponse } from 'next/server'
-import { runSequences, runEventReminderTriggers } from '@/lib/sequences'
+import {
+  runSequences,
+  runEventReminderTriggers,
+  runAnniversaryTriggers,
+  runInactivityTriggers,
+} from '@/lib/sequences'
 import { runEventReminderSends } from '@/lib/event-reminders'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 
@@ -50,9 +55,25 @@ export async function GET(request) {
     console.warn(`[cron] event_reminder triggers failed: ${triggerErr}`)
   }
 
+  // Tier 2A — anniversary + inactivity triggers (mig 088 follow-up).
+  // Run alongside the existing event_reminder scan. Both are
+  // independent + best-effort.
+  let anniversaryStats = null, anniversaryErr = null
+  try { anniversaryStats = await runAnniversaryTriggers() }
+  catch (e) {
+    anniversaryErr = e.message || String(e)
+    console.warn(`[cron] anniversary triggers failed: ${anniversaryErr}`)
+  }
+  let inactivityStats = null, inactivityErr = null
+  try { inactivityStats = await runInactivityTriggers() }
+  catch (e) {
+    inactivityErr = e.message || String(e)
+    console.warn(`[cron] inactivity triggers failed: ${inactivityErr}`)
+  }
+
   try {
     const stats = await runSequences()
-    // Heartbeat AFTER all three phases ran. If runSequences threw we
+    // Heartbeat AFTER all phases ran. If runSequences threw we
     // skip the stamp — that's the signal a downstream alert needs.
     await stampHeartbeat('run-sequences')
     return NextResponse.json({
@@ -60,6 +81,10 @@ export async function GET(request) {
       stats,
       triggers: triggerStats,
       trigger_error: triggerErr,
+      anniversary: anniversaryStats,
+      anniversary_error: anniversaryErr,
+      inactivity: inactivityStats,
+      inactivity_error: inactivityErr,
       reminder_sends: reminderSendStats,
       reminder_sends_error: reminderSendErr,
     })
