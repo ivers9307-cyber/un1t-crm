@@ -410,8 +410,10 @@ export default function SequenceEditor({ sequence, locationId, userId }) {
   const [description, setDescription] = useState(sequence?.description || '')
   const [triggerType, setTriggerType] = useState(sequence?.trigger_type || 'manual')
   const [triggerConfig, setTriggerConfig] = useState(sequence?.trigger_config || {})
+  const [goalConfig, setGoalConfig] = useState(sequence?.goal_config || null)
   const [status, setStatus] = useState(sequence?.status || 'draft')
   const [steps, setSteps] = useState(sequence?.sequence_steps || [])
+  const [testStatus, setTestStatus] = useState(null) // { ok, message }
   const [whatsappTemplates, setWhatsappTemplates] = useState([])
 
   // Lazy-load the location's WhatsApp templates so the StepCard
@@ -443,6 +445,7 @@ export default function SequenceEditor({ sequence, locationId, userId }) {
         description,
         trigger_type: triggerType,
         trigger_config: triggerConfig,
+        goal_config: goalConfig,
         status,
         location_id: locationId,
         created_by: userId,
@@ -588,6 +591,28 @@ export default function SequenceEditor({ sequence, locationId, userId }) {
               {status === 'active' ? <><Pause size={14} /> Pause</> : <><Play size={14} /> Activate</>}
             </button>
           )}
+          {sequenceId && (
+            <button
+              onClick={async () => {
+                setTestStatus(null)
+                try {
+                  const r = await fetch(`/api/sequences/${sequenceId}/test`, { method: 'POST' })
+                  const j = await r.json()
+                  if (!r.ok || j.success === false) {
+                    setTestStatus({ ok: false, message: j.error || `Test failed (${r.status})` })
+                  } else {
+                    setTestStatus({ ok: true, message: j.data?.message || 'Test enrolment created.' })
+                  }
+                } catch (e) {
+                  setTestStatus({ ok: false, message: e.message || 'Network error' })
+                }
+              }}
+              className="flex items-center gap-1.5 text-sm border border-un1t-gray text-un1t-light hover:text-un1t-white px-3 py-1.5 rounded-md"
+              title="Enrol your own contact with delays accelerated to 60s — preview every step in a couple of minutes"
+            >
+              <Zap size={14} /> Send test
+            </button>
+          )}
           <button
             onClick={handleSave}
             disabled={saving}
@@ -598,6 +623,14 @@ export default function SequenceEditor({ sequence, locationId, userId }) {
           </button>
         </div>
       </div>
+
+      {testStatus && (
+        <div className={`text-sm px-5 py-2 border-b ${testStatus.ok
+          ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-700'
+          : 'bg-red-500/10 border-red-500/30 text-red-400'}`}>
+          {testStatus.message}
+        </div>
+      )}
 
       {error && (
         <div className="bg-red-500/10 border-b border-red-500/30 text-red-400 text-sm px-5 py-2">
@@ -680,6 +713,64 @@ export default function SequenceEditor({ sequence, locationId, userId }) {
                 </div>
               </div>
             )}
+          </div>
+
+          {/* Goal (mig 088). Optional. When met, enrolment auto-exits
+              with exit_reason='goal_met' so the contact doesn't get
+              the rest of the sequence after they've already converted. */}
+          <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5">
+            <h3 className="font-semibold text-sm text-un1t-light uppercase tracking-wider mb-3">
+              Goal <span className="text-xs text-un1t-mid normal-case font-normal">(optional)</span>
+            </h3>
+            <p className="text-xs text-un1t-mid mb-3">
+              Auto-exits the contact when they hit a milestone — they won&apos;t get the day-3 follow-up if they&apos;ve already converted.
+            </p>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              <select
+                value={goalConfig?.type || ''}
+                onChange={e => {
+                  const t = e.target.value
+                  if (!t) setGoalConfig(null)
+                  else setGoalConfig({ type: t })
+                }}
+                className="bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
+              >
+                <option value="">No goal</option>
+                <option value="lead_status">Lead status reaches…</option>
+                <option value="tag_added">Tag is added…</option>
+                <option value="booking_made">Books an event</option>
+              </select>
+              {goalConfig?.type === 'lead_status' && (
+                <select
+                  value={goalConfig?.value || ''}
+                  onChange={e => setGoalConfig({ ...goalConfig, value: e.target.value })}
+                  className="bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid sm:col-span-2"
+                >
+                  <option value="">(pick one)</option>
+                  <option value="active_trial">active_trial</option>
+                  <option value="cold">cold</option>
+                  <option value="lost_member">lost_member</option>
+                  <option value="member">member</option>
+                  <option value="returning">returning</option>
+                  <option value="competition_competitor">competition_competitor</option>
+                </select>
+              )}
+              {goalConfig?.type === 'tag_added' && (
+                <input
+                  type="text"
+                  value={goalConfig?.tag || ''}
+                  onChange={e => setGoalConfig({ ...goalConfig, tag: e.target.value })}
+                  placeholder="e.g. race_completed"
+                  maxLength={60}
+                  className="bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid sm:col-span-2"
+                />
+              )}
+              {goalConfig?.type === 'booking_made' && (
+                <p className="text-xs text-un1t-mid sm:col-span-2 self-center">
+                  Triggers when this contact creates ANY booking. (Per-event-type filter coming soon.)
+                </p>
+              )}
+            </div>
           </div>
 
           {/* Description */}

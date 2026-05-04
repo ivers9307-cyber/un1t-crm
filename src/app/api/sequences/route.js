@@ -13,9 +13,13 @@ const SequenceCreateSchema = z.object({
   // enum had stale draft values ('on_signup' / 'on_status_change')
   // that would silently reject legitimate sequences from the editor.
   trigger_type: z.enum([
-    'manual', 'booking_created', 'status_change', 'event_reminder', 'tag_added',
+    'manual', 'booking_created', 'first_booking', 'status_change',
+    'event_reminder', 'tag_added',
+    'race_registered', 'race_finished',
+    'order_completed', 'order_failed', 'order_abandoned',
   ]).optional(),
   trigger_config: z.unknown().optional(),
+  goal_config: z.unknown().nullable().optional(),
   location_id: uuidLike.optional(),
 })
 

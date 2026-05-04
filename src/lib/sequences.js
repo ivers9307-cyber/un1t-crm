@@ -858,7 +858,7 @@ export async function runSequences({ now = new Date() } = {}) {
   // we update current_step_order before returning.
   const { data: due, error: dueErr } = await db
     .from('sequence_enrollments')
-    .select('id, sequence_id, contact_id, current_step_order, error_count, status')
+    .select('id, sequence_id, contact_id, current_step_order, error_count, status, metadata')
     .eq('status', 'active')
     .lte('next_step_at', now.toISOString())
     .order('next_step_at', { ascending: true })
@@ -893,6 +893,23 @@ export async function runSequences({ now = new Date() } = {}) {
         }).eq('id', enrollment.id)
         stats.skipped++
         continue
+      }
+
+      // Mig 088: goal check. If a goal is configured and met,
+      // auto-exit BEFORE processing the next step. exit_reason
+      // distinguishes from natural completion.
+      if (sequence.goal_config) {
+        const goalMet = await isGoalMet({ db, contact, goalConfig: sequence.goal_config })
+        if (goalMet) {
+          await db.from('sequence_enrollments').update({
+            status: 'exited',
+            exit_reason: 'goal_met',
+            last_processed_at: now.toISOString(),
+            next_step_at: null,
+          }).eq('id', enrollment.id)
+          stats.skipped++
+          continue
+        }
       }
 
       const step = await nextStepForEnrollment(db, enrollment)
@@ -946,9 +963,18 @@ export async function runSequences({ now = new Date() } = {}) {
         .eq('sequence_id', sequence.id)
         .eq('step_order', step.step_order + 1)
         .maybeSingle()
-      const nextFireAt = followingStep.data
-        ? new Date(now.getTime() + nextStepDelayMs(followingStep.data)).toISOString()
-        : null
+      // Mig 088: test mode — accelerate delays to a fixed N seconds.
+      // metadata.test=true on the enrolment is the marker.
+      const isTest = enrollment.metadata?.test === true
+      const accelSeconds = Number.isFinite(enrollment.metadata?.accelerated_delay_seconds)
+        ? enrollment.metadata.accelerated_delay_seconds
+        : 60
+      let nextFireAt = null
+      if (followingStep.data) {
+        nextFireAt = isTest
+          ? new Date(now.getTime() + accelSeconds * 1000).toISOString()
+          : new Date(now.getTime() + nextStepDelayMs(followingStep.data)).toISOString()
+      }
       const newStatus = followingStep.data ? 'active' : 'completed'
 
       await db.from('sequence_enrollments').update({
@@ -983,6 +1009,59 @@ export async function runSequences({ now = new Date() } = {}) {
   }
 
   return stats
+}
+
+// ─── Tier 1C: goal-tracking helper (mig 088) ─────────────────────
+
+/**
+ * Check whether a sequence's goal has been met for one contact.
+ * Returns true → enrolment auto-exits with exit_reason='goal_met'.
+ *
+ * Goal types (mig 088):
+ *   { type: 'tag_added',    tag: '<tag>'      }
+ *   { type: 'lead_status',  value: '<status>' }
+ *   { type: 'booking_made', event_type_id?: '<uuid>' }
+ *
+ * Best-effort — DB hiccup → return false (don't auto-exit on
+ * uncertainty; let the next pass try again).
+ *
+ * @param {object} args
+ * @param {SupabaseClient} args.db
+ * @param {object} args.contact
+ * @param {object} args.goalConfig
+ * @returns {Promise<boolean>}
+ */
+async function isGoalMet({ db, contact, goalConfig }) {
+  if (!goalConfig?.type) return false
+  try {
+    if (goalConfig.type === 'lead_status') {
+      return contact.lead_status === goalConfig.value
+    }
+    if (goalConfig.type === 'tag_added') {
+      const tag = String(goalConfig.tag || '').trim()
+      if (!tag) return false
+      const { count } = await db
+        .from('contact_tags')
+        .select('id', { count: 'exact', head: true })
+        .eq('contact_id', contact.id)
+        .eq('tag', tag)
+        .is('removed_at', null)
+      return (count || 0) > 0
+    }
+    if (goalConfig.type === 'booking_made') {
+      let q = db
+        .from('bookings')
+        .select('id', { count: 'exact', head: true })
+        .eq('contact_id', contact.id)
+        .neq('status', 'cancelled')
+      if (goalConfig.event_type_id) q = q.eq('event_type_id', goalConfig.event_type_id)
+      const { count } = await q
+      return (count || 0) > 0
+    }
+  } catch {
+    return false
+  }
+  return false
 }
 
 // ─── Tier 1B: non-message step handlers (mig 087) ────────────────

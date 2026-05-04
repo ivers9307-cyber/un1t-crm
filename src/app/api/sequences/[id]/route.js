@@ -10,9 +10,13 @@ const SequenceUpdateSchema = z.object({
   // Must match what the runner (lib/sequences.js) handles AND the
   // editor offers (SequenceEditor.jsx TRIGGER_TYPES).
   trigger_type: z.enum([
-    'manual', 'booking_created', 'status_change', 'event_reminder', 'tag_added',
+    'manual', 'booking_created', 'first_booking', 'status_change',
+    'event_reminder', 'tag_added',
+    'race_registered', 'race_finished',
+    'order_completed', 'order_failed', 'order_abandoned',
   ]).optional(),
   trigger_config: z.unknown().optional(),
+  goal_config: z.unknown().nullable().optional(),
   status: z.enum(['draft', 'active', 'paused', 'archived']).optional(),
 })
 
