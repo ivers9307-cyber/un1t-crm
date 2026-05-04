@@ -113,6 +113,12 @@ export const leadSourceSchema = z.enum([
 ])
 export const leadStatusSchema = z.enum([
   'active_trial', 'cold', 'lost_member', 'member', 'returning',
+  // Mig 086 — race-contact-linking. A non-member who registered for
+  // a race gets stamped with this status so they can be filtered /
+  // sequenced separately from gym leads. Schema was missing it,
+  // which made the contacts PUT route reject this value even though
+  // race-contact-linking writes it directly.
+  'competition_competitor',
 ])
 
 // Deal status — open/won/lost from migration 001.

@@ -4,9 +4,11 @@ import Link from 'next/link'
 import { ArrowLeft, Mail, Phone, Calendar, MessageSquare, CheckSquare, Clock, BookOpen, ArrowRight, MessageCircle } from 'lucide-react'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
+import { MANAGER_ROLES } from '@/lib/schemas'
 import ContactActions from '@/components/ContactActions'
 import StartWhatsAppButton from '@/components/StartWhatsAppButton'
 import ContactRaceHistory from '@/components/ContactRaceHistory'
+import ContactEditDeleteActions from '@/components/ContactEditDeleteActions'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
@@ -105,6 +107,11 @@ export default async function ContactDetailPage({ params }) {
           </div>
         </div>
         <div className="flex items-center gap-3">
+          <ContactEditDeleteActions
+            contact={contact}
+            canEdit={MANAGER_ROLES.includes(user?.role)}
+            canDelete={user?.role === 'owner' || user?.role === 'master'}
+          />
           <StartWhatsAppButton
             contactId={contact.id}
             contactPhone={contact.phone}

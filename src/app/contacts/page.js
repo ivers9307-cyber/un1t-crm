@@ -1,6 +1,9 @@
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { redirect } from 'next/navigation'
+import Link from 'next/link'
+import { Plus } from 'lucide-react'
+import { MANAGER_ROLES } from '@/lib/schemas'
 import ContactsView from '@/components/ContactsView'
 
 export const dynamic = 'force-dynamic'
@@ -25,14 +28,28 @@ export default async function ContactsPage({ searchParams }) {
 
   const { data: contacts } = await query
 
+  const canCreate = MANAGER_ROLES.includes(user.role)
+  const canMerge = user.role === 'owner' || user.role === 'master'
+
   return (
     <div className="p-6">
-      <h2 className="text-2xl font-bold mb-5">Contacts</h2>
+      <div className="flex items-center justify-between mb-5">
+        <h2 className="text-2xl font-bold">Contacts</h2>
+        {canCreate && (
+          <Link
+            href="/contacts/new"
+            className="inline-flex items-center gap-2 bg-un1t-white text-un1t-black text-sm font-medium px-4 py-2 rounded-lg hover:bg-un1t-accent transition-colors"
+          >
+            <Plus size={16} /> New contact
+          </Link>
+        )}
+      </div>
       <ContactsView
         initialContacts={contacts || []}
         locationId={locationId}
         initialStatus={status}
         initialSearch={search}
+        canMerge={canMerge}
       />
     </div>
   )

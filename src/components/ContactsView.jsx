@@ -30,6 +30,7 @@ export default function ContactsView({
   locationId,
   initialStatus = '',
   initialSearch = '',
+  canMerge = false,
 }) {
   const [status, setStatus] = useState(initialStatus)
   const [search, setSearch] = useState(initialSearch)
@@ -374,7 +375,7 @@ export default function ContactsView({
         <div className="mb-3 text-xs text-un1t-light">Loading…</div>
       )}
 
-      <ContactsTable contacts={visibleContacts} locationId={locationId} />
+      <ContactsTable contacts={visibleContacts} locationId={locationId} canMerge={canMerge} />
     </div>
   )
 }

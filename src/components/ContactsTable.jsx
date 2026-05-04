@@ -13,8 +13,9 @@
 
 import { useState, useMemo } from 'react'
 import Link from 'next/link'
-import { ChevronRight, Mail, X } from 'lucide-react'
+import { ChevronRight, Mail, X, GitMerge } from 'lucide-react'
 import SequencePicker from './SequencePicker'
+import ContactMergeModal from './ContactMergeModal'
 
 const statusBadge = {
   active_trial: 'bg-green-500/20 text-green-400',
@@ -24,11 +25,12 @@ const statusBadge = {
   returning:    'bg-indigo-500/20 text-indigo-400',
 }
 
-export default function ContactsTable({ contacts, locationId }) {
+export default function ContactsTable({ contacts, locationId, canMerge = false }) {
   // Set<contactId>. Set so toggle is O(1) and resilient to the contact
   // list changing under us (filter / search updates).
   const [selectedIds, setSelectedIds] = useState(() => new Set())
   const [pickerOpen, setPickerOpen] = useState(false)
+  const [mergeOpen, setMergeOpen] = useState(false)
 
   const allIds = useMemo(() => contacts.map(c => c.id), [contacts])
   const allSelected = allIds.length > 0 && allIds.every(id => selectedIds.has(id))
@@ -75,7 +77,26 @@ export default function ContactsTable({ contacts, locationId }) {
           >
             <Mail size={12} /> Add to sequence
           </button>
+          {/* Merge — owner-only. Visible only when exactly 2 rows
+              are selected (the merge API takes survivor + loser). */}
+          {canMerge && selectedCount === 2 && (
+            <button
+              onClick={() => setMergeOpen(true)}
+              className="text-xs px-3 py-1.5 rounded-md border border-un1t-gray text-un1t-light hover:text-un1t-white hover:border-un1t-mid flex items-center gap-1.5"
+              title="Merge two contacts into one"
+            >
+              <GitMerge size={12} /> Merge
+            </button>
+          )}
         </div>
+      )}
+
+      {mergeOpen && (
+        <ContactMergeModal
+          contactIds={selectedIdsArray}
+          contacts={contacts.filter(c => selectedIds.has(c.id))}
+          onClose={() => setMergeOpen(false)}
+        />
       )}
 
       <div className="bg-un1t-dark border border-un1t-gray rounded-lg overflow-hidden">

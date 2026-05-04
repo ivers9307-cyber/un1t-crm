@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { requireApiKey } from '@/lib/api-auth'
+import { requireApiKey, requireApiKeyOrManager } from '@/lib/api-auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike, email, phone, leadSourceSchema, leadStatusSchema, MANAGER_ROLES } from '@/lib/schemas'
 import { sendPushToRolesAtLocation } from '@/lib/push'
@@ -22,14 +22,24 @@ const ContactCreateSchema = z.object({
   location_id: uuidLike.optional(),
 })
 
-// POST /api/contacts — Create a contact (replaces Pipedrive POST /v1/persons)
+// POST /api/contacts — Create a contact.
+//
+// Originally a pipedrive-replacement n8n endpoint (API-key only).
+// Now also callable from the web UI (manager+ via cookie). Web
+// callers default location_id to their active location if they
+// didn't provide one.
 export async function POST(request) {
-  const authError = requireApiKey(request)
-  if (authError) return authError
+  const auth = await requireApiKeyOrManager(request)
+  if (!auth.ok) return auth.response
 
   const validation = await validateBody(request, ContactCreateSchema)
   if (!validation.ok) return validation.response
   const body = validation.data
+  // Web callers usually omit location_id — fall back to their
+  // active location. n8n callers always supply it explicitly.
+  if (!body.location_id && auth.user?.activeLocation?.id) {
+    body.location_id = auth.user.activeLocation.id
+  }
   const db = createServerClient()
 
   const { data, error } = await db.from('contacts').insert({

@@ -1,11 +1,12 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { requireApiKey } from '@/lib/api-auth'
+import { requireApiKey, requireApiKeyOrManager } from '@/lib/api-auth'
 import { validateBody } from '@/lib/validate'
 import { email, phone, leadSourceSchema, leadStatusSchema } from '@/lib/schemas'
 import { triggerSequencesForStatusChange, triggerSequencesForTagsAdded } from '@/lib/sequences'
 import { logPipelineEvent } from '@/lib/activity-events'
+import { getCurrentUser } from '@/lib/auth'
 
 const ContactUpdateSchema = z.object({
   name: z.string().min(1).max(200).optional(),
@@ -25,10 +26,13 @@ const ContactUpdateSchema = z.object({
   tags: z.array(z.string().min(1).max(64)).max(50).optional(),
 })
 
-// PUT /api/contacts/:id — Update a contact (replaces Pipedrive PUT /v1/persons/:id)
+// PUT /api/contacts/:id — Update a contact.
+//
+// Accepts either the n8n API key OR a logged-in manager+. Web UI
+// uses the cookie path; n8n keeps using the bearer token.
 export async function PUT(request, { params }) {
-  const authError = requireApiKey(request)
-  if (authError) return authError
+  const auth = await requireApiKeyOrManager(request)
+  if (!auth.ok) return auth.response
 
   const { id } = params
   const validation = await validateBody(request, ContactUpdateSchema)
@@ -106,4 +110,52 @@ export async function GET(request, { params }) {
   }
 
   return NextResponse.json({ success: true, data })
+}
+
+// DELETE /api/contacts/:id — owner-only hard delete.
+//
+// Uses the cookie auth path (n8n shouldn't be issuing destructive
+// deletes — kept off the API-key surface). Cascades the rows
+// listed in CASCADE_TABLES; SET-NULL tables keep the row with the
+// FK nulled (history preserved). If the contact still has
+// whatsapp_* rows (NO ACTION) the delete will fail at the DB
+// layer — caller should merge into another contact first.
+export async function DELETE(_request, { params }) {
+  const user = await getCurrentUser()
+  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+  if (user.role !== 'owner' && user.role !== 'master') {
+    return NextResponse.json({ success: false, error: 'Owner or master required' }, { status: 403 })
+  }
+
+  const db = createServerClient()
+  // Verify the contact is at the caller's location before deleting.
+  // Master bypasses the location check (mig 033 master semantics).
+  const { data: existing } = await db.from('contacts')
+    .select('id, location_id')
+    .eq('id', params.id)
+    .single()
+  if (!existing) return NextResponse.json({ success: false, error: 'Contact not found' }, { status: 404 })
+  if (user.role !== 'master') {
+    const userLocIds = (user.locations || []).map(l => l.id)
+    if (!userLocIds.includes(existing.location_id)) {
+      return NextResponse.json({ success: false, error: 'Contact is at a different location' }, { status: 403 })
+    }
+  }
+
+  const { error } = await db.from('contacts').delete().eq('id', params.id)
+  if (error) {
+    // 23503 = FK violation (NO ACTION row blocking the delete —
+    // most likely whatsapp_*). Return a friendlier error pointing
+    // the operator at merge instead of just dumping the SQL message.
+    if (error.code === '23503' || /foreign key|violates/i.test(error.message || '')) {
+      return NextResponse.json({
+        success: false,
+        error: 'Cannot delete: contact has WhatsApp history. Merge into another contact first.',
+        code: 'has_protected_history',
+      }, { status: 409 })
+    }
+    return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+  }
+
+  return NextResponse.json({ success: true })
 }
