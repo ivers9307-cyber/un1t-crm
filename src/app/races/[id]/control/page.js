@@ -7,6 +7,7 @@ import Link from 'next/link'
 import { Tv } from 'lucide-react'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { hasPermission } from '@/lib/permissions'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import RaceControlPanel from '@/components/RaceControlPanel'
 
@@ -17,6 +18,7 @@ export default async function RaceControlPage({ params }) {
   const user = await getCurrentUser()
   if (!user) redirect('/login')
   if (!MANAGER_ROLES.includes(user.role)) redirect('/')
+  if (!hasPermission(user, 'races')) redirect('/')
 
   const db = createServerClient()
   const { data: race } = await db

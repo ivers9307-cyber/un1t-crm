@@ -1,5 +1,6 @@
 import { redirect } from 'next/navigation'
 import { getCurrentUser } from '@/lib/auth'
+import { hasPermission } from '@/lib/permissions'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import RaceEventForm from '@/components/RaceEventForm'
 
@@ -9,6 +10,7 @@ export default async function NewRacePage() {
   const user = await getCurrentUser()
   if (!user) redirect('/login')
   if (!MANAGER_ROLES.includes(user.role)) redirect('/')
+  if (!hasPermission(user, 'races')) redirect('/')
 
   return (
     <div className="p-8 max-w-2xl">

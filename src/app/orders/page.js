@@ -5,6 +5,7 @@
 
 import { redirect } from 'next/navigation'
 import { getCurrentUser } from '@/lib/auth'
+import { hasPermission } from '@/lib/permissions'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import OrdersTable from '@/components/OrdersTable'
 
@@ -15,6 +16,8 @@ export default async function OrdersIndexPage() {
   const user = await getCurrentUser()
   if (!user) redirect('/login')
   if (!MANAGER_ROLES.includes(user.role)) redirect('/')
+  // Per-location feature gate + per-user permission, mig 092 audit.
+  if (!hasPermission(user, 'orders')) redirect('/')
 
   return (
     <div className="p-6 max-w-7xl mx-auto">

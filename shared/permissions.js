@@ -25,22 +25,41 @@
 // lets a single admin toggle in StaffForm control visibility on both
 // devices at once. To check on mobile use `canDashboard(profile, key)`
 // from lib/permissions.js (NOT canMobile() — those are mobile-only).
+// Ordered into logical groups so the location feature matrix and
+// the per-user permission picker scan top-to-bottom: dashboards →
+// CRM → bookings/events → races → communications → operations →
+// revenue → infra. New top-level routes go in the appropriate
+// group, not at the end of the list.
 export const WEB_PERMISSIONS = Object.freeze([
+  // — Dashboards (cross-platform, see CROSS_PLATFORM_DASHBOARD_KEYS) —
   { key: 'dashboard_personal', label: 'Dashboard · Today',     hint: 'Personal home view — your shifts, swaps, inbox' },
   { key: 'dashboard_studio',   label: 'Dashboard · Studio',    hint: 'Operational view — leads, members, approvals' },
   { key: 'dashboard_business', label: 'Dashboard · Business',  hint: 'Owner-level — pipeline, won deals, payroll' },
+  // — CRM —
   { key: 'pipeline',   label: 'Pipeline & Deals' },
   { key: 'contacts',   label: 'Contacts' },
-  { key: 'events',     label: 'Events' },
-  { key: 'bookings',   label: 'Bookings' },
-  { key: 'activities', label: 'Activities' },
-  { key: 'email',      label: 'Email Marketing' },
-  { key: 'whatsapp',   label: 'WhatsApp' },
-  { key: 'sms',        label: 'SMS', hint: 'Send SMS via Twilio. Per-location alpha sender ID configured in Location Settings.' },
-  { key: 'schedule',   label: 'Schedule' },
-  { key: 'assistant',  label: 'AI Assistant' },
-  { key: 'car_processing', label: 'Car Processing', hint: 'Tesla import tracker (CCF Autos). Off by default — enable per user.' },
-  { key: 'settings',   label: 'Settings & Staff Management' },
+  { key: 'activities', label: 'Tasks',                          hint: 'Renamed from Activities (mig 073). Tasks-kind activities only — auto-logged events stay on the contact timeline.' },
+  // — Calendly bookings + standalone race events —
+  { key: 'events',     label: 'Calendly events',                hint: 'Booking event types (recurring availability, slot picker, /events + /bookings hub).' },
+  { key: 'bookings',   label: 'Bookings list',                  hint: 'Enables the /bookings sub-tab inside the Calendly hub. Operators usually want this on alongside Events.' },
+  // Mig 092 split: races used to ride on `events`. Locations that
+  // don't run races can now hide them without losing booking events.
+  { key: 'races',      label: 'Race events',                    hint: 'Standalone race events (mig 082). Hyrox-style team races with waves, member pricing, race-day control panel + TV display.' },
+  // — Communications (single hub at /communications) —
+  { key: 'email',      label: 'Email Marketing',                hint: 'Postmark broadcasts, sequences (drip campaigns), templates, segments.' },
+  { key: 'whatsapp',   label: 'WhatsApp',                       hint: 'WhatsApp Cloud API inbox + broadcasts.' },
+  { key: 'sms',        label: 'SMS',                            hint: 'Send SMS via Twilio. Per-location alpha sender ID configured in Location Settings.' },
+  // — Operations —
+  { key: 'schedule',   label: 'Schedule',                       hint: 'Coach roster, shift blocks, time-off, swap requests.' },
+  { key: 'assistant',  label: 'AI Assistant',                   hint: 'In-app chat assistant with CRM tool use.' },
+  // — Revenue —
+  // Mig 092 split: orders used to inherit `events|car_processing`
+  // OR via the sidebar. Standalone key lets a location hide /orders
+  // even if they have race events or car processing on.
+  { key: 'orders',     label: 'Orders',                          hint: 'Unified revenue view across race signups + car deposits (mig 085). Refund + retry-recovery flows live here.' },
+  { key: 'car_processing', label: 'Car Processing',             hint: 'Tesla import tracker (CCF Autos). Off by default at user level — enable per user.' },
+  // — Infra —
+  { key: 'settings',   label: 'Settings & Staff Management',    hint: 'Location settings, staff management, integrations, branding.' },
 ])
 
 export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
@@ -50,38 +69,48 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
   // the parity / shared-permissions tests that iterate every role.
   master: {
     dashboard_personal: true, dashboard_studio: true, dashboard_business: true,
-    pipeline: true, contacts: true,
-    events: true, bookings: true, activities: true,
-    email: true, whatsapp: true, sms: true, schedule: true, assistant: true, settings: true,
-    car_processing: true,
+    pipeline: true, contacts: true, activities: true,
+    events: true, bookings: true, races: true,
+    email: true, whatsapp: true, sms: true,
+    schedule: true, assistant: true,
+    orders: true, car_processing: true,
+    settings: true,
   },
   staff: {
     dashboard_personal: true, dashboard_studio: false, dashboard_business: false,
-    pipeline: true, contacts: true,
-    events: true, bookings: true, activities: true,
-    email: false, whatsapp: false, sms: false, schedule: true, assistant: false, settings: false,
-    car_processing: false,
+    pipeline: true, contacts: true, activities: true,
+    events: true, bookings: true, races: true,    // race-day starts/finishes are a front-of-house duty
+    email: false, whatsapp: false, sms: false,
+    schedule: true, assistant: false,
+    orders: false, car_processing: false,         // financial views off by default
+    settings: false,
   },
   head_coach: {
     dashboard_personal: true, dashboard_studio: true, dashboard_business: false,
-    pipeline: true, contacts: true,
-    events: true, bookings: true, activities: true,
-    email: true, whatsapp: true, sms: true, schedule: true, assistant: true, settings: false,
-    car_processing: false,
+    pipeline: true, contacts: true, activities: true,
+    events: true, bookings: true, races: true,
+    email: true, whatsapp: true, sms: true,
+    schedule: true, assistant: true,
+    orders: false, car_processing: false,         // head coach doesn't need orders by default
+    settings: false,
   },
   manager: {
     dashboard_personal: true, dashboard_studio: true, dashboard_business: false,
-    pipeline: true, contacts: true,
-    events: true, bookings: true, activities: true,
-    email: true, whatsapp: true, sms: true, schedule: true, assistant: true, settings: true,
-    car_processing: false,
+    pipeline: true, contacts: true, activities: true,
+    events: true, bookings: true, races: true,
+    email: true, whatsapp: true, sms: true,
+    schedule: true, assistant: true,
+    orders: true, car_processing: false,          // managers run revenue ops; CCF Autos is per-user opt-in
+    settings: true,
   },
   owner: {
     dashboard_personal: true, dashboard_studio: true, dashboard_business: true,
-    pipeline: true, contacts: true,
-    events: true, bookings: true, activities: true,
-    email: true, whatsapp: true, sms: true, schedule: true, assistant: true, settings: true,
-    car_processing: false,   // OFF for owner too — explicit opt-in per profile
+    pipeline: true, contacts: true, activities: true,
+    events: true, bookings: true, races: true,
+    email: true, whatsapp: true, sms: true,
+    schedule: true, assistant: true,
+    orders: true, car_processing: false,          // OFF for owner too — explicit opt-in per profile
+    settings: true,
   },
 })
 

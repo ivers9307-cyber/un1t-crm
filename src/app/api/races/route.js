@@ -6,6 +6,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { getCurrentUser, getUserLocationIds, assertLocationAccess } from '@/lib/auth'
+import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
@@ -55,6 +56,9 @@ export async function GET(request) {
   if (!MANAGER_ROLES.includes(user.role)) {
     return NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 })
   }
+  if (!hasPermission(user, 'races')) {
+    return NextResponse.json({ success: false, error: 'Races feature is disabled at this location' }, { status: 403 })
+  }
 
   const url = new URL(request.url)
   const filterLocation = url.searchParams.get('location_id')
@@ -92,6 +96,9 @@ export async function POST(request) {
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
   if (!MANAGER_ROLES.includes(user.role)) {
     return NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 })
+  }
+  if (!hasPermission(user, 'races')) {
+    return NextResponse.json({ success: false, error: 'Races feature is disabled at this location' }, { status: 403 })
   }
 
   const validation = await validateBody(request, CreateSchema)

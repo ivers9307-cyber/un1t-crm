@@ -4,6 +4,7 @@
 
 import { redirect } from 'next/navigation'
 import { getCurrentUser } from '@/lib/auth'
+import { hasPermission } from '@/lib/permissions'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import OrderDetail from '@/components/OrderDetail'
 
@@ -14,6 +15,7 @@ export default async function OrderDetailPage({ params }) {
   const user = await getCurrentUser()
   if (!user) redirect('/login')
   if (!MANAGER_ROLES.includes(user.role)) redirect('/')
+  if (!hasPermission(user, 'orders')) redirect('/')
 
   return (
     <div className="p-6 max-w-5xl mx-auto">

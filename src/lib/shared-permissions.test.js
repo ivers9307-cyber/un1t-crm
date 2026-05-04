@@ -132,6 +132,53 @@ describe('per-location feature gate (isFeatureEnabledAtLocation)', () => {
   })
 })
 
+describe('mig 092 audit — orders + races permission keys', () => {
+  // The audit added dedicated `orders` and `races` keys (previously
+  // these routes piggybacked on `events|car_processing` / `events`).
+  // Lock the role defaults + location-gate honour so a regression
+  // doesn't silently re-attach them to the wrong parent permission.
+
+  it('orders is a valid permission key with role defaults', () => {
+    expect(WEB_PERMISSION_KEYS).toContain('orders')
+    expect(DEFAULT_WEB_PERMISSIONS_BY_ROLE.owner.orders).toBe(true)
+    expect(DEFAULT_WEB_PERMISSIONS_BY_ROLE.manager.orders).toBe(true)
+    // Front-of-house roles default to off — financial views are an
+    // explicit opt-in even if the location has Orders enabled.
+    expect(DEFAULT_WEB_PERMISSIONS_BY_ROLE.head_coach.orders).toBe(false)
+    expect(DEFAULT_WEB_PERMISSIONS_BY_ROLE.staff.orders).toBe(false)
+  })
+
+  it('races is a valid permission key with role defaults', () => {
+    expect(WEB_PERMISSION_KEYS).toContain('races')
+    // Race-day starts/finishes are a front-of-house duty, so every
+    // role defaults to true — same shape as `events`.
+    for (const r of ROLES) {
+      expect(DEFAULT_WEB_PERMISSIONS_BY_ROLE[r].races, `${r}/races`).toBe(true)
+    }
+  })
+
+  it('a location can disable Races without disabling booking Events', () => {
+    const u = (role) => ({
+      role,
+      activeLocation: { features: { races: false /* events stays on */ } },
+      permissions: {},
+    })
+    expect(hasPermission(u('owner'), 'events')).toBe(true)
+    expect(hasPermission(u('owner'), 'races')).toBe(false)
+  })
+
+  it('a location can disable Orders independently of Events + Cars', () => {
+    const u = (role) => ({
+      role,
+      activeLocation: { features: { orders: false } },
+      permissions: {},
+    })
+    expect(hasPermission(u('manager'), 'events')).toBe(true)
+    expect(hasPermission(u('manager'), 'car_processing')).toBe(false) // role default
+    expect(hasPermission(u('manager'), 'orders')).toBe(false)
+  })
+})
+
 describe('master role gating (mig 033 + location-gate honour)', () => {
   it('master honours the per-location feature gate just like everyone else', () => {
     // CCF Autos scenario: location has every feature off except

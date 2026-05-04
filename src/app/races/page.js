@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
+import { hasPermission } from '@/lib/permissions'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { Plus, Flag, ExternalLink, Users } from 'lucide-react'
 import { getAppUrl } from '@/lib/app-url'
@@ -15,6 +16,8 @@ export default async function RacesIndexPage() {
   const user = await getCurrentUser()
   if (!user) redirect('/login')
   if (!MANAGER_ROLES.includes(user.role)) redirect('/')
+  // Mig 092 audit: dedicated 'races' permission key (was `events`).
+  if (!hasPermission(user, 'races')) redirect('/')
 
   const db = createServerClient()
   const locationIds = getUserLocationIds(user)

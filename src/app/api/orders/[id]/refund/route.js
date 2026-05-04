@@ -20,6 +20,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { refundOrder, RevolutError } from '@/lib/revolut'
@@ -36,6 +37,9 @@ const Body = z.object({
 export async function POST(request, { params }) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
+  if (!hasPermission(user, 'orders')) {
+    return NextResponse.json({ success: false, error: 'Orders feature is disabled at this location' }, { status: 403 })
+  }
   if (!MANAGER_ROLES.includes(user.role)) {
     return NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 })
   }

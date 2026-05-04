@@ -46,19 +46,18 @@ const allNav = [
   { href: '/communications', label: 'Communications', icon: MessagesSquare,
     anyPermission: ['email', 'whatsapp'] },
   { href: '/schedule',   label: 'Schedule',     icon: CalendarClock,   permission: 'schedule' },
-  // Race events (mig 082) — standalone from booking events. Same
-  // 'events' permission gate so anyone who can manage booking events
-  // can also manage races; if those need to diverge later, add a
-  // dedicated 'races' permission key.
-  { href: '/races',      label: 'Races',        icon: Flag,            permission: 'events' },
+  // Race events (mig 082) — standalone from booking events. Got its
+  // own permission key in the mig-092 audit so locations that don't
+  // run races can hide them without losing booking events.
+  { href: '/races',      label: 'Races',        icon: Flag,            permission: 'races' },
   { href: '/cars',       label: 'Car Processing', icon: Car,           permission: 'car_processing' },
   // Orders (mig 085) spans all revenue streams (race signups + cars).
-  // Segments USED to be a top-level entry too — moved under
-  // /communications/segments because operators only ever come to
-  // segments to drive a broadcast. The top-level entry is gone, the
-  // /segments URL still works (legacy redirect).
-  { href: '/orders',     label: 'Orders',       icon: Receipt,
-    anyPermission: ['events', 'car_processing'] },
+  // Got its own permission key in the mig-092 audit. Segments USED
+  // to be a top-level entry too — moved under /communications/segments
+  // because operators only ever come to segments to drive a broadcast.
+  // The top-level entry is gone, the /segments URL still works
+  // (legacy redirect).
+  { href: '/orders',     label: 'Orders',       icon: Receipt,         permission: 'orders' },
   { href: '/settings',   label: 'Settings',     icon: Settings,        permission: 'settings' },
 ]
 
