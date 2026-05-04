@@ -919,6 +919,22 @@ export async function runSequences({ now = new Date() } = {}) {
         sendId = await sendWhatsappStep(db, { enrollment, step, sequence, contact })
       } else if (step.step_type === 'sms') {
         sendId = await sendSmsStep(db, { enrollment, step, sequence, contact })
+      } else if (step.step_type === 'apply_tag') {
+        // Mig 087: apply a contact_tags row. Config: { tag }.
+        // No send_id since nothing went out the door.
+        await applyTagStep(db, { step, contact, sequence })
+        sendId = null
+      } else if (step.step_type === 'update_field') {
+        // Mig 087: set a whitelisted contacts.* field. Config:
+        // { field, value }. Whitelist enforced server-side.
+        await updateFieldStep(db, { step, contact })
+        sendId = null
+      } else if (step.step_type === 'internal_task') {
+        // Mig 087: create an activity row (kind='task') assigned
+        // to a staff user. Config: { subject, note, assignee_role,
+        // assignee_user_id, due_offset_minutes }.
+        await internalTaskStep(db, { step, contact, sequence })
+        sendId = null
       } else {
         throw new Error(`Unknown step_type "${step.step_type}".`)
       }
@@ -967,4 +983,115 @@ export async function runSequences({ now = new Date() } = {}) {
   }
 
   return stats
+}
+
+// ─── Tier 1B: non-message step handlers (mig 087) ────────────────
+
+/**
+ * apply_tag step. Reads config.tag and upserts a contact_tags row
+ * for this contact (location-scoped). Idempotent — the partial
+ * UNIQUE on (contact_id, tag) WHERE removed_at IS NULL keeps a
+ * single active row even if the operator queues the same tag
+ * twice in a sequence.
+ *
+ * Tag string is operator-controlled — no whitelist. Lets operators
+ * use the rules-engine tags AND custom tags they invent. Trim +
+ * length cap at 60 chars to match contact_tags column.
+ */
+async function applyTagStep(db, { step, contact, sequence }) {
+  const tag = String(step.config?.tag || '').trim().slice(0, 60)
+  if (!tag) throw new Error('apply_tag step: config.tag is required')
+
+  // Re-activate a soft-deleted matching tag if one exists; otherwise
+  // insert. The partial UNIQUE prevents concurrent dupes.
+  const { data: existing } = await db
+    .from('contact_tags')
+    .select('id, removed_at')
+    .eq('contact_id', contact.id)
+    .eq('tag', tag)
+    .order('added_at', { ascending: false })
+    .limit(1)
+  const row = existing?.[0]
+  if (row && row.removed_at) {
+    await db
+      .from('contact_tags')
+      .update({ removed_at: null, added_at: new Date().toISOString() })
+      .eq('id', row.id)
+  } else if (!row) {
+    await db.from('contact_tags').insert({
+      contact_id: contact.id,
+      location_id: sequence?.location_id || contact.location_id,
+      tag,
+    })
+  }
+  // Active row already exists → no-op.
+}
+
+/**
+ * update_field step. Whitelisted fields only — operators can't
+ * stamp arbitrary columns. Currently allows lead_status + label;
+ * extend the WHITELIST set below to add more.
+ *
+ * Fires the status_change sequence trigger when lead_status changes
+ * so chains compose ("on first race, set status=active_trial → that
+ * triggers a different sequence").
+ */
+async function updateFieldStep(db, { step, contact }) {
+  const WHITELIST = new Set(['lead_status', 'label'])
+  const field = String(step.config?.field || '').trim()
+  const value = step.config?.value
+  if (!WHITELIST.has(field)) {
+    throw new Error(`update_field step: field "${field}" is not allowed (whitelist: ${[...WHITELIST].join(', ')})`)
+  }
+  if (typeof value !== 'string' && value !== null) {
+    throw new Error('update_field step: value must be a string or null')
+  }
+
+  const oldValue = contact[field]
+  if (oldValue === value) return // no-op
+
+  await db.from('contacts').update({ [field]: value }).eq('id', contact.id)
+
+  // Cascade for lead_status only — lets sequences chain.
+  if (field === 'lead_status') {
+    try {
+      await triggerSequencesForStatusChange(contact.id, oldValue || null, value || null)
+    } catch (e) {
+      console.warn(`[sequences] update_field cascade trigger failed: ${e.message}`)
+    }
+  }
+}
+
+/**
+ * internal_task step. Creates an activity row (kind='task') so it
+ * shows up on the contact's open-tasks list + the staff's task
+ * inbox. Config: subject, note, assignee_user_id (optional),
+ * assignee_role (optional, e.g. 'manager').
+ *
+ * If assignee_user_id is provided, it's set directly. Otherwise
+ * the assignee is left null — operators can pick it up from the
+ * /activities queue. assignee_role is informational; we don't
+ * fan-out to multiple users.
+ */
+async function internalTaskStep(db, { step, contact, sequence }) {
+  const cfg = step.config || {}
+  const subject = String(cfg.subject || '').trim().slice(0, 200)
+  const note = String(cfg.note || '').trim().slice(0, 4000)
+  if (!subject) throw new Error('internal_task step: config.subject is required')
+
+  const dueOffsetMinutes = Number.isFinite(cfg.due_offset_minutes)
+    ? cfg.due_offset_minutes
+    : 0
+  const dueAt = new Date(Date.now() + Math.max(0, dueOffsetMinutes) * 60_000).toISOString()
+
+  await db.from('activities').insert({
+    contact_id: contact.id,
+    location_id: sequence?.location_id || contact.location_id,
+    type: 'task',
+    kind: 'task',
+    subject,
+    note: note || null,
+    assigned_to: cfg.assignee_user_id || null,
+    due_at: dueAt,
+  })
 }

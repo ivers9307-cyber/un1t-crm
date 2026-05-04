@@ -125,6 +125,9 @@ function StepCard({ step, index, onUpdate, onDelete, onMoveUp, onMoveDown, isFir
                   <option value="whatsapp">WhatsApp</option>
                   <option value="sms">SMS</option>
                   <option value="wait">Wait (delay only)</option>
+                  <option value="apply_tag">Apply tag</option>
+                  <option value="update_field">Update field</option>
+                  <option value="internal_task">Create internal task</option>
                 </select>
               </div>
               <div>
@@ -280,6 +283,117 @@ function StepCard({ step, index, onUpdate, onDelete, onMoveUp, onMoveDown, isFir
               <div className="bg-un1t-black/40 border border-un1t-gray rounded-md p-3">
                 <p className="text-xs text-un1t-light">
                   Wait steps just hold the contact for the delay above before the next step fires. Useful between channels (e.g. WhatsApp → wait 2 days → email follow-up).
+                </p>
+              </div>
+            )}
+
+            {/* apply_tag step (mig 087). Tags this contact with the
+                specified retargeting tag. Composable with Tag Added
+                trigger on a different sequence. */}
+            {stepType === 'apply_tag' && (
+              <div className="space-y-2">
+                <label className="block text-xs text-un1t-light">Tag to apply</label>
+                <input
+                  type="text"
+                  value={step.config?.tag || ''}
+                  onChange={e => onUpdate({ config: { ...(step.config || {}), tag: e.target.value } })}
+                  placeholder="e.g. engaged_competitor"
+                  maxLength={60}
+                  className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
+                />
+                <p className="text-[11px] text-un1t-mid">
+                  Lower-case + underscores recommended. Lets a different sequence with trigger=&quot;Tag Added&quot; pick this contact up.
+                </p>
+              </div>
+            )}
+
+            {/* update_field step (mig 087). Whitelisted fields only —
+                runner enforces the same allowlist server-side. */}
+            {stepType === 'update_field' && (
+              <div className="space-y-2">
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs text-un1t-light mb-1">Field</label>
+                    <select
+                      value={step.config?.field || 'lead_status'}
+                      onChange={e => onUpdate({ config: { ...(step.config || {}), field: e.target.value } })}
+                      className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
+                    >
+                      <option value="lead_status">lead_status</option>
+                      <option value="label">label</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs text-un1t-light mb-1">Value</label>
+                    {(step.config?.field || 'lead_status') === 'lead_status' ? (
+                      <select
+                        value={step.config?.value || ''}
+                        onChange={e => onUpdate({ config: { ...(step.config || {}), value: e.target.value } })}
+                        className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
+                      >
+                        <option value="">(pick one)</option>
+                        <option value="active_trial">active_trial</option>
+                        <option value="cold">cold</option>
+                        <option value="lost_member">lost_member</option>
+                        <option value="member">member</option>
+                        <option value="returning">returning</option>
+                        <option value="competition_competitor">competition_competitor</option>
+                      </select>
+                    ) : (
+                      <input
+                        type="text"
+                        value={step.config?.value || ''}
+                        onChange={e => onUpdate({ config: { ...(step.config || {}), value: e.target.value } })}
+                        placeholder="Value"
+                        className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
+                      />
+                    )}
+                  </div>
+                </div>
+                <p className="text-[11px] text-un1t-mid">
+                  Useful to graduate a contact between buckets (e.g. competition_competitor → returning) when they hit a milestone. Setting lead_status will fire the Status Change trigger so other sequences can chain off it.
+                </p>
+              </div>
+            )}
+
+            {/* internal_task step (mig 087). Creates an activity row
+                that shows up on the contact's open tasks + the staff
+                task inbox. */}
+            {stepType === 'internal_task' && (
+              <div className="space-y-2">
+                <div>
+                  <label className="block text-xs text-un1t-light mb-1">Task subject</label>
+                  <input
+                    type="text"
+                    value={step.config?.subject || ''}
+                    onChange={e => onUpdate({ config: { ...(step.config || {}), subject: e.target.value } })}
+                    placeholder="e.g. Follow up with this race competitor"
+                    maxLength={200}
+                    className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-un1t-light mb-1">Note (optional)</label>
+                  <textarea
+                    value={step.config?.note || ''}
+                    onChange={e => onUpdate({ config: { ...(step.config || {}), note: e.target.value } })}
+                    rows={3}
+                    placeholder="Context for whoever picks this up…"
+                    className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-un1t-light mb-1">Due (minutes from now)</label>
+                  <input
+                    type="number"
+                    min="0"
+                    value={step.config?.due_offset_minutes ?? 0}
+                    onChange={e => onUpdate({ config: { ...(step.config || {}), due_offset_minutes: parseInt(e.target.value) || 0 } })}
+                    className="w-32 bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
+                  />
+                </div>
+                <p className="text-[11px] text-un1t-mid">
+                  Task lands unassigned by default — staff pick it up from the activities queue. Pair with a Wait step before to delay the task.
                 </p>
               </div>
             )}

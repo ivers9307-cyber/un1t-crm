@@ -11,8 +11,9 @@ const StepShape = z.object({
   delay_hours: z.number().int().min(0).max(23).optional(),
   // Channel selector. 'wait' = no send, just the delay before the
   // following step. Defaults to 'email' for back-compat with rows
-  // pre-mig 039 that didn't set step_type explicitly.
-  step_type: z.enum(['email', 'whatsapp', 'sms', 'wait']).optional(),
+  // pre-mig 039 that didn't set step_type explicitly. Mig 087 adds
+  // apply_tag / update_field / internal_task — all use `config`.
+  step_type: z.enum(['email', 'whatsapp', 'sms', 'wait', 'apply_tag', 'update_field', 'internal_task']).optional(),
   // Email step content
   subject: z.string().max(500).optional(),
   html_content: z.string().max(1_000_000).optional(),
@@ -24,6 +25,12 @@ const StepShape = z.object({
   whatsapp_header_media_url: z.string().url().max(2000).nullable().optional(),
   // SMS step content (mig 062). Same 1600-char hard cap as broadcasts.
   sms_body: z.string().max(1600).nullable().optional(),
+  // Generic config bag for non-message step types (mig 087).
+  // Schema by step_type:
+  //   apply_tag      → { tag }
+  //   update_field   → { field, value }
+  //   internal_task  → { subject, note, assignee_user_id, due_offset_minutes }
+  config: z.record(z.unknown()).nullable().optional(),
 })
 
 const StepCreateSchema = StepShape
@@ -100,6 +107,11 @@ export async function POST(request, { params }) {
     whatsapp_header_media_url: stepType === 'whatsapp' ? (body.whatsapp_header_media_url || null) : null,
     // SMS field (mig 062 — only meaningful when step_type=sms)
     sms_body: stepType === 'sms' ? (body.sms_body || null) : null,
+    // Mig 087 — generic config for apply_tag / update_field /
+    // internal_task. Whitelisted server-side at runtime.
+    config: ['apply_tag', 'update_field', 'internal_task'].includes(stepType)
+      ? (body.config || {})
+      : {},
   }).select().single()
 
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
@@ -138,6 +150,7 @@ export async function PUT(request, { params }) {
     if (step.whatsapp_variables !== undefined) updates.whatsapp_variables = step.whatsapp_variables
     if (step.whatsapp_header_media_url !== undefined) updates.whatsapp_header_media_url = step.whatsapp_header_media_url
     if (step.sms_body !== undefined) updates.sms_body = step.sms_body
+    if (step.config !== undefined) updates.config = step.config
 
     await db.from('sequence_steps')
       .update(updates)
