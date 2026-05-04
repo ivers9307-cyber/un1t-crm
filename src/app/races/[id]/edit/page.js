@@ -12,9 +12,19 @@ export default async function EditRacePage({ params }) {
   if (!MANAGER_ROLES.includes(user.role)) redirect('/')
 
   const db = createServerClient()
+  // CRITICAL: pull waves alongside the race. `select('*')` only
+  // returns race_events columns; without the explicit waves join,
+  // the form receives race.waves = undefined and treats every save
+  // as "no existing waves", which causes the diff-and-apply path
+  // in /api/races/[id] to delete + re-insert ALL waves on every
+  // edit. Operators saw this as "my new wave didn't save" because
+  // their existing capacity / label values were also being wiped.
   const { data: race } = await db
     .from('race_events')
-    .select('*')
+    .select(`
+      *,
+      waves:race_waves ( id, start_time, capacity, label, display_order )
+    `)
     .eq('id', params.id)
     .single()
 
