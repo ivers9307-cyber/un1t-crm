@@ -197,11 +197,24 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
 // Cross-platform dashboard keys — top-level on profiles.permissions,
 // not nested under mobile.* . Listed here so the parity linter knows
 // they're shared by design (no webEquivalent needed since they ARE
-// the web equivalent of themselves).
+// the web equivalent of themselves). Kept as a named export for the
+// mobile bundle's existing import; new code should reach for
+// CROSS_PLATFORM_KEYS below which is the broader, future-friendly
+// list.
 export const CROSS_PLATFORM_DASHBOARD_KEYS = Object.freeze([
   'dashboard_personal',
   'dashboard_studio',
   'dashboard_business',
+])
+
+// Every cross-platform key. Mig 093 added `studio_management` —
+// when adding more shared-by-design keys (e.g. `notifications`,
+// `assistant`-on-mobile), add them here too. The parity linter
+// uses this list to skip the "missing mobile counterpart" check
+// for these keys.
+export const CROSS_PLATFORM_KEYS = Object.freeze([
+  ...CROSS_PLATFORM_DASHBOARD_KEYS,
+  'studio_management',
 ])
 
 // ============================================================

@@ -38,14 +38,16 @@ import {
   MOBILE_PERMISSIONS,
   WEB_PERMISSION_KEYS,
   MOBILE_PERMISSION_KEYS,
-  CROSS_PLATFORM_DASHBOARD_KEYS,
+  CROSS_PLATFORM_KEYS,
 } from '../shared/permissions.js'
 
 // Cross-platform keys live in WEB_PERMISSIONS only on disk but
-// satisfy both web and mobile — the mobile Home tab reads them via
-// canDashboard(). Treat them as "implicitly satisfied on mobile" so
-// the linter doesn't complain.
-const CROSS_PLATFORM_SET = new Set(CROSS_PLATFORM_DASHBOARD_KEYS)
+// satisfy both web and mobile — the mobile app reads them from the
+// same key. Treat them as "implicitly satisfied on mobile" so the
+// linter doesn't complain about a missing webEquivalent. Mig 093
+// promoted studio_management to this list; future shared-by-design
+// keys go in CROSS_PLATFORM_KEYS in shared/permissions.js.
+const CROSS_PLATFORM_SET = new Set(CROSS_PLATFORM_KEYS)
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const repoRoot = resolve(__dirname, '..')
@@ -78,6 +80,13 @@ const WEB_ONLY_OK = {
   sms:            'SMS broadcasts/sequences/automations + ad-hoc sends from the contact profile are web-only — alpha sender ID is configured per-location in Location Settings (mig 059). No mobile SMS UI by design.',
   settings:       'Staff/branding/billing settings are managed on web.',
   car_processing: 'Tesla import tracker (CCF Autos) — operations workflow with file uploads; not part of mobile gym workflows.',
+  // Mig 092 — split out from `events` / `events|car_processing`.
+  // Both are operator-side ops surfaces with no mobile equivalent
+  // today. Race-day starts/finishes happen on the desktop control
+  // panel (RaceControlPanel.jsx); orders + refunds are
+  // admin-on-laptop work.
+  races:          'Race event management + race-day control panel + TV display are desktop / studio-TV surfaces (mig 082 / 092). No mobile UI by design.',
+  orders:         'Orders list + refund flow + retry-chain drill-in are desktop-only (mig 085 / 092). Mobile users with revenue questions see the contact profile timeline.',
 }
 
 const webDrift = []
