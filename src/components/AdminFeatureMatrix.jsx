@@ -14,7 +14,6 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Building2, Check, AlertCircle } from 'lucide-react'
-import { createBrowserClient } from '@/lib/supabase'
 import { WEB_PERMISSIONS, MOBILE_PERMISSIONS, isFeatureGatedByLocation } from '@shared/permissions'
 
 // Mirror of isFeatureEnabledAtLocation in shared/permissions.js —
@@ -41,7 +40,6 @@ function ToggleCell({ on, busy, onClick }) {
 
 export default function AdminFeatureMatrix({ organizations, locationsByOrg }) {
   const router = useRouter()
-  const db = createBrowserClient()
 
   // Local copy of every location's features map, keyed by location.id.
   // Seeded from the server-rendered locations on mount.
@@ -69,21 +67,27 @@ export default function AdminFeatureMatrix({ organizations, locationsByOrg }) {
     const current = featuresByLoc[locationId] || {}
     const next = { ...current, [featureKey]: !isOn(current, featureKey) }
 
-    // Optimistic update — revert on failure.
+    // Optimistic update — revert on failure. Save goes through the
+    // master-only endpoint so the policy is enforced server-side
+    // even though /admin/* itself is master-gated.
     setFeaturesByLoc({ ...featuresByLoc, [locationId]: next })
     try {
-      const { error: upErr } = await db
-        .from('locations')
-        .update({ features: next, updated_at: new Date().toISOString() })
-        .eq('id', locationId)
-      if (upErr) {
-        setError(`${locationId}: ${upErr.message}`)
-        // Revert
+      const r = await fetch(`/api/locations/${locationId}/features`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ features: next }),
+      })
+      const j = await r.json()
+      if (!r.ok || j.success === false) {
+        setError(`${locationId}: ${j.error || `Save failed (${r.status})`}`)
         setFeaturesByLoc({ ...featuresByLoc, [locationId]: current })
         return
       }
       setSavedAt(new Date())
       router.refresh()
+    } catch (e) {
+      setError(`${locationId}: ${e.message || 'Network error'}`)
+      setFeaturesByLoc({ ...featuresByLoc, [locationId]: current })
     } finally {
       setBusyCell(null)
     }

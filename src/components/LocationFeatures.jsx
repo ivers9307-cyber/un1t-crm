@@ -1,21 +1,18 @@
 'use client'
 
-// Per-location feature gates (migration 032). Owner-only edit.
+// Per-location feature gates (migration 032). MASTER-ONLY edit
+// (audit Nov 2026 — was owner-or-master, RLS still let owners
+// touch the column). Saves now go through PUT /api/locations/[id]/features
+// which gates on canEditLocationFeatures().
 //
 // Toggling a feature OFF here disables it for every user at this
 // location, regardless of their role default or per-user permission.
 // Notification preferences (notify_*) are NOT location-gated — they
 // stay user-controlled — and are filtered out below.
-//
-// Save model: each toggle writes the full features map back to the
-// row. We use the browser Supabase client; RLS restricts updates to
-// location members, and the page itself is owner-gated by the
-// settings → locations route.
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Check, AlertCircle } from 'lucide-react'
-import { createBrowserClient } from '@/lib/supabase'
 import { WEB_PERMISSIONS, MOBILE_PERMISSIONS, isFeatureGatedByLocation } from '@shared/permissions'
 
 // Resolve current state of a key — explicit false → off, anything
@@ -53,8 +50,6 @@ export default function LocationFeatures({ location }) {
   const [error, setError] = useState(null)
   const [savedAt, setSavedAt] = useState(null)
 
-  const db = createBrowserClient()
-
   // Filter out notification keys — those are personal preferences,
   // not something a location admin should override.
   const webFeatures = WEB_PERMISSIONS.filter(p => isFeatureGatedByLocation(p.key))
@@ -66,12 +61,14 @@ export default function LocationFeatures({ location }) {
     // Optimistic update — revert on failure.
     setFeatures(next)
     try {
-      const { error: upErr } = await db
-        .from('locations')
-        .update({ features: next, updated_at: new Date().toISOString() })
-        .eq('id', location.id)
-      if (upErr) {
-        setError(upErr.message)
+      const r = await fetch(`/api/locations/${location.id}/features`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ features: next }),
+      })
+      const j = await r.json()
+      if (!r.ok || j.success === false) {
+        setError(j.error || `Save failed (${r.status})`)
         setFeatures(features) // revert
         return
       }
@@ -80,6 +77,9 @@ export default function LocationFeatures({ location }) {
       // for the operator (their own activeLocation will pick up the
       // new features map on next render).
       router.refresh()
+    } catch (e) {
+      setError(e.message || 'Network error')
+      setFeatures(features)
     } finally {
       setBusyKey(null)
     }

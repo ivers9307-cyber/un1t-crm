@@ -2,6 +2,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { isFeatureEnabledAtLocation } from '@shared/permissions'
+import { canEditStaffMember } from '@/lib/staff-access'
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
 import { Users, MapPin, Shield, Clock, Palette, CalendarDays, Plug, UserCog, LayoutGrid, FileClock } from 'lucide-react'
@@ -96,12 +97,25 @@ export default async function SettingsPage() {
                     </span>
                   </td>
                   <td className="p-3">
-                    <Link
-                      href={`/settings/staff/${s.id}`}
-                      className="text-xs text-blue-400 hover:text-blue-300"
-                    >
-                      Edit
-                    </Link>
+                    {/* Hide the Edit link for rows the caller can't
+                        modify (owner-self, owner-peer). Saves a
+                        click + keeps the staff list honest with the
+                        new policy. */}
+                    {canEditStaffMember(
+                      { id: user.id, role: user.role, isMaster: user.isMaster },
+                      { id: s.id, role: s.role },
+                    ) ? (
+                      <Link
+                        href={`/settings/staff/${s.id}`}
+                        className="text-xs text-blue-400 hover:text-blue-300"
+                      >
+                        Edit
+                      </Link>
+                    ) : (
+                      <span className="text-xs text-un1t-mid" title="Master only — owners can't edit themselves or other owners">
+                        Locked
+                      </span>
+                    )}
                   </td>
                 </tr>
               ))}

@@ -1,0 +1,105 @@
+// Tests for the three audit fixes:
+//   1. mapProfileLocationToAssignment preserves the permissions blob
+//      (regression — bug was on the SELECT side, but the helper
+//      now centralises the contract so the bug can't recur silently).
+//   2. canEditStaffMember enforces the new owner-self / owner-peer
+//      restrictions.
+//   3. canEditLocationFeatures restricts feature toggles to master.
+
+import { describe, it, expect } from 'vitest'
+import {
+  mapProfileLocationToAssignment,
+  canEditStaffMember,
+  canEditLocationFeatures,
+} from './staff-access.js'
+
+describe('mapProfileLocationToAssignment — preserves permissions', () => {
+  it('passes the permissions JSONB through unmodified', () => {
+    // The bug was that the staff edit page narrowed its SELECT to
+    // exclude `permissions`, so the form received undefined and
+    // fell back to role defaults — making every saved override
+    // look like it was wiped on next refresh.
+    const pl = {
+      location_id: 'loc-A',
+      role: 'manager',
+      is_default: true,
+      unifi_door_access: false,
+      permissions: { pipeline: false, schedule: false, mobile: { schedule: true } },
+    }
+    const a = mapProfileLocationToAssignment(pl)
+    expect(a.permissions).toEqual({ pipeline: false, schedule: false, mobile: { schedule: true } })
+    expect(a.role).toBe('manager')
+    expect(a.is_default).toBe(true)
+    expect(a.unifi_door_access).toBe(false)
+  })
+
+  it('treats null permissions as empty object (form falls through to role defaults)', () => {
+    const a = mapProfileLocationToAssignment({
+      location_id: 'loc-A', role: 'staff', permissions: null,
+    })
+    expect(a.permissions).toEqual({})
+  })
+
+  it('returns null on null input (defensive)', () => {
+    expect(mapProfileLocationToAssignment(null)).toBe(null)
+  })
+})
+
+describe('canEditStaffMember — owner cannot edit themselves or peers', () => {
+  const master   = { id: 'u1', role: 'master', isMaster: true }
+  const ownerA   = { id: 'u2', role: 'owner' }
+  const ownerB   = { id: 'u3', role: 'owner' }
+  const manager  = { id: 'u4', role: 'manager' }
+  const staffer  = { id: 'u5', role: 'staff' }
+
+  it('master can edit anyone (including themselves)', () => {
+    expect(canEditStaffMember(master, master)).toBe(true)
+    expect(canEditStaffMember(master, ownerA)).toBe(true)
+    expect(canEditStaffMember(master, manager)).toBe(true)
+    expect(canEditStaffMember(master, staffer)).toBe(true)
+  })
+
+  it('owner CANNOT edit themselves', () => {
+    expect(canEditStaffMember(ownerA, ownerA)).toBe(false)
+  })
+
+  it('owner CANNOT edit another owner', () => {
+    expect(canEditStaffMember(ownerA, ownerB)).toBe(false)
+  })
+
+  it('owner CAN edit manager / head_coach / staff', () => {
+    expect(canEditStaffMember(ownerA, manager)).toBe(true)
+    expect(canEditStaffMember(ownerA, { id: 'hc', role: 'head_coach' })).toBe(true)
+    expect(canEditStaffMember(ownerA, staffer)).toBe(true)
+  })
+
+  it('non-owner / non-master cannot use the editor at all', () => {
+    expect(canEditStaffMember(manager, staffer)).toBe(false)
+    expect(canEditStaffMember(staffer, staffer)).toBe(false)
+  })
+
+  it('null / undefined inputs deny safely', () => {
+    expect(canEditStaffMember(null, ownerA)).toBe(false)
+    expect(canEditStaffMember(ownerA, null)).toBe(false)
+    expect(canEditStaffMember(null, null)).toBe(false)
+  })
+})
+
+describe('canEditLocationFeatures — master only', () => {
+  it('master is allowed', () => {
+    expect(canEditLocationFeatures({ role: 'master', isMaster: true })).toBe(true)
+    // Defensive: isMaster=true even when role is something else.
+    expect(canEditLocationFeatures({ role: 'owner', isMaster: true })).toBe(true)
+  })
+
+  it('owner is denied', () => {
+    expect(canEditLocationFeatures({ role: 'owner' })).toBe(false)
+  })
+
+  it('every other role denied', () => {
+    expect(canEditLocationFeatures({ role: 'manager' })).toBe(false)
+    expect(canEditLocationFeatures({ role: 'head_coach' })).toBe(false)
+    expect(canEditLocationFeatures({ role: 'staff' })).toBe(false)
+    expect(canEditLocationFeatures(null)).toBe(false)
+  })
+})

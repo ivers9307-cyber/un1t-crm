@@ -11,6 +11,7 @@ import {
   getLocationUnifiConfig, findOrCreateUnifiUser,
   syncUnifiUserPolicyForRole, revokeUnifiUserPolicies, UnifiError,
 } from '@/lib/unifi-access'
+import { canEditStaffMember } from '@/lib/staff-access'
 
 export const runtime = 'nodejs'
 
@@ -113,6 +114,22 @@ export async function PUT(request, { params }) {
 
   if (!targetBefore) {
     return NextResponse.json({ success: false, error: 'Profile not found' }, { status: 404 })
+  }
+
+  // Owner-self / owner-peer guard. Master is exempt. Defence-in-
+  // depth — the UI page gate redirects before the form even
+  // renders, but a hand-crafted PUT (n8n script, curl, etc.)
+  // would otherwise bypass the rule.
+  if (!canEditStaffMember(
+    { id: user.id, role: user.role, isMaster: user.isMaster },
+    { id: targetBefore.id, role: targetBefore.role },
+  )) {
+    return NextResponse.json({
+      success: false,
+      error: targetBefore.id === user.id
+        ? 'Owners cannot edit their own permissions. Ask a master to make this change.'
+        : 'Owners cannot edit other owners. Ask a master to make this change.',
+    }, { status: 403 })
   }
 
   // Owners can only edit users they share a location with — and even

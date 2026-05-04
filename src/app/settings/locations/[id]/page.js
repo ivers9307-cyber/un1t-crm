@@ -3,6 +3,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { redirect, notFound } from 'next/navigation'
 import { ToggleRight } from 'lucide-react'
 import { isFeatureEnabledAtLocation } from '@shared/permissions'
+import { canEditLocationFeatures } from '@/lib/staff-access'
 import LocationForm from '@/components/LocationForm'
 import LocationFeatures from '@/components/LocationFeatures'
 import CarDepositSettings from '@/components/CarDepositSettings'
@@ -32,13 +33,20 @@ export default async function EditLocationPage({ params }) {
       <p className="text-sm text-un1t-light mb-6">Update {location.name} details and integrations</p>
       <LocationForm location={location} callerRole={user.role} organizations={organizations || []} />
 
-      <section className="mt-10">
-        <div className="flex items-center gap-2 mb-3">
-          <ToggleRight size={16} className="text-un1t-light" />
-          <h3 className="text-lg font-semibold">Features</h3>
-        </div>
-        <LocationFeatures location={location} />
-      </section>
+      {/* Features matrix is master-only. Owners can still edit
+          their location's name / address / branding / UniFi config
+          via LocationForm above; only the per-location feature
+          toggles are restricted. canEditLocationFeatures() is the
+          canonical check (`@/lib/staff-access`). */}
+      {canEditLocationFeatures(user) && (
+        <section className="mt-10">
+          <div className="flex items-center gap-2 mb-3">
+            <ToggleRight size={16} className="text-un1t-light" />
+            <h3 className="text-lg font-semibold">Features</h3>
+          </div>
+          <LocationFeatures location={location} />
+        </section>
+      )}
 
       {/* Car deposit settings are only relevant when this location
           has the Car Processing feature enabled. Hides the section

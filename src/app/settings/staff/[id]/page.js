@@ -2,6 +2,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { redirect, notFound } from 'next/navigation'
 import StaffForm from '@/components/StaffForm'
+import { canEditStaffMember, mapProfileLocationToAssignment } from '@/lib/staff-access'
 
 export const dynamic = 'force-dynamic'
 
@@ -11,8 +12,17 @@ export default async function EditStaffPage({ params }) {
 
   const db = createServerClient()
   const [profileRes, locationsRes] = await Promise.all([
+    // CRITICAL: include permissions on profile_locations. Bug fix —
+    // the previous SELECT narrowed to (location_id, role,
+    // unifi_door_access, unifi_user_id, is_default), silently
+    // dropping the permissions JSONB. The form fell back to role
+    // defaults, then on save POSTed the role-default values BACK to
+    // the row — making every per-user override look like it was
+    // wiped on refresh. mapProfileLocationToAssignment() now
+    // centralises the shape so a future SELECT change can't recur
+    // the same bug without breaking the helper's contract test.
     db.from('profiles')
-      .select('*, profile_locations(location_id, role, unifi_door_access, unifi_user_id, is_default)')
+      .select('*, profile_locations(location_id, role, unifi_door_access, unifi_user_id, is_default, permissions)')
       .eq('id', params.id)
       .single(),
     db.from('locations').select('*').eq('active', true).order('name'),
@@ -20,15 +30,20 @@ export default async function EditStaffPage({ params }) {
 
   if (!profileRes.data) notFound()
 
-  // Per mig 051 — assemble the assignments array the form will edit.
-  // One row per profile_locations entry, carrying its own role + UniFi
-  // toggle + default flag. The form mutates this array in place.
-  const assignments = (profileRes.data.profile_locations || []).map(pl => ({
-    location_id: pl.location_id,
-    role: pl.role,
-    is_default: !!pl.is_default,
-    unifi_door_access: !!pl.unifi_door_access,
-  }))
+  // Owner-self / owner-peer guard. Master is exempt. The check has
+  // a server-side equivalent in /api/staff/[id]'s PUT handler — this
+  // is the UI gate that prevents the form from rendering at all,
+  // not just a button hide.
+  if (!canEditStaffMember(
+    { id: user.id, role: user.role, isMaster: user.isMaster },
+    { id: profileRes.data.id, role: profileRes.data.role },
+  )) {
+    redirect('/settings')
+  }
+
+  const assignments = (profileRes.data.profile_locations || [])
+    .map(mapProfileLocationToAssignment)
+    .filter(Boolean)
 
   // Caller scope: master sees every location; owner sees only the
   // locations they themselves are owner at. Used to gate which cards
