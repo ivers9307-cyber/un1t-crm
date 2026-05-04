@@ -237,23 +237,43 @@ function OrderRow({ row, onRefunded }) {
   const [confirming, setConfirming] = useState(false)
   const [busy, setBusy] = useState(false)
   const [refundError, setRefundError] = useState(null)
+  // Partial-refund amount in major units (€). Defaults to the full
+  // order amount; operator can override before confirming.
+  const [refundEuros, setRefundEuros] = useState(() =>
+    Number.isFinite(row.amount_cents) ? (row.amount_cents / 100).toFixed(2) : ''
+  )
 
   function navigateToDetail(e) {
     // Don't navigate when the operator's interacting with the
-    // refund control or its confirm/cancel buttons.
+    // refund control or any input/button inside the row.
     if (confirming) return
-    if (e.target.closest('button')) return
+    if (e.target.closest('button, input')) return
     router.push(`/orders/${row.id}`)
   }
 
   async function handleRefund() {
+    // Validate partial-refund amount client-side. Server re-checks
+    // and rejects with refund_exceeds_order if needed.
+    const major = Number(refundEuros)
+    if (!Number.isFinite(major) || major <= 0) {
+      setRefundError('Enter a positive amount.')
+      return
+    }
+    const cents = Math.round(major * 100)
+    if (cents > row.amount_cents) {
+      setRefundError(`Cannot refund more than the order total (${formatMoney(row.amount_cents, row.currency)}).`)
+      return
+    }
+    const isFull = cents === row.amount_cents
     setBusy(true)
     setRefundError(null)
     try {
       const r = await fetch(`/api/orders/${row.id}/refund`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({}),
+        // Omit amount_cents on full refund — server treats missing
+        // as "full" which is the safest semantic.
+        body: JSON.stringify(isFull ? {} : { amount_cents: cents }),
       })
       const j = await r.json()
       if (!r.ok || j.success === false) {
@@ -308,7 +328,17 @@ function OrderRow({ row, onRefunded }) {
         )}
         {canRefund && confirming && (
           <div className="inline-flex items-center gap-1.5">
-            <span className="text-[11px] text-un1t-light">Refund {amount}?</span>
+            <span className="text-[11px] text-un1t-light">Refund €</span>
+            <input
+              type="number"
+              min="0.01"
+              step="0.01"
+              max={row.amount_cents / 100}
+              value={refundEuros}
+              onChange={(e) => setRefundEuros(e.target.value)}
+              className="text-[11px] bg-un1t-black border border-un1t-gray rounded px-1.5 py-0.5 text-un1t-white w-20 tabular-nums"
+              title={`Up to ${amount} (full refund). Lower for partial.`}
+            />
             <button
               type="button"
               onClick={handleRefund}
