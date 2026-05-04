@@ -50,14 +50,22 @@ const SET_NULL_TABLES = Object.freeze([
   { table: 'teams',                     column: 'captain_contact_id', label: 'teams (as captain)' },
 ])
 
-// Tables with NO ACTION delete rule — these BLOCK a hard delete if
-// any rows exist. The route's delete confirm dialog refuses with a
-// clear error; the merge path UPDATEs them so they follow the
-// survivor and the loser becomes deletable.
-const BLOCK_DELETE_TABLES = Object.freeze([
-  { table: 'whatsapp_broadcast_recipients', column: 'contact_id', label: 'WhatsApp broadcast history' },
-  { table: 'whatsapp_conversations',        column: 'contact_id', label: 'WhatsApp conversations' },
-  { table: 'whatsapp_messages',             column: 'contact_id', label: 'WhatsApp messages' },
+// Tables that need an explicit PII scrub before the contact row is
+// deleted (GDPR right-to-erasure, mig 094). The conversation rows
+// stay — operator + regulator audit trail — but identifying fields
+// (wa_phone, wa_profile_name, message body, media URL,
+// template variables) are wiped to NULL or '[redacted]'. The FK
+// itself is now ON DELETE SET NULL on conversations + messages and
+// CASCADE on broadcast_recipients (mig 094) so no row blocks the
+// delete; the scrub is what makes the kept rows GDPR-safe.
+//
+// Used by the impact preview as a third "Will be redacted"
+// category, and by redactWhatsAppForContact() below as the work
+// list.
+const REDACT_ON_DELETE_TABLES = Object.freeze([
+  { table: 'whatsapp_broadcast_recipients', column: 'contact_id', label: 'WhatsApp broadcast history (cascade-deleted; per-recipient send status)' },
+  { table: 'whatsapp_conversations',        column: 'contact_id', label: 'WhatsApp conversations (PII redacted, thread preserved)' },
+  { table: 'whatsapp_messages',             column: 'contact_id', label: 'WhatsApp messages (body + media redacted, metadata preserved)' },
 ])
 
 // Pre-UPDATE dedupe: when both contacts have a row sharing a unique
@@ -117,12 +125,20 @@ async function dedupePreUpdate(db, { survivorId, loserId }) {
  * Returns counts of every dependent row for a contact, split by
  * delete-rule. The shape is friendly to UI rendering — caller can
  * map each entry to a "X rows of <label>" line.
+ *
+ * Mig 094 introduced a new `redact_on_delete` category for the
+ * WhatsApp tables (was `block_delete` before — they used to refuse
+ * the delete entirely). `block_delete` is retained as an empty
+ * array for back-compat with the existing UI (renders nothing when
+ * empty); future add-only protected FKs can land in there without
+ * a UI change.
  */
 export async function getContactImpact(db, contactId) {
   if (!contactId) throw new Error('getContactImpact: contactId required')
   const out = {
     cascade_on_delete: [],
     keep_on_delete: [],
+    redact_on_delete: [],
     block_delete: [],
     total_rows: 0,
   }
@@ -154,15 +170,78 @@ export async function getContactImpact(db, contactId) {
       out.total_rows += n
     }
   }
-  for (const t of BLOCK_DELETE_TABLES) {
+  for (const t of REDACT_ON_DELETE_TABLES) {
     const n = await countAt(t)
     if (n > 0) {
-      out.block_delete.push({ ...t, count: n })
+      out.redact_on_delete.push({ ...t, count: n })
       out.total_rows += n
     }
   }
 
   return out
+}
+
+/**
+ * Mig 094: GDPR right-to-erasure scrub for the WhatsApp tables.
+ * Strips wa_phone, wa_profile_name, message body, media URL,
+ * template variables. Leaves audit-friendly metadata (timestamps,
+ * status, message_type, direction). Idempotent — running twice on
+ * the same contact_id is a no-op since the second run finds
+ * everything already null.
+ *
+ * Caller is responsible for issuing the `DELETE FROM contacts`
+ * AFTER this completes. The FK rules (mig 094) handle the
+ * contact_id → null transition automatically once the parent row
+ * is gone.
+ *
+ * Best-effort: each UPDATE is independent. If one fails (e.g.
+ * permission issue, schema drift), we log and continue so a
+ * partial scrub is better than no scrub. The caller still attempts
+ * the contact delete which will surface the underlying error if
+ * something is genuinely broken.
+ *
+ * @param {SupabaseClient} db          service-role client
+ * @param {string}        contactId
+ */
+export async function redactWhatsAppForContact(db, contactId) {
+  if (!contactId) throw new Error('redactWhatsAppForContact: contactId required')
+
+  // whatsapp_conversations — strip the phone, profile name, last
+  // message preview. Keep timestamps + status + assigned_to (those
+  // are operator-side audit, not customer PII).
+  try {
+    await db
+      .from('whatsapp_conversations')
+      .update({
+        wa_phone: null,
+        wa_profile_name: null,
+        last_message_preview: '[redacted]',
+      })
+      .eq('contact_id', contactId)
+  } catch (e) {
+    console.warn(`[contact-merge] redact whatsapp_conversations failed for ${contactId}: ${e?.message || e}`)
+  }
+
+  // whatsapp_messages — strip body + media URL + template
+  // variables. Keep direction, message_type, status, sent_at /
+  // delivered_at / read_at (operator-side audit).
+  try {
+    await db
+      .from('whatsapp_messages')
+      .update({
+        body: '[redacted at user request]',
+        media_url: null,
+        media_mime_type: null,
+        template_variables: null,
+      })
+      .eq('contact_id', contactId)
+  } catch (e) {
+    console.warn(`[contact-merge] redact whatsapp_messages failed for ${contactId}: ${e?.message || e}`)
+  }
+
+  // whatsapp_broadcast_recipients — no body to scrub here, the row
+  // gets cascaded on contact delete (mig 094 FK rule). No-op for
+  // the scrub function but kept for symmetry / future-proofing.
 }
 
 /**
@@ -264,7 +343,13 @@ export async function mergeContacts(db, { survivorId, loserId }) {
   // SET fk=A WHERE fk=B is a no-op on retry once x=A) so a re-run
   // is safe.
   const folded = {}
-  const everyTable = [...CASCADE_TABLES, ...SET_NULL_TABLES, ...BLOCK_DELETE_TABLES]
+  // Merge re-points every dependent FK from loser → survivor.
+  // After mig 094 the WhatsApp tables are SET NULL / CASCADE on
+  // delete, but during MERGE we still want their rows to follow the
+  // survivor (the conversation thread should track the kept
+  // identity, not get nulled out). So include REDACT_ON_DELETE_TABLES
+  // here even though the delete-path handles them via the scrub.
+  const everyTable = [...CASCADE_TABLES, ...SET_NULL_TABLES, ...REDACT_ON_DELETE_TABLES]
   for (const t of everyTable) {
     const { error: upErr, count } = await db
       .from(t.table)

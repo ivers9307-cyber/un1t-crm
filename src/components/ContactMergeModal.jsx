@@ -198,11 +198,11 @@ export default function ContactMergeModal({ contactIds, contacts, onClose }) {
                 {impactErr}
               </div>
             )}
-            {impact && (impact.cascade_on_delete?.length > 0 || impact.keep_on_delete?.length > 0 || impact.block_delete?.length > 0) && (
+            {impact && (impact.cascade_on_delete?.length > 0 || impact.keep_on_delete?.length > 0 || impact.block_delete?.length > 0 || impact.redact_on_delete?.length > 0) && (
               <div className="bg-un1t-black border border-un1t-gray rounded-md p-3 mb-3">
                 <div className="text-xs uppercase tracking-wider text-un1t-light mb-2">Folding across from <strong className="text-un1t-white">{loser.name || loser.email}</strong></div>
                 <ul className="text-xs text-un1t-light space-y-0.5">
-                  {[...(impact.block_delete || []), ...(impact.cascade_on_delete || []), ...(impact.keep_on_delete || [])].map(t => (
+                  {[...(impact.block_delete || []), ...(impact.cascade_on_delete || []), ...(impact.redact_on_delete || []), ...(impact.keep_on_delete || [])].map(t => (
                     <li key={`${t.table}.${t.column}`}>{t.count} {t.label}</li>
                   ))}
                 </ul>

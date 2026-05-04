@@ -108,7 +108,7 @@ export default function ContactBulkDeleteModal({ contacts, onClose, onDeleted })
             <div className="bg-un1t-black border border-un1t-gray rounded-md p-3 mb-3 text-[11px] text-un1t-light space-y-1">
               <div><strong className="text-un1t-white">Will be deleted:</strong> deals, notes, activities, sequence enrolments, send history.</div>
               <div><strong className="text-un1t-white">Will stay (unlinked):</strong> bookings, orders, race registrations, race payments — revenue history is preserved.</div>
-              <div><strong className="text-un1t-white">Will be blocked:</strong> any contact with WhatsApp history will be skipped — merge those into another contact first.</div>
+              <div><strong className="text-un1t-white">Will be redacted:</strong> WhatsApp conversations + messages — PII (phone, profile name, message body, media) is wiped, conversation thread stays for audit (GDPR right-to-erasure).</div>
             </div>
 
             <div className="space-y-3">

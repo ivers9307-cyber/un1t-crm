@@ -7,6 +7,7 @@ import { email, phone, leadSourceSchema, leadStatusSchema, MANAGER_ROLES } from 
 import { triggerSequencesForStatusChange, triggerSequencesForTagsAdded } from '@/lib/sequences'
 import { logPipelineEvent } from '@/lib/activity-events'
 import { getCurrentUser } from '@/lib/auth'
+import { redactWhatsAppForContact } from '@/lib/contact-merge'
 
 const ContactUpdateSchema = z.object({
   name: z.string().min(1).max(200).optional(),
@@ -112,16 +113,17 @@ export async function GET(request, { params }) {
   return NextResponse.json({ success: true, data })
 }
 
-// DELETE /api/contacts/:id — hard delete.
+// DELETE /api/contacts/:id — hard delete + GDPR PII scrub.
 //
 // Uses the cookie auth path (n8n shouldn't be issuing destructive
-// deletes — kept off the API-key surface). Permission widened
-// (Nov 2026) from owner+ to MANAGER_ROLES (head_coach / manager /
-// owner / master). Cascades the rows listed in CASCADE_TABLES;
-// SET-NULL tables keep the row with the FK nulled (history
-// preserved). If the contact still has whatsapp_* rows (NO ACTION)
-// the delete will fail at the DB layer — caller should merge into
-// another contact first.
+// deletes — kept off the API-key surface). MANAGER_ROLES (mig 092
+// audit). Mig 094: WhatsApp history no longer blocks the delete —
+// PII (wa_phone, wa_profile_name, message body, media URL) is
+// scrubbed via redactWhatsAppForContact() BEFORE the contact row
+// is deleted, then the FK rules (SET NULL on conversations +
+// messages, CASCADE on broadcast_recipients) handle the link.
+// Cascades CASCADE_TABLES; SET-NULL tables keep the row with the
+// FK nulled (booking + revenue history preserved).
 export async function DELETE(_request, { params }) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
@@ -130,8 +132,6 @@ export async function DELETE(_request, { params }) {
   }
 
   const db = createServerClient()
-  // Verify the contact is at the caller's location before deleting.
-  // Master bypasses the location check (mig 033 master semantics).
   const { data: existing } = await db.from('contacts')
     .select('id, location_id')
     .eq('id', params.id)
@@ -144,18 +144,14 @@ export async function DELETE(_request, { params }) {
     }
   }
 
+  // GDPR scrub first — strip PII from the kept WhatsApp rows so
+  // the audit thread is anonymised. Best-effort: even if this
+  // partially fails the delete still proceeds (the FK rules will
+  // null the contact_id link automatically).
+  await redactWhatsAppForContact(db, params.id)
+
   const { error } = await db.from('contacts').delete().eq('id', params.id)
   if (error) {
-    // 23503 = FK violation (NO ACTION row blocking the delete —
-    // most likely whatsapp_*). Return a friendlier error pointing
-    // the operator at merge instead of just dumping the SQL message.
-    if (error.code === '23503' || /foreign key|violates/i.test(error.message || '')) {
-      return NextResponse.json({
-        success: false,
-        error: 'Cannot delete: contact has WhatsApp history. Merge into another contact first.',
-        code: 'has_protected_history',
-      }, { status: 409 })
-    }
     return NextResponse.json({ success: false, error: error.message }, { status: 500 })
   }
 

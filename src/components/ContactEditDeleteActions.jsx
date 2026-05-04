@@ -125,6 +125,22 @@ export default function ContactEditDeleteActions({ contact, canEdit, canDelete }
 
             {impact && (
               <div className="text-sm text-un1t-light space-y-3 mb-4">
+                {impact.redact_on_delete?.length > 0 && (
+                  <div>
+                    <div className="text-xs uppercase tracking-wider text-amber-700 mb-1">Will be redacted</div>
+                    <ul className="text-xs space-y-0.5">
+                      {impact.redact_on_delete.map(t => (
+                        <li key={`${t.table}.${t.column}`}>
+                          {t.count} {t.label}
+                        </li>
+                      ))}
+                    </ul>
+                    <p className="text-[11px] text-un1t-mid mt-1">
+                      Phone, profile name, message bodies, and media URLs are wiped. Conversation thread + timestamps stay for audit (GDPR right-to-erasure).
+                    </p>
+                  </div>
+                )}
+
                 {impact.block_delete?.length > 0 && (
                   <div>
                     <div className="text-xs uppercase tracking-wider text-red-700 mb-1">Blocking</div>
@@ -135,9 +151,6 @@ export default function ContactEditDeleteActions({ contact, canEdit, canDelete }
                         </li>
                       ))}
                     </ul>
-                    <p className="text-[11px] text-un1t-mid mt-1">
-                      WhatsApp history blocks deletion. Merge this contact into another one first.
-                    </p>
                   </div>
                 )}
 

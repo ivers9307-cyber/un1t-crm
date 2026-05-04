@@ -30,6 +30,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
 import { uuidLike, MANAGER_ROLES } from '@/lib/schemas'
+import { redactWhatsAppForContact } from '@/lib/contact-merge'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -80,17 +81,23 @@ export async function POST(request) {
       result.forbidden.push({ id, name: row.name, reason: 'Different location' })
       continue
     }
+    // Mig 094: GDPR scrub of WhatsApp PII before the contact row
+    // delete. Idempotent — safe to call even if the contact has no
+    // WhatsApp history. Best-effort: a scrub failure won't stop
+    // us trying the delete, since the FK rules now SET NULL on
+    // conversations + messages anyway.
+    await redactWhatsAppForContact(db, id)
     const { error } = await db.from('contacts').delete().eq('id', id)
     if (error) {
-      // 23503 — FK violation (most commonly whatsapp_* NO ACTION rows
-      // refusing the cascade). Surface as a "blocked" entry so the
-      // operator knows to merge first; don't fail the whole request.
+      // After mig 094 there shouldn't be FK-blocked deletes, but
+      // we keep the friendly message in case some future protected
+      // FK gets added without a redact step.
       const isFk = error.code === '23503' || /foreign key|violates/i.test(error.message || '')
       result.blocked.push({
         id,
         name: row.name,
         reason: isFk
-          ? 'WhatsApp history blocks delete — merge first.'
+          ? 'A protected FK is still pointing at this contact.'
           : (error.message || 'Delete failed'),
       })
       continue
