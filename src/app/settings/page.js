@@ -1,6 +1,7 @@
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
+import { isFeatureEnabledAtLocation } from '@shared/permissions'
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
 import { Users, MapPin, Shield, Clock, Palette, CalendarDays, Plug, UserCog, LayoutGrid, FileClock } from 'lucide-react'
@@ -226,24 +227,35 @@ export default async function SettingsPage() {
         </div>
       )}
 
-      {/* Integrations Section */}
-      <div className="mb-10">
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center gap-2">
-            <Plug size={18} className="text-un1t-light" />
-            <h3 className="text-lg font-semibold">Integrations</h3>
+      {/* Integrations Section.
+          Currently surfaces the Xero connection — only used by the
+          Car Processing flow. Hidden when no location the user has
+          access to has Car Processing enabled, so gym-only operators
+          don't see settings that would never apply. We check the
+          per-location feature gate directly (not hasPermission)
+          since this is "is this feature live at any of my locations"
+          rather than "do I personally have access." The
+          /settings/integrations page itself filters its location
+          list the same way. */}
+      {locations.some(l => isFeatureEnabledAtLocation(l, 'car_processing')) && (
+        <div className="mb-10">
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-2">
+              <Plug size={18} className="text-un1t-light" />
+              <h3 className="text-lg font-semibold">Integrations</h3>
+            </div>
+            <Link
+              href="/settings/integrations"
+              className="text-xs bg-un1t-white text-un1t-black px-3 py-1.5 rounded-md hover:bg-un1t-accent transition-colors font-medium"
+            >
+              Manage
+            </Link>
           </div>
-          <Link
-            href="/settings/integrations"
-            className="text-xs bg-un1t-white text-un1t-black px-3 py-1.5 rounded-md hover:bg-un1t-accent transition-colors font-medium"
-          >
-            Manage
-          </Link>
+          <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5">
+            <p className="text-sm text-un1t-light">Xero connection per location — used for pushing customer invoices when a car is marked completed.</p>
+          </div>
         </div>
-        <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5">
-          <p className="text-sm text-un1t-light">Xero connection per location — used for pushing customer invoices when a car is marked completed.</p>
-        </div>
-      </div>
+      )}
 
       {/* Branding Section — Owner or master */}
       {(user.role === 'owner' || user.role === 'master') && (

@@ -8,6 +8,7 @@ import Link from 'next/link'
 import { ChevronLeft, Plug, AlertTriangle, CheckCircle2 } from 'lucide-react'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
+import { isFeatureEnabledAtLocation } from '@shared/permissions'
 import { createServerClient } from '@/lib/supabase'
 import XeroLocationCard from '@/components/settings/XeroLocationCard'
 
@@ -20,11 +21,15 @@ export default async function IntegrationsPage({ searchParams }) {
 
   const db = createServerClient()
   // Show every location the user is a member of. Owners typically
-  // see them all; staff see only their own.
+  // see them all; staff see only their own. Pull `features` so we
+  // can filter to locations with Car Processing enabled — Xero is
+  // only used by the cars flow today, so a gym-only location has
+  // nothing to integrate.
   const memberLocationIds = (user.locations || []).map(l => l.id).filter(Boolean)
-  const { data: locations } = memberLocationIds.length
-    ? await db.from('locations').select('id, name').in('id', memberLocationIds).order('name')
+  const { data: rawLocations } = memberLocationIds.length
+    ? await db.from('locations').select('id, name, features').in('id', memberLocationIds).order('name')
     : { data: [] }
+  const locations = (rawLocations || []).filter(l => isFeatureEnabledAtLocation(l, 'car_processing'))
 
   const { data: connections } = await db
     .from('xero_connections')
@@ -71,7 +76,13 @@ export default async function IntegrationsPage({ searchParams }) {
           ))}
         </div>
       ) : (
-        <p className="text-sm text-un1t-light">No locations available.</p>
+        // Two cases: user has no locations at all, OR none of them
+        // have Car Processing enabled. Either way Xero has nothing
+        // to do — point the user at the location feature toggle so
+        // they know how to surface this.
+        <p className="text-sm text-un1t-light">
+          No locations have Car Processing enabled. Turn it on under <Link href="/settings" className="underline">Settings → Locations → Features</Link> if a location should integrate with Xero.
+        </p>
       )}
 
       <div className="mt-8 p-4 bg-un1t-dark border border-un1t-gray rounded-2xl text-xs text-un1t-light space-y-2">

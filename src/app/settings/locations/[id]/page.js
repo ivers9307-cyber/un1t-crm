@@ -2,6 +2,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { redirect, notFound } from 'next/navigation'
 import { ToggleRight } from 'lucide-react'
+import { isFeatureEnabledAtLocation } from '@shared/permissions'
 import LocationForm from '@/components/LocationForm'
 import LocationFeatures from '@/components/LocationFeatures'
 import CarDepositSettings from '@/components/CarDepositSettings'
@@ -39,7 +40,15 @@ export default async function EditLocationPage({ params }) {
         <LocationFeatures location={location} />
       </section>
 
-      <CarDepositSettings location={location} />
+      {/* Car deposit settings are only relevant when this location
+          has the Car Processing feature enabled. Hides the section
+          for gym-only locations so the page doesn't carry settings
+          that would never apply. Toggling Car Processing back on
+          restores the section without a refresh (LocationFeatures
+          calls router.refresh() after save). */}
+      {isFeatureEnabledAtLocation(location, 'car_processing') && (
+        <CarDepositSettings location={location} />
+      )}
     </div>
   )
 }
