@@ -51,7 +51,7 @@ export async function middleware(request) {
 
   // ── CRM hostname (default) — existing behaviour ──────────────────
   // Public routes that don't require auth
-  const publicPaths = ['/login', '/reset-password', '/book/', '/api/public/', '/unsubscribe/', '/preferences/', '/api/unsubscribe/', '/api/preferences/', '/api/webhooks/', '/api/cron/', '/deposit/']
+  const publicPaths = ['/login', '/reset-password', '/book/', '/race/', '/api/public/', '/unsubscribe/', '/preferences/', '/api/unsubscribe/', '/api/preferences/', '/api/webhooks/', '/api/cron/', '/deposit/']
   const isPublic = publicPaths.some(p => request.nextUrl.pathname.startsWith(p))
   if (isPublic) return NextResponse.next()
 

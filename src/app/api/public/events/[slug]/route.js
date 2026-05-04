@@ -17,7 +17,6 @@ export async function GET(request, { params }) {
       id, name, slug, description, duration_minutes, color,
       availability, buffer_minutes, max_advance_days, custom_fields,
       location_id,
-      is_timed_event, allowed_team_sizes,
       locations:location_id ( id, name, address, timezone )
     `)
     .eq('slug', params.slug)

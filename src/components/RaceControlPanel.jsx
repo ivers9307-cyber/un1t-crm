@@ -1,55 +1,43 @@
 'use client'
 
-// RaceControlPanel — race-day operator UI for timed events (mig 081).
+// RaceControlPanel — race-day operator UI for standalone race events
+// (mig 082). Sources race_registrations (not bookings) so race
+// timing is fully decoupled from the booking flow.
 //
 // Three sections, designed for tablet-finger-friendly interaction:
-//   1. Next Up   — bookings scheduled to start. Sorted by scheduled
-//                  start time. Big "Start" button per row. Tap → POSTs
-//                  /api/bookings/[id]/race-start which stamps
-//                  race_started_at = NOW().
-//   2. On Course — bookings started but not finished. Sorted longest-
-//                  on-course first (oldest race_started_at at top)
-//                  because the team that's been running longest is
-//                  most likely to finish next, which makes the
-//                  operator's tap target most accurate. Live elapsed
-//                  timer ticks every 500ms.
-//   3. Completed — finished bookings. Sorted fastest first. Reset
-//                  button per row in case the operator tapped the
-//                  wrong team.
+//   1. Next Up   — registrations not started yet, sorted by
+//                  registered_at ascending. Big "Start" button per
+//                  row. Tap → POSTs /api/registrations/[id]/race-start.
+//   2. On Course — started but not finished. Sorted longest-on-course
+//                  first (oldest race_started_at at top — most likely
+//                  next finisher, makes the operator's tap target
+//                  most accurate). Live elapsed timer ticks at 500ms.
+//   3. Completed — finished registrations. Sorted fastest first.
+//                  Reset button per row in case the operator tapped
+//                  the wrong team.
 //
-// Polls /api/events/[id]/race-board every 2 seconds so multiple
-// operators (one at start line, one at finish) stay in sync. State
-// changes from one operator's device appear on the other within ~2s.
-// No realtime / websockets in v1 — polling is fine for the modest
-// event-rate this drives.
+// Polls /api/races/[id]/control-board every 2 seconds so multiple
+// operators stay in sync.
 //
-// Each booking row shows: team name + size badge + member names with
-// captain highlighted, plus the action button. Edge cases:
-//   - status='no_show' / 'cancelled' bookings are hidden from Next Up
-//   - bookings with team_id null still render (race-start auto-creates
-//     the team via ensureTeamForBooking) but show customer_name as a
-//     placeholder until the team is created
+// Each row shows: team name + size badge + member names with captain
+// highlighted. Cancelled / no_show registrations are filtered from
+// the active sections.
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Play, Square, RotateCcw, Loader2, Trophy, Clock, Users, AlertCircle } from 'lucide-react'
 import { formatElapsed, classifyBookingState, elapsedSecondsBetween } from '@/lib/race-control'
 
-export default function RaceControlPanel({ eventId, date }) {
+export default function RaceControlPanel({ raceId }) {
   const [board, setBoard] = useState(null)
   const [loadError, setLoadError] = useState(null)
-  const [actionBusy, setActionBusy] = useState(null) // booking id of in-flight action
+  const [actionBusy, setActionBusy] = useState(null)
   const [actionError, setActionError] = useState(null)
-  // Tick state purely for live timer re-renders. We don't store seconds
-  // because computing them off (now - race_started_at) on every render
-  // is cheap and avoids drift.
   const [, setTick] = useState(0)
   const pollRef = useRef(null)
 
   async function fetchBoard() {
     try {
-      const r = await fetch(`/api/events/${eventId}/race-board?date=${encodeURIComponent(date)}`, {
-        cache: 'no-store',
-      })
+      const r = await fetch(`/api/races/${raceId}/control-board`, { cache: 'no-store' })
       const j = await r.json()
       if (!r.ok || j.success === false) {
         setLoadError(j.error || `Fetch failed (${r.status})`)
@@ -62,9 +50,6 @@ export default function RaceControlPanel({ eventId, date }) {
     }
   }
 
-  // Initial load + 2-second poll. Live timer ticks at 500ms via a
-  // separate setInterval so On-Course rows update smoothly without
-  // forcing a refetch.
   useEffect(() => {
     fetchBoard()
     pollRef.current = setInterval(fetchBoard, 2000)
@@ -74,19 +59,17 @@ export default function RaceControlPanel({ eventId, date }) {
       clearInterval(tickInt)
     }
     // eslint-disable-next-line
-  }, [eventId, date])
+  }, [raceId])
 
-  async function fireAction(bookingId, action) {
-    setActionBusy(bookingId)
+  async function fireAction(registrationId, action) {
+    setActionBusy(registrationId)
     setActionError(null)
     try {
-      const r = await fetch(`/api/bookings/${bookingId}/${action}`, { method: 'POST' })
+      const r = await fetch(`/api/registrations/${registrationId}/${action}`, { method: 'POST' })
       const j = await r.json()
       if (!r.ok || j.success === false) {
         throw new Error(j.error || `${action} failed (${r.status})`)
       }
-      // Refresh the board so the row jumps to the next section
-      // immediately rather than waiting for the next poll tick.
       await fetchBoard()
     } catch (e) {
       setActionError(`${action}: ${e.message || 'failed'}`)
@@ -98,15 +81,14 @@ export default function RaceControlPanel({ eventId, date }) {
   const sections = useMemo(() => {
     if (!board) return { next_up: [], on_course: [], completed: [] }
     const buckets = { next_up: [], on_course: [], completed: [], no_show: [] }
-    for (const b of (board.bookings || [])) {
-      const state = classifyBookingState(b)
-      buckets[state].push(b)
+    for (const r of (board.registrations || [])) {
+      // classifyBookingState reads { status, race_started_at,
+      // race_finished_at } — same shape as race_registrations.
+      const state = classifyBookingState(r)
+      buckets[state].push(r)
     }
-    // Next Up: scheduled order ascending.
-    buckets.next_up.sort((a, b) => (a.start_time || '').localeCompare(b.start_time || ''))
-    // On Course: oldest race_started_at first (longest on course at top).
+    buckets.next_up.sort((a, b) => (a.registered_at || '').localeCompare(b.registered_at || ''))
     buckets.on_course.sort((a, b) => (a.race_started_at || '').localeCompare(b.race_started_at || ''))
-    // Completed: fastest first.
     buckets.completed.sort((a, b) => {
       const ea = elapsedSecondsBetween(a.race_started_at, a.race_finished_at) ?? Infinity
       const eb = elapsedSecondsBetween(b.race_started_at, b.race_finished_at) ?? Infinity
@@ -138,56 +120,21 @@ export default function RaceControlPanel({ eventId, date }) {
         </div>
       )}
 
-      {/* On Course — surface first because it's the most time-sensitive
-          (operator at the finish line is watching for the next finisher) */}
-      <Section
-        title="On Course"
-        icon={Clock}
-        count={sections.on_course.length}
-        emptyText="No teams currently on the course."
-      >
-        {sections.on_course.map((b) => (
-          <OnCourseRow
-            key={b.id}
-            booking={b}
-            busy={actionBusy === b.id}
-            onFinish={() => fireAction(b.id, 'race-finish')}
-          />
+      <Section title="On Course" icon={Clock} count={sections.on_course.length} emptyText="No teams currently on the course.">
+        {sections.on_course.map((r) => (
+          <OnCourseRow key={r.id} registration={r} busy={actionBusy === r.id} onFinish={() => fireAction(r.id, 'race-finish')} />
         ))}
       </Section>
 
-      {/* Next Up — start line view */}
-      <Section
-        title="Next Up"
-        icon={Play}
-        count={sections.next_up.length}
-        emptyText="No teams scheduled to start."
-      >
-        {sections.next_up.map((b) => (
-          <NextUpRow
-            key={b.id}
-            booking={b}
-            busy={actionBusy === b.id}
-            onStart={() => fireAction(b.id, 'race-start')}
-          />
+      <Section title="Next Up" icon={Play} count={sections.next_up.length} emptyText="No teams registered yet.">
+        {sections.next_up.map((r) => (
+          <NextUpRow key={r.id} registration={r} busy={actionBusy === r.id} onStart={() => fireAction(r.id, 'race-start')} />
         ))}
       </Section>
 
-      {/* Completed — leaderboard view */}
-      <Section
-        title="Completed"
-        icon={Trophy}
-        count={sections.completed.length}
-        emptyText="No teams have finished yet."
-      >
-        {sections.completed.map((b, i) => (
-          <CompletedRow
-            key={b.id}
-            booking={b}
-            rank={i + 1}
-            busy={actionBusy === b.id}
-            onReset={() => fireAction(b.id, 'race-reset')}
-          />
+      <Section title="Completed" icon={Trophy} count={sections.completed.length} emptyText="No teams have finished yet.">
+        {sections.completed.map((r, i) => (
+          <CompletedRow key={r.id} registration={r} rank={i + 1} busy={actionBusy === r.id} onReset={() => fireAction(r.id, 'race-reset')} />
         ))}
       </Section>
     </div>
@@ -212,9 +159,9 @@ function Section({ title, icon: Icon, count, emptyText, children }) {
   )
 }
 
-function TeamHeader({ booking, accent = 'default' }) {
-  const team = booking.teams
-  const teamName = team?.name || booking.customer_name || '(unnamed)'
+function TeamHeader({ registration, accent = 'default' }) {
+  const team = registration.teams
+  const teamName = team?.name || '(no team)'
   const size = team?.size
   const members = team?.team_members || []
   const accentClass = accent === 'on_course'
@@ -249,12 +196,11 @@ function TeamHeader({ booking, accent = 'default' }) {
   )
 }
 
-function NextUpRow({ booking, busy, onStart }) {
+function NextUpRow({ registration, busy, onStart }) {
   return (
     <div className="flex items-stretch gap-2">
-      <TeamHeader booking={booking} />
+      <TeamHeader registration={registration} />
       <div className="flex flex-col items-end justify-center gap-1 min-w-[110px]">
-        <div className="text-[11px] text-un1t-light">{booking.start_time?.slice(0, 5) || ''}</div>
         <button
           type="button"
           onClick={onStart}
@@ -269,15 +215,14 @@ function NextUpRow({ booking, busy, onStart }) {
   )
 }
 
-function OnCourseRow({ booking, busy, onFinish }) {
-  // Live elapsed — recomputed every render (parent ticks at 500ms).
+function OnCourseRow({ registration, busy, onFinish }) {
   const nowMs = Date.now()
-  const startedMs = booking.race_started_at ? Date.parse(booking.race_started_at) : nowMs
+  const startedMs = registration.race_started_at ? Date.parse(registration.race_started_at) : nowMs
   const elapsed = Math.max(0, Math.floor((nowMs - startedMs) / 1000))
 
   return (
     <div className="flex items-stretch gap-2">
-      <TeamHeader booking={booking} accent="on_course" />
+      <TeamHeader registration={registration} accent="on_course" />
       <div className="flex flex-col items-end justify-center gap-1 min-w-[110px]">
         <div className="font-mono text-base font-semibold text-amber-700 tabular-nums">
           {formatElapsed(elapsed)}
@@ -296,14 +241,14 @@ function OnCourseRow({ booking, busy, onFinish }) {
   )
 }
 
-function CompletedRow({ booking, rank, busy, onReset }) {
-  const elapsed = elapsedSecondsBetween(booking.race_started_at, booking.race_finished_at)
+function CompletedRow({ registration, rank, busy, onReset }) {
+  const elapsed = elapsedSecondsBetween(registration.race_started_at, registration.race_finished_at)
   return (
     <div className="flex items-stretch gap-2">
       <div className="flex items-center justify-center min-w-[40px] text-base font-semibold text-un1t-light">
         #{rank}
       </div>
-      <TeamHeader booking={booking} accent="completed" />
+      <TeamHeader registration={registration} accent="completed" />
       <div className="flex flex-col items-end justify-center gap-1 min-w-[110px]">
         <div className="font-mono text-base font-semibold text-emerald-700 tabular-nums">
           {formatElapsed(elapsed)}

@@ -51,17 +51,8 @@ export default function EventForm({ event, locationId }) {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
 
-  // Race tracking (mig 081). When on, this event becomes a "timed
-  // event" — bookings get the team-capture treatment in the booking
-  // widget, and the operator gets the /events/[id]/race UI on race
-  // day. allowedTeamSizes is the set of team sizes the booking widget
-  // will offer (e.g. {1, 2, 4} for Hyrox formats).
-  const [isTimedEvent, setIsTimedEvent] = useState(!!event?.is_timed_event)
-  const [allowedTeamSizes, setAllowedTeamSizes] = useState(
-    Array.isArray(event?.allowed_team_sizes) && event.allowed_team_sizes.length > 0
-      ? event.allowed_team_sizes
-      : [1, 2, 4]
-  )
+  // (mig 081 race-tracking state removed in mig 082 — races are
+  // now standalone race_events with their own /races admin UI.)
 
   // Confirmation config (mig 077 — booking confirmation flow).
   // One-shot message sent at booking creation time. Same channel
@@ -247,14 +238,6 @@ export default function EventForm({ event, locationId }) {
       confirmation_sms_body:
         confirmationActive && confirmationChannels.includes('sms')
           ? (confirmationSmsBody || null) : null,
-      // mig 081 — race tracking. allowed_team_sizes is only meaningful
-      // when is_timed_event=true; null it out otherwise so a future
-      // re-toggle starts fresh from defaults rather than picking up
-      // stale values.
-      is_timed_event: isTimedEvent,
-      allowed_team_sizes: isTimedEvent && allowedTeamSizes.length > 0
-        ? [...allowedTeamSizes].sort((a, b) => a - b)
-        : null,
       ...(locationId && !isEditing ? { location_id: locationId } : {}),
     }
 
@@ -525,68 +508,6 @@ export default function EventForm({ event, locationId }) {
                 </div>
               </div>
             ))}
-          </div>
-        )}
-      </div>
-
-      {/* Race tracking (mig 081). When on, this event becomes a timed
-          event: the booking widget collects team name + size + members
-          at signup, and the operator gets the /events/[id]/race UI on
-          race day to start/finish each team's timer. */}
-      <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5 space-y-4">
-        <div className="flex items-center justify-between gap-3">
-          <h3 className="font-semibold text-sm text-un1t-light uppercase tracking-wider flex items-center gap-2">
-            🏁 Race tracking
-          </h3>
-          <button
-            type="button"
-            onClick={() => setIsTimedEvent(v => !v)}
-            className={`shrink-0 w-10 h-5 rounded-full transition-colors ${isTimedEvent ? 'bg-emerald-500' : 'bg-un1t-gray'}`}
-            aria-pressed={isTimedEvent}
-          >
-            <div className={`w-4 h-4 rounded-full bg-white transition-transform ${isTimedEvent ? 'translate-x-5' : 'translate-x-0.5'}`} />
-          </button>
-        </div>
-        <p className="text-xs text-un1t-light -mt-2">
-          Track race times for this event. Bookings get team-capture fields at signup
-          (name + members). On race day, open <span className="font-mono">/events/{event?.id || '…'}/race</span>{' '}
-          to start and finish each team&apos;s timer with one tap.
-        </p>
-
-        {isTimedEvent && (
-          <div className="space-y-2 pt-1 border-t border-un1t-gray/50">
-            <div className="text-xs text-un1t-light pt-2">Allowed team sizes</div>
-            <p className="text-[11px] text-un1t-mid">
-              The booking widget shows a radio constrained to these sizes. For each size {`>`} 1,
-              the form renders {'N−1'} additional name+email pairs so members can be captured at
-              signup time. Hyrox formats: 1 (singles), 2 (doubles), 4 (relay).
-            </p>
-            <div className="flex flex-wrap gap-2">
-              {[1, 2, 3, 4, 5, 6, 8].map((s) => {
-                const on = allowedTeamSizes.includes(s)
-                return (
-                  <button
-                    key={s}
-                    type="button"
-                    onClick={() => setAllowedTeamSizes(prev =>
-                      prev.includes(s) ? prev.filter(x => x !== s) : [...prev, s]
-                    )}
-                    className={`text-xs px-3 py-1.5 rounded-md border transition-colors ${
-                      on
-                        ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-700'
-                        : 'bg-un1t-black border-un1t-gray text-un1t-light hover:border-un1t-mid'
-                    }`}
-                  >
-                    {s}-person
-                  </button>
-                )
-              })}
-            </div>
-            {allowedTeamSizes.length === 0 && (
-              <p className="text-[11px] text-amber-700 mt-1">
-                Pick at least one team size or the booking widget won&apos;t render team fields.
-              </p>
-            )}
           </div>
         )}
       </div>

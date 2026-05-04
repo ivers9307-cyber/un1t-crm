@@ -80,7 +80,8 @@ React 18 + Next.js 14, Tailwind CSS 3.4, Supabase Auth (SSR cookies), Postmark (
 | Organizations (tenant tier) | 079 | (browser-side updates via RLS) | `auth.js` (org loading) | `AdminFeatureMatrix.jsx`, `AdminAccessMatrix.jsx` |
 | Master admin matrix | 079 | `/admin/matrix` (server page), `/admin/layout.js` (master gate) | — | `AdminFeatureMatrix.jsx`, `AdminAccessMatrix.jsx` |
 | Master admin v2 (editable + audit) | 080 | `/api/admin/assignments`, `/api/admin/assignments/bulk`, `/api/admin/master-toggle`, `/api/admin/audit-log`, `/admin/audit-log` | `assignment-changes.js` | `UserAssignmentsPanel.jsx`, `AuditLogTable.jsx` (matrix + access components updated in place) |
-| Teams + race tracking | 081 | `/api/bookings/[id]/race-{start,finish,reset}`, `/api/events/[id]/race-board` | `race-control.js` | `RaceControlPanel.jsx`, `EventForm.jsx` + `BookingWidget.jsx` (extended) |
+| Teams + race tracking | 081 | (mig 081 routes deleted in mig 082 cleanup) | `race-control.js` | (merged version stripped in mig 082) |
+| Standalone race events | 082 | `/api/races`, `/api/races/[id]`, `/api/races/[id]/control-board`, `/api/registrations/[id]/race-{start,finish,reset}`, `/api/public/races/[slug]`, `/api/public/races/[slug]/register` | `race-control.js` | `RaceEventForm.jsx`, `RaceSignupWidget.jsx`, `RaceControlPanel.jsx` (repurposed) |
 | Add organization UI | (cross-cutting) | `/api/admin/organizations` | `slug.js` | `AddOrganizationButton.jsx`, `LocationForm.jsx` (org picker added) |
 | Email Marketing | 005, 006 | `/api/campaigns`, `/api/templates`, `/api/sequences`, `/api/preferences/[token]`, `/api/unsubscribe/[token]` | `postmark.js`, `audience-filter.js` | `CampaignEditor.jsx`, `TemplateEditor.jsx`, `AudienceBuilder.jsx` |
 | WhatsApp | 007, 008 | `/api/whatsapp/*` | `whatsapp.js`, `audience-filter.js` | `WAInbox.jsx`, `WABroadcastEditor.jsx` |
@@ -1029,42 +1030,64 @@ To remove or demote the current sole master, you have to first promote another u
 
 **Why it exists:** with two organizations and a handful of locations, clicking through `/settings/locations/[id]` for each one to flip a feature is fine. With three+ tenant businesses on the platform, the per-location flow becomes friction. The matrix lets a master see and modify the entire platform's posture from one screen, which is also the right shape for the eventual "tenant onboarding" flow (provisioning a new org → bulk-toggle features for all its locations → add their team in bulk via the bulk action bar).
 
-## Teams + race tracking
+## Teams + race events
 
-Mig 081 adds first-class team identity and race timing to the platform, built for the every-6-weeks Hyrox sim and any other timed event the gym wants to run. Three new schema concepts:
+Two migrations form the current architecture:
+- **Mig 081** introduced `teams` + `team_members` (kept) and shoehorned race tracking into the booking flow (`event_types.is_timed_event`, `bookings.race_started_at`, etc — all DEPRECATED in mig 082, see below).
+- **Mig 082** unmerged race events into a standalone first-class entity. Race events have their own table, URL space (`/races/*` operator + `/race/[slug]` public), and signup widget — independent of the Calendly-style booking flow.
 
-- **`teams`** — per-location, persistent across events. UNIQUE `(location_id, name)` so a returning team booking with the same name auto-links to the same row. Carries `size`, `captain_contact_id`, `notes`. The persistence is the point — a v2 leaderboard / "best time across 6 events" needs the team_id link to compute.
-- **`team_members`** — who's on which team. Captain row has `contact_id` set (they filled out the booking form, so they exist as a contact). Other members captured via the booking widget have `contact_id = NULL` initially — they exist as team_members but not as standalone CRM contacts until they show up separately. Promoting a member to a real contact is a v2 admin action.
-- **Race timing on `bookings`** — `race_started_at` and `race_finished_at` are stamped by the operator UI. Pure append-only data; the race-reset route is the only path that nulls them back out (operator-mistake undo).
+The deprecated mig 081 columns stay on disk per the codebase convention (CLAUDE.md "Deprecated columns kept on disk") and will be dropped in a follow-up cleanup migration once we're confident the standalone architecture is bedded in.
 
-Plus extensions:
-- `event_types.is_timed_event BOOLEAN` — opt-in flag. When true, the booking widget renders team-capture fields and the operator gets the `/events/[id]/race` UI.
-- `event_types.allowed_team_sizes INT[]` — e.g. `{1,2,4}` for Hyrox formats. Booking widget shows a radio constrained to these sizes; for size > 1, it renders N−1 additional name+email pairs. Server-side validates that the submitted `team_size` is in this array.
+### Schema (current)
 
-**Booking flow when an event is timed.** Captain books on the public widget. Above the standard fields they enter team name, pick a size (only allowed sizes shown), and fill in name+email for each non-captain member. The `POST /api/public/book` route validates against `allowed_team_sizes`, finds-or-creates the team by `(location_id, name)`, links the booking, and inserts a fresh set of `team_members` rows (captain with `contact_id` set, others with NULL). Returning teams pick up the same `team_id` automatically; the team's `size` updates to the latest booking's value (most recent wins). If team setup fails for any reason, the booking still succeeds — the race-control UI's `ensureTeamForBooking` back-stop will reconstruct on first race-start.
+- **`teams`** (mig 081, kept) — per-location, persistent across events. UNIQUE `(location_id, name)` so a returning team booking with the same name auto-links to the same row. Carries `size`, `captain_contact_id`, `notes`. The persistence is the point — leaderboards / "best time across N events" need the team_id link.
+- **`team_members`** (mig 081, kept) — captain row has `contact_id` set; non-captain members have name+email captured via the signup form with `contact_id = NULL`.
+- **`race_events`** (mig 082) — one row per race occurrence. Per-location. UNIQUE `(location_id, slug)`. Carries `name, slug, race_date, start_time, registration_opens_at, registration_closes_at, capacity, allowed_team_sizes (INT[]), description, active`. No relation to `event_types` — completely standalone.
+- **`race_registrations`** (mig 082) — one row per (race_event, team) with UNIQUE constraint preventing double-registration. Carries `status, race_started_at, race_finished_at, registered_at`. Replaces the bookings.race_started/finished_at pattern from mig 081.
 
-**Race-day UI at `/events/[id]/race?date=YYYY-MM-DD`.** Master-or-manager-at-the-event's-location-only. Three sections:
-- **On Course** — surfaced first because that's where the operator's attention is at the finish line. Sorted longest-on-course first (oldest `race_started_at` at top — the team that's been running longest is most likely to finish next, which makes the operator's tap target the most accurate guess). Live elapsed timer ticks every 500ms.
-- **Next Up** — sorted by scheduled start time. Big "Start" button per row.
-- **Completed** — sorted fastest first (leaderboard view). Reset button per row.
+### Operator UI
 
-The page polls `/api/events/[id]/race-board` every 2 seconds so multiple operators (one at start, one at finish, one in the office) stay in sync. No realtime / websockets in v1 — polling is fine for the modest event-rate this drives.
+- **`/races`** — index of race events at the active location. Sidebar entry under the `events` permission. Shows registration counts vs capacity, allowed sizes, status, and quick-links to public signup, race-day control, and edit.
+- **`/races/new`** + **`/races/[id]/edit`** — `<RaceEventForm>` for the operator-facing config. Different from `<EventForm>` because races have a different shape (race_date instead of recurring availability, registration window instead of slot generator, capacity instead of buffer_minutes).
+- **`/races/[id]/control`** — race-day operator UI. `<RaceControlPanel>` polls `/api/races/[id]/control-board` every 2s. Three sections: On Course (sorted longest-on-course first, the most-likely-next-finisher heuristic), Next Up (registration order), Completed (fastest first leaderboard view). Live elapsed timer ticks at 500ms.
 
-**Three race API routes:**
-- `POST /api/bookings/[id]/race-start` — stamps `race_started_at = NOW()` if event is_timed and not already started. Auto-creates team via `ensureTeamForBooking` if `team_id` is null (back-stop for bookings created before mig 081 or via non-widget channels).
-- `POST /api/bookings/[id]/race-finish` — stamps `race_finished_at = NOW()` if started but not finished. Returns 409 with `code: 'not_started'` if you try to finish without a start.
-- `POST /api/bookings/[id]/race-reset` — clears both timestamps. Operator-mistake undo. Doesn't touch the team_id link.
+### Public signup
 
-All three: manager+ at the event's location.
+- **`/race/[slug]`** — standalone public team-first signup page. `<RaceSignupWidget>` — no calendar, no slot picking, just team name + size radio + N member name+email pairs + captain contact details. Validates the registration window state (`not_yet_open` / `open` / `closed` / `full`) from the public race API. Confirmation card after success.
 
-**Out of scope for v1 (good v2 candidates):**
-- Email customer their result — straightforward Postmark template once race times exist; iterate over `team_members[*].email` for the recipient list
-- Public leaderboard / results page (e.g. `/teams/[id]` showing every Hyrox the Iron Dogs have run, ranked)
-- Returning-team badge in the race UI ("3rd time at this event")
-- Multi-day events / heats / waves
-- Realtime sync via Supabase Realtime (today: 2s polling)
-- Auto-promoting non-captain members to real contacts (today: stays as team_members rows only)
-- Cross-org team identity (today: teams are scoped to one location; CCF Autos and UN1T Group can't share team identities)
+### API surface
+
+| Route | Method | Auth | Purpose |
+|---|---|---|---|
+| `/api/races` | GET | manager+ | List races at location(s) |
+| `/api/races` | POST | manager+ | Create race |
+| `/api/races/[id]` | GET | manager+ | Read one race + registrations |
+| `/api/races/[id]` | PUT | manager+ | Update race fields |
+| `/api/races/[id]` | DELETE | manager+ | Soft-delete (active=false) |
+| `/api/races/[id]/control-board` | GET | manager+ | Race-day polling endpoint |
+| `/api/registrations/[id]/race-start` | POST | manager+ | Stamp `race_started_at = NOW()` |
+| `/api/registrations/[id]/race-finish` | POST | manager+ | Stamp `race_finished_at = NOW()` |
+| `/api/registrations/[id]/race-reset` | POST | manager+ | Clear both timestamps (mistake undo) |
+| `/api/public/races/[slug]` | GET | public | Race details + capacity state |
+| `/api/public/races/[slug]/register` | POST | public, rate-limited | Team signup |
+
+### Public-signup flow internals
+
+`POST /api/public/races/[slug]/register` does, in order: validate body shape, check race active + registration window + capacity, find-or-create the captain contact by `(location_id, lower(email))`, find-or-create the team by `(location_id, name)` updating size/captain on conflict, refresh `team_members` (clear + re-insert captain + N−1 others), insert the `race_registration`. UNIQUE `(race_event_id, team_id)` surfaces double-registration as a clean 409 with `code: 'already_registered'`. Capacity is soft-enforced (count vs configured) — concurrent signups could in theory both squeeze in over the cap; acceptable for v1.
+
+### What's deferred to v2
+
+- Email customer their result — straightforward Postmark template once race_registration timing exists; iterate `team_members[*].email` for recipients.
+- Public leaderboard / results page (`/race/[slug]/results`).
+- Heats/waves — `race_registrations.wave_id` column reserved for this; UI not built.
+- Hard capacity enforcement via UNIQUE constraint or trigger (current is soft).
+- Returning-team badge in the race-day UI ("3rd time at this event").
+- Realtime sync via Supabase Realtime instead of 2s polling.
+- Auto-promoting non-captain members to standalone CRM contacts.
+
+### Architectural note: why the unmerge
+
+Mig 081 tried to layer race tracking on top of event_types/bookings via an `is_timed_event` flag + extra columns. The booking widget rendered team fields conditionally, slot generation produced calendar slots that don't match a "race runs once on Saturday" reality, and `max_advance_days` accidentally hid race signup pages until ~3 days before the event. The clunkiness was structural — a Calendly-style "pick a slot from recurring availability" abstraction is the wrong shape for "register your team for the event next month, capacity 12." Mig 082 separates the two concerns into independent tables and URL spaces; the booking flow goes back to being clean, races get to be themselves.
 
 ## Roadmap & backlog
 
@@ -1074,6 +1097,7 @@ Mirror of the Cowork task list — kept here as the durable record so that a fre
 
 | # | Item | Notes |
 |---|------|-------|
+| 92 | Standalone race events (unmerge from booking flow) | Mig 082. Same-day pivot from #91 — the merged race-tracking-on-bookings approach was structurally wrong (Calendly slot abstraction doesn't fit "race on Saturday, capacity 12, teams register"). New `race_events` + `race_registrations` tables fully independent of event_types/bookings. New URL space: operator at `/races` (index, new, [id]/edit, [id]/control), public at `/race/[slug]` for team-first signup. New API space at `/api/races/*` + `/api/registrations/[id]/race-{start,finish,reset}` + `/api/public/races/[slug]/{,register}`. New `<RaceEventForm>`, `<RaceSignupWidget>` (standalone — no calendar, no slot picking, just team capture), and repurposed `<RaceControlPanel>` sourcing race_registrations. Sidebar gets a "Races" entry under the events permission. The mig 081 columns (event_types.is_timed_event, bookings.team_id/race_started_at/race_finished_at) stay on disk per the deprecated-columns convention but are comment-marked DEPRECATED — drop in a follow-up cleanup migration. BookingWidget + EventForm + /api/public/book all stripped of the merged race UI. The `/events/[id]/race` page and `/api/bookings/[id]/race-*` routes deleted. teams + team_members tables stay (still the right abstraction; race_registrations.team_id references them). 505 tests still passing. CLAUDE.md gets a fresh "Teams + race events" architectural section reflecting the new shape; the redundant mig-081-era prose was deleted. |
 | 91 | Teams + race tracking (Hyrox sims) | Mig 081. New `teams` table (per-location, persistent across events, UNIQUE(location_id, name) for return-team auto-link) + `team_members` (captain has contact_id; others captured by name+email at signup). New columns: `bookings.team_id`, `bookings.race_started_at`, `bookings.race_finished_at`, `event_types.is_timed_event`, `event_types.allowed_team_sizes` (INT[]). New `src/lib/race-control.js` with pure helpers (formatElapsed, classifyBookingState, elapsedSecondsBetween) + `ensureTeamForBooking` back-stop (find-or-create team by name, link booking, seed captain as team_member). Three race API routes: `POST /api/bookings/[id]/race-{start,finish,reset}` (manager+ at event's location). New `GET /api/events/[id]/race-board?date=YYYY-MM-DD` returns the polling shape — bookings with team + members joined, sorted by scheduled start. New `/events/[id]/race` server page + `<RaceControlPanel>` client component: three sections (On Course / Next Up / Completed) with big tap targets, live elapsed timer ticking every 500ms, polls every 2s for multi-operator sync. EventForm gets the timed-event toggle + size-multi-select. BookingWidget extended: when event is_timed_event, after standard fields show team name input, size radio (only allowed sizes), and N−1 dynamic name+email pairs. Public book API validates against allowed_team_sizes server-side and creates the team + members in the same transaction as the booking. 19 new unit tests in race-control.test.js. CLAUDE.md gets a full new "Teams + race tracking" section. v1 is fully shippable as the operator UX it needs to be; v2 ideas (email results, leaderboard page, returning-team badge, realtime sync, member→contact promotion) are listed in the section. |
 | 90 | Invite-by-email onboarding + admin password reset | Admins no longer enter passwords on behalf of new users. `POST /api/staff` switched from `auth.admin.createUser({email,password})` to `auth.admin.inviteUserByEmail(email, { data: { full_name }, redirectTo: $APP_URL/reset-password })`. StaffForm drops the password field on create and shows an explanatory note ("invitation email will be sent…"). New `POST /api/staff/[id]/send-password-reset` (master/admin only) calls `auth.resetPasswordForEmail()` against an existing staff member's email — handles both the "user missed the original invite" case and the "user forgot their password" case. New "Send password reset email" button on StaffForm in edit mode with inline confirmation prompt + success/error states (`<SendPasswordResetButton>`). `/reset-password` page enhanced to detect invite vs recovery via URL hash (`#type=invite|recovery`) and show appropriate copy ("Welcome — set your password" vs "Set a new password"). Already-existing-email case on create returns 409 with a clean message suggesting the password-reset flow. **Cleaner posture:** admin never sees plaintext passwords; the credential is owned by the user from the moment it's set. |
 | 89 | Location-gate test coverage | Closes a real gap — `assertLocationAccess` and `getUserLocationIds` had zero direct unit tests before this PR (the backlog item's claim of "20 tests" was incorrect, probably misremembering the schemas test file). Added 12 tests to `src/lib/auth.test.js` covering every branch: null user → 401, no locationId → null pass-through, allowed → null, denied → 403 (the IDOR case), empty/missing locations array → 403, master with all-locations populated passes naturally, defensive id-less entries treated as non-match. Plus one representative route-level test pattern at `src/app/api/contacts/segments/[id]/route.test.js` demonstrating the `vi.mock('@/lib/auth')` + `vi.mock('@/lib/supabase')` + direct-handler-call approach — copy this shape for any future route that wants route-level coverage of its auth/authz path. The pattern handles the chainable Supabase mock (lookup → guard → mutation) and shows assertions for both happy-path and IDOR-attempt branches across PUT and DELETE handlers. |

@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
-import { LayoutDashboard, Users, Columns3, CheckSquare, Calendar, MessagesSquare, CalendarClock, Settings, LogOut, Car } from 'lucide-react'
+import { LayoutDashboard, Users, Columns3, CheckSquare, Calendar, MessagesSquare, CalendarClock, Settings, LogOut, Car, Flag } from 'lucide-react'
 import { createBrowserClient } from '@/lib/supabase'
 import LocationSwitcher from './LocationSwitcher'
 import ImpersonatePicker from './ImpersonatePicker'
@@ -46,6 +46,11 @@ const allNav = [
   { href: '/communications', label: 'Communications', icon: MessagesSquare,
     anyPermission: ['email', 'whatsapp'] },
   { href: '/schedule',   label: 'Schedule',     icon: CalendarClock,   permission: 'schedule' },
+  // Race events (mig 082) — standalone from booking events. Same
+  // 'events' permission gate so anyone who can manage booking events
+  // can also manage races; if those need to diverge later, add a
+  // dedicated 'races' permission key.
+  { href: '/races',      label: 'Races',        icon: Flag,            permission: 'events' },
   { href: '/cars',       label: 'Car Processing', icon: Car,           permission: 'car_processing' },
   { href: '/settings',   label: 'Settings',     icon: Settings,        permission: 'settings' },
 ]

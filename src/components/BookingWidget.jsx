@@ -46,12 +46,9 @@ export default function BookingWidget({ slug }) {
   const [, setBookingResult] = useState(null)
   const [fieldErrors, setFieldErrors] = useState({})
 
-  // Race tracking (mig 081). Only meaningful when event.is_timed_event.
-  // Defaults to the smallest allowed size so the form has sensible
-  // initial state. Member rows are built dynamically from teamSize.
-  const [teamName, setTeamName] = useState('')
-  const [teamSize, setTeamSize] = useState(1)
-  const [teamMembers, setTeamMembers] = useState([])  // [{ name, email }] for members 2..N (captain is the booker)
+  // (mig 081 race-tracking state removed in mig 082 — races now have
+  // their own standalone signup widget at /race/[slug] and don't
+  // share UI with the booking flow.)
 
   // Detected timezone — surfaces on the calendar pane so customers
   // know what zone the slot times are in (matches the Calendly
@@ -182,30 +179,6 @@ export default function BookingWidget({ slug }) {
     return /^\+353[1-9]\d{6,9}$/.test(e164)
   }
 
-  // Initialise the default team size once the event loads (so the radio
-  // points at the first allowed size, and member rows have correct count).
-  useEffect(() => {
-    if (event?.is_timed_event && Array.isArray(event.allowed_team_sizes) && event.allowed_team_sizes.length > 0) {
-      const sortedSizes = [...event.allowed_team_sizes].sort((a, b) => a - b)
-      const initialSize = sortedSizes[0]
-      setTeamSize(initialSize)
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [event?.id])
-
-  // Re-shape the members array when the operator changes team size.
-  // Preserves any names/emails already typed for slots that survive.
-  useEffect(() => {
-    const memberCount = Math.max(0, teamSize - 1)  // captain is the booker
-    setTeamMembers((prev) => {
-      const next = []
-      for (let i = 0; i < memberCount; i++) {
-        next.push(prev[i] || { name: '', email: '' })
-      }
-      return next
-    })
-  }, [teamSize])
-
   async function handleSubmit(e) {
     e.preventDefault()
     setError(null)
@@ -214,30 +187,11 @@ export default function BookingWidget({ slug }) {
     if (!validateEmail(formData.email)) errors.email = 'Please enter a valid email address'
     if (formData.phone && !validatePhone(formData.phone)) errors.phone = 'Please enter a valid Irish phone number'
 
-    // Race tracking — team capture validation when event is_timed_event.
-    if (event?.is_timed_event) {
-      if (!teamName.trim()) errors.team_name = 'Team name is required'
-      teamMembers.forEach((m, i) => {
-        if (!m.name.trim()) errors[`member_${i}_name`] = `Member ${i + 2} name is required`
-        if (m.email && !validateEmail(m.email)) errors[`member_${i}_email`] = `Member ${i + 2} email is invalid`
-      })
-    }
-
     if (Object.keys(errors).length > 0) {
       setFieldErrors(errors)
       return
     }
     setSubmitting(true)
-    const teamPayload = event?.is_timed_event
-      ? {
-          team_name: teamName.trim(),
-          team_size: teamSize,
-          team_members: teamMembers.map((m) => ({
-            name: m.name.trim(),
-            email: m.email.trim().toLowerCase() || null,
-          })),
-        }
-      : {}
     const res = await fetch('/api/public/book', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -249,7 +203,6 @@ export default function BookingWidget({ slug }) {
         customer_email: formData.email.trim().toLowerCase(),
         customer_phone: formData.phone ? phoneToE164(formData.phone) : null,
         custom_responses: customResponses,
-        ...teamPayload,
       }),
     })
     const data = await res.json()
@@ -569,89 +522,6 @@ export default function BookingWidget({ slug }) {
                   )}
                 </div>
               ))}
-
-              {/* Team capture (mig 081). Rendered only for timed
-                  events. Captain is the booker (already captured
-                  above as name + email); members 2..N get name +
-                  optional email here. */}
-              {event.is_timed_event && (
-                <div className="pt-3 mt-2 border-t border-gray-200 space-y-3">
-                  <div>
-                    <label className="block text-xs font-medium text-gray-700 mb-1">Team name *</label>
-                    <input
-                      type="text"
-                      required
-                      value={teamName}
-                      onChange={(e) => setTeamName(e.target.value)}
-                      placeholder="The Iron Dogs"
-                      className={`w-full border rounded-md px-3 py-2 text-sm focus:outline-none ${fieldErrors.team_name ? 'border-red-400' : 'border-gray-300 focus:border-gray-500'}`}
-                    />
-                    {fieldErrors.team_name && (
-                      <p className="text-[11px] text-red-600 mt-1">{fieldErrors.team_name}</p>
-                    )}
-                  </div>
-
-                  {(event.allowed_team_sizes || []).length > 1 && (
-                    <div>
-                      <label className="block text-xs font-medium text-gray-700 mb-1">Team size *</label>
-                      <div className="flex flex-wrap gap-2">
-                        {[...(event.allowed_team_sizes || [])].sort((a, b) => a - b).map((s) => (
-                          <button
-                            key={s}
-                            type="button"
-                            onClick={() => setTeamSize(s)}
-                            className={`text-xs px-3 py-2 rounded-md border transition-colors ${
-                              teamSize === s
-                                ? 'border-gray-700 bg-gray-100 text-gray-900 font-semibold'
-                                : 'border-gray-300 bg-white text-gray-600 hover:border-gray-400'
-                            }`}
-                          >
-                            {s}-person
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {teamMembers.length > 0 && (
-                    <div className="space-y-2">
-                      <p className="text-[11px] text-gray-600">
-                        Add the other {teamMembers.length} {teamMembers.length === 1 ? 'team member' : 'team members'}.
-                        You&apos;re registered as the captain.
-                      </p>
-                      {teamMembers.map((m, i) => (
-                        <div key={i} className="grid grid-cols-2 gap-2">
-                          <div>
-                            <input
-                              type="text"
-                              required
-                              placeholder={`Member ${i + 2} name *`}
-                              value={m.name}
-                              onChange={(e) => setTeamMembers((prev) => prev.map((x, j) => j === i ? { ...x, name: e.target.value } : x))}
-                              className={`w-full border rounded-md px-3 py-2 text-sm focus:outline-none ${fieldErrors[`member_${i}_name`] ? 'border-red-400' : 'border-gray-300 focus:border-gray-500'}`}
-                            />
-                            {fieldErrors[`member_${i}_name`] && (
-                              <p className="text-[11px] text-red-600 mt-1">{fieldErrors[`member_${i}_name`]}</p>
-                            )}
-                          </div>
-                          <div>
-                            <input
-                              type="email"
-                              placeholder={`Member ${i + 2} email`}
-                              value={m.email}
-                              onChange={(e) => setTeamMembers((prev) => prev.map((x, j) => j === i ? { ...x, email: e.target.value } : x))}
-                              className={`w-full border rounded-md px-3 py-2 text-sm focus:outline-none ${fieldErrors[`member_${i}_email`] ? 'border-red-400' : 'border-gray-300 focus:border-gray-500'}`}
-                            />
-                            {fieldErrors[`member_${i}_email`] && (
-                              <p className="text-[11px] text-red-600 mt-1">{fieldErrors[`member_${i}_email`]}</p>
-                            )}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
 
               <button
                 type="submit"
