@@ -50,8 +50,15 @@ export const WEB_PERMISSIONS = Object.freeze([
   { key: 'whatsapp',   label: 'WhatsApp',                       hint: 'WhatsApp Cloud API inbox + broadcasts.' },
   { key: 'sms',        label: 'SMS',                            hint: 'Send SMS via Twilio. Per-location alpha sender ID configured in Location Settings.' },
   // — Operations —
-  { key: 'schedule',   label: 'Schedule',                       hint: 'Coach roster, shift blocks, time-off, swap requests.' },
-  { key: 'assistant',  label: 'AI Assistant',                   hint: 'In-app chat assistant with CRM tool use.' },
+  { key: 'schedule',          label: 'Schedule',                hint: 'Coach roster, shift blocks, time-off, swap requests.' },
+  { key: 'assistant',         label: 'AI Assistant',            hint: 'In-app chat assistant with CRM tool use.' },
+  // Mig 093 (Nov 2026): renamed from `door_unlock` (mobile-only)
+  // to `studio_management` (cross-platform, top-level on
+  // permissions). Both web sidebar AND mobile read this single
+  // key. Surface today is remote door unlock via UniFi Access;
+  // future studio-ops actions (alarm arm/disarm, camera live view,
+  // etc.) will land under the same gate.
+  { key: 'studio_management', label: 'Studio Management',       hint: 'Remote door unlock + future on-site operations. Requires UniFi Access configured for the location.' },
   // — Revenue —
   // Mig 092 split: orders used to inherit `events|car_processing`
   // OR via the sidebar. Standalone key lets a location hide /orders
@@ -72,7 +79,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     pipeline: true, contacts: true, activities: true,
     events: true, bookings: true, races: true,
     email: true, whatsapp: true, sms: true,
-    schedule: true, assistant: true,
+    schedule: true, assistant: true, studio_management: true,
     orders: true, car_processing: true,
     settings: true,
   },
@@ -81,7 +88,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     pipeline: true, contacts: true, activities: true,
     events: true, bookings: true, races: true,    // race-day starts/finishes are a front-of-house duty
     email: false, whatsapp: false, sms: false,
-    schedule: true, assistant: false,
+    schedule: true, assistant: false, studio_management: false,
     orders: false, car_processing: false,         // financial views off by default
     settings: false,
   },
@@ -90,7 +97,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     pipeline: true, contacts: true, activities: true,
     events: true, bookings: true, races: true,
     email: true, whatsapp: true, sms: true,
-    schedule: true, assistant: true,
+    schedule: true, assistant: true, studio_management: false, // explicit opt-in
     orders: false, car_processing: false,         // head coach doesn't need orders by default
     settings: false,
   },
@@ -99,7 +106,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     pipeline: true, contacts: true, activities: true,
     events: true, bookings: true, races: true,
     email: true, whatsapp: true, sms: true,
-    schedule: true, assistant: true,
+    schedule: true, assistant: true, studio_management: true,
     orders: true, car_processing: false,          // managers run revenue ops; CCF Autos is per-user opt-in
     settings: true,
   },
@@ -108,7 +115,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     pipeline: true, contacts: true, activities: true,
     events: true, bookings: true, races: true,
     email: true, whatsapp: true, sms: true,
-    schedule: true, assistant: true,
+    schedule: true, assistant: true, studio_management: true,
     orders: true, car_processing: false,          // OFF for owner too — explicit opt-in per profile
     settings: true,
   },
@@ -133,7 +140,12 @@ export const MOBILE_PERMISSIONS = Object.freeze([
   { key: 'whatsapp',           label: 'WhatsApp Inbox',           hint: 'Reply to inbound WhatsApp messages on the go',                  webEquivalent: 'whatsapp' },
   { key: 'time_off',           label: 'Time Off Requests',        hint: 'Submit and view leave requests',                                webEquivalent: 'schedule' },
   { key: 'assistant',          label: 'AI Assistant',             hint: 'Use the in-app assistant from mobile',                          webEquivalent: 'assistant' },
-  { key: 'door_unlock',        label: 'Door Unlock',              hint: 'Unlock UniFi-controlled doors from the phone',                  mobileOnly: true },
+  // Mig 093: door_unlock was promoted to a cross-platform key
+  // named `studio_management` (lives in WEB_PERMISSIONS, top-level
+  // on profiles.permissions — same shape as dashboard_*). Both
+  // web sidebar AND the mobile app read it from the same key.
+  // Removed from MOBILE_PERMISSIONS so it's not double-listed in
+  // the StaffForm picker.
   { key: 'push_notifications', label: 'Push Notifications',       hint: 'Master switch — turn off to silence everything',                mobileOnly: true },
   { key: 'notify_time_off',    label: '… Time-off decisions',     hint: 'Notify on approval/decline of own requests',                    mobileOnly: true, isNotify: true },
   { key: 'notify_schedule',    label: '… Schedule published',     hint: 'Notify when a new week is published',                           mobileOnly: true, isNotify: true },
@@ -147,35 +159,35 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
   // also short-circuits true for master regardless of these values.
   master: {
     schedule: true, pipeline: true, whatsapp: true,
-    time_off: true, assistant: true, door_unlock: true,
+    time_off: true, assistant: true,
     push_notifications: true,
     notify_time_off: true, notify_schedule: true, notify_swap: true,
     notify_lead: true, notify_whatsapp: true,
   },
   staff: {
     schedule: true, pipeline: false, whatsapp: false,
-    time_off: true, assistant: false, door_unlock: false,
+    time_off: true, assistant: false,
     push_notifications: true,
     notify_time_off: true, notify_schedule: true, notify_swap: true,
     notify_lead: false, notify_whatsapp: false,
   },
   head_coach: {
     schedule: true, pipeline: true, whatsapp: true,
-    time_off: true, assistant: true, door_unlock: false,
+    time_off: true, assistant: true,
     push_notifications: true,
     notify_time_off: true, notify_schedule: true, notify_swap: true,
     notify_lead: true, notify_whatsapp: true,
   },
   manager: {
     schedule: true, pipeline: true, whatsapp: true,
-    time_off: true, assistant: true, door_unlock: true,
+    time_off: true, assistant: true,
     push_notifications: true,
     notify_time_off: true, notify_schedule: true, notify_swap: true,
     notify_lead: true, notify_whatsapp: true,
   },
   owner: {
     schedule: true, pipeline: true, whatsapp: true,
-    time_off: true, assistant: true, door_unlock: true,
+    time_off: true, assistant: true,
     push_notifications: true,
     notify_time_off: true, notify_schedule: true, notify_swap: true,
     notify_lead: true, notify_whatsapp: true,

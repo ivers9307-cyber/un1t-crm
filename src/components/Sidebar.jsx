@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
-import { LayoutDashboard, Users, Columns3, CheckSquare, Calendar, MessagesSquare, CalendarClock, Settings, LogOut, Car, Flag, Receipt } from 'lucide-react'
+import { LayoutDashboard, Users, Columns3, CheckSquare, Calendar, MessagesSquare, CalendarClock, Settings, LogOut, Car, Flag, Receipt, DoorOpen } from 'lucide-react'
 import { createBrowserClient } from '@/lib/supabase'
 import LocationSwitcher from './LocationSwitcher'
 import ImpersonatePicker from './ImpersonatePicker'
@@ -58,6 +58,10 @@ const allNav = [
   // The top-level entry is gone, the /segments URL still works
   // (legacy redirect).
   { href: '/orders',     label: 'Orders',       icon: Receipt,         permission: 'orders' },
+  // Studio Management — mig 093 cross-platform key. Replaces the
+  // mobile-only `door_unlock` flag. Surface today is remote door
+  // unlock via UniFi; future on-site ops land here.
+  { href: '/studio-management', label: 'Studio Management', icon: DoorOpen, permission: 'studio_management' },
   { href: '/settings',   label: 'Settings',     icon: Settings,        permission: 'settings' },
 ]
 

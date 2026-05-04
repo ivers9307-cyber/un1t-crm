@@ -92,8 +92,8 @@ describe('shared/permissions.js', () => {
 
   it('manager role mobile defaults are a superset of staff', () => {
     // Sanity: promoting someone from staff to manager should never
-    // *take away* any mobile capability. (Inverse of the door_unlock
-    // convention.)
+    // *take away* any mobile capability. (Inverse of the
+    // staff-defaults-off-by-default convention.)
     const s = DEFAULT_MOBILE_PERMISSIONS_BY_ROLE.staff
     const m = DEFAULT_MOBILE_PERMISSIONS_BY_ROLE.manager
     for (const k of MOBILE_PERMISSION_KEYS) {
@@ -128,6 +128,37 @@ describe('per-location feature gate (isFeatureEnabledAtLocation)', () => {
       expect(isFeatureGatedByLocation(k)).toBe(false)
       // Even an explicit false in the location map is ignored for notify_*
       expect(isFeatureEnabledAtLocation({ features: { [k]: false } }, k)).toBe(true)
+    }
+  })
+})
+
+describe('mig 093 — studio_management replaces door_unlock', () => {
+  it('studio_management is a top-level web key (cross-platform)', () => {
+    expect(WEB_PERMISSION_KEYS).toContain('studio_management')
+  })
+
+  it('door_unlock is gone from the mobile registry', () => {
+    expect(MOBILE_PERMISSION_KEYS).not.toContain('door_unlock')
+  })
+
+  it('studio_management is NOT under the mobile namespace', () => {
+    // The whole point of the rename was to make it cross-platform —
+    // top-level on permissions, like dashboard_*. Listing it under
+    // mobile would mean two separate toggles for the same feature.
+    expect(MOBILE_PERMISSION_KEYS).not.toContain('studio_management')
+  })
+
+  it('role defaults: master/owner/manager on, head_coach/staff off', () => {
+    expect(DEFAULT_WEB_PERMISSIONS_BY_ROLE.master.studio_management).toBe(true)
+    expect(DEFAULT_WEB_PERMISSIONS_BY_ROLE.owner.studio_management).toBe(true)
+    expect(DEFAULT_WEB_PERMISSIONS_BY_ROLE.manager.studio_management).toBe(true)
+    expect(DEFAULT_WEB_PERMISSIONS_BY_ROLE.head_coach.studio_management).toBe(false)
+    expect(DEFAULT_WEB_PERMISSIONS_BY_ROLE.staff.studio_management).toBe(false)
+  })
+
+  it('mobile role defaults no longer carry door_unlock', () => {
+    for (const r of ROLES) {
+      expect(DEFAULT_MOBILE_PERMISSIONS_BY_ROLE[r]).not.toHaveProperty('door_unlock')
     }
   })
 })

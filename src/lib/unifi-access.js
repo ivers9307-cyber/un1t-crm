@@ -233,4 +233,61 @@ export async function revokeUnifiUserPolicies(cfg, unifiUserId) {
   await setUnifiUserPolicies(cfg, unifiUserId, [])
 }
 
+// ── Mig 093 / studio_management — list + remote-unlock doors ─────
+//
+// Two new operations on top of the four user-policy ones above:
+//
+//   listDoors(cfg)         GET    /doors
+//   remoteUnlockDoor(cfg, doorId, { actorEmail }?)
+//                          POST   /doors/{id}/remote_unlock
+//
+// `remote_unlock` triggers a one-shot unlock (the relay opens for the
+// door's configured unlock duration in UniFi, then re-locks). That's
+// the right shape for the operator-pressed-a-button-once flow — we
+// don't need a temporary lock-rule.
+//
+// The actorEmail is optional but recommended: UniFi logs the API
+// token name as the actor by default (e.g. "UN1T CRM (Stillorgan)"),
+// which is fine for "who triggered" but not "which user pressed
+// the button". We pass actorEmail through to a header so audit
+// downstream can correlate. UniFi ignores unknown headers so this
+// is forward-safe even if their schema changes.
+//
+// Both helpers throw UnifiError on failure so the route can return
+// a clean message to the operator.
+
+/**
+ * List every door registered with the controller. Used to populate
+ * the /studio-management page's per-door unlock buttons.
+ *
+ * Response shape from UniFi varies slightly by firmware — sometimes
+ * it's `{ data: [doors] }`, sometimes `{ data: { doors: [...] } }`.
+ * Tolerate both.
+ */
+export async function listDoors(cfg) {
+  const data = await call(cfg, 'GET', '/doors')
+  if (Array.isArray(data)) return data
+  if (Array.isArray(data?.doors)) return data.doors
+  return []
+}
+
+/**
+ * Trigger a one-shot remote unlock on a single door.
+ *
+ * @param {object} cfg          getLocationUnifiConfig() output
+ * @param {string} doorId       UniFi door UUID
+ * @param {object} [meta]       optional context for logging
+ * @param {string} [meta.actorEmail]  CRM user who pressed the button
+ */
+export async function remoteUnlockDoor(cfg, doorId, meta = {}) {
+  if (!doorId) throw new UnifiError('doorId is required')
+  // Per UniFi Developer API §4 (Doors), the unlock endpoint takes
+  // no body — the door's configured unlock duration drives how long
+  // the relay stays open. We POST with a minimal stamp so audit
+  // logs (theirs and ours) show who triggered it.
+  return await call(cfg, 'POST', `/doors/${encodeURIComponent(doorId)}/remote_unlock`, {
+    actor_email: meta.actorEmail || undefined,
+  })
+}
+
 export { UnifiError }
