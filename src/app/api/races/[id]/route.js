@@ -32,6 +32,12 @@ const UpdateSchema = z.object({
   registration_closes_at: z.string().datetime().nullable().optional(),
   allowed_team_sizes: z.array(z.number().int().positive().max(50)).min(1).max(20).optional(),
   active: z.boolean().optional(),
+  // Member pricing (mig 084).
+  member_pricing_enabled: z.boolean().optional(),
+  members_only: z.boolean().optional(),
+  member_fee_cents: z.number().int().nonnegative().nullable().optional(),
+  non_member_fee_cents: z.number().int().nonnegative().nullable().optional(),
+  payment_currency: z.string().length(3).optional(),
   // When provided, replaces the wave set entirely (diff-and-apply).
   // Omitting leaves waves untouched. At least one wave required if set.
   waves: z.array(WaveInputSchema).min(1).max(50).optional(),
@@ -44,11 +50,14 @@ async function loadRace(db, id) {
       id, location_id, name, slug, description, race_date,
       registration_opens_at, registration_closes_at,
       allowed_team_sizes, active, created_at, updated_at,
+      member_pricing_enabled, member_fee_cents, non_member_fee_cents,
+      members_only, payment_currency,
       waves:race_waves ( id, start_time, capacity, label, display_order ),
       registrations:race_registrations (
         id, status, race_started_at, race_finished_at, registered_at, wave_id,
+        team_composition, active_payment_id,
         teams ( id, name, size, captain_contact_id,
-          team_members ( id, name, email, role )
+          team_members ( id, name, email, role, is_member, member_validation_status )
         )
       )
     `)

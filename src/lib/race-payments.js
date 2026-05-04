@@ -1,0 +1,262 @@
+// race-payments — UN1T race payment lifecycle (mig 084).
+//
+// DELIBERATELY SEPARATE from src/lib/deposit-receipts.js and the
+// cars deposit flow. UN1T (gym + races) and CCF Autos (cars) are
+// different businesses; their payment surfaces and receipts should
+// not share code paths even though they both happen to use Revolut
+// Merchant under the hood.
+//
+// What this module owns:
+//   - createRacePayment()    — insert a race_payments row + a
+//     Revolut order, store both ids
+//   - markRacePaymentStatus() — apply a webhook-driven state change
+//   - resolveRacePaymentByProviderRef() — webhook lookup
+//
+// What this module deliberately does NOT do:
+//   - Talk to cars.* tables. Ever.
+//   - Reuse deposit-receipts templates. Race confirmations live in
+//     src/lib/race-confirmations.js with their own copy + branding.
+//
+// The Revolut HTTP client (src/lib/revolut.js) is the only shared
+// piece — it's a generic transport layer with no domain knowledge.
+// If a future phase needs per-business credentials (different
+// merchant accounts), this module is where the env-var indirection
+// would land.
+
+import { createOrder, getOrder } from './revolut'
+
+/**
+ * Resolve which Revolut credentials to use for race payments. For
+ * v1 we share the merchant account with cars (REVOLUT_API_KEY); the
+ * env var indirection here exists so we can split later by setting
+ * REVOLUT_RACE_API_KEY without touching call sites.
+ *
+ * Side note: the actual key resolution lives inside src/lib/revolut.js
+ * via getConfig(). This function is the future hook for swapping in
+ * per-domain credentials by temporarily setting process.env at
+ * call time. We don't need it yet — both businesses share one
+ * merchant account today — so it's just a comment-marker for now.
+ */
+
+/**
+ * Create a pending race_payments row and a corresponding Revolut
+ * order. Returns the inserted row + Revolut handle so the caller
+ * (the public register route) can return checkout details to the
+ * widget.
+ *
+ * If amount_cents is 0, no Revolut order is created — the row is
+ * inserted with status='completed' immediately (free entry, e.g.
+ * members-only race with member_fee_cents=NULL).
+ *
+ * @param {object} args
+ * @param {SupabaseClient} args.db          service-role client
+ * @param {object} args.race                race_events row (id, name, payment_currency)
+ * @param {object} args.registration        race_registrations row (id, contact_id)
+ * @param {object} args.captain             { name, email, phone }
+ * @param {object} args.pricing             output of computeTeamPricing
+ * @param {string} args.returnUrl           where Revolut sends the buyer post-payment
+ * @returns {Promise<{
+ *   payment: object,
+ *   checkout: { token: string|null, url: string|null, free: boolean }
+ * }>}
+ */
+export async function createRacePayment({ db, race, registration, captain, pricing, returnUrl }) {
+  const amount = Number(pricing?.total_cents || 0)
+  const currency = race?.payment_currency || 'EUR'
+
+  // Free entry — no Revolut round-trip.
+  if (amount <= 0) {
+    const { data: row, error } = await db
+      .from('race_payments')
+      .insert({
+        race_event_id: race.id,
+        race_registration_id: registration.id,
+        contact_id: registration.contact_id || null,
+        contact_email: captain.email,
+        contact_phone: captain.phone || null,
+        contact_name: captain.name || null,
+        amount_cents: 0,
+        currency,
+        member_count: pricing.member_count,
+        non_member_count: pricing.non_member_count,
+        member_fee_cents: pricing.member_fee_cents,
+        non_member_fee_cents: pricing.non_member_fee_cents,
+        status: 'completed',
+        payment_provider: 'free',
+        completed_at: new Date().toISOString(),
+      })
+      .select('*')
+      .single()
+    if (error) throw new Error(`race_payments insert failed: ${error.message}`)
+    await db.from('race_registrations')
+      .update({ active_payment_id: row.id, status: 'confirmed' })
+      .eq('id', registration.id)
+    return { payment: row, checkout: { token: null, url: null, free: true } }
+  }
+
+  // Paid entry — create Revolut order first so we can stamp the
+  // returned id + token on the inserted payment row.
+  const order = await createOrder({
+    amount,
+    currency,
+    description: `${race.name} — race entry`,
+    redirectUrl: returnUrl,
+    metadata: {
+      race_event_id: race.id,
+      race_registration_id: registration.id,
+      domain: 'un1t_race', // disambiguates from cars in shared webhook stream
+    },
+    idempotencyKey: registration.id, // re-issuing for the same registration is safe
+  })
+
+  const { data: row, error } = await db
+    .from('race_payments')
+    .insert({
+      race_event_id: race.id,
+      race_registration_id: registration.id,
+      contact_id: registration.contact_id || null,
+      contact_email: captain.email,
+      contact_phone: captain.phone || null,
+      contact_name: captain.name || null,
+      amount_cents: amount,
+      currency,
+      member_count: pricing.member_count,
+      non_member_count: pricing.non_member_count,
+      member_fee_cents: pricing.member_fee_cents,
+      non_member_fee_cents: pricing.non_member_fee_cents,
+      status: 'pending',
+      payment_provider: 'revolut',
+      payment_provider_ref: order.id,
+      payment_checkout_token: order.token || null,
+      payment_checkout_url: order.checkout_url || null,
+    })
+    .select('*')
+    .single()
+  if (error) throw new Error(`race_payments insert failed: ${error.message}`)
+
+  await db.from('race_registrations')
+    .update({ active_payment_id: row.id })
+    .eq('id', registration.id)
+
+  return {
+    payment: row,
+    checkout: {
+      token: order.token || null,
+      url: order.checkout_url || null,
+      free: false,
+    },
+  }
+}
+
+/**
+ * Webhook + return-page lookup: find the race_payments row by its
+ * provider reference. Returns the row + the parent race_event for
+ * convenience.
+ *
+ * @param {SupabaseClient} db
+ * @param {string} providerRef  Revolut order id (uuid string)
+ */
+export async function resolveRacePaymentByProviderRef(db, providerRef) {
+  if (!providerRef) return null
+  const { data } = await db
+    .from('race_payments')
+    .select(`
+      *,
+      race:race_event_id ( id, name, slug, location_id, race_date, payment_currency,
+        locations:location_id ( id, name, twilio_alpha_sender_id ) )
+    `)
+    .eq('payment_provider_ref', providerRef)
+    .maybeSingle()
+  return data || null
+}
+
+/**
+ * Apply a state change driven by a Revolut webhook. Idempotent —
+ * callers can fire this for every retry without double-completing.
+ * Returns { applied: object|null, state_changed: boolean }.
+ *
+ * @param {object} args
+ * @param {SupabaseClient} args.db
+ * @param {object} args.payment    full race_payments row (from resolve...)
+ * @param {string} args.revolutState  lowercased Revolut order.state
+ * @param {number|null} args.revolutAmount  Revolut order.amount (minor units)
+ */
+export async function markRacePaymentStatus({ db, payment, revolutState, revolutAmount }) {
+  const updates = {}
+  const nowIso = new Date().toISOString()
+
+  switch (revolutState) {
+    case 'completed':
+      if (payment.status !== 'completed') {
+        updates.status = 'completed'
+        updates.completed_at = payment.completed_at || nowIso
+      }
+      // Defensive — record the actual captured amount in case it
+      // diverged from what we requested (currency rounding etc).
+      if (Number.isFinite(revolutAmount) && revolutAmount !== payment.amount_cents) {
+        updates.amount_cents = revolutAmount
+      }
+      break
+    case 'failed':
+      if (payment.status !== 'failed') {
+        updates.status = 'failed'
+        updates.failed_at = payment.failed_at || nowIso
+      }
+      break
+    case 'cancelled':
+      if (payment.status !== 'abandoned') {
+        updates.status = 'abandoned'
+        updates.abandoned_at = payment.abandoned_at || nowIso
+      }
+      break
+    default:
+      // Transient (pending / processing / authorised) — don't touch.
+      return { applied: null, state_changed: false }
+  }
+
+  if (Object.keys(updates).length === 0) {
+    return { applied: null, state_changed: false }
+  }
+
+  await db.from('race_payments').update(updates).eq('id', payment.id)
+
+  // Roll the registration's status forward when the payment lands.
+  if (updates.status === 'completed' && payment.race_registration_id) {
+    await db.from('race_registrations')
+      .update({ status: 'confirmed' })
+      .eq('id', payment.race_registration_id)
+      .eq('status', 'pending_payment') // don't clobber operator edits
+  }
+
+  return { applied: updates, state_changed: true }
+}
+
+/**
+ * Convenience wrapper for the embedded checkout + return page.
+ * Pulls the live order state from Revolut so the front-end can show
+ * an accurate status without waiting for the webhook to land.
+ */
+export async function refreshRacePaymentFromProvider(db, payment) {
+  if (!payment?.payment_provider_ref) return payment
+  if (payment.payment_provider !== 'revolut') return payment
+  let order
+  try {
+    order = await getOrder(payment.payment_provider_ref)
+  } catch {
+    return payment
+  }
+  if (!order) return payment
+  const state = String(order.state || '').toLowerCase()
+  await markRacePaymentStatus({
+    db,
+    payment,
+    revolutState: state,
+    revolutAmount: Number.isFinite(order.amount) ? order.amount : null,
+  })
+  const { data: refreshed } = await db
+    .from('race_payments')
+    .select('*')
+    .eq('id', payment.id)
+    .single()
+  return refreshed || payment
+}

@@ -10,7 +10,7 @@
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { ArrowLeft, Calendar, Clock, Users, Save, AlertCircle, Loader2, Plus, Trash2 } from 'lucide-react'
+import { ArrowLeft, Calendar, Clock, Users, Save, AlertCircle, Loader2, Plus, Trash2, BadgeEuro } from 'lucide-react'
 import Link from 'next/link'
 import { toSlug } from '@/lib/slug'
 
@@ -55,6 +55,16 @@ export default function RaceEventForm({ race, locationId }) {
       }))
   })
   const [active, setActive] = useState(race?.active ?? true)
+  // Member pricing (mig 084). Stored as cents on the wire; the form
+  // shows whole-euro inputs and converts on submit.
+  const [memberPricingEnabled, setMemberPricingEnabled] = useState(!!race?.member_pricing_enabled)
+  const [membersOnly, setMembersOnly] = useState(!!race?.members_only)
+  const [memberFee, setMemberFee] = useState(
+    race?.member_fee_cents != null ? String(race.member_fee_cents / 100) : ''
+  )
+  const [nonMemberFee, setNonMemberFee] = useState(
+    race?.non_member_fee_cents != null ? String(race.non_member_fee_cents / 100) : ''
+  )
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
 
@@ -82,6 +92,19 @@ export default function RaceEventForm({ race, locationId }) {
       seenTimes.add(w.start_time)
     }
 
+    // Pricing validation. Empty input → null fee (free for that
+    // category). Negative or non-numeric → error.
+    const memberFeeCents = memberFee.trim() === '' ? null : Math.round(Number(memberFee) * 100)
+    const nonMemberFeeCents = nonMemberFee.trim() === '' ? null : Math.round(Number(nonMemberFee) * 100)
+    if (memberFeeCents != null && (!Number.isFinite(memberFeeCents) || memberFeeCents < 0)) {
+      setError('Member fee must be a positive number (or empty for free).')
+      return
+    }
+    if (nonMemberFeeCents != null && (!Number.isFinite(nonMemberFeeCents) || nonMemberFeeCents < 0)) {
+      setError('Non-member fee must be a positive number (or empty for free).')
+      return
+    }
+
     setSaving(true)
     const sortedWaves = waves.slice().sort((a, b) => a.start_time.localeCompare(b.start_time))
     const payload = {
@@ -94,6 +117,10 @@ export default function RaceEventForm({ race, locationId }) {
       registration_closes_at: registrationClosesAt ? new Date(registrationClosesAt).toISOString() : null,
       allowed_team_sizes: allowedTeamSizes,
       active,
+      member_pricing_enabled: memberPricingEnabled,
+      members_only: membersOnly,
+      member_fee_cents: memberPricingEnabled ? memberFeeCents : null,
+      non_member_fee_cents: nonMemberFeeCents,
       waves: sortedWaves.map((w, i) => ({
         ...(w.id ? { id: w.id } : {}),
         start_time: w.start_time,
@@ -309,6 +336,79 @@ export default function RaceEventForm({ race, locationId }) {
               </button>
             )
           })}
+        </div>
+      </div>
+
+      <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5 space-y-4">
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light flex items-center gap-2">
+          <BadgeEuro size={14} /> Pricing
+        </h3>
+        <p className="text-[11px] text-un1t-light -mt-2">
+          Per-person pricing. Mixed teams pay each head at their own rate (e.g. 2 members + 2
+          non-members on a 4-person team = 2 × member fee + 2 × non-member fee). Leave a fee blank
+          to make that category free. UN1T members are matched by the email on their member account.
+        </p>
+
+        <div>
+          <label className="block text-sm text-un1t-light mb-1">Non-member fee (€ per person)</label>
+          <input
+            type="number"
+            min={0}
+            step="0.01"
+            value={nonMemberFee}
+            onChange={e => setNonMemberFee(e.target.value)}
+            placeholder="Free"
+            className="w-40 bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
+          />
+          <p className="text-[11px] text-un1t-mid mt-1">
+            Charged per non-member entrant. Leave empty for a free race.
+          </p>
+        </div>
+
+        <div className="flex items-center justify-between gap-3 pt-2 border-t border-un1t-gray">
+          <div>
+            <div className="text-sm text-un1t-white">Different pricing for UN1T members</div>
+            <div className="text-[11px] text-un1t-light">When on, the signup form validates member emails and applies the member rate per verified head.</div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setMemberPricingEnabled(v => !v)}
+            className={`shrink-0 w-10 h-5 rounded-full ${memberPricingEnabled ? 'bg-emerald-500' : 'bg-un1t-gray'}`}
+          >
+            <div className={`w-4 h-4 rounded-full bg-white transition-transform ${memberPricingEnabled ? 'translate-x-5' : 'translate-x-0.5'}`} />
+          </button>
+        </div>
+
+        {memberPricingEnabled && (
+          <div className="pl-2">
+            <label className="block text-sm text-un1t-light mb-1">Member fee (€ per person)</label>
+            <input
+              type="number"
+              min={0}
+              step="0.01"
+              value={memberFee}
+              onChange={e => setMemberFee(e.target.value)}
+              placeholder="Free for members"
+              className="w-40 bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
+            />
+            <p className="text-[11px] text-un1t-mid mt-1">
+              Empty = members enter free. Members are matched against contacts with active membership at the race&apos;s location.
+            </p>
+          </div>
+        )}
+
+        <div className="flex items-center justify-between gap-3 pt-2 border-t border-un1t-gray">
+          <div>
+            <div className="text-sm text-un1t-white">Members only</div>
+            <div className="text-[11px] text-un1t-light">Refuse signups containing any unverified members. Independent of pricing — a free members-only race is valid.</div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setMembersOnly(v => !v)}
+            className={`shrink-0 w-10 h-5 rounded-full ${membersOnly ? 'bg-amber-500' : 'bg-un1t-gray'}`}
+          >
+            <div className={`w-4 h-4 rounded-full bg-white transition-transform ${membersOnly ? 'translate-x-5' : 'translate-x-0.5'}`} />
+          </button>
         </div>
       </div>
 

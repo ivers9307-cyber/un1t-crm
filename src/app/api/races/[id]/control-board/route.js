@@ -41,8 +41,9 @@ export async function GET(_request, { params }) {
     .from('race_registrations')
     .select(`
       id, status, race_started_at, race_finished_at, registered_at, wave_id,
+      team_composition,
       teams ( id, name, size, captain_contact_id,
-        team_members ( id, name, email, role )
+        team_members ( id, name, email, role, is_member, member_validation_status )
       )
     `)
     .eq('race_event_id', params.id)

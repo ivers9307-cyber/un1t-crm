@@ -17,6 +17,8 @@ export async function GET(_request, { params }) {
       id, name, slug, description, race_date,
       registration_opens_at, registration_closes_at,
       allowed_team_sizes, location_id,
+      member_pricing_enabled, member_fee_cents, non_member_fee_cents,
+      members_only, payment_currency,
       waves:race_waves ( id, start_time, capacity, label, display_order ),
       locations:location_id ( id, name, address, timezone )
     `)

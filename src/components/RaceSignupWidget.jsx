@@ -6,30 +6,39 @@
 // just a single "what team are you, how many of you are there,
 // who's competing" form.
 //
-// Flow:
-//   1. Fetch /api/public/races/[slug] for race details + state
-//   2. Render race info + team capture form
-//   3. POST to /api/public/races/[slug]/register with team data
-//   4. Show post-signup confirmation card
+// Mig 084 additions:
+//   - Per-email live UN1T-member validation (debounced) so the form
+//     can show "UN1T member · €X" badges and live-update the total.
+//   - A prominent banner at the top telling members to use the email
+//     on their UN1T account (so they aren't accidentally charged the
+//     non-member rate).
+//   - Pricing summary card with per-head breakdown.
+//   - Members-only race handling (banner + submit-time block).
+//   - Post-submit: redirect to embedded checkout for paid entries,
+//     or to /race/[slug]/confirmed for free entries.
 
-import { useEffect, useState } from 'react'
-import { Calendar, Clock, MapPin, Users, AlertCircle, Check, Loader2 } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { useRouter } from 'next/navigation'
+import { Calendar, Clock, MapPin, AlertCircle, Loader2, Check, BadgeCheck, Info } from 'lucide-react'
 
 export default function RaceSignupWidget({ slug }) {
+  const router = useRouter()
   const [race, setRace] = useState(null)
   const [loadError, setLoadError] = useState(null)
-  const [submitted, setSubmitted] = useState(null)
 
   // Form state
   const [teamName, setTeamName] = useState('')
   const [teamSize, setTeamSize] = useState(1)
-  // Selected wave id (mig 083). Required server-side. Single-wave
-  // races auto-pick on race load so the form requires one click less.
   const [waveId, setWaveId] = useState('')
   const [members, setMembers] = useState([])
   const [captainName, setCaptainName] = useState('')
   const [captainEmail, setCaptainEmail] = useState('')
   const [captainPhone, setCaptainPhone] = useState('')
+
+  // Member-validation cache. Key = lower email; value =
+  //   { state: 'idle'|'checking'|'verified'|'not_member', first_name?, applicable }
+  const [memberChecks, setMemberChecks] = useState({})
+  const checkTimers = useRef({})
 
   const [submitting, setSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState(null)
@@ -45,26 +54,18 @@ export default function RaceSignupWidget({ slug }) {
           return
         }
         setRace(j.data)
-        // Default the team-size radio to the smallest allowed size.
         const sizes = j.data.allowed_team_sizes || [1]
         const initial = [...sizes].sort((a, b) => a - b)[0]
         setTeamSize(initial)
-        // If there's only one wave, auto-pick it. If there are
-        // multiple, the user picks below. We only auto-select waves
-        // that aren't full. Public API only exposes is_full, not raw
-        // numbers, so capacity stays operator-only.
         const waves = Array.isArray(j.data.waves) ? j.data.waves : []
         const available = waves.filter((w) => !w.is_full)
-        if (waves.length === 1 && available.length === 1) {
-          setWaveId(waves[0].id)
-        } else if (available.length === 1) {
-          setWaveId(available[0].id)
-        }
+        if (waves.length === 1 && available.length === 1) setWaveId(waves[0].id)
+        else if (available.length === 1) setWaveId(available[0].id)
       })
       .catch(e => setLoadError(e.message || 'Network error'))
   }, [slug])
 
-  // When team_size changes, reshape the members array.
+  // Reshape members array when team_size changes.
   useEffect(() => {
     const memberCount = Math.max(0, teamSize - 1)
     setMembers((prev) => {
@@ -78,6 +79,86 @@ export default function RaceSignupWidget({ slug }) {
 
   function validateEmail(s) {
     return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s)
+  }
+
+  // Debounced member check for one email. The key in memberChecks is
+  // the lowercased email; the underlying API endpoint is rate-limited
+  // (60/min) but we still debounce to avoid hammering it on keystroke.
+  function scheduleMemberCheck(rawEmail) {
+    const email = (rawEmail || '').trim().toLowerCase()
+    if (!email || !validateEmail(email)) return
+    if (!race?.member_pricing_enabled && !race?.members_only) return
+    // Already cached?
+    if (memberChecks[email] && memberChecks[email].state !== 'idle') return
+    // Already a timer? Reset.
+    if (checkTimers.current[email]) clearTimeout(checkTimers.current[email])
+    checkTimers.current[email] = setTimeout(async () => {
+      setMemberChecks((prev) => ({ ...prev, [email]: { state: 'checking', applicable: true } }))
+      try {
+        const r = await fetch(`/api/public/races/${slug}/check-member`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email }),
+        })
+        const j = await r.json()
+        if (j?.success && j.data?.applicable) {
+          setMemberChecks((prev) => ({
+            ...prev,
+            [email]: {
+              state: j.data.is_member ? 'verified' : 'not_member',
+              first_name: j.data.first_name || null,
+              applicable: true,
+            },
+          }))
+        } else {
+          setMemberChecks((prev) => ({
+            ...prev,
+            [email]: { state: 'not_member', applicable: false },
+          }))
+        }
+      } catch {
+        // Silent fail — the form still works without live validation;
+        // the server will re-check at submit.
+        setMemberChecks((prev) => ({
+          ...prev,
+          [email]: { state: 'not_member', applicable: true },
+        }))
+      }
+    }, 500)
+  }
+
+  // Roster as the live form sees it — used for pricing preview.
+  const liveRoster = [
+    { name: captainName, email: captainEmail.toLowerCase().trim() },
+    ...members.map((m) => ({ name: m.name, email: (m.email || '').toLowerCase().trim() })),
+  ]
+
+  function isVerifiedMember(email) {
+    if (!email) return false
+    return memberChecks[email]?.state === 'verified'
+  }
+
+  // Live pricing preview. Mirrors computeTeamPricing on the server.
+  const memberPricing = !!race?.member_pricing_enabled
+  const memberFeeCents = Number.isFinite(race?.member_fee_cents) ? race.member_fee_cents : null
+  const nonMemberFeeCents = Number.isFinite(race?.non_member_fee_cents) ? race.non_member_fee_cents : null
+  const currency = race?.payment_currency || 'EUR'
+
+  let memberCount = 0, nonMemberCount = 0
+  for (const m of liveRoster) {
+    if (memberPricing && isVerifiedMember(m.email)) memberCount += 1
+    else nonMemberCount += 1
+  }
+  const memberSubtotal = memberPricing && memberFeeCents != null ? memberFeeCents * memberCount : 0
+  const nonMemberSubtotal = nonMemberFeeCents != null ? nonMemberFeeCents * nonMemberCount : 0
+  const totalCents = memberSubtotal + nonMemberSubtotal
+
+  const fmtMoney = (cents) => {
+    if (!Number.isFinite(cents)) return ''
+    const major = (cents / 100).toFixed(2)
+    if (currency === 'EUR') return `€${major}`
+    if (currency === 'GBP') return `£${major}`
+    return `${major} ${currency}`
   }
 
   async function handleSubmit(e) {
@@ -94,6 +175,20 @@ export default function RaceSignupWidget({ slug }) {
       if (!m.name.trim()) errors[`member_${i}_name`] = 'Name required'
       if (m.email && !validateEmail(m.email)) errors[`member_${i}_email`] = 'Invalid email'
     })
+
+    // Members-only races require everyone to validate as a member
+    // before submit. The server enforces this too, but failing on the
+    // client is faster + friendlier.
+    if (race?.members_only) {
+      const unverified = liveRoster.filter((m) => !isVerifiedMember(m.email))
+      if (unverified.length > 0) {
+        setSubmitError(
+          `This is a members-only race. We couldn't verify membership for ${unverified.length} team member(s). Make sure everyone uses the email on their UN1T account.`
+        )
+        return
+      }
+    }
+
     if (Object.keys(errors).length > 0) {
       setFieldErrors(errors)
       return
@@ -124,7 +219,19 @@ export default function RaceSignupWidget({ slug }) {
       setSubmitError(json.error || `Registration failed (${res.status})`)
       return
     }
-    setSubmitted(json.data)
+
+    // Free entry → straight to confirmation page. Paid → embedded
+    // checkout page that owns the Revolut SDK lifecycle.
+    const payment = json.data?.payment
+    if (payment?.free) {
+      router.push(`/race/${slug}/confirmed?registration=${json.data.registration_id}`)
+    } else if (payment?.id) {
+      router.push(`/race-pay/${payment.id}`)
+    } else {
+      // Defensive — if the API didn't return a payment id, show a
+      // best-effort confirmation rather than getting stuck.
+      router.push(`/race/${slug}/confirmed?registration=${json.data.registration_id}`)
+    }
   }
 
   if (loadError) {
@@ -151,27 +258,8 @@ export default function RaceSignupWidget({ slug }) {
   }
   const isClosed = race.registration_state !== 'open'
   const closeMsg = closedReasons[race.registration_state]
-
-  if (submitted) {
-    return (
-      <div className="w-full max-w-xl bg-white rounded-2xl border border-gray-200 shadow-sm p-8">
-        <div className="text-center">
-          <div className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-emerald-50 text-emerald-600 mb-4">
-            <Check size={24} />
-          </div>
-          <h2 className="text-xl font-semibold text-gray-900 mb-1">
-            Team registered!
-          </h2>
-          <p className="text-sm text-gray-600 mb-1">
-            <span className="font-medium">{submitted.team_name}</span> is in for {race.name}.
-          </p>
-          <p className="text-xs text-gray-500">
-            Confirmation email coming to {captainEmail}.
-          </p>
-        </div>
-      </div>
-    )
-  }
+  const showMemberNotice = !!(race.member_pricing_enabled || race.members_only)
+  const showPricingCard = !!(memberPricing || nonMemberFeeCents != null)
 
   return (
     <div className="w-full max-w-3xl bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
@@ -209,6 +297,28 @@ export default function RaceSignupWidget({ slug }) {
               </div>
             )}
           </div>
+
+          {/* Pricing summary card. Only shown when there's pricing
+              configured (free races skip this). Updates live as
+              members get verified. */}
+          {showPricingCard && (
+            <div className="mt-5 p-3 rounded-md bg-gray-50 border border-gray-200">
+              <div className="text-[11px] text-gray-500 uppercase tracking-wider mb-2">Total</div>
+              <div className="text-2xl font-bold text-gray-900">
+                {totalCents > 0 ? fmtMoney(totalCents) : 'Free'}
+              </div>
+              {memberPricing && (memberCount > 0 || nonMemberCount > 0) && (
+                <div className="text-[11px] text-gray-600 mt-2 space-y-0.5">
+                  {memberCount > 0 && (
+                    <div>{memberCount} × member {memberFeeCents != null ? fmtMoney(memberFeeCents) : 'free'}</div>
+                  )}
+                  {nonMemberCount > 0 && (
+                    <div>{nonMemberCount} × non-member {nonMemberFeeCents != null ? fmtMoney(nonMemberFeeCents) : 'free'}</div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
         </aside>
 
         {/* Form */}
@@ -218,6 +328,19 @@ export default function RaceSignupWidget({ slug }) {
             You&apos;re registering as the team captain. Add your team members below.
           </p>
 
+          {/* Member-email notice. Shown whenever member pricing OR
+              members-only is on — that's when using the right email
+              actually matters. */}
+          {showMemberNotice && (
+            <div className="mb-4 p-3 bg-amber-50 border border-amber-200 text-amber-900 text-xs rounded-md inline-flex items-start gap-2">
+              <Info size={14} className="mt-0.5 shrink-0 text-amber-700" />
+              <span>
+                <strong>UN1T members:</strong> use the email on your UN1T account so member pricing applies. We&apos;ll match each entrant&apos;s email against active member records.
+                {race.members_only && ' This race is members-only — every team member must be a verified UN1T member.'}
+              </span>
+            </div>
+          )}
+
           {isClosed && (
             <div className="mb-4 p-3 bg-amber-50 border border-amber-200 text-amber-800 text-sm rounded-md inline-flex items-start gap-2">
               <AlertCircle size={14} className="mt-0.5 shrink-0" /> {closeMsg}
@@ -226,10 +349,7 @@ export default function RaceSignupWidget({ slug }) {
 
           <form onSubmit={handleSubmit} className="space-y-4">
             <fieldset disabled={isClosed} className="space-y-4">
-              {/* Wave picker (mig 083). Public-facing: capacity numbers
-                  are deliberately hidden — only "Full" vs "Available"
-                  status is exposed. Operator capacity tracking lives
-                  inside the CRM /races index. */}
+              {/* Wave picker (mig 083). */}
               {Array.isArray(race.waves) && race.waves.length > 0 && (
                 <div>
                   <label className="block text-xs font-medium text-gray-700 mb-1">Pick your wave *</label>
@@ -257,9 +377,7 @@ export default function RaceSignupWidget({ slug }) {
                               <span className="text-sm font-semibold text-gray-900">{time}</span>
                               {w.label && <span className="ml-2 text-xs text-gray-600">{w.label}</span>}
                             </div>
-                            {full && (
-                              <div className="text-[11px] text-gray-500">Full</div>
-                            )}
+                            {full && <div className="text-[11px] text-gray-500">Full</div>}
                           </div>
                         </button>
                       )
@@ -316,15 +434,29 @@ export default function RaceSignupWidget({ slug }) {
                     className={`w-full border rounded-md px-3 py-2 text-sm focus:outline-none ${fieldErrors.captain_name ? 'border-red-400' : 'border-gray-300 focus:border-gray-500'}`}
                   />
                   {fieldErrors.captain_name && <p className="text-[11px] text-red-600">{fieldErrors.captain_name}</p>}
-                  <input
-                    type="email"
-                    required
-                    placeholder="Your email *"
-                    value={captainEmail}
-                    onChange={e => setCaptainEmail(e.target.value)}
-                    className={`w-full border rounded-md px-3 py-2 text-sm focus:outline-none ${fieldErrors.captain_email ? 'border-red-400' : 'border-gray-300 focus:border-gray-500'}`}
-                  />
-                  {fieldErrors.captain_email && <p className="text-[11px] text-red-600">{fieldErrors.captain_email}</p>}
+                  <div>
+                    <input
+                      type="email"
+                      required
+                      placeholder="Your email *"
+                      value={captainEmail}
+                      onChange={e => {
+                        setCaptainEmail(e.target.value)
+                        scheduleMemberCheck(e.target.value)
+                      }}
+                      onBlur={() => scheduleMemberCheck(captainEmail)}
+                      className={`w-full border rounded-md px-3 py-2 text-sm focus:outline-none ${fieldErrors.captain_email ? 'border-red-400' : 'border-gray-300 focus:border-gray-500'}`}
+                    />
+                    <MemberStatusBadge
+                      email={captainEmail}
+                      checks={memberChecks}
+                      memberFeeCents={memberFeeCents}
+                      nonMemberFeeCents={nonMemberFeeCents}
+                      memberPricing={memberPricing}
+                      fmt={fmtMoney}
+                    />
+                    {fieldErrors.captain_email && <p className="text-[11px] text-red-600 mt-0.5">{fieldErrors.captain_email}</p>}
+                  </div>
                   <input
                     type="tel"
                     placeholder="Your phone (optional)"
@@ -338,30 +470,45 @@ export default function RaceSignupWidget({ slug }) {
               {members.length > 0 && (
                 <div className="pt-3 border-t border-gray-200">
                   <div className="text-xs text-gray-500 uppercase tracking-wider mb-2">Other team members</div>
-                  <div className="space-y-2">
+                  <div className="space-y-3">
                     {members.map((m, i) => (
-                      <div key={i} className="grid grid-cols-2 gap-2">
-                        <div>
-                          <input
-                            type="text"
-                            required
-                            placeholder={`Member ${i + 2} name *`}
-                            value={m.name}
-                            onChange={e => setMembers(prev => prev.map((x, j) => j === i ? { ...x, name: e.target.value } : x))}
-                            className={`w-full border rounded-md px-3 py-2 text-sm focus:outline-none ${fieldErrors[`member_${i}_name`] ? 'border-red-400' : 'border-gray-300 focus:border-gray-500'}`}
-                          />
-                          {fieldErrors[`member_${i}_name`] && <p className="text-[11px] text-red-600 mt-0.5">{fieldErrors[`member_${i}_name`]}</p>}
+                      <div key={i} className="space-y-1">
+                        <div className="grid grid-cols-2 gap-2">
+                          <div>
+                            <input
+                              type="text"
+                              required
+                              placeholder={`Member ${i + 2} name *`}
+                              value={m.name}
+                              onChange={e => setMembers(prev => prev.map((x, j) => j === i ? { ...x, name: e.target.value } : x))}
+                              className={`w-full border rounded-md px-3 py-2 text-sm focus:outline-none ${fieldErrors[`member_${i}_name`] ? 'border-red-400' : 'border-gray-300 focus:border-gray-500'}`}
+                            />
+                            {fieldErrors[`member_${i}_name`] && <p className="text-[11px] text-red-600 mt-0.5">{fieldErrors[`member_${i}_name`]}</p>}
+                          </div>
+                          <div>
+                            <input
+                              type="email"
+                              placeholder={`Member ${i + 2} email`}
+                              value={m.email}
+                              onChange={e => {
+                                const next = e.target.value
+                                setMembers(prev => prev.map((x, j) => j === i ? { ...x, email: next } : x))
+                                scheduleMemberCheck(next)
+                              }}
+                              onBlur={() => scheduleMemberCheck(m.email)}
+                              className={`w-full border rounded-md px-3 py-2 text-sm focus:outline-none ${fieldErrors[`member_${i}_email`] ? 'border-red-400' : 'border-gray-300 focus:border-gray-500'}`}
+                            />
+                            {fieldErrors[`member_${i}_email`] && <p className="text-[11px] text-red-600 mt-0.5">{fieldErrors[`member_${i}_email`]}</p>}
+                          </div>
                         </div>
-                        <div>
-                          <input
-                            type="email"
-                            placeholder={`Member ${i + 2} email`}
-                            value={m.email}
-                            onChange={e => setMembers(prev => prev.map((x, j) => j === i ? { ...x, email: e.target.value } : x))}
-                            className={`w-full border rounded-md px-3 py-2 text-sm focus:outline-none ${fieldErrors[`member_${i}_email`] ? 'border-red-400' : 'border-gray-300 focus:border-gray-500'}`}
-                          />
-                          {fieldErrors[`member_${i}_email`] && <p className="text-[11px] text-red-600 mt-0.5">{fieldErrors[`member_${i}_email`]}</p>}
-                        </div>
+                        <MemberStatusBadge
+                          email={m.email}
+                          checks={memberChecks}
+                          memberFeeCents={memberFeeCents}
+                          nonMemberFeeCents={nonMemberFeeCents}
+                          memberPricing={memberPricing}
+                          fmt={fmtMoney}
+                        />
                       </div>
                     ))}
                   </div>
@@ -380,7 +527,11 @@ export default function RaceSignupWidget({ slug }) {
                 className="w-full bg-gray-900 hover:bg-gray-800 text-white font-semibold py-2.5 rounded-md disabled:opacity-50 inline-flex items-center justify-center gap-2"
               >
                 {submitting ? <Loader2 size={14} className="animate-spin" /> : null}
-                {submitting ? 'Registering…' : 'Register team'}
+                {submitting
+                  ? 'Registering…'
+                  : totalCents > 0
+                    ? `Register and pay ${fmtMoney(totalCents)}`
+                    : 'Register team'}
               </button>
             </fieldset>
           </form>
@@ -388,4 +539,40 @@ export default function RaceSignupWidget({ slug }) {
       </div>
     </div>
   )
+}
+
+// Per-email status pill rendered under each email input. Quiet when
+// member pricing is off (no signal to give); renders the verified
+// badge or a muted "non-member rate" line otherwise.
+function MemberStatusBadge({ email, checks, memberFeeCents, nonMemberFeeCents, memberPricing, fmt }) {
+  if (!memberPricing) return null
+  const e = (email || '').trim().toLowerCase()
+  if (!e) return null
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)) return null
+  const c = checks[e]
+  if (!c) return null
+  if (c.state === 'checking') {
+    return (
+      <p className="text-[11px] text-gray-500 inline-flex items-center gap-1 mt-0.5">
+        <Loader2 size={10} className="animate-spin" /> Checking membership…
+      </p>
+    )
+  }
+  if (c.state === 'verified') {
+    const fee = memberFeeCents != null ? fmt(memberFeeCents) : 'free'
+    return (
+      <p className="text-[11px] text-emerald-700 inline-flex items-center gap-1 mt-0.5">
+        <BadgeCheck size={11} /> UN1T member{c.first_name ? ` — welcome back, ${c.first_name}` : ''} · {fee}
+      </p>
+    )
+  }
+  if (c.state === 'not_member') {
+    const fee = nonMemberFeeCents != null ? fmt(nonMemberFeeCents) : 'free'
+    return (
+      <p className="text-[11px] text-gray-500 inline-flex items-center gap-1 mt-0.5">
+        <Check size={11} /> Non-member rate · {fee}
+      </p>
+    )
+  }
+  return null
 }

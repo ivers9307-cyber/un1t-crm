@@ -24,14 +24,22 @@
 // the active sections.
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Play, Square, RotateCcw, Loader2, Trophy, Clock, Users, AlertCircle } from 'lucide-react'
+import { Play, Square, RotateCcw, Loader2, Trophy, Clock, Users, AlertCircle, BadgeCheck, Filter } from 'lucide-react'
 import { formatElapsed, classifyBookingState, elapsedSecondsBetween } from '@/lib/race-control'
+
+const COMPOSITION_FILTERS = [
+  { id: 'all', label: 'All' },
+  { id: 'all_members', label: 'Members only' },
+  { id: 'mixed', label: 'Mixed' },
+  { id: 'all_non_members', label: 'Non-members' },
+]
 
 export default function RaceControlPanel({ raceId }) {
   const [board, setBoard] = useState(null)
   const [loadError, setLoadError] = useState(null)
   const [actionBusy, setActionBusy] = useState(null)
   const [actionError, setActionError] = useState(null)
+  const [compositionFilter, setCompositionFilter] = useState('all')
   const [, setTick] = useState(0)
   const pollRef = useRef(null)
 
@@ -89,7 +97,12 @@ export default function RaceControlPanel({ raceId }) {
   const sections = useMemo(() => {
     if (!board) return { next_up: [], on_course: [], completed: [] }
     const buckets = { next_up: [], on_course: [], completed: [], no_show: [] }
+    const matchesFilter = (r) => {
+      if (compositionFilter === 'all') return true
+      return r.team_composition === compositionFilter
+    }
     for (const r of (board.registrations || [])) {
+      if (!matchesFilter(r)) continue
       // classifyBookingState reads { status, race_started_at,
       // race_finished_at } — same shape as race_registrations.
       const state = classifyBookingState(r)
@@ -113,7 +126,7 @@ export default function RaceControlPanel({ raceId }) {
       return ea - eb
     })
     return buckets
-  }, [board, wavesById])
+  }, [board, wavesById, compositionFilter])
 
   if (loadError && !board) {
     return (
@@ -137,6 +150,29 @@ export default function RaceControlPanel({ raceId }) {
           <AlertCircle size={14} className="mt-0.5 shrink-0" /> {actionError}
         </div>
       )}
+
+      <div className="flex items-center gap-2 flex-wrap">
+        <Filter size={13} className="text-un1t-light" />
+        <span className="text-[11px] uppercase tracking-wider text-un1t-light mr-1">Composition</span>
+        {COMPOSITION_FILTERS.map((f) => {
+          const on = compositionFilter === f.id
+          return (
+            <button
+              key={f.id}
+              type="button"
+              onClick={() => setCompositionFilter(f.id)}
+              className={`text-xs px-2.5 py-1 rounded-full border ${
+                on
+                  ? 'bg-un1t-white text-un1t-black border-un1t-white'
+                  : 'border-un1t-gray text-un1t-light hover:border-un1t-mid'
+              }`}
+            >
+              {f.label}
+            </button>
+          )
+        })}
+      </div>
+
 
       <Section title="On Course" icon={Clock} count={sections.on_course.length} emptyText="No teams currently on the course.">
         {sections.on_course.map((r) => (
@@ -182,6 +218,7 @@ function TeamHeader({ registration, wave, accent = 'default' }) {
   const teamName = team?.name || '(no team)'
   const size = team?.size
   const members = team?.team_members || []
+  const composition = registration.team_composition
   const accentClass = accent === 'on_course'
     ? 'border-amber-500/50 bg-amber-500/5'
     : accent === 'completed'
@@ -207,6 +244,16 @@ function TeamHeader({ registration, wave, accent = 'default' }) {
             <Clock size={10} /> {waveBadge}
           </span>
         )}
+        {composition === 'all_members' && (
+          <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-700 inline-flex items-center gap-1" title="All team members are verified UN1T members">
+            <BadgeCheck size={10} /> Members
+          </span>
+        )}
+        {composition === 'mixed' && (
+          <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-700" title="Mixed team — members + non-members">
+            Mixed
+          </span>
+        )}
       </div>
       {members.length > 0 && (
         <div className="text-[11px] text-un1t-light mt-1">
@@ -216,6 +263,11 @@ function TeamHeader({ registration, wave, accent = 'default' }) {
               <span className={m.role === 'captain' ? 'text-un1t-white font-medium' : ''}>
                 {m.name}
                 {m.role === 'captain' && <span className="text-amber-700 ml-0.5">★</span>}
+                {m.is_member && (
+                  <span title="Verified UN1T member" className="ml-1 inline-flex items-center text-emerald-700">
+                    <BadgeCheck size={10} />
+                  </span>
+                )}
               </span>
             </span>
           ))}

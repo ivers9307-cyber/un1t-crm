@@ -33,6 +33,12 @@ const CreateSchema = z.object({
   registration_closes_at: z.string().datetime().nullable().optional(),
   allowed_team_sizes: z.array(z.number().int().positive().max(50)).min(1).max(20).optional(),
   active: z.boolean().optional(),
+  // Member pricing (mig 084).
+  member_pricing_enabled: z.boolean().optional(),
+  members_only: z.boolean().optional(),
+  member_fee_cents: z.number().int().nonnegative().nullable().optional(),
+  non_member_fee_cents: z.number().int().nonnegative().nullable().optional(),
+  payment_currency: z.string().length(3).optional(),
   // Waves (mig 083) — at least one required for a usable race.
   // Server normalises by start_time ascending; UNIQUE on
   // (race_event_id, start_time) catches duplicates from the DB side.
@@ -65,8 +71,10 @@ export async function GET(request) {
       id, location_id, name, slug, description, race_date,
       registration_opens_at, registration_closes_at,
       allowed_team_sizes, active, created_at, updated_at,
+      member_pricing_enabled, member_fee_cents, non_member_fee_cents,
+      members_only, payment_currency,
       waves:race_waves ( id, start_time, capacity, label, display_order ),
-      registrations:race_registrations ( id, status, race_started_at, race_finished_at, wave_id )
+      registrations:race_registrations ( id, status, race_started_at, race_finished_at, wave_id, team_composition )
     `)
     .in('location_id', locationIds)
     .order('race_date', { ascending: false })
@@ -112,6 +120,13 @@ export async function POST(request) {
         ? [...body.allowed_team_sizes].sort((a, b) => a - b)
         : [1, 2, 4],
       active: body.active ?? true,
+      member_pricing_enabled: body.member_pricing_enabled ?? false,
+      members_only: body.members_only ?? false,
+      // Only persist member_fee_cents when pricing is on — keeps the
+      // table consistent ("if you see member_fee, member pricing is enabled").
+      member_fee_cents: (body.member_pricing_enabled && body.member_fee_cents != null) ? body.member_fee_cents : null,
+      non_member_fee_cents: body.non_member_fee_cents ?? null,
+      payment_currency: body.payment_currency ?? 'EUR',
     })
     .select()
     .single()

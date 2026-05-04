@@ -3,24 +3,32 @@
 // Public team registration for a standalone race event. No auth.
 // Rate-limited per IP same as /api/public/book.
 //
-// Flow:
+// Flow (mig 084 update — adds member validation + payment kickoff):
 //   1. Validate body shape
 //   2. Look up race by slug; check it's active + within registration window
 //   3. Validate team_size against allowed_team_sizes
-//   4. Capacity check (if set) — soft race against concurrent signups
-//      is acceptable for v1; we just count current confirmed regs
-//   5. Find-or-create the captain contact (the booking system has a
-//      DB trigger for bookings; race_registrations doesn't yet, so
-//      we do it explicitly here)
+//   4. Wave validation (mig 083) + per-wave capacity check
+//   5. Find-or-create the captain contact
 //   6. Find-or-create the team by (location_id, name); update size
-//   7. Refresh team_members (clear + re-insert captain + N-1 members)
-//   8. Insert race_registration row
+//   7. Validate every member's email against UN1T members (mig 084)
+//   8. members_only race? — refuse if any non-member detected
+//   9. Compute pricing per head (member_fee × verified + non_member_fee × rest)
+//  10. Refresh team_members with is_member + member_contact_id stamps
+//  11. Insert race_registration row (status = pending_payment if paid,
+//      confirmed if free)
+//  12. Create race_payment + Revolut order (or mark paid for free entry)
+//  13. Return either { payment_url, payment_token, payment_id } for the
+//      embedded checkout, or { confirmed: true } for free entries.
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit'
 import { validateBody } from '@/lib/validate'
+import { validateTeamRoster, computeTeamPricing } from '@/lib/member-validation'
+import { createRacePayment } from '@/lib/race-payments'
+import { sendRaceConfirmations } from '@/lib/race-confirmations'
+import { getAppUrl } from '@/lib/app-url'
 
 export const runtime = 'nodejs'
 
@@ -55,12 +63,14 @@ export async function POST(request, { params }) {
 
   // Look up the race — must be active. Joins waves so we can validate
   // wave_id belongs to this race and check per-wave capacity in one
-  // round-trip.
+  // round-trip. Also pulls the new pricing fields (mig 084).
   const { data: race, error: raceErr } = await db
     .from('race_events')
     .select(`
       id, location_id, name, slug, race_date, allowed_team_sizes,
       registration_opens_at, registration_closes_at, active,
+      member_pricing_enabled, member_fee_cents, non_member_fee_cents,
+      members_only, payment_currency,
       waves:race_waves ( id, start_time, capacity, label )
     `)
     .eq('slug', params.slug)
@@ -131,9 +141,7 @@ export async function POST(request, { params }) {
     }
   }
 
-  // Find-or-create the captain contact. The booking flow uses a DB
-  // trigger; race_registrations doesn't have one yet, so do it
-  // explicitly. Match by (location_id, lower(email)).
+  // Find-or-create the captain contact. Match by (location_id, lower(email)).
   const captainEmail = body.captain_email.toLowerCase().trim()
   let captainContactId = null
   const { data: existingContact } = await db
@@ -213,39 +221,84 @@ export async function POST(request, { params }) {
     }
   }
 
-  // Refresh team_members for THIS registration's roster. Same
-  // semantics as the (now-deprecated) booking-flow team handling.
-  await db.from('team_members').delete().eq('team_id', teamId)
-  const memberRows = [
-    {
-      team_id: teamId,
-      contact_id: captainContactId,
-      name: body.captain_name,
-      email: captainEmail,
-      role: 'captain',
-    },
+  // ─── member validation (mig 084) ─────────────────────────────────
+  // Compose the full roster (captain + others) and check each email
+  // against UN1T members. Validation only matters when member pricing
+  // is enabled OR the race is members_only — otherwise everyone is a
+  // non-member by default and we skip the per-email contacts query.
+  const fullRoster = [
+    { name: body.captain_name, email: captainEmail },
     ...(body.members || []).map((m) => ({
-      team_id: teamId,
-      contact_id: null,
       name: m.name,
       email: m.email ? m.email.toLowerCase().trim() : null,
-      role: 'member',
     })),
   ]
+
+  let validatedRoster
+  if (race.member_pricing_enabled || race.members_only) {
+    validatedRoster = await validateTeamRoster({
+      db,
+      members: fullRoster,
+      locationId: race.location_id,
+    })
+  } else {
+    validatedRoster = fullRoster.map((m) => ({
+      name: m.name,
+      email: m.email,
+      is_member: false,
+      member_contact_id: null,
+      status: 'not_applicable',
+    }))
+  }
+
+  // members_only gate. Reject if any team member couldn't be verified.
+  if (race.members_only) {
+    const unverified = validatedRoster.filter((m) => !m.is_member)
+    if (unverified.length > 0) {
+      const names = unverified.map((m) => m.name || '(unnamed)').join(', ')
+      return NextResponse.json({
+        success: false,
+        error: `This race is open to UN1T members only. We couldn't verify membership for: ${names}. Each team member must use the email on their UN1T account.`,
+        code: 'members_only_unverified',
+        unverified_emails: unverified.map((m) => m.email).filter(Boolean),
+      }, { status: 403 })
+    }
+  }
+
+  // Pricing breakdown.
+  const pricing = computeTeamPricing({ validatedRoster, race })
+
+  // Refresh team_members for THIS registration's roster, stamping
+  // member-validation results.
+  await db.from('team_members').delete().eq('team_id', teamId)
+  const memberRows = validatedRoster.map((m, idx) => ({
+    team_id: teamId,
+    contact_id: idx === 0 ? captainContactId : null, // captain only
+    name: m.name,
+    email: m.email,
+    role: idx === 0 ? 'captain' : 'member',
+    is_member: !!m.is_member,
+    member_validation_status: m.status,
+    member_contact_id: m.member_contact_id || null,
+    member_validated_at: m.status === 'verified' ? new Date().toISOString() : null,
+  }))
   await db.from('team_members').insert(memberRows)
 
-  // Create the race_registration. UNIQUE (race_event_id, team_id)
-  // means a returning team can't double-register — surface as 409.
+  // Create the race_registration. Paid races start as pending_payment;
+  // free races (total_cents=0) jump straight to confirmed via the
+  // payment helper below.
+  const initialStatus = pricing.total_cents > 0 ? 'pending_payment' : 'confirmed'
   const { data: registration, error: regErr } = await db
     .from('race_registrations')
     .insert({
       race_event_id: race.id,
       team_id: teamId,
       contact_id: captainContactId,
-      status: 'confirmed',
+      status: initialStatus,
       wave_id: wave.id,
+      team_composition: pricing.team_composition,
     })
-    .select('id, registered_at, wave_id')
+    .select('id, registered_at, wave_id, contact_id')
     .single()
 
   if (regErr) {
@@ -259,6 +312,44 @@ export async function POST(request, { params }) {
     return NextResponse.json({ success: false, error: regErr.message }, { status: 500 })
   }
 
+  // ─── kick off the payment (or mark paid for free entry) ──────────
+  let paymentResult
+  try {
+    const baseUrl = getAppUrl()
+    const returnUrl = `${baseUrl}/race/${race.slug}/confirmed?registration=${registration.id}`
+    paymentResult = await createRacePayment({
+      db,
+      race,
+      registration,
+      captain: {
+        name: body.captain_name,
+        email: captainEmail,
+        phone: body.captain_phone || null,
+      },
+      pricing,
+      returnUrl,
+    })
+  } catch (e) {
+    // Roll back the registration so the team can retry — leaving a
+    // pending_payment row with no payment is operator confusion.
+    await db.from('race_registrations').delete().eq('id', registration.id)
+    return NextResponse.json({
+      success: false,
+      error: `Could not start payment: ${e.message || 'unknown error'}`,
+      code: 'payment_init_failed',
+    }, { status: 502 })
+  }
+
+  // Free entry — fire confirmations immediately. Best-effort, never
+  // fails the response.
+  if (paymentResult.checkout.free) {
+    try {
+      await sendRaceConfirmations({ db, paymentId: paymentResult.payment.id })
+    } catch (e) {
+      console.warn(`[race-register] free-entry confirmations failed: ${e.message}`)
+    }
+  }
+
   return NextResponse.json({
     success: true,
     data: {
@@ -267,7 +358,24 @@ export async function POST(request, { params }) {
       team_id: teamId,
       team_name: teamName,
       race: { id: race.id, name: race.name, race_date: race.race_date, slug: race.slug },
+      pricing: {
+        total_cents: pricing.total_cents,
+        currency: race.payment_currency || 'EUR',
+        member_count: pricing.member_count,
+        non_member_count: pricing.non_member_count,
+        member_fee_cents: pricing.member_fee_cents,
+        non_member_fee_cents: pricing.non_member_fee_cents,
+      },
+      payment: {
+        id: paymentResult.payment.id,
+        free: paymentResult.checkout.free,
+        token: paymentResult.checkout.token,
+        url: paymentResult.checkout.url,
+        status: paymentResult.payment.status,
+      },
     },
-    message: `Team "${teamName}" registered for ${race.name}.`,
+    message: paymentResult.checkout.free
+      ? `Team "${teamName}" registered for ${race.name}.`
+      : `Team "${teamName}" registered — complete payment to confirm.`,
   })
 }
