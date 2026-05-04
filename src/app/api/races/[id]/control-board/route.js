@@ -25,7 +25,10 @@ export async function GET(_request, { params }) {
   const db = createServerClient()
   const { data: race, error: raceErr } = await db
     .from('race_events')
-    .select('id, name, location_id, race_date, start_time, allowed_team_sizes')
+    .select(`
+      id, name, location_id, race_date, allowed_team_sizes,
+      waves:race_waves ( id, start_time, capacity, label, display_order )
+    `)
     .eq('id', params.id)
     .single()
   if (raceErr || !race) {
@@ -37,7 +40,7 @@ export async function GET(_request, { params }) {
   const { data: registrations, error: regErr } = await db
     .from('race_registrations')
     .select(`
-      id, status, race_started_at, race_finished_at, registered_at,
+      id, status, race_started_at, race_finished_at, registered_at, wave_id,
       teams ( id, name, size, captain_contact_id,
         team_members ( id, name, email, role )
       )

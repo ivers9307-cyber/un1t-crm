@@ -78,6 +78,14 @@ export default function RaceControlPanel({ raceId }) {
     }
   }
 
+  // Wave lookup so each registration row can render its wave badge
+  // without N round-trips. Built once per board update.
+  const wavesById = useMemo(() => {
+    const m = new Map()
+    for (const w of (board?.race?.waves || [])) m.set(w.id, w)
+    return m
+  }, [board])
+
   const sections = useMemo(() => {
     if (!board) return { next_up: [], on_course: [], completed: [] }
     const buckets = { next_up: [], on_course: [], completed: [], no_show: [] }
@@ -87,7 +95,17 @@ export default function RaceControlPanel({ raceId }) {
       const state = classifyBookingState(r)
       buckets[state].push(r)
     }
-    buckets.next_up.sort((a, b) => (a.registered_at || '').localeCompare(b.registered_at || ''))
+    // Next Up: sort by wave start_time first (so the next wave's
+    // teams cluster together at the top), then by registered_at
+    // within each wave. Falls back to registered_at when wave_id
+    // is missing.
+    buckets.next_up.sort((a, b) => {
+      const wa = wavesById.get(a.wave_id)?.start_time || ''
+      const wb = wavesById.get(b.wave_id)?.start_time || ''
+      const cmp = wa.localeCompare(wb)
+      if (cmp !== 0) return cmp
+      return (a.registered_at || '').localeCompare(b.registered_at || '')
+    })
     buckets.on_course.sort((a, b) => (a.race_started_at || '').localeCompare(b.race_started_at || ''))
     buckets.completed.sort((a, b) => {
       const ea = elapsedSecondsBetween(a.race_started_at, a.race_finished_at) ?? Infinity
@@ -95,7 +113,7 @@ export default function RaceControlPanel({ raceId }) {
       return ea - eb
     })
     return buckets
-  }, [board])
+  }, [board, wavesById])
 
   if (loadError && !board) {
     return (
@@ -122,19 +140,19 @@ export default function RaceControlPanel({ raceId }) {
 
       <Section title="On Course" icon={Clock} count={sections.on_course.length} emptyText="No teams currently on the course.">
         {sections.on_course.map((r) => (
-          <OnCourseRow key={r.id} registration={r} busy={actionBusy === r.id} onFinish={() => fireAction(r.id, 'race-finish')} />
+          <OnCourseRow key={r.id} registration={r} wave={wavesById.get(r.wave_id)} busy={actionBusy === r.id} onFinish={() => fireAction(r.id, 'race-finish')} />
         ))}
       </Section>
 
       <Section title="Next Up" icon={Play} count={sections.next_up.length} emptyText="No teams registered yet.">
         {sections.next_up.map((r) => (
-          <NextUpRow key={r.id} registration={r} busy={actionBusy === r.id} onStart={() => fireAction(r.id, 'race-start')} />
+          <NextUpRow key={r.id} registration={r} wave={wavesById.get(r.wave_id)} busy={actionBusy === r.id} onStart={() => fireAction(r.id, 'race-start')} />
         ))}
       </Section>
 
       <Section title="Completed" icon={Trophy} count={sections.completed.length} emptyText="No teams have finished yet.">
         {sections.completed.map((r, i) => (
-          <CompletedRow key={r.id} registration={r} rank={i + 1} busy={actionBusy === r.id} onReset={() => fireAction(r.id, 'race-reset')} />
+          <CompletedRow key={r.id} registration={r} wave={wavesById.get(r.wave_id)} rank={i + 1} busy={actionBusy === r.id} onReset={() => fireAction(r.id, 'race-reset')} />
         ))}
       </Section>
     </div>
@@ -159,7 +177,7 @@ function Section({ title, icon: Icon, count, emptyText, children }) {
   )
 }
 
-function TeamHeader({ registration, accent = 'default' }) {
+function TeamHeader({ registration, wave, accent = 'default' }) {
   const team = registration.teams
   const teamName = team?.name || '(no team)'
   const size = team?.size
@@ -169,6 +187,12 @@ function TeamHeader({ registration, accent = 'default' }) {
     : accent === 'completed'
       ? 'border-emerald-500/30 bg-emerald-500/5'
       : 'border-un1t-gray bg-un1t-dark'
+  // Wave badge label: prefer "Label (HH:MM)", fall back to just HH:MM,
+  // fall back to "(no wave)" only when the registration is unlinked.
+  const waveTime = wave?.start_time ? wave.start_time.slice(0, 5) : null
+  const waveBadge = wave
+    ? wave.label ? `${wave.label} · ${waveTime}` : waveTime
+    : null
   return (
     <div className={`flex-1 min-w-0 border rounded-md p-3 ${accentClass}`}>
       <div className="flex items-center gap-2 flex-wrap">
@@ -176,6 +200,11 @@ function TeamHeader({ registration, accent = 'default' }) {
         {size && (
           <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded-full bg-un1t-gray/40 text-un1t-light inline-flex items-center gap-1">
             <Users size={10} /> {size}-person
+          </span>
+        )}
+        {waveBadge && (
+          <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded-full bg-blue-500/15 text-blue-700 inline-flex items-center gap-1">
+            <Clock size={10} /> {waveBadge}
           </span>
         )}
       </div>
@@ -196,10 +225,10 @@ function TeamHeader({ registration, accent = 'default' }) {
   )
 }
 
-function NextUpRow({ registration, busy, onStart }) {
+function NextUpRow({ registration, wave, busy, onStart }) {
   return (
     <div className="flex items-stretch gap-2">
-      <TeamHeader registration={registration} />
+      <TeamHeader registration={registration} wave={wave} />
       <div className="flex flex-col items-end justify-center gap-1 min-w-[110px]">
         <button
           type="button"
@@ -215,14 +244,14 @@ function NextUpRow({ registration, busy, onStart }) {
   )
 }
 
-function OnCourseRow({ registration, busy, onFinish }) {
+function OnCourseRow({ registration, wave, busy, onFinish }) {
   const nowMs = Date.now()
   const startedMs = registration.race_started_at ? Date.parse(registration.race_started_at) : nowMs
   const elapsed = Math.max(0, Math.floor((nowMs - startedMs) / 1000))
 
   return (
     <div className="flex items-stretch gap-2">
-      <TeamHeader registration={registration} accent="on_course" />
+      <TeamHeader registration={registration} wave={wave} accent="on_course" />
       <div className="flex flex-col items-end justify-center gap-1 min-w-[110px]">
         <div className="font-mono text-base font-semibold text-amber-700 tabular-nums">
           {formatElapsed(elapsed)}
@@ -241,14 +270,14 @@ function OnCourseRow({ registration, busy, onFinish }) {
   )
 }
 
-function CompletedRow({ registration, rank, busy, onReset }) {
+function CompletedRow({ registration, wave, rank, busy, onReset }) {
   const elapsed = elapsedSecondsBetween(registration.race_started_at, registration.race_finished_at)
   return (
     <div className="flex items-stretch gap-2">
       <div className="flex items-center justify-center min-w-[40px] text-base font-semibold text-un1t-light">
         #{rank}
       </div>
-      <TeamHeader registration={registration} accent="completed" />
+      <TeamHeader registration={registration} wave={wave} accent="completed" />
       <div className="flex flex-col items-end justify-center gap-1 min-w-[110px]">
         <div className="font-mono text-base font-semibold text-emerald-700 tabular-nums">
           {formatElapsed(elapsed)}

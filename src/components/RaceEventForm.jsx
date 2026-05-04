@@ -10,7 +10,7 @@
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { ArrowLeft, Calendar, Clock, Users, Save, AlertCircle, Loader2 } from 'lucide-react'
+import { ArrowLeft, Calendar, Clock, Users, Save, AlertCircle, Loader2, Plus, Trash2 } from 'lucide-react'
 import Link from 'next/link'
 import { toSlug } from '@/lib/slug'
 
@@ -25,19 +25,35 @@ export default function RaceEventForm({ race, locationId }) {
   const [slugAuto, setSlugAuto] = useState(!isEditing)
   const [description, setDescription] = useState(race?.description || '')
   const [raceDate, setRaceDate] = useState(race?.race_date || '')
-  const [startTime, setStartTime] = useState(race?.start_time?.slice(0, 5) || '')
   const [registrationOpensAt, setRegistrationOpensAt] = useState(
     race?.registration_opens_at ? toLocalInput(race.registration_opens_at) : ''
   )
   const [registrationClosesAt, setRegistrationClosesAt] = useState(
     race?.registration_closes_at ? toLocalInput(race.registration_closes_at) : ''
   )
-  const [capacity, setCapacity] = useState(race?.capacity != null ? String(race.capacity) : '')
   const [allowedTeamSizes, setAllowedTeamSizes] = useState(
     Array.isArray(race?.allowed_team_sizes) && race.allowed_team_sizes.length > 0
       ? race.allowed_team_sizes
       : [1, 2, 4]
   )
+  // Waves (mig 083). Each: { id?, start_time (HH:MM), capacity (string), label (string) }
+  // id is preserved for existing waves so the API's diff-and-apply
+  // hits update vs insert. Unidentified rows (new waves added in
+  // this session) get inserted server-side.
+  const [waves, setWaves] = useState(() => {
+    const incoming = Array.isArray(race?.waves) && race.waves.length > 0
+      ? race.waves
+      : [{ start_time: '09:00:00', capacity: null, label: null }]
+    return incoming
+      .slice()
+      .sort((a, b) => (a.start_time || '').localeCompare(b.start_time || ''))
+      .map((w) => ({
+        id: w.id,
+        start_time: (w.start_time || '').slice(0, 5),
+        capacity: w.capacity != null ? String(w.capacity) : '',
+        label: w.label || '',
+      }))
+  })
   const [active, setActive] = useState(race?.active ?? true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
@@ -54,20 +70,37 @@ export default function RaceEventForm({ race, locationId }) {
     if (!name.trim()) { setError('Name is required.'); return }
     if (!raceDate) { setError('Race date is required.'); return }
     if (allowedTeamSizes.length === 0) { setError('Pick at least one allowed team size.'); return }
+    if (waves.length === 0) { setError('Add at least one wave.'); return }
+    // Surface duplicate wave times before the server complains.
+    const seenTimes = new Set()
+    for (const w of waves) {
+      if (!w.start_time) { setError('Every wave needs a start time.'); return }
+      if (seenTimes.has(w.start_time)) {
+        setError(`Two waves can't share the same start time (${w.start_time}).`)
+        return
+      }
+      seenTimes.add(w.start_time)
+    }
 
     setSaving(true)
+    const sortedWaves = waves.slice().sort((a, b) => a.start_time.localeCompare(b.start_time))
     const payload = {
       ...(isEditing ? {} : { location_id: locationId }),
       name: name.trim(),
       ...(isEditing ? {} : { slug: slug.trim() || undefined }),
       description: description.trim() || null,
       race_date: raceDate,
-      start_time: startTime || null,
       registration_opens_at: registrationOpensAt ? new Date(registrationOpensAt).toISOString() : null,
       registration_closes_at: registrationClosesAt ? new Date(registrationClosesAt).toISOString() : null,
-      capacity: capacity ? Number(capacity) : null,
       allowed_team_sizes: allowedTeamSizes,
       active,
+      waves: sortedWaves.map((w, i) => ({
+        ...(w.id ? { id: w.id } : {}),
+        start_time: w.start_time,
+        capacity: w.capacity ? Number(w.capacity) : null,
+        label: w.label.trim() || null,
+        display_order: i,
+      })),
     }
 
     const url = isEditing ? `/api/races/${race.id}` : '/api/races'
@@ -149,28 +182,74 @@ export default function RaceEventForm({ race, locationId }) {
 
       <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5 space-y-4">
         <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light flex items-center gap-2">
-          <Calendar size={14} /> When
+          <Calendar size={14} /> Race date
         </h3>
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className="block text-sm text-un1t-light mb-1">Race date *</label>
-            <input
-              type="date"
-              required
-              value={raceDate}
-              onChange={e => setRaceDate(e.target.value)}
-              className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
-            />
-          </div>
-          <div>
-            <label className="block text-sm text-un1t-light mb-1">First wave start time</label>
-            <input
-              type="time"
-              value={startTime}
-              onChange={e => setStartTime(e.target.value)}
-              className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
-            />
-          </div>
+        <div>
+          <input
+            type="date"
+            required
+            value={raceDate}
+            onChange={e => setRaceDate(e.target.value)}
+            className="w-56 bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
+          />
+        </div>
+      </div>
+
+      <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5 space-y-3">
+        <div className="flex items-center justify-between gap-2">
+          <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light flex items-center gap-2">
+            <Clock size={14} /> Waves
+          </h3>
+          <button
+            type="button"
+            onClick={() => setWaves(prev => [...prev, { start_time: '', capacity: '', label: '' }])}
+            className="text-xs text-blue-400 hover:text-blue-300 inline-flex items-center gap-1"
+          >
+            <Plus size={11} /> Add wave
+          </button>
+        </div>
+        <p className="text-[11px] text-un1t-light -mt-2">
+          Multiple start times throughout the race day. Each wave has its own capacity. Teams pick a
+          wave at signup. Per-wave capacity is soft-enforced at signup time (a fast-fingered team
+          can in theory squeeze in over the cap during a near-simultaneous signup; acceptable for v1).
+        </p>
+        <div className="space-y-2">
+          {waves.map((w, i) => (
+            <div key={i} className="grid grid-cols-[110px_120px_1fr_auto] gap-2 items-center">
+              <input
+                type="time"
+                required
+                value={w.start_time}
+                onChange={e => setWaves(prev => prev.map((x, j) => j === i ? { ...x, start_time: e.target.value } : x))}
+                className="bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
+              />
+              <input
+                type="number"
+                min={1}
+                placeholder="Unlimited"
+                value={w.capacity}
+                onChange={e => setWaves(prev => prev.map((x, j) => j === i ? { ...x, capacity: e.target.value } : x))}
+                className="bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
+                title="Max teams in this wave (empty = unlimited)"
+              />
+              <input
+                type="text"
+                placeholder="Label (optional, e.g. Morning)"
+                value={w.label}
+                onChange={e => setWaves(prev => prev.map((x, j) => j === i ? { ...x, label: e.target.value } : x))}
+                className="bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
+              />
+              <button
+                type="button"
+                onClick={() => setWaves(prev => prev.length > 1 ? prev.filter((_, j) => j !== i) : prev)}
+                disabled={waves.length === 1}
+                className="text-un1t-light hover:text-red-700 disabled:opacity-30 p-1"
+                title={waves.length === 1 ? 'A race must have at least one wave' : 'Remove this wave'}
+              >
+                <Trash2 size={14} />
+              </button>
+            </div>
+          ))}
         </div>
       </div>
 
@@ -199,18 +278,6 @@ export default function RaceEventForm({ race, locationId }) {
             />
             <p className="text-[11px] text-un1t-mid mt-1">Empty = open until race date.</p>
           </div>
-        </div>
-        <div>
-          <label className="block text-sm text-un1t-light mb-1">Capacity (max teams)</label>
-          <input
-            type="number"
-            min={1}
-            value={capacity}
-            onChange={e => setCapacity(e.target.value)}
-            placeholder="Unlimited"
-            className="w-40 bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
-          />
-          <p className="text-[11px] text-un1t-mid mt-1">Empty = unlimited. Soft-enforced at signup time.</p>
         </div>
       </div>
 

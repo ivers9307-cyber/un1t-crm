@@ -23,6 +23,9 @@ export default function RaceSignupWidget({ slug }) {
   // Form state
   const [teamName, setTeamName] = useState('')
   const [teamSize, setTeamSize] = useState(1)
+  // Selected wave id (mig 083). Required server-side. Single-wave
+  // races auto-pick on race load so the form requires one click less.
+  const [waveId, setWaveId] = useState('')
   const [members, setMembers] = useState([])
   const [captainName, setCaptainName] = useState('')
   const [captainEmail, setCaptainEmail] = useState('')
@@ -46,6 +49,16 @@ export default function RaceSignupWidget({ slug }) {
         const sizes = j.data.allowed_team_sizes || [1]
         const initial = [...sizes].sort((a, b) => a - b)[0]
         setTeamSize(initial)
+        // If there's only one wave, auto-pick it. If there are
+        // multiple, the user picks below. We only auto-select
+        // available waves (capacity remaining > 0 OR unlimited).
+        const waves = Array.isArray(j.data.waves) ? j.data.waves : []
+        const available = waves.filter((w) => w.capacity == null || (w.remaining_capacity ?? 0) > 0)
+        if (waves.length === 1 && available.length === 1) {
+          setWaveId(waves[0].id)
+        } else if (available.length === 1) {
+          setWaveId(available[0].id)
+        }
       })
       .catch(e => setLoadError(e.message || 'Network error'))
   }, [slug])
@@ -73,6 +86,7 @@ export default function RaceSignupWidget({ slug }) {
 
     const errors = {}
     if (!teamName.trim()) errors.team_name = 'Team name is required'
+    if (!waveId) errors.wave_id = 'Pick a wave'
     if (!captainName.trim()) errors.captain_name = 'Your name is required'
     if (!validateEmail(captainEmail)) errors.captain_email = 'Valid email required'
     members.forEach((m, i) => {
@@ -91,6 +105,7 @@ export default function RaceSignupWidget({ slug }) {
       body: JSON.stringify({
         team_name: teamName.trim(),
         team_size: teamSize,
+        wave_id: waveId,
         captain_name: captainName.trim(),
         captain_email: captainEmail.trim().toLowerCase(),
         captain_phone: captainPhone.trim() || null,
@@ -176,22 +191,20 @@ export default function RaceSignupWidget({ slug }) {
               <Calendar size={14} className="text-gray-400" />
               {new Date(race.race_date).toLocaleDateString('en-IE', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
             </div>
-            {race.start_time && (
-              <div className="flex items-center gap-2">
-                <Clock size={14} className="text-gray-400" />
-                First wave at {race.start_time.slice(0, 5)}
+            {Array.isArray(race.waves) && race.waves.length > 0 && (
+              <div className="flex items-start gap-2">
+                <Clock size={14} className="text-gray-400 mt-0.5 shrink-0" />
+                <span>
+                  {race.waves.length === 1
+                    ? `Wave at ${(race.waves[0].start_time || '').slice(0, 5)}`
+                    : `${race.waves.length} waves: ${race.waves.map(w => (w.start_time || '').slice(0, 5)).join(', ')}`}
+                </span>
               </div>
             )}
             {location?.address && (
               <div className="flex items-start gap-2">
                 <MapPin size={14} className="text-gray-400 mt-0.5 shrink-0" />
                 <span>{location.address}</span>
-              </div>
-            )}
-            {race.capacity != null && (
-              <div className="flex items-center gap-2">
-                <Users size={14} className="text-gray-400" />
-                {race.remaining_capacity ?? race.capacity} of {race.capacity} spots remaining
               </div>
             )}
           </div>
@@ -212,6 +225,53 @@ export default function RaceSignupWidget({ slug }) {
 
           <form onSubmit={handleSubmit} className="space-y-4">
             <fieldset disabled={isClosed} className="space-y-4">
+              {/* Wave picker (mig 083). Each wave = a start time + capacity.
+                  Single-wave races still render this so the customer sees
+                  what time they're locked into; auto-selected on load. */}
+              {Array.isArray(race.waves) && race.waves.length > 0 && (
+                <div>
+                  <label className="block text-xs font-medium text-gray-700 mb-1">Pick your wave *</label>
+                  <div className="space-y-2">
+                    {race.waves.map((w) => {
+                      const remaining = w.remaining_capacity
+                      const full = w.capacity != null && remaining === 0
+                      const selected = waveId === w.id
+                      const time = (w.start_time || '').slice(0, 5)
+                      return (
+                        <button
+                          key={w.id}
+                          type="button"
+                          disabled={full}
+                          onClick={() => setWaveId(w.id)}
+                          className={`w-full text-left px-3 py-2 rounded-md border transition-colors ${
+                            selected
+                              ? 'border-gray-700 bg-gray-100'
+                              : full
+                                ? 'border-gray-200 bg-gray-50 opacity-60 cursor-not-allowed'
+                                : 'border-gray-300 hover:border-gray-400 bg-white'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <div>
+                              <span className="text-sm font-semibold text-gray-900">{time}</span>
+                              {w.label && <span className="ml-2 text-xs text-gray-600">{w.label}</span>}
+                            </div>
+                            <div className="text-[11px] text-gray-500">
+                              {w.capacity == null
+                                ? 'Open'
+                                : full
+                                  ? 'Full'
+                                  : `${remaining} of ${w.capacity} spots left`}
+                            </div>
+                          </div>
+                        </button>
+                      )
+                    })}
+                  </div>
+                  {fieldErrors.wave_id && <p className="text-[11px] text-red-600 mt-1">{fieldErrors.wave_id}</p>}
+                </div>
+              )}
+
               <div>
                 <label className="block text-xs font-medium text-gray-700 mb-1">Team name *</label>
                 <input

@@ -15,18 +15,28 @@ import { toSlug } from '@/lib/slug'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
+// Wave shape used in both create + update. capacity null = unlimited.
+const WaveInputSchema = z.object({
+  start_time: z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/, 'Use HH:MM'),
+  capacity: z.number().int().positive().max(10000).nullable().optional(),
+  label: z.string().max(60).nullable().optional(),
+  display_order: z.number().int().nonnegative().optional(),
+})
+
 const CreateSchema = z.object({
   location_id: uuidLike,
   name: z.string().trim().min(1).max(200),
   slug: z.string().trim().min(1).max(120).regex(/^[a-z0-9]+(-[a-z0-9]+)*$/, 'lowercase kebab-case').optional(),
   description: z.string().max(4000).nullable().optional(),
   race_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'YYYY-MM-DD'),
-  start_time: z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/).nullable().optional(),
   registration_opens_at: z.string().datetime().nullable().optional(),
   registration_closes_at: z.string().datetime().nullable().optional(),
-  capacity: z.number().int().positive().max(10000).nullable().optional(),
   allowed_team_sizes: z.array(z.number().int().positive().max(50)).min(1).max(20).optional(),
   active: z.boolean().optional(),
+  // Waves (mig 083) — at least one required for a usable race.
+  // Server normalises by start_time ascending; UNIQUE on
+  // (race_event_id, start_time) catches duplicates from the DB side.
+  waves: z.array(WaveInputSchema).min(1, 'Add at least one wave.').max(50),
 })
 
 export async function GET(request) {
@@ -52,10 +62,11 @@ export async function GET(request) {
   const { data, error } = await db
     .from('race_events')
     .select(`
-      id, location_id, name, slug, description, race_date, start_time,
-      registration_opens_at, registration_closes_at, capacity,
+      id, location_id, name, slug, description, race_date,
+      registration_opens_at, registration_closes_at,
       allowed_team_sizes, active, created_at, updated_at,
-      registrations:race_registrations ( id, status, race_started_at, race_finished_at )
+      waves:race_waves ( id, start_time, capacity, label, display_order ),
+      registrations:race_registrations ( id, status, race_started_at, race_finished_at, wave_id )
     `)
     .in('location_id', locationIds)
     .order('race_date', { ascending: false })
@@ -95,10 +106,8 @@ export async function POST(request) {
       slug,
       description: body.description ?? null,
       race_date: body.race_date,
-      start_time: body.start_time ?? null,
       registration_opens_at: body.registration_opens_at ?? null,
       registration_closes_at: body.registration_closes_at ?? null,
-      capacity: body.capacity ?? null,
       allowed_team_sizes: body.allowed_team_sizes && body.allowed_team_sizes.length > 0
         ? [...body.allowed_team_sizes].sort((a, b) => a - b)
         : [1, 2, 4],
@@ -118,5 +127,34 @@ export async function POST(request) {
     return NextResponse.json({ success: false, error: error.message }, { status: 400 })
   }
 
-  return NextResponse.json({ success: true, data }, { status: 201 })
+  // Insert the waves (mig 083). Sorted by start_time so display_order
+  // defaults match temporal order if the operator didn't set them.
+  const sortedWaves = [...body.waves].sort((a, b) => (a.start_time || '').localeCompare(b.start_time || ''))
+  const waveRows = sortedWaves.map((w, i) => ({
+    race_event_id: data.id,
+    start_time: w.start_time,
+    capacity: w.capacity ?? null,
+    label: w.label ?? null,
+    display_order: w.display_order ?? i,
+  }))
+  const { data: insertedWaves, error: wavesErr } = await db
+    .from('race_waves')
+    .insert(waveRows)
+    .select()
+  if (wavesErr) {
+    // Roll back the race insert so a failed wave create doesn't leave
+    // an orphaned race_event with no waves (which would break public
+    // signup). Best-effort delete; the race is unusable either way.
+    await db.from('race_events').delete().eq('id', data.id)
+    if (wavesErr.code === '23505' || /duplicate/i.test(wavesErr.message || '')) {
+      return NextResponse.json({
+        success: false,
+        error: 'Two waves can\'t share the same start time.',
+        code: 'duplicate_wave_time',
+      }, { status: 409 })
+    }
+    return NextResponse.json({ success: false, error: `Race created but waves failed: ${wavesErr.message}` }, { status: 400 })
+  }
+
+  return NextResponse.json({ success: true, data: { ...data, waves: insertedWaves } }, { status: 201 })
 }

@@ -27,6 +27,9 @@ export const runtime = 'nodejs'
 const RegisterSchema = z.object({
   team_name: z.string().trim().min(1).max(200),
   team_size: z.number().int().positive().max(50),
+  // Wave selection (mig 083) — required since every race has at
+  // least one wave. Validated server-side against the parent race.
+  wave_id: z.string().uuid(),
   captain_name: z.string().trim().min(1).max(200),
   captain_email: z.string().email().max(320),
   captain_phone: z.string().max(50).nullable().optional(),
@@ -50,10 +53,16 @@ export async function POST(request, { params }) {
   if (!validation.ok) return validation.response
   const body = validation.data
 
-  // Look up the race — must be active.
+  // Look up the race — must be active. Joins waves so we can validate
+  // wave_id belongs to this race and check per-wave capacity in one
+  // round-trip.
   const { data: race, error: raceErr } = await db
     .from('race_events')
-    .select('id, location_id, name, slug, race_date, allowed_team_sizes, capacity, registration_opens_at, registration_closes_at, active')
+    .select(`
+      id, location_id, name, slug, race_date, allowed_team_sizes,
+      registration_opens_at, registration_closes_at, active,
+      waves:race_waves ( id, start_time, capacity, label )
+    `)
     .eq('slug', params.slug)
     .eq('active', true)
     .single()
@@ -95,19 +104,29 @@ export async function POST(request, { params }) {
     }, { status: 400 })
   }
 
-  // Capacity check (soft — small race window means concurrent signups
-  // could in theory both squeeze in over the cap; acceptable for v1).
-  if (race.capacity != null) {
+  // Wave validation (mig 083). The submitted wave_id must belong to
+  // this race; we then check the wave's capacity rather than a race-
+  // wide cap.
+  const wave = (race.waves || []).find((w) => w.id === body.wave_id)
+  if (!wave) {
+    return NextResponse.json({
+      success: false,
+      error: 'Selected wave does not belong to this race.',
+      code: 'invalid_wave',
+    }, { status: 400 })
+  }
+  if (wave.capacity != null) {
     const { count } = await db
       .from('race_registrations')
       .select('*', { count: 'exact', head: true })
       .eq('race_event_id', race.id)
+      .eq('wave_id', wave.id)
       .eq('status', 'confirmed')
-    if ((count || 0) >= race.capacity) {
+    if ((count || 0) >= wave.capacity) {
       return NextResponse.json({
         success: false,
-        error: 'This race is full.',
-        code: 'full',
+        error: `The ${wave.label || wave.start_time.slice(0, 5)} wave is full. Pick another.`,
+        code: 'wave_full',
       }, { status: 409 })
     }
   }
@@ -224,8 +243,9 @@ export async function POST(request, { params }) {
       team_id: teamId,
       contact_id: captainContactId,
       status: 'confirmed',
+      wave_id: wave.id,
     })
-    .select('id, registered_at')
+    .select('id, registered_at, wave_id')
     .single()
 
   if (regErr) {
