@@ -108,35 +108,21 @@ export async function POST(request, { params }) {
   }
 
   // Find-or-create the team. Captain is the first member with role=captain
-  // (or the first member if none specified). Captain's contact is found
-  // or created from their email.
+  // (or the first member if none specified). Captain's contact is
+  // resolved via findOrCreateRaceContact so mig 086 semantics apply
+  // (existing contacts unchanged, new ones get
+  // 'competition_competitor' lead_status, status_change trigger fires).
   const teamName = body.team_name.trim()
   const captainIdx = body.members.findIndex((m) => m.role === 'captain')
   const captain = body.members[captainIdx >= 0 ? captainIdx : 0]
   let captainContactId = null
   if (captain.email) {
-    const captainEmail = captain.email.toLowerCase().trim()
-    const { data: existing } = await db
-      .from('contacts')
-      .select('id')
-      .eq('location_id', race.location_id)
-      .ilike('email', captainEmail)
-      .maybeSingle()
-    if (existing) {
-      captainContactId = existing.id
-    } else {
-      const { data: inserted } = await db
-        .from('contacts')
-        .insert({
-          location_id: race.location_id,
-          name: captain.name,
-          email: captainEmail,
-          source: 'manual_race_signup',
-        })
-        .select('id')
-        .single()
-      captainContactId = inserted?.id || null
-    }
+    captainContactId = await findOrCreateRaceContact({
+      db,
+      locationId: race.location_id,
+      email: captain.email,
+      name: captain.name,
+    })
   }
 
   // Find-or-create the team by (location_id, name).

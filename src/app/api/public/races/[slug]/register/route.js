@@ -142,36 +142,24 @@ export async function POST(request, { params }) {
     }
   }
 
-  // Find-or-create the captain contact. Match by (location_id, lower(email)).
+  // Find-or-create the captain contact via the shared helper so
+  // mig 086 semantics apply consistently: existing contacts keep
+  // their lead_status, fresh inserts pick up
+  // 'competition_competitor', and the status_change sequence
+  // trigger fires with oldStatus=null on insert.
   const captainEmail = body.captain_email.toLowerCase().trim()
-  let captainContactId = null
-  const { data: existingContact } = await db
-    .from('contacts')
-    .select('id')
-    .eq('location_id', race.location_id)
-    .ilike('email', captainEmail)
-    .maybeSingle()
-  if (existingContact) {
-    captainContactId = existingContact.id
-  } else {
-    const { data: insertedContact, error: contactErr } = await db
-      .from('contacts')
-      .insert({
-        location_id: race.location_id,
-        name: body.captain_name,
-        email: captainEmail,
-        phone: body.captain_phone || null,
-        source: body.source || 'race_signup',
-      })
-      .select('id')
-      .single()
-    if (contactErr) {
-      return NextResponse.json({
-        success: false,
-        error: `Could not create contact: ${contactErr.message}`,
-      }, { status: 500 })
-    }
-    captainContactId = insertedContact.id
+  const captainContactId = await findOrCreateRaceContact({
+    db,
+    locationId: race.location_id,
+    email: captainEmail,
+    name: body.captain_name,
+    phone: body.captain_phone || null,
+  })
+  if (!captainContactId) {
+    return NextResponse.json({
+      success: false,
+      error: 'Could not create captain contact.',
+    }, { status: 500 })
   }
 
   // Find-or-create the team by (location_id, name).

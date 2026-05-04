@@ -1,6 +1,10 @@
 // race-contact-linking — find-or-create the contact for a race
 // team_member (mig 086).
 //
+// Insert path also fires the status_change sequence trigger with
+// oldStatus=null so operators can build "on first race signup,
+// enrol in welcome sequence" automations through the portal.
+//
 // Used by every code path that writes a team_members row with an
 // email: public race signup (captain + every member), manual
 // operator-add at /api/races/[id]/teams, member edits at
@@ -83,7 +87,21 @@ export async function findOrCreateRaceContact({ db, locationId, email, name = nu
       console.warn(`[race-contact-linking] insert failed for ${normalised}: ${error.message}`)
       return null
     }
-    return inserted?.id || null
+    const newId = inserted?.id || null
+    if (newId) {
+      // Fire the status_change sequence trigger with oldStatus=null
+      // so any "when contact becomes X" sequence picks the new
+      // competitor up. Best-effort — never blocks the create.
+      // Imported lazily to dodge any circular-import surprise
+      // between sequences ↔ contact-linking.
+      try {
+        const { triggerSequencesForStatusChange } = await import('./sequences')
+        await triggerSequencesForStatusChange(newId, null, COMPETITOR_LEAD_STATUS)
+      } catch (e) {
+        console.warn(`[race-contact-linking] sequence trigger failed: ${e?.message || e}`)
+      }
+    }
+    return newId
   } catch (e) {
     console.warn(`[race-contact-linking] threw: ${e?.message || e}`)
     return null

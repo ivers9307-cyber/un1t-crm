@@ -5,6 +5,7 @@ import { requireApiKey } from '@/lib/api-auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike, email, phone, leadSourceSchema, leadStatusSchema, MANAGER_ROLES } from '@/lib/schemas'
 import { sendPushToRolesAtLocation } from '@/lib/push'
+import { triggerSequencesForStatusChange } from '@/lib/sequences'
 
 const ContactCreateSchema = z.object({
   name: z.string().min(1).max(200),
@@ -48,6 +49,15 @@ export async function POST(request) {
 
   if (error) {
     return NextResponse.json({ success: false, error: error.message }, { status: 400 })
+  }
+
+  // Fire the status_change sequence trigger with oldStatus=null
+  // so any "when contact becomes X" sequence picks the new
+  // contact up. Best-effort — never blocks the create response.
+  try {
+    await triggerSequencesForStatusChange(data.id, null, data.lead_status)
+  } catch (e) {
+    console.warn(`[contacts] insert trigger failed for ${data.id}: ${e?.message || e}`)
   }
 
   // Push notification: a new lead has landed. Fan out to managers /
