@@ -32,8 +32,19 @@ export default async function RacesIndexPage() {
     races = data || []
   }
 
-  let appUrl = ''
-  try { appUrl = getAppUrl() } catch {}
+  // Use ONLY the origin part of NEXT_PUBLIC_APP_URL so a misconfigured
+  // env var (someone pastes a full URL with path + query into the
+  // env value by mistake) can't poison the public-link concatenation.
+  // If the env var is missing or unparseable, fall back to relative
+  // paths — they still work in the browser, just without the bare
+  // domain prefix on the operator's "Public" link preview.
+  let appOrigin = ''
+  try {
+    const raw = getAppUrl()
+    appOrigin = new URL(raw).origin
+  } catch {
+    appOrigin = ''
+  }
 
   return (
     <div className="p-8 max-w-5xl">
@@ -78,7 +89,7 @@ export default async function RacesIndexPage() {
             <tbody className="divide-y divide-un1t-gray">
               {races.map((r) => {
                 const confirmedCount = (r.registrations || []).filter(x => x.status === 'confirmed').length
-                const publicUrl = appUrl ? `${appUrl}/race/${r.slug}` : `/race/${r.slug}`
+                const publicUrl = appOrigin ? `${appOrigin}/race/${r.slug}` : `/race/${r.slug}`
                 return (
                   <tr key={r.id} className="hover:bg-un1t-gray/20">
                     <td className="p-3">
