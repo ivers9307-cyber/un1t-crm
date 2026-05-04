@@ -18,6 +18,19 @@ Tests live alongside source as `*.test.js` (Vitest). Currently covers the securi
 
 Migrations are run manually in Supabase SQL Editor.
 
+### Pushing commits from the sandbox
+
+The sandboxed bash has no GitHub credentials configured (no `~/.gitconfig`, no `GH_TOKEN`, no credential helper). Plain `git push` will fail with `fatal: could not read Username for 'https://github.com'`.
+
+A GitHub PAT lives at `/Users/richardivers/code/.github-pat` (one directory above this repo). To push from the sandbox:
+
+```bash
+PAT=$(cat /Users/richardivers/code/.github-pat | tr -d '[:space:]') && \
+  git push "https://x-access-token:${PAT}@github.com/ivers9307-cyber/un1t-crm.git" main
+```
+
+Inside the sandbox the file is at `/sessions/<session>/mnt/code/.github-pat` — same content, mounted from the host. The file lives one directory above this repo so it's already outside the working tree (no `.gitignore` entry needed). Don't echo the token in the conversation.
+
 ## API Reference
 
 OpenAPI 3.1 spec is generated from the Zod schemas in `src/lib/schemas.js` via `src/lib/openapi.js` and exposed at:
