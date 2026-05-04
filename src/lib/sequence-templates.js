@@ -220,9 +220,12 @@ export const SEQUENCE_TEMPLATES = [
     id: 'anniversary_one_year',
     category: 'Anniversary',
     name: '1-year anniversary',
-    description: 'Fires 365 days after lead_created_at. Single thank-you email.',
+    description: 'Fires 365 days after lead_created_at. Re-fires every year.',
     trigger_type: 'anniversary',
     trigger_config: { from_field: 'lead_created_at', days_after: 365 },
+    // Mig 090: lets the sequence fire once a year. 350 leaves a safety
+    // buffer so next year's enrolment isn't blocked by clock drift.
+    re_enrolment_cooldown_days: 350,
     steps: [
       {
         step_type: 'email',

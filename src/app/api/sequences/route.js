@@ -22,6 +22,10 @@ const SequenceCreateSchema = z.object({
   trigger_config: z.unknown().optional(),
   goal_config: z.unknown().nullable().optional(),
   send_window: z.unknown().nullable().optional(),
+  // Mig 090 (Tier 3C): NULL/0 = single-enrolment-per-contact (default).
+  // > 0 = same contact may re-enrol after their previous run ended that
+  // many days ago. Capped at ~10 years to avoid silly inputs.
+  re_enrolment_cooldown_days: z.number().int().min(0).max(3650).nullable().optional(),
   location_id: uuidLike.optional(),
 })
 
@@ -72,6 +76,9 @@ export async function POST(request) {
     description: body.description || null,
     trigger_type: body.trigger_type || 'manual',
     trigger_config: body.trigger_config || {},
+    goal_config: body.goal_config ?? null,
+    send_window: body.send_window ?? null,
+    re_enrolment_cooldown_days: body.re_enrolment_cooldown_days ?? null,
     status: 'draft',
     location_id: locationId,
     created_by: user.id,

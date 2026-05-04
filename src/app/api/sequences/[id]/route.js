@@ -19,6 +19,8 @@ const SequenceUpdateSchema = z.object({
   trigger_config: z.unknown().optional(),
   goal_config: z.unknown().nullable().optional(),
   send_window: z.unknown().nullable().optional(),
+  // Mig 090 (Tier 3C). See create-route comment for semantics.
+  re_enrolment_cooldown_days: z.number().int().min(0).max(3650).nullable().optional(),
   status: z.enum(['draft', 'active', 'paused', 'archived']).optional(),
 })
 

@@ -476,6 +476,11 @@ export default function SequenceEditor({ sequence, locationId, userId }) {
   const [triggerConfig, setTriggerConfig] = useState(sequence?.trigger_config || {})
   const [goalConfig, setGoalConfig] = useState(sequence?.goal_config || null)
   const [sendWindow, setSendWindow] = useState(sequence?.send_window || null)
+  // Mig 090 / Tier 3C. NULL or '' = single-enrolment-per-contact.
+  // Empty-string state lets the input render cleanly when unset.
+  const [reEnrolCooldown, setReEnrolCooldown] = useState(
+    sequence?.re_enrolment_cooldown_days ?? ''
+  )
   const [stats, setStats] = useState(null) // mig 088 / Tier 3A
   const [status, setStatus] = useState(sequence?.status || 'draft')
   const [steps, setSteps] = useState(sequence?.sequence_steps || [])
@@ -524,6 +529,10 @@ export default function SequenceEditor({ sequence, locationId, userId }) {
         trigger_config: triggerConfig,
         goal_config: goalConfig,
         send_window: sendWindow,
+        re_enrolment_cooldown_days:
+          reEnrolCooldown === '' || reEnrolCooldown === null
+            ? null
+            : Math.max(0, Math.min(3650, parseInt(reEnrolCooldown))),
         status,
         location_id: locationId,
         created_by: userId,
@@ -929,6 +938,44 @@ export default function SequenceEditor({ sequence, locationId, userId }) {
                   type="button"
                   onClick={() => setSendWindow(null)}
                   className="text-[11px] text-un1t-light hover:text-un1t-white"
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Re-enrolment cooldown (mig 090 / Tier 3C). Optional.
+              Default behaviour: a contact can only be enrolled in the
+              same sequence once. Setting a cooldown lets them re-enrol
+              after their previous run ended N days ago. The canonical
+              use case is the anniversary sequence — set 350 so it can
+              fire each year without colliding with itself. */}
+          <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5">
+            <h3 className="font-semibold text-sm text-un1t-light uppercase tracking-wider mb-3">
+              Re-enrolment <span className="text-xs text-un1t-mid normal-case font-normal">(optional)</span>
+            </h3>
+            <p className="text-xs text-un1t-mid mb-3">
+              Empty = each contact runs through this sequence at most once. Set days to allow the same contact to re-enter after their last run ended that long ago. Useful for anniversary or seasonal flows.
+            </p>
+            <div className="flex items-end gap-3">
+              <div>
+                <label className="block text-xs text-un1t-light mb-1">Cooldown (days)</label>
+                <input
+                  type="number"
+                  min="0"
+                  max="3650"
+                  value={reEnrolCooldown}
+                  onChange={e => setReEnrolCooldown(e.target.value)}
+                  placeholder="e.g. 350"
+                  className="bg-un1t-black border border-un1t-gray rounded-md px-2.5 py-1.5 text-sm text-un1t-white w-28 focus:outline-none focus:border-un1t-mid"
+                />
+              </div>
+              {reEnrolCooldown !== '' && reEnrolCooldown !== null && (
+                <button
+                  type="button"
+                  onClick={() => setReEnrolCooldown('')}
+                  className="text-[11px] text-un1t-light hover:text-un1t-white pb-2"
                 >
                   Clear
                 </button>

@@ -63,6 +63,7 @@ export async function POST(request) {
       goal_config: tpl.goal_config || null,
       send_window: tpl.send_window || null,
       audience_filter: tpl.audience_filter || null,
+      re_enrolment_cooldown_days: tpl.re_enrolment_cooldown_days ?? null,
       status: 'draft',
       location_id: locationId,
       created_by: user.id,

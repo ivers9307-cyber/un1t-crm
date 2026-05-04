@@ -89,10 +89,8 @@ export async function enrolContacts({ sequenceId, contactIds, sourceType = 'manu
   }
   const db = createServerClient()
 
-  // Use upsert with onConflict on the unique partial index. Doesn't
-  // quite work in PostgREST because partial indexes can't be the
-  // conflict target; instead, do a SELECT-then-INSERT for the
-  // missing rows.
+  // Active-enrolment dedup. Use SELECT-then-INSERT for the missing
+  // rows (PostgREST won't UPSERT on a partial unique index).
   const { data: existing } = await db
     .from('sequence_enrollments')
     .select('contact_id')
@@ -101,8 +99,48 @@ export async function enrolContacts({ sequenceId, contactIds, sourceType = 'manu
     .in('contact_id', contactIds)
   const alreadyActive = new Set((existing || []).map(r => r.contact_id))
 
+  // Mig 090: re-enrolment cooldown. When the sequence has
+  // re_enrolment_cooldown_days set, allow re-enrolment after the
+  // contact's MOST RECENT terminal enrolment ended that long ago.
+  // Without a cooldown configured (NULL or 0), block any contact
+  // who has EVER been enrolled in this sequence (preserves the
+  // existing single-enrolment behaviour).
+  const { data: seqRow } = await db
+    .from('email_sequences')
+    .select('re_enrolment_cooldown_days')
+    .eq('id', sequenceId)
+    .single()
+  const cooldownDays = Number(seqRow?.re_enrolment_cooldown_days)
+  const blockedFromHistory = new Set()
+  const candidatesNotActive = contactIds.filter(id => !alreadyActive.has(id))
+  if (candidatesNotActive.length > 0) {
+    const { data: history } = await db
+      .from('sequence_enrollments')
+      .select('contact_id, status, last_processed_at, created_at')
+      .eq('sequence_id', sequenceId)
+      .in('contact_id', candidatesNotActive)
+      .in('status', ['completed', 'exited'])
+    if (Number.isFinite(cooldownDays) && cooldownDays > 0) {
+      // Pick the most recent terminal end-time per contact.
+      const lastEndByContact = new Map()
+      for (const h of (history || [])) {
+        const end = h.last_processed_at || h.created_at
+        const prior = lastEndByContact.get(h.contact_id)
+        if (!prior || end > prior) lastEndByContact.set(h.contact_id, end)
+      }
+      const cooldownMs = cooldownDays * 86400_000
+      const now = Date.now()
+      for (const [cid, end] of lastEndByContact) {
+        if (now - new Date(end).getTime() < cooldownMs) blockedFromHistory.add(cid)
+      }
+    } else {
+      // No cooldown → any past enrolment blocks (legacy behaviour).
+      for (const h of (history || [])) blockedFromHistory.add(h.contact_id)
+    }
+  }
+
   const toInsert = contactIds
-    .filter(id => !alreadyActive.has(id))
+    .filter(id => !alreadyActive.has(id) && !blockedFromHistory.has(id))
     .map(contactId => ({
       sequence_id: sequenceId,
       contact_id: contactId,
