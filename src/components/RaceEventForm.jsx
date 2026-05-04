@@ -10,7 +10,7 @@
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { ArrowLeft, Calendar, Clock, Users, Save, AlertCircle, Loader2, Plus, Trash2, BadgeEuro } from 'lucide-react'
+import { ArrowLeft, Calendar, Clock, Users, Save, AlertCircle, Loader2, Plus, Trash2, BadgeEuro, ImagePlus, X as XIcon, Tv } from 'lucide-react'
 import Link from 'next/link'
 import { toSlug } from '@/lib/slug'
 
@@ -65,12 +65,69 @@ export default function RaceEventForm({ race, locationId }) {
   const [nonMemberFee, setNonMemberFee] = useState(
     race?.non_member_fee_cents != null ? String(race.non_member_fee_cents / 100) : ''
   )
+  // Mig 092: TV-display logos. Each slot holds either a URL (already
+  // uploaded + saved on the race) or null. Slot index is the
+  // visual position; we pack out empties on save so tv_logos in the
+  // DB is a contiguous array.
+  const [logos, setLogos] = useState(() => {
+    const incoming = Array.isArray(race?.tv_logos) ? race.tv_logos : []
+    return [incoming[0] || null, incoming[1] || null, incoming[2] || null]
+  })
+  const [logoBusy, setLogoBusy] = useState(null) // slot index currently uploading
+  const [logoError, setLogoError] = useState(null)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
 
   function onNameChange(v) {
     setName(v)
     if (slugAuto) setSlug(toSlug(v))
+  }
+
+  // Mig 092: upload a single TV logo into the slot. Requires the
+  // race to exist (POST /api/races/[id]/logo needs an id) — for new
+  // races we hide the section until after first save.
+  async function handleLogoUpload(slot, file) {
+    if (!race?.id) {
+      setLogoError('Save the race first, then add logos.')
+      return
+    }
+    setLogoError(null)
+    setLogoBusy(slot)
+    try {
+      const fd = new FormData()
+      fd.append('file', file)
+      fd.append('slot', String(slot))
+      const r = await fetch(`/api/races/${race.id}/logo`, { method: 'POST', body: fd })
+      const j = await r.json()
+      if (!r.ok || j.success === false) {
+        setLogoError(j.error || `Upload failed (${r.status})`)
+        return
+      }
+      const next = [...logos]
+      next[slot] = j.url
+      setLogos(next)
+    } catch (e) {
+      setLogoError(e.message || 'Network error')
+    } finally {
+      setLogoBusy(null)
+    }
+  }
+
+  async function handleLogoRemove(slot) {
+    if (!race?.id) return
+    setLogoError(null)
+    setLogoBusy(slot)
+    try {
+      // Best-effort: clear bytes on storage AND clear the slot in
+      // local state. Operator must still hit Save Changes to persist
+      // the new tv_logos array.
+      await fetch(`/api/races/${race.id}/logo?slot=${slot}`, { method: 'DELETE' })
+      const next = [...logos]
+      next[slot] = null
+      setLogos(next)
+    } finally {
+      setLogoBusy(null)
+    }
   }
 
   async function handleSubmit(e) {
@@ -121,6 +178,9 @@ export default function RaceEventForm({ race, locationId }) {
       members_only: membersOnly,
       member_fee_cents: memberPricingEnabled ? memberFeeCents : null,
       non_member_fee_cents: nonMemberFeeCents,
+      // Mig 092: pack out empty slots so tv_logos is a contiguous
+      // array. The schema enforces max length so trim defensively.
+      tv_logos: logos.filter((u) => typeof u === 'string' && u.length > 0).slice(0, 3),
       waves: sortedWaves.map((w, i) => ({
         ...(w.id ? { id: w.id } : {}),
         start_time: w.start_time,
@@ -412,6 +472,50 @@ export default function RaceEventForm({ race, locationId }) {
         </div>
       </div>
 
+      {/* Mig 092: TV-display logos. Only shown after the race exists
+          because the upload route needs a race id to namespace the
+          storage path. For brand-new races we render a hint instead. */}
+      <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5 space-y-4">
+        <div className="flex items-start gap-3">
+          <Tv size={18} className="text-un1t-light mt-0.5 shrink-0" />
+          <div>
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light">TV display logos</h3>
+            <p className="text-[11px] text-un1t-light mt-1">
+              Up to 3 logos rendered centred in the header of <code>/race/&lt;slug&gt;/display</code>. Use the same height across logos for the cleanest look. PNG/JPEG/WebP/SVG, max 2MB each.
+            </p>
+          </div>
+        </div>
+
+        {!isEditing ? (
+          <div className="bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-[11px] text-un1t-light">
+            Save the race first — you&apos;ll be able to add logos after it&apos;s created.
+          </div>
+        ) : (
+          <>
+            {logoError && (
+              <div className="bg-red-500/10 border border-red-500/30 text-red-700 text-xs rounded-md px-3 py-2">
+                {logoError}
+              </div>
+            )}
+            <div className="grid grid-cols-3 gap-3">
+              {[0, 1, 2].map((slot) => (
+                <LogoSlot
+                  key={slot}
+                  slot={slot}
+                  url={logos[slot]}
+                  busy={logoBusy === slot}
+                  onPick={(file) => handleLogoUpload(slot, file)}
+                  onRemove={() => handleLogoRemove(slot)}
+                />
+              ))}
+            </div>
+            <p className="text-[11px] text-un1t-mid">
+              Logo bytes save immediately. The slot order doesn&apos;t persist until you click <strong>Save Changes</strong> below.
+            </p>
+          </>
+        )}
+      </div>
+
       {isEditing && (
         <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5 flex items-center justify-between">
           <div>
@@ -437,6 +541,51 @@ export default function RaceEventForm({ race, locationId }) {
         {saving ? 'Saving…' : isEditing ? 'Save Changes' : 'Create Race'}
       </button>
     </form>
+  )
+}
+
+// Mig 092: a single TV-logo slot. Empty state shows a dashed
+// dropzone-style button; populated state shows the image with a
+// remove (X) button. Clicking the slot opens the file picker.
+function LogoSlot({ slot, url, busy, onPick, onRemove }) {
+  const inputId = `race-logo-input-${slot}`
+  if (url) {
+    return (
+      <div className="relative bg-un1t-black border border-un1t-gray rounded-md aspect-video flex items-center justify-center p-3 group">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={url} alt={`Logo ${slot + 1}`} className="max-h-full max-w-full object-contain" />
+        <button
+          type="button"
+          onClick={onRemove}
+          disabled={busy}
+          className="absolute top-1 right-1 bg-un1t-dark/90 border border-un1t-gray rounded-full p-1 text-un1t-light hover:text-red-500 disabled:opacity-50"
+          title="Remove logo"
+        >
+          {busy ? <Loader2 size={12} className="animate-spin" /> : <XIcon size={12} />}
+        </button>
+        <span className="absolute bottom-1 left-2 text-[10px] text-un1t-mid">Slot {slot + 1}</span>
+      </div>
+    )
+  }
+  return (
+    <label
+      htmlFor={inputId}
+      className={`bg-un1t-black border-2 border-dashed border-un1t-gray hover:border-un1t-mid rounded-md aspect-video flex flex-col items-center justify-center text-un1t-light cursor-pointer ${busy ? 'opacity-50 pointer-events-none' : ''}`}
+    >
+      {busy ? <Loader2 size={20} className="animate-spin" /> : <ImagePlus size={20} />}
+      <span className="text-[11px] mt-1">{busy ? 'Uploading…' : `Add logo ${slot + 1}`}</span>
+      <input
+        id={inputId}
+        type="file"
+        accept="image/png,image/jpeg,image/webp,image/svg+xml"
+        className="hidden"
+        onChange={(e) => {
+          const f = e.target.files?.[0]
+          if (f) onPick(f)
+          e.target.value = '' // reset so re-picking the same file fires onChange
+        }}
+      />
+    </label>
   )
 }
 

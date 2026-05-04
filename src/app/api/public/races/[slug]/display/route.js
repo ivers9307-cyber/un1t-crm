@@ -25,7 +25,7 @@ export async function GET(_request, { params }) {
   const { data: race, error: raceErr } = await db
     .from('race_events')
     .select(`
-      id, name, slug, race_date, location_id,
+      id, name, slug, race_date, location_id, tv_logos,
       waves:race_waves ( id, start_time, label, display_order )
     `)
     .eq('slug', params.slug)
@@ -90,6 +90,13 @@ export async function GET(_request, { params }) {
         name: race.name,
         slug: race.slug,
         race_date: race.race_date,
+        // Mig 092: array of public logo URLs to render in the
+        // header. Filter to strings (defensive against bad data) +
+        // cap at 3 so the page never renders more than its layout
+        // accounts for.
+        tv_logos: Array.isArray(race.tv_logos)
+          ? race.tv_logos.filter((u) => typeof u === 'string' && u.length > 0).slice(0, 3)
+          : [],
       },
       waves: waves.map((w) => ({ id: w.id, label: w.label, start_time: w.start_time })),
       active,

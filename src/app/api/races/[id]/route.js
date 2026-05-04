@@ -38,6 +38,8 @@ const UpdateSchema = z.object({
   member_fee_cents: z.number().int().nonnegative().nullable().optional(),
   non_member_fee_cents: z.number().int().nonnegative().nullable().optional(),
   payment_currency: z.string().length(3).optional(),
+  // Mig 092: TV-display logos (max 3 in UI, schema allows 6).
+  tv_logos: z.array(z.string().url().max(2000)).max(6).optional(),
   // When provided, replaces the wave set entirely (diff-and-apply).
   // Omitting leaves waves untouched. At least one wave required if set.
   waves: z.array(WaveInputSchema).min(1).max(50).optional(),
@@ -51,7 +53,7 @@ async function loadRace(db, id) {
       registration_opens_at, registration_closes_at,
       allowed_team_sizes, active, created_at, updated_at,
       member_pricing_enabled, member_fee_cents, non_member_fee_cents,
-      members_only, payment_currency,
+      members_only, payment_currency, tv_logos,
       waves:race_waves ( id, start_time, capacity, label, display_order ),
       registrations:race_registrations (
         id, status, race_started_at, race_finished_at, registered_at, wave_id,

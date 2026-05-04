@@ -148,13 +148,27 @@ export default function RaceDisplayBoard({ slug }) {
       className="min-h-screen bg-black text-white flex flex-col select-none cursor-pointer"
       onClick={() => setScreen((s) => (s + 1) % 2)}
     >
-      {/* Header — race name + date. Stays put across screens. */}
-      <header className="flex items-center justify-between px-12 pt-10 pb-6">
-        <div>
-          <div className="text-5xl font-bold tracking-tight">{race.name}</div>
+      {/* Header — race name on the left, sponsor logos centred,
+          screen indicator + count on the right. The three slots use
+          a 3-column grid (1fr / auto / 1fr) so the centre stays
+          dead-centre regardless of how wide the side blocks get. */}
+      <header className="grid grid-cols-[1fr_auto_1fr] items-center px-12 pt-10 pb-6 gap-8">
+        <div className="min-w-0">
+          <div className="text-5xl font-bold tracking-tight truncate">{race.name}</div>
           {dateLabel && <div className="text-2xl opacity-60 mt-2">{dateLabel}</div>}
         </div>
-        <div className="text-right">
+        <div className="flex items-center justify-center gap-10 min-h-[80px]">
+          {(race.tv_logos || []).map((src, i) => (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              key={`${src}-${i}`}
+              src={src}
+              alt=""
+              className="max-h-24 max-w-[220px] object-contain"
+            />
+          ))}
+        </div>
+        <div className="text-right min-w-0">
           <div className="text-xl uppercase tracking-widest opacity-70">
             {screen === 0 ? 'On course' : 'Finished'}
           </div>

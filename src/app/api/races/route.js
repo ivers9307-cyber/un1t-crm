@@ -39,6 +39,10 @@ const CreateSchema = z.object({
   member_fee_cents: z.number().int().nonnegative().nullable().optional(),
   non_member_fee_cents: z.number().int().nonnegative().nullable().optional(),
   payment_currency: z.string().length(3).optional(),
+  // Mig 092: up to 3 sponsor/branding logo URLs for the TV display.
+  // Schema CHECK caps the array at 6 to leave headroom; UI caps at 3.
+  // Each entry must be an http(s) URL (no data: blobs).
+  tv_logos: z.array(z.string().url().max(2000)).max(6).optional(),
   // Waves (mig 083) — at least one required for a usable race.
   // Server normalises by start_time ascending; UNIQUE on
   // (race_event_id, start_time) catches duplicates from the DB side.
@@ -127,6 +131,7 @@ export async function POST(request) {
       member_fee_cents: (body.member_pricing_enabled && body.member_fee_cents != null) ? body.member_fee_cents : null,
       non_member_fee_cents: body.non_member_fee_cents ?? null,
       payment_currency: body.payment_currency ?? 'EUR',
+      tv_logos: Array.isArray(body.tv_logos) ? body.tv_logos : [],
     })
     .select()
     .single()
