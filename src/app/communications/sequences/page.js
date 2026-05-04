@@ -11,15 +11,24 @@ import { Plus, Zap, Play, Pause, FileEdit } from 'lucide-react'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
+import SequenceTemplatePicker from '@/components/SequenceTemplatePicker'
 
 export const dynamic = 'force-dynamic'
 
 const triggerLabels = {
   manual: 'Manual enrollment',
   booking_created: 'Booking created',
+  first_booking: 'First booking',
   status_change: 'Status change',
   event_reminder: 'Event reminder',
   tag_added: 'Tag added',
+  race_registered: 'Race registered',
+  race_finished: 'Race finished',
+  order_completed: 'Order completed',
+  order_failed: 'Order failed',
+  order_abandoned: 'Order abandoned',
+  anniversary: 'Anniversary',
+  inactivity: 'Inactivity',
 }
 
 const statusConfig = {
@@ -46,13 +55,16 @@ export default async function SequencesListPage() {
           <h2 className="text-lg font-semibold">Sequences</h2>
           <p className="text-xs text-un1t-light mt-0.5">Automated drip campaigns triggered by events</p>
         </div>
-        <Link
-          href="/email/sequences/new"
-          className="flex items-center gap-2 bg-un1t-white text-un1t-black text-sm font-medium px-4 py-2 rounded-lg hover:bg-un1t-accent transition-colors"
-        >
-          <Plus size={16} />
-          New Sequence
-        </Link>
+        <div className="flex items-center gap-2">
+          <SequenceTemplatePicker />
+          <Link
+            href="/email/sequences/new"
+            className="flex items-center gap-2 bg-un1t-white text-un1t-black text-sm font-medium px-4 py-2 rounded-lg hover:bg-un1t-accent transition-colors"
+          >
+            <Plus size={16} />
+            New Sequence
+          </Link>
+        </div>
       </div>
 
       {(!sequences || sequences.length === 0) ? (

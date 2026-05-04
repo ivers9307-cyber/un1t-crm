@@ -52,7 +52,7 @@ function whatsappBodyVariables(template) {
   return [...set].sort((a, b) => Number(a) - Number(b))
 }
 
-function StepCard({ step, index, onUpdate, onDelete, onMoveUp, onMoveDown, isFirst, isLast, whatsappTemplates }) {
+function StepCard({ step, index, onUpdate, onDelete, onMoveUp, onMoveDown, isFirst, isLast, whatsappTemplates, stats }) {
   const [expanded, setExpanded] = useState(false)
   const stepType = step.step_type || 'email'
   const config = CHANNEL_CONFIG[stepType] || CHANNEL_CONFIG.email
@@ -104,6 +104,30 @@ function StepCard({ step, index, onUpdate, onDelete, onMoveUp, onMoveDown, isFir
               {' · '}{config.label}
             </p>
           </div>
+
+          {/* Tier 3A: per-step stats badge. Only renders when we
+              have data — saved-step-with-sends. Compact pill so it
+              fits the header. */}
+          {stats && stats.sent > 0 && (
+            <div className="hidden md:flex items-center gap-3 text-[11px] text-un1t-light">
+              <span title="Sent" className="tabular-nums">{stats.sent} sent</span>
+              {stepType === 'email' && (
+                <>
+                  <span title="Open rate" className="tabular-nums text-emerald-700">
+                    {Math.round((stats.opened / stats.sent) * 100)}% open
+                  </span>
+                  <span title="Click rate" className="tabular-nums text-blue-700">
+                    {Math.round((stats.clicked / stats.sent) * 100)}% click
+                  </span>
+                  {stats.bounced > 0 && (
+                    <span title="Bounces" className="tabular-nums text-red-700">
+                      {stats.bounced} bounced
+                    </span>
+                  )}
+                </>
+              )}
+            </div>
+          )}
 
           <button onClick={e => { e.stopPropagation(); onDelete() }} className="p-1.5 text-un1t-mid hover:text-red-400">
             <Trash2 size={14} />
@@ -452,6 +476,7 @@ export default function SequenceEditor({ sequence, locationId, userId }) {
   const [triggerConfig, setTriggerConfig] = useState(sequence?.trigger_config || {})
   const [goalConfig, setGoalConfig] = useState(sequence?.goal_config || null)
   const [sendWindow, setSendWindow] = useState(sequence?.send_window || null)
+  const [stats, setStats] = useState(null) // mig 088 / Tier 3A
   const [status, setStatus] = useState(sequence?.status || 'draft')
   const [steps, setSteps] = useState(sequence?.sequence_steps || [])
   const [testStatus, setTestStatus] = useState(null) // { ok, message }
@@ -472,6 +497,17 @@ export default function SequenceEditor({ sequence, locationId, userId }) {
       .catch(() => {})
   }, [locationId])
   const [sequenceId, setSequenceId] = useState(sequence?.id || null)
+
+  // Fetch per-step + enrolment stats once on load (Tier 3A).
+  // Re-fetched after operator clicks 'Send test' so the updated
+  // enrolment count surfaces. Skipped for unsaved sequences.
+  useEffect(() => {
+    if (!sequenceId) return
+    fetch(`/api/sequences/${sequenceId}/stats`, { cache: 'no-store' })
+      .then(r => r.json())
+      .then(j => { if (j?.success) setStats(j.data) })
+      .catch(() => {})
+  }, [sequenceId])
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
 
@@ -912,6 +948,49 @@ export default function SequenceEditor({ sequence, locationId, userId }) {
             />
           </div>
 
+          {/* Tier 3A: enrolment overview. Only renders for saved
+              sequences with stats data. Five-stat strip showing the
+              enrolment funnel + exit reasons. */}
+          {stats && stats.enrolments?.total > 0 && (
+            <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5">
+              <h3 className="font-semibold text-sm text-un1t-light uppercase tracking-wider mb-3">
+                Performance
+              </h3>
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 text-center">
+                <div>
+                  <div className="text-2xl font-bold tabular-nums text-un1t-white">{stats.enrolments.total}</div>
+                  <div className="text-[11px] text-un1t-light">enrolled</div>
+                </div>
+                <div>
+                  <div className="text-2xl font-bold tabular-nums text-amber-700">{stats.enrolments.active}</div>
+                  <div className="text-[11px] text-un1t-light">active</div>
+                </div>
+                <div>
+                  <div className="text-2xl font-bold tabular-nums text-emerald-700">{stats.enrolments.completed}</div>
+                  <div className="text-[11px] text-un1t-light">completed</div>
+                </div>
+                <div>
+                  <div className="text-2xl font-bold tabular-nums text-blue-700">{stats.enrolments.exited}</div>
+                  <div className="text-[11px] text-un1t-light">exited</div>
+                </div>
+                <div>
+                  <div className="text-2xl font-bold tabular-nums text-red-700">{stats.enrolments.paused}</div>
+                  <div className="text-[11px] text-un1t-light">paused</div>
+                </div>
+              </div>
+              {stats.exit_reasons && Object.keys(stats.exit_reasons).length > 0 && (
+                <div className="mt-3 pt-3 border-t border-un1t-gray text-[11px] text-un1t-light flex flex-wrap gap-3">
+                  <span className="text-un1t-mid">Exit reasons:</span>
+                  {Object.entries(stats.exit_reasons).map(([reason, count]) => (
+                    <span key={reason}>
+                      <span className="font-mono">{reason}</span>: <span className="tabular-nums text-un1t-white">{count}</span>
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Steps */}
           <div>
             <h3 className="font-semibold text-sm text-un1t-light uppercase tracking-wider mb-3">
@@ -940,6 +1019,7 @@ export default function SequenceEditor({ sequence, locationId, userId }) {
                   isFirst={index === 0}
                   isLast={index === steps.length - 1}
                   whatsappTemplates={whatsappTemplates}
+                  stats={step.id ? stats?.per_step?.[step.id] : null}
                 />
               ))}
             </div>
