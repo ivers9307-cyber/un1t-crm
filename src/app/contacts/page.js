@@ -36,11 +36,24 @@ export default async function ContactsPage({ searchParams }) {
   const canMerge = user.role === 'owner' || user.role === 'master'
   const canImport = user.isMaster || user.role === 'master'
 
+  // Load locations the master can pick from for the import wizard.
+  // Skip the query for non-master callers so the page stays cheap.
+  let locationsForImport = []
+  if (canImport) {
+    const { data } = await db.from('locations').select('id, name').eq('active', true).order('name')
+    locationsForImport = data || []
+  }
+
   return (
     <div className="p-6">
       <div className="flex items-center justify-between mb-5">
         <h2 className="text-2xl font-bold">Contacts</h2>
-        <ContactsHeaderActions canCreate={canCreate} canImport={canImport} />
+        <ContactsHeaderActions
+          canCreate={canCreate}
+          canImport={canImport}
+          locations={locationsForImport}
+          defaultLocationId={locationId}
+        />
       </div>
       <ContactsView
         initialContacts={contacts || []}

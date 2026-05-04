@@ -4,13 +4,22 @@
 // on /contacts. Lives in a client component because the Import
 // wizard is a stateful modal — would otherwise force the whole
 // page to be a client component.
+//
+// `locations` (master sees all) is threaded into the wizard so the
+// Step 1 dropdown can pick a target studio. `defaultLocationId` is
+// the current active location.
 
 import { useState } from 'react'
 import Link from 'next/link'
 import { Plus, Upload, History } from 'lucide-react'
 import ContactImportWizard from './ContactImportWizard'
 
-export default function ContactsHeaderActions({ canCreate, canImport }) {
+export default function ContactsHeaderActions({
+  canCreate,
+  canImport,
+  locations = [],
+  defaultLocationId = null,
+}) {
   const [importOpen, setImportOpen] = useState(false)
   return (
     <div className="flex items-center gap-2">
@@ -40,7 +49,13 @@ export default function ContactsHeaderActions({ canCreate, canImport }) {
           <Plus size={16} /> New contact
         </Link>
       )}
-      {importOpen && <ContactImportWizard onClose={() => setImportOpen(false)} />}
+      {importOpen && (
+        <ContactImportWizard
+          onClose={() => setImportOpen(false)}
+          locations={locations}
+          defaultLocationId={defaultLocationId}
+        />
+      )}
     </div>
   )
 }

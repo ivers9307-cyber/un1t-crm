@@ -1,34 +1,40 @@
 // POST /api/contacts/import/preview
 //
-// Mig 095. Master-only dry-run for the contact import wizard. The
-// client parses the CSV locally (parseCsv is pure JS, no DOM deps)
-// and POSTs the rows + the operator's chosen mapping. We validate
-// every row, look up existing contacts by email in one bulk query,
-// classify each row as create / update / skipped / errored, and
-// return the plan. Nothing is written to the DB.
+// Mig 095 + v2 (mig 096). Master-only dry-run for the contact
+// import wizard. Now accepts:
+//   - location_id (master picks the target studio)
+//   - per-row Glofox-ID secondary match key
+//   - returns per-row conflicts (existing-vs-incoming field diffs)
 //
-// The wizard's commit step then POSTs the same body to /commit
-// which re-runs validation and applies the writes. Sending the
-// rows twice is acceptable up to ~5k rows; for larger imports
-// we'd shift to a Storage-backed flow (out of scope for v1).
+// Match priority for an existing contact at the target location:
+//   1. glofox_member_id  (when both incoming + existing have one)
+//   2. email (case-insensitive)
 //
 // Body: {
-//   mapping:   { csv_header: contact_field, ... },
-//   rows:      [{ csv_header: value, ... }, ...]   // up to MAX_ROWS
-//   batch_tag: optional CSV string (becomes one or more tags)
+//   mapping:     { csv_header: contact_field, ... },
+//   rows:        [{ csv_header: value, ... }, ...]
+//   batch_tag:   optional CSV string
+//   location_id: target location uuid (defaults to active)
 // }
 //
 // Returns: { success, data: {
 //   summary: { total, to_create, to_update, to_skip, to_error },
-//   rows: [{ row_number, action, email, error?, contact_id? }, ...]
+//   rows: [{ row_number, action, email, glofox_id?, contact_id?, error?,
+//           conflicts?: [{ field, existing, incoming }] }, ...]
 // }}
+//
+// `conflicts` is only present on `updated` rows where at least one
+// field the import is about to write differs from the current
+// value. The wizard uses it to render the per-row resolution UI on
+// the Review step.
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
-import { validateRow } from '@/lib/contact-import'
+import { uuidLike } from '@/lib/schemas'
+import { validateRow, fieldsTouchedByMapping } from '@/lib/contact-import'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -39,6 +45,7 @@ const Body = z.object({
   mapping: z.record(z.string().nullable()),
   rows: z.array(z.record(z.unknown())).min(1).max(MAX_ROWS),
   batch_tag: z.string().max(200).optional(),
+  location_id: uuidLike.optional(),
 })
 
 export async function POST(request) {
@@ -50,67 +57,133 @@ export async function POST(request) {
       error: 'Only a master account can import contacts.',
     }, { status: 403 })
   }
-  const locationId = user.activeLocation?.id
-  if (!locationId) {
-    return NextResponse.json({ success: false, error: 'No active location.' }, { status: 400 })
-  }
 
   const validation = await validateBody(request, Body)
   if (!validation.ok) return validation.response
-  const { mapping, rows, batch_tag } = validation.data
+  const { mapping, rows, batch_tag, location_id } = validation.data
+
+  // Master is the only role that can hit this route — but we still
+  // make sure the location_id (when explicit) is real before we
+  // try to look up contacts at it. Active location is the fallback.
+  const targetLocationId = location_id || user.activeLocation?.id
+  if (!targetLocationId) {
+    return NextResponse.json({ success: false, error: 'No target location.' }, { status: 400 })
+  }
+  const db = createServerClient()
+  const { data: targetLoc } = await db
+    .from('locations').select('id').eq('id', targetLocationId).single()
+  if (!targetLoc) {
+    return NextResponse.json({ success: false, error: 'Target location not found.' }, { status: 404 })
+  }
 
   const batchTags = (batch_tag || '').split(',').map(s => s.trim()).filter(Boolean)
+  const touchedFields = fieldsTouchedByMapping(mapping)
 
-  // First pass: validate every row + collect emails to look up.
-  // Track within-file dupes so the second occurrence becomes a
-  // skip (with a clear reason) instead of overwriting itself.
+  // First pass: validate every row + collect emails AND glofox ids
+  // so we can do bulk lookups for both.
   const plan = []
-  const emails = new Set()
-  const seenInFile = new Set()
+  const emailsToLookup = new Set()
+  const glofoxToLookup = new Set()
+  const seenEmails = new Set()
+  const seenGlofox = new Set()
   for (let i = 0; i < rows.length; i++) {
     const r = validateRow(rows[i], mapping, { batchTags })
-    const rowNumber = i + 2 // CSV row number (header is 1)
+    const rowNumber = i + 2
     if (!r.ok) {
       plan.push({ row_number: rowNumber, action: 'errored', email: null, error: r.error })
       continue
     }
     const email = r.payload.email
-    if (seenInFile.has(email)) {
+    const glofoxId = r.payload.glofox_member_id || null
+    if (seenEmails.has(email)) {
       plan.push({
         row_number: rowNumber,
         action: 'skipped',
         email,
+        glofox_id: glofoxId,
         error: 'Duplicate email earlier in this file — first occurrence wins.',
       })
       continue
     }
-    seenInFile.add(email)
-    emails.add(email)
-    plan.push({ row_number: rowNumber, action: 'pending', email, payload: r.payload })
+    if (glofoxId && seenGlofox.has(glofoxId)) {
+      plan.push({
+        row_number: rowNumber,
+        action: 'skipped',
+        email,
+        glofox_id: glofoxId,
+        error: `Duplicate Glofox ID '${glofoxId}' earlier in this file — first occurrence wins.`,
+      })
+      continue
+    }
+    seenEmails.add(email)
+    if (glofoxId) seenGlofox.add(glofoxId)
+    emailsToLookup.add(email)
+    if (glofoxId) glofoxToLookup.add(glofoxId)
+    plan.push({ row_number: rowNumber, action: 'pending', email, glofox_id: glofoxId, payload: r.payload })
   }
 
-  // Bulk lookup of existing contacts at this location by email
-  // (lower-cased — we lowercased on the way in).
-  const db = createServerClient()
+  // Bulk lookup. Pull all the touched fields so we can compute the
+  // per-row diff for the conflict UI.
+  const lookupCols = ['id', 'email', 'glofox_member_id', ...touchedFields].filter(Boolean)
+  const colExpr = [...new Set(lookupCols)].join(', ')
   const existingByEmail = new Map()
-  if (emails.size > 0) {
-    const { data } = await db
-      .from('contacts')
-      .select('id, email')
-      .eq('location_id', locationId)
-      .in('email', [...emails])
-    for (const c of (data || [])) {
-      if (c.email) existingByEmail.set(c.email.toLowerCase(), c.id)
+  const existingByGlofox = new Map()
+  if (emailsToLookup.size > 0 || glofoxToLookup.size > 0) {
+    // Two queries — one by email, one by glofox id. We could do
+    // an OR in a single query but it's harder to reason about and
+    // the numbers here are small (≤5k each).
+    const queries = []
+    if (emailsToLookup.size > 0) {
+      queries.push(db.from('contacts').select(colExpr)
+        .eq('location_id', targetLocationId).in('email', [...emailsToLookup]))
+    }
+    if (glofoxToLookup.size > 0) {
+      queries.push(db.from('contacts').select(colExpr)
+        .eq('location_id', targetLocationId).in('glofox_member_id', [...glofoxToLookup]))
+    }
+    const results = await Promise.all(queries)
+    for (const { data } of results) {
+      for (const c of (data || [])) {
+        if (c.email) existingByEmail.set(String(c.email).toLowerCase(), c)
+        if (c.glofox_member_id) existingByGlofox.set(c.glofox_member_id, c)
+      }
     }
   }
 
-  // Second pass: classify pending rows as create vs update.
+  // Second pass: classify pending rows as create vs update +
+  // compute conflicts. Match priority: glofox first, email
+  // fallback. The matched contact is whatever the lookup returned.
   for (const p of plan) {
     if (p.action !== 'pending') continue
-    const existingId = existingByEmail.get(p.email)
-    if (existingId) {
+    const matched = (p.glofox_id && existingByGlofox.get(p.glofox_id))
+                 || existingByEmail.get(p.email)
+    if (matched) {
       p.action = 'updated'
-      p.contact_id = existingId
+      p.contact_id = matched.id
+      p.match_key = (p.glofox_id && existingByGlofox.get(p.glofox_id)) ? 'glofox_member_id' : 'email'
+
+      // Conflict detection — for every touched field where the
+      // existing value is non-empty AND differs from the incoming
+      // value. Tags are special: an "incoming" tag list always
+      // adds (we union on commit), so a non-empty existing tag set
+      // isn't really a conflict — only flag if the operator's
+      // mapping would set lead_status, lead_source, label, etc.
+      // to a different value than what's there.
+      const conflicts = []
+      for (const f of touchedFields) {
+        if (f === 'tags') continue
+        const existingVal = matched[f]
+        const incomingVal = p.payload[f]
+        if (incomingVal == null) continue
+        if (existingVal == null || existingVal === '') continue
+        if (String(existingVal) === String(incomingVal)) continue
+        conflicts.push({
+          field: f,
+          existing: existingVal,
+          incoming: incomingVal,
+        })
+      }
+      if (conflicts.length > 0) p.conflicts = conflicts
     } else {
       p.action = 'created'
     }
@@ -123,6 +196,7 @@ export async function POST(request) {
     to_update: plan.filter(p => p.action === 'updated').length,
     to_skip:   plan.filter(p => p.action === 'skipped').length,
     to_error:  plan.filter(p => p.action === 'errored').length,
+    with_conflicts: plan.filter(p => p.conflicts?.length > 0).length,
   }
 
   return NextResponse.json({ success: true, data: { summary, rows: plan } })

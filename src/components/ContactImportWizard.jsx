@@ -14,6 +14,7 @@
 
 import { useState, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
+import Link from 'next/link'
 import { Upload, X, Loader2, AlertTriangle, ArrowRight, Download, CheckCircle2, FileText, ArrowLeft } from 'lucide-react'
 import { parseCsv, autoMapHeaders, IMPORT_FIELDS, IMPORT_FIELD_KEYS, buildCsvTemplate } from '@/lib/contact-import'
 
@@ -22,7 +23,7 @@ const FIELD_OPTIONS = [
   ...IMPORT_FIELDS.map(f => ({ value: f.key, label: f.label })),
 ]
 
-export default function ContactImportWizard({ onClose }) {
+export default function ContactImportWizard({ onClose, locations = [], defaultLocationId = null }) {
   const router = useRouter()
   const [stage, setStage] = useState('upload')
   const [filename, setFilename] = useState('')
@@ -30,9 +31,13 @@ export default function ContactImportWizard({ onClose }) {
   const [rows, setRows] = useState([])
   const [mapping, setMapping] = useState({})
   const [batchTag, setBatchTag] = useState('')
+  const [locationId, setLocationId] = useState(defaultLocationId || locations[0]?.id || '')
   const [error, setError] = useState(null)
   const [busy, setBusy] = useState(false)
   const [preview, setPreview] = useState(null)
+  // Per-row resolution decisions for the conflict UI on Review.
+  // Keyed by row_number → 'row_wins' | 'preserve_existing' | 'skip'.
+  const [resolutions, setResolutions] = useState({})
   const [result, setResult] = useState(null)
 
   function downloadTemplate() {
@@ -56,8 +61,8 @@ export default function ContactImportWizard({ onClose }) {
         setError('CSV is empty or malformed.')
         return
       }
-      if (parsed.rows.length > 5000) {
-        setError(`Too many rows (${parsed.rows.length}). Max is 5,000 per import — split the file and run two batches.`)
+      if (parsed.rows.length > 50000) {
+        setError(`Too many rows (${parsed.rows.length}). Max is 50,000 per import — split the file and run multiple batches.`)
         return
       }
       setHeaders(parsed.headers)
@@ -84,12 +89,21 @@ export default function ContactImportWizard({ onClose }) {
       setError('Email column is required — pick which CSV column contains the email.')
       return
     }
+    if (!locationId) {
+      setError('Pick a target location.')
+      return
+    }
     setBusy(true)
+    setResolutions({}) // wipe stale resolutions from a previous run
     try {
       const r = await fetch('/api/contacts/import/preview', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mapping, rows, batch_tag: batchTag || undefined }),
+        body: JSON.stringify({
+          mapping, rows,
+          batch_tag: batchTag || undefined,
+          location_id: locationId,
+        }),
       })
       const j = await r.json()
       if (!r.ok || j.success === false) {
@@ -117,11 +131,21 @@ export default function ContactImportWizard({ onClose }) {
           rows,
           batch_tag: batchTag || undefined,
           source_filename: filename,
+          location_id: locationId,
+          resolutions,
         }),
       })
       const j = await r.json()
       if (!r.ok || j.success === false) {
         setError(j.error || `Import failed (${r.status})`)
+        return
+      }
+      // Async path — server enqueued the job, runs in pg_cron.
+      // Switch to a polling stage that watches the batch row.
+      if (j.data.async) {
+        setResult({ import_id: j.data.import_id, async: true, estimated_seconds: j.data.estimated_seconds })
+        setStage('processing')
+        pollAsync(j.data.import_id)
         return
       }
       setResult(j.data)
@@ -130,6 +154,42 @@ export default function ContactImportWizard({ onClose }) {
       setError(e.message || 'Network error')
     } finally {
       setBusy(false)
+    }
+  }
+
+  // Poll the batch endpoint every 3s while in 'processing'. Stop
+  // when status flips to completed / failed / rolled_back, or
+  // after 30 minutes (safety bound).
+  async function pollAsync(importId) {
+    const startedAt = Date.now()
+    const HARD_LIMIT_MS = 30 * 60_000
+    while (Date.now() - startedAt < HARD_LIMIT_MS) {
+      await new Promise(r => setTimeout(r, 3000))
+      try {
+        const r = await fetch(`/api/contacts/imports/${importId}`, { cache: 'no-store' })
+        const j = await r.json()
+        if (!r.ok || j.success === false) continue
+        const batch = j.data.batch
+        if (batch.status === 'completed' || batch.status === 'failed') {
+          setResult({
+            import_id: importId,
+            async: true,
+            failed: batch.status === 'failed',
+            error_message: batch.error_message,
+            summary: {
+              total: batch.total_rows,
+              created: batch.created_count,
+              updated: batch.updated_count,
+              skipped: batch.skipped_count,
+              errored: batch.errored_count,
+            },
+          })
+          setStage('done')
+          return
+        }
+      } catch {
+        // Network blip — keep polling.
+      }
     }
   }
 
@@ -151,7 +211,8 @@ export default function ContactImportWizard({ onClose }) {
               {stage === 'upload' && 'Upload a CSV. Email column is required; everything else is optional.'}
               {stage === 'map' && 'Map your CSV columns to contact fields. We pre-fill obvious matches.'}
               {stage === 'review' && 'Dry-run summary. Nothing is written until you click Import.'}
-              {stage === 'done' && 'Import complete. Any failed rows can be downloaded as CSV.'}
+              {stage === 'processing' && 'Big import — running in the background. You can close this window and check the import history later.'}
+          {stage === 'done' && 'Import complete. Any failed rows can be downloaded as CSV.'}
             </p>
           </div>
           <button type="button" onClick={() => !busy && onClose()} disabled={busy} className="text-un1t-light hover:text-un1t-white">
@@ -173,6 +234,9 @@ export default function ContactImportWizard({ onClose }) {
             batchTag={batchTag}
             setBatchTag={setBatchTag}
             downloadTemplate={downloadTemplate}
+            locations={locations}
+            locationId={locationId}
+            setLocationId={setLocationId}
           />
         )}
 
@@ -193,10 +257,17 @@ export default function ContactImportWizard({ onClose }) {
           <ReviewStage
             preview={preview}
             batchTag={batchTag}
+            resolutions={resolutions}
+            setResolutions={setResolutions}
+            locationName={locations.find(l => l.id === locationId)?.name}
             onBack={() => setStage('map')}
             onCommit={runCommit}
             busy={busy}
           />
+        )}
+
+        {stage === 'processing' && (
+          <ProcessingStage result={result} onClose={done} />
         )}
 
         {stage === 'done' && (
@@ -226,9 +297,27 @@ function Steps({ stage }) {
   )
 }
 
-function UploadStage({ onFile, batchTag, setBatchTag, downloadTemplate }) {
+function UploadStage({ onFile, batchTag, setBatchTag, downloadTemplate, locations, locationId, setLocationId }) {
   return (
     <div className="space-y-4">
+      {locations?.length > 1 && (
+        <div>
+          <label className="block text-xs text-un1t-light mb-1">Target location</label>
+          <select
+            value={locationId}
+            onChange={(e) => setLocationId(e.target.value)}
+            className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
+          >
+            {locations.map(l => (
+              <option key={l.id} value={l.id}>{l.name}</option>
+            ))}
+          </select>
+          <p className="text-[11px] text-un1t-mid mt-1">
+            Imported contacts land here. Email-match dedup is per-location — same email at two studios stays as two contacts.
+          </p>
+        </div>
+      )}
+
       <label
         htmlFor="contact-import-file"
         className="block bg-un1t-black border-2 border-dashed border-un1t-gray hover:border-un1t-mid rounded-lg p-8 text-center cursor-pointer"
@@ -330,11 +419,21 @@ function MapStage({ headers, rows, mapping, setMapping, mappedFieldCount, onBack
   )
 }
 
-function ReviewStage({ preview, batchTag, onBack, onCommit, busy }) {
+function ReviewStage({ preview, batchTag, resolutions, setResolutions, locationName, onBack, onCommit, busy }) {
   if (!preview) return null
   const { summary, rows } = preview
   const errored = rows.filter(r => r.action === 'errored')
   const skipped = rows.filter(r => r.action === 'skipped')
+  const conflicted = rows.filter(r => r.conflicts?.length > 0)
+
+  function setResolution(rowNumber, value) {
+    setResolutions(prev => ({ ...prev, [rowNumber]: value }))
+  }
+  function setAllConflicts(value) {
+    const next = {}
+    for (const c of conflicted) next[c.row_number] = value
+    setResolutions(prev => ({ ...prev, ...next }))
+  }
 
   return (
     <div className="space-y-4">
@@ -345,9 +444,82 @@ function ReviewStage({ preview, batchTag, onBack, onCommit, busy }) {
         <Stat label="Error" value={summary.to_error} tone="red" />
       </div>
 
-      {batchTag && (
-        <div className="bg-un1t-black border border-un1t-gray rounded-md p-2 text-[11px] text-un1t-light">
-          Every contact will be tagged: <strong className="text-un1t-white">{batchTag}</strong>
+      <div className="text-[11px] text-un1t-light flex flex-wrap gap-3">
+        {locationName && <span>Target: <strong className="text-un1t-white">{locationName}</strong></span>}
+        {batchTag && <span>Tag: <strong className="text-un1t-white">{batchTag}</strong></span>}
+        {summary.with_conflicts > 0 && (
+          <span className="text-amber-700">{summary.with_conflicts} row{summary.with_conflicts === 1 ? ' has' : 's have'} conflicts</span>
+        )}
+      </div>
+
+      {/* Conflict resolution UI — only when there's at least one. */}
+      {conflicted.length > 0 && (
+        <div className="bg-un1t-black border border-amber-500/30 rounded-md p-3">
+          <div className="flex items-center justify-between mb-2">
+            <div>
+              <div className="text-xs font-semibold text-amber-700">Conflicts</div>
+              <div className="text-[11px] text-un1t-mid">
+                {conflicted.length} update row{conflicted.length === 1 ? '' : 's'} differ from existing values. Pick a resolution per row, or set all at once.
+              </div>
+            </div>
+            <div className="flex gap-1 text-[10px]">
+              <button type="button" onClick={() => setAllConflicts('row_wins')}
+                className="px-2 py-1 border border-un1t-gray text-un1t-light hover:text-un1t-white rounded">
+                All: row wins
+              </button>
+              <button type="button" onClick={() => setAllConflicts('preserve_existing')}
+                className="px-2 py-1 border border-un1t-gray text-un1t-light hover:text-un1t-white rounded">
+                All: preserve
+              </button>
+              <button type="button" onClick={() => setAllConflicts('skip')}
+                className="px-2 py-1 border border-un1t-gray text-un1t-light hover:text-un1t-white rounded">
+                All: skip
+              </button>
+            </div>
+          </div>
+          <div className="max-h-72 overflow-auto space-y-2">
+            {conflicted.slice(0, 100).map(r => {
+              const choice = resolutions[r.row_number] || 'row_wins'
+              return (
+                <div key={r.row_number} className="border border-un1t-gray/60 rounded p-2 text-[11px]">
+                  <div className="flex items-center justify-between mb-1">
+                    <div className="text-un1t-white">
+                      Row {r.row_number} · <span className="text-un1t-light">{r.email}</span>
+                      {r.match_key === 'glofox_member_id' && (
+                        <span className="ml-2 text-[10px] text-un1t-mid">(matched on Glofox ID)</span>
+                      )}
+                    </div>
+                    <select
+                      value={choice}
+                      onChange={(e) => setResolution(r.row_number, e.target.value)}
+                      className="bg-un1t-dark border border-un1t-gray rounded px-2 py-0.5 text-[10px] text-un1t-white"
+                    >
+                      <option value="row_wins">Row wins (overwrite)</option>
+                      <option value="preserve_existing">Preserve existing (fill empties only)</option>
+                      <option value="skip">Skip this row</option>
+                    </select>
+                  </div>
+                  <ul className="text-un1t-light space-y-0.5">
+                    {r.conflicts.map((c, i) => (
+                      <li key={i}>
+                        <span className="text-un1t-mid">{c.field}:</span>{' '}
+                        <span className="line-through opacity-70">{String(c.existing)}</span>{' '}
+                        →{' '}
+                        <span className={choice === 'preserve_existing' ? 'text-un1t-mid line-through' : 'text-un1t-white'}>
+                          {String(c.incoming)}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )
+            })}
+            {conflicted.length > 100 && (
+              <div className="text-[11px] text-un1t-mid">
+                …and {conflicted.length - 100} more conflict rows. Use the bulk buttons above to set them in one click.
+              </div>
+            )}
+          </div>
         </div>
       )}
 
@@ -390,8 +562,63 @@ function ReviewStage({ preview, batchTag, onBack, onCommit, busy }) {
   )
 }
 
+function ProcessingStage({ result, onClose }) {
+  if (!result) return null
+  return (
+    <div className="space-y-4">
+      <div className="bg-un1t-black border border-un1t-gray rounded-md p-6 text-center">
+        <Loader2 size={32} className="mx-auto mb-3 animate-spin text-un1t-light" />
+        <div className="text-base font-semibold text-un1t-white mb-1">Processing in the background</div>
+        <div className="text-xs text-un1t-light">
+          Estimated {Math.ceil((result.estimated_seconds || 60) / 60)} minute{Math.ceil((result.estimated_seconds || 60) / 60) === 1 ? '' : 's'}.
+          You can close this window — the import keeps running.
+        </div>
+      </div>
+      <div className="text-[11px] text-un1t-mid text-center">
+        Track progress on the <Link href={`/contacts/imports/${result.import_id}`} className="underline">batch detail page</Link>{' '}
+        or in the <Link href="/contacts/imports" className="underline">import history</Link>.
+      </div>
+      <button
+        type="button"
+        onClick={onClose}
+        className="w-full inline-flex items-center justify-center text-sm border border-un1t-gray text-un1t-light py-2 rounded-md hover:text-un1t-white"
+      >
+        Close window
+      </button>
+    </div>
+  )
+}
+
 function DoneStage({ result, onDone }) {
   if (!result) return null
+  if (result.failed) {
+    return (
+      <div className="space-y-4">
+        <div className="bg-red-500/10 border border-red-500/30 rounded-md p-4 flex items-start gap-3">
+          <AlertTriangle size={20} className="text-red-500 mt-0.5 shrink-0" />
+          <div>
+            <div className="text-base font-semibold text-un1t-white mb-1">Import failed</div>
+            <div className="text-xs text-un1t-light">{result.error_message || 'The background worker reported an error. Check the import history for details.'}</div>
+          </div>
+        </div>
+        <div className="flex gap-2">
+          <Link
+            href={`/contacts/imports/${result.import_id}`}
+            className="flex-1 inline-flex items-center justify-center gap-2 text-sm border border-un1t-gray text-un1t-light py-2 rounded-md hover:text-un1t-white"
+          >
+            <FileText size={14} /> View batch
+          </Link>
+          <button
+            type="button"
+            onClick={onDone}
+            className="flex-1 inline-flex items-center justify-center text-sm bg-un1t-white text-un1t-black font-medium py-2 rounded-md hover:bg-un1t-accent"
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    )
+  }
   const hasErrors = (result.summary.errored || 0) > 0 || (result.summary.skipped || 0) > 0
   return (
     <div className="space-y-4">

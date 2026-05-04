@@ -1,38 +1,43 @@
 // POST /api/contacts/import/commit
 //
-// Mig 095. Master-only contact CSV import. Same body as /preview;
-// re-runs validation server-side (defence-in-depth — never trust
-// the wizard's submitted plan) and writes:
+// Mig 095 + 096. Master-only contact CSV import.
 //
-//   1. INSERT contact_imports row (the batch envelope)
-//   2. INSERT or UPDATE one contacts row per CSV row
-//   3. INSERT contact_import_rows row per CSV row, capturing
-//      before_snapshot for updates so rollback can reverse them
-//   4. UPDATE contact_imports row totals when done
+// Two paths based on row count:
 //
-// Best-effort per-row: a single failed write becomes an `errored`
-// row in contact_import_rows but doesn't fail the batch. Operator
-// gets a summary back + can download the error CSV later.
+//   ≤ SYNC_LIMIT (1000) — write inline, return final stats. Wizard
+//     jumps straight to the "Done" step.
 //
-// Body matches /preview: { mapping, rows, batch_tag, source_filename }
+//   > SYNC_LIMIT (up to ASYNC_LIMIT = 50_000) — enqueue: insert
+//     contact_imports row with status='pending' + payload, return
+//     immediately with import_id. The wizard polls
+//     /api/contacts/imports/[id] until status flips to
+//     'completed' / 'failed'. The cron worker at
+//     /api/cron/process-contact-imports drains the queue every
+//     minute.
+//
+// Body: { mapping, rows, batch_tag, source_filename, location_id?, resolutions? }
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
-import { validateRow, deriveName, fieldsTouchedByMapping } from '@/lib/contact-import'
+import { uuidLike } from '@/lib/schemas'
+import { runImportCommit } from '@/lib/contact-import-runner'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-const MAX_ROWS = 5000
+const SYNC_LIMIT = 1000
+const ASYNC_LIMIT = 50_000
 
 const Body = z.object({
   mapping: z.record(z.string().nullable()),
-  rows: z.array(z.record(z.unknown())).min(1).max(MAX_ROWS),
+  rows: z.array(z.record(z.unknown())).min(1).max(ASYNC_LIMIT),
   batch_tag: z.string().max(200).optional(),
   source_filename: z.string().max(500).optional(),
+  location_id: uuidLike.optional(),
+  resolutions: z.record(z.enum(['row_wins', 'preserve_existing', 'skip'])).optional(),
 })
 
 export async function POST(request) {
@@ -44,31 +49,36 @@ export async function POST(request) {
       error: 'Only a master account can import contacts.',
     }, { status: 403 })
   }
-  const locationId = user.activeLocation?.id
-  if (!locationId) {
-    return NextResponse.json({ success: false, error: 'No active location.' }, { status: 400 })
-  }
 
   const validation = await validateBody(request, Body)
   if (!validation.ok) return validation.response
-  const { mapping, rows, batch_tag, source_filename } = validation.data
-  const batchTags = (batch_tag || '').split(',').map(s => s.trim()).filter(Boolean)
-  const touchedFields = fieldsTouchedByMapping(mapping)
-  // tags is touched if either the mapping has it OR there's a batch tag
-  if (batchTags.length > 0 && !touchedFields.includes('tags')) touchedFields.push('tags')
-
+  const { mapping, rows, batch_tag, source_filename, location_id, resolutions } = validation.data
+  const targetLocationId = location_id || user.activeLocation?.id
+  if (!targetLocationId) {
+    return NextResponse.json({ success: false, error: 'No target location.' }, { status: 400 })
+  }
   const db = createServerClient()
+  const { data: targetLoc } = await db
+    .from('locations').select('id').eq('id', targetLocationId).single()
+  if (!targetLoc) {
+    return NextResponse.json({ success: false, error: 'Target location not found.' }, { status: 404 })
+  }
 
-  // 1. Open the batch envelope. Totals are stamped at the end.
+  const isAsync = rows.length > SYNC_LIMIT
+
+  // Open the batch envelope. For async we stash the full payload
+  // so the cron worker can pick it up later.
   const { data: batch, error: batchErr } = await db
     .from('contact_imports')
     .insert({
-      location_id: locationId,
+      location_id: targetLocationId,
       actor_user_id: user.id,
       source_filename: source_filename || null,
       mapping,
       batch_tag: batch_tag || null,
       total_rows: rows.length,
+      status: isAsync ? 'pending' : 'completed',
+      payload: isAsync ? { mapping, rows, batchTag: batch_tag || null, resolutions: resolutions || {} } : null,
     })
     .select()
     .single()
@@ -76,167 +86,53 @@ export async function POST(request) {
     return NextResponse.json({ success: false, error: `Could not start import: ${batchErr.message}` }, { status: 500 })
   }
 
-  // 2. Validate every row + look up existing emails in one bulk
-  // query (mirrors /preview exactly).
-  const plans = []
-  const seenInFile = new Set()
-  const emailsToLookup = new Set()
-  for (let i = 0; i < rows.length; i++) {
-    const r = validateRow(rows[i], mapping, { batchTags })
-    const rowNumber = i + 2
-    if (!r.ok) {
-      plans.push({ rowNumber, action: 'errored', rawRow: rows[i], error: r.error })
-      continue
-    }
-    if (seenInFile.has(r.payload.email)) {
-      plans.push({
-        rowNumber,
-        action: 'skipped',
-        rawRow: rows[i],
-        error: 'Duplicate email earlier in this file — first occurrence wins.',
-        payload: r.payload,
-      })
-      continue
-    }
-    seenInFile.add(r.payload.email)
-    emailsToLookup.add(r.payload.email)
-    plans.push({ rowNumber, action: 'pending', rawRow: rows[i], payload: r.payload })
-  }
-
-  // Bulk lookup existing contacts. Pull all the touched fields so
-  // we can build the before_snapshot for updates.
-  const lookupCols = ['id', 'email', ...touchedFields].filter(Boolean)
-  const { data: existing } = emailsToLookup.size > 0
-    ? await db
-        .from('contacts')
-        .select([...new Set(lookupCols)].join(', '))
-        .eq('location_id', locationId)
-        .in('email', [...emailsToLookup])
-    : { data: [] }
-  const existingByEmail = new Map((existing || []).map(c => [String(c.email).toLowerCase(), c]))
-
-  // 3. Apply each row. Per-row try/catch so one bad row doesn't
-  // blow up the batch.
-  const counts = { created: 0, updated: 0, skipped: 0, errored: 0 }
-  const importRowInserts = []
-
-  for (const p of plans) {
-    if (p.action === 'errored' || p.action === 'skipped') {
-      counts[p.action] += 1
-      importRowInserts.push({
+  // Async path: return now, cron worker will fill in counts.
+  if (isAsync) {
+    return NextResponse.json({
+      success: true,
+      data: {
         import_id: batch.id,
-        row_number: p.rowNumber,
-        action: p.action,
-        contact_id: null,
-        raw_row: p.rawRow,
-        before_snapshot: null,
-        error_message: p.error || null,
-      })
-      continue
-    }
-
-    const existingRow = existingByEmail.get(p.payload.email)
-    try {
-      if (existingRow) {
-        // Build before_snapshot — only the columns this import is
-        // about to write. Avoids the rollback restoring fields the
-        // operator never touched.
-        const before = {}
-        for (const f of touchedFields) {
-          if (f in existingRow) before[f] = existingRow[f] ?? null
-        }
-        // Build the update payload — merge tags rather than replace
-        // so the operator's batch tag adds to existing tags instead
-        // of nuking them.
-        const update = { ...p.payload }
-        if (update.tags) {
-          const prior = Array.isArray(existingRow.tags) ? existingRow.tags : []
-          const merged = [...new Set([...prior, ...update.tags])]
-          update.tags = merged
-        }
-        const { error: upErr } = await db
-          .from('contacts')
-          .update(update)
-          .eq('id', existingRow.id)
-        if (upErr) throw new Error(upErr.message)
-        counts.updated += 1
-        importRowInserts.push({
-          import_id: batch.id,
-          row_number: p.rowNumber,
-          action: 'updated',
-          contact_id: existingRow.id,
-          raw_row: p.rawRow,
-          before_snapshot: before,
-        })
-      } else {
-        const insertPayload = {
-          ...p.payload,
-          name: deriveName(p.payload.first_name, p.payload.last_name, p.payload.email),
-          location_id: locationId,
-          lead_status: p.payload.lead_status || 'active_trial',
-          created_via_import_id: batch.id,
-        }
-        const { data: created, error: insErr } = await db
-          .from('contacts')
-          .insert(insertPayload)
-          .select('id')
-          .single()
-        if (insErr) throw new Error(insErr.message)
-        counts.created += 1
-        importRowInserts.push({
-          import_id: batch.id,
-          row_number: p.rowNumber,
-          action: 'created',
-          contact_id: created.id,
-          raw_row: p.rawRow,
-          before_snapshot: null,
-        })
-      }
-    } catch (e) {
-      counts.errored += 1
-      importRowInserts.push({
-        import_id: batch.id,
-        row_number: p.rowNumber,
-        action: 'errored',
-        contact_id: null,
-        raw_row: p.rawRow,
-        before_snapshot: null,
-        error_message: e?.message || String(e),
-      })
-    }
-  }
-
-  // 4. Persist per-row outcomes + stamp the batch totals. Chunked
-  // insert because Supabase rejects very large single inserts.
-  const CHUNK = 500
-  for (let i = 0; i < importRowInserts.length; i += CHUNK) {
-    const slice = importRowInserts.slice(i, i + CHUNK)
-    const { error } = await db.from('contact_import_rows').insert(slice)
-    if (error) {
-      console.warn(`[contact-import] row insert chunk ${i} failed: ${error.message}`)
-    }
-  }
-
-  await db
-    .from('contact_imports')
-    .update({
-      created_count: counts.created,
-      updated_count: counts.updated,
-      skipped_count: counts.skipped,
-      errored_count: counts.errored,
+        async: true,
+        // Estimate based on ~200 rows/min throughput as a rough
+        // first guess. Tighten once we have real data.
+        estimated_seconds: Math.max(60, Math.ceil(rows.length / 3)),
+      },
     })
-    .eq('id', batch.id)
+  }
+
+  // Sync path — same as before but via the shared runner.
+  let result
+  try {
+    result = await runImportCommit(db, {
+      importId: batch.id,
+      locationId: targetLocationId,
+      mapping, rows,
+      batchTag: batch_tag,
+      resolutions,
+    })
+  } catch (e) {
+    await db.from('contact_imports').update({
+      status: 'failed',
+      error_message: e?.message || String(e),
+    }).eq('id', batch.id)
+    return NextResponse.json({ success: false, error: e?.message || String(e) }, { status: 500 })
+  }
+
+  await db.from('contact_imports').update({
+    created_count: result.counts.created,
+    updated_count: result.counts.updated,
+    skipped_count: result.counts.skipped,
+    errored_count: result.counts.errored,
+  }).eq('id', batch.id)
 
   return NextResponse.json({
     success: true,
     data: {
       import_id: batch.id,
+      async: false,
       summary: {
         total: rows.length,
-        created: counts.created,
-        updated: counts.updated,
-        skipped: counts.skipped,
-        errored: counts.errored,
+        ...result.counts,
       },
     },
   })
