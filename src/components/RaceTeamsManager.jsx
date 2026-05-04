@@ -1,0 +1,554 @@
+'use client'
+
+// RaceTeamsManager — operator team-management UI for a race.
+//
+// Polls /api/races/[id]/teams once on load, then refreshes after
+// every successful mutation. Each team card has inline edit
+// affordances rather than a per-team modal — operators can scan +
+// adjust without context-switching.
+
+import { useEffect, useState } from 'react'
+import { Plus, Trash2, Loader2, AlertCircle, Users, Check, X, Pencil, Star, BadgeCheck, Clock } from 'lucide-react'
+
+export default function RaceTeamsManager({ race }) {
+  const [registrations, setRegistrations] = useState(null)
+  const [loadError, setLoadError] = useState(null)
+  const [showAddForm, setShowAddForm] = useState(false)
+  const [actionError, setActionError] = useState(null)
+
+  const waves = (race?.waves || []).slice().sort((a, b) =>
+    (a.display_order ?? 0) - (b.display_order ?? 0) || (a.start_time || '').localeCompare(b.start_time || '')
+  )
+
+  async function load() {
+    try {
+      const r = await fetch(`/api/races/${race.id}/teams`, { cache: 'no-store' })
+      const j = await r.json()
+      if (!r.ok || j.success === false) {
+        setLoadError(j.error || `Fetch failed (${r.status})`)
+        return
+      }
+      setRegistrations(j.data || [])
+      setLoadError(null)
+    } catch (e) {
+      setLoadError(e.message || 'Network error')
+    }
+  }
+
+  useEffect(() => { load() }, [race.id]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (loadError && !registrations) {
+    return (
+      <div className="bg-red-500/10 border border-red-500/30 text-red-700 text-sm rounded-md p-3 inline-flex items-start gap-2">
+        <AlertCircle size={14} className="mt-0.5 shrink-0" /> {loadError}
+      </div>
+    )
+  }
+  if (!registrations) {
+    return (
+      <div className="text-sm text-un1t-light inline-flex items-center gap-2">
+        <Loader2 size={14} className="animate-spin" /> Loading teams…
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-4">
+      {actionError && (
+        <div className="bg-red-500/10 border border-red-500/30 text-red-700 text-sm rounded-md p-3 inline-flex items-start gap-2">
+          <AlertCircle size={14} className="mt-0.5 shrink-0" /> {actionError}
+          <button onClick={() => setActionError(null)} className="ml-auto"><X size={12} /></button>
+        </div>
+      )}
+
+      <div className="flex items-center justify-between">
+        <div className="text-sm text-un1t-light">
+          {registrations.length} team{registrations.length === 1 ? '' : 's'} registered
+        </div>
+        {!showAddForm && (
+          <button
+            type="button"
+            onClick={() => setShowAddForm(true)}
+            className="text-xs bg-un1t-white text-un1t-black px-3 py-1.5 rounded-md hover:bg-un1t-accent inline-flex items-center gap-1.5"
+          >
+            <Plus size={12} /> Add team
+          </button>
+        )}
+      </div>
+
+      {showAddForm && (
+        <AddTeamForm
+          race={race}
+          waves={waves}
+          onCancel={() => setShowAddForm(false)}
+          onAdded={() => { setShowAddForm(false); load() }}
+          onError={setActionError}
+        />
+      )}
+
+      {registrations.length === 0 && !showAddForm && (
+        <div className="text-sm text-un1t-light italic px-2 py-8 text-center">
+          No teams yet.
+        </div>
+      )}
+
+      <div className="space-y-3">
+        {registrations.map((reg) => (
+          <TeamCard
+            key={reg.id}
+            registration={reg}
+            waves={waves}
+            onChanged={load}
+            onError={setActionError}
+          />
+        ))}
+      </div>
+    </div>
+  )
+}
+
+// ─── Add team form ───────────────────────────────────────────────
+
+function AddTeamForm({ race, waves, onCancel, onAdded, onError }) {
+  const sizes = (race.allowed_team_sizes || [1, 2, 4]).slice().sort((a, b) => a - b)
+  const [teamName, setTeamName] = useState('')
+  const [teamSize, setTeamSize] = useState(sizes[0])
+  const [waveId, setWaveId] = useState(waves[0]?.id || '')
+  const [members, setMembers] = useState(() =>
+    Array.from({ length: sizes[0] }, (_, i) => ({ name: '', email: '', role: i === 0 ? 'captain' : 'member' }))
+  )
+  const [busy, setBusy] = useState(false)
+
+  // Reshape members when size changes.
+  useEffect(() => {
+    setMembers((prev) => {
+      const next = []
+      for (let i = 0; i < teamSize; i++) {
+        next.push(prev[i] || { name: '', email: '', role: i === 0 ? 'captain' : 'member' })
+      }
+      return next
+    })
+  }, [teamSize])
+
+  async function handleSubmit(e) {
+    e.preventDefault()
+    if (!teamName.trim()) return onError('Team name is required.')
+    if (!waveId) return onError('Pick a wave.')
+    for (const m of members) {
+      if (!m.name.trim()) return onError('Every member needs a name.')
+    }
+
+    setBusy(true)
+    try {
+      const r = await fetch(`/api/races/${race.id}/teams`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          team_name: teamName.trim(),
+          team_size: teamSize,
+          wave_id: waveId,
+          members: members.map((m, i) => ({
+            name: m.name.trim(),
+            email: m.email.trim() || null,
+            role: i === 0 ? 'captain' : 'member',
+          })),
+        }),
+      })
+      const j = await r.json()
+      if (!r.ok || j.success === false) {
+        onError(j.error || `Add failed (${r.status})`)
+        setBusy(false)
+        return
+      }
+      onAdded()
+    } catch (e) {
+      onError(e.message || 'Network error')
+      setBusy(false)
+    }
+  }
+
+  return (
+    <form onSubmit={handleSubmit} className="bg-un1t-dark border border-un1t-gray rounded-lg p-4 space-y-3">
+      <div className="text-xs uppercase tracking-wider text-un1t-light">New team</div>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+        <input
+          type="text"
+          required
+          placeholder="Team name *"
+          value={teamName}
+          onChange={(e) => setTeamName(e.target.value)}
+          className="bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm"
+        />
+        <select
+          value={teamSize}
+          onChange={(e) => setTeamSize(Number(e.target.value))}
+          className="bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm"
+        >
+          {sizes.map((s) => <option key={s} value={s}>{s}-person</option>)}
+        </select>
+        <select
+          value={waveId}
+          onChange={(e) => setWaveId(e.target.value)}
+          className="bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm"
+        >
+          {waves.map((w) => (
+            <option key={w.id} value={w.id}>
+              {w.label ? `${w.label} · ` : ''}{(w.start_time || '').slice(0, 5)}
+            </option>
+          ))}
+        </select>
+      </div>
+      <div className="space-y-2 pt-2 border-t border-un1t-gray/50">
+        <div className="text-[11px] text-un1t-light uppercase tracking-wider">Members (first row = captain)</div>
+        {members.map((m, i) => (
+          <div key={i} className="grid grid-cols-2 gap-2">
+            <input
+              type="text"
+              required
+              placeholder={i === 0 ? 'Captain name *' : `Member ${i + 1} name *`}
+              value={m.name}
+              onChange={(e) => setMembers((prev) => prev.map((x, j) => j === i ? { ...x, name: e.target.value } : x))}
+              className="bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm"
+            />
+            <input
+              type="email"
+              placeholder="Email (optional)"
+              value={m.email}
+              onChange={(e) => setMembers((prev) => prev.map((x, j) => j === i ? { ...x, email: e.target.value } : x))}
+              className="bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm"
+            />
+          </div>
+        ))}
+      </div>
+      <div className="flex justify-end gap-2 pt-2">
+        <button
+          type="button"
+          onClick={onCancel}
+          disabled={busy}
+          className="text-xs px-3 py-1.5 text-un1t-light hover:text-un1t-white"
+        >
+          Cancel
+        </button>
+        <button
+          type="submit"
+          disabled={busy}
+          className="text-xs bg-un1t-white text-un1t-black px-3 py-1.5 rounded-md hover:bg-un1t-accent inline-flex items-center gap-1.5 disabled:opacity-40"
+        >
+          {busy ? <Loader2 size={11} className="animate-spin" /> : <Check size={11} />}
+          {busy ? 'Adding…' : 'Add team'}
+        </button>
+      </div>
+    </form>
+  )
+}
+
+// ─── One-team card ───────────────────────────────────────────────
+
+function TeamCard({ registration, waves, onChanged, onError }) {
+  const team = registration.teams
+  const wave = registration.wave
+  const members = (team?.team_members || []).slice().sort((a, b) =>
+    (a.role === 'captain' ? 0 : 1) - (b.role === 'captain' ? 0 : 1)
+  )
+  const [showAddMember, setShowAddMember] = useState(false)
+  const [busy, setBusy] = useState(false)
+
+  async function moveWave(newWaveId) {
+    if (newWaveId === registration.wave_id) return
+    setBusy(true)
+    try {
+      const r = await fetch(`/api/race-registrations/${registration.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ wave_id: newWaveId }),
+      })
+      const j = await r.json()
+      if (!r.ok || j.success === false) onError(j.error || `Move failed`)
+      else onChanged()
+    } catch (e) {
+      onError(e.message || 'Network error')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function removeRegistration() {
+    if (!confirm(`Remove team "${team?.name}" from this race?`)) return
+    setBusy(true)
+    try {
+      const r = await fetch(`/api/race-registrations/${registration.id}`, { method: 'DELETE' })
+      const j = await r.json()
+      if (!r.ok || j.success === false) onError(j.error || `Remove failed`)
+      else onChanged()
+    } catch (e) {
+      onError(e.message || 'Network error')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-4">
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-base font-semibold text-un1t-white">{team?.name || '(no team)'}</span>
+          {team?.size && (
+            <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded-full bg-un1t-gray/40 text-un1t-light inline-flex items-center gap-1">
+              <Users size={10} /> {team.size}-person
+            </span>
+          )}
+          <StatusPill status={registration.status} />
+          {registration.team_composition === 'all_members' && (
+            <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-700 inline-flex items-center gap-1">
+              <BadgeCheck size={10} /> Members
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          <select
+            value={registration.wave_id || ''}
+            onChange={(e) => moveWave(e.target.value)}
+            disabled={busy}
+            className="text-[11px] bg-un1t-black border border-un1t-gray rounded-md px-2 py-1 text-un1t-white disabled:opacity-40"
+            title="Move to a different wave"
+          >
+            {waves.map((w) => (
+              <option key={w.id} value={w.id}>
+                <Clock size={10} />{' '}
+                {w.label ? `${w.label} · ` : ''}{(w.start_time || '').slice(0, 5)}
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            onClick={removeRegistration}
+            disabled={busy}
+            className="text-[11px] text-un1t-light hover:text-red-700 inline-flex items-center gap-1"
+            title="Remove this team from the race"
+          >
+            <Trash2 size={11} /> Remove
+          </button>
+        </div>
+      </div>
+
+      {wave && (
+        <div className="text-[11px] text-un1t-light mt-1">
+          Wave: {wave.label ? `${wave.label} · ` : ''}{(wave.start_time || '').slice(0, 5)}
+        </div>
+      )}
+
+      <div className="mt-3 pt-3 border-t border-un1t-gray/50 space-y-1.5">
+        {members.map((m) => (
+          <MemberRow key={m.id} member={m} onChanged={onChanged} onError={onError} />
+        ))}
+        {showAddMember ? (
+          <AddMemberRow
+            teamId={team?.id}
+            onAdded={() => { setShowAddMember(false); onChanged() }}
+            onCancel={() => setShowAddMember(false)}
+            onError={onError}
+          />
+        ) : (
+          <button
+            type="button"
+            onClick={() => setShowAddMember(true)}
+            className="text-[11px] text-un1t-light hover:text-un1t-white inline-flex items-center gap-1"
+          >
+            <Plus size={11} /> Add member
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ─── One member row ──────────────────────────────────────────────
+
+function MemberRow({ member, onChanged, onError }) {
+  const [editing, setEditing] = useState(false)
+  const [name, setName] = useState(member.name)
+  const [email, setEmail] = useState(member.email || '')
+  const [busy, setBusy] = useState(false)
+
+  async function save() {
+    setBusy(true)
+    try {
+      const r = await fetch(`/api/team-members/${member.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: name.trim(), email: email.trim() || null }),
+      })
+      const j = await r.json()
+      if (!r.ok || j.success === false) onError(j.error || 'Save failed')
+      else { setEditing(false); onChanged() }
+    } catch (e) {
+      onError(e.message || 'Network error')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function remove() {
+    if (!confirm(`Remove ${member.name} from this team?`)) return
+    setBusy(true)
+    try {
+      const r = await fetch(`/api/team-members/${member.id}`, { method: 'DELETE' })
+      const j = await r.json()
+      if (!r.ok || j.success === false) onError(j.error || 'Remove failed')
+      else onChanged()
+    } catch (e) {
+      onError(e.message || 'Network error')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (editing) {
+    return (
+      <div className="grid grid-cols-[1fr_1fr_auto] gap-2 items-center">
+        <input
+          type="text"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          className="bg-un1t-black border border-un1t-gray rounded-md px-2 py-1 text-sm"
+        />
+        <input
+          type="email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          placeholder="email"
+          className="bg-un1t-black border border-un1t-gray rounded-md px-2 py-1 text-sm"
+        />
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={save}
+            disabled={busy}
+            className="text-[11px] bg-emerald-600 text-white rounded px-2 py-1 disabled:opacity-40 inline-flex items-center gap-1"
+          >
+            {busy ? <Loader2 size={10} className="animate-spin" /> : <Check size={10} />}
+            Save
+          </button>
+          <button
+            type="button"
+            onClick={() => { setEditing(false); setName(member.name); setEmail(member.email || '') }}
+            disabled={busy}
+            className="text-[11px] text-un1t-light hover:text-un1t-white"
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex items-center justify-between text-sm">
+      <div className="flex items-center gap-1.5">
+        <span className={member.role === 'captain' ? 'text-un1t-white font-medium' : 'text-un1t-light'}>
+          {member.name}
+        </span>
+        {member.role === 'captain' && <Star size={10} className="text-amber-700" />}
+        {member.is_member && <BadgeCheck size={11} className="text-emerald-700" />}
+        {member.email && <span className="text-[11px] text-un1t-mid">· {member.email}</span>}
+      </div>
+      <div className="flex items-center gap-1">
+        <button
+          type="button"
+          onClick={() => setEditing(true)}
+          className="text-un1t-light hover:text-un1t-white p-1"
+          title="Edit"
+        >
+          <Pencil size={11} />
+        </button>
+        <button
+          type="button"
+          onClick={remove}
+          disabled={busy}
+          className="text-un1t-light hover:text-red-700 p-1 disabled:opacity-40"
+          title="Remove"
+        >
+          <Trash2 size={11} />
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function AddMemberRow({ teamId, onAdded, onCancel, onError }) {
+  const [name, setName] = useState('')
+  const [email, setEmail] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  async function save() {
+    if (!name.trim()) return onError('Name is required.')
+    setBusy(true)
+    try {
+      const r = await fetch(`/api/teams/${teamId}/members`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: name.trim(), email: email.trim() || null }),
+      })
+      const j = await r.json()
+      if (!r.ok || j.success === false) onError(j.error || 'Add failed')
+      else onAdded()
+    } catch (e) {
+      onError(e.message || 'Network error')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="grid grid-cols-[1fr_1fr_auto] gap-2 items-center pt-1">
+      <input
+        type="text"
+        autoFocus
+        placeholder="Member name *"
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        className="bg-un1t-black border border-un1t-gray rounded-md px-2 py-1 text-sm"
+      />
+      <input
+        type="email"
+        placeholder="Email (optional)"
+        value={email}
+        onChange={(e) => setEmail(e.target.value)}
+        className="bg-un1t-black border border-un1t-gray rounded-md px-2 py-1 text-sm"
+      />
+      <div className="flex items-center gap-1">
+        <button
+          type="button"
+          onClick={save}
+          disabled={busy}
+          className="text-[11px] bg-emerald-600 text-white rounded px-2 py-1 disabled:opacity-40 inline-flex items-center gap-1"
+        >
+          {busy ? <Loader2 size={10} className="animate-spin" /> : <Check size={10} />}
+          Add
+        </button>
+        <button
+          type="button"
+          onClick={onCancel}
+          disabled={busy}
+          className="text-[11px] text-un1t-light hover:text-un1t-white"
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function StatusPill({ status }) {
+  const map = {
+    confirmed: 'bg-emerald-500/15 text-emerald-700',
+    pending_payment: 'bg-amber-500/15 text-amber-700',
+    cancelled: 'bg-gray-500/15 text-gray-600',
+    no_show: 'bg-red-500/15 text-red-700',
+  }
+  return (
+    <span className={`text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded-full ${map[status] || 'bg-un1t-gray/30 text-un1t-light'}`}>
+      {status?.replaceAll('_', ' ')}
+    </span>
+  )
+}

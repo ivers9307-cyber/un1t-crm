@@ -124,6 +124,13 @@ export default async function RacesIndexPage() {
                           Public <ExternalLink size={10} />
                         </a>
                         <Link
+                          href={`/races/${r.id}/teams`}
+                          className="text-[11px] text-un1t-light hover:text-un1t-white"
+                          title="View + manage registered teams"
+                        >
+                          Teams
+                        </Link>
+                        <Link
                           href={`/races/${r.id}/control`}
                           className="text-[11px] text-blue-700 hover:text-blue-800"
                         >
