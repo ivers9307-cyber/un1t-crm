@@ -8,6 +8,11 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 
 export const runtime = 'nodejs'
+// Force-dynamic so wave / fee edits in the operator UI show up
+// immediately on the public page — Next.js' default caching for
+// route handlers would otherwise hold stale data for a few minutes.
+export const dynamic = 'force-dynamic'
+export const revalidate = 0
 
 export async function GET(_request, { params }) {
   const db = createServerClient()

@@ -18,7 +18,7 @@
 // without a follow-up call.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
+import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { MANAGER_ROLES } from '@/lib/schemas'
 
@@ -45,10 +45,13 @@ export async function GET(request) {
   const limit = Math.min(200, Math.max(1, parseInt(url.searchParams.get('limit') || '50', 10)))
 
   const db = createServerClient()
-  const locationIds = getUserLocationIds(user)
-  // Master with all-locations access (locationIds === null) sees everything.
-  // Empty array → no rows returned.
-  if (Array.isArray(locationIds) && locationIds.length === 0) {
+  // Scope to the operator's ACTIVE location. The orders page is
+  // location-specific by design — when an operator switches the
+  // location dropdown the list should follow. Master users without
+  // an active location selected fall through to "no scope" (i.e.
+  // RLS / policy decides what they see, which is everything).
+  const activeLocationId = user.activeLocation?.id || null
+  if (!activeLocationId && user.role !== 'master') {
     return NextResponse.json({
       success: true,
       data: [],
@@ -61,7 +64,7 @@ export async function GET(request) {
   const countQuery = db
     .from('orders')
     .select('status', { count: 'exact' })
-  if (Array.isArray(locationIds)) countQuery.in('location_id', locationIds)
+  if (activeLocationId) countQuery.eq('location_id', activeLocationId)
   if (sourceParam && ALLOWED_SOURCES.includes(sourceParam)) countQuery.eq('source_type', sourceParam)
   if (from) countQuery.gte('created_at', from)
   if (to) countQuery.lte('created_at', to)
@@ -73,7 +76,7 @@ export async function GET(request) {
   const counts = {}
   await Promise.all(ALLOWED_STATUSES.map(async (s) => {
     let q2 = db.from('orders').select('id', { count: 'exact', head: true }).eq('status', s)
-    if (Array.isArray(locationIds)) q2 = q2.in('location_id', locationIds)
+    if (activeLocationId) q2 = q2.eq('location_id', activeLocationId)
     if (sourceParam && ALLOWED_SOURCES.includes(sourceParam)) q2 = q2.eq('source_type', sourceParam)
     if (from) q2 = q2.gte('created_at', from)
     if (to) q2 = q2.lte('created_at', to)
@@ -98,7 +101,7 @@ export async function GET(request) {
     .order('created_at', { ascending: false })
     .range((page - 1) * limit, page * limit - 1)
 
-  if (Array.isArray(locationIds)) listQ = listQ.in('location_id', locationIds)
+  if (activeLocationId) listQ = listQ.eq('location_id', activeLocationId)
   if (statusParam && ALLOWED_STATUSES.includes(statusParam)) listQ = listQ.eq('status', statusParam)
   if (sourceParam && ALLOWED_SOURCES.includes(sourceParam)) listQ = listQ.eq('source_type', sourceParam)
   if (from) listQ = listQ.gte('created_at', from)

@@ -10,7 +10,7 @@
 // Manager+ only. Master sees aggregate across all locations.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
+import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { TAG_RULES } from '@/lib/contact-events'
@@ -26,8 +26,11 @@ export async function GET() {
   }
 
   const db = createServerClient()
-  const locationIds = getUserLocationIds(user)
-  if (Array.isArray(locationIds) && locationIds.length === 0) {
+  // Scope to the operator's ACTIVE location, mirroring /api/orders.
+  // Master users without an active location selected see aggregated
+  // counts across everything (RLS bypass via service role).
+  const activeLocationId = user.activeLocation?.id || null
+  if (!activeLocationId && user.role !== 'master') {
     return NextResponse.json({
       success: true,
       data: TAG_RULES.map(r => ({ tag: r.tag, description: r.description, count: 0 })),
@@ -40,8 +43,8 @@ export async function GET() {
       .select('id', { count: 'exact', head: true })
       .eq('tag', rule.tag)
       .is('removed_at', null)
-    if (Array.isArray(locationIds)) {
-      q = q.in('location_id', locationIds)
+    if (activeLocationId) {
+      q = q.eq('location_id', activeLocationId)
     }
     const { count } = await q
     return { tag: rule.tag, description: rule.description, count: count || 0 }
