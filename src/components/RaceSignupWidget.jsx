@@ -107,6 +107,12 @@ export default function RaceSignupWidget({ slug }) {
             [email]: {
               state: j.data.is_member ? 'verified' : 'not_member',
               first_name: j.data.first_name || null,
+              // Mig 085 follow-up: personalisation signals returned
+              // alongside the membership match. null when not a member
+              // OR when the lookup failed — widget falls back to the
+              // generic "Welcome back" message in that case.
+              races_finished_count: j.data.races_finished_count ?? null,
+              repeat_racer: !!j.data.repeat_racer,
               applicable: true,
             },
           }))
@@ -560,9 +566,21 @@ function MemberStatusBadge({ email, checks, memberFeeCents, nonMemberFeeCents, m
   }
   if (c.state === 'verified') {
     const fee = memberFeeCents != null ? fmt(memberFeeCents) : 'free'
+    // Personalisation: when we have a finished-race count, append it.
+    // Repeat racers (≥2 finishes) get a stronger "x races" greeting;
+    // first-timers (or unknown count) just get the welcome-back.
+    const count = Number.isFinite(c.races_finished_count) ? c.races_finished_count : null
+    let greeting = c.first_name ? ` — welcome back, ${c.first_name}` : ''
+    if (count != null && count >= 2) {
+      greeting = c.first_name
+        ? ` — welcome back, ${c.first_name} · ${count} race${count === 1 ? '' : 's'} finished`
+        : ` — ${count} race${count === 1 ? '' : 's'} finished`
+    } else if (count === 0 && c.first_name) {
+      greeting = ` — welcome, ${c.first_name} · first race?`
+    }
     return (
       <p className="text-[11px] text-emerald-700 inline-flex items-center gap-1 mt-0.5">
-        <BadgeCheck size={11} /> UN1T member{c.first_name ? ` — welcome back, ${c.first_name}` : ''} · {fee}
+        <BadgeCheck size={11} /> UN1T member{greeting} · {fee}
       </p>
     )
   }
