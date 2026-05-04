@@ -29,6 +29,7 @@ import { validateTeamRoster, computeTeamPricing } from '@/lib/member-validation'
 import { createRacePayment } from '@/lib/race-payments'
 import { sendRaceConfirmations } from '@/lib/race-confirmations'
 import { getAppUrl } from '@/lib/app-url'
+import { findOrCreateRaceContact } from '@/lib/race-contact-linking'
 
 export const runtime = 'nodejs'
 
@@ -269,19 +270,38 @@ export async function POST(request, { params }) {
   const pricing = computeTeamPricing({ validatedRoster, race })
 
   // Refresh team_members for THIS registration's roster, stamping
-  // member-validation results.
+  // member-validation results AND contact_id linkage (mig 086).
+  // Every member with an email gets a find-or-create contact lookup
+  // — not just the captain — so race results show up on every
+  // competitor's profile. Verified UN1T members already have
+  // member_contact_id set; we still call findOrCreateRaceContact
+  // because the contact_id column on team_members is the canonical
+  // "who is this person" pointer.
   await db.from('team_members').delete().eq('team_id', teamId)
-  const memberRows = validatedRoster.map((m, idx) => ({
-    team_id: teamId,
-    contact_id: idx === 0 ? captainContactId : null, // captain only
-    name: m.name,
-    email: m.email,
-    role: idx === 0 ? 'captain' : 'member',
-    is_member: !!m.is_member,
-    member_validation_status: m.status,
-    member_contact_id: m.member_contact_id || null,
-    member_validated_at: m.status === 'verified' ? new Date().toISOString() : null,
-  }))
+  const memberRows = []
+  for (let idx = 0; idx < validatedRoster.length; idx++) {
+    const m = validatedRoster[idx]
+    let contactId = idx === 0 ? captainContactId : null
+    if (!contactId && m.email) {
+      contactId = await findOrCreateRaceContact({
+        db,
+        locationId: race.location_id,
+        email: m.email,
+        name: m.name,
+      })
+    }
+    memberRows.push({
+      team_id: teamId,
+      contact_id: contactId,
+      name: m.name,
+      email: m.email,
+      role: idx === 0 ? 'captain' : 'member',
+      is_member: !!m.is_member,
+      member_validation_status: m.status,
+      member_contact_id: m.member_contact_id || null,
+      member_validated_at: m.status === 'verified' ? new Date().toISOString() : null,
+    })
+  }
   await db.from('team_members').insert(memberRows)
 
   // Create the race_registration. Paid races start as pending_payment;

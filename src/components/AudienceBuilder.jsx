@@ -5,7 +5,7 @@ import { Plus, Trash2, Users } from 'lucide-react'
 
 const FIELD_OPTIONS = [
   { value: 'lead_status',           label: 'Lead Status',           type: 'select',
-    options: ['active_trial', 'cold', 'lost_member', 'member', 'returning'] },
+    options: ['active_trial', 'cold', 'lost_member', 'member', 'returning', 'competition_competitor'] },
   { value: 'email_status',          label: 'Email Status',          type: 'select',
     options: ['active', 'bounced', 'complained', 'unsubscribed'] },
   { value: 'lead_source',           label: 'Lead Source',           type: 'select',

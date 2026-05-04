@@ -11,6 +11,7 @@ import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
 import { MANAGER_ROLES } from '@/lib/schemas'
+import { findOrCreateRaceContact } from '@/lib/race-contact-linking'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -171,16 +172,33 @@ export async function POST(request, { params }) {
 
   // Reset members. Operator-added teams skip member-validation —
   // is_member stays false, member_validation_status='not_applicable'.
+  // EVERY member with an email gets find-or-create contact linkage
+  // (mig 086) so race results map back to contact profiles.
   await db.from('team_members').delete().eq('team_id', teamId)
-  const memberRows = body.members.map((m, i) => ({
-    team_id: teamId,
-    contact_id: i === (captainIdx >= 0 ? captainIdx : 0) ? captainContactId : null,
-    name: m.name,
-    email: m.email ? m.email.toLowerCase().trim() : null,
-    role: i === (captainIdx >= 0 ? captainIdx : 0) ? 'captain' : 'member',
-    is_member: false,
-    member_validation_status: 'not_applicable',
-  }))
+  const captainPos = captainIdx >= 0 ? captainIdx : 0
+  const memberRows = []
+  for (let i = 0; i < body.members.length; i++) {
+    const m = body.members[i]
+    const normalisedEmail = m.email ? m.email.toLowerCase().trim() : null
+    let contactId = i === captainPos ? captainContactId : null
+    if (!contactId && normalisedEmail) {
+      contactId = await findOrCreateRaceContact({
+        db,
+        locationId: race.location_id,
+        email: normalisedEmail,
+        name: m.name,
+      })
+    }
+    memberRows.push({
+      team_id: teamId,
+      contact_id: contactId,
+      name: m.name,
+      email: normalisedEmail,
+      role: i === captainPos ? 'captain' : 'member',
+      is_member: false,
+      member_validation_status: 'not_applicable',
+    })
+  }
   await db.from('team_members').insert(memberRows)
 
   // Insert the registration. Manual ops-added teams are status=confirmed

@@ -6,6 +6,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import ContactActions from '@/components/ContactActions'
 import StartWhatsAppButton from '@/components/StartWhatsAppButton'
+import ContactRaceHistory from '@/components/ContactRaceHistory'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
@@ -200,6 +201,15 @@ export default async function ContactDetailPage({ params }) {
                 </span>
               </div>
             ))}
+          </div>
+
+          {/* Race history (mig 086). Surfaces every race this contact
+              has competed in — captain or member — with team, wave,
+              and finish time. Always rendered; the component shows
+              a "no races yet" message when empty. */}
+          <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-4">
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light mb-3">Races</h3>
+            <ContactRaceHistory contactId={contact.id} />
           </div>
 
           {/* Past Bookings */}

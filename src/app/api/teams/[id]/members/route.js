@@ -9,6 +9,7 @@ import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
 import { MANAGER_ROLES } from '@/lib/schemas'
+import { findOrCreateRaceContact } from '@/lib/race-contact-linking'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -42,19 +43,32 @@ export async function POST(request, { params }) {
   const guard = assertLocationAccess(user, team.location_id)
   if (guard) return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
 
+  const normalisedEmail = body.email ? body.email.toLowerCase().trim() : null
+  // Find-or-create the contact row so race results map to a
+  // profile (mig 086). Best-effort — null email skips silently.
+  const contactId = normalisedEmail
+    ? await findOrCreateRaceContact({
+        db,
+        locationId: team.location_id,
+        email: normalisedEmail,
+        name: body.name,
+      })
+    : null
+
   const { data, error } = await db
     .from('team_members')
     .insert({
       team_id: params.id,
+      contact_id: contactId,
       name: body.name,
-      email: body.email ? body.email.toLowerCase().trim() : null,
+      email: normalisedEmail,
       role: body.role || 'member',
       // Operator-added members skip member-validation (manual flow,
       // no public form to verify against).
       is_member: false,
       member_validation_status: 'not_applicable',
     })
-    .select('id, name, email, role')
+    .select('id, name, email, role, contact_id')
     .single()
   if (error) {
     return NextResponse.json({ success: false, error: error.message }, { status: 400 })

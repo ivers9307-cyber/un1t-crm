@@ -12,6 +12,7 @@ import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
 import { MANAGER_ROLES } from '@/lib/schemas'
+import { findOrCreateRaceContact } from '@/lib/race-contact-linking'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -56,6 +57,22 @@ export async function PUT(request, { params }) {
   if (body.name !== undefined) updates.name = body.name
   if (body.email !== undefined) {
     updates.email = body.email ? body.email.toLowerCase().trim() : null
+    // When the email changes, re-resolve contact_id so race
+    // results stay mapped to the right profile (mig 086).
+    if (updates.email !== member.email) {
+      if (updates.email) {
+        const newContactId = await findOrCreateRaceContact({
+          db,
+          locationId: member.team?.location_id,
+          email: updates.email,
+          name: body.name || member.name,
+        })
+        updates.contact_id = newContactId
+      } else {
+        // email cleared → drop the contact link.
+        updates.contact_id = null
+      }
+    }
   }
   if (body.role) updates.role = body.role
   if (Object.keys(updates).length === 0) {
