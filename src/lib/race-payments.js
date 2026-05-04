@@ -26,6 +26,7 @@
 import { createOrder, getOrder } from './revolut'
 import { syncOrderFromRacePayment } from './orders'
 import { emitEvent, applyTagRules, EVENT_TYPES } from './contact-events'
+import { triggerSequencesForOrderStatus } from './sequences'
 
 /**
  * Resolve which Revolut credentials to use for race payments. For
@@ -119,6 +120,14 @@ export async function createRacePayment({ db, race, registration, captain, prici
       })
       if (registration.contact_id) {
         await applyTagRules({ db, contactId: registration.contact_id })
+        // Free entry → fire order_completed sequence trigger (Tier 1A).
+        await triggerSequencesForOrderStatus({
+          contactId: registration.contact_id,
+          locationId: race.location_id,
+          status: 'completed',
+          sourceType: 'race_registration',
+          orderId: row.id,
+        })
       }
     } catch (e) {
       console.warn(`[race-payments] orders/events sync (free) failed: ${e?.message || e}`)
@@ -316,6 +325,16 @@ export async function markRacePaymentStatus({ db, payment, revolutState, revolut
       })
       if (payment.contact_id) {
         await applyTagRules({ db, contactId: payment.contact_id })
+        // Fire order_completed/failed/abandoned sequence trigger
+        // (Tier 1A). Best-effort — error already swallowed by the
+        // outer try/catch in this caller.
+        await triggerSequencesForOrderStatus({
+          contactId: payment.contact_id,
+          locationId: locId,
+          status: updates.status,
+          sourceType: 'race_registration',
+          orderId: payment.id,
+        })
       }
     }
   } catch (e) {

@@ -382,6 +382,237 @@ export async function triggerSequencesForTagsAdded(contactId, addedTags) {
   }
 }
 
+/**
+ * Race-registered trigger (Tier 1A).
+ *
+ * Called from /api/public/races/[slug]/register and from
+ * /api/races/[id]/teams (manual operator add) right after a
+ * race_registration row is created. Pulls the registration's team
+ * + members and enrols EVERY member (with a contact_id) into
+ * any matching trigger_type='race_registered' sequence.
+ *
+ * trigger_config:
+ *   - race_event_id (optional) — restrict to one race
+ *
+ * Best-effort.
+ */
+export async function triggerSequencesForRaceRegistered(registrationId) {
+  const db = createServerClient()
+  try {
+    const { data: reg } = await db
+      .from('race_registrations')
+      .select(`
+        id, race_event_id, team_id,
+        race:race_event_id ( id, location_id ),
+        teams:team_id ( id, team_members ( contact_id ) )
+      `)
+      .eq('id', registrationId)
+      .single()
+    if (!reg?.race?.location_id) return
+    const memberContactIds = (reg.teams?.team_members || [])
+      .map((m) => m.contact_id)
+      .filter(Boolean)
+    if (memberContactIds.length === 0) return
+
+    const { data: sequences } = await db
+      .from('email_sequences')
+      .select('id, trigger_config, audience_filter')
+      .eq('location_id', reg.race.location_id)
+      .eq('trigger_type', 'race_registered')
+      .eq('status', 'active')
+    if (!sequences || sequences.length === 0) return
+
+    for (const seq of sequences) {
+      const cfg = seq.trigger_config || {}
+      if (cfg.race_event_id && cfg.race_event_id !== reg.race_event_id) continue
+      // Audience-filter each contact independently — some members
+      // may match (e.g. members only) while others don't.
+      const matched = []
+      for (const cid of memberContactIds) {
+        const ok = await contactMatchesSequenceAudience(cid, seq.audience_filter)
+        if (ok) matched.push(cid)
+      }
+      if (matched.length === 0) continue
+      await enrolContacts({
+        sequenceId: seq.id,
+        contactIds: matched,
+        sourceType: 'race_registered',
+        sourceRef: registrationId,
+      })
+    }
+  } catch (e) {
+    console.warn(`[sequences] race_registered trigger failed for ${registrationId}: ${e.message}`)
+  }
+}
+
+/**
+ * Race-finished trigger (Tier 1A).
+ *
+ * Called from /api/registrations/[id]/race-finish after the
+ * registration's race_finished_at is stamped. Enrols every team
+ * member with a contact_id.
+ *
+ * trigger_config:
+ *   - race_event_id (optional)
+ *
+ * Best-effort.
+ */
+export async function triggerSequencesForRaceFinished(registrationId) {
+  const db = createServerClient()
+  try {
+    const { data: reg } = await db
+      .from('race_registrations')
+      .select(`
+        id, race_event_id, team_id,
+        race:race_event_id ( id, location_id ),
+        teams:team_id ( id, team_members ( contact_id ) )
+      `)
+      .eq('id', registrationId)
+      .single()
+    if (!reg?.race?.location_id) return
+    const memberContactIds = (reg.teams?.team_members || [])
+      .map((m) => m.contact_id)
+      .filter(Boolean)
+    if (memberContactIds.length === 0) return
+
+    const { data: sequences } = await db
+      .from('email_sequences')
+      .select('id, trigger_config, audience_filter')
+      .eq('location_id', reg.race.location_id)
+      .eq('trigger_type', 'race_finished')
+      .eq('status', 'active')
+    if (!sequences || sequences.length === 0) return
+
+    for (const seq of sequences) {
+      const cfg = seq.trigger_config || {}
+      if (cfg.race_event_id && cfg.race_event_id !== reg.race_event_id) continue
+      const matched = []
+      for (const cid of memberContactIds) {
+        const ok = await contactMatchesSequenceAudience(cid, seq.audience_filter)
+        if (ok) matched.push(cid)
+      }
+      if (matched.length === 0) continue
+      await enrolContacts({
+        sequenceId: seq.id,
+        contactIds: matched,
+        sourceType: 'race_finished',
+        sourceRef: registrationId,
+      })
+    }
+  } catch (e) {
+    console.warn(`[sequences] race_finished trigger failed for ${registrationId}: ${e.message}`)
+  }
+}
+
+/**
+ * Order-status trigger (Tier 1A).
+ *
+ * Called from order lifecycle code paths whenever an orders row
+ * moves to a terminal state. One trigger type per status:
+ *   - 'order_completed'
+ *   - 'order_failed'
+ *   - 'order_abandoned'
+ *
+ * trigger_config:
+ *   - source_type (optional) — restrict to 'race_registration' /
+ *     'car_deposit'.
+ *
+ * @param {string} contactId   - contact tied to the order (may be null)
+ * @param {string} locationId  - the order's location_id
+ * @param {string} status      - one of 'completed' | 'failed' | 'abandoned'
+ * @param {string} sourceType  - 'race_registration' | 'car_deposit'
+ * @param {string|null} orderId - source ref for audit
+ */
+export async function triggerSequencesForOrderStatus({ contactId, locationId, status, sourceType, orderId = null }) {
+  if (!contactId || !locationId || !status) return
+  const triggerType = `order_${status}`
+  if (!['order_completed', 'order_failed', 'order_abandoned'].includes(triggerType)) return
+
+  const db = createServerClient()
+  try {
+    const { data: sequences } = await db
+      .from('email_sequences')
+      .select('id, trigger_config, audience_filter')
+      .eq('location_id', locationId)
+      .eq('trigger_type', triggerType)
+      .eq('status', 'active')
+    if (!sequences || sequences.length === 0) return
+
+    for (const seq of sequences) {
+      const cfg = seq.trigger_config || {}
+      if (cfg.source_type && cfg.source_type !== sourceType) continue
+      const ok = await contactMatchesSequenceAudience(contactId, seq.audience_filter)
+      if (!ok) continue
+      await enrolContacts({
+        sequenceId: seq.id,
+        contactIds: [contactId],
+        sourceType: triggerType,
+        sourceRef: orderId,
+      })
+    }
+  } catch (e) {
+    console.warn(`[sequences] ${triggerType} trigger failed for ${contactId}: ${e.message}`)
+  }
+}
+
+/**
+ * First-booking trigger (Tier 1A).
+ *
+ * Called alongside the existing booking_created trigger from
+ * /api/public/book. Fires only when this is the contact's first
+ * confirmed booking ever — perfect for welcome series that
+ * shouldn't re-fire on the second/third booking.
+ *
+ * trigger_config:
+ *   - event_type_id (optional)
+ *
+ * Best-effort.
+ */
+export async function triggerSequencesForFirstBooking(bookingId) {
+  const db = createServerClient()
+  try {
+    const { data: booking } = await db
+      .from('bookings')
+      .select('id, event_type_id, location_id, contact_id')
+      .eq('id', bookingId)
+      .single()
+    if (!booking || !booking.contact_id) return
+
+    // Count prior confirmed bookings (excluding this one). If > 0,
+    // this isn't the first — short-circuit.
+    const { count } = await db
+      .from('bookings')
+      .select('id', { count: 'exact', head: true })
+      .eq('contact_id', booking.contact_id)
+      .neq('id', bookingId)
+      .neq('status', 'cancelled')
+    if ((count || 0) > 0) return
+
+    const { data: sequences } = await db
+      .from('email_sequences')
+      .select('id, trigger_config, audience_filter')
+      .eq('location_id', booking.location_id)
+      .eq('trigger_type', 'first_booking')
+      .eq('status', 'active')
+    if (!sequences || sequences.length === 0) return
+
+    for (const seq of sequences) {
+      const cfg = seq.trigger_config || {}
+      if (cfg.event_type_id && cfg.event_type_id !== booking.event_type_id) continue
+      const matches = await contactMatchesSequenceAudience(booking.contact_id, seq.audience_filter)
+      if (!matches) continue
+      await enrolContacts({
+        sequenceId: seq.id,
+        contactIds: [booking.contact_id],
+        sourceType: 'first_booking',
+        sourceRef: booking.id,
+      })
+    }
+  } catch (e) {
+    console.warn(`[sequences] first_booking trigger failed for ${bookingId}: ${e.message}`)
+  }
+}
+
 // ── Public: pause / resume / exit ────────────────────────────────
 
 export async function setEnrollmentStatus({ enrollmentId, status, reason }) {

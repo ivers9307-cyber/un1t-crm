@@ -30,6 +30,7 @@ import { createRacePayment } from '@/lib/race-payments'
 import { sendRaceConfirmations } from '@/lib/race-confirmations'
 import { getAppUrl } from '@/lib/app-url'
 import { findOrCreateRaceContact } from '@/lib/race-contact-linking'
+import { triggerSequencesForRaceRegistered } from '@/lib/sequences'
 
 export const runtime = 'nodejs'
 
@@ -318,6 +319,15 @@ export async function POST(request, { params }) {
       }, { status: 409 })
     }
     return NextResponse.json({ success: false, error: regErr.message }, { status: 500 })
+  }
+
+  // Fire the race_registered sequence trigger (Tier 1A). Best-effort —
+  // never blocks the registration response. Enrols every team member
+  // with a contact_id, not just the captain.
+  try {
+    await triggerSequencesForRaceRegistered(registration.id)
+  } catch (e) {
+    console.warn(`[race-register] race_registered trigger failed: ${e?.message || e}`)
   }
 
   // ─── kick off the payment (or mark paid for free entry) ──────────

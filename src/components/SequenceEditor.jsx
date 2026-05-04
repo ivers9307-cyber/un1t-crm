@@ -8,11 +8,17 @@ import {
 } from 'lucide-react'
 
 const TRIGGER_TYPES = [
-  { value: 'manual',          label: 'Manual Enrollment',    description: 'Manually add contacts to this sequence' },
-  { value: 'booking_created', label: 'Booking Created',      description: 'Triggered when a contact makes a booking' },
-  { value: 'status_change',   label: 'Status Change',        description: 'Triggered when lead status changes' },
-  { value: 'event_reminder',  label: 'Event Reminder',       description: 'Triggered before an event starts' },
-  { value: 'tag_added',       label: 'Tag Added',            description: 'Triggered when a tag is added to a contact' },
+  { value: 'manual',           label: 'Manual Enrollment',  description: 'Manually add contacts to this sequence' },
+  { value: 'booking_created',  label: 'Booking Created',    description: 'Triggered when a contact makes a booking' },
+  { value: 'first_booking',    label: 'First Booking',      description: 'Triggered ONLY on the contact\'s very first booking — perfect for welcome series' },
+  { value: 'status_change',    label: 'Status Change',      description: 'Triggered when lead status changes' },
+  { value: 'event_reminder',   label: 'Event Reminder',     description: 'Triggered before an event starts' },
+  { value: 'tag_added',        label: 'Tag Added',          description: 'Triggered when a tag is added to a contact' },
+  { value: 'race_registered',  label: 'Race Registered',    description: 'Triggered when a team signs up for a race — fires for every team member' },
+  { value: 'race_finished',    label: 'Race Finished',      description: 'Triggered when an operator marks a team done at the finish line' },
+  { value: 'order_completed',  label: 'Order Completed',    description: 'Triggered when a paid order (race or car deposit) lands' },
+  { value: 'order_failed',     label: 'Order Failed',       description: 'Triggered when a payment fails — perfect for retry-recovery' },
+  { value: 'order_abandoned',  label: 'Order Abandoned',    description: 'Triggered when a buyer abandons checkout — cart-recovery sequences' },
 ]
 
 // Per-step icon/colour by channel.

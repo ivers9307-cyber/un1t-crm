@@ -100,12 +100,15 @@ export async function POST(request) {
     return NextResponse.json({ success: false, error: error.message }, { status: 400 })
   }
 
-  // Fire booking_created triggers for active sequences. Best-effort —
-  // a sequence misconfig must never break the booking response. The
-  // helper itself swallows + logs errors internally.
+  // Fire booking_created + first_booking triggers for active
+  // sequences. Best-effort — a sequence misconfig must never break
+  // the booking response. The helpers themselves swallow + log
+  // errors internally. first_booking checks prior bookings count
+  // server-side and short-circuits when not the first.
   try {
-    const { triggerSequencesForBooking } = await import('@/lib/sequences')
+    const { triggerSequencesForBooking, triggerSequencesForFirstBooking } = await import('@/lib/sequences')
     await triggerSequencesForBooking(data.id)
+    await triggerSequencesForFirstBooking(data.id)
   } catch (e) {
     console.warn(`[booking] sequence trigger error: ${e?.message || e}`)
   }

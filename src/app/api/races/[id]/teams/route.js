@@ -12,6 +12,7 @@ import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { findOrCreateRaceContact } from '@/lib/race-contact-linking'
+import { triggerSequencesForRaceRegistered } from '@/lib/sequences'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -212,6 +213,13 @@ export async function POST(request, { params }) {
       }, { status: 409 })
     }
     return NextResponse.json({ success: false, error: regErr.message }, { status: 500 })
+  }
+
+  // Fire the race_registered sequence trigger (Tier 1A). Best-effort.
+  try {
+    await triggerSequencesForRaceRegistered(registration.id)
+  } catch (e) {
+    console.warn(`[races-teams] race_registered trigger failed: ${e?.message || e}`)
   }
 
   return NextResponse.json({

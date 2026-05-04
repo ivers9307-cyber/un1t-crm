@@ -28,6 +28,7 @@ import { verifyWebhookSignature, getOrder } from '@/lib/revolut'
 import { sendDepositReceiptSms } from '@/lib/deposit-receipts'
 import { syncOrderFromCarDeposit } from '@/lib/orders'
 import { emitEvent, EVENT_TYPES } from '@/lib/contact-events'
+import { triggerSequencesForOrderStatus } from '@/lib/sequences'
 
 export const runtime = 'nodejs'
 
@@ -137,11 +138,22 @@ export async function POST(request) {
     }
     const evType = evMap[state]
     if (evType && car.buyer_email) {
+      // Look up a contact by buyer_email so the order_* sequence
+      // trigger (Tier 1A) has someone to enrol. We don't auto-create
+      // contacts on the cars side — the cars deposit flow is for
+      // car buyers, not necessarily UN1T contacts.
+      const { data: existingContact } = await db
+        .from('contacts')
+        .select('id')
+        .ilike('email', car.buyer_email.toLowerCase().trim())
+        .maybeSingle()
+      const buyerContactId = existingContact?.id || null
+
       await emitEvent({
         db,
         eventType: evType,
         contactEmail: car.buyer_email,
-        contactId: null, // cars buyers aren't linked to contacts in v1
+        contactId: buyerContactId,
         locationId: car.location_id,
         sourceType: 'car_deposit',
         sourceId: car.id,
@@ -152,6 +164,20 @@ export async function POST(request) {
           irish_reg: car.irish_reg,
         },
       })
+
+      // Sequence trigger fires only when we have a contact — the
+      // sequence runner needs a contact_id to enrol. Cars-only buyers
+      // without a CRM contact silently skip (acceptable for v1).
+      if (buyerContactId && ['completed', 'failed', 'cancelled'].includes(state)) {
+        const status = state === 'cancelled' ? 'abandoned' : state
+        await triggerSequencesForOrderStatus({
+          contactId: buyerContactId,
+          locationId: car.location_id,
+          status,
+          sourceType: 'car_deposit',
+          orderId: car.id,
+        })
+      }
     }
   } catch (e) {
     console.warn(`[revolut-webhook] orders/events sync failed for car ${car.id}: ${e?.message || e}`)

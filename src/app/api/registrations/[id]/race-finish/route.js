@@ -6,6 +6,8 @@ import { NextResponse } from 'next/server'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { MANAGER_ROLES } from '@/lib/schemas'
+import { triggerSequencesForRaceFinished } from '@/lib/sequences'
+import { emitEvent, applyTagRules, EVENT_TYPES } from '@/lib/contact-events'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -53,6 +55,42 @@ export async function POST(_request, { params }) {
     .update({ race_finished_at: finishedAt })
     .eq('id', reg.id)
   if (upErr) return NextResponse.json({ success: false, error: upErr.message }, { status: 500 })
+
+  // Emit race.finished events for every team member with a contact_id
+  // + reapply tag rules + fire the race_finished sequence trigger.
+  // Best-effort — the timing update is the authoritative signal.
+  try {
+    const { data: regFull } = await db
+      .from('race_registrations')
+      .select(`
+        id, race_event_id,
+        race:race_event_id ( id, location_id ),
+        teams:team_id ( id, team_members ( contact_id, email ) )
+      `)
+      .eq('id', reg.id)
+      .single()
+    const locationId = regFull?.race?.location_id
+    const members = regFull?.teams?.team_members || []
+    for (const m of members) {
+      if (!m.email) continue
+      await emitEvent({
+        db,
+        eventType: EVENT_TYPES.RACE_FINISHED,
+        contactEmail: m.email,
+        contactId: m.contact_id || null,
+        locationId,
+        sourceType: 'race_registration',
+        sourceId: reg.id,
+        metadata: { race_event_id: regFull?.race_event_id || null },
+      })
+      if (m.contact_id) {
+        await applyTagRules({ db, contactId: m.contact_id })
+      }
+    }
+    await triggerSequencesForRaceFinished(reg.id)
+  } catch (e) {
+    console.warn(`[race-finish] events/triggers failed for ${reg.id}: ${e?.message || e}`)
+  }
 
   return NextResponse.json({
     success: true,
