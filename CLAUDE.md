@@ -212,7 +212,8 @@ XERO_SALES_ACCOUNT_CODE=         # optional, defaults to 200 (Sales). Set if you
 # Revolut Merchant — see "Revolut Merchant integration"
 REVOLUT_API_KEY=                 # Secret API key (sk_live_... or sk_sandbox_...)
 REVOLUT_API_BASE_URL=            # https://merchant.revolut.com (prod) or https://sandbox-merchant.revolut.com
-REVOLUT_WEBHOOK_SECRET=          # signing_secret returned when creating /api/webhooks
+REVOLUT_WEBHOOK_SECRET=          # signing_secret for the CARS deposit webhook (/api/webhooks/revolut)
+REVOLUT_RACE_WEBHOOK_SECRET=     # signing_secret for the RACE-PAYMENTS webhook (/api/webhooks/revolut/race-payments). Mig 084. If unset, race route falls back to REVOLUT_WEBHOOK_SECRET (single-merchant transitional case).
 REVOLUT_API_VERSION=2026-03-12   # optional; default in src/lib/revolut.js
 NEXT_PUBLIC_REVOLUT_MODE=        # 'prod' | 'sandbox' — must match REVOLUT_API_BASE_URL
 NEXT_PUBLIC_REVOLUT_PUBLIC_KEY=  # Public API key (pk_live_... or pk_sandbox_...) for the embedded checkout widget

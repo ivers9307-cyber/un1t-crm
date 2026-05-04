@@ -19,9 +19,12 @@
 // misrouted webhook returns 200/skipped rather than mutating the
 // wrong domain.
 //
-// Auth: shares REVOLUT_WEBHOOK_SECRET with the cars webhook in v1.
-// Splitting the secret can come later by switching to
-// REVOLUT_RACE_WEBHOOK_SECRET when configured.
+// Auth: each Revolut webhook gets its OWN signing secret. We try
+// REVOLUT_RACE_WEBHOOK_SECRET first (the dedicated one for this
+// webhook), falling back to REVOLUT_WEBHOOK_SECRET for the
+// transition window or single-merchant-account setups. Both are
+// passed to verifyWebhookSignature; whichever matches the header
+// candidate wins.
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
@@ -35,7 +38,13 @@ export async function POST(request) {
   const rawBody = await request.text()
   const sig = request.headers.get('revolut-signature')
   const ts = request.headers.get('revolut-request-timestamp')
-  if (!verifyWebhookSignature(rawBody, sig, ts)) {
+  // Race webhook secret, with the cars/shared one as a fallback so
+  // pre-split deployments still verify.
+  const secrets = [
+    process.env.REVOLUT_RACE_WEBHOOK_SECRET,
+    process.env.REVOLUT_WEBHOOK_SECRET,
+  ].filter(Boolean)
+  if (!verifyWebhookSignature(rawBody, sig, ts, { secrets })) {
     return NextResponse.json({ success: false, error: 'Invalid signature' }, { status: 401 })
   }
 

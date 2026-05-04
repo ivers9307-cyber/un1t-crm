@@ -156,15 +156,33 @@ export async function refundOrder(orderId, { amount, currency = 'EUR', descripti
  * the webhook signing secret. Multiple signatures may be present
  * during a secret rotation; any one matching is acceptable.
  *
+ * Each webhook configured in Revolut has its OWN signing secret.
+ * Pass `secrets` to verify against a list (e.g. the race-payments
+ * handler passes `[REVOLUT_RACE_WEBHOOK_SECRET, REVOLUT_WEBHOOK_SECRET]`
+ * so it works whether the env split has happened yet or not). Empty
+ * / undefined entries are skipped.
+ *
  * @param {string} rawBody  — the request body string EXACTLY as received
  * @param {string} signatureHeader — value of `revolut-signature`
  * @param {string} timestampHeader — value of `revolut-request-timestamp`
+ * @param {object} [opts]
+ * @param {string|string[]} [opts.secrets] — one or more secrets to try.
+ *   Defaults to `[REVOLUT_WEBHOOK_SECRET]` for back-compat with the
+ *   cars deposit webhook.
  * @returns {boolean}
  */
-export function verifyWebhookSignature(rawBody, signatureHeader, timestampHeader) {
-  const { webhookSecret } = getConfig()
-  if (!webhookSecret) {
-    console.warn('[revolut-webhook] REVOLUT_WEBHOOK_SECRET not set — rejecting all hooks')
+export function verifyWebhookSignature(rawBody, signatureHeader, timestampHeader, opts = {}) {
+  const candidateSecrets = []
+  if (opts.secrets) {
+    const arr = Array.isArray(opts.secrets) ? opts.secrets : [opts.secrets]
+    for (const s of arr) if (s) candidateSecrets.push(s)
+  }
+  if (candidateSecrets.length === 0) {
+    const { webhookSecret } = getConfig()
+    if (webhookSecret) candidateSecrets.push(webhookSecret)
+  }
+  if (candidateSecrets.length === 0) {
+    console.warn('[revolut-webhook] no signing secret configured — rejecting all hooks')
     return false
   }
   if (!signatureHeader || !timestampHeader) return false
@@ -176,22 +194,25 @@ export function verifyWebhookSignature(rawBody, signatureHeader, timestampHeader
   const ageMs = Math.abs(Date.now() - ts)
   if (ageMs > 5 * 60 * 1000) return false
 
-  const signedPayload = `v1.${timestampHeader}.${rawBody}`
-  const expected = createHmac('sha256', webhookSecret).update(signedPayload).digest('hex')
-
   // Header is comma-separated `v1=<hex>` candidates. Any match wins.
-  const candidates = signatureHeader.split(',')
+  const headerCandidates = signatureHeader.split(',')
     .map(s => s.trim())
     .filter(s => s.startsWith('v1='))
     .map(s => s.slice(3))
 
-  for (const candidate of candidates) {
-    try {
-      const a = Buffer.from(expected, 'hex')
-      const b = Buffer.from(candidate, 'hex')
-      if (a.length === b.length && timingSafeEqual(a, b)) return true
-    } catch {
-      // Malformed candidate — try the next one.
+  // Try each configured secret against each header candidate. Cross-
+  // product is fine — usually 1×1 or 2×1.
+  for (const secret of candidateSecrets) {
+    const signedPayload = `v1.${timestampHeader}.${rawBody}`
+    const expected = createHmac('sha256', secret).update(signedPayload).digest('hex')
+    for (const candidate of headerCandidates) {
+      try {
+        const a = Buffer.from(expected, 'hex')
+        const b = Buffer.from(candidate, 'hex')
+        if (a.length === b.length && timingSafeEqual(a, b)) return true
+      } catch {
+        // Malformed candidate — try the next one.
+      }
     }
   }
   return false
