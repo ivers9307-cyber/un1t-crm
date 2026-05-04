@@ -15,7 +15,7 @@ import { createRacePayment, markRacePaymentStatus } from './race-payments'
 
 // Minimal Supabase chain mock — captures inserts/updates so tests can
 // assert what was written.
-function makeDb({ insertedRow = { id: 'pay-1' }, registrationUpdates = [] } = {}) {
+function makeDb({ insertedRow = { id: 'pay-1' } } = {}) {
   const ops = { inserts: [], updates: [] }
   const tableShim = (table) => ({
     insert: (row) => {
