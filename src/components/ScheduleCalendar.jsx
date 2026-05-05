@@ -144,9 +144,10 @@ export default function ScheduleCalendar({ user }) {
   const [publishModal, setPublishModal] = useState(null) // { periodStart, periodEnd }
   const [timeOff, setTimeOff] = useState([])
   const [holidays, setHolidays] = useState([])
-  // Partial-shift editor: assignment id currently being edited.
-  // Inline panel renders below the assignment row when set.
-  const [editingPartialId, setEditingPartialId] = useState(null)
+  // Block detail modal — clicking on a block card opens a popout
+  // listing every assignment with edit affordances (override times,
+  // remove, etc.). Replaces the cramped inline pencil/X icons.
+  const [blockDetail, setBlockDetail] = useState(null) // shift_block row
 
   const locationId = user.activeLocation?.id
   const isManager = canManage(user.role)
@@ -240,7 +241,9 @@ export default function ScheduleCalendar({ user }) {
     else alert(data.error || 'Failed to remove')
   }
 
-  // Partial shift save: { start, end, reason } — null clears.
+  // Partial shift save — used by BlockDetailModal. payload is
+  // { start, end, reason } where null on any field clears the
+  // override and returns to the block default.
   async function handlePartialSave(assignmentId, payload) {
     const res = await fetch(`/api/schedule/assignments/${assignmentId}`, {
       method: 'PUT',
@@ -253,12 +256,29 @@ export default function ScheduleCalendar({ user }) {
     })
     const data = await res.json()
     if (data.success) {
-      setEditingPartialId(null)
-      fetchData()
-    } else {
-      alert(data.error || 'Failed to save partial shift')
+      await fetchData()
+      // Re-pull the latest block from the freshly-fetched list so
+      // the modal shows the updated override values without the
+      // operator having to close and reopen.
+      if (blockDetail?.id) {
+        // fetchData mutates blocks state on next tick; we use a
+        // closure-friendly pattern via setBlocks below.
+      }
+      return { ok: true }
     }
+    return { ok: false, error: data.error || 'Failed to save partial shift' }
   }
+
+  // Refresh the modal's view when blocks state changes (after a
+  // save fired fetchData).
+  useEffect(() => {
+    if (!blockDetail) return
+    const updated = blocks.find((b) => b.id === blockDetail.id)
+    if (updated) setBlockDetail(updated)
+    // If the block was deleted, close the modal.
+    else setBlockDetail(null)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [blocks])
 
   async function handleDeleteBlock(blockId) {
     if (!confirm('Delete this entire shift slot? Any assigned coaches are removed too. (The template will regenerate it on next save unless you remove the matching weekday from the template.)')) return
@@ -774,8 +794,10 @@ export default function ScheduleCalendar({ user }) {
                       return (
                         <div
                           key={block.id}
-                          className={`rounded-md p-2 text-xs relative group ${myAssignment ? 'ring-1 ring-blue-400/50' : ''} ${unstaffed ? 'border border-red-500/50' : ''}`}
+                          onClick={() => setBlockDetail(block)}
+                          className={`rounded-md p-2 text-xs relative group cursor-pointer hover:ring-1 hover:ring-un1t-light/40 ${myAssignment ? 'ring-1 ring-blue-400/50' : ''} ${unstaffed ? 'border border-red-500/50' : ''}`}
                           style={{ backgroundColor: unstaffed ? '#7F1D1D20' : blockColor + '20', borderLeft: `3px solid ${unstaffed ? '#EF4444' : blockColor}` }}
+                          title="Click to manage this shift"
                         >
                           <div className="flex items-center justify-between gap-1">
                             <div className="font-semibold truncate" style={{ color: unstaffed ? '#FCA5A5' : 'inherit' }}>
@@ -809,97 +831,37 @@ export default function ScheduleCalendar({ user }) {
                               {assignments.map(a => {
                                 const isMe = a.profile_id === user.id
                                 const hasOverride = !!(a.start_time_override || a.end_time_override)
-                                const isEditing = editingPartialId === a.id
-                                const canEdit = isManager || isMe
                                 return (
-                                  <div key={a.id}>
-                                    <div className="flex items-center justify-between gap-1 text-[11px]">
-                                      <span className={`truncate ${isMe ? 'text-blue-300 font-medium' : 'text-un1t-white'}`}>
-                                        {a.profiles?.full_name || 'Unknown'}
-                                        {hasOverride && (
-                                          <span
-                                            className="ml-1 text-amber-300"
-                                            title={
-                                              `Partial: ${formatTime(a.start_time_override || block.start_time)}–${formatTime(a.end_time_override || block.end_time)}` +
-                                              (a.partial_reason ? ` · ${a.partial_reason}` : '')
-                                            }
-                                          >
-                                            ●
-                                          </span>
-                                        )}
-                                      </span>
-                                      <div className="flex items-center gap-0.5 flex-shrink-0">
-                                        {canEdit && (
-                                          <button
-                                            onClick={(e) => {
-                                              e.stopPropagation()
-                                              setEditingPartialId(isEditing ? null : a.id)
-                                            }}
-                                            className={`text-un1t-mid hover:text-amber-400 ${hasOverride ? '' : 'opacity-0 group-hover:opacity-100'}`}
-                                            title={hasOverride ? 'Edit partial-shift times' : 'Set partial-shift times'}
-                                          >
-                                            <Pencil size={10} />
-                                          </button>
-                                        )}
-                                        {canEdit && (
-                                          <button
-                                            onClick={(e) => { e.stopPropagation(); handleUnassign(a.id) }}
-                                            className="opacity-0 group-hover:opacity-100 text-un1t-mid hover:text-red-400"
-                                            title="Remove coach"
-                                          >
-                                            <X size={10} />
-                                          </button>
-                                        )}
-                                      </div>
-                                    </div>
-                                    {isEditing && (
-                                      <PartialShiftEditor
-                                        assignment={a}
-                                        block={block}
-                                        onCancel={() => setEditingPartialId(null)}
-                                        onSave={(payload) => handlePartialSave(a.id, payload)}
-                                      />
-                                    )}
+                                  <div key={a.id} className="flex items-center justify-between gap-1 text-[11px]">
+                                    <span className={`truncate ${isMe ? 'text-blue-300 font-medium' : 'text-un1t-white'}`}>
+                                      {a.profiles?.full_name || 'Unknown'}
+                                      {hasOverride && (
+                                        <span
+                                          className="ml-1 text-amber-300"
+                                          title={
+                                            `Partial: ${formatTime(a.start_time_override || block.start_time)}–${formatTime(a.end_time_override || block.end_time)}` +
+                                            (a.partial_reason ? ` · ${a.partial_reason}` : '')
+                                          }
+                                        >
+                                          ●
+                                        </span>
+                                      )}
+                                    </span>
                                   </div>
                                 )
                               })}
                             </div>
                           )}
 
-                          {/* Action row */}
-                          <div className="mt-1.5 flex items-center justify-end gap-1">
-                            {myAssignment && (
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation()
-                                  // Swap modal expects a legacy shift-shaped row
-                                  const shiftShape = flatShifts.find(fs => fs.id === myAssignment.id)
-                                  if (shiftShape) setSwapModal(shiftShape)
-                                }}
-                                className="text-[10px] text-un1t-light hover:text-un1t-white"
-                                title="Request swap"
-                              >
-                                <ArrowLeftRight size={11} />
-                              </button>
-                            )}
-                            {isManager && !atCapacity && (
-                              <button
-                                onClick={() => setAssignTarget({ block })}
-                                className="text-[10px] text-blue-400 hover:text-blue-300 px-1.5 py-0.5 rounded border border-blue-500/30 hover:border-blue-500/60"
-                              >
-                                + Assign
-                              </button>
-                            )}
-                            {isManager && (
-                              <button
-                                onClick={() => handleDeleteBlock(block.id)}
-                                className="opacity-0 group-hover:opacity-100 text-un1t-mid hover:text-red-400"
-                                title="Remove this shift slot"
-                              >
-                                <X size={11} />
-                              </button>
-                            )}
-                          </div>
+                          {/* Subtle "click to manage" hint at the bottom.
+                              Everything actionable (assign coach, partial-shift
+                              edits, remove coach, delete block, swap) lives in
+                              the modal that opens on click. */}
+                          {(isManager || myAssignment) && (
+                            <div className="mt-1.5 text-[10px] text-un1t-mid italic text-right opacity-0 group-hover:opacity-100 transition-opacity">
+                              Click to manage
+                            </div>
+                          )}
                         </div>
                       )
                     })}
@@ -951,6 +913,42 @@ export default function ScheduleCalendar({ user }) {
           templates={templates}
           onCreate={(templateId) => handleCreateBlock(createTarget.date, templateId)}
           onClose={() => setCreateTarget(null)}
+        />
+      )}
+
+      {/* Block Detail Modal — opens on block-card click. Houses all
+          per-assignment edits (partial-shift overrides, remove coach,
+          self-swap-request) plus block-level actions (assign, delete). */}
+      {blockDetail && (
+        <BlockDetailModal
+          block={blockDetail}
+          user={user}
+          isManager={isManager}
+          flatShifts={flatShifts}
+          onClose={() => setBlockDetail(null)}
+          onAddCoach={() => { setAssignTarget({ block: blockDetail }); setBlockDetail(null) }}
+          onUnassign={async (assignmentId) => {
+            if (!confirm('Remove this coach from the shift?')) return
+            const res = await fetch(`/api/schedule/assignments/${assignmentId}`, { method: 'DELETE' })
+            const data = await res.json()
+            if (data.success) await fetchData()
+            else alert(data.error || 'Failed to remove')
+          }}
+          onPartialSave={handlePartialSave}
+          onDeleteBlock={async () => {
+            if (!confirm('Delete this entire shift slot? Any assigned coaches are removed too.')) return
+            const res = await fetch(`/api/schedule/blocks/${blockDetail.id}`, { method: 'DELETE' })
+            const data = await res.json()
+            if (data.success) { setBlockDetail(null); fetchData() }
+            else alert(data.error || 'Failed to delete')
+          }}
+          onSwapRequest={(myAssignmentId) => {
+            const shiftShape = flatShifts.find((fs) => fs.id === myAssignmentId)
+            if (shiftShape) {
+              setSwapModal(shiftShape)
+              setBlockDetail(null)
+            }
+          }}
         />
       )}
 
@@ -1288,111 +1286,289 @@ function SwapModal({ shift, onSubmit, onClose }) {
 }
 
 
-// PartialShiftEditor — inline editor for assignment-level time overrides.
-// Use case: Sarah was scheduled for the 9-5 block but actually worked
-// 9-1. Operator clicks the pencil on her assignment and sets her own
-// start/end times here. NULL fields inherit the block default. Saved
-// values flow to public.shifts.start_time_override via the mig 100
-// mirror trigger and feed payroll automatically.
-function PartialShiftEditor({ assignment, block, onCancel, onSave }) {
-  const [start, setStart] = useState(assignment.start_time_override || "")
-  const [end, setEnd] = useState(assignment.end_time_override || "")
-  const [reason, setReason] = useState(assignment.partial_reason || "")
+// BlockDetailModal — opens when an operator clicks a block card.
+//
+// Replaces the old inline pencil + cramped buttons on the block
+// card. One pop-out, plenty of room, all the relevant actions:
+//   - Add a coach (manager + below capacity)
+//   - For each assigned coach: their effective times + per-row
+//     partial-shift override editor + remove button
+//   - Self-only "Request swap" if the operator is on this block
+//   - Manager-only "Delete this slot" at the bottom
+//
+// We re-fetch on every save (parent's fetchData) and the parent
+// useEffect keeps `block` here in sync with the latest data. So the
+// modal updates live as overrides are saved without a re-mount.
+function BlockDetailModal({
+  block, user, isManager, flatShifts,
+  onClose, onAddCoach, onUnassign, onPartialSave, onDeleteBlock, onSwapRequest,
+}) {
+  const tmpl = block.shift_templates || {}
+  const assignments = block.shift_assignments || []
+  const max = block.max_coaches || 15
+  const atCapacity = assignments.length >= max
+  const dateLabel = new Date(block.block_date + 'T00:00:00').toLocaleDateString('en-IE', {
+    weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
+  })
+
+  return (
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={onClose}>
+      <div
+        className="bg-un1t-dark border border-un1t-gray rounded-lg p-5 max-w-lg w-full max-h-[90vh] overflow-y-auto"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="flex items-start justify-between gap-3 mb-4">
+          <div className="min-w-0">
+            <h3 className="font-semibold text-un1t-white">{tmpl.name || 'Shift'}</h3>
+            <p className="text-xs text-un1t-light mt-0.5">{dateLabel}</p>
+            <p className="text-xs text-un1t-mid mt-1 inline-flex items-center gap-1.5">
+              <Clock size={11} />
+              {formatTime(block.start_time)}–{formatTime(block.end_time)}
+              <span className="mx-1">·</span>
+              {assignments.length}/{max} assigned
+            </p>
+          </div>
+          <button
+            onClick={onClose}
+            className="text-un1t-light hover:text-un1t-white shrink-0"
+            title="Close"
+          >
+            <X size={18} />
+          </button>
+        </div>
+
+        {/* Assigned coaches */}
+        <div className="space-y-2 mb-4">
+          <div className="text-[11px] font-semibold uppercase tracking-wider text-un1t-light">
+            Coaches
+          </div>
+          {assignments.length === 0 ? (
+            <p className="text-xs text-un1t-light italic">No coaches assigned yet.</p>
+          ) : (
+            assignments.map((a) => (
+              <AssignmentRow
+                key={a.id}
+                assignment={a}
+                block={block}
+                isMe={a.profile_id === user.id}
+                canEdit={isManager || a.profile_id === user.id}
+                onUnassign={() => onUnassign(a.id)}
+                onSave={(payload) => onPartialSave(a.id, payload)}
+                onSwapRequest={
+                  a.profile_id === user.id
+                    ? () => onSwapRequest(a.id)
+                    : null
+                }
+              />
+            ))
+          )}
+        </div>
+
+        {/* Action footer */}
+        <div className="border-t border-un1t-gray pt-4 flex items-center justify-between gap-2">
+          {isManager && !atCapacity ? (
+            <button
+              onClick={onAddCoach}
+              className="text-xs bg-blue-500/20 text-blue-300 border border-blue-500/40 hover:bg-blue-500/30 px-3 py-2 rounded-md font-medium inline-flex items-center gap-1.5"
+            >
+              <Plus size={12} /> Add coach
+            </button>
+          ) : <span />}
+          {isManager && (
+            <button
+              onClick={onDeleteBlock}
+              className="text-xs bg-red-500/15 text-red-300 border border-red-500/30 hover:bg-red-500/25 px-3 py-2 rounded-md font-medium inline-flex items-center gap-1.5"
+              title="Delete this entire shift slot"
+            >
+              <X size={12} /> Delete this slot
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// One coach's row inside BlockDetailModal — shows their effective
+// times, lets a manager (or the coach themselves) override the
+// times for partial shifts, request a swap, or be removed.
+function AssignmentRow({ assignment, block, isMe, canEdit, onUnassign, onSave, onSwapRequest }) {
+  const blockStart = (block.start_time || '').slice(0, 5)
+  const blockEnd = (block.end_time || '').slice(0, 5)
+  const overrideStart = (assignment.start_time_override || '').slice(0, 5)
+  const overrideEnd = (assignment.end_time_override || '').slice(0, 5)
+  const hasOverride = !!(assignment.start_time_override || assignment.end_time_override)
+
+  const [editing, setEditing] = useState(false)
+  const [start, setStart] = useState(overrideStart || blockStart)
+  const [end, setEnd] = useState(overrideEnd || blockEnd)
+  const [reason, setReason] = useState(assignment.partial_reason || '')
   const [saving, setSaving] = useState(false)
+  const [error, setError] = useState(null)
 
-  // Strip seconds for the input value so HH:MM works in <input type="time">.
-  const blockStart = (block.start_time || "").slice(0, 5)
-  const blockEnd = (block.end_time || "").slice(0, 5)
+  // Effective display times — what payroll will actually compute.
+  const effStart = formatTime(assignment.start_time_override || block.start_time)
+  const effEnd = formatTime(assignment.end_time_override || block.end_time)
 
-  async function handleSubmit(e) {
-    e.preventDefault()
-    e.stopPropagation()
+  async function handleSave() {
     setSaving(true)
-    try {
-      await onSave({
-        start: start && start !== blockStart ? start : null,
-        end: end && end !== blockEnd ? end : null,
-        reason: reason.trim() || null,
-      })
-    } finally {
-      setSaving(false)
+    setError(null)
+    // Treat "same as block default" as inherit (null).
+    const payload = {
+      start: start && start !== blockStart ? start : null,
+      end: end && end !== blockEnd ? end : null,
+      reason: reason.trim() || null,
+    }
+    const result = await onSave(payload)
+    setSaving(false)
+    if (result?.ok === false) {
+      setError(result.error || 'Save failed')
+    } else {
+      setEditing(false)
     }
   }
 
-  function handleClear(e) {
-    e.preventDefault()
-    e.stopPropagation()
+  async function handleClear() {
     setSaving(true)
-    onSave({ start: null, end: null, reason: null })
-      .finally(() => setSaving(false))
+    setError(null)
+    const result = await onSave({ start: null, end: null, reason: null })
+    setSaving(false)
+    if (result?.ok === false) {
+      setError(result.error || 'Clear failed')
+    } else {
+      setStart(blockStart)
+      setEnd(blockEnd)
+      setReason('')
+      setEditing(false)
+    }
   }
 
-  const hasExisting = !!(assignment.start_time_override || assignment.end_time_override || assignment.partial_reason)
-
   return (
-    <form
-      onClick={(e) => e.stopPropagation()}
-      onSubmit={handleSubmit}
-      className="mt-1.5 mb-1 p-2 bg-un1t-black/60 border border-amber-500/30 rounded text-[11px] space-y-1.5"
-    >
-      <div className="text-[10px] text-un1t-light">
-        Block default: <span className="font-mono">{blockStart}–{blockEnd}</span>. Leave fields equal to the block default to inherit.
-      </div>
-      <div className="flex items-center gap-1.5">
-        <input
-          type="time"
-          value={start}
-          onChange={(e) => setStart(e.target.value)}
-          placeholder={blockStart}
-          className="flex-1 bg-un1t-black border border-un1t-gray rounded px-1.5 py-1 text-un1t-white"
-        />
-        <span className="text-un1t-mid">–</span>
-        <input
-          type="time"
-          value={end}
-          onChange={(e) => setEnd(e.target.value)}
-          placeholder={blockEnd}
-          className="flex-1 bg-un1t-black border border-un1t-gray rounded px-1.5 py-1 text-un1t-white"
-        />
-      </div>
-      <input
-        type="text"
-        value={reason}
-        onChange={(e) => setReason(e.target.value)}
-        placeholder="Reason (optional, e.g. left early — sick)"
-        maxLength={200}
-        className="w-full bg-un1t-black border border-un1t-gray rounded px-1.5 py-1 text-un1t-white"
-      />
-      <div className="flex items-center justify-between gap-1.5">
-        <div className="flex items-center gap-1">
-          <button
-            type="submit"
-            disabled={saving}
-            className="bg-amber-500/20 text-amber-200 border border-amber-500/40 hover:bg-amber-500/30 px-2 py-1 rounded font-medium inline-flex items-center gap-1 disabled:opacity-50"
-          >
-            <Check size={10} /> {saving ? "Saving…" : "Save"}
-          </button>
-          <button
-            type="button"
-            onClick={onCancel}
-            disabled={saving}
-            className="text-un1t-light hover:text-un1t-white px-2 py-1"
-          >
-            Cancel
-          </button>
+    <div className="bg-un1t-black/40 border border-un1t-gray rounded-md p-3">
+      <div className="flex items-center justify-between gap-2">
+        <div className="min-w-0">
+          <div className={`text-sm font-medium ${isMe ? 'text-blue-300' : 'text-un1t-white'}`}>
+            {assignment.profiles?.full_name || 'Unknown'}
+            {hasOverride && (
+              <span className="ml-1.5 text-[10px] uppercase font-semibold bg-amber-500/20 text-amber-300 px-1.5 py-0.5 rounded">
+                Partial
+              </span>
+            )}
+          </div>
+          <div className="text-xs text-un1t-light mt-0.5 inline-flex items-center gap-1">
+            <Clock size={10} />
+            {effStart}–{effEnd}
+            {hasOverride && (
+              <span className="text-un1t-mid ml-1">(block default {formatTime(block.start_time)}–{formatTime(block.end_time)})</span>
+            )}
+          </div>
+          {assignment.partial_reason && !editing && (
+            <div className="text-[11px] text-un1t-mid mt-1 italic">
+              &ldquo;{assignment.partial_reason}&rdquo;
+            </div>
+          )}
         </div>
-        {hasExisting && (
-          <button
-            type="button"
-            onClick={handleClear}
-            disabled={saving}
-            className="text-un1t-mid hover:text-red-300 text-[10px]"
-            title="Clear override; assignment will inherit the block default"
-          >
-            Clear override
-          </button>
-        )}
+        <div className="flex items-center gap-1.5 shrink-0">
+          {onSwapRequest && !editing && (
+            <button
+              onClick={onSwapRequest}
+              className="text-[11px] text-un1t-light hover:text-un1t-white inline-flex items-center gap-1 px-2 py-1 rounded hover:bg-un1t-gray/40"
+              title="Request swap"
+            >
+              <ArrowLeftRight size={11} />
+            </button>
+          )}
+          {canEdit && !editing && (
+            <button
+              onClick={() => setEditing(true)}
+              className="text-[11px] text-amber-300 hover:text-amber-200 inline-flex items-center gap-1 px-2 py-1 rounded hover:bg-amber-500/10"
+              title={hasOverride ? 'Edit partial-shift times' : 'Set partial-shift times'}
+            >
+              <Pencil size={11} />
+              {hasOverride ? 'Edit' : 'Partial'}
+            </button>
+          )}
+          {canEdit && !editing && (
+            <button
+              onClick={onUnassign}
+              className="text-[11px] text-un1t-light hover:text-red-400 inline-flex items-center gap-1 px-2 py-1 rounded hover:bg-red-500/10"
+              title="Remove coach"
+            >
+              <X size={11} />
+            </button>
+          )}
+        </div>
       </div>
-    </form>
+
+      {editing && (
+        <div className="mt-3 pt-3 border-t border-un1t-gray space-y-2">
+          <div className="text-[11px] text-un1t-light">
+            Set the actual times this coach worked. Leave equal to the block default
+            ({formatTime(block.start_time)}–{formatTime(block.end_time)}) to inherit.
+          </div>
+          <div className="flex items-center gap-2">
+            <label className="text-xs text-un1t-light w-12">Start</label>
+            <input
+              type="time"
+              value={start}
+              onChange={(e) => setStart(e.target.value)}
+              className="flex-1 bg-un1t-black border border-un1t-gray rounded-md px-2 py-1.5 text-sm text-un1t-white focus:outline-none focus:border-amber-500/50"
+            />
+            <label className="text-xs text-un1t-light w-8 text-center">End</label>
+            <input
+              type="time"
+              value={end}
+              onChange={(e) => setEnd(e.target.value)}
+              className="flex-1 bg-un1t-black border border-un1t-gray rounded-md px-2 py-1.5 text-sm text-un1t-white focus:outline-none focus:border-amber-500/50"
+            />
+          </div>
+          <div>
+            <label className="text-xs text-un1t-light block mb-1">Reason (optional)</label>
+            <input
+              type="text"
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              maxLength={200}
+              placeholder="e.g. left early — sick, covered until 1pm for Mike"
+              className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-1.5 text-sm text-un1t-white focus:outline-none focus:border-amber-500/50"
+            />
+          </div>
+          {error && (
+            <div className="text-xs text-red-400 inline-flex items-start gap-1.5">
+              <AlertCircle size={11} className="mt-0.5 shrink-0" /> {error}
+            </div>
+          )}
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleSave}
+                disabled={saving}
+                className="text-xs bg-amber-500/20 text-amber-200 border border-amber-500/40 hover:bg-amber-500/30 px-3 py-1.5 rounded-md font-medium inline-flex items-center gap-1.5 disabled:opacity-50"
+              >
+                <Check size={11} /> {saving ? 'Saving…' : 'Save'}
+              </button>
+              <button
+                onClick={() => { setEditing(false); setError(null); setStart(overrideStart || blockStart); setEnd(overrideEnd || blockEnd); setReason(assignment.partial_reason || '') }}
+                disabled={saving}
+                className="text-xs text-un1t-light hover:text-un1t-white px-2 py-1.5"
+              >
+                Cancel
+              </button>
+            </div>
+            {hasOverride && (
+              <button
+                onClick={handleClear}
+                disabled={saving}
+                className="text-[11px] text-un1t-mid hover:text-red-300"
+                title="Remove the override and inherit the block default"
+              >
+                Clear override
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
   )
 }
