@@ -128,7 +128,7 @@ export default function Sidebar({ user }) {
       {/* Logo + Location */}
       <div className="p-5 border-b border-un1t-gray">
         {branding?.logo_url ? (
-          <img src={branding.logo_url} alt={branding.company_name || 'Logo'} className="h-8 max-w-[140px] object-contain" />
+          <img src={branding.logo_url} alt={branding.company_name || 'Logo'} className="h-[54px] max-w-full object-contain" />
         ) : (
           <h1 className="text-xl font-bold tracking-wider">{branding?.company_name || 'UN1T'}</h1>
         )}
