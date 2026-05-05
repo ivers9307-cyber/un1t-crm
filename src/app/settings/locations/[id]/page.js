@@ -1,12 +1,13 @@
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { redirect, notFound } from 'next/navigation'
-import { ToggleRight } from 'lucide-react'
+import { ToggleRight, Image as ImageIcon } from 'lucide-react'
 import { isFeatureEnabledAtLocation } from '@shared/permissions'
 import { canEditLocationFeatures } from '@/lib/staff-access'
 import LocationForm from '@/components/LocationForm'
 import LocationFeatures from '@/components/LocationFeatures'
 import CarDepositSettings from '@/components/CarDepositSettings'
+import BrandingSettings from '@/components/BrandingSettings'
 
 export const dynamic = 'force-dynamic'
 
@@ -47,6 +48,21 @@ export default async function EditLocationPage({ params }) {
           <LocationFeatures location={location} />
         </section>
       )}
+
+      {/* Per-location branding (logo + favicon + company name).
+          Drives the favicon and tab title on this location's
+          buyer-facing surfaces — the deposit page on
+          pay.ccfautos.com pulls the car's location's branding so
+          CCF Autos buyers see CCF Autos branding while UN1T's
+          gym-side pages still get UN1T's. Same access gate as the
+          rest of the page (master OR owner-at-this-location). */}
+      <section className="mt-10">
+        <div className="flex items-center gap-2 mb-3">
+          <ImageIcon size={16} className="text-un1t-light" />
+          <h3 className="text-lg font-semibold">Branding</h3>
+        </div>
+        <BrandingSettings user={user} locationId={location.id} />
+      </section>
 
       {/* Car deposit settings are only relevant when this location
           has the Car Processing feature enabled. Hides the section

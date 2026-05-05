@@ -202,9 +202,17 @@ export default function CarDepositPage({ token }) {
   // Already paid (DB-confirmed via webhook OR SDK onSuccess just fired).
   if (data.status === 'paid' || phase === 'paid') {
     const amount = data.paid_amount ?? data.amount
+    const paidBrandLogo = data.branding?.logo_url || null
+    const paidBrandName = data.branding?.company_name || ''
     return (
       <Centered>
         <div className="bg-green-50 border border-green-200 rounded-xl p-8 text-center">
+          {paidBrandLogo && (
+            <div className="flex justify-center mb-3">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={paidBrandLogo} alt={paidBrandName || 'Dealer'} className="max-h-12 w-auto object-contain" />
+            </div>
+          )}
           <CheckCircle2 className="mx-auto mb-3 text-green-600" size={40} />
           <h1 className="text-xl font-bold text-gray-900 mb-1">Deposit received</h1>
           <p className="text-sm text-gray-700 mb-2">
@@ -226,10 +234,27 @@ export default function CarDepositPage({ token }) {
     )
   }
 
+  // Per-location buyer-facing branding. CCF Autos cars surface CCF
+  // Autos's logo + company name; UN1T cars surface UN1T's. data.branding
+  // is { logo_url, company_name } populated by /api/public/deposit/[token].
+  const brandLogo = data.branding?.logo_url || null
+  const brandName = data.branding?.company_name || ''
+  const headingPrefix = brandName ? `${brandName} — ` : ''
+
   return (
     <Centered>
       <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-6 sm:p-8">
-        <h1 className="text-2xl sm:text-3xl font-bold text-gray-900 mb-1">Tesla Car Deposit</h1>
+        {brandLogo && (
+          <div className="flex justify-center mb-5">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={brandLogo}
+              alt={brandName || 'Dealer'}
+              className="max-h-14 sm:max-h-16 w-auto object-contain"
+            />
+          </div>
+        )}
+        <h1 className="text-2xl sm:text-3xl font-bold text-gray-900 mb-1">{headingPrefix}Car Deposit</h1>
         <p className="text-sm text-gray-600 mb-6">
           Secure the <strong>{data.car.label}{data.car.reg ? ` (${data.car.reg})` : ''}</strong> with a
           €{data.amount.toFixed(2)} deposit.

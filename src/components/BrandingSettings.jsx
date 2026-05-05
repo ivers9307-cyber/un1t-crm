@@ -5,7 +5,13 @@ import { useState, useEffect, useRef } from 'react'
 // confuse it with an HTML <img> element and demand an alt prop.
 import { Image as ImageIcon, Upload, Trash2, Check } from 'lucide-react'
 
-export default function BrandingSettings({ user }) {
+// `locationId` is optional. When omitted, falls back to the user's
+// active location — the existing /settings page passes the user
+// only and uses the active location. The /settings/locations/[id]
+// page passes the explicit id of the location being edited so a
+// master can upload, e.g. CCF Autos branding while their active
+// location is UN1T Stillorgan.
+export default function BrandingSettings({ user, locationId: propLocationId }) {
   const [settings, setSettings] = useState(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -15,7 +21,7 @@ export default function BrandingSettings({ user }) {
   const logoInputRef = useRef(null)
   const faviconInputRef = useRef(null)
 
-  const locationId = user.activeLocation?.id
+  const locationId = propLocationId || user.activeLocation?.id
 
   useEffect(() => {
     async function load() {
@@ -62,8 +68,11 @@ export default function BrandingSettings({ user }) {
       const saveData = await saveRes.json()
       if (saveData.success) {
         setSettings(saveData.data)
-        // If favicon changed, update it in the browser immediately
-        if (type === 'favicon') {
+        // Only update the live browser favicon when editing the
+        // ACTIVE location — otherwise editing CCF Autos branding
+        // from a UN1T-active session would clobber the UN1T tab
+        // icon until reload.
+        if (type === 'favicon' && locationId === user.activeLocation?.id) {
           updateBrowserFavicon(data.url)
         }
       }
@@ -90,7 +99,7 @@ export default function BrandingSettings({ user }) {
     const data = await res.json()
     if (data.success) {
       setSettings(data.data)
-      if (type === 'favicon') {
+      if (type === 'favicon' && locationId === user.activeLocation?.id) {
         updateBrowserFavicon(null)
       }
     }

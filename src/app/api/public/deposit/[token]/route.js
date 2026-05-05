@@ -13,6 +13,11 @@ export const dynamic = 'force-dynamic'
 
 export async function GET(_request, { params }) {
   const db = createServerClient()
+  // The nested company_settings join lets the public page render
+  // the per-location logo without a second round-trip. Buyer-facing
+  // branding follows the car's location: a CCF Autos car shows CCF
+  // Autos branding, a UN1T car shows UN1T's. Falls back to a plain
+  // make/model header when no company_settings row exists.
   const { data: car } = await db
     .from('cars')
     .select(`
@@ -20,7 +25,10 @@ export async function GET(_request, { params }) {
       buyer_name,
       deposit_token, deposit_token_expires_at, deposit_amount, deposit_status,
       deposit_terms_accepted_at, deposit_paid_at, deposit_paid_amount,
-      locations ( id, name, car_deposit_terms, car_deposit_terms_version )
+      locations (
+        id, name, car_deposit_terms, car_deposit_terms_version,
+        company_settings ( logo_url, favicon_url, company_name )
+      )
     `)
     .eq('deposit_token', params.token)
     .maybeSingle()
@@ -44,11 +52,16 @@ export async function GET(_request, { params }) {
   }
 
   const carLabel = [car.make, car.model, car.vehicle_year]
-    .filter(Boolean).join(' ').trim() || 'Tesla'
+    .filter(Boolean).join(' ').trim() || 'Vehicle'
   // Buyer-facing — only show the Irish reg they'll actually drive
   // away with. UK reg is internal to our import workflow and would
   // confuse the buyer (or worse, look like a different car).
   const reg = car.irish_reg || null
+
+  // company_settings is a 1-or-0 join — Postgres returns it as an
+  // array because the FK direction (settings → location) is
+  // many-side. Pluck the first row defensively.
+  const settings = car.locations?.company_settings?.[0] || null
 
   return NextResponse.json({
     success: true,
@@ -65,6 +78,12 @@ export async function GET(_request, { params }) {
       text: car.locations?.car_deposit_terms || null,
       version: car.locations?.car_deposit_terms_version || 1,
     },
+    branding: settings
+      ? {
+          logo_url: settings.logo_url || null,
+          company_name: settings.company_name || car.locations?.name || null,
+        }
+      : { logo_url: null, company_name: car.locations?.name || null },
     accepted_at: car.deposit_terms_accepted_at,
     paid_at: car.deposit_paid_at,
     paid_amount: car.deposit_paid_amount != null ? Number(car.deposit_paid_amount) : null,
