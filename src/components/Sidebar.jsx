@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
-import { LayoutDashboard, Users, Columns3, CheckSquare, Calendar, MessagesSquare, CalendarClock, Settings, LogOut, Car, Flag, Receipt, DoorOpen } from 'lucide-react'
+import { LayoutDashboard, Users, Columns3, CheckSquare, Calendar, MessagesSquare, CalendarClock, Settings, LogOut, Car, Flag, Receipt, DoorOpen, Activity, ExternalLink } from 'lucide-react'
 import { createBrowserClient } from '@/lib/supabase'
 import LocationSwitcher from './LocationSwitcher'
 import ImpersonatePicker from './ImpersonatePicker'
@@ -172,6 +172,26 @@ export default function Sidebar({ user }) {
           )
         })}
       </nav>
+
+      {/* Master-only Platform link. Opens the standalone ops
+          dashboard at platform.un1tdublin.com in a new tab —
+          alerts, balances, cost tracking, approve/decline.
+          Lives on a separate Vercel project + Supabase
+          (un1t-sentinel) so it stays reachable during a CRM
+          outage. No feature gate, no permission key, role-only. */}
+      {user?.role === 'master' && (
+        <a
+          href="https://platform.un1tdublin.com"
+          target="_blank"
+          rel="noreferrer"
+          className="flex items-center gap-3 px-5 py-2.5 text-sm transition-colors text-un1t-light hover:text-un1t-white hover:bg-un1t-gray/30 border-l-2 border-transparent border-t border-un1t-gray"
+          title="Sentinel ops dashboard (master-only, opens in new tab)"
+        >
+          <Activity size={18} />
+          Platform
+          <ExternalLink size={11} className="ml-auto opacity-60" />
+        </a>
+      )}
 
       {/* Master-only impersonation picker. Visible while a real
           master session is active, OR while currently impersonating
