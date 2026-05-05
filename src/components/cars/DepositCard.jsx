@@ -9,7 +9,9 @@
 // pending/completed cars.
 
 import { useState } from 'react'
-import { Send, CheckCircle2, Clock, AlertCircle, ExternalLink, RefreshCw, Mail, MessageCircle } from 'lucide-react'
+import { Send, CheckCircle2, Clock, AlertCircle, ExternalLink, RefreshCw, Mail, MessageCircle, XCircle } from 'lucide-react'
+
+const CANCELLABLE_STATUSES = new Set(['sent', 'terms_accepted', 'failed'])
 
 const STATUS_META = {
   sent:            { label: 'Link sent',       cls: 'bg-blue-500/20 text-blue-400',     icon: Send },
@@ -32,11 +34,16 @@ export default function DepositCard({ car, setCar, setError, disabled, defaultAm
     car.deposit_amount != null ? Number(car.deposit_amount) : defaultAmount
   )
   const [lastResult, setLastResult] = useState(null)
+  // Two-step cancel confirm: first click flips cancelArmed=true,
+  // second click within ~5s actually fires the API. Auto-disarms
+  // if the operator looks at it for too long.
+  const [cancelArmed, setCancelArmed] = useState(false)
 
   const status = car.deposit_status
   const meta = status && STATUS_META[status]
   const isPaid = status === 'paid'
   const hasLink = !!car.deposit_token
+  const canCancel = CANCELLABLE_STATUSES.has(status)
 
   async function issueLink() {
     setBusy(true); setError(null); setLastResult(null)
@@ -67,6 +74,30 @@ export default function DepositCard({ car, setCar, setError, disabled, defaultAm
     } finally {
       setBusy(false)
     }
+  }
+
+  async function cancelDeposit() {
+    setBusy(true); setError(null); setLastResult(null)
+    try {
+      const res = await fetch(`/api/cars/${car.id}/cancel-deposit`, { method: 'POST' })
+      const j = await res.json()
+      if (!j.success) {
+        setError(j.error || 'Failed to cancel deposit')
+        return
+      }
+      // Reflect the cancelled state locally — no page reload needed.
+      // Server returns the updated car so we stamp it directly.
+      setCar(c => ({ ...c, ...j.data.car }))
+      setCancelArmed(false)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  function armCancel() {
+    setCancelArmed(true)
+    // Auto-disarm after 5s so the button doesn't sit primed forever.
+    setTimeout(() => setCancelArmed(false), 5000)
   }
 
   return (
@@ -152,6 +183,42 @@ export default function DepositCard({ car, setCar, setError, disabled, defaultAm
             >
               <ExternalLink size={11} /> View public deposit page
             </a>
+          )}
+
+          {/* Cancel deposit request — only visible while the deposit
+              is in a state that can still be cancelled. Two-step
+              confirm: first click arms the button, second click
+              within 5s actually fires. Auto-disarms on timeout. */}
+          {canCancel && (
+            <div className="mt-3 pt-3 border-t border-un1t-gray/40">
+              {!cancelArmed ? (
+                <button
+                  onClick={armCancel}
+                  disabled={busy || disabled}
+                  className="text-xs text-red-400 hover:text-red-300 inline-flex items-center gap-1 disabled:opacity-50"
+                >
+                  <XCircle size={11} /> Cancel deposit request
+                </button>
+              ) : (
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-amber-400">Are you sure? This kills the buyer's link.</span>
+                  <button
+                    onClick={cancelDeposit}
+                    disabled={busy}
+                    className="text-xs px-2 py-1 rounded bg-red-500/80 text-white hover:bg-red-500 disabled:opacity-50"
+                  >
+                    {busy ? 'Cancelling…' : 'Yes, cancel'}
+                  </button>
+                  <button
+                    onClick={() => setCancelArmed(false)}
+                    disabled={busy}
+                    className="text-xs px-2 py-1 rounded bg-un1t-gray/40 text-un1t-light hover:bg-un1t-gray/60"
+                  >
+                    Keep
+                  </button>
+                </div>
+              )}
+            </div>
           )}
         </>
       )}
