@@ -1031,10 +1031,11 @@ function PermanentDeleteButton({ staffId, staffName }) {
         throw new Error(data.error || `Delete failed (${res.status})`)
       }
       // Hard delete — there's no profile to return to. Send the
-      // operator back to the staff list. data.warning surfaces the
-      // auth-orphan case if it happened.
+      // operator back to the staff list (which lives at /settings,
+      // not /settings/staff — there's no index page in that subtree).
+      // data.warning surfaces the auth-orphan case if it happened.
       if (data.warning) alert(data.warning)
-      router.push('/settings/staff')
+      router.push('/settings')
     } catch (e) {
       setState('error')
       setError(e.message || 'Delete failed')
