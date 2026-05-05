@@ -186,11 +186,11 @@ export default function CarDepositPage({ token }) {
         <div className={`border rounded-xl p-6 text-center ${cls}`}>
           <AlertCircle className="mx-auto mb-2" size={28} />
           <p className="font-semibold">
-            {isExpired ? 'This deposit link has expired' : loadError}
+            {isExpired ? 'This payment link has expired' : loadError}
           </p>
           {isExpired && (
             <p className="text-sm mt-1">
-              Deposit links are valid for 24 hours. Please contact the dealer to receive a new link.
+              Please contact the dealer to reissue a new link.
             </p>
           )}
         </div>

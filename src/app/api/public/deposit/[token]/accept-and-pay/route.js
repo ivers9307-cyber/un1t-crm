@@ -57,7 +57,7 @@ export async function POST(request, { params }) {
     if (new Date(car.deposit_token_expires_at).getTime() <= Date.now()) {
       return NextResponse.json({
         success: false,
-        error: 'This deposit link has expired. Please ask the dealer to send you a new one.',
+        error: 'This payment link has expired. Please contact the dealer to reissue a new link.',
         code: 'TOKEN_EXPIRED',
       }, { status: 410 })
     }

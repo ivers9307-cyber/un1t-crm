@@ -76,8 +76,14 @@ export async function POST(request, { params }) {
   // the receipt page on the public URL keeps working.
   const isAlreadyPaid = car.deposit_status === 'paid'
   const token = isAlreadyPaid && car.deposit_token ? car.deposit_token : randomUUID()
-  const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000
-  const expiresAt = isAlreadyPaid ? car.deposit_token_expires_at : new Date(Date.now() + TWENTY_FOUR_HOURS_MS).toISOString()
+  // 72 hours is the buyer-facing window — long enough that a buyer
+  // can sleep on it / talk to a partner / sort funds, short enough
+  // that the dealer doesn't have a forest of dormant unpaid links.
+  // Paid deposits keep their existing expiry untouched (the receipt
+  // page renders forever for any status='paid' regardless of the
+  // expiry timestamp).
+  const SEVENTY_TWO_HOURS_MS = 72 * 60 * 60 * 1000
+  const expiresAt = isAlreadyPaid ? car.deposit_token_expires_at : new Date(Date.now() + SEVENTY_TWO_HOURS_MS).toISOString()
 
   // Persist the token + expiry + amount + reset status so this issue
   // act becomes the new source of truth. Acceptance / payment columns
