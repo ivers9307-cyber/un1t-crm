@@ -16,6 +16,7 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { emitEvent, applyTagRules, EVENT_TYPES } from '@/lib/contact-events'
+import { stampHeartbeat } from '@/lib/cron-heartbeat'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -61,6 +62,9 @@ export async function GET(request) {
     .lte('race.race_date', toDate)
 
   if (error) {
+    // Don't stamp the heartbeat on a query failure — the whole point
+    // of the health-check is to surface this. Caller (Vercel cron)
+    // sees a 500 in its log too.
     return NextResponse.json({ success: false, error: error.message }, { status: 500 })
   }
 
@@ -124,6 +128,11 @@ export async function GET(request) {
       }
     }
   }
+
+  // Stamp the heartbeat after the loop completes — the health-check
+  // (mig 053) needs this to know the cron is alive. Best-effort: a
+  // failed write here shouldn't take down a successful run.
+  await stampHeartbeat('race-timing-events', stats).catch(() => {})
 
   return NextResponse.json({ success: true, stats })
 }
