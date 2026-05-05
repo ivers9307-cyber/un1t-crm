@@ -53,10 +53,24 @@ export function addDays(date, days) {
 }
 
 /**
- * Format a Date as YYYY-MM-DD (no time component, no TZ).
+ * Format a Date as YYYY-MM-DD using LOCAL calendar components.
+ *
+ * Why not toISOString().split('T')[0]? That shifts to UTC. In any
+ * timezone east of UTC (e.g. Ireland BST = +1), local midnight
+ * Monday is UTC 23:00 Sunday — toISOString() then returns the
+ * previous day's date string. The result: Monday slots in the
+ * weekly calendar key off Sunday's date, no blocks match, the
+ * Monday column renders empty.
+ *
+ * shift_blocks.block_date is a calendar date (no TZ) representing
+ * the day the operator MEANT, so we want the local-day intent
+ * preserved. getFullYear/getMonth/getDate use local components.
  */
 export function formatDate(date) {
-  return date.toISOString().split('T')[0]
+  const y = date.getFullYear()
+  const m = String(date.getMonth() + 1).padStart(2, '0')
+  const d = String(date.getDate()).padStart(2, '0')
+  return `${y}-${m}-${d}`
 }
 
 /**

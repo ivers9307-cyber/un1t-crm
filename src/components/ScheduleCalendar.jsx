@@ -44,8 +44,15 @@ function getMonday(date) {
   return d
 }
 
+// Local calendar-day formatter. toISOString() would shift to UTC and
+// move Monday-at-local-midnight back to Sunday's date in any tz east
+// of UTC (Ireland BST = +1) — Monday column then keys off Sunday and
+// no blocks match. Mirror src/lib/roster.js#formatDate.
 function formatDate(date) {
-  return date.toISOString().split('T')[0]
+  const y = date.getFullYear()
+  const m = String(date.getMonth() + 1).padStart(2, '0')
+  const d = String(date.getDate()).padStart(2, '0')
+  return `${y}-${m}-${d}`
 }
 
 function addDays(date, days) {
