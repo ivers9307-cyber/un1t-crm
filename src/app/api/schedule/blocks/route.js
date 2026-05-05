@@ -53,6 +53,9 @@ export async function GET(request) {
         notes,
         status,
         assigned_at,
+        start_time_override,
+        end_time_override,
+        partial_reason,
         profiles:profile_id(id, full_name, email, avatar_url, role)
       )
     `)

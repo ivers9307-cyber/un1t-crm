@@ -1,15 +1,108 @@
-// /api/schedule/assignments/[id] — DELETE
+// /api/schedule/assignments/[id] — PUT, DELETE
 //
-// Removes a coach from a shift_block. The mig 068 trigger then
-// removes the corresponding legacy public.shifts row.
+// PUT — partial-shift edits (mig 099/100). Operator can override the
+//       assignment's start/end times when they differ from the parent
+//       block, and add a free-text reason. Mirror trigger pushes the
+//       overrides into public.shifts.start_time_override which payroll
+//       already reads.
 //
-// Coaches can remove themselves; managers can remove anyone at a
-// location they own.
+// DELETE — removes a coach from a shift_block. The mig 068 trigger
+//       then removes the corresponding legacy public.shifts row.
+//
+// Coaches can edit/remove themselves on assignments they own.
+// Managers can edit/remove anyone at a location they own.
 
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
-import { MANAGER_ROLES } from '@/lib/schemas'
+import { validateBody } from '@/lib/validate'
+import { MANAGER_ROLES, timeOfDay } from '@/lib/schemas'
+
+// All fields optional. To CLEAR an override, send null explicitly
+// (z.nullable() vs .optional() — PUT body should pass null to remove
+// a previously-set override; omit the key to leave it unchanged).
+const UpdateAssignmentSchema = z.object({
+  start_time_override: timeOfDay.nullable().optional(),
+  end_time_override: timeOfDay.nullable().optional(),
+  partial_reason: z.string().max(200).nullable().optional(),
+  notes: z.string().max(2000).nullable().optional(),
+  status: z.enum(['scheduled', 'confirmed', 'declined', 'completed']).optional(),
+})
+
+export async function PUT(request, { params }) {
+  const user = await getCurrentUser()
+  if (!user) {
+    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+  }
+
+  const validation = await validateBody(request, UpdateAssignmentSchema)
+  if (!validation.ok) return validation.response
+  const updates = { ...validation.data }
+  if (Object.keys(updates).length === 0) {
+    return NextResponse.json({ success: false, error: 'Empty update' }, { status: 400 })
+  }
+
+  const db = createServerClient()
+
+  const { data: assignment, error: fetchErr } = await db
+    .from('shift_assignments')
+    .select('id, profile_id, block_id, shift_blocks!block_id(location_id, start_time, end_time, block_date)')
+    .eq('id', params.id)
+    .single()
+  if (fetchErr || !assignment) {
+    return NextResponse.json({ success: false, error: 'Assignment not found' }, { status: 404 })
+  }
+
+  const isSelf = assignment.profile_id === user.id
+  const isManager = MANAGER_ROLES.includes(user.role)
+  if (!isSelf && !isManager) {
+    return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+  }
+  if (isManager && user.role !== 'master') {
+    const userLocationIds = getUserLocationIds(user)
+    const blockLocation = assignment.shift_blocks?.location_id
+    if (blockLocation && !userLocationIds.includes(blockLocation)) {
+      return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+    }
+  }
+
+  // Soft sanity check on overrides — if both are set and end <= start
+  // (and neither crosses midnight), the operator's typo'd. Reject
+  // rather than silently saving a 0-or-negative-duration shift.
+  // Overnight shifts (end < start, e.g. 22:00→06:00) stay valid.
+  // We only enforce when the override is the same calendar day as
+  // the block — if the operator clearly wants something exotic, let
+  // them through.
+  const newStart = Object.prototype.hasOwnProperty.call(updates, 'start_time_override')
+    ? updates.start_time_override
+    : null
+  const newEnd = Object.prototype.hasOwnProperty.call(updates, 'end_time_override')
+    ? updates.end_time_override
+    : null
+  if (newStart && newEnd && newStart === newEnd) {
+    return NextResponse.json(
+      { success: false, error: 'Override start and end cannot be identical.' },
+      { status: 400 }
+    )
+  }
+
+  const { data, error } = await db
+    .from('shift_assignments')
+    .update(updates)
+    .eq('id', params.id)
+    .select(`
+      id, block_id, profile_id, notes, status, assigned_at, updated_at,
+      start_time_override, end_time_override, partial_reason,
+      profiles:profile_id(id, full_name, email, avatar_url, role)
+    `)
+    .single()
+
+  if (error) {
+    return NextResponse.json({ success: false, error: error.message }, { status: 400 })
+  }
+  return NextResponse.json({ success: true, data })
+}
 
 export async function DELETE(_request, { params }) {
   const user = await getCurrentUser()

@@ -19,7 +19,7 @@
 // those writes back into shift_blocks/shift_assignments.
 
 import { useState, useEffect, useCallback } from 'react'
-import { ChevronLeft, ChevronRight, Copy, Send, Plus, Users, User, Clock, X, ArrowLeftRight, CalendarOff, Palmtree, ThermometerSun, Ban, AlertTriangle, AlertCircle, CalendarDays, CalendarRange } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Copy, Send, Plus, Users, User, Clock, X, ArrowLeftRight, CalendarOff, Palmtree, ThermometerSun, Ban, AlertTriangle, AlertCircle, CalendarDays, CalendarRange, Pencil, Check } from 'lucide-react'
 import Link from 'next/link'
 import { computeWeeklyCost } from '@/lib/payroll'
 import { indexByDate } from '@/lib/bank-holidays'
@@ -144,6 +144,9 @@ export default function ScheduleCalendar({ user }) {
   const [publishModal, setPublishModal] = useState(null) // { periodStart, periodEnd }
   const [timeOff, setTimeOff] = useState([])
   const [holidays, setHolidays] = useState([])
+  // Partial-shift editor: assignment id currently being edited.
+  // Inline panel renders below the assignment row when set.
+  const [editingPartialId, setEditingPartialId] = useState(null)
 
   const locationId = user.activeLocation?.id
   const isManager = canManage(user.role)
@@ -235,6 +238,26 @@ export default function ScheduleCalendar({ user }) {
     const data = await res.json()
     if (data.success) fetchData()
     else alert(data.error || 'Failed to remove')
+  }
+
+  // Partial shift save: { start, end, reason } — null clears.
+  async function handlePartialSave(assignmentId, payload) {
+    const res = await fetch(`/api/schedule/assignments/${assignmentId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        start_time_override: payload.start || null,
+        end_time_override: payload.end || null,
+        partial_reason: payload.reason || null,
+      }),
+    })
+    const data = await res.json()
+    if (data.success) {
+      setEditingPartialId(null)
+      fetchData()
+    } else {
+      alert(data.error || 'Failed to save partial shift')
+    }
   }
 
   async function handleDeleteBlock(blockId) {
@@ -785,19 +808,57 @@ export default function ScheduleCalendar({ user }) {
                             <div className="mt-1.5 space-y-0.5">
                               {assignments.map(a => {
                                 const isMe = a.profile_id === user.id
+                                const hasOverride = !!(a.start_time_override || a.end_time_override)
+                                const isEditing = editingPartialId === a.id
+                                const canEdit = isManager || isMe
                                 return (
-                                  <div key={a.id} className="flex items-center justify-between gap-1 text-[11px]">
-                                    <span className={`truncate ${isMe ? 'text-blue-300 font-medium' : 'text-un1t-white'}`}>
-                                      {a.profiles?.full_name || 'Unknown'}
-                                    </span>
-                                    {(isManager || isMe) && (
-                                      <button
-                                        onClick={(e) => { e.stopPropagation(); handleUnassign(a.id) }}
-                                        className="opacity-0 group-hover:opacity-100 text-un1t-mid hover:text-red-400 flex-shrink-0"
-                                        title="Remove coach"
-                                      >
-                                        <X size={10} />
-                                      </button>
+                                  <div key={a.id}>
+                                    <div className="flex items-center justify-between gap-1 text-[11px]">
+                                      <span className={`truncate ${isMe ? 'text-blue-300 font-medium' : 'text-un1t-white'}`}>
+                                        {a.profiles?.full_name || 'Unknown'}
+                                        {hasOverride && (
+                                          <span
+                                            className="ml-1 text-amber-300"
+                                            title={
+                                              `Partial: ${formatTime(a.start_time_override || block.start_time)}–${formatTime(a.end_time_override || block.end_time)}` +
+                                              (a.partial_reason ? ` · ${a.partial_reason}` : '')
+                                            }
+                                          >
+                                            ●
+                                          </span>
+                                        )}
+                                      </span>
+                                      <div className="flex items-center gap-0.5 flex-shrink-0">
+                                        {canEdit && (
+                                          <button
+                                            onClick={(e) => {
+                                              e.stopPropagation()
+                                              setEditingPartialId(isEditing ? null : a.id)
+                                            }}
+                                            className={`text-un1t-mid hover:text-amber-400 ${hasOverride ? '' : 'opacity-0 group-hover:opacity-100'}`}
+                                            title={hasOverride ? 'Edit partial-shift times' : 'Set partial-shift times'}
+                                          >
+                                            <Pencil size={10} />
+                                          </button>
+                                        )}
+                                        {canEdit && (
+                                          <button
+                                            onClick={(e) => { e.stopPropagation(); handleUnassign(a.id) }}
+                                            className="opacity-0 group-hover:opacity-100 text-un1t-mid hover:text-red-400"
+                                            title="Remove coach"
+                                          >
+                                            <X size={10} />
+                                          </button>
+                                        )}
+                                      </div>
+                                    </div>
+                                    {isEditing && (
+                                      <PartialShiftEditor
+                                        assignment={a}
+                                        block={block}
+                                        onCancel={() => setEditingPartialId(null)}
+                                        onSave={(payload) => handlePartialSave(a.id, payload)}
+                                      />
                                     )}
                                   </div>
                                 )
@@ -1223,5 +1284,115 @@ function SwapModal({ shift, onSubmit, onClose }) {
         </button>
       </div>
     </div>
+  )
+}
+
+
+// PartialShiftEditor — inline editor for assignment-level time overrides.
+// Use case: Sarah was scheduled for the 9-5 block but actually worked
+// 9-1. Operator clicks the pencil on her assignment and sets her own
+// start/end times here. NULL fields inherit the block default. Saved
+// values flow to public.shifts.start_time_override via the mig 100
+// mirror trigger and feed payroll automatically.
+function PartialShiftEditor({ assignment, block, onCancel, onSave }) {
+  const [start, setStart] = useState(assignment.start_time_override || "")
+  const [end, setEnd] = useState(assignment.end_time_override || "")
+  const [reason, setReason] = useState(assignment.partial_reason || "")
+  const [saving, setSaving] = useState(false)
+
+  // Strip seconds for the input value so HH:MM works in <input type="time">.
+  const blockStart = (block.start_time || "").slice(0, 5)
+  const blockEnd = (block.end_time || "").slice(0, 5)
+
+  async function handleSubmit(e) {
+    e.preventDefault()
+    e.stopPropagation()
+    setSaving(true)
+    try {
+      await onSave({
+        start: start && start !== blockStart ? start : null,
+        end: end && end !== blockEnd ? end : null,
+        reason: reason.trim() || null,
+      })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  function handleClear(e) {
+    e.preventDefault()
+    e.stopPropagation()
+    setSaving(true)
+    onSave({ start: null, end: null, reason: null })
+      .finally(() => setSaving(false))
+  }
+
+  const hasExisting = !!(assignment.start_time_override || assignment.end_time_override || assignment.partial_reason)
+
+  return (
+    <form
+      onClick={(e) => e.stopPropagation()}
+      onSubmit={handleSubmit}
+      className="mt-1.5 mb-1 p-2 bg-un1t-black/60 border border-amber-500/30 rounded text-[11px] space-y-1.5"
+    >
+      <div className="text-[10px] text-un1t-light">
+        Block default: <span className="font-mono">{blockStart}–{blockEnd}</span>. Leave fields equal to the block default to inherit.
+      </div>
+      <div className="flex items-center gap-1.5">
+        <input
+          type="time"
+          value={start}
+          onChange={(e) => setStart(e.target.value)}
+          placeholder={blockStart}
+          className="flex-1 bg-un1t-black border border-un1t-gray rounded px-1.5 py-1 text-un1t-white"
+        />
+        <span className="text-un1t-mid">–</span>
+        <input
+          type="time"
+          value={end}
+          onChange={(e) => setEnd(e.target.value)}
+          placeholder={blockEnd}
+          className="flex-1 bg-un1t-black border border-un1t-gray rounded px-1.5 py-1 text-un1t-white"
+        />
+      </div>
+      <input
+        type="text"
+        value={reason}
+        onChange={(e) => setReason(e.target.value)}
+        placeholder="Reason (optional, e.g. left early — sick)"
+        maxLength={200}
+        className="w-full bg-un1t-black border border-un1t-gray rounded px-1.5 py-1 text-un1t-white"
+      />
+      <div className="flex items-center justify-between gap-1.5">
+        <div className="flex items-center gap-1">
+          <button
+            type="submit"
+            disabled={saving}
+            className="bg-amber-500/20 text-amber-200 border border-amber-500/40 hover:bg-amber-500/30 px-2 py-1 rounded font-medium inline-flex items-center gap-1 disabled:opacity-50"
+          >
+            <Check size={10} /> {saving ? "Saving…" : "Save"}
+          </button>
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={saving}
+            className="text-un1t-light hover:text-un1t-white px-2 py-1"
+          >
+            Cancel
+          </button>
+        </div>
+        {hasExisting && (
+          <button
+            type="button"
+            onClick={handleClear}
+            disabled={saving}
+            className="text-un1t-mid hover:text-red-300 text-[10px]"
+            title="Clear override; assignment will inherit the block default"
+          >
+            Clear override
+          </button>
+        )}
+      </div>
+    </form>
   )
 }
