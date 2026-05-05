@@ -1486,7 +1486,7 @@ function AssignmentRow({ assignment, block, isMe, canEdit, onUnassign, onSave, o
           {canEdit && !editing && (
             <button
               onClick={() => setEditing(true)}
-              className="text-[11px] font-semibold text-amber-200 hover:text-white inline-flex items-center gap-1 px-2 py-1 rounded bg-amber-500/15 hover:bg-amber-500/30 border border-amber-500/40"
+              className="text-[11px] font-semibold text-white inline-flex items-center gap-1 px-2.5 py-1 rounded bg-amber-600 hover:bg-amber-700 border border-amber-700"
               title={hasOverride ? 'Edit adjusted times' : 'Adjust this coach’s actual times'}
             >
               <Pencil size={11} />
