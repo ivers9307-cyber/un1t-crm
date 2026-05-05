@@ -141,6 +141,12 @@ export async function syncOrderFromCarDeposit({ db, car }) {
     completed_at: status === 'completed' ? (car.deposit_paid_at || null) : null,
     failed_at: status === 'failed' ? (car.deposit_link_sent_at || null) : null,
     refunded_at: status === 'refunded' ? (car.deposit_paid_at || null) : null,
+    // No canonical 'when did the buyer abandon' timestamp on the
+    // cars row, so stamp NOW() at the moment we discover it. For
+    // operator-initiated cancels (deposit_status='cancelled') that's
+    // ~the cancel click; for stale terms_accepted that resolve via
+    // a sweep, it's ~the sweep tick. Both are the right semantics.
+    abandoned_at: status === 'abandoned' ? new Date().toISOString() : null,
     metadata: {
       car_make: car.make || null,
       car_model: car.model || null,
