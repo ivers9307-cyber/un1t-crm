@@ -839,7 +839,7 @@ export default function ScheduleCalendar({ user }) {
                                         <span
                                           className="ml-1 text-amber-300"
                                           title={
-                                            `Partial: ${formatTime(a.start_time_override || block.start_time)}–${formatTime(a.end_time_override || block.end_time)}` +
+                                            `Adjusted: ${formatTime(a.start_time_override || block.start_time)}–${formatTime(a.end_time_override || block.end_time)}` +
                                             (a.partial_reason ? ` · ${a.partial_reason}` : '')
                                           }
                                         >
@@ -918,15 +918,19 @@ export default function ScheduleCalendar({ user }) {
 
       {/* Block Detail Modal — opens on block-card click. Houses all
           per-assignment edits (partial-shift overrides, remove coach,
-          self-swap-request) plus block-level actions (assign, delete). */}
-      {blockDetail && (
+          self-swap-request) plus block-level actions (assign, delete).
+          Hidden while the assign-coach modal is up so the operator
+          isn't staring at a doubled overlay; re-renders automatically
+          (with the new assignment baked in via the blocks-sync effect)
+          once the assign-coach modal closes. */}
+      {blockDetail && !assignTarget && (
         <BlockDetailModal
           block={blockDetail}
           user={user}
           isManager={isManager}
           flatShifts={flatShifts}
           onClose={() => setBlockDetail(null)}
-          onAddCoach={() => { setAssignTarget({ block: blockDetail }); setBlockDetail(null) }}
+          onAddCoach={() => setAssignTarget({ block: blockDetail })}
           onUnassign={async (assignmentId) => {
             if (!confirm('Remove this coach from the shift?')) return
             const res = await fetch(`/api/schedule/assignments/${assignmentId}`, { method: 'DELETE' })
@@ -1451,8 +1455,8 @@ function AssignmentRow({ assignment, block, isMe, canEdit, onUnassign, onSave, o
           <div className={`text-sm font-medium ${isMe ? 'text-blue-300' : 'text-un1t-white'}`}>
             {assignment.profiles?.full_name || 'Unknown'}
             {hasOverride && (
-              <span className="ml-1.5 text-[10px] uppercase font-semibold bg-amber-500/20 text-amber-300 px-1.5 py-0.5 rounded">
-                Partial
+              <span className="ml-1.5 text-[10px] uppercase font-bold bg-amber-400 text-amber-950 px-1.5 py-0.5 rounded">
+                Adjusted
               </span>
             )}
           </div>
@@ -1482,11 +1486,11 @@ function AssignmentRow({ assignment, block, isMe, canEdit, onUnassign, onSave, o
           {canEdit && !editing && (
             <button
               onClick={() => setEditing(true)}
-              className="text-[11px] text-amber-300 hover:text-amber-200 inline-flex items-center gap-1 px-2 py-1 rounded hover:bg-amber-500/10"
-              title={hasOverride ? 'Edit partial-shift times' : 'Set partial-shift times'}
+              className="text-[11px] font-semibold text-amber-200 hover:text-white inline-flex items-center gap-1 px-2 py-1 rounded bg-amber-500/15 hover:bg-amber-500/30 border border-amber-500/40"
+              title={hasOverride ? 'Edit adjusted times' : 'Adjust this coach’s actual times'}
             >
               <Pencil size={11} />
-              {hasOverride ? 'Edit' : 'Partial'}
+              {hasOverride ? 'Edit' : 'Adjust'}
             </button>
           )}
           {canEdit && !editing && (
