@@ -3,7 +3,7 @@
 import { useState, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { ArrowLeft, Plus, Trash2, Crown, KeyRound, AlertCircle, Loader2 } from 'lucide-react'
+import { ArrowLeft, Plus, Trash2, Crown, KeyRound, AlertCircle, Loader2, UserX, UserCheck, Skull } from 'lucide-react'
 import {
   OWNER_ASSIGNABLE_ROLES, MASTER_ASSIGNABLE_ROLES,
 } from '@/lib/schemas'
@@ -839,7 +839,267 @@ export default function StaffForm({
       >
         {saving ? 'Saving...' : isEdit ? 'Save Changes' : 'Create Team Member'}
       </button>
+
+      {/* Danger Zone — soft archive (Deactivate) and permanent delete
+          (master only, only when already inactive). Lives inside the
+          form but every button is type="button" so they don't trigger
+          the submit handler. */}
+      {isEdit && staff?.id && (
+        <DangerZone
+          staffId={staff.id}
+          staffName={form.full_name || staff.email}
+          isActive={form.active}
+          callerIsMaster={callerIsMaster}
+        />
+      )}
     </form>
+  )
+}
+
+// Danger Zone — destructive actions on a staff member.
+//
+// Visible states:
+//   active staff       → Deactivate button (everyone authorized to edit)
+//   inactive staff     → Reactivate button + Permanent delete (master only)
+//
+// Both destructive actions go through a confirmation step. Permanent
+// delete additionally requires typing the staff member's name to
+// match — that's the second-confirm UX standard for irreversible
+// destructive actions in this codebase (see contact delete-with-impact).
+function DangerZone({ staffId, staffName, isActive, callerIsMaster }) {
+  return (
+    <div className="bg-red-500/5 border border-red-500/20 rounded-lg p-5 space-y-4">
+      <div>
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-red-400">Danger Zone</h3>
+        <p className="text-xs text-un1t-light mt-1">
+          {isActive
+            ? "Deactivating revokes all door access and prevents sign-in. Their history (shifts, contact events, audit log) stays intact — that's almost always what you want when someone leaves."
+            : "This account is deactivated. They can't sign in. Reactivate to restore access, or permanently delete (master only) to fulfil a GDPR right-to-be-forgotten request."}
+        </p>
+      </div>
+
+      {isActive ? (
+        <DeactivateButton staffId={staffId} staffName={staffName} />
+      ) : (
+        <div className="space-y-3">
+          <ReactivateButton staffId={staffId} />
+          {callerIsMaster && (
+            <PermanentDeleteButton staffId={staffId} staffName={staffName} />
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// Soft-archive (DELETE /api/staff/[id]). Two-state inline confirm.
+function DeactivateButton({ staffId, staffName }) {
+  const router = useRouter()
+  const [state, setState] = useState('idle') // idle | confirming | working | error
+  const [error, setError] = useState(null)
+
+  async function run() {
+    setState('working')
+    setError(null)
+    try {
+      const res = await fetch(`/api/staff/${staffId}`, { method: 'DELETE' })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || data.success === false) {
+        throw new Error(data.error || `Deactivate failed (${res.status})`)
+      }
+      router.refresh()
+      setState('idle')
+    } catch (e) {
+      setState('error')
+      setError(e.message || 'Deactivate failed')
+    }
+  }
+
+  if (state === 'confirming' || state === 'working' || state === 'error') {
+    return (
+      <div className="bg-un1t-black/40 border border-un1t-gray rounded-md p-3 space-y-2">
+        <div className="text-xs text-un1t-light">
+          Deactivate <span className="font-mono text-un1t-white">{staffName}</span>?
+          They lose CRM access immediately and any UniFi door policies are revoked.
+          You can reactivate them at any time.
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={run}
+            disabled={state === 'working'}
+            className="text-xs bg-red-500 text-white px-3 py-1.5 rounded-md hover:bg-red-600 font-medium inline-flex items-center gap-1.5 disabled:opacity-50"
+          >
+            {state === 'working' ? <Loader2 size={11} className="animate-spin" /> : <UserX size={11} />}
+            {state === 'working' ? 'Deactivating…' : 'Yes, deactivate'}
+          </button>
+          <button
+            type="button"
+            onClick={() => { setState('idle'); setError(null) }}
+            disabled={state === 'working'}
+            className="text-xs text-un1t-light hover:text-un1t-white"
+          >
+            Cancel
+          </button>
+        </div>
+        {error && (
+          <div className="text-xs text-red-400 inline-flex items-start gap-1.5">
+            <AlertCircle size={11} className="mt-0.5 shrink-0" /> {error}
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={() => setState('confirming')}
+      className="text-xs bg-red-500/15 text-red-300 border border-red-500/30 hover:bg-red-500/25 px-3 py-2 rounded-md font-medium inline-flex items-center gap-1.5"
+    >
+      <UserX size={12} /> Deactivate staff member
+    </button>
+  )
+}
+
+// Reactivate (PUT /api/staff/[id] with active:true). One-step — low risk.
+function ReactivateButton({ staffId }) {
+  const router = useRouter()
+  const [state, setState] = useState('idle')
+  const [error, setError] = useState(null)
+
+  async function run() {
+    setState('working')
+    setError(null)
+    try {
+      const res = await fetch(`/api/staff/${staffId}`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ active: true }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || data.success === false) {
+        throw new Error(data.error || `Reactivate failed (${res.status})`)
+      }
+      router.refresh()
+      setState('idle')
+    } catch (e) {
+      setState('error')
+      setError(e.message || 'Reactivate failed')
+    }
+  }
+
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={run}
+        disabled={state === 'working'}
+        className="text-xs bg-green-500/15 text-green-300 border border-green-500/30 hover:bg-green-500/25 px-3 py-2 rounded-md font-medium inline-flex items-center gap-1.5 disabled:opacity-50"
+      >
+        {state === 'working' ? <Loader2 size={11} className="animate-spin" /> : <UserCheck size={12} />}
+        {state === 'working' ? 'Reactivating…' : 'Reactivate staff member'}
+      </button>
+      {error && (
+        <div className="text-xs text-red-400 mt-2 inline-flex items-start gap-1.5">
+          <AlertCircle size={11} className="mt-0.5 shrink-0" /> {error}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// Permanent delete (DELETE /api/staff/[id]/permanent).
+// Master-only. Requires typed-name match.
+function PermanentDeleteButton({ staffId, staffName }) {
+  const router = useRouter()
+  const [state, setState] = useState('idle') // idle | confirming | working | error
+  const [typedName, setTypedName] = useState('')
+  const [error, setError] = useState(null)
+
+  const expectsConfirmText = (staffName || 'this user').trim()
+  const matches = typedName.trim().toLowerCase() === expectsConfirmText.toLowerCase()
+
+  async function run() {
+    if (!matches) return
+    setState('working')
+    setError(null)
+    try {
+      const res = await fetch(`/api/staff/${staffId}/permanent`, { method: 'DELETE' })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || data.success === false) {
+        throw new Error(data.error || `Delete failed (${res.status})`)
+      }
+      // Hard delete — there's no profile to return to. Send the
+      // operator back to the staff list. data.warning surfaces the
+      // auth-orphan case if it happened.
+      if (data.warning) alert(data.warning)
+      router.push('/settings/staff')
+    } catch (e) {
+      setState('error')
+      setError(e.message || 'Delete failed')
+    }
+  }
+
+  if (state === 'confirming' || state === 'working' || state === 'error') {
+    return (
+      <div className="bg-red-500/10 border border-red-500/40 rounded-md p-3 space-y-3">
+        <div className="text-xs text-red-200">
+          <strong className="block text-red-100 mb-1">This is irreversible.</strong>
+          Permanently deleting <span className="font-mono text-white">{staffName}</span> removes their
+          profile, login, and all per-location assignments. Audit attribution on rosters,
+          shifts, and broadcasts becomes anonymous (the row stays, the &ldquo;by&rdquo; column goes NULL).
+          Use this only for a confirmed GDPR right-to-be-forgotten request.
+        </div>
+        <div>
+          <label className="block text-xs text-un1t-light mb-1">
+            Type <span className="font-mono text-un1t-white">{expectsConfirmText}</span> to confirm:
+          </label>
+          <input
+            type="text"
+            value={typedName}
+            onChange={(e) => setTypedName(e.target.value)}
+            disabled={state === 'working'}
+            className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-red-500/50 disabled:opacity-50"
+            autoComplete="off"
+          />
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={run}
+            disabled={!matches || state === 'working'}
+            className="text-xs bg-red-600 text-white px-3 py-1.5 rounded-md hover:bg-red-700 font-medium inline-flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {state === 'working' ? <Loader2 size={11} className="animate-spin" /> : <Skull size={11} />}
+            {state === 'working' ? 'Deleting…' : 'Permanently delete'}
+          </button>
+          <button
+            type="button"
+            onClick={() => { setState('idle'); setError(null); setTypedName('') }}
+            disabled={state === 'working'}
+            className="text-xs text-un1t-light hover:text-un1t-white"
+          >
+            Cancel
+          </button>
+        </div>
+        {error && (
+          <div className="text-xs text-red-400 inline-flex items-start gap-1.5">
+            <AlertCircle size={11} className="mt-0.5 shrink-0" /> {error}
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={() => setState('confirming')}
+      className="text-xs bg-red-500/15 text-red-300 border border-red-500/40 hover:bg-red-500/25 px-3 py-2 rounded-md font-medium inline-flex items-center gap-1.5"
+    >
+      <Skull size={12} /> Permanently delete (GDPR)
+    </button>
   )
 }
 
