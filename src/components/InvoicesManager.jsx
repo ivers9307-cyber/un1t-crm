@@ -19,13 +19,20 @@ import {
   Upload, FileText, CheckCircle2, XCircle, Clock, AlertCircle,
   RefreshCw, Loader2, Eye, ExternalLink, Undo2, History,
 } from 'lucide-react'
-import { MANAGER_ROLES } from '@/lib/schemas'
 import { recentMonthOptions, defaultMonthKey, periodLabel } from '@/lib/contractor-invoices'
 
-const isMgr = (role) => MANAGER_ROLES.includes(role) || role === 'master'
+// Approver = the only roles allowed to review + approve/decline.
+// Tighter than MANAGER_ROLES (which includes manager + head_coach):
+// we want the financial-sign-off to live with master + owner only.
+const isApprover = (role) => role === 'master' || role === 'owner'
+
+// Contractor = the only employment_type allowed to submit invoices.
+// Hide the upload form from FTEs and any other employment shape.
+const isContractor = (user) => user?.employment_type === 'contractor'
 
 export default function InvoicesManager({ user }) {
-  const reviewerMode = isMgr(user.role)
+  const reviewerMode = isApprover(user.role)
+  const canSubmit = isContractor(user)
   const [invoices, setInvoices] = useState([])
   const [loading, setLoading] = useState(true)
   const [activeTab, setActiveTab] = useState(reviewerMode ? 'submitted' : 'all')
@@ -56,17 +63,31 @@ export default function InvoicesManager({ user }) {
         <p className="text-sm text-un1t-light mt-1">
           {reviewerMode
             ? 'Review submitted invoices against scheduled hours, then approve to forward to Xero or decline with a reason.'
-            : 'Submit your monthly invoice as a PDF. Approved invoices are forwarded to accounts; declined ones come back with notes for adjustment.'}
+            : canSubmit
+              ? 'Submit your monthly invoice as a PDF. Approved invoices are forwarded to accounts; declined ones come back with notes for adjustment.'
+              : 'This area is for contractor invoice submissions and approvals.'}
         </p>
       </header>
 
-      {/* Submit form — visible to everyone. Owners/masters who also do
-          contracted coaching work need it; everyone benefits from being
-          able to test the flow. The review queue below still gates on
-          reviewerMode. */}
-      <SubmitForm user={user} onSubmitted={fetchList} />
+      {/* Neither contractor nor approver — show a friendly note and nothing else.
+          ScheduleTabs hides the tab entirely for these users, so this is a
+          defence-in-depth path (direct URL, role flip, etc.). */}
+      {!canSubmit && !reviewerMode && (
+        <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-12 text-center text-sm text-un1t-light">
+          You don&apos;t have access to invoice submission or review.
+          {' '}If you should be set up as a contractor, ask an owner to update your profile.
+        </div>
+      )}
 
-      {/* List view */}
+      {/* Submit form — only visible to staff with employment_type =
+          'contractor'. FTEs and admin roles never invoice this way,
+          so the form would just be confusing noise for them. */}
+      {canSubmit && <SubmitForm user={user} onSubmitted={fetchList} />}
+
+      {/* List view — contractors see their own submissions; approvers
+          see the review queue + history tabs. Hidden for the in-between
+          empty case. */}
+      {(canSubmit || reviewerMode) && (
       <div className="bg-un1t-dark border border-un1t-gray rounded-lg overflow-hidden">
         {/* Tabs */}
         {reviewerMode ? (
@@ -107,6 +128,7 @@ export default function InvoicesManager({ user }) {
           </ul>
         )}
       </div>
+      )}
 
       {/* Review panel */}
       {selectedId && (

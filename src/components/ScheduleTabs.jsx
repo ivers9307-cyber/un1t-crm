@@ -14,14 +14,19 @@ export default function ScheduleTabs({ user }) {
   const [activeTab, setActiveTab] = useState('schedule')
   const isManager = canManage(user.role)
 
-  // Invoices tab is visible to everyone — contractors need it to
-  // submit, owners/masters need it to review. The InvoicesManager
-  // component branches internally on role to show the right surface.
+  // Invoices is shown to:
+  //   - contractors (employment_type = 'contractor') — to submit
+  //   - master + owner — to approve/decline + audit
+  // Hidden for FTE managers / head_coaches / staff who are neither.
+  const isContractor = user.employment_type === 'contractor'
+  const isApprover = user.role === 'master' || user.role === 'owner'
+  const showInvoices = isContractor || isApprover
+
   const tabs = [
     { key: 'schedule', label: 'Schedule', icon: CalendarClock, show: true },
     { key: 'approvals', label: 'Approvals', icon: CheckCircle, show: isManager },
     { key: 'reporting', label: 'Reporting', icon: BarChart3, show: isManager },
-    { key: 'invoices', label: 'Invoices', icon: Receipt, show: true },
+    { key: 'invoices', label: 'Invoices', icon: Receipt, show: showInvoices },
   ].filter(t => t.show)
 
   return (

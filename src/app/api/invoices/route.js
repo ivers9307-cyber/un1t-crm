@@ -35,6 +35,20 @@ export async function POST(request) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
   }
 
+  // Lock the submit endpoint to contractors only. FTEs and admin
+  // roles never invoice through this surface, so a curl from any
+  // other employment_type gets a 403 — defence in depth on top of
+  // the UI hiding the form.
+  if (user.employment_type !== 'contractor') {
+    return NextResponse.json(
+      {
+        success: false,
+        error: 'Only contractor accounts can submit invoices. If this is wrong, ask an owner to update your profile.',
+      },
+      { status: 403 }
+    )
+  }
+
   const form = await request.formData().catch(() => null)
   if (!form) {
     return NextResponse.json({ success: false, error: 'Expected multipart/form-data body.' }, { status: 400 })
