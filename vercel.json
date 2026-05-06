@@ -23,6 +23,10 @@
     {
       "path": "/api/cron/process-contact-imports",
       "schedule": "* * * * *"
+    },
+    {
+      "path": "/api/cron/ac-auto-off",
+      "schedule": "*/5 * * * *"
     }
   ]
 }

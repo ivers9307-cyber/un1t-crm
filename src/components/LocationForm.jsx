@@ -61,8 +61,41 @@ export default function LocationForm({ location, callerRole = 'owner', organizat
   const [unifiManagerPolicyId, setUnifiManagerPolicyId] = useState(settings.unifi?.manager_policy_id || '')
   const [unifiAllowSelfSigned, setUnifiAllowSelfSigned] = useState(settings.unifi?.allow_self_signed === true)
 
+  // Sensibo / AC config (mig 103). Top-level columns on locations,
+  // not in settings JSONB. Master + owner can edit.
+  const [sensiboApiKey, setSensiboApiKey] = useState(location?.sensibo_api_key || '')
+  const [sensiboPodId, setSensiboPodId] = useState(location?.sensibo_pod_id || '')
+  const [acDefaultMode, setAcDefaultMode] = useState(location?.ac_default_mode || 'cool')
+  const [acDefaultTemp, setAcDefaultTemp] = useState(location?.ac_default_temp ?? 18)
+  const [acDefaultFan, setAcDefaultFan] = useState(location?.ac_default_fan || 'high')
+  const [acSessionMinutes, setAcSessionMinutes] = useState(location?.ac_session_minutes ?? 90)
+  const [pods, setPods] = useState(null)
+  const [podsLoading, setPodsLoading] = useState(false)
+  const [podsError, setPodsError] = useState(null)
+
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
+
+  async function loadPods() {
+    if (!sensiboApiKey.trim()) {
+      setPodsError('Paste an API key first.')
+      return
+    }
+    setPodsLoading(true)
+    setPodsError(null)
+    try {
+      const url = `/api/studio-management/ac/pods?api_key=${encodeURIComponent(sensiboApiKey.trim())}`
+      const r = await fetch(url, { cache: 'no-store' })
+      const j = await r.json()
+      if (!r.ok || j.success === false) throw new Error(j.error || `Failed (${r.status})`)
+      setPods(j.data || [])
+    } catch (e) {
+      setPodsError(e.message || 'Failed to fetch pods')
+      setPods([])
+    } finally {
+      setPodsLoading(false)
+    }
+  }
 
   async function handleSubmit(e) {
     e.preventDefault()
@@ -116,6 +149,15 @@ export default function LocationForm({ location, callerRole = 'owner', organizat
       monthly_contractor_budget_eur: contractorBudget.trim() === ''
         ? null
         : (Number.isFinite(Number(contractorBudget)) ? Number(contractorBudget) : null),
+      // Sensibo / AC config (mig 103). Top-level columns; master/owner only.
+      ...(canEditUnifi ? {
+        sensibo_api_key: sensiboApiKey.trim() || null,
+        sensibo_pod_id: sensiboPodId.trim() || null,
+        ac_default_mode: acDefaultMode || 'cool',
+        ac_default_temp: Number(acDefaultTemp) || 18,
+        ac_default_fan: acDefaultFan || 'high',
+        ac_session_minutes: Number(acSessionMinutes) || 90,
+      } : {}),
       settings: {
         ...(settings || {}),
         glofox: glofoxBranchId || glofoxApiKey ? {
@@ -477,6 +519,133 @@ export default function LocationForm({ location, callerRole = 'owner', organizat
             </span>
           </span>
         </label>
+      </div>
+      )}
+
+      {/* AC / Sensibo Integration — master + owner only.
+          Drives the Studio Management → AC turn-on button. */}
+      {canEditUnifi && (
+      <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5 space-y-4">
+        <h3 className="font-semibold text-sm text-un1t-light uppercase tracking-wider">Air Conditioning (Sensibo)</h3>
+        <p className="text-xs text-un1t-mid">
+          Connect this studio&apos;s Sensibo account so staff can turn the AC on from the Studio Management page.
+          One-button toggle applies the preset below; auto-off after the session duration.
+          {' '}<a href="https://home.sensibo.com/me/api" target="_blank" rel="noreferrer" className="text-blue-400 hover:underline">Get an API key →</a>
+        </p>
+
+        <div>
+          <label className="block text-sm mb-1.5">Sensibo API key</label>
+          <input
+            type="password"
+            value={sensiboApiKey}
+            onChange={e => setSensiboApiKey(e.target.value)}
+            placeholder="••••••••••••••••"
+            className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid font-mono"
+          />
+          <p className="text-xs text-un1t-mid mt-1">
+            From <span className="font-mono">home.sensibo.com → Account → API</span>. Plaintext is fine — controls AC only.
+          </p>
+        </div>
+
+        <div>
+          <div className="flex items-center justify-between mb-1.5">
+            <label className="block text-sm">Pod (AC unit)</label>
+            <button
+              type="button"
+              onClick={loadPods}
+              disabled={podsLoading || !sensiboApiKey.trim()}
+              className="text-xs text-blue-400 hover:text-blue-300 disabled:opacity-40"
+            >
+              {podsLoading ? 'Loading…' : 'List pods on this account'}
+            </button>
+          </div>
+          {pods && pods.length > 0 ? (
+            <select
+              value={sensiboPodId}
+              onChange={e => setSensiboPodId(e.target.value)}
+              className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
+            >
+              <option value="">Choose…</option>
+              {pods.map(p => (
+                <option key={p.id} value={p.id}>
+                  {p.room_name || p.id} {p.product_model ? `(${p.product_model})` : ''}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <input
+              type="text"
+              value={sensiboPodId}
+              onChange={e => setSensiboPodId(e.target.value)}
+              placeholder="paste pod id, or click 'List pods' above"
+              className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid font-mono"
+            />
+          )}
+          {podsError && (
+            <p className="text-xs text-red-300 mt-1">{podsError}</p>
+          )}
+          {pods && pods.length === 0 && !podsError && (
+            <p className="text-xs text-amber-300 mt-1">No pods on this account.</p>
+          )}
+        </div>
+
+        <div className="grid grid-cols-3 gap-3">
+          <div>
+            <label className="block text-sm mb-1.5">Mode</label>
+            <select
+              value={acDefaultMode}
+              onChange={e => setAcDefaultMode(e.target.value)}
+              className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
+            >
+              <option value="cool">Cool</option>
+              <option value="heat">Heat</option>
+              <option value="auto">Auto</option>
+              <option value="fan">Fan only</option>
+              <option value="dry">Dry</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-sm mb-1.5">Target (°C)</label>
+            <input
+              type="number"
+              min="16"
+              max="30"
+              value={acDefaultTemp}
+              onChange={e => setAcDefaultTemp(e.target.value)}
+              className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
+            />
+          </div>
+          <div>
+            <label className="block text-sm mb-1.5">Fan</label>
+            <select
+              value={acDefaultFan}
+              onChange={e => setAcDefaultFan(e.target.value)}
+              className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
+            >
+              <option value="auto">Auto</option>
+              <option value="low">Low</option>
+              <option value="medium">Medium</option>
+              <option value="high">High</option>
+              <option value="quiet">Quiet</option>
+              <option value="strong">Strong</option>
+            </select>
+          </div>
+        </div>
+
+        <div>
+          <label className="block text-sm mb-1.5">Auto-off after (minutes)</label>
+          <input
+            type="number"
+            min="5"
+            max="720"
+            value={acSessionMinutes}
+            onChange={e => setAcSessionMinutes(e.target.value)}
+            className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
+          />
+          <p className="text-xs text-un1t-mid mt-1">
+            How long the AC stays on after the staff button is pressed before the cron auto-shuts it. Default 90.
+          </p>
+        </div>
       </div>
       )}
 

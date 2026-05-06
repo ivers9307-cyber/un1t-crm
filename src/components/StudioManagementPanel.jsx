@@ -19,6 +19,7 @@
 
 import { useEffect, useState } from 'react'
 import { DoorOpen, Loader2, AlertCircle, CheckCircle2, RefreshCw } from 'lucide-react'
+import AcControlPanel from './AcControlPanel'
 
 export default function StudioManagementPanel() {
   const [doors, setDoors] = useState(null)
@@ -48,7 +49,11 @@ export default function StudioManagementPanel() {
   useEffect(() => { loadDoors() }, [])
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-6">
+      {/* Air conditioning — Sensibo-controlled, with a 90-min auto-off
+          timer enforced by /api/cron/ac-auto-off. */}
+      <AcControlPanel />
+
       <div className="flex items-center justify-between">
         <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light">Doors</h3>
         <button
