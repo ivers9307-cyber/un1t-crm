@@ -15,9 +15,10 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
-import { computeScheduledForPeriod } from '@/lib/contractor-invoices'
+import { computeScheduledForPeriod, periodLabel } from '@/lib/contractor-invoices'
 import { sendContractorInvoiceBillEmail } from '@/lib/xero/contractor-bills'
 import { sendInvoiceApprovedEmail } from '@/lib/contractor-invoice-email'
+import { sendPush } from '@/lib/push'
 
 export const runtime = 'nodejs'
 
@@ -108,6 +109,27 @@ export async function POST(_request, { params }) {
     await sendInvoiceApprovedEmail(approved.id)
   } catch (e) {
     warnings.push(`Approval email failed: ${e?.message || String(e)}. The contractor will see the status next time they open Invoices.`)
+  }
+
+  // Push notification (best-effort). category=invoice_approved
+  // maps to notify_invoice_approved on the contractor's profile,
+  // and the master push_notifications switch is honoured by
+  // sendPush itself.
+  try {
+    await sendPush([approved.contractor_id], {
+      title: 'Invoice approved',
+      body: `€${Number(approved.invoice_amount).toFixed(2)} for ${periodLabel(approved.period_start)} has been approved and forwarded to accounts.`,
+      category: 'invoice_approved',
+      data: {
+        type: 'invoice_approved',
+        invoice_id: approved.id,
+      },
+    })
+  } catch (e) {
+    // Pushed are non-blocking; don't surface as a warning unless
+    // the entire transport is broken — and even then operators can
+    // see this in logs. Log only.
+    console.warn(`[invoice-approve] push failed for ${approved.id}: ${e?.message || e}`)
   }
 
   return NextResponse.json({
