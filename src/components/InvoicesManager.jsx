@@ -645,32 +645,35 @@ function DiffRow({ invoiced, estimated }) {
   const diff = invoiced - estimated
   const pct = estimated > 0 ? (diff / estimated) * 100 : 0
 
-  // Match: small inline confirmation in green — non-actionable, doesn't
-  // need to dominate the panel.
+  // Match: solid green pill, white text — works on any theme.
   if (Math.abs(diff) < 0.005) {
     return (
-      <div className="mt-3 flex items-center gap-2 text-sm text-green-300">
-        <CheckCircle2 size={14} className="shrink-0" />
-        <span>Invoiced amount matches estimate</span>
+      <div className="mt-3 rounded-md bg-green-600 text-white px-4 py-3 flex items-center gap-2.5 shadow">
+        <CheckCircle2 size={18} className="shrink-0" />
+        <span className="text-base font-semibold">Invoiced amount matches estimate</span>
       </div>
     )
   }
 
-  // Mismatch: full-width callout box — bigger text, real contrast.
-  // Amber when >5% off, neutral for small drift.
-  const sign = diff > 0 ? '+' : ''
+  // Mismatch: solid orange (>5% off) or neutral (small drift) box,
+  // white text. We use solid background colors instead of low-alpha
+  // tints so the callout stays high-contrast regardless of light or
+  // dark page theme — the previous amber-on-amber washed out on
+  // light backgrounds.
   const isBig = Math.abs(pct) > 5
   const bgClass = isBig
-    ? 'bg-amber-500/15 border-amber-500/40 text-amber-100'
-    : 'bg-un1t-gray/30 border-un1t-gray text-un1t-light'
+    ? 'bg-orange-600 text-white'
+    : 'bg-slate-700 text-white'
   return (
-    <div className={`mt-3 rounded-md border p-3 flex items-start gap-2.5 ${bgClass}`}>
-      <AlertCircle size={16} className="shrink-0 mt-0.5" />
-      <div className="text-sm font-semibold leading-snug">
-        Invoiced {sign}€{Math.abs(diff).toFixed(2)} {diff > 0 ? 'over' : 'under'} estimate
-        <span className="block text-xs font-normal opacity-80 mt-0.5">
-          {sign}{pct.toFixed(1)}% vs scheduled hours × hourly rate
-        </span>
+    <div className={`mt-3 rounded-md ${bgClass} px-4 py-3 flex items-start gap-3 shadow`}>
+      <AlertCircle size={20} className="shrink-0 mt-0.5" />
+      <div className="leading-snug">
+        <div className="text-base font-bold">
+          Invoiced €{Math.abs(diff).toFixed(2)} {diff > 0 ? 'over' : 'under'} estimate
+        </div>
+        <div className="text-sm font-medium opacity-90 mt-0.5">
+          {diff > 0 ? '+' : '−'}{Math.abs(pct).toFixed(1)}% vs scheduled hours × hourly rate
+        </div>
       </div>
     </div>
   )
