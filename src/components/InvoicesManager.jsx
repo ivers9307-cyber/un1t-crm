@@ -59,10 +59,11 @@ export default function InvoicesManager({ user }) {
         </p>
       </header>
 
-      {/* Contractor: submit form on top */}
-      {!reviewerMode && (
-        <SubmitForm user={user} onSubmitted={fetchList} />
-      )}
+      {/* Submit form — visible to everyone. Owners/masters who also do
+          contracted coaching work need it; everyone benefits from being
+          able to test the flow. The review queue below still gates on
+          reviewerMode. */}
+      <SubmitForm user={user} onSubmitted={fetchList} />
 
       {/* List view */}
       <div className="bg-un1t-dark border border-un1t-gray rounded-lg overflow-hidden">

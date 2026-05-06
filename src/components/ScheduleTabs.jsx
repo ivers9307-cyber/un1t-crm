@@ -1,10 +1,11 @@
 'use client'
 
 import { useState } from 'react'
-import { CalendarClock, CheckCircle, BarChart3 } from 'lucide-react'
+import { CalendarClock, CheckCircle, BarChart3, Receipt } from 'lucide-react'
 import ScheduleCalendar from './ScheduleCalendar'
 import ScheduleApprovals from './ScheduleApprovals'
 import ScheduleReporting from './ScheduleReporting'
+import InvoicesManager from './InvoicesManager'
 import { MANAGER_ROLES } from '@/lib/schemas'
 
 const canManage = (role) => MANAGER_ROLES.includes(role)
@@ -13,10 +14,14 @@ export default function ScheduleTabs({ user }) {
   const [activeTab, setActiveTab] = useState('schedule')
   const isManager = canManage(user.role)
 
+  // Invoices tab is visible to everyone — contractors need it to
+  // submit, owners/masters need it to review. The InvoicesManager
+  // component branches internally on role to show the right surface.
   const tabs = [
     { key: 'schedule', label: 'Schedule', icon: CalendarClock, show: true },
     { key: 'approvals', label: 'Approvals', icon: CheckCircle, show: isManager },
     { key: 'reporting', label: 'Reporting', icon: BarChart3, show: isManager },
+    { key: 'invoices', label: 'Invoices', icon: Receipt, show: true },
   ].filter(t => t.show)
 
   return (
@@ -43,6 +48,7 @@ export default function ScheduleTabs({ user }) {
       {activeTab === 'schedule' && <ScheduleCalendar user={user} />}
       {activeTab === 'approvals' && isManager && <ScheduleApprovals user={user} />}
       {activeTab === 'reporting' && isManager && <ScheduleReporting user={user} />}
+      {activeTab === 'invoices' && <InvoicesManager user={user} />}
     </div>
   )
 }

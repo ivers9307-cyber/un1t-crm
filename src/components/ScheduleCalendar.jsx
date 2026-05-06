@@ -449,12 +449,6 @@ export default function ScheduleCalendar({ user }) {
           >
             <CalendarOff size={14} /> Time Off
           </Link>
-          <Link
-            href="/schedule/invoices"
-            className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg border border-un1t-gray text-un1t-light hover:text-un1t-white hover:border-un1t-white/30 transition-colors"
-          >
-            <Receipt size={14} /> Invoices
-          </Link>
 
           <div className="flex bg-un1t-dark border border-un1t-gray rounded-lg overflow-hidden text-xs">
             <button
