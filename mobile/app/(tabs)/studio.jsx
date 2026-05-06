@@ -1,13 +1,17 @@
-// Studio Management — door unlock + AC control for staff at the
+// Studio Management tab — door unlock + AC control for staff at the
 // active location. Permission: studio_management (cross-platform key,
-// (mig 093). Web has the same surface at /studio-management.
+// mig 093). Web has the same surface at /studio-management.
+//
+// Lives at app/(tabs)/studio.jsx so it sits in the bottom tab bar
+// when the user has the permission. The (tabs)/_layout.jsx Tabs.Screen
+// uses href: showStudio ? '/(tabs)/studio' : null to gate visibility.
 
 import { useState, useEffect, useCallback, useRef } from 'react'
 import {
   View, Text, ScrollView, Pressable, RefreshControl,
   ActivityIndicator, Alert,
 } from 'react-native'
-import { Stack, useRouter } from 'expo-router'
+import { useRouter } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { useAuth } from '../../lib/auth-context'
 import { canMobile } from '../../lib/permissions'
@@ -48,24 +52,21 @@ export default function StudioManagementScreen() {
   const [refreshKey, setRefreshKey] = useState(0)
 
   return (
-    <>
-      <Stack.Screen options={{ title: 'Studio management' }} />
-      <ScrollView
-        className="flex-1 bg-un1t-black"
-        contentContainerStyle={{ padding: 16, paddingBottom: 32 }}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#94A3B8" />}
-      >
-        <Text className="text-sm text-un1t-light mb-4">
-          On-site actions for {activeLocation?.name || 'your active location'}.
-        </Text>
+    <ScrollView
+      className="flex-1 bg-un1t-black"
+      contentContainerStyle={{ padding: 16, paddingBottom: 32 }}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#94A3B8" />}
+    >
+      <Text className="text-sm text-un1t-light mb-4">
+        On-site actions for {activeLocation?.name || 'your active location'}.
+      </Text>
 
-        <AcCard key={`ac-${refreshKey}`} locationId={activeLocation?.id} />
+      <AcCard key={`ac-${refreshKey}`} locationId={activeLocation?.id} />
 
-        <View className="h-4" />
+      <View className="h-4" />
 
-        <DoorsCard key={`doors-${refreshKey}`} locationId={activeLocation?.id} />
-      </ScrollView>
-    </>
+      <DoorsCard key={`doors-${refreshKey}`} locationId={activeLocation?.id} />
+    </ScrollView>
   )
 }
 

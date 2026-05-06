@@ -7,10 +7,8 @@
 // permission flags), dark mode toggle, "open web app", about screen.
 
 import { View, Text, ScrollView, Pressable, Alert } from 'react-native'
-import { useRouter } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { useAuth } from '../../lib/auth-context'
-import { canMobile } from '../../lib/permissions'
 
 function Section({ title, children }) {
   return (
@@ -59,7 +57,6 @@ function Row({ icon, label, value, onPress, isLast, destructive }) {
 }
 
 export default function More() {
-  const router = useRouter()
   const {
     profile,
     locations,
@@ -67,7 +64,6 @@ export default function More() {
     setActiveLocationId,
     signOut,
   } = useAuth()
-  const showStudio = canMobile(profile, 'studio_management', activeLocation)
 
   function pickLocation() {
     if (!locations.length) return
@@ -116,18 +112,6 @@ export default function More() {
           isLast
         />
       </Section>
-
-      {showStudio && (
-        <Section title="On-site">
-          <Row
-            icon="business-outline"
-            label="Studio management"
-            value="Doors · AC"
-            onPress={() => router.push('/studio')}
-            isLast
-          />
-        </Section>
-      )}
 
       <Section>
         <Row

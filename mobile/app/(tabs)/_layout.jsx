@@ -47,6 +47,11 @@ export default function TabsLayout() {
   // approve from the web; on mobile the tab would just be noise for
   // them. (mig 101)
   const showInvoices = profile?.employment_type === 'contractor'
+  // Studio Management tab — same gate as web sidebar (mig 093 cross-
+  // platform key). Door unlock + AC control. Promoted from a More-tab
+  // row to a primary tab per operator request — managers running
+  // between studios want one-tap access.
+  const showStudio = canMobile(profile, 'studio_management', activeLocation)
 
   return (
     <Tabs
@@ -101,6 +106,16 @@ export default function TabsLayout() {
           href: showWhatsapp ? '/(tabs)/whatsapp' : null,
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="chatbubble-outline" size={size} color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="studio"
+        options={{
+          title: 'Studio',
+          href: showStudio ? '/(tabs)/studio' : null,
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="business-outline" size={size} color={color} />
           ),
         }}
       />

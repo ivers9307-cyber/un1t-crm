@@ -6,7 +6,8 @@
 // with no shifts say "Off". Today is highlighted. Past days are
 // dimmed.
 
-import { View, Text, ActivityIndicator } from 'react-native'
+import { View, Text, ActivityIndicator, Pressable } from 'react-native'
+import { Ionicons } from '@expo/vector-icons'
 import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'expo-router'
 import { useAuth } from '../../lib/auth-context'
@@ -166,14 +167,24 @@ export default function PersonalDashboard({ refreshKey }) {
   const router = useRouter()
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(null)
   // Show per-shift location chip only when the user is assigned to
   // 2+ locations — otherwise it's redundant.
   const showLocation = (locations || []).length > 1
 
   const load = useCallback(async () => {
     if (!profile) return
-    const res = await fetchPersonalDashboard(profile.id, activeLocation?.id)
-    if (res.success) setData(res.data)
+    setError(null)
+    try {
+      const res = await fetchPersonalDashboard(profile.id, activeLocation?.id)
+      if (res.success) {
+        setData(res.data)
+      } else {
+        setError(res.error || 'Failed to load')
+      }
+    } catch (e) {
+      setError(e?.message || 'Network error')
+    }
   }, [profile, activeLocation])
 
   useEffect(() => {
@@ -181,10 +192,37 @@ export default function PersonalDashboard({ refreshKey }) {
     load().finally(() => setLoading(false))
   }, [load, refreshKey])
 
-  if (loading || !data) {
+  if (loading) {
     return (
       <View className="py-8 items-center">
         <ActivityIndicator />
+      </View>
+    )
+  }
+  if (error) {
+    return (
+      <View className="bg-red-500/10 border border-red-500/30 rounded-2xl p-5">
+        <View className="flex-row items-start">
+          <Ionicons name="alert-circle" size={18} color="#DC2626" />
+          <View className="flex-1 ml-2">
+            <Text className="text-sm font-semibold text-red-700">Couldn’t load Today</Text>
+            <Text className="text-xs text-red-700 mt-1">{error}</Text>
+          </View>
+        </View>
+        <Pressable
+          onPress={() => { setLoading(true); load().finally(() => setLoading(false)) }}
+          className="mt-3 bg-red-600 active:opacity-80 px-3 py-2 rounded-md self-start"
+        >
+          <Text className="text-xs font-semibold text-white">Try again</Text>
+        </Pressable>
+      </View>
+    )
+  }
+  if (!data) {
+    // Loaded with no error but no data — defensive empty state.
+    return (
+      <View className="py-8 items-center">
+        <Text className="text-sm text-un1t-light">No data</Text>
       </View>
     )
   }
