@@ -17,7 +17,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import {
   Upload, FileText, CheckCircle2, XCircle, Clock, AlertCircle,
-  RefreshCw, Loader2, Eye, ExternalLink,
+  RefreshCw, Loader2, Eye, ExternalLink, Undo2, History,
 } from 'lucide-react'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { recentMonthOptions, defaultMonthKey, periodLabel } from '@/lib/contractor-invoices'
@@ -45,6 +45,7 @@ export default function InvoicesManager({ user }) {
     submitted: invoices.filter(i => i.status === 'submitted'),
     approved: invoices.filter(i => i.status === 'approved'),
     declined: invoices.filter(i => i.status === 'declined'),
+    revoked: invoices.filter(i => i.status === 'revoked'),
     all: invoices,
   }), [invoices])
 
@@ -69,10 +70,11 @@ export default function InvoicesManager({ user }) {
       <div className="bg-un1t-dark border border-un1t-gray rounded-lg overflow-hidden">
         {/* Tabs */}
         {reviewerMode ? (
-          <div className="border-b border-un1t-gray flex">
+          <div className="border-b border-un1t-gray flex flex-wrap">
             <Tab id="submitted" label={`Awaiting review · ${grouped.submitted.length}`} active={activeTab} onClick={setActiveTab} />
             <Tab id="approved" label={`Approved · ${grouped.approved.length}`} active={activeTab} onClick={setActiveTab} />
             <Tab id="declined" label={`Declined · ${grouped.declined.length}`} active={activeTab} onClick={setActiveTab} />
+            <Tab id="revoked" label={`Revoked · ${grouped.revoked.length}`} active={activeTab} onClick={setActiveTab} />
           </div>
         ) : (
           <div className="border-b border-un1t-gray px-4 py-3 flex items-center justify-between">
@@ -138,6 +140,7 @@ function EmptyState({ reviewerMode, tab }) {
     if (tab === 'submitted') msg = 'No invoices awaiting review.'
     else if (tab === 'approved') msg = 'No approved invoices yet.'
     else if (tab === 'declined') msg = 'No declined invoices.'
+    else if (tab === 'revoked') msg = 'No revoked invoices — contractors haven\'t pulled any submissions back.'
   }
   return (
     <div className="p-12 text-center text-un1t-light text-sm">{msg}</div>
@@ -352,11 +355,13 @@ function InvoiceListRow({ invoice, reviewerMode, onOpen }) {
 function StatusIcon({ status }) {
   if (status === 'approved') return <CheckCircle2 size={18} className="text-green-400 shrink-0" />
   if (status === 'declined') return <XCircle size={18} className="text-red-400 shrink-0" />
+  if (status === 'revoked') return <Undo2 size={18} className="text-un1t-light shrink-0" />
   return <Clock size={18} className="text-amber-400 shrink-0" />
 }
 function StatusLabel({ status }) {
   if (status === 'approved') return <span className="text-green-300 font-medium">Approved</span>
   if (status === 'declined') return <span className="text-red-300 font-medium">Declined</span>
+  if (status === 'revoked') return <span className="text-un1t-light font-medium">Revoked by contractor</span>
   return <span className="text-amber-300 font-medium">Awaiting review</span>
 }
 
@@ -366,7 +371,7 @@ function InvoiceDetailModal({ invoiceId, reviewerMode, onClose, onChanged }) {
   const [data, setData] = useState(null)
   const [pdfUrl, setPdfUrl] = useState(null)
   const [loading, setLoading] = useState(true)
-  const [actionState, setActionState] = useState('idle') // idle | confirming-decline | working
+  const [actionState, setActionState] = useState('idle') // idle | confirming-decline | confirming-revoke | working
   const [reason, setReason] = useState('')
   const [error, setError] = useState(null)
   const [warnings, setWarnings] = useState([])
@@ -396,6 +401,22 @@ function InvoiceDetailModal({ invoiceId, reviewerMode, onClose, onChanged }) {
       await load()
     } catch (e) {
       setError(e.message || 'Approve failed')
+    } finally {
+      setActionState('idle')
+    }
+  }
+
+  async function revoke() {
+    setActionState('working')
+    setError(null)
+    try {
+      const res = await fetch(`/api/invoices/${invoiceId}/revoke`, { method: 'POST' })
+      const j = await res.json()
+      if (!res.ok || !j.success) throw new Error(j.error || `Revoke failed (${res.status})`)
+      onChanged?.()
+      await load()
+    } catch (e) {
+      setError(e.message || 'Revoke failed')
     } finally {
       setActionState('idle')
     }
@@ -549,8 +570,20 @@ function InvoiceDetailModal({ invoiceId, reviewerMode, onClose, onChanged }) {
                         {data.decline_reason}
                       </div>
                     )}
+                    {data.status === 'revoked' && (
+                      <p className="text-xs text-un1t-light mt-2">
+                        Revoked by the contractor {timeAgo(data.revoked_at)}.
+                        A fresh submission can be made for the same period.
+                      </p>
+                    )}
                   </div>
                 </div>
+
+                {/* Audit timeline — visible to everyone, useful both
+                    for the contractor (so they remember what they did)
+                    and for the approver (so the history is on-screen
+                    next to the current state). */}
+                <AuditTimeline data={data} />
 
                 {data.notes && (
                   <div>
@@ -568,6 +601,46 @@ function InvoiceDetailModal({ invoiceId, reviewerMode, onClose, onChanged }) {
                   <div className="text-xs text-red-300 bg-red-500/10 border border-red-500/30 rounded p-2 inline-flex items-start gap-1.5">
                     <AlertCircle size={12} className="mt-0.5 shrink-0" /> {error}
                   </div>
+                )}
+
+                {/* Contractor self-revoke — only the owner of the
+                    invoice while it's still pending review. */}
+                {!reviewerMode && data.status === 'submitted' && data.viewer_role === 'self' && (
+                  actionState === 'confirming-revoke' ? (
+                    <div className="space-y-2 pt-2 border-t border-un1t-gray">
+                      <p className="text-xs text-un1t-light">
+                        Revoke this submission? It stays in your history (and the approver's audit
+                        trail) but is no longer in the review queue. You can submit a fresh invoice
+                        for the same month afterwards.
+                      </p>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={revoke}
+                          disabled={actionState === 'working'}
+                          className="bg-un1t-light text-un1t-black hover:bg-un1t-white text-xs font-semibold px-3 py-2 rounded-md inline-flex items-center gap-1.5 disabled:opacity-50"
+                        >
+                          {actionState === 'working' ? <Loader2 size={11} className="animate-spin" /> : <Undo2 size={11} />}
+                          Yes, revoke
+                        </button>
+                        <button
+                          onClick={() => { setActionState('idle'); setError(null) }}
+                          className="text-xs text-un1t-light hover:text-un1t-white px-3"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="pt-2 border-t border-un1t-gray">
+                      <button
+                        onClick={() => setActionState('confirming-revoke')}
+                        className="text-xs text-un1t-light hover:text-un1t-white border border-un1t-gray hover:border-un1t-mid px-3 py-2 rounded-md inline-flex items-center gap-1.5"
+                        title="Pull this submission back so you can resubmit"
+                      >
+                        <Undo2 size={11} /> Revoke this submission
+                      </button>
+                    </div>
+                  )
                 )}
 
                 {/* Action footer — owner/master + submitted only */}
@@ -689,4 +762,90 @@ function timeAgo(iso) {
   if (h < 24) return `${h}h ago`
   const d = Math.floor(h / 24)
   return `${d}d ago`
+}
+
+// AuditTimeline — chronological log of every state event on this
+// invoice. Visible to both contractor and approver so the history
+// is plain. We rebuild this from the row's stored timestamps
+// rather than maintaining a separate audit table — every status
+// transition has its own dedicated column already.
+function AuditTimeline({ data }) {
+  const events = []
+  if (data.submitted_at) {
+    events.push({
+      ts: data.submitted_at,
+      label: 'Submitted',
+      sub: data.contractor?.full_name ? `by ${data.contractor.full_name}` : null,
+      tone: 'amber',
+    })
+  }
+  if (data.revoked_at) {
+    events.push({
+      ts: data.revoked_at,
+      label: 'Revoked by contractor',
+      sub: 'The contractor pulled this submission back. They may have resubmitted in a separate row.',
+      tone: 'neutral',
+    })
+  }
+  if (data.reviewed_at && data.status === 'declined') {
+    events.push({
+      ts: data.reviewed_at,
+      label: 'Declined',
+      sub: data.reviewer?.full_name
+        ? `by ${data.reviewer.full_name}${data.decline_reason ? ` — ${data.decline_reason}` : ''}`
+        : data.decline_reason || null,
+      tone: 'red',
+    })
+  }
+  if (data.reviewed_at && data.status === 'approved') {
+    events.push({
+      ts: data.reviewed_at,
+      label: 'Approved',
+      sub: data.reviewer?.full_name ? `by ${data.reviewer.full_name}` : null,
+      tone: 'green',
+    })
+  }
+  if (data.xero_synced_at) {
+    events.push({
+      ts: data.xero_synced_at,
+      label: 'Forwarded to Xero',
+      sub: 'Draft bill created in Bills to pay → Draft.',
+      tone: 'green',
+    })
+  }
+  // Sort newest-last (chronological top-down).
+  events.sort((a, b) => new Date(a.ts) - new Date(b.ts))
+
+  if (events.length === 0) return null
+
+  return (
+    <div>
+      <h4 className="text-xs font-semibold uppercase tracking-wider text-un1t-light mb-2 inline-flex items-center gap-1.5">
+        <History size={12} /> Audit trail
+      </h4>
+      <ol className="bg-un1t-black/60 border border-un1t-gray rounded-lg p-4 space-y-3">
+        {events.map((e, i) => (
+          <li key={i} className="flex gap-3">
+            <TimelineDot tone={e.tone} />
+            <div className="flex-1 min-w-0">
+              <div className="text-sm text-un1t-white font-medium">{e.label}</div>
+              {e.sub && <div className="text-xs text-un1t-light mt-0.5">{e.sub}</div>}
+              <div className="text-[11px] text-un1t-mid mt-0.5">
+                {new Date(e.ts).toLocaleString('en-IE', { dateStyle: 'medium', timeStyle: 'short' })}
+              </div>
+            </div>
+          </li>
+        ))}
+      </ol>
+    </div>
+  )
+}
+
+function TimelineDot({ tone }) {
+  const cls =
+    tone === 'green' ? 'bg-green-400' :
+    tone === 'red' ? 'bg-red-400' :
+    tone === 'amber' ? 'bg-amber-400' :
+    'bg-un1t-light'
+  return <span className={`inline-block w-2 h-2 rounded-full mt-1.5 shrink-0 ${cls}`} />
 }
