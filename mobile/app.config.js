@@ -31,12 +31,20 @@ export default ({ config }) => ({
     // the equivalent in Apple-acceptable form. Change before App Store
     // submission if a different ID is preferred.
     bundleIdentifier: 'com.un1tdublin.crmmobileios',
-    buildNumber: '1',
+    // buildNumber omitted — eas.json sets appVersionSource: 'remote',
+    // so build numbers are managed by EAS, not the local config.
     infoPlist: {
       // Required for sending push tokens via APNs once an Apple
       // Developer account is wired up. Until then, Expo Go uses Expo's
       // own push channel for development.
       UIBackgroundModes: ['remote-notification'],
+      // US export-control declaration. UN1T CRM uses only HTTPS
+      // (standard) and the iOS Keychain (standard) — no custom or
+      // proprietary cryptography — so the app is EXEMPT from export
+      // compliance review. Setting this to `false` here means we
+      // never have to re-answer the "are you using encryption?"
+      // question in App Store Connect for each version.
+      ITSAppUsesNonExemptEncryption: false,
     },
   },
   android: {
