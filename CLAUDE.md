@@ -34,6 +34,14 @@ The parity linter is the one that's bitten this codebase the most — it catches
 
 Skipping the parity check locally was the root cause of the five red Web-CI runs after mig 092 / 093 — every commit between `8823a59` and `fe5ec5b` failed for the same latent drift, masked because lint + tests were clean. The fix landed in `b1e54d3`.
 
+**If you touched `mobile/package.json`, also re-sync the lock file** before pushing — EAS Build runs `npm ci --include=dev` which refuses to install when the manifest and lock disagree:
+
+```bash
+cd mobile && npm install --package-lock-only && cd -
+```
+
+Skipping this step was what burned the first iOS production EAS build (commit `52c38a3` on 2026-05-06): two packages from the contractor-invoices sprint (`expo-document-picker`, `expo-web-browser`) were in `package.json` but missing from `package-lock.json`, so EAS aborted with `npm error Missing: <pkg> from lock file` before any native build started.
+
 ### Pushing commits from the sandbox
 
 The sandboxed bash has no GitHub credentials configured (no `~/.gitconfig`, no `GH_TOKEN`, no credential helper). Plain `git push` will fail with `fatal: could not read Username for 'https://github.com'`.
@@ -609,7 +617,49 @@ For production push (TestFlight / App Store), an Apple Developer account ($99/yr
 
 ### Deployment (mobile)
 
-EAS Build for App Store / TestFlight (`eas build --platform ios`). The Vercel-deployed `crm.un1tdublin.com` is the API base URL the mobile app calls — no separate backend deploy.
+Two distinct pipelines — **EAS Update** for JS-only changes (over-the-air, no review) and **EAS Build** for native binaries (required for App Store / TestFlight / Custom App via ABM).
+
+**EAS Update (JS only).** Auto-runs on every push to `main` via `.github/workflows/eas-update.yml`. Ships only the JS bundle; existing installs pick it up on next launch. Use for any change that doesn't add/remove a native module or change permissions, plugins, icons, or bundle identifier. ~30 sec to publish, no Apple review.
+
+**EAS Build (native binary).** Required when `app.config.js` plugins / `package.json` native deps / icons / bundle id / version change. Two ways to trigger:
+
+1. **CLI** — from `mobile/`:
+   ```bash
+   eas build --platform ios --profile production
+   eas submit --platform ios --profile production --latest
+   ```
+2. **expo.dev web UI** — easier for non-developer triggering. Project → Builds → "Build" → pick iOS / production / latest commit on main. First time, link GitHub at Project settings → GitHub with **Base directory = `mobile`** (this is a monorepo; without the base dir EAS tries to build the Next.js app and fails). Submit step is a separate button on the build page.
+
+The Vercel-deployed `crm.un1tdublin.com` is the API base URL the mobile app calls — no separate backend deploy.
+
+#### Apple distribution: Custom App via Apple Business Manager
+
+UN1T CRM is an internal staff tool, not a consumer product, so it ships as a **Custom App for Business or Education** via ABM, not on the public App Store. Distribution is gated by ABM organisation membership, not by the public storefront.
+
+**One-time prerequisites (already done as of 2026-05):**
+- Apple Developer Program membership (annual fee).
+- Apple Business Manager account for UN1T Dublin Ltd (requires D-U-N-S; free).
+- Bundle ID `com.un1tdublin.crmmobileios` registered at developer.apple.com → Identifiers, with **Push Notifications** capability ticked.
+- App Store Connect record created (ID `6766947870`), distribution method set to **Custom App for Business or Education**, ABM org listed as recipient.
+- Privacy policy live at `crm.un1tdublin.com/privacy` (page lives at `src/app/privacy/page.js`).
+- App icons at `mobile/assets/icon.png` (iOS, 1024×1024 RGB no alpha), `adaptive-icon.png` (Android), `notification-icon.png`, `splash.png` — generated as a black/white wordmark using **Poppins Bold** as a SIL-licensed stand-in for NEXA.
+- `mobile/eas.json` `submit.production.ios` populated: `appleId`, `appleTeamId` (`535XMCT5PY`), `ascAppId` (`6766947870`).
+
+**Per-version submission flow:**
+1. Bump `version` in `mobile/app.config.js` (semver). EAS auto-increments `buildNumber`.
+2. Verify lock file is in sync (see "Before pushing" above) — `npm ci` is what EAS runs and the lock-drift failure is silent in local dev.
+3. Trigger build (CLI or web UI as above). ~15–25 min.
+4. Trigger submit. Apple "processes" the upload for ~10–20 min then it appears under App Store Connect → My Apps → UN1T CRM → TestFlight.
+5. In App Store Connect, attach the build to the version, fill metadata (screenshots, App Privacy nutrition label, age rating, content rights, review notes), submit for review. Custom App reviews are typically 24–48h.
+6. Once approved, distribute via ABM → Apps & Books — assign to staff Apple IDs by email or Managed Apple ID. App appears in their App Store app library, not searchable publicly.
+
+**App Privacy declarations** (the "nutrition label") for UN1T CRM iOS: Name, Email Address, Phone Number, User ID, Device ID, Photos/Videos (invoice PDFs), Customer Support (WhatsApp/email/SMS history), Crash Data, Performance Data — all linked, none used for tracking, all purposes are App Functionality (+ Customer Support for phone/messages, + Analytics for diagnostics). Do NOT declare: Location, Contacts (the iOS Contacts app — CRM "contacts" is a different concept), Payment Info (Revolut handles cards, app never sees them), Health/Fitness (no HealthKit access), IDFA. Age rating: all "None"/"No" → 4+. Content rights: No (no licensed third-party media).
+
+**Common build/submit failures and their fixes:**
+- `npm error Missing: <pkg> from lock file` → run `npm install --package-lock-only` in `mobile/` and recommit (see "Before pushing").
+- `Bundle ID dropdown empty in App Store Connect` → bundle ID has to be registered at **developer.apple.com → Identifiers** first; App Store Connect only lists pre-registered IDs.
+- Apple credentials prompt during build → first-time only; let EAS generate the cert + provisioning profile.
+- iPad screenshots required — set `supportsTablet: false` in `app.config.js` if iPad isn't a target, otherwise Apple rejects for missing 13" iPad screenshots.
 
 ## Deployment
 
