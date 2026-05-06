@@ -485,8 +485,13 @@ function InvoiceDetailModal({ invoiceId, reviewerMode, onClose, onChanged }) {
               </div>
 
               <div className="p-5 space-y-5">
-                {/* Computed comparison */}
-                {data.computed_scheduled && (
+                {/* Computed comparison — REVIEWER ONLY.
+                    Schedule-vs-invoice exposes the company's
+                    estimated cost (rate × hours), which is
+                    commercially sensitive and not for the
+                    contractor's eyes. The API also strips this
+                    block for self-views as a defence-in-depth. */}
+                {reviewerMode && data.computed_scheduled && (
                   <div>
                     <h4 className="text-xs font-semibold uppercase tracking-wider text-un1t-light mb-2">
                       Schedule vs invoice

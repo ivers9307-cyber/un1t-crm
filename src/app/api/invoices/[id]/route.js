@@ -49,13 +49,20 @@ export async function GET(_request, { params }) {
     }
   }
 
-  // Computed scheduled hours + estimated cost for the period.
-  const computed = await computeScheduledForPeriod(db, {
-    contractor_id: inv.contractor_id,
-    location_id: inv.location_id,
-    period_start: inv.period_start,
-    period_end: inv.period_end,
-  })
+  // Compute the schedule-vs-invoice comparison block ONLY for the
+  // reviewer (owner / master). The hourly rate × scheduled hours
+  // is commercially sensitive — we don't expose it to the
+  // contractor themselves, and stripping here means a curl-savvy
+  // self caller can't pull it via the API either.
+  const reviewerView = isMaster || isOwnerHere
+  const computed = reviewerView
+    ? await computeScheduledForPeriod(db, {
+        contractor_id: inv.contractor_id,
+        location_id: inv.location_id,
+        period_start: inv.period_start,
+        period_end: inv.period_end,
+      })
+    : null
 
   return NextResponse.json({
     success: true,
