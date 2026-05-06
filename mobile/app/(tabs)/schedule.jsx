@@ -27,7 +27,7 @@ import {
 import {
   getMyShifts, getMyTimeOff, createSwapRequest, adjustShiftAssignment,
 } from '../../lib/schedule-api'
-import { MANAGER_ROLES } from '@shared/permissions'
+import { MANAGER_ROLES } from '../../../shared/permissions'
 
 const isManagerRole = (role) => MANAGER_ROLES.includes(role)
 
