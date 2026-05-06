@@ -43,6 +43,10 @@ export default function TabsLayout() {
   const showSchedule = canMobile(profile, 'schedule', activeLocation)
   const showPipeline = canMobile(profile, 'pipeline', activeLocation)
   const showWhatsapp = canMobile(profile, 'whatsapp', activeLocation)
+  // Invoices tab: contractor employment_type only. Owners/masters
+  // approve from the web; on mobile the tab would just be noise for
+  // them. (mig 101)
+  const showInvoices = profile?.employment_type === 'contractor'
 
   return (
     <Tabs
@@ -97,6 +101,16 @@ export default function TabsLayout() {
           href: showWhatsapp ? '/(tabs)/whatsapp' : null,
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="chatbubble-outline" size={size} color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="invoices"
+        options={{
+          title: 'Invoices',
+          href: showInvoices ? '/(tabs)/invoices' : null,
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="receipt-outline" size={size} color={color} />
           ),
         }}
       />

@@ -39,6 +39,9 @@ export async function GET() {
     role: user.role,
     isMaster: !!user.isMaster,
     avatar_url: user.avatar_url || null,
+    // Mobile gates the Invoices tab on contractor employment_type
+    // (mig 101). Plain categorical field, not a permission grant.
+    employment_type: user.employment_type || null,
     // Per-location roles (mig 051). The mobile app reads this when
     // the user switches active location locally, so role-default
     // resolution can flip without a /me refetch.
