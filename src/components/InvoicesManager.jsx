@@ -153,19 +153,16 @@ function SubmitForm({ user, onSubmitted }) {
   const [invoiceNumber, setInvoiceNumber] = useState('')
   const [notes, setNotes] = useState('')
   const [pdf, setPdf] = useState(null)
-  const [locationId, setLocationId] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState(null)
   const [success, setSuccess] = useState(false)
 
-  const myLocations = (user.profile_locations || user.assignments || []).map((a) => ({
-    id: a.location_id,
-    name: a.locations?.name || a.location_name || a.location_id,
-  }))
-  // Fallback if user payload doesn't carry locations: show a single
-  // disabled note. Most contractors will have at least one location.
-  const needsLocationPicker = myLocations.length > 1
-  const defaultLocationId = myLocations.length === 1 ? myLocations[0].id : ''
+  // The submission is always tied to the location the user has
+  // ACTIVE in the sidebar location switcher. If they want to
+  // invoice a different studio, they switch up there first. This
+  // matches how every other surface in the app scopes itself
+  // (Schedule, Orders, etc. all key off activeLocation).
+  const activeLocation = user.activeLocation || null
 
   async function handleSubmit(e) {
     e.preventDefault()
@@ -175,6 +172,10 @@ function SubmitForm({ user, onSubmitted }) {
       setError('Please attach the PDF.')
       return
     }
+    if (!activeLocation?.id) {
+      setError('No active location — pick a studio in the sidebar before submitting.')
+      return
+    }
     setSubmitting(true)
     try {
       const fd = new FormData()
@@ -182,8 +183,7 @@ function SubmitForm({ user, onSubmitted }) {
       fd.set('amount', amount)
       if (invoiceNumber) fd.set('invoice_number', invoiceNumber)
       if (notes) fd.set('notes', notes)
-      const useLoc = needsLocationPicker ? locationId : defaultLocationId
-      if (useLoc) fd.set('location_id', useLoc)
+      fd.set('location_id', activeLocation.id)
       fd.set('pdf', pdf)
 
       const res = await fetch('/api/invoices', { method: 'POST', body: fd })
@@ -211,6 +211,12 @@ function SubmitForm({ user, onSubmitted }) {
         <h2 className="text-xs font-semibold uppercase tracking-wider text-un1t-light">Submit a new invoice</h2>
         <p className="text-xs text-un1t-light mt-1">
           One invoice per calendar month. PDF only, max 10 MB.
+          {activeLocation?.name && (
+            <>
+              {' '}Submitting for <span className="text-un1t-white font-medium">{activeLocation.name}</span>
+              {' '}— switch studios in the sidebar to change.
+            </>
+          )}
         </p>
       </div>
 
@@ -241,21 +247,6 @@ function SubmitForm({ user, onSubmitted }) {
           />
         </div>
       </div>
-
-      {needsLocationPicker && (
-        <div>
-          <label className="block text-xs text-un1t-light mb-1">Studio *</label>
-          <select
-            required
-            value={locationId}
-            onChange={(e) => setLocationId(e.target.value)}
-            className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
-          >
-            <option value="">Choose…</option>
-            {myLocations.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
-          </select>
-        </div>
-      )}
 
       <div>
         <label className="block text-xs text-un1t-light mb-1">Your invoice reference (optional)</label>
