@@ -8,6 +8,7 @@
 
 import { View, Text, ScrollView, Pressable, Alert } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
+import { useRouter } from 'expo-router'
 import { useAuth } from '../../lib/auth-context'
 
 function Section({ title, children }) {
@@ -57,13 +58,19 @@ function Row({ icon, label, value, onPress, isLast, destructive }) {
 }
 
 export default function More() {
+  const router = useRouter()
   const {
     profile,
     locations,
     activeLocation,
     setActiveLocationId,
     signOut,
+    impersonatingFrom,
   } = useAuth()
+  // Master gate — when impersonating, the visible profile.role is the
+  // target's, so also check impersonatingFrom (the underlying caller
+  // is then implicitly a master).
+  const canImpersonate = profile?.role === 'master' || profile?.isMaster || !!impersonatingFrom
 
   function pickLocation() {
     if (!locations.length) return
@@ -112,6 +119,22 @@ export default function More() {
           isLast
         />
       </Section>
+
+      {/* Master-only: switch into another user's view (mig 035).
+          Mirrors the web Settings → Impersonate entry point. The banner
+          above the tabs already shows the active session + Stop button
+          when one's running. */}
+      {canImpersonate && (
+        <Section title="Master tools">
+          <Row
+            icon="eye-outline"
+            label="View as user"
+            value={impersonatingFrom ? 'Active' : undefined}
+            onPress={() => router.push('/impersonate')}
+            isLast
+          />
+        </Section>
+      )}
 
       <Section>
         <Row

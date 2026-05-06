@@ -12,10 +12,12 @@
 
 import { Tabs, Redirect } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
+import { View } from 'react-native'
 import { useEffect, useRef } from 'react'
 import { useAuth } from '../../lib/auth-context'
 import { canMobile } from '../../lib/permissions'
 import { registerForPushNotifications } from '../../lib/push-register'
+import ImpersonateBanner from '../../components/ImpersonateBanner'
 
 export default function TabsLayout() {
   const { session, profile, activeLocation, loading } = useAuth()
@@ -54,7 +56,12 @@ export default function TabsLayout() {
   const showStudio = canMobile(profile, 'studio_management', activeLocation)
 
   return (
-    <Tabs
+    // Wrap the navigator so the impersonation banner can pin above
+    // the system header on every tab. ImpersonateBanner returns null
+    // when not active, so this wrapper is a no-op for the common case.
+    <View style={{ flex: 1 }}>
+      <ImpersonateBanner />
+      <Tabs
       screenOptions={{
         headerShown: true,
         headerTitleStyle: { fontWeight: '600' },
@@ -139,5 +146,6 @@ export default function TabsLayout() {
         }}
       />
     </Tabs>
+    </View>
   )
 }

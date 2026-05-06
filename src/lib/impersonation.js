@@ -16,10 +16,11 @@
 // matching log row. Starting a new session on top of an existing one
 // implicitly closes the old one first (no double-active rows).
 
-import { cookies } from 'next/headers'
+import { cookies, headers } from 'next/headers'
 import { createServerClient } from './supabase'
 
 export const IMPERSONATE_COOKIE = 'un1t_impersonate'
+export const IMPERSONATE_HEADER = 'x-impersonate-target'
 const ONE_DAY_SECONDS = 24 * 60 * 60
 
 /**
@@ -35,6 +36,31 @@ export function readImpersonationCookie() {
     // Not in a request context.
     return null
   }
+}
+
+/**
+ * Read the impersonation HEADER. Mobile clients can't set cookies, so
+ * they signal impersonation via x-impersonate-target on each request.
+ * Like the cookie path, the value is still master-gated downstream
+ * inside getCurrentUser() — a non-master JWT sending this header has
+ * the value silently ignored. Returns the target user's UUID.
+ */
+export function readImpersonationHeader() {
+  try {
+    const v = headers().get(IMPERSONATE_HEADER) || ''
+    return v && /^[0-9a-f-]{36}$/i.test(v) ? v : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Combined cookie+header read. Header wins if both are set (mobile
+ * client should be authoritative when both are present, e.g. a
+ * developer running the iOS sim against a logged-in dev cookie).
+ */
+export function readImpersonationTarget() {
+  return readImpersonationHeader() || readImpersonationCookie()
 }
 
 /**

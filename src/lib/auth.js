@@ -154,22 +154,28 @@ export const getCurrentUser = cache(async function getCurrentUser() {
   // don't know whether to fetch it until realProfile is loaded
   // (only masters can impersonate), but the cookie read is cheap and
   // doesn't depend on the profile fetch.
-  const [{ data: realProfile }, { readImpersonationCookie }] = await Promise.all([
+  const [{ data: realProfile }, { readImpersonationTarget }] = await Promise.all([
     db.from('profiles').select('*').eq('id', user.id).single(),
     import('./impersonation.js'),
   ])
 
   if (!realProfile) return null
 
-  // Master impersonation (mig 035). If a `un1t_impersonate` cookie
-  // is set AND the underlying session belongs to a master, swap to
-  // the target profile so the rest of the app sees what they'd see.
-  // The original master identity is exposed as `impersonatingFrom`
-  // so the banner / debug tools can show it.
+  // Master impersonation (mig 035). If `un1t_impersonate` cookie OR
+  // `x-impersonate-target` header is set AND the underlying session
+  // belongs to a master, swap to the target profile so the rest of
+  // the app sees what they'd see. The original master identity is
+  // exposed as `impersonatingFrom` so the banner / debug tools can
+  // show it.
+  //
+  // Cookie path is for the web app (server components, API routes).
+  // Header path is for mobile (Bearer JWT, no cookies). Both go
+  // through the same readImpersonationTarget() so the master gate
+  // and audit hooks work identically.
   let profile = realProfile
   let impersonatingFrom = null
   if (realProfile.role === 'master') {
-    const targetId = readImpersonationCookie()
+    const targetId = readImpersonationTarget()
     if (targetId && targetId !== realProfile.id) {
       const { data: target } = await db
         .from('profiles')

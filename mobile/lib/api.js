@@ -9,6 +9,7 @@
 
 import Constants from 'expo-constants'
 import { supabase } from './supabase'
+import { readImpersonate } from './impersonate'
 
 const API_BASE = Constants.expoConfig?.extra?.apiBaseUrl
 
@@ -35,6 +36,20 @@ export async function api(path, options = {}) {
   }
   if (token) headers.Authorization = `Bearer ${token}`
   if (options.locationId) headers['x-active-location'] = options.locationId
+
+  // Master impersonation (mig 035). When the user has an active
+  // "View as user" session stored locally, every authenticated
+  // request surfaces it via x-impersonate-target — same code path
+  // server-side as the web cookie. Auto-stop after 24h is enforced
+  // inside readImpersonate(). Any non-master JWT sending this
+  // header has the value silently ignored server-side.
+  try {
+    const imp = await readImpersonate()
+    if (imp?.targetId) headers['x-impersonate-target'] = imp.targetId
+  } catch {
+    // Best-effort — never fail an API call because the local
+    // impersonate blob couldn't be read.
+  }
 
   let response
   try {

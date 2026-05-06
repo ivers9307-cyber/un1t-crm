@@ -54,10 +54,19 @@ export async function GET() {
   // without an additional round-trip.
   const assignmentsByLocation = user.assignmentsByLocation || {}
 
+  // Impersonation status (mig 035). When the underlying JWT is a
+  // master AND the x-impersonate-target header is set, getCurrentUser
+  // already swapped the visible profile to the target — we just need
+  // to tell the mobile client that's what's happening so the banner
+  // can render. impersonatingFrom carries the master's identity so
+  // the banner can show "Viewing as Bob (logged in as Richard)".
+  const impersonatingFrom = user.impersonatingFrom || null
+
   return NextResponse.json({
     success: true,
     data: {
       profile: safeProfile,
+      impersonatingFrom,
       locations: (user.locations || []).map(l => ({
         id: l.id,
         name: l.name,
