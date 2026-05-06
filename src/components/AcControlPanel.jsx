@@ -17,7 +17,7 @@
 
 import { useEffect, useState, useRef } from 'react'
 import {
-  Snowflake, Loader2, AlertCircle, CheckCircle2, Power, Clock, Plus, Settings,
+  Snowflake, Loader2, AlertCircle, CheckCircle2, Power, Clock, Settings,
 } from 'lucide-react'
 
 const POLL_INTERVAL_MS = 30_000
@@ -26,7 +26,7 @@ export default function AcControlPanel() {
   const [data, setData] = useState(null)
   const [loadError, setLoadError] = useState(null)
   const [notConfigured, setNotConfigured] = useState(false)
-  const [busy, setBusy] = useState(null) // 'on' | 'off' | 'extend'
+  const [busy, setBusy] = useState(null) // 'on' | 'off'
   const [actionError, setActionError] = useState(null)
   const [actionInfo, setActionInfo] = useState(null)
   const [tick, setTick] = useState(0)
@@ -97,24 +97,6 @@ export default function AcControlPanel() {
       await load()
     } catch (e) {
       setActionError(e.message || 'Turn-off failed')
-    } finally {
-      setBusy(null)
-    }
-  }
-
-  async function extend(minutes = 30) {
-    setBusy('extend'); setActionError(null); setActionInfo(null)
-    try {
-      const r = await fetch('/api/studio-management/ac/extend', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ minutes }),
-      })
-      const j = await r.json()
-      if (!r.ok || j.success === false) throw new Error(j.error || `Extend failed (${r.status})`)
-      await load()
-    } catch (e) {
-      setActionError(e.message || 'Extend failed')
     } finally {
       setBusy(null)
     }
@@ -227,24 +209,14 @@ export default function AcControlPanel() {
             </div>
           )}
 
-          <div className="flex gap-2">
-            <button
-              onClick={() => extend(30)}
-              disabled={busy === 'extend'}
-              className="flex-1 bg-un1t-gray/60 hover:bg-un1t-gray/80 text-un1t-white text-sm font-semibold px-3 py-2 rounded-md inline-flex items-center justify-center gap-1.5 disabled:opacity-50"
-            >
-              {busy === 'extend' ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}
-              Extend +30 min
-            </button>
-            <button
-              onClick={turnOff}
-              disabled={busy === 'off'}
-              className="flex-1 bg-red-500/15 text-red-300 border border-red-500/30 hover:bg-red-500/25 text-sm font-semibold px-3 py-2 rounded-md inline-flex items-center justify-center gap-1.5 disabled:opacity-50"
-            >
-              {busy === 'off' ? <Loader2 size={14} className="animate-spin" /> : <Power size={14} />}
-              Turn off now
-            </button>
-          </div>
+          <button
+            onClick={turnOff}
+            disabled={busy === 'off'}
+            className="w-full bg-red-500/15 text-red-300 border border-red-500/30 hover:bg-red-500/25 text-sm font-semibold px-3 py-2.5 rounded-md inline-flex items-center justify-center gap-1.5 disabled:opacity-50"
+          >
+            {busy === 'off' ? <Loader2 size={14} className="animate-spin" /> : <Power size={14} />}
+            Turn off now
+          </button>
         </div>
       )}
 
