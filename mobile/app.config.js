@@ -25,7 +25,13 @@ export default ({ config }) => ({
   },
   assetBundlePatterns: ['**/*'],
   ios: {
-    supportsTablet: true,
+    // iPhone-only. Setting this to false keeps the binary's UIDeviceFamily
+    // restricted to iPhone (1) — App Store Connect then doesn't require
+    // iPad screenshots, and the Custom App in ABM only offers itself to
+    // iPhones. The CRM's mobile UI is laid out for narrow viewports;
+    // iPad would show stretched single-column layouts which isn't a
+    // good user experience anyway.
+    supportsTablet: false,
     // NOTE: Apple bundle IDs use reverse-DNS. The literal string
     // "crmmobileios.un1tdublin.com" the user wrote isn't valid; this is
     // the equivalent in Apple-acceptable form. Change before App Store
