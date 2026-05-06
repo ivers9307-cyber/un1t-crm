@@ -621,14 +621,16 @@ Two distinct pipelines — **EAS Update** for JS-only changes (over-the-air, no 
 
 **EAS Update (JS only).** Auto-runs on every push to `main` via `.github/workflows/eas-update.yml`. Ships only the JS bundle; existing installs pick it up on next launch. Use for any change that doesn't add/remove a native module or change permissions, plugins, icons, or bundle identifier. ~30 sec to publish, no Apple review.
 
-**EAS Build (native binary).** Required when `app.config.js` plugins / `package.json` native deps / icons / bundle id / version change. Two ways to trigger:
+**EAS Build (native binary).** Required when `app.config.js` plugins / `package.json` native deps / icons / bundle id / version change. Three ways to trigger:
 
-1. **CLI** — from `mobile/`:
+1. **EAS Workflow (recommended)** — `mobile/.eas/workflows/release-ios.yml` defines a manually-triggered "Release iOS" workflow that runs build + submit in sequence. Trigger from expo.dev → Workflows → Run. Single click, no laptop needed, uses credentials already stored on EAS. This is the steady-state path for shipping new native releases.
+2. **CLI** — from `mobile/`:
    ```bash
    eas build --platform ios --profile production
    eas submit --platform ios --profile production --latest
    ```
-2. **expo.dev web UI** — easier for non-developer triggering. Project → Builds → "Build" → pick iOS / production / latest commit on main. First time, link GitHub at Project settings → GitHub with **Base directory = `mobile`** (this is a monorepo; without the base dir EAS tries to build the Next.js app and fails). Submit step is a separate button on the build page.
+   Used for the very first build (because credentials need interactive setup) and as a fallback if EAS Workflows is unavailable.
+3. **expo.dev web UI ad-hoc** — Project → Builds → "Build". Equivalent to the CLI route but no laptop needed. First time, link GitHub at Project settings → GitHub with **Base directory = `mobile`** (this is a monorepo; without the base dir EAS tries to build the Next.js app and fails).
 
 The Vercel-deployed `crm.un1tdublin.com` is the API base URL the mobile app calls — no separate backend deploy.
 

@@ -1,0 +1,56 @@
+# EAS Workflow — manually-triggered iOS native release.
+#
+# Runs on EAS's macOS workers, uses the same Apple Distribution
+# Certificate + provisioning profile already stored on Expo (set up
+# during the first `eas build` from the CLI). No secrets to thread
+# through GitHub. No 2FA prompts because the App Store Connect API
+# Key (when configured at expo.dev → Credentials → Apple) handles
+# submit auth.
+#
+# Trigger this from https://expo.dev/accounts/<you>/projects/un1t-crm-mobile/workflows
+# whenever a NATIVE change has landed on main — bumping version,
+# adding a plugin, swapping icons, changing app.config.js plugins
+# array, anything that requires a fresh .ipa.
+#
+# JS-only changes do NOT need this — they auto-ship via the existing
+# `.github/workflows/eas-update.yml` over-the-air.
+#
+# What it does:
+#   1. Builds iOS production profile (~15-25 min)
+#   2. Submits the resulting .ipa to App Store Connect (~3-5 min upload
+#      + 10-20 min Apple processing — happens after the workflow ends)
+#
+# Pre-flight checklist before running this:
+#   - Bump `version` in mobile/app.config.js if it's a user-visible
+#     release (e.g. 0.1.0 → 0.2.0 for a feature release, 1.0.0 → 1.0.1
+#     for a bug fix). EAS auto-increments buildNumber.
+#   - Ensure mobile/package-lock.json is in sync with package.json
+#     (the build will refuse to install otherwise — see CLAUDE.md
+#     "Before pushing").
+#   - Ensure CI is green on main.
+
+name: Release iOS
+
+on:
+  # Manually triggered from expo.dev → Workflows → Run.
+  # No other triggers — every native release is a deliberate choice
+  # and we don't want a stray push to mobile/ burning Apple's review
+  # queue.
+  workflow_dispatch: {}
+
+jobs:
+  build_ios:
+    name: Build iOS
+    type: build
+    params:
+      platform: ios
+      profile: production
+
+  submit_ios:
+    name: Submit to App Store Connect
+    needs: [build_ios]
+    type: submit
+    params:
+      platform: ios
+      profile: production
+      build_id: ${{ needs.build_ios.outputs.build_id }}
