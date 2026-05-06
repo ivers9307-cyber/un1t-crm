@@ -15,14 +15,14 @@ export default ({ config }) => ({
   slug: 'un1t-crm-mobile',
   version: '0.1.0',
   orientation: 'portrait',
-  // icon: './assets/icon.png',          // TODO: add UN1T branding to assets/
+  icon: './assets/icon.png',
   scheme: 'un1tcrm',
   userInterfaceStyle: 'automatic',
-  // splash: {                           // TODO: add splash to assets/
-  //   image: './assets/splash.png',
-  //   resizeMode: 'contain',
-  //   backgroundColor: '#FFFFFF',
-  // },
+  splash: {
+    image: './assets/splash.png',
+    resizeMode: 'contain',
+    backgroundColor: '#000000',
+  },
   assetBundlePatterns: ['**/*'],
   ios: {
     supportsTablet: true,
@@ -41,10 +41,13 @@ export default ({ config }) => ({
   },
   android: {
     package: 'com.un1tdublin.crmmobileios',
-    // adaptiveIcon: {                  // TODO: add UN1T branding to assets/
-    //   foregroundImage: './assets/adaptive-icon.png',
-    //   backgroundColor: '#FFFFFF',
-    // },
+    adaptiveIcon: {
+      foregroundImage: './assets/adaptive-icon.png',
+      // Android adaptive icon background — UN1T identity is black/white
+      // and the foreground is a white wordmark, so the background must
+      // be black to match the iOS icon visually.
+      backgroundColor: '#000000',
+    },
   },
   plugins: [
     'expo-router',
@@ -52,9 +55,9 @@ export default ({ config }) => ({
     [
       'expo-notifications',
       {
-        // TODO: add a transparent white silhouette of the UN1T logo for
-        // the notification tray icon. Defaults work fine for development.
-        // icon: './assets/notification-icon.png',
+        // Android notification tray icon — must be a white silhouette
+        // on transparent (Android masks it). iOS uses the app icon.
+        icon: './assets/notification-icon.png',
         color: '#111827',
       },
     ],
