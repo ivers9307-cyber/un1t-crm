@@ -8,7 +8,10 @@
     "ios": "expo start --ios",
     "android": "expo start --android",
     "lint": "expo lint",
-    "prebuild": "expo prebuild --clean"
+    "prebuild": "expo prebuild --clean",
+    "version:patch": "node scripts/bump-version.mjs patch",
+    "version:minor": "node scripts/bump-version.mjs minor",
+    "version:major": "node scripts/bump-version.mjs major"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.3",

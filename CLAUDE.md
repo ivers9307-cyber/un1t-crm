@@ -648,10 +648,17 @@ UN1T CRM is an internal staff tool, not a consumer product, so it ships as a **C
 - `mobile/eas.json` `submit.production.ios` populated: `appleId`, `appleTeamId` (`535XMCT5PY`), `ascAppId` (`6766947870`).
 
 **Per-version submission flow:**
-1. Bump `version` in `mobile/app.config.js` (semver). EAS auto-increments `buildNumber`.
+1. Bump `version` in `mobile/app.config.js` (semver). Use the helper:
+   ```bash
+   cd mobile
+   npm run version:patch    # 0.1.0 -> 0.1.1   (bug fix)
+   npm run version:minor    # 0.1.0 -> 0.2.0   (new feature)
+   npm run version:major    # 0.1.0 -> 1.0.0   (breaking / milestone)
+   ```
+   The script (`mobile/scripts/bump-version.mjs`) edits `app.config.js`, commits with a descriptive message, tags the commit `mobile-vX.Y.Z`, and pushes — all in one go. Add `--no-commit` and/or `--no-push` if you want to stage manually. EAS Build auto-increments `buildNumber` on every native build, so we only manage the marketing version here.
 2. Verify lock file is in sync (see "Before pushing" above) — `npm ci` is what EAS runs and the lock-drift failure is silent in local dev.
-3. Trigger build (CLI or web UI as above). ~15–25 min.
-4. Trigger submit. Apple "processes" the upload for ~10–20 min then it appears under App Store Connect → My Apps → UN1T CRM → TestFlight.
+3. Trigger build via the **Release iOS** EAS Workflow at expo.dev → Workflows → Run. ~15–25 min build, automatically followed by submit (~3–5 min upload + 10–20 min Apple processing). For first-time builds or when EAS Workflows is unavailable, fall back to the CLI route.
+4. The build appears under App Store Connect → My Apps → UN1T CRM → TestFlight tab once Apple finishes processing.
 5. In App Store Connect, attach the build to the version, fill metadata (screenshots, App Privacy nutrition label, age rating, content rights, review notes), submit for review. Custom App reviews are typically 24–48h.
 6. Once approved, distribute via ABM → Apps & Books — assign to staff Apple IDs by email or Managed Apple ID. App appears in their App Store app library, not searchable publicly.
 
