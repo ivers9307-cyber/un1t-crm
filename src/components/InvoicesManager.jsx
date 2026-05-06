@@ -644,15 +644,35 @@ function DiffRow({ invoiced, estimated }) {
   if (estimated == null || !Number.isFinite(estimated)) return null
   const diff = invoiced - estimated
   const pct = estimated > 0 ? (diff / estimated) * 100 : 0
+
+  // Match: small inline confirmation in green — non-actionable, doesn't
+  // need to dominate the panel.
   if (Math.abs(diff) < 0.005) {
-    return <p className="text-xs text-green-300 mt-1.5 inline-flex items-center gap-1"><CheckCircle2 size={11} /> Invoiced amount matches estimate.</p>
+    return (
+      <div className="mt-3 flex items-center gap-2 text-sm text-green-300">
+        <CheckCircle2 size={14} className="shrink-0" />
+        <span>Invoiced amount matches estimate</span>
+      </div>
+    )
   }
+
+  // Mismatch: full-width callout box — bigger text, real contrast.
+  // Amber when >5% off, neutral for small drift.
   const sign = diff > 0 ? '+' : ''
+  const isBig = Math.abs(pct) > 5
+  const bgClass = isBig
+    ? 'bg-amber-500/15 border-amber-500/40 text-amber-100'
+    : 'bg-un1t-gray/30 border-un1t-gray text-un1t-light'
   return (
-    <p className={`text-xs mt-1.5 inline-flex items-center gap-1 ${Math.abs(pct) > 5 ? 'text-amber-300' : 'text-un1t-light'}`}>
-      <AlertCircle size={11} />
-      Invoiced {sign}€{diff.toFixed(2)} vs estimate ({sign}{pct.toFixed(1)}%)
-    </p>
+    <div className={`mt-3 rounded-md border p-3 flex items-start gap-2.5 ${bgClass}`}>
+      <AlertCircle size={16} className="shrink-0 mt-0.5" />
+      <div className="text-sm font-semibold leading-snug">
+        Invoiced {sign}€{Math.abs(diff).toFixed(2)} {diff > 0 ? 'over' : 'under'} estimate
+        <span className="block text-xs font-normal opacity-80 mt-0.5">
+          {sign}{pct.toFixed(1)}% vs scheduled hours × hourly rate
+        </span>
+      </div>
+    </div>
   )
 }
 
