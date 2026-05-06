@@ -18,6 +18,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { MANAGER_ROLES, timeOfDay } from '@/lib/schemas'
+import { sendPush } from '@/lib/push'
 
 // All fields optional. To CLEAR an override, send null explicitly
 // (z.nullable() vs .optional() — PUT body should pass null to remove
@@ -94,6 +95,10 @@ export async function PUT(request, { params }) {
     .select(`
       id, block_id, profile_id, notes, status, assigned_at, updated_at,
       start_time_override, end_time_override, partial_reason,
+      shift_blocks!block_id (
+        block_date, start_time, end_time,
+        shift_templates ( name )
+      ),
       profiles:profile_id(id, full_name, email, avatar_url, role)
     `)
     .single()
@@ -101,6 +106,48 @@ export async function PUT(request, { params }) {
   if (error) {
     return NextResponse.json({ success: false, error: error.message }, { status: 400 })
   }
+
+  // Push the affected coach when a manager (not self) actually
+  // changed the override times. Same-fields-as-before doesn't
+  // count — we compare to assignment we read pre-update.
+  const wasManagerEdit = assignment.profile_id !== user.id
+  const overrideChanged =
+    Object.prototype.hasOwnProperty.call(updates, 'start_time_override') ||
+    Object.prototype.hasOwnProperty.call(updates, 'end_time_override') ||
+    Object.prototype.hasOwnProperty.call(updates, 'partial_reason')
+  if (wasManagerEdit && overrideChanged) {
+    try {
+      const block = data.shift_blocks
+      const tplName = block?.shift_templates?.name || 'Shift'
+      const date = block?.block_date || ''
+      const dateLabel = date
+        ? new Date(date + 'T00:00:00').toLocaleDateString('en-IE', { weekday: 'short', day: 'numeric', month: 'short' })
+        : ''
+      const blockStart = (block?.start_time || '').slice(0, 5)
+      const blockEnd = (block?.end_time || '').slice(0, 5)
+      const newStart = (data.start_time_override || block?.start_time || '').slice(0, 5)
+      const newEnd = (data.end_time_override || block?.end_time || '').slice(0, 5)
+      const cleared = !data.start_time_override && !data.end_time_override
+      const body = cleared
+        ? `${tplName} ${dateLabel}: back to block default ${blockStart}–${blockEnd}.`
+        : `${tplName} ${dateLabel}: now ${newStart}–${newEnd}` +
+          (data.partial_reason ? ` · ${data.partial_reason}` : '')
+
+      await sendPush([data.profile_id], {
+        title: 'Shift adjusted',
+        body,
+        category: 'shift_adjusted',
+        data: {
+          type: 'shift_adjusted',
+          assignment_id: data.id,
+          block_date: date,
+        },
+      })
+    } catch (e) {
+      console.warn(`[assignment-update] push failed for ${data.id}: ${e?.message || e}`)
+    }
+  }
+
   return NextResponse.json({ success: true, data })
 }
 

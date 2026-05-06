@@ -157,6 +157,10 @@ export const MOBILE_PERMISSIONS = Object.freeze([
   // toggles are still listed but default off for non-contractors.
   { key: 'notify_invoice_approved', label: '… Invoice approved',   hint: 'Notify when an invoice you submitted is approved',              mobileOnly: true, isNotify: true },
   { key: 'notify_invoice_declined', label: '… Invoice declined',   hint: 'Notify when an invoice you submitted needs adjustment',         mobileOnly: true, isNotify: true },
+  // Partial-shift overrides (mig 099/100). Coach gets a push when a
+  // manager adjusts their times — the schedule effectively shifted
+  // out from under them, so a heads-up is high-value.
+  { key: 'notify_shift_adjusted',   label: '… Shift adjusted',     hint: 'Notify when a manager changes the times on one of your shifts', mobileOnly: true, isNotify: true },
 ])
 
 export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
@@ -169,6 +173,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     notify_time_off: true, notify_schedule: true, notify_swap: true,
     notify_lead: true, notify_whatsapp: true,
     notify_invoice_approved: true, notify_invoice_declined: true,
+    notify_shift_adjusted: true,
   },
   staff: {
     schedule: true, pipeline: false, whatsapp: false,
@@ -177,6 +182,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     notify_time_off: true, notify_schedule: true, notify_swap: true,
     notify_lead: false, notify_whatsapp: false,
     notify_invoice_approved: true, notify_invoice_declined: true,
+    notify_shift_adjusted: true,
   },
   head_coach: {
     schedule: true, pipeline: true, whatsapp: true,
@@ -185,6 +191,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     notify_time_off: true, notify_schedule: true, notify_swap: true,
     notify_lead: true, notify_whatsapp: true,
     notify_invoice_approved: true, notify_invoice_declined: true,
+    notify_shift_adjusted: true,
   },
   manager: {
     schedule: true, pipeline: true, whatsapp: true,
@@ -193,6 +200,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     notify_time_off: true, notify_schedule: true, notify_swap: true,
     notify_lead: true, notify_whatsapp: true,
     notify_invoice_approved: true, notify_invoice_declined: true,
+    notify_shift_adjusted: true,
   },
   owner: {
     schedule: true, pipeline: true, whatsapp: true,
@@ -201,6 +209,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     notify_time_off: true, notify_schedule: true, notify_swap: true,
     notify_lead: true, notify_whatsapp: true,
     notify_invoice_approved: true, notify_invoice_declined: true,
+    notify_shift_adjusted: true,
   },
 })
 

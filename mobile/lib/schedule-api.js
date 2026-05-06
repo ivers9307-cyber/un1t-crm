@@ -69,3 +69,21 @@ export function respondToSwap(id, status, reviewNote, locationId) {
     body: { status, review_note: reviewNote || null },
   })
 }
+
+/**
+ * Set / clear / change a partial-shift override on an assignment
+ * (mig 099/100). Pass null to any time field to clear that override
+ * back to the block default. partial_reason is optional free text
+ * (200 char cap server-side).
+ */
+export function adjustShiftAssignment(assignmentId, { startTime, endTime, reason, locationId }) {
+  return api(`/api/schedule/assignments/${assignmentId}`, {
+    method: 'PUT',
+    locationId,
+    body: {
+      start_time_override: startTime ?? null,
+      end_time_override: endTime ?? null,
+      partial_reason: reason ?? null,
+    },
+  })
+}
