@@ -66,6 +66,12 @@ export default ({ config }) => ({
   plugins: [
     'expo-router',
     'expo-secure-store',
+    // Required peer of @expo/vector-icons used throughout the app
+    // (every Ionicons component imports a font under the hood).
+    // Expo Go bundles expo-font automatically so it works in dev,
+    // but production builds — and EAS's expo-doctor pre-flight check
+    // — require it to be declared explicitly.
+    'expo-font',
     [
       'expo-notifications',
       {
