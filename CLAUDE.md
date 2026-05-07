@@ -623,20 +623,29 @@ Two distinct pipelines — **EAS Update** for JS-only changes (over-the-air, no 
 
 **EAS Build (native binary).** Required when `app.config.js` plugins / `package.json` native deps / icons / bundle id / version change. Three ways to trigger:
 
-1. **EAS Workflow (recommended)** — `mobile/.eas/workflows/release-ios.yml` defines a manually-triggered "Release iOS" workflow that runs build + submit in sequence. Trigger from expo.dev → Workflows → Run. Single click, no laptop needed, uses credentials already stored on EAS. This is the steady-state path for shipping new native releases.
+1. **EAS Workflow (recommended)** — `mobile/.eas/workflows/release.yml` defines a manually-triggered "Release" workflow that builds AND submits BOTH platforms in parallel: iOS to App Store Connect (Custom App / ABM) and Android to Google Play Internal Testing track. Trigger from expo.dev → Workflows → Run. Single click, no laptop needed, total wall-clock ~25 min (slower of the two builds). Each platform's submit job depends only on its own build so a failure on one doesn't block the other. This is the steady-state path for shipping new native releases.
 2. **CLI** — from `mobile/`:
    ```bash
    eas build --platform ios --profile production
    eas submit --platform ios --profile production --latest
+   eas build --platform android --profile production
+   eas submit --platform android --profile production --latest
    ```
-   Used for the very first build (because credentials need interactive setup) and as a fallback if EAS Workflows is unavailable.
+   Used for the very first build per platform (because credentials need interactive setup — Distribution Cert for iOS, upload keystore for Android) and as a fallback if EAS Workflows is unavailable.
 3. **expo.dev web UI ad-hoc** — Project → Builds → "Build". Equivalent to the CLI route but no laptop needed. First time, link GitHub at Project settings → GitHub with **Base directory = `mobile`** (this is a monorepo; without the base dir EAS tries to build the Next.js app and fails).
 
 The Vercel-deployed `crm.un1tdublin.com` is the API base URL the mobile app calls — no separate backend deploy.
 
-#### Apple distribution: Custom App via Apple Business Manager
+#### Distribution: closed-track only, no public stores
 
-UN1T CRM is an internal staff tool, not a consumer product, so it ships as a **Custom App for Business or Education** via ABM, not on the public App Store. Distribution is gated by ABM organisation membership, not by the public storefront.
+UN1T CRM is an internal staff tool, not a consumer product, so neither store version is publicly listed:
+
+- **iOS**: ships as a **Custom App for Business or Education** via Apple Business Manager. Distribution is gated by ABM organisation membership.
+- **Android**: ships to the **Internal Testing track** on Google Play Console. Up to 100 testers managed by email lists; testers click a "Become a tester" link, app appears in their Play Store. App is not searchable publicly.
+
+The two platforms have parallel-but-not-identical setup paths. iOS specifics first, then Android.
+
+##### iOS — Custom App via Apple Business Manager
 
 **One-time prerequisites (already done as of 2026-05):**
 - Apple Developer Program membership (annual fee).
@@ -664,11 +673,34 @@ UN1T CRM is an internal staff tool, not a consumer product, so it ships as a **C
 
 **App Privacy declarations** (the "nutrition label") for UN1T CRM iOS: Name, Email Address, Phone Number, User ID, Device ID, Photos/Videos (invoice PDFs), Customer Support (WhatsApp/email/SMS history), Crash Data, Performance Data — all linked, none used for tracking, all purposes are App Functionality (+ Customer Support for phone/messages, + Analytics for diagnostics). Do NOT declare: Location, Contacts (the iOS Contacts app — CRM "contacts" is a different concept), Payment Info (Revolut handles cards, app never sees them), Health/Fitness (no HealthKit access), IDFA. Age rating: all "None"/"No" → 4+. Content rights: No (no licensed third-party media).
 
-**Common build/submit failures and their fixes:**
+**Common iOS build/submit failures and their fixes:**
 - `npm error Missing: <pkg> from lock file` → run `npm install --package-lock-only` in `mobile/` and recommit (see "Before pushing").
 - `Bundle ID dropdown empty in App Store Connect` → bundle ID has to be registered at **developer.apple.com → Identifiers** first; App Store Connect only lists pre-registered IDs.
 - Apple credentials prompt during build → first-time only; let EAS generate the cert + provisioning profile.
 - iPad screenshots required — set `supportsTablet: false` in `app.config.js` if iPad isn't a target, otherwise Apple rejects for missing 13" iPad screenshots.
+
+##### Android — Internal Testing track on Google Play
+
+**One-time prerequisites:**
+- Google Play Console developer account ($25 one-time).
+- App record created in Play Console with the matching package name (`com.un1tdublin.crmmobileios`).
+- App content forms completed: Privacy Policy URL (`https://crm.un1tdublin.com/privacy`), Data Safety form (Android's privacy nutrition label), Content Rating questionnaire, Target Audience (18+), App Category, Ads disclosure (no ads).
+- Google Play API service account: created in Google Cloud Console, granted "Service Account User" + "Release Manager" roles in Play Console → Setup → API Access. Download the JSON key.
+- Service account JSON uploaded to expo.dev → Credentials → Google Service Account Keys (so EAS Submit can post to Play Console without prompts).
+- Android upload keystore: auto-generated on first interactive `eas build --platform android --profile production`. Stored on EAS, reused indefinitely.
+- `submit.production.android` block in `mobile/eas.json` set with the desired track (currently `"internal"` — for Closed Testing change to `"alpha"` or a custom track name).
+- Internal Testing track configured in Play Console with the staff tester email list.
+
+**Per-version submission flow (Android-specific bits):**
+The version bump and EAS Workflow trigger steps are shared with iOS — `npm run version:patch` updates the marketing version once for both platforms, and the `Release` EAS Workflow handles both binaries in parallel. Android-specific differences:
+- The first build to a fresh app record needs to be uploaded manually via Play Console because the "Production" rollout state requires at least one build to exist before EAS can submit subsequent builds via API. After the first manual upload, all subsequent submissions go through `eas submit` automatically.
+- Play Console requires a separate Data Safety review when the data-handling profile changes (added a new third-party SDK, started collecting a new data type). When in doubt, re-fill the Data Safety form using the same answers as the iOS App Privacy nutrition label — they map directly.
+
+**Common Android build/submit failures and their fixes:**
+- `Service account does not have permission` → grant "Release Manager" role in Play Console → Setup → API Access → Linked service accounts.
+- `Track 'internal' not found` → the Internal Testing track has to be set up in Play Console (Testing → Internal testing → Create new release) at least once before EAS can submit to it.
+- `Version code already exists` → `appVersionSource: 'remote'` in eas.json should auto-increment, but if a build was rejected and resubmitted under the same code, force a new build to get a fresh code.
+- Upload keystore prompts during build → first-time only; let EAS generate it. After this, never delete the keystore on EAS — Play App Signing pins your app to the upload key fingerprint and a new keystore would lock you out of the Play listing.
 
 ## Deployment
 

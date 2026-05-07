@@ -1,0 +1,79 @@
+# EAS Workflow — manually-triggered iOS + Android native release.
+#
+# Builds and submits BOTH platforms in parallel. iOS goes to App
+# Store Connect (Custom App for ABM); Android goes to the Internal
+# Testing track on Google Play Console.
+#
+# Both build jobs run concurrently on EAS workers — total wall-clock
+# time is roughly the slower of the two (~25 min). Each platform's
+# submit job depends only on its OWN build, so iOS and Android also
+# submit independently — a failure on one platform doesn't block the
+# other.
+#
+# Trigger from https://expo.dev/accounts/<you>/projects/un1t-crm-mobile/workflows
+# whenever a NATIVE change has landed on main. JS-only changes do
+# NOT need this — they auto-ship via .github/workflows/eas-update.yml.
+#
+# Pre-flight checklist:
+#   - Bump `version` in mobile/app.config.js (use `npm run version:patch`).
+#   - Ensure mobile/package-lock.json is in sync with package.json
+#     (the build refuses npm ci otherwise — see CLAUDE.md "Before
+#     pushing").
+#   - Web CI green on main.
+#
+# Credentials this workflow expects to find on EAS (one-time setup):
+#   - Apple Distribution Certificate + Provisioning Profile (auto-
+#     generated on the first interactive `eas build --platform ios`).
+#   - App Store Connect API Key (uploaded at expo.dev → Credentials
+#     → App Store Connect API Keys).
+#   - Android upload keystore (auto-generated on the first
+#     interactive `eas build --platform android`).
+#   - Google Play service-account JSON (uploaded at expo.dev →
+#     Credentials → Google Service Account Keys, or kept on disk and
+#     referenced in eas.json submit.android.serviceAccountKeyPath).
+
+name: Release
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  # -----------------------------------------------------------------
+  # Builds — run in parallel on EAS workers.
+  # -----------------------------------------------------------------
+  build_ios:
+    name: Build iOS
+    type: build
+    params:
+      platform: ios
+      profile: production
+
+  build_android:
+    name: Build Android
+    type: build
+    params:
+      platform: android
+      profile: production
+
+  # -----------------------------------------------------------------
+  # Submits — each depends only on its own build, so they run as
+  # soon as their respective build finishes. iOS submit doesn't
+  # block on Android build success and vice versa.
+  # -----------------------------------------------------------------
+  submit_ios:
+    name: Submit to App Store Connect
+    needs: [build_ios]
+    type: submit
+    params:
+      platform: ios
+      profile: production
+      build_id: ${{ needs.build_ios.outputs.build_id }}
+
+  submit_android:
+    name: Submit to Google Play (Internal Testing)
+    needs: [build_android]
+    type: submit
+    params:
+      platform: android
+      profile: production
+      build_id: ${{ needs.build_android.outputs.build_id }}
