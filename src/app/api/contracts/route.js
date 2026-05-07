@@ -30,6 +30,7 @@ import {
   renderTemplate,
   validateCustomVariables,
 } from '@/lib/contracts'
+import { sendContractIssuedEmail } from '@/lib/contracts-email'
 
 export const runtime = 'nodejs'
 
@@ -166,11 +167,25 @@ export async function POST(request) {
     .single()
   if (insErr) return NextResponse.json({ success: false, error: insErr.message }, { status: 500 })
 
-  // TODO (commit 3): trigger Postmark "contract issued" email + push
-  // notification to the recipient. The recipient sign flow doesn't
-  // need this — they can also discover the contract by visiting
-  // /account/contracts directly — but the email is the prompt that
-  // makes the feature feel finished.
+  // Look up template name for the email subject. Best-effort —
+  // the contract is already in the DB; an email failure surfaces
+  // as a warning but doesn't roll back the issue.
+  const { data: tplRow } = await db
+    .from('contract_templates')
+    .select('name')
+    .eq('id', template.id)
+    .maybeSingle()
 
-  return NextResponse.json({ success: true, data: contract })
+  const emailResult = await sendContractIssuedEmail({
+    contract,
+    recipient: { full_name: recipient.full_name, email: recipient.email },
+    issuer: { full_name: user.full_name },
+    templateName: tplRow?.name,
+  })
+
+  return NextResponse.json({
+    success: true,
+    data: contract,
+    warning: emailResult.ok ? undefined : `Contract issued but email could not be sent: ${emailResult.error}`,
+  })
 }

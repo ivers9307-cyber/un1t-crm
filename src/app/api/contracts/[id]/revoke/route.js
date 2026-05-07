@@ -14,6 +14,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { contractRevokeSchema } from '@/lib/schemas'
 import { canTransition } from '@/lib/contracts'
+import { sendContractRevokedEmail } from '@/lib/contracts-email'
 
 export const runtime = 'nodejs'
 
@@ -69,8 +70,26 @@ export async function POST(request, { params }) {
     return NextResponse.json({ success: false, error: 'Contract status changed concurrently — refresh and retry.' }, { status: 409 })
   }
 
-  // TODO (commit 3): email + push to the recipient noting the
-  // revocation + reason. Best-effort, don't block the response.
+  // Notify recipient — best effort.
+  const { data: detail } = await db
+    .from('contracts')
+    .select(`
+      id,
+      profile:profiles!profile_id (full_name, email),
+      template:contract_templates!template_id (name)
+    `)
+    .eq('id', updated.id)
+    .maybeSingle()
 
-  return NextResponse.json({ success: true, data: updated })
+  const emailResult = await sendContractRevokedEmail({
+    contract: updated,
+    recipient: detail?.profile,
+    templateName: detail?.template?.name,
+  })
+
+  return NextResponse.json({
+    success: true,
+    data: updated,
+    warning: emailResult.ok ? undefined : `Revoke recorded but recipient email failed: ${emailResult.error}`,
+  })
 }

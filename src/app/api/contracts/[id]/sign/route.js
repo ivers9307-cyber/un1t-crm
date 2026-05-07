@@ -19,6 +19,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { contractSignSchema } from '@/lib/schemas'
 import { canTransition } from '@/lib/contracts'
+import { sendContractSignedEmails } from '@/lib/contracts-email'
 
 export const runtime = 'nodejs'
 
@@ -81,16 +82,44 @@ export async function POST(request, { params }) {
     return NextResponse.json({ success: false, error: 'Contract status changed concurrently — refresh and retry.' }, { status: 409 })
   }
 
-  // TODO (commit 3): trigger PDF generation, upload to Storage at
-  // contracts/<id>/signed.pdf, persist signed_pdf_path on the row,
-  // and fire two Postmark emails:
-  //   - To the recipient: "Your contract has been signed" with
-  //     PDF attached.
-  //   - To the issuer: "Sarah signed her contract" with PDF
-  //     attached + a link to the contract detail page.
-  // Until that lands, signed contracts have body_rendered + the
-  // signature metadata in the row, which is sufficient as a legal
-  // record on its own. The PDF is a derivative.
+  // Look up recipient + issuer + template name for the
+  // confirmation emails. Best-effort — the contract is already
+  // signed; an email failure is a warning not a rollback.
+  const { data: detail } = await db
+    .from('contracts')
+    .select(`
+      id,
+      profile:profiles!profile_id (full_name, email),
+      issuer:profiles!issued_by (full_name, email),
+      template:contract_templates!template_id (name)
+    `)
+    .eq('id', updated.id)
+    .maybeSingle()
 
-  return NextResponse.json({ success: true, data: updated })
+  const emailResults = await sendContractSignedEmails({
+    contract: updated,
+    recipient: detail?.profile,
+    issuer: detail?.issuer,
+    templateName: detail?.template?.name,
+  })
+
+  // PDF generation is deliberately deferred — body_rendered +
+  // signature metadata + ip/ua/timestamp are the actual legal
+  // record. Both /admin/contracts/[id] and /account/contracts/[id]
+  // render that to print-friendly HTML so either party can
+  // browser-save-as-PDF whenever they need a tangible copy.
+
+  const warnings = []
+  if (emailResults.recipient && !emailResults.recipient.ok) {
+    warnings.push(`Recipient email failed: ${emailResults.recipient.error}`)
+  }
+  if (emailResults.issuer && !emailResults.issuer.ok) {
+    warnings.push(`Issuer email failed: ${emailResults.issuer.error}`)
+  }
+
+  return NextResponse.json({
+    success: true,
+    data: updated,
+    warning: warnings.length ? warnings.join('; ') : undefined,
+  })
 }

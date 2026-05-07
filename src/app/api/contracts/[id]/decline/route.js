@@ -14,6 +14,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { contractDeclineSchema } from '@/lib/schemas'
 import { canTransition } from '@/lib/contracts'
+import { sendContractDeclinedEmail } from '@/lib/contracts-email'
 
 export const runtime = 'nodejs'
 
@@ -64,8 +65,28 @@ export async function POST(request, { params }) {
     return NextResponse.json({ success: false, error: 'Contract status changed concurrently — refresh and retry.' }, { status: 409 })
   }
 
-  // TODO (commit 3): notify the issuer via email + push that the
-  // recipient declined.
+  // Notify issuer — best effort.
+  const { data: detail } = await db
+    .from('contracts')
+    .select(`
+      id,
+      profile:profiles!profile_id (full_name, email),
+      issuer:profiles!issued_by (full_name, email),
+      template:contract_templates!template_id (name)
+    `)
+    .eq('id', updated.id)
+    .maybeSingle()
 
-  return NextResponse.json({ success: true, data: updated })
+  const emailResult = await sendContractDeclinedEmail({
+    contract: updated,
+    recipient: detail?.profile,
+    issuer: detail?.issuer,
+    templateName: detail?.template?.name,
+  })
+
+  return NextResponse.json({
+    success: true,
+    data: updated,
+    warning: emailResult.ok ? undefined : `Decline recorded but issuer email failed: ${emailResult.error}`,
+  })
 }
