@@ -1,14 +1,18 @@
-# EAS Workflow — manually-triggered iOS + Android native release.
+# EAS Workflow — manually-triggered native release.
 #
-# Builds and submits BOTH platforms in parallel. iOS goes to App
-# Store Connect (Custom App for ABM); Android goes to the Internal
-# Testing track on Google Play Console.
+# iOS gets the full pipeline (build + auto-submit to App Store
+# Connect Custom App distribution). Android gets BUILD ONLY because
+# UN1T's Google Workspace organisation policy
+# `iam.disableServiceAccountKeyCreation` blocks creating the
+# service-account JSON that `eas submit --platform android` needs.
+# The Android .aab still ships automatically from this workflow —
+# you just download it from the EAS build page and drag it into
+# Play Console -> Internal testing -> Create new release.
 #
 # Both build jobs run concurrently on EAS workers — total wall-clock
-# time is roughly the slower of the two (~25 min). Each platform's
-# submit job depends only on its OWN build, so iOS and Android also
-# submit independently — a failure on one platform doesn't block the
-# other.
+# time is roughly the slower of the two (~25 min). The iOS submit
+# depends only on the iOS build, so a future Android-submit failure
+# (when we re-enable it) won't block iOS shipping.
 #
 # Trigger from https://expo.dev/accounts/<you>/projects/un1t-crm-mobile/workflows
 # whenever a NATIVE change has landed on main. JS-only changes do
@@ -21,16 +25,13 @@
 #     pushing").
 #   - Web CI green on main.
 #
-# Credentials this workflow expects to find on EAS (one-time setup):
-#   - Apple Distribution Certificate + Provisioning Profile (auto-
-#     generated on the first interactive `eas build --platform ios`).
-#   - App Store Connect API Key (uploaded at expo.dev → Credentials
-#     → App Store Connect API Keys).
-#   - Android upload keystore (auto-generated on the first
-#     interactive `eas build --platform android`).
-#   - Google Play service-account JSON (uploaded at expo.dev →
-#     Credentials → Google Service Account Keys, or kept on disk and
-#     referenced in eas.json submit.android.serviceAccountKeyPath).
+# Manual-upload step for Android (post-workflow):
+#   1. Open the build page on expo.dev (link surfaces in the
+#      workflow output).
+#   2. Download the .aab from the build artefacts panel.
+#   3. Play Console -> Testing -> Internal testing -> Create new
+#      release -> drag the .aab in.
+#   4. Review release -> Start rollout to Internal testing.
 
 name: Release
 
@@ -38,9 +39,6 @@ on:
   workflow_dispatch: {}
 
 jobs:
-  # -----------------------------------------------------------------
-  # Builds — run in parallel on EAS workers.
-  # -----------------------------------------------------------------
   build_ios:
     name: Build iOS
     type: build
@@ -55,11 +53,6 @@ jobs:
       platform: android
       profile: production
 
-  # -----------------------------------------------------------------
-  # Submits — each depends only on its own build, so they run as
-  # soon as their respective build finishes. iOS submit doesn't
-  # block on Android build success and vice versa.
-  # -----------------------------------------------------------------
   submit_ios:
     name: Submit to App Store Connect
     needs: [build_ios]
@@ -68,12 +61,3 @@ jobs:
       platform: ios
       profile: production
       build_id: ${{ needs.build_ios.outputs.build_id }}
-
-  submit_android:
-    name: Submit to Google Play (Internal Testing)
-    needs: [build_android]
-    type: submit
-    params:
-      platform: android
-      profile: production
-      build_id: ${{ needs.build_android.outputs.build_id }}

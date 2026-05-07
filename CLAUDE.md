@@ -679,28 +679,35 @@ The two platforms have parallel-but-not-identical setup paths. iOS specifics fir
 - Apple credentials prompt during build → first-time only; let EAS generate the cert + provisioning profile.
 - iPad screenshots required — set `supportsTablet: false` in `app.config.js` if iPad isn't a target, otherwise Apple rejects for missing 13" iPad screenshots.
 
-##### Android — Internal Testing track on Google Play
+##### Android — Internal Testing track on Google Play (build-only automation)
+
+**Important: Android submit is NOT automated.** UN1T's Google Workspace organisation policy `iam.disableServiceAccountKeyCreation` blocks creating the service-account JSON that `eas submit --platform android` needs. Disabling that constraint requires Cloud Org Administrator role at the Workspace level which isn't worth the bureaucratic adventure for what's a roughly quarterly native release. Instead:
+
+- The EAS Workflow **builds** the Android `.aab` automatically.
+- You **download and upload manually** to Play Console (~2 min per release).
+
+If we ever want to re-enable automated submit, the path is either: (1) become Cloud Org Admin → disable the org policy → create a service-account JSON → upload to expo.dev → restore the `submit.production.android` block in `eas.json` → restore the `submit_android` job in `release.yml`. Or (2) set up Workload Identity Federation in EAS, which doesn't need a JSON key but is more involved.
 
 **One-time prerequisites:**
 - Google Play Console developer account ($25 one-time).
 - App record created in Play Console with the matching package name (`com.un1tdublin.crmmobileios`).
-- App content forms completed: Privacy Policy URL (`https://crm.un1tdublin.com/privacy`), Data Safety form (Android's privacy nutrition label), Content Rating questionnaire, Target Audience (18+), App Category, Ads disclosure (no ads).
-- Google Play API service account: created in Google Cloud Console, granted "Service Account User" + "Release Manager" roles in Play Console → Setup → API Access. Download the JSON key.
-- Service account JSON uploaded to expo.dev → Credentials → Google Service Account Keys (so EAS Submit can post to Play Console without prompts).
-- Android upload keystore: auto-generated on first interactive `eas build --platform android --profile production`. Stored on EAS, reused indefinitely.
-- `submit.production.android` block in `mobile/eas.json` set with the desired track (currently `"internal"` — for Closed Testing change to `"alpha"` or a custom track name).
+- App content forms completed: Privacy Policy URL (`https://crm.un1tdublin.com/privacy`), Account Deletion URL (`https://crm.un1tdublin.com/account-deletion`), Data Safety form (Android's privacy nutrition label), Content Rating questionnaire, Target Audience (18+), App Category, Ads disclosure (no ads).
+- Main Store Listing filled in (icon 512×512 RGB, feature graphic 1024×500, 3+ phone screenshots at 1080×2160, full description).
+- Android upload keystore: auto-generated on first interactive `eas build --platform android --profile production`. Stored on EAS, reused indefinitely. **Never delete it** — Play App Signing pins your app to its fingerprint, deleting locks you out of the Play listing forever.
 - Internal Testing track configured in Play Console with the staff tester email list.
 
-**Per-version submission flow (Android-specific bits):**
-The version bump and EAS Workflow trigger steps are shared with iOS — `npm run version:patch` updates the marketing version once for both platforms, and the `Release` EAS Workflow handles both binaries in parallel. Android-specific differences:
-- The first build to a fresh app record needs to be uploaded manually via Play Console because the "Production" rollout state requires at least one build to exist before EAS can submit subsequent builds via API. After the first manual upload, all subsequent submissions go through `eas submit` automatically.
-- Play Console requires a separate Data Safety review when the data-handling profile changes (added a new third-party SDK, started collecting a new data type). When in doubt, re-fill the Data Safety form using the same answers as the iOS App Privacy nutrition label — they map directly.
+**Per-version submission flow:**
+1. Bump version (shared with iOS): `npm run version:patch` from `mobile/`.
+2. Trigger the `Release` EAS Workflow at expo.dev → Workflows → Run. iOS auto-submits; Android only builds.
+3. Once the Android build is green: open it on expo.dev, click **Download** to get the `.aab`.
+4. Play Console → Testing → Internal testing → **Create new release** → drag the `.aab` in → fill release notes → **Save → Review release → Start rollout to Internal testing**.
 
-**Common Android build/submit failures and their fixes:**
-- `Service account does not have permission` → grant "Release Manager" role in Play Console → Setup → API Access → Linked service accounts.
-- `Track 'internal' not found` → the Internal Testing track has to be set up in Play Console (Testing → Internal testing → Create new release) at least once before EAS can submit to it.
-- `Version code already exists` → `appVersionSource: 'remote'` in eas.json should auto-increment, but if a build was rejected and resubmitted under the same code, force a new build to get a fresh code.
-- Upload keystore prompts during build → first-time only; let EAS generate it. After this, never delete the keystore on EAS — Play App Signing pins your app to the upload key fingerprint and a new keystore would lock you out of the Play listing.
+The first build to a fresh app record always has to be uploaded manually like this anyway — even with a service account configured, Play Console requires the first AAB through the web UI to "create" the listing.
+
+**Common Android build failures and their fixes:**
+- Upload keystore prompts during build → first-time only; let EAS generate it. After this, never delete the keystore on EAS.
+- `Version code already exists` (when manually uploading) → `appVersionSource: 'remote'` in eas.json should auto-increment, but if a build was rejected and resubmitted under the same code, force a new build to get a fresh code.
+- Manual upload rejected for "metadata not complete" → Play Console requires every form in App Content to be green-ticked before any upload is accepted. Check the "App content" sidebar for amber dots.
 
 ## Deployment
 
