@@ -10,7 +10,7 @@
 
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
-import { ChevronRight, History } from 'lucide-react'
+import { ChevronRight, History, FileSignature } from 'lucide-react'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { resolveLandingPreference } from '@shared/permissions'
@@ -54,21 +54,38 @@ export default async function AccountPage() {
         <h2 className="text-sm font-semibold uppercase tracking-wider text-un1t-light mb-3">
           More
         </h2>
-        <Link
-          href="/account/access-history"
-          className="flex items-center justify-between p-4 rounded-xl bg-un1t-dark border border-un1t-gray hover:border-un1t-light transition-colors"
-        >
-          <div className="flex items-center gap-3">
-            <History size={18} className="text-un1t-light" />
-            <div>
-              <div className="text-sm font-medium text-un1t-white">Access history</div>
-              <div className="text-xs text-un1t-light mt-0.5">
-                See if anyone has impersonated your account
+        <div className="space-y-2">
+          <Link
+            href="/account/contracts"
+            className="flex items-center justify-between p-4 rounded-xl bg-un1t-dark border border-un1t-gray hover:border-un1t-light transition-colors"
+          >
+            <div className="flex items-center gap-3">
+              <FileSignature size={18} className="text-un1t-light" />
+              <div>
+                <div className="text-sm font-medium text-un1t-white">Your contracts</div>
+                <div className="text-xs text-un1t-light mt-0.5">
+                  Review and sign documents UN1T has issued you
+                </div>
               </div>
             </div>
-          </div>
-          <ChevronRight size={16} className="text-un1t-light" />
-        </Link>
+            <ChevronRight size={16} className="text-un1t-light" />
+          </Link>
+          <Link
+            href="/account/access-history"
+            className="flex items-center justify-between p-4 rounded-xl bg-un1t-dark border border-un1t-gray hover:border-un1t-light transition-colors"
+          >
+            <div className="flex items-center gap-3">
+              <History size={18} className="text-un1t-light" />
+              <div>
+                <div className="text-sm font-medium text-un1t-white">Access history</div>
+                <div className="text-xs text-un1t-light mt-0.5">
+                  See if anyone has impersonated your account
+                </div>
+              </div>
+            </div>
+            <ChevronRight size={16} className="text-un1t-light" />
+          </Link>
+        </div>
       </div>
     </div>
   )
