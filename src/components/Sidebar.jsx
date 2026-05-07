@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
-import { LayoutDashboard, Users, Columns3, CheckSquare, Calendar, MessagesSquare, CalendarClock, Settings, LogOut, Car, Flag, Receipt, DoorOpen, Activity, ExternalLink } from 'lucide-react'
+import { LayoutDashboard, Users, Columns3, CheckSquare, Calendar, MessagesSquare, CalendarClock, Settings, LogOut, Car, Flag, Receipt, DoorOpen, Activity, ExternalLink, X } from 'lucide-react'
 import { createBrowserClient } from '@/lib/supabase'
 import LocationSwitcher from './LocationSwitcher'
 import ImpersonatePicker from './ImpersonatePicker'
@@ -65,7 +65,7 @@ const allNav = [
   { href: '/settings',   label: 'Settings',     icon: Settings,        permission: 'settings' },
 ]
 
-export default function Sidebar({ user }) {
+export default function Sidebar({ user, mobileOpen = false, onMobileClose }) {
   const pathname = usePathname()
   const router = useRouter()
   const [branding, setBranding] = useState(null)
@@ -124,14 +124,44 @@ export default function Sidebar({ user }) {
   }
 
   return (
-    <aside className="w-56 bg-un1t-dark border-r border-un1t-gray flex flex-col shrink-0">
-      {/* Logo + Location */}
+    // Responsive shell:
+    //   - md+ (desktop):  inline flex item, always visible (w-56)
+    //   - below md:       fixed overlay drawer that slides in from
+    //                     the left when mobileOpen is true
+    // The transition class only animates on mobile (md:transition-none)
+    // because the sidebar is never hidden on desktop and we don't
+    // want a one-frame slide on first paint.
+    <aside
+      className={clsx(
+        'w-64 md:w-56 bg-un1t-dark border-r border-un1t-gray flex flex-col shrink-0',
+        // Mobile-only overlay positioning + slide animation
+        'fixed inset-y-0 left-0 z-50 transform transition-transform duration-200',
+        mobileOpen ? 'translate-x-0' : '-translate-x-full',
+        // Desktop: cancel everything mobile-specific
+        'md:relative md:translate-x-0 md:transition-none md:z-auto'
+      )}
+    >
+      {/* Logo + Location + mobile close button */}
       <div className="p-5 border-b border-un1t-gray">
-        {branding?.logo_url ? (
-          <img src={branding.logo_url} alt={branding.company_name || 'Logo'} className="h-[54px] max-w-full object-contain" />
-        ) : (
-          <h1 className="text-xl font-bold tracking-wider">{branding?.company_name || 'UN1T'}</h1>
-        )}
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            {branding?.logo_url ? (
+              <img src={branding.logo_url} alt={branding.company_name || 'Logo'} className="h-[54px] max-w-full object-contain" />
+            ) : (
+              <h1 className="text-xl font-bold tracking-wider">{branding?.company_name || 'UN1T'}</h1>
+            )}
+          </div>
+          {/* Mobile-only close affordance — duplicates the backdrop
+              tap-to-close so users with a trackpad / mouse on a
+              narrow window can also dismiss without overshooting. */}
+          <button
+            onClick={onMobileClose}
+            aria-label="Close menu"
+            className="md:hidden p-1.5 -m-1 text-un1t-light hover:text-un1t-white rounded transition-colors"
+          >
+            <X size={18} />
+          </button>
+        </div>
         <div className="mt-1">
           {user?.locations?.length > 1 ? (
             <LocationSwitcher

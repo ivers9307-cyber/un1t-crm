@@ -26,6 +26,18 @@ export const metadata = {
   },
 }
 
+// Explicit viewport — Next 14 ships a sensible default but pinning
+// it lets us add `viewportFit: 'cover'` so iOS Safari respects the
+// notch / Dynamic Island and our content uses the full screen
+// instead of leaving the safe-area inset on the sides. Also locks
+// the initial scale so the AppShell hamburger doesn't double-tap-
+// zoom unexpectedly on phones.
+export const viewport = {
+  width: 'device-width',
+  initialScale: 1,
+  viewportFit: 'cover',
+}
+
 export default function RootLayout({ children }) {
   return (
     <html lang="en">
