@@ -77,82 +77,160 @@ export default async function RacesIndexPage() {
           </Link>
         </div>
       ) : (
-        <div className="bg-un1t-dark border border-un1t-gray rounded-lg overflow-hidden">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-un1t-gray text-un1t-light text-[11px] uppercase tracking-wider">
-                <th className="text-left p-3">Race</th>
-                <th className="text-left p-3">Date</th>
-                <th className="text-left p-3">Teams</th>
-                <th className="text-left p-3">Sizes</th>
-                <th className="text-left p-3">Status</th>
-                <th className="text-right p-3">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-un1t-gray">
-              {races.map((r) => {
-                const confirmedCount = (r.registrations || []).filter(x => x.status === 'confirmed').length
-                const publicUrl = appOrigin ? `${appOrigin}/race/${r.slug}` : `/race/${r.slug}`
-                return (
-                  <tr key={r.id} className="hover:bg-un1t-gray/20">
-                    <td className="p-3">
-                      <div className="font-medium text-un1t-white">{r.name}</div>
+        <>
+          {/* Desktop / tablet: original table — hidden below md so
+              phones don't horizontal-scroll a 6-column grid. */}
+          <div className="hidden md:block bg-un1t-dark border border-un1t-gray rounded-lg overflow-hidden">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-un1t-gray text-un1t-light text-[11px] uppercase tracking-wider">
+                  <th className="text-left p-3">Race</th>
+                  <th className="text-left p-3">Date</th>
+                  <th className="text-left p-3">Teams</th>
+                  <th className="text-left p-3">Sizes</th>
+                  <th className="text-left p-3">Status</th>
+                  <th className="text-right p-3">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-un1t-gray">
+                {races.map((r) => {
+                  const confirmedCount = (r.registrations || []).filter(x => x.status === 'confirmed').length
+                  const publicUrl = appOrigin ? `${appOrigin}/race/${r.slug}` : `/race/${r.slug}`
+                  return (
+                    <tr key={r.id} className="hover:bg-un1t-gray/20">
+                      <td className="p-3">
+                        <div className="font-medium text-un1t-white">{r.name}</div>
+                        <div className="text-[11px] text-un1t-light font-mono mt-0.5">/{r.slug}</div>
+                      </td>
+                      <td className="p-3 text-un1t-light whitespace-nowrap">
+                        {r.race_date}
+                        {r.start_time && <span className="text-[11px] text-un1t-mid ml-1">@ {r.start_time.slice(0, 5)}</span>}
+                      </td>
+                      <td className="p-3 text-un1t-light">
+                        <span className="inline-flex items-center gap-1">
+                          <Users size={11} /> {confirmedCount}{r.capacity ? ` / ${r.capacity}` : ''}
+                        </span>
+                      </td>
+                      <td className="p-3 text-un1t-light text-xs">
+                        {(r.allowed_team_sizes || []).join(', ')}
+                      </td>
+                      <td className="p-3">
+                        <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${r.active ? 'bg-emerald-500/15 text-emerald-700' : 'bg-gray-500/15 text-gray-700'}`}>
+                          {r.active ? 'Active' : 'Inactive'}
+                        </span>
+                      </td>
+                      <td className="p-3 text-right">
+                        <div className="inline-flex items-center gap-3">
+                          <a
+                            href={publicUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-[11px] text-un1t-light hover:text-un1t-white inline-flex items-center gap-1"
+                          >
+                            Public <ExternalLink size={10} />
+                          </a>
+                          <Link
+                            href={`/races/${r.id}/teams`}
+                            className="text-[11px] text-un1t-light hover:text-un1t-white"
+                            title="View + manage registered teams"
+                          >
+                            Teams
+                          </Link>
+                          <Link
+                            href={`/races/${r.id}/control`}
+                            className="text-[11px] text-blue-700 hover:text-blue-800"
+                          >
+                            Race day
+                          </Link>
+                          <Link
+                            href={`/races/${r.id}/edit`}
+                            className="text-[11px] text-un1t-light hover:text-un1t-white"
+                          >
+                            Edit
+                          </Link>
+                        </div>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Mobile: card list. Same data restacked — header row
+              with name + status, sub-row with date + team count,
+              footer row with action links spaced for tap targets. */}
+          <div className="md:hidden space-y-2">
+            {races.map((r) => {
+              const confirmedCount = (r.registrations || []).filter(x => x.status === 'confirmed').length
+              const publicUrl = appOrigin ? `${appOrigin}/race/${r.slug}` : `/race/${r.slug}`
+              return (
+                <div
+                  key={r.id}
+                  className="bg-un1t-dark border border-un1t-gray rounded-lg p-4"
+                >
+                  <div className="flex items-start justify-between gap-2 mb-2">
+                    <div className="min-w-0 flex-1">
+                      <div className="font-semibold text-un1t-white">{r.name}</div>
                       <div className="text-[11px] text-un1t-light font-mono mt-0.5">/{r.slug}</div>
-                    </td>
-                    <td className="p-3 text-un1t-light whitespace-nowrap">
+                    </div>
+                    <span className={`text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded-full shrink-0 ${
+                      r.active ? 'bg-emerald-500/15 text-emerald-700' : 'bg-gray-500/15 text-gray-700'
+                    }`}>
+                      {r.active ? 'Active' : 'Inactive'}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-3 text-xs text-un1t-light mb-3">
+                    <span className="whitespace-nowrap">
                       {r.race_date}
-                      {r.start_time && <span className="text-[11px] text-un1t-mid ml-1">@ {r.start_time.slice(0, 5)}</span>}
-                    </td>
-                    <td className="p-3 text-un1t-light">
-                      <span className="inline-flex items-center gap-1">
-                        <Users size={11} /> {confirmedCount}{r.capacity ? ` / ${r.capacity}` : ''}
+                      {r.start_time && <span className="text-un1t-mid"> · {r.start_time.slice(0, 5)}</span>}
+                    </span>
+                    <span className="inline-flex items-center gap-1">
+                      <Users size={11} /> {confirmedCount}{r.capacity ? ` / ${r.capacity}` : ''}
+                    </span>
+                    {(r.allowed_team_sizes || []).length > 0 && (
+                      <span className="text-un1t-mid">
+                        {(r.allowed_team_sizes || []).join(', ')}
                       </span>
-                    </td>
-                    <td className="p-3 text-un1t-light text-xs">
-                      {(r.allowed_team_sizes || []).join(', ')}
-                    </td>
-                    <td className="p-3">
-                      <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${r.active ? 'bg-emerald-500/15 text-emerald-700' : 'bg-gray-500/15 text-gray-700'}`}>
-                        {r.active ? 'Active' : 'Inactive'}
-                      </span>
-                    </td>
-                    <td className="p-3 text-right">
-                      <div className="inline-flex items-center gap-3">
-                        <a
-                          href={publicUrl}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="text-[11px] text-un1t-light hover:text-un1t-white inline-flex items-center gap-1"
-                        >
-                          Public <ExternalLink size={10} />
-                        </a>
-                        <Link
-                          href={`/races/${r.id}/teams`}
-                          className="text-[11px] text-un1t-light hover:text-un1t-white"
-                          title="View + manage registered teams"
-                        >
-                          Teams
-                        </Link>
-                        <Link
-                          href={`/races/${r.id}/control`}
-                          className="text-[11px] text-blue-700 hover:text-blue-800"
-                        >
-                          Race day
-                        </Link>
-                        <Link
-                          href={`/races/${r.id}/edit`}
-                          className="text-[11px] text-un1t-light hover:text-un1t-white"
-                        >
-                          Edit
-                        </Link>
-                      </div>
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
-        </div>
+                    )}
+                  </div>
+                  {/* Action row — distinct tap targets, the
+                      day-of operator path is highlighted in blue
+                      because that's the highest-frequency mobile
+                      use of this page. */}
+                  <div className="flex flex-wrap items-center gap-2 pt-3 border-t border-un1t-gray text-xs">
+                    <Link
+                      href={`/races/${r.id}/control`}
+                      className="px-3 py-1.5 rounded-md bg-blue-600 text-white font-medium"
+                    >
+                      Race day
+                    </Link>
+                    <Link
+                      href={`/races/${r.id}/teams`}
+                      className="px-3 py-1.5 rounded-md border border-un1t-gray text-un1t-light"
+                    >
+                      Teams
+                    </Link>
+                    <Link
+                      href={`/races/${r.id}/edit`}
+                      className="px-3 py-1.5 rounded-md border border-un1t-gray text-un1t-light"
+                    >
+                      Edit
+                    </Link>
+                    <a
+                      href={publicUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="ml-auto px-3 py-1.5 rounded-md text-un1t-light inline-flex items-center gap-1"
+                    >
+                      Public <ExternalLink size={10} />
+                    </a>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </>
       )}
     </div>
   )

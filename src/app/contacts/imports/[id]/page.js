@@ -93,8 +93,8 @@ export default async function ImportDetailPage({ params }) {
       )}
 
       <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light mb-2">Rows</h3>
-      <div className="bg-un1t-dark border border-un1t-gray rounded-lg overflow-hidden">
-        <table className="w-full text-xs">
+      <div className="bg-un1t-dark border border-un1t-gray rounded-lg overflow-x-auto">
+        <table className="w-full text-xs min-w-[600px]">
           <thead className="text-[10px] uppercase tracking-wider text-un1t-light">
             <tr className="border-b border-un1t-gray">
               <th className="text-left p-2 w-12">#</th>

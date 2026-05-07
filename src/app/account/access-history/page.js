@@ -59,8 +59,8 @@ export default async function AccessHistoryPage() {
           </p>
         </div>
       ) : (
-        <div className="bg-un1t-dark border border-un1t-gray rounded-2xl overflow-hidden">
-          <table className="w-full text-sm">
+        <div className="bg-un1t-dark border border-un1t-gray rounded-2xl overflow-x-auto">
+          <table className="w-full text-sm min-w-[600px]">
             <thead>
               <tr className="border-b border-un1t-gray text-un1t-light text-xs uppercase tracking-wider">
                 <th className="text-left p-3">Signed in as me</th>

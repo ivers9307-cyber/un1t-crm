@@ -221,8 +221,8 @@ export default function ScheduleReporting({ user }) {
 
               {/* Staff data table */}
               {reportResult.report_data?.staff && (
-                <div className="bg-un1t-dark border border-un1t-gray rounded-lg overflow-hidden">
-                  <table className="w-full text-sm">
+                <div className="bg-un1t-dark border border-un1t-gray rounded-lg overflow-x-auto">
+                  <table className="w-full text-sm min-w-[600px]">
                     <thead>
                       <tr className="border-b border-un1t-gray text-xs text-un1t-light uppercase">
                         <th className="text-left px-4 py-3">Staff Member</th>
@@ -275,8 +275,8 @@ export default function ScheduleReporting({ user }) {
 
               {/* Time-off by staff table */}
               {reportResult.report_data?.by_staff && (
-                <div className="bg-un1t-dark border border-un1t-gray rounded-lg overflow-hidden">
-                  <table className="w-full text-sm">
+                <div className="bg-un1t-dark border border-un1t-gray rounded-lg overflow-x-auto">
+                  <table className="w-full text-sm min-w-[600px]">
                     <thead>
                       <tr className="border-b border-un1t-gray text-xs text-un1t-light uppercase">
                         <th className="text-left px-4 py-3">Staff Member</th>
@@ -303,8 +303,8 @@ export default function ScheduleReporting({ user }) {
 
               {/* Roster coverage day view */}
               {reportResult.report_data?.days && (
-                <div className="bg-un1t-dark border border-un1t-gray rounded-lg overflow-hidden">
-                  <table className="w-full text-sm">
+                <div className="bg-un1t-dark border border-un1t-gray rounded-lg overflow-x-auto">
+                  <table className="w-full text-sm min-w-[600px]">
                     <thead>
                       <tr className="border-b border-un1t-gray text-xs text-un1t-light uppercase">
                         <th className="text-left px-4 py-3">Date</th>

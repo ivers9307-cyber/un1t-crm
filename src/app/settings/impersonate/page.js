@@ -87,8 +87,8 @@ export default async function ImpersonatePage() {
       {log.length === 0 ? (
         <p className="text-sm text-un1t-light">No impersonation sessions yet.</p>
       ) : (
-        <div className="bg-un1t-dark border border-un1t-gray rounded-lg overflow-hidden">
-          <table className="w-full text-sm">
+        <div className="bg-un1t-dark border border-un1t-gray rounded-lg overflow-x-auto">
+          <table className="w-full text-sm min-w-[600px]">
             <thead>
               <tr className="border-b border-un1t-gray text-un1t-light text-xs uppercase tracking-wider">
                 <th className="text-left p-3">User</th>

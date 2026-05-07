@@ -115,8 +115,8 @@ export default function HolidayManager({ locationId, initialHolidays }) {
         {Object.entries(byYear).sort(([a], [b]) => a.localeCompare(b)).map(([year, list]) => (
           <div key={year}>
             <h4 className="text-xs font-semibold uppercase tracking-wider text-un1t-light mb-2">{year}</h4>
-            <div className="bg-un1t-dark border border-un1t-gray rounded-lg overflow-hidden">
-              <table className="w-full text-sm">
+            <div className="bg-un1t-dark border border-un1t-gray rounded-lg overflow-x-auto">
+              <table className="w-full text-sm min-w-[500px]">
                 <tbody className="divide-y divide-un1t-gray">
                   {list.map(h => (
                     <tr key={h.id || `static-${h.date}`} className="hover:bg-un1t-gray/20">

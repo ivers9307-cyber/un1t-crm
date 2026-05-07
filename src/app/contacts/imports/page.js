@@ -46,8 +46,8 @@ export default async function ImportsPage() {
           </p>
         </div>
       ) : (
-        <div className="bg-un1t-dark border border-un1t-gray rounded-lg overflow-hidden">
-          <table className="w-full text-sm">
+        <div className="bg-un1t-dark border border-un1t-gray rounded-lg overflow-x-auto">
+          <table className="w-full text-sm min-w-[600px]">
             <thead className="text-[11px] uppercase tracking-wider text-un1t-light">
               <tr className="border-b border-un1t-gray">
                 <th className="text-left p-3">When</th>

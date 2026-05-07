@@ -169,8 +169,8 @@ export default function CampaignDetail({ campaign, recipients = [], locationId: 
                 <p className="text-sm text-un1t-light">No recipient data available yet</p>
               </div>
             ) : (
-              <div className="bg-un1t-dark border border-un1t-gray rounded-lg overflow-hidden">
-                <table className="w-full text-sm">
+              <div className="bg-un1t-dark border border-un1t-gray rounded-lg overflow-x-auto">
+                <table className="w-full text-sm min-w-[600px]">
                   <thead>
                     <tr className="border-b border-un1t-gray text-left text-xs text-un1t-light uppercase tracking-wider">
                       <th className="px-4 py-3">Contact</th>
