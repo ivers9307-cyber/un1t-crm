@@ -329,7 +329,7 @@ export default function EventForm({ event, locationId }) {
           />
         </div>
 
-        <div className="grid grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           <div>
             <label className="block text-sm mb-1.5">Duration (min)</label>
             <input
@@ -449,7 +449,7 @@ export default function EventForm({ event, locationId }) {
               <div key={field.id} className="bg-un1t-black border border-un1t-gray rounded-lg p-3 space-y-3">
                 <div className="flex items-start gap-3">
                   <div className="flex-1 space-y-3">
-                    <div className="grid grid-cols-2 gap-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       <div>
                         <label className="block text-xs text-un1t-light mb-1">Label</label>
                         <input
@@ -703,7 +703,7 @@ export default function EventForm({ event, locationId }) {
                 </button>
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm mb-1.5">Send this many hours before</label>
                   <div className="flex items-center gap-2">

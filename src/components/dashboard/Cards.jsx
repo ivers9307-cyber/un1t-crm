@@ -24,7 +24,10 @@ export function KpiCard({ label, value, sublabel, accent, href }) {
 }
 
 export function KpiRow({ children }) {
-  return <div className="flex flex-row gap-3 mb-3">{children}</div>
+  // Stack vertically below sm (640px) so each KPI gets full width
+  // on a phone — values like "€12.4k" no longer wrap mid-character.
+  // sm+ retains the original side-by-side row.
+  return <div className="flex flex-col sm:flex-row gap-3 mb-3">{children}</div>
 }
 
 export function SectionHeader({ title, count, action }) {

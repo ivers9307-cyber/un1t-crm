@@ -171,25 +171,39 @@ export default function OrdersTable() {
       )}
 
       {rows.length > 0 && (
-        <div className="overflow-x-auto border border-un1t-gray rounded-lg">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="text-[11px] uppercase tracking-wider text-un1t-light bg-un1t-gray/20">
-                <th className="text-left px-3 py-2">Date</th>
-                <th className="text-left px-3 py-2">Contact</th>
-                <th className="text-left px-3 py-2">Source</th>
-                <th className="text-right px-3 py-2">Amount</th>
-                <th className="text-left px-3 py-2">Status</th>
-                <th className="text-right px-3 py-2"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((row) => (
-                <OrderRow key={row.id} row={row} onRefunded={load} />
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <>
+          {/* Desktop table — hidden below md so phones don't have to
+              horizontal-scroll a 6-column grid with inline refund UI. */}
+          <div className="hidden md:block overflow-x-auto border border-un1t-gray rounded-lg">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-[11px] uppercase tracking-wider text-un1t-light bg-un1t-gray/20">
+                  <th className="text-left px-3 py-2">Date</th>
+                  <th className="text-left px-3 py-2">Contact</th>
+                  <th className="text-left px-3 py-2">Source</th>
+                  <th className="text-right px-3 py-2">Amount</th>
+                  <th className="text-left px-3 py-2">Status</th>
+                  <th className="text-right px-3 py-2"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((row) => (
+                  <OrderRow key={row.id} row={row} onRefunded={load} />
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Mobile card list — same data without the inline refund
+              widget. Tapping a card navigates to /orders/[id] which
+              has the full refund flow. md:hidden so it's invisible
+              from tablet upwards. */}
+          <div className="md:hidden space-y-2">
+            {rows.map((row) => (
+              <OrderCard key={row.id} row={row} />
+            ))}
+          </div>
+        </>
       )}
 
       {/* Pagination */}
@@ -365,6 +379,61 @@ function OrderRow({ row, onRefunded }) {
         )}
       </td>
     </tr>
+  )
+}
+
+// Mobile-only — same data as OrderRow minus the inline refund UI
+// (refund still works from /orders/[id], just one extra tap). Tap
+// the card to navigate to the detail page. Kept as a sibling of
+// OrderRow rather than a CSS-only restyle because the row's
+// "tr / td" structure can't reflow into a stacked card without
+// breaking the table semantics.
+function OrderCard({ row }) {
+  const router = useRouter()
+  const dt = row.created_at ? new Date(row.created_at) : null
+  const dateLabel = dt ? dt.toLocaleString('en-IE', {
+    timeZone: 'Europe/Dublin',
+    day: 'numeric', month: 'short',
+    hour: '2-digit', minute: '2-digit',
+  }) : ''
+  const amount = formatMoney(row.amount_cents, row.currency)
+  const sourceLabel = SOURCE_LABELS[row.source_type] || row.source_type
+  const meta = row.metadata || {}
+  const sourceDetail = row.source_type === 'race_registration'
+    ? ''
+    : [meta.car_make, meta.car_model, meta.irish_reg].filter(Boolean).join(' ')
+
+  return (
+    <button
+      type="button"
+      onClick={() => router.push(`/orders/${row.id}`)}
+      className="w-full text-left bg-un1t-dark border border-un1t-gray rounded-lg p-3 active:bg-un1t-gray/30 transition-colors"
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="font-medium text-un1t-white truncate">
+            {row.contact_name || row.contact_email || 'Unknown'}
+          </div>
+          {row.contact_name && row.contact_email && (
+            <div className="text-[11px] text-un1t-light truncate">{row.contact_email}</div>
+          )}
+        </div>
+        <div className="text-right shrink-0">
+          <div className="font-mono tabular-nums text-un1t-white">{amount}</div>
+          <div className="text-[10px] text-un1t-light">{dateLabel}</div>
+        </div>
+      </div>
+      <div className="flex items-center justify-between gap-2 mt-2">
+        <div className="text-[11px] text-un1t-light truncate">
+          {sourceLabel}
+          {sourceDetail && <span className="text-un1t-mid"> · {sourceDetail}</span>}
+          {row.retry_of_order_id && (
+            <span className="text-blue-700"> · ↻ Retry</span>
+          )}
+        </div>
+        <StatusPill status={row.status} />
+      </div>
+    </button>
   )
 }
 

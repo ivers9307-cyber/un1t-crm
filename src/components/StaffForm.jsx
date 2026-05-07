@@ -617,7 +617,7 @@ export default function StaffForm({
 
         {form.employment_type === 'fte' ? (
           <>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <label className="block text-sm text-un1t-light mb-1">Annual Salary (€)</label>
                 <input

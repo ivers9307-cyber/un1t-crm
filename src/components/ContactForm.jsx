@@ -133,7 +133,7 @@ export default function ContactForm({ contact = null, onCancelHref = '/contacts'
 
       <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5 space-y-4">
         <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light">Identity</h3>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div>
             <label className="block text-sm text-un1t-light mb-1">First name</label>
             <input
@@ -179,7 +179,7 @@ export default function ContactForm({ contact = null, onCancelHref = '/contacts'
 
       <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5 space-y-4">
         <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light">Pipeline</h3>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div>
             <label className="block text-sm text-un1t-light mb-1">Lead status</label>
             <select

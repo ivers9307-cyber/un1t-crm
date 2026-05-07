@@ -122,7 +122,9 @@ export default function ContactsTable({ contacts, locationId, canMerge = false, 
         />
       )}
 
-      <div className="bg-un1t-dark border border-un1t-gray rounded-lg overflow-hidden">
+      {/* Desktop / tablet: original wide table. Hidden below md so
+          phones don't horizontal-scroll a 7-column grid. */}
+      <div className="hidden md:block bg-un1t-dark border border-un1t-gray rounded-lg overflow-hidden">
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-un1t-gray text-un1t-light text-xs uppercase tracking-wider">
@@ -188,6 +190,80 @@ export default function ContactsTable({ contacts, locationId, canMerge = false, 
         </table>
         {contacts.length === 0 && (
           <p className="text-center text-un1t-light text-sm py-12">No contacts found.</p>
+        )}
+      </div>
+
+      {/* Mobile: card list. Same data, vertically stacked with the
+          checkbox and chevron flanking each card. md:hidden so it
+          disappears once the table fits horizontally. */}
+      <div className="md:hidden space-y-2">
+        {contacts.length === 0 ? (
+          <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-8 text-center">
+            <p className="text-sm text-un1t-light">No contacts found.</p>
+          </div>
+        ) : (
+          contacts.map(c => {
+            const isSelected = selectedIds.has(c.id)
+            return (
+              <div
+                key={c.id}
+                className={`bg-un1t-dark border rounded-lg overflow-hidden transition-colors ${
+                  isSelected ? 'border-un1t-mid bg-un1t-gray/30' : 'border-un1t-gray'
+                }`}
+              >
+                <div className="flex items-stretch">
+                  {/* Checkbox column — generous tap target so bulk
+                      selection on a phone doesn't fight you. */}
+                  <label className="flex items-center px-3 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={isSelected}
+                      onChange={() => toggle(c.id)}
+                      className="cursor-pointer w-4 h-4"
+                      aria-label={`Select ${c.name}`}
+                    />
+                  </label>
+                  {/* Body — link wraps everything except the checkbox
+                      so tapping the card navigates to detail. */}
+                  <Link
+                    href={`/contacts/${c.id}`}
+                    className="flex-1 flex items-center gap-2 py-3 pr-3 min-w-0"
+                  >
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-medium text-un1t-white truncate">
+                          {c.name}
+                        </span>
+                        <span className={`text-[10px] px-1.5 py-0.5 rounded-full uppercase tracking-wider ${
+                          statusBadge[c.lead_status] || 'bg-un1t-gray text-un1t-light'
+                        }`}>
+                          {c.lead_status?.replace('_', ' ') || '—'}
+                        </span>
+                      </div>
+                      {(c.email || c.phone) && (
+                        <div className="text-xs text-un1t-light truncate mt-0.5">
+                          {c.email}
+                          {c.email && c.phone ? ' · ' : ''}
+                          {c.phone}
+                        </div>
+                      )}
+                      <div className="flex items-center gap-2 mt-1 text-[11px] text-un1t-mid">
+                        {c.lead_source && (
+                          <span className="px-1.5 py-0.5 bg-un1t-gray rounded">
+                            {c.lead_source}
+                          </span>
+                        )}
+                        {c.trial_credits_remaining != null && (
+                          <span>{c.trial_credits_remaining} credits</span>
+                        )}
+                      </div>
+                    </div>
+                    <ChevronRight size={16} className="text-un1t-mid shrink-0" />
+                  </Link>
+                </div>
+              </div>
+            )
+          })
         )}
       </div>
 
