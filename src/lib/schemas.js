@@ -205,3 +205,57 @@ export const audienceFilterSchema = z.object({
     value: z.unknown().optional(),
   })).optional(),
 }).optional()
+
+// =============================================================
+// Contracts (mig 106) — templates + issued instances
+// =============================================================
+
+// Single custom-variable definition inside a template's
+// variables_schema array. Type is informational (the wizard uses
+// it to render the right input control); validation at issue time
+// is just "is the field non-empty when required is true".
+export const contractVariableDefSchema = z.object({
+  key: z.string().regex(/^[a-zA-Z0-9_]+$/, 'Use only letters, digits, underscore').max(60),
+  label: z.string().min(1).max(120),
+  type: z.enum(['text', 'number', 'date']).default('text'),
+  required: z.boolean().default(false),
+})
+
+export const contractTemplateSchema = z.object({
+  name: z.string().min(1).max(200),
+  description: z.string().max(500).nullable().optional(),
+  body_markdown: z.string().min(1).max(50_000),
+  variables_schema: z.array(contractVariableDefSchema).max(50).default([]),
+  employment_type: z.enum(['fte', 'contractor', 'both']).default('both'),
+  active: z.boolean().default(true),
+})
+
+// Issue-a-contract payload. variables is an open record because
+// the keys depend on the template's variables_schema, which is
+// dynamic. The route looks up the template and runs
+// validateCustomVariables() against the schema.
+export const contractIssueSchema = z.object({
+  template_id: uuidLike,
+  profile_id: uuidLike,
+  location_id: uuidLike.nullable().optional(),
+  variables: z.record(z.union([z.string(), z.number(), z.null()])).default({}),
+  // Issuer's typed name for the countersign block. Recipient sees
+  // a fully-employer-signed document on first view.
+  issuer_signature: z.string().min(1).max(200),
+})
+
+// Sign payload — typed-name only in the MVP. The route adds IP
+// + user agent + timestamp from the request itself (those
+// shouldn't come from the client).
+export const contractSignSchema = z.object({
+  signature_value: z.string().min(1).max(200),
+  signature_method: z.enum(['typed', 'drawn']).default('typed'),
+})
+
+export const contractDeclineSchema = z.object({
+  declined_reason: z.string().min(1).max(500),
+})
+
+export const contractRevokeSchema = z.object({
+  revoked_reason: z.string().min(1).max(500),
+})
