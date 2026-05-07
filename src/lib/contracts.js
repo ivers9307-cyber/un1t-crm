@@ -57,9 +57,13 @@ export function profileVariables(profile) {
     v.hourly_rate_raw = String(profile.hourly_rate)
     v.hourly_rate = formatEuro(profile.hourly_rate)
   }
-  if (profile.contracted_rate != null) {
-    v.contracted_rate_raw = String(profile.contracted_rate)
-    v.contracted_rate = formatEuro(profile.contracted_rate)
+  // Overtime rate (numeric on profiles; for FTEs the legal premium
+  // for hours beyond contracted_hours_per_week, for contractors the
+  // higher rate after a per-day cap if applicable). Templates can
+  // reference {{overtime_rate}} for either employment type.
+  if (profile.overtime_rate != null) {
+    v.overtime_rate_raw = String(profile.overtime_rate)
+    v.overtime_rate = formatEuro(profile.overtime_rate)
   }
   if (profile.contracted_hours_per_week != null) {
     v.contracted_hours_per_week = String(profile.contracted_hours_per_week)

@@ -96,7 +96,7 @@ export async function POST(request) {
     .from('profiles')
     .select(`
       id, full_name, email, role, employment_type,
-      annual_salary, hourly_rate, contracted_rate, contracted_hours_per_week,
+      annual_salary, hourly_rate, overtime_rate, contracted_hours_per_week,
       profile_locations:profile_locations(location_id, is_default,
         location:locations!location_id(id, organization_id))
     `)

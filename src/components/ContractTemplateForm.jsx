@@ -28,7 +28,7 @@ const SAMPLE_PROFILE = {
   employment_type: 'fte',
   annual_salary: 60000,
   hourly_rate: 28,
-  contracted_rate: 90,
+  overtime_rate: 42,
   contracted_hours_per_week: 37.5,
 }
 
@@ -39,7 +39,7 @@ const PROFILE_VAR_HELP = [
   { key: 'employment_type',           label: 'Employment type' },
   { key: 'annual_salary',             label: 'Annual salary (formatted, FTE)' },
   { key: 'hourly_rate',               label: 'Hourly rate (formatted)' },
-  { key: 'contracted_rate',           label: 'Contracted rate (formatted, contractor)' },
+  { key: 'overtime_rate',             label: 'Overtime rate (formatted)' },
   { key: 'contracted_hours_per_week', label: 'Contracted hours per week' },
   { key: 'today',                     label: "Today's date (auto)" },
 ]

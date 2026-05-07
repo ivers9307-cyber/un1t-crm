@@ -58,7 +58,7 @@ describe('profileVariables', () => {
     const p = {
       annual_salary: 65000,
       hourly_rate: 25,
-      contracted_rate: 80,
+      overtime_rate: 37.5,
       contracted_hours_per_week: 37.5,
     }
     const v = profileVariables(p)
@@ -66,8 +66,8 @@ describe('profileVariables', () => {
     expect(v.annual_salary).toMatch(/€65,000/)
     expect(v.hourly_rate_raw).toBe('25')
     expect(v.hourly_rate).toMatch(/€25/)
-    expect(v.contracted_rate_raw).toBe('80')
-    expect(v.contracted_rate).toMatch(/€80/)
+    expect(v.overtime_rate_raw).toBe('37.5')
+    expect(v.overtime_rate).toMatch(/€37/)
     expect(v.contracted_hours_per_week).toBe('37.5')
   })
 
