@@ -29,10 +29,10 @@ import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
 import { uuidLike, locationRoleSchema } from '@/lib/schemas'
 import {
-import { logWarn } from '@/lib/log'
   logAssignmentChange,
   canRemoveSelfFromLastOwnerLocation,
 } from '@/lib/assignment-changes'
+import { logWarn } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'

@@ -31,10 +31,10 @@ import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import {
-import { logWarn } from '@/lib/log'
   wouldLeaveZeroMasters,
   logAssignmentChange,
 } from '@/lib/assignment-changes'
+import { logWarn } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
