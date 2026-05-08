@@ -120,6 +120,18 @@ export default function More() {
         />
       </Section>
 
+      {/* Documents — your contracts. Always shown (every staff
+          member is potentially a recipient); the screen shows an
+          empty-state if none have been issued yet. */}
+      <Section title="Documents">
+        <Row
+          icon="document-text-outline"
+          label="Your contracts"
+          onPress={() => router.push('/contracts')}
+          isLast
+        />
+      </Section>
+
       {/* Master-only: switch into another user's view (mig 035).
           Mirrors the web Settings → Impersonate entry point. The banner
           above the tabs already shows the active session + Stop button

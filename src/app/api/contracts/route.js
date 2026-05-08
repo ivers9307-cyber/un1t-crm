@@ -31,6 +31,7 @@ import {
   validateCustomVariables,
 } from '@/lib/contracts'
 import { sendContractIssuedEmail } from '@/lib/contracts-email'
+import { sendPush } from '@/lib/push'
 
 export const runtime = 'nodejs'
 
@@ -182,6 +183,29 @@ export async function POST(request) {
     issuer: { full_name: user.full_name },
     templateName: tplRow?.name,
   })
+
+  // Push notification (best effort, never blocks). sendPush honours
+  // the recipient's permissions.mobile.push_notifications master
+  // switch + their notify_contract_issued category toggle. If the
+  // mobile app isn't installed (no device tokens) it's a quiet
+  // no-op. Tap deep-links to /contracts/<id> via expo-router so
+  // the recipient lands directly on the sign screen.
+  try {
+    await sendPush([recipient.id], {
+      title: 'Contract awaiting signature',
+      body: tplRow?.name
+        ? `${user.full_name || 'UN1T'} issued you "${tplRow.name}" — tap to review and sign.`
+        : `${user.full_name || 'UN1T'} issued you a contract — tap to review and sign.`,
+      category: 'contract_issued',
+      data: {
+        type: 'contract_issued',
+        contract_id: contract.id,
+        path: `/contracts/${contract.id}`,
+      },
+    })
+  } catch {
+    // Push is non-blocking; intentionally swallow.
+  }
 
   return NextResponse.json({
     success: true,
