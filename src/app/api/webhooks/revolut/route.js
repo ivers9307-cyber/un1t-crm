@@ -29,6 +29,7 @@ import { sendDepositReceiptSms } from '@/lib/deposit-receipts'
 import { syncOrderFromCarDeposit } from '@/lib/orders'
 import { emitEvent, EVENT_TYPES } from '@/lib/contact-events'
 import { triggerSequencesForOrderStatus } from '@/lib/sequences'
+import { recordWebhookEvent, WEBHOOK_PROVIDERS } from '@/lib/webhook-events'
 
 export const runtime = 'nodejs'
 
@@ -52,6 +53,18 @@ export async function POST(request) {
   if (!orderId || !event) return NextResponse.json({ success: true })
 
   const db = createServerClient()
+
+  // Idempotency (mig 107). Revolut sends ORDER_AUTHORISED then
+  // ORDER_COMPLETED for the same order; we want to process each
+  // event-state once, but a retry of either should short-circuit.
+  // Per-row guards still exist downstream — this is the chokepoint.
+  const dedup = await recordWebhookEvent({
+    db, provider: WEBHOOK_PROVIDERS.REVOLUT,
+    eventId: `${event}:${orderId}`,
+  })
+  if (dedup.seen) {
+    return NextResponse.json({ success: true, deduped: true })
+  }
   const { data: car } = await db
     .from('cars')
     .select(`

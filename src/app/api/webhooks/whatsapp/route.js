@@ -4,6 +4,7 @@ import { refreshWindow } from '@/lib/whatsapp'
 import { verifyMetaSignature, safeEqual } from '@/lib/webhook-auth'
 import { sendPush, sendPushToRolesAtLocation } from '@/lib/push'
 import { MANAGER_ROLES } from '@/lib/schemas'
+import { recordWebhookEvent, WEBHOOK_PROVIDERS } from '@/lib/webhook-events'
 
 // Force Node.js runtime — we use node:crypto for HMAC verification.
 export const runtime = 'nodejs'
@@ -77,16 +78,37 @@ export async function POST(request) {
         const value = change.value
         const phoneNumberId = value.metadata?.phone_number_id
 
-        // Handle incoming messages
+        // Handle incoming messages. Per-message idempotency
+        // (mig 107) — Meta retries the entire envelope on non-2xx,
+        // so each message.id is the natural dedup key. A retry
+        // short-circuits the whole handleIncomingMessage call
+        // before we double-insert into whatsapp_messages.
         if (value.messages) {
           for (const message of value.messages) {
+            if (message?.id) {
+              const dedup = await recordWebhookEvent({
+                db, provider: WEBHOOK_PROVIDERS.WHATSAPP,
+                eventId: `msg:${message.id}`,
+              })
+              if (dedup.seen) continue
+            }
             await handleIncomingMessage(db, message, value.contacts, phoneNumberId)
           }
         }
 
-        // Handle status updates (sent, delivered, read, failed)
+        // Handle status updates (sent, delivered, read, failed).
+        // Per (status.id, status.status) — same message id can
+        // legitimately produce multiple status events, but each
+        // (id, status) pair is unique from Meta.
         if (value.statuses) {
           for (const status of value.statuses) {
+            if (status?.id && status?.status) {
+              const dedup = await recordWebhookEvent({
+                db, provider: WEBHOOK_PROVIDERS.WHATSAPP,
+                eventId: `status:${status.id}:${status.status}`,
+              })
+              if (dedup.seen) continue
+            }
             await handleStatusUpdate(db, status)
           }
         }

@@ -31,6 +31,7 @@ import { createServerClient } from '@/lib/supabase'
 import { verifyWebhookSignature, getOrder } from '@/lib/revolut'
 import { resolveRacePaymentByProviderRef, markRacePaymentStatus } from '@/lib/race-payments'
 import { sendRaceConfirmations } from '@/lib/race-confirmations'
+import { recordWebhookEvent, WEBHOOK_PROVIDERS } from '@/lib/webhook-events'
 
 export const runtime = 'nodejs'
 
@@ -59,6 +60,19 @@ export async function POST(request) {
   if (!orderId || !event) return NextResponse.json({ success: true })
 
   const db = createServerClient()
+
+  // Idempotency (mig 107). Distinct provider key from the cars
+  // Revolut webhook so a single (order, state) pair can't collide
+  // across the two routes (Revolut order_ids are unique per merchant
+  // account but we want belt-and-braces if a misroute happens).
+  const dedup = await recordWebhookEvent({
+    db, provider: WEBHOOK_PROVIDERS.REVOLUT_RACE,
+    eventId: `${event}:${orderId}`,
+  })
+  if (dedup.seen) {
+    return NextResponse.json({ success: true, deduped: true })
+  }
+
   const payment = await resolveRacePaymentByProviderRef(db, orderId)
   if (!payment) {
     // Could be a cars deposit webhook misrouted here, or a stale id.

@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { verifySharedSecret } from '@/lib/webhook-auth'
+import { recordWebhookEvent, WEBHOOK_PROVIDERS } from '@/lib/webhook-events'
 
 // Force Node.js runtime so node:crypto is available for the timing-safe compare.
 export const runtime = 'nodejs'
@@ -96,6 +97,17 @@ export async function POST(request) {
   }
 
   const recordType = body.RecordType
+
+  // Idempotency (mig 107). One row per (RecordType + MessageID) so
+  // a duplicate Delivery / Open / Click / Bounce retry short-
+  // circuits before doing the per-record work below.
+  const dedup = await recordWebhookEvent({
+    db, provider: WEBHOOK_PROVIDERS.POSTMARK,
+    eventId: `${recordType || 'unknown'}:${messageId}`,
+  })
+  if (dedup.seen) {
+    return NextResponse.json({ success: true, deduped: true })
+  }
 
   try {
     switch (recordType) {
