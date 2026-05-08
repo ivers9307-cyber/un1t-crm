@@ -31,13 +31,24 @@ export async function stampHeartbeat(name) {
 
   try {
     const db = createServerClient()
-    const { error } = await db
+    const { data, error } = await db
       .from('cron_heartbeats')
       .update({ last_ok_at: new Date().toISOString() })
       .eq('name', name)
+      .select('name')
 
     if (error) {
       logWarn('cron-heartbeat', 'stamp failed', { name, err: error })
+      return
+    }
+
+    // Update with no matching row is silent in Postgres — but for our
+    // use case it means "this cron is running but isn't registered for
+    // monitoring", which is exactly the bug Betterstack caught after
+    // mig 119. Surface it loudly so the next time someone adds a cron
+    // and forgets the seed migration, the logs scream.
+    if (!data || data.length === 0) {
+      logWarn('cron-heartbeat', 'stamp matched 0 rows — cron not seeded in cron_heartbeats', { name })
     }
   } catch (e) {
     logWarn('cron-heartbeat', 'stamp threw', { name, err: e })
