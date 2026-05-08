@@ -190,7 +190,7 @@ async function uploadInvoicePdf({ carId, invoiceNumber, bytes }) {
   if (error) {
     // Persisting the PDF is best-effort — the invoice is already in
     // Xero. Log and let the caller decide how to surface it.
-    logWarn('xero', `PDF upload failed for car ${carId}`, { err: e })
+    logWarn('xero', `PDF upload failed for car ${carId}`, { err: error })
     return null
   }
   return path

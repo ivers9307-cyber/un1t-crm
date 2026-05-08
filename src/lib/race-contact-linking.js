@@ -86,7 +86,7 @@ export async function findOrCreateRaceContact({ db, locationId, email, name = nu
       .select('id')
       .single()
     if (error) {
-      logWarn('race-contact-linking', `insert failed for ${normalised}`, { err: e })
+      logWarn('race-contact-linking', `insert failed for ${normalised}`, { err: error })
       return null
     }
     const newId = inserted?.id || null

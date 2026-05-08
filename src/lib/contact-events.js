@@ -90,7 +90,7 @@ export async function emitEvent({
       // Idempotency violation on time-anchored events is expected
       // (cron retries) — silent skip. Other errors get logged.
       if (!/duplicate|unique|23505/i.test(error.message || '')) {
-        logWarn('contact-events', `emit failed`, { err: e })
+        logWarn('contact-events', 'emit failed', { err: error })
       }
       return null
     }
