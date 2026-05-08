@@ -6,6 +6,7 @@ import { Menu, X } from 'lucide-react'
 import Sidebar from './Sidebar'
 import AssistantBubble from './AssistantBubble'
 import ImpersonationBanner from './ImpersonationBanner'
+import PendingContractsAlert from './PendingContractsAlert'
 import { hasPermission } from '@/lib/permissions'
 
 // Routes that should NOT show the CRM sidebar (i.e. anything a
@@ -78,9 +79,15 @@ export default function AppShell({ children, user }) {
           onMobileClose={() => setSidebarOpen(false)}
         />
 
-        <main className="flex-1 overflow-auto">
-          {children}
-        </main>
+        {/* Wrap main + the pending-contracts alert in their own
+            flex column so the banner sits above the scrollable
+            main content area without scrolling away with the page. */}
+        <div className="flex-1 flex flex-col overflow-hidden">
+          <PendingContractsAlert />
+          <main className="flex-1 overflow-auto">
+            {children}
+          </main>
+        </div>
         {hasPermission(user, 'assistant') && <AssistantBubble user={user} />}
       </div>
     </div>

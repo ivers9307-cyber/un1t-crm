@@ -32,16 +32,24 @@ const SAMPLE_PROFILE = {
   contracted_hours_per_week: 37.5,
 }
 
+// Reference table rendered under the markdown editor. Each row is
+// a variable that's auto-filled from the recipient's profile (or
+// computed) at issue time. Group is just for visual section
+// headers — keeps identity / compensation / dates separated so
+// the table scans quickly.
 const PROFILE_VAR_HELP = [
-  { key: 'full_name',                 label: 'Full name (from profile)' },
-  { key: 'email',                     label: 'Email (from profile)' },
-  { key: 'role',                      label: 'Role (from profile)' },
-  { key: 'employment_type',           label: 'Employment type' },
-  { key: 'annual_salary',             label: 'Annual salary (formatted, FTE)' },
-  { key: 'hourly_rate',               label: 'Hourly rate (formatted)' },
-  { key: 'overtime_rate',             label: 'Overtime rate (formatted)' },
-  { key: 'contracted_hours_per_week', label: 'Contracted hours per week' },
-  { key: 'today',                     label: "Today's date (auto)" },
+  { group: 'Identity', key: 'full_name',           sample: 'Sarah Doe',                       desc: 'Recipient\'s full name from their profile.' },
+  { group: 'Identity', key: 'email',               sample: 'sarah@un1tdublin.com',            desc: 'Recipient\'s email address.' },
+  { group: 'Identity', key: 'role',                sample: 'staff',                           desc: 'Role label (master/owner/manager/head_coach/staff).' },
+  { group: 'Identity', key: 'employment_type',     sample: 'fte',                             desc: 'fte or contractor.' },
+  { group: 'Compensation', key: 'annual_salary',           sample: '€60,000',  desc: 'Annual salary, Irish-locale formatted (FTE).' },
+  { group: 'Compensation', key: 'annual_salary_raw',       sample: '60000',    desc: 'Raw numeric for arithmetic.' },
+  { group: 'Compensation', key: 'hourly_rate',             sample: '€28',      desc: 'Hourly rate (also acts as contractor rate).' },
+  { group: 'Compensation', key: 'hourly_rate_raw',         sample: '28',       desc: 'Raw numeric.' },
+  { group: 'Compensation', key: 'overtime_rate',           sample: '€42',      desc: 'Overtime / premium rate.' },
+  { group: 'Compensation', key: 'overtime_rate_raw',       sample: '42',       desc: 'Raw numeric.' },
+  { group: 'Compensation', key: 'contracted_hours_per_week', sample: '37.5',   desc: 'Contracted weekly hours.' },
+  { group: 'Dates',    key: 'today',               sample: '2026-05-08',                      desc: 'Today\'s date in ISO format. Auto-filled.' },
 ]
 
 export default function ContractTemplateForm({ initial, isEdit = false }) {
@@ -242,15 +250,52 @@ export default function ContractTemplateForm({ initial, isEdit = false }) {
             className="w-full bg-un1t-dark border border-un1t-gray rounded-md px-3 py-2 text-sm font-mono"
             placeholder="# Contract&#10;&#10;This Agreement is between UN1T Dublin Ltd and {{full_name}}..."
           />
-          <details className="mt-2 text-[11px] text-un1t-light">
-            <summary className="cursor-pointer">Available auto-fill variables</summary>
-            <ul className="mt-2 space-y-0.5">
-              {PROFILE_VAR_HELP.map(v => (
-                <li key={v.key}>
-                  <code className="text-un1t-mid">{`{{${v.key}}}`}</code> — {v.label}
-                </li>
-              ))}
-            </ul>
+          <details className="mt-3 text-xs text-un1t-light" open>
+            <summary className="cursor-pointer font-semibold text-un1t-white mb-2">
+              Available auto-fill variables
+            </summary>
+            <p className="text-[11px] text-un1t-light mb-2">
+              Drop these directly into the body — they&apos;re replaced with the recipient&apos;s real
+              values at issue time. The custom variables you defined above appear in the issue
+              wizard for the issuer to fill in.
+            </p>
+            <div className="overflow-x-auto border border-un1t-gray rounded-md">
+              <table className="w-full text-[11px] min-w-[480px]">
+                <thead className="bg-un1t-gray/30">
+                  <tr className="text-left text-un1t-light uppercase tracking-wider text-[10px]">
+                    <th className="px-3 py-2">Variable</th>
+                    <th className="px-3 py-2">Sample</th>
+                    <th className="px-3 py-2">Notes</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(() => {
+                    const out = []
+                    let lastGroup = null
+                    PROFILE_VAR_HELP.forEach(v => {
+                      if (v.group !== lastGroup) {
+                        out.push(
+                          <tr key={`g-${v.group}`}>
+                            <td colSpan={3} className="px-3 pt-3 pb-1 text-[10px] uppercase tracking-wider text-un1t-mid">
+                              {v.group}
+                            </td>
+                          </tr>
+                        )
+                        lastGroup = v.group
+                      }
+                      out.push(
+                        <tr key={v.key} className="border-t border-un1t-gray/40 align-top">
+                          <td className="px-3 py-2"><code className="text-un1t-white">{`{{${v.key}}}`}</code></td>
+                          <td className="px-3 py-2 text-un1t-mid font-mono">{v.sample}</td>
+                          <td className="px-3 py-2 text-un1t-light">{v.desc}</td>
+                        </tr>
+                      )
+                    })
+                    return out
+                  })()}
+                </tbody>
+              </table>
+            </div>
           </details>
         </div>
         <div className={`${tab === 'write' ? 'hidden md:block' : ''}`}>
