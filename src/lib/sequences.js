@@ -18,7 +18,6 @@
 
 import { createServerClient } from '@/lib/supabase'
 import { sendTransactionalEmail, applyMergeTags } from '@/lib/postmark'
-import { applyAudienceFilterAsync, InvalidAudienceFilterError } from '@/lib/audience-filter'
 import {
   sendTemplateMessage,
   buildTemplateComponents,
@@ -27,147 +26,21 @@ import {
 import { sendLocationSms, TwilioError } from '@/lib/twilio'
 import { logWarn } from '@/lib/log'
 
-/**
- * Returns true if a given contact would match a sequence's
- * audience_filter (the same filter shape campaigns + broadcasts use).
- * Implemented as a single-row reachability check — applies the filter
- * to a 1-row query and asks Postgres whether the row survives.
- *
- * Sequences with no filter (the common case) match everyone.
- *
- * @param {string} contactId
- * @param {object | null | undefined} filter — { logic, filters: [{ field, op, value }] }
- * @returns {Promise<boolean>}
- */
-async function contactMatchesSequenceAudience(contactId, filter) {
-  if (!filter?.filters?.length) return true
-  const db = createServerClient()
-  // Look up the contact's location so tag-filter resolution can be
-  // location-scoped (cheaper than scanning contact_tags org-wide).
-  const { data: contact } = await db.from('contacts').select('location_id').eq('id', contactId).maybeSingle()
-  let query = db.from('contacts')
-    .select('id', { count: 'exact', head: true })
-    .eq('id', contactId)
-  try {
-    // Async path supports the new `tag` field (Phase 3 — mig 085).
-    query = await applyAudienceFilterAsync({
-      db,
-      query,
-      filter,
-      locationId: contact?.location_id || null,
-    })
-  } catch (e) {
-    if (e instanceof InvalidAudienceFilterError) {
-      logWarn('sequences', `sequence has invalid audience_filter, treating as no-match`, { err: e })
-      return false
-    }
-    throw e
-  }
-  const { count } = await query
-  return (count ?? 0) > 0
-}
+// God-module split (audit item 3.1) — first slice. The audience-
+// match check + the public enrol entry point now live in
+// ./sequences/, with their own tests. They're imported back here so
+// the rest of the module + every existing import path keeps
+// working unchanged.
+//
+// `enrolContacts` is imported into local scope (it's called from
+// every trigger handler in this file) AND re-exported for the
+// 8 modules that import it from '@/lib/sequences'.
+import { contactMatchesSequenceAudience } from './sequences/audience.js'
+import { enrolContacts } from './sequences/enrol.js'
+export { enrolContacts }
 
 const MAX_ERRORS = 5
 const PROCESS_BATCH_SIZE = 100
-
-// ── Public: enrol contacts ───────────────────────────────────────
-
-/**
- * Add contacts to a sequence. Idempotent — uses the
- * sequence_enrollments_unique_active index, so re-enrolling a
- * contact who's currently active is a no-op.
- *
- * @param {object} args
- * @param {string} args.sequenceId
- * @param {string[]} args.contactIds
- * @param {string} [args.sourceType='manual']
- * @param {string} [args.sourceRef]
- * @returns {Promise<{ enrolled: number, skipped: number }>}
- */
-export async function enrolContacts({ sequenceId, contactIds, sourceType = 'manual', sourceRef = null }) {
-  if (!Array.isArray(contactIds) || contactIds.length === 0) {
-    return { enrolled: 0, skipped: 0 }
-  }
-  const db = createServerClient()
-
-  // Active-enrolment dedup. Use SELECT-then-INSERT for the missing
-  // rows (PostgREST won't UPSERT on a partial unique index).
-  const { data: existing } = await db
-    .from('sequence_enrollments')
-    .select('contact_id')
-    .eq('sequence_id', sequenceId)
-    .eq('status', 'active')
-    .in('contact_id', contactIds)
-  const alreadyActive = new Set((existing || []).map(r => r.contact_id))
-
-  // Mig 090: re-enrolment cooldown. When the sequence has
-  // re_enrolment_cooldown_days set, allow re-enrolment after the
-  // contact's MOST RECENT terminal enrolment ended that long ago.
-  // Without a cooldown configured (NULL or 0), block any contact
-  // who has EVER been enrolled in this sequence (preserves the
-  // existing single-enrolment behaviour).
-  const { data: seqRow } = await db
-    .from('email_sequences')
-    .select('re_enrolment_cooldown_days')
-    .eq('id', sequenceId)
-    .single()
-  const cooldownDays = Number(seqRow?.re_enrolment_cooldown_days)
-  const blockedFromHistory = new Set()
-  const candidatesNotActive = contactIds.filter(id => !alreadyActive.has(id))
-  if (candidatesNotActive.length > 0) {
-    const { data: history } = await db
-      .from('sequence_enrollments')
-      .select('contact_id, status, last_processed_at, created_at')
-      .eq('sequence_id', sequenceId)
-      .in('contact_id', candidatesNotActive)
-      .in('status', ['completed', 'exited'])
-    if (Number.isFinite(cooldownDays) && cooldownDays > 0) {
-      // Pick the most recent terminal end-time per contact.
-      const lastEndByContact = new Map()
-      for (const h of (history || [])) {
-        const end = h.last_processed_at || h.created_at
-        const prior = lastEndByContact.get(h.contact_id)
-        if (!prior || end > prior) lastEndByContact.set(h.contact_id, end)
-      }
-      const cooldownMs = cooldownDays * 86400_000
-      const now = Date.now()
-      for (const [cid, end] of lastEndByContact) {
-        if (now - new Date(end).getTime() < cooldownMs) blockedFromHistory.add(cid)
-      }
-    } else {
-      // No cooldown → any past enrolment blocks (legacy behaviour).
-      for (const h of (history || [])) blockedFromHistory.add(h.contact_id)
-    }
-  }
-
-  const toInsert = contactIds
-    .filter(id => !alreadyActive.has(id) && !blockedFromHistory.has(id))
-    .map(contactId => ({
-      sequence_id: sequenceId,
-      contact_id: contactId,
-      current_step_order: 0,
-      status: 'active',
-      next_step_at: new Date().toISOString(), // fire on next cron tick
-      source_type: sourceType,
-      source_ref: sourceRef,
-    }))
-
-  if (toInsert.length === 0) {
-    return { enrolled: 0, skipped: contactIds.length }
-  }
-
-  const { error } = await db.from('sequence_enrollments').insert(toInsert)
-  if (error) throw new Error(`Enrol failed: ${error.message}`)
-
-  // Bump the cached counter on the parent sequence.
-  await db.rpc('increment_sequence_enrolled', { p_sequence_id: sequenceId, p_delta: toInsert.length })
-    .catch(() => {
-      // RPC not present — fall back to a direct read+update. Best
-      // effort, runner does not depend on this counter.
-    })
-
-  return { enrolled: toInsert.length, skipped: alreadyActive.size }
-}
 
 // ── Public: trigger handlers ────────────────────────────────────
 
@@ -259,7 +132,7 @@ export async function triggerSequencesForStatusChange(contactId, oldStatus, newS
       const cfg = seq.trigger_config || {}
       if (cfg.to_status && cfg.to_status !== newStatus) continue
       if (cfg.from_status && cfg.from_status !== oldStatus) continue
-      const matches = await contactMatchesSequenceAudience(contactId, seq.audience_filter)
+      const matches = await contactMatchesSequenceAudience(db, contactId, seq.audience_filter)
       if (!matches) continue
       await enrolContacts({
         sequenceId: seq.id,
@@ -350,7 +223,7 @@ export async function runEventReminderTriggers() {
         .maybeSingle()
       if (existing) { stats.skipped++; continue }
 
-      const matchesAudience = await contactMatchesSequenceAudience(booking.contact_id, seq.audience_filter)
+      const matchesAudience = await contactMatchesSequenceAudience(db, booking.contact_id, seq.audience_filter)
       if (!matchesAudience) continue
 
       try {
@@ -407,7 +280,7 @@ export async function triggerSequencesForTagsAdded(contactId, addedTags) {
       // cfg.tag is required for tag_added triggers — a sequence with no
       // configured tag would otherwise fire on every tag mutation.
       if (!cfg.tag || !addedSet.has(cfg.tag)) continue
-      const matches = await contactMatchesSequenceAudience(contactId, seq.audience_filter)
+      const matches = await contactMatchesSequenceAudience(db, contactId, seq.audience_filter)
       if (!matches) continue
       await enrolContacts({
         sequenceId: seq.id,
@@ -477,7 +350,7 @@ export async function runAnniversaryTriggers() {
     for (const c of (contacts || [])) {
       if (!c.id) continue
       // Audience filter check (per-contact).
-      const matches = await contactMatchesSequenceAudience(c.id, seq.audience_filter)
+      const matches = await contactMatchesSequenceAudience(db, c.id, seq.audience_filter)
       if (!matches) continue
       // Dedup across all statuses on (sequence, contact, anniversary).
       const { data: existing } = await db
@@ -579,7 +452,7 @@ export async function runInactivityTriggers() {
     }
 
     for (const c of candidates) {
-      const matches = await contactMatchesSequenceAudience(c.id, seq.audience_filter)
+      const matches = await contactMatchesSequenceAudience(db, c.id, seq.audience_filter)
       if (!matches) continue
       const { data: existing } = await db
         .from('sequence_enrollments')
@@ -649,7 +522,7 @@ export async function triggerSequencesForRaceRegistered(registrationId) {
       // may match (e.g. members only) while others don't.
       const matched = []
       for (const cid of memberContactIds) {
-        const ok = await contactMatchesSequenceAudience(cid, seq.audience_filter)
+        const ok = await contactMatchesSequenceAudience(db, cid, seq.audience_filter)
         if (ok) matched.push(cid)
       }
       if (matched.length === 0) continue
@@ -708,7 +581,7 @@ export async function triggerSequencesForRaceFinished(registrationId) {
       if (cfg.race_event_id && cfg.race_event_id !== reg.race_event_id) continue
       const matched = []
       for (const cid of memberContactIds) {
-        const ok = await contactMatchesSequenceAudience(cid, seq.audience_filter)
+        const ok = await contactMatchesSequenceAudience(db, cid, seq.audience_filter)
         if (ok) matched.push(cid)
       }
       if (matched.length === 0) continue
@@ -761,7 +634,7 @@ export async function triggerSequencesForOrderStatus({ contactId, locationId, st
     for (const seq of sequences) {
       const cfg = seq.trigger_config || {}
       if (cfg.source_type && cfg.source_type !== sourceType) continue
-      const ok = await contactMatchesSequenceAudience(contactId, seq.audience_filter)
+      const ok = await contactMatchesSequenceAudience(db, contactId, seq.audience_filter)
       if (!ok) continue
       await enrolContacts({
         sequenceId: seq.id,
@@ -819,7 +692,7 @@ export async function triggerSequencesForFirstBooking(bookingId) {
     for (const seq of sequences) {
       const cfg = seq.trigger_config || {}
       if (cfg.event_type_id && cfg.event_type_id !== booking.event_type_id) continue
-      const matches = await contactMatchesSequenceAudience(booking.contact_id, seq.audience_filter)
+      const matches = await contactMatchesSequenceAudience(db, booking.contact_id, seq.audience_filter)
       if (!matches) continue
       await enrolContacts({
         sequenceId: seq.id,
