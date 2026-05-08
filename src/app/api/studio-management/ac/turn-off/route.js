@@ -6,57 +6,44 @@
 // up state if our DB lost track) and return success.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
-import { createServerClient } from '@/lib/supabase'
+import { withAuth } from '@/lib/with-auth'
 import { turnPodOff, SensiboError } from '@/lib/sensibo'
 import { AC_SESSION_STATUS, AC_SESSION_ACTIVE_STATUSES } from '@/lib/enums'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function POST() {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  if (!hasPermission(user, 'studio_management')) {
-    return NextResponse.json(
-      { success: false, error: 'Studio management is not enabled for your role at this location.' },
-      { status: 403 }
-    )
-  }
-  const locationId = user.activeLocation?.id
-  if (!locationId) {
-    return NextResponse.json({ success: false, error: 'No active location.' }, { status: 400 })
-  }
+export const POST = withAuth(
+  { permission: 'studio_management' },
+  async ({ user, db, locationId }) => {
+    const { data: loc } = await db
+      .from('locations')
+      .select('id, sensibo_api_key, sensibo_pod_id')
+      .eq('id', locationId)
+      .single()
+    if (!loc?.sensibo_api_key || !loc?.sensibo_pod_id) {
+      return NextResponse.json({
+        success: false, error: 'AC is not configured for this location.', code: 'sensibo_not_configured',
+      }, { status: 412 })
+    }
 
-  const db = createServerClient()
-  const { data: loc } = await db
-    .from('locations')
-    .select('id, sensibo_api_key, sensibo_pod_id')
-    .eq('id', locationId)
-    .single()
-  if (!loc?.sensibo_api_key || !loc?.sensibo_pod_id) {
-    return NextResponse.json({
-      success: false, error: 'AC is not configured for this location.', code: 'sensibo_not_configured',
-    }, { status: 412 })
+    try {
+      await turnPodOff(loc.sensibo_api_key, loc.sensibo_pod_id)
+    } catch (e) {
+      const msg = e instanceof SensiboError ? e.message : (e?.message || String(e))
+      return NextResponse.json({
+        success: false, error: `Sensibo refused the request: ${msg}`, code: 'sensibo_error',
+      }, { status: 502 })
+    }
+
+    // Close any active sessions for this pod at this location.
+    const now = new Date().toISOString()
+    await db
+      .from('ac_sessions')
+      .update({ status: AC_SESSION_STATUS.MANUAL_OFF, ended_at: now, ended_by: user.id })
+      .eq('location_id', locationId)
+      .in('status', AC_SESSION_ACTIVE_STATUSES)
+
+    return NextResponse.json({ success: true })
   }
-
-  try {
-    await turnPodOff(loc.sensibo_api_key, loc.sensibo_pod_id)
-  } catch (e) {
-    const msg = e instanceof SensiboError ? e.message : (e?.message || String(e))
-    return NextResponse.json({
-      success: false, error: `Sensibo refused the request: ${msg}`, code: 'sensibo_error',
-    }, { status: 502 })
-  }
-
-  // Close any active sessions for this pod at this location.
-  const now = new Date().toISOString()
-  await db
-    .from('ac_sessions')
-    .update({ status: AC_SESSION_STATUS.MANUAL_OFF, ended_at: now, ended_by: user.id })
-    .eq('location_id', locationId)
-    .in('status', AC_SESSION_ACTIVE_STATUSES)
-
-  return NextResponse.json({ success: true })
-}
+)

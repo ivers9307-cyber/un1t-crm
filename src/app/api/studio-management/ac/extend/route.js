@@ -9,9 +9,7 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
-import { createServerClient } from '@/lib/supabase'
+import { withAuth } from '@/lib/with-auth'
 import { validateBody } from '@/lib/validate'
 import { AC_SESSION_STATUS, AC_SESSION_ACTIVE_STATUSES } from '@/lib/enums'
 
@@ -22,56 +20,45 @@ const ExtendSchema = z.object({
   minutes: z.number().int().min(5).max(240).optional(),
 })
 
-export async function POST(request) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  if (!hasPermission(user, 'studio_management')) {
-    return NextResponse.json(
-      { success: false, error: 'Studio management is not enabled for your role at this location.' },
-      { status: 403 }
-    )
+export const POST = withAuth(
+  { permission: 'studio_management' },
+  async ({ db, locationId, request }) => {
+    const validation = await validateBody(request, ExtendSchema)
+    if (!validation.ok) return validation.response
+    const minutes = validation.data.minutes ?? 30
+
+    const { data: openRows } = await db
+      .from('ac_sessions')
+      .select('id, auto_off_at, status')
+      .eq('location_id', locationId)
+      .in('status', AC_SESSION_ACTIVE_STATUSES)
+      .order('started_at', { ascending: false })
+      .limit(1)
+    const session = openRows?.[0]
+    if (!session) {
+      return NextResponse.json({
+        success: false, error: 'No active AC session to extend.', code: 'no_active_session',
+      }, { status: 409 })
+    }
+
+    // Add to whatever auto_off_at currently is — extending mid-class
+    // gives the operator the full extra block from the existing end,
+    // not "30 min from now" which would shorten things if they hit
+    // the button early.
+    const base = session.auto_off_at ? new Date(session.auto_off_at).getTime() : Date.now()
+    const newAutoOff = new Date(base + minutes * 60_000).toISOString()
+
+    const { data: updated, error } = await db
+      .from('ac_sessions')
+      .update({ status: AC_SESSION_STATUS.EXTENDED, auto_off_at: newAutoOff })
+      .eq('id', session.id)
+      .in('status', AC_SESSION_ACTIVE_STATUSES)
+      .select()
+      .single()
+    if (error) {
+      return NextResponse.json({ success: false, error: error.message }, { status: 400 })
+    }
+
+    return NextResponse.json({ success: true, data: updated })
   }
-  const locationId = user.activeLocation?.id
-  if (!locationId) {
-    return NextResponse.json({ success: false, error: 'No active location.' }, { status: 400 })
-  }
-
-  const validation = await validateBody(request, ExtendSchema)
-  if (!validation.ok) return validation.response
-  const minutes = validation.data.minutes ?? 30
-
-  const db = createServerClient()
-  const { data: openRows } = await db
-    .from('ac_sessions')
-    .select('id, auto_off_at, status')
-    .eq('location_id', locationId)
-    .in('status', AC_SESSION_ACTIVE_STATUSES)
-    .order('started_at', { ascending: false })
-    .limit(1)
-  const session = openRows?.[0]
-  if (!session) {
-    return NextResponse.json({
-      success: false, error: 'No active AC session to extend.', code: 'no_active_session',
-    }, { status: 409 })
-  }
-
-  // Add to whatever auto_off_at currently is — extending mid-class
-  // gives the operator the full extra block from the existing end,
-  // not "30 min from now" which would shorten things if they hit
-  // the button early.
-  const base = session.auto_off_at ? new Date(session.auto_off_at).getTime() : Date.now()
-  const newAutoOff = new Date(base + minutes * 60_000).toISOString()
-
-  const { data: updated, error } = await db
-    .from('ac_sessions')
-    .update({ status: AC_SESSION_STATUS.EXTENDED, auto_off_at: newAutoOff })
-    .eq('id', session.id)
-    .in('status', AC_SESSION_ACTIVE_STATUSES)
-    .select()
-    .single()
-  if (error) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 400 })
-  }
-
-  return NextResponse.json({ success: true, data: updated })
-}
+)

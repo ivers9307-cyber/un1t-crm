@@ -10,30 +10,16 @@
 // Sensibo, try again".
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
-import { createServerClient } from '@/lib/supabase'
+import { withAuth } from '@/lib/with-auth'
 import { getPodState, SensiboError } from '@/lib/sensibo'
 import { AC_SESSION_STATUS, AC_SESSION_ACTIVE_STATUSES } from '@/lib/enums'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function GET() {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  if (!hasPermission(user, 'studio_management')) {
-    return NextResponse.json(
-      { success: false, error: 'Studio management is not enabled for your role at this location.' },
-      { status: 403 }
-    )
-  }
-  const locationId = user.activeLocation?.id
-  if (!locationId) {
-    return NextResponse.json({ success: false, error: 'No active location.' }, { status: 400 })
-  }
-
-  const db = createServerClient()
+export const GET = withAuth(
+  { permission: 'studio_management' },
+  async ({ db, locationId }) => {
   const { data: loc } = await db
     .from('locations')
     .select('id, name, sensibo_api_key, sensibo_pod_id, ac_default_mode, ac_default_temp, ac_default_fan, ac_session_minutes')
@@ -145,4 +131,4 @@ export async function GET() {
       control_source: controlSource,
     },
   })
-}
+})
