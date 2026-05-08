@@ -1,21 +1,18 @@
 // Server-side permission helper — single function shared by every
 // page-level permission gate.
 //
-// Three-tier resolution:
-//   1. LOCATION gate (migration 032) — if the user's active location
-//      has features[key] === false, the answer is DENIED regardless
-//      of role or per-user override. Notification preferences
-//      (notify_*) are exempt from this gate (see
-//      isFeatureGatedByLocation in shared/permissions.js).
-//   2. PER-LOCATION USER override (migration 058) — explicit
-//      true/false in the active assignment's permissions blob wins.
-//      The override layer used to live on profiles.permissions
-//      (profile-wide), which leaked privileges across locations for
-//      mixed-role users (owner@A, staff@B → got owner toggles at B).
-//      It now lives on profile_locations.permissions and is read
-//      from `user.activeAssignment.permissions`.
-//   3. ROLE default — fall back to DEFAULT_WEB_PERMISSIONS_BY_ROLE
-//      for the user's role at the active location.
+// Thin web-specific adapter around the canonical 3-tier resolver
+// in shared/permissions.js. The tier ordering + master semantics
+// live there so web and mobile can't drift; this file only adds
+// the bits that are web-specific:
+//
+//   • Master gets `settings` even when the location says no — an
+//     escape hatch so a master at a feature-disabled location can
+//     still navigate to /settings/locations/[id] to flip the
+//     toggles back on. Mobile has no settings UI, so no equivalent.
+//   • Reads the per-user override from `user.activeAssignment
+//     .permissions` (an aggregated object built by getCurrentUser)
+//     rather than walking profile_locations directly.
 //
 // Owners are NOT special-cased here — if an owner toggles a feature
 // off on their own profile (or off at their location), the toggle is
@@ -23,23 +20,15 @@
 // location feature edits) remain owner-only via separate
 // `if (user.role !== 'owner') ...` checks inside those routes.
 //
-// Master role: honours the location gate just like everyone else
-// (otherwise "disabled at this location" wouldn't really mean
-// disabled). The single exception is the `settings` key — master
-// always sees the Settings sidebar entry as an escape hatch so they
-// can navigate to /settings/locations/[id] to flip features back on.
-// Without that, a master at a location with settings turned off
-// would have no way back into the per-location feature toggles
-// from the sidebar. Once tier-1 passes, master also bypasses tiers
-// 2 + 3 — no point making a master tick boxes for themselves once
-// the location says yes.
-//
 // Multi-location users: BOTH `activeLocation` (gate) and
 // `activeAssignment` (override + role) follow the active location,
 // so switching location can change which features the same user
 // can access.
 
-import { DEFAULT_WEB_PERMISSIONS_BY_ROLE, isFeatureEnabledAtLocation } from '@shared/permissions'
+import {
+  DEFAULT_WEB_PERMISSIONS_BY_ROLE,
+  resolvePermission,
+} from '@shared/permissions'
 
 /**
  * @param {{
@@ -59,20 +48,11 @@ export function hasPermission(user, key) {
   // gated inside the page handler.
   if (user.role === 'master' && key === 'settings') return true
 
-  // Tier 1: location gate. Applies to ALL roles including master.
-  if (!isFeatureEnabledAtLocation(user.activeLocation, key)) return false
-
-  // Master bypasses per-user permission tiers — once the location
-  // says yes, master sees it without needing role-default or
-  // per-user permission entries.
-  if (user.role === 'master') return true
-
-  // Tier 2: per-location user override (mig 058). Read from the
-  // active assignment, NOT from profile.permissions — the latter
-  // would leak across locations.
-  const perms = user.activeAssignment?.permissions || {}
-  if (key in perms) return perms[key] === true
-
-  // Tier 3: role default at the active-location role.
-  return DEFAULT_WEB_PERMISSIONS_BY_ROLE[user.role]?.[key] === true
+  return resolvePermission({
+    role: user.role,
+    location: user.activeLocation,
+    permissions: user.activeAssignment?.permissions || {},
+    defaults: DEFAULT_WEB_PERMISSIONS_BY_ROLE,
+    key,
+  })
 }

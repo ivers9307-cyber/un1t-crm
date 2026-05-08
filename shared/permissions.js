@@ -288,6 +288,62 @@ export function isFeatureEnabledAtLocation(location, key) {
   return features[key] !== false
 }
 
+// ============================================================
+// Three-tier resolver
+//
+// Single canonical implementation of the 3-tier permission check.
+// Both web (src/lib/permissions.js → hasPermission) and mobile
+// (mobile/lib/permissions.js → canMobile + canDashboard) call this
+// via thin platform-specific adapters so the tier ordering /
+// semantics live in exactly one place.
+//
+// Tiers:
+//   1. LOCATION gate (mig 032). Notification keys are exempt
+//      because per-user comms toggles are personal, not org-wide.
+//   2. PER-LOCATION USER override (mig 058). Caller passes the
+//      already-namespaced permission bag (e.g. mobile callers
+//      pass `permissions.mobile`, web passes `permissions`).
+//   3. ROLE default. Caller passes the appropriate defaults map
+//      (DEFAULT_WEB_PERMISSIONS_BY_ROLE or
+//      DEFAULT_MOBILE_PERMISSIONS_BY_ROLE).
+//
+// Master bypasses tiers 2+3 once tier 1 passes — once the
+// location says yes, master sees it without a per-user entry.
+//
+// The web `hasPermission` adds one extra rule on top: master gets
+// the `settings` key even when the location says no, so a master
+// always has a way back into the per-location feature toggles
+// from the sidebar. That's a web-specific escape hatch and lives
+// in the web adapter, not here.
+// ============================================================
+
+/**
+ * Pure 3-tier resolver. Returns boolean.
+ *
+ * @param {object} args
+ * @param {string} args.role                               'master' | 'owner' | 'manager' | 'head_coach' | 'staff' | …
+ * @param {{features?: object} | null | undefined} args.location  Used for tier 1.
+ * @param {object | null | undefined} args.permissions    Per-user overrides (already namespaced — mobile callers pass `permissions.mobile`, web passes top-level).
+ * @param {object} args.defaults                          Role → key → boolean map. Pass DEFAULT_WEB_… or DEFAULT_MOBILE_… as appropriate.
+ * @param {string} args.key
+ * @returns {boolean}
+ */
+export function resolvePermission({ role, location, permissions, defaults, key }) {
+  // Tier 1: location gate. Applies to all roles including master.
+  if (!isFeatureEnabledAtLocation(location, key)) return false
+  // Master bypasses per-user permission tiers — once the location
+  // says yes, master sees it without needing role-default or
+  // per-user permission entries.
+  if (role === 'master') return true
+  // Tier 2: per-location user override (mig 058). Explicit
+  // true/false in the bag wins over the role default.
+  if (permissions && typeof permissions === 'object' && key in permissions) {
+    return permissions[key] === true
+  }
+  // Tier 3: role default at the active-location role.
+  return defaults?.[role]?.[key] === true
+}
+
 // Convenience exports — saves callers from doing array-to-set work.
 export const WEB_PERMISSION_KEYS = Object.freeze(
   WEB_PERMISSIONS.map(p => p.key)

@@ -5,26 +5,21 @@
 // namespace so disabling something on the web doesn't accidentally
 // disable it on mobile (and vice versa).
 //
-// Three-tier resolution (mirrors src/lib/permissions.js on the web):
-//   1. LOCATION gate (migration 032) — activeLocation.features[key]
-//      explicitly false → DENIED for everyone at that location,
-//      regardless of role default or per-user mobile permission. This
-//      gate applies to MASTER too — if a location has a feature off,
-//      it's off, full stop. (The web has a small escape hatch on the
-//      'settings' key so a master can navigate to flip features back
-//      on; mobile has no feature-toggle UI, so no escape hatch is
-//      needed here.) Notification preferences (notify_*) are exempt —
-//      see isFeatureGatedByLocation in shared/permissions.js.
-//   2. PER-LOCATION USER override (migration 058) — explicit true/false
-//      in the active assignment's permissions blob wins. Reads
-//      `activeLocation.permissions.mobile[key]` for mobile keys, and
-//      `activeLocation.permissions[key]` for cross-platform dashboard
-//      keys. The override layer used to live profile-wide on
-//      profile.permissions.mobile, which leaked across locations for
-//      mixed-role users (owner@A, staff@B → got owner mobile toggles
-//      at B). Now per-assignment.
-//   3. ROLE default — DEFAULT_MOBILE_PERMISSIONS_BY_ROLE for the
-//      active-location role.
+// Thin mobile-specific adapter around the canonical 3-tier resolver
+// in shared/permissions.js. The tier ordering + master semantics
+// live there so web and mobile can't drift; this file only specifies
+// what's mobile-shaped:
+//
+//   • canMobile reads the per-user override from
+//     `activeLocation.permissions.mobile[key]` (the .mobile namespace
+//     scopes the toggle to phone/tablet only).
+//   • canDashboard reads from `activeLocation.permissions[key]` (top
+//     level — these three keys are intentionally cross-platform and
+//     fall back to the web defaults map so a single admin toggle
+//     covers both web and mobile dashboards).
+//   • No `settings` escape hatch — mobile has no feature-toggle UI,
+//     so the web's special-case for master + 'settings' isn't
+//     needed here.
 //
 // The list of valid keys + their default-by-role values lives in
 // ../../shared/permissions.js and is also imported by the web admin
@@ -32,8 +27,9 @@
 // auto-flows here and to the parity linter (npm run check:mobile-parity).
 
 import {
-  isFeatureEnabledAtLocation, MOBILE_PERMISSION_KEYS,
+  MOBILE_PERMISSION_KEYS,
   DEFAULT_MOBILE_PERMISSIONS_BY_ROLE, DEFAULT_WEB_PERMISSIONS_BY_ROLE,
+  resolvePermission,
 } from '../../shared/permissions'
 
 // Re-export the shared definitions so screens that need labels/hints
@@ -55,19 +51,15 @@ export {
  */
 export function canMobile(profile, key, activeLocation = null) {
   if (!profile) return false
-  // Tier 1: location gate. Applies to ALL roles including master —
-  // if the location has the feature off, it's off for everyone there.
-  if (!isFeatureEnabledAtLocation(activeLocation, key)) return false
-  // Master bypasses tiers 2 + 3 — once the location says yes, master
-  // sees it without needing a per-user permission entry.
-  if (profile.role === 'master') return true
-  // Tier 2: per-location user override (mig 058). Mobile keys live
-  // under .mobile in the assignment's permissions blob.
-  const m = activeLocation?.permissions?.mobile
-  if (m && typeof m === 'object' && key in m) return m[key] === true
-  // Tier 3: role default at the active-location role.
-  const defaults = DEFAULT_MOBILE_PERMISSIONS_BY_ROLE[profile.role] || {}
-  return defaults[key] === true
+  // Mobile keys live under .mobile in the assignment's permissions
+  // blob. Hand the canonical resolver the namespaced bag.
+  return resolvePermission({
+    role: profile.role,
+    location: activeLocation,
+    permissions: activeLocation?.permissions?.mobile || null,
+    defaults: DEFAULT_MOBILE_PERMISSIONS_BY_ROLE,
+    key,
+  })
 }
 
 /**
@@ -99,14 +91,15 @@ export function hasAnyMobileFeature(profile, activeLocation = null) {
  */
 export function canDashboard(profile, key, activeLocation = null) {
   if (!profile) return false
-  // Tier 1: location gate. Applies to ALL roles including master.
-  if (!isFeatureEnabledAtLocation(activeLocation, key)) return false
-  // Master bypasses the per-user permission check.
-  if (profile.role === 'master') return true
-  // Tier 2: per-location user override (mig 058).
-  const perms = activeLocation?.permissions
-  if (perms && typeof perms === 'object' && key in perms) return perms[key] === true
-  // Tier 3: role default at the active-location role.
-  const defaults = DEFAULT_WEB_PERMISSIONS_BY_ROLE[profile.role] || {}
-  return defaults[key] === true
+  // Dashboard sub-views live at the TOP level of the permissions
+  // bag (no .mobile namespace) and fall back to the WEB defaults
+  // map — a single admin toggle controls visibility on both web
+  // and mobile dashboards.
+  return resolvePermission({
+    role: profile.role,
+    location: activeLocation,
+    permissions: activeLocation?.permissions || null,
+    defaults: DEFAULT_WEB_PERMISSIONS_BY_ROLE,
+    key,
+  })
 }
