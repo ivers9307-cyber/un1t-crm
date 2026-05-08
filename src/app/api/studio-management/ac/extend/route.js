@@ -13,6 +13,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
+import { AC_SESSION_STATUS, AC_SESSION_ACTIVE_STATUSES } from '@/lib/enums'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -44,7 +45,7 @@ export async function POST(request) {
     .from('ac_sessions')
     .select('id, auto_off_at, status')
     .eq('location_id', locationId)
-    .in('status', ['on', 'extended'])
+    .in('status', AC_SESSION_ACTIVE_STATUSES)
     .order('started_at', { ascending: false })
     .limit(1)
   const session = openRows?.[0]
@@ -63,9 +64,9 @@ export async function POST(request) {
 
   const { data: updated, error } = await db
     .from('ac_sessions')
-    .update({ status: 'extended', auto_off_at: newAutoOff })
+    .update({ status: AC_SESSION_STATUS.EXTENDED, auto_off_at: newAutoOff })
     .eq('id', session.id)
-    .in('status', ['on', 'extended'])
+    .in('status', AC_SESSION_ACTIVE_STATUSES)
     .select()
     .single()
   if (error) {

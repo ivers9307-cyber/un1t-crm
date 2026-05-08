@@ -15,6 +15,7 @@ import { createServerClient } from '@/lib/supabase'
 import {
   setPodState, buildTurnOnState, SensiboError,
 } from '@/lib/sensibo'
+import { AC_SESSION_STATUS, AC_SESSION_ACTIVE_STATUSES } from '@/lib/enums'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -56,7 +57,7 @@ export async function POST() {
     .from('ac_sessions')
     .select('id, started_at, auto_off_at, status, started_by, profiles:started_by(full_name)')
     .eq('location_id', locationId)
-    .in('status', ['on', 'extended'])
+    .in('status', AC_SESSION_ACTIVE_STATUSES)
     .order('started_at', { ascending: false })
     .limit(1)
   const existing = openRows?.[0]
@@ -105,7 +106,7 @@ export async function POST() {
       sensibo_pod_id: loc.sensibo_pod_id,
       started_by: user.id,
       auto_off_at: autoOffAt,
-      status: 'on',
+      status: AC_SESSION_STATUS.ON,
       sensibo_state_snapshot: observed,
     })
     .select()

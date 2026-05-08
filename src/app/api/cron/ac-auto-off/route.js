@@ -12,6 +12,14 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { turnPodOff, SensiboError } from '@/lib/sensibo'
+import { AC_SESSION_STATUS } from '@/lib/enums'
+
+// Cron picks up these statuses — 'on' and 'extended' are the live
+// states; 'failed' is included so a transient Sensibo error
+// self-heals on the next tick.
+const CRON_PICKUP_STATUSES = [
+  AC_SESSION_STATUS.ON, AC_SESSION_STATUS.EXTENDED, AC_SESSION_STATUS.FAILED,
+]
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -35,7 +43,7 @@ export async function GET(request) {
       id, location_id, sensibo_pod_id, auto_off_at, status,
       locations:location_id(sensibo_api_key)
     `)
-    .in('status', ['on', 'extended', 'failed'])
+    .in('status', CRON_PICKUP_STATUSES)
     .not('auto_off_at', 'is', null)
     .lte('auto_off_at', nowIso)
     .order('auto_off_at', { ascending: true })
@@ -55,7 +63,7 @@ export async function GET(request) {
       await db
         .from('ac_sessions')
         .update({
-          status: 'failed',
+          status: AC_SESSION_STATUS.FAILED,
           failure_reason: 'Sensibo config missing on location at auto-off time',
           ended_at: nowIso,
         })
@@ -68,19 +76,19 @@ export async function GET(request) {
       await db
         .from('ac_sessions')
         .update({
-          status: 'auto_off',
+          status: AC_SESSION_STATUS.AUTO_OFF,
           ended_at: new Date().toISOString(),
           failure_reason: null,
         })
         .eq('id', row.id)
-        .in('status', ['on', 'extended', 'failed'])
+        .in('status', CRON_PICKUP_STATUSES)
       stats.off++
     } catch (e) {
       const msg = e instanceof SensiboError ? e.message : (e?.message || String(e))
       await db
         .from('ac_sessions')
         .update({
-          status: 'failed',
+          status: AC_SESSION_STATUS.FAILED,
           failure_reason: `Auto-off failed at ${nowIso}: ${msg.slice(0, 500)}`,
         })
         .eq('id', row.id)

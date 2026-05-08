@@ -10,6 +10,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { turnPodOff, SensiboError } from '@/lib/sensibo'
+import { AC_SESSION_STATUS, AC_SESSION_ACTIVE_STATUSES } from '@/lib/enums'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -53,9 +54,9 @@ export async function POST() {
   const now = new Date().toISOString()
   await db
     .from('ac_sessions')
-    .update({ status: 'manual_off', ended_at: now, ended_by: user.id })
+    .update({ status: AC_SESSION_STATUS.MANUAL_OFF, ended_at: now, ended_by: user.id })
     .eq('location_id', locationId)
-    .in('status', ['on', 'extended'])
+    .in('status', AC_SESSION_ACTIVE_STATUSES)
 
   return NextResponse.json({ success: true })
 }

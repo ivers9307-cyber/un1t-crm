@@ -14,6 +14,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { getPodState, SensiboError } from '@/lib/sensibo'
+import { AC_SESSION_STATUS, AC_SESSION_ACTIVE_STATUSES } from '@/lib/enums'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -56,7 +57,7 @@ export async function GET() {
     .from('ac_sessions')
     .select('id, started_by, started_at, auto_off_at, status, sensibo_pod_id, sensibo_state_snapshot, profiles:started_by(full_name)')
     .eq('location_id', locationId)
-    .in('status', ['on', 'extended'])
+    .in('status', AC_SESSION_ACTIVE_STATUSES)
     .order('started_at', { ascending: false })
     .limit(1)
   let session = activeRows?.[0] || null
@@ -100,12 +101,12 @@ export async function GET() {
     await db
       .from('ac_sessions')
       .update({
-        status: 'manual_off',
+        status: AC_SESSION_STATUS.MANUAL_OFF,
         ended_at: new Date().toISOString(),
         failure_reason: 'turned off externally (wall panel or Sensibo schedule)',
       })
       .eq('id', session.id)
-      .in('status', ['on', 'extended'])
+      .in('status', AC_SESSION_ACTIVE_STATUSES)
     session = null
   }
   // If pod_state failed to load, fall back to "session means on"
