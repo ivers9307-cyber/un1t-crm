@@ -40,17 +40,23 @@ export default function InviteToAppButton({ contactId, hasUserAccount }) {
   const label = hasUserAccount ? 'Resend sign-in link' : 'Invite to App'
   const Icon = result?.ok ? Check : Smartphone
 
+  // Two visual variants. Both pin solid bg + white text against the
+  // light page background (un1t-black is white in this theme; the
+  // earlier first-cut styling used un1t-gray which is the panel
+  // colour, leaving the button nearly invisible).
+  //   - First-time invite: indigo, the brand-ish "go" colour. Stands out.
+  //   - Resend: neutral slate. Clear it's a secondary, but still readable.
+  const variantClasses = hasUserAccount
+    ? 'bg-slate-600 text-white hover:bg-slate-500 border border-slate-700'
+    : 'bg-indigo-600 text-white hover:bg-indigo-500 border border-indigo-700'
+
   return (
     <div className="flex items-center gap-2">
       <button
         type="button"
         onClick={send}
         disabled={busy}
-        className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition ${
-          hasUserAccount
-            ? 'bg-un1t-gray text-un1t-light hover:bg-un1t-gray/80'
-            : 'bg-un1t-purple text-white hover:bg-un1t-purple/90'
-        } disabled:opacity-50`}
+        className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition shadow-sm ${variantClasses} disabled:opacity-50 disabled:cursor-not-allowed`}
         title={hasUserAccount
           ? 'Sends a fresh sign-in link to the member by email.'
           : 'Sends a magic-link invite by email so the member can sign in to app.champfitness.com.'}
@@ -60,7 +66,7 @@ export default function InviteToAppButton({ contactId, hasUserAccount }) {
       </button>
       {result && (
         <span
-          className={`text-xs ${result.ok ? 'text-green-400' : 'text-red-400'}`}
+          className={`text-xs font-medium ${result.ok ? 'text-green-700' : 'text-red-700'}`}
           role="status"
         >
           {result.message}
