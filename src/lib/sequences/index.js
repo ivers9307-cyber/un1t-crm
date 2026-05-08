@@ -1,7 +1,6 @@
 // Sequences package — public surface.
 //
-// As of the slice 3 refactor (audit item 3.1) every concrete piece
-// of sequence logic lives under ./sequences/:
+// Every concrete piece of sequence logic lives in a sibling module:
 //
 //   audience.js       — contactMatchesSequenceAudience
 //   cooldown.js       — findBlockedByCooldown
@@ -11,16 +10,13 @@
 //   steps.js          — every step handler (email/whatsapp/sms/tag/field/branch/webhook/task)
 //   scheduler.js      — runSequences + setEnrollmentStatus + helpers
 //
-// This file is a barrel: it re-exports the public surface so every
-// existing `import { … } from '@/lib/sequences'` in the codebase
-// keeps working without churn. New imports should reach into the
-// per-concern modules above.
-//
-// Slice 4 will replace this file with src/lib/sequences/index.js
-// (true package barrel) and delete sequences.js. Holding off on
-// that bigger move until everything else has settled.
+// This file is the package barrel — `import { … } from '@/lib/sequences'`
+// resolves here because `src/lib/sequences.js` no longer exists, so
+// Node falls through to `src/lib/sequences/index.js`. Existing call
+// sites continue to work; new code is free to import directly from
+// the per-concern modules.
 
-export { enrolContacts } from './sequences/enrol.js'
+export { enrolContacts } from './enrol.js'
 export {
   triggerSequencesForBooking,
   triggerSequencesForStatusChange,
@@ -29,11 +25,11 @@ export {
   triggerSequencesForRaceFinished,
   triggerSequencesForOrderStatus,
   triggerSequencesForFirstBooking,
-} from './sequences/triggers.js'
+} from './triggers.js'
 export {
   runEventReminderTriggers,
   runAnniversaryTriggers,
   runInactivityTriggers,
-} from './sequences/cron-triggers.js'
-export { evaluateBranchPredicate, processBranchStep } from './sequences/steps.js'
-export { runSequences, setEnrollmentStatus } from './sequences/scheduler.js'
+} from './cron-triggers.js'
+export { evaluateBranchPredicate, processBranchStep } from './steps.js'
+export { runSequences, setEnrollmentStatus } from './scheduler.js'

@@ -1,7 +1,9 @@
 // Tests for the SMS branch of the sequence runner (mig 062).
-// We test the sendSmsStep helper indirectly by importing the
-// resolution logic through small fixtures — the runner itself is
-// already covered by the existing sequences.test setup.
+// We test the sendSmsStep guard logic by re-implementing the
+// validation block here against fixtures. sendSmsStep itself lives
+// in src/lib/sequences/steps.js since the slice-3b refactor; this
+// file pins the contract independently so the production helper
+// can't drift on the back-compat case where sms_status is absent.
 //
 // What we want to lock in:
 //   1. A contact with sms_status != 'active' is rejected with a
