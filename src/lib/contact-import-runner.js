@@ -22,6 +22,7 @@
 // the batch as failed.
 
 import { validateRow, deriveName, fieldsTouchedByMapping } from './contact-import.js'
+import { logWarn } from './log.js'
 
 export async function runImportCommit(db, {
   importId,
@@ -196,7 +197,7 @@ export async function runImportCommit(db, {
     const slice = importRowInserts.slice(i, i + CHUNK)
     const { error } = await db.from('contact_import_rows').insert(slice)
     if (error) {
-      console.warn(`[contact-import-runner] row chunk ${i} failed: ${error.message}`)
+      logWarn('contact-import-runner', 'row chunk failed', { chunkIndex: i, err: error })
     }
   }
 

@@ -23,6 +23,8 @@
 // Tables that point at contacts.id with ON DELETE CASCADE — these
 // rows GO AWAY when the contact is deleted. The merge path UPDATEs
 // these to the survivor instead so history is preserved.
+import { logWarn } from './log'
+
 const CASCADE_TABLES = Object.freeze([
   { table: 'activities',                column: 'contact_id', label: 'activities & tasks' },
   { table: 'campaign_recipients',       column: 'contact_id', label: 'campaign send history' },
@@ -219,7 +221,7 @@ export async function redactWhatsAppForContact(db, contactId) {
       })
       .eq('contact_id', contactId)
   } catch (e) {
-    console.warn(`[contact-merge] redact whatsapp_conversations failed for ${contactId}: ${e?.message || e}`)
+    logWarn('contact-merge', 'redact whatsapp_conversations failed', { contactId, err: e })
   }
 
   // whatsapp_messages — strip body + media URL + template
@@ -236,7 +238,7 @@ export async function redactWhatsAppForContact(db, contactId) {
       })
       .eq('contact_id', contactId)
   } catch (e) {
-    console.warn(`[contact-merge] redact whatsapp_messages failed for ${contactId}: ${e?.message || e}`)
+    logWarn('contact-merge', 'redact whatsapp_messages failed', { contactId, err: e })
   }
 
   // whatsapp_broadcast_recipients — no body to scrub here, the row

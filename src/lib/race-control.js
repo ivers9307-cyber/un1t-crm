@@ -25,6 +25,8 @@
  * @param {number|null|undefined} seconds
  * @returns {string}
  */
+import { logWarn } from './log'
+
 export function formatElapsed(seconds) {
   if (seconds == null || !Number.isFinite(seconds) || seconds < 0) return '—'
   const s = Math.floor(seconds)
@@ -144,7 +146,7 @@ export async function ensureTeamForBooking(db, booking) {
           role: 'captain',
         })
       } catch (e) {
-        console.warn(`[race-control] failed to seed captain team_member for team ${team.id}: ${e.message || e}`)
+        logWarn('race-control', 'failed to seed captain team_member', { teamId: team.id, err: e })
       }
     }
   }

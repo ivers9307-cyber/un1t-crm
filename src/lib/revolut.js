@@ -22,6 +22,7 @@
 //   capture_mode values are LOWERCASE ('automatic' / 'manual').
 
 import { createHmac, timingSafeEqual } from 'node:crypto'
+import { logWarn } from './log'
 
 // API version pinned by header — Revolut requires this on every
 // request. Updating the date string is the migration path when they
@@ -182,7 +183,7 @@ export function verifyWebhookSignature(rawBody, signatureHeader, timestampHeader
     if (webhookSecret) candidateSecrets.push(webhookSecret)
   }
   if (candidateSecrets.length === 0) {
-    console.warn('[revolut-webhook] no signing secret configured — rejecting all hooks')
+    logWarn('revolut-webhook', 'no signing secret configured — rejecting all hooks')
     return false
   }
   if (!signatureHeader || !timestampHeader) return false

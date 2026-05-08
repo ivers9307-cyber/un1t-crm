@@ -12,6 +12,8 @@
 // roster-published-to-coach (once we figure out the staff-vs-
 // contact wiring for that one).
 
+import { logWarn } from '@/lib/log'
+
 const STATUS_LABELS = {
   active_trial: 'Active Trial',
   cold: 'Cold',
@@ -56,6 +58,6 @@ export async function logPipelineEvent(db, { contactId, locationId, oldStatus, n
       done: false,
     })
   } catch (e) {
-    console.warn(`[activity-events] logPipelineEvent failed: ${e.message}`)
+    logWarn('activity-events', 'logPipelineEvent failed', { contactId, err: e })
   }
 }

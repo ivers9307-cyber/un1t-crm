@@ -8,6 +8,7 @@
 
 import { sendEmail } from './postmark'
 import { getAppUrl } from './app-url'
+import { logWarn } from './log'
 
 function formatEur(n) {
   if (n == null) return '€0'
@@ -88,7 +89,7 @@ export async function sendOverBudgetApprovalEmail(db, args) {
       sent++
     } catch (e) {
       // Best-effort — surface in logs but don't fail the publish.
-      console.warn(`[roster-email] send to ${r.email} failed: ${e.message}`)
+      logWarn('roster-email', 'send failed', { email: r.email, recipientId: r.id, err: e })
     }
   }
 

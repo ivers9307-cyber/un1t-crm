@@ -17,6 +17,7 @@
 
 import { sendTransactionalEmail, applyMergeTags } from './postmark'
 import { sendLocationSms, TwilioError } from './twilio'
+import { logWarn } from './log'
 
 function fmtBookingTime(dateStr, timeStr) {
   try {
@@ -112,7 +113,7 @@ export async function sendBookingConfirmation(db, bookingId) {
       if (outcome.status === 'sent') result.sent.push(channel)
       else if (outcome.status === 'skipped') result.skipped.push(`${channel}:${outcome.reason}`)
     } catch (e) {
-      console.warn(`[booking-confirmation] ${channel} failed for booking ${bookingId}: ${e.message}`)
+      logWarn('booking-confirmation', `${channel} failed`, { bookingId, err: e })
       result.failed.push(`${channel}:${e.message}`)
     }
   }

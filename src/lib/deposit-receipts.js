@@ -25,6 +25,7 @@
 // for the Twilio SID when a customer says "I never got the SMS").
 
 import { sendLocationSms, TwilioError } from './twilio'
+import { logWarn } from './log'
 
 /**
  * @param {object} args
@@ -70,7 +71,7 @@ export async function sendDepositReceiptSms({ db, car, location, actorId = null 
     const msg = e instanceof TwilioError
       ? `Twilio ${e.code || e.status || ''}: ${e.message}`.trim()
       : (e?.message || 'SMS send failed')
-    console.warn(`[deposit-receipt] SMS send failed for car ${car.id}: ${msg}`)
+    logWarn('deposit-receipt', 'SMS send failed', { carId: car.id, reason: msg })
     return { status: 'failed', reason: msg }
   }
 
@@ -84,10 +85,9 @@ export async function sendDepositReceiptSms({ db, car, location, actorId = null 
   try {
     await db.from('cars').update({ deposit_receipt_sent_at: sentAt }).eq('id', car.id)
   } catch (e) {
-    console.warn(
-      `[deposit-receipt] Stamp failed for car ${car.id} after SMS sent ` +
-      `(sid ${smsResult?.sid}): ${e.message || e}`
-    )
+    logWarn('deposit-receipt', 'stamp failed after SMS sent', {
+      carId: car.id, twilioSid: smsResult?.sid, err: e,
+    })
   }
 
   // System note on the car timeline. Matches the issue-deposit-link
@@ -105,7 +105,7 @@ export async function sendDepositReceiptSms({ db, car, location, actorId = null 
         `(Twilio sid ${smsResult?.sid || 'unknown'}).\n${body}`,
     })
   } catch (e) {
-    console.warn(`[deposit-receipt] Failed to write car_notes entry for car ${car.id}: ${e.message || e}`)
+    logWarn('deposit-receipt', 'failed to write car_notes entry', { carId: car.id, err: e })
   }
 
   return {

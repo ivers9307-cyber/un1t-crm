@@ -10,10 +10,11 @@
 // stampHeartbeat() is intentionally best-effort: a failure to write the
 // heartbeat must NEVER fail the cron itself. Worst case, a transient DB
 // hiccup means one stamp is missed; the next tick covers it. We swallow
-// errors loudly via console.warn so Vercel runtime logs still capture
-// them for debugging.
+// errors loudly via the structured logger so Vercel runtime logs +
+// Sentinel still capture them for debugging.
 
 import { createServerClient } from '@/lib/supabase'
+import { logWarn } from '@/lib/log'
 
 /**
  * Stamp last_ok_at = NOW() on the named heartbeat row. Best-effort —
@@ -24,7 +25,7 @@ import { createServerClient } from '@/lib/supabase'
  */
 export async function stampHeartbeat(name) {
   if (!name || typeof name !== 'string') {
-    console.warn(`[cron-heartbeat] invalid name: ${JSON.stringify(name)}`)
+    logWarn('cron-heartbeat', 'invalid name', { name })
     return
   }
 
@@ -36,9 +37,9 @@ export async function stampHeartbeat(name) {
       .eq('name', name)
 
     if (error) {
-      console.warn(`[cron-heartbeat] stamp failed for ${name}: ${error.message}`)
+      logWarn('cron-heartbeat', 'stamp failed', { name, err: error })
     }
   } catch (e) {
-    console.warn(`[cron-heartbeat] stamp threw for ${name}: ${e?.message || String(e)}`)
+    logWarn('cron-heartbeat', 'stamp threw', { name, err: e })
   }
 }
