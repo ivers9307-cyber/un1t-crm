@@ -15,18 +15,11 @@
 
 import { sendTransactionalEmail } from './postmark'
 import { sendLocationSms, TwilioError } from './twilio'
+import { formatWeekdayLongDateInTZ } from './dates'
 
 function fmtRaceDate(dateStr) {
   if (!dateStr) return ''
-  try {
-    const d = new Date(`${dateStr}T00:00:00Z`)
-    return d.toLocaleDateString('en-IE', {
-      timeZone: 'Europe/Dublin',
-      weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
-    })
-  } catch {
-    return dateStr
-  }
+  return formatWeekdayLongDateInTZ(dateStr) || dateStr
 }
 
 function fmtMoney(cents, currency = 'EUR') {

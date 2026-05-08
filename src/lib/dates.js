@@ -145,6 +145,82 @@ export function formatWeekdayShortDateTime(value) {
   return FMT.weekdayShortDateTime.format(d)
 }
 
+// ── TZ-aware variants ────────────────────────────────────────────
+// Server-rendered output (transactional emails, PDFs) needs to
+// consistently render in Dublin time even though Vercel functions
+// run in UTC. These take an explicit timeZone arg and don't
+// reuse the module-level Intl instances — TZ-aware formatters
+// don't cache as cleanly because the option set varies.
+//
+// `timeZone` defaults to 'Europe/Dublin' since that's the only
+// caller today. Pass an IANA TZ string to override.
+
+const DEFAULT_EMAIL_TZ = 'Europe/Dublin'
+
+/**
+ * "Thu, 8 May, 14:30" rendered in the given timezone. Used by
+ * email + PDF templates so output is consistent regardless of
+ * where the server function ran. Mirrors formatWeekdayShortDateTime
+ * but with a TZ.
+ *
+ * @param {string|Date|null|undefined} value
+ * @param {string} [timeZone='Europe/Dublin']
+ */
+export function formatWeekdayShortDateTimeInTZ(value, timeZone = DEFAULT_EMAIL_TZ) {
+  if (!value) return ''
+  const d = value instanceof Date ? value : new Date(value)
+  if (Number.isNaN(d.getTime())) return ''
+  return new Intl.DateTimeFormat(LOCALE, {
+    timeZone,
+    weekday: 'short', day: 'numeric', month: 'short',
+    hour: '2-digit', minute: '2-digit',
+  }).format(d)
+}
+
+/**
+ * "Friday, 8 May 2026" rendered in the given timezone — race-day
+ * confirmation emails, contract footers, anything where the
+ * sender needs the date to read in Dublin terms even when sent
+ * from a UTC-runtime function.
+ *
+ * @param {string|Date|null|undefined} value
+ * @param {string} [timeZone='Europe/Dublin']
+ */
+export function formatWeekdayLongDateInTZ(value, timeZone = DEFAULT_EMAIL_TZ) {
+  if (!value) return ''
+  // Date-only inputs: parse as date-only (mirrors the Z-suffix
+  // pattern used in race-confirmations).
+  let d = value
+  if (typeof value === 'string' && !value.includes('T')) {
+    d = new Date(`${value}T00:00:00Z`)
+  } else if (!(value instanceof Date)) {
+    d = new Date(value)
+  }
+  if (Number.isNaN(d.getTime())) return ''
+  return new Intl.DateTimeFormat(LOCALE, {
+    timeZone,
+    weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
+  }).format(d)
+}
+
+/**
+ * "8 May 2026, 14:30" rendered in the given timezone. Used in
+ * contract signature blocks + audit notices.
+ *
+ * @param {string|Date|null|undefined} value
+ * @param {string} [timeZone='Europe/Dublin']
+ */
+export function formatFullDateTimeInTZ(value, timeZone = DEFAULT_EMAIL_TZ) {
+  if (!value) return ''
+  const d = value instanceof Date ? value : new Date(value)
+  if (Number.isNaN(d.getTime())) return ''
+  return new Intl.DateTimeFormat(LOCALE, {
+    timeZone,
+    day: 'numeric', month: 'short', year: 'numeric',
+    hour: '2-digit', minute: '2-digit',
+  }).format(d)
+}
+
 /**
  * Trim seconds from an 'HH:MM' or 'HH:MM:SS' string. We never want
  * to display seconds in the UI; this is the single function that

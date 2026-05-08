@@ -18,18 +18,12 @@
 import { sendTransactionalEmail, applyMergeTags } from './postmark'
 import { sendLocationSms, TwilioError } from './twilio'
 import { logWarn } from './log'
+import { formatWeekdayShortDateTimeInTZ } from './dates'
 
 function fmtBookingTime(dateStr, timeStr) {
   try {
     const dt = new Date(`${dateStr}T${timeStr}Z`)
-    return dt.toLocaleString('en-IE', {
-      timeZone: 'Europe/Dublin',
-      weekday: 'short',
-      day: 'numeric',
-      month: 'short',
-      hour: '2-digit',
-      minute: '2-digit',
-    })
+    return formatWeekdayShortDateTimeInTZ(dt) || `${dateStr} ${timeStr}`
   } catch {
     return `${dateStr} ${timeStr}`
   }

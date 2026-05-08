@@ -11,6 +11,7 @@
 
 import { createServerClient } from '@/lib/supabase'
 import { periodLabel } from './contractor-invoices.js'
+import { formatFullDateTimeInTZ } from './dates.js'
 
 const POSTMARK_API_URL = 'https://api.postmarkapp.com'
 
@@ -100,7 +101,7 @@ export async function sendInvoiceApprovedEmail(invoiceId) {
       <table style="border-collapse:collapse;margin:16px 0">
         <tr><td style="padding:4px 12px 4px 0;color:#666">Period</td><td style="padding:4px 0">${period}</td></tr>
         <tr><td style="padding:4px 12px 4px 0;color:#666">Amount</td><td style="padding:4px 0">€${Number(inv.invoice_amount).toFixed(2)}</td></tr>
-        <tr><td style="padding:4px 12px 4px 0;color:#666">Approved at</td><td style="padding:4px 0">${new Date(inv.approved_at).toLocaleString('en-IE', { dateStyle: 'medium', timeStyle: 'short' })}</td></tr>
+        <tr><td style="padding:4px 12px 4px 0;color:#666">Approved at</td><td style="padding:4px 0">${formatFullDateTimeInTZ(inv.approved_at)}</td></tr>
       </table>
       <p>You can review your submission history at <a href="${appUrl()}/schedule/invoices">${appUrl()}/schedule/invoices</a>.</p>
       <p style="color:#666;font-size:13px;margin-top:24px">
@@ -112,7 +113,7 @@ export async function sendInvoiceApprovedEmail(invoiceId) {
     `Hi ${inv.contractor.full_name || 'there'},\n\n` +
     `Your invoice for ${period} has been approved and forwarded for payment.\n\n` +
     `Amount: €${Number(inv.invoice_amount).toFixed(2)}\n` +
-    `Approved at: ${new Date(inv.approved_at).toLocaleString('en-IE')}\n\n` +
+    `Approved at: ${formatFullDateTimeInTZ(inv.approved_at)}\n\n` +
     `Review your submission history: ${appUrl()}/schedule/invoices\n`
 
   const messageId = await postmarkSend({

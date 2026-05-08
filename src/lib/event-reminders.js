@@ -25,6 +25,7 @@ import { createServerClient } from '@/lib/supabase'
 import { sendTransactionalEmail, applyMergeTags } from '@/lib/postmark'
 import { sendLocationSms, TwilioError } from '@/lib/twilio'
 import { logWarn } from '@/lib/log'
+import { formatWeekdayShortDateTimeInTZ } from '@/lib/dates'
 
 // ±1h covers Dublin DST drift cleanly. Operators set reminder time in
 // coarse units (24h, 2h) so a ±1h fire-time window is acceptable.
@@ -35,19 +36,8 @@ const TOLERANCE_MS = 60 * 60 * 1000
  */
 function fmtBookingTime(dateStr, timeStr) {
   const dt = new Date(`${dateStr}T${timeStr}Z`)
-  // Dublin display, falls back to UTC if Intl isn't available.
-  try {
-    return dt.toLocaleString('en-IE', {
-      timeZone: 'Europe/Dublin',
-      weekday: 'short',
-      day: 'numeric',
-      month: 'short',
-      hour: '2-digit',
-      minute: '2-digit',
-    })
-  } catch {
-    return `${dateStr} ${timeStr}`
-  }
+  // Dublin display, falls back to a raw concat if Intl is unavailable.
+  return formatWeekdayShortDateTimeInTZ(dt) || `${dateStr} ${timeStr}`
 }
 
 /**

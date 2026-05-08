@@ -12,6 +12,8 @@ import {
   formatShortDate, formatWeekdayShortDate, formatWeekdayLongDate,
   formatMonthYear, formatFullDate,
   formatTimeOnly, formatShortDateTime, formatWeekdayShortDateTime,
+  formatWeekdayShortDateTimeInTZ, formatWeekdayLongDateInTZ,
+  formatFullDateTimeInTZ,
   formatTimeStr, formatTimeRange, formatRelative,
   isoDate, isSameDay,
 } from './dates.js'
@@ -179,6 +181,61 @@ describe('isoDate', () => {
     expect(isoDate('2026-05-08')).toBe('')
     expect(isoDate(null)).toBe('')
     expect(isoDate(new Date('not-a-date'))).toBe('')
+  })
+})
+
+describe('TZ-aware variants — server-rendered emails', () => {
+  // The server runs UTC on Vercel; the email content has to
+  // render in Dublin time so a customer reads "race start
+  // 09:00" rather than "08:00" or "09:00 BST" depending on
+  // when in the year the email goes out. Pin the contract:
+  // the same instant rendered in Europe/Dublin and UTC differs
+  // by 1h in BST and 0h in IST.
+
+  // 09:00 UTC on a Dublin-summer day → 10:00 BST in Dublin
+  const summerInstantUtc = '2026-07-08T09:00:00.000Z'
+  // 09:00 UTC on a Dublin-winter day → 09:00 IST/UTC
+  const winterInstantUtc = '2026-01-08T09:00:00.000Z'
+
+  it('formatWeekdayShortDateTimeInTZ shifts the visible time to Dublin BST in summer', () => {
+    const out = formatWeekdayShortDateTimeInTZ(summerInstantUtc, 'Europe/Dublin')
+    // BST = UTC+1 → renders 10:00
+    expect(out).toMatch(/10:00/)
+    expect(out).toMatch(/Jul/)
+  })
+
+  it('formatWeekdayShortDateTimeInTZ keeps Dublin winter time same as UTC (IST)', () => {
+    const out = formatWeekdayShortDateTimeInTZ(winterInstantUtc, 'Europe/Dublin')
+    expect(out).toMatch(/09:00/)
+    expect(out).toMatch(/Jan/)
+  })
+
+  it('formatWeekdayLongDateInTZ accepts a bare YYYY-MM-DD as the date in that TZ', () => {
+    const out = formatWeekdayLongDateInTZ('2026-05-08', 'Europe/Dublin')
+    expect(out).toMatch(/Friday/)
+    expect(out).toMatch(/May/)
+    expect(out).toMatch(/2026/)
+  })
+
+  it('formatFullDateTimeInTZ renders dd MMM yyyy + time in TZ', () => {
+    const out = formatFullDateTimeInTZ(summerInstantUtc, 'Europe/Dublin')
+    expect(out).toMatch(/Jul/)
+    expect(out).toMatch(/2026/)
+    expect(out).toMatch(/10:00/)
+  })
+
+  it('all three return "" for null/invalid', () => {
+    expect(formatWeekdayShortDateTimeInTZ(null)).toBe('')
+    expect(formatWeekdayShortDateTimeInTZ('not-a-date')).toBe('')
+    expect(formatWeekdayLongDateInTZ(null)).toBe('')
+    expect(formatFullDateTimeInTZ(null)).toBe('')
+  })
+
+  it('default timezone is Europe/Dublin', () => {
+    // No explicit timeZone arg → same output as Europe/Dublin.
+    const a = formatWeekdayShortDateTimeInTZ(summerInstantUtc)
+    const b = formatWeekdayShortDateTimeInTZ(summerInstantUtc, 'Europe/Dublin')
+    expect(a).toBe(b)
   })
 })
 

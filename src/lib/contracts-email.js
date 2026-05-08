@@ -14,6 +14,7 @@
 
 import { createServerClient } from './supabase.js'
 import { sendEmail } from './postmark.js'
+import { formatFullDateTimeInTZ } from './dates.js'
 
 function appUrl() {
   return process.env.NEXT_PUBLIC_APP_URL || 'https://crm.un1tdublin.com'
@@ -138,7 +139,7 @@ export async function sendContractSignedEmails({ contract, recipient, issuer, te
         <a href="${recipientUrl}" style="display:inline-block;background:#111827;color:#ffffff;text-decoration:none;padding:12px 24px;border-radius:8px;font-weight:600;">View signed contract</a>
       </p>
       <p style="font-size:12px;color:#6b7280;">For your records, the contract was signed
-      on ${new Date(contract.signed_at || Date.now()).toLocaleString('en-IE', { timeZone: 'Europe/Dublin' })}.</p>`
+      on ${formatFullDateTimeInTZ(contract.signed_at || new Date())}.</p>`
     try {
       await sendEmail({
         to: recipient.email,
