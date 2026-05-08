@@ -27,6 +27,10 @@
     {
       "path": "/api/cron/ac-auto-off",
       "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/cron/auto-end-stale-hr-sessions",
+      "schedule": "*/5 * * * *"
     }
   ]
 }

@@ -13,6 +13,7 @@
 
 import { logWarn } from '@/lib/log'
 import { resolveMaxHr, summariseSession } from '@/lib/heart-rate'
+import { sendPostClassEmail } from '@/lib/hr-post-class-email'
 
 const RECENT_SAMPLE_WINDOW_MS = 30 * 1000  // current-BPM averaging window
 
@@ -255,6 +256,13 @@ export async function endSession(db, sessionId, { nowMs = Date.now() } = {}) {
     .update({ ended_at: endedAt })
     .eq('heart_rate_session_id', sessionId)
     .is('ended_at', null)
+
+  // Best-effort post-class email. Doesn't propagate errors — the
+  // sender already swallows + logs everything internally. The
+  // session is finalised regardless of email outcome.
+  sendPostClassEmail(db, sessionId).catch((err) => {
+    logWarn('live-class', 'post-class email scheduling threw', { err, sessionId })
+  })
 
   return { ok: true, summary }
 }
