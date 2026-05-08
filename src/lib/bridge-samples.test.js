@@ -184,9 +184,25 @@ describe('insertHrSamples', () => {
     expect(db.from).not.toHaveBeenCalled()
   })
 
+  // Two-table dispatch helper: hr_samples uses upsert(); the touch
+  // path on heart_rate_sessions uses update().eq() which returns
+  // a thenable.
+  function makeDb({ upsertResult = { error: null, count: 0 }, sessionUpdateError = null } = {}) {
+    const upsert = vi.fn(() => Promise.resolve(upsertResult))
+    const sessionEq = vi.fn(() => Promise.resolve({ error: sessionUpdateError }))
+    const sessionUpdate = vi.fn(() => ({ eq: sessionEq }))
+    return {
+      from: vi.fn((table) => {
+        if (table === 'hr_samples') return { upsert }
+        if (table === 'heart_rate_sessions') return { update: sessionUpdate }
+        throw new Error(`unexpected table ${table}`)
+      }),
+      _spies: { upsert, sessionUpdate, sessionEq },
+    }
+  }
+
   it('upserts with onConflict ignoreDuplicates', async () => {
-    const upsert = vi.fn(() => Promise.resolve({ error: null, count: 3 }))
-    const db = { from: vi.fn(() => ({ upsert })) }
+    const db = makeDb({ upsertResult: { error: null, count: 3 } })
     const rows = [
       { session_id: 's', recorded_at: '2026-05-08T16:00:00.000Z', bpm: 145 },
       { session_id: 's', recorded_at: '2026-05-08T16:00:01.000Z', bpm: 146 },
@@ -195,15 +211,38 @@ describe('insertHrSamples', () => {
     const out = await insertHrSamples(db, rows)
     expect(out).toEqual({ inserted: 3, error: null })
     expect(db.from).toHaveBeenCalledWith('hr_samples')
-    expect(upsert).toHaveBeenCalledWith(rows, expect.objectContaining({
+    expect(db._spies.upsert).toHaveBeenCalledWith(rows, expect.objectContaining({
       onConflict: 'session_id,recorded_at',
       ignoreDuplicates: true,
     }))
   })
 
+  it('touches last_sample_at to the LATEST recorded_at per session', async () => {
+    const db = makeDb({ upsertResult: { error: null, count: 4 } })
+    const rows = [
+      { session_id: 'sA', recorded_at: '2026-05-08T16:00:00.000Z', bpm: 145 },
+      { session_id: 'sA', recorded_at: '2026-05-08T16:00:02.000Z', bpm: 147 }, // newer
+      { session_id: 'sA', recorded_at: '2026-05-08T16:00:01.000Z', bpm: 146 },
+      { session_id: 'sB', recorded_at: '2026-05-08T16:00:00.000Z', bpm: 130 },
+    ]
+    await insertHrSamples(db, rows)
+    expect(db._spies.sessionUpdate).toHaveBeenCalledTimes(2)
+    expect(db._spies.sessionUpdate).toHaveBeenCalledWith({ last_sample_at: '2026-05-08T16:00:02.000Z' })
+    expect(db._spies.sessionUpdate).toHaveBeenCalledWith({ last_sample_at: '2026-05-08T16:00:00.000Z' })
+  })
+
+  it('still returns inserted on a touch failure (best-effort)', async () => {
+    const db = makeDb({
+      upsertResult: { error: null, count: 1 },
+      sessionUpdateError: { message: 'rls' },
+    })
+    const out = await insertHrSamples(db, [{ session_id: 's', recorded_at: '2026-05-08T16:00:00.000Z', bpm: 145 }])
+    expect(out.error).toBe(null)
+    expect(out.inserted).toBe(1)
+  })
+
   it('returns error from supabase rather than throwing', async () => {
-    const upsert = vi.fn(() => Promise.resolve({ error: { message: 'rls' }, count: 0 }))
-    const db = { from: vi.fn(() => ({ upsert })) }
+    const db = makeDb({ upsertResult: { error: { message: 'rls' }, count: 0 } })
     const out = await insertHrSamples(db, [{ session_id: 's', recorded_at: '2026-05-08T16:00:00.000Z', bpm: 145 }])
     expect(out.error).toBeTruthy()
     expect(out.inserted).toBe(0)

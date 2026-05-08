@@ -288,6 +288,12 @@ function resolveMaxHrForBridgeInsert(contact) {
 /**
  * Upsert with onConflict (session_id, recorded_at) ignoreDuplicates.
  * Bridge retries after a network blip don't 409.
+ *
+ * Also opportunistically touches heart_rate_sessions.last_sample_at
+ * for each session represented in the batch — the live coach view
+ * uses that column to flag stale sessions ("strap silent for >2min").
+ * Best-effort: a failure here is logged but does not fail the
+ * sample insert.
  */
 export async function insertHrSamples(db, rows) {
   if (rows.length === 0) return { inserted: 0, error: null }
@@ -298,6 +304,27 @@ export async function insertHrSamples(db, rows) {
     logWarn('bridge-samples', 'hr_samples upsert failed', { err: error, attempted: rows.length })
     return { inserted: 0, error }
   }
+
+  // Touch last_sample_at on each affected session. Use the latest
+  // recorded_at per session (rather than now()) so the column
+  // reflects the actual sample timestamp the bridge sent — robust
+  // to clock skew between bridge + server.
+  const latestPerSession = new Map()
+  for (const r of rows) {
+    const prev = latestPerSession.get(r.session_id)
+    if (!prev || r.recorded_at > prev) latestPerSession.set(r.session_id, r.recorded_at)
+  }
+  await Promise.all(
+    Array.from(latestPerSession.entries()).map(([sessionId, ts]) =>
+      db.from('heart_rate_sessions')
+        .update({ last_sample_at: ts })
+        .eq('id', sessionId)
+        .then(({ error: e }) => {
+          if (e) logWarn('bridge-samples', 'last_sample_at touch failed', { err: e, sessionId })
+        }),
+    ),
+  )
+
   return { inserted: count ?? rows.length, error: null }
 }
 

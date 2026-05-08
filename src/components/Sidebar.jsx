@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
-import { LayoutDashboard, Users, Columns3, CheckSquare, Calendar, MessagesSquare, CalendarClock, Settings, LogOut, Car, Flag, Receipt, DoorOpen, Activity, ExternalLink, X, FileSignature } from 'lucide-react'
+import { LayoutDashboard, Users, Columns3, CheckSquare, Calendar, MessagesSquare, CalendarClock, Settings, LogOut, Car, Flag, Receipt, DoorOpen, Activity, ExternalLink, X, FileSignature, Heart } from 'lucide-react'
 import { createBrowserClient } from '@/lib/supabase'
 import LocationSwitcher from './LocationSwitcher'
 import ImpersonatePicker from './ImpersonatePicker'
@@ -62,6 +62,12 @@ const allNav = [
   // mobile-only `door_unlock` flag. Surface today is remote door
   // unlock via UniFi; future on-site ops land here.
   { href: '/studio-management', label: 'Studio Management', icon: DoorOpen, permission: 'studio_management' },
+  // Live class — coach view of in-studio HR (mig 110-113). Renders
+  // attendees with current zone color, available straps panel, and
+  // override-pairing flow. /live redirects to /live/<activeLocation>.
+  // Same permission gate as Studio Management — anyone running
+  // class can use it.
+  { href: '/live', label: 'Live HR', icon: Heart, permission: 'studio_management' },
   // Contracts (mig 106) — digital staff/contractor contracts with
   // typed-name signatures. Master/owner only — no permission flag,
   // role-only gate (matches the API + RLS layer). Custom matcher
