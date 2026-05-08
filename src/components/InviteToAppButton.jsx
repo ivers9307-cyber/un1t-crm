@@ -1,7 +1,7 @@
 'use client'
 
 // "Invite to App" — sends a magic-link invite for the customer-facing
-// app (champ-app at app.champfitness.com).
+// app (champ-app at app.champfitness.ie).
 //
 // Two visual states:
 //   - Not yet linked    → "Invite to App"
@@ -59,7 +59,7 @@ export default function InviteToAppButton({ contactId, hasUserAccount }) {
         className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition shadow-sm ${variantClasses} disabled:opacity-50 disabled:cursor-not-allowed`}
         title={hasUserAccount
           ? 'Sends a fresh sign-in link to the member by email.'
-          : 'Sends a magic-link invite by email so the member can sign in to app.champfitness.com.'}
+          : 'Sends a magic-link invite by email so the member can sign in to app.champfitness.ie.'}
       >
         <Icon size={14} />
         {busy ? 'Sending…' : label}

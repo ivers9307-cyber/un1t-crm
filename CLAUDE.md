@@ -73,7 +73,7 @@ UN1T CRM is a Next.js 14 App Router application with Supabase (PostgreSQL) backe
 This repo is no longer the only Next.js app talking to the un1t-crm Supabase project. There are now three deployments sharing the same database:
 
 - **un1t-crm** (this repo) — staff / admin / operator surface. `crm.un1tdublin.com`. Heavy: contacts, scheduling, contractor invoices, sequences, Xero, WhatsApp, audit logs, every back-office tool.
-- **champ-app** (`/Users/richardivers/code/champ-app`) — customer-facing portal. `app.champfitness.com`. Members log in with magic links to see their own heart rate sessions, post-class reports, and OAuth connections to Fitbit/Whoop/Apple/Garmin. **Deliberately scoped to one customer's own data only — no admin features should ever appear there.** First feature is the Myzone replacement (mig 110+).
+- **champ-app** (`/Users/richardivers/code/champ-app`) — customer-facing portal. `app.champfitness.ie`. Members log in with magic links to see their own heart rate sessions, post-class reports, and OAuth connections to Fitbit/Whoop/Apple/Garmin. **Deliberately scoped to one customer's own data only — no admin features should ever appear there.** First feature is the Myzone replacement (mig 110+).
 - **un1t-platform** — multi-tenant admin/sentinel dashboard (older project, separate brief).
 
 Customer auth model: a "customer" is `auth.users` row + `contacts.user_id` link. We don't add a `customer` value to `profiles.role` — profiles stays staff-only. The `private.auth_contact_id()` SECURITY DEFINER helper (mig 110) returns the current user's contact_id for customer-self RLS:
@@ -84,7 +84,7 @@ CREATE POLICY "Customers can view own sessions"
   USING (contact_id = private.auth_contact_id());
 ```
 
-Invite flow: admin clicks **Invite to App** on a contact's profile in this CRM (`POST /api/contacts/[id]/invite-app`). That calls `supabase.auth.admin.inviteUserByEmail` with `redirectTo = https://app.champfitness.com/auth/callback`. The champ-app callback exchanges the code, looks up `contacts` by email (service-role), and links `contacts.user_id`. Idempotent: existing-user case falls back to a fresh magic link via `auth.admin.generateLink`. Tests in `src/app/api/contacts/[id]/invite-app/route.test.js`.
+Invite flow: admin clicks **Invite to App** on a contact's profile in this CRM (`POST /api/contacts/[id]/invite-app`). That calls `supabase.auth.admin.inviteUserByEmail` with `redirectTo = https://app.champfitness.ie/auth/callback`. The champ-app callback exchanges the code, looks up `contacts` by email (service-role), and links `contacts.user_id`. Idempotent: existing-user case falls back to a fresh magic link via `auth.admin.generateLink`. Tests in `src/app/api/contacts/[id]/invite-app/route.test.js`.
 
 In-class TV display + the BLE bridge service for live heart-rate aggregation will live where they best fit:
   - **TV display**: a public route in *this* CRM (matches the existing `/race/[slug]/tv` pattern) — no auth, reads aggregated session state for a single location.

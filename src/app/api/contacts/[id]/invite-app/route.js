@@ -1,7 +1,7 @@
 // POST /api/contacts/[id]/invite-app
 //
 // Master/admin-only: send a magic-link invite for a contact to join
-// the customer-facing app (champ-app at app.champfitness.com). The
+// the customer-facing app (champ-app at app.champfitness.ie). The
 // invite goes to the contact's email; clicking it lands them at
 // `${CHAMP_APP_URL}/auth/callback` which links auth.users to
 // contacts.user_id (see champ-app's callback route handler).
@@ -30,7 +30,7 @@ import { logInfo, logError } from '@/lib/log'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-const CHAMP_APP_URL = process.env.NEXT_PUBLIC_CHAMP_APP_URL || 'https://app.champfitness.com'
+const CHAMP_APP_URL = process.env.NEXT_PUBLIC_CHAMP_APP_URL || 'https://app.champfitness.ie'
 const ALLOWED_INVITE_ROLES = ['owner', 'manager']
 
 export async function POST(_request, { params }) {

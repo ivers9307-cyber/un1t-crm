@@ -5,7 +5,7 @@
 -- Background
 -- ----------
 -- Phase 0 of the Myzone-replacement project. We're standing up
--- champ-app (a separate Next.js project on app.champfitness.com)
+-- champ-app (a separate Next.js project on app.champfitness.ie)
 -- as the customer-facing portal. It shares this Supabase project
 -- so customer data lives next to staff data in one source of truth,
 -- but the customer app is a completely separate deploy with its
