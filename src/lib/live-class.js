@@ -14,6 +14,7 @@
 import { logWarn } from '@/lib/log'
 import { resolveMaxHr, summariseSession } from '@/lib/heart-rate'
 import { sendPostClassEmail } from '@/lib/hr-post-class-email'
+import { runDetectionForSession } from '@/lib/achievements'
 
 const RECENT_SAMPLE_WINDOW_MS = 30 * 1000  // current-BPM averaging window
 
@@ -262,6 +263,13 @@ export async function endSession(db, sessionId, { nowMs = Date.now() } = {}) {
   // session is finalised regardless of email outcome.
   sendPostClassEmail(db, sessionId).catch((err) => {
     logWarn('live-class', 'post-class email scheduling threw', { err, sessionId })
+  })
+
+  // Best-effort achievement detection. Internally swallows errors;
+  // unlocks land in contact_achievements with notified_at = null
+  // for the future native app's push-notification consumer.
+  runDetectionForSession(db, sessionId).catch((err) => {
+    logWarn('live-class', 'achievement detection threw', { err, sessionId })
   })
 
   return { ok: true, summary }
