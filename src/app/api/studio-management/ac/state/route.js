@@ -59,7 +59,7 @@ export async function GET() {
     .in('status', ['on', 'extended'])
     .order('started_at', { ascending: false })
     .limit(1)
-  const session = activeRows?.[0] || null
+  let session = activeRows?.[0] || null
 
   // Live pod state from Sensibo. Best-effort — if we can't reach
   // Sensibo we still return what we know from our own DB so the
@@ -70,6 +70,59 @@ export async function GET() {
     podState = await getPodState(loc.sensibo_api_key, loc.sensibo_pod_id)
   } catch (e) {
     podError = e instanceof SensiboError ? e.message : `Sensibo: ${e?.message || String(e)}`
+  }
+
+  // Reconcile state. The pod state (Sensibo) is the ground truth
+  // for whether the AC is physically on right now — staff can flip
+  // it at the wall panel or it can be turned off by a Sensibo
+  // schedule, neither of which goes through our app. We treat the
+  // session row as context-only ("who turned it on through the
+  // app, when does our auto-off cron fire") and auto-clean stale
+  // sessions when Sensibo says the AC is off:
+  //
+  //   - is_on        : did Sensibo report the AC physically on?
+  //   - control_source:
+  //       'app'      → our session row says on AND pod_state agrees
+  //       'external' → pod_state says on but no app session
+  //                    (someone hit the wall panel or a Sensibo
+  //                    schedule kicked in)
+  //       null       → AC is off
+  //
+  // Stale-session cleanup: if we have a session row in on/extended
+  // state but Sensibo says the AC is off, the staff member turned
+  // it off at the wall panel or via Sensibo. Mark the row as
+  // 'manual_off' here so the auto-off cron doesn't try to re-stop
+  // an already-stopped pod, and so the audit trail captures that
+  // it ended outside the app. Status enum values from mig 103:
+  // on / auto_off / manual_off / extended / failed.
+  const podOn = podState?.on === true
+  if (session && podState && !podOn) {
+    await db
+      .from('ac_sessions')
+      .update({
+        status: 'manual_off',
+        ended_at: new Date().toISOString(),
+        failure_reason: 'turned off externally (wall panel or Sensibo schedule)',
+      })
+      .eq('id', session.id)
+      .in('status', ['on', 'extended'])
+    session = null
+  }
+  // If pod_state failed to load, fall back to "session means on"
+  // (stale-tolerant) so the UI doesn't flicker every time Sensibo
+  // hiccups. control_source then reflects what we know from our
+  // own DB.
+  let isOn
+  let controlSource
+  if (podError) {
+    isOn = !!session
+    controlSource = session ? 'app' : null
+  } else if (podOn && session) {
+    isOn = true; controlSource = 'app'
+  } else if (podOn && !session) {
+    isOn = true; controlSource = 'external'
+  } else {
+    isOn = false; controlSource = null
   }
 
   return NextResponse.json({
@@ -87,6 +140,8 @@ export async function GET() {
       pod_state: podState,
       pod_state_error: podError,
       active_session: session,
+      is_on: isOn,
+      control_source: controlSource,
     },
   })
 }

@@ -7,6 +7,7 @@
 // uses href: showStudio ? '/(tabs)/studio' : null to gate visibility.
 
 import { useState, useEffect, useCallback, useRef } from 'react'
+import { useFocusEffect } from 'expo-router'
 import {
   View, Text, ScrollView, Pressable, RefreshControl,
   ActivityIndicator, Alert,
@@ -104,6 +105,15 @@ function AcCard({ locationId }) {
     return () => clearInterval(pollRef.current)
   }, [load])
 
+  // Force a refresh whenever the user navigates back to the
+  // Studio tab. Wall-panel changes / Sensibo schedule firings
+  // happen between polls; refreshing on focus means a staff
+  // member who flicks to the tab specifically to check the AC
+  // gets fresh state immediately rather than waiting up to 30s.
+  useFocusEffect(useCallback(() => {
+    load()
+  }, [load]))
+
   // Re-render every second when the AC is active so the countdown
   // updates without polling.
   useEffect(() => {
@@ -172,8 +182,16 @@ function AcCard({ locationId }) {
   }
   if (!data) return null
 
+  // is_on + control_source come from the server now (mig-103
+  // companion fix). Truth table:
+  //   is_on=false              → AC is off, show 'Turn on'.
+  //   is_on=true app           → our session row, timer to auto-off.
+  //   is_on=true external      → wall panel / Sensibo schedule
+  //                              turned it on, no countdown but
+  //                              'Turn off' still works.
   const session = data.active_session
-  const isOn = !!session
+  const isOn = data.is_on === true
+  const controlSource = data.control_source // 'app' | 'external' | null
   let minsLeft = null
   if (session?.auto_off_at) {
     const ms = new Date(session.auto_off_at).getTime() - Date.now()
@@ -211,21 +229,31 @@ function AcCard({ locationId }) {
             <Ionicons name="snow" size={28} color="#60A5FA" />
             <View className="flex-1 ml-3">
               <Text className="text-base font-bold text-un1t-white">AC is running</Text>
-              {session?.profiles?.full_name && (
+              {controlSource === 'external' ? (
+                <Text className="text-xs text-un1t-light mt-0.5">
+                  Turned on at the wall panel or by schedule
+                </Text>
+              ) : session?.profiles?.full_name ? (
                 <Text className="text-xs text-un1t-light mt-0.5">
                   Started by {session.profiles.full_name}
                 </Text>
-              )}
+              ) : null}
             </View>
-            <View className="items-end">
-              <View className="flex-row items-center">
-                <Ionicons name="time-outline" size={16} color="#93C5FD" />
-                <Text className="text-2xl font-bold text-blue-200 ml-1.5">
-                  {minsLeft != null ? `${minsLeft} min` : '—'}
-                </Text>
+            {/* Countdown only makes sense for app-controlled
+                sessions — externally-controlled means we don't
+                know when the AC was turned on, so no auto-off
+                timer to display. */}
+            {controlSource === 'app' && (
+              <View className="items-end">
+                <View className="flex-row items-center">
+                  <Ionicons name="time-outline" size={16} color="#93C5FD" />
+                  <Text className="text-2xl font-bold text-blue-200 ml-1.5">
+                    {minsLeft != null ? `${minsLeft} min` : '—'}
+                  </Text>
+                </View>
+                <Text className="text-[10px] text-un1t-light">until auto-off</Text>
               </View>
-              <Text className="text-[10px] text-un1t-light">until auto-off</Text>
-            </View>
+            )}
           </View>
 
           {data.pod_state && (
