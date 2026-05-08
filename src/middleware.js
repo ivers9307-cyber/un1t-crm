@@ -50,8 +50,12 @@ export async function middleware(request) {
   }
 
   // ── CRM hostname (default) — existing behaviour ──────────────────
-  // Public routes that don't require auth
-  const publicPaths = ['/login', '/reset-password', '/book/', '/race/', '/api/public/', '/unsubscribe/', '/preferences/', '/api/unsubscribe/', '/api/preferences/', '/api/webhooks/', '/api/cron/', '/deposit/']
+  // Public routes that don't require auth.
+  // /tv/ — big-screen kiosk displays (HR live board, future race
+  // display moves here too). TV browsers don't have CRM accounts
+  // and shouldn't need them; the API endpoints under /api/public/
+  // expose only display-safe data.
+  const publicPaths = ['/login', '/reset-password', '/book/', '/race/', '/tv/', '/api/public/', '/unsubscribe/', '/preferences/', '/api/unsubscribe/', '/api/preferences/', '/api/webhooks/', '/api/cron/', '/deposit/']
   const isPublic = publicPaths.some(p => request.nextUrl.pathname.startsWith(p))
   if (isPublic) return NextResponse.next()
 
