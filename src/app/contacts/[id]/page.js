@@ -9,6 +9,7 @@ import ContactActions from '@/components/ContactActions'
 import StartWhatsAppButton from '@/components/StartWhatsAppButton'
 import ContactRaceHistory from '@/components/ContactRaceHistory'
 import ContactEditDeleteActions from '@/components/ContactEditDeleteActions'
+import InviteToAppButton from '@/components/InviteToAppButton'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
@@ -122,6 +123,15 @@ export default async function ContactDetailPage({ params }) {
             contactPhone={contact.phone}
             waPhone={contact.wa_phone}
           />
+          {/* Customer-facing app invite — owner/manager/master only.
+              The button copy adapts based on whether the contact is
+              already linked to an auth user (mig 110 contacts.user_id). */}
+          {(user?.isMaster || ['owner', 'manager'].includes(user?.role)) && contact.email && (
+            <InviteToAppButton
+              contactId={contact.id}
+              hasUserAccount={Boolean(contact.user_id)}
+            />
+          )}
           <span className={`px-3 py-1 rounded-full text-sm border ${statusColors[contact.lead_status] || 'bg-un1t-gray text-un1t-light border-un1t-gray'}`}>
             {contact.lead_status?.replace('_', ' ')}
           </span>
