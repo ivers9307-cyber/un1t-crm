@@ -5,7 +5,7 @@ import { isFeatureEnabledAtLocation } from '@shared/permissions'
 import { canEditStaffMember } from '@/lib/staff-access'
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
-import { Users, MapPin, Shield, Clock, Palette, CalendarDays, Plug, UserCog, LayoutGrid, FileClock, Trophy } from 'lucide-react'
+import { Users, MapPin, Shield, Clock, Palette, CalendarDays, Plug, UserCog, LayoutGrid, FileClock, Trophy, Cable } from 'lucide-react'
 import BrandingSettings from '@/components/BrandingSettings'
 
 export const dynamic = 'force-dynamic'
@@ -232,6 +232,12 @@ export default async function SettingsPage() {
                 className="text-xs bg-un1t-white text-un1t-black px-3 py-1.5 rounded-md hover:bg-un1t-accent transition-colors font-medium inline-flex items-center gap-1.5"
               >
                 <Trophy size={12} /> Achievements
+              </Link>
+              <Link
+                href="/admin/integrations"
+                className="text-xs bg-un1t-white text-un1t-black px-3 py-1.5 rounded-md hover:bg-un1t-accent transition-colors font-medium inline-flex items-center gap-1.5"
+              >
+                <Cable size={12} /> Integrations
               </Link>
               <Link
                 href="/settings/impersonate"

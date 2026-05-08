@@ -391,12 +391,25 @@ export async function runDetectionForSession(db, sessionId, { nowMs = Date.now()
       source_session_id: session.id,
       metadata,
     }))
-    const { error: insErr } = await db
+    const { data: insertedRows, error: insErr } = await db
       .from('contact_achievements')
       .upsert(rows, { onConflict: 'contact_id,rule_id', ignoreDuplicates: true })
+      .select('id')
     if (insErr) {
       logWarn('achievements', 'insert failed', { sessionId, err: insErr })
       return { ok: false, error: insErr.message }
+    }
+
+    // Fire sequence triggers for each newly-inserted row. Best-effort —
+    // import is deferred to keep this module from depending on the
+    // sequences barrel at top-of-file (avoids cycles when sequences
+    // imports anything that ends up touching achievements later).
+    if (insertedRows && insertedRows.length > 0) {
+      const { triggerSequencesForAchievement } = await import('@/lib/sequences')
+      for (const row of insertedRows) {
+        triggerSequencesForAchievement(row.id).catch((err) =>
+          logWarn('achievements', 'sequence trigger failed', { rowId: row.id, err }))
+      }
     }
 
     return {

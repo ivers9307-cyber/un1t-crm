@@ -421,3 +421,68 @@ export async function triggerSequencesForFirstBooking(bookingId) {
     logWarn('sequences', `first_booking trigger failed for ${bookingId}`, { err: e })
   }
 }
+
+// ── achievement_unlocked (Phase 4 Slice B) ───────────────────────
+
+/**
+ * Called from src/lib/achievements.js#runDetectionForSession after
+ * inserting newly-unlocked rows. Each contact_achievement id passed
+ * in is the trigger source.
+ *
+ * trigger_config (all optional, AND-combined):
+ *   - rule_slug    — only fire for this specific badge (e.g. 'first_z5')
+ *   - rule_family  — fire for any tier in this family (e.g. 'streak')
+ *   - category     — fire for any rule in this category (e.g. 'milestone')
+ *
+ * Empty config means "any achievement". Useful for the
+ * generic "we celebrate every badge you earn" newsletter.
+ *
+ * Best-effort.
+ */
+export async function triggerSequencesForAchievement(achievementId) {
+  const db = createServerClient()
+  try {
+    const { data: ach } = await db
+      .from('contact_achievements')
+      .select('id, contact_id, rule_id, rule_slug, rule:achievement_rules(slug, family, category)')
+      .eq('id', achievementId)
+      .single()
+    if (!ach || !ach.contact_id || !ach.rule) return
+
+    // Resolve location via the contact (sessions don't carry it on
+    // the achievement row).
+    const { data: contact } = await db
+      .from('contacts')
+      .select('location_id')
+      .eq('id', ach.contact_id)
+      .single()
+    if (!contact?.location_id) return
+
+    const { data: sequences } = await db
+      .from('email_sequences')
+      .select('id, trigger_config, audience_filter')
+      .eq('location_id', contact.location_id)
+      .eq('trigger_type', 'achievement_unlocked')
+      .eq('status', 'active')
+    if (!sequences || sequences.length === 0) return
+
+    for (const seq of sequences) {
+      const cfg = seq.trigger_config || {}
+      if (cfg.rule_slug   && cfg.rule_slug   !== ach.rule.slug)     continue
+      if (cfg.rule_family && cfg.rule_family !== ach.rule.family)   continue
+      if (cfg.category    && cfg.category    !== ach.rule.category) continue
+
+      const matches = await contactMatchesSequenceAudience(db, ach.contact_id, seq.audience_filter)
+      if (!matches) continue
+
+      await enrolContacts({
+        sequenceId: seq.id,
+        contactIds: [ach.contact_id],
+        sourceType: 'achievement_unlocked',
+        sourceRef: ach.id,
+      })
+    }
+  } catch (e) {
+    logWarn('sequences', `achievement trigger failed for ${achievementId}`, { err: e })
+  }
+}

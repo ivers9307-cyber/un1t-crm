@@ -15,6 +15,7 @@ import { logWarn } from '@/lib/log'
 import { resolveMaxHr, summariseSession } from '@/lib/heart-rate'
 import { sendPostClassEmail } from '@/lib/hr-post-class-email'
 import { runDetectionForSession } from '@/lib/achievements'
+import { enqueueExportsForSession } from '@/lib/external-export'
 
 const RECENT_SAMPLE_WINDOW_MS = 30 * 1000  // current-BPM averaging window
 
@@ -223,7 +224,7 @@ export async function pairOverride(db, { locationId, bridgeId, contactId, strapM
 export async function endSession(db, sessionId, { nowMs = Date.now() } = {}) {
   const { data: session, error: sErr } = await db
     .from('heart_rate_sessions')
-    .select('id, max_hr_used, ended_at')
+    .select('id, contact_id, max_hr_used, ended_at')
     .eq('id', sessionId)
     .single()
   if (sErr || !session) return { ok: false, error: 'Session not found' }
@@ -270,6 +271,16 @@ export async function endSession(db, sessionId, { nowMs = Date.now() } = {}) {
   // for the future native app's push-notification consumer.
   runDetectionForSession(db, sessionId).catch((err) => {
     logWarn('live-class', 'achievement detection threw', { err, sessionId })
+  })
+
+  // Best-effort: queue external-system exports for this session.
+  // The actual upload happens out-of-band via the cron worker.
+  enqueueExportsForSession(db, {
+    id: sessionId,
+    contact_id: session.contact_id,
+    ended_at: endedAt,
+  }).catch((err) => {
+    logWarn('live-class', 'export enqueue threw', { err, sessionId })
   })
 
   return { ok: true, summary }

@@ -406,7 +406,9 @@ describe('runDetectionForSession', () => {
             select: vi.fn(() => ({
               eq: vi.fn(() => Promise.resolve({ data: earned, error: null })),
             })),
-            upsert: vi.fn(() => Promise.resolve({ error: insertError })),
+            upsert: vi.fn(() => ({
+              select: vi.fn(() => Promise.resolve({ data: [], error: insertError })),
+            })),
           }
         }
         throw new Error(`unexpected table ${table}`)

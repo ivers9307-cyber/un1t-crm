@@ -25,6 +25,7 @@ export {
   triggerSequencesForRaceFinished,
   triggerSequencesForOrderStatus,
   triggerSequencesForFirstBooking,
+  triggerSequencesForAchievement,
 } from './triggers.js'
 export {
   runEventReminderTriggers,

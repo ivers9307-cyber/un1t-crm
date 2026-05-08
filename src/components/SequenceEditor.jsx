@@ -21,6 +21,7 @@ const TRIGGER_TYPES = [
   { value: 'order_abandoned',  label: 'Order Abandoned',    description: 'Triggered when a buyer abandons checkout — cart-recovery sequences' },
   { value: 'anniversary',      label: 'Anniversary',        description: 'Triggered N days after a contact field (lead_created_at, last_emailed_at)' },
   { value: 'inactivity',       label: 'Inactivity',         description: 'Triggered when a contact has been inactive for N days — win-back sequences' },
+  { value: 'achievement_unlocked', label: 'Achievement Unlocked', description: 'Triggered when a member earns a heart-rate achievement. Optional rule_slug filter targets a specific badge.' },
 ]
 
 // Per-step icon/colour by channel.
