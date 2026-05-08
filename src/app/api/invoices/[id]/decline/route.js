@@ -12,6 +12,7 @@ import { validateBody } from '@/lib/validate'
 import { sendInvoiceDeclinedEmail } from '@/lib/contractor-invoice-email'
 import { sendPush } from '@/lib/push'
 import { periodLabel } from '@/lib/contractor-invoices'
+import { logWarn } from '@/lib/log'
 
 export const runtime = 'nodejs'
 
@@ -100,7 +101,7 @@ export async function POST(request, { params }) {
       },
     })
   } catch (e) {
-    console.warn(`[invoice-decline] push failed for ${declined.id}: ${e?.message || e}`)
+    logWarn('invoice-decline', `push failed for ${declined.id}`, { err: e })
   }
 
   return NextResponse.json({

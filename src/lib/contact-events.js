@@ -19,6 +19,8 @@
 // adding a rule object; do NOT add per-org rule customisation here
 // without a DB-backed registry.
 
+import { logWarn } from './log'
+
 // ─── event-type constants ────────────────────────────────────────
 
 export const EVENT_TYPES = Object.freeze({
@@ -88,13 +90,13 @@ export async function emitEvent({
       // Idempotency violation on time-anchored events is expected
       // (cron retries) — silent skip. Other errors get logged.
       if (!/duplicate|unique|23505/i.test(error.message || '')) {
-        console.warn(`[contact-events] emit failed: ${error.message}`)
+        logWarn('contact-events', `emit failed`, { err: e })
       }
       return null
     }
     return data
   } catch (e) {
-    console.warn(`[contact-events] emit threw: ${e?.message || e}`)
+    logWarn('contact-events', `emit threw`, { err: e })
     return null
   }
 }

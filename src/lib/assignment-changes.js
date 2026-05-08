@@ -21,6 +21,8 @@
 // caller's authentication has already been verified via
 // getCurrentUser at the route boundary.
 
+import { logWarn } from './log'
+
 const MASTER_ROLE = 'master'
 
 /**
@@ -121,12 +123,12 @@ export async function logAssignmentChange(db, {
       after,
     })
     if (error) {
-      console.warn(`[assignment-changes] audit insert failed: ${error.message}`)
+      logWarn('assignment-changes', 'audit insert failed', { err: error })
       return { logged: false, error: error.message }
     }
     return { logged: true }
   } catch (e) {
-    console.warn(`[assignment-changes] audit threw: ${e?.message || e}`)
+    logWarn('assignment-changes', `audit threw`, { err: e })
     return { logged: false, error: e?.message || 'unknown' }
   }
 }

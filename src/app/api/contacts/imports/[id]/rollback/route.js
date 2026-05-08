@@ -21,6 +21,7 @@ import { NextResponse } from 'next/server'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { redactWhatsAppForContact } from '@/lib/contact-merge'
+import { logWarn } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -72,7 +73,7 @@ export async function POST(_request, { params }) {
       deleted += 1
     } catch (e) {
       failed += 1
-      console.warn(`[rollback ${params.id}] delete ${c.id} failed: ${e?.message || e}`)
+      logWarn('rollback ${params.id}', `delete ${c.id} failed`, { err: e })
     }
   }
 
@@ -94,7 +95,7 @@ export async function POST(_request, { params }) {
       restored += 1
     } catch (e) {
       failed += 1
-      console.warn(`[rollback ${params.id}] restore ${r.contact_id} failed: ${e?.message || e}`)
+      logWarn('rollback ${params.id}', `restore ${r.contact_id} failed`, { err: e })
     }
   }
 

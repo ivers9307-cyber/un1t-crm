@@ -23,6 +23,7 @@ import { sendLocationSms, TwilioError } from '@/lib/twilio'
 import { getDepositBaseUrl, getRequestOrigin } from '@/lib/app-url'
 import { syncOrderFromCarDeposit } from '@/lib/orders'
 import { emitEvent, EVENT_TYPES } from '@/lib/contact-events'
+import { logWarn } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -153,7 +154,7 @@ export async function POST(request, { params }) {
       })
     }
   } catch (e) {
-    console.warn(`[issue-deposit-link] orders/events sync failed for car ${car.id}: ${e?.message || e}`)
+    logWarn('issue-deposit-link', `orders/events sync failed for car ${car.id}`, { err: e })
   }
 
   // Drop a system note on the car timeline so the operator can copy
@@ -171,7 +172,7 @@ export async function POST(request, { params }) {
       content: `Deposit link issued — €${amount.toFixed(2)}. Sent via SMS to ${car.buyer_phone} (Twilio sid ${smsResult?.sid || 'unknown'}).\n${link}${expiryHint}`,
     })
   } catch (e) {
-    console.warn(`[issue-deposit-link] failed to write car_notes entry: ${e.message}`)
+    logWarn('issue-deposit-link', `failed to write car_notes entry`, { err: e })
   }
 
   return NextResponse.json({

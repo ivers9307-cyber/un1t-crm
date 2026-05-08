@@ -27,6 +27,7 @@ import { createOrder, getOrder } from './revolut'
 import { syncOrderFromRacePayment } from './orders'
 import { emitEvent, applyTagRules, EVENT_TYPES } from './contact-events'
 import { triggerSequencesForOrderStatus } from './sequences'
+import { logWarn } from './log'
 
 /**
  * Resolve which Revolut credentials to use for race payments. For
@@ -130,7 +131,7 @@ export async function createRacePayment({ db, race, registration, captain, prici
         })
       }
     } catch (e) {
-      console.warn(`[race-payments] orders/events sync (free) failed: ${e?.message || e}`)
+      logWarn('race-payments', `orders/events sync (free) failed`, { err: e })
     }
     return { payment: row, checkout: { token: null, url: null, free: true } }
   }
@@ -207,7 +208,7 @@ export async function createRacePayment({ db, race, registration, captain, prici
       await applyTagRules({ db, contactId: registration.contact_id })
     }
   } catch (e) {
-    console.warn(`[race-payments] orders/events sync (paid) failed: ${e?.message || e}`)
+    logWarn('race-payments', `orders/events sync (paid) failed`, { err: e })
   }
 
   return {
@@ -338,7 +339,7 @@ export async function markRacePaymentStatus({ db, payment, revolutState, revolut
       }
     }
   } catch (e) {
-    console.warn(`[race-payments] orders/events sync (status) failed: ${e?.message || e}`)
+    logWarn('race-payments', `orders/events sync (status) failed`, { err: e })
   }
 
   return { applied: updates, state_changed: true }

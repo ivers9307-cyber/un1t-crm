@@ -9,6 +9,7 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
 import { notifyStaffOfPublish } from '@/lib/roster-notify'
+import { logWarn } from '@/lib/log'
 
 export async function POST(_request, { params }) {
   const user = await getCurrentUser()
@@ -103,7 +104,7 @@ export async function POST(_request, { params }) {
       locationId: roster.location_id,
     })
   } catch (e) {
-    console.warn(`[rosters/approve] staff notify failed: ${e.message}`)
+    logWarn('rosters/approve', `staff notify failed`, { err: e })
   }
 
   return NextResponse.json({ success: true, data: updated })

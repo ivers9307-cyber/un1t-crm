@@ -18,6 +18,7 @@ import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
 import { getLocationUnifiConfig, remoteUnlockDoor, UnifiError } from '@/lib/unifi-access'
+import { logWarn } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -77,7 +78,7 @@ export async function POST(request) {
       profile_id: user.id,
       location_id: locationId,
     }).then(() => {}).catch((e) => {
-      console.warn(`[studio-management] activity log failed: ${e?.message || e}`)
+      logWarn('studio-management', `activity log failed`, { err: e })
     })
     return NextResponse.json({ success: true })
   } catch (e) {

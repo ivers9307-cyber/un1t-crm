@@ -4,6 +4,7 @@ import { createServerClient } from '@/lib/supabase'
 import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit'
 import { validateBody, uuidLike } from '@/lib/validate'
 import { validateCustomResponses } from '@/lib/booking-validation'
+import { logWarn } from '@/lib/log'
 
 export const runtime = 'nodejs'
 
@@ -110,7 +111,7 @@ export async function POST(request) {
     await triggerSequencesForBooking(data.id)
     await triggerSequencesForFirstBooking(data.id)
   } catch (e) {
-    console.warn(`[booking] sequence trigger error: ${e?.message || e}`)
+    logWarn('booking', `sequence trigger error`, { err: e })
   }
 
   // Fire the per-event_type confirmation message (mig 077). Best-
@@ -122,7 +123,7 @@ export async function POST(request) {
     const { sendBookingConfirmation } = await import('@/lib/booking-confirmations')
     confirmation = await sendBookingConfirmation(db, data.id)
   } catch (e) {
-    console.warn(`[booking] confirmation send error: ${e?.message || e}`)
+    logWarn('booking', `confirmation send error`, { err: e })
   }
 
   return NextResponse.json({

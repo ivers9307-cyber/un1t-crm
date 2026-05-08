@@ -31,6 +31,7 @@ import { validateBody } from '@/lib/validate'
 import { uuidLike, isoDate, MANAGER_ROLES } from '@/lib/schemas'
 import { projectPublishImpact } from '@/lib/roster-publish'
 import { sendOverBudgetApprovalEmail } from '@/lib/roster-email'
+import { logWarn } from '@/lib/log'
 
 const PublishSchema = z.object({
   location_id: uuidLike,
@@ -210,7 +211,7 @@ export async function POST(request) {
         budgetEur: impact.monthlyBudgetEur,
       })
     } catch (e) {
-      console.warn(`[rosters] approval email failed: ${e.message}`)
+      logWarn('rosters', `approval email failed`, { err: e })
     }
   }
 

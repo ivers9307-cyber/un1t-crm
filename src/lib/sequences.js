@@ -25,6 +25,7 @@ import {
   getOrCreateConversation,
 } from '@/lib/whatsapp'
 import { sendLocationSms, TwilioError } from '@/lib/twilio'
+import { logWarn } from '@/lib/log'
 
 /**
  * Returns true if a given contact would match a sequence's
@@ -57,7 +58,7 @@ async function contactMatchesSequenceAudience(contactId, filter) {
     })
   } catch (e) {
     if (e instanceof InvalidAudienceFilterError) {
-      console.warn(`[sequences] sequence has invalid audience_filter, treating as no-match: ${e.message}`)
+      logWarn('sequences', `sequence has invalid audience_filter, treating as no-match`, { err: e })
       return false
     }
     throw e
@@ -214,7 +215,7 @@ export async function triggerSequencesForBooking(bookingId) {
   } catch (e) {
     // Don't propagate — booking creation must never fail because
     // of a sequence trigger. Logged for cron/operator review.
-    console.warn(`[sequences] booking trigger failed for ${bookingId}: ${e.message}`)
+    logWarn('sequences', `booking trigger failed for ${bookingId}`, { err: e })
   }
 }
 
@@ -268,7 +269,7 @@ export async function triggerSequencesForStatusChange(contactId, oldStatus, newS
       })
     }
   } catch (e) {
-    console.warn(`[sequences] status_change trigger failed for ${contactId}: ${e.message}`)
+    logWarn('sequences', `status_change trigger failed for ${contactId}`, { err: e })
   }
 }
 
@@ -361,7 +362,7 @@ export async function runEventReminderTriggers() {
         })
         stats.fired++
       } catch (e) {
-        console.warn(`[sequences] event_reminder enrol failed for booking ${booking.id}: ${e.message}`)
+        logWarn('sequences', `event_reminder enrol failed for booking ${booking.id}`, { err: e })
       }
     }
   }
@@ -416,7 +417,7 @@ export async function triggerSequencesForTagsAdded(contactId, addedTags) {
       })
     }
   } catch (e) {
-    console.warn(`[sequences] tag_added trigger failed for ${contactId}: ${e.message}`)
+    logWarn('sequences', `tag_added trigger failed for ${contactId}`, { err: e })
   }
 }
 
@@ -660,7 +661,7 @@ export async function triggerSequencesForRaceRegistered(registrationId) {
       })
     }
   } catch (e) {
-    console.warn(`[sequences] race_registered trigger failed for ${registrationId}: ${e.message}`)
+    logWarn('sequences', `race_registered trigger failed for ${registrationId}`, { err: e })
   }
 }
 
@@ -719,7 +720,7 @@ export async function triggerSequencesForRaceFinished(registrationId) {
       })
     }
   } catch (e) {
-    console.warn(`[sequences] race_finished trigger failed for ${registrationId}: ${e.message}`)
+    logWarn('sequences', `race_finished trigger failed for ${registrationId}`, { err: e })
   }
 }
 
@@ -770,7 +771,7 @@ export async function triggerSequencesForOrderStatus({ contactId, locationId, st
       })
     }
   } catch (e) {
-    console.warn(`[sequences] ${triggerType} trigger failed for ${contactId}: ${e.message}`)
+    logWarn('sequences', `${triggerType} trigger failed for ${contactId}`, { err: e })
   }
 }
 
@@ -828,7 +829,7 @@ export async function triggerSequencesForFirstBooking(bookingId) {
       })
     }
   } catch (e) {
-    console.warn(`[sequences] first_booking trigger failed for ${bookingId}: ${e.message}`)
+    logWarn('sequences', `first_booking trigger failed for ${bookingId}`, { err: e })
   }
 }
 
@@ -1439,7 +1440,7 @@ async function updateFieldStep(db, { step, contact }) {
     try {
       await triggerSequencesForStatusChange(contact.id, oldValue || null, value || null)
     } catch (e) {
-      console.warn(`[sequences] update_field cascade trigger failed: ${e.message}`)
+      logWarn('sequences', `update_field cascade trigger failed`, { err: e })
     }
   }
 }

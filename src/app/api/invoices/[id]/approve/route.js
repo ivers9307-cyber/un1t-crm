@@ -19,6 +19,7 @@ import { computeScheduledForPeriod, periodLabel } from '@/lib/contractor-invoice
 import { sendContractorInvoiceBillEmail } from '@/lib/xero/contractor-bills'
 import { sendInvoiceApprovedEmail } from '@/lib/contractor-invoice-email'
 import { sendPush } from '@/lib/push'
+import { logWarn } from '@/lib/log'
 
 export const runtime = 'nodejs'
 
@@ -129,7 +130,7 @@ export async function POST(_request, { params }) {
     // Pushed are non-blocking; don't surface as a warning unless
     // the entire transport is broken — and even then operators can
     // see this in logs. Log only.
-    console.warn(`[invoice-approve] push failed for ${approved.id}: ${e?.message || e}`)
+    logWarn('invoice-approve', `push failed for ${approved.id}`, { err: e })
   }
 
   return NextResponse.json({

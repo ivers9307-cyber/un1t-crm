@@ -19,6 +19,7 @@ import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { MANAGER_ROLES, timeOfDay } from '@/lib/schemas'
 import { sendPush } from '@/lib/push'
+import { logWarn } from '@/lib/log'
 
 // All fields optional. To CLEAR an override, send null explicitly
 // (z.nullable() vs .optional() — PUT body should pass null to remove
@@ -144,7 +145,7 @@ export async function PUT(request, { params }) {
         },
       })
     } catch (e) {
-      console.warn(`[assignment-update] push failed for ${data.id}: ${e?.message || e}`)
+      logWarn('assignment-update', `push failed for ${data.id}`, { err: e })
     }
   }
 

@@ -24,6 +24,7 @@
 import { createServerClient } from '@/lib/supabase'
 import { sendTransactionalEmail, applyMergeTags } from '@/lib/postmark'
 import { sendLocationSms, TwilioError } from '@/lib/twilio'
+import { logWarn } from '@/lib/log'
 
 // ±1h covers Dublin DST drift cleanly. Operators set reminder time in
 // coarse units (24h, 2h) so a ±1h fire-time window is acceptable.
@@ -170,7 +171,7 @@ export async function runEventReminderSends() {
           // Hard error on this channel — record but don't poison
           // the other one. Email-down doesn't have to take SMS
           // down too.
-          console.warn(`[event-reminders] ${channel} failed for booking ${booking.id} reminder ${reminder.id}: ${e.message}`)
+          logWarn('event-reminders', `${channel} failed for booking ${booking.id} reminder ${reminder.id}`, { err: e })
           channelOutcomes.push({ channel, status: 'failed', reason: e.message })
           anyHardError = e.message
         }

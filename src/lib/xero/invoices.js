@@ -30,6 +30,7 @@
 
 import { withFreshToken, XeroError } from './client'
 import { createServerClient } from '@/lib/supabase'
+import { logWarn } from '@/lib/log'
 
 const IE_OUTPUT_VAT = 'OUTPUT2'                 // Irish 23% standard rate
 const STORAGE_BUCKET = 'car-documents'
@@ -76,7 +77,7 @@ async function resolveBrandingThemeId(xfetch, name = BRANDING_THEME_NAME) {
     // Theme lookup failure shouldn't block the invoice — Xero will
     // fall back to the org's default. Surface a warning in the
     // structured response so the UI can show it.
-    console.warn(`[xero] Could not resolve branding theme "${name}": ${e.message}`)
+    logWarn('xero', `Could not resolve branding theme "${name}"`, { err: e })
     return null
   }
 }
@@ -189,7 +190,7 @@ async function uploadInvoicePdf({ carId, invoiceNumber, bytes }) {
   if (error) {
     // Persisting the PDF is best-effort — the invoice is already in
     // Xero. Log and let the caller decide how to surface it.
-    console.warn(`[xero] PDF upload failed for car ${carId}: ${error.message}`)
+    logWarn('xero', `PDF upload failed for car ${carId}`, { err: e })
     return null
   }
   return path
@@ -246,7 +247,7 @@ export async function issueCarInvoice(car) {
       bytes,
     })
   } catch (e) {
-    console.warn(`[xero] PDF download failed for invoice ${inv.InvoiceNumber}: ${e.message}`)
+    logWarn('xero', `PDF download failed for invoice ${inv.InvoiceNumber}`, { err: e })
   }
 
   const editorUrl = `https://go.xero.com/AccountsReceivable/Edit.aspx?InvoiceID=${inv.InvoiceID}`

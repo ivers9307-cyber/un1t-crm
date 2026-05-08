@@ -31,6 +31,7 @@ import { sendRaceConfirmations } from '@/lib/race-confirmations'
 import { getAppUrl } from '@/lib/app-url'
 import { findOrCreateRaceContact } from '@/lib/race-contact-linking'
 import { triggerSequencesForRaceRegistered } from '@/lib/sequences'
+import { logWarn } from '@/lib/log'
 
 export const runtime = 'nodejs'
 
@@ -327,7 +328,7 @@ export async function POST(request, { params }) {
   try {
     await triggerSequencesForRaceRegistered(registration.id)
   } catch (e) {
-    console.warn(`[race-register] race_registered trigger failed: ${e?.message || e}`)
+    logWarn('race-register', `race_registered trigger failed`, { err: e })
   }
 
   // ─── kick off the payment (or mark paid for free entry) ──────────
@@ -364,7 +365,7 @@ export async function POST(request, { params }) {
     try {
       await sendRaceConfirmations({ db, paymentId: paymentResult.payment.id })
     } catch (e) {
-      console.warn(`[race-register] free-entry confirmations failed: ${e.message}`)
+      logWarn('race-register', `free-entry confirmations failed`, { err: e })
     }
   }
 

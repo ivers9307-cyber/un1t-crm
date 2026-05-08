@@ -6,6 +6,7 @@ import { validateBody } from '@/lib/validate'
 import { uuidLike, email, phone, leadSourceSchema, leadStatusSchema, MANAGER_ROLES } from '@/lib/schemas'
 import { sendPushToRolesAtLocation } from '@/lib/push'
 import { triggerSequencesForStatusChange } from '@/lib/sequences'
+import { logWarn } from '@/lib/log'
 
 const ContactCreateSchema = z.object({
   name: z.string().min(1).max(200),
@@ -67,7 +68,7 @@ export async function POST(request) {
   try {
     await triggerSequencesForStatusChange(data.id, null, data.lead_status)
   } catch (e) {
-    console.warn(`[contacts] insert trigger failed for ${data.id}: ${e?.message || e}`)
+    logWarn('contacts', `insert trigger failed for ${data.id}`, { err: e })
   }
 
   // Push notification: a new lead has landed. Fan out to managers /

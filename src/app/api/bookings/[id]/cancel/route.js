@@ -22,6 +22,7 @@ import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { sendTransactionalEmail } from '@/lib/postmark'
+import { logWarn } from '@/lib/log'
 
 const CancelSchema = z.object({
   notify_customer: z.boolean().optional(),
@@ -146,7 +147,7 @@ export async function POST(request, { params }) {
         })
         notification = { sent: true }
       } catch (e) {
-        console.warn(`[bookings/cancel] notify failed: ${e.message}`)
+        logWarn('bookings/cancel', `notify failed`, { err: e })
         notification = { sent: false, error: e.message }
       }
     }

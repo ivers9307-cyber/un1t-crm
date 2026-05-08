@@ -19,6 +19,8 @@
 // throws. Caller is expected to update team_members.contact_id
 // itself; this helper only cares about the contacts row.
 
+import { logWarn } from './log'
+
 const COMPETITOR_LEAD_STATUS = 'competition_competitor'
 
 /**
@@ -84,7 +86,7 @@ export async function findOrCreateRaceContact({ db, locationId, email, name = nu
       .select('id')
       .single()
     if (error) {
-      console.warn(`[race-contact-linking] insert failed for ${normalised}: ${error.message}`)
+      logWarn('race-contact-linking', `insert failed for ${normalised}`, { err: e })
       return null
     }
     const newId = inserted?.id || null
@@ -98,12 +100,12 @@ export async function findOrCreateRaceContact({ db, locationId, email, name = nu
         const { triggerSequencesForStatusChange } = await import('./sequences')
         await triggerSequencesForStatusChange(newId, null, COMPETITOR_LEAD_STATUS)
       } catch (e) {
-        console.warn(`[race-contact-linking] sequence trigger failed: ${e?.message || e}`)
+        logWarn('race-contact-linking', `sequence trigger failed`, { err: e })
       }
     }
     return newId
   } catch (e) {
-    console.warn(`[race-contact-linking] threw: ${e?.message || e}`)
+    logWarn('race-contact-linking', `threw`, { err: e })
     return null
   }
 }

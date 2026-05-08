@@ -8,6 +8,7 @@ import { triggerSequencesForStatusChange, triggerSequencesForTagsAdded } from '@
 import { logPipelineEvent } from '@/lib/activity-events'
 import { getCurrentUser } from '@/lib/auth'
 import { redactWhatsAppForContact } from '@/lib/contact-merge'
+import { logWarn } from '@/lib/log'
 
 const ContactUpdateSchema = z.object({
   name: z.string().min(1).max(200).optional(),
@@ -73,7 +74,7 @@ export async function PUT(request, { params }) {
   if (oldRow) {
     if (typeof body.lead_status !== 'undefined' && body.lead_status !== oldRow.lead_status) {
       triggerSequencesForStatusChange(id, oldRow.lead_status, body.lead_status)
-        .catch(e => console.warn(`[contacts.PUT] status_change trigger error for ${id}: ${e.message}`))
+        .catch(e => logWarn('contacts.PUT', `status_change trigger error for ${id}`, { err: e }))
 
       // Activities revamp phase 1 (mig 073) — log the stage change
       // to the contact's timeline. Best-effort, fire-and-forget.
@@ -82,14 +83,14 @@ export async function PUT(request, { params }) {
         locationId: oldRow.location_id,
         oldStatus: oldRow.lead_status,
         newStatus: body.lead_status,
-      }).catch(e => console.warn(`[contacts.PUT] pipeline-event log failed for ${id}: ${e.message}`))
+      }).catch(e => logWarn('contacts.PUT', `pipeline-event log failed for ${id}`, { err: e }))
     }
     if (Array.isArray(body.tags)) {
       const oldTags = new Set(oldRow.tags || [])
       const added = body.tags.filter(t => !oldTags.has(t))
       if (added.length > 0) {
         triggerSequencesForTagsAdded(id, added)
-          .catch(e => console.warn(`[contacts.PUT] tag_added trigger error for ${id}: ${e.message}`))
+          .catch(e => logWarn('contacts.PUT', `tag_added trigger error for ${id}`, { err: e }))
       }
     }
   }

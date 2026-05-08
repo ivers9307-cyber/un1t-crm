@@ -29,6 +29,7 @@ import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
 import { uuidLike, locationRoleSchema } from '@/lib/schemas'
 import {
+import { logWarn } from '@/lib/log'
   logAssignmentChange,
   canRemoveSelfFromLastOwnerLocation,
 } from '@/lib/assignment-changes'
@@ -175,7 +176,7 @@ export async function POST(request) {
           }, { status: 409 })
         }
       } catch (e) {
-        console.warn(`[admin/assignments] self-orphan check failed: ${e?.message || e}`)
+        logWarn('admin/assignments', `self-orphan check failed`, { err: e })
         // Fail closed on guard errors — better to refuse than risk orphaning.
         return NextResponse.json({
           success: false,

@@ -31,6 +31,7 @@ import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import {
+import { logWarn } from '@/lib/log'
   wouldLeaveZeroMasters,
   logAssignmentChange,
 } from '@/lib/assignment-changes'
@@ -119,7 +120,7 @@ export async function POST(request) {
   try {
     guard = await wouldLeaveZeroMasters(db, body.profile_id)
   } catch (e) {
-    console.warn(`[master-toggle] guard check failed: ${e?.message || e}`)
+    logWarn('master-toggle', `guard check failed`, { err: e })
     return NextResponse.json({
       success: false,
       error: 'Could not verify master-count guard. Try again.',

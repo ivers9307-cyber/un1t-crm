@@ -15,6 +15,7 @@
 // gymnastics or double-flipping shifts.published.
 
 import { sendPush } from './push'
+import { logWarn } from './log'
 
 /**
  * Insert per-profile schedule_notifications rows + send push
@@ -54,7 +55,7 @@ export async function notifyStaffOfPublish(db, shifts, { startDate, endDate, loc
   try {
     await db.from('schedule_notifications').insert(notifications)
   } catch (e) {
-    console.warn(`[roster-notify] notification log insert failed: ${e.message}`)
+    logWarn('roster-notify', `notification log insert failed`, { err: e })
   }
 
   const userIds = Object.keys(profileShifts)
