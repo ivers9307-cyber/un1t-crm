@@ -28,7 +28,7 @@ import { NextResponse } from 'next/server'
 import { verifyBridgeToken } from '@/lib/bridge-auth'
 import { createServerClient } from '@/lib/supabase'
 import {
-  getActiveStrapMap,
+  resolveStrapsForBatch,
   buildHrSampleRows,
   insertHrSamples,
 } from '@/lib/bridge-samples'
@@ -65,7 +65,16 @@ export async function POST(request) {
   }
 
   const db = createServerClient()
-  const strapMap = await getActiveStrapMap(db, bridge.bridgeId)
+  // Resolve every MAC in the batch ONCE — checking the manual-override
+  // strap_assignments path first, then falling through to the
+  // contact_devices auto-association (which auto-creates a session
+  // tied to the contact's in-progress booking when applicable).
+  const macs = (samples || []).map((s) => s?.strap_mac).filter(Boolean)
+  const strapMap = await resolveStrapsForBatch(db, {
+    bridgeId: bridge.bridgeId,
+    locationId: bridge.locationId,
+    macs,
+  })
   const { rows, stats } = buildHrSampleRows(samples, strapMap)
 
   let inserted = 0

@@ -10,6 +10,7 @@ import StartWhatsAppButton from '@/components/StartWhatsAppButton'
 import ContactRaceHistory from '@/components/ContactRaceHistory'
 import ContactEditDeleteActions from '@/components/ContactEditDeleteActions'
 import InviteToAppButton from '@/components/InviteToAppButton'
+import ContactDevicesCard from '@/components/ContactDevicesCard'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
@@ -150,6 +151,13 @@ export default async function ContactDetailPage({ params }) {
             <InfoRow label="Label" value={contact.label || '—'} />
             <InfoRow label="Created" value={new Date(contact.created_at).toLocaleDateString('en-IE')} />
           </div>
+
+          {/* HR devices: chest strap MAC registry. Member or staff
+              register here; bridge auto-routes samples to bookings. */}
+          <ContactDevicesCard
+            contactId={contact.id}
+            canEdit={user?.isMaster || ['owner', 'manager', 'head_coach'].includes(user?.role)}
+          />
 
           {/* Deals */}
           <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-4">
