@@ -56,10 +56,15 @@ export const GET = withAuth(
     // Pull every assignment in the window for this location.
     let q = db
       .from('shift_assignments')
+      // shift_assignments has two FKs to profiles (profile_id +
+      // assigned_by) so PostgREST needs the column name as a
+      // disambiguator on the embed, otherwise it errors with
+      // "more than one relationship was found". `!profile_id` tells
+      // it to follow the assigned-coach FK, not the audit one.
       .select(`
         id, profile_id, status, start_time_override,
         block:shift_blocks!inner ( id, location_id, block_date, start_time, end_time ),
-        profile:profiles ( id, full_name, email, role )
+        profile:profiles!profile_id ( id, full_name, email, role )
       `)
       .eq('block.location_id', locationId)
       .gte('block.block_date', fromStr)
