@@ -416,6 +416,42 @@ For "I expected to be auto-stamped but wasn't", check this column
 to know which knob to turn (sync staff, fix wave window, regenerate
 token, etc).
 
+### Webhook alarm payload — actual shape (firmware ~v3.x)
+
+Discovered live 2026-05-09 by capturing real UniFi POSTs. **Don't trust generic docs** — UniFi sends an alarm envelope, not a flat single event:
+
+```json
+{
+  "alarm_id": "019e0da5-d0f3-7ec3-81c8-827431b33ecc",
+  "events": [{
+    "id": "access.entry.granted" | "access.unlocks.location_unlocked" | ...,
+    "user": "<uuid>",                  // actor — links to profile_locations.unifi_user_id
+    "device": "<uuid>" | "",           // door (empty for remote unlocks)
+    "location": "<uuid>",              // UniFi internal id (NOT our locations.id)
+    "scope": { "locations": "<uuid>" },
+    "time": "<iso>" | "",              // empty for remote unlocks
+    "unlock_method_text": "NFC" | "Remote Unlock" | "PIN" | "REX" | ...
+  }],
+  "data": { "custom_content": "" }
+}
+```
+
+Critical findings:
+
+1. **`alarm_id` is reused across every fire** of the same alarm rule. Naive dedup keyed on `alarm_id:index` silently drops every fire after the first. Receiver mixes a 60-second receipt-time bucket into the dedup key.
+2. **Iterate `events[]`** — one alarm can carry multiple events.
+3. **Event type lives at `events[i].id`**, not top-level. Examples seen: `access.unlocks.location_unlocked` (remote app unlock), `access.entry.granted` (real card tap, expected — not yet verified live).
+4. **`unlock_method_text === "Remote Unlock"`** identifies operator app-unlocks. The actor in the payload is the operator, not the person walking through. The receiver records audit rows for these but never stamps a shift.
+5. **`event.time` is often empty.** Falls back to webhook receipt time at the receiver.
+6. **`event.location` is UniFi's internal location UUID, not our `locations.id`**. Single-UniFi-location deploys (today) just pick the only location with UniFi configured. Multi-location will need a `controller_id` mapping column on `locations`.
+
+### Linking staff to UniFi users via the staff edit page
+
+Without a `profile_locations.unifi_user_id` link per location, every webhook lands as `match_outcome='unknown_user'` and shifts never auto-stamp. There are two paths:
+
+- **Auto** — flipping the per-location Door Access toggle in StaffForm runs `findOrCreateUnifiUser(cfg, profile)`, which finds the UniFi user by email or creates one. Works only when emails match.
+- **Manual picker** (recommended for existing UniFi users with mismatched emails) — owner / manager / master picks the right UniFi user from a dropdown per location. Lives inside each per-location card on the staff edit page; sub-component is `UnifiUserPicker` in `src/components/StaffForm.jsx`. Backed by `GET /api/locations/[id]/unifi-users`.
+
 ### Updated rollout checklist
 
 In light of all the above, the canonical checklist for the next
