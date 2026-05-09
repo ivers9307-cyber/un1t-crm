@@ -46,7 +46,7 @@ export default function RaceSignupWidget({ slug }) {
 
   // Initial load
   useEffect(() => {
-    fetch(`/api/public/races/${slug}`)
+    fetch(`/api/public/events/${slug}`)
       .then(r => r.json())
       .then(j => {
         if (!j.success) {
@@ -95,7 +95,7 @@ export default function RaceSignupWidget({ slug }) {
     checkTimers.current[email] = setTimeout(async () => {
       setMemberChecks((prev) => ({ ...prev, [email]: { state: 'checking', applicable: true } }))
       try {
-        const r = await fetch(`/api/public/races/${slug}/check-member`, {
+        const r = await fetch(`/api/public/events/${slug}/check-member`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ email }),
@@ -201,7 +201,7 @@ export default function RaceSignupWidget({ slug }) {
     }
 
     setSubmitting(true)
-    const res = await fetch(`/api/public/races/${slug}/register`, {
+    const res = await fetch(`/api/public/events/${slug}/register`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -230,13 +230,13 @@ export default function RaceSignupWidget({ slug }) {
     // checkout page that owns the Revolut SDK lifecycle.
     const payment = json.data?.payment
     if (payment?.free) {
-      router.push(`/race/${slug}/confirmed?registration=${json.data.registration_id}`)
+      router.push(`/event/${slug}/confirmed?registration=${json.data.registration_id}`)
     } else if (payment?.id) {
-      router.push(`/race-pay/${payment.id}`)
+      router.push(`/event-pay/${payment.id}`)
     } else {
       // Defensive — if the API didn't return a payment id, show a
       // best-effort confirmation rather than getting stuck.
-      router.push(`/race/${slug}/confirmed?registration=${json.data.registration_id}`)
+      router.push(`/event/${slug}/confirmed?registration=${json.data.registration_id}`)
     }
   }
 

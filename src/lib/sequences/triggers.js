@@ -188,8 +188,8 @@ export async function triggerSequencesForTagsAdded(contactId, addedTags) {
 /**
  * Race-registered trigger (Tier 1A).
  *
- * Called from /api/public/races/[slug]/register and from
- * /api/races/[id]/teams (manual operator add) right after a
+ * Called from /api/public/events/[slug]/register and from
+ * /api/events/[id]/teams (manual operator add) right after a
  * race_registration row is created. Pulls the registration's team
  * + members and enrols EVERY member (with a contact_id) into
  * any matching trigger_type='race_registered' sequence.

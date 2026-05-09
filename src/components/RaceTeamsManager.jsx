@@ -2,7 +2,7 @@
 
 // RaceTeamsManager — operator team-management UI for a race.
 //
-// Polls /api/races/[id]/teams once on load, then refreshes after
+// Polls /api/events/[id]/teams once on load, then refreshes after
 // every successful mutation. Each team card has inline edit
 // affordances rather than a per-team modal — operators can scan +
 // adjust without context-switching.
@@ -22,7 +22,7 @@ export default function RaceTeamsManager({ race }) {
 
   async function load() {
     try {
-      const r = await fetch(`/api/races/${race.id}/teams`, { cache: 'no-store' })
+      const r = await fetch(`/api/events/${race.id}/teams`, { cache: 'no-store' })
       const j = await r.json()
       if (!r.ok || j.success === false) {
         setLoadError(j.error || `Fetch failed (${r.status})`)
@@ -140,7 +140,7 @@ function AddTeamForm({ race, waves, onCancel, onAdded, onError }) {
 
     setBusy(true)
     try {
-      const r = await fetch(`/api/races/${race.id}/teams`, {
+      const r = await fetch(`/api/events/${race.id}/teams`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -257,7 +257,7 @@ function TeamCard({ registration, waves, onChanged, onError }) {
     if (newWaveId === registration.wave_id) return
     setBusy(true)
     try {
-      const r = await fetch(`/api/race-registrations/${registration.id}`, {
+      const r = await fetch(`/api/event-registrations/${registration.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ wave_id: newWaveId }),
@@ -276,7 +276,7 @@ function TeamCard({ registration, waves, onChanged, onError }) {
     if (!confirm(`Remove team "${team?.name}" from this race?`)) return
     setBusy(true)
     try {
-      const r = await fetch(`/api/race-registrations/${registration.id}`, { method: 'DELETE' })
+      const r = await fetch(`/api/event-registrations/${registration.id}`, { method: 'DELETE' })
       const j = await r.json()
       if (!r.ok || j.success === false) onError(j.error || `Remove failed`)
       else onChanged()

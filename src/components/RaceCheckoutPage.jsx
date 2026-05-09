@@ -2,11 +2,11 @@
 
 // RaceCheckoutPage — embedded Revolut checkout for a race signup
 // (mig 084). The race_payment row + Revolut order were created by
-// /api/public/races/[slug]/register; this page only mounts the SDK
+// /api/public/events/[slug]/register; this page only mounts the SDK
 // against the existing order token.
 //
 // Flow:
-//   1. Fetch /api/public/race-payments/[paymentId] — has the race
+//   1. Fetch /api/public/event-payments/[paymentId] — has the race
 //      details + checkout token + status.
 //   2. If status='completed' → redirect to /race/[slug]/confirmed
 //      (handles the case where the buyer clicked back-then-forward
@@ -60,7 +60,7 @@ export default function RaceCheckoutPage({ paymentId }) {
   // Load payment + race info.
   useEffect(() => {
     let cancelled = false
-    fetch(`/api/public/race-payments/${paymentId}`)
+    fetch(`/api/public/event-payments/${paymentId}`)
       .then(r => r.json())
       .then(j => {
         if (cancelled) return
@@ -74,7 +74,7 @@ export default function RaceCheckoutPage({ paymentId }) {
           // Already paid — webhook landed. Redirect to confirmation.
           const slug = j.data.race?.slug
           const regId = j.data.registration?.id
-          if (slug) router.replace(`/race/${slug}/confirmed?registration=${regId || ''}`)
+          if (slug) router.replace(`/event/${slug}/confirmed?registration=${regId || ''}`)
         }
       })
       .catch(e => {
@@ -119,7 +119,7 @@ export default function RaceCheckoutPage({ paymentId }) {
             if (destroyed) return
             const slug = data.race?.slug
             const regId = data.registration?.id
-            router.push(`/race/${slug}/confirmed?registration=${regId || ''}`)
+            router.push(`/event/${slug}/confirmed?registration=${regId || ''}`)
           },
           onError: ({ error }) => {
             if (destroyed) return

@@ -8,7 +8,7 @@
 //   2. Completed today — finishers ranked by finish time (fastest
 //      first).
 //
-// Refreshes data every 2s via /api/public/races/[slug]/display so a
+// Refreshes data every 2s via /api/public/events/[slug]/display so a
 // finish-line operator marking a team done in RaceControlPanel
 // surfaces on the TV within ~2 ticks. Live elapsed time is computed
 // against the server clock returned by the API (server_now) plus the
@@ -71,7 +71,7 @@ export default function RaceDisplayBoard({ slug }) {
     let cancelled = false
     async function load() {
       try {
-        const r = await fetch(`/api/public/races/${slug}/display`, { cache: 'no-store' })
+        const r = await fetch(`/api/public/events/${slug}/display`, { cache: 'no-store' })
         const j = await r.json()
         if (cancelled) return
         if (!j.success) {

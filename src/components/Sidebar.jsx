@@ -54,10 +54,15 @@ const allNav = [
   // staff or head_coach (see DEFAULT_WEB_PERMISSIONS_BY_ROLE in
   // shared/permissions.js).
   { href: '/schedule/attendance', label: 'Attendance', icon: UserCheck, permission: 'attendance_reports' },
-  // Race events (mig 082) — standalone from booking events. Got its
-  // own permission key in the mig-092 audit so locations that don't
-  // run races can hide them without losing booking events.
-  { href: '/races',      label: 'Races',        icon: Flag,            permission: 'races' },
+  // Events (mig 082 origin, multi-kind from mig 122 onwards). Was
+  // labelled "Races" before the events expansion — same data table
+  // (race_events), now spans race + workshop + seminar + open_day +
+  // masterclass via the kind discriminator. URL relocated /races →
+  // /events; permission key 'races' stays internal (gates UI, not
+  // user-visible). extraActivePaths keeps the entry highlighted on
+  // old /events/* URLs that hit the back-compat rewrite.
+  { href: '/events',     label: 'Events',       icon: Flag,            permission: 'races',
+    extraActivePaths: ['/events'] },
   { href: '/cars',       label: 'Car Processing', icon: Car,           permission: 'car_processing' },
   // Orders (mig 085) spans all revenue streams (race signups + cars).
   // Got its own permission key in the mig-092 audit. Segments USED

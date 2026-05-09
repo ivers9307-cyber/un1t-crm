@@ -7,7 +7,7 @@
 //
 // Used by every code path that writes a team_members row with an
 // email: public race signup (captain + every member), manual
-// operator-add at /api/races/[id]/teams, member edits at
+// operator-add at /api/events/[id]/teams, member edits at
 // /api/team-members/[id], and adds at /api/teams/[id]/members.
 //
 // The single rule: every team_member with an email has a

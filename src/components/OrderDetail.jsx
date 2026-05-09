@@ -211,7 +211,7 @@ function SourceSummary({ source }) {
         )}
         {r?.slug && (
           <div className="pt-2">
-            <Link href={`/races`} className="text-xs text-un1t-light hover:text-un1t-white inline-flex items-center gap-1">
+            <Link href={`/events`} className="text-xs text-un1t-light hover:text-un1t-white inline-flex items-center gap-1">
               View race &rarr;
             </Link>
           </div>

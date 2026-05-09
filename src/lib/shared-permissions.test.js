@@ -184,7 +184,7 @@ describe('mig 092 audit — orders + races permission keys', () => {
     // Race-day starts/finishes are a front-of-house duty, so every
     // role defaults to true — same shape as `events`.
     for (const r of ROLES) {
-      expect(DEFAULT_WEB_PERMISSIONS_BY_ROLE[r].races, `${r}/races`).toBe(true)
+      expect(DEFAULT_WEB_PERMISSIONS_BY_ROLE[r].races, `${r}/events`).toBe(true)
     }
   })
 

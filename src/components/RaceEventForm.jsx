@@ -1,7 +1,7 @@
 'use client'
 
 // RaceEventForm — operator create/edit form for a standalone race
-// event (mig 082). Used by /races/new and /races/[id]/edit.
+// event (mig 082). Used by /events/new and /events/[id]/edit.
 //
 // Standalone from EventForm because races have a different shape:
 // no recurring availability calendar, no slot generation, no
@@ -84,7 +84,7 @@ export default function RaceEventForm({ race, locationId }) {
   }
 
   // Mig 092: upload a single TV logo into the slot. Requires the
-  // race to exist (POST /api/races/[id]/logo needs an id) — for new
+  // race to exist (POST /api/events/[id]/logo needs an id) — for new
   // races we hide the section until after first save.
   async function handleLogoUpload(slot, file) {
     if (!race?.id) {
@@ -97,7 +97,7 @@ export default function RaceEventForm({ race, locationId }) {
       const fd = new FormData()
       fd.append('file', file)
       fd.append('slot', String(slot))
-      const r = await fetch(`/api/races/${race.id}/logo`, { method: 'POST', body: fd })
+      const r = await fetch(`/api/events/${race.id}/logo`, { method: 'POST', body: fd })
       const j = await r.json()
       if (!r.ok || j.success === false) {
         setLogoError(j.error || `Upload failed (${r.status})`)
@@ -121,7 +121,7 @@ export default function RaceEventForm({ race, locationId }) {
       // Best-effort: clear bytes on storage AND clear the slot in
       // local state. Operator must still hit Save Changes to persist
       // the new tv_logos array.
-      await fetch(`/api/races/${race.id}/logo?slot=${slot}`, { method: 'DELETE' })
+      await fetch(`/api/events/${race.id}/logo?slot=${slot}`, { method: 'DELETE' })
       const next = [...logos]
       next[slot] = null
       setLogos(next)
@@ -190,7 +190,7 @@ export default function RaceEventForm({ race, locationId }) {
       })),
     }
 
-    const url = isEditing ? `/api/races/${race.id}` : '/api/races'
+    const url = isEditing ? `/api/events/${race.id}` : '/api/events'
     const method = isEditing ? 'PUT' : 'POST'
     const res = await fetch(url, {
       method,
@@ -204,13 +204,13 @@ export default function RaceEventForm({ race, locationId }) {
       setError(json.error || `Save failed (${res.status})`)
       return
     }
-    router.push('/races')
+    router.push('/events')
     router.refresh()
   }
 
   return (
     <form onSubmit={handleSubmit} className="space-y-6">
-      <Link href="/races" className="inline-flex items-center gap-1.5 text-sm text-un1t-light hover:text-un1t-white">
+      <Link href="/events" className="inline-flex items-center gap-1.5 text-sm text-un1t-light hover:text-un1t-white">
         <ArrowLeft size={16} /> Back to Races
       </Link>
 
@@ -250,7 +250,7 @@ export default function RaceEventForm({ race, locationId }) {
             className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white font-mono disabled:opacity-50"
           />
           <p className="text-[11px] text-un1t-mid mt-1">
-            Public signup page is at <span className="font-mono">/race/{slug || 'your-slug'}</span>.
+            Public signup page is at <span className="font-mono">/event/{slug || 'your-slug'}</span>.
             {isEditing && ' Slug cannot be changed after creation (would break shared links).'}
           </p>
         </div>

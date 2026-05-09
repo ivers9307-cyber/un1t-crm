@@ -14,7 +14,7 @@ export default function ContactRaceHistory({ contactId }) {
 
   useEffect(() => {
     let cancelled = false
-    fetch(`/api/contacts/${contactId}/races`, { cache: 'no-store' })
+    fetch(`/api/contacts/${contactId}/events`, { cache: 'no-store' })
       .then(r => r.json())
       .then(j => {
         if (cancelled) return
@@ -68,7 +68,7 @@ export default function ContactRaceHistory({ contactId }) {
               <div className="flex items-center gap-2 flex-wrap">
                 <Flag size={12} className="text-un1t-light" />
                 <Link
-                  href={`/races/${r.race?.id}/teams`}
+                  href={`/events/${r.race?.id}/teams`}
                   className="text-sm font-medium text-un1t-white hover:text-un1t-accent truncate"
                 >
                   {r.race?.name || '(unknown race)'}

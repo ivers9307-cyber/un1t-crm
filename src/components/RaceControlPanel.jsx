@@ -16,7 +16,7 @@
 //                  Reset button per row in case the operator tapped
 //                  the wrong team.
 //
-// Polls /api/races/[id]/control-board every 2 seconds so multiple
+// Polls /api/events/[id]/control-board every 2 seconds so multiple
 // operators stay in sync.
 //
 // Each row shows: team name + size badge + member names with captain
@@ -45,7 +45,7 @@ export default function RaceControlPanel({ raceId }) {
 
   async function fetchBoard() {
     try {
-      const r = await fetch(`/api/races/${raceId}/control-board`, { cache: 'no-store' })
+      const r = await fetch(`/api/events/${raceId}/control-board`, { cache: 'no-store' })
       const j = await r.json()
       if (!r.ok || j.success === false) {
         setLoadError(j.error || `Fetch failed (${r.status})`)

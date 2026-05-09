@@ -28,7 +28,7 @@ export default function RaceConfirmedPage({ slug, registrationId }) {
 
     async function tick() {
       try {
-        const r = await fetch(`/api/public/race-registrations/${registrationId}`, { cache: 'no-store' })
+        const r = await fetch(`/api/public/event-registrations/${registrationId}`, { cache: 'no-store' })
         const j = await r.json()
         if (cancelled) return
         if (!j.success) {
@@ -163,7 +163,7 @@ export default function RaceConfirmedPage({ slug, registrationId }) {
         </div>
 
         <div className="mt-6 text-center">
-          <Link href={`/race/${slug}`} className="text-sm text-gray-600 hover:text-gray-900 underline">
+          <Link href={`/event/${slug}`} className="text-sm text-gray-600 hover:text-gray-900 underline">
             ← Back to {race.name || 'race'} signup
           </Link>
         </div>
