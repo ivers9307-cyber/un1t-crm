@@ -19,7 +19,7 @@ export async function GET(_request, { params }) {
   const { data, error } = await db
     .from('race_events')
     .select(`
-      id, name, slug, description, race_date,
+      id, name, slug, description, race_date, kind,
       registration_opens_at, registration_closes_at,
       allowed_team_sizes, location_id,
       member_pricing_enabled, member_fee_cents, non_member_fee_cents,

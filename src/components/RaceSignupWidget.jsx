@@ -1,25 +1,145 @@
 'use client'
 
-// RaceSignupWidget — public team-first signup for a race event.
-// Lives at /race/[slug]. Standalone from BookingWidget (which is
-// for Calendly-style slot booking) — no calendar, no slot picking,
-// just a single "what team are you, how many of you are there,
-// who's competing" form.
+// RaceSignupWidget — public signup widget for an event of any kind
+// (race | workshop | seminar | open_day | masterclass). Lives at
+// /event/[slug]. Standalone from BookingWidget (which is for
+// Calendly-style slot booking).
 //
-// Mig 084 additions:
-//   - Per-email live UN1T-member validation (debounced) so the form
-//     can show "UN1T member · €X" badges and live-update the total.
-//   - A prominent banner at the top telling members to use the email
-//     on their UN1T account (so they aren't accidentally charged the
-//     non-member rate).
-//   - Pricing summary card with per-head breakdown.
-//   - Members-only race handling (banner + submit-time block).
-//   - Post-submit: redirect to embedded checkout for paid entries,
-//     or to /race/[slug]/confirmed for free entries.
+// The component name + filename keep the "Race" prefix because
+// many internal imports reference it; the user-facing UI says
+// "Event" / "Booking" depending on kind. A future internal rename
+// can rename the file without changing behaviour.
+//
+// Kind-aware behaviour (mig 122 added the discriminator on
+// race_events.kind):
+//   - kind='race': Original team-first signup. Team name required,
+//     wave picker shown (multiple waves), N−1 member name+email
+//     pairs for N>1, "Register team" submit.
+//   - kind != 'race': Single time slot (one synthetic wave auto-
+//     selected and the picker hidden), no team name (auto-derived
+//     from captain name client-side so the underlying team_id FK
+//     stays satisfied), N−1 attendee name+email pairs for N>1
+//     (per Richard's spec: every seat captures name+email regardless
+//     of buy mode — solo, bring-a-friend, group), terminology
+//     relabelled ("team member" → "attendee", "Pick wave" hidden,
+//     submit "Register" / "Buy N seats").
+//
+// Same pricing path (mig 084 — member/non-member per-head pricing,
+// member-validation, members-only flag, Revolut Race embedded
+// checkout) regardless of kind. The /register API handler is
+// indifferent to kind.
 
 import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Calendar, Clock, MapPin, AlertCircle, Loader2, Check, BadgeCheck, Info } from 'lucide-react'
+
+// Kind-keyed copy. Adding a new kind = one entry. The 'race' entry
+// holds the original strings so the operator-visible UX for races
+// is byte-identical to before the multi-kind extension.
+const KIND_COPY = {
+  race: {
+    sidebarTimeOne: (t) => `Wave at ${t}`,
+    sidebarTimeMany: (n, list) => `${n} waves: ${list}`,
+    showWavePicker: true,
+    showTeamName: true,
+    headingTitle: 'Register your team',
+    headingSubtitle: "You're registering as the team captain. Add your team members below.",
+    captainSectionLabel: 'You (team captain)',
+    membersSectionLabel: 'Other team members',
+    sizeLabel: 'Team size *',
+    sizeButtonSuffix: 'person',
+    submitFreeLabel: 'Register team',
+    submitPaidLabel: (price) => `Register and pay ${price}`,
+    closedFull: 'This race is full.',
+    closedNotYet: "Registration hasn't opened yet for this race.",
+    closedClosed: 'Registration has closed for this race.',
+    membersOnlyExtra: ' This race is members-only — every team member must be a verified UN1T member.',
+    membersOnlyBlock: (n) =>
+      `This is a members-only race. We couldn't verify membership for ${n} team member(s). Make sure everyone uses the email on their UN1T account.`,
+  },
+  workshop: {
+    sidebarTimeOne: (t) => `Starts at ${t}`,
+    sidebarTimeMany: (n, list) => `Sessions at ${list}`,
+    showWavePicker: false,
+    showTeamName: false,
+    headingTitle: 'Book your seat',
+    headingSubtitle: "Add anyone joining you below — every seat captures a name and email.",
+    captainSectionLabel: 'Your details',
+    membersSectionLabel: 'Other attendees',
+    sizeLabel: 'How many seats? *',
+    sizeButtonSuffix: 'seat',
+    submitFreeLabel: 'Book seat',
+    submitPaidLabel: (price) => `Book and pay ${price}`,
+    closedFull: 'This workshop is full.',
+    closedNotYet: "Bookings haven't opened yet for this workshop.",
+    closedClosed: 'Bookings have closed for this workshop.',
+    membersOnlyExtra: " This workshop is members-only — every attendee must be a verified UN1T member.",
+    membersOnlyBlock: (n) =>
+      `This is a members-only workshop. We couldn't verify membership for ${n} attendee(s). Make sure everyone uses the email on their UN1T account.`,
+  },
+  seminar: {
+    sidebarTimeOne: (t) => `Starts at ${t}`,
+    sidebarTimeMany: (n, list) => `Sessions at ${list}`,
+    showWavePicker: false,
+    showTeamName: false,
+    headingTitle: 'Book your seat',
+    headingSubtitle: "Add anyone joining you below — every seat captures a name and email.",
+    captainSectionLabel: 'Your details',
+    membersSectionLabel: 'Other attendees',
+    sizeLabel: 'How many seats? *',
+    sizeButtonSuffix: 'seat',
+    submitFreeLabel: 'Book seat',
+    submitPaidLabel: (price) => `Book and pay ${price}`,
+    closedFull: 'This seminar is full.',
+    closedNotYet: "Bookings haven't opened yet for this seminar.",
+    closedClosed: 'Bookings have closed for this seminar.',
+    membersOnlyExtra: " This seminar is members-only — every attendee must be a verified UN1T member.",
+    membersOnlyBlock: (n) =>
+      `This is a members-only seminar. We couldn't verify membership for ${n} attendee(s). Make sure everyone uses the email on their UN1T account.`,
+  },
+  open_day: {
+    sidebarTimeOne: (t) => `Starts at ${t}`,
+    sidebarTimeMany: (n, list) => `Sessions at ${list}`,
+    showWavePicker: false,
+    showTeamName: false,
+    headingTitle: 'Reserve your spot',
+    headingSubtitle: "Add anyone joining you below — every spot captures a name and email.",
+    captainSectionLabel: 'Your details',
+    membersSectionLabel: 'Other attendees',
+    sizeLabel: 'How many spots? *',
+    sizeButtonSuffix: 'spot',
+    submitFreeLabel: 'Reserve spot',
+    submitPaidLabel: (price) => `Reserve and pay ${price}`,
+    closedFull: 'This open day is full.',
+    closedNotYet: "Reservations haven't opened yet for this open day.",
+    closedClosed: 'Reservations have closed for this open day.',
+    membersOnlyExtra: ' This open day is members-only — every attendee must be a verified UN1T member.',
+    membersOnlyBlock: (n) =>
+      `This is a members-only open day. We couldn't verify membership for ${n} attendee(s). Make sure everyone uses the email on their UN1T account.`,
+  },
+  masterclass: {
+    sidebarTimeOne: (t) => `Starts at ${t}`,
+    sidebarTimeMany: (n, list) => `Sessions at ${list}`,
+    showWavePicker: false,
+    showTeamName: false,
+    headingTitle: 'Book your seat',
+    headingSubtitle: "Add anyone joining you below — every seat captures a name and email.",
+    captainSectionLabel: 'Your details',
+    membersSectionLabel: 'Other attendees',
+    sizeLabel: 'How many seats? *',
+    sizeButtonSuffix: 'seat',
+    submitFreeLabel: 'Book seat',
+    submitPaidLabel: (price) => `Book and pay ${price}`,
+    closedFull: 'This masterclass is full.',
+    closedNotYet: "Bookings haven't opened yet for this masterclass.",
+    closedClosed: 'Bookings have closed for this masterclass.',
+    membersOnlyExtra: ' This masterclass is members-only — every attendee must be a verified UN1T member.',
+    membersOnlyBlock: (n) =>
+      `This is a members-only masterclass. We couldn't verify membership for ${n} attendee(s). Make sure everyone uses the email on their UN1T account.`,
+  },
+}
+
+const copyFor = (k) => KIND_COPY[k] || KIND_COPY.race
 
 export default function RaceSignupWidget({ slug }) {
   const router = useRouter()
@@ -50,7 +170,7 @@ export default function RaceSignupWidget({ slug }) {
       .then(r => r.json())
       .then(j => {
         if (!j.success) {
-          setLoadError(j.error || 'Race not found')
+          setLoadError(j.error || 'Event not found')
           return
         }
         setRace(j.data)
@@ -59,8 +179,17 @@ export default function RaceSignupWidget({ slug }) {
         setTeamSize(initial)
         const waves = Array.isArray(j.data.waves) ? j.data.waves : []
         const available = waves.filter((w) => !w.is_full)
-        if (waves.length === 1 && available.length === 1) setWaveId(waves[0].id)
-        else if (available.length === 1) setWaveId(available[0].id)
+        // For non-race kinds we always auto-select the (single)
+        // available wave because the picker is hidden. For races
+        // we only auto-select when there's exactly one option.
+        const kind = j.data.kind || 'race'
+        if (kind !== 'race' && available.length >= 1) {
+          setWaveId(available[0].id)
+        } else if (waves.length === 1 && available.length === 1) {
+          setWaveId(waves[0].id)
+        } else if (available.length === 1) {
+          setWaveId(available[0].id)
+        }
       })
       .catch(e => setLoadError(e.message || 'Network error'))
   }, [slug])
@@ -88,9 +217,7 @@ export default function RaceSignupWidget({ slug }) {
     const email = (rawEmail || '').trim().toLowerCase()
     if (!email || !validateEmail(email)) return
     if (!race?.member_pricing_enabled && !race?.members_only) return
-    // Already cached?
     if (memberChecks[email] && memberChecks[email].state !== 'idle') return
-    // Already a timer? Reset.
     if (checkTimers.current[email]) clearTimeout(checkTimers.current[email])
     checkTimers.current[email] = setTimeout(async () => {
       setMemberChecks((prev) => ({ ...prev, [email]: { state: 'checking', applicable: true } }))
@@ -107,10 +234,6 @@ export default function RaceSignupWidget({ slug }) {
             [email]: {
               state: j.data.is_member ? 'verified' : 'not_member',
               first_name: j.data.first_name || null,
-              // Mig 085 follow-up: personalisation signals returned
-              // alongside the membership match. null when not a member
-              // OR when the lookup failed — widget falls back to the
-              // generic "Welcome back" message in that case.
               races_finished_count: j.data.races_finished_count ?? null,
               repeat_racer: !!j.data.repeat_racer,
               applicable: true,
@@ -123,8 +246,6 @@ export default function RaceSignupWidget({ slug }) {
           }))
         }
       } catch {
-        // Silent fail — the form still works without live validation;
-        // the server will re-check at submit.
         setMemberChecks((prev) => ({
           ...prev,
           [email]: { state: 'not_member', applicable: true },
@@ -133,7 +254,6 @@ export default function RaceSignupWidget({ slug }) {
     }, 500)
   }
 
-  // Roster as the live form sees it — used for pricing preview.
   const liveRoster = [
     { name: captainName, email: captainEmail.toLowerCase().trim() },
     ...members.map((m) => ({ name: m.name, email: (m.email || '').toLowerCase().trim() })),
@@ -167,14 +287,20 @@ export default function RaceSignupWidget({ slug }) {
     return `${major} ${currency}`
   }
 
+  const kind = race?.kind || 'race'
+  const copy = copyFor(kind)
+
   async function handleSubmit(e) {
     e.preventDefault()
     setSubmitError(null)
     setFieldErrors({})
 
     const errors = {}
-    if (!teamName.trim()) errors.team_name = 'Team name is required'
-    if (!waveId) errors.wave_id = 'Pick a wave'
+    // Team name required only for races. Non-race kinds synthesise
+    // a server-bound team_name from the captain so the team_id FK
+    // stays satisfied.
+    if (copy.showTeamName && !teamName.trim()) errors.team_name = 'Team name is required'
+    if (!waveId) errors.wave_id = copy.showWavePicker ? 'Pick a wave' : 'No time slot available'
     if (!captainName.trim()) errors.captain_name = 'Your name is required'
     if (!validateEmail(captainEmail)) errors.captain_email = 'Valid email required'
     members.forEach((m, i) => {
@@ -182,15 +308,10 @@ export default function RaceSignupWidget({ slug }) {
       if (m.email && !validateEmail(m.email)) errors[`member_${i}_email`] = 'Invalid email'
     })
 
-    // Members-only races require everyone to validate as a member
-    // before submit. The server enforces this too, but failing on the
-    // client is faster + friendlier.
     if (race?.members_only) {
       const unverified = liveRoster.filter((m) => !isVerifiedMember(m.email))
       if (unverified.length > 0) {
-        setSubmitError(
-          `This is a members-only race. We couldn't verify membership for ${unverified.length} team member(s). Make sure everyone uses the email on their UN1T account.`
-        )
+        setSubmitError(copy.membersOnlyBlock(unverified.length))
         return
       }
     }
@@ -200,12 +321,23 @@ export default function RaceSignupWidget({ slug }) {
       return
     }
 
+    // Synthesised team_name for non-race kinds. The team_id FK on
+    // race_registrations still needs a non-null value; we make it
+    // human-readable so operator views ("teams" tab on the operator
+    // event detail page) show something meaningful: the captain's
+    // name plus a "(+N)" suffix if it's a group buy.
+    const outboundTeamName = copy.showTeamName
+      ? teamName.trim()
+      : (teamSize > 1
+          ? `${captainName.trim()} (+${teamSize - 1})`
+          : captainName.trim())
+
     setSubmitting(true)
     const res = await fetch(`/api/public/events/${slug}/register`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        team_name: teamName.trim(),
+        team_name: outboundTeamName,
         team_size: teamSize,
         wave_id: waveId,
         captain_name: captainName.trim(),
@@ -226,16 +358,12 @@ export default function RaceSignupWidget({ slug }) {
       return
     }
 
-    // Free entry → straight to confirmation page. Paid → embedded
-    // checkout page that owns the Revolut SDK lifecycle.
     const payment = json.data?.payment
     if (payment?.free) {
       router.push(`/event/${slug}/confirmed?registration=${json.data.registration_id}`)
     } else if (payment?.id) {
       router.push(`/event-pay/${payment.id}`)
     } else {
-      // Defensive — if the API didn't return a payment id, show a
-      // best-effort confirmation rather than getting stuck.
       router.push(`/event/${slug}/confirmed?registration=${json.data.registration_id}`)
     }
   }
@@ -258,19 +386,20 @@ export default function RaceSignupWidget({ slug }) {
 
   const location = race.locations || null
   const closedReasons = {
-    not_yet_open: 'Registration hasn\'t opened yet for this race.',
-    closed: 'Registration has closed for this race.',
-    full: 'This race is full.',
+    not_yet_open: copy.closedNotYet,
+    closed: copy.closedClosed,
+    full: copy.closedFull,
   }
   const isClosed = race.registration_state !== 'open'
   const closeMsg = closedReasons[race.registration_state]
   const showMemberNotice = !!(race.member_pricing_enabled || race.members_only)
   const showPricingCard = !!(memberPricing || nonMemberFeeCents != null)
+  const wavesArr = Array.isArray(race.waves) ? race.waves : []
 
   return (
     <div className="w-full max-w-3xl bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
       <div className="grid md:grid-cols-[260px_1fr] divide-y md:divide-y-0 md:divide-x divide-gray-200">
-        {/* Race info sidebar */}
+        {/* Event info sidebar */}
         <aside className="p-6">
           {location && (
             <div className="text-[11px] text-gray-500 uppercase tracking-wider mb-3">
@@ -286,13 +415,16 @@ export default function RaceSignupWidget({ slug }) {
               <Calendar size={14} className="text-gray-400" />
               {new Date(race.race_date).toLocaleDateString('en-IE', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
             </div>
-            {Array.isArray(race.waves) && race.waves.length > 0 && (
+            {wavesArr.length > 0 && (
               <div className="flex items-start gap-2">
                 <Clock size={14} className="text-gray-400 mt-0.5 shrink-0" />
                 <span>
-                  {race.waves.length === 1
-                    ? `Wave at ${(race.waves[0].start_time || '').slice(0, 5)}`
-                    : `${race.waves.length} waves: ${race.waves.map(w => (w.start_time || '').slice(0, 5)).join(', ')}`}
+                  {wavesArr.length === 1
+                    ? copy.sidebarTimeOne((wavesArr[0].start_time || '').slice(0, 5))
+                    : copy.sidebarTimeMany(
+                        wavesArr.length,
+                        wavesArr.map(w => (w.start_time || '').slice(0, 5)).join(', ')
+                      )}
                 </span>
               </div>
             )}
@@ -304,9 +436,7 @@ export default function RaceSignupWidget({ slug }) {
             )}
           </div>
 
-          {/* Pricing summary card. Only shown when there's pricing
-              configured (free races skip this). Updates live as
-              members get verified. */}
+          {/* Pricing summary card. Same logic as before — kind-agnostic. */}
           {showPricingCard && (
             <div className="mt-5 p-3 rounded-md bg-gray-50 border border-gray-200">
               <div className="text-[11px] text-gray-500 uppercase tracking-wider mb-2">Total</div>
@@ -329,20 +459,17 @@ export default function RaceSignupWidget({ slug }) {
 
         {/* Form */}
         <main className="p-6">
-          <h2 className="text-base font-semibold text-gray-900 mb-1">Register your team</h2>
+          <h2 className="text-base font-semibold text-gray-900 mb-1">{copy.headingTitle}</h2>
           <p className="text-xs text-gray-500 mb-4">
-            You&apos;re registering as the team captain. Add your team members below.
+            {copy.headingSubtitle}
           </p>
 
-          {/* Member-email notice. Shown whenever member pricing OR
-              members-only is on — that's when using the right email
-              actually matters. */}
           {showMemberNotice && (
             <div className="mb-4 p-3 bg-amber-50 border border-amber-200 text-amber-900 text-xs rounded-md inline-flex items-start gap-2">
               <Info size={14} className="mt-0.5 shrink-0 text-amber-700" />
               <span>
                 <strong>UN1T members:</strong> use the email on your UN1T account so member pricing applies. We&apos;ll match each entrant&apos;s email against active member records.
-                {race.members_only && ' This race is members-only — every team member must be a verified UN1T member.'}
+                {race.members_only && copy.membersOnlyExtra}
               </span>
             </div>
           )}
@@ -355,14 +482,14 @@ export default function RaceSignupWidget({ slug }) {
 
           <form onSubmit={handleSubmit} className="space-y-4">
             <fieldset disabled={isClosed} className="space-y-4">
-              {/* Wave picker (mig 083). Compact pill grid — 3 cols on
-                  mobile, 4 on tablet, 5 on desktop. Stays tidy at 10+
-                  waves where the older stacked-button layout sprawled. */}
-              {Array.isArray(race.waves) && race.waves.length > 0 && (
+              {/* Wave picker — race-only. Non-race kinds have a single
+                  auto-selected wave; the time is shown in the sidebar
+                  under the date so the operator UX still surfaces it. */}
+              {copy.showWavePicker && wavesArr.length > 0 && (
                 <div>
                   <label className="block text-xs font-medium text-gray-700 mb-1">Pick your wave *</label>
                   <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-2">
-                    {race.waves.map((w) => {
+                    {wavesArr.map((w) => {
                       const full = !!w.is_full
                       const selected = waveId === w.id
                       const time = (w.start_time || '').slice(0, 5)
@@ -399,22 +526,26 @@ export default function RaceSignupWidget({ slug }) {
                 </div>
               )}
 
-              <div>
-                <label className="block text-xs font-medium text-gray-700 mb-1">Team name *</label>
-                <input
-                  type="text"
-                  required
-                  value={teamName}
-                  onChange={e => setTeamName(e.target.value)}
-                  placeholder="The Iron Dogs"
-                  className={`w-full border rounded-md px-3 py-2 text-sm focus:outline-none ${fieldErrors.team_name ? 'border-red-400' : 'border-gray-300 focus:border-gray-500'}`}
-                />
-                {fieldErrors.team_name && <p className="text-[11px] text-red-600 mt-1">{fieldErrors.team_name}</p>}
-              </div>
+              {/* Team name — race-only. Non-race kinds synthesise a
+                  team_name from the captain + group size on submit. */}
+              {copy.showTeamName && (
+                <div>
+                  <label className="block text-xs font-medium text-gray-700 mb-1">Team name *</label>
+                  <input
+                    type="text"
+                    required
+                    value={teamName}
+                    onChange={e => setTeamName(e.target.value)}
+                    placeholder="The Iron Dogs"
+                    className={`w-full border rounded-md px-3 py-2 text-sm focus:outline-none ${fieldErrors.team_name ? 'border-red-400' : 'border-gray-300 focus:border-gray-500'}`}
+                  />
+                  {fieldErrors.team_name && <p className="text-[11px] text-red-600 mt-1">{fieldErrors.team_name}</p>}
+                </div>
+              )}
 
               {(race.allowed_team_sizes || []).length > 1 && (
                 <div>
-                  <label className="block text-xs font-medium text-gray-700 mb-1">Team size *</label>
+                  <label className="block text-xs font-medium text-gray-700 mb-1">{copy.sizeLabel}</label>
                   <div className="flex flex-wrap gap-2">
                     {[...(race.allowed_team_sizes || [])].sort((a, b) => a - b).map((s) => (
                       <button
@@ -427,7 +558,7 @@ export default function RaceSignupWidget({ slug }) {
                             : 'border-gray-300 bg-white text-gray-600 hover:border-gray-400'
                         }`}
                       >
-                        {s}-person
+                        {s}-{copy.sizeButtonSuffix}
                       </button>
                     ))}
                   </div>
@@ -435,7 +566,7 @@ export default function RaceSignupWidget({ slug }) {
               )}
 
               <div className="pt-3 border-t border-gray-200">
-                <div className="text-xs text-gray-500 uppercase tracking-wider mb-2">You (team captain)</div>
+                <div className="text-xs text-gray-500 uppercase tracking-wider mb-2">{copy.captainSectionLabel}</div>
                 <div className="space-y-2">
                   <input
                     type="text"
@@ -481,7 +612,7 @@ export default function RaceSignupWidget({ slug }) {
 
               {members.length > 0 && (
                 <div className="pt-3 border-t border-gray-200">
-                  <div className="text-xs text-gray-500 uppercase tracking-wider mb-2">Other team members</div>
+                  <div className="text-xs text-gray-500 uppercase tracking-wider mb-2">{copy.membersSectionLabel}</div>
                   <div className="space-y-3">
                     {members.map((m, i) => (
                       <div key={i} className="space-y-1">
@@ -490,7 +621,7 @@ export default function RaceSignupWidget({ slug }) {
                             <input
                               type="text"
                               required
-                              placeholder={`Member ${i + 2} name *`}
+                              placeholder={`${kind === 'race' ? 'Member' : 'Attendee'} ${i + 2} name *`}
                               value={m.name}
                               onChange={e => setMembers(prev => prev.map((x, j) => j === i ? { ...x, name: e.target.value } : x))}
                               className={`w-full border rounded-md px-3 py-2 text-sm focus:outline-none ${fieldErrors[`member_${i}_name`] ? 'border-red-400' : 'border-gray-300 focus:border-gray-500'}`}
@@ -500,7 +631,7 @@ export default function RaceSignupWidget({ slug }) {
                           <div>
                             <input
                               type="email"
-                              placeholder={`Member ${i + 2} email`}
+                              placeholder={`${kind === 'race' ? 'Member' : 'Attendee'} ${i + 2} email`}
                               value={m.email}
                               onChange={e => {
                                 const next = e.target.value
@@ -540,10 +671,10 @@ export default function RaceSignupWidget({ slug }) {
               >
                 {submitting ? <Loader2 size={14} className="animate-spin" /> : null}
                 {submitting
-                  ? 'Registering…'
+                  ? 'Submitting…'
                   : totalCents > 0
-                    ? `Register and pay ${fmtMoney(totalCents)}`
-                    : 'Register team'}
+                    ? copy.submitPaidLabel(fmtMoney(totalCents))
+                    : copy.submitFreeLabel}
               </button>
             </fieldset>
           </form>
@@ -572,9 +703,6 @@ function MemberStatusBadge({ email, checks, memberFeeCents, nonMemberFeeCents, m
   }
   if (c.state === 'verified') {
     const fee = memberFeeCents != null ? fmt(memberFeeCents) : 'free'
-    // Personalisation: when we have a finished-race count, append it.
-    // Repeat racers (≥2 finishes) get a stronger "x races" greeting;
-    // first-timers (or unknown count) just get the welcome-back.
     const count = Number.isFinite(c.races_finished_count) ? c.races_finished_count : null
     let greeting = c.first_name ? ` — welcome back, ${c.first_name}` : ''
     if (count != null && count >= 2) {
