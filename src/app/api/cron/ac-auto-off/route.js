@@ -13,6 +13,8 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { turnPodOff, SensiboError } from '@/lib/sensibo'
 import { AC_SESSION_STATUS } from '@/lib/enums'
+import { stampHeartbeat } from '@/lib/cron-heartbeat'
+import { logWarn } from '@/lib/log'
 
 // Cron picks up these statuses — 'on' and 'extended' are the live
 // states; 'failed' is included so a transient Sensibo error
@@ -96,6 +98,9 @@ export async function GET(request) {
       console.warn(`[ac-auto-off] pod ${row.sensibo_pod_id}: ${msg}`)
     }
   }
+
+  await stampHeartbeat('ac-auto-off').catch((err) =>
+    logWarn('cron-ac-auto-off', 'heartbeat failed', { err }))
 
   return NextResponse.json({ success: true, stats })
 }
