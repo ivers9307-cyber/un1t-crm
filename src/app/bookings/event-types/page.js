@@ -1,3 +1,10 @@
+// Relocated from src/app/events/page.js (E2 of events expansion).
+// The /events URL space was freed for the new multi-kind events
+// feature (race + workshop + seminar + open_day + masterclass);
+// Calendly's bookable templates moved here, alongside the
+// /bookings hub they already belong to. See next.config.js for
+// the back-compat rewrite from old /events/* URLs.
+
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { redirect } from 'next/navigation'
@@ -38,7 +45,7 @@ function getAvailableDays(availability) {
   return days.map((d, i) => availability[d] ? labels[i] : null).filter(Boolean).join(', ') || 'None'
 }
 
-export default async function EventsPage() {
+export default async function BookingTypesPage() {
   const user = await getCurrentUser()
   if (!user) redirect('/login')
   const events = await getEvents(user.activeLocation?.id)
@@ -48,29 +55,29 @@ export default async function EventsPage() {
       <CalendlyTabs />
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h2 className="text-2xl font-bold">Event types</h2>
+          <h2 className="text-2xl font-bold">Booking types</h2>
           <p className="text-sm text-un1t-light mt-1">Bookable templates customers reserve from. Configure once, reuse on every booking page.</p>
         </div>
         <Link
-          href="/events/new"
+          href="/bookings/event-types/new"
           className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium px-4 py-2.5 rounded-lg transition-colors"
         >
           <Plus size={16} />
-          New event type
+          New booking type
         </Link>
       </div>
 
       {events.length === 0 ? (
         <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-12 text-center">
           <Calendar size={40} className="mx-auto mb-4 text-un1t-light" />
-          <h3 className="text-lg font-semibold mb-2">No events yet</h3>
-          <p className="text-sm text-un1t-light mb-4">Create your first bookable event to start accepting bookings</p>
+          <h3 className="text-lg font-semibold mb-2">No booking types yet</h3>
+          <p className="text-sm text-un1t-light mb-4">Create your first bookable template to start accepting bookings</p>
           <Link
-            href="/events/new"
+            href="/bookings/event-types/new"
             className="inline-flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium px-4 py-2.5 rounded-lg transition-colors"
           >
             <Plus size={16} />
-            Create Event
+            Create booking type
           </Link>
         </div>
       ) : (
@@ -85,7 +92,7 @@ export default async function EventsPage() {
                   />
                   <div>
                     <div className="flex items-center gap-3">
-                      <Link href={`/events/${event.id}`} className="text-lg font-semibold hover:text-blue-400 transition-colors">
+                      <Link href={`/bookings/event-types/${event.id}`} className="text-lg font-semibold hover:text-blue-400 transition-colors">
                         {event.name}
                       </Link>
                       {!event.active && (
@@ -115,7 +122,7 @@ export default async function EventsPage() {
                 <div className="flex items-center gap-2 shrink-0">
                   <EventActions slug={event.slug} eventId={event.id} />
                   <Link
-                    href={`/events/${event.id}`}
+                    href={`/bookings/event-types/${event.id}`}
                     className="text-xs px-3 py-1.5 rounded border border-un1t-gray text-un1t-light hover:text-un1t-white hover:border-un1t-white/30 transition-colors"
                   >
                     Manage

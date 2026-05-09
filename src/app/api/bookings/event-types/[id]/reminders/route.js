@@ -1,4 +1,8 @@
-// /api/events/[id]/reminders — multi-reminder management.
+// /api/bookings/event-types/[id]/reminders — multi-reminder management.
+//
+// Relocated from /api/events/[id]/reminders (E2 of events expansion).
+// /events URL space freed for the multi-kind events feature; Calendly's
+// bookable templates now live alongside their /bookings hub.
 //
 // Mig 076 added event_type_reminders so each event type can
 // have multiple reminders configured. The EventForm needs a way

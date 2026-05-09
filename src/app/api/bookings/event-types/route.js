@@ -1,3 +1,8 @@
+// Relocated from src/app/api/events/route.js (E2 of events expansion).
+// /events URL space freed for the multi-kind events feature; Calendly's
+// bookable templates now live alongside their /bookings hub. See
+// next.config.js for the back-compat rewrite from old /api/events/*.
+
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
@@ -20,7 +25,7 @@ const EventCreateSchema = z.object({
   location_id: uuidLike.optional(),
 })
 
-// GET /api/events — List all event types
+// GET /api/bookings/event-types — List all event types
 export async function GET(request) {
   const authError = requireApiKey(request)
   if (authError) return authError
@@ -40,7 +45,7 @@ export async function GET(request) {
   return NextResponse.json({ success: true, data })
 }
 
-// POST /api/events — Create a new event type
+// POST /api/bookings/event-types — Create a new event type
 export async function POST(request) {
   const authError = requireApiKey(request)
   if (authError) return authError

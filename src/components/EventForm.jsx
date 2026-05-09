@@ -91,7 +91,7 @@ export default function EventForm({ event, locationId }) {
   useEffect(() => {
     if (!isEditing || !event?.id) return
     let cancelled = false
-    fetch(`/api/events/${event.id}/reminders`)
+    fetch(`/api/bookings/event-types/${event.id}/reminders`)
       .then(r => r.json())
       .then(j => {
         if (cancelled) return
@@ -272,7 +272,7 @@ export default function EventForm({ event, locationId }) {
             sms_body: r.channels.includes('sms') ? (r.sms_body || null) : null,
             active: r.active !== false,
           }))
-        const resp = await fetch(`/api/events/${eventId}/reminders`, {
+        const resp = await fetch(`/api/bookings/event-types/${eventId}/reminders`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ reminders: reminderPayload }),
@@ -290,7 +290,7 @@ export default function EventForm({ event, locationId }) {
       }
     }
 
-    router.push('/events')
+    router.push('/bookings/event-types')
     router.refresh()
   }
 
@@ -855,7 +855,7 @@ export default function EventForm({ event, locationId }) {
         </button>
         <button
           type="button"
-          onClick={() => router.push('/events')}
+          onClick={() => router.push('/bookings/event-types')}
           className="text-sm text-un1t-light hover:text-un1t-white px-4 py-2.5 transition-colors"
         >
           Cancel

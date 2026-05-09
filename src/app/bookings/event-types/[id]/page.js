@@ -1,3 +1,6 @@
+// Relocated from src/app/events/[id]/page.js (E2 of events expansion).
+// See src/app/bookings/event-types/page.js header for context.
+
 import { createServerClient } from '@/lib/supabase'
 import Link from 'next/link'
 import { ArrowLeft, Edit } from 'lucide-react'
@@ -30,14 +33,14 @@ function formatTime(time) {
   return `${h12}:${m} ${ampm}`
 }
 
-export default async function EventDetailPage({ params }) {
+export default async function BookingTypeDetailPage({ params }) {
   const { event, bookings } = await getEvent(params.id)
 
   if (!event) {
     return (
       <div className="p-8">
-        <p className="text-un1t-light">Event not found.</p>
-        <Link href="/events" className="text-blue-400 text-sm mt-2 inline-block">Back to Events</Link>
+        <p className="text-un1t-light">Booking type not found.</p>
+        <Link href="/bookings/event-types" className="text-blue-400 text-sm mt-2 inline-block">Back to Booking types</Link>
       </div>
     )
   }
@@ -48,7 +51,7 @@ export default async function EventDetailPage({ params }) {
     <div className="p-8">
       {/* Header */}
       <div className="flex items-center gap-3 mb-6">
-        <Link href="/events" className="text-un1t-light hover:text-un1t-white transition-colors">
+        <Link href="/bookings/event-types" className="text-un1t-light hover:text-un1t-white transition-colors">
           <ArrowLeft size={20} />
         </Link>
         <div className="flex-1">
@@ -64,7 +67,7 @@ export default async function EventDetailPage({ params }) {
         <div className="flex items-center gap-2">
           <EventActions slug={event.slug} eventId={event.id} />
           <Link
-            href={`/events/${event.id}/edit`}
+            href={`/bookings/event-types/${event.id}/edit`}
             className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded border border-un1t-gray text-un1t-light hover:text-un1t-white hover:border-un1t-white/30 transition-colors"
           >
             <Edit size={12} />

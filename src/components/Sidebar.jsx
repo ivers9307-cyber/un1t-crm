@@ -33,12 +33,15 @@ const allNav = [
   // view — "what's booked today / coming up") with a tab strip
   // at the top of both /bookings and /events that lets the
   // operator switch between booking types and reservations.
-  // anyPermission means visible if EITHER permission is granted;
-  // extraActivePaths keeps the nav item highlighted when the
-  // user is on /events as well as /bookings.
-  { href: '/bookings',   label: 'Calendly',     icon: Calendar,
-    anyPermission: ['events', 'bookings'],
-    extraActivePaths: ['/events'] },
+  // anyPermission means visible if EITHER permission is granted.
+  // Renamed from "Calendly" → "Bookings" in E2 of the events
+  // expansion, as part of freeing the word "Events" for the new
+  // multi-kind events feature (race + workshop + seminar +
+  // open_day + masterclass). The /events URL itself relocated to
+  // /bookings/event-types — no extraActivePaths needed since both
+  // tabs now live under /bookings/*.
+  { href: '/bookings',   label: 'Bookings',     icon: Calendar,
+    anyPermission: ['events', 'bookings'] },
   // Single Communications entry replacing the old Email + WhatsApp.
   // Visible if the user has EITHER permission — sub-tabs inside the
   // hub gate themselves further. Marked with a custom check function

@@ -1,3 +1,6 @@
+// Relocated from src/app/api/events/[id]/route.js (E2 of events expansion).
+// See src/app/api/bookings/event-types/route.js header for context.
+
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
@@ -19,7 +22,7 @@ const EventUpdateSchema = z.object({
   active: z.boolean().optional(),
 })
 
-// GET /api/events/:id — Get single event type with bookings count
+// GET /api/bookings/event-types/:id — Get single event type with bookings count
 export async function GET(request, { params }) {
   const authError = requireApiKey(request)
   if (authError) return authError
@@ -31,7 +34,7 @@ export async function GET(request, { params }) {
   return NextResponse.json({ success: true, data })
 }
 
-// PUT /api/events/:id — Update event type
+// PUT /api/bookings/event-types/:id — Update event type
 export async function PUT(request, { params }) {
   const authError = requireApiKey(request)
   if (authError) return authError
@@ -54,7 +57,7 @@ export async function PUT(request, { params }) {
   return NextResponse.json({ success: true, data })
 }
 
-// DELETE /api/events/:id — Deactivate event type (soft delete)
+// DELETE /api/bookings/event-types/:id — Deactivate event type (soft delete)
 export async function DELETE(request, { params }) {
   const authError = requireApiKey(request)
   if (authError) return authError
