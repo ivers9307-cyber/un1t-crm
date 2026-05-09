@@ -25,7 +25,7 @@ export async function GET(_request, { params }) {
   const { data: race, error: raceErr } = await db
     .from('race_events')
     .select(`
-      id, name, slug, race_date, location_id, tv_logos,
+      id, name, slug, race_date, kind, location_id, tv_logos,
       waves:race_waves ( id, start_time, label, display_order )
     `)
     .eq('slug', params.slug)
@@ -34,6 +34,19 @@ export async function GET(_request, { params }) {
 
   if (raceErr || !race) {
     return NextResponse.json({ success: false, error: 'Race not found' }, { status: 404 })
+  }
+
+  // Mig 122 (E7): the TV display board renders live race timing
+  // (started/finished elapsed clocks per team) — race-specific by
+  // design. For non-race kinds there's nothing to display, so we
+  // 404 rather than render an empty board. Public URL: a operator
+  // who shared /event/<workshop-slug>/display by mistake gets a
+  // clean error.
+  if (race.kind && race.kind !== 'race') {
+    return NextResponse.json({
+      success: false,
+      error: `The TV display board is only available for race events (this is a ${race.kind}).`,
+    }, { status: 404 })
   }
 
   // Pull every confirmed registration for this race. We filter to

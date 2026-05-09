@@ -30,7 +30,7 @@ export async function GET(_request, { params }) {
   const { data: race, error: raceErr } = await db
     .from('race_events')
     .select(`
-      id, name, location_id, race_date, allowed_team_sizes,
+      id, name, location_id, race_date, kind, allowed_team_sizes,
       waves:race_waves ( id, start_time, capacity, label, display_order )
     `)
     .eq('id', params.id)
@@ -40,6 +40,18 @@ export async function GET(_request, { params }) {
   }
   const guard = assertLocationAccess(user, race.location_id)
   if (guard) return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+
+  // Mig 122 (E7): the race-day control panel is race-specific by
+  // design — it shows the start/finish/reset workflow for live race
+  // timing. Non-race kinds have no equivalent operator surface so
+  // we 404 here to match the page-level redirect (so direct API
+  // hits behave the same as navigating to the page).
+  if (race.kind && race.kind !== 'race') {
+    return NextResponse.json({
+      success: false,
+      error: `The race-day control board is only available for race events (this is a ${race.kind}).`,
+    }, { status: 404 })
+  }
 
   const { data: registrations, error: regErr } = await db
     .from('race_registrations')

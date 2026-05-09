@@ -47,17 +47,25 @@ export async function GET(request) {
   const fromDate = new Date(now.getTime() - 3 * 86400_000).toISOString().slice(0, 10)
   const toDate = new Date(now.getTime() + 3 * 86400_000).toISOString().slice(0, 10)
 
+  // Mig 122 (E7 of events expansion): the race-timing event types
+  // (race.starts_in_24h / race.starts_in_1h / race.completed_24h_ago)
+  // are race-specific by design. A workshop has no "race start" or
+  // "race finish" semantics, so we filter to kind='race' here.
+  // Workshops, seminars, etc. ride the same race_events table but
+  // don't get these milestone emissions; their reminder/follow-up
+  // sequences (mig 076 event_type_reminders) drive separately.
   const { data: regs, error } = await db
     .from('race_registrations')
     .select(`
       id, contact_id, status,
       race_event_id,
-      race:race_event_id ( id, name, location_id, race_date ),
+      race:race_event_id ( id, name, kind, location_id, race_date ),
       wave:wave_id ( id, start_time ),
       teams:team_id ( id,
         team_members ( id, name, email, role, contact_id, member_contact_id ) )
     `)
     .eq('status', 'confirmed')
+    .eq('race.kind', 'race')
     .gte('race.race_date', fromDate)
     .lte('race.race_date', toDate)
 
@@ -71,6 +79,15 @@ export async function GET(request) {
   for (const reg of (regs || [])) {
     const race = reg.race
     if (!race?.race_date || !reg.wave?.start_time) {
+      stats.skipped += 1
+      continue
+    }
+    // Defence-in-depth: the .eq('race.kind', 'race') filter above
+    // should already exclude non-race kinds, but if PostgREST's
+    // embedded filter ever changes semantics we want a hard guard
+    // in code so a workshop registration never gets a race milestone
+    // event emitted against it.
+    if (race.kind && race.kind !== 'race') {
       stats.skipped += 1
       continue
     }

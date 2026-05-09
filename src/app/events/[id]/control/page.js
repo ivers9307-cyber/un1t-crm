@@ -23,13 +23,22 @@ export default async function RaceControlPage({ params }) {
   const db = createServerClient()
   const { data: race } = await db
     .from('race_events')
-    .select('id, name, slug, location_id, race_date, start_time, active')
+    .select('id, name, slug, location_id, race_date, start_time, active, kind')
     .eq('id', params.id)
     .single()
 
   if (!race) notFound()
   const guard = assertLocationAccess(user, race.location_id)
   if (guard) redirect('/')
+
+  // Mig 122 (E7): the race-day control panel is race-specific by
+  // design — start/finish/reset workflow for live race timing. For
+  // other event kinds (workshop, seminar, etc.) we redirect back
+  // to the event detail page so the operator never lands on a UI
+  // that can't do anything useful.
+  if (race.kind && race.kind !== 'race') {
+    redirect(`/events/${params.id}/edit`)
+  }
 
   return (
     <div className="p-4 sm:p-6 max-w-7xl">

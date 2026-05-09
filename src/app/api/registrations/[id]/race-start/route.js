@@ -23,7 +23,7 @@ export async function POST(_request, { params }) {
     .from('race_registrations')
     .select(`
       id, status, race_started_at, race_finished_at,
-      race_events ( id, location_id )
+      race_events ( id, location_id, kind )
     `)
     .eq('id', params.id)
     .single()
@@ -32,6 +32,18 @@ export async function POST(_request, { params }) {
   }
   const guard = assertLocationAccess(user, reg.race_events?.location_id)
   if (guard) return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+
+  // Mig 122 (E7): race-day timing only applies to kind='race'.
+  // A workshop/seminar/etc. registration has no "started" semantics
+  // — return 409 to make the operator UI failure mode obvious if
+  // it ever fires (the control panel page is also gated, so this is
+  // belt-and-braces).
+  if (reg.race_events?.kind && reg.race_events.kind !== 'race') {
+    return NextResponse.json({
+      success: false,
+      error: `Race-day timing doesn't apply to ${reg.race_events.kind} events.`,
+    }, { status: 409 })
+  }
 
   if (reg.status !== 'confirmed') {
     return NextResponse.json({
