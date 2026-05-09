@@ -68,7 +68,11 @@ export async function POST(request) {
   }
 
   try {
-    await remoteUnlockDoor(cfg, door_id, { actorEmail: user.email })
+    // UniFi Access wants actor_id + actor_name (both required if
+    // either is set). Use the CRM user's UUID + display name so the
+    // UniFi audit log shows the human who pressed the button.
+    const actorName = user.full_name || user.fullName || user.name || user.email || 'CRM user'
+    await remoteUnlockDoor(cfg, door_id, { actorId: user.id, actorName })
     // Best-effort audit row. activities.kind='event' (mig 073) so
     // it lands on the timeline without showing up as a task.
     db.from('activities').insert({

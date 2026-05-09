@@ -281,32 +281,29 @@ export async function listDoors(cfg) {
  */
 export async function remoteUnlockDoor(cfg, doorId, meta = {}) {
   if (!doorId) throw new UnifiError('doorId is required')
-  // UniFi Access renamed the unlock endpoint between firmware versions:
-  //   v1.x          POST /doors/{id}/remote_unlock
-  //   v2.x / v3.x+  POST /doors/{id}/remote_unlocking
-  // Different studios have different firmware levels (UDM-SE upgrades
-  // Access on its own cadence). Rather than hard-code one path, try
-  // the newer endpoint first — it's what 99% of in-use controllers
-  // expose today — and fall back to the older one only if we get a
-  // path-not-found 404. Other error codes (auth, validation) propagate
-  // as normal so we don't mask real problems.
+  // UniFi Access "Remote Door Unlocking" — docs §7.9:
+  //   PUT /api/v1/developer/doors/:id/unlock
+  //   Permission Key: edit:space
   //
-  // The unlock endpoint takes no body — the door's configured unlock
-  // duration drives how long the relay stays open. We POST a minimal
-  // stamp so audit logs show who triggered it.
-  const id = encodeURIComponent(doorId)
-  const body = { actor_email: meta.actorEmail || undefined }
-  try {
-    return await call(cfg, 'POST', `/doors/${id}/remote_unlocking`, body)
-  } catch (e) {
-    const isPathNotFound =
-      e instanceof UnifiError &&
-      (e.status === 404 ||
-       /HTTP_404|404|not\s*found|api was not found/i.test(e.message || e.code || ''))
-    if (!isPathNotFound) throw e
-    // Fall back to the legacy endpoint name.
-    return await call(cfg, 'POST', `/doors/${id}/remote_unlock`, body)
+  // Body is optional. actor_id + actor_name are both required if
+  // EITHER is provided (the controller rejects partial actors). When
+  // both are omitted the controller logs the API token name as the
+  // actor, which is fine for audit. Pass both when we have CRM user
+  // context so the UniFi audit log shows the human who pressed the
+  // button rather than just "UN1T CRM".
+  //
+  // The `extra` field is fully passthrough — anything we put in there
+  // appears verbatim in UniFi's webhook payloads. We use it to stamp
+  // the source ('un1t-crm') so downstream UniFi automation can
+  // distinguish app-driven unlocks from on-prem keypad use.
+  const body = {
+    extra: { source: 'un1t-crm' },
   }
+  if (meta.actorId && meta.actorName) {
+    body.actor_id = String(meta.actorId)
+    body.actor_name = String(meta.actorName)
+  }
+  return await call(cfg, 'PUT', `/doors/${encodeURIComponent(doorId)}/unlock`, body)
 }
 
 export { UnifiError }
