@@ -91,6 +91,36 @@ describe('computeTeamPricing', () => {
     expect(result.total_cents).toBe(0)
     expect(result.team_composition).toBe('all_non_members')
   })
+
+  // Mig 122 (E6 of events expansion): pricing math must be
+  // indifferent to event kind. A workshop with 2 members + 1 non-
+  // member should produce the same totals as a race with the same
+  // roster + the same fee structure. The function reads only
+  // member_pricing_enabled / member_fee_cents / non_member_fee_cents
+  // off the race object — kind isn't accessed and shouldn't be — so
+  // this test guards against any future regression that would
+  // accidentally introduce a per-kind pricing branch.
+  it('is indifferent to event kind (race vs workshop vs masterclass)', () => {
+    const roster = [
+      { is_member: true },
+      { is_member: true },
+      { is_member: false },
+    ]
+    const fees = { member_pricing_enabled: true, member_fee_cents: 1500, non_member_fee_cents: 2500 }
+
+    const expected = 2 * 1500 + 1 * 2500
+
+    for (const kind of ['race', 'workshop', 'seminar', 'open_day', 'masterclass']) {
+      const r = computeTeamPricing({
+        validatedRoster: roster,
+        race: { ...fees, kind },
+      })
+      expect(r.total_cents, `kind=${kind} total_cents`).toBe(expected)
+      expect(r.member_count, `kind=${kind} member_count`).toBe(2)
+      expect(r.non_member_count, `kind=${kind} non_member_count`).toBe(1)
+      expect(r.team_composition, `kind=${kind} composition`).toBe('mixed')
+    }
+  })
 })
 
 // ─── validateMemberByEmail — DB-shape lookup ─────────────────────
