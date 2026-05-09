@@ -23,9 +23,10 @@ import { useEffect, useMemo, useState } from 'react'
 import { Activity, Trophy, Loader2 } from 'lucide-react'
 import { formatElapsed, elapsedSecondsBetween } from '@/lib/race-control'
 
-// 20s rotation per spec. Polling is independent — every 2s the data
-// refreshes regardless of which screen is showing.
-const ROTATION_MS = 20_000
+// Auto-rotation removed at operator request — the screen stays on
+// whichever view the operator picked (default: on-course). Tap
+// anywhere on the screen to flip between on-course and finished.
+// Data polling stays at 2s so timer ticks + finishes appear live.
 const POLL_MS = 2_000
 
 export default function RaceDisplayBoard({ slug }) {
@@ -74,16 +75,9 @@ export default function RaceDisplayBoard({ slug }) {
     return () => clearInterval(id)
   }, [])
 
-  // Auto-rotate screens every ROTATION_MS. Key on a stable boolean
-  // so the polling-driven `data` updates every 2s don't tear down
-  // and rebuild the interval (that bug meant the screen never
-  // rotated — interval kept restarting before it could fire).
-  const hasData = !!data
-  useEffect(() => {
-    if (!hasData) return
-    const id = setInterval(() => setScreen((s) => (s + 1) % 2), ROTATION_MS)
-    return () => clearInterval(id)
-  }, [hasData])
+  // Auto-rotation deliberately removed. The operator clicks (or taps
+  // on the TV's touchscreen) to switch between on-course and finished.
+  // `screen` is still state-driven so manual switching keeps working.
 
   // Compute "now" in server time so the active-team timer is honest.
   // Plain const (no useMemo) — we WANT this to recompute every
@@ -186,9 +180,9 @@ export default function RaceDisplayBoard({ slug }) {
         )}
       </main>
 
-      {/* Footer — rotation indicator + reconnecting hint. */}
+      {/* Footer — current screen + tap hint + reconnecting state. */}
       <footer className="flex items-center justify-between px-12 pb-8 text-base opacity-60">
-        <div>{error ? 'Reconnecting…' : ''}</div>
+        <div>{error ? 'Reconnecting…' : 'Tap to switch screens'}</div>
         <div className="flex items-center gap-3">
           <Dot active={screen === 0} icon={Activity} label="On course" />
           <Dot active={screen === 1} icon={Trophy} label="Finished" />
