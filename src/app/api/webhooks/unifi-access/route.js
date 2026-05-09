@@ -107,17 +107,39 @@ export async function POST(request) {
   // etc); only door entries should drive attendance.
   const isDoorEntry = /access\.?(granted|success|allow)|door\.?(unlock|enter)|entry\.?(success|granted)/i.test(eventTypeRaw)
   if (!isDoorEntry) {
-    // Log the event type even on ignore so we can widen the regex
-    // when UniFi firmware fires an unfamiliar string (the test
-    // webhook button typically sends 'alarm.test', and real door
-    // events vary by firmware family). Includes a small slice of
-    // the payload key list to help diagnose which envelope shape
-    // we're looking at.
+    // DIAGNOSTIC (temporary): record ignored events to the audit
+    // table with source='unifi_access' + match_outcome='unknown_user'
+    // so we can read the raw payload back from the DB to discover
+    // what event-type string this UniFi firmware actually sends.
+    // Once we've widened the regex this whole branch reverts to a
+    // plain return.
+    try {
+      const db2 = createServerClient()
+      // Pick a location to satisfy NOT NULL — first one with UniFi
+      // configured, falls back to nothing (and we skip the insert).
+      const { data: locs } = await db2
+        .from('locations')
+        .select('id, settings')
+        .not('settings->unifi', 'is', null)
+        .limit(1)
+      const locId = (locs || [])[0]?.id
+      if (locId) {
+        await db2.from('staff_attendance_events').insert({
+          location_id: locId,
+          source: 'unifi_access',
+          unifi_user_id: actorUserId ? String(actorUserId) : null,
+          unifi_door_id: doorId ? String(doorId) : null,
+          event_at: new Date().toISOString(),
+          match_outcome: 'unknown_user',
+          payload: truncatePayload({ _diag_ignored: true, event_type: eventTypeRaw, full: payload }, 8 * 1024),
+        })
+      }
+    } catch (e) {
+      logWarn('webhook-unifi-access', 'diag insert failed', { err: String(e) })
+    }
     logInfo('webhook-unifi-access', 'ignored non-door-entry event', {
       event_type: eventTypeRaw,
       payload_keys: Object.keys(payload || {}).slice(0, 20),
-      has_actor: !!payload?.actor,
-      has_door: !!payload?.door,
     })
     return NextResponse.json({ success: true, ignored: 'not_a_door_entry', event_type: eventTypeRaw })
   }
