@@ -38,6 +38,11 @@ export const WEBHOOK_PROVIDERS = Object.freeze({
   // Mig 120: UniFi Access door-unlock events — drives zero-touch
   // staff attendance tracking. Provider whitelist updated in mig 120.
   UNIFI_ACCESS: 'unifi_access',
+  // Mig 121: UniFi Protect face-recognition events — Phase 2 of
+  // zero-touch attendance. Co-equal with UNIFI_ACCESS; whichever
+  // source's webhook lands first stamps the shift, the other
+  // becomes audit-only via the existing 'already_stamped' bucket.
+  UNIFI_PROTECT: 'unifi_protect',
 })
 
 const VALID_PROVIDERS = new Set(Object.values(WEBHOOK_PROVIDERS))
