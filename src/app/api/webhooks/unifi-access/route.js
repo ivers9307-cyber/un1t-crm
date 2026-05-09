@@ -175,10 +175,19 @@ export async function POST(request) {
       continue
     }
 
-    // Dedup key: alarm_id + index uniquely identifies one event in
-    // one alarm fire. UniFi will retry the whole alarm on 5xx, so
-    // dedup at this granularity is what we want.
-    const dedupKey = alarmId ? `${alarmId}:${i}` : `synthetic:${eventAt.toISOString()}:${actorUserId || 'na'}:${i}`
+    // Dedup key: UniFi REUSES the same alarm_id across every fire of
+    // a given alarm rule (verified live 2026-05-09 — three remote
+    // unlocks 5min apart all carried alarm_id 019e0da5...). So
+    // alarm_id alone collapses every fire into one. Mix in a 60-second
+    // bucket of the receipt time: a 5xx-retry within the same minute
+    // is treated as a dup (correct), but a new fire on the next minute
+    // boundary is treated as new (correct). Worst case for double-tap
+    // within 60s is one missed audit row — the shift-stamp race guard
+    // (UPDATE … IS NULL) prevents double-stamping anyway.
+    const minuteBucket = Math.floor(Date.now() / 60_000)
+    const dedupKey = alarmId
+      ? `${alarmId}:${i}:${minuteBucket}`
+      : `synthetic:${eventAt.toISOString()}:${actorUserId || 'na'}:${i}`
     const dedup = await recordWebhookEvent({
       db,
       provider: WEBHOOK_PROVIDERS.UNIFI_ACCESS,
