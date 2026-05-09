@@ -40,11 +40,15 @@ export async function GET(_request, { params }) {
   // started/finished on the page so a single shape covers both
   // screens. Ignore cancelled / refunded — they shouldn't appear on
   // the spectator board.
+  //
+  // team_members (mig 086) provides the per-team competitor names.
+  // Selecting ONLY `name` here on purpose — email / contact_id /
+  // member_contact_id must never reach the public spectator URL.
   const { data: registrations, error: regErr } = await db
     .from('race_registrations')
     .select(`
       id, status, race_started_at, race_finished_at, wave_id,
-      teams ( id, name, size )
+      teams ( id, name, size, members:team_members ( name ) )
     `)
     .eq('race_event_id', race.id)
     .in('status', ['confirmed', 'completed'])
@@ -54,15 +58,28 @@ export async function GET(_request, { params }) {
     return NextResponse.json({ success: false, error: regErr.message }, { status: 500 })
   }
 
-  // Strip down to the smallest possible per-team shape. No member
-  // data, no contact_id, no email. The TV doesn't need it.
+  // Strip down to the smallest possible per-team shape. Only the
+  // member NAME goes out — no contact_id, no email, no membership
+  // status. Trim + dedup names so the TV row stays tidy if the
+  // signup form let someone retype the same person.
   const wavesById = new Map((race.waves || []).map((w) => [w.id, w]))
   const trim = (r) => {
     const wave = r.wave_id ? wavesById.get(r.wave_id) : null
+    const seen = new Set()
+    const member_names = []
+    for (const m of (r.teams?.members || [])) {
+      const n = (m?.name || '').trim()
+      if (!n) continue
+      const k = n.toLowerCase()
+      if (seen.has(k)) continue
+      seen.add(k)
+      member_names.push(n)
+    }
     return {
       id: r.id,
       team_name: r.teams?.name || 'Unknown team',
       team_size: r.teams?.size ?? null,
+      member_names,
       wave_label: wave?.label || null,
       wave_start_time: wave?.start_time || null,
       race_started_at: r.race_started_at,

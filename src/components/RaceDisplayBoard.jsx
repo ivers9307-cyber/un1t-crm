@@ -230,17 +230,20 @@ function ActiveRow({ row, rank, serverNowMs }) {
   const startedMs = row.race_started_at ? Date.parse(row.race_started_at) : null
   const elapsed = startedMs ? Math.max(0, Math.floor((serverNowMs - startedMs) / 1000)) : null
   return (
-    <div className="flex items-baseline justify-between border-b border-white/10 py-3">
-      <div className="flex items-baseline gap-5 min-w-0">
-        <span className="text-3xl font-bold opacity-50 w-12 shrink-0">{rank}</span>
-        <span className="text-3xl font-semibold truncate">{row.team_name}</span>
-        {row.wave_label && (
-          <span className="text-base uppercase tracking-widest opacity-50 hidden lg:inline">
-            {row.wave_label}
-          </span>
-        )}
+    <div className="flex items-baseline justify-between border-b border-white/10 py-3 gap-6">
+      <div className="min-w-0 flex-1">
+        <div className="flex items-baseline gap-5 min-w-0">
+          <span className="text-3xl font-bold opacity-50 w-12 shrink-0">{rank}</span>
+          <span className="text-3xl font-semibold truncate">{row.team_name}</span>
+          {row.wave_label && (
+            <span className="text-base uppercase tracking-widest opacity-50 hidden lg:inline">
+              {row.wave_label}
+            </span>
+          )}
+        </div>
+        <Competitors names={row.member_names} />
       </div>
-      <span className="text-4xl font-mono font-bold tabular-nums shrink-0 ml-6">
+      <span className="text-4xl font-mono font-bold tabular-nums shrink-0">
         {formatElapsed(elapsed)}
       </span>
     </div>
@@ -271,19 +274,39 @@ function CompletedRow({ row, rank }) {
   // Top-3 podium accent.
   const accent = rank === 1 ? 'text-yellow-300' : rank === 2 ? 'text-zinc-200' : rank === 3 ? 'text-amber-500' : 'text-white'
   return (
-    <div className="flex items-baseline justify-between border-b border-white/10 py-3">
-      <div className="flex items-baseline gap-5 min-w-0">
-        <span className={`text-3xl font-bold w-12 shrink-0 ${accent}`}>{rank}</span>
-        <span className="text-3xl font-semibold truncate">{row.team_name}</span>
-        {row.wave_label && (
-          <span className="text-base uppercase tracking-widest opacity-50 hidden lg:inline">
-            {row.wave_label}
-          </span>
-        )}
+    <div className="flex items-baseline justify-between border-b border-white/10 py-3 gap-6">
+      <div className="min-w-0 flex-1">
+        <div className="flex items-baseline gap-5 min-w-0">
+          <span className={`text-3xl font-bold w-12 shrink-0 ${accent}`}>{rank}</span>
+          <span className="text-3xl font-semibold truncate">{row.team_name}</span>
+          {row.wave_label && (
+            <span className="text-base uppercase tracking-widest opacity-50 hidden lg:inline">
+              {row.wave_label}
+            </span>
+          )}
+        </div>
+        <Competitors names={row.member_names} />
       </div>
-      <span className="text-4xl font-mono font-bold tabular-nums shrink-0 ml-6">
+      <span className="text-4xl font-mono font-bold tabular-nums shrink-0">
         {formatElapsed(elapsed)}
       </span>
+    </div>
+  )
+}
+
+// Sub-line under the team name: comma-separated competitor names.
+// Indented to align with the team name (after the rank column). Hidden
+// when there are no names (e.g. solo signup with only the team name).
+// Truncates the visible string and appends "+N more" if a team has
+// many members so the row never wraps and ruins the grid.
+function Competitors({ names }) {
+  if (!Array.isArray(names) || names.length === 0) return null
+  const visible = names.slice(0, 4)
+  const rest = names.length - visible.length
+  return (
+    <div className="ml-[3.25rem] mt-1 text-lg opacity-70 truncate">
+      {visible.join(' · ')}
+      {rest > 0 && <span className="opacity-60"> · +{rest} more</span>}
     </div>
   )
 }
