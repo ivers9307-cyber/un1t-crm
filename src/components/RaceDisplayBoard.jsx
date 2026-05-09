@@ -196,9 +196,9 @@ export default function RaceDisplayBoard({ slug }) {
             type="button"
             onClick={toggleNameMode}
             title={nameMode === NAME_MODE_TEAM ? 'Showing team names — tap for competitor names' : 'Showing competitor names — tap for team names'}
-            className="inline-flex items-center gap-2 rounded-full border border-white/15 px-3 py-1.5 text-sm uppercase tracking-widest opacity-60 hover:opacity-100 hover:bg-white/5 transition mt-2"
+            className="inline-flex items-center gap-3 rounded-full bg-white/15 hover:bg-white/25 active:bg-white/30 border border-white/30 px-5 py-3 text-xl font-semibold uppercase tracking-widest transition mt-2 shrink-0"
           >
-            {nameMode === NAME_MODE_TEAM ? <Users size={16} /> : <User size={16} />}
+            {nameMode === NAME_MODE_TEAM ? <Users size={22} /> : <User size={22} />}
             {nameMode === NAME_MODE_TEAM ? 'Teams' : 'Names'}
           </button>
           <div className="text-right min-w-0">
