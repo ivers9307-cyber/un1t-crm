@@ -21,6 +21,13 @@ on:
       - '.eslintrc.json'
       - 'vitest.config.js'
       - 'jsconfig.json'
+      # scripts/** added because scripts/check-mobile-parity.mjs is
+      # one of the CI steps — editing that script needs to re-run CI
+      # to verify the change. Otherwise a parity-rule fix lands silently
+      # without CI confirming it works (which happened on commit
+      # a1e57a8 — the attendance_reports allow-list addition didn't
+      # trigger CI because scripts/** wasn't watched).
+      - 'scripts/**'
       - '.github/workflows/web-ci.yml'
 
 concurrency:
