@@ -42,7 +42,7 @@ const UpdateStaffSchema = z.object({
 // Throws UnifiError on failure — the caller surfaces the message to
 // the API consumer without persisting the toggle change in
 // profile_locations, so the UI state stays consistent with reality.
-async function applyDoorAccessChange({ profile, location, enable, role, existingUnifiUserId }) {
+async function applyDoorAccessChange({ profile, location, enable, role, existingUnifiUserId, skipFindOrCreate = false }) {
   const cfg = getLocationUnifiConfig(location)
 
   if (!enable) {
@@ -60,8 +60,15 @@ async function applyDoorAccessChange({ profile, location, enable, role, existing
       `enabling door access here.`
     )
   }
+  // skipFindOrCreate=true → operator picked the UniFi user manually
+  // via the staff edit picker (mig 120). Use the id they chose without
+  // looking up by email or creating a new UniFi user. existingUnifiUserId
+  // is already the operator-picked value at this point.
   const unifiUserId = existingUnifiUserId
-    || await findOrCreateUnifiUser(cfg, profile)
+    || (skipFindOrCreate ? null : await findOrCreateUnifiUser(cfg, profile))
+  if (!unifiUserId) {
+    throw new UnifiError('No UniFi user id available to sync policies for — pick a UniFi user in the staff edit page or rely on the auto-create flow.')
+  }
   await syncUnifiUserPolicyForRole(cfg, unifiUserId, role)
   return unifiUserId
 }
@@ -299,6 +306,22 @@ export async function PUT(request, { params }) {
       // user will have AT THIS location. Critically, the role is
       // a.role (per-location) — not profiles.role.
       let unifiUserId = existing?.unifi_user_id || null
+
+      // Manual UniFi user link (mig 120 attendance picker). If the
+      // assignment payload includes an explicit unifi_user_id key:
+      //   - string  → set the link to that id (overrides the existing
+      //               value AND skips findOrCreateUnifiUser, since the
+      //               operator picked exactly which UniFi user to use)
+      //   - null    → clear the link
+      //   - missing → leave behaviour unchanged (auto-create on toggle)
+      // This is what the staff edit page uses to attach a CRM profile
+      // to a pre-existing UniFi user that doesn't share the email
+      // findOrCreateUnifiUser would otherwise look up.
+      const manualLinkProvided = Object.prototype.hasOwnProperty.call(a, 'unifi_user_id')
+      if (manualLinkProvided) {
+        unifiUserId = a.unifi_user_id || null
+      }
+
       const locationRow = existing?.locations
       if (locationRow) {
         try {
@@ -308,6 +331,10 @@ export async function PUT(request, { params }) {
             enable: wantsDoor,
             role: a.role,
             existingUnifiUserId: unifiUserId,
+            // When the operator manually picked a specific UniFi user,
+            // skip the find-or-create lookup — we want THIS user, not
+            // whoever happens to share the staff member's email.
+            skipFindOrCreate: manualLinkProvided && !!unifiUserId,
           })
         } catch (e) {
           const msg = e instanceof UnifiError
@@ -318,6 +345,10 @@ export async function PUT(request, { params }) {
           // DO still apply role + is_default change. The toggle stays
           // at its previous state so UI / DB / UniFi don't diverge.
         }
+      } else if (manualLinkProvided) {
+        // No location row joined (rare), but a manual link was set —
+        // honour it without doing any UniFi calls.
+        // unifiUserId already holds the manual value above.
       }
 
       const row = {

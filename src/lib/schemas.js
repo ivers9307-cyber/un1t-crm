@@ -77,6 +77,15 @@ export const assignmentSchema = z.object({
   role: locationRoleSchema,
   is_default: z.boolean().optional(),
   unifi_door_access: z.boolean().optional(),
+  // Optional manual link to an existing UniFi Access user AT THIS
+  // LOCATION (mig 120 attendance picker). Normally findOrCreateUnifiUser
+  // populates this when the door-access toggle is flipped on; the
+  // picker lets the operator override that and link to a specific
+  // pre-existing UniFi user instead. `null` clears the link,
+  // `undefined` leaves it unchanged, a string sets it. Treated as a
+  // hint by the staff PUT — when present and door access is ON, the
+  // route uses this id rather than calling findOrCreateUnifiUser.
+  unifi_user_id: z.string().nullable().optional(),
   // Per-location user permission overrides (mig 058). Empty `{}` =
   // "use the role default at this assignment's role". Top-level
   // keys mirror WEB_PERMISSIONS; nested `mobile` sub-object mirrors

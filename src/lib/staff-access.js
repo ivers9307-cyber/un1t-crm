@@ -36,7 +36,7 @@
  * updating this single shape.
  *
  * @param {object} pl  profile_locations row
- * @returns {{ location_id, role, is_default, unifi_door_access, permissions }}
+ * @returns {{ location_id, role, is_default, unifi_door_access, unifi_user_id, permissions }}
  */
 export function mapProfileLocationToAssignment(pl) {
   if (!pl) return null
@@ -45,6 +45,9 @@ export function mapProfileLocationToAssignment(pl) {
     role: pl.role,
     is_default: !!pl.is_default,
     unifi_door_access: !!pl.unifi_door_access,
+    // Surfaced so the staff edit UniFi user picker (mig 120) can show
+    // which UniFi user is currently linked. Empty/null = unlinked.
+    unifi_user_id: pl.unifi_user_id || null,
     // CRITICAL: keep the permissions blob. StaffForm's hydration
     // path (initialAssignments in StaffForm.jsx) only renders the
     // saved overrides when permissions has keys; an empty/undefined

@@ -150,6 +150,56 @@ export async function findUnifiUserByEmail(cfg, email) {
 }
 
 /**
+ * List all UniFi Access users at the controller, paginated. Returns a
+ * flat array of { id, full_name, user_email, employee_number, status,
+ * nfc_cards } objects (we map UniFi's first_name + last_name into a
+ * combined full_name for picker UI convenience).
+ *
+ * Used by the staff-edit UniFi user picker (mig 120 attendance) so the
+ * operator can manually link a CRM profile to an existing UniFi user
+ * — the alternative to the auto-create path findOrCreateUnifiUser
+ * takes when the door-access toggle is flipped on.
+ *
+ * Implementation: /users/search with an empty keyword returns the
+ * full user list from the controller, paginated. We walk pages until
+ * we run out, capping at 1000 to keep the response bounded for
+ * studios with thousands of registered cards.
+ */
+export async function listUnifiUsers(cfg, { maxUsers = 1000, pageSize = 100 } = {}) {
+  const out = []
+  let page = 1
+  // Hard cap on pages so a misbehaving controller can't walk us forever.
+  while (out.length < maxUsers && page <= 50) {
+    const data = await call(cfg, 'POST', '/users/search', {
+      keyword: '',          // empty keyword → return all
+      page_num: page,
+      page_size: pageSize,
+    })
+    const batch = Array.isArray(data?.users) ? data.users : Array.isArray(data) ? data : []
+    if (batch.length === 0) break
+    for (const u of batch) {
+      out.push({
+        id:               u.id,
+        full_name:        [u.first_name, u.last_name].filter(Boolean).join(' ').trim() || u.user_email || u.id,
+        first_name:       u.first_name || '',
+        last_name:        u.last_name || '',
+        user_email:       u.user_email || null,
+        employee_number:  u.employee_number || null,
+        status:           u.status || null,
+        nfc_count:        Array.isArray(u.nfc_cards) ? u.nfc_cards.length : 0,
+      })
+      if (out.length >= maxUsers) break
+    }
+    if (batch.length < pageSize) break  // last page
+    page++
+  }
+  // Sort alphabetically — the picker is much friendlier when names
+  // come back in a stable order.
+  out.sort((a, b) => a.full_name.localeCompare(b.full_name))
+  return out
+}
+
+/**
  * Register a new UniFi user. Returns the created user (with id).
  * Per §3.2 the only required fields are first_name + last_name.
  */

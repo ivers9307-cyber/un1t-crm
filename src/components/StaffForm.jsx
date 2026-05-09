@@ -310,6 +310,12 @@ export default function StaffForm({
         role: a.role,
         is_default: !!a.is_default,
         unifi_door_access: !!a.unifi_door_access,
+        // Manual UniFi user link (mig 120 attendance picker). Sending
+        // `null` clears the link, a string sets it, omitting the key
+        // leaves whatever the server already has unchanged. We always
+        // send the current state so the operator's "Auto" choice
+        // (null) reliably wipes the link.
+        unifi_user_id: a.unifi_user_id || null,
         permissions: a.permissions || {},
       })),
       active: form.active,
@@ -531,6 +537,25 @@ export default function StaffForm({
                 <div className="text-xs text-amber-300">
                   UniFi not configured for {loc.name}. Set it up in Location settings before enabling door access.
                 </div>
+              )}
+
+              {/* UniFi user link (mig 120 attendance picker).
+                  Lets the operator manually pick which UniFi Access user
+                  this profile maps to AT THIS LOCATION — needed when the
+                  staff member's UniFi user wasn't auto-discovered by
+                  email match (which is the common case: cards are often
+                  registered under personal not work emails). The
+                  selected unifi_user_id drives the attendance webhook's
+                  card-tap → shift-stamp pipeline. */}
+              {isEdit && configured && (
+                <UnifiUserPicker
+                  locationId={a.location_id}
+                  locationName={loc.name}
+                  value={a.unifi_user_id || null}
+                  onChange={(unifi_user_id) =>
+                    updateAssignment(a.location_id, { unifi_user_id })
+                  }
+                />
               )}
             </div>
           )
@@ -1188,6 +1213,122 @@ function SendPasswordResetButton({ staffId, email }) {
       {error && state === 'error' && (
         <div className="text-xs text-red-700 inline-flex items-start gap-1.5">
           <AlertCircle size={11} className="mt-0.5 shrink-0" /> {error}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── UnifiUserPicker ─────────────────────────────────────────────────
+//
+// Per-location dropdown that lets the operator pick which UniFi Access
+// user this CRM profile is linked to (mig 120 attendance). The link
+// drives the staff_attendance webhook's actor → profile resolution:
+// without it, real card taps land as match_outcome='unknown_user' and
+// shifts never auto-stamp.
+//
+// Lazy-fetches /api/locations/[id]/unifi-users on first expand so the
+// staff edit page stays snappy even with multiple locations attached.
+// Caches the result on the component so reopening doesn't refetch.
+function UnifiUserPicker({ locationId, locationName, value, onChange }) {
+  const [open, setOpen] = useState(false)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState(null)
+  const [users, setUsers] = useState(null) // null = unfetched
+
+  // The pretty label shown on the closed picker — pulls from the
+  // fetched user list when available, falls back to the raw id.
+  const currentLabel = (() => {
+    if (!value) return 'Auto (link on first email match)'
+    const found = users?.find((u) => u.id === value)
+    if (found) {
+      return found.full_name + (found.user_email ? ` · ${found.user_email}` : '')
+    }
+    return value.length > 12 ? `Linked: ${value.slice(0, 8)}…` : `Linked: ${value}`
+  })()
+
+  async function fetchUsers() {
+    if (loading) return
+    setLoading(true)
+    setError(null)
+    try {
+      const res = await fetch(`/api/locations/${locationId}/unifi-users`, { cache: 'no-store' })
+      const json = await res.json()
+      if (!json.success) throw new Error(json.message || json.error || 'Fetch failed')
+      setUsers(json.users || [])
+    } catch (e) {
+      setError(e.message || 'Could not load UniFi users')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  function handleToggle() {
+    const next = !open
+    setOpen(next)
+    if (next && users === null) fetchUsers()
+  }
+
+  return (
+    <div className="space-y-1.5">
+      <button
+        type="button"
+        onClick={handleToggle}
+        className="w-full flex items-center justify-between text-left rounded-md border border-un1t-gray bg-un1t-black px-3 py-2 text-sm hover:border-un1t-mid"
+      >
+        <div className="min-w-0">
+          <div className="text-xs text-un1t-light">UniFi Access user</div>
+          <div className="truncate">{currentLabel}</div>
+        </div>
+        <span className="text-un1t-light text-xs ml-2">{open ? '▴' : '▾'}</span>
+      </button>
+
+      {open && (
+        <div className="rounded-md border border-un1t-gray bg-un1t-black p-2 space-y-1">
+          {loading && (
+            <div className="text-xs text-un1t-light px-2 py-1.5">Loading users from {locationName}…</div>
+          )}
+          {error && (
+            <div className="text-xs text-red-300 px-2 py-1.5">{error}</div>
+          )}
+          {!loading && !error && users && (
+            <>
+              <button
+                type="button"
+                onClick={() => { onChange(null); setOpen(false) }}
+                className={`w-full text-left text-sm px-2 py-1.5 rounded hover:bg-un1t-gray/40 ${!value ? 'text-blue-300' : ''}`}
+              >
+                Auto / clear link
+                <div className="text-xs text-un1t-light">Let the system match by email when door access is enabled</div>
+              </button>
+              <div className="border-t border-un1t-gray/50 my-1" />
+              <div className="max-h-64 overflow-y-auto">
+                {users.length === 0 && (
+                  <div className="text-xs text-un1t-light px-2 py-1.5">No UniFi users registered at this controller.</div>
+                )}
+                {users.map((u) => (
+                  <button
+                    key={u.id}
+                    type="button"
+                    onClick={() => { onChange(u.id); setOpen(false) }}
+                    className={`w-full text-left text-sm px-2 py-1.5 rounded hover:bg-un1t-gray/40 ${value === u.id ? 'text-blue-300' : ''}`}
+                  >
+                    <div>{u.full_name}</div>
+                    <div className="text-xs text-un1t-light">
+                      {u.user_email || 'no email'}
+                      {u.nfc_count > 0 && ` · ${u.nfc_count} NFC card${u.nfc_count === 1 ? '' : 's'}`}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {value && (
+        <div className="text-[11px] text-un1t-light px-1">
+          When this person taps a door at {locationName}, attendance auto-stamps their shift.
         </div>
       )}
     </div>
