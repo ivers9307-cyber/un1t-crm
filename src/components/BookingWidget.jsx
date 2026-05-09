@@ -64,7 +64,12 @@ export default function BookingWidget({ slug }) {
 
   // Load event details
   useEffect(() => {
-    fetch(`/api/public/events/${slug}`)
+    // /api/public/bookings/[slug] (Calendly templates) — moved
+    // here from /api/public/events/[slug] in commit 6f6911a (E3 of
+    // events expansion) when the multi-kind events feature claimed
+    // the /api/public/events/* prefix for race / workshop / seminar
+    // / open_day / masterclass signups.
+    fetch(`/api/public/bookings/${slug}`)
       .then(r => r.json())
       .then(d => {
         if (d.success) setEvent(d.data)
@@ -80,7 +85,7 @@ export default function BookingWidget({ slug }) {
     setLoadingSlots(true)
     setSelectedSlot(null)
     const dateStr = selectedDate.toISOString().split('T')[0]
-    fetch(`/api/public/events/${slug}/slots?date=${dateStr}`)
+    fetch(`/api/public/bookings/${slug}/slots?date=${dateStr}`)
       .then(r => r.json())
       .then(d => {
         setSlots(d.data?.slots || [])

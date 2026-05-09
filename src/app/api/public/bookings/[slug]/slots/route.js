@@ -1,8 +1,16 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 
-// GET /api/public/events/:slug/slots?date=2026-04-28
-// Returns available time slots for a given date
+// GET /api/public/bookings/:slug/slots?date=2026-04-28
+// Returns available time slots for a given date.
+//
+// PATH HISTORY: lived at /api/public/events/[slug]/slots until the
+// events expansion (E3 / commit 6f6911a) — the multi-kind events
+// feature claimed the /api/public/events/* prefix. Calendly slots
+// follow the templates over to /api/public/bookings/* (E2 named the
+// templates "booking types" and lives at /bookings/event-types/* on
+// the operator side; the public surface is just /book/[slug] with
+// its API at /api/public/bookings/[slug]).
 export async function GET(request, { params }) {
   const db = createServerClient()
   const { searchParams } = new URL(request.url)
@@ -20,7 +28,7 @@ export async function GET(request, { params }) {
     .single()
 
   if (eventErr || !event) {
-    return NextResponse.json({ success: false, error: 'Event not found' }, { status: 404 })
+    return NextResponse.json({ success: false, error: 'Booking type not found' }, { status: 404 })
   }
 
   // Check date is within allowed range
