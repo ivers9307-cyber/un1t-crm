@@ -107,6 +107,18 @@ export async function POST(request) {
   // etc); only door entries should drive attendance.
   const isDoorEntry = /access\.?(granted|success|allow)|door\.?(unlock|enter)|entry\.?(success|granted)/i.test(eventTypeRaw)
   if (!isDoorEntry) {
+    // Log the event type even on ignore so we can widen the regex
+    // when UniFi firmware fires an unfamiliar string (the test
+    // webhook button typically sends 'alarm.test', and real door
+    // events vary by firmware family). Includes a small slice of
+    // the payload key list to help diagnose which envelope shape
+    // we're looking at.
+    logInfo('webhook-unifi-access', 'ignored non-door-entry event', {
+      event_type: eventTypeRaw,
+      payload_keys: Object.keys(payload || {}).slice(0, 20),
+      has_actor: !!payload?.actor,
+      has_door: !!payload?.door,
+    })
     return NextResponse.json({ success: true, ignored: 'not_a_door_entry', event_type: eventTypeRaw })
   }
 
