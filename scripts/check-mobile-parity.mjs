@@ -87,6 +87,12 @@ const WEB_ONLY_OK = {
   // admin-on-laptop work.
   races:          'Race event management + race-day control panel + TV display are desktop / studio-TV surfaces (mig 082 / 092). No mobile UI by design.',
   orders:         'Orders list + refund flow + retry-chain drill-in are desktop-only (mig 085 / 092). Mobile users with revenue questions see the contact profile timeline.',
+  // Mig 120 — auto-stamped from UniFi Access door unlocks. Owner /
+  // manager / master only — operator monitoring view that lives
+  // inside the Schedule hub (folded under the Schedule tab strip in
+  // commit 138def1). No mobile counterpart by design — staff +
+  // head_coach can't see it on web either.
+  attendance_reports: 'Attendance report (mig 120) is an operator monitoring view inside the desktop Schedule hub. Owner/manager/master only — staff + head_coach are blocked even on web. No mobile UI by design.',
 }
 
 const webDrift = []
