@@ -281,13 +281,32 @@ export async function listDoors(cfg) {
  */
 export async function remoteUnlockDoor(cfg, doorId, meta = {}) {
   if (!doorId) throw new UnifiError('doorId is required')
-  // Per UniFi Developer API §4 (Doors), the unlock endpoint takes
-  // no body — the door's configured unlock duration drives how long
-  // the relay stays open. We POST with a minimal stamp so audit
-  // logs (theirs and ours) show who triggered it.
-  return await call(cfg, 'POST', `/doors/${encodeURIComponent(doorId)}/remote_unlock`, {
-    actor_email: meta.actorEmail || undefined,
-  })
+  // UniFi Access renamed the unlock endpoint between firmware versions:
+  //   v1.x          POST /doors/{id}/remote_unlock
+  //   v2.x / v3.x+  POST /doors/{id}/remote_unlocking
+  // Different studios have different firmware levels (UDM-SE upgrades
+  // Access on its own cadence). Rather than hard-code one path, try
+  // the newer endpoint first — it's what 99% of in-use controllers
+  // expose today — and fall back to the older one only if we get a
+  // path-not-found 404. Other error codes (auth, validation) propagate
+  // as normal so we don't mask real problems.
+  //
+  // The unlock endpoint takes no body — the door's configured unlock
+  // duration drives how long the relay stays open. We POST a minimal
+  // stamp so audit logs show who triggered it.
+  const id = encodeURIComponent(doorId)
+  const body = { actor_email: meta.actorEmail || undefined }
+  try {
+    return await call(cfg, 'POST', `/doors/${id}/remote_unlocking`, body)
+  } catch (e) {
+    const isPathNotFound =
+      e instanceof UnifiError &&
+      (e.status === 404 ||
+       /HTTP_404|404|not\s*found|api was not found/i.test(e.message || e.code || ''))
+    if (!isPathNotFound) throw e
+    // Fall back to the legacy endpoint name.
+    return await call(cfg, 'POST', `/doors/${id}/remote_unlock`, body)
+  }
 }
 
 export { UnifiError }
