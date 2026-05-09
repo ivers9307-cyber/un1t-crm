@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
-import { LayoutDashboard, Users, Columns3, CheckSquare, Calendar, MessagesSquare, CalendarClock, Settings, LogOut, Car, Flag, Receipt, DoorOpen, Activity, ExternalLink, X, FileSignature, Heart } from 'lucide-react'
+import { LayoutDashboard, Users, Columns3, CheckSquare, Calendar, MessagesSquare, CalendarClock, Settings, LogOut, Car, Flag, Receipt, DoorOpen, Activity, ExternalLink, X, FileSignature, Heart, UserCheck } from 'lucide-react'
 import { createBrowserClient } from '@/lib/supabase'
 import LocationSwitcher from './LocationSwitcher'
 import ImpersonatePicker from './ImpersonatePicker'
@@ -46,6 +46,11 @@ const allNav = [
   { href: '/communications', label: 'Communications', icon: MessagesSquare,
     anyPermission: ['email', 'whatsapp'] },
   { href: '/schedule',   label: 'Schedule',     icon: CalendarClock,   permission: 'schedule' },
+  // Attendance report (mig 120) — owner/manager/master only.
+  // Auto-stamped from UniFi Access door unlocks. Not visible to
+  // staff or head_coach (see DEFAULT_WEB_PERMISSIONS_BY_ROLE in
+  // shared/permissions.js).
+  { href: '/schedule/attendance', label: 'Attendance', icon: UserCheck, permission: 'attendance_reports' },
   // Race events (mig 082) — standalone from booking events. Got its
   // own permission key in the mig-092 audit so locations that don't
   // run races can hide them without losing booking events.

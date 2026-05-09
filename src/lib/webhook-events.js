@@ -35,6 +35,9 @@ export const WEBHOOK_PROVIDERS = Object.freeze({
   WHATSAPP: 'whatsapp',
   TWILIO: 'twilio',
   XERO: 'xero',
+  // Mig 120: UniFi Access door-unlock events — drives zero-touch
+  // staff attendance tracking. Provider whitelist updated in mig 120.
+  UNIFI_ACCESS: 'unifi_access',
 })
 
 const VALID_PROVIDERS = new Set(Object.values(WEBHOOK_PROVIDERS))

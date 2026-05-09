@@ -361,6 +361,61 @@ fix: switch to a different DDNS provider that respects the
 existing record state, or pre-create the record with proxied=false
 and confirm UniFi's update doesn't change it on the next push.
 
+## Webhook → CRM (zero-touch attendance, mig 120)
+
+The CRM receives door-unlock events from UniFi Access at
+`POST https://crm.un1tdublin.com/api/webhooks/unifi-access`. Each
+event is logged to `staff_attendance_events` and, if it can be
+matched to a scheduled shift in the next/previous 4h, the arrival
+time is auto-stamped onto `shift_assignments.start_time_override`.
+That stamp drives the on-time / late / no-show buckets shown at
+`/schedule/attendance` (owner / manager / master only).
+
+### One-time setup per location
+
+1. **Generate a webhook token.** A long random string is fine —
+   anything ≥ 32 chars. We use one shared token across all
+   locations because the receiver fingerprints which location an
+   event belongs to from the controller_id in the payload (and
+   falls back to "single configured location" when there's only
+   one studio with UniFi Access).
+
+2. **Set the env var on Vercel.**
+   - `UNIFI_ACCESS_WEBHOOK_TOKEN` → the token from step 1
+   - During rotation: `UNIFI_ACCESS_WEBHOOK_TOKEN_PREVIOUS` → the
+     previous token. Both are accepted while you flip every
+     controller's webhook config.
+
+3. **Configure the webhook in UniFi Access** (per location):
+   - Settings → System → Webhooks → Add
+   - URL: `https://crm.un1tdublin.com/api/webhooks/unifi-access`
+   - Events: tick **Door access (success)** only — we ignore
+     denials, lock-rule changes, user-create events, etc.
+   - Custom header: `X-Webhook-Token: <your-token>`
+
+4. **Smoke test.** Tap your card at any door. Within ~2s the
+   `staff_attendance_events` table gets a row. If you're scheduled
+   on a shift starting within 4h, the stamp also lands on
+   `shift_assignments.start_time_override`. Operators check
+   `/schedule/attendance` to see live results.
+
+### Diagnostic: what does each `match_outcome` mean?
+
+The audit table `staff_attendance_events.match_outcome` tells you
+why a webhook didn't end up stamping a shift:
+
+| `match_outcome`         | Meaning |
+| ----------------------- | ------- |
+| `matched`               | Stamped successfully — see `matched_assignment_id` |
+| `no_shift_in_window`    | Staff identified, but no shift starting within ±4h at this location |
+| `already_stamped`       | Found a candidate shift but a parallel webhook beat us to it |
+| `unknown_user`          | The `actor.user_id` from the payload doesn't match any `profile_locations.unifi_user_id` — the door was unlocked by a member NFC card, a deactivated staff card, or a never-synced staff record |
+| `wrong_location`        | The staff member is registered in a different studio's UniFi instance — somehow they tapped at this controller |
+
+For "I expected to be auto-stamped but wasn't", check this column
+to know which knob to turn (sync staff, fix wave window, regenerate
+token, etc).
+
 ### Updated rollout checklist
 
 In light of all the above, the canonical checklist for the next

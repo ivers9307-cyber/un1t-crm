@@ -51,6 +51,12 @@ export const WEB_PERMISSIONS = Object.freeze([
   { key: 'sms',        label: 'SMS',                            hint: 'Send SMS via Twilio. Per-location alpha sender ID configured in Location Settings.' },
   // — Operations —
   { key: 'schedule',          label: 'Schedule',                hint: 'Coach roster, shift blocks, time-off, swap requests.' },
+  // Mig 120: zero-touch attendance tracking. Auto-stamps actual
+  // arrival times from UniFi Access door unlocks and reports
+  // on-time / late / no-show. NOT visible to staff themselves —
+  // this is an owner-/manager-/master-only oversight tool.
+  // Default-off for staff + head_coach below.
+  { key: 'attendance_reports', label: 'Attendance Reports',     hint: 'Who turned up on time. Auto-stamped from UniFi Access door unlocks; staff cannot see this.' },
   { key: 'assistant',         label: 'AI Assistant',            hint: 'In-app chat assistant with CRM tool use.' },
   // Mig 093 (Nov 2026): renamed from `door_unlock` (mobile-only)
   // to `studio_management` (cross-platform, top-level on
@@ -79,7 +85,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     pipeline: true, contacts: true, activities: true,
     events: true, bookings: true, races: true,
     email: true, whatsapp: true, sms: true,
-    schedule: true, assistant: true, studio_management: true,
+    schedule: true, attendance_reports: true, assistant: true, studio_management: true,
     orders: true, car_processing: true,
     settings: true,
   },
@@ -88,7 +94,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     pipeline: true, contacts: true, activities: true,
     events: true, bookings: true, races: true,    // race-day starts/finishes are a front-of-house duty
     email: false, whatsapp: false, sms: false,
-    schedule: true, assistant: false, studio_management: false,
+    schedule: true, attendance_reports: false, assistant: false, studio_management: false,
     orders: false, car_processing: false,         // financial views off by default
     settings: false,
   },
@@ -97,7 +103,8 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     pipeline: true, contacts: true, activities: true,
     events: true, bookings: true, races: true,
     email: true, whatsapp: true, sms: true,
-    schedule: true, assistant: true, studio_management: false, // explicit opt-in
+    schedule: true, attendance_reports: false,    // head coaches don't see attendance — owner/manager only
+    assistant: true, studio_management: false,    // explicit opt-in
     orders: false, car_processing: false,         // head coach doesn't need orders by default
     settings: false,
   },
@@ -106,7 +113,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     pipeline: true, contacts: true, activities: true,
     events: true, bookings: true, races: true,
     email: true, whatsapp: true, sms: true,
-    schedule: true, assistant: true, studio_management: true,
+    schedule: true, attendance_reports: true, assistant: true, studio_management: true,
     orders: true, car_processing: false,          // managers run revenue ops; CCF Autos is per-user opt-in
     settings: true,
   },
@@ -115,7 +122,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     pipeline: true, contacts: true, activities: true,
     events: true, bookings: true, races: true,
     email: true, whatsapp: true, sms: true,
-    schedule: true, assistant: true, studio_management: true,
+    schedule: true, attendance_reports: true, assistant: true, studio_management: true,
     orders: true, car_processing: false,          // OFF for owner too — explicit opt-in per profile
     settings: true,
   },
