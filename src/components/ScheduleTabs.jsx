@@ -1,12 +1,14 @@
 'use client'
 
 import { useState } from 'react'
-import { CalendarClock, CheckCircle, BarChart3, Receipt } from 'lucide-react'
+import { CalendarClock, CheckCircle, BarChart3, Receipt, UserCheck } from 'lucide-react'
 import ScheduleCalendar from './ScheduleCalendar'
 import ScheduleApprovals from './ScheduleApprovals'
 import ScheduleReporting from './ScheduleReporting'
 import InvoicesManager from './InvoicesManager'
+import AttendanceReportClient from './AttendanceReportClient'
 import { MANAGER_ROLES } from '@/lib/schemas'
+import { hasPermission } from '@/lib/permissions'
 
 const canManage = (role) => MANAGER_ROLES.includes(role)
 
@@ -22,11 +24,19 @@ export default function ScheduleTabs({ user }) {
   const isApprover = user.role === 'master' || user.role === 'owner'
   const showInvoices = isContractor || isApprover
 
+  // Attendance: same gate as the standalone /schedule/attendance page
+  // (still reachable directly — this is just an additional surface).
+  // attendance_reports defaults on for owner/manager/master, off for
+  // staff + head_coach (see DEFAULT_WEB_PERMISSIONS_BY_ROLE in
+  // shared/permissions.js).
+  const showAttendance = hasPermission(user, 'attendance_reports')
+
   const tabs = [
-    { key: 'schedule', label: 'Schedule', icon: CalendarClock, show: true },
-    { key: 'approvals', label: 'Approvals', icon: CheckCircle, show: isManager },
-    { key: 'reporting', label: 'Reporting', icon: BarChart3, show: isManager },
-    { key: 'invoices', label: 'Invoices', icon: Receipt, show: showInvoices },
+    { key: 'schedule',   label: 'Schedule',   icon: CalendarClock, show: true },
+    { key: 'approvals',  label: 'Approvals',  icon: CheckCircle,   show: isManager },
+    { key: 'reporting',  label: 'Reporting',  icon: BarChart3,     show: isManager },
+    { key: 'invoices',   label: 'Invoices',   icon: Receipt,       show: showInvoices },
+    { key: 'attendance', label: 'Attendance', icon: UserCheck,     show: showAttendance },
   ].filter(t => t.show)
 
   return (
@@ -54,6 +64,9 @@ export default function ScheduleTabs({ user }) {
       {activeTab === 'approvals' && isManager && <ScheduleApprovals user={user} />}
       {activeTab === 'reporting' && isManager && <ScheduleReporting user={user} />}
       {activeTab === 'invoices' && <InvoicesManager user={user} />}
+      {activeTab === 'attendance' && showAttendance && (
+        <AttendanceReportClient activeLocationName={user.activeLocation?.name || ''} />
+      )}
     </div>
   )
 }

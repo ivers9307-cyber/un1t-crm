@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
-import { LayoutDashboard, Users, Columns3, CheckSquare, Calendar, MessagesSquare, CalendarClock, Settings, LogOut, Car, Flag, Receipt, DoorOpen, Activity, ExternalLink, X, FileSignature, Heart, UserCheck } from 'lucide-react'
+import { LayoutDashboard, Users, Columns3, CheckSquare, Calendar, MessagesSquare, CalendarClock, Settings, LogOut, Car, Flag, Receipt, DoorOpen, Activity, ExternalLink, X, FileSignature, Heart } from 'lucide-react'
 import { createBrowserClient } from '@/lib/supabase'
 import LocationSwitcher from './LocationSwitcher'
 import ImpersonatePicker from './ImpersonatePicker'
@@ -48,12 +48,16 @@ const allNav = [
   // since it ORs two permissions instead of requiring one.
   { href: '/communications', label: 'Communications', icon: MessagesSquare,
     anyPermission: ['email', 'whatsapp'] },
+  // Schedule hub — single sidebar entry. Internal tab strip
+  // (ScheduleTabs.jsx) holds Schedule / Approvals / Reporting /
+  // Invoices / Attendance. The Attendance tab (mig 120 — auto-
+  // stamped from UniFi Access door unlocks) used to be a top-level
+  // sidebar entry; folded into the schedule tab strip in May 2026
+  // because operationally it sits next to Invoices (both are
+  // about staff time + pay). Same attendance_reports permission
+  // gate; the standalone /schedule/attendance URL still works as
+  // a deep link for cron-driven emails / scheduled reminders.
   { href: '/schedule',   label: 'Schedule',     icon: CalendarClock,   permission: 'schedule' },
-  // Attendance report (mig 120) — owner/manager/master only.
-  // Auto-stamped from UniFi Access door unlocks. Not visible to
-  // staff or head_coach (see DEFAULT_WEB_PERMISSIONS_BY_ROLE in
-  // shared/permissions.js).
-  { href: '/schedule/attendance', label: 'Attendance', icon: UserCheck, permission: 'attendance_reports' },
   // Events (mig 082 origin, multi-kind from mig 122 onwards). Was
   // labelled "Races" before the events expansion — same data table
   // (race_events), now spans race + workshop + seminar + open_day +
