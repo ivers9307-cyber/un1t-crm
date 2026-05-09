@@ -50,7 +50,7 @@ async function loadRace(db, id) {
   return db
     .from('race_events')
     .select(`
-      id, location_id, name, slug, description, race_date,
+      id, location_id, name, slug, description, race_date, kind,
       registration_opens_at, registration_closes_at,
       allowed_team_sizes, active, created_at, updated_at,
       member_pricing_enabled, member_fee_cents, non_member_fee_cents,

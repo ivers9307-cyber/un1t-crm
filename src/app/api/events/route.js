@@ -1,7 +1,16 @@
-// /api/races
+// /api/events
 //
-// List + create race events. Manager+ permission. Scoped to the
-// caller's active location (mig 082).
+// List + create events. Manager+ permission. Scoped to the caller's
+// active location (originally mig 082 as race events; multi-kind
+// since mig 122). Permission key is still 'races' internally.
+//
+// Multi-kind: race_events.kind discriminates between 'race' (the
+// original Hyrox-sim shape — multiple waves, team-name required,
+// race-day control panel, TV display) and 'workshop' / 'seminar' /
+// 'open_day' / 'masterclass' (single time slot, per-seat capture
+// without a team name). UI gates on kind; the underlying data shape
+// (waves[], allowed_team_sizes, race_payments per-seat) stays the
+// same — non-race kinds always submit exactly one synthetic wave.
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
@@ -26,6 +35,10 @@ const WaveInputSchema = z.object({
 
 const CreateSchema = z.object({
   location_id: uuidLike,
+  // Mig 122: discriminator. Defaults to 'race' so existing operator
+  // muscle memory (where every event is a race) keeps working without
+  // the form having to send the field.
+  kind: z.enum(['race', 'workshop', 'seminar', 'open_day', 'masterclass']).optional(),
   name: z.string().trim().min(1).max(200),
   slug: z.string().trim().min(1).max(120).regex(/^[a-z0-9]+(-[a-z0-9]+)*$/, 'lowercase kebab-case').optional(),
   description: z.string().max(4000).nullable().optional(),
@@ -76,7 +89,7 @@ export async function GET(request) {
   const { data, error } = await db
     .from('race_events')
     .select(`
-      id, location_id, name, slug, description, race_date,
+      id, location_id, name, slug, description, race_date, kind,
       registration_opens_at, registration_closes_at,
       allowed_team_sizes, active, created_at, updated_at,
       member_pricing_enabled, member_fee_cents, non_member_fee_cents,
@@ -121,6 +134,7 @@ export async function POST(request) {
     .from('race_events')
     .insert({
       location_id: body.location_id,
+      kind: body.kind ?? 'race',
       name: body.name,
       slug,
       description: body.description ?? null,
