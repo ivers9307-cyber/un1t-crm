@@ -18,11 +18,13 @@
 //   4. Log enough fields to derive the parser from observed traffic.
 //
 // We do NOT yet:
-//   - Resolve face_id → profile_id (mig 122 adds the column)
+//   - Resolve face_id → profile_id (mig 123 adds the column;
+//     mig 122 was consumed by the unrelated race_events.kind enum
+//     before this work resumed — the next attendance mig is 123)
 //   - Stamp shifts (P2.5 wires this once the payload shape is known)
 //
 // Every dark-launch event lands with match_outcome='unknown_user'
-// by definition until mig 122 ships. This is the same play that
+// by definition until mig 123 ships. This is the same play that
 // worked for Access in Phase 1 — the docs lie often enough about
 // the alarm-envelope shape that we'd rather build the parser
 // against captured wire traffic than speculate.
@@ -184,7 +186,7 @@ export async function POST(request) {
     }
 
     // ── Persist for inspection ──────────────────────────────
-    // profile_id stays NULL until mig 122 lands the
+    // profile_id stays NULL until mig 123 lands the
     // protect_face_id mapping. unifi_door_id is overloaded for
     // Phase 2 to mean "camera id" (same column, similar semantics
     // — the device that observed the event); we'll rename or add
@@ -197,7 +199,7 @@ export async function POST(request) {
         profile_id: null,
         location_id: locationId,
         source: 'protect',
-        unifi_user_id: null,        // n/a until face↔profile mapping (mig 122)
+        unifi_user_id: null,        // n/a until face↔profile mapping (mig 123)
         unifi_door_id: cameraId ? String(cameraId) : null,
         event_at: eventAt.toISOString(),
         matched_assignment_id: null,

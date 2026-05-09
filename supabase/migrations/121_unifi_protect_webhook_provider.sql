@@ -15,7 +15,7 @@
 -- shape diverge often enough that we don't trust the docs.
 --
 -- Follow-up migrations:
---   122  — add profile_locations.protect_face_id + RLS, the
+--   123  — add profile_locations.protect_face_id + RLS, the
 --          face↔profile mapping that lets the receiver resolve
 --          identity (currently every dark-launch event lands as
 --          match_outcome='unknown_user' by definition).
