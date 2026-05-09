@@ -20,8 +20,15 @@
 // shows which screen we're on. Tap anywhere to skip rotation.
 
 import { useEffect, useMemo, useState } from 'react'
-import { Activity, Trophy, Loader2 } from 'lucide-react'
+import { Activity, Trophy, Loader2, Users, User } from 'lucide-react'
 import { formatElapsed, elapsedSecondsBetween } from '@/lib/race-control'
+
+// Persisted display preference. localStorage key shared across all
+// race-display tabs on this device so toggling on one TV is sticky.
+const NAME_MODE_KEY = 'un1t.race-display.nameMode'
+const NAME_MODE_TEAM        = 'team'        // big team name + small competitor sub-line (default)
+const NAME_MODE_COMPETITORS = 'competitors' // big competitor names, no team name
+const NAME_MODES = [NAME_MODE_TEAM, NAME_MODE_COMPETITORS]
 
 // Auto-rotation removed at operator request — the screen stays on
 // whichever view the operator picked (default: on-course). Tap
@@ -39,6 +46,23 @@ export default function RaceDisplayBoard({ slug }) {
   const [clockSync, setClockSync] = useState({ server: null, browser: null })
   // 'now' state purely to trigger re-renders for the live timer.
   const [tick, setTick] = useState(0)
+  // Team-name vs competitor-names toggle. Hydrated from localStorage
+  // on mount so a TV restart picks up the operator's last choice.
+  const [nameMode, setNameMode] = useState(NAME_MODE_TEAM)
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const stored = window.localStorage.getItem(NAME_MODE_KEY)
+    if (stored && NAME_MODES.includes(stored)) setNameMode(stored)
+  }, [])
+  function toggleNameMode(e) {
+    // Stop the outer "tap to switch screens" handler from also firing.
+    e.stopPropagation()
+    const next = nameMode === NAME_MODE_TEAM ? NAME_MODE_COMPETITORS : NAME_MODE_TEAM
+    setNameMode(next)
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(NAME_MODE_KEY, next)
+    }
+  }
 
   // Poll the API. First call waits for data; subsequent calls refresh
   // silently. Errors don't blank the screen — we keep the last good
@@ -162,21 +186,37 @@ export default function RaceDisplayBoard({ slug }) {
             />
           ))}
         </div>
-        <div className="text-right min-w-0">
-          <div className="text-xl uppercase tracking-widest opacity-70">
-            {screen === 0 ? 'On course' : 'Finished'}
-          </div>
-          <div className="text-5xl font-bold mt-1">
-            {screen === 0 ? activeSorted.length : completedSorted.length}
+        <div className="flex items-start justify-end gap-4 min-w-0">
+          {/* Toggle: team-name view vs competitor-names view. Sits to
+              the LEFT of the count block so the operator's eye finds
+              it without crowding the count. stopPropagation on the
+              button so the outer "tap to switch screens" handler
+              doesn't also fire. */}
+          <button
+            type="button"
+            onClick={toggleNameMode}
+            title={nameMode === NAME_MODE_TEAM ? 'Showing team names — tap for competitor names' : 'Showing competitor names — tap for team names'}
+            className="inline-flex items-center gap-2 rounded-full border border-white/15 px-3 py-1.5 text-sm uppercase tracking-widest opacity-60 hover:opacity-100 hover:bg-white/5 transition mt-2"
+          >
+            {nameMode === NAME_MODE_TEAM ? <Users size={16} /> : <User size={16} />}
+            {nameMode === NAME_MODE_TEAM ? 'Teams' : 'Names'}
+          </button>
+          <div className="text-right min-w-0">
+            <div className="text-xl uppercase tracking-widest opacity-70">
+              {screen === 0 ? 'On course' : 'Finished'}
+            </div>
+            <div className="text-5xl font-bold mt-1">
+              {screen === 0 ? activeSorted.length : completedSorted.length}
+            </div>
           </div>
         </div>
       </header>
 
       <main className="flex-1 px-12 pb-10 overflow-hidden">
         {screen === 0 ? (
-          <ActiveScreen rows={activeSorted} serverNowMs={serverNowMs} />
+          <ActiveScreen rows={activeSorted} serverNowMs={serverNowMs} nameMode={nameMode} />
         ) : (
-          <CompletedScreen rows={completedSorted} />
+          <CompletedScreen rows={completedSorted} nameMode={nameMode} />
         )}
       </main>
 
@@ -201,7 +241,7 @@ function Dot({ active, icon: Icon, label }) {
   )
 }
 
-function ActiveScreen({ rows, serverNowMs }) {
+function ActiveScreen({ rows, serverNowMs, nameMode }) {
   if (rows.length === 0) {
     return (
       <EmptyState
@@ -214,28 +254,19 @@ function ActiveScreen({ rows, serverNowMs }) {
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 gap-x-12 gap-y-4 content-start">
       {rows.map((r, i) => (
-        <ActiveRow key={r.id} row={r} rank={i + 1} serverNowMs={serverNowMs} />
+        <ActiveRow key={r.id} row={r} rank={i + 1} serverNowMs={serverNowMs} nameMode={nameMode} />
       ))}
     </div>
   )
 }
 
-function ActiveRow({ row, rank, serverNowMs }) {
+function ActiveRow({ row, rank, serverNowMs, nameMode }) {
   const startedMs = row.race_started_at ? Date.parse(row.race_started_at) : null
   const elapsed = startedMs ? Math.max(0, Math.floor((serverNowMs - startedMs) / 1000)) : null
   return (
     <div className="flex items-baseline justify-between border-b border-white/10 py-3 gap-6">
       <div className="min-w-0 flex-1">
-        <div className="flex items-baseline gap-5 min-w-0">
-          <span className="text-3xl font-bold opacity-50 w-12 shrink-0">{rank}</span>
-          <span className="text-3xl font-semibold truncate">{row.team_name}</span>
-          {row.wave_label && (
-            <span className="text-base uppercase tracking-widest opacity-50 hidden lg:inline">
-              {row.wave_label}
-            </span>
-          )}
-        </div>
-        <Competitors names={row.member_names} />
+        <RowNames row={row} rank={rank} nameMode={nameMode} rankClass="opacity-50" />
       </div>
       <span className="text-4xl font-mono font-bold tabular-nums shrink-0">
         {formatElapsed(elapsed)}
@@ -244,7 +275,7 @@ function ActiveRow({ row, rank, serverNowMs }) {
   )
 }
 
-function CompletedScreen({ rows }) {
+function CompletedScreen({ rows, nameMode }) {
   if (rows.length === 0) {
     return (
       <EmptyState
@@ -257,29 +288,20 @@ function CompletedScreen({ rows }) {
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 gap-x-12 gap-y-4 content-start">
       {rows.map((r, i) => (
-        <CompletedRow key={r.id} row={r} rank={i + 1} />
+        <CompletedRow key={r.id} row={r} rank={i + 1} nameMode={nameMode} />
       ))}
     </div>
   )
 }
 
-function CompletedRow({ row, rank }) {
+function CompletedRow({ row, rank, nameMode }) {
   const elapsed = elapsedSecondsBetween(row.race_started_at, row.race_finished_at)
-  // Top-3 podium accent.
+  // Top-3 podium accent on the rank number.
   const accent = rank === 1 ? 'text-yellow-300' : rank === 2 ? 'text-zinc-200' : rank === 3 ? 'text-amber-500' : 'text-white'
   return (
     <div className="flex items-baseline justify-between border-b border-white/10 py-3 gap-6">
       <div className="min-w-0 flex-1">
-        <div className="flex items-baseline gap-5 min-w-0">
-          <span className={`text-3xl font-bold w-12 shrink-0 ${accent}`}>{rank}</span>
-          <span className="text-3xl font-semibold truncate">{row.team_name}</span>
-          {row.wave_label && (
-            <span className="text-base uppercase tracking-widest opacity-50 hidden lg:inline">
-              {row.wave_label}
-            </span>
-          )}
-        </div>
-        <Competitors names={row.member_names} />
+        <RowNames row={row} rank={rank} nameMode={nameMode} rankClass={accent} />
       </div>
       <span className="text-4xl font-mono font-bold tabular-nums shrink-0">
         {formatElapsed(elapsed)}
@@ -288,20 +310,50 @@ function CompletedRow({ row, rank }) {
   )
 }
 
-// Sub-line under the team name: comma-separated competitor names.
-// Indented to align with the team name (after the rank column). Hidden
-// when there are no names (e.g. solo signup with only the team name).
-// Truncates the visible string and appends "+N more" if a team has
-// many members so the row never wraps and ruins the grid.
-function Competitors({ names }) {
-  if (!Array.isArray(names) || names.length === 0) return null
+// Render the rank + names according to the operator-toggled mode.
+//
+//   NAME_MODE_TEAM        — big team name, small competitor sub-line
+//                           (omitted entirely if no member names).
+//   NAME_MODE_COMPETITORS — big competitor names, no team name. Falls
+//                           back to the team name if a team has no
+//                           registered competitor names so the row
+//                           is never blank.
+//
+// Wave label sits inline next to whichever name acts as the headline.
+function RowNames({ row, rank, nameMode, rankClass }) {
+  const names = Array.isArray(row.member_names) ? row.member_names : []
+  const hasNames = names.length > 0
+  const showCompetitorsHeadline = nameMode === NAME_MODE_COMPETITORS && hasNames
+
+  // Build the comma-separated names string with a "+N more" overflow
+  // hint past 4 names so the row never wraps and ruins the grid.
   const visible = names.slice(0, 4)
-  const rest = names.length - visible.length
+  const overflow = Math.max(0, names.length - visible.length)
+  const headlineNames = visible.join(' · ')
+
   return (
-    <div className="ml-[3.25rem] mt-1 text-lg opacity-70 truncate">
-      {visible.join(' · ')}
-      {rest > 0 && <span className="opacity-60"> · +{rest} more</span>}
-    </div>
+    <>
+      <div className="flex items-baseline gap-5 min-w-0">
+        <span className={`text-3xl font-bold w-12 shrink-0 ${rankClass}`}>{rank}</span>
+        <span className="text-3xl font-semibold truncate">
+          {showCompetitorsHeadline ? headlineNames : row.team_name}
+          {showCompetitorsHeadline && overflow > 0 && (
+            <span className="opacity-60"> · +{overflow} more</span>
+          )}
+        </span>
+        {row.wave_label && (
+          <span className="text-base uppercase tracking-widest opacity-50 hidden lg:inline">
+            {row.wave_label}
+          </span>
+        )}
+      </div>
+      {nameMode === NAME_MODE_TEAM && hasNames && (
+        <div className="ml-[3.25rem] mt-1 text-lg opacity-70 truncate">
+          {headlineNames}
+          {overflow > 0 && <span className="opacity-60"> · +{overflow} more</span>}
+        </div>
+      )}
+    </>
   )
 }
 
