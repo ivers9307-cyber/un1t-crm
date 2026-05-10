@@ -39,6 +39,11 @@ const CreateSchema = z.object({
   // muscle memory (where every event is a race) keeps working without
   // the form having to send the field.
   kind: z.enum(['race', 'workshop', 'seminar', 'open_day', 'masterclass']).optional(),
+  // Mig 125: staffing requirement for the studio overview demand
+  // classifier. 0-50 (matches DB CHECK). Default 1 (matches DB DEFAULT).
+  // Form pre-fills per kind (race=4, workshop=1, etc.) but operator
+  // can override.
+  staff_required: z.number().int().min(0).max(50).optional(),
   name: z.string().trim().min(1).max(200),
   slug: z.string().trim().min(1).max(120).regex(/^[a-z0-9]+(-[a-z0-9]+)*$/, 'lowercase kebab-case').optional(),
   description: z.string().max(4000).nullable().optional(),
@@ -89,7 +94,7 @@ export async function GET(request) {
   const { data, error } = await db
     .from('race_events')
     .select(`
-      id, location_id, name, slug, description, race_date, kind,
+      id, location_id, name, slug, description, race_date, kind, staff_required,
       registration_opens_at, registration_closes_at,
       allowed_team_sizes, active, created_at, updated_at,
       member_pricing_enabled, member_fee_cents, non_member_fee_cents,
@@ -135,6 +140,7 @@ export async function POST(request) {
     .insert({
       location_id: body.location_id,
       kind: body.kind ?? 'race',
+      staff_required: body.staff_required ?? 1,
       name: body.name,
       slug,
       description: body.description ?? null,

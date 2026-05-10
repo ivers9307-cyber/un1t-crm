@@ -20,6 +20,8 @@ const EventUpdateSchema = z.object({
   custom_fields: z.array(z.unknown()).optional(),
   webhook_url: url.nullable().optional(),
   active: z.boolean().optional(),
+  // Mig 125: editable on update. See POST schema for semantics.
+  staff_required: z.number().int().min(0).max(50).optional(),
 })
 
 // GET /api/bookings/event-types/:id — Get single event type with bookings count

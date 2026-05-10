@@ -23,6 +23,12 @@ const EventCreateSchema = z.object({
   webhook_url: url.nullable().optional(),
   active: z.boolean().optional(),
   location_id: uuidLike.optional(),
+  // Mig 125: how many staff are needed to keep this booking type
+  // bookable. Commitment-based — if availability exists for a day,
+  // this many staff must be rostered to cover (regardless of actual
+  // booking count). 0 = covered by another role. Drives the studio
+  // overview classifier on /schedule.
+  staff_required: z.number().int().min(0).max(50).optional(),
 })
 
 // GET /api/bookings/event-types — List all event types
@@ -70,6 +76,7 @@ export async function POST(request) {
     custom_fields: body.custom_fields || [],
     webhook_url: body.webhook_url || null,
     active: body.active !== false,
+    staff_required: body.staff_required ?? 1,
     ...(body.location_id ? { location_id: body.location_id } : {}),
   }).select().single()
 

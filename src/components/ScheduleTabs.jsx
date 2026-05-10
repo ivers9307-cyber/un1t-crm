@@ -7,6 +7,7 @@ import ScheduleApprovals from './ScheduleApprovals'
 import ScheduleReporting from './ScheduleReporting'
 import InvoicesManager from './InvoicesManager'
 import AttendanceReportClient from './AttendanceReportClient'
+import StudioOverviewStrip from './StudioOverviewStrip'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { hasPermission } from '@/lib/permissions'
 
@@ -15,6 +16,12 @@ const canManage = (role) => MANAGER_ROLES.includes(role)
 export default function ScheduleTabs({ user }) {
   const [activeTab, setActiveTab] = useState('schedule')
   const isManager = canManage(user.role)
+
+  // Mig 125: studio overview strip date range. ScheduleCalendar holds
+  // the operator's view (week / month / current date) internally and
+  // pipes the resulting visible range up here via onRangeChange so the
+  // strip above can re-fetch its per-day demand summary in sync.
+  const [scheduleRange, setScheduleRange] = useState(null)
 
   // Invoices is shown to:
   //   - contractors (employment_type = 'contractor') — to submit
@@ -60,7 +67,17 @@ export default function ScheduleTabs({ user }) {
       </div>
 
       {/* Tab content */}
-      {activeTab === 'schedule' && <ScheduleCalendar user={user} />}
+      {activeTab === 'schedule' && (
+        <>
+          {/* Studio overview — visible only on the Schedule tab.
+              Sits above the calendar; demand-vs-supply summary scoped
+              to whatever date range the calendar is showing. Mig 125. */}
+          {isManager && user.activeLocation?.id && (
+            <StudioOverviewStrip range={scheduleRange} locationId={user.activeLocation.id} />
+          )}
+          <ScheduleCalendar user={user} onRangeChange={setScheduleRange} />
+        </>
+      )}
       {activeTab === 'approvals' && isManager && <ScheduleApprovals user={user} />}
       {activeTab === 'reporting' && isManager && <ScheduleReporting user={user} />}
       {activeTab === 'invoices' && <InvoicesManager user={user} />}

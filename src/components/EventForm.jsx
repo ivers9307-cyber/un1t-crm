@@ -44,6 +44,12 @@ export default function EventForm({ event, locationId }) {
   const [duration, setDuration] = useState(event?.duration_minutes || 30)
   const [buffer, setBuffer] = useState(event?.buffer_minutes || 0)
   const [maxDays, setMaxDays] = useState(event?.max_advance_days || 30)
+  // Mig 125: how many staff are needed to keep this booking type
+  // bookable. Drives the studio overview demand classifier on
+  // /schedule. 0 = covered by another role already on shift.
+  const [staffRequired, setStaffRequired] = useState(
+    event?.staff_required != null ? String(event.staff_required) : '1'
+  )
   const [color, setColor] = useState(event?.color || '#3B82F6')
   const [webhookUrl, setWebhookUrl] = useState(event?.webhook_url || '')
   const [availability, setAvailability] = useState(event?.availability || defaultAvailability)
@@ -226,6 +232,14 @@ export default function EventForm({ event, locationId }) {
       availability,
       custom_fields: customFields.filter(f => f.label.trim()),
       webhook_url: webhookUrl || null,
+      // Mig 125: clamp to 0-50 (matches DB CHECK + API schema). NaN /
+      // non-int falls back to the column DEFAULT of 1 so a malformed
+      // value doesn't reject the save.
+      staff_required: (() => {
+        const n = Number(staffRequired)
+        if (!Number.isFinite(n) || !Number.isInteger(n)) return 1
+        return Math.max(0, Math.min(50, n))
+      })(),
       active: true,
       confirmation_enabled: confirmationActive,
       confirmation_channels: confirmationActive ? confirmationChannels : null,
@@ -363,7 +377,26 @@ export default function EventForm({ event, locationId }) {
               className="w-full bg-un1t-black border border-un1t-gray rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
             />
           </div>
+          <div>
+            {/* Mig 125: drives the studio overview classifier on /schedule.
+                If availability is open today, this many staff must be
+                rostered or the day flags amber/red. 0 = no own demand
+                (covered by another role already on shift). */}
+            <label className="block text-sm mb-1.5" title="Used by the studio overview on /schedule to flag undermanned days">Staff required</label>
+            <input
+              type="number"
+              value={staffRequired}
+              onChange={e => setStaffRequired(e.target.value)}
+              min={0}
+              max={50}
+              step={1}
+              className="w-full bg-un1t-black border border-un1t-gray rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+            />
+          </div>
         </div>
+        <p className="text-[11px] text-un1t-light -mt-2">
+          <strong>Staff required</strong> drives the demand check on the schedule overview. Default 1 — set 0 if this booking type is covered by another role already on shift (e.g. consultations done by the on-shift PT coach).
+        </p>
 
         <div>
           <label className="block text-sm mb-2">Colour</label>

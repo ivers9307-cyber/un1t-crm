@@ -32,6 +32,9 @@ const UpdateSchema = z.object({
   registration_opens_at: z.string().datetime().nullable().optional(),
   registration_closes_at: z.string().datetime().nullable().optional(),
   allowed_team_sizes: z.array(z.number().int().positive().max(50)).min(1).max(20).optional(),
+  // Mig 125: staffing requirement edit. Same range as create. UpdateSchema
+  // accepts kind-NULL keep semantics — only patches when explicitly set.
+  staff_required: z.number().int().min(0).max(50).optional(),
   active: z.boolean().optional(),
   // Member pricing (mig 084).
   member_pricing_enabled: z.boolean().optional(),
@@ -50,7 +53,7 @@ async function loadRace(db, id) {
   return db
     .from('race_events')
     .select(`
-      id, location_id, name, slug, description, race_date, kind,
+      id, location_id, name, slug, description, race_date, kind, staff_required,
       registration_opens_at, registration_closes_at,
       allowed_team_sizes, active, created_at, updated_at,
       member_pricing_enabled, member_fee_cents, non_member_fee_cents,

@@ -127,10 +127,26 @@ function flattenBlocksToShifts(blocks) {
   return rows
 }
 
-export default function ScheduleCalendar({ user }) {
+export default function ScheduleCalendar({ user, onRangeChange }) {
   const [weekStart, setWeekStart] = useState(() => getMonday(new Date()))
   const [monthStart, setMonthStart] = useState(() => getMonthStart(new Date()))
   const [viewType, setViewType] = useState('week')
+
+  // Mig 125: notify parent (ScheduleTabs) of the visible date range
+  // so the StudioOverviewStrip above us can re-fetch its per-day demand
+  // summary. Fires every time the operator switches week / month or
+  // navigates date. Uses formatDate(YYYY-MM-DD) for the wire shape.
+  useEffect(() => {
+    if (typeof onRangeChange !== 'function') return
+    const innerStart = viewType === 'month' ? getMonthGridRange(monthStart).start : weekStart
+    const innerEnd   = viewType === 'month' ? getMonthGridRange(monthStart).end   : addDays(weekStart, 6)
+    onRangeChange({
+      from: formatDate(innerStart),
+      to:   formatDate(innerEnd),
+      viewType,
+    })
+  }, [weekStart, monthStart, viewType, onRangeChange])
+
   const [blocks, setBlocks] = useState([])
   const [templates, setTemplates] = useState([])
   const [staff, setStaff] = useState([])

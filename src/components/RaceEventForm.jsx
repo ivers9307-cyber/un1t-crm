@@ -52,6 +52,7 @@ const KINDS = [
     submitLabel: 'Create race',
     showWaves: true,
     showLogos: true,
+    defaultStaffRequired: 4,
   },
   {
     value: 'workshop',
@@ -66,6 +67,7 @@ const KINDS = [
     submitLabel: 'Create workshop',
     showWaves: false,
     showLogos: false,
+    defaultStaffRequired: 1,
   },
   {
     value: 'seminar',
@@ -80,6 +82,7 @@ const KINDS = [
     submitLabel: 'Create seminar',
     showWaves: false,
     showLogos: false,
+    defaultStaffRequired: 1,
   },
   {
     value: 'open_day',
@@ -94,6 +97,7 @@ const KINDS = [
     submitLabel: 'Create open day',
     showWaves: false,
     showLogos: false,
+    defaultStaffRequired: 2,
   },
   {
     value: 'masterclass',
@@ -108,6 +112,7 @@ const KINDS = [
     submitLabel: 'Create masterclass',
     showWaves: false,
     showLogos: false,
+    defaultStaffRequired: 1,
   },
 ]
 
@@ -119,6 +124,24 @@ export default function RaceEventForm({ race, locationId }) {
 
   const [kind, setKind] = useState(race?.kind || 'race')
   const meta = kindMeta(kind)
+
+  // Mig 125: staff_required for the studio overview demand classifier.
+  // Initial value: existing race's value, or the kind's default for new
+  // events. When the operator switches kind on a new event, the default
+  // for the new kind is loaded UNLESS they've already manually edited
+  // the field (`staffRequiredTouched`) — that respects intent.
+  const [staffRequired, setStaffRequired] = useState(
+    race?.staff_required != null ? String(race.staff_required) : String(kindMeta(race?.kind || 'race').defaultStaffRequired ?? 1)
+  )
+  const [staffRequiredTouched, setStaffRequiredTouched] = useState(isEditing)
+
+  function handleKindChange(newKind) {
+    setKind(newKind)
+    if (!staffRequiredTouched) {
+      const def = kindMeta(newKind).defaultStaffRequired ?? 1
+      setStaffRequired(String(def))
+    }
+  }
 
   const [name, setName] = useState(race?.name || '')
   const [slug, setSlug] = useState(race?.slug || '')
@@ -294,10 +317,18 @@ export default function RaceEventForm({ race, locationId }) {
       return
     }
 
+    // Mig 125 validation: staff_required must be 0-50 integer.
+    const staffReqNum = Number(staffRequired)
+    if (!Number.isFinite(staffReqNum) || !Number.isInteger(staffReqNum) || staffReqNum < 0 || staffReqNum > 50) {
+      setError('Staff required must be a whole number between 0 and 50.')
+      return
+    }
+
     setSaving(true)
     const payload = {
       ...(isEditing ? {} : { location_id: locationId, kind }),
       name: name.trim(),
+      staff_required: staffReqNum,
       ...(isEditing ? {} : { slug: slug.trim() || undefined }),
       description: description.trim() || null,
       race_date: raceDate,
@@ -374,7 +405,7 @@ export default function RaceEventForm({ race, locationId }) {
                 key={k.value}
                 type="button"
                 disabled={isEditing && !on}
-                onClick={() => setKind(k.value)}
+                onClick={() => handleKindChange(k.value)}
                 className={`text-left p-3 rounded-md border transition-colors ${
                   on
                     ? 'bg-emerald-500/15 border-emerald-500/40 text-un1t-white'
@@ -570,6 +601,34 @@ export default function RaceEventForm({ race, locationId }) {
             />
             <p className="text-[11px] text-un1t-mid mt-1">Empty = open until {meta.value === 'race' ? 'race date' : 'event date'}.</p>
           </div>
+        </div>
+      </div>
+
+      {/* Mig 125: staffing requirement for the studio overview demand
+          classifier on /schedule. Pre-fills from the kind's default
+          when the operator hasn't manually edited it. */}
+      <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5 space-y-3">
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light flex items-center gap-2">
+          <Users size={14} /> Staffing
+        </h3>
+        <div>
+          <label className="block text-sm text-un1t-light mb-1">Staff required *</label>
+          <input
+            type="number"
+            min={0}
+            max={50}
+            step={1}
+            required
+            value={staffRequired}
+            onChange={e => { setStaffRequired(e.target.value); setStaffRequiredTouched(true) }}
+            className="w-32 bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white tabular-nums"
+          />
+          <p className="text-[11px] text-un1t-mid mt-1">
+            How many staff are needed to run this {meta.label.toLowerCase()}.
+            Used by the studio overview on <code>/schedule</code> to flag undermanned days.
+            Default for {meta.label.toLowerCase()}: {meta.defaultStaffRequired}.
+            {' '}Set <strong>0</strong> if covered by another role already on shift.
+          </p>
         </div>
       </div>
 
