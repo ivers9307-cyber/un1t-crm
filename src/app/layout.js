@@ -16,9 +16,26 @@ import { Analytics } from '@vercel/analytics/next'
 const FAVICON_URL =
   'https://iyvtbjjxdggiadzwwvdj.supabase.co/storage/v1/object/public/branding/a0000000-0000-0000-0000-000000000001/favicon.png'
 
+// Default site metadata. Customer-facing public surfaces (event
+// signup, deposit pay, etc.) inherit these unless the page exports
+// its own `generateMetadata`. Brand-neutral on purpose — operator-
+// only context like "CRM" or "Lead management" must NOT leak into
+// the link previews customers see in WhatsApp / iMessage / email,
+// because the share is a member-facing booking link not an internal
+// admin tool.
+//
+// Per-page upgrades (richer previews showing the actual event name
+// + description) live on individual page files via generateMetadata
+// — see src/app/event/[slug]/page.js for the event signup example.
 export const metadata = {
-  title: 'UN1T CRM',
-  description: 'Lead management for UN1T',
+  title: 'UN1T Dublin',
+  description: 'UN1T Dublin — strength, conditioning, racing.',
+  openGraph: {
+    title: 'UN1T Dublin',
+    description: 'UN1T Dublin — strength, conditioning, racing.',
+    siteName: 'UN1T Dublin',
+    type: 'website',
+  },
   icons: {
     icon: FAVICON_URL,
     shortcut: FAVICON_URL,
