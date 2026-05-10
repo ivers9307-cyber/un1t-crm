@@ -24,7 +24,7 @@ import { z } from 'zod'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
-import { MANAGER_ROLES } from '@/lib/schemas'
+import { MANAGER_ROLES, uuidLike } from '@/lib/schemas'
 import {
   eventTypeHasWindowForDate,
   sumStaffRequired,
@@ -35,10 +35,17 @@ import { logWarn } from '@/lib/log'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
+// uuidLike (not z.string().uuid()) because Zod 4's .uuid() validator
+// requires the version digit (3rd group, 1st char) to be 1-8 per
+// RFC 4122. UN1T location IDs are hand-seeded with version digit 0
+// (e.g. "a0000000-0000-0000-0000-000000000001" for Stillorgan) so
+// strict UUID validation rejects them. uuidLike is the codebase's
+// shared lenient regex (src/lib/schemas.js) — UUID-shaped, no
+// version assertion. Same choice every other API route makes.
 const QuerySchema = z.object({
   from:        z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'YYYY-MM-DD'),
   to:          z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'YYYY-MM-DD'),
-  location_id: z.string().uuid(),
+  location_id: uuidLike,
 })
 
 // Defensive max — strip uses week (7) or month (~31) views.
