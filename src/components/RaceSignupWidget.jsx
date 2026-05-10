@@ -397,14 +397,13 @@ export default function RaceSignupWidget({ slug }) {
   const wavesArr = Array.isArray(race.waves) ? race.waves : []
 
   return (
-    <div className="w-full max-w-4xl bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
-      {/* Container max-w bumped 3xl → 4xl and sidebar widened from
-          260px to 360px so the description (often a multi-bullet list)
-          has room to breathe at a bigger font without hijacking the
-          page or pushing the form below the fold. The previous
-          "hero strip above the grid" approach put a long description
-          between the user and the action, hiding the booking form. */}
-      <div className="grid md:grid-cols-[360px_1fr] divide-y md:divide-y-0 md:divide-x divide-gray-200">
+    <div className="w-full max-w-6xl bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+      {/* Container widened max-w-4xl → max-w-6xl and sidebar 360px →
+          520px so the description (often multi-bullet workshop blurb)
+          gets enough horizontal room that bullet items stay on a
+          single line where reasonable. Form column still 540+px so
+          inputs aren't crowded. */}
+      <div className="grid md:grid-cols-[520px_1fr] divide-y md:divide-y-0 md:divide-x divide-gray-200">
         {/* Event info sidebar */}
         <aside className="p-6">
           {location && (
