@@ -397,23 +397,14 @@ export default function RaceSignupWidget({ slug }) {
   const wavesArr = Array.isArray(race.waves) ? race.waves : []
 
   return (
-    <div className="w-full max-w-3xl bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
-      {/* Description hero strip — moved out of the cramped 260px sidebar
-          into a full-width row above the grid so it gets ~3x the
-          horizontal real estate, plus a much bigger font (text-base
-          instead of text-sm = ~14% bigger per character; combined with
-          the wider container the SECTION displays ~90% larger overall
-          per Richard's spec). Only renders when description is set so
-          races without one don't get an empty banner. */}
-      {race.description && (
-        <div className="px-6 py-5 border-b border-gray-200 bg-gray-50/50">
-          <p className="text-base text-gray-700 whitespace-pre-line leading-relaxed">
-            {race.description}
-          </p>
-        </div>
-      )}
-
-      <div className="grid md:grid-cols-[260px_1fr] divide-y md:divide-y-0 md:divide-x divide-gray-200">
+    <div className="w-full max-w-4xl bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+      {/* Container max-w bumped 3xl → 4xl and sidebar widened from
+          260px to 360px so the description (often a multi-bullet list)
+          has room to breathe at a bigger font without hijacking the
+          page or pushing the form below the fold. The previous
+          "hero strip above the grid" approach put a long description
+          between the user and the action, hiding the booking form. */}
+      <div className="grid md:grid-cols-[360px_1fr] divide-y md:divide-y-0 md:divide-x divide-gray-200">
         {/* Event info sidebar */}
         <aside className="p-6">
           {location && (
@@ -421,7 +412,12 @@ export default function RaceSignupWidget({ slug }) {
               {location.name}
             </div>
           )}
-          <h1 className="text-xl font-bold text-gray-900 mb-4">{race.name}</h1>
+          <h1 className="text-2xl font-bold text-gray-900 mb-4">{race.name}</h1>
+          {race.description && (
+            <p className="text-base text-gray-700 whitespace-pre-line leading-relaxed mb-5">
+              {race.description}
+            </p>
+          )}
           <div className="space-y-2 text-sm text-gray-700">
             <div className="flex items-center gap-2">
               <Calendar size={14} className="text-gray-400" />
