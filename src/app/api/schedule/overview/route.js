@@ -30,6 +30,7 @@ import {
   sumStaffRequired,
   classifyDayLoad,
 } from '@/lib/schedule-overview'
+import { logWarn } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -57,6 +58,21 @@ function* dateRange(fromStr, toStr) {
 }
 
 export async function GET(request) {
+  try {
+    return await handleGet(request)
+  } catch (e) {
+    logWarn('schedule-overview', 'handler threw', {
+      err: e?.message || String(e),
+      stack: e?.stack,
+    })
+    return NextResponse.json({
+      success: false,
+      error: e?.message || 'Internal error',
+    }, { status: 500 })
+  }
+}
+
+async function handleGet(request) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
   if (!MANAGER_ROLES.includes(user.role)) {
@@ -81,9 +97,13 @@ export async function GET(request) {
   if (guard) return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
 
   // Reject ranges over the cap (one round-trip would otherwise pull
-  // a year of events at once).
-  const fromMs = Date.UTC(...from.split('-').map((n, i) => i === 1 ? +n - 1 : +n))
-  const toMs   = Date.UTC(...to.split('-').map((n, i) => i === 1 ? +n - 1 : +n))
+  // a year of events at once). Explicit destructure rather than spread
+  // because spread + Date.UTC was triggering a build-time mangling
+  // issue on Vercel's serverless bundler.
+  const [fy, fm, fd] = from.split('-').map(Number)
+  const [ty, tm, td] = to.split('-').map(Number)
+  const fromMs = Date.UTC(fy, fm - 1, fd)
+  const toMs   = Date.UTC(ty, tm - 1, td)
   if (toMs < fromMs) {
     return NextResponse.json({ success: false, error: 'to must be on or after from' }, { status: 400 })
   }
