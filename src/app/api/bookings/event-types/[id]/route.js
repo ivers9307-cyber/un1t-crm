@@ -4,7 +4,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { requireApiKey } from '@/lib/api-auth'
+import { requireApiKeyOrManager } from '@/lib/api-auth'
 import { validateBody } from '@/lib/validate'
 import { hexColor, url } from '@/lib/schemas'
 
@@ -25,9 +25,16 @@ const EventUpdateSchema = z.object({
 })
 
 // GET /api/bookings/event-types/:id — Get single event type with bookings count
+//
+// Auth: requireApiKeyOrManager — accepts both the n8n bearer-token
+// (CRM_API_KEY) AND a manager+ cookie session. The original handler
+// (relocated from /api/events/[id]) used requireApiKey-only because
+// the only consumer was n8n; once the in-CRM operator UI started
+// invoking these (EventActions delete button), cookie auth had to
+// be allowed. Same pattern as /api/contacts/[id] (mig 109 contact CRUD).
 export async function GET(request, { params }) {
-  const authError = requireApiKey(request)
-  if (authError) return authError
+  const auth = await requireApiKeyOrManager(request)
+  if (!auth.ok) return auth.response
 
   const db = createServerClient()
   const { data, error } = await db.from('event_types').select('*').eq('id', params.id).single()
@@ -38,8 +45,8 @@ export async function GET(request, { params }) {
 
 // PUT /api/bookings/event-types/:id — Update event type
 export async function PUT(request, { params }) {
-  const authError = requireApiKey(request)
-  if (authError) return authError
+  const auth = await requireApiKeyOrManager(request)
+  if (!auth.ok) return auth.response
 
   const validation = await validateBody(request, EventUpdateSchema)
   if (!validation.ok) return validation.response
@@ -61,8 +68,8 @@ export async function PUT(request, { params }) {
 
 // DELETE /api/bookings/event-types/:id — Deactivate event type (soft delete)
 export async function DELETE(request, { params }) {
-  const authError = requireApiKey(request)
-  if (authError) return authError
+  const auth = await requireApiKeyOrManager(request)
+  if (!auth.ok) return auth.response
 
   const db = createServerClient()
   const { data, error } = await db.from('event_types').update({ active: false }).eq('id', params.id).select().single()
