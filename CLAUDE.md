@@ -1211,18 +1211,33 @@ This was discovered by capture, not docs. The shape is **alarm-envelope, not fla
     "location": "<uuid>",              // UniFi internal location id (NOT our locations.id)
     "scope": { "locations": "<uuid>" },
     "time": "<iso>" | "",              // empty for remote unlocks → fall back to receipt time
-    "unlock_method_text": "NFC" | "Remote Unlock" | "PIN" | "REX" | "Touch to Unlock"
+    "unlock_method_text": <see method taxonomy below>
   }],
   "data": { "custom_content": "" }
 }
 ```
 
+**`unlock_method_text` taxonomy** (observed values, May 9-10 2026 at Stillorgan — verified live for everything below):
+
+| Method | Semantics | Stamp? |
+|---|---|---|
+| `NFC` | Physical card tap on the door reader | ✅ |
+| `Mobile Tap` | Phone NFC tap on the reader | ✅ |
+| `Touch to Unlock` | Apple Wallet / Google Wallet hold-to-unlock | ✅ |
+| `Face Unlock` | Door reader's built-in face recognition (NOT the Protect camera) | ✅ |
+| `PIN` | Keypad code | ✅ |
+| `Remote Unlock` | Operator pressed unlock in the desktop UniFi app or `/studio-management` UI | ❌ |
+| `Mobile Button` | Operator pressed unlock in the UniFi mobile app — same conceptual action as Remote Unlock | ❌ |
+| `request-to-exit device` (or `REX`) | Passive motion sensor / button on the inside of the door, fires on EXIT. Often arrives with `unifi_user_id=null` so it lands as `unknown_user` regardless | ⚠️ ambiguous |
+
+The receiver's `REMOTE_UNLOCK_METHODS` regex matches the two operator-pressed methods (Remote Unlock + Mobile Button) so they're recorded for audit but never stamp a shift — the actor in the payload is the operator, not whoever walked through.
+
 **Critical gotchas, all learned the hard way:**
 
 - UniFi **reuses `alarm_id` across every fire** of the same alarm rule. A naive `dedupKey = alarm_id:index` silently drops every fire after the first. We add a 60-second receipt-time bucket to the dedup key so retries-within-a-minute dedupe but new fires don't (`${alarm_id}:${i}:${minute_bucket}`).
 - The **alarm has an array of events** — process each one. The CRM iterates `events[]` rather than treating the alarm as a single event.
-- `unlock_method_text === "Remote Unlock"` means an operator pressed unlock in the UniFi app or `/studio-management` UI. The actor in the payload is the operator, not anyone walking through. We record the audit row but **never stamp a shift** for remote unlocks.
-- Real card taps will populate `device` and put a method like `NFC` / `Touch to Unlock` in `unlock_method_text`. Phase 1 was tested only against remote-app unlocks; the on-site card-tap path is the next live verification step.
+- `Mobile Button` looks deceptively in-person but isn't — it's the unlock button in the UniFi mobile app. Looks identical to Remote Unlock from the data plane's perspective. Initially missed in Phase 1; bitten on the May 10 morning verification when a Mobile Button event would have stamped the operator's shift if their UniFi user had been linked. Keep this in mind whenever new method strings appear: default to "don't stamp until proven in-person."
+- Real card taps populate `device` (door uuid) and put one of the in-person methods in `unlock_method_text`. Verified end-to-end on May 10 morning: Mobile Tap and Face Unlock both flowed through cleanly with `match_outcome='unknown_user'` (because the morning-shift staff's UniFi users aren't linked to CRM profiles yet — link via the UnifiUserPicker in StaffForm to start auto-stamping).
 
 ### Webhook setup per location
 

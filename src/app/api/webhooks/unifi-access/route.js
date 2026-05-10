@@ -70,7 +70,34 @@ const UNLOCK_EVENT_RE = /access\.(entry|door|unlocks?)\.|door\.unlocked|entry\.(
 // unlock — NOT a person walking through. We record them for audit
 // (so staff_attendance_events still gets a row) but never stamp a
 // shift from them.
-const REMOTE_UNLOCK_METHODS = /^remote/i
+//
+// Observed unlock_method_text values to date (Stillorgan, May 9-10
+// 2026). Anything not in REMOTE_UNLOCK_METHODS is treated as a
+// real arrival.
+//
+//   IN-PERSON (stamp):
+//     "NFC"              — physical card tap on the reader
+//     "Mobile Tap"       — phone NFC tap on the reader
+//     "Touch to Unlock"  — Apple Wallet / Google Wallet hold-to-unlock
+//     "Face Unlock"      — Access device's built-in face recognition
+//                          (the door reader, NOT the Protect camera)
+//     "PIN"              — keypad code
+//
+//   REMOTE / OPERATOR-PRESSED (don't stamp):
+//     "Remote Unlock"    — desktop UniFi app or our /studio-management UI
+//     "Mobile Button"    — operator pressed unlock in the UniFi mobile app
+//                          (same conceptual action as Remote Unlock,
+//                          different surface — actor is the operator,
+//                          not whoever walked through)
+//
+//   AMBIGUOUS / EXIT (currently treated as in-person but probably
+//   shouldn't stamp — see follow-up note in the receiver loop):
+//     "REX" / "request-to-exit device" — passive motion sensor or
+//                          button on the inside of the door, fires
+//                          when SOMEONE EXITS. Often has no user
+//                          attached (NULL unifi_user_id) so it lands
+//                          as match_outcome='unknown_user' anyway.
+const REMOTE_UNLOCK_METHODS = /^(remote unlock|mobile button)$/i
 
 /**
  * Pure auth-gate predicate, exported for the route test.
