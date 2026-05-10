@@ -9,6 +9,8 @@ import {
   classifyBookingState,
   elapsedSecondsBetween,
   ensureTeamForBooking,
+  penaltySumSeconds,
+  elapsedWithPenalties,
 } from './race-control.js'
 
 describe('formatElapsed', () => {
@@ -101,6 +103,72 @@ describe('elapsedSecondsBetween', () => {
 
   it('returns null for unparseable input', () => {
     expect(elapsedSecondsBetween('not-a-date', '2026-05-10T11:00:00Z')).toBeNull()
+  })
+})
+
+// Mig 124 helpers — penalty sum + elapsed-with-penalties.
+
+describe('penaltySumSeconds', () => {
+  it('returns 0 for missing or empty input (additive identity)', () => {
+    expect(penaltySumSeconds(undefined)).toBe(0)
+    expect(penaltySumSeconds(null)).toBe(0)
+    expect(penaltySumSeconds([])).toBe(0)
+  })
+
+  it('sums positive penalties', () => {
+    expect(penaltySumSeconds([{ seconds: 30 }, { seconds: 15 }])).toBe(45)
+  })
+
+  it('handles signed entries (penalty + credit)', () => {
+    expect(penaltySumSeconds([{ seconds: 30 }, { seconds: -10 }])).toBe(20)
+  })
+
+  it('skips non-numeric entries (defensive)', () => {
+    expect(penaltySumSeconds([
+      { seconds: 30 },
+      { seconds: 'oops' },
+      { seconds: null },
+      { seconds: 10 },
+    ])).toBe(40)
+  })
+
+  it('handles a single negative-only entry', () => {
+    expect(penaltySumSeconds([{ seconds: -45 }])).toBe(-45)
+  })
+})
+
+describe('elapsedWithPenalties', () => {
+  const start  = '2026-05-10T10:00:00.000Z'
+  const finish = '2026-05-10T10:30:00.000Z' // 1800s elapsed
+
+  it('returns null when base elapsed is unknowable', () => {
+    expect(elapsedWithPenalties(null,  finish, [])).toBeNull()
+    expect(elapsedWithPenalties(start, null,   [])).toBeNull()
+  })
+
+  it('matches base elapsed when no penalties', () => {
+    expect(elapsedWithPenalties(start, finish, [])).toBe(1800)
+    expect(elapsedWithPenalties(start, finish, undefined)).toBe(1800)
+  })
+
+  it('adds positive penalty seconds to base elapsed', () => {
+    expect(elapsedWithPenalties(start, finish, [{ seconds: 30 }])).toBe(1830)
+  })
+
+  it('subtracts negative credit seconds from base elapsed', () => {
+    expect(elapsedWithPenalties(start, finish, [{ seconds: -60 }])).toBe(1740)
+  })
+
+  it('clamps to 0 when net offset would push elapsed negative', () => {
+    expect(elapsedWithPenalties(start, finish, [{ seconds: -3600 }])).toBe(0)
+  })
+
+  it('combines multiple penalties + credits', () => {
+    expect(elapsedWithPenalties(start, finish, [
+      { seconds: 30 },
+      { seconds: -10 },
+      { seconds: 5 },
+    ])).toBe(1825)
   })
 })
 

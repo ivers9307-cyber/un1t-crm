@@ -61,7 +61,8 @@ export async function GET(_request, { params }) {
     .from('race_registrations')
     .select(`
       id, status, race_started_at, race_finished_at, wave_id,
-      teams ( id, name, size, members:team_members ( name ) )
+      teams ( id, name, size, members:team_members ( name ) ),
+      penalties:race_penalties ( seconds )
     `)
     .eq('race_event_id', race.id)
     .in('status', ['confirmed', 'completed'])
@@ -88,6 +89,15 @@ export async function GET(_request, { params }) {
       seen.add(k)
       member_names.push(n)
     }
+    // Mig 124: sum penalty seconds for this row so the public TV
+    // shows adjusted times. Send only the total — individual
+    // penalty reasons + applier ids are operator-only data and
+    // must never leak through the public URL.
+    let penalty_total_seconds = 0
+    for (const p of (r.penalties || [])) {
+      const n = Number(p?.seconds)
+      if (Number.isFinite(n)) penalty_total_seconds += n
+    }
     return {
       id: r.id,
       team_name: r.teams?.name || 'Unknown team',
@@ -97,6 +107,7 @@ export async function GET(_request, { params }) {
       wave_start_time: wave?.start_time || null,
       race_started_at: r.race_started_at,
       race_finished_at: r.race_finished_at,
+      penalty_total_seconds,
     }
   }
 

@@ -21,7 +21,19 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { Activity, Trophy, Loader2, Users, User } from 'lucide-react'
-import { formatElapsed, elapsedSecondsBetween } from '@/lib/race-control'
+import { formatElapsed, elapsedWithPenalties } from '@/lib/race-control'
+
+// The display API (mig 124) ships penalty_total_seconds per row
+// instead of the full penalties[] array — operator reasons are
+// kept off the public TV. Wrap as a single-element pseudo-array
+// for elapsedWithPenalties + penaltySumSeconds (which both expect
+// {seconds} shaped entries) so we can reuse the helpers without
+// branching on shape.
+function penaltyArrayFromTotal(row) {
+  const n = Number(row?.penalty_total_seconds)
+  if (!Number.isFinite(n) || n === 0) return []
+  return [{ seconds: n }]
+}
 
 // Persisted display preference. localStorage key shared across all
 // race-display tabs on this device so toggling on one TV is sticky.
@@ -125,12 +137,14 @@ export default function RaceDisplayBoard({ slug }) {
     })
   }, [data])
 
-  // Sort completed by finish time (fastest first).
+  // Sort completed by ADJUSTED finish time (mig 124 — fastest first
+  // after penalty offsets). A team with a +30s penalty correctly
+  // drops in the ranking against a clean run.
   const completedSorted = useMemo(() => {
     if (!data?.completed) return []
     return data.completed.slice().sort((a, b) => {
-      const ea = elapsedSecondsBetween(a.race_started_at, a.race_finished_at) ?? Infinity
-      const eb = elapsedSecondsBetween(b.race_started_at, b.race_finished_at) ?? Infinity
+      const ea = elapsedWithPenalties(a.race_started_at, a.race_finished_at, penaltyArrayFromTotal(a)) ?? Infinity
+      const eb = elapsedWithPenalties(b.race_started_at, b.race_finished_at, penaltyArrayFromTotal(b)) ?? Infinity
       return ea - eb
     })
   }, [data])
@@ -262,7 +276,11 @@ function ActiveScreen({ rows, serverNowMs, nameMode }) {
 
 function ActiveRow({ row, rank, serverNowMs, nameMode }) {
   const startedMs = row.race_started_at ? Date.parse(row.race_started_at) : null
-  const elapsed = startedMs ? Math.max(0, Math.floor((serverNowMs - startedMs) / 1000)) : null
+  // Live elapsed = wallclock - start, plus any mid-race penalties
+  // (operator might apply during the run, e.g. "false start: +10s").
+  const baseElapsed = startedMs ? Math.max(0, Math.floor((serverNowMs - startedMs) / 1000)) : null
+  const penaltyTotal = Number(row.penalty_total_seconds) || 0
+  const elapsed = baseElapsed == null ? null : Math.max(0, baseElapsed + penaltyTotal)
   return (
     <div className="flex items-baseline justify-between border-b border-white/10 py-3 gap-6">
       <div className="min-w-0 flex-1">
@@ -270,6 +288,11 @@ function ActiveRow({ row, rank, serverNowMs, nameMode }) {
       </div>
       <span className="text-4xl font-mono font-bold tabular-nums shrink-0">
         {formatElapsed(elapsed)}
+        {penaltyTotal !== 0 && (
+          <span className={`text-xl ml-2 ${penaltyTotal > 0 ? 'text-amber-300' : 'text-emerald-300'}`}>
+            ({penaltyTotal > 0 ? '+' : ''}{penaltyTotal}s)
+          </span>
+        )}
       </span>
     </div>
   )
@@ -295,7 +318,10 @@ function CompletedScreen({ rows, nameMode }) {
 }
 
 function CompletedRow({ row, rank, nameMode }) {
-  const elapsed = elapsedSecondsBetween(row.race_started_at, row.race_finished_at)
+  // Adjusted finish time (mig 124 — base + penalty offset). Same
+  // value used in the sort above, displayed here.
+  const elapsed = elapsedWithPenalties(row.race_started_at, row.race_finished_at, penaltyArrayFromTotal(row))
+  const penaltyTotal = Number(row.penalty_total_seconds) || 0
   // Top-3 podium accent on the rank number.
   const accent = rank === 1 ? 'text-yellow-300' : rank === 2 ? 'text-zinc-200' : rank === 3 ? 'text-amber-500' : 'text-white'
   return (
@@ -305,6 +331,11 @@ function CompletedRow({ row, rank, nameMode }) {
       </div>
       <span className="text-4xl font-mono font-bold tabular-nums shrink-0">
         {formatElapsed(elapsed)}
+        {penaltyTotal !== 0 && (
+          <span className={`text-xl ml-2 ${penaltyTotal > 0 ? 'text-amber-300' : 'text-emerald-300'}`}>
+            ({penaltyTotal > 0 ? '+' : ''}{penaltyTotal}s)
+          </span>
+        )}
       </span>
     </div>
   )

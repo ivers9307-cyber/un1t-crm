@@ -24,8 +24,9 @@
 // the active sections.
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Play, Square, RotateCcw, Loader2, Trophy, Clock, Users, AlertCircle, BadgeCheck, Filter } from 'lucide-react'
-import { formatElapsed, classifyBookingState, elapsedSecondsBetween } from '@/lib/race-control'
+import { Play, Square, RotateCcw, Loader2, Trophy, Clock, Users, AlertCircle, BadgeCheck, Filter, SlidersHorizontal } from 'lucide-react'
+import { formatElapsed, classifyBookingState, penaltySumSeconds, elapsedWithPenalties } from '@/lib/race-control'
+import RaceAdjustModal from './RaceAdjustModal'
 
 const COMPOSITION_FILTERS = [
   { id: 'all', label: 'All' },
@@ -42,6 +43,12 @@ export default function RaceControlPanel({ raceId }) {
   const [compositionFilter, setCompositionFilter] = useState('all')
   const [, setTick] = useState(0)
   const pollRef = useRef(null)
+  // Mig 124 (RD3): which registration is open in the Adjust modal.
+  // null = closed. Holds the registration id; the modal reads the
+  // live row from board.registrations on every render so penalty
+  // adds/deletes inside the modal reflect immediately when the
+  // 2s polling tick lands.
+  const [adjustingId, setAdjustingId] = useState(null)
 
   async function fetchBoard() {
     try {
@@ -121,8 +128,12 @@ export default function RaceControlPanel({ raceId }) {
     })
     buckets.on_course.sort((a, b) => (a.race_started_at || '').localeCompare(b.race_started_at || ''))
     buckets.completed.sort((a, b) => {
-      const ea = elapsedSecondsBetween(a.race_started_at, a.race_finished_at) ?? Infinity
-      const eb = elapsedSecondsBetween(b.race_started_at, b.race_finished_at) ?? Infinity
+      // Mig 124: rank by adjusted time (base + penalties) so a team
+      // with a +30s penalty doesn't keep their pre-adjustment podium
+      // position. Falls back to Infinity for half-stamped rows so
+      // they sort to the bottom rather than throwing.
+      const ea = elapsedWithPenalties(a.race_started_at, a.race_finished_at, a.penalties) ?? Infinity
+      const eb = elapsedWithPenalties(b.race_started_at, b.race_finished_at, b.penalties) ?? Infinity
       return ea - eb
     })
     return buckets
@@ -176,21 +187,33 @@ export default function RaceControlPanel({ raceId }) {
 
       <Section title="On Course" icon={Clock} count={sections.on_course.length} emptyText="No teams currently on the course.">
         {sections.on_course.map((r) => (
-          <OnCourseRow key={r.id} registration={r} wave={wavesById.get(r.wave_id)} busy={actionBusy === r.id} onFinish={() => fireAction(r.id, 'race-finish')} />
+          <OnCourseRow key={r.id} registration={r} wave={wavesById.get(r.wave_id)} busy={actionBusy === r.id} onFinish={() => fireAction(r.id, 'race-finish')} onAdjust={() => setAdjustingId(r.id)} />
         ))}
       </Section>
 
       <Section title="Next Up" icon={Play} count={sections.next_up.length} emptyText="No teams registered yet.">
         {sections.next_up.map((r) => (
-          <NextUpRow key={r.id} registration={r} wave={wavesById.get(r.wave_id)} busy={actionBusy === r.id} onStart={() => fireAction(r.id, 'race-start')} />
+          <NextUpRow key={r.id} registration={r} wave={wavesById.get(r.wave_id)} busy={actionBusy === r.id} onStart={() => fireAction(r.id, 'race-start')} onAdjust={() => setAdjustingId(r.id)} />
         ))}
       </Section>
 
       <Section title="Completed" icon={Trophy} count={sections.completed.length} emptyText="No teams have finished yet.">
         {sections.completed.map((r, i) => (
-          <CompletedRow key={r.id} registration={r} wave={wavesById.get(r.wave_id)} rank={i + 1} busy={actionBusy === r.id} onReset={() => fireAction(r.id, 'race-reset')} />
+          <CompletedRow key={r.id} registration={r} wave={wavesById.get(r.wave_id)} rank={i + 1} busy={actionBusy === r.id} onReset={() => fireAction(r.id, 'race-reset')} onAdjust={() => setAdjustingId(r.id)} />
         ))}
       </Section>
+
+      {/* Adjust modal — opens against the live registration row from
+          board.registrations so penalty edits inside the modal reflect
+          immediately when the 2s polling tick lands. Closes on outside
+          click + the X button. */}
+      <RaceAdjustModal
+        open={adjustingId != null}
+        registration={(board?.registrations || []).find((r) => r.id === adjustingId) || null}
+        teamName={(board?.registrations || []).find((r) => r.id === adjustingId)?.teams?.name || ''}
+        onClose={() => setAdjustingId(null)}
+        onChanged={fetchBoard}
+      />
     </div>
   )
 }
@@ -277,7 +300,39 @@ function TeamHeader({ registration, wave, accent = 'default' }) {
   )
 }
 
-function NextUpRow({ registration, wave, busy, onStart }) {
+// Small annotation rendered next to elapsed time when penalties
+// are present. e.g. " (+30s)" or " (-15s)". Hidden when penalty
+// total is zero. Title hover lists individual penalties.
+function PenaltyBadge({ penalties }) {
+  const total = penaltySumSeconds(penalties)
+  if (total === 0) return null
+  const sign = total > 0 ? '+' : ''
+  const tone = total > 0 ? 'text-amber-700' : 'text-emerald-700'
+  const breakdown = (penalties || [])
+    .map((p) => `${p.seconds > 0 ? '+' : ''}${p.seconds}s — ${p.reason}`)
+    .join('\n')
+  return (
+    <span className={`text-[11px] font-mono tabular-nums ml-1 ${tone}`} title={breakdown}>
+      ({sign}{total}s)
+    </span>
+  )
+}
+
+function AdjustButton({ onAdjust }) {
+  return (
+    <button
+      type="button"
+      onClick={onAdjust}
+      className="text-[11px] text-un1t-light hover:text-un1t-white inline-flex items-center gap-1"
+      title="Adjust times + manage penalties"
+    >
+      <SlidersHorizontal size={11} />
+      Adjust
+    </button>
+  )
+}
+
+function NextUpRow({ registration, wave, busy, onStart, onAdjust }) {
   return (
     <div className="flex items-stretch gap-2">
       <TeamHeader registration={registration} wave={wave} />
@@ -291,22 +346,28 @@ function NextUpRow({ registration, wave, busy, onStart }) {
           {busy ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />}
           {busy ? 'Starting…' : 'Start'}
         </button>
+        <AdjustButton onAdjust={onAdjust} />
       </div>
     </div>
   )
 }
 
-function OnCourseRow({ registration, wave, busy, onFinish }) {
+function OnCourseRow({ registration, wave, busy, onFinish, onAdjust }) {
   const nowMs = Date.now()
   const startedMs = registration.race_started_at ? Date.parse(registration.race_started_at) : nowMs
-  const elapsed = Math.max(0, Math.floor((nowMs - startedMs) / 1000))
+  // Live elapsed = wallclock - start. Penalties shown separately
+  // alongside (sums into displayed value during On Course too —
+  // operator might apply mid-race, e.g. "false start, +10s").
+  const baseElapsed = Math.max(0, Math.floor((nowMs - startedMs) / 1000))
+  const totalElapsed = Math.max(0, baseElapsed + penaltySumSeconds(registration.penalties))
 
   return (
     <div className="flex items-stretch gap-2">
       <TeamHeader registration={registration} wave={wave} accent="on_course" />
       <div className="flex flex-col items-end justify-center gap-1 min-w-[110px]">
         <div className="font-mono text-base font-semibold text-amber-700 tabular-nums">
-          {formatElapsed(elapsed)}
+          {formatElapsed(totalElapsed)}
+          <PenaltyBadge penalties={registration.penalties} />
         </div>
         <button
           type="button"
@@ -317,13 +378,16 @@ function OnCourseRow({ registration, wave, busy, onFinish }) {
           {busy ? <Loader2 size={14} className="animate-spin" /> : <Square size={14} />}
           {busy ? 'Finishing…' : 'Finish'}
         </button>
+        <AdjustButton onAdjust={onAdjust} />
       </div>
     </div>
   )
 }
 
-function CompletedRow({ registration, wave, rank, busy, onReset }) {
-  const elapsed = elapsedSecondsBetween(registration.race_started_at, registration.race_finished_at)
+function CompletedRow({ registration, wave, rank, busy, onReset, onAdjust }) {
+  // Use the new helper — base elapsed + penalties — so the Completed
+  // section's leaderboard sort + display reflect adjusted times.
+  const elapsed = elapsedWithPenalties(registration.race_started_at, registration.race_finished_at, registration.penalties)
   return (
     <div className="flex items-stretch gap-2">
       <div className="flex items-center justify-center min-w-[40px] text-base font-semibold text-un1t-light">
@@ -333,17 +397,21 @@ function CompletedRow({ registration, wave, rank, busy, onReset }) {
       <div className="flex flex-col items-end justify-center gap-1 min-w-[110px]">
         <div className="font-mono text-base font-semibold text-emerald-700 tabular-nums">
           {formatElapsed(elapsed)}
+          <PenaltyBadge penalties={registration.penalties} />
         </div>
-        <button
-          type="button"
-          onClick={onReset}
-          disabled={busy}
-          className="text-[11px] text-un1t-light hover:text-un1t-white inline-flex items-center gap-1 disabled:opacity-40"
-          title="Clear this team's race timing (operator mistake undo)"
-        >
-          {busy ? <Loader2 size={11} className="animate-spin" /> : <RotateCcw size={11} />}
-          Reset
-        </button>
+        <div className="flex items-center gap-3">
+          <AdjustButton onAdjust={onAdjust} />
+          <button
+            type="button"
+            onClick={onReset}
+            disabled={busy}
+            className="text-[11px] text-un1t-light hover:text-un1t-white inline-flex items-center gap-1 disabled:opacity-40"
+            title="Clear this team's race timing (operator mistake undo)"
+          >
+            {busy ? <Loader2 size={11} className="animate-spin" /> : <RotateCcw size={11} />}
+            Reset
+          </button>
+        </div>
       </div>
     </div>
   )

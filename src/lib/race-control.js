@@ -75,6 +75,57 @@ export function elapsedSecondsBetween(startIso, endIso) {
 }
 
 /**
+ * Sum a registration's penalties[] (mig 124). Operator-applied
+ * adjustments are stored as one row per penalty so the audit
+ * trail is preserved; the UI sums them to a single offset
+ * applied to displayed elapsed time.
+ *
+ * Returns 0 (not null) for missing/empty arrays so the caller
+ * can additively combine without null-checking. Coerces non-
+ * numeric entries to 0 — defensive against malformed payloads.
+ *
+ *   penaltySumSeconds(undefined)              -> 0
+ *   penaltySumSeconds([])                     -> 0
+ *   penaltySumSeconds([{seconds: 30}])        -> 30
+ *   penaltySumSeconds([{seconds: 30}, {seconds: -10}]) -> 20
+ *
+ * @param {Array<{seconds:number}>|null|undefined} penalties
+ * @returns {number}
+ */
+export function penaltySumSeconds(penalties) {
+  if (!Array.isArray(penalties) || penalties.length === 0) return 0
+  let total = 0
+  for (const p of penalties) {
+    const n = Number(p?.seconds)
+    if (Number.isFinite(n)) total += n
+  }
+  return total
+}
+
+/**
+ * Adjusted elapsed time for a registration: base elapsed +
+ * sum(penalties.seconds). Returns null if the base elapsed is
+ * unknowable (no start, or no finish for completed view —
+ * caller decides which timestamp to pass for endIso). Penalties
+ * apply on top of whatever the caller passes; for live "on
+ * course" rows pass nowIso as endIso so penalties show even
+ * before the team finishes.
+ *
+ * Negative result clamps to 0 (a -60s credit on a 30s elapsed
+ * shouldn't display as -30s; treat as a finish at zero).
+ *
+ * @param {string|null|undefined} startIso
+ * @param {string|null|undefined} endIso
+ * @param {Array<{seconds:number}>|null|undefined} penalties
+ * @returns {number|null}
+ */
+export function elapsedWithPenalties(startIso, endIso, penalties) {
+  const base = elapsedSecondsBetween(startIso, endIso)
+  if (base == null) return null
+  return Math.max(0, base + penaltySumSeconds(penalties))
+}
+
+/**
  * Find-or-create a team for the given booking. Used by the race API
  * routes when a timed-event booking lands without a team_id (rare —
  * the booking widget creates the team at signup time, but a booking

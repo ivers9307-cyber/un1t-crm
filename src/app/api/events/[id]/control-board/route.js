@@ -53,6 +53,9 @@ export async function GET(_request, { params }) {
     }, { status: 404 })
   }
 
+  // Mig 124: penalties[] embedded inline so the polling UI can sum
+  // them client-side without a second roundtrip per team. Ordered by
+  // applied_at so the manage-penalties list reads chronologically.
   const { data: registrations, error: regErr } = await db
     .from('race_registrations')
     .select(`
@@ -60,7 +63,8 @@ export async function GET(_request, { params }) {
       team_composition,
       teams ( id, name, size, captain_contact_id,
         team_members ( id, name, email, role, is_member, member_validation_status )
-      )
+      ),
+      penalties:race_penalties ( id, seconds, reason, applied_by, applied_at )
     `)
     .eq('race_event_id', params.id)
     .order('registered_at', { ascending: true })
