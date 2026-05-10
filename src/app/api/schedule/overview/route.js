@@ -89,7 +89,13 @@ async function handleGet(request) {
     location_id: url.searchParams.get('location_id'),
   })
   if (!parsed.success) {
-    return NextResponse.json({ success: false, error: parsed.error.errors[0]?.message || 'Bad query' }, { status: 400 })
+    // Codebase convention is .issues (not .errors) — see
+    // src/lib/validate.js + every other route under src/app/api.
+    // Map all issues so the operator sees which field is wrong.
+    return NextResponse.json({
+      success: false,
+      error: parsed.error.issues.map(i => `${i.path.join('.')}: ${i.message}`).join('; ') || 'Bad query',
+    }, { status: 400 })
   }
   const { from, to, location_id } = parsed.data
 
