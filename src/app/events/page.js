@@ -29,7 +29,22 @@ const KIND_BADGE = {
 }
 const kindBadge = (k) => KIND_BADGE[k] || KIND_BADGE.race
 
-export default async function EventsIndexPage() {
+// Today in YYYY-MM-DD (Europe/Dublin) — used to split events into
+// upcoming vs past tabs. Server-side renders against THIS date so the
+// boundary doesn't shift mid-page-render. Anything dated today counts
+// as upcoming (race day is the day OF the event).
+function todayIsoDublin() {
+  // Dublin is UTC+0/+1 depending on DST. The simplest correct way to
+  // get "today's date as the operator sees it" is to format via Intl
+  // in the Dublin tz. Returns YYYY-MM-DD.
+  const fmt = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Europe/Dublin',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+  })
+  return fmt.format(new Date())
+}
+
+export default async function EventsIndexPage({ searchParams }) {
   const user = await getCurrentUser()
   if (!user) redirect('/login')
   if (!MANAGER_ROLES.includes(user.role)) redirect('/')
@@ -38,6 +53,11 @@ export default async function EventsIndexPage() {
   // key would cascade to every per-role default + every location's
   // saved overrides, not worth the churn).
   if (!hasPermission(user, 'races')) redirect('/')
+
+  // Tab selection via ?tab=upcoming|past. Defaults to upcoming so
+  // operators land on what's actionable, not on history.
+  const rawTab = searchParams?.tab
+  const tab = rawTab === 'past' ? 'past' : 'upcoming'
 
   const db = createServerClient()
   const locationIds = getUserLocationIds(user)
@@ -54,6 +74,24 @@ export default async function EventsIndexPage() {
       .order('race_date', { ascending: false })
     races = data || []
   }
+
+  // Split into upcoming (race_date >= today) and past (race_date <
+  // today). Anything with no race_date defaults to upcoming so a
+  // half-created event doesn't get hidden in the past tab.
+  const today = todayIsoDublin()
+  const upcoming = races.filter((r) => !r.race_date || r.race_date >= today)
+  const past     = races.filter((r) => r.race_date && r.race_date < today)
+
+  // Upcoming sorts by date ASC (next event first); past stays DESC
+  // (most recent past at top of the history list).
+  upcoming.sort((a, b) => (a.race_date || '').localeCompare(b.race_date || ''))
+  // past is already DESC from the SQL order
+
+  const visible = tab === 'past' ? past : upcoming
+  const tabs = [
+    { id: 'upcoming', label: 'Upcoming', count: upcoming.length, href: '/events' },
+    { id: 'past',     label: 'Past',     count: past.length,     href: '/events?tab=past' },
+  ]
 
   let appOrigin = ''
   try {
@@ -74,20 +112,52 @@ export default async function EventsIndexPage() {
           <Plus size={12} /> New event
         </Link>
       </div>
-      <p className="text-sm text-un1t-light mb-8">
+      <p className="text-sm text-un1t-light mb-6">
         Standalone events at this location — races (Hyrox sims with race-day timing + TV display), workshops, seminars, open days, masterclasses. Customers register via a dedicated public signup page; per-seat name + email is captured for every event kind.
       </p>
 
-      {races.length === 0 ? (
+      {/* Upcoming / Past tab strip. Server-rendered via ?tab= search
+          param — full page reload on switch but data is small and the
+          UX is "I want to see history" rather than "rapid back-and-
+          forth". Keeps the page a pure server component. */}
+      <div className="flex items-center gap-1 mb-5 border-b border-un1t-gray">
+        {tabs.map((t) => {
+          const active = tab === t.id
+          return (
+            <Link
+              key={t.id}
+              href={t.href}
+              className={`flex items-center gap-2 px-4 py-2.5 text-sm border-b-2 transition-colors -mb-px ${
+                active
+                  ? 'border-un1t-white text-un1t-white font-medium'
+                  : 'border-transparent text-un1t-light hover:text-un1t-white'
+              }`}
+            >
+              {t.label}
+              <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${
+                active ? 'bg-un1t-white/15 text-un1t-white' : 'bg-un1t-gray/40 text-un1t-light'
+              }`}>{t.count}</span>
+            </Link>
+          )
+        })}
+      </div>
+
+      {visible.length === 0 ? (
         <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-8 text-center">
           <Flag size={28} className="mx-auto text-un1t-light mb-3" />
-          <p className="text-sm text-un1t-light mb-4">No events yet.</p>
-          <Link
-            href="/events/new"
-            className="inline-flex items-center gap-1.5 text-xs bg-un1t-white text-un1t-black px-3 py-1.5 rounded-md hover:bg-un1t-accent font-medium"
-          >
-            <Plus size={12} /> Create the first one
-          </Link>
+          <p className="text-sm text-un1t-light mb-4">
+            {tab === 'past'
+              ? 'No past events yet.'
+              : 'No upcoming events. Create one to get started.'}
+          </p>
+          {tab === 'upcoming' && (
+            <Link
+              href="/events/new"
+              className="inline-flex items-center gap-1.5 text-xs bg-un1t-white text-un1t-black px-3 py-1.5 rounded-md hover:bg-un1t-accent font-medium"
+            >
+              <Plus size={12} /> Create the first one
+            </Link>
+          )}
         </div>
       ) : (
         <>
@@ -107,7 +177,7 @@ export default async function EventsIndexPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-un1t-gray">
-                {races.map((r) => {
+                {visible.map((r) => {
                   const confirmedCount = (r.registrations || []).filter(x => x.status === 'confirmed').length
                   const publicUrl = appOrigin ? `${appOrigin}/event/${r.slug}` : `/event/${r.slug}`
                   const isRace = (r.kind || 'race') === 'race'

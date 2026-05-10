@@ -65,7 +65,7 @@ export default async function BookingTypeDetailPage({ params }) {
           {event.description && <p className="text-sm text-un1t-light mt-1 ml-6">{event.description}</p>}
         </div>
         <div className="flex items-center gap-2">
-          <EventActions slug={event.slug} eventId={event.id} />
+          <EventActions slug={event.slug} eventId={event.id} eventName={event.name} />
           <Link
             href={`/bookings/event-types/${event.id}/edit`}
             className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded border border-un1t-gray text-un1t-light hover:text-un1t-white hover:border-un1t-white/30 transition-colors"

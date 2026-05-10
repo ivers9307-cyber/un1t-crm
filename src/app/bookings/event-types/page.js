@@ -120,7 +120,7 @@ export default async function BookingTypesPage() {
                 </div>
 
                 <div className="flex items-center gap-2 shrink-0">
-                  <EventActions slug={event.slug} eventId={event.id} />
+                  <EventActions slug={event.slug} eventId={event.id} eventName={event.name} />
                   <Link
                     href={`/bookings/event-types/${event.id}`}
                     className="text-xs px-3 py-1.5 rounded border border-un1t-gray text-un1t-light hover:text-un1t-white hover:border-un1t-white/30 transition-colors"
