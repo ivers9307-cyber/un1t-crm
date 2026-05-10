@@ -133,8 +133,9 @@ async function handleGet(request) {
   // ── Pull all four data sources in parallel ──────────────────
   const [eventsRes, eventTypesRes, blocksRes, timeOffRes] = await Promise.all([
     // Multi-kind events (race / workshop / etc.) on or between [from, to].
+    // start_time included so the day-detail modal can show "Workshop @ 18:00".
     db.from('race_events')
-      .select('id, name, kind, race_date, staff_required, active')
+      .select('id, name, kind, race_date, start_time, staff_required, active')
       .eq('location_id', location_id)
       .eq('active', true)
       .gte('race_date', from)
@@ -228,14 +229,34 @@ async function handleGet(request) {
     const bookingDemand   = sumStaffRequired(eventTypesToday)
     const demand          = eventDemand + bookingDemand
 
+    // Day-of-week key for extracting the per-day availability window
+    // from each Calendly type's availability JSON. Mirrors
+    // eventTypeHasWindowForDate's lookup.
+    const DAY_NAMES = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat']
+    const [yy, mm, dd] = date.split('-').map(Number)
+    const dayKey = DAY_NAMES[new Date(Date.UTC(yy, mm - 1, dd)).getUTCDay()]
+
     days.push({
       date,
       events: eventsToday.map((e) => ({
-        id: e.id, name: e.name, kind: e.kind, staff_required: e.staff_required,
+        id: e.id,
+        name: e.name,
+        kind: e.kind,
+        start_time: e.start_time,    // HH:MM:SS or null
+        staff_required: e.staff_required,
       })),
-      event_types: eventTypesToday.map((et) => ({
-        id: et.id, name: et.name, staff_required: et.staff_required,
-      })),
+      event_types: eventTypesToday.map((et) => {
+        // Surface the day's bookable window so the modal can show
+        // "PT bookings — bookable 09:00–17:00" instead of just "PT".
+        const win = et?.availability?.[dayKey] || null
+        return {
+          id: et.id,
+          name: et.name,
+          staff_required: et.staff_required,
+          window_start: win?.start || null,
+          window_end:   win?.end   || null,
+        }
+      }),
       time_off: onLeaveNames,
       staff_scheduled,
       staff_on_leave,
