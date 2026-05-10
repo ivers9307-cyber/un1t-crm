@@ -45,10 +45,24 @@ function getAvailableDays(availability) {
   return days.map((d, i) => availability[d] ? labels[i] : null).filter(Boolean).join(', ') || 'None'
 }
 
-export default async function BookingTypesPage() {
+export default async function BookingTypesPage({ searchParams }) {
   const user = await getCurrentUser()
   if (!user) redirect('/login')
   const events = await getEvents(user.activeLocation?.id)
+
+  // Active / inactive split. Defaults to active so operators land on
+  // what's actually bookable; inactive (soft-deleted via the Delete
+  // button in EventActions, or disabled via edit) is one click away
+  // for re-enabling.
+  const rawTab = searchParams?.tab
+  const tab = rawTab === 'inactive' ? 'inactive' : 'active'
+  const activeEvents   = events.filter((e) => e.active !== false)
+  const inactiveEvents = events.filter((e) => e.active === false)
+  const visible = tab === 'inactive' ? inactiveEvents : activeEvents
+  const tabs = [
+    { id: 'active',   label: 'Active',   count: activeEvents.length,   href: '/bookings/event-types' },
+    { id: 'inactive', label: 'Inactive', count: inactiveEvents.length, href: '/bookings/event-types?tab=inactive' },
+  ]
 
   return (
     <div className="p-8">
@@ -67,22 +81,57 @@ export default async function BookingTypesPage() {
         </Link>
       </div>
 
-      {events.length === 0 ? (
+      {/* Active / Inactive tab strip — same pattern as the Upcoming /
+          Past tabs on /events. Server-rendered via ?tab= search param.
+          Inactive booking types stay hidden from the public booking
+          page (active=true filter on /api/public/bookings/[slug]) but
+          are kept for historical bookings reporting context. */}
+      <div className="flex items-center gap-1 mb-5 border-b border-un1t-gray">
+        {tabs.map((t) => {
+          const active = tab === t.id
+          return (
+            <Link
+              key={t.id}
+              href={t.href}
+              className={`flex items-center gap-2 px-4 py-2.5 text-sm border-b-2 transition-colors -mb-px ${
+                active
+                  ? 'border-un1t-white text-un1t-white font-medium'
+                  : 'border-transparent text-un1t-light hover:text-un1t-white'
+              }`}
+            >
+              {t.label}
+              <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${
+                active ? 'bg-un1t-white/15 text-un1t-white' : 'bg-un1t-gray/40 text-un1t-light'
+              }`}>{t.count}</span>
+            </Link>
+          )
+        })}
+      </div>
+
+      {visible.length === 0 ? (
         <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-12 text-center">
           <Calendar size={40} className="mx-auto mb-4 text-un1t-light" />
-          <h3 className="text-lg font-semibold mb-2">No booking types yet</h3>
-          <p className="text-sm text-un1t-light mb-4">Create your first bookable template to start accepting bookings</p>
-          <Link
-            href="/bookings/event-types/new"
-            className="inline-flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium px-4 py-2.5 rounded-lg transition-colors"
-          >
-            <Plus size={16} />
-            Create booking type
-          </Link>
+          <h3 className="text-lg font-semibold mb-2">
+            {tab === 'inactive' ? 'No inactive booking types' : 'No booking types yet'}
+          </h3>
+          <p className="text-sm text-un1t-light mb-4">
+            {tab === 'inactive'
+              ? 'Deleted or disabled types will appear here so you can re-enable them.'
+              : 'Create your first bookable template to start accepting bookings'}
+          </p>
+          {tab === 'active' && (
+            <Link
+              href="/bookings/event-types/new"
+              className="inline-flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium px-4 py-2.5 rounded-lg transition-colors"
+            >
+              <Plus size={16} />
+              Create booking type
+            </Link>
+          )}
         </div>
       ) : (
         <div className="grid gap-4">
-          {events.map(event => (
+          {visible.map(event => (
             <div key={event.id} className="bg-un1t-dark border border-un1t-gray rounded-lg p-5">
               <div className="flex items-start justify-between">
                 <div className="flex items-start gap-4">
