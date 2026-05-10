@@ -170,6 +170,14 @@ export default async function EventsIndexPage() {
                               Race day
                             </Link>
                           )}
+                          <a
+                            href={`/api/events/${r.id}/qr-code`}
+                            download
+                            className="text-[11px] text-un1t-light hover:text-un1t-white"
+                            title="Download a printable QR code that links to the public signup page"
+                          >
+                            QR
+                          </a>
                           <Link
                             href={`/events/${r.id}/edit`}
                             className="text-[11px] text-un1t-light hover:text-un1t-white"

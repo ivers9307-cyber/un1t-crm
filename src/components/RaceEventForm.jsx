@@ -456,6 +456,20 @@ export default function RaceEventForm({ race, locationId }) {
             Public signup page is at <span className="font-mono">/event/{slug || 'your-slug'}</span>.
             {isEditing && ' Slug cannot be changed after creation (would break shared links).'}
           </p>
+          {/* QR-code download is operator-only and only renders for
+              saved events (it needs an id to look up). Right-aligned
+              under the slug field so it sits visually with the
+              public-URL line. */}
+          {isEditing && race?.id && (
+            <a
+              href={`/api/events/${race.id}/qr-code`}
+              download
+              className="mt-2 inline-flex items-center gap-1.5 text-xs text-blue-400 hover:text-blue-300"
+              title="Download a printable QR code that links to the public signup page"
+            >
+              <ImagePlus size={12} /> Download QR code (PNG)
+            </a>
+          )}
         </div>
 
         <div>
