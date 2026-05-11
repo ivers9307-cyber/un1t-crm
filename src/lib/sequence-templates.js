@@ -11,6 +11,73 @@
 // the picker UI.
 
 export const SEQUENCE_TEMPLATES = [
+  // ─── Lead conversion ─────────────────────────────────────────
+  // Templates for the top of the funnel — turning consultation
+  // bookings + landing-page leads into trial classes + members.
+  // Added as part of the Flows/Automations gallery work after the
+  // un1tdublin.com landing page started capturing consultations.
+  {
+    id: 'consultation_reminder',
+    category: 'Lead conversion',
+    name: 'Consultation reminder',
+    description: 'For free consultations booked via /welcome. Email reminder 24h before the slot, SMS nudge 1h before. Cuts no-shows by giving the prospect two touch points before their arrival.',
+    trigger_type: 'event_reminder',
+    // hours_before=24 → the sequence enrols the booking 24h before
+    // the consultation time. Step 1 fires immediately (T-24h email),
+    // step 2 waits 23h then sends the T-1h SMS.
+    trigger_config: { hours_before: 24 },
+    goal_config: null,
+    send_window: { start_hour: 7, end_hour: 22, skip_days: [] },
+    steps: [
+      {
+        step_type: 'email',
+        delay_days: 0,
+        delay_hours: 0,
+        subject: 'See you tomorrow, {{first_name}}',
+        html_content: '<p>Hi {{first_name}},</p><p>Your consultation\'s booked for tomorrow. Arrive 5 minutes early so we can chat through your goals before we move.</p><p>Bring water + comfy gym kit. We\'ll handle the rest.</p><p>UN1T Stillorgan, Dublin.</p>',
+      },
+      {
+        step_type: 'sms',
+        delay_days: 0,
+        delay_hours: 23,
+        sms_body: 'UN1T: {{first_name}}, your consultation\'s in 1 hour. See you at Stillorgan. Reply if you need to change anything.',
+      },
+    ],
+  },
+  {
+    id: 'consultation_lead_nurture',
+    category: 'Lead conversion',
+    name: 'Lead nurture from consultation',
+    description: 'Three-touch drip starting the day the prospect books a free consultation. Day 0 thanks + what-to-expect, Day 3 social proof, Day 7 trial-class offer. Goal: contact becomes an active_trial.',
+    trigger_type: 'booking_created',
+    trigger_config: {},
+    goal_config: { type: 'lead_status', value: 'active_trial' },
+    send_window: { start_hour: 9, end_hour: 19, skip_days: [] },
+    steps: [
+      {
+        step_type: 'email',
+        delay_days: 0,
+        delay_hours: 1,
+        subject: 'Welcome to UN1T, {{first_name}} — what\'s next',
+        html_content: '<p>Hi {{first_name}},</p><p>Thanks for booking your consultation. Here\'s what to expect: a 30-minute chat about your goals + a tour of the floor + a short movement screen so we know where you\'re at.</p><p>No pressure, no commitment. Just a conversation.</p><p>See you soon,<br/>UN1T</p>',
+      },
+      {
+        step_type: 'email',
+        delay_days: 3,
+        delay_hours: 0,
+        subject: 'How our members talk about UN1T',
+        html_content: '<p>Hi {{first_name}},</p><p>People often ask "what makes UN1T different?" The short answer: coaches who know your name and a room that shows up.</p><p>Read what members say about training here: <a href="https://un1tdublin.com">un1tdublin.com</a></p><p>Looking forward to meeting you.</p>',
+      },
+      {
+        step_type: 'email',
+        delay_days: 7,
+        delay_hours: 0,
+        subject: 'Your first class is on us',
+        html_content: '<p>Hi {{first_name}},</p><p>If our consultation showed you what we\'re about, the next step is feeling it on the floor.</p><p>Reply YES and we\'ll book you in for a free trial class this week.</p>',
+      },
+    ],
+  },
+
   // ─── Race ────────────────────────────────────────────────────
   {
     id: 'race_welcome',
@@ -174,6 +241,43 @@ export const SEQUENCE_TEMPLATES = [
       },
     ],
   },
+  {
+    id: 'lapsing_member_cascade',
+    category: 'Recovery',
+    name: 'Lapsing member cascade (30 / 60 / 90 day)',
+    description: 'Fires when a contact goes 30 days without opening an email. Three touch points spaced 30 days apart: friendly nudge, a "would Saturday work" check-in, and a half-off-comeback offer. Re-enrolment locked for 120 days after exit so the same contact doesn\'t bounce between attempts.',
+    trigger_type: 'inactivity',
+    trigger_config: { signal: 'last_email_open_at', days_inactive: 30 },
+    goal_config: { type: 'booking_made' },
+    re_enrolment_cooldown_days: 120,
+    send_window: { start_hour: 9, end_hour: 19, skip_days: [] },
+    steps: [
+      // T+0 (30d inactive) — light touch
+      {
+        step_type: 'email',
+        delay_days: 0,
+        delay_hours: 0,
+        subject: 'Quick check-in, {{first_name}}',
+        html_content: '<p>Hi {{first_name}},</p><p>Haven\'t seen you in a few weeks. Hope life\'s good.</p><p>If you want to drop back in this week, just reply — we\'ll save you a spot.</p>',
+      },
+      // T+30 (60d inactive) — more specific ask
+      {
+        step_type: 'email',
+        delay_days: 30,
+        delay_hours: 0,
+        subject: 'Would Saturday morning work?',
+        html_content: '<p>Hi {{first_name}},</p><p>Most members who come back start with a Saturday class — quieter, longer, more chat with the coach.</p><p>Want me to put you down for this Saturday at 10am?</p>',
+      },
+      // T+60 (90d inactive) — final offer
+      {
+        step_type: 'email',
+        delay_days: 30,
+        delay_hours: 0,
+        subject: 'Half off your first month back',
+        html_content: '<p>Hi {{first_name}},</p><p>It\'s been three months. The first step back is the hardest — so we\'re halving your first month if you want to give UN1T another go.</p><p>Reply HALF and I\'ll set it up. No long contract, no fuss.</p>',
+      },
+    ],
+  },
 
   // ─── Internal ────────────────────────────────────────────────
   {
@@ -236,9 +340,34 @@ export const SEQUENCE_TEMPLATES = [
       },
     ],
   },
+  {
+    id: 'birthday_wishes',
+    category: 'Anniversary',
+    name: 'Birthday wishes + free class',
+    description: 'Fires on each contact\'s birthday (uses contact.dob). Email at 9am plus an SMS later in the morning so the message lands on both channels. Re-fires every year with a 350-day cooldown.',
+    trigger_type: 'anniversary',
+    trigger_config: { from_field: 'dob', days_after: 0 },
+    re_enrolment_cooldown_days: 350,
+    send_window: { start_hour: 9, end_hour: 19, skip_days: [] },
+    steps: [
+      {
+        step_type: 'email',
+        delay_days: 0,
+        delay_hours: 0,
+        subject: 'Happy birthday, {{first_name}} 🎂',
+        html_content: '<p>Hi {{first_name}},</p><p>Happy birthday from the UN1T team — hope today\'s a good one.</p><p>Drop in any time this week for a free birthday class. Just reply with a day that works.</p>',
+      },
+      {
+        step_type: 'sms',
+        delay_days: 0,
+        delay_hours: 2,
+        sms_body: 'UN1T: Happy birthday {{first_name}}! Free class on us this week — reply with a day.',
+      },
+    ],
+  },
 ]
 
-export const TEMPLATE_CATEGORIES = ['Races', 'Welcome', 'Recovery', 'Internal', 'Anniversary']
+export const TEMPLATE_CATEGORIES = ['Lead conversion', 'Welcome', 'Recovery', 'Anniversary', 'Races', 'Internal']
 
 export function getTemplate(id) {
   return SEQUENCE_TEMPLATES.find((t) => t.id === id) || null

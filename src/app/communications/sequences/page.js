@@ -7,11 +7,12 @@
 
 import Link from 'next/link'
 import { redirect } from 'next/navigation'
-import { Plus, Zap, Play, Pause, FileEdit } from 'lucide-react'
+import { Plus, Zap, Play, Pause, FileEdit, LayoutTemplate } from 'lucide-react'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import SequenceTemplatePicker from '@/components/SequenceTemplatePicker'
+import CloneSequenceButton from '@/components/CloneSequenceButton'
 
 export const dynamic = 'force-dynamic'
 
@@ -56,6 +57,16 @@ export default async function SequencesListPage() {
           <p className="text-xs text-un1t-light mt-0.5">Automated drip campaigns triggered by events</p>
         </div>
         <div className="flex items-center gap-2">
+          {/* Discoverable gallery link — the SequenceTemplatePicker
+              modal stays for muscle memory but the gallery page is
+              the new primary surface for browsing templates. */}
+          <Link
+            href="/communications/sequences/templates"
+            className="inline-flex items-center gap-2 border border-un1t-gray text-un1t-light text-sm font-medium px-4 py-2 rounded-lg hover:text-un1t-white hover:border-un1t-mid transition-colors"
+          >
+            <LayoutTemplate size={16} />
+            Browse templates
+          </Link>
           <SequenceTemplatePicker />
           <Link
             href="/email/sequences/new"
@@ -87,24 +98,29 @@ export default async function SequencesListPage() {
             const config = statusConfig[seq.status] || statusConfig.draft
             const StatusIcon = config.icon
             const stepsCount = seq.sequence_steps?.length || 0
+            // The row is wrapped in a div (not the link) so the
+            // clone button can live alongside without the whole
+            // row hijacking its click. The label area stays a Link.
             return (
-              <Link
+              <div
                 key={seq.id}
-                href={`/email/sequences/${seq.id}`}
                 className="flex items-center justify-between px-5 py-4 hover:bg-un1t-gray/20 transition-colors"
               >
-                <div className="flex items-center gap-4">
-                  <div className="w-10 h-10 rounded-lg bg-un1t-gray/30 flex items-center justify-center">
+                <Link
+                  href={`/email/sequences/${seq.id}`}
+                  className="flex items-center gap-4 flex-1 min-w-0"
+                >
+                  <div className="w-10 h-10 rounded-lg bg-un1t-gray/30 flex items-center justify-center shrink-0">
                     <Zap size={18} className="text-un1t-light" />
                   </div>
-                  <div>
-                    <p className="text-sm font-medium">{seq.name}</p>
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium truncate">{seq.name}</p>
                     <p className="text-xs text-un1t-light mt-0.5">
                       {triggerLabels[seq.trigger_type] || seq.trigger_type} · {stepsCount} step{stepsCount !== 1 ? 's' : ''}
                     </p>
                   </div>
-                </div>
-                <div className="flex items-center gap-3">
+                </Link>
+                <div className="flex items-center gap-3 shrink-0">
                   {seq.total_enrolled > 0 && (
                     <span className="text-xs text-un1t-light">{seq.total_enrolled} enrolled</span>
                   )}
@@ -112,8 +128,9 @@ export default async function SequencesListPage() {
                     <StatusIcon size={10} />
                     {config.label}
                   </span>
+                  <CloneSequenceButton sequenceId={seq.id} sequenceName={seq.name} />
                 </div>
-              </Link>
+              </div>
             )
           })}
         </div>
