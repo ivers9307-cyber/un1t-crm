@@ -13,6 +13,8 @@ import Link from 'next/link'
 import BookingWidget from '@/components/BookingWidget'
 import { parseEmbed } from '@/lib/landing-page-embed'
 import EditableText from './EditableText'
+import EditableImage from './EditableImage'
+import HeroMediaTools from './HeroMediaTools'
 
 // Pass-through wrapper used by every block renderer. When `onEdit`
 // is provided (i.e. we're rendering inside the iframe edit
@@ -30,18 +32,22 @@ function E({ value, onEdit, path, multiline }) {
   )
 }
 
-export default function BlockRenderer({ block, onEdit }) {
+export default function BlockRenderer({ block, onEdit, locationId }) {
   // onEdit is bound to this block: caller hands us a generic
   // (blockId, path, value) function and we curry the blockId so
   // each child renderer thinks in local field paths.
   const localOnEdit = onEdit
     ? (path, value) => onEdit(block.id, path, value)
     : null
+  // Common props bundled so we don't repeat ourselves on every
+  // block case. locationId is needed by EditableImage to attribute
+  // the upload to the right tenant.
+  const editProps = { onEdit: localOnEdit, locationId }
   switch (block.type) {
-    case 'hero':        return <HeroBlock        block={block} onEdit={localOnEdit} />
+    case 'hero':        return <HeroBlock        block={block} {...editProps} />
     case 'booking':     return <BookingBlock     block={block} />
-    case 'pillars':     return <PillarsBlock     block={block} onEdit={localOnEdit} />
-    case 'gallery':     return <GalleryBlock     block={block} onEdit={localOnEdit} />
+    case 'pillars':     return <PillarsBlock     block={block} {...editProps} />
+    case 'gallery':     return <GalleryBlock     block={block} {...editProps} />
     case 'embed':       return <EmbedBlock       block={block} onEdit={localOnEdit} />
     case 'stats':       return <StatsBlock       block={block} onEdit={localOnEdit} />
     case 'testimonial': return <TestimonialBlock block={block} onEdit={localOnEdit} />
@@ -52,7 +58,7 @@ export default function BlockRenderer({ block, onEdit }) {
 // Hero — backdrop precedence: video > image > radial gradient.
 // Video uses the image as poster so the hero never flashes black
 // while the video downloads.
-export function HeroBlock({ block, onEdit }) {
+export function HeroBlock({ block, onEdit, locationId }) {
   return (
     <section className="relative pt-24 pb-8 md:pt-32 md:pb-10 overflow-hidden">
       {block.video_url ? (
@@ -103,6 +109,19 @@ export function HeroBlock({ block, onEdit }) {
           aria-hidden="true"
         />
       )}
+      {/* Hero media tools — only when in edit mode. Sit top-right
+          inside the hero so they're visible without overlapping the
+          headline. Uses the same /media upload route as everything
+          else. */}
+      {onEdit && (
+        <HeroMediaTools
+          imageUrl={block.image_url}
+          videoUrl={block.video_url}
+          locationId={locationId}
+          onChangeImage={(url) => onEdit(['image_url'], url)}
+          onChangeVideo={(url) => onEdit(['video_url'], url)}
+        />
+      )}
       <div className="relative max-w-5xl mx-auto px-6 text-center">
         {(block.eyebrow || onEdit) && (
           <p className="text-xs md:text-sm uppercase tracking-[0.3em] text-white/60 mb-5">
@@ -151,7 +170,7 @@ export function BookingBlock({ block }) {
   )
 }
 
-export function PillarsBlock({ block, onEdit }) {
+export function PillarsBlock({ block, onEdit, locationId }) {
   const items = Array.isArray(block.items) ? block.items.slice(0, 3) : []
   if (items.length === 0 && !onEdit) return null
   return (
@@ -166,6 +185,7 @@ export function PillarsBlock({ block, onEdit }) {
               body={p.body || ''}
               photoUrl={p.photo_url || null}
               onEdit={onEdit}
+              locationId={locationId}
               itemIndex={i}
             />
           ))}
@@ -175,7 +195,7 @@ export function PillarsBlock({ block, onEdit }) {
   )
 }
 
-export function GalleryBlock({ block, onEdit }) {
+export function GalleryBlock({ block, onEdit, locationId }) {
   const items = Array.isArray(block.items) ? block.items : []
   if (items.length === 0 && !onEdit) return null
   return (
@@ -189,20 +209,60 @@ export function GalleryBlock({ block, onEdit }) {
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 md:gap-4">
           {items.map((g, i) => (
             <figure key={i} className="relative aspect-square overflow-hidden bg-white/5 group">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={g.url}
-                alt={g.alt || ''}
-                className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
-                loading="lazy"
-              />
+              {onEdit ? (
+                <EditableImage
+                  src={g.url}
+                  alt={g.alt || ''}
+                  kind="image"
+                  locationId={locationId}
+                  className="absolute inset-0"
+                  onChange={(url) => {
+                    // null = remove this item; otherwise swap.
+                    if (url === null) {
+                      const next = items.filter((_, j) => j !== i)
+                      onEdit(['items'], next)
+                    } else {
+                      onEdit(['items', i, 'url'], url)
+                    }
+                  }}
+                />
+              ) : (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={g.url}
+                  alt={g.alt || ''}
+                  className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
+                  loading="lazy"
+                />
+              )}
               {g.caption && (
-                <figcaption className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent p-3 text-xs text-white/90">
+                <figcaption className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent p-3 text-xs text-white/90 z-20 pointer-events-none">
                   {g.caption}
                 </figcaption>
               )}
             </figure>
           ))}
+          {onEdit && items.length < 24 && (
+            // "Add photo" tile — sits at the end of the grid.
+            // EditableImage with empty src renders the dashed
+            // placeholder; on upload we append to items via the
+            // setByPath route on the parent (path = ['items']
+            // with the full new array).
+            <figure className="relative aspect-square overflow-hidden bg-white/5">
+              <EditableImage
+                src=""
+                kind="image"
+                locationId={locationId}
+                className="absolute inset-0"
+                emptyLabel="+ Add photo"
+                onChange={(url) => {
+                  if (!url) return
+                  const next = [...items, { url, alt: '', caption: '' }]
+                  onEdit(['items'], next)
+                }}
+              />
+            </figure>
+          )}
         </div>
       </div>
     </section>
@@ -319,18 +379,33 @@ export function TestimonialBlock({ block, onEdit }) {
   )
 }
 
-function Pillar({ number, title, body, photoUrl, onEdit, itemIndex }) {
+function Pillar({ number, title, body, photoUrl, onEdit, locationId, itemIndex }) {
+  // Show the photo region if there IS a photo OR we're in edit mode
+  // (so the operator has somewhere to drop one). Same -mx/-mt as
+  // before so the image bleeds to the tile edges.
+  const showPhotoRegion = !!photoUrl || !!onEdit
   return (
     <div className="bg-white p-8 md:p-10">
-      {photoUrl && (
-        <div className="aspect-[4/3] mb-6 overflow-hidden -mx-8 -mt-8 md:-mx-10 md:-mt-10 bg-black/5">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src={photoUrl}
-            alt=""
-            className="w-full h-full object-cover"
-            loading="lazy"
-          />
+      {showPhotoRegion && (
+        <div className="aspect-[4/3] mb-6 overflow-hidden -mx-8 -mt-8 md:-mx-10 md:-mt-10 bg-black/5 relative">
+          {onEdit ? (
+            <EditableImage
+              src={photoUrl || ''}
+              kind="image"
+              locationId={locationId}
+              onChange={(url) => onEdit(['items', itemIndex, 'photo_url'], url)}
+              emptyLabel="Add pillar photo"
+              className="absolute inset-0"
+            />
+          ) : (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={photoUrl}
+              alt=""
+              className="w-full h-full object-cover"
+              loading="lazy"
+            />
+          )}
         </div>
       )}
       <div className="text-xs font-mono text-black/40 mb-6">

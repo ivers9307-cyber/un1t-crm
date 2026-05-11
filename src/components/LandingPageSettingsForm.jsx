@@ -105,8 +105,12 @@ export default function LandingPageSettingsForm({ locationId, initialSettings, a
       logoUrl: logoUrl.trim() || null,
       logoAlt: logoAlt.trim() || null,
       logoWidthPx: widthPxOrNull,
+      // Mig 3c.3 — iframe needs locationId to attribute uploads
+      // (EditableImage / HeroMediaTools call /api/landing-page-
+      // settings/media which validates location ownership).
+      locationId,
     }
-  }, [blocks, logoUrl, logoAlt, logoWidthPx])
+  }, [blocks, logoUrl, logoAlt, logoWidthPx, locationId])
 
   // Push state to the iframe whenever it changes. The iframe also
   // sends a 'ready' message on mount which we respond to immediately

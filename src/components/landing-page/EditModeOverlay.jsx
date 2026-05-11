@@ -39,6 +39,11 @@ export default function EditModeOverlay({
   const [logoUrl, setLogoUrl] = useState(initialLogoUrl)
   const [logoAlt, setLogoAlt] = useState(initialLogoAlt)
   const [logoWidthPx, setLogoWidthPx] = useState(initialLogoWidthPx)
+  // locationId arrives via postMessage state (the parent settings
+  // form has it from getCurrentUser().activeLocation.id and pushes
+  // it down so EditableImage / HeroMediaTools can attribute uploads
+  // to the right tenant). Null until the first state message lands.
+  const [locationId, setLocationId] = useState(null)
   const [selectedId, setSelectedId] = useState(null)
   const blockRefs = useRef({})
 
@@ -61,6 +66,7 @@ export default function EditModeOverlay({
         if (msg.logoUrl !== undefined)     setLogoUrl(msg.logoUrl || null)
         if (msg.logoAlt !== undefined)     setLogoAlt(msg.logoAlt || 'UN1T Dublin')
         if (msg.logoWidthPx !== undefined) setLogoWidthPx(msg.logoWidthPx || 200)
+        if (msg.locationId !== undefined)  setLocationId(msg.locationId || null)
         if (msg.selectedBlockId !== undefined) {
           setSelectedId(msg.selectedBlockId || null)
           // Scroll the selected block into view so clicking it on the
@@ -133,7 +139,7 @@ export default function EditModeOverlay({
                 : 'hover:outline hover:outline-2 hover:outline-blue-300/60 hover:outline-offset-[-2px]'
             }`}
           >
-            <BlockRenderer block={block} onEdit={emitFieldEdit} />
+            <BlockRenderer block={block} onEdit={emitFieldEdit} locationId={locationId} />
             {/* Type badge — top-left, only shows on hover or when
                 selected. Click-through to select via the wrapper. */}
             <div
