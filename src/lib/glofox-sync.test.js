@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest'
-import { mapGlofoxMember, mapMembershipStatus, previewMemberSync } from './glofox-sync.js'
+import {
+  mapGlofoxMember,
+  mapMembershipStatus,
+  previewMemberSync,
+  parseGlofoxDate,
+  normalizePhone,
+  mapGlofoxSource,
+} from './glofox-sync.js'
 
 describe('mapGlofoxMember', () => {
   it('returns null for a non-object', () => {
@@ -103,6 +110,108 @@ describe('mapMembershipStatus', () => {
   })
 })
 
+describe('parseGlofoxDate', () => {
+  it('returns null for null / empty / unparseable input', () => {
+    expect(parseGlofoxDate(null)).toBeNull()
+    expect(parseGlofoxDate('')).toBeNull()
+    expect(parseGlofoxDate('not a date')).toBeNull()
+    expect(parseGlofoxDate({})).toBeNull()
+  })
+
+  it('parses ISO date strings, stripping any time component', () => {
+    expect(parseGlofoxDate('1990-05-12')).toBe('1990-05-12')
+    expect(parseGlofoxDate('1990-05-12T00:00:00Z')).toBe('1990-05-12')
+    expect(parseGlofoxDate('1990-05-12T14:30:00.000+01:00')).toBe('1990-05-12')
+  })
+
+  it('parses Unix seconds', () => {
+    // 1990-05-12 → 642470400 seconds since epoch (UTC)
+    expect(parseGlofoxDate(642470400)).toBe('1990-05-12')
+  })
+
+  it('parses Unix millis (>10-digit guard)', () => {
+    expect(parseGlofoxDate(642470400000)).toBe('1990-05-12')
+  })
+
+  it('parses Mongo BSON timestamp shape { sec, usec }', () => {
+    expect(parseGlofoxDate({ sec: 642470400, usec: 0 })).toBe('1990-05-12')
+  })
+
+  it('rejects out-of-range values (sentinel garbage)', () => {
+    expect(parseGlofoxDate(-9_999_999_999)).toBeNull()
+    expect(parseGlofoxDate(99_999_999_999_999)).toBeNull()
+  })
+})
+
+describe('normalizePhone', () => {
+  it('returns null for non-string / empty', () => {
+    expect(normalizePhone(null)).toBeNull()
+    expect(normalizePhone('')).toBeNull()
+    expect(normalizePhone(123)).toBeNull()
+  })
+
+  it('preserves already-E.164 numbers', () => {
+    expect(normalizePhone('+447310018668')).toBe('+447310018668')
+    expect(normalizePhone('+353871234567')).toBe('+353871234567')
+  })
+
+  it('strips whitespace from E.164 numbers', () => {
+    expect(normalizePhone('+44 7310 018668')).toBe('+447310018668')
+  })
+
+  it('converts 00-prefix to +-prefix', () => {
+    expect(normalizePhone('00447310018668')).toBe('+447310018668')
+  })
+
+  it('normalises UK 11-digit 07 mobile to +44', () => {
+    // Roisin Leddy from the live Stillorgan payload — 07310018668
+    expect(normalizePhone('07310018668')).toBe('+447310018668')
+    expect(normalizePhone('07700900123')).toBe('+447700900123')
+  })
+
+  it('normalises Irish 10-digit 08 mobile to +353', () => {
+    expect(normalizePhone('0871234567')).toBe('+353871234567')
+    expect(normalizePhone('0851234567')).toBe('+353851234567')
+    expect(normalizePhone('0861234567')).toBe('+353861234567')
+    expect(normalizePhone('0891234567')).toBe('+353891234567')
+  })
+
+  it('leaves unrecognised formats as-is rather than guessing wrong', () => {
+    // Landline (Dublin 01-XXX XXXX), unknown international,
+    // mis-formatted strings — preserve the raw value so a bulk
+    // normalisation pass can review later.
+    expect(normalizePhone('016700100')).toBe('016700100')
+    expect(normalizePhone('123')).toBe('123')
+  })
+})
+
+describe('mapGlofoxSource', () => {
+  it('maps known Glofox sources to leadSourceSchema enum values', () => {
+    expect(mapGlofoxSource('WEBPORTAL')).toBe('website')
+    expect(mapGlofoxSource('WEB')).toBe('website')
+    expect(mapGlofoxSource('WALK_IN')).toBe('walkin')
+    expect(mapGlofoxSource('WALKIN')).toBe('walkin')
+    expect(mapGlofoxSource('REFERRAL')).toBe('referral')
+    expect(mapGlofoxSource('FACEBOOK')).toBe('meta')
+    expect(mapGlofoxSource('INSTAGRAM')).toBe('meta')
+    expect(mapGlofoxSource('TIKTOK')).toBe('tiktok')
+    expect(mapGlofoxSource('BOOKING')).toBe('booking')
+    expect(mapGlofoxSource('WHATSAPP')).toBe('whatsapp')
+  })
+
+  it('is case-insensitive', () => {
+    expect(mapGlofoxSource('webportal')).toBe('website')
+    expect(mapGlofoxSource('Walk_In')).toBe('walkin')
+  })
+
+  it('defaults to "other" for unmapped or missing values', () => {
+    expect(mapGlofoxSource('UNKNOWN_SOURCE')).toBe('other')
+    expect(mapGlofoxSource('')).toBe('other')
+    expect(mapGlofoxSource(null)).toBe('other')
+    expect(mapGlofoxSource(undefined)).toBe('other')
+  })
+})
+
 // Lock the live UN1T Stillorgan payload from GLOFOX2.1 dry-run
 // against the mapper so future refactors can't silently regress
 // the field paths against Glofox's real shape.
@@ -127,6 +236,8 @@ describe('mapGlofoxMember (real Glofox payload)', () => {
     leads: { status: 'TRIAL' },
     name: 'Roisin Leddy',
     role: 'member',
+    source: 'WEBPORTAL',
+    birth: null,
   }
 
   it('extracts the right fields', () => {
@@ -135,7 +246,6 @@ describe('mapGlofoxMember (real Glofox payload)', () => {
     expect(out.email).toBe('roisinled@hotmail.com')
     expect(out.first_name).toBe('Roisin')
     expect(out.last_name).toBe('Leddy')
-    expect(out.phone).toBe('07310018668')
     expect(out.name).toBe('Roisin Leddy')
   })
 
@@ -144,6 +254,28 @@ describe('mapGlofoxMember (real Glofox payload)', () => {
     // payload mapped to 'lead' because the parser only checked
     // membership.status / active_membership.status.
     expect(mapGlofoxMember(realPayload).glofox_membership_status).toBe('trial')
+  })
+
+  it('normalises Roisin\'s UK mobile to E.164 (GLOFOX2.1.2)', () => {
+    expect(mapGlofoxMember(realPayload).phone).toBe('+447310018668')
+  })
+
+  it('maps WEBPORTAL source to website lead_source (GLOFOX2.1.2)', () => {
+    expect(mapGlofoxMember(realPayload).lead_source).toBe('website')
+  })
+
+  it('leaves dob null when Glofox birth is null', () => {
+    expect(mapGlofoxMember(realPayload).dob).toBeNull()
+  })
+
+  it('captures dob when Glofox supplies a birth ISO string', () => {
+    const withBirth = { ...realPayload, birth: '1990-05-12' }
+    expect(mapGlofoxMember(withBirth).dob).toBe('1990-05-12')
+  })
+
+  it('captures dob when Glofox supplies a Mongo BSON timestamp', () => {
+    const withBirth = { ...realPayload, birth: { sec: 642470400, usec: 0 } }
+    expect(mapGlofoxMember(withBirth).dob).toBe('1990-05-12')
   })
 })
 
@@ -186,7 +318,17 @@ describe('previewMemberSync', () => {
     const out = await previewMemberSync(fakeDb(), 'loc', member)
     expect(out.action).toBe('create')
     expect(out.changes.glofox_member_id.to).toBe('g1')
-    expect(out.changes.lead_source.to).toBe('glofox')
+    // GLOFOX2.1.2 — lead_source is now mapped from Glofox source
+    // through leadSourceSchema. Member fixture has no source field
+    // so we expect the 'other' fallback, not the old hardcoded
+    // 'glofox' value.
+    expect(out.changes.lead_source.to).toBe('other')
+  })
+
+  it('uses mapped lead_source when Glofox source is supplied', async () => {
+    const m = { ...member, source: 'WEBPORTAL' }
+    const out = await previewMemberSync(fakeDb(), 'loc', m)
+    expect(out.changes.lead_source.to).toBe('website')
   })
 
   it('returns update when only glofox_member_id matches', async () => {

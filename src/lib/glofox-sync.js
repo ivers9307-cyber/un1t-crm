@@ -53,6 +53,125 @@ function pluck(obj, paths) {
   return null
 }
 
+// ─────────────────────────────────────────────────────────────
+// Parsers — Glofox payload conventions (GLOFOX2.1.2)
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Parse a Glofox date-ish value into a YYYY-MM-DD string suitable
+ * for the contacts.dob DATE column.
+ *
+ * Glofox's `birth` field shape is undocumented — could arrive as:
+ *   - ISO date string: "1990-05-12" or "1990-05-12T00:00:00Z"
+ *   - Unix seconds: 642470400
+ *   - Mongo BSON timestamp object: { sec: 642470400, usec: 0 }
+ *     (Glofox uses this for modified/created elsewhere)
+ *
+ * Returns null when the value is null / empty / unparseable so
+ * the sync can leave dob NULL rather than write garbage.
+ */
+export function parseGlofoxDate(value) {
+  if (value == null || value === '') return null
+  // ISO string — already in the right shape; strip any time
+  // component since dob is DATE-only.
+  if (typeof value === 'string') {
+    const ymd = value.match(/^(\d{4}-\d{2}-\d{2})/)
+    if (ymd) return ymd[1]
+    return null
+  }
+  // Mongo BSON timestamp shape.
+  let secs = null
+  if (typeof value === 'object' && typeof value.sec === 'number') {
+    secs = value.sec
+  } else if (typeof value === 'number') {
+    secs = value
+  }
+  if (secs == null || !Number.isFinite(secs)) return null
+  // Heuristic: Glofox sometimes returns millis instead of seconds.
+  // Anything past 10 digits + a sensible date range means millis.
+  if (secs > 10_000_000_000) secs = Math.floor(secs / 1000)
+  // Sanity-bound: 1900-2100 in unix seconds. Outside this is
+  // almost certainly garbage (or a sentinel value Glofox uses
+  // for "no birthday set").
+  if (secs < -2_208_988_800 || secs > 4_102_444_800) return null
+  const d = new Date(secs * 1000)
+  if (Number.isNaN(d.getTime())) return null
+  // Format YYYY-MM-DD using UTC parts so a server in any TZ
+  // produces the same string for the same instant.
+  const y = d.getUTCFullYear()
+  const m = String(d.getUTCMonth() + 1).padStart(2, '0')
+  const day = String(d.getUTCDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
+
+/**
+ * Normalise UK + Irish mobile numbers to E.164. Length is the
+ * disambiguator:
+ *   - 11 digits starting 07 → UK mobile, drop leading 0 → +44
+ *   - 10 digits starting 08 → Irish mobile (083/085/086/087/089),
+ *     drop leading 0 → +353
+ *   - already +-prefixed → trust the input
+ *   - 00 prefix → swap to +
+ *   - anything else → return as-is (we'd rather store the raw
+ *     value than guess wrong; bulk normalisation can clean these
+ *     up later with operator review)
+ *
+ * No third-party libraries — libphonenumber is overkill for the
+ * two countries UN1T actually serves.
+ */
+export function normalizePhone(phone) {
+  if (typeof phone !== 'string') return null
+  const trimmed = phone.trim()
+  if (!trimmed) return null
+  // Already E.164-ish.
+  if (trimmed.startsWith('+')) return trimmed.replace(/\s+/g, '')
+  // International prefix via 00.
+  if (trimmed.startsWith('00')) return '+' + trimmed.slice(2).replace(/\s+/g, '')
+  // Strip non-digits for the heuristic check.
+  const digits = trimmed.replace(/\D/g, '')
+  // UK mobile: 11 digits starting 07.
+  if (digits.length === 11 && digits.startsWith('07')) {
+    return '+44' + digits.slice(1)
+  }
+  // Irish mobile: 10 digits starting 08X. 083, 085, 086, 087, 089
+  // are the active prefixes today; we cover the broader 08* to
+  // future-proof against a new operator block.
+  if (digits.length === 10 && digits.startsWith('08')) {
+    return '+353' + digits.slice(1)
+  }
+  // Unknown / landline / international without + → leave as-is.
+  return trimmed
+}
+
+/**
+ * Glofox `source` values map to our existing leadSourceSchema
+ * enum (src/lib/schemas.js — booking / meta / tiktok / walkin /
+ * referral / website / whatsapp / other). Anything we can't
+ * recognise becomes 'other'. The granular Glofox-side detail is
+ * preserved via glofox_member_id; operators who need a finer
+ * audience filter can use the membership_status + status-driven
+ * tags.
+ */
+const GLOFOX_SOURCE_MAP = {
+  WEBPORTAL:    'website',
+  WEB:          'website',
+  WALK_IN:      'walkin',
+  WALKIN:       'walkin',
+  REFERRAL:     'referral',
+  FACEBOOK:     'meta',
+  INSTAGRAM:    'meta',
+  META:         'meta',
+  TIKTOK:       'tiktok',
+  BOOKING:      'booking',
+  WHATSAPP:     'whatsapp',
+}
+
+export function mapGlofoxSource(source) {
+  if (!source) return 'other'
+  const key = String(source).trim().toUpperCase()
+  return GLOFOX_SOURCE_MAP[key] || 'other'
+}
+
 const ID_PATHS = [['_id'], ['id'], ['member_id']]
 const EMAIL_PATHS = [['email']]
 const FIRST_NAME_PATHS = [['first_name'], ['firstName'], ['name', 'first']]
@@ -96,10 +215,22 @@ export function mapGlofoxMember(member) {
   firstName = firstName ? String(firstName).trim() : null
   lastName  = lastName  ? String(lastName).trim()  : null
 
-  const phone = pluck(member, PHONE_PATHS)
-  const phoneStr = phone ? String(phone).trim() : null
+  // Phone: normalise UK + Irish mobiles to E.164 (GLOFOX2.1.2).
+  // Falls back to the raw value if neither heuristic matches.
+  const phoneRaw = pluck(member, PHONE_PATHS)
+  const phone = phoneRaw ? normalizePhone(String(phoneRaw)) : null
 
   const membershipStatus = mapMembershipStatus(member)
+
+  // GLOFOX2.1.2 — date of birth from Glofox `birth`. Powers the
+  // birthday-wishes anniversary template + future age-segment
+  // reports. Null when Glofox doesn't have it (most members).
+  const dob = parseGlofoxDate(member.birth ?? member.dob ?? null)
+
+  // GLOFOX2.1.2 — granular source mapping. Glofox's WEBPORTAL /
+  // WALK_IN / FACEBOOK etc. → our leadSourceSchema enum
+  // (src/lib/schemas.js). Defaults to 'other' for unmapped values.
+  const leadSource = mapGlofoxSource(member.source)
 
   // CRM's name column is NOT NULL — compose from parts, fall back
   // to email or 'Glofox member' so we never violate the constraint.
@@ -112,8 +243,10 @@ export function mapGlofoxMember(member) {
     email,
     first_name: firstName,
     last_name: lastName,
-    phone: phoneStr,
+    phone,
     name,
+    dob,
+    lead_source: leadSource,
     glofox_membership_status: membershipStatus,
   }
 }
@@ -157,10 +290,11 @@ export function mapMembershipStatus(member) {
 export async function findExistingContact(db, locationId, mapped) {
   if (!db || !locationId || !mapped) return { byGlofox: null, byEmail: null }
   // Lookup by glofox_member_id and email in parallel.
+  const SELECT_COLS = 'id, email, first_name, last_name, phone, dob, glofox_member_id, glofox_membership_status, lead_source'
   const queries = []
   queries.push(
     db.from('contacts')
-      .select('id, email, first_name, last_name, phone, glofox_member_id, glofox_membership_status, lead_source')
+      .select(SELECT_COLS)
       .eq('location_id', locationId)
       .eq('glofox_member_id', mapped.glofox_member_id)
       .limit(1)
@@ -168,7 +302,7 @@ export async function findExistingContact(db, locationId, mapped) {
   if (mapped.email) {
     queries.push(
       db.from('contacts')
-        .select('id, email, first_name, last_name, phone, glofox_member_id, glofox_membership_status, lead_source')
+        .select(SELECT_COLS)
         .eq('location_id', locationId)
         .eq('email', mapped.email)
         .limit(1)
@@ -220,8 +354,9 @@ export async function previewMemberSync(db, locationId, member) {
 
   const existing = byGlofox || byEmail
   if (!existing) {
-    // CREATE path — mark the lead_source as 'glofox' so we know
-    // where the contact originated.
+    // CREATE path — uses the mapped lead_source (Glofox source
+    // → leadSourceSchema enum). Falls back to 'other' when
+    // Glofox didn't tell us where the contact came from.
     return {
       action: 'create',
       mapped,
@@ -232,15 +367,18 @@ export async function previewMemberSync(db, locationId, member) {
         last_name:                { from: null, to: mapped.last_name },
         phone:                    { from: null, to: mapped.phone },
         name:                     { from: null, to: mapped.name },
+        dob:                      { from: null, to: mapped.dob },
         glofox_membership_status: { from: null, to: mapped.glofox_membership_status },
-        lead_source:              { from: null, to: 'glofox' },
+        lead_source:              { from: null, to: mapped.lead_source },
       },
     }
   }
 
-  // UPDATE path — Glofox is source of truth for the four sync-
-  // owned fields; for the seed fields (first_name etc.) we only
-  // write when CRM is empty so operator edits aren't clobbered.
+  // UPDATE path — Glofox is source of truth for the sync-owned
+  // fields; for the seed fields (first_name / last_name / phone /
+  // dob) we only write when CRM is empty so operator edits aren't
+  // clobbered. lead_source is NEVER updated post-create — operator
+  // may have re-categorised the contact and that wins.
   const changes = {}
   if (existing.glofox_member_id !== mapped.glofox_member_id) {
     changes.glofox_member_id = { from: existing.glofox_member_id, to: mapped.glofox_member_id }
@@ -259,6 +397,9 @@ export async function previewMemberSync(db, locationId, member) {
   }
   if (!existing.phone && mapped.phone) {
     changes.phone = { from: existing.phone, to: mapped.phone }
+  }
+  if (!existing.dob && mapped.dob) {
+    changes.dob = { from: existing.dob, to: mapped.dob }
   }
   // Always stamp synced_at — but represent in the diff so the
   // operator sees we will touch the row.
@@ -289,9 +430,10 @@ export async function applyMemberSync(db, locationId, member) {
       last_name: m.last_name,
       phone: m.phone,
       name: m.name,
+      dob: m.dob,
       glofox_membership_status: m.glofox_membership_status,
       glofox_synced_at: now,
-      lead_source: 'glofox',
+      lead_source: m.lead_source,
     }).select('id').single()
     if (error) return { ...preview, error: error.message }
     return { ...preview, contact_id: data.id }
@@ -305,6 +447,7 @@ export async function applyMemberSync(db, locationId, member) {
   if ('first_name' in preview.changes)               updates.first_name               = m.first_name
   if ('last_name'  in preview.changes)               updates.last_name                = m.last_name
   if ('phone'      in preview.changes)               updates.phone                    = m.phone
+  if ('dob'        in preview.changes)               updates.dob                      = m.dob
   // Recompose name only if first_name OR last_name changed.
   if ('first_name' in preview.changes || 'last_name' in preview.changes) {
     updates.name = m.name
