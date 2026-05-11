@@ -200,6 +200,15 @@ export default function LandingPageSettingsForm({ locationId, initialSettings, a
         // Auto-expand the freshly-added block in the form list so
         // the operator can immediately edit its content.
         setExpanded((prev) => new Set(prev).add(added.id))
+      } else if (msg.type === 'edit-chrome' && typeof msg.field === 'string') {
+        // LP3c.5 — site chrome (logo) swap from the iframe. Logo
+        // isn't a block; chrome lives in flat columns on
+        // landing_page_settings (mig 129). For now only the
+        // logoUrl field is editable from the iframe — alt text +
+        // width still go through the form on the left.
+        if (msg.field === 'logoUrl')          setLogoUrl(msg.value || '')
+        else if (msg.field === 'logoAlt')     setLogoAlt(msg.value || '')
+        else if (msg.field === 'logoWidthPx') setLogoWidthPx(String(msg.value || ''))
       }
     }
     window.addEventListener('message', onMessage)

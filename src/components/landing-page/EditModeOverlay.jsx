@@ -20,6 +20,7 @@
 //     { type: 'duplicate-block', blockId }
 //     { type: 'delete-block',   blockId }
 //     { type: 'add-block',      blockType, atIndex }
+//     { type: 'edit-chrome',    field: 'logoUrl', value }
 //
 // Origin check: same-origin only — settings page lives on the same
 // Vercel project as /welcome. Anything cross-origin is dropped.
@@ -142,10 +143,25 @@ export default function EditModeOverlay({
     emit({ type: 'add-block', blockType, atIndex })
     setPickerAtIndex(null)
   }
+  function emitChromeEdit(field, value) {
+    // LP3c.5 — site chrome (logo) edits. Logo isn't a block so it
+    // can't go through 'edit-field'; chrome lives in flat columns
+    // on landing_page_settings (mig 129).
+    emit({ type: 'edit-chrome', field, value })
+    // Optimistically update local state so the iframe re-renders
+    // immediately without waiting for the parent's state push.
+    if (field === 'logoUrl') setLogoUrl(value || null)
+  }
 
   return (
     <div className="min-h-screen bg-black text-white antialiased">
-      <SiteHeader logoUrl={logoUrl} logoAlt={logoAlt} logoWidthPx={logoWidthPx} />
+      <SiteHeader
+        logoUrl={logoUrl}
+        logoAlt={logoAlt}
+        logoWidthPx={logoWidthPx}
+        locationId={locationId}
+        onChangeLogo={(url) => emitChromeEdit('logoUrl', url)}
+      />
       {/* Insert-section gap before the very first block. The
           gaps render even on the public path? No — EditModeOverlay
           is the ONLY caller, so they're always edit-mode. */}

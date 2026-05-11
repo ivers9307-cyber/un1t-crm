@@ -15,6 +15,7 @@ import { parseEmbed } from '@/lib/landing-page-embed'
 import EditableText from './EditableText'
 import EditableImage from './EditableImage'
 import HeroMediaTools from './HeroMediaTools'
+import LogoSwapper from './LogoSwapper'
 
 // Pass-through wrapper used by every block renderer. When `onEdit`
 // is provided (i.e. we're rendering inside the iframe edit
@@ -437,11 +438,32 @@ function Stat({ number, label, onEdit, itemIndex }) {
 // Site chrome — top nav (logo or wordmark) + footer. Same in both
 // public + edit-mode renders. Pulled out so the welcome page and
 // the EditModeOverlay don't drift on chrome over time.
-export function SiteHeader({ logoUrl, logoAlt = 'UN1T Dublin', logoWidthPx = 200 }) {
+//
+// Edit mode: when onChangeLogo is provided (only the iframe edit
+// overlay does this), the logo becomes click-to-change with a
+// hover overlay. When no logo is set, the wordmark text is
+// replaced with a small "+ Add logo" upload button so the
+// operator has a visible affordance — not a hidden hover target
+// they wouldn't think to look for.
+export function SiteHeader({
+  logoUrl,
+  logoAlt = 'UN1T Dublin',
+  logoWidthPx = 200,
+  onChangeLogo = null,
+  locationId = null,
+}) {
   return (
     <header className="absolute inset-x-0 top-0 z-20">
       <div className="max-w-6xl mx-auto px-6 py-5 flex items-center justify-between">
-        {logoUrl ? (
+        {onChangeLogo ? (
+          <EditableLogo
+            logoUrl={logoUrl}
+            logoAlt={logoAlt}
+            logoWidthPx={logoWidthPx}
+            locationId={locationId}
+            onChange={onChangeLogo}
+          />
+        ) : logoUrl ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img
             src={logoUrl}
@@ -457,6 +479,29 @@ export function SiteHeader({ logoUrl, logoAlt = 'UN1T Dublin', logoWidthPx = 200
         </nav>
       </div>
     </header>
+  )
+}
+
+// EditableLogo — iframe-only affordance for swapping/removing the
+// site logo. Lives here (in the same file as SiteHeader) because
+// it's intimately tied to the logo's specific layout — width-driven
+// sizing with auto height, object-contain (NOT object-cover so the
+// logo isn't cropped). EditableImage is sized for full-bleed media
+// and would need too many overrides to fit this.
+//
+// Rendered as a self-contained inline element that delegates the
+// React import to its own (declared in the file's hooks via the
+// imported HeroMediaTools helpers — but we just inline the upload
+// here for simplicity).
+function EditableLogo({ logoUrl, logoAlt, logoWidthPx, locationId, onChange }) {
+  return (
+    <LogoSwapper
+      src={logoUrl}
+      alt={logoAlt}
+      widthPx={logoWidthPx}
+      locationId={locationId}
+      onChange={onChange}
+    />
   )
 }
 
