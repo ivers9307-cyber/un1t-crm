@@ -46,6 +46,14 @@ export default function LocationForm({ location, callerRole = 'owner', organizat
   const settings = location?.settings || {}
   const [glofoxBranchId, setGlofoxBranchId] = useState(settings.glofox?.branch_id || '')
   const [glofoxApiKey, setGlofoxApiKey] = useState(settings.glofox?.api_key || '')
+  // GLOFOX1.6 — Glofox auth requires THREE headers (branch-id +
+  // api-key + api-token). Webhook signature verification (HMAC-
+  // SHA256) needs a separate secret Glofox provides when
+  // webhooks are enabled. Both stored alongside the existing
+  // branch_id + api_key in settings.glofox so all Glofox config
+  // for a location lives in one place.
+  const [glofoxApiToken, setGlofoxApiToken] = useState(settings.glofox?.api_token || '')
+  const [glofoxWebhookSecret, setGlofoxWebhookSecret] = useState(settings.glofox?.webhook_secret || '')
 
   // UniFi Access settings — drives the door-access toggle on staff profiles.
   // host  : public-facing URL of the UniFi Access controller, including
@@ -160,9 +168,15 @@ export default function LocationForm({ location, callerRole = 'owner', organizat
       } : {}),
       settings: {
         ...(settings || {}),
-        glofox: glofoxBranchId || glofoxApiKey ? {
+        glofox: (glofoxBranchId || glofoxApiKey || glofoxApiToken || glofoxWebhookSecret) ? {
           branch_id: glofoxBranchId || null,
           api_key: glofoxApiKey || null,
+          // GLOFOX1.6 — api_token is the third header Glofox auth
+          // requires alongside branch_id + api_key. webhook_secret
+          // is the HMAC-SHA256 signing secret Glofox provides
+          // separately when webhooks are enabled.
+          api_token: glofoxApiToken || null,
+          webhook_secret: glofoxWebhookSecret || null,
         } : null,
         // UniFi controller config is master-only (mig 034 enforces
         // at the DB layer). For non-masters, preserve whatever is
@@ -415,7 +429,11 @@ export default function LocationForm({ location, callerRole = 'owner', organizat
       {/* Glofox Integration */}
       <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5 space-y-4">
         <h3 className="font-semibold text-sm text-un1t-light uppercase tracking-wider">Glofox Integration</h3>
-        <p className="text-xs text-un1t-mid">Connect this location to its own Glofox branch for member syncing</p>
+        <p className="text-xs text-un1t-mid">
+          Connect this location to its own Glofox branch for member syncing + inbound webhooks. All four values
+          come from <a href="mailto:apiactivation@abcfitness.com" className="underline hover:text-un1t-light">apiactivation@abcfitness.com</a> when they enable
+          your integration. Test the connection at <code>/api/glofox/ping?location_id={location?.id || '<this-location-id>'}</code>.
+        </p>
 
         <div>
           <label className="block text-sm mb-1.5">Branch ID</label>
@@ -426,6 +444,7 @@ export default function LocationForm({ location, callerRole = 'owner', organizat
             placeholder="your-glofox-branch-id"
             className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid font-mono"
           />
+          <p className="text-[11px] text-un1t-mid mt-1">Sent as the <code>x-glofox-branch-id</code> header. Identifies this location to Glofox.</p>
         </div>
 
         <div>
@@ -437,6 +456,31 @@ export default function LocationForm({ location, callerRole = 'owner', organizat
             placeholder="••••••••••••••••"
             className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid font-mono"
           />
+          <p className="text-[11px] text-un1t-mid mt-1">Sent as the <code>x-api-key</code> header.</p>
+        </div>
+
+        <div>
+          <label className="block text-sm mb-1.5">API Token</label>
+          <input
+            type="password"
+            value={glofoxApiToken}
+            onChange={e => setGlofoxApiToken(e.target.value)}
+            placeholder="••••••••••••••••"
+            className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid font-mono"
+          />
+          <p className="text-[11px] text-un1t-mid mt-1">Sent as the <code>x-glofox-api-token</code> header. Different from the API Key — Glofox issues both.</p>
+        </div>
+
+        <div>
+          <label className="block text-sm mb-1.5">Webhook Secret</label>
+          <input
+            type="password"
+            value={glofoxWebhookSecret}
+            onChange={e => setGlofoxWebhookSecret(e.target.value)}
+            placeholder="hex-string-from-glofox-when-webhooks-enabled"
+            className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid font-mono"
+          />
+          <p className="text-[11px] text-un1t-mid mt-1">HMAC-SHA256 signing secret. Glofox sends this separately when they enable webhooks; until then leave blank and the receiver will reject all events for safety.</p>
         </div>
       </div>
 
