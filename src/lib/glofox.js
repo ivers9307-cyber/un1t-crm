@@ -193,3 +193,58 @@ export function tagsForGlofoxEvent(eventType) {
 
 // Surface the registry for tests + future admin UI.
 export { EVENT_TYPE_TAGS }
+
+// ─────────────────────────────────────────────────────────────
+// Outbound API helper
+// ─────────────────────────────────────────────────────────────
+//
+// glofoxFetch wraps fetch() with the three required Glofox headers
+// (branch id + api key + api token, all from env). Used by the
+// /api/glofox/ping connection test today; future phase-2 work
+// (member sync, lead push, booking lookup) calls it the same way.
+//
+// Throws when credentials aren't configured — caller catches and
+// returns a clean 'not configured' response. Doesn't throw on
+// non-2xx HTTP responses; caller inspects the returned Response.
+//
+// Base URL is the production Glofox host. Sandbox endpoints would
+// need a parallel constant + a way to switch between them; we'll
+// add that when/if Glofox confirms sandbox credentials are
+// separate (see request-access doc — they say both sets point at
+// the same env config which is unusual).
+
+const GLOFOX_API_BASE = 'https://gf-api.aws.glofox.com/prod'
+
+export function glofoxCredentials() {
+  return {
+    branchId: process.env.GLOFOX_BRANCH_ID || null,
+    apiKey:   process.env.GLOFOX_API_KEY   || null,
+    apiToken: process.env.GLOFOX_API_TOKEN || null,
+  }
+}
+
+export function missingGlofoxCredentials() {
+  const c = glofoxCredentials()
+  const missing = []
+  if (!c.branchId) missing.push('GLOFOX_BRANCH_ID')
+  if (!c.apiKey)   missing.push('GLOFOX_API_KEY')
+  if (!c.apiToken) missing.push('GLOFOX_API_TOKEN')
+  return missing
+}
+
+export async function glofoxFetch(pathOrUrl, options = {}) {
+  const c = glofoxCredentials()
+  if (!c.branchId || !c.apiKey || !c.apiToken) {
+    throw new Error('Glofox API credentials not configured (set GLOFOX_BRANCH_ID, GLOFOX_API_KEY, GLOFOX_API_TOKEN)')
+  }
+  const url = pathOrUrl.startsWith('http')
+    ? pathOrUrl
+    : `${GLOFOX_API_BASE}${pathOrUrl.startsWith('/') ? '' : '/'}${pathOrUrl}`
+  const headers = {
+    'x-glofox-branch-id': c.branchId,
+    'x-api-key':          c.apiKey,
+    'x-glofox-api-token': c.apiToken,
+    ...(options.headers || {}),
+  }
+  return fetch(url, { ...options, headers })
+}
