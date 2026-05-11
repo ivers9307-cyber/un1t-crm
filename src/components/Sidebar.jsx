@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
-import { LayoutDashboard, Users, Columns3, CheckSquare, Calendar, MessagesSquare, CalendarClock, Settings, LogOut, Car, Flag, Receipt, DoorOpen, Activity, ExternalLink, X, FileSignature, Heart } from 'lucide-react'
+import { LayoutDashboard, Users, Columns3, CheckSquare, Calendar, MessagesSquare, CalendarClock, Settings, LogOut, Car, Flag, Receipt, DoorOpen, Activity, ExternalLink, X, FileSignature, Heart, Globe } from 'lucide-react'
 import { createBrowserClient } from '@/lib/supabase'
 import LocationSwitcher from './LocationSwitcher'
 import ImpersonatePicker from './ImpersonatePicker'
@@ -90,6 +90,12 @@ const allNav = [
   // role-only gate (matches the API + RLS layer). Custom matcher
   // below uses the masterOrOwnerOnly key.
   { href: '/admin/contracts', label: 'Contracts', icon: FileSignature, masterOrOwnerOnly: true },
+  // Public landing page — preview link for master/owner. Phase 1
+  // is hand-coded React at /welcome; Phase 2 will add a settings
+  // page next to this entry for hero copy / CTA / hero image
+  // editing. Opens in the operator's same tab — they can ctrl-click
+  // for a new tab if they want side-by-side editing iteration.
+  { href: '/welcome', label: 'Landing page', icon: Globe, masterOrOwnerOnly: true, openInNewTab: true },
   { href: '/settings',   label: 'Settings',     icon: Settings,        permission: 'settings' },
 ]
 
@@ -207,24 +213,38 @@ export default function Sidebar({ user, mobileOpen = false, onMobileClose }) {
 
       {/* Navigation */}
       <nav className="flex-1 py-4">
-        {nav.map(({ href, label, icon: Icon, extraActivePaths }) => {
+        {nav.map(({ href, label, icon: Icon, extraActivePaths, openInNewTab }) => {
           // Active when the URL matches the entry's href OR any of
           // the merged-feature aliases (e.g. /events highlights the
           // Calendly entry that points at /bookings).
           const active = pathname === href
             || (href !== '/' && pathname.startsWith(href))
             || (extraActivePaths || []).some(p => pathname.startsWith(p))
+
+          // Public surfaces (e.g. the marketing landing page) open in
+          // a new tab so the operator doesn't lose their CRM context
+          // when previewing the customer-facing view. Uses a plain
+          // <a> with target+rel rather than next/link prefetch since
+          // we want a real new browser tab, not a soft client-side
+          // navigation.
+          const className = clsx(
+            'flex items-center gap-3 px-5 py-2.5 text-sm transition-colors',
+            active
+              ? 'text-un1t-white bg-un1t-gray/50 border-l-2 border-un1t-white'
+              : 'text-un1t-light hover:text-un1t-white hover:bg-un1t-gray/30 border-l-2 border-transparent'
+          )
+
+          if (openInNewTab) {
+            return (
+              <a key={href} href={href} target="_blank" rel="noopener noreferrer" className={className}>
+                <Icon size={18} />
+                {label}
+                <ExternalLink size={11} className="opacity-60 ml-1" />
+              </a>
+            )
+          }
           return (
-            <Link
-              key={href}
-              href={href}
-              className={clsx(
-                'flex items-center gap-3 px-5 py-2.5 text-sm transition-colors',
-                active
-                  ? 'text-un1t-white bg-un1t-gray/50 border-l-2 border-un1t-white'
-                  : 'text-un1t-light hover:text-un1t-white hover:bg-un1t-gray/30 border-l-2 border-transparent'
-              )}
-            >
+            <Link key={href} href={href} className={className}>
               <Icon size={18} />
               {label}
             </Link>

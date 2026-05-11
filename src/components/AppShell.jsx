@@ -12,7 +12,7 @@ import { hasPermission } from '@/lib/permissions'
 // Routes that should NOT show the CRM sidebar (i.e. anything a
 // non-CRM user might land on — public booking, unsubscribe, deposit
 // payment, etc.). Mirrors the auth allowlist in middleware.js.
-const publicPaths = ['/login', '/book/', '/event/', '/unsubscribe/', '/preferences/', '/deposit/']
+const publicPaths = ['/login', '/book/', '/event/', '/unsubscribe/', '/preferences/', '/deposit/', '/welcome']
 
 export default function AppShell({ children, user }) {
   const pathname = usePathname()
