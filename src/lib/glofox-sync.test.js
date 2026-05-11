@@ -338,7 +338,9 @@ describe('normalizePhone', () => {
 })
 
 describe('mapGlofoxSource', () => {
-  it('maps known Glofox sources to leadSourceSchema enum values', () => {
+  // Legacy string-only signature still works — many existing
+  // call paths pass member.source directly.
+  it('maps known Glofox sources (string signature) to leadSourceSchema enum values', () => {
     expect(mapGlofoxSource('WEBPORTAL')).toBe('website')
     expect(mapGlofoxSource('WEB')).toBe('website')
     expect(mapGlofoxSource('WALK_IN')).toBe('walkin')
@@ -349,6 +351,7 @@ describe('mapGlofoxSource', () => {
     expect(mapGlofoxSource('TIKTOK')).toBe('tiktok')
     expect(mapGlofoxSource('BOOKING')).toBe('booking')
     expect(mapGlofoxSource('WHATSAPP')).toBe('whatsapp')
+    expect(mapGlofoxSource('CLASSPASS')).toBe('classpass')
   })
 
   it('is case-insensitive', () => {
@@ -361,6 +364,33 @@ describe('mapGlofoxSource', () => {
     expect(mapGlofoxSource('')).toBe('other')
     expect(mapGlofoxSource(null)).toBe('other')
     expect(mapGlofoxSource(undefined)).toBe('other')
+  })
+
+  // GLOFOX2.1.8 — full-payload signature reads origin first, then source.
+  it('reads member.origin BEFORE member.source (origin takes precedence)', () => {
+    // The Shanice case — Glofox sets source='UNKNOWN' for ClassPass
+    // users but origin='classpass'. Origin must win.
+    expect(mapGlofoxSource({ origin: 'classpass', source: 'UNKNOWN' })).toBe('classpass')
+  })
+
+  it('falls through to member.source when origin is missing', () => {
+    expect(mapGlofoxSource({ source: 'WEBPORTAL' })).toBe('website')
+    expect(mapGlofoxSource({ source: 'FACEBOOK' })).toBe('meta')
+  })
+
+  it('falls through to member.source when origin is not in the origin map', () => {
+    // A future origin we haven\'t mapped — don\'t hide the legit source.
+    expect(mapGlofoxSource({ origin: 'GYMPASS', source: 'WEBPORTAL' })).toBe('website')
+  })
+
+  it('full-payload form is case-insensitive on both origin and source', () => {
+    expect(mapGlofoxSource({ origin: 'ClassPass' })).toBe('classpass')
+    expect(mapGlofoxSource({ source: 'webportal' })).toBe('website')
+  })
+
+  it('full-payload form defaults to "other" when neither matches', () => {
+    expect(mapGlofoxSource({ origin: 'GYMPASS', source: 'UNKNOWN' })).toBe('other')
+    expect(mapGlofoxSource({})).toBe('other')
   })
 })
 
@@ -477,6 +507,13 @@ describe('mapGlofoxMember (real Glofox payload — ClassPass PAYG)', () => {
 
   it('preserves the +-prefixed phone passthrough', () => {
     expect(mapGlofoxMember(shanicePayload).phone).toBe('+10000000000')
+  })
+
+  it('maps ClassPass origin to lead_source=classpass (GLOFOX2.1.8)', () => {
+    // Glofox sets source='UNKNOWN' for ClassPass users; the origin
+    // field is the real attribution signal. Previously mapped to
+    // 'other' which lost the channel.
+    expect(mapGlofoxMember(shanicePayload).lead_source).toBe('classpass')
   })
 })
 

@@ -88,6 +88,30 @@ describe('applyAudienceFilter', () => {
     applyAudienceFilter(q.query, { filters: [{ field: 'glofox_member_id', op: 'is_null' }] })
     expect(q.calls).toEqual([['is', 'glofox_member_id', null]])
   })
+
+  // GLOFOX2.1.8 — glofox_membership_status is the synced Glofox-side
+  // Client Status. Operator filters on this to build sequences
+  // targeting Credit Members, ClassPass users, ex-members etc.
+  it('applies glofox_membership_status eq for the credit_member audience', () => {
+    applyAudienceFilter(q.query, {
+      filters: [{ field: 'glofox_membership_status', op: 'eq', value: 'credit_member' }],
+    })
+    expect(q.calls).toEqual([['eq', 'glofox_membership_status', 'credit_member']])
+  })
+
+  it('applies glofox_membership_status eq for the classpass_payg audience', () => {
+    applyAudienceFilter(q.query, {
+      filters: [{ field: 'glofox_membership_status', op: 'eq', value: 'classpass_payg' }],
+    })
+    expect(q.calls).toEqual([['eq', 'glofox_membership_status', 'classpass_payg']])
+  })
+
+  it('applies glofox_membership_status is_null to find unsynced contacts', () => {
+    applyAudienceFilter(q.query, {
+      filters: [{ field: 'glofox_membership_status', op: 'is_null' }],
+    })
+    expect(q.calls).toEqual([['is', 'glofox_membership_status', null]])
+  })
 })
 
 describe('AUDIENCE_FIELDS allowlist', () => {

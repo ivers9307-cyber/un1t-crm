@@ -144,13 +144,18 @@ export function normalizePhone(phone) {
 }
 
 /**
- * Glofox `source` values map to our existing leadSourceSchema
- * enum (src/lib/schemas.js — booking / meta / tiktok / walkin /
- * referral / website / whatsapp / other). Anything we can't
- * recognise becomes 'other'. The granular Glofox-side detail is
- * preserved via glofox_member_id; operators who need a finer
- * audience filter can use the membership_status + status-driven
- * tags.
+ * Glofox `source` values map to our leadSourceSchema enum
+ * (src/lib/schemas.js — booking / meta / tiktok / walkin / referral /
+ * website / whatsapp / classpass / other). Anything we can't recognise
+ * becomes 'other'.
+ *
+ * GLOFOX2.1.8 — `origin` takes precedence over `source`. Glofox uses
+ * the top-level `origin` field for 3rd-party-platform attribution
+ * (currently we've seen 'classpass'), and sets `source` to 'UNKNOWN'
+ * for those contacts. Reading origin first preserves the attribution
+ * signal in lead_source so audience filters can target ClassPass-
+ * sourced contacts directly without having to join on
+ * glofox_membership_status.
  */
 const GLOFOX_SOURCE_MAP = {
   WEBPORTAL:    'website',
@@ -164,11 +169,39 @@ const GLOFOX_SOURCE_MAP = {
   TIKTOK:       'tiktok',
   BOOKING:      'booking',
   WHATSAPP:     'whatsapp',
+  CLASSPASS:    'classpass',
 }
 
-export function mapGlofoxSource(source) {
-  if (!source) return 'other'
-  const key = String(source).trim().toUpperCase()
+const GLOFOX_ORIGIN_MAP = {
+  CLASSPASS: 'classpass',
+  // Future 3rd-party platforms Glofox might surface via `origin`
+  // (Gympass, MoveGB, etc.) — add a row here per audience the
+  // operator wants to filter on. The synthesised canonical that
+  // currently routes via membership.type lives in mapMembershipStatus.
+}
+
+/**
+ * Resolve a Glofox member's lead_source. Accepts either:
+ *   - a full member payload (preferred — reads both origin + source)
+ *   - a raw source string (legacy — for callers that already
+ *     extracted member.source. origin attribution will be missed.)
+ */
+export function mapGlofoxSource(memberOrSource) {
+  if (!memberOrSource) return 'other'
+  // Full payload — try origin first, then source.
+  if (typeof memberOrSource === 'object') {
+    if (memberOrSource.origin) {
+      const oKey = String(memberOrSource.origin).trim().toUpperCase()
+      if (GLOFOX_ORIGIN_MAP[oKey]) return GLOFOX_ORIGIN_MAP[oKey]
+    }
+    if (memberOrSource.source) {
+      const sKey = String(memberOrSource.source).trim().toUpperCase()
+      if (GLOFOX_SOURCE_MAP[sKey]) return GLOFOX_SOURCE_MAP[sKey]
+    }
+    return 'other'
+  }
+  // Legacy string-only callers.
+  const key = String(memberOrSource).trim().toUpperCase()
   return GLOFOX_SOURCE_MAP[key] || 'other'
 }
 
@@ -468,7 +501,9 @@ export function mapGlofoxMember(member) {
   // GLOFOX2.1.2 — granular source mapping. Glofox's WEBPORTAL /
   // WALK_IN / FACEBOOK etc. → our leadSourceSchema enum
   // (src/lib/schemas.js). Defaults to 'other' for unmapped values.
-  const leadSource = mapGlofoxSource(member.source)
+  // GLOFOX2.1.8 — passing the full member so origin (e.g. 'classpass')
+  // takes precedence over source when present.
+  const leadSource = mapGlofoxSource(member)
 
   // CRM's name column is NOT NULL — compose from parts, fall back
   // to email or 'Glofox member' so we never violate the constraint.

@@ -6,10 +6,18 @@ import { Plus, Trash2, Users } from 'lucide-react'
 const FIELD_OPTIONS = [
   { value: 'lead_status',           label: 'Lead Status',           type: 'select',
     options: ['active_trial', 'cold', 'lost_member', 'member', 'returning', 'competition_competitor'] },
+  // GLOFOX2.1.8 — Glofox-side Client Status (synced from Glofox via
+  // /api/glofox/sync-member). Distinct from lead_status (which is
+  // local-CRM). Three of the values are synthesised from deeper
+  // Glofox payload signals (credit_member, classpass_payg, ex_member)
+  // — see src/lib/glofox-sync.js for the detection rules.
+  { value: 'glofox_membership_status', label: 'Glofox Status',      type: 'select',
+    options: ['cold', 'tour', 'no_sale_tour', 'trial', 'no_sale_trial',
+              'member', 'credit_member', 'classpass_payg', 'ex_member', 'lead'] },
   { value: 'email_status',          label: 'Email Status',          type: 'select',
     options: ['active', 'bounced', 'complained', 'unsubscribed'] },
   { value: 'lead_source',           label: 'Lead Source',           type: 'select',
-    options: ['booking', 'meta', 'tiktok', 'walkin', 'referral', 'website', 'whatsapp', 'other'] },
+    options: ['booking', 'meta', 'tiktok', 'walkin', 'referral', 'website', 'whatsapp', 'classpass', 'other'] },
   { value: 'label',                 label: 'Label',                 type: 'text' },
   { value: 'tags',                  label: 'Free-text tag',         type: 'text' },
   // Phase 3 (mig 085): machine-derived retargeting tags. Resolved

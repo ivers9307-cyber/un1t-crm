@@ -23,6 +23,12 @@ export const AUDIENCE_FIELDS = Object.freeze({
   lead_status:               { type: 'select',  ops: ['eq', 'neq'] },
   email_status:              { type: 'select',  ops: ['eq', 'neq'] },
   lead_source:               { type: 'select',  ops: ['eq', 'neq'] },
+  // GLOFOX2.1.8 — Glofox-side membership status (mig 133). Distinct
+  // from local lead_status; mirrors Glofox's Client Status with three
+  // synthesised canonicals (credit_member, classpass_payg, ex_member).
+  // Adds the ability to target Credit Members specifically for
+  // subscription-upsell sequences.
+  glofox_membership_status:  { type: 'select',  ops: ['eq', 'neq', 'is_null', 'is_not_null', 'not_null'] },
   wa_status:                 { type: 'select',  ops: ['eq', 'neq'] },
   // contacts.sms_status (mig 059) — mirrors wa_status. Used by the
   // upcoming SMS broadcasts/sequences/automations to filter out

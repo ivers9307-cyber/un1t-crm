@@ -117,8 +117,11 @@ export const OWNER_ASSIGNABLE_ROLES = Object.freeze(['owner', 'manager', 'head_c
 export const DEFAULT_COLOR = '#3B82F6'
 
 // Lead source / status — mirror the values surfaced in AudienceBuilder.jsx.
+// 'classpass' added in GLOFOX2.1.8 — preserves the 3rd-party origin signal
+// for ClassPass-sourced contacts (Glofox surfaces this on member.origin,
+// distinct from member.source which is 'UNKNOWN' for ClassPass).
 export const leadSourceSchema = z.enum([
-  'booking', 'meta', 'tiktok', 'walkin', 'referral', 'website', 'whatsapp', 'other',
+  'booking', 'meta', 'tiktok', 'walkin', 'referral', 'website', 'whatsapp', 'classpass', 'other',
 ])
 export const leadStatusSchema = z.enum([
   'active_trial', 'cold', 'lost_member', 'member', 'returning',
