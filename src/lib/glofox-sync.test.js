@@ -193,22 +193,38 @@ describe('mapMembershipStatus (GLOFOX2.1.5 canonical enum)', () => {
     })).toBe('classpass_payg')
   })
 
-  // GLOFOX2.1.7 — Credit Member detection.
+  // GLOFOX2.1.9 — credit_member auto-detection REVERTED.
   //
-  // UN1T "Credit Members" buy class packs directly (membership.type
-  // = 'num_classes') instead of taking out a subscription. Glofox
-  // tags them as lead_status='MEMBER' (correct — they pay) but
-  // operationally they need their own audience for upsell-to-
-  // subscription marketing.
-  it('detects Credit Member (active) → credit_member', () => {
+  // The discriminator we tried (lead_status=MEMBER + membership.type=
+  // num_classes) failed against real data because member.membership
+  // returns the user's INITIAL/trial pack, not their current product.
+  // Tightening with MEMBERPURCHASE=true would also exclude comp'd
+  // credit members. Until we have a richer Glofox API endpoint
+  // (GLOFOX2.1.10), all lead_status=MEMBER + active=true map to
+  // 'member' canonical and operators classify Credit Members manually
+  // via the kanban.
+  it('GLOFOX2.1.9 revert — MEMBER + num_classes maps to member (not credit_member)', () => {
     expect(mapMembershipStatus({
       lead_status: 'MEMBER',
       membership: { type: 'num_classes' },
       active: true,
-    })).toBe('credit_member')
+    })).toBe('member')
   })
 
-  it('collapses inactive Credit Member into ex_member', () => {
+  it('GLOFOX2.1.9 revert — MEMBER + num_classes + MEMBERPURCHASE=true still maps to member', () => {
+    // We removed the MEMBERPURCHASE-based discriminator too — comp'd
+    // credit members would be excluded by it. Single payload can't
+    // tell us; treat as member uniformly.
+    expect(mapMembershipStatus({
+      lead_status: 'MEMBER',
+      membership: { type: 'num_classes' },
+      MEMBERPURCHASE: true,
+      active: true,
+    })).toBe('member')
+  })
+
+  it('MEMBER + active=false still synthesises ex_member', () => {
+    // The basic ex_member synthesis is unaffected by the revert.
     expect(mapMembershipStatus({
       lead_status: 'MEMBER',
       membership: { type: 'num_classes' },
@@ -216,22 +232,9 @@ describe('mapMembershipStatus (GLOFOX2.1.5 canonical enum)', () => {
     })).toBe('ex_member')
   })
 
-  it('Credit Member detection takes precedence over plain MEMBER mapping', () => {
-    // Without the synthesis they'd fall through to 'member' (the
-    // subscription canonical) and get lumped in with monthly
-    // recurring customers.
-    const out = mapMembershipStatus({
-      lead_status: 'MEMBER',
-      membership: { type: 'num_classes' },
-      active: true,
-    })
-    expect(out).not.toBe('member')
-    expect(out).toBe('credit_member')
-  })
-
-  it('does NOT trigger Credit Member detection without lead_status=MEMBER', () => {
-    // A trial user on a num_classes pack (e.g., the 3-class trial)
-    // should map by lead_status, not promote to credit_member.
+  it('TRIAL + num_classes still maps by lead_status (= trial)', () => {
+    // The trial pack IS num_classes — making sure the revert doesn't
+    // accidentally regress trial users either.
     expect(mapMembershipStatus({
       lead_status: 'TRIAL',
       membership: { type: 'num_classes' },
@@ -239,8 +242,7 @@ describe('mapMembershipStatus (GLOFOX2.1.5 canonical enum)', () => {
     })).toBe('trial')
   })
 
-  it('does NOT trigger Credit Member detection for a subscription MEMBER', () => {
-    // A real subscription member must NOT get reclassified.
+  it('subscription MEMBER unchanged after revert', () => {
     expect(mapMembershipStatus({
       lead_status: 'MEMBER',
       membership: { type: 'subscription' },
@@ -251,14 +253,6 @@ describe('mapMembershipStatus (GLOFOX2.1.5 canonical enum)', () => {
       membership: { type: 'recurring' },
       active: true,
     })).toBe('member')
-  })
-
-  it('Credit Member detection is case-insensitive on type', () => {
-    expect(mapMembershipStatus({
-      lead_status: 'member',
-      membership: { type: 'NUM_CLASSES' },
-      active: true,
-    })).toBe('credit_member')
   })
 })
 
@@ -517,12 +511,25 @@ describe('mapGlofoxMember (real Glofox payload — ClassPass PAYG)', () => {
   })
 })
 
-// GLOFOX2.1.7 — Credit Member (real payload).
-// Gillian Collins from the live UN1T Stillorgan dry-run. Glofox
-// tags her lead_status='MEMBER' because she pays, but her
-// membership.type='num_classes' reveals she bought a class pack
-// rather than a subscription — a "Credit Member" in UN1T parlance.
-describe('mapGlofoxMember (real Glofox payload — Credit Member)', () => {
+// GLOFOX2.1.9 — Real-world MEMBER payloads (post-revert).
+//
+// Two real members from live dry-runs that exposed the unreliable
+// signals in member.membership and forced the credit_member auto-
+// detection revert. Both now map to the plain 'member' canonical.
+//
+// Gillian Collins:    MEMBERPURCHASE=true,  membership.type=num_classes
+//                     (operationally a Credit Member who paid for a pack)
+// Cathy Laverty:      MEMBERPURCHASE=false, membership.type=num_classes
+//                     (operationally a Credit Member with a comp'd pack —
+//                     "10 Class Credits - Class Packs" per the operator)
+//
+// Both have the SAME membership._id (620bdab4df0f8054814cd7be) showing
+// the trial pack — proving member.membership is a stale/initial reference,
+// not the user's current product. Until Plan A (richer Glofox API) gives
+// us reliable current-membership data, both classify as 'member' and the
+// operator manually moves real Credit Members into the credit_member
+// kanban stage (which is in OPERATOR_ONLY_STAGES so the sync respects it).
+describe('mapGlofoxMember (real Glofox payload — Gillian, paid Credit Member)', () => {
   const gillianPayload = {
     _id: '69f1319ff6d376b55a0b8add',
     branch_id: '6155764859810329ec3826b3',
@@ -552,14 +559,8 @@ describe('mapGlofoxMember (real Glofox payload — Credit Member)', () => {
     role: 'member',
   }
 
-  it('detects Credit Member via lead_status=MEMBER + membership.type=num_classes', () => {
-    expect(mapGlofoxMember(gillianPayload).glofox_membership_status).toBe('credit_member')
-  })
-
-  it('does NOT collapse to plain "member" canonical', () => {
-    // Regression guard — without the credit_member synthesis Gillian
-    // would land in the 'member' stage alongside monthly subscribers.
-    expect(mapGlofoxMember(gillianPayload).glofox_membership_status).not.toBe('member')
+  it('maps to plain "member" (auto-detection of credit_member reverted)', () => {
+    expect(mapGlofoxMember(gillianPayload).glofox_membership_status).toBe('member')
   })
 
   it('normalises Irish 08X mobile to +353', () => {
@@ -568,6 +569,53 @@ describe('mapGlofoxMember (real Glofox payload — Credit Member)', () => {
 
   it('maps WEBPORTAL source to website lead_source', () => {
     expect(mapGlofoxMember(gillianPayload).lead_source).toBe('website')
+  })
+})
+
+describe('mapGlofoxMember (real Glofox payload — Cathy, comp\'d Credit Member)', () => {
+  // The smoking gun: Cathy has the SAME stale trial membership object
+  // as Gillian (membership._id=620bdab4df0f8054814cd7be), MEMBERPURCHASE
+  // is false (her pack was given to her by the operator), but
+  // operationally she IS a Credit Member with an active 10-class pack.
+  // Single-payload signals can't see her actual current product.
+  const cathyPayload = {
+    _id: '69e677b6fd868d85ee088cb3',
+    branch_id: '6155764859810329ec3826b3',
+    namespace: 'untstillorgan',
+    membership: {
+      _id: '620bdab4df0f8054814cd7be',
+      type: 'num_classes',
+      plan_price: 0,
+      trial: true,
+      membership_name: '1) The UN1T Trial',
+      description: '3  Classes - 7 Day Expiry',
+    },
+    first_name: 'Cathy',
+    last_name: 'Laverty',
+    phone: '0864099944',
+    email: 'lavertycathy@hotmail.com',
+    birth: null,
+    type: 'member',
+    active: true,
+    lead_status: 'MEMBER',
+    leads: { status: 'MEMBER' },
+    source: 'WEBPORTAL',
+    MEMBERPURCHASE: false,
+    PAYGPAYMENT: true,
+    name: 'Cathy Laverty',
+    role: 'member',
+  }
+
+  it('maps to plain "member" — single-payload data cannot detect credit pack', () => {
+    expect(mapGlofoxMember(cathyPayload).glofox_membership_status).toBe('member')
+  })
+
+  it('normalises Irish 08X mobile to +353', () => {
+    expect(mapGlofoxMember(cathyPayload).phone).toBe('+353864099944')
+  })
+
+  it('maps WEBPORTAL source to website lead_source', () => {
+    expect(mapGlofoxMember(cathyPayload).lead_source).toBe('website')
   })
 })
 
@@ -805,19 +853,18 @@ describe('targetDealStageForSync (GLOFOX2.1.5 transitions)', () => {
     expect(targetDealStageForSync('classpass_payg', 'ex_member', 'conversion_ready')).toBe('lost_member')
   })
 
-  it('routes credit_member → member when Credit Member takes a subscription', () => {
-    // The operator's primary win for Credit Members — recurring
-    // revenue beats one-off pack purchases. Move from credit_member
-    // straight to member.
-    expect(targetDealStageForSync('credit_member', 'member', 'credit_member')).toBe('member')
+  // GLOFOX2.1.9 — credit_member is now operator-only. The sync no
+  // longer auto-routes IN or OUT of this stage (manual placement
+  // wins). Operator handles credit-member churn manually until the
+  // Plan A richer-API research lands a reliable detector.
+  it('respects credit_member as operator-only — no auto-move from credit_member to member', () => {
+    expect(targetDealStageForSync('credit_member', 'member', 'credit_member')).toBeNull()
   })
 
-  it('routes credit_member → ex_member to lost_member (credits ran out, no renewal)', () => {
-    expect(targetDealStageForSync('credit_member', 'ex_member', 'credit_member')).toBe('lost_member')
-  })
-
-  it('routes trial → credit_member when trialist buys a class pack', () => {
-    expect(targetDealStageForSync('trial', 'credit_member', 'trial_active')).toBe('credit_member')
+  it('respects credit_member as operator-only — even on member->ex_member transition', () => {
+    // Operator placed someone in credit_member manually. Even when
+    // their Glofox status flips to inactive, sync stays out.
+    expect(targetDealStageForSync('member', 'ex_member', 'credit_member')).toBeNull()
   })
 
   it('respects operator-only stages — returning_member is sticky', () => {

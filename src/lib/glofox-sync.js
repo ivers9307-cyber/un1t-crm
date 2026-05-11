@@ -231,14 +231,13 @@ export function mapGlofoxSource(memberOrSource) {
 //
 // Membership status (Active / Overdue / Paused / Cancelled / Past)
 // lives on the membership subscription, not on the client. We don't
-// use it directly for funnel placement — instead we derive three
+// use it directly for funnel placement — instead we derive two
 // synthesised canonicals from deeper payload signals:
 //
 //   ex_member       — lead_status=MEMBER + top-level active=false.
 //                     Glofox uses this pair to mark lapsed members.
-//                     Also the collapse target for any other
-//                     paying-customer canonical going inactive
-//                     (classpass_payg, credit_member).
+//                     Also the collapse target for classpass_payg
+//                     going inactive.
 //
 //   classpass_payg  — origin='classpass' + membership.type='payg'.
 //                     Glofox tags ClassPass users as lead_status='LEAD'
@@ -247,19 +246,25 @@ export function mapGlofoxSource(memberOrSource) {
 //                     into the conversion funnel as warm upsell
 //                     targets distinct from fresh leads.
 //
-//   credit_member   — lead_status='MEMBER' + membership.type='num_classes'.
-//                     Operationally a UN1T "Credit Member" — bought a
-//                     class pack from us directly but never converted
-//                     to a recurring subscription. Glofox tags them
-//                     as MEMBER (because they ARE paying), but they
-//                     need their own marketing audience separate from
-//                     subscription members (different price-points,
-//                     different upgrade pitch). New pipeline stage
-//                     'credit_member' added in mig 135.
+// GLOFOX2.1.9 — credit_member auto-detection REVERTED.
+// The discriminator we attempted (lead_status=MEMBER + membership.
+// type=num_classes [+ MEMBERPURCHASE=true]) failed against real
+// data: member.membership returns a stale/initial reference (the
+// trial pack), NOT the user's current product, so the type field
+// can't be trusted. MEMBERPURCHASE=false also fires for comp'd
+// credit members, ruling out that flag as a reliable filter.
+// Until we have a richer Glofox API endpoint that returns a
+// member's CURRENT memberships (Plan A — see GLOFOX2.1.10), all
+// lead_status=MEMBER + active=true now map to 'member' canonical.
+// The credit_member canonical + pipeline stage + audience option
+// remain in place for operator-managed flow and future re-
+// introduction once we have reliable signals.
 //
 // Canonical CRM statuses (what we store in glofox_membership_status):
 //   cold, tour, no_sale_tour, trial, no_sale_trial,
 //   member, credit_member, classpass_payg, ex_member, lead
+//   (credit_member retained as a status value but the sync no
+//    longer auto-derives it.)
 //
 // Pipeline placement (pipeline_stages slugs — mig 001 seeded the
 // first 9, mig 135 added credit_member):
@@ -294,10 +299,23 @@ export function pipelineStageSlugForStatus(status) {
  * operator-managed slots. If a deal sits here, leave it.
  *   returning_member  — operator-curated comeback funnel
  *   new_lead_social   — channel-specific bucket the operator owns
+ *   credit_member     — operator-classified Class Pack customers.
+ *                       GLOFOX2.1.9: payload signals can't reliably
+ *                       distinguish credit vs subscription members
+ *                       (member.membership shows stale trial ref;
+ *                       MEMBERPURCHASE=false for comp'd packs). The
+ *                       operator manually places contacts here in
+ *                       the kanban; the sync stays out. Trade-off:
+ *                       when a credit member churns, the sync won't
+ *                       auto-move them to lost_member — operator
+ *                       handles that manually too. Acceptable until
+ *                       Plan A (richer Glofox API — GLOFOX2.1.10)
+ *                       lets us auto-detect reliably.
  */
 const OPERATOR_ONLY_STAGES = new Set([
   'returning_member',
   'new_lead_social',
+  'credit_member',
 ])
 
 /**
@@ -586,30 +604,26 @@ function isClassPassPayg(member) {
   return origin === 'classpass' && mType === 'payg'
 }
 
-/**
- * Detect a "Credit Member" — paying customer who bought a class
- * pack directly from UN1T (not a subscription, not via a 3rd-party
- * platform like ClassPass). Glofox surfaces these with
- * lead_status='MEMBER' (because they ARE paying) but
- * membership.type='num_classes' (a credit pack, not a recurring
- * subscription).
- *
- * This canonical exists primarily so the operator can build
- * sequences targeting credit-pack customers specifically — the
- * pitch is "you've used most of your credits, here's why
- * subscribing saves money", which is a different message from
- * what subscription members or fresh leads should receive.
- */
-function isCreditMember(member) {
-  if (!member || typeof member !== 'object') return false
-  const leadStatus = typeof member.lead_status === 'string'
-    ? member.lead_status.trim().toUpperCase()
-    : null
-  const mType = typeof member.membership?.type === 'string'
-    ? member.membership.type.trim().toLowerCase()
-    : null
-  return leadStatus === 'MEMBER' && mType === 'num_classes'
-}
+// GLOFOX2.1.9 — isCreditMember() removed.
+//
+// We tried (lead_status='MEMBER' + membership.type='num_classes')
+// for the auto-classification, but real data showed:
+//   - member.membership returns the user's INITIAL membership (the
+//     trial pack), not their CURRENT product. Both Cathy Laverty
+//     (real Credit Member with a comp'd 10-class pack) and Gillian
+//     Collins (different scenario) showed the SAME stale trial
+//     membership object — type='num_classes' was a false positive
+//     for the trial reference, not a genuine signal of credit
+//     membership.
+//   - Tightening with MEMBERPURCHASE=true would exclude comp'd
+//     credit members like Cathy (whose pack was given by the
+//     operator, not purchased), which is a meaningful population.
+//
+// The fix needs richer data than a single GET /members/{id}
+// returns — see GLOFOX2.1.10 for the Plan A research task. Until
+// then, all lead_status=MEMBER + active=true map to 'member'
+// canonical, and credit_member becomes operator-managed via the
+// kanban (added to OPERATOR_ONLY_STAGES so manual placements stick).
 
 /**
  * Normalise a raw Glofox status string to one of the canonicals,
@@ -636,31 +650,31 @@ function normalizeGlofoxStatus(raw) {
 
 /**
  * Map a Glofox member payload to one of the canonical statuses.
- * Order of resolution (synthesis steps come first because Glofox's
- * lead_status loses signal for these audiences):
+ * Order of resolution:
  *
  *   1. ClassPass PAYG detection (origin + membership.type=payg).
  *      Glofox tags these as lead_status='LEAD' which conflates them
- *      with fresh leads.
+ *      with fresh leads — so we synthesise.
  *      - active=true  → 'classpass_payg' (warm upsell)
  *      - active=false → 'ex_member'      (collapsed with churn)
  *
- *   2. Credit Member detection (lead_status='MEMBER' + membership.
- *      type='num_classes'). Glofox tags as MEMBER (correct — they
- *      pay) but lumps them with subscription members. We split so
- *      they get distinct marketing.
- *      - active=true  → 'credit_member' (own pipeline stage)
- *      - active=false → 'ex_member'      (collapsed with churn)
- *
- *   3. lead_status / leads.status / membership.status (the various
+ *   2. lead_status / leads.status / membership.status (the various
  *      shapes Glofox uses across endpoints) → normalise.
  *
- *   4. If the normalised result is 'member' AND the top-level
+ *   3. If the normalised result is 'member' AND the top-level
  *      `active` boolean is false → synthesise 'ex_member'. This is
  *      how Glofox marks a lapsed subscription member.
  *
- *   5. Default 'lead' so unrecognised payloads still land in the
+ *   4. Default 'lead' so unrecognised payloads still land in the
  *      pipeline at new_lead rather than vanishing.
+ *
+ * Note (GLOFOX2.1.9): credit_member auto-detection was removed —
+ * the member.membership field doesn't reliably represent the
+ * user's CURRENT product. lead_status='MEMBER' now always maps to
+ * 'member' regardless of the membership.type field. Operators
+ * place credit members manually in the kanban; the credit_member
+ * stage is in OPERATOR_ONLY_STAGES so manual placements aren't
+ * disturbed by the sync.
  */
 export function mapMembershipStatus(member) {
   if (!member || typeof member !== 'object') return 'lead'
@@ -668,18 +682,14 @@ export function mapMembershipStatus(member) {
   if (isClassPassPayg(member)) {
     return member.active === false ? 'ex_member' : 'classpass_payg'
   }
-  // Step 2 — Credit Member (Glofox lumps with subscription MEMBER).
-  if (isCreditMember(member)) {
-    return member.active === false ? 'ex_member' : 'credit_member'
-  }
-  // Step 3/4 — standard path.
+  // Step 2/3 — standard path.
   const raw = pluck(member, MEMBERSHIP_STATUS_PATHS)
   const normalized = normalizeGlofoxStatus(raw)
   if (normalized === 'member' && member.active === false) {
     return 'ex_member'
   }
   if (normalized) return normalized
-  // Step 5 — fallback.
+  // Step 4 — fallback.
   return 'lead'
 }
 
