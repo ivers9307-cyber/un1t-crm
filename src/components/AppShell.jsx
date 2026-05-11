@@ -16,7 +16,17 @@ const publicPaths = ['/login', '/book/', '/event/', '/unsubscribe/', '/preferenc
 
 export default function AppShell({ children, user }) {
   const pathname = usePathname()
-  const isPublic = publicPaths.some(p => pathname.startsWith(p))
+  // The exact "/" path also counts as public — when un1tdublin.com or
+  // www.un1tdublin.com hit "/", middleware rewrites to /welcome
+  // server-side, but usePathname() returns the BROWSER URL which is
+  // still "/" (the rewrite is invisible to the client). Without this,
+  // visitors to un1tdublin.com saw the CRM sidebar wrapped around the
+  // welcome page (and the absolute-positioned hero header scrolled
+  // with the inner container instead of the page). On crm.un1tdublin
+  // .com, hitting "/" never renders this layout because src/app/page
+  // .js does a server-side redirect to /dashboard before AppShell
+  // mounts — so this is safe.
+  const isPublic = pathname === '/' || publicPaths.some(p => pathname.startsWith(p))
 
   // Mobile sidebar drawer state. Desktop (>= md breakpoint, 768px)
   // ignores this entirely and always shows the sidebar; mobile hides
