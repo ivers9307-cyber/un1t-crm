@@ -79,13 +79,28 @@ export async function generateMetadata() {
 export default async function WelcomePage() {
   const row = await loadSettings()
   const blocks = blocksOrDefault(row?.blocks)
+  // Site chrome (mig 129) — logo lives outside the blocks array
+  // because it always renders regardless of section ordering.
+  const logoUrl     = row?.logo_url || null
+  const logoAlt     = row?.logo_alt || 'UN1T Dublin'
+  const logoWidthPx = row?.logo_width_px || 96
 
   return (
     <div className="min-h-screen bg-black text-white antialiased">
       {/* ── Top nav ───────────────────────────────────────────── */}
       <header className="absolute inset-x-0 top-0 z-20">
         <div className="max-w-6xl mx-auto px-6 py-5 flex items-center justify-between">
-          <div className="text-xl font-black tracking-widest">UN1T</div>
+          {logoUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={logoUrl}
+              alt={logoAlt}
+              style={{ maxWidth: `${logoWidthPx}px` }}
+              className="h-10 w-auto object-contain"
+            />
+          ) : (
+            <div className="text-xl font-black tracking-widest">UN1T</div>
+          )}
           <nav className="hidden md:flex items-center gap-8 text-sm font-medium">
             <a href="#book"  className="text-white/70 hover:text-white transition-colors">Book</a>
           </nav>

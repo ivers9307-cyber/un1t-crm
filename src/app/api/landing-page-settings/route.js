@@ -79,6 +79,12 @@ const PutSchema = z.object({
   // valid for backward-compat / rollback but the operator form
   // (Phase 3b onwards) writes blocks ONLY.
   blocks:             BlocksArraySchema.nullable().optional(),
+  // Mig 129 — site-chrome logo for the top nav. NULL → render the
+  // hard-coded UN1T wordmark text. logo_width_px is bounded both
+  // here AND by a CHECK constraint in the DB.
+  logo_url:           z.string().url().max(2000).nullable().optional(),
+  logo_alt:           z.string().trim().max(200).nullable().optional(),
+  logo_width_px:      z.number().int().min(24).max(400).nullable().optional(),
 }).strict()
 
 function isMasterOrLocationOwner(user, locationId) {
@@ -140,6 +146,8 @@ export async function PUT(request) {
     'booking_slug','hero_image_url','hero_video_url',
     'gallery_title','embed_title','embed_url','embed_caption',
     'testimonial_quote','testimonial_author',
+    // Mig 129 — site logo
+    'logo_url','logo_alt','logo_width_px',
   ]) {
     if (body[key] !== undefined) payload[key] = body[key]
   }

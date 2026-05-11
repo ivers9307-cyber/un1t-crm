@@ -50,6 +50,15 @@ export default function LandingPageSettingsForm({ locationId, initialSettings, a
   const [activeDragId, setActiveDragId] = useState(null)
   const [pickerOpen, setPickerOpen] = useState(false)
 
+  // Site chrome (mig 129) — logo lives outside the blocks array
+  // because it always renders regardless of section ordering.
+  // Width stored as string so the operator can clear/edit the
+  // input mid-typing without it snapping to a default; coerced
+  // on save (same pattern Staff required + Booking type forms use).
+  const [logoUrl,     setLogoUrl]     = useState(initialSettings?.logo_url || '')
+  const [logoAlt,     setLogoAlt]     = useState(initialSettings?.logo_alt || '')
+  const [logoWidthPx, setLogoWidthPx] = useState(String(initialSettings?.logo_width_px || ''))
+
   const [saving, setSaving] = useState(false)
   const [error,  setError]  = useState(null)
   const [savedAt, setSavedAt] = useState(null)
@@ -135,10 +144,25 @@ export default function LandingPageSettingsForm({ locationId, initialSettings, a
     setError(null)
     setSaving(true)
     try {
+      // Coerce + clamp logo width on save (the input keeps it as
+      // a string so mid-edit empty state doesn't snap; clamp to
+      // the same 24-400 range as the API + DB CHECK constraint).
+      let widthPxOrNull = null
+      const parsed = parseInt(logoWidthPx, 10)
+      if (Number.isFinite(parsed)) {
+        widthPxOrNull = Math.min(400, Math.max(24, parsed))
+      }
+      const payload = {
+        location_id: locationId,
+        blocks,
+        logo_url:      logoUrl.trim() || null,
+        logo_alt:      logoAlt.trim() || null,
+        logo_width_px: widthPxOrNull,
+      }
       const r = await fetch('/api/landing-page-settings', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ location_id: locationId, blocks }),
+        body: JSON.stringify(payload),
       })
       const j = await r.json()
       if (!r.ok || j.success === false) throw new Error(j.error || `Save failed (${r.status})`)
@@ -181,6 +205,45 @@ export default function LandingPageSettingsForm({ locationId, initialSettings, a
           <span className="text-xs text-emerald-700">Saved {savedAt.toLocaleTimeString('en-IE')}</span>
         )}
       </div>
+
+      {/* Site header (mig 129) — chrome that always renders, lives
+          OUTSIDE the blocks list because it doesn't move and the
+          operator can't have more than one. */}
+      <section className="bg-un1t-dark border border-un1t-gray rounded-lg p-4 space-y-3">
+        <div>
+          <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light">Site header</h3>
+          <p className="text-[11px] text-un1t-mid mt-1">Logo for the top nav. Renders on every page state regardless of section ordering. Leave the logo blank to fall back to the &ldquo;UN1T&rdquo; wordmark text.</p>
+        </div>
+        <Field label="Logo image" hint="PNG / JPEG / WebP, ≤ 5MB. Transparent PNG works best on the dark nav background.">
+          <MediaSlot
+            url={logoUrl}
+            onClear={() => setLogoUrl('')}
+            onUpload={async (file) => { const url = await uploadMedia({ file, kind: 'image', key: 'site-logo' }); if (url) setLogoUrl(url) }}
+            uploading={!!uploading['site-logo']}
+            error={uploadErr['site-logo']}
+            accept="image/png,image/jpeg,image/webp"
+            label="Add logo"
+            kind="image"
+          />
+        </Field>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <Field label="Alt text" hint="What screen readers announce. Defaults to &ldquo;UN1T Dublin&rdquo; if blank.">
+            <Input value={logoAlt} onChange={setLogoAlt} maxLength={200} placeholder="UN1T Dublin" />
+          </Field>
+          <Field label="Logo width (px)" hint="24-400. Defaults to 96px. Tweak if a wide wordmark looks too small or a square logo looks too big.">
+            <input
+              type="number"
+              min={24}
+              max={400}
+              step={4}
+              value={logoWidthPx}
+              onChange={(e) => setLogoWidthPx(e.target.value)}
+              placeholder="96"
+              className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
+            />
+          </Field>
+        </div>
+      </section>
 
       {/* Sortable block list */}
       <DndContext
