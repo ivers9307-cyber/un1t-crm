@@ -35,6 +35,7 @@ import {
   glofoxCredentialsByBranchId,
 } from '@/lib/glofox'
 import { triggerSequencesForTagsAdded } from '@/lib/sequences/triggers'
+import { applyInvoiceWebhook } from '@/lib/glofox-invoices'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -188,6 +189,23 @@ export async function POST(request) {
     return NextResponse.json({ success: true, status: 'contact_not_found', email: parsed.contactEmail })
   }
 
+  // 7a. GLOFOX2.1.20 — INVOICE_UPDATED side-effect. Mirror the
+  // Glofox invoice into glofox_invoices + recompute the contact's
+  // LTV aggregates. Best-effort: failures here log but don't abort
+  // the rest of the webhook flow (tags + sequences still fire).
+  let ltvResult = null
+  const isInvoiceEvent = String(parsed.eventType || '').toUpperCase() === 'INVOICE_UPDATED'
+  if (isInvoiceEvent) {
+    try {
+      ltvResult = await applyInvoiceWebhook(db, creds.locationId, contact.id, payload)
+    } catch (e) {
+      logWarn('glofox-webhook', 'invoice ltv update threw', {
+        err: e?.message, contact_id: contact.id, event_id: parsed.eventId,
+      })
+      ltvResult = { ok: false, reason: 'threw', error: e?.message }
+    }
+  }
+
   // 7. Apply each tag using the same re-activate-or-insert pattern
   // as the apply_tag step in steps.js.
   const appliedTags = []
@@ -227,13 +245,16 @@ export async function POST(request) {
     }
   }
 
-  await markEvent(db, eventRow.id, 'applied', { contact_id: contact.id, tags: appliedTags }, null)
+  await markEvent(db, eventRow.id, 'applied', {
+    contact_id: contact.id, tags: appliedTags, ltv: ltvResult,
+  }, null)
   return NextResponse.json({
     success: true,
     status: 'applied',
     location_id: creds.locationId,
     contact_id: contact.id,
     tags: appliedTags,
+    ltv: ltvResult,
   })
 }
 

@@ -63,11 +63,16 @@ const EVENT_ID_PATHS = [
   ['message_id'],
   ['data', 'event_id'],
   ['data', 'id'],
+  // GLOFOX2.1.20 — newer event schemas (INVOICE_UPDATED,
+  // MEMBER_UPDATED, MEMBERSHIP_UPDATED) wrap data under Payload.
+  ['Payload', 'id'],
+  ['Metadata', 'trace_id'],
 ]
 const EVENT_TYPE_PATHS = [
   ['event_type'],
   ['eventType'],
   ['type'],
+  ['Type'],
   ['event'],
   ['data', 'event_type'],
 ]
@@ -76,6 +81,13 @@ const BRANCH_ID_PATHS = [
   ['branchId'],
   ['data', 'branch_id'],
   ['data', 'branchId'],
+  // INVOICE_UPDATED carries location_id under Metadata; use it as
+  // a branch_id fallback (the receiver looks up the location by
+  // branch_id first, but invoice events Glofox-side use the
+  // location/branch interchangeably).
+  ['Metadata', 'location_id'],
+  ['Metadata', 'branch_id'],
+  ['Payload', 'branch_id'],
 ]
 const ENTITY_ID_PATHS = [
   ['data', 'id'],
@@ -84,11 +96,14 @@ const ENTITY_ID_PATHS = [
   ['data', 'member_id'],
   ['data', 'membership_id'],
   ['entity_id'],
+  ['Payload', 'id'],
 ]
 // Email lives under different keys depending on the entity:
 //   - member.created     → data.email
 //   - booking.created    → data.member.email OR data.member_email
 //   - membership.cancelled → data.member.email
+//   - INVOICE_UPDATED    → Payload.user.email
+//   - MEMBER_UPDATED     → Payload.email (per spec)
 const CONTACT_EMAIL_PATHS = [
   ['data', 'email'],
   ['data', 'member_email'],
@@ -96,6 +111,8 @@ const CONTACT_EMAIL_PATHS = [
   ['data', 'user', 'email'],
   ['data', 'customer', 'email'],
   ['email'],
+  ['Payload', 'user', 'email'],
+  ['Payload', 'email'],
 ]
 
 function pluck(obj, paths) {

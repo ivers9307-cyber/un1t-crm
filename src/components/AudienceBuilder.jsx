@@ -43,6 +43,13 @@ const FIELD_OPTIONS = [
   { value: 'total_attended_30d',    label: 'Attended (30d)',         type: 'number' },
   { value: 'total_bookings_30d',    label: 'Bookings (30d)',         type: 'number' },
   { value: 'total_noshow_30d',      label: 'No-shows (30d)',         type: 'number' },
+  // GLOFOX2.1.20 — Lifetime Value from invoice webhook. Powers VIP
+  // segmentation, at-risk audiences, and revenue-cohort analysis.
+  // Cents for precision — operator types "50000" for €500.
+  { value: 'lifetime_value_cents',       label: 'Lifetime Value (cents)', type: 'number' },
+  { value: 'lifetime_transaction_count', label: 'Lifetime Payments',       type: 'number' },
+  { value: 'last_payment_at',            label: 'Last Payment',            type: 'date' },
+  { value: 'last_invoice_at',            label: 'Last Invoice (any status)', type: 'date' },
   { value: 'glofox_member_id',      label: 'Has Glofox ID',         type: 'exists' },
   { value: 'phone',                 label: 'Has Phone',             type: 'exists' },
 ]

@@ -56,6 +56,13 @@ export const AUDIENCE_FIELDS = Object.freeze({
   total_bookings_30d:        { type: 'number',  ops: ['eq', 'neq', 'gt', 'lt', 'gte', 'lte'] },
   total_attended_30d:        { type: 'number',  ops: ['eq', 'neq', 'gt', 'lt', 'gte', 'lte'] },
   total_noshow_30d:          { type: 'number',  ops: ['eq', 'neq', 'gt', 'lt', 'gte', 'lte'] },
+  // GLOFOX2.1.20 — Lifetime Value from INVOICE_UPDATED webhook
+  // (mig 140). Powers VIP segmentation, at-risk audiences (high
+  // LTV + lapsed), and revenue-cohort analysis.
+  // Stored as cents (BIGINT) so the operator filters with
+  // "lifetime_value_cents > 50000" (= €500).
+  lifetime_value_cents:        { type: 'number',  ops: ['eq', 'neq', 'gt', 'lt', 'gte', 'lte'] },
+  lifetime_transaction_count:  { type: 'number',  ops: ['eq', 'neq', 'gt', 'lt', 'gte', 'lte'] },
   total_emails_opened:       { type: 'number',  ops: ['eq', 'neq', 'gt', 'lt', 'gte', 'lte'] },
   total_emails_clicked:      { type: 'number',  ops: ['eq', 'neq', 'gt', 'lt', 'gte', 'lte'] },
   total_wa_sent:             { type: 'number',  ops: ['eq', 'neq', 'gt', 'lt', 'gte', 'lte'] },
@@ -73,6 +80,9 @@ export const AUDIENCE_FIELDS = Object.freeze({
   // GLOFOX2.1.14 — booking-engagement timestamps (mig 137).
   last_booked_at:            { type: 'date',    ops: ['eq', 'neq', 'gt', 'lt', 'gte', 'lte', 'is_null', 'is_not_null', 'not_null', 'days_since_gt', 'days_since_lt'] },
   last_attended_at:          { type: 'date',    ops: ['eq', 'neq', 'gt', 'lt', 'gte', 'lte', 'is_null', 'is_not_null', 'not_null', 'days_since_gt', 'days_since_lt'] },
+  // GLOFOX2.1.20 — payment-activity timestamps.
+  last_payment_at:           { type: 'date',    ops: ['eq', 'neq', 'gt', 'lt', 'gte', 'lte', 'is_null', 'is_not_null', 'not_null', 'days_since_gt', 'days_since_lt'] },
+  last_invoice_at:           { type: 'date',    ops: ['eq', 'neq', 'gt', 'lt', 'gte', 'lte', 'is_null', 'is_not_null', 'not_null', 'days_since_gt', 'days_since_lt'] },
   last_emailed_at:           { type: 'date',    ops: ['eq', 'neq', 'gt', 'lt', 'gte', 'lte', 'is_null', 'is_not_null', 'not_null', 'days_since_gt', 'days_since_lt'] },
   last_wa_message_at:        { type: 'date',    ops: ['eq', 'neq', 'gt', 'lt', 'gte', 'lte', 'is_null', 'is_not_null', 'not_null', 'days_since_gt', 'days_since_lt'] },
 
