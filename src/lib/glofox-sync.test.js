@@ -55,12 +55,24 @@ describe('mapGlofoxMember', () => {
 })
 
 describe('mapMembershipStatus', () => {
-  it('returns lead when no membership info is present', () => {
+  it('returns lead when no membership info AND no active boolean', () => {
     expect(mapMembershipStatus({})).toBe('lead')
     expect(mapMembershipStatus(null)).toBe('lead')
   })
 
-  it('reads top-level status', () => {
+  it('reads top-level lead_status (Glofox primary)', () => {
+    // Real Glofox payload puts the membership stage in lead_status
+    // (uppercase: TRIAL / ACTIVE / CANCELLED / EXPIRED / LEAD).
+    expect(mapMembershipStatus({ lead_status: 'TRIAL' })).toBe('trial')
+    expect(mapMembershipStatus({ lead_status: 'ACTIVE' })).toBe('active')
+    expect(mapMembershipStatus({ lead_status: 'CANCELLED' })).toBe('cancelled')
+  })
+
+  it('reads nested leads.status (Glofox secondary)', () => {
+    expect(mapMembershipStatus({ leads: { status: 'TRIAL' } })).toBe('trial')
+  })
+
+  it('reads top-level status (alternate shape)', () => {
     expect(mapMembershipStatus({ status: 'active' })).toBe('active')
   })
 
@@ -72,8 +84,66 @@ describe('mapMembershipStatus', () => {
     expect(mapMembershipStatus({ active_membership: { status: 'cancelled' } })).toBe('cancelled')
   })
 
+  it('falls back to active=true → active', () => {
+    expect(mapMembershipStatus({ active: true })).toBe('active')
+  })
+
+  it('falls back to active=false → inactive', () => {
+    expect(mapMembershipStatus({ active: false })).toBe('inactive')
+  })
+
+  it('prefers lead_status over the active boolean', () => {
+    // A trial member has active: true AND lead_status: TRIAL — we
+    // want the more-specific TRIAL, not the generic 'active'.
+    expect(mapMembershipStatus({ lead_status: 'TRIAL', active: true })).toBe('trial')
+  })
+
   it('lowercases + trims', () => {
-    expect(mapMembershipStatus({ status: '  EXPIRED  ' })).toBe('expired')
+    expect(mapMembershipStatus({ lead_status: '  EXPIRED  ' })).toBe('expired')
+  })
+})
+
+// Lock the live UN1T Stillorgan payload from GLOFOX2.1 dry-run
+// against the mapper so future refactors can't silently regress
+// the field paths against Glofox's real shape.
+describe('mapGlofoxMember (real Glofox payload)', () => {
+  const realPayload = {
+    _id: '6a01e48ba3409d706800d9f8',
+    membership: {
+      _id: '620bdab4df0f8054814cd7be',
+      type: 'num_classes',
+      trial: true,
+      membership_name: '1) The UN1T Trial',
+      membership_plan_name: 'The UN1T Trial',
+    },
+    first_name: 'Roisin',
+    last_name: 'Leddy',
+    phone: '07310018668',
+    email: 'roisinled@hotmail.com',
+    branch_id: '6155764859810329ec3826b3',
+    type: 'member',
+    active: true,
+    lead_status: 'TRIAL',
+    leads: { status: 'TRIAL' },
+    name: 'Roisin Leddy',
+    role: 'member',
+  }
+
+  it('extracts the right fields', () => {
+    const out = mapGlofoxMember(realPayload)
+    expect(out.glofox_member_id).toBe('6a01e48ba3409d706800d9f8')
+    expect(out.email).toBe('roisinled@hotmail.com')
+    expect(out.first_name).toBe('Roisin')
+    expect(out.last_name).toBe('Leddy')
+    expect(out.phone).toBe('07310018668')
+    expect(out.name).toBe('Roisin Leddy')
+  })
+
+  it('captures TRIAL as the membership status (NOT lead)', () => {
+    // Regression guard for the GLOFOX2.1.1 fix — pre-fix this
+    // payload mapped to 'lead' because the parser only checked
+    // membership.status / active_membership.status.
+    expect(mapGlofoxMember(realPayload).glofox_membership_status).toBe('trial')
   })
 })
 

@@ -59,9 +59,15 @@ const FIRST_NAME_PATHS = [['first_name'], ['firstName'], ['name', 'first']]
 const LAST_NAME_PATHS = [['last_name'], ['lastName'], ['name', 'last']]
 const FULL_NAME_PATHS = [['name'], ['full_name'], ['fullName']]
 const PHONE_PATHS = [['phone'], ['mobile'], ['phone_number']]
-// Glofox commonly nests membership state. We try the easy paths
-// first; if none hit, mapMembershipStatus falls back to 'lead'.
+// Glofox payload uses `lead_status` as the operator-visible
+// membership-stage enum (uppercase: TRIAL, ACTIVE, CANCELLED,
+// EXPIRED, LEAD). We probe that first, then a few less-likely
+// shapes in case Glofox renames it or other tenants see different
+// keys. See the GLOFOX2.1.1 commit for the live payload that
+// confirmed this ordering against UN1T Stillorgan members.
 const MEMBERSHIP_STATUS_PATHS = [
+  ['lead_status'],
+  ['leads', 'status'],
   ['membership_status'],
   ['membershipStatus'],
   ['status'],
@@ -112,15 +118,31 @@ export function mapGlofoxMember(member) {
   }
 }
 
-// Best-effort membership-status normaliser. Real values (active,
-// paused, cancelled, expired) come straight through; absent
-// membership info → 'lead' (the operator can still see the
-// glofox_member_id, they're just not currently a paying member).
+// Best-effort membership-status normaliser. Real values (trial,
+// active, paused, cancelled, expired) come straight through
+// lowercased. Falls back through:
+//   1. lead_status / leads.status / membership.status (most likely)
+//   2. active boolean — true → 'active', false → 'inactive'
+//   3. 'lead' as the absolute last resort
+//
+// 'lead' here means "we have this person in Glofox but couldn't
+// determine a membership state from the payload" — different from
+// Glofox's LEAD lead_status (that becomes lowercased 'lead' too,
+// which is fine; the operator can build sequences targeting it).
 export function mapMembershipStatus(member) {
   if (!member || typeof member !== 'object') return 'lead'
   const raw = pluck(member, MEMBERSHIP_STATUS_PATHS)
-  if (raw == null) return 'lead'
-  return String(raw).trim().toLowerCase() || 'lead'
+  if (raw != null) {
+    const out = String(raw).trim().toLowerCase()
+    if (out) return out
+  }
+  // Fallback to the active boolean. Glofox uses `active: true`
+  // for members in good standing; `active: false` for cancelled/
+  // expired/dormant.
+  if (typeof member.active === 'boolean') {
+    return member.active ? 'active' : 'inactive'
+  }
+  return 'lead'
 }
 
 // ─────────────────────────────────────────────────────────────
