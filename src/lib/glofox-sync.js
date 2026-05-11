@@ -5,7 +5,7 @@
 // /api/glofox/sync-member endpoint (dry-run + apply); used
 // tomorrow by the daily bulk-sync cron.
 
-import { fetchUserCredits, fetchMembership, fetchUserBookings } from './glofox.js'
+import { fetchUserCredits, fetchMembership, fetchUserBookings, fetchUserInteractions } from './glofox.js'
 //
 // Source-of-truth contract:
 //   Glofox owns:  glofox_member_id, glofox_membership_status,
@@ -861,6 +861,91 @@ export async function findExistingContact(db, locationId, mapped) {
 // obvious in the dry-run JSON.
 
 // ─────────────────────────────────────────────────────────────
+// Interactions sync (GLOFOX2.1.15 — Tier 1 #2)
+// ─────────────────────────────────────────────────────────────
+//
+// Pull Glofox interactions into the CRM activity timeline so
+// front-desk touchpoints show up alongside CRM-side ones.
+//
+// Mapping Glofox Interaction.type → CRM activities.type:
+//   NOTE                  → 'note'
+//   CALLED_AND_CONNECTED  → 'call'    (subject: "Call (connected)")
+//   CALLED_AND_NO_ANSWER  → 'call'    (subject: "Call (no answer)")
+//   MANUAL_EMAIL          → 'email'
+
+const INTERACTION_TYPE_MAP = {
+  NOTE:                   { type: 'note',  subject: 'Note' },
+  CALLED_AND_CONNECTED:   { type: 'call',  subject: 'Call (connected)' },
+  CALLED_AND_NO_ANSWER:   { type: 'call',  subject: 'Call (no answer)' },
+  MANUAL_EMAIL:           { type: 'email', subject: 'Manual email' },
+}
+
+/**
+ * Map a Glofox Interaction object into the CRM activity row shape
+ * we want to upsert. Returns null when the interaction is missing
+ * required fields (no _id, unknown type).
+ *
+ * Pure function — no DB. Caller does the upsert.
+ */
+export function mapGlofoxInteraction(interaction, contactId, locationId) {
+  if (!interaction || typeof interaction !== 'object') return null
+  if (!interaction._id) return null
+  const typeKey = String(interaction.type || '').trim().toUpperCase()
+  const mapping = INTERACTION_TYPE_MAP[typeKey]
+  if (!mapping) return null
+  // created is Unix seconds per spec — convert to ISO TIMESTAMPTZ.
+  let createdAt = null
+  if (typeof interaction.created === 'number' && Number.isFinite(interaction.created)) {
+    let secs = interaction.created
+    if (secs > 10_000_000_000) secs = Math.floor(secs / 1000)
+    if (secs >= 946_684_800 && secs <= 4_102_444_800) {
+      createdAt = new Date(secs * 1000).toISOString()
+    }
+  }
+  return {
+    contact_id: contactId,
+    location_id: locationId,
+    type: mapping.type,
+    subject: mapping.subject,
+    note: typeof interaction.description === 'string' ? interaction.description : null,
+    done: true,                    // Glofox interactions are always already-done
+    source: 'glofox',
+    glofox_interaction_id: String(interaction._id),
+    // created_at preserved as the Glofox-side timestamp so the
+    // activity timeline shows the touchpoint when it actually
+    // happened, not when we synced it.
+    created_at: createdAt,
+  }
+}
+
+/**
+ * Upsert a list of Glofox interactions into the CRM activities
+ * table. Idempotent via glofox_interaction_id (UNIQUE partial
+ * index in mig 138). Re-running this for the same member converges
+ * — no duplicates created, but description updates land if the
+ * front-desk team edited the note.
+ *
+ * Returns { synced, skipped, errors } counts so the operator-facing
+ * dry-run preview can show what happened.
+ */
+export async function syncGlofoxInteractions(db, locationId, contactId, interactions) {
+  const result = { synced: 0, skipped: 0, errors: 0 }
+  if (!db || !contactId || !locationId || !Array.isArray(interactions)) return result
+  for (const i of interactions) {
+    const row = mapGlofoxInteraction(i, contactId, locationId)
+    if (!row) { result.skipped++; continue }
+    // Upsert via PostgREST onConflict — uses the partial UNIQUE
+    // index from mig 138 on glofox_interaction_id.
+    const { error } = await db
+      .from('activities')
+      .upsert(row, { onConflict: 'glofox_interaction_id' })
+    if (error) result.errors++
+    else result.synced++
+  }
+  return result
+}
+
+// ─────────────────────────────────────────────────────────────
 // Booking aggregates (GLOFOX2.1.14 — Tier 1 #1)
 // ─────────────────────────────────────────────────────────────
 //
@@ -1004,6 +1089,26 @@ export async function previewMemberSync(db, locationId, member, opts = {}) {
     mapped.total_noshow_30d    = bookingAggs.total_noshow_30d
   }
 
+  // GLOFOX2.1.15 — interactions. Fetched alongside credits/bookings
+  // when creds provided. Preview returns the COUNT only; the actual
+  // upsert happens in applyMemberSync (so dry-run never writes
+  // activities). Caller can short-circuit with opts.interactions
+  // (pre-fetched) or opts.skipInteractions.
+  let interactions = null
+  if (opts.interactions !== undefined) {
+    interactions = opts.interactions
+  } else if (opts.creds && !opts.skipInteractions) {
+    const memberId = member._id || member.id
+    if (memberId) {
+      interactions = await fetchUserInteractions(opts.creds, memberId)
+    }
+  }
+  if (interactions) {
+    // Stash on the preview output so applyMemberSync can re-use
+    // them without re-fetching, and dry-run can show the count.
+    mapped._glofox_interactions = interactions
+  }
+
   const { byGlofox, byEmail } = await findExistingContact(db, locationId, mapped)
   // GLOFOX2.1.3 — proposed pipeline placement. Same value goes
   // into the dry-run preview AND into the live deal insert on apply.
@@ -1052,6 +1157,7 @@ export async function previewMemberSync(db, locationId, member, opts = {}) {
       // GLOFOX2.1.3 — fresh contact = no existing deal, so we'll
       // create one. Operator sees the stage slug in the dry-run.
       deal_action: { action: 'create', stage_slug: proposedStageSlug },
+      interactions_to_sync: interactions ? interactions.length : 0,
     }
   }
 
@@ -1155,6 +1261,7 @@ export async function previewMemberSync(db, locationId, member, opts = {}) {
     mapped,
     changes,
     deal_action: dealAction,
+    interactions_to_sync: interactions ? interactions.length : 0,
   }
 }
 
@@ -1254,5 +1361,20 @@ export async function applyMemberSync(db, locationId, member, opts = {}) {
     dealResult = { action: 'error', error: e?.message || 'deal write threw' }
   }
 
-  return { ...preview, contact_id: contactId, deal: dealResult }
+  // GLOFOX2.1.15 — upsert Glofox interactions into CRM activity
+  // timeline. Idempotent via the partial UNIQUE index on
+  // glofox_interaction_id. Best-effort: failures here don't roll
+  // back the contact write — operator gets the count so they can
+  // diagnose if anything's off.
+  let interactionsResult = null
+  const interactions = preview.mapped?._glofox_interactions
+  if (Array.isArray(interactions) && interactions.length > 0) {
+    try {
+      interactionsResult = await syncGlofoxInteractions(db, locationId, contactId, interactions)
+    } catch (e) {
+      interactionsResult = { synced: 0, skipped: 0, errors: interactions.length, error: e?.message }
+    }
+  }
+
+  return { ...preview, contact_id: contactId, deal: dealResult, interactions: interactionsResult }
 }

@@ -12,6 +12,7 @@ import {
   isClassPackMembership,
   detectCreditMember,
   computeBookingAggregates,
+  mapGlofoxInteraction,
 } from './glofox-sync.js'
 
 // Helper: build a Plan A ctx for tests. Real call site fetches via
@@ -485,6 +486,118 @@ describe('computeBookingAggregates', () => {
     // Pretend "now" is 60 days later — same booking is now 70d old.
     const laterNow = NOW + 60 * 86400 * 1000
     expect(computeBookingAggregates(bookings, laterNow).total_bookings_30d).toBe(0)
+  })
+})
+
+// GLOFOX2.1.15 — Glofox interactions → CRM activity mapping.
+describe('mapGlofoxInteraction', () => {
+  const CONTACT_ID = '00000000-0000-0000-0000-000000000abc'
+  const LOCATION_ID = 'a0000000-0000-0000-0000-000000000001'
+
+  it('returns null for null / non-object input', () => {
+    expect(mapGlofoxInteraction(null, CONTACT_ID, LOCATION_ID)).toBeNull()
+    expect(mapGlofoxInteraction('string', CONTACT_ID, LOCATION_ID)).toBeNull()
+  })
+
+  it('returns null when _id is missing', () => {
+    expect(mapGlofoxInteraction({ type: 'NOTE' }, CONTACT_ID, LOCATION_ID)).toBeNull()
+  })
+
+  it('returns null for unknown interaction types', () => {
+    expect(mapGlofoxInteraction({
+      _id: 'i1',
+      type: 'BRAND_NEW_TYPE',
+    }, CONTACT_ID, LOCATION_ID)).toBeNull()
+  })
+
+  it('maps NOTE to type=note with the description carried as note', () => {
+    const out = mapGlofoxInteraction({
+      _id: 'i1',
+      type: 'NOTE',
+      description: 'Member said they have an injury, going easy this week',
+      created: 1778108400, // 2026-05-06T23:00:00Z
+    }, CONTACT_ID, LOCATION_ID)
+    expect(out).toMatchObject({
+      contact_id: CONTACT_ID,
+      location_id: LOCATION_ID,
+      type: 'note',
+      subject: 'Note',
+      note: 'Member said they have an injury, going easy this week',
+      done: true,
+      source: 'glofox',
+      glofox_interaction_id: 'i1',
+    })
+    expect(out.created_at).toBe('2026-05-06T23:00:00.000Z')
+  })
+
+  it('maps CALLED_AND_CONNECTED to type=call with explicit subject', () => {
+    const out = mapGlofoxInteraction({
+      _id: 'i2',
+      type: 'CALLED_AND_CONNECTED',
+      description: 'Confirmed Saturday booking',
+    }, CONTACT_ID, LOCATION_ID)
+    expect(out).toMatchObject({
+      type: 'call',
+      subject: 'Call (connected)',
+      note: 'Confirmed Saturday booking',
+    })
+  })
+
+  it('maps CALLED_AND_NO_ANSWER to type=call with distinct subject', () => {
+    const out = mapGlofoxInteraction({
+      _id: 'i3',
+      type: 'CALLED_AND_NO_ANSWER',
+    }, CONTACT_ID, LOCATION_ID)
+    expect(out).toMatchObject({
+      type: 'call',
+      subject: 'Call (no answer)',
+    })
+  })
+
+  it('maps MANUAL_EMAIL to type=email', () => {
+    const out = mapGlofoxInteraction({
+      _id: 'i4',
+      type: 'MANUAL_EMAIL',
+      description: 'Sent membership renewal info',
+    }, CONTACT_ID, LOCATION_ID)
+    expect(out).toMatchObject({
+      type: 'email',
+      subject: 'Manual email',
+      note: 'Sent membership renewal info',
+    })
+  })
+
+  it('is case-insensitive on type', () => {
+    expect(mapGlofoxInteraction({
+      _id: 'i5',
+      type: 'note',
+    }, CONTACT_ID, LOCATION_ID)?.type).toBe('note')
+  })
+
+  it('coerces _id to string', () => {
+    const out = mapGlofoxInteraction({
+      _id: 12345,
+      type: 'NOTE',
+    }, CONTACT_ID, LOCATION_ID)
+    expect(out.glofox_interaction_id).toBe('12345')
+  })
+
+  it('handles missing/malformed created timestamp gracefully', () => {
+    const out = mapGlofoxInteraction({
+      _id: 'i6',
+      type: 'NOTE',
+      created: -9999999999, // out of range
+    }, CONTACT_ID, LOCATION_ID)
+    expect(out.created_at).toBeNull()
+  })
+
+  it('always sets source=glofox and done=true', () => {
+    const out = mapGlofoxInteraction({
+      _id: 'i7',
+      type: 'NOTE',
+    }, CONTACT_ID, LOCATION_ID)
+    expect(out.source).toBe('glofox')
+    expect(out.done).toBe(true)
   })
 })
 

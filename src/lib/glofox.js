@@ -422,6 +422,34 @@ export async function fetchMembership(creds, membershipId, cache = null) {
 }
 
 /**
+ * Fetch a Glofox member's interactions log via
+ * /2.1/branches/{branchId}/leads/{userId}/interactions.
+ *
+ * Per the spec, an Interaction has:
+ *   _id, branch_id, user_id, description, created (Unix sec)
+ *   type: NOTE | CALLED_AND_CONNECTED | CALLED_AND_NO_ANSWER | MANUAL_EMAIL
+ *
+ * Returns the data array (Interaction[]) or [] on failure.
+ * Best-effort — failures don't bubble (the contact still syncs).
+ */
+export async function fetchUserInteractions(creds, userId) {
+  if (!creds || !userId || !creds.branchId) return []
+  try {
+    const r = await glofoxFetch(
+      creds,
+      `/2.1/branches/${encodeURIComponent(creds.branchId)}/leads/${encodeURIComponent(userId)}/interactions`,
+    )
+    if (!r.ok) return []
+    const body = await r.json()
+    if (Array.isArray(body)) return body
+    if (Array.isArray(body?.data)) return body.data
+    return []
+  } catch {
+    return []
+  }
+}
+
+/**
  * Fetch a Glofox member's recent bookings via /2.0/bookings.
  *
  * Per the spec, the endpoint is paginated (limit defaults 50, max
