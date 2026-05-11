@@ -25,6 +25,13 @@
 
 import { useState, useEffect } from 'react'
 import { Clock, MapPin, ChevronLeft, ChevronRight, Check, AlertCircle, Globe } from 'lucide-react'
+// formatDate uses LOCAL calendar components so a Mon-clicked date
+// stays a Mon date string. Replaces the previous
+// .toISOString().split('T')[0] which converts to UTC and (in
+// Ireland BST = +1) shifted Mon→Sun, causing the slots API to look
+// up Sunday's null availability and return zero slots — see the
+// roster.js docstring for the full incident reasoning.
+import { formatDate } from '@/lib/roster'
 
 export default function BookingWidget({ slug }) {
   const [event, setEvent] = useState(null)
@@ -84,7 +91,7 @@ export default function BookingWidget({ slug }) {
     if (!selectedDate || !event) return
     setLoadingSlots(true)
     setSelectedSlot(null)
-    const dateStr = selectedDate.toISOString().split('T')[0]
+    const dateStr = formatDate(selectedDate)
     fetch(`/api/public/bookings/${slug}/slots?date=${dateStr}`)
       .then(r => r.json())
       .then(d => {
@@ -202,7 +209,7 @@ export default function BookingWidget({ slug }) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         event_type_id: event.id,
-        booking_date: selectedDate.toISOString().split('T')[0],
+        booking_date: formatDate(selectedDate),
         start_time: selectedSlot.start,
         customer_name: formData.name.trim(),
         customer_email: formData.email.trim().toLowerCase(),
