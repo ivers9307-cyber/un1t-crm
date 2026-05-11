@@ -173,7 +173,7 @@ export function mapGlofoxSource(source) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Pipeline stage mapping (GLOFOX2.1.3)
+// Pipeline stage mapping (GLOFOX2.1.5)
 // ─────────────────────────────────────────────────────────────
 //
 // The CRM pipeline reads from `deals`, not `contacts.lead_status`.
@@ -183,26 +183,52 @@ export function mapGlofoxSource(source) {
 // needs to slot each member into the right stage by creating a
 // deal row alongside the contact.
 //
-// Stage slug map mirrors pipeline_stages seeded in mig 001:
-//   new_lead, new_lead_social, trial_active, conversion_ready,
-//   follow_up_needed, member, cold_email_only, lost_member,
-//   returning_member.
+// Glofox has TWO separate status systems and earlier passes
+// (GLOFOX2.1.3/2.1.4) conflated them. The portal screenshot +
+// Glofox support docs confirm the operator-visible "Client Status"
+// (Glofox's `lead_status` field) is the funnel state we want:
+//
+//   Cold              — captured but cold
+//   Tour              — booked / completed a tour
+//   No Sale (Tour)    — toured, didn't convert
+//   Trial             — currently on a trial
+//   No Sale (Trial)   — trial finished without converting
+//   Member            — paying member  (+ active:false → ex_member)
+//   Lead              — generic catch-all when nothing else fits
+//
+// Membership status (Active / Overdue / Paused / Cancelled / Past)
+// lives on the membership subscription, not on the client. We don't
+// use it directly for funnel placement — instead we derive the
+// "ex_member" canonical when lead_status=MEMBER AND the top-level
+// `active` boolean is false (which is how Glofox marks lapsed
+// members). That's the only synthesised status; the rest pass
+// through 1:1 from `lead_status`.
+//
+// Canonical CRM statuses (what we store in glofox_membership_status):
+//   cold, tour, no_sale_tour, trial, no_sale_trial,
+//   member, ex_member, lead
+//
+// Pipeline placement (pipeline_stages slugs seeded in mig 001:
+// new_lead, new_lead_social, trial_active, conversion_ready,
+// follow_up_needed, member, cold_email_only, lost_member,
+// returning_member):
 
 const GLOFOX_STATUS_TO_STAGE_SLUG = {
-  trial:     'trial_active',
-  active:    'member',
-  cancelled: 'lost_member',
-  expired:   'lost_member',
-  inactive:  'lost_member',
-  paused:    'follow_up_needed',
-  lead:      'new_lead',
+  cold:          'cold_email_only',
+  tour:          'conversion_ready',
+  no_sale_tour:  'follow_up_needed',
+  trial:         'trial_active',
+  no_sale_trial: 'follow_up_needed',
+  member:        'member',
+  ex_member:     'lost_member',
+  lead:          'new_lead',
 }
 
 /**
- * Pure mapping: Glofox membership status → CRM pipeline stage
- * slug FOR FIRST-TIME PLACEMENT (no existing deal yet). Unknown
- * statuses default to 'new_lead' so the member still appears in
- * the pipeline. For transitions on EXISTING deals see
+ * Pure mapping: canonical Glofox status → CRM pipeline stage slug
+ * FOR FIRST-TIME PLACEMENT (no existing deal yet). Unknown statuses
+ * default to 'new_lead' so the member still appears in the
+ * pipeline. For transitions on EXISTING deals see
  * targetDealStageForSync below.
  */
 export function pipelineStageSlugForStatus(status) {
@@ -211,61 +237,52 @@ export function pipelineStageSlugForStatus(status) {
 }
 
 /**
- * Transition map for EXISTING deals (GLOFOX2.1.4).
- *
- * Decides whether to auto-move a contact's open deal when their
- * Glofox membership status changes. Returns the target stage
- * slug — or null to leave the deal alone.
- *
- * Auto-move ONLY when the deal is in a "system-default" stage
- * (one this sync would have put them in). If the operator has
- * manually moved them to ANY OTHER stage (e.g., follow_up_needed
- * after a chase call, or returning_member after a comeback chat),
- * the sync respects that — Glofox owns membership state, but the
- * operator owns where the deal sits.
- *
- * Routing:
- *   → active     from trial_active / new_lead*  → member         (converted)
- *   → trial      from new_lead*                  → trial_active   (promoted)
- *   → cancelled  from member                     → lost_member    (paying customer churned)
- *   → cancelled  from trial_active / new_lead*   → follow_up_needed (chase them)
- *   → paused     from member                     → follow_up_needed (at-risk)
- *   anything else                                → null (leave alone)
+ * Stages the sync would NEVER place a contact in — pure
+ * operator-managed slots. If a deal sits here, leave it.
+ *   returning_member  — operator-curated comeback funnel
+ *   new_lead_social   — channel-specific bucket the operator owns
  */
-const SYSTEM_DEFAULT_PRE_PAID_STAGES = new Set([
-  'trial_active', 'new_lead', 'new_lead_social',
+const OPERATOR_ONLY_STAGES = new Set([
+  'returning_member',
+  'new_lead_social',
 ])
 
-export function targetDealStageForSync(newStatus, currentStageSlug) {
-  const s = newStatus ? String(newStatus).toLowerCase() : ''
-  switch (s) {
-    case 'active':
-      // Promoted FROM a pre-paid funnel stage → member.
-      if (SYSTEM_DEFAULT_PRE_PAID_STAGES.has(currentStageSlug)) return 'member'
-      return null
-    case 'trial':
-      // Promoted FROM a new-lead stage → trial_active.
-      if (currentStageSlug === 'new_lead' || currentStageSlug === 'new_lead_social') {
-        return 'trial_active'
-      }
-      return null
-    case 'cancelled':
-    case 'expired':
-    case 'inactive':
-      // Paying member churned → lost_member.
-      if (currentStageSlug === 'member') return 'lost_member'
-      // Trial / lead that didn't convert → follow_up_needed so a
-      // team member can call them.
-      if (SYSTEM_DEFAULT_PRE_PAID_STAGES.has(currentStageSlug)) return 'follow_up_needed'
-      return null
-    case 'paused':
-      // Paying member on pause → at-risk; flag for follow-up.
-      if (currentStageSlug === 'member') return 'follow_up_needed'
-      return null
-    default:
-      // 'lead' or unknown → don't touch the deal. Operator wins.
-      return null
-  }
+/**
+ * Transition for EXISTING deals (GLOFOX2.1.5).
+ *
+ * Auto-move rule: only move the open deal when ALL of the
+ * following hold:
+ *   1. The Glofox status has CHANGED since the last sync.
+ *      (Idempotent re-syncs are no-ops.)
+ *   2. The current deal stage is NOT an operator-only slot.
+ *      (Operator manual moves to returning_member /
+ *       new_lead_social are sticky.)
+ *   3. The new status maps to a known stage.
+ *   4. The target stage is different from the current stage.
+ *
+ * Returns the target slug, or null to leave the deal alone.
+ *
+ * The "status changed" guard makes manual operator moves between
+ * syncs safe: if Glofox status is unchanged, we never overwrite an
+ * operator placement, regardless of what stage they put the deal
+ * in. When Glofox status does change, we route to the canonical
+ * stage for the new status — Glofox is source of truth for
+ * membership state, and the deal placement reflects that.
+ */
+export function targetDealStageForSync(previousStatus, newStatus, currentStageSlug) {
+  const prev = previousStatus ? String(previousStatus).toLowerCase() : null
+  const next = newStatus ? String(newStatus).toLowerCase() : null
+  // 1. No change → leave it.
+  if (prev === next) return null
+  // 2. Operator-only stage → respect manual placement.
+  if (OPERATOR_ONLY_STAGES.has(currentStageSlug)) return null
+  // 3. No mapping for the new status → leave it.
+  if (!next) return null
+  const target = GLOFOX_STATUS_TO_STAGE_SLUG[next]
+  if (!target) return null
+  // 4. Target is already current → no-op.
+  if (target === currentStageSlug) return null
+  return target
 }
 
 /**
@@ -312,18 +329,22 @@ async function findStageIdBySlug(db, locationId, stageSlug) {
 
 /**
  * Ensure the contact's pipeline placement reflects their Glofox
- * status. Three terminal states:
+ * status. Four terminal states:
  *
  *   { action: 'create',  deal_id, stage_slug }              fresh deal made
  *   { action: 'move',    deal_id, from_slug, to_slug }       existing deal moved
- *   { action: 'leave',   deal_id, stage_slug }               nothing to do (operator-managed
- *                                                             stage OR target = current)
+ *   { action: 'leave',   deal_id, stage_slug }               nothing to do (no status
+ *                                                             change, operator-only slot,
+ *                                                             or already at target)
  *   { action: 'error',   error }                              lookup/insert/update failed
  *
- * Idempotent: re-running with the same Glofox status is a no-op
- * for both create + move paths (returns 'leave' once stable).
+ * Auto-move only fires on a status CHANGE (previousStatus !==
+ * newStatus). previousStatus is what we last wrote into
+ * contacts.glofox_membership_status; newStatus is what we're
+ * about to write. Idempotent — re-running with the same status
+ * converges to 'leave'.
  */
-export async function ensureDealForContact(db, locationId, contactId, glofoxStatus) {
+export async function ensureDealForContact(db, locationId, contactId, previousStatus, newStatus) {
   if (!db || !locationId || !contactId) {
     return { action: 'error', error: 'missing arguments' }
   }
@@ -331,7 +352,7 @@ export async function ensureDealForContact(db, locationId, contactId, glofoxStat
 
   if (!existing) {
     // CREATE path — first time this contact has had a deal.
-    const stageSlug = pipelineStageSlugForStatus(glofoxStatus)
+    const stageSlug = pipelineStageSlugForStatus(newStatus)
     let stageId = await findStageIdBySlug(db, locationId, stageSlug)
     let resolvedSlug = stageSlug
     if (!stageId) {
@@ -351,11 +372,9 @@ export async function ensureDealForContact(db, locationId, contactId, glofoxStat
     return { action: 'create', deal_id: data.id, stage_slug: resolvedSlug }
   }
 
-  // EXISTING deal — compute the transition target.
-  const target = targetDealStageForSync(glofoxStatus, existing.stage_slug)
-  // null target → operator-managed stage OR no transition for
-  // this status. Leave it alone.
-  if (!target || target === existing.stage_slug) {
+  // EXISTING deal — auto-move only on a status change.
+  const target = targetDealStageForSync(previousStatus, newStatus, existing.stage_slug)
+  if (!target) {
     return { action: 'leave', deal_id: existing.id, stage_slug: existing.stage_slug }
   }
   // MOVE path.
@@ -450,30 +469,80 @@ export function mapGlofoxMember(member) {
   }
 }
 
-// Best-effort membership-status normaliser. Real values (trial,
-// active, paused, cancelled, expired) come straight through
-// lowercased. Falls back through:
-//   1. lead_status / leads.status / membership.status (most likely)
-//   2. active boolean — true → 'active', false → 'inactive'
-//   3. 'lead' as the absolute last resort
+// ─────────────────────────────────────────────────────────────
+// Membership status mapping (GLOFOX2.1.5)
+// ─────────────────────────────────────────────────────────────
 //
-// 'lead' here means "we have this person in Glofox but couldn't
-// determine a membership state from the payload" — different from
-// Glofox's LEAD lead_status (that becomes lowercased 'lead' too,
-// which is fine; the operator can build sequences targeting it).
+// Glofox's operator-visible "Client Status" (the lead_status field)
+// uses this enum, per the portal and Glofox support docs:
+//
+//   COLD              — captured but not engaged
+//   TOUR              — booked/completed a tour
+//   NO_SALE_TOUR      — toured, didn't convert
+//                       (portal label: "No Sale (Tour)")
+//   TRIAL             — currently on a trial
+//   NO_SALE_TRIAL     — trial finished without converting
+//                       (portal label: "No Sale (Trial)")
+//   MEMBER            — paying member
+//   LEAD              — generic, used as a catch-all
+//
+// We mirror these as lowercased canonicals + add one synthesised
+// value: ex_member. A member whose subscription has lapsed shows
+// up in the API with lead_status: 'MEMBER' AND active: false at
+// the top level — that pair is how we identify churned members.
+//
+// Canonical set written to contacts.glofox_membership_status:
+//   cold, tour, no_sale_tour, trial, no_sale_trial,
+//   member, ex_member, lead
+
+const CANONICAL_GLOFOX_STATUSES = new Set([
+  'cold', 'tour', 'no_sale_tour', 'trial', 'no_sale_trial',
+  'member', 'ex_member', 'lead',
+])
+
+/**
+ * Normalise a raw Glofox status string to one of the canonicals,
+ * or return null when it doesn't match. Tolerates:
+ *   - case  ("MEMBER" / "member" / "Member")
+ *   - spaces, dashes, dots in place of underscores
+ *   - the portal label form: "No Sale (Tour)" → no_sale_tour
+ *   - smushed forms: "NoSale_Trial" → no_sale_trial
+ */
+function normalizeGlofoxStatus(raw) {
+  if (raw == null) return null
+  let s = String(raw).trim().toLowerCase()
+  if (!s) return null
+  // Drop parens, normalise separators, collapse runs.
+  s = s.replace(/[()]/g, '')
+       .replace(/[\s\-.]+/g, '_')
+       .replace(/_+/g, '_')
+       .replace(/^_|_$/g, '')
+  // Common smushed-form aliases.
+  if (s === 'nosale_trial' || s === 'no_sale_trial') return 'no_sale_trial'
+  if (s === 'nosale_tour'  || s === 'no_sale_tour')  return 'no_sale_tour'
+  return CANONICAL_GLOFOX_STATUSES.has(s) ? s : null
+}
+
+/**
+ * Map a Glofox member payload to one of the canonical statuses.
+ * Order of resolution:
+ *   1. lead_status / leads.status / membership.status (the various
+ *      shapes Glofox uses across endpoints) → normalise.
+ *   2. If the normalised result is 'member' AND the top-level
+ *      `active` boolean is false → synthesise 'ex_member'. This is
+ *      how Glofox marks a member whose subscription has lapsed.
+ *   3. If nothing recognisable was found, default to 'lead' (the
+ *      generic catch-all) so the contact still slots into the
+ *      pipeline at new_lead.
+ */
 export function mapMembershipStatus(member) {
   if (!member || typeof member !== 'object') return 'lead'
   const raw = pluck(member, MEMBERSHIP_STATUS_PATHS)
-  if (raw != null) {
-    const out = String(raw).trim().toLowerCase()
-    if (out) return out
+  const normalized = normalizeGlofoxStatus(raw)
+  if (normalized === 'member' && member.active === false) {
+    return 'ex_member'
   }
-  // Fallback to the active boolean. Glofox uses `active: true`
-  // for members in good standing; `active: false` for cancelled/
-  // expired/dormant.
-  if (typeof member.active === 'boolean') {
-    return member.active ? 'active' : 'inactive'
-  }
+  if (normalized) return normalized
   return 'lead'
 }
 
@@ -610,28 +679,43 @@ export async function previewMemberSync(db, locationId, member) {
   // operator sees we will touch the row.
   changes.glofox_synced_at = { from: 'previous timestamp', to: 'now' }
 
-  // GLOFOX2.1.4 — compute the deal action by checking existing
-  // open deal + applying the transition map.
+  // GLOFOX2.1.5 — deal action driven by the (previous, new) status
+  // pair. previousStatus comes from contacts.glofox_membership_status
+  // as we last wrote it; newStatus is what we're about to write.
+  // The transition only fires on a status change AND when the deal
+  // isn't in an operator-only slot.
+  const previousStatus = existing.glofox_membership_status
+  const newStatus = mapped.glofox_membership_status
   const openDeal = await getOpenDealWithStage(db, existing.id)
   let dealAction
   if (!openDeal) {
-    // No deal yet → backfill (Roisin case).
+    // No deal yet → backfill at the canonical stage for newStatus.
     dealAction = { action: 'create', stage_slug: proposedStageSlug }
   } else {
-    const target = targetDealStageForSync(mapped.glofox_membership_status, openDeal.stage_slug)
-    if (target && target !== openDeal.stage_slug) {
+    const target = targetDealStageForSync(previousStatus, newStatus, openDeal.stage_slug)
+    if (target) {
       dealAction = {
         action: 'move',
         deal_id: openDeal.id,
         from_slug: openDeal.stage_slug,
         to_slug: target,
+        previous_status: previousStatus,
+        new_status: newStatus,
       }
     } else {
+      // Three reasons we'd leave alone — surface the most useful
+      // one for the operator dry-run.
+      let reason
+      if (previousStatus === newStatus) reason = 'no Glofox status change since last sync'
+      else if (OPERATOR_ONLY_STAGES.has(openDeal.stage_slug)) reason = 'operator-only stage; sync respects it'
+      else reason = 'already in canonical stage for this status'
       dealAction = {
         action: 'leave',
         deal_id: openDeal.id,
         stage_slug: openDeal.stage_slug,
-        reason: target ? 'already in target stage' : 'operator-managed stage; sync respects it',
+        previous_status: previousStatus,
+        new_status: newStatus,
+        reason,
       }
     }
   }
@@ -656,6 +740,20 @@ export async function applyMemberSync(db, locationId, member) {
   const preview = await previewMemberSync(db, locationId, member)
   if (preview.action === 'invalid' || preview.action === 'ambiguous') return preview
   const now = new Date().toISOString()
+
+  // GLOFOX2.1.5 — capture previousStatus BEFORE we overwrite the
+  // contact row. The deal-transition rule keys off the (previous,
+  // new) status pair, so we need to know what was there. If the
+  // status didn't change, preview.changes won't include the key —
+  // in that case previous === new (a re-sync). If the status did
+  // change, .from carries the old value (which may legitimately
+  // be null for contacts pre-existing without a Glofox link).
+  const newStatus = preview.mapped.glofox_membership_status
+  const previousStatus = preview.action === 'update'
+    ? ('glofox_membership_status' in (preview.changes || {})
+        ? preview.changes.glofox_membership_status.from
+        : newStatus)
+    : null
 
   let contactId
   if (preview.action === 'create') {
@@ -705,7 +803,7 @@ export async function applyMemberSync(db, locationId, member) {
   let dealResult = null
   try {
     dealResult = await ensureDealForContact(
-      db, locationId, contactId, preview.mapped.glofox_membership_status,
+      db, locationId, contactId, previousStatus, newStatus,
     )
   } catch (e) {
     dealResult = { action: 'error', error: e?.message || 'deal write threw' }

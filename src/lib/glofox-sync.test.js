@@ -63,52 +63,67 @@ describe('mapGlofoxMember', () => {
   })
 })
 
-describe('mapMembershipStatus', () => {
-  it('returns lead when no membership info AND no active boolean', () => {
+describe('mapMembershipStatus (GLOFOX2.1.5 canonical enum)', () => {
+  // The portal's "Client Status" picker shows: Cold, Tour,
+  // No Sale (Tour), Trial, No Sale (Trial), Member. We mirror those
+  // in lowercased canonical form + add ex_member (synthesised when
+  // lead_status=MEMBER + active=false). Anything else → 'lead'.
+  it('returns lead when no membership info present', () => {
     expect(mapMembershipStatus({})).toBe('lead')
     expect(mapMembershipStatus(null)).toBe('lead')
   })
 
-  it('reads top-level lead_status (Glofox primary)', () => {
-    // Real Glofox payload puts the membership stage in lead_status
-    // (uppercase: TRIAL / ACTIVE / CANCELLED / EXPIRED / LEAD).
+  it('maps each portal-visible Client Status to its canonical', () => {
+    expect(mapMembershipStatus({ lead_status: 'COLD' })).toBe('cold')
+    expect(mapMembershipStatus({ lead_status: 'TOUR' })).toBe('tour')
+    expect(mapMembershipStatus({ lead_status: 'NO_SALE_TOUR' })).toBe('no_sale_tour')
     expect(mapMembershipStatus({ lead_status: 'TRIAL' })).toBe('trial')
-    expect(mapMembershipStatus({ lead_status: 'ACTIVE' })).toBe('active')
-    expect(mapMembershipStatus({ lead_status: 'CANCELLED' })).toBe('cancelled')
+    expect(mapMembershipStatus({ lead_status: 'NO_SALE_TRIAL' })).toBe('no_sale_trial')
+    expect(mapMembershipStatus({ lead_status: 'MEMBER' })).toBe('member')
+    expect(mapMembershipStatus({ lead_status: 'LEAD' })).toBe('lead')
   })
 
-  it('reads nested leads.status (Glofox secondary)', () => {
+  it('synthesises ex_member from MEMBER + active:false (lapsed)', () => {
+    // Glofox doesn't have an "ex member" lead_status — a lapsed
+    // member shows as MEMBER with the top-level active boolean
+    // flipped to false. We collapse the pair into one canonical.
+    expect(mapMembershipStatus({ lead_status: 'MEMBER', active: false })).toBe('ex_member')
+  })
+
+  it('still returns member when MEMBER + active:true', () => {
+    expect(mapMembershipStatus({ lead_status: 'MEMBER', active: true })).toBe('member')
+  })
+
+  it('does NOT synthesise ex_member from active:false alone', () => {
+    // active:false on a non-MEMBER lead_status (or none) is just
+    // a quirk of the payload — don't promote it to ex_member.
+    expect(mapMembershipStatus({ lead_status: 'TRIAL', active: false })).toBe('trial')
+    expect(mapMembershipStatus({ active: false })).toBe('lead')
+  })
+
+  it('accepts the portal-label form "No Sale (Tour)"', () => {
+    expect(mapMembershipStatus({ lead_status: 'No Sale (Tour)' })).toBe('no_sale_tour')
+    expect(mapMembershipStatus({ lead_status: 'No Sale (Trial)' })).toBe('no_sale_trial')
+  })
+
+  it('accepts smushed and dashed forms', () => {
+    expect(mapMembershipStatus({ lead_status: 'NoSale_Tour' })).toBe('no_sale_tour')
+    expect(mapMembershipStatus({ lead_status: 'NO-SALE-TRIAL' })).toBe('no_sale_trial')
+  })
+
+  it('reads nested leads.status (Glofox secondary path)', () => {
     expect(mapMembershipStatus({ leads: { status: 'TRIAL' } })).toBe('trial')
   })
 
-  it('reads top-level status (alternate shape)', () => {
-    expect(mapMembershipStatus({ status: 'active' })).toBe('active')
-  })
-
-  it('reads nested membership.status', () => {
-    expect(mapMembershipStatus({ membership: { status: 'paused' } })).toBe('paused')
-  })
-
-  it('reads nested active_membership.status', () => {
-    expect(mapMembershipStatus({ active_membership: { status: 'cancelled' } })).toBe('cancelled')
-  })
-
-  it('falls back to active=true → active', () => {
-    expect(mapMembershipStatus({ active: true })).toBe('active')
-  })
-
-  it('falls back to active=false → inactive', () => {
-    expect(mapMembershipStatus({ active: false })).toBe('inactive')
-  })
-
-  it('prefers lead_status over the active boolean', () => {
-    // A trial member has active: true AND lead_status: TRIAL — we
-    // want the more-specific TRIAL, not the generic 'active'.
-    expect(mapMembershipStatus({ lead_status: 'TRIAL', active: true })).toBe('trial')
-  })
-
   it('lowercases + trims', () => {
-    expect(mapMembershipStatus({ lead_status: '  EXPIRED  ' })).toBe('expired')
+    expect(mapMembershipStatus({ lead_status: '  TRIAL  ' })).toBe('trial')
+  })
+
+  it('returns lead for an unrecognised lead_status', () => {
+    // Defensive default: contact still surfaces in the pipeline at
+    // new_lead rather than vanishing because Glofox shipped a new
+    // status we haven't mapped yet.
+    expect(mapMembershipStatus({ lead_status: 'BRAND_NEW_GLOFOX_STATUS' })).toBe('lead')
   })
 })
 
@@ -359,7 +374,7 @@ describe('previewMemberSync', () => {
     expect(out.deal_action.stage_slug).toBe('new_lead')
   })
 
-  it('proposes leave when deal already in target stage', async () => {
+  it('proposes leave when status unchanged AND deal already at target', async () => {
     const existing = { id: 'c1', email: 'me@x.com', glofox_member_id: 'g1', glofox_membership_status: 'trial' }
     const out = await previewMemberSync(
       fakeDb({
@@ -370,50 +385,73 @@ describe('previewMemberSync', () => {
       { ...member, lead_status: 'TRIAL' },
     )
     expect(out.deal_action.action).toBe('leave')
+    expect(out.deal_action.reason).toMatch(/no Glofox status change/)
   })
 
-  it('proposes move when trial → cancelled while deal is in trial_active', async () => {
-    const existing = { id: 'c1', email: 'me@x.com', glofox_member_id: 'g1' }
+  it('proposes move when trial → no_sale_trial (chase the trialist)', async () => {
+    const existing = { id: 'c1', email: 'me@x.com', glofox_member_id: 'g1', glofox_membership_status: 'trial' }
     const out = await previewMemberSync(
       fakeDb({
         rowsByGlofoxId: [existing], rowsByEmail: [existing],
         openDeal: { id: 'd1', stage_id: 's1', stage_slug: 'trial_active' },
       }),
       'loc',
-      { ...member, lead_status: 'CANCELLED' },
+      { ...member, lead_status: 'NO_SALE_TRIAL' },
     )
     expect(out.deal_action).toMatchObject({
       action: 'move', from_slug: 'trial_active', to_slug: 'follow_up_needed',
+      previous_status: 'trial', new_status: 'no_sale_trial',
     })
   })
 
-  it('proposes move when member → cancelled (lost_member)', async () => {
-    const existing = { id: 'c1', email: 'me@x.com', glofox_member_id: 'g1' }
+  it('proposes move when MEMBER + active:false (ex_member → lost_member)', async () => {
+    const existing = { id: 'c1', email: 'me@x.com', glofox_member_id: 'g1', glofox_membership_status: 'member' }
     const out = await previewMemberSync(
       fakeDb({
         rowsByGlofoxId: [existing], rowsByEmail: [existing],
         openDeal: { id: 'd1', stage_id: 's1', stage_slug: 'member' },
       }),
       'loc',
-      { ...member, lead_status: 'CANCELLED' },
+      { ...member, lead_status: 'MEMBER', active: false },
     )
     expect(out.deal_action).toMatchObject({
       action: 'move', from_slug: 'member', to_slug: 'lost_member',
+      previous_status: 'member', new_status: 'ex_member',
     })
   })
 
-  it('proposes leave when deal in operator-managed stage (e.g. follow_up_needed → cancelled)', async () => {
-    const existing = { id: 'c1', email: 'me@x.com', glofox_member_id: 'g1' }
+  it('proposes leave when status changed but deal sits in operator-only stage', async () => {
+    // Operator manually placed the deal in returning_member (a
+    // pure operator-managed slot). Glofox status changes — still
+    // hands off; respect the manual placement.
+    const existing = { id: 'c1', email: 'me@x.com', glofox_member_id: 'g1', glofox_membership_status: 'member' }
+    const out = await previewMemberSync(
+      fakeDb({
+        rowsByGlofoxId: [existing], rowsByEmail: [existing],
+        openDeal: { id: 'd1', stage_id: 's1', stage_slug: 'returning_member' },
+      }),
+      'loc',
+      { ...member, lead_status: 'MEMBER', active: false },
+    )
+    expect(out.deal_action.action).toBe('leave')
+    expect(out.deal_action.reason).toMatch(/operator-only/)
+  })
+
+  it('proposes leave when operator manually moved a member deal to follow_up_needed and status is unchanged', async () => {
+    // Real-world case: member is being chased for renewal — operator
+    // moved the deal to follow_up_needed. Re-syncing must NOT pull
+    // them back to 'member'. The status-change guard handles this.
+    const existing = { id: 'c1', email: 'me@x.com', glofox_member_id: 'g1', glofox_membership_status: 'member' }
     const out = await previewMemberSync(
       fakeDb({
         rowsByGlofoxId: [existing], rowsByEmail: [existing],
         openDeal: { id: 'd1', stage_id: 's1', stage_slug: 'follow_up_needed' },
       }),
       'loc',
-      { ...member, lead_status: 'CANCELLED' },
+      { ...member, lead_status: 'MEMBER', active: true },
     )
     expect(out.deal_action.action).toBe('leave')
-    expect(out.deal_action.reason).toMatch(/operator-managed/)
+    expect(out.deal_action.reason).toMatch(/no Glofox status change/)
   })
 
   it('returns update when only email matches (link to existing CRM contact)', async () => {
@@ -444,65 +482,84 @@ describe('previewMemberSync', () => {
   })
 })
 
-describe('targetDealStageForSync (GLOFOX2.1.4 transitions)', () => {
-  it('promotes trial_active to member when status becomes active', () => {
-    expect(targetDealStageForSync('active', 'trial_active')).toBe('member')
-    expect(targetDealStageForSync('active', 'new_lead')).toBe('member')
-    expect(targetDealStageForSync('active', 'new_lead_social')).toBe('member')
+describe('targetDealStageForSync (GLOFOX2.1.5 transitions)', () => {
+  // Signature: (previousStatus, newStatus, currentStageSlug).
+  // Auto-move only fires when status CHANGED + current stage isn't
+  // operator-only. The target is just the canonical stage for the
+  // new status.
+
+  it('returns null when the Glofox status hasn\'t changed', () => {
+    // Re-syncs are no-ops. Even if the operator manually moved the
+    // deal, an unchanged Glofox status never overwrites them.
+    expect(targetDealStageForSync('trial', 'trial', 'trial_active')).toBeNull()
+    expect(targetDealStageForSync('member', 'member', 'follow_up_needed')).toBeNull()
+    expect(targetDealStageForSync(null, null, 'new_lead')).toBeNull()
   })
 
-  it('promotes new_lead to trial_active when status becomes trial', () => {
-    expect(targetDealStageForSync('trial', 'new_lead')).toBe('trial_active')
-    expect(targetDealStageForSync('trial', 'new_lead_social')).toBe('trial_active')
+  it('routes trial → member to the member stage on conversion', () => {
+    expect(targetDealStageForSync('trial', 'member', 'trial_active')).toBe('member')
   })
 
-  it('routes member → cancelled to lost_member', () => {
-    expect(targetDealStageForSync('cancelled', 'member')).toBe('lost_member')
-    expect(targetDealStageForSync('expired', 'member')).toBe('lost_member')
-    expect(targetDealStageForSync('inactive', 'member')).toBe('lost_member')
+  it('routes member → ex_member to lost_member (lapsed paying customer)', () => {
+    expect(targetDealStageForSync('member', 'ex_member', 'member')).toBe('lost_member')
   })
 
-  it('routes trial/lead → cancelled to follow_up_needed', () => {
-    expect(targetDealStageForSync('cancelled', 'trial_active')).toBe('follow_up_needed')
-    expect(targetDealStageForSync('cancelled', 'new_lead')).toBe('follow_up_needed')
-    expect(targetDealStageForSync('cancelled', 'new_lead_social')).toBe('follow_up_needed')
+  it('routes trial → no_sale_trial to follow_up_needed (chase the trialist)', () => {
+    expect(targetDealStageForSync('trial', 'no_sale_trial', 'trial_active')).toBe('follow_up_needed')
   })
 
-  it('flags paused member as at-risk via follow_up_needed', () => {
-    expect(targetDealStageForSync('paused', 'member')).toBe('follow_up_needed')
+  it('routes tour → no_sale_tour to follow_up_needed', () => {
+    expect(targetDealStageForSync('tour', 'no_sale_tour', 'conversion_ready')).toBe('follow_up_needed')
   })
 
-  it('leaves operator-managed stages alone on cancellation', () => {
-    expect(targetDealStageForSync('cancelled', 'follow_up_needed')).toBeNull()
-    expect(targetDealStageForSync('cancelled', 'returning_member')).toBeNull()
-    expect(targetDealStageForSync('cancelled', 'cold_email_only')).toBeNull()
-    expect(targetDealStageForSync('cancelled', 'conversion_ready')).toBeNull()
+  it('routes cold → tour to conversion_ready (warmed up)', () => {
+    expect(targetDealStageForSync('cold', 'tour', 'cold_email_only')).toBe('conversion_ready')
   })
 
-  it('leaves deals alone on lead / unknown / null status', () => {
-    expect(targetDealStageForSync('lead', 'trial_active')).toBeNull()
-    expect(targetDealStageForSync('unknown', 'member')).toBeNull()
-    expect(targetDealStageForSync(null, 'member')).toBeNull()
+  it('routes no_sale_trial → trial back to trial_active (re-engaged)', () => {
+    expect(targetDealStageForSync('no_sale_trial', 'trial', 'follow_up_needed')).toBe('trial_active')
   })
 
-  it('is case-insensitive on status', () => {
-    expect(targetDealStageForSync('CANCELLED', 'member')).toBe('lost_member')
+  it('respects operator-only stages — returning_member is sticky', () => {
+    // Operator placed a deal in returning_member after a comeback
+    // chat. Even when Glofox status changes, we don't disturb it.
+    expect(targetDealStageForSync('member', 'ex_member', 'returning_member')).toBeNull()
+  })
+
+  it('respects operator-only stages — new_lead_social is sticky', () => {
+    expect(targetDealStageForSync('lead', 'trial', 'new_lead_social')).toBeNull()
+  })
+
+  it('returns null when target equals current stage (no-op)', () => {
+    // Status changed but the canonical stage is what they're
+    // already in (e.g., backfill from null status).
+    expect(targetDealStageForSync(null, 'trial', 'trial_active')).toBeNull()
+  })
+
+  it('returns null on unknown new status', () => {
+    expect(targetDealStageForSync('member', 'something_weird', 'member')).toBeNull()
+  })
+
+  it('is case-insensitive on both status arguments', () => {
+    expect(targetDealStageForSync('TRIAL', 'MEMBER', 'trial_active')).toBe('member')
   })
 })
 
-describe('pipelineStageSlugForStatus', () => {
-  it('maps Glofox statuses to pipeline_stages slugs', () => {
+describe('pipelineStageSlugForStatus (GLOFOX2.1.5 canonical map)', () => {
+  it('maps each canonical Glofox status to its pipeline slug', () => {
+    expect(pipelineStageSlugForStatus('cold')).toBe('cold_email_only')
+    expect(pipelineStageSlugForStatus('tour')).toBe('conversion_ready')
+    expect(pipelineStageSlugForStatus('no_sale_tour')).toBe('follow_up_needed')
     expect(pipelineStageSlugForStatus('trial')).toBe('trial_active')
-    expect(pipelineStageSlugForStatus('active')).toBe('member')
-    expect(pipelineStageSlugForStatus('cancelled')).toBe('lost_member')
-    expect(pipelineStageSlugForStatus('expired')).toBe('lost_member')
-    expect(pipelineStageSlugForStatus('inactive')).toBe('lost_member')
-    expect(pipelineStageSlugForStatus('paused')).toBe('follow_up_needed')
+    expect(pipelineStageSlugForStatus('no_sale_trial')).toBe('follow_up_needed')
+    expect(pipelineStageSlugForStatus('member')).toBe('member')
+    expect(pipelineStageSlugForStatus('ex_member')).toBe('lost_member')
     expect(pipelineStageSlugForStatus('lead')).toBe('new_lead')
   })
 
   it('is case-insensitive', () => {
     expect(pipelineStageSlugForStatus('TRIAL')).toBe('trial_active')
+    expect(pipelineStageSlugForStatus('Member')).toBe('member')
   })
 
   it('defaults to new_lead for unknown / missing values', () => {
