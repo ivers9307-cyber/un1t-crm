@@ -131,7 +131,7 @@ export function parseGlofoxEvent(payload) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Event-type → CRM tag map
+// Event-type → CRM tag map (GLOFOX2.1.12 — spec-aligned)
 // ─────────────────────────────────────────────────────────────
 //
 // Single source of truth for "when Glofox says X, apply tag Y to
@@ -142,52 +142,102 @@ export function parseGlofoxEvent(payload) {
 // Tag naming convention: glofox_<entity>_<verb>. Snake_case. Matches
 // the codebase's existing contact_tags conventions.
 //
-// Real Glofox event_type strings will be confirmed during dark-
-// launch. The keys below are the most likely Glofox conventions
-// (entity.verb, dot-separated lowercase) plus common variations
-// (snake_case, hyphenated). Add more keys per actual payload —
-// updating this single object surfaces the new event type to every
-// downstream sequence template + the audit UI.
+// GLOFOX2.1.12 — keys updated to UPPERCASE_SNAKE_CASE per the
+// official Glofox openapi.yaml. The descriptions of the webhook
+// endpoints (member, membership, booking, course_booking, invoice,
+// access, event, eagreement, service) confirm these exact event
+// type strings:
+//
+//   member:         MEMBER_CREATED, MEMBER_UPDATED
+//   membership:     MEMBERSHIP_CREATED, MEMBERSHIP_UPDATED, MEMBERSHIP_DELETED
+//   booking:        BOOKING_CREATED, BOOKING_DELETED, BOOKING_UPDATED
+//   course_booking: COURSE_BOOKING_CREATED, COURSE_BOOKING_DELETED
+//   invoice:        INVOICE_UPDATED
+//   access:         MEMBER_ACCESS_INFO_CREATED, MEMBER_ACCESS_INFO_UPDATED
+//   event:          EVENT_CREATED, EVENT_UPDATED, EVENT_DELETED
+//   eagreement:     EAGREEMENT_CREATED, EAGREEMENT_UPDATED
+//   service:        SERVICE_CREATED, SERVICE_UPDATED, SERVICE_DELETED
+//
+// tagsForGlofoxEvent() also accepts the dotted-lowercase variants
+// (member.created, etc.) for backward compatibility — the
+// normaliser maps both forms to the same canonical lookup.
 
 const EVENT_TYPE_TAGS = {
-  // Bookings
-  'booking.created':         ['glofox_booking_created'],
-  'booking.cancelled':       ['glofox_booking_cancelled'],
-  'booking.canceled':        ['glofox_booking_cancelled'], // US spelling
-  'booking.no_show':         ['glofox_booking_no_show'],
-  'booking.attended':        ['glofox_booking_attended'],
-  'booking.late_cancel':     ['glofox_booking_late_cancel'],
+  // Members
+  'MEMBER_CREATED':              ['glofox_member_created'],
+  'MEMBER_UPDATED':              ['glofox_member_updated'],
   // Memberships
-  'membership.created':      ['glofox_membership_created'],
-  'membership.cancelled':    ['glofox_membership_cancelled'],
-  'membership.canceled':     ['glofox_membership_cancelled'],
-  'membership.ended':        ['glofox_membership_ended'],
-  'membership.expired':      ['glofox_membership_ended'],
-  'membership.paused':       ['glofox_membership_paused'],
-  'membership.unpaused':     ['glofox_membership_unpaused'],
-  'membership.renewed':      ['glofox_membership_renewed'],
-  // Members (+ leads)
-  'member.created':          ['glofox_member_created'],
-  'member.updated':          ['glofox_member_updated'],
-  'lead.created':            ['glofox_lead_created'],
-  // Access (barcodes — not door access)
-  'access.created':          ['glofox_access_created'],
-  'access.updated':          ['glofox_access_updated'],
+  'MEMBERSHIP_CREATED':          ['glofox_membership_created'],
+  'MEMBERSHIP_UPDATED':          ['glofox_membership_updated'],
+  'MEMBERSHIP_DELETED':          ['glofox_membership_deleted'],
+  // Bookings
+  'BOOKING_CREATED':             ['glofox_booking_created'],
+  'BOOKING_UPDATED':             ['glofox_booking_updated'],
+  'BOOKING_DELETED':             ['glofox_booking_cancelled'],
+  // Course bookings (multi-session courses)
+  'COURSE_BOOKING_CREATED':      ['glofox_course_booking_created'],
+  'COURSE_BOOKING_DELETED':      ['glofox_course_booking_cancelled'],
+  // Invoices
+  'INVOICE_UPDATED':             ['glofox_invoice_updated'],
+  // Access (barcodes / door access info)
+  'MEMBER_ACCESS_INFO_CREATED':  ['glofox_access_created'],
+  'MEMBER_ACCESS_INFO_UPDATED':  ['glofox_access_updated'],
+  // Events (class schedule changes — rarely contact-relevant)
+  'EVENT_CREATED':               ['glofox_event_created'],
+  'EVENT_UPDATED':               ['glofox_event_updated'],
+  'EVENT_DELETED':               ['glofox_event_deleted'],
+  // E-agreement signatures
+  'EAGREEMENT_CREATED':          ['glofox_eagreement_created'],
+  'EAGREEMENT_UPDATED':          ['glofox_eagreement_updated'],
+  // Service catalog
+  'SERVICE_CREATED':             ['glofox_service_created'],
+  'SERVICE_UPDATED':             ['glofox_service_updated'],
+  'SERVICE_DELETED':             ['glofox_service_deleted'],
+}
+
+// Backward compat: dotted-lowercase variants (which we shipped in
+// EVENT_TYPE_TAGS pre-2.1.12 based on a guess about the Glofox
+// convention) map to the same canonical UPPERCASE_SNAKE_CASE form.
+// This keeps any existing test fixtures + manually-crafted webhook
+// replays working.
+const EVENT_TYPE_ALIASES = {
+  'booking.created':       'BOOKING_CREATED',
+  'booking.cancelled':     'BOOKING_DELETED',
+  'booking.canceled':      'BOOKING_DELETED',
+  'booking.no_show':       'BOOKING_UPDATED',
+  'booking.attended':      'BOOKING_UPDATED',
+  'booking.late_cancel':   'BOOKING_UPDATED',
+  'membership.created':    'MEMBERSHIP_CREATED',
+  'membership.cancelled':  'MEMBERSHIP_DELETED',
+  'membership.canceled':   'MEMBERSHIP_DELETED',
+  'membership.ended':      'MEMBERSHIP_DELETED',
+  'membership.expired':    'MEMBERSHIP_DELETED',
+  'membership.paused':     'MEMBERSHIP_UPDATED',
+  'membership.unpaused':   'MEMBERSHIP_UPDATED',
+  'membership.renewed':    'MEMBERSHIP_UPDATED',
+  'member.created':        'MEMBER_CREATED',
+  'member.updated':        'MEMBER_UPDATED',
+  'lead.created':          'MEMBER_CREATED',
+  'access.created':        'MEMBER_ACCESS_INFO_CREATED',
+  'access.updated':        'MEMBER_ACCESS_INFO_UPDATED',
 }
 
 export function tagsForGlofoxEvent(eventType) {
   if (!eventType) return []
+  // 1. Direct UPPERCASE_SNAKE_CASE hit (the canonical Glofox form
+  //    per openapi.yaml).
   const direct = EVENT_TYPE_TAGS[eventType]
   if (direct) return direct.slice()
-  // Forgiving lookups — try common variations before giving up.
-  const lower = eventType.toLowerCase()
-  if (EVENT_TYPE_TAGS[lower]) return EVENT_TYPE_TAGS[lower].slice()
-  // snake_case → dotted
-  const dotted = lower.replace(/_/g, '.')
-  if (EVENT_TYPE_TAGS[dotted]) return EVENT_TYPE_TAGS[dotted].slice()
-  // hyphenated → dotted
-  const fromHyphen = lower.replace(/-/g, '.')
-  if (EVENT_TYPE_TAGS[fromHyphen]) return EVENT_TYPE_TAGS[fromHyphen].slice()
+  // 2. Normalise to UPPERCASE_SNAKE_CASE and re-try. Handles
+  //    lowercase, hyphens, dots, mixed case from older fixtures.
+  const upper = String(eventType).toUpperCase().replace(/[.\-]/g, '_')
+  if (EVENT_TYPE_TAGS[upper]) return EVENT_TYPE_TAGS[upper].slice()
+  // 3. Dotted-lowercase aliases for backward compat.
+  const lower = String(eventType).toLowerCase()
+  const aliasTarget = EVENT_TYPE_ALIASES[lower]
+  if (aliasTarget && EVENT_TYPE_TAGS[aliasTarget]) {
+    return EVENT_TYPE_TAGS[aliasTarget].slice()
+  }
   return []
 }
 

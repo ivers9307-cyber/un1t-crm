@@ -108,36 +108,61 @@ describe('parseGlofoxEvent', () => {
 })
 
 describe('tagsForGlofoxEvent', () => {
-  it('maps known event types to one or more tags', () => {
+  // GLOFOX2.1.12 — canonical Glofox event_type strings are
+  // UPPERCASE_SNAKE_CASE per openapi.yaml (MEMBER_CREATED,
+  // BOOKING_DELETED, etc.). The dotted-lowercase form is kept
+  // as backward-compatible aliases.
+
+  it('maps canonical UPPERCASE_SNAKE_CASE event types', () => {
+    expect(tagsForGlofoxEvent('BOOKING_CREATED')).toEqual(['glofox_booking_created'])
+    expect(tagsForGlofoxEvent('BOOKING_DELETED')).toEqual(['glofox_booking_cancelled'])
+    expect(tagsForGlofoxEvent('BOOKING_UPDATED')).toEqual(['glofox_booking_updated'])
+    expect(tagsForGlofoxEvent('MEMBER_CREATED')).toEqual(['glofox_member_created'])
+    expect(tagsForGlofoxEvent('MEMBER_UPDATED')).toEqual(['glofox_member_updated'])
+    expect(tagsForGlofoxEvent('MEMBERSHIP_CREATED')).toEqual(['glofox_membership_created'])
+    expect(tagsForGlofoxEvent('MEMBERSHIP_UPDATED')).toEqual(['glofox_membership_updated'])
+    expect(tagsForGlofoxEvent('MEMBERSHIP_DELETED')).toEqual(['glofox_membership_deleted'])
+  })
+
+  it('handles new event families added in GLOFOX2.1.12', () => {
+    expect(tagsForGlofoxEvent('COURSE_BOOKING_CREATED')).toEqual(['glofox_course_booking_created'])
+    expect(tagsForGlofoxEvent('COURSE_BOOKING_DELETED')).toEqual(['glofox_course_booking_cancelled'])
+    expect(tagsForGlofoxEvent('INVOICE_UPDATED')).toEqual(['glofox_invoice_updated'])
+  })
+
+  it('handles access (barcode) events with the spec-named MEMBER_ACCESS_INFO_* keys', () => {
+    expect(tagsForGlofoxEvent('MEMBER_ACCESS_INFO_CREATED')).toEqual(['glofox_access_created'])
+    expect(tagsForGlofoxEvent('MEMBER_ACCESS_INFO_UPDATED')).toEqual(['glofox_access_updated'])
+  })
+
+  it('legacy dotted-lowercase aliases still map to canonical tags', () => {
     expect(tagsForGlofoxEvent('booking.created')).toEqual(['glofox_booking_created'])
-    expect(tagsForGlofoxEvent('membership.cancelled')).toEqual(['glofox_membership_cancelled'])
     expect(tagsForGlofoxEvent('member.created')).toEqual(['glofox_member_created'])
+    expect(tagsForGlofoxEvent('membership.cancelled')).toEqual(['glofox_membership_deleted'])
   })
 
-  it('aliases US-spelt cancellations to the British form', () => {
+  it('legacy US-spelling cancellations still alias correctly', () => {
     expect(tagsForGlofoxEvent('booking.canceled')).toEqual(['glofox_booking_cancelled'])
-    expect(tagsForGlofoxEvent('membership.canceled')).toEqual(['glofox_membership_cancelled'])
-  })
-
-  it('aliases membership.expired to membership_ended', () => {
-    expect(tagsForGlofoxEvent('membership.expired')).toEqual(['glofox_membership_ended'])
+    expect(tagsForGlofoxEvent('membership.canceled')).toEqual(['glofox_membership_deleted'])
   })
 
   it('returns empty array for unknown event types', () => {
     expect(tagsForGlofoxEvent('something.weird')).toEqual([])
+    expect(tagsForGlofoxEvent('SOMETHING_WEIRD')).toEqual([])
     expect(tagsForGlofoxEvent('')).toEqual([])
     expect(tagsForGlofoxEvent(null)).toEqual([])
     expect(tagsForGlofoxEvent(undefined)).toEqual([])
   })
 
-  it('forgives snake_case + hyphen variants', () => {
+  it('normalises lowercase / dashes / mixed-case to canonical form', () => {
     expect(tagsForGlofoxEvent('booking_created')).toEqual(['glofox_booking_created'])
     expect(tagsForGlofoxEvent('booking-created')).toEqual(['glofox_booking_created'])
+    expect(tagsForGlofoxEvent('Booking_Created')).toEqual(['glofox_booking_created'])
   })
 
   it('returns a fresh array per call (caller can mutate without poisoning)', () => {
-    const a = tagsForGlofoxEvent('booking.created')
-    const b = tagsForGlofoxEvent('booking.created')
+    const a = tagsForGlofoxEvent('BOOKING_CREATED')
+    const b = tagsForGlofoxEvent('BOOKING_CREATED')
     expect(a).not.toBe(b)
     a.push('extra')
     expect(b).toEqual(['glofox_booking_created'])
