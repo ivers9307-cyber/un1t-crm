@@ -4,6 +4,8 @@
 // into the CRM contacts table. Used today by the single-member
 // /api/glofox/sync-member endpoint (dry-run + apply); used
 // tomorrow by the daily bulk-sync cron.
+
+import { fetchUserCredits, fetchMembership } from './glofox.js'
 //
 // Source-of-truth contract:
 //   Glofox owns:  glofox_member_id, glofox_membership_status,
@@ -299,23 +301,17 @@ export function pipelineStageSlugForStatus(status) {
  * operator-managed slots. If a deal sits here, leave it.
  *   returning_member  — operator-curated comeback funnel
  *   new_lead_social   — channel-specific bucket the operator owns
- *   credit_member     — operator-classified Class Pack customers.
- *                       GLOFOX2.1.9: payload signals can't reliably
- *                       distinguish credit vs subscription members
- *                       (member.membership shows stale trial ref;
- *                       MEMBERPURCHASE=false for comp'd packs). The
- *                       operator manually places contacts here in
- *                       the kanban; the sync stays out. Trade-off:
- *                       when a credit member churns, the sync won't
- *                       auto-move them to lost_member — operator
- *                       handles that manually too. Acceptable until
- *                       Plan A (richer Glofox API — GLOFOX2.1.10)
- *                       lets us auto-detect reliably.
+ *
+ * GLOFOX2.1.11 — credit_member REMOVED from this set. Plan A
+ * (detectCreditMember below) gives us reliable auto-classification
+ * via the /2.0/credits + parent-membership lookup, so the sync now
+ * takes ownership again. When a credit member's status changes
+ * (active=false, or upgrades to a subscription), the sync auto-
+ * routes them.
  */
 const OPERATOR_ONLY_STAGES = new Set([
   'returning_member',
   'new_lead_social',
-  'credit_member',
 ])
 
 /**
@@ -483,7 +479,14 @@ const MEMBERSHIP_STATUS_PATHS = [
   ['active_membership', 'status'],
 ]
 
-export function mapGlofoxMember(member) {
+/**
+ * Map a Glofox member payload to the CRM contact shape.
+ *
+ * @param {object} member Glofox member payload.
+ * @param {object} [ctx]  Optional Plan A context (credits + memberships)
+ *                        for credit_member detection. See mapMembershipStatus.
+ */
+export function mapGlofoxMember(member, ctx = null) {
   if (!member || typeof member !== 'object') return null
   const id = pluck(member, ID_PATHS)
   if (!id) return null
@@ -509,7 +512,7 @@ export function mapGlofoxMember(member) {
   const phoneRaw = pluck(member, PHONE_PATHS)
   const phone = phoneRaw ? normalizePhone(String(phoneRaw)) : null
 
-  const membershipStatus = mapMembershipStatus(member)
+  const membershipStatus = mapMembershipStatus(member, ctx)
 
   // GLOFOX2.1.2 — date of birth from Glofox `birth`. Powers the
   // birthday-wishes anniversary template + future age-segment
@@ -604,26 +607,86 @@ function isClassPassPayg(member) {
   return origin === 'classpass' && mType === 'payg'
 }
 
-// GLOFOX2.1.9 — isCreditMember() removed.
+// ─────────────────────────────────────────────────────────────
+// Credit Member detection (GLOFOX2.1.11 — Plan A)
+// ─────────────────────────────────────────────────────────────
 //
-// We tried (lead_status='MEMBER' + membership.type='num_classes')
-// for the auto-classification, but real data showed:
-//   - member.membership returns the user's INITIAL membership (the
-//     trial pack), not their CURRENT product. Both Cathy Laverty
-//     (real Credit Member with a comp'd 10-class pack) and Gillian
-//     Collins (different scenario) showed the SAME stale trial
-//     membership object — type='num_classes' was a false positive
-//     for the trial reference, not a genuine signal of credit
-//     membership.
-//   - Tightening with MEMBERPURCHASE=true would exclude comp'd
-//     credit members like Cathy (whose pack was given by the
-//     operator, not purchased), which is a meaningful population.
+// Reliable detection now possible thanks to the /2.0/credits +
+// /2.0/memberships endpoints (research GLOFOX2.1.10). The previous
+// attempt (GLOFOX2.1.7) used member.membership.type which is a
+// stale/initial reference (typically the trial pack), not the
+// user's current product. The new path uses the /credits endpoint
+// to get the user's CURRENT credit packs, then resolves each
+// pack's parent Membership to check the discriminating plan.type.
 //
-// The fix needs richer data than a single GET /members/{id}
-// returns — see GLOFOX2.1.10 for the Plan A research task. Until
-// then, all lead_status=MEMBER + active=true map to 'member'
-// canonical, and credit_member becomes operator-managed via the
-// kanban (added to OPERATOR_ONLY_STAGES so manual placements stick).
+// Glofox MembershipPlan.type enum:
+//   'time'         → unlimited subscription                  → member
+//   'time_classes' → restricted subscription with credits    → member
+//   'num_classes'  → one-off non-subscription pack           → credit_member
+//
+// Detection rule:
+//   1. Precondition: lead_status='MEMBER' AND active=true.
+//      (Trial users on the trial pack — Roisin — also have
+//       num_classes credits, but their lead_status='TRIAL'
+//       correctly excludes them.)
+//   2. User must have ≥1 ACTIVE credit pack.
+//   3. EVERY unique parent Membership of those packs must:
+//      - have membership.trial !== true (defence-in-depth: the
+//        trial Membership wouldn't normally appear here for a
+//        MEMBER lead_status, but guard anyway), AND
+//      - have plans where ALL entries are type='num_classes'
+//        (so a Class Pack membership qualifies; a 'time_classes'
+//        subscription with credits does not).
+//
+// Why "every" not "any" on rule 3: a subscription customer who
+// also bought a one-off pack on top would have packs from BOTH a
+// 'time_classes' subscription AND a 'num_classes' pack. They're
+// still primarily a subscription member — only ALL-num_classes
+// → credit_member.
+
+/**
+ * Pure check: does this Glofox Membership represent a Class Pack
+ * (one-off, no subscription cycle)?
+ *
+ *   - membership.trial must NOT be true
+ *   - membership.plans must exist + be non-empty
+ *   - every plan in plans[] must have type === 'num_classes'
+ */
+export function isClassPackMembership(membership) {
+  if (!membership || typeof membership !== 'object') return false
+  if (membership.trial === true) return false
+  if (!Array.isArray(membership.plans) || membership.plans.length === 0) return false
+  return membership.plans.every(p => p && typeof p.type === 'string' && p.type.toLowerCase() === 'num_classes')
+}
+
+/**
+ * Pure check: does the Plan A context indicate a Credit Member?
+ * Takes the raw member payload + a context object built by
+ * buildCreditMemberContext (credits + memberships Map).
+ *
+ * Returns true only when the precondition + every-active-pack
+ * check pass. Returns false when context is missing (degrades to
+ * standard mapping path so we don't false-negative when the API
+ * call to /credits failed).
+ */
+export function detectCreditMember(member, ctx) {
+  if (!member || typeof member !== 'object') return false
+  if (!ctx || !ctx.credits || !ctx.memberships) return false
+  // Precondition — lead_status='MEMBER' + active=true.
+  const leadStatus = String(member.lead_status || '').trim().toUpperCase()
+  if (leadStatus !== 'MEMBER') return false
+  if (member.active !== true) return false
+  // Need at least one ACTIVE credit pack.
+  const activePacks = ctx.credits.filter(c => c?.active === true)
+  if (activePacks.length === 0) return false
+  // Get unique membership_ids from active packs.
+  const membershipIds = Array.from(new Set(
+    activePacks.map(p => p?.membership_id).filter(Boolean),
+  ))
+  if (membershipIds.length === 0) return false
+  // Every parent membership must be a Class Pack membership.
+  return membershipIds.every(mid => isClassPackMembership(ctx.memberships.get(mid)))
+}
 
 /**
  * Normalise a raw Glofox status string to one of the canonicals,
@@ -658,38 +721,47 @@ function normalizeGlofoxStatus(raw) {
  *      - active=true  → 'classpass_payg' (warm upsell)
  *      - active=false → 'ex_member'      (collapsed with churn)
  *
- *   2. lead_status / leads.status / membership.status (the various
+ *   2. Credit Member detection (GLOFOX2.1.11 — Plan A) when ctx is
+ *      provided. Requires lead_status='MEMBER' + active=true + ALL
+ *      active credit packs from non-trial Class-Pack memberships.
+ *      Skipped when ctx is missing (caller didn't fetch credits) so
+ *      callers that don't need richer detection (tests, legacy code)
+ *      still work.
+ *
+ *   3. lead_status / leads.status / membership.status (the various
  *      shapes Glofox uses across endpoints) → normalise.
  *
- *   3. If the normalised result is 'member' AND the top-level
+ *   4. If the normalised result is 'member' AND the top-level
  *      `active` boolean is false → synthesise 'ex_member'. This is
  *      how Glofox marks a lapsed subscription member.
  *
- *   4. Default 'lead' so unrecognised payloads still land in the
+ *   5. Default 'lead' so unrecognised payloads still land in the
  *      pipeline at new_lead rather than vanishing.
  *
- * Note (GLOFOX2.1.9): credit_member auto-detection was removed —
- * the member.membership field doesn't reliably represent the
- * user's CURRENT product. lead_status='MEMBER' now always maps to
- * 'member' regardless of the membership.type field. Operators
- * place credit members manually in the kanban; the credit_member
- * stage is in OPERATOR_ONLY_STAGES so manual placements aren't
- * disturbed by the sync.
+ * @param {object} member  Glofox member payload (e.g., from GET /members/{id})
+ * @param {object} [ctx]   Optional Plan A context. Shape:
+ *                         { credits: Credits[], memberships: Map<id, Membership> }
+ *                         When omitted, credit_member detection is skipped.
  */
-export function mapMembershipStatus(member) {
+export function mapMembershipStatus(member, ctx = null) {
   if (!member || typeof member !== 'object') return 'lead'
   // Step 1 — ClassPass PAYG (Glofox loses signal as 'LEAD').
   if (isClassPassPayg(member)) {
     return member.active === false ? 'ex_member' : 'classpass_payg'
   }
-  // Step 2/3 — standard path.
+  // Step 2 — Credit Member (Plan A). Requires ctx; falls through
+  // to the standard path when ctx is missing or detection fails.
+  if (ctx && detectCreditMember(member, ctx)) {
+    return 'credit_member'
+  }
+  // Step 3/4 — standard path.
   const raw = pluck(member, MEMBERSHIP_STATUS_PATHS)
   const normalized = normalizeGlofoxStatus(raw)
   if (normalized === 'member' && member.active === false) {
     return 'ex_member'
   }
   if (normalized) return normalized
-  // Step 4 — fallback.
+  // Step 5 — fallback.
   return 'lead'
 }
 
@@ -746,8 +818,47 @@ export async function findExistingContact(db, locationId, mapped) {
 // 'changes' is a per-field record { from, to } so the diff is
 // obvious in the dry-run JSON.
 
-export async function previewMemberSync(db, locationId, member) {
-  const mapped = mapGlofoxMember(member)
+/**
+ * Build the Plan A context for credit_member detection. Fetches
+ * the member's credit packs from /2.0/credits, then resolves each
+ * unique active pack's parent Membership via /2.0/memberships/{id}
+ * (cached across the sync run).
+ *
+ * Best-effort: failures during fetch return an empty/partial ctx
+ * so the caller can still proceed with standard mapping. Caller
+ * passes the optional `membershipCache` Map to share across many
+ * member syncs in a bulk run (the Class Packs membership is the
+ * same object for every Credit Member).
+ */
+export async function buildCreditMemberContext(creds, member, membershipCache = null) {
+  if (!creds || !member) return { credits: [], memberships: new Map() }
+  const memberId = member._id || member.id || member.member_id
+  if (!memberId) return { credits: [], memberships: new Map() }
+  const credits = await fetchUserCredits(creds, memberId)
+  const cache = membershipCache || new Map()
+  // Only resolve memberships for ACTIVE packs — saves API calls
+  // when historical packs are present.
+  const uniqueIds = Array.from(new Set(
+    credits.filter(c => c?.active === true).map(c => c?.membership_id).filter(Boolean),
+  ))
+  for (const mid of uniqueIds) {
+    await fetchMembership(creds, mid, cache)
+  }
+  return { credits, memberships: cache }
+}
+
+export async function previewMemberSync(db, locationId, member, opts = {}) {
+  // GLOFOX2.1.11 — build the Plan A context (credits + parent
+  // memberships) when creds are provided. Without creds, we degrade
+  // to standard mapping (no credit_member detection) — happens for
+  // legacy callers, tests with mock dbs, etc.
+  let ctx = null
+  if (opts.creds) {
+    ctx = await buildCreditMemberContext(opts.creds, member, opts.membershipCache)
+  } else if (opts.ctx) {
+    ctx = opts.ctx
+  }
+  const mapped = mapGlofoxMember(member, ctx)
   if (!mapped) {
     return { action: 'invalid', reason: 'Could not extract glofox_member_id from payload', mapped: null }
   }
@@ -883,8 +994,8 @@ export async function previewMemberSync(db, locationId, member) {
 // Calls preview first so we never write on the ambiguous path.
 // Returns { action, contact_id } or { action: 'ambiguous', ... }.
 
-export async function applyMemberSync(db, locationId, member) {
-  const preview = await previewMemberSync(db, locationId, member)
+export async function applyMemberSync(db, locationId, member, opts = {}) {
+  const preview = await previewMemberSync(db, locationId, member, opts)
   if (preview.action === 'invalid' || preview.action === 'ambiguous') return preview
   const now = new Date().toISOString()
 

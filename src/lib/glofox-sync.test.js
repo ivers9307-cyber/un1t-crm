@@ -8,7 +8,43 @@ import {
   mapGlofoxSource,
   pipelineStageSlugForStatus,
   targetDealStageForSync,
+  isClassPackMembership,
+  detectCreditMember,
 } from './glofox-sync.js'
+
+// Helper: build a Plan A ctx for tests. Real call site fetches via
+// /2.0/credits + /2.0/memberships. Tests inline-construct the same
+// shape to exercise mapping logic without hitting the API.
+function makeCtx({ credits = [], memberships = [] } = {}) {
+  const cache = new Map()
+  for (const m of memberships) cache.set(m._id, m)
+  return { credits, memberships: cache }
+}
+
+const CLASS_PACK_MEMBERSHIP = {
+  _id: '6512ae6b179d3834bb0b7f78',
+  name: 'Class Packs',
+  trial: false,
+  plans: [
+    { code: 1, type: 'num_classes', price: 25 },
+    { code: 2, type: 'num_classes', price: 120 },
+    { code: 3, type: 'num_classes', price: 210 },
+  ],
+}
+
+const TRIAL_MEMBERSHIP = {
+  _id: '620bdab4df0f8054814cd7be',
+  name: '1) The UN1T Trial',
+  trial: true,
+  plans: [{ code: 999, type: 'num_classes', price: 0 }],
+}
+
+const SUBSCRIPTION_MEMBERSHIP = {
+  _id: 'sub_membership_1',
+  name: 'Unlimited Monthly',
+  trial: false,
+  plans: [{ code: 100, type: 'time', price: 99 }],
+}
 
 describe('mapGlofoxMember', () => {
   it('returns null for a non-object', () => {
@@ -193,66 +229,182 @@ describe('mapMembershipStatus (GLOFOX2.1.5 canonical enum)', () => {
     })).toBe('classpass_payg')
   })
 
-  // GLOFOX2.1.9 — credit_member auto-detection REVERTED.
-  //
-  // The discriminator we tried (lead_status=MEMBER + membership.type=
-  // num_classes) failed against real data because member.membership
-  // returns the user's INITIAL/trial pack, not their current product.
-  // Tightening with MEMBERPURCHASE=true would also exclude comp'd
-  // credit members. Until we have a richer Glofox API endpoint
-  // (GLOFOX2.1.10), all lead_status=MEMBER + active=true map to
-  // 'member' canonical and operators classify Credit Members manually
-  // via the kanban.
-  it('GLOFOX2.1.9 revert — MEMBER + num_classes maps to member (not credit_member)', () => {
+  // GLOFOX2.1.11 — Plan A credit_member detection via /2.0/credits +
+  // parent Membership lookup. Replaces the broken GLOFOX2.1.7 attempt
+  // and the GLOFOX2.1.9 revert. The detection requires a `ctx`
+  // containing credits + memberships fetched at sync time.
+  it('without ctx, MEMBER falls back to standard mapping (no credit_member detection)', () => {
+    // Legacy callers / tests that don't supply ctx still work.
     expect(mapMembershipStatus({
       lead_status: 'MEMBER',
-      membership: { type: 'num_classes' },
       active: true,
     })).toBe('member')
   })
 
-  it('GLOFOX2.1.9 revert — MEMBER + num_classes + MEMBERPURCHASE=true still maps to member', () => {
-    // We removed the MEMBERPURCHASE-based discriminator too — comp'd
-    // credit members would be excluded by it. Single payload can't
-    // tell us; treat as member uniformly.
+  it('with ctx — MEMBER + active Class Pack credits → credit_member', () => {
+    const ctx = makeCtx({
+      credits: [{ active: true, num_sessions: 10, membership_id: CLASS_PACK_MEMBERSHIP._id, model: 'programs' }],
+      memberships: [CLASS_PACK_MEMBERSHIP],
+    })
     expect(mapMembershipStatus({
       lead_status: 'MEMBER',
-      membership: { type: 'num_classes' },
-      MEMBERPURCHASE: true,
       active: true,
-    })).toBe('member')
+    }, ctx)).toBe('credit_member')
   })
 
-  it('MEMBER + active=false still synthesises ex_member', () => {
-    // The basic ex_member synthesis is unaffected by the revert.
+  it('with ctx — MEMBER + active credits but parent is subscription → member', () => {
+    // A subscription member with 'time_classes' or 'time' plans
+    // should NOT be classified as credit_member.
+    const ctx = makeCtx({
+      credits: [{ active: true, num_sessions: 8, membership_id: SUBSCRIPTION_MEMBERSHIP._id }],
+      memberships: [SUBSCRIPTION_MEMBERSHIP],
+    })
     expect(mapMembershipStatus({
       lead_status: 'MEMBER',
-      membership: { type: 'num_classes' },
-      active: false,
-    })).toBe('ex_member')
+      active: true,
+    }, ctx)).toBe('member')
   })
 
-  it('TRIAL + num_classes still maps by lead_status (= trial)', () => {
-    // The trial pack IS num_classes — making sure the revert doesn't
-    // accidentally regress trial users either.
+  it('with ctx — TRIAL + active credits from trial pack → trial (NOT credit_member)', () => {
+    // Roisin: TRIAL lead_status with the trial num_classes pack.
+    // lead_status discriminator excludes her from credit_member.
+    const ctx = makeCtx({
+      credits: [{ active: true, num_sessions: 3, membership_id: TRIAL_MEMBERSHIP._id }],
+      memberships: [TRIAL_MEMBERSHIP],
+    })
     expect(mapMembershipStatus({
       lead_status: 'TRIAL',
-      membership: { type: 'num_classes' },
       active: true,
-    })).toBe('trial')
+    }, ctx)).toBe('trial')
   })
 
-  it('subscription MEMBER unchanged after revert', () => {
+  it('with ctx — MEMBER but no active credits → member (not credit_member)', () => {
+    // A subscription member with no current credit pack (e.g.,
+    // unlimited 'time' subscription, or no /credits result) maps to
+    // plain member.
+    const ctx = makeCtx({ credits: [], memberships: [] })
     expect(mapMembershipStatus({
       lead_status: 'MEMBER',
-      membership: { type: 'subscription' },
       active: true,
-    })).toBe('member')
+    }, ctx)).toBe('member')
+  })
+
+  it('with ctx — MEMBER + INACTIVE credit packs only → member (not credit_member)', () => {
+    // Past credit packs that have been used up (active:false) don't
+    // qualify — only currently-active packs.
+    const ctx = makeCtx({
+      credits: [{ active: false, num_sessions: 10, membership_id: CLASS_PACK_MEMBERSHIP._id }],
+      memberships: [CLASS_PACK_MEMBERSHIP],
+    })
     expect(mapMembershipStatus({
       lead_status: 'MEMBER',
-      membership: { type: 'recurring' },
       active: true,
-    })).toBe('member')
+    }, ctx)).toBe('member')
+  })
+
+  it('with ctx — MEMBER + active=false collapses to ex_member regardless of credits', () => {
+    // A lapsed Member who happened to have a credit pack still goes
+    // to ex_member (the higher-priority synthesis runs first when
+    // member.active=false).
+    const ctx = makeCtx({
+      credits: [{ active: true, num_sessions: 10, membership_id: CLASS_PACK_MEMBERSHIP._id }],
+      memberships: [CLASS_PACK_MEMBERSHIP],
+    })
+    // active=false → detectCreditMember returns false → falls through
+    // → standard path picks up MEMBER+active:false → ex_member.
+    expect(mapMembershipStatus({
+      lead_status: 'MEMBER',
+      active: false,
+    }, ctx)).toBe('ex_member')
+  })
+
+  it('with ctx — MEMBER + mixed pack memberships (one subscription) → member', () => {
+    // Subscription member who ALSO bought a one-off pack on top.
+    // EVERY-not-ANY rule means they\'re still primarily a member.
+    const ctx = makeCtx({
+      credits: [
+        { active: true, num_sessions: 10, membership_id: CLASS_PACK_MEMBERSHIP._id },
+        { active: true, num_sessions: 8, membership_id: SUBSCRIPTION_MEMBERSHIP._id },
+      ],
+      memberships: [CLASS_PACK_MEMBERSHIP, SUBSCRIPTION_MEMBERSHIP],
+    })
+    expect(mapMembershipStatus({
+      lead_status: 'MEMBER',
+      active: true,
+    }, ctx)).toBe('member')
+  })
+})
+
+// GLOFOX2.1.11 — pure helpers used by Plan A.
+describe('isClassPackMembership', () => {
+  it('returns true for a Class Pack membership (all plans num_classes, trial false)', () => {
+    expect(isClassPackMembership(CLASS_PACK_MEMBERSHIP)).toBe(true)
+  })
+
+  it('returns false for a trial membership even though plans are num_classes', () => {
+    expect(isClassPackMembership(TRIAL_MEMBERSHIP)).toBe(false)
+  })
+
+  it('returns false for a subscription membership (plans type=time)', () => {
+    expect(isClassPackMembership(SUBSCRIPTION_MEMBERSHIP)).toBe(false)
+  })
+
+  it('returns false when plans is missing or empty', () => {
+    expect(isClassPackMembership({ trial: false })).toBe(false)
+    expect(isClassPackMembership({ trial: false, plans: [] })).toBe(false)
+  })
+
+  it('returns false when ANY plan is not num_classes (mixed plan types)', () => {
+    expect(isClassPackMembership({
+      trial: false,
+      plans: [
+        { type: 'num_classes' },
+        { type: 'time_classes' }, // subscription with credits
+      ],
+    })).toBe(false)
+  })
+
+  it('is case-insensitive on plan.type', () => {
+    expect(isClassPackMembership({
+      trial: false,
+      plans: [{ type: 'NUM_CLASSES' }],
+    })).toBe(true)
+  })
+
+  it('returns false for null / non-object input', () => {
+    expect(isClassPackMembership(null)).toBe(false)
+    expect(isClassPackMembership('Class Packs')).toBe(false)
+  })
+})
+
+describe('detectCreditMember', () => {
+  it('returns false without ctx', () => {
+    expect(detectCreditMember({ lead_status: 'MEMBER', active: true }, null)).toBe(false)
+  })
+
+  it('returns false when lead_status is not MEMBER', () => {
+    const ctx = makeCtx({
+      credits: [{ active: true, num_sessions: 10, membership_id: CLASS_PACK_MEMBERSHIP._id }],
+      memberships: [CLASS_PACK_MEMBERSHIP],
+    })
+    expect(detectCreditMember({ lead_status: 'TRIAL', active: true }, ctx)).toBe(false)
+    expect(detectCreditMember({ lead_status: 'LEAD', active: true }, ctx)).toBe(false)
+  })
+
+  it('returns false when member.active is false', () => {
+    const ctx = makeCtx({
+      credits: [{ active: true, num_sessions: 10, membership_id: CLASS_PACK_MEMBERSHIP._id }],
+      memberships: [CLASS_PACK_MEMBERSHIP],
+    })
+    expect(detectCreditMember({ lead_status: 'MEMBER', active: false }, ctx)).toBe(false)
+  })
+
+  it('returns true on the canonical Cathy/Gillian shape', () => {
+    const ctx = makeCtx({
+      credits: [{ active: true, num_sessions: 10, membership_id: CLASS_PACK_MEMBERSHIP._id, model: 'programs' }],
+      memberships: [CLASS_PACK_MEMBERSHIP],
+    })
+    expect(detectCreditMember({ lead_status: 'MEMBER', active: true }, ctx)).toBe(true)
   })
 })
 
@@ -511,24 +663,13 @@ describe('mapGlofoxMember (real Glofox payload — ClassPass PAYG)', () => {
   })
 })
 
-// GLOFOX2.1.9 — Real-world MEMBER payloads (post-revert).
+// GLOFOX2.1.11 — Real-world Credit Member regressions with Plan A ctx.
 //
-// Two real members from live dry-runs that exposed the unreliable
-// signals in member.membership and forced the credit_member auto-
-// detection revert. Both now map to the plain 'member' canonical.
-//
-// Gillian Collins:    MEMBERPURCHASE=true,  membership.type=num_classes
-//                     (operationally a Credit Member who paid for a pack)
-// Cathy Laverty:      MEMBERPURCHASE=false, membership.type=num_classes
-//                     (operationally a Credit Member with a comp'd pack —
-//                     "10 Class Credits - Class Packs" per the operator)
-//
-// Both have the SAME membership._id (620bdab4df0f8054814cd7be) showing
-// the trial pack — proving member.membership is a stale/initial reference,
-// not the user's current product. Until Plan A (richer Glofox API) gives
-// us reliable current-membership data, both classify as 'member' and the
-// operator manually moves real Credit Members into the credit_member
-// kanban stage (which is in OPERATOR_ONLY_STAGES so the sync respects it).
+// Cathy Laverty + Gillian Collins both have an active Class Pack
+// (membership 6512ae6b179d3834bb0b7f78), confirmed by /2.0/credits
+// probe. Plan A correctly classifies both as credit_member regardless
+// of paid-vs-comp'd status. The same data without ctx (legacy code,
+// tests that haven't been updated) falls back to plain 'member'.
 describe('mapGlofoxMember (real Glofox payload — Gillian, paid Credit Member)', () => {
   const gillianPayload = {
     _id: '69f1319ff6d376b55a0b8add',
@@ -537,17 +678,13 @@ describe('mapGlofoxMember (real Glofox payload — Gillian, paid Credit Member)'
     membership: {
       _id: '620bdab4df0f8054814cd7be',
       type: 'num_classes',
-      plan_price: 0,
       trial: true,
       membership_name: '1) The UN1T Trial',
-      description: '3  Classes - 7 Day Expiry',
-      membership_plan_name: 'The UN1T Trial',
     },
     first_name: 'Gillian',
     last_name: 'Collins',
     phone: '0871359761',
     email: 'gillianpcollins@gmail.com',
-    birth: null,
     type: 'member',
     active: true,
     lead_status: 'MEMBER',
@@ -556,10 +693,29 @@ describe('mapGlofoxMember (real Glofox payload — Gillian, paid Credit Member)'
     MEMBERPURCHASE: true,
     PAYGPAYMENT: true,
     name: 'Gillian Collins',
-    role: 'member',
   }
 
-  it('maps to plain "member" (auto-detection of credit_member reverted)', () => {
+  // Real /2.0/credits response from the dry-run — 10-pack with 2 used.
+  const gillianCtx = makeCtx({
+    credits: [{
+      _id: '6a0070c10099cc8c8706e067',
+      user_id: '69f1319ff6d376b55a0b8add',
+      membership_id: CLASS_PACK_MEMBERSHIP._id,
+      model: 'programs',
+      num_sessions: 10,
+      bookings: ['x', 'y'],
+      active: true,
+      available: 8,
+      membership_name: 'Class Packs',
+    }],
+    memberships: [CLASS_PACK_MEMBERSHIP],
+  })
+
+  it('with Plan A ctx — maps to credit_member', () => {
+    expect(mapGlofoxMember(gillianPayload, gillianCtx).glofox_membership_status).toBe('credit_member')
+  })
+
+  it('without ctx — falls back to plain member (legacy callers)', () => {
     expect(mapGlofoxMember(gillianPayload).glofox_membership_status).toBe('member')
   })
 
@@ -573,11 +729,10 @@ describe('mapGlofoxMember (real Glofox payload — Gillian, paid Credit Member)'
 })
 
 describe('mapGlofoxMember (real Glofox payload — Cathy, comp\'d Credit Member)', () => {
-  // The smoking gun: Cathy has the SAME stale trial membership object
-  // as Gillian (membership._id=620bdab4df0f8054814cd7be), MEMBERPURCHASE
-  // is false (her pack was given to her by the operator), but
-  // operationally she IS a Credit Member with an active 10-class pack.
-  // Single-payload signals can't see her actual current product.
+  // The smoking gun: Plan A correctly identifies Cathy as a Credit
+  // Member even though MEMBERPURCHASE=false (her pack was comp'd).
+  // The /2.0/credits endpoint surfaces her active 10-pack regardless
+  // of how it was acquired.
   const cathyPayload = {
     _id: '69e677b6fd868d85ee088cb3',
     branch_id: '6155764859810329ec3826b3',
@@ -585,16 +740,13 @@ describe('mapGlofoxMember (real Glofox payload — Cathy, comp\'d Credit Member)
     membership: {
       _id: '620bdab4df0f8054814cd7be',
       type: 'num_classes',
-      plan_price: 0,
       trial: true,
       membership_name: '1) The UN1T Trial',
-      description: '3  Classes - 7 Day Expiry',
     },
     first_name: 'Cathy',
     last_name: 'Laverty',
     phone: '0864099944',
     email: 'lavertycathy@hotmail.com',
-    birth: null,
     type: 'member',
     active: true,
     lead_status: 'MEMBER',
@@ -603,10 +755,29 @@ describe('mapGlofoxMember (real Glofox payload — Cathy, comp\'d Credit Member)
     MEMBERPURCHASE: false,
     PAYGPAYMENT: true,
     name: 'Cathy Laverty',
-    role: 'member',
   }
 
-  it('maps to plain "member" — single-payload data cannot detect credit pack', () => {
+  // Real /2.0/credits response from the dry-run — 10-pack with 1 used.
+  const cathyCtx = makeCtx({
+    credits: [{
+      _id: '69fbab78d6981cfcab034c86',
+      user_id: '69e677b6fd868d85ee088cb3',
+      membership_id: CLASS_PACK_MEMBERSHIP._id,
+      model: 'programs',
+      num_sessions: 10,
+      bookings: ['z'],
+      active: true,
+      available: 9,
+      membership_name: 'Class Packs',
+    }],
+    memberships: [CLASS_PACK_MEMBERSHIP],
+  })
+
+  it('with Plan A ctx — maps to credit_member (works for comp\'d packs!)', () => {
+    expect(mapGlofoxMember(cathyPayload, cathyCtx).glofox_membership_status).toBe('credit_member')
+  })
+
+  it('without ctx — falls back to plain member', () => {
     expect(mapGlofoxMember(cathyPayload).glofox_membership_status).toBe('member')
   })
 
@@ -853,18 +1024,28 @@ describe('targetDealStageForSync (GLOFOX2.1.5 transitions)', () => {
     expect(targetDealStageForSync('classpass_payg', 'ex_member', 'conversion_ready')).toBe('lost_member')
   })
 
-  // GLOFOX2.1.9 — credit_member is now operator-only. The sync no
-  // longer auto-routes IN or OUT of this stage (manual placement
-  // wins). Operator handles credit-member churn manually until the
-  // Plan A richer-API research lands a reliable detector.
-  it('respects credit_member as operator-only — no auto-move from credit_member to member', () => {
-    expect(targetDealStageForSync('credit_member', 'member', 'credit_member')).toBeNull()
+  // GLOFOX2.1.11 — credit_member auto-routing re-enabled now that
+  // Plan A detection is reliable. credit_member is no longer in
+  // OPERATOR_ONLY_STAGES so the sync routes IN/OUT based on status
+  // changes.
+  it('routes credit_member → member when Credit Member takes a subscription', () => {
+    // The operator\'s primary win for Credit Members — recurring
+    // revenue beats one-off pack purchases.
+    expect(targetDealStageForSync('credit_member', 'member', 'credit_member')).toBe('member')
   })
 
-  it('respects credit_member as operator-only — even on member->ex_member transition', () => {
-    // Operator placed someone in credit_member manually. Even when
-    // their Glofox status flips to inactive, sync stays out.
-    expect(targetDealStageForSync('member', 'ex_member', 'credit_member')).toBeNull()
+  it('routes credit_member → ex_member to lost_member (credits expired, no renewal)', () => {
+    expect(targetDealStageForSync('credit_member', 'ex_member', 'credit_member')).toBe('lost_member')
+  })
+
+  it('routes trial → credit_member when trialist buys a class pack', () => {
+    expect(targetDealStageForSync('trial', 'credit_member', 'trial_active')).toBe('credit_member')
+  })
+
+  it('routes member → credit_member when subscription cancels but pack still active', () => {
+    // Edge case — a subscription member who downgraded to using
+    // only their remaining one-off pack.
+    expect(targetDealStageForSync('member', 'credit_member', 'member')).toBe('credit_member')
   })
 
   it('respects operator-only stages — returning_member is sticky', () => {

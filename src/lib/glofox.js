@@ -314,3 +314,59 @@ export async function glofoxFetch(creds, pathOrUrl, options = {}) {
   }
   return fetch(url, { ...options, headers })
 }
+
+// ─────────────────────────────────────────────────────────────
+// Per-member API helpers (GLOFOX2.1.11 — Plan A credit detection)
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Fetch the active + historical credit packs for a Glofox member.
+ * Returns the data array (Credits[]) or [] on failure / no data.
+ *
+ * Used to drive credit_member detection — a paying customer with
+ * an active class-pack credit pack qualifies as a Credit Member
+ * (separate audience from subscription members). See
+ * src/lib/glofox-sync.js:detectCreditMember.
+ *
+ * Best-effort: a network/API failure here returns [] so the
+ * containing sync can still proceed (member contact gets synced,
+ * credit_member detection is skipped, next sync gets it right).
+ */
+export async function fetchUserCredits(creds, userId) {
+  if (!creds || !userId) return []
+  try {
+    const r = await glofoxFetch(creds, `/2.0/credits?user_id=${encodeURIComponent(userId)}`)
+    if (!r.ok) return []
+    const body = await r.json()
+    return Array.isArray(body?.data) ? body.data : []
+  } catch {
+    return []
+  }
+}
+
+/**
+ * Fetch a Glofox Membership (the catalog entry, with plans[]) by
+ * its id. Optional `cache` Map memoises within a sync run — many
+ * members share the same Membership (e.g., everyone on Class Packs
+ * shares membership 6512ae6b179d3834bb0b7f78), so the bulk cron
+ * benefits from caching across the run.
+ *
+ * Returns the membership object or null on failure / not-found.
+ * Cache stores nulls too so repeated lookups for a missing
+ * membership don't re-hit the API.
+ */
+export async function fetchMembership(creds, membershipId, cache = null) {
+  if (!creds || !membershipId) return null
+  if (cache && cache.has(membershipId)) return cache.get(membershipId)
+  let result = null
+  try {
+    const r = await glofoxFetch(creds, `/2.0/memberships/${encodeURIComponent(membershipId)}`)
+    if (r.ok) {
+      result = await r.json()
+    }
+  } catch {
+    result = null
+  }
+  if (cache) cache.set(membershipId, result)
+  return result
+}

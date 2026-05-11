@@ -99,7 +99,10 @@ export async function GET(request) {
   const member = glofoxBody?.data || glofoxBody?.member || glofoxBody
 
   if (dryRun) {
-    const preview = await previewMemberSync(db, locationId, member)
+    // GLOFOX2.1.11 — pass creds so previewMemberSync can build the
+    // Plan A context (credits + parent memberships) and detect
+    // credit_member reliably.
+    const preview = await previewMemberSync(db, locationId, member, { creds })
     return NextResponse.json({
       ok: true,
       dry_run: true,
@@ -114,7 +117,7 @@ export async function GET(request) {
     })
   }
 
-  const applied = await applyMemberSync(db, locationId, member)
+  const applied = await applyMemberSync(db, locationId, member, { creds })
   return NextResponse.json({
     ok: applied.action !== 'ambiguous' && applied.action !== 'invalid' && !applied.error,
     dry_run: false,
