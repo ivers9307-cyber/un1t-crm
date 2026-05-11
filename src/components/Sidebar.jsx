@@ -91,11 +91,18 @@ const allNav = [
   // below uses the masterOrOwnerOnly key.
   { href: '/admin/contracts', label: 'Contracts', icon: FileSignature, masterOrOwnerOnly: true },
   // Public landing page — preview link for master/owner. Phase 1
-  // is hand-coded React at /welcome; Phase 2 will add a settings
-  // page next to this entry for hero copy / CTA / hero image
-  // editing. Opens in the operator's same tab — they can ctrl-click
-  // for a new tab if they want side-by-side editing iteration.
+  // is hand-coded React at /welcome; Phase 2 (mig 126) added the
+  // sibling /settings/landing-page page below for editing hero copy /
+  // booking-form slug / hero image / pillars / stats / testimonial
+  // without a redeploy. The preview link opens in a new tab so the
+  // operator can keep the settings form open while iterating.
   { href: '/welcome', label: 'Landing page', icon: Globe, masterOrOwnerOnly: true, openInNewTab: true },
+  // Landing page settings — operator form for the /welcome page.
+  // Master/owner only (matches the table's RLS write policy +
+  // the API gate). Stays in the same tab — sits next to the preview
+  // link above so the workflow is "open settings, click preview to
+  // pop a tab, edit + save, reload the preview tab".
+  { href: '/settings/landing-page', label: 'Landing page settings', icon: Globe, masterOrOwnerOnly: true },
   { href: '/settings',   label: 'Settings',     icon: Settings,        permission: 'settings' },
 ]
 
