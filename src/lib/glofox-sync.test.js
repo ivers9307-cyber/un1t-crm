@@ -6,6 +6,7 @@ import {
   parseGlofoxDate,
   normalizePhone,
   mapGlofoxSource,
+  pipelineStageSlugForStatus,
 } from './glofox-sync.js'
 
 describe('mapGlofoxMember', () => {
@@ -281,29 +282,35 @@ describe('mapGlofoxMember (real Glofox payload)', () => {
 
 // previewMemberSync exercises the match-or-create branches via a
 // fluent fake of the Supabase query builder. Each db.from(...) call
-// returns the same `chain` proxy with .select / .eq / .limit
+// returns its own `chain` proxy with .select / .eq / .limit
 // methods that record state and end with a Promise of { data }.
-function fakeDb({ rowsByGlofoxId = [], rowsByEmail = [] } = {}) {
-  // Mode is PER CHAIN — both lookups fire in parallel, so a shared
-  // outer-scope `mode` would race and both queries would see the
-  // last-written value when their .then() resolved.
-  function chain() {
+//
+// `dealsForContact` lets the deals-existence check (GLOFOX2.1.3)
+// return either empty (→ deal_to_create proposed) or a row
+// (→ skip deal creation).
+function fakeDb({ rowsByGlofoxId = [], rowsByEmail = [], dealsForContact = [] } = {}) {
+  function chain(table) {
     let mode = null
     const c = {}
     c.select = () => c
     c.eq = (col) => {
-      if (col === 'glofox_member_id') mode = 'glofox'
-      if (col === 'email')            mode = 'email'
+      if (table === 'deals' && col === 'contact_id') mode = 'deals'
+      else if (col === 'glofox_member_id') mode = 'glofox'
+      else if (col === 'email')            mode = 'email'
       return c
     }
     c.limit = () => c
     c.then = (resolve) => {
-      const data = mode === 'glofox' ? rowsByGlofoxId : mode === 'email' ? rowsByEmail : []
+      let data
+      if (mode === 'deals')      data = dealsForContact
+      else if (mode === 'glofox') data = rowsByGlofoxId
+      else if (mode === 'email')  data = rowsByEmail
+      else                        data = []
       resolve({ data })
     }
     return c
   }
-  return { from: () => chain() }
+  return { from: (table) => chain(table) }
 }
 
 describe('previewMemberSync', () => {
@@ -314,7 +321,7 @@ describe('previewMemberSync', () => {
     expect(out.action).toBe('invalid')
   })
 
-  it('returns create when nothing matches', async () => {
+  it('returns create when nothing matches + proposes a deal', async () => {
     const out = await previewMemberSync(fakeDb(), 'loc', member)
     expect(out.action).toBe('create')
     expect(out.changes.glofox_member_id.to).toBe('g1')
@@ -323,6 +330,15 @@ describe('previewMemberSync', () => {
     // so we expect the 'other' fallback, not the old hardcoded
     // 'glofox' value.
     expect(out.changes.lead_source.to).toBe('other')
+    // GLOFOX2.1.3 — fresh contact → deal proposed at new_lead (no
+    // membership status mapped from this fixture).
+    expect(out.deal_to_create).toEqual({ stage_slug: 'new_lead' })
+  })
+
+  it('proposes trial_active stage when Glofox status is trial', async () => {
+    const m = { ...member, lead_status: 'TRIAL' }
+    const out = await previewMemberSync(fakeDb(), 'loc', m)
+    expect(out.deal_to_create).toEqual({ stage_slug: 'trial_active' })
   })
 
   it('uses mapped lead_source when Glofox source is supplied', async () => {
@@ -331,10 +347,10 @@ describe('previewMemberSync', () => {
     expect(out.changes.lead_source.to).toBe('website')
   })
 
-  it('returns update when only glofox_member_id matches', async () => {
+  it('returns update + proposes a deal when contact exists but has no open deal', async () => {
     const existing = { id: 'c1', email: 'me@x.com', first_name: null, last_name: null, phone: null, glofox_member_id: 'g1', glofox_membership_status: null }
     const out = await previewMemberSync(
-      fakeDb({ rowsByGlofoxId: [existing], rowsByEmail: [existing] }),
+      fakeDb({ rowsByGlofoxId: [existing], rowsByEmail: [existing], dealsForContact: [] }),
       'loc',
       member,
     )
@@ -344,12 +360,25 @@ describe('previewMemberSync', () => {
     expect(out.changes.first_name.to).toBe('Me')
     expect(out.changes.last_name.to).toBe('You')
     expect(out.changes.phone.to).toBe('+353871234567')
+    // No open deal exists → backfill one (this is the Roisin case).
+    expect(out.deal_to_create).toEqual({ stage_slug: 'new_lead' })
+  })
+
+  it('does NOT propose a deal when contact already has an open one', async () => {
+    const existing = { id: 'c1', email: 'me@x.com', first_name: 'Me', last_name: 'You', phone: '+353871234567', glofox_member_id: 'g1', glofox_membership_status: 'trial' }
+    const out = await previewMemberSync(
+      fakeDb({ rowsByGlofoxId: [existing], rowsByEmail: [existing], dealsForContact: [{ id: 'd1' }] }),
+      'loc',
+      member,
+    )
+    expect(out.action).toBe('update')
+    expect(out.deal_to_create).toBeUndefined()
   })
 
   it('returns update when only email matches (link to existing CRM contact)', async () => {
     const existing = { id: 'c2', email: 'me@x.com', first_name: 'Existing', last_name: 'Name', phone: '+353000', glofox_member_id: null, glofox_membership_status: null }
     const out = await previewMemberSync(
-      fakeDb({ rowsByGlofoxId: [], rowsByEmail: [existing] }),
+      fakeDb({ rowsByGlofoxId: [], rowsByEmail: [existing], dealsForContact: [] }),
       'loc',
       member,
     )
@@ -372,5 +401,28 @@ describe('previewMemberSync', () => {
     expect(out.action).toBe('ambiguous')
     expect(out.conflicts.contact_matched_by_glofox_id.id).toBe('cA')
     expect(out.conflicts.contact_matched_by_email.id).toBe('cB')
+  })
+})
+
+describe('pipelineStageSlugForStatus', () => {
+  it('maps Glofox statuses to pipeline_stages slugs', () => {
+    expect(pipelineStageSlugForStatus('trial')).toBe('trial_active')
+    expect(pipelineStageSlugForStatus('active')).toBe('member')
+    expect(pipelineStageSlugForStatus('cancelled')).toBe('lost_member')
+    expect(pipelineStageSlugForStatus('expired')).toBe('lost_member')
+    expect(pipelineStageSlugForStatus('inactive')).toBe('lost_member')
+    expect(pipelineStageSlugForStatus('paused')).toBe('follow_up_needed')
+    expect(pipelineStageSlugForStatus('lead')).toBe('new_lead')
+  })
+
+  it('is case-insensitive', () => {
+    expect(pipelineStageSlugForStatus('TRIAL')).toBe('trial_active')
+  })
+
+  it('defaults to new_lead for unknown / missing values', () => {
+    expect(pipelineStageSlugForStatus('something_weird')).toBe('new_lead')
+    expect(pipelineStageSlugForStatus(null)).toBe('new_lead')
+    expect(pipelineStageSlugForStatus(undefined)).toBe('new_lead')
+    expect(pipelineStageSlugForStatus('')).toBe('new_lead')
   })
 })

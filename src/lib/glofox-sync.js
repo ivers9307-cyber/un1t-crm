@@ -172,6 +172,107 @@ export function mapGlofoxSource(source) {
   return GLOFOX_SOURCE_MAP[key] || 'other'
 }
 
+// ─────────────────────────────────────────────────────────────
+// Pipeline stage mapping (GLOFOX2.1.3)
+// ─────────────────────────────────────────────────────────────
+//
+// The CRM pipeline reads from `deals`, not `contacts.lead_status`.
+// A contact without a deal row in pipeline_stages doesn't appear
+// on the kanban — that's by design (deals are opportunities, a
+// contact can have many or none). The Glofox sync therefore
+// needs to slot each member into the right stage by creating a
+// deal row alongside the contact.
+//
+// Stage slug map mirrors pipeline_stages seeded in mig 001:
+//   new_lead, new_lead_social, trial_active, conversion_ready,
+//   follow_up_needed, member, cold_email_only, lost_member,
+//   returning_member.
+
+const GLOFOX_STATUS_TO_STAGE_SLUG = {
+  trial:     'trial_active',
+  active:    'member',
+  cancelled: 'lost_member',
+  expired:   'lost_member',
+  inactive:  'lost_member',
+  paused:    'follow_up_needed',
+  lead:      'new_lead',
+}
+
+/**
+ * Pure mapping: Glofox membership status → CRM pipeline stage
+ * slug. Unknown statuses default to 'new_lead' so the member
+ * still appears in the pipeline (operator can drag them elsewhere
+ * after first sight).
+ */
+export function pipelineStageSlugForStatus(status) {
+  if (!status) return 'new_lead'
+  return GLOFOX_STATUS_TO_STAGE_SLUG[String(status).toLowerCase()] || 'new_lead'
+}
+
+/**
+ * Ensure the contact has at least one open deal. Backfills the
+ * pipeline for existing Glofox-synced contacts that pre-date the
+ * deal-creation logic. Returns:
+ *   { created: true,  deal_id, stage_slug }  — fresh deal made
+ *   { created: false, existing_deal_id }     — already had one
+ *   { created: false, error }                 — lookup or insert failed
+ */
+export async function ensureDealForContact(db, locationId, contactId, glofoxStatus) {
+  if (!db || !locationId || !contactId) {
+    return { created: false, error: 'missing arguments' }
+  }
+  // 1. Already has an open deal? Don't make a second one.
+  const { data: existing, error: existingErr } = await db
+    .from('deals')
+    .select('id')
+    .eq('contact_id', contactId)
+    .eq('status', 'open')
+    .limit(1)
+  if (existingErr) return { created: false, error: existingErr.message }
+  if (existing?.[0]) {
+    return { created: false, existing_deal_id: existing[0].id }
+  }
+  // 2. Look up the stage by slug.
+  const stageSlug = pipelineStageSlugForStatus(glofoxStatus)
+  const { data: stages, error: stageErr } = await db
+    .from('pipeline_stages')
+    .select('id')
+    .eq('location_id', locationId)
+    .eq('slug', stageSlug)
+    .limit(1)
+  if (stageErr) return { created: false, error: stageErr.message }
+  const stageId = stages?.[0]?.id
+  if (!stageId) {
+    // Stage doesn't exist at this location yet. Falling back to
+    // the new_lead stage rather than failing — at minimum the
+    // contact should be in the pipeline somewhere visible.
+    const { data: fallback } = await db
+      .from('pipeline_stages')
+      .select('id')
+      .eq('location_id', locationId)
+      .eq('slug', 'new_lead')
+      .limit(1)
+    if (!fallback?.[0]) return { created: false, error: `Pipeline stage '${stageSlug}' not found and no new_lead fallback` }
+    return await insertDeal(db, locationId, contactId, fallback[0].id, 'new_lead')
+  }
+  return await insertDeal(db, locationId, contactId, stageId, stageSlug)
+}
+
+async function insertDeal(db, locationId, contactId, stageId, stageSlug) {
+  const { data, error } = await db
+    .from('deals')
+    .insert({
+      contact_id: contactId,
+      stage_id: stageId,
+      location_id: locationId,
+      status: 'open',
+    })
+    .select('id')
+    .single()
+  if (error) return { created: false, error: error.message }
+  return { created: true, deal_id: data.id, stage_slug: stageSlug }
+}
+
 const ID_PATHS = [['_id'], ['id'], ['member_id']]
 const EMAIL_PATHS = [['email']]
 const FIRST_NAME_PATHS = [['first_name'], ['firstName'], ['name', 'first']]
@@ -338,6 +439,9 @@ export async function previewMemberSync(db, locationId, member) {
   }
 
   const { byGlofox, byEmail } = await findExistingContact(db, locationId, mapped)
+  // GLOFOX2.1.3 — proposed pipeline placement. Same value goes
+  // into the dry-run preview AND into the live deal insert on apply.
+  const proposedStageSlug = pipelineStageSlugForStatus(mapped.glofox_membership_status)
 
   // Ambiguous: same email already linked to a DIFFERENT glofox member.
   if (byGlofox && byEmail && byGlofox.id !== byEmail.id) {
@@ -371,6 +475,9 @@ export async function previewMemberSync(db, locationId, member) {
         glofox_membership_status: { from: null, to: mapped.glofox_membership_status },
         lead_source:              { from: null, to: mapped.lead_source },
       },
+      // GLOFOX2.1.3 — fresh contact = no existing deal, so we'll
+      // create one. Operator sees the stage slug in the dry-run.
+      deal_to_create: { stage_slug: proposedStageSlug },
     }
   }
 
@@ -405,7 +512,26 @@ export async function previewMemberSync(db, locationId, member) {
   // operator sees we will touch the row.
   changes.glofox_synced_at = { from: 'previous timestamp', to: 'now' }
 
-  return { action: 'update', existing_id: existing.id, mapped, changes }
+  // GLOFOX2.1.3 — even on UPDATE, check if the contact has an
+  // open deal. If not, the apply path will backfill one. This
+  // catches the case where a Glofox member was synced before
+  // pipeline-deal-creation existed (like Roisin), and re-syncing
+  // them now should slot them into the right stage.
+  const { data: openDeals } = await db
+    .from('deals')
+    .select('id')
+    .eq('contact_id', existing.id)
+    .eq('status', 'open')
+    .limit(1)
+  const dealToCreate = !openDeals?.[0] ? { stage_slug: proposedStageSlug } : null
+
+  return {
+    action: 'update',
+    existing_id: existing.id,
+    mapped,
+    changes,
+    ...(dealToCreate ? { deal_to_create: dealToCreate } : {}),
+  }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -420,6 +546,7 @@ export async function applyMemberSync(db, locationId, member) {
   if (preview.action === 'invalid' || preview.action === 'ambiguous') return preview
   const now = new Date().toISOString()
 
+  let contactId
   if (preview.action === 'create') {
     const m = preview.mapped
     const { data, error } = await db.from('contacts').insert({
@@ -436,23 +563,42 @@ export async function applyMemberSync(db, locationId, member) {
       lead_source: m.lead_source,
     }).select('id').single()
     if (error) return { ...preview, error: error.message }
-    return { ...preview, contact_id: data.id }
+    contactId = data.id
+  } else {
+    // UPDATE — only write the fields that changed.
+    const m = preview.mapped
+    const updates = { glofox_synced_at: now }
+    if ('glofox_member_id' in preview.changes)         updates.glofox_member_id         = m.glofox_member_id
+    if ('glofox_membership_status' in preview.changes) updates.glofox_membership_status = m.glofox_membership_status
+    if ('first_name' in preview.changes)               updates.first_name               = m.first_name
+    if ('last_name'  in preview.changes)               updates.last_name                = m.last_name
+    if ('phone'      in preview.changes)               updates.phone                    = m.phone
+    if ('dob'        in preview.changes)               updates.dob                      = m.dob
+    // Recompose name only if first_name OR last_name changed.
+    if ('first_name' in preview.changes || 'last_name' in preview.changes) {
+      updates.name = m.name
+    }
+    const { error } = await db.from('contacts').update(updates).eq('id', preview.existing_id)
+    if (error) return { ...preview, error: error.message }
+    contactId = preview.existing_id
   }
 
-  // UPDATE — only write the fields that changed.
-  const m = preview.mapped
-  const updates = { glofox_synced_at: now }
-  if ('glofox_member_id' in preview.changes)         updates.glofox_member_id         = m.glofox_member_id
-  if ('glofox_membership_status' in preview.changes) updates.glofox_membership_status = m.glofox_membership_status
-  if ('first_name' in preview.changes)               updates.first_name               = m.first_name
-  if ('last_name'  in preview.changes)               updates.last_name                = m.last_name
-  if ('phone'      in preview.changes)               updates.phone                    = m.phone
-  if ('dob'        in preview.changes)               updates.dob                      = m.dob
-  // Recompose name only if first_name OR last_name changed.
-  if ('first_name' in preview.changes || 'last_name' in preview.changes) {
-    updates.name = m.name
+  // GLOFOX2.1.3 — make sure the contact has a pipeline deal.
+  // Idempotent: ensureDealForContact short-circuits if an open
+  // deal already exists, so re-running sync never duplicates.
+  // Best-effort — a deal-creation failure must not roll back the
+  // contact write (we'd rather have the contact synced and tell
+  // the operator to manually drop them into the pipeline).
+  let dealResult = null
+  if (preview.deal_to_create) {
+    try {
+      dealResult = await ensureDealForContact(
+        db, locationId, contactId, preview.mapped.glofox_membership_status,
+      )
+    } catch (e) {
+      dealResult = { created: false, error: e?.message || 'deal insert threw' }
+    }
   }
-  const { error } = await db.from('contacts').update(updates).eq('id', preview.existing_id)
-  if (error) return { ...preview, error: error.message }
-  return { ...preview, contact_id: preview.existing_id }
+
+  return { ...preview, contact_id: contactId, deal: dealResult }
 }
