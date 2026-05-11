@@ -192,6 +192,74 @@ describe('mapMembershipStatus (GLOFOX2.1.5 canonical enum)', () => {
       active: true,
     })).toBe('classpass_payg')
   })
+
+  // GLOFOX2.1.7 — Credit Member detection.
+  //
+  // UN1T "Credit Members" buy class packs directly (membership.type
+  // = 'num_classes') instead of taking out a subscription. Glofox
+  // tags them as lead_status='MEMBER' (correct — they pay) but
+  // operationally they need their own audience for upsell-to-
+  // subscription marketing.
+  it('detects Credit Member (active) → credit_member', () => {
+    expect(mapMembershipStatus({
+      lead_status: 'MEMBER',
+      membership: { type: 'num_classes' },
+      active: true,
+    })).toBe('credit_member')
+  })
+
+  it('collapses inactive Credit Member into ex_member', () => {
+    expect(mapMembershipStatus({
+      lead_status: 'MEMBER',
+      membership: { type: 'num_classes' },
+      active: false,
+    })).toBe('ex_member')
+  })
+
+  it('Credit Member detection takes precedence over plain MEMBER mapping', () => {
+    // Without the synthesis they'd fall through to 'member' (the
+    // subscription canonical) and get lumped in with monthly
+    // recurring customers.
+    const out = mapMembershipStatus({
+      lead_status: 'MEMBER',
+      membership: { type: 'num_classes' },
+      active: true,
+    })
+    expect(out).not.toBe('member')
+    expect(out).toBe('credit_member')
+  })
+
+  it('does NOT trigger Credit Member detection without lead_status=MEMBER', () => {
+    // A trial user on a num_classes pack (e.g., the 3-class trial)
+    // should map by lead_status, not promote to credit_member.
+    expect(mapMembershipStatus({
+      lead_status: 'TRIAL',
+      membership: { type: 'num_classes' },
+      active: true,
+    })).toBe('trial')
+  })
+
+  it('does NOT trigger Credit Member detection for a subscription MEMBER', () => {
+    // A real subscription member must NOT get reclassified.
+    expect(mapMembershipStatus({
+      lead_status: 'MEMBER',
+      membership: { type: 'subscription' },
+      active: true,
+    })).toBe('member')
+    expect(mapMembershipStatus({
+      lead_status: 'MEMBER',
+      membership: { type: 'recurring' },
+      active: true,
+    })).toBe('member')
+  })
+
+  it('Credit Member detection is case-insensitive on type', () => {
+    expect(mapMembershipStatus({
+      lead_status: 'member',
+      membership: { type: 'NUM_CLASSES' },
+      active: true,
+    })).toBe('credit_member')
+  })
 })
 
 describe('parseGlofoxDate', () => {
@@ -409,6 +477,60 @@ describe('mapGlofoxMember (real Glofox payload — ClassPass PAYG)', () => {
 
   it('preserves the +-prefixed phone passthrough', () => {
     expect(mapGlofoxMember(shanicePayload).phone).toBe('+10000000000')
+  })
+})
+
+// GLOFOX2.1.7 — Credit Member (real payload).
+// Gillian Collins from the live UN1T Stillorgan dry-run. Glofox
+// tags her lead_status='MEMBER' because she pays, but her
+// membership.type='num_classes' reveals she bought a class pack
+// rather than a subscription — a "Credit Member" in UN1T parlance.
+describe('mapGlofoxMember (real Glofox payload — Credit Member)', () => {
+  const gillianPayload = {
+    _id: '69f1319ff6d376b55a0b8add',
+    branch_id: '6155764859810329ec3826b3',
+    namespace: 'untstillorgan',
+    membership: {
+      _id: '620bdab4df0f8054814cd7be',
+      type: 'num_classes',
+      plan_price: 0,
+      trial: true,
+      membership_name: '1) The UN1T Trial',
+      description: '3  Classes - 7 Day Expiry',
+      membership_plan_name: 'The UN1T Trial',
+    },
+    first_name: 'Gillian',
+    last_name: 'Collins',
+    phone: '0871359761',
+    email: 'gillianpcollins@gmail.com',
+    birth: null,
+    type: 'member',
+    active: true,
+    lead_status: 'MEMBER',
+    leads: { status: 'MEMBER' },
+    source: 'WEBPORTAL',
+    MEMBERPURCHASE: true,
+    PAYGPAYMENT: true,
+    name: 'Gillian Collins',
+    role: 'member',
+  }
+
+  it('detects Credit Member via lead_status=MEMBER + membership.type=num_classes', () => {
+    expect(mapGlofoxMember(gillianPayload).glofox_membership_status).toBe('credit_member')
+  })
+
+  it('does NOT collapse to plain "member" canonical', () => {
+    // Regression guard — without the credit_member synthesis Gillian
+    // would land in the 'member' stage alongside monthly subscribers.
+    expect(mapGlofoxMember(gillianPayload).glofox_membership_status).not.toBe('member')
+  })
+
+  it('normalises Irish 08X mobile to +353', () => {
+    expect(mapGlofoxMember(gillianPayload).phone).toBe('+353871359761')
+  })
+
+  it('maps WEBPORTAL source to website lead_source', () => {
+    expect(mapGlofoxMember(gillianPayload).lead_source).toBe('website')
   })
 })
 
@@ -646,6 +768,21 @@ describe('targetDealStageForSync (GLOFOX2.1.5 transitions)', () => {
     expect(targetDealStageForSync('classpass_payg', 'ex_member', 'conversion_ready')).toBe('lost_member')
   })
 
+  it('routes credit_member → member when Credit Member takes a subscription', () => {
+    // The operator's primary win for Credit Members — recurring
+    // revenue beats one-off pack purchases. Move from credit_member
+    // straight to member.
+    expect(targetDealStageForSync('credit_member', 'member', 'credit_member')).toBe('member')
+  })
+
+  it('routes credit_member → ex_member to lost_member (credits ran out, no renewal)', () => {
+    expect(targetDealStageForSync('credit_member', 'ex_member', 'credit_member')).toBe('lost_member')
+  })
+
+  it('routes trial → credit_member when trialist buys a class pack', () => {
+    expect(targetDealStageForSync('trial', 'credit_member', 'trial_active')).toBe('credit_member')
+  })
+
   it('respects operator-only stages — returning_member is sticky', () => {
     // Operator placed a deal in returning_member after a comeback
     // chat. Even when Glofox status changes, we don't disturb it.
@@ -679,6 +816,7 @@ describe('pipelineStageSlugForStatus (GLOFOX2.1.5 canonical map)', () => {
     expect(pipelineStageSlugForStatus('trial')).toBe('trial_active')
     expect(pipelineStageSlugForStatus('no_sale_trial')).toBe('follow_up_needed')
     expect(pipelineStageSlugForStatus('member')).toBe('member')
+    expect(pipelineStageSlugForStatus('credit_member')).toBe('credit_member')
     expect(pipelineStageSlugForStatus('classpass_payg')).toBe('conversion_ready')
     expect(pipelineStageSlugForStatus('ex_member')).toBe('lost_member')
     expect(pipelineStageSlugForStatus('lead')).toBe('new_lead')

@@ -198,32 +198,38 @@ export function mapGlofoxSource(source) {
 //
 // Membership status (Active / Overdue / Paused / Cancelled / Past)
 // lives on the membership subscription, not on the client. We don't
-// use it directly for funnel placement — instead we derive two
+// use it directly for funnel placement — instead we derive three
 // synthesised canonicals from deeper payload signals:
 //
 //   ex_member       — lead_status=MEMBER + top-level active=false.
 //                     Glofox uses this pair to mark lapsed members.
+//                     Also the collapse target for any other
+//                     paying-customer canonical going inactive
+//                     (classpass_payg, credit_member).
 //
 //   classpass_payg  — origin='classpass' + membership.type='payg'.
-//                     Glofox doesn't have a dedicated lead_status
-//                     for ClassPass-originated PAYG users, so they
-//                     default to lead_status='LEAD' — which loses
-//                     the "active paying customer" signal. We
-//                     synthesise so they can be routed into the
-//                     conversion-targeting funnel rather than the
-//                     fresh-leads bucket. If they go inactive
-//                     (active=false) we collapse them into the
-//                     same ex_member canonical as a churned
-//                     subscription member.
+//                     Glofox tags ClassPass users as lead_status='LEAD'
+//                     which loses the "active paying customer"
+//                     signal. We synthesise so they can be routed
+//                     into the conversion funnel as warm upsell
+//                     targets distinct from fresh leads.
+//
+//   credit_member   — lead_status='MEMBER' + membership.type='num_classes'.
+//                     Operationally a UN1T "Credit Member" — bought a
+//                     class pack from us directly but never converted
+//                     to a recurring subscription. Glofox tags them
+//                     as MEMBER (because they ARE paying), but they
+//                     need their own marketing audience separate from
+//                     subscription members (different price-points,
+//                     different upgrade pitch). New pipeline stage
+//                     'credit_member' added in mig 135.
 //
 // Canonical CRM statuses (what we store in glofox_membership_status):
 //   cold, tour, no_sale_tour, trial, no_sale_trial,
-//   member, classpass_payg, ex_member, lead
+//   member, credit_member, classpass_payg, ex_member, lead
 //
-// Pipeline placement (pipeline_stages slugs seeded in mig 001:
-// new_lead, new_lead_social, trial_active, conversion_ready,
-// follow_up_needed, member, cold_email_only, lost_member,
-// returning_member):
+// Pipeline placement (pipeline_stages slugs — mig 001 seeded the
+// first 9, mig 135 added credit_member):
 
 const GLOFOX_STATUS_TO_STAGE_SLUG = {
   cold:           'cold_email_only',
@@ -232,7 +238,8 @@ const GLOFOX_STATUS_TO_STAGE_SLUG = {
   trial:          'trial_active',
   no_sale_trial:  'follow_up_needed',
   member:         'member',
-  classpass_payg: 'conversion_ready', // warm upsell — push to subscription
+  credit_member:  'credit_member',     // own column — distinct marketing audience
+  classpass_payg: 'conversion_ready',  // warm upsell — push to subscription
   ex_member:      'lost_member',
   lead:           'new_lead',
 }
@@ -499,37 +506,41 @@ export function mapGlofoxMember(member) {
 //   MEMBER            — paying member
 //   LEAD              — generic, used as a catch-all
 //
-// We mirror these as lowercased canonicals + add two synthesised
+// We mirror these as lowercased canonicals + add three synthesised
 // values:
 //
-//   ex_member        — lead_status=MEMBER + active:false. This is
-//                      how Glofox marks a lapsed subscription
-//                      member. Routes to lost_member.
+//   ex_member        — lead_status=MEMBER + active:false. Also the
+//                      collapse target for any paying-customer
+//                      canonical going inactive. Routes to lost_member.
 //
 //   classpass_payg   — origin='classpass' + membership.type='payg'.
 //                      ClassPass-originated PAYG users default to
 //                      Glofox's catch-all LEAD lead_status, which
 //                      loses the "actively paying customer" signal.
-//                      We detect from the deeper payload and route
-//                      them to conversion_ready as warm upsell
-//                      targets. If they go inactive (active:false)
-//                      we collapse to ex_member.
+//                      Routes to conversion_ready as a warm upsell.
+//
+//   credit_member    — lead_status='MEMBER' + membership.type='num_classes'.
+//                      A UN1T "Credit Member" — bought a class pack
+//                      directly (not a subscription, not via ClassPass).
+//                      Routes to its own pipeline stage 'credit_member'
+//                      so the operator can target them with distinct
+//                      marketing (subscription-upgrade pitch).
 //
 // Canonical set written to contacts.glofox_membership_status:
 //   cold, tour, no_sale_tour, trial, no_sale_trial,
-//   member, classpass_payg, ex_member, lead
+//   member, credit_member, classpass_payg, ex_member, lead
 
 const CANONICAL_GLOFOX_STATUSES = new Set([
   'cold', 'tour', 'no_sale_tour', 'trial', 'no_sale_trial',
-  'member', 'classpass_payg', 'ex_member', 'lead',
+  'member', 'credit_member', 'classpass_payg', 'ex_member', 'lead',
 ])
 
 /**
  * Detect a ClassPass pay-as-you-go user from the deeper payload
- * signals (Glofox doesn't expose this on lead_status). All three
- * checks must pass — we don't want to false-positive on a legacy
- * member who happens to have a payg add-on, or a ClassPass user
- * who later took a real subscription.
+ * signals (Glofox doesn't expose this on lead_status). All checks
+ * must pass — we don't want to false-positive on a legacy member
+ * who happens to have a payg add-on, or a ClassPass user who later
+ * took a real subscription.
  */
 function isClassPassPayg(member) {
   if (!member || typeof member !== 'object') return false
@@ -538,6 +549,31 @@ function isClassPassPayg(member) {
     ? member.membership.type.trim().toLowerCase()
     : null
   return origin === 'classpass' && mType === 'payg'
+}
+
+/**
+ * Detect a "Credit Member" — paying customer who bought a class
+ * pack directly from UN1T (not a subscription, not via a 3rd-party
+ * platform like ClassPass). Glofox surfaces these with
+ * lead_status='MEMBER' (because they ARE paying) but
+ * membership.type='num_classes' (a credit pack, not a recurring
+ * subscription).
+ *
+ * This canonical exists primarily so the operator can build
+ * sequences targeting credit-pack customers specifically — the
+ * pitch is "you've used most of your credits, here's why
+ * subscribing saves money", which is a different message from
+ * what subscription members or fresh leads should receive.
+ */
+function isCreditMember(member) {
+  if (!member || typeof member !== 'object') return false
+  const leadStatus = typeof member.lead_status === 'string'
+    ? member.lead_status.trim().toUpperCase()
+    : null
+  const mType = typeof member.membership?.type === 'string'
+    ? member.membership.type.trim().toLowerCase()
+    : null
+  return leadStatus === 'MEMBER' && mType === 'num_classes'
 }
 
 /**
@@ -565,37 +601,50 @@ function normalizeGlofoxStatus(raw) {
 
 /**
  * Map a Glofox member payload to one of the canonical statuses.
- * Order of resolution:
- *   1. ClassPass PAYG detection (origin + membership.type) takes
- *      precedence over lead_status — Glofox's lead_status for
- *      these users is the catch-all 'LEAD' and that loses the
- *      active-paying-customer signal we care about.
+ * Order of resolution (synthesis steps come first because Glofox's
+ * lead_status loses signal for these audiences):
+ *
+ *   1. ClassPass PAYG detection (origin + membership.type=payg).
+ *      Glofox tags these as lead_status='LEAD' which conflates them
+ *      with fresh leads.
  *      - active=true  → 'classpass_payg' (warm upsell)
  *      - active=false → 'ex_member'      (collapsed with churn)
- *   2. lead_status / leads.status / membership.status (the various
+ *
+ *   2. Credit Member detection (lead_status='MEMBER' + membership.
+ *      type='num_classes'). Glofox tags as MEMBER (correct — they
+ *      pay) but lumps them with subscription members. We split so
+ *      they get distinct marketing.
+ *      - active=true  → 'credit_member' (own pipeline stage)
+ *      - active=false → 'ex_member'      (collapsed with churn)
+ *
+ *   3. lead_status / leads.status / membership.status (the various
  *      shapes Glofox uses across endpoints) → normalise.
- *   3. If the normalised result is 'member' AND the top-level
+ *
+ *   4. If the normalised result is 'member' AND the top-level
  *      `active` boolean is false → synthesise 'ex_member'. This is
- *      how Glofox marks a member whose subscription has lapsed.
- *   4. If nothing recognisable was found, default to 'lead' (the
- *      generic catch-all) so the contact still slots into the
- *      pipeline at new_lead.
+ *      how Glofox marks a lapsed subscription member.
+ *
+ *   5. Default 'lead' so unrecognised payloads still land in the
+ *      pipeline at new_lead rather than vanishing.
  */
 export function mapMembershipStatus(member) {
   if (!member || typeof member !== 'object') return 'lead'
-  // Step 1 — ClassPass PAYG takes precedence (Glofox tags these as
-  // LEAD which loses the signal).
+  // Step 1 — ClassPass PAYG (Glofox loses signal as 'LEAD').
   if (isClassPassPayg(member)) {
     return member.active === false ? 'ex_member' : 'classpass_payg'
   }
-  // Step 2/3 — standard path.
+  // Step 2 — Credit Member (Glofox lumps with subscription MEMBER).
+  if (isCreditMember(member)) {
+    return member.active === false ? 'ex_member' : 'credit_member'
+  }
+  // Step 3/4 — standard path.
   const raw = pluck(member, MEMBERSHIP_STATUS_PATHS)
   const normalized = normalizeGlofoxStatus(raw)
   if (normalized === 'member' && member.active === false) {
     return 'ex_member'
   }
   if (normalized) return normalized
-  // Step 4 — fallback.
+  // Step 5 — fallback.
   return 'lead'
 }
 
