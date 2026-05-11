@@ -963,6 +963,35 @@ export async function syncGlofoxInteractions(db, locationId, contactId, interact
 // same aggregates.
 
 /**
+ * Trim the most-recent N bookings to the shape we want to store
+ * on contacts.recent_bookings JSONB. Caller passes the same list
+ * used for the aggregate computation; we drop fields the UI
+ * doesn't need (paid, image_url, etc.) to keep the JSONB small.
+ *
+ * Sorted by time_start descending (most recent class first), so
+ * the contact-page UI can render directly.
+ */
+export function trimRecentBookings(bookings, limit = 10) {
+  if (!Array.isArray(bookings) || bookings.length === 0) return []
+  const sliced = bookings
+    .filter(b => b && typeof b === 'object')
+    .slice() // don't mutate caller
+    .sort((a, b) => (Number(b.time_start) || 0) - (Number(a.time_start) || 0))
+    .slice(0, limit)
+  return sliced.map(b => ({
+    glofox_id:   b._id || null,
+    event_name:  b.event_name || null,
+    model_name:  b.model_name || null,
+    model:       b.model || null,
+    time_start:  Number(b.time_start) || null,
+    created:     Number(b.created) || null,
+    status:      typeof b.status === 'string' ? b.status.toUpperCase() : null,
+    attended:    b.attended === true,
+    duration:    Number(b.duration) || null,
+  }))
+}
+
+/**
  * Compute booking aggregates from a list of Glofox Booking objects.
  * Returns the shape stored on contacts (timestamps as ISO strings,
  * counts as integers).
@@ -1072,13 +1101,15 @@ export async function previewMemberSync(db, locationId, member, opts = {}) {
   // the bulk cron that pulls per-branch bookings in one shot instead
   // of one call per member).
   let bookingAggs = null
+  let bookingsList = null
   if (opts.bookings !== undefined) {
+    bookingsList = opts.bookings
     bookingAggs = computeBookingAggregates(opts.bookings)
   } else if (opts.creds && !opts.skipBookings) {
     const memberId = member._id || member.id
     if (memberId) {
-      const bookings = await fetchUserBookings(opts.creds, memberId)
-      bookingAggs = computeBookingAggregates(bookings)
+      bookingsList = await fetchUserBookings(opts.creds, memberId)
+      bookingAggs = computeBookingAggregates(bookingsList)
     }
   }
   if (bookingAggs) {
@@ -1087,6 +1118,8 @@ export async function previewMemberSync(db, locationId, member, opts = {}) {
     mapped.total_bookings_30d  = bookingAggs.total_bookings_30d
     mapped.total_attended_30d  = bookingAggs.total_attended_30d
     mapped.total_noshow_30d    = bookingAggs.total_noshow_30d
+    // GLOFOX2.1.18 — last 10 bookings for the contact-page history view.
+    mapped.recent_bookings = trimRecentBookings(bookingsList, 10)
   }
 
   // GLOFOX2.1.15 — interactions. Fetched alongside credits/bookings
@@ -1208,6 +1241,9 @@ export async function previewMemberSync(db, locationId, member, opts = {}) {
     changes.total_bookings_30d    = { from: existing.total_bookings_30d ?? 0,       to: bookingAggs.total_bookings_30d }
     changes.total_attended_30d    = { from: existing.total_attended_30d ?? 0,       to: bookingAggs.total_attended_30d }
     changes.total_noshow_30d      = { from: existing.total_noshow_30d ?? 0,         to: bookingAggs.total_noshow_30d }
+    // GLOFOX2.1.18 — recent_bookings JSONB diff is too verbose for
+    // the operator preview; surface a lightweight indicator instead.
+    changes.recent_bookings       = { from: '<previous list>', to: `${mapped.recent_bookings?.length || 0} booking(s)` }
   }
 
   // Always stamp synced_at — but represent in the diff so the
@@ -1314,6 +1350,8 @@ export async function applyMemberSync(db, locationId, member, opts = {}) {
       total_bookings_30d:   m.total_bookings_30d   ?? 0,
       total_attended_30d:   m.total_attended_30d   ?? 0,
       total_noshow_30d:     m.total_noshow_30d     ?? 0,
+      // GLOFOX2.1.18 — last 10 bookings as JSONB.
+      recent_bookings:      m.recent_bookings      ?? null,
     }).select('id').single()
     if (error) return { ...preview, error: error.message }
     contactId = data.id
@@ -1335,6 +1373,7 @@ export async function applyMemberSync(db, locationId, member, opts = {}) {
     if ('total_bookings_30d' in preview.changes)       updates.total_bookings_30d = m.total_bookings_30d
     if ('total_attended_30d' in preview.changes)       updates.total_attended_30d = m.total_attended_30d
     if ('total_noshow_30d'   in preview.changes)       updates.total_noshow_30d   = m.total_noshow_30d
+    if ('recent_bookings'    in preview.changes)       updates.recent_bookings    = m.recent_bookings
     // Recompose name only if first_name OR last_name changed.
     if ('first_name' in preview.changes || 'last_name' in preview.changes) {
       updates.name = m.name
