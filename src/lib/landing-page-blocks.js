@@ -161,3 +161,22 @@ const BlockBaseSchema = z.object({
 }).passthrough() // allow any per-type fields, validated at render
 
 export const BlocksArraySchema = z.array(BlockBaseSchema).max(40)
+
+// ─────────────────────────────────────────────────────────────
+// Path-based immutable update — used by the LP3c.2 inline editor
+// to apply edits like ['items', 2, 'title'] to a block.
+//
+// Path = array of string keys (object) or number indices (array).
+// Empty path = replace the whole obj with value. Returns a new
+// tree, never mutates the input.
+// ─────────────────────────────────────────────────────────────
+export function setByPath(obj, path, value) {
+  if (!Array.isArray(path) || path.length === 0) return value
+  const [head, ...rest] = path
+  if (typeof head === 'number') {
+    const arr = Array.isArray(obj) ? obj.slice() : []
+    arr[head] = setByPath(arr[head], rest, value)
+    return arr
+  }
+  return { ...(obj || {}), [head]: setByPath(obj?.[head], rest, value) }
+}

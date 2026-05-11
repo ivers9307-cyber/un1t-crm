@@ -94,6 +94,20 @@ export default function EditModeOverlay({
     )
   }
 
+  // Inline-edit callback wired through BlockRenderer → each block's
+  // text renderers (see <E> helper in BlockRenderers.jsx). The path
+  // is local to the block (e.g. ['headline'] or ['items', 2, 'title']);
+  // we tack on the blockId here and post to the parent. The parent's
+  // setByPath walker applies it to the blocks array.
+  function emitFieldEdit(blockId, path, value) {
+    if (typeof window === 'undefined') return
+    if (window.parent === window) return
+    window.parent.postMessage(
+      { namespace: MESSAGE_NAMESPACE, type: 'edit-field', blockId, path, value },
+      window.location.origin,
+    )
+  }
+
   return (
     <div className="min-h-screen bg-black text-white antialiased">
       <SiteHeader logoUrl={logoUrl} logoAlt={logoAlt} logoWidthPx={logoWidthPx} />
@@ -105,10 +119,11 @@ export default function EditModeOverlay({
             ref={(el) => { if (el) blockRefs.current[block.id] = el }}
             onClick={(e) => {
               // Don't intercept clicks inside interactive elements
-              // (booking widget, embed iframes, links). The block
-              // can still be selected by clicking its margin.
+              // (booking widget, embed iframes, links, contentEditable
+              // text). The block can still be selected by clicking
+              // its margin / non-editable surface.
               const t = e.target
-              if (t.closest('button, a, input, select, textarea, iframe')) return
+              if (t.closest('button, a, input, select, textarea, iframe, [contenteditable="true"]')) return
               e.stopPropagation()
               selectBlock(block.id)
             }}
@@ -118,7 +133,7 @@ export default function EditModeOverlay({
                 : 'hover:outline hover:outline-2 hover:outline-blue-300/60 hover:outline-offset-[-2px]'
             }`}
           >
-            <BlockRenderer block={block} />
+            <BlockRenderer block={block} onEdit={emitFieldEdit} />
             {/* Type badge — top-left, only shows on hover or when
                 selected. Click-through to select via the wrapper. */}
             <div

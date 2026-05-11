@@ -12,16 +12,39 @@
 import Link from 'next/link'
 import BookingWidget from '@/components/BookingWidget'
 import { parseEmbed } from '@/lib/landing-page-embed'
+import EditableText from './EditableText'
 
-export default function BlockRenderer({ block }) {
+// Pass-through wrapper used by every block renderer. When `onEdit`
+// is provided (i.e. we're rendering inside the iframe edit
+// overlay), the text becomes contentEditable and edits propagate
+// via onEdit(path, newValue). When `onEdit` is absent (public page
+// render), it's a plain text fragment — zero overhead.
+function E({ value, onEdit, path, multiline }) {
+  if (!onEdit) return <>{value}</>
+  return (
+    <EditableText
+      value={value || ''}
+      onChange={(v) => onEdit(path, v)}
+      multiline={multiline}
+    />
+  )
+}
+
+export default function BlockRenderer({ block, onEdit }) {
+  // onEdit is bound to this block: caller hands us a generic
+  // (blockId, path, value) function and we curry the blockId so
+  // each child renderer thinks in local field paths.
+  const localOnEdit = onEdit
+    ? (path, value) => onEdit(block.id, path, value)
+    : null
   switch (block.type) {
-    case 'hero':        return <HeroBlock        block={block} />
+    case 'hero':        return <HeroBlock        block={block} onEdit={localOnEdit} />
     case 'booking':     return <BookingBlock     block={block} />
-    case 'pillars':     return <PillarsBlock     block={block} />
-    case 'gallery':     return <GalleryBlock     block={block} />
-    case 'embed':       return <EmbedBlock       block={block} />
-    case 'stats':       return <StatsBlock       block={block} />
-    case 'testimonial': return <TestimonialBlock block={block} />
+    case 'pillars':     return <PillarsBlock     block={block} onEdit={localOnEdit} />
+    case 'gallery':     return <GalleryBlock     block={block} onEdit={localOnEdit} />
+    case 'embed':       return <EmbedBlock       block={block} onEdit={localOnEdit} />
+    case 'stats':       return <StatsBlock       block={block} onEdit={localOnEdit} />
+    case 'testimonial': return <TestimonialBlock block={block} onEdit={localOnEdit} />
     default:            return null
   }
 }
@@ -29,7 +52,7 @@ export default function BlockRenderer({ block }) {
 // Hero — backdrop precedence: video > image > radial gradient.
 // Video uses the image as poster so the hero never flashes black
 // while the video downloads.
-export function HeroBlock({ block }) {
+export function HeroBlock({ block, onEdit }) {
   return (
     <section className="relative pt-24 pb-8 md:pt-32 md:pb-10 overflow-hidden">
       {block.video_url ? (
@@ -81,25 +104,27 @@ export function HeroBlock({ block }) {
         />
       )}
       <div className="relative max-w-5xl mx-auto px-6 text-center">
-        {block.eyebrow && (
+        {(block.eyebrow || onEdit) && (
           <p className="text-xs md:text-sm uppercase tracking-[0.3em] text-white/60 mb-5">
-            {block.eyebrow}
+            <E value={block.eyebrow} onEdit={onEdit} path={['eyebrow']} />
           </p>
         )}
-        {(block.headline || block.subhead) && (
+        {(block.headline || block.subhead || onEdit) && (
           <h1 className="text-4xl md:text-6xl font-black leading-[1.05] tracking-tight mb-4">
-            {block.headline}
-            {block.subhead && (
+            <E value={block.headline} onEdit={onEdit} path={['headline']} />
+            {(block.subhead || onEdit) && (
               <>
                 <br />
-                <span className="text-white/70">{block.subhead}</span>
+                <span className="text-white/70">
+                  <E value={block.subhead} onEdit={onEdit} path={['subhead']} />
+                </span>
               </>
             )}
           </h1>
         )}
-        {block.subtext && (
+        {(block.subtext || onEdit) && (
           <p className="text-base md:text-lg text-white/70 max-w-2xl mx-auto leading-relaxed">
-            {block.subtext}
+            <E value={block.subtext} onEdit={onEdit} path={['subtext']} multiline />
           </p>
         )}
       </div>
@@ -126,9 +151,9 @@ export function BookingBlock({ block }) {
   )
 }
 
-export function PillarsBlock({ block }) {
+export function PillarsBlock({ block, onEdit }) {
   const items = Array.isArray(block.items) ? block.items.slice(0, 3) : []
-  if (items.length === 0) return null
+  if (items.length === 0 && !onEdit) return null
   return (
     <section className="bg-white text-black py-20 md:py-28">
       <div className="max-w-6xl mx-auto px-6">
@@ -140,6 +165,8 @@ export function PillarsBlock({ block }) {
               title={p.title || ''}
               body={p.body || ''}
               photoUrl={p.photo_url || null}
+              onEdit={onEdit}
+              itemIndex={i}
             />
           ))}
         </div>
@@ -148,14 +175,16 @@ export function PillarsBlock({ block }) {
   )
 }
 
-export function GalleryBlock({ block }) {
+export function GalleryBlock({ block, onEdit }) {
   const items = Array.isArray(block.items) ? block.items : []
-  if (items.length === 0) return null
+  if (items.length === 0 && !onEdit) return null
   return (
     <section className="bg-black py-20 md:py-28 border-t border-white/10">
       <div className="max-w-6xl mx-auto px-6">
-        {block.title && (
-          <p className="text-xs uppercase tracking-[0.3em] text-white/50 mb-4">{block.title}</p>
+        {(block.title || onEdit) && (
+          <p className="text-xs uppercase tracking-[0.3em] text-white/50 mb-4">
+            <E value={block.title} onEdit={onEdit} path={['title']} />
+          </p>
         )}
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 md:gap-4">
           {items.map((g, i) => (
@@ -180,14 +209,20 @@ export function GalleryBlock({ block }) {
   )
 }
 
-export function EmbedBlock({ block }) {
+export function EmbedBlock({ block, onEdit }) {
   const embed = parseEmbed(block.url)
-  if (!embed) return null
+  // In edit mode, keep the block visible even when the URL hasn't
+  // been pasted yet (or is invalid) so the operator can still edit
+  // the title / caption from the iframe and isn't fighting an
+  // invisible section.
+  if (!embed && !onEdit) return null
   return (
     <section className="bg-black py-20 md:py-28 border-t border-white/10">
       <div className="max-w-4xl mx-auto px-6">
-        {block.title && (
-          <p className="text-xs uppercase tracking-[0.3em] text-white/50 mb-4">{block.title}</p>
+        {(block.title || onEdit) && (
+          <p className="text-xs uppercase tracking-[0.3em] text-white/50 mb-4">
+            <E value={block.title} onEdit={onEdit} path={['title']} />
+          </p>
         )}
         {/* 16:9 wrapper for YouTube; Instagram uses a taller portrait
             aspect for reels — we let IG decide its own height inside
@@ -209,23 +244,39 @@ export function EmbedBlock({ block }) {
             allowFullScreen
           />
         </div>
-        {block.caption && (
-          <p className="text-center text-sm text-white/60 mt-4">{block.caption}</p>
+        {(block.caption || onEdit) && (
+          <p className="text-center text-sm text-white/60 mt-4">
+            <E value={block.caption} onEdit={onEdit} path={['caption']} />
+          </p>
+        )}
+        {!embed && onEdit && (
+          // Placeholder shown only in edit mode when no valid URL
+          // is set — keeps the section interactive while the
+          // operator pastes a YouTube / Instagram link in the form.
+          <div className="aspect-video w-full bg-white/5 border border-dashed border-white/20 rounded flex items-center justify-center text-sm text-white/40 mt-2">
+            Paste a YouTube or Instagram URL on the left to embed
+          </div>
         )}
       </div>
     </section>
   )
 }
 
-export function StatsBlock({ block }) {
+export function StatsBlock({ block, onEdit }) {
   const items = Array.isArray(block.items) ? block.items.slice(0, 3) : []
-  if (items.length === 0) return null
+  if (items.length === 0 && !onEdit) return null
   return (
     <section className="bg-black text-white py-20 md:py-28 border-t border-white/10">
       <div className="max-w-6xl mx-auto px-6">
         <div className="grid md:grid-cols-3 gap-12 text-center">
           {items.map((s, i) => (
-            <Stat key={i} number={s.number || ''} label={s.label || ''} />
+            <Stat
+              key={i}
+              number={s.number || ''}
+              label={s.label || ''}
+              onEdit={onEdit}
+              itemIndex={i}
+            />
           ))}
         </div>
         <div className="text-center mt-14">
@@ -242,20 +293,24 @@ export function StatsBlock({ block }) {
   )
 }
 
-export function TestimonialBlock({ block }) {
-  if (!block.quote && !block.author) return null
+export function TestimonialBlock({ block, onEdit }) {
+  if (!block.quote && !block.author && !onEdit) return null
   return (
     <section className="bg-black text-white py-20 md:py-28 border-t border-white/10">
       <div className="max-w-6xl mx-auto px-6">
         <blockquote className="max-w-3xl mx-auto text-center">
-          {block.quote && (
+          {(block.quote || onEdit) && (
             <p className="text-2xl md:text-3xl font-medium leading-snug text-white/90">
-              &ldquo;{block.quote}&rdquo;
+              {onEdit
+                ? <E value={block.quote} onEdit={onEdit} path={['quote']} multiline />
+                : <>&ldquo;{block.quote}&rdquo;</>
+              }
             </p>
           )}
-          {block.author && (
+          {(block.author || onEdit) && (
             <footer className="mt-6 text-sm uppercase tracking-widest text-white/60">
-              &mdash; {block.author}
+              {onEdit ? null : <>&mdash; </>}
+              <E value={block.author} onEdit={onEdit} path={['author']} />
             </footer>
           )}
         </blockquote>
@@ -264,7 +319,7 @@ export function TestimonialBlock({ block }) {
   )
 }
 
-function Pillar({ number, title, body, photoUrl }) {
+function Pillar({ number, title, body, photoUrl, onEdit, itemIndex }) {
   return (
     <div className="bg-white p-8 md:p-10">
       {photoUrl && (
@@ -278,18 +333,28 @@ function Pillar({ number, title, body, photoUrl }) {
           />
         </div>
       )}
-      <div className="text-xs font-mono text-black/40 mb-6">{number}</div>
-      <h3 className="text-xl md:text-2xl font-black mb-3 leading-tight">{title}</h3>
-      <p className="text-black/70 leading-relaxed">{body}</p>
+      <div className="text-xs font-mono text-black/40 mb-6">
+        <E value={number} onEdit={onEdit} path={['items', itemIndex, 'number']} />
+      </div>
+      <h3 className="text-xl md:text-2xl font-black mb-3 leading-tight">
+        <E value={title} onEdit={onEdit} path={['items', itemIndex, 'title']} />
+      </h3>
+      <p className="text-black/70 leading-relaxed">
+        <E value={body} onEdit={onEdit} path={['items', itemIndex, 'body']} multiline />
+      </p>
     </div>
   )
 }
 
-function Stat({ number, label }) {
+function Stat({ number, label, onEdit, itemIndex }) {
   return (
     <div>
-      <div className="text-5xl md:text-6xl font-black tracking-tight mb-2">{number}</div>
-      <div className="text-sm uppercase tracking-widest text-white/60">{label}</div>
+      <div className="text-5xl md:text-6xl font-black tracking-tight mb-2">
+        <E value={number} onEdit={onEdit} path={['items', itemIndex, 'number']} />
+      </div>
+      <div className="text-sm uppercase tracking-widest text-white/60">
+        <E value={label} onEdit={onEdit} path={['items', itemIndex, 'label']} />
+      </div>
     </div>
   )
 }

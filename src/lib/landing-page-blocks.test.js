@@ -6,6 +6,7 @@ import {
   blocksOrDefault,
   BLOCK_TYPES,
   BlocksArraySchema,
+  setByPath,
 } from './landing-page-blocks.js'
 
 describe('newBlockId', () => {
@@ -108,5 +109,59 @@ describe('BlocksArraySchema', () => {
     const tooMany = Array.from({ length: 41 }, () => ({ id: 'x', type: 'hero' }))
     const r = BlocksArraySchema.safeParse(tooMany)
     expect(r.success).toBe(false)
+  })
+})
+
+describe('setByPath', () => {
+  it('replaces the whole tree on empty path', () => {
+    expect(setByPath({ a: 1 }, [], 'X')).toBe('X')
+  })
+  it('sets a top-level object key', () => {
+    expect(setByPath({ a: 1, b: 2 }, ['a'], 9)).toEqual({ a: 9, b: 2 })
+  })
+  it('does not mutate the input', () => {
+    const original = { a: 1, b: 2 }
+    setByPath(original, ['a'], 9)
+    expect(original).toEqual({ a: 1, b: 2 })
+  })
+  it('creates a missing intermediate object', () => {
+    expect(setByPath({ a: 1 }, ['nested', 'key'], 'v')).toEqual({
+      a: 1,
+      nested: { key: 'v' },
+    })
+  })
+  it('sets an array element by index', () => {
+    expect(setByPath([10, 20, 30], [1], 99)).toEqual([10, 99, 30])
+  })
+  it('sets a nested array element', () => {
+    expect(setByPath({ items: [{ t: 'a' }, { t: 'b' }] }, ['items', 1, 't'], 'X'))
+      .toEqual({ items: [{ t: 'a' }, { t: 'X' }] })
+  })
+  it('preserves sibling array elements (shallow copy of the array)', () => {
+    const arr = [{ t: 'a' }, { t: 'b' }, { t: 'c' }]
+    const out = setByPath(arr, [1, 't'], 'X')
+    expect(out).toEqual([{ t: 'a' }, { t: 'X' }, { t: 'c' }])
+    // The unchanged elements should be the SAME references (we
+    // didn't deep-clone the array's items).
+    expect(out[0]).toBe(arr[0])
+    expect(out[2]).toBe(arr[2])
+  })
+  it('creates a missing array when the path expects one', () => {
+    expect(setByPath({ a: 1 }, [0], 'X')).toEqual(['X'])
+  })
+  it('handles a deep block-style path (pillars.items[2].title)', () => {
+    const block = {
+      id: 'h1',
+      type: 'pillars',
+      items: [
+        { number: '01', title: 'A', body: 'aa' },
+        { number: '02', title: 'B', body: 'bb' },
+        { number: '03', title: 'C', body: 'cc' },
+      ],
+    }
+    const out = setByPath(block, ['items', 2, 'title'], 'New C')
+    expect(out.items[2].title).toBe('New C')
+    expect(out.items[0]).toBe(block.items[0])
+    expect(out.id).toBe('h1')
   })
 })

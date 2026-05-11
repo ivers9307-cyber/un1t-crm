@@ -39,7 +39,7 @@ import {
   ChevronRight, Layers,
 } from 'lucide-react'
 import {
-  BLOCK_TYPES, blocksOrDefault, newBlockOfType,
+  BLOCK_TYPES, blocksOrDefault, newBlockOfType, setByPath,
 } from '@/lib/landing-page-blocks'
 
 // PostMessage namespace shared with src/components/landing-page/
@@ -139,6 +139,14 @@ export default function LandingPageSettingsForm({ locationId, initialSettings, a
             el.scrollIntoView({ behavior: 'smooth', block: 'center' })
           }
         }, 50)
+      } else if (msg.type === 'edit-field' && msg.blockId && Array.isArray(msg.path)) {
+        // Inline contentEditable in the iframe → apply the patch
+        // to the corresponding block via setByPath. Each keystroke
+        // arrives here; React's batched updates + EditableText's
+        // focus-aware DOM write keep the cursor stable.
+        setBlocks((prev) => prev.map((b) => (
+          b.id === msg.blockId ? setByPath(b, msg.path, msg.value) : b
+        )))
       }
     }
     window.addEventListener('message', onMessage)
