@@ -125,6 +125,73 @@ describe('mapMembershipStatus (GLOFOX2.1.5 canonical enum)', () => {
     // status we haven't mapped yet.
     expect(mapMembershipStatus({ lead_status: 'BRAND_NEW_GLOFOX_STATUS' })).toBe('lead')
   })
+
+  // GLOFOX2.1.6 — ClassPass PAYG detection.
+  //
+  // ClassPass-originated PAYG users default to lead_status=LEAD in
+  // Glofox (it has no dedicated status for them). We synthesise
+  // 'classpass_payg' from the deeper payload signals so they land
+  // in conversion_ready instead of new_lead.
+  it('detects ClassPass PAYG (active) → classpass_payg', () => {
+    expect(mapMembershipStatus({
+      origin: 'classpass',
+      membership: { type: 'payg' },
+      lead_status: 'LEAD',
+      active: true,
+    })).toBe('classpass_payg')
+  })
+
+  it('collapses inactive ClassPass PAYG into ex_member', () => {
+    // Operationally equivalent to a lapsed subscription member:
+    // they were paying customers, now they're not. Same lost_member
+    // surface for win-back.
+    expect(mapMembershipStatus({
+      origin: 'classpass',
+      membership: { type: 'payg' },
+      lead_status: 'LEAD',
+      active: false,
+    })).toBe('ex_member')
+  })
+
+  it('ClassPass detection takes precedence over lead_status=LEAD', () => {
+    // Without the synthesis they'd fall through to 'lead' → new_lead.
+    const out = mapMembershipStatus({
+      origin: 'classpass',
+      membership: { type: 'payg' },
+      lead_status: 'LEAD',
+      active: true,
+    })
+    expect(out).not.toBe('lead')
+    expect(out).toBe('classpass_payg')
+  })
+
+  it('does NOT trigger ClassPass detection without origin=classpass', () => {
+    expect(mapMembershipStatus({
+      membership: { type: 'payg' },
+      lead_status: 'LEAD',
+      active: true,
+    })).toBe('lead')
+  })
+
+  it('does NOT trigger ClassPass detection without membership.type=payg', () => {
+    // A ClassPass-originated user who took out a real subscription
+    // should map by lead_status, not by origin.
+    expect(mapMembershipStatus({
+      origin: 'classpass',
+      membership: { type: 'subscription' },
+      lead_status: 'MEMBER',
+      active: true,
+    })).toBe('member')
+  })
+
+  it('ClassPass detection is case-insensitive', () => {
+    expect(mapMembershipStatus({
+      origin: 'ClassPass',
+      membership: { type: 'PAYG' },
+      lead_status: 'LEAD',
+      active: true,
+    })).toBe('classpass_payg')
+  })
 })
 
 describe('parseGlofoxDate', () => {
@@ -293,6 +360,55 @@ describe('mapGlofoxMember (real Glofox payload)', () => {
   it('captures dob when Glofox supplies a Mongo BSON timestamp', () => {
     const withBirth = { ...realPayload, birth: { sec: 642470400, usec: 0 } }
     expect(mapGlofoxMember(withBirth).dob).toBe('1990-05-12')
+  })
+})
+
+// GLOFOX2.1.6 — ClassPass-originated PAYG user (real payload).
+// Shanice Callinan from the live UN1T Stillorgan dry-run. Glofox
+// classifies her as lead_status='LEAD' (their catch-all) but the
+// deeper signals (origin='classpass' + membership.type='payg' +
+// active=true + PAYGPAYMENT=true) reveal she's an actively-paying
+// customer worth routing into the conversion funnel rather than
+// the fresh-leads bucket.
+describe('mapGlofoxMember (real Glofox payload — ClassPass PAYG)', () => {
+  const shanicePayload = {
+    _id: '6a0219cee62c0c6c980bc95f',
+    branch_id: '6155764859810329ec3826b3',
+    namespace: 'untstillorgan',
+    first_name: 'Shanice',
+    last_name: 'Callinan',
+    phone: '+10000000000',
+    email: 'scallinan1263807351@members.classpass.com',
+    active: true,
+    type: 'member',
+    membership: {
+      type: 'payg',
+      user_membership_id: '6a0219cfb4764c1cf687d640',
+      status: 'ACTIVE',
+      membership_name: '',
+    },
+    origin: 'classpass',
+    leads: { status: 'LEAD' },
+    lead_status: 'LEAD',
+    source: 'UNKNOWN',
+    MEMBERPURCHASE: false,
+    PAYGPAYMENT: true,
+    name: 'Shanice Callinan',
+    role: 'member',
+  }
+
+  it('detects ClassPass PAYG via origin + membership.type signals', () => {
+    expect(mapGlofoxMember(shanicePayload).glofox_membership_status).toBe('classpass_payg')
+  })
+
+  it('does NOT default to "lead" despite lead_status=LEAD', () => {
+    // Regression guard — without the ClassPass synthesis Shanice
+    // would land in new_lead alongside form-fillers.
+    expect(mapGlofoxMember(shanicePayload).glofox_membership_status).not.toBe('lead')
+  })
+
+  it('preserves the +-prefixed phone passthrough', () => {
+    expect(mapGlofoxMember(shanicePayload).phone).toBe('+10000000000')
   })
 })
 
@@ -520,6 +636,16 @@ describe('targetDealStageForSync (GLOFOX2.1.5 transitions)', () => {
     expect(targetDealStageForSync('no_sale_trial', 'trial', 'follow_up_needed')).toBe('trial_active')
   })
 
+  it('routes classpass_payg → member when ClassPass user takes a subscription', () => {
+    // Hot conversion — the operator's primary win condition for
+    // ClassPass users. From conversion_ready straight to member.
+    expect(targetDealStageForSync('classpass_payg', 'member', 'conversion_ready')).toBe('member')
+  })
+
+  it('routes classpass_payg → ex_member to lost_member (ClassPass user lapsed)', () => {
+    expect(targetDealStageForSync('classpass_payg', 'ex_member', 'conversion_ready')).toBe('lost_member')
+  })
+
   it('respects operator-only stages — returning_member is sticky', () => {
     // Operator placed a deal in returning_member after a comeback
     // chat. Even when Glofox status changes, we don't disturb it.
@@ -553,6 +679,7 @@ describe('pipelineStageSlugForStatus (GLOFOX2.1.5 canonical map)', () => {
     expect(pipelineStageSlugForStatus('trial')).toBe('trial_active')
     expect(pipelineStageSlugForStatus('no_sale_trial')).toBe('follow_up_needed')
     expect(pipelineStageSlugForStatus('member')).toBe('member')
+    expect(pipelineStageSlugForStatus('classpass_payg')).toBe('conversion_ready')
     expect(pipelineStageSlugForStatus('ex_member')).toBe('lost_member')
     expect(pipelineStageSlugForStatus('lead')).toBe('new_lead')
   })
