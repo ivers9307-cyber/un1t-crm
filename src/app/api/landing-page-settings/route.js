@@ -23,6 +23,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
+import { BlocksArraySchema } from '@/lib/landing-page-blocks'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -73,6 +74,11 @@ const PutSchema = z.object({
   embed_caption:      z.string().trim().max(400).nullable().optional(),
   testimonial_quote:  z.string().trim().max(2000).nullable().optional(),
   testimonial_author: z.string().trim().max(200).nullable().optional(),
+  // Mig 128 — blocks array. When set, the welcome page renders from
+  // this instead of the flat columns above. The flat columns stay
+  // valid for backward-compat / rollback but the operator form
+  // (Phase 3b onwards) writes blocks ONLY.
+  blocks:             BlocksArraySchema.nullable().optional(),
 }).strict()
 
 function isMasterOrLocationOwner(user, locationId) {
@@ -140,6 +146,7 @@ export async function PUT(request) {
   if (body.pillars !== undefined) payload.pillars = body.pillars
   if (body.stats   !== undefined) payload.stats   = body.stats
   if (body.gallery !== undefined) payload.gallery = body.gallery
+  if (body.blocks  !== undefined) payload.blocks  = body.blocks
 
   const db = createServerClient()
   const { data, error } = await db
