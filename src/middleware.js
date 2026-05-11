@@ -25,6 +25,34 @@ const PAY_HOST = process.env.PAY_HOSTNAME || 'pay.ccfautos.com'
 // adding a new public path here is a deliberate decision.
 const PAY_HOST_ALLOWED = ['/deposit/', '/api/public/deposit/']
 
+// Hostnames of the public-facing marketing site (the apex + www).
+// On these hosts, "/" rewrites to "/welcome" (the operator-editable
+// landing page from mig 126+), and only customer-facing paths are
+// reachable — CRM URLs like /dashboard, /pipeline, /contacts get
+// rewritten to /welcome too so the CRM never bleeds through under
+// the public brand. Operators continue to use crm.un1tdublin.com,
+// where "/" still routes to /dashboard via src/app/page.js.
+//
+// Comma-separated env override for staging / preview hostnames;
+// defaults to the production apex + www.
+const MARKETING_HOSTS = new Set(
+  (process.env.MARKETING_HOSTNAMES || 'un1tdublin.com,www.un1tdublin.com')
+    .split(',').map(s => s.trim()).filter(Boolean)
+)
+
+// Paths the marketing host serves directly (everything else gets
+// rewritten to /welcome). Same "explicit allowlist" pattern as the
+// pay-host block below — adding a new customer-facing path here is
+// a deliberate decision.
+const MARKETING_HOST_ALLOWED = [
+  '/welcome',
+  '/book/',          // public Calendly-style booking pages
+  '/event/',         // public race / workshop / etc. signup pages
+  '/race/',          // race kiosk + signup
+  '/api/public/',    // backing API for all of the above
+  '/api/webhooks/',  // future-proof if a payment redirect lands here
+]
+
 export async function middleware(request) {
   const hostname = request.headers.get('host') || ''
 
@@ -46,6 +74,36 @@ export async function middleware(request) {
     }
     // Deposit paths on pay.* are unconditionally public — skip the
     // CRM auth gate below.
+    return NextResponse.next()
+  }
+
+  // ── Public marketing host (un1tdublin.com / www.un1tdublin.com) ──
+  // Same isolation pattern as the pay subdomain: only customer-
+  // facing paths are reachable; CRM URLs get bounced to /welcome so
+  // operators / nosy visitors can't poke at /dashboard, /pipeline,
+  // /contacts, etc. via the public brand. The "/" → "/welcome"
+  // rewrite is a rewrite (not a redirect) so the URL bar stays
+  // clean — the marketing URL is un1tdublin.com/, not /welcome.
+  const marketingHostKey = hostname.split(':')[0]
+  if (MARKETING_HOSTS.has(marketingHostKey)) {
+    const path = request.nextUrl.pathname
+    const isFrameworkAsset = path.startsWith('/_next/')
+      || path === '/favicon.ico'
+      || path === '/robots.txt'
+      || path === '/sitemap.xml'
+    if (isFrameworkAsset) return NextResponse.next()
+    if (path === '/') {
+      return NextResponse.rewrite(new URL('/welcome', request.url))
+    }
+    const allowed = MARKETING_HOST_ALLOWED.some((p) => path.startsWith(p))
+    if (!allowed) {
+      // Anything CRM-flavoured (/dashboard, /login, /settings, etc.)
+      // gets rewritten home rather than 404'd — most stray hits are
+      // typos / stale links and the marketing page is the right
+      // landing place for those.
+      return NextResponse.rewrite(new URL('/welcome', request.url))
+    }
+    // Allowlisted customer-facing path — let it through, no auth gate.
     return NextResponse.next()
   }
 
