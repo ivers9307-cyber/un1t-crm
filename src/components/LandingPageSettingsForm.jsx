@@ -23,7 +23,7 @@
 // add a case to BlockEditPanel below, and add a renderer to
 // src/app/welcome/page.js. Three-file change.
 
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useRef, useEffect, useCallback } from 'react'
 import {
   DndContext, KeyboardSensor, PointerSensor, useSensor, useSensors,
   closestCenter, DragOverlay,
@@ -41,6 +41,11 @@ import {
 import {
   BLOCK_TYPES, blocksOrDefault, newBlockOfType,
 } from '@/lib/landing-page-blocks'
+
+// PostMessage namespace shared with src/components/landing-page/
+// EditModeOverlay.jsx so the iframe and the parent only react to
+// each other and ignore the noise from extensions / dev tools.
+const MESSAGE_NAMESPACE = 'lp-editor'
 
 export default function LandingPageSettingsForm({ locationId, initialSettings, availableBookingTypes }) {
   // Seed from saved blocks; if none, blocksOrDefault returns the
@@ -75,6 +80,70 @@ export default function LandingPageSettingsForm({ locationId, initialSettings, a
 
   const blockIds = useMemo(() => blocks.map((b) => b.id), [blocks])
   const activeBlock = blocks.find((b) => b.id === activeDragId)
+
+  // ── Live preview iframe (Phase 3c) ────────────────────────
+  // Right-pane iframe loads /welcome?edit=1, which mounts the
+  // EditModeOverlay client component. The overlay posts a 'ready'
+  // message on mount; we respond with the current state and then
+  // push every subsequent state change so typing in the form
+  // updates the preview in near-realtime. The iframe also posts
+  // 'block-clicked' when the operator clicks a block in the
+  // preview — we expand + scroll-to that block's edit panel.
+  const iframeRef = useRef(null)
+  const cardRefs = useRef({})
+
+  const buildState = useCallback(() => {
+    let widthPxOrNull = null
+    const parsed = parseInt(logoWidthPx, 10)
+    if (Number.isFinite(parsed)) {
+      widthPxOrNull = Math.min(600, Math.max(40, parsed))
+    }
+    return {
+      namespace: MESSAGE_NAMESPACE,
+      type: 'state',
+      blocks,
+      logoUrl: logoUrl.trim() || null,
+      logoAlt: logoAlt.trim() || null,
+      logoWidthPx: widthPxOrNull,
+    }
+  }, [blocks, logoUrl, logoAlt, logoWidthPx])
+
+  // Push state to the iframe whenever it changes. The iframe also
+  // sends a 'ready' message on mount which we respond to immediately
+  // (handled in the message listener below) — this useEffect covers
+  // every keystroke after that.
+  useEffect(() => {
+    const win = iframeRef.current?.contentWindow
+    if (!win) return
+    try { win.postMessage(buildState(), window.location.origin) } catch { /* not loaded yet */ }
+  }, [buildState])
+
+  // Listen for messages from the iframe (block click → select).
+  useEffect(() => {
+    function onMessage(event) {
+      if (event.origin !== window.location.origin) return
+      const msg = event.data
+      if (!msg || typeof msg !== 'object' || msg.namespace !== MESSAGE_NAMESPACE) return
+      if (msg.type === 'ready') {
+        // Send initial state right away.
+        const win = iframeRef.current?.contentWindow
+        if (win) try { win.postMessage(buildState(), window.location.origin) } catch { /* ignore */ }
+      } else if (msg.type === 'block-clicked' && msg.blockId) {
+        // Expand the clicked block + scroll its card into view.
+        setExpanded((prev) => new Set(prev).add(msg.blockId))
+        // Defer the scroll so the expanded panel has measured by the
+        // time we ask the browser to scroll to it.
+        setTimeout(() => {
+          const el = cardRefs.current[msg.blockId]
+          if (el && typeof el.scrollIntoView === 'function') {
+            el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+          }
+        }, 50)
+      }
+    }
+    window.addEventListener('message', onMessage)
+    return () => window.removeEventListener('message', onMessage)
+  }, [buildState])
 
   // ── Block ops ─────────────────────────────────────────────
   function updateBlock(id, patch) {
@@ -175,7 +244,11 @@ export default function LandingPageSettingsForm({ locationId, initialSettings, a
   }
 
   return (
-    <form onSubmit={handleSave} className="space-y-4">
+    <form onSubmit={handleSave} className="xl:grid xl:grid-cols-[minmax(0,520px)_minmax(0,1fr)] xl:gap-6 xl:items-start">
+      {/* Left pane — block editor (the original form). On <xl
+          screens this is the entire form; on xl+ it sits beside
+          the live preview iframe. */}
+      <div className="space-y-4 xl:max-h-[calc(100vh-160px)] xl:overflow-y-auto xl:pr-2">
       {error && (
         <div className="bg-red-500/10 border border-red-500/30 text-red-700 text-sm rounded-md p-3 inline-flex items-start gap-2">
           <AlertCircle size={14} className="mt-0.5 shrink-0" /> {error}
@@ -256,18 +329,27 @@ export default function LandingPageSettingsForm({ locationId, initialSettings, a
         <SortableContext items={blockIds} strategy={verticalListSortingStrategy}>
           <div className="space-y-2">
             {blocks.map((block) => (
-              <SortableBlockCard
+              // The wrapper div carries the cardRef target so the
+              // iframe-click → scroll-to-card behaviour can find it.
+              // SortableBlockCard's own outer div is the @dnd-kit
+              // setNodeRef target, so we wrap it rather than thread
+              // a second ref through.
+              <div
                 key={block.id}
-                block={block}
-                expanded={expanded.has(block.id)}
-                onToggleExpand={() => toggleExpanded(block.id)}
-                onRemove={() => removeBlock(block.id)}
-                onUpdate={(patch) => updateBlock(block.id, patch)}
-                availableBookingTypes={availableBookingTypes}
-                uploadMedia={uploadMedia}
-                uploading={uploading}
-                uploadErr={uploadErr}
-              />
+                ref={(el) => { if (el) cardRefs.current[block.id] = el }}
+              >
+                <SortableBlockCard
+                  block={block}
+                  expanded={expanded.has(block.id)}
+                  onToggleExpand={() => toggleExpanded(block.id)}
+                  onRemove={() => removeBlock(block.id)}
+                  onUpdate={(patch) => updateBlock(block.id, patch)}
+                  availableBookingTypes={availableBookingTypes}
+                  uploadMedia={uploadMedia}
+                  uploading={uploading}
+                  uploadErr={uploadErr}
+                />
+              </div>
             ))}
           </div>
         </SortableContext>
@@ -315,7 +397,8 @@ export default function LandingPageSettingsForm({ locationId, initialSettings, a
         )}
       </div>
 
-      {/* Sticky save bar */}
+      {/* Sticky save bar (lives inside the left pane so it sits
+          under the form scroll, not the iframe). */}
       <div className="sticky bottom-4 flex items-center justify-end gap-2 bg-un1t-dark/80 backdrop-blur border border-un1t-gray rounded-md p-3">
         <a
           href="/welcome"
@@ -334,6 +417,38 @@ export default function LandingPageSettingsForm({ locationId, initialSettings, a
           {saving ? 'Saving…' : 'Save changes'}
         </button>
       </div>
+      </div>
+      {/* ── Right pane — live preview iframe (xl+ screens only) ─
+          Loads /welcome?edit=1, which mounts EditModeOverlay and
+          re-renders from the postMessage state we push from
+          buildState() above. Click any block in the iframe →
+          its edit panel auto-expands + scrolls into view in the
+          left pane. */}
+      <aside className="hidden xl:block xl:sticky xl:top-4">
+        <div className="border border-un1t-gray rounded-lg overflow-hidden bg-un1t-black">
+          <div className="flex items-center justify-between px-3 py-2 bg-un1t-dark border-b border-un1t-gray text-[11px] text-un1t-light">
+            <span className="inline-flex items-center gap-1.5">
+              <span className="w-2 h-2 rounded-full bg-emerald-500" />
+              Live preview · click a section to edit
+            </span>
+            <button
+              type="button"
+              onClick={() => { try { iframeRef.current?.contentWindow?.location?.reload() } catch { /* cross-origin guard */ } }}
+              className="text-un1t-mid hover:text-un1t-white"
+              title="Reload preview"
+            >
+              ⟳
+            </button>
+          </div>
+          <iframe
+            ref={iframeRef}
+            src="/welcome?edit=1"
+            title="Welcome page live preview"
+            className="w-full"
+            style={{ height: 'calc(100vh - 200px)', minHeight: '600px' }}
+          />
+        </div>
+      </aside>
     </form>
   )
 }

@@ -39,13 +39,18 @@ export default async function LandingPageSettingsPage() {
     db.from('event_types').select('id, name, slug').eq('location_id', locationId).eq('active', true).order('name'),
   ])
 
+  // Full-width container for the Phase 3c split-view editor. The
+  // form expands to use the live preview iframe alongside on
+  // xl+ screens; on smaller screens the iframe hides and the form
+  // takes the full width so a small laptop screen still gets a
+  // usable editor.
   return (
-    <div className="p-8 max-w-3xl">
-      <div className="mb-8">
+    <div className="p-6 max-w-[1800px]">
+      <div className="mb-4">
         <h2 className="text-2xl font-bold">Landing page</h2>
         <p className="text-sm text-un1t-light mt-1">
           Edit the copy + media on the public marketing page at <code>/welcome</code>.
-          Save here, refresh the public page to see changes.
+          On wide screens you&apos;ll see a live preview on the right — click any section in the preview to jump to its edit panel.
         </p>
       </div>
 
