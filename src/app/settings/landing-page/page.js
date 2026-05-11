@@ -9,6 +9,7 @@
 import { redirect } from 'next/navigation'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
+import { hasPermission } from '@/lib/permissions'
 import LandingPageSettingsForm from '@/components/LandingPageSettingsForm'
 
 export const dynamic = 'force-dynamic'
@@ -18,7 +19,13 @@ export const fetchCache = 'force-no-store'
 export default async function LandingPageSettingsPage() {
   const user = await getCurrentUser()
   if (!user) redirect('/login')
-  if (user.role !== 'master' && user.role !== 'owner') redirect('/')
+  // Permission gate — 3-tier resolver: location feature gate →
+  // per-user override → role default. Defaults to owner+master
+  // per shared/permissions.js. Replaces the older role-only
+  // (master OR owner) check so the LocationFeatures matrix can
+  // disable landing-page editing per-location and operators can
+  // grant/revoke per-user from StaffForm.
+  if (!hasPermission(user, 'landing_page')) redirect('/')
 
   const locationId = user.activeLocation?.id
   if (!locationId) {

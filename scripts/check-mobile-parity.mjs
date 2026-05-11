@@ -93,6 +93,13 @@ const WEB_ONLY_OK = {
   // commit 138def1). No mobile counterpart by design — staff +
   // head_coach can't see it on web either.
   attendance_reports: 'Attendance report (mig 120) is an operator monitoring view inside the desktop Schedule hub. Owner/manager/master only — staff + head_coach are blocked even on web. No mobile UI by design.',
+  // Mig 126-130 — operator-side editor for the public marketing
+  // landing page (un1tdublin.com / /welcome). Includes the WYSIWYG
+  // iframe editor + per-block edit forms. No mobile UI: editing
+  // marketing copy + uploading hero video on a phone is a worse
+  // experience than just opening the laptop, and the iframe
+  // preview needs screen real estate the iOS app doesn't have.
+  landing_page: 'Landing-page editor (mig 126-130) — operator-side WYSIWYG marketing-page editor. Desktop-only by design; the live-preview iframe needs the screen real estate the iOS app does not have.',
 }
 
 const webDrift = []

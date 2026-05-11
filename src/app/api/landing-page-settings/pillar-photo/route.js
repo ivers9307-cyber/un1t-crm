@@ -12,7 +12,8 @@
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { hasPermissionForLocation } from '@/lib/permissions'
 import { uuidLike } from '@/lib/schemas'
 
 export const runtime = 'nodejs'
@@ -31,16 +32,8 @@ const EXT_BY_TYPE = {
 }
 const VALID_SLOTS = new Set(['0', '1', '2'])
 
-function isMasterOrLocationOwner(user, locationId) {
-  if (!user) return false
-  if (user.role === 'master') return true
-  const match = (user.locations || []).find((l) => l.id === locationId)
-  return match?.role === 'owner'
-}
-
 export async function POST(request) {
   const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
 
   const form = await request.formData()
   const file = form.get('file')
@@ -53,11 +46,10 @@ export async function POST(request) {
   if (!slot || !VALID_SLOTS.has(String(slot))) {
     return NextResponse.json({ success: false, error: 'slot must be 0, 1, or 2' }, { status: 400 })
   }
-  if (!isMasterOrLocationOwner(user, locationId)) {
-    return NextResponse.json({ success: false, error: 'Master or owner required' }, { status: 403 })
-  }
-  if (user.role !== 'master' && !getUserLocationIds(user).includes(locationId)) {
-    return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+  const guard = assertLocationAccess(user, locationId)
+  if (guard) return guard
+  if (!hasPermissionForLocation(user, locationId, 'landing_page')) {
+    return NextResponse.json({ success: false, error: 'Landing page editor not enabled for your role at this location' }, { status: 403 })
   }
 
   if (!file || typeof file === 'string') {

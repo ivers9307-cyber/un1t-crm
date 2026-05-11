@@ -56,3 +56,42 @@ export function hasPermission(user, key) {
     key,
   })
 }
+
+/**
+ * Same three-tier resolver as hasPermission(), but checks against a
+ * SPECIFIC location (not the user's active one). Used by API routes
+ * that take an explicit `location_id` parameter — the caller might
+ * be a master switching between locations whose active context lags
+ * behind the route's target.
+ *
+ * Resolves the user's role at the given location via
+ * user.locations[].role (which getCurrentUser populates from
+ * profile_locations). Master is global — its role isn't location-
+ * specific, so we use user.role unchanged for the master case.
+ *
+ * @param {object} user           — getCurrentUser() result
+ * @param {string} locationId
+ * @param {string} key            — WEB_PERMISSIONS key
+ * @returns {boolean}
+ */
+export function hasPermissionForLocation(user, locationId, key) {
+  if (!user || !locationId) return false
+
+  // Master escape hatch — same rationale as hasPermission().
+  if (user.role === 'master' && key === 'settings') return true
+
+  // Master is global; for any other role we need the per-location
+  // assignment to know what role they hold there.
+  const assignment = user.assignmentsByLocation?.[locationId] || null
+  const location   = (user.locations || []).find((l) => l.id === locationId) || null
+  const roleHere   = user.role === 'master' ? 'master' : (assignment?.role || location?.role || null)
+  if (!roleHere) return false
+
+  return resolvePermission({
+    role: roleHere,
+    location, // location.features carries the tier-1 gate
+    permissions: assignment?.permissions || {},
+    defaults: DEFAULT_WEB_PERMISSIONS_BY_ROLE,
+    key,
+  })
+}

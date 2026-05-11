@@ -2,17 +2,25 @@
 // media for the public marketing page at /welcome (mig 126, Phase 2
 // of landing-page work).
 //
-// Auth model:
-//   - GET: master OR owner at the location, OR public anon. The
-//     /welcome public page also reads via the supabase server client
-//     which goes through RLS — that uses the table's public-read
-//     policy directly, no auth gate here. The auth gate here is
-//     mainly so the SETTINGS form (operator-side) gets a clean
-//     400/403 instead of an empty response when permissions slip.
-//   - PUT: master OR owner ONLY. Same gate as the table's RLS
-//     write policy — a hand-crafted PUT from a manager session
-//     would land here with a 403 even though service-role bypasses
-//     RLS, because we explicitly check the role.
+// Auth model (refactored from inline role checks → permission key
+// 'landing_page' in shared/permissions.js):
+//   - Membership: assertLocationAccess() — caller must be assigned
+//     to the target location_id, OR master.
+//   - Permission: hasPermissionForLocation(user, location_id,
+//     'landing_page') — 3-tier resolver: location feature gate →
+//     per-user override → role default. Defaults give the perm to
+//     owner+master; managers/head-coaches/staff are off by default
+//     but can be granted via StaffForm. The location feature gate
+//     lets owners disable landing-page editing per location (e.g.
+//     CCF Autos doesn't need it).
+//   - The /welcome public page reads via the table's RLS public-
+//     read policy directly, NOT through this endpoint. Public anon
+//     visitors hit no auth here.
+//   - RLS write policy on landing_page_settings (mig 126) still
+//     gates by master-or-owner role — defense-in-depth at the
+//     simpler role level. Even if hasPermissionForLocation evolves
+//     in the future to grant landing_page to managers, the RLS
+//     ceiling remains owner+master.
 //
 // Single row per location. Caller passes ?location_id= so master
 // (who has multiple locations) can pick which to edit.
@@ -20,7 +28,8 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { hasPermissionForLocation } from '@/lib/permissions'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import { BlocksArraySchema } from '@/lib/landing-page-blocks'
@@ -87,31 +96,19 @@ const PutSchema = z.object({
   logo_width_px:      z.number().int().min(40).max(600).nullable().optional(),
 }).strict()
 
-function isMasterOrLocationOwner(user, locationId) {
-  if (!user) return false
-  if (user.role === 'master') return true
-  // Per-location role check via profile_locations.
-  const locs = user.locations || []
-  const match = locs.find((l) => l.id === locationId)
-  return match?.role === 'owner'
-}
-
 export async function GET(request) {
   const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-
   const url = new URL(request.url)
   const locationId = url.searchParams.get('location_id')
   if (!locationId) {
     return NextResponse.json({ success: false, error: 'location_id is required' }, { status: 400 })
   }
-
-  // Caller must be a member of the location (or master) to read
-  // settings via this auth path. Public reads of the welcome page
-  // come through the table's RLS public-read policy directly, not
-  // through this endpoint.
-  if (user.role !== 'master' && !getUserLocationIds(user).includes(locationId)) {
-    return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+  // Membership gate first (returns 401 if !user, 403 if not a
+  // member of the target location), then permission gate.
+  const guard = assertLocationAccess(user, locationId)
+  if (guard) return guard
+  if (!hasPermissionForLocation(user, locationId, 'landing_page')) {
+    return NextResponse.json({ success: false, error: 'Landing page editor not enabled for your role at this location' }, { status: 403 })
   }
 
   const db = createServerClient()
@@ -133,8 +130,12 @@ export async function PUT(request) {
   if (!validation.ok) return validation.response
   const body = validation.data
 
-  if (!isMasterOrLocationOwner(user, body.location_id)) {
-    return NextResponse.json({ success: false, error: 'Master or owner required' }, { status: 403 })
+  // Membership gate then permission gate. Body-derived location_id
+  // is validated as uuidLike via the Zod schema above.
+  const guard = assertLocationAccess(user, body.location_id)
+  if (guard) return guard
+  if (!hasPermissionForLocation(user, body.location_id, 'landing_page')) {
+    return NextResponse.json({ success: false, error: 'Landing page editor not enabled for your role at this location' }, { status: 403 })
   }
 
   // Build an upsert payload — only include fields the operator

@@ -73,6 +73,14 @@ export const WEB_PERMISSIONS = Object.freeze([
   { key: 'car_processing', label: 'Car Processing',             hint: 'Tesla import tracker (CCF Autos). Off by default at user level — enable per user.' },
   // — Infra —
   { key: 'settings',   label: 'Settings & Staff Management',    hint: 'Location settings, staff management, integrations, branding.' },
+  // Landing-page editor (mig 126-130, Phase LP1-3c). Operator
+  // editor for the public /welcome marketing page (un1tdublin.com).
+  // Owners + master by default — managers/head-coaches/staff don't
+  // touch marketing copy. Default-on at the location level so
+  // existing locations keep working unchanged; operators can flip
+  // it off per location via Location Settings if they don't run
+  // marketing for that studio (e.g. CCF Autos).
+  { key: 'landing_page', label: 'Landing page editor',          hint: 'Edit the public marketing page at /welcome. Includes WYSIWYG editor + sidebar settings form.' },
 ])
 
 export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
@@ -88,6 +96,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     schedule: true, attendance_reports: true, assistant: true, studio_management: true,
     orders: true, car_processing: true,
     settings: true,
+    landing_page: true,
   },
   staff: {
     dashboard_personal: true, dashboard_studio: false, dashboard_business: false,
@@ -97,6 +106,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     schedule: true, attendance_reports: false, assistant: false, studio_management: false,
     orders: false, car_processing: false,         // financial views off by default
     settings: false,
+    landing_page: false,                          // marketing copy isn't a staff concern
   },
   head_coach: {
     dashboard_personal: true, dashboard_studio: true, dashboard_business: false,
@@ -107,6 +117,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     assistant: true, studio_management: false,    // explicit opt-in
     orders: false, car_processing: false,         // head coach doesn't need orders by default
     settings: false,
+    landing_page: false,
   },
   manager: {
     dashboard_personal: true, dashboard_studio: true, dashboard_business: false,
@@ -116,6 +127,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     schedule: true, attendance_reports: true, assistant: true, studio_management: true,
     orders: true, car_processing: false,          // managers run revenue ops; CCF Autos is per-user opt-in
     settings: true,
+    landing_page: false,                          // owner/master decision; per-user override available
   },
   owner: {
     dashboard_personal: true, dashboard_studio: true, dashboard_business: true,
@@ -125,6 +137,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     schedule: true, attendance_reports: true, assistant: true, studio_management: true,
     orders: true, car_processing: false,          // OFF for owner too — explicit opt-in per profile
     settings: true,
+    landing_page: true,
   },
 })
 
