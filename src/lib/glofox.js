@@ -422,6 +422,147 @@ export async function fetchMembership(creds, membershipId, cache = null) {
 }
 
 /**
+ * Fetch a paginated list of leads/members from a branch via
+ * POST /2.1/branches/{branchId}/leads/filter.
+ *
+ * Per the spec, UserFilters supports:
+ *   lead_status: array of LEAD/TRIAL/COLD/MEMBER/NO_SALE_TRIAL/TOUR/NO_SALE_TOUR
+ *   source:      array of MEMBER_APP/CLASSPASS/DASHBOARD/etc.
+ *   created:     { start, end } — Unix seconds
+ *   modified:    { start, end } — Unix seconds
+ *   name:        string — searches name/first_name/last_name/email/phone
+ *   deleted:     boolean — default false (active users only)
+ *
+ * Pagination via { skip, limit } in the body. limit max per page
+ * is server-defined (typically 50–100); paginate by re-calling.
+ *
+ * Returns { data, total } shape from the response, OR { data: [],
+ * total: 0 } on failure. Best-effort.
+ */
+export async function fetchBranchLeads(creds, filters = {}, pagination = { skip: 0, limit: 50 }) {
+  if (!creds || !creds.branchId) return { data: [], total: 0 }
+  try {
+    const r = await glofoxFetch(
+      creds,
+      `/2.1/branches/${encodeURIComponent(creds.branchId)}/leads/filter`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ filters, pagination }),
+      },
+    )
+    if (!r.ok) return { data: [], total: 0 }
+    const body = await r.json()
+    return {
+      data: Array.isArray(body?.data) ? body.data : (Array.isArray(body) ? body : []),
+      total: typeof body?.total_count === 'number' ? body.total_count
+           : typeof body?.total === 'number' ? body.total
+           : null,
+      raw: body,
+    }
+  } catch {
+    return { data: [], total: 0 }
+  }
+}
+
+/**
+ * Fetch the studio payments report via POST /Analytics/report.
+ *
+ * Per the spec, the body shape is PaymentsReportRequest:
+ *   { branch_id, namespace, start, end, model: 'TransactionsList',
+ *     filter: { ReportByMembers: bool, CompareToRanges: bool,
+ *               PaymentMethods: [{id}] } }
+ *
+ * Returns { ok, status, body }. The body shape is
+ * PaymentsReportResponse — { TransactionsList: { details: [Transaction] } }
+ * by default. The ReportByMembers=true variant isn't documented;
+ * surface the raw body so the caller can inspect.
+ */
+export async function fetchPaymentsReport(creds, opts = {}) {
+  if (!creds || !creds.branchId) {
+    return { ok: false, status: 400, body: { error: 'missing branch credentials' } }
+  }
+  const startSec = Number.isFinite(opts.start)
+    ? opts.start
+    : Math.floor((Date.now() - 30 * 86400 * 1000) / 1000)
+  const endSec = Number.isFinite(opts.end)
+    ? opts.end
+    : Math.floor(Date.now() / 1000)
+  const body = {
+    branch_id: creds.branchId,
+    namespace: opts.namespace,
+    start: String(startSec),
+    end: String(endSec),
+    model: opts.model || 'TransactionsList',
+    filter: {
+      ReportByMembers: opts.byMembers === true,
+      CompareToRanges: false,
+      ...(opts.paymentMethods ? { PaymentMethods: opts.paymentMethods } : {}),
+    },
+  }
+  try {
+    const r = await glofoxFetch(creds, '/Analytics/report', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    })
+    let parsed
+    try { parsed = await r.json() } catch { parsed = null }
+    return { ok: r.ok, status: r.status, body: parsed, request_body: body }
+  } catch (e) {
+    return { ok: false, status: 0, body: { error: e?.message || 'network error' } }
+  }
+}
+
+/**
+ * Create a booking on behalf of a member via /2.0/bookings.
+ *
+ * Per the spec the request body is a BookingRequest. Real-world
+ * minimum: { user_id, event_id }. Glofox enforces capacity, double-
+ * book prevention, and waitlist behaviour server-side — error
+ * responses include a message_code (e.g. YOU_HAVE_BOOKED_FOR_THIS_EVENT,
+ * EVENT_HAS_BEEN_CANCELLED) so the caller can surface what went wrong.
+ *
+ * Returns the parsed JSON response. status + ok hoisted onto the
+ * return so the operator-facing endpoint can route on them.
+ */
+export async function createBooking(creds, bookingRequest) {
+  if (!creds || !bookingRequest) return { ok: false, status: 400, body: { error: 'missing args' } }
+  try {
+    const r = await glofoxFetch(creds, '/2.0/bookings', {
+      method: 'POST',
+      body: JSON.stringify(bookingRequest),
+    })
+    let body
+    try { body = await r.json() } catch { body = null }
+    return { ok: r.ok, status: r.status, body }
+  } catch (e) {
+    return { ok: false, status: 0, body: { error: e?.message || 'network error' } }
+  }
+}
+
+/**
+ * Cancel a booking via POST /booking/{bookingId}/user/{userId}/cancel.
+ * Studios can configure "no cancellation allowed within X hours of class"
+ * — Glofox returns the rule violation message in the response body.
+ */
+export async function cancelBooking(creds, bookingId, userId) {
+  if (!creds || !bookingId || !userId) {
+    return { ok: false, status: 400, body: { error: 'missing args' } }
+  }
+  try {
+    const r = await glofoxFetch(
+      creds,
+      `/booking/${encodeURIComponent(bookingId)}/user/${encodeURIComponent(userId)}/cancel`,
+      { method: 'POST' },
+    )
+    let body
+    try { body = await r.json() } catch { body = null }
+    return { ok: r.ok, status: r.status, body }
+  } catch (e) {
+    return { ok: false, status: 0, body: { error: e?.message || 'network error' } }
+  }
+}
+
+/**
  * Fetch a Glofox member's interactions log via
  * /2.1/branches/{branchId}/leads/{userId}/interactions.
  *
