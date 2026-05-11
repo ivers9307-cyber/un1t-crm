@@ -41,9 +41,18 @@ export default function EventForm({ event, locationId }) {
 
   const [name, setName] = useState(event?.name || '')
   const [description, setDescription] = useState(event?.description || '')
-  const [duration, setDuration] = useState(event?.duration_minutes || 30)
-  const [buffer, setBuffer] = useState(event?.buffer_minutes || 0)
-  const [maxDays, setMaxDays] = useState(event?.max_advance_days || 30)
+  // Stored as raw STRING so the operator can clear the field while
+  // they retype. The previous "parseInt(e.target.value) || default"
+  // pattern snapped the state back to the default the instant the
+  // field went empty (which it must, briefly, between backspace and
+  // the first new digit) — React then re-rendered the field with the
+  // default, reset the cursor, and ate subsequent keystrokes.
+  // Operators reported only being able to use the spinner arrows.
+  // We coerce + clamp on submit instead. Initial value coerces to
+  // string so React doesn't get a number/string flip-flop.
+  const [duration, setDuration] = useState(String(event?.duration_minutes ?? 30))
+  const [buffer,   setBuffer]   = useState(String(event?.buffer_minutes ?? 0))
+  const [maxDays,  setMaxDays]  = useState(String(event?.max_advance_days ?? 30))
   // Mig 125: how many staff are needed to keep this booking type
   // bookable. Drives the studio overview demand classifier on
   // /schedule. 0 = covered by another role already on shift.
@@ -221,13 +230,21 @@ export default function EventForm({ event, locationId }) {
     // isn't selected so old values don't leak through after a
     // channel toggle.
     const confirmationActive = confirmationEnabled && confirmationChannels.length > 0
+    // Coerce + clamp the string-state numeric fields on submit. The
+    // raw strings allow the operator to clear+retype mid-edit; the
+    // payload still gets sane numbers within the API/DB ranges.
+    const clampInt = (raw, fallback, min, max) => {
+      const n = parseInt(raw, 10)
+      if (!Number.isFinite(n)) return fallback
+      return Math.max(min, Math.min(max, n))
+    }
     const payload = {
       name,
       slug,
       description: description || null,
-      duration_minutes: duration,
-      buffer_minutes: buffer,
-      max_advance_days: maxDays,
+      duration_minutes: clampInt(duration, 30, 1, 1440),
+      buffer_minutes:   clampInt(buffer,    0, 0, 1440),
+      max_advance_days: clampInt(maxDays,  30, 0, 3650),
       color,
       availability,
       custom_fields: customFields.filter(f => f.label.trim()),
@@ -349,7 +366,7 @@ export default function EventForm({ event, locationId }) {
             <input
               type="number"
               value={duration}
-              onChange={e => setDuration(parseInt(e.target.value) || 30)}
+              onChange={e => setDuration(e.target.value)}
               min={5}
               max={480}
               className="w-full bg-un1t-black border border-un1t-gray rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
@@ -360,7 +377,7 @@ export default function EventForm({ event, locationId }) {
             <input
               type="number"
               value={buffer}
-              onChange={e => setBuffer(parseInt(e.target.value) || 0)}
+              onChange={e => setBuffer(e.target.value)}
               min={0}
               max={120}
               className="w-full bg-un1t-black border border-un1t-gray rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
@@ -371,7 +388,7 @@ export default function EventForm({ event, locationId }) {
             <input
               type="number"
               value={maxDays}
-              onChange={e => setMaxDays(parseInt(e.target.value) || 30)}
+              onChange={e => setMaxDays(e.target.value)}
               min={1}
               max={365}
               className="w-full bg-un1t-black border border-un1t-gray rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
