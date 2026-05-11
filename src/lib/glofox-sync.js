@@ -5,7 +5,7 @@
 // /api/glofox/sync-member endpoint (dry-run + apply); used
 // tomorrow by the daily bulk-sync cron.
 
-import { fetchUserCredits, fetchMembership } from './glofox.js'
+import { fetchUserCredits, fetchMembership, fetchUserBookings } from './glofox.js'
 //
 // Source-of-truth contract:
 //   Glofox owns:  glofox_member_id, glofox_membership_status,
@@ -819,7 +819,7 @@ export function mapMembershipStatus(member, ctx = null) {
 export async function findExistingContact(db, locationId, mapped) {
   if (!db || !locationId || !mapped) return { byGlofox: null, byEmail: null }
   // Lookup by glofox_member_id and email in parallel.
-  const SELECT_COLS = 'id, email, first_name, last_name, phone, dob, joined_at, glofox_member_id, glofox_membership_status, lead_source'
+  const SELECT_COLS = 'id, email, first_name, last_name, phone, dob, joined_at, glofox_member_id, glofox_membership_status, lead_source, last_booked_at, last_attended_at, total_bookings_30d, total_attended_30d, total_noshow_30d'
   const queries = []
   queries.push(
     db.from('contacts')
@@ -859,6 +859,82 @@ export async function findExistingContact(db, locationId, mapped) {
 //
 // 'changes' is a per-field record { from, to } so the diff is
 // obvious in the dry-run JSON.
+
+// ─────────────────────────────────────────────────────────────
+// Booking aggregates (GLOFOX2.1.14 — Tier 1 #1)
+// ─────────────────────────────────────────────────────────────
+//
+// Compute engagement signals from a member's recent bookings:
+//   - last_booked_at       max(booking.created)
+//   - last_attended_at     max(booking.time_start where attended)
+//   - total_bookings_30d   bookings created in last 30d (any status)
+//   - total_attended_30d   bookings attended in last 30d
+//   - total_noshow_30d     no-shows in last 30d
+//                          (status=BOOKED, time_start in past, not attended)
+//
+// Pure function — caller fetches bookings (fetchUserBookings),
+// passes them in. Designed to be called from per-member sync,
+// daily cron, AND webhook handler so all paths converge to the
+// same aggregates.
+
+/**
+ * Compute booking aggregates from a list of Glofox Booking objects.
+ * Returns the shape stored on contacts (timestamps as ISO strings,
+ * counts as integers).
+ *
+ * @param {Array} bookings  Array of Booking shapes per /2.0/bookings.
+ *                          Expected fields: created, time_start,
+ *                          attended (bool), status (BOOKED/CANCELED).
+ * @param {number} [now]    Timestamp in millis for "now" — overridable
+ *                          for deterministic tests.
+ */
+export function computeBookingAggregates(bookings, now = Date.now()) {
+  const empty = {
+    last_booked_at: null,
+    last_attended_at: null,
+    total_bookings_30d: 0,
+    total_attended_30d: 0,
+    total_noshow_30d: 0,
+  }
+  if (!Array.isArray(bookings) || bookings.length === 0) return empty
+  const nowSec = Math.floor(now / 1000)
+  const cutoff30d = nowSec - 30 * 24 * 60 * 60
+  let lastBookedSec = 0
+  let lastAttendedSec = 0
+  let bookings30d = 0
+  let attended30d = 0
+  let noshow30d = 0
+  for (const b of bookings) {
+    if (!b || typeof b !== 'object') continue
+    const created = Number(b.created) || 0
+    const timeStart = Number(b.time_start) || 0
+    const attended = b.attended === true
+    const status = typeof b.status === 'string' ? b.status.toUpperCase() : ''
+    // last_booked_at — most recent booking-row creation (any status).
+    if (created > lastBookedSec) lastBookedSec = created
+    // last_attended_at — most recent class start where they attended.
+    if (attended && timeStart > lastAttendedSec) lastAttendedSec = timeStart
+    // 30-day rollups, scoped by booking creation time.
+    if (created >= cutoff30d) bookings30d++
+    if (attended && timeStart >= cutoff30d && timeStart <= nowSec) {
+      attended30d++
+    }
+    // No-show: status=BOOKED, class already happened (time_start in
+    // past), but they didn't attend. Excludes CANCELED (member
+    // cancelled in advance — not a no-show).
+    if (status === 'BOOKED' && !attended && timeStart > 0 && timeStart <= nowSec
+        && timeStart >= cutoff30d) {
+      noshow30d++
+    }
+  }
+  return {
+    last_booked_at: lastBookedSec ? new Date(lastBookedSec * 1000).toISOString() : null,
+    last_attended_at: lastAttendedSec ? new Date(lastAttendedSec * 1000).toISOString() : null,
+    total_bookings_30d: bookings30d,
+    total_attended_30d: attended30d,
+    total_noshow_30d: noshow30d,
+  }
+}
 
 /**
  * Build the Plan A context for credit_member detection. Fetches
@@ -905,6 +981,29 @@ export async function previewMemberSync(db, locationId, member, opts = {}) {
     return { action: 'invalid', reason: 'Could not extract glofox_member_id from payload', mapped: null }
   }
 
+  // GLOFOX2.1.14 — booking aggregates. Fetched alongside credits when
+  // creds are provided. Caller can short-circuit by passing
+  // opts.bookings (pre-fetched list) or opts.skipBookings (e.g., for
+  // the bulk cron that pulls per-branch bookings in one shot instead
+  // of one call per member).
+  let bookingAggs = null
+  if (opts.bookings !== undefined) {
+    bookingAggs = computeBookingAggregates(opts.bookings)
+  } else if (opts.creds && !opts.skipBookings) {
+    const memberId = member._id || member.id
+    if (memberId) {
+      const bookings = await fetchUserBookings(opts.creds, memberId)
+      bookingAggs = computeBookingAggregates(bookings)
+    }
+  }
+  if (bookingAggs) {
+    mapped.last_booked_at      = bookingAggs.last_booked_at
+    mapped.last_attended_at    = bookingAggs.last_attended_at
+    mapped.total_bookings_30d  = bookingAggs.total_bookings_30d
+    mapped.total_attended_30d  = bookingAggs.total_attended_30d
+    mapped.total_noshow_30d    = bookingAggs.total_noshow_30d
+  }
+
   const { byGlofox, byEmail } = await findExistingContact(db, locationId, mapped)
   // GLOFOX2.1.3 — proposed pipeline placement. Same value goes
   // into the dry-run preview AND into the live deal insert on apply.
@@ -942,6 +1041,13 @@ export async function previewMemberSync(db, locationId, member, opts = {}) {
         joined_at:                { from: null, to: mapped.joined_at },
         glofox_membership_status: { from: null, to: mapped.glofox_membership_status },
         lead_source:              { from: null, to: mapped.lead_source },
+        ...(bookingAggs ? {
+          last_booked_at:        { from: null, to: bookingAggs.last_booked_at },
+          last_attended_at:      { from: null, to: bookingAggs.last_attended_at },
+          total_bookings_30d:    { from: null, to: bookingAggs.total_bookings_30d },
+          total_attended_30d:    { from: null, to: bookingAggs.total_attended_30d },
+          total_noshow_30d:      { from: null, to: bookingAggs.total_noshow_30d },
+        } : {}),
       },
       // GLOFOX2.1.3 — fresh contact = no existing deal, so we'll
       // create one. Operator sees the stage slug in the dry-run.
@@ -987,6 +1093,17 @@ export async function previewMemberSync(db, locationId, member, opts = {}) {
       changes.joined_at = { from: existing.joined_at, to: mapped.joined_at }
     }
   }
+  // GLOFOX2.1.14 — booking aggregates always overwrite when fetched
+  // (full recompute is the source of truth; cron is the safety net
+  // that corrects any webhook-counter drift).
+  if (bookingAggs) {
+    changes.last_booked_at        = { from: existing.last_booked_at ?? null,        to: bookingAggs.last_booked_at }
+    changes.last_attended_at      = { from: existing.last_attended_at ?? null,      to: bookingAggs.last_attended_at }
+    changes.total_bookings_30d    = { from: existing.total_bookings_30d ?? 0,       to: bookingAggs.total_bookings_30d }
+    changes.total_attended_30d    = { from: existing.total_attended_30d ?? 0,       to: bookingAggs.total_attended_30d }
+    changes.total_noshow_30d      = { from: existing.total_noshow_30d ?? 0,         to: bookingAggs.total_noshow_30d }
+  }
+
   // Always stamp synced_at — but represent in the diff so the
   // operator sees we will touch the row.
   changes.glofox_synced_at = { from: 'previous timestamp', to: 'now' }
@@ -1083,6 +1200,13 @@ export async function applyMemberSync(db, locationId, member, opts = {}) {
       glofox_membership_status: m.glofox_membership_status,
       glofox_synced_at: now,
       lead_source: m.lead_source,
+      // GLOFOX2.1.14 — booking aggregates (default to 0/null when
+      // we couldn't fetch them, so the row is still well-formed).
+      last_booked_at:       m.last_booked_at       ?? null,
+      last_attended_at:     m.last_attended_at     ?? null,
+      total_bookings_30d:   m.total_bookings_30d   ?? 0,
+      total_attended_30d:   m.total_attended_30d   ?? 0,
+      total_noshow_30d:     m.total_noshow_30d     ?? 0,
     }).select('id').single()
     if (error) return { ...preview, error: error.message }
     contactId = data.id
@@ -1097,6 +1221,13 @@ export async function applyMemberSync(db, locationId, member, opts = {}) {
     if ('phone'      in preview.changes)               updates.phone                    = m.phone
     if ('dob'        in preview.changes)               updates.dob                      = m.dob
     if ('joined_at'  in preview.changes)               updates.joined_at                = m.joined_at
+    // Booking aggregates — write each individually (mapped only
+    // carries them when bookings were fetched).
+    if ('last_booked_at'     in preview.changes)       updates.last_booked_at     = m.last_booked_at
+    if ('last_attended_at'   in preview.changes)       updates.last_attended_at   = m.last_attended_at
+    if ('total_bookings_30d' in preview.changes)       updates.total_bookings_30d = m.total_bookings_30d
+    if ('total_attended_30d' in preview.changes)       updates.total_attended_30d = m.total_attended_30d
+    if ('total_noshow_30d'   in preview.changes)       updates.total_noshow_30d   = m.total_noshow_30d
     // Recompose name only if first_name OR last_name changed.
     if ('first_name' in preview.changes || 'last_name' in preview.changes) {
       updates.name = m.name

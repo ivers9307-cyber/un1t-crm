@@ -11,6 +11,7 @@ import {
   targetDealStageForSync,
   isClassPackMembership,
   detectCreditMember,
+  computeBookingAggregates,
 } from './glofox-sync.js'
 
 // Helper: build a Plan A ctx for tests. Real call site fetches via
@@ -375,6 +376,115 @@ describe('isClassPackMembership', () => {
   it('returns false for null / non-object input', () => {
     expect(isClassPackMembership(null)).toBe(false)
     expect(isClassPackMembership('Class Packs')).toBe(false)
+  })
+})
+
+// GLOFOX2.1.14 — engagement aggregates from booking history.
+describe('computeBookingAggregates', () => {
+  // Fix "now" for deterministic windows. 2026-05-11 12:00:00 UTC.
+  const NOW = new Date('2026-05-11T12:00:00Z').getTime()
+  const NOW_SEC = Math.floor(NOW / 1000)
+  const sec = (isoOrSecs) => typeof isoOrSecs === 'string'
+    ? Math.floor(new Date(isoOrSecs).getTime() / 1000)
+    : isoOrSecs
+
+  it('returns empty aggregates for no bookings', () => {
+    expect(computeBookingAggregates([], NOW)).toEqual({
+      last_booked_at: null,
+      last_attended_at: null,
+      total_bookings_30d: 0,
+      total_attended_30d: 0,
+      total_noshow_30d: 0,
+    })
+  })
+
+  it('returns empty aggregates for null/non-array input', () => {
+    expect(computeBookingAggregates(null, NOW).total_bookings_30d).toBe(0)
+    expect(computeBookingAggregates(undefined, NOW).total_bookings_30d).toBe(0)
+  })
+
+  it('captures last_booked_at as max(created)', () => {
+    const out = computeBookingAggregates([
+      { created: sec('2026-05-01T10:00:00Z'), status: 'BOOKED' },
+      { created: sec('2026-05-08T10:00:00Z'), status: 'BOOKED' },
+      { created: sec('2026-04-20T10:00:00Z'), status: 'BOOKED' },
+    ], NOW)
+    expect(out.last_booked_at).toBe('2026-05-08T10:00:00.000Z')
+  })
+
+  it('captures last_attended_at as max(time_start where attended)', () => {
+    const out = computeBookingAggregates([
+      { created: sec('2026-04-01T10:00:00Z'), time_start: sec('2026-04-02T07:00:00Z'), status: 'BOOKED', attended: true },
+      { created: sec('2026-05-01T10:00:00Z'), time_start: sec('2026-05-02T07:00:00Z'), status: 'BOOKED', attended: true },
+      { created: sec('2026-05-09T10:00:00Z'), time_start: sec('2026-05-10T07:00:00Z'), status: 'BOOKED', attended: false },
+    ], NOW)
+    expect(out.last_attended_at).toBe('2026-05-02T07:00:00.000Z')
+  })
+
+  it('counts total_bookings_30d (any status, scoped by booking creation)', () => {
+    const out = computeBookingAggregates([
+      { created: sec('2026-05-08T10:00:00Z'), status: 'BOOKED' },     // 3 days ago
+      { created: sec('2026-05-01T10:00:00Z'), status: 'CANCELED' },   // 10 days ago
+      { created: sec('2026-04-20T10:00:00Z'), status: 'BOOKED' },     // 21 days ago
+      { created: sec('2026-03-01T10:00:00Z'), status: 'BOOKED' },     // 71 days ago — out of window
+    ], NOW)
+    expect(out.total_bookings_30d).toBe(3)
+  })
+
+  it('counts total_attended_30d (only attended + class start in window + in past)', () => {
+    const out = computeBookingAggregates([
+      // Attended classes within window
+      { created: sec('2026-05-01T10:00:00Z'), time_start: sec('2026-05-02T07:00:00Z'), status: 'BOOKED', attended: true },
+      { created: sec('2026-04-25T10:00:00Z'), time_start: sec('2026-04-26T07:00:00Z'), status: 'BOOKED', attended: true },
+      // Booked but didn't attend → not counted
+      { created: sec('2026-05-05T10:00:00Z'), time_start: sec('2026-05-06T07:00:00Z'), status: 'BOOKED', attended: false },
+      // Future class booked (time_start in future) → not counted
+      { created: sec('2026-05-10T10:00:00Z'), time_start: sec('2026-05-15T07:00:00Z'), status: 'BOOKED', attended: false },
+      // Attended but outside 30d window → not counted
+      { created: sec('2026-03-01T10:00:00Z'), time_start: sec('2026-03-02T07:00:00Z'), status: 'BOOKED', attended: true },
+    ], NOW)
+    expect(out.total_attended_30d).toBe(2)
+  })
+
+  it('counts total_noshow_30d (BOOKED + class in past + attended:false)', () => {
+    const out = computeBookingAggregates([
+      // True no-show: booked, class happened, didn't show
+      { created: sec('2026-05-05T10:00:00Z'), time_start: sec('2026-05-06T07:00:00Z'), status: 'BOOKED', attended: false },
+      // Cancelled in advance → NOT a no-show
+      { created: sec('2026-05-04T10:00:00Z'), time_start: sec('2026-05-06T07:00:00Z'), status: 'CANCELED', attended: false },
+      // Future class — they might still attend, not a no-show yet
+      { created: sec('2026-05-10T10:00:00Z'), time_start: sec('2026-05-15T07:00:00Z'), status: 'BOOKED', attended: false },
+      // Attended → not a no-show
+      { created: sec('2026-05-01T10:00:00Z'), time_start: sec('2026-05-02T07:00:00Z'), status: 'BOOKED', attended: true },
+    ], NOW)
+    expect(out.total_noshow_30d).toBe(1)
+  })
+
+  it('case-insensitive on status', () => {
+    const out = computeBookingAggregates([
+      { created: sec('2026-05-05T10:00:00Z'), time_start: sec('2026-05-06T07:00:00Z'), status: 'booked', attended: false },
+    ], NOW)
+    expect(out.total_noshow_30d).toBe(1)
+  })
+
+  it('handles malformed booking entries gracefully', () => {
+    const out = computeBookingAggregates([
+      null,
+      'not an object',
+      {}, // empty
+      { created: sec('2026-05-08T10:00:00Z'), status: 'BOOKED' }, // valid
+    ], NOW)
+    expect(out.total_bookings_30d).toBe(1)
+  })
+
+  it('uses NOW parameter for deterministic 30-day cutoff', () => {
+    // Same booking data, different "now" → different aggregates.
+    const fixed = NOW_SEC
+    const bookings = [{ created: fixed - 10 * 86400, status: 'BOOKED' }] // 10d ago
+    expect(computeBookingAggregates(bookings, NOW).total_bookings_30d).toBe(1)
+    // Pretend "now" is 60 days later — same booking is now 70d old.
+    const laterNow = NOW + 60 * 86400 * 1000
+    expect(computeBookingAggregates(bookings, laterNow).total_bookings_30d).toBe(0)
   })
 })
 

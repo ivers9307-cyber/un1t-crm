@@ -420,3 +420,53 @@ export async function fetchMembership(creds, membershipId, cache = null) {
   if (cache) cache.set(membershipId, result)
   return result
 }
+
+/**
+ * Fetch a Glofox member's recent bookings via /2.0/bookings.
+ *
+ * Per the spec, the endpoint is paginated (limit defaults 50, max
+ * 100). For engagement-aggregate purposes we want the last ~30 days
+ * of activity — defaults to ~30d window via time_start. Caller can
+ * override.
+ *
+ * Returns the data array (Booking[]) or [] on failure / no data.
+ * Best-effort: a network or auth failure here returns [] so the
+ * containing sync can still write the contact + skip booking
+ * aggregates (next sync will fill them in).
+ *
+ * @param {object} creds  per-location credentials
+ * @param {string} userId Glofox member _id
+ * @param {object} [opts]
+ * @param {string} [opts.branchId]   override branch (defaults to creds.branchId)
+ * @param {number} [opts.windowDays] history window in days (default 30)
+ * @param {number} [opts.limit]      page size (default 100, max 100)
+ */
+export async function fetchUserBookings(creds, userId, opts = {}) {
+  if (!creds || !userId) return []
+  const branchId = opts.branchId || creds.branchId
+  if (!branchId) return []
+  const windowDays = Number.isFinite(opts.windowDays) ? opts.windowDays : 30
+  const limit = Math.min(opts.limit || 100, 100)
+  const cutoffSec = Math.floor((Date.now() - windowDays * 24 * 60 * 60 * 1000) / 1000)
+  // sort_by=-created → newest first; time_start filters by class
+  // start time (not booking creation), but the cutoff still bounds
+  // historical scope. exclude_cancelled=false so we can count
+  // cancellations toward the bookings_30d aggregate too.
+  const qs = new URLSearchParams({
+    branchId,
+    user_id: userId,
+    limit: String(limit),
+    page: '1',
+    sort_by: '-created',
+    time_start: String(cutoffSec),
+    exclude_cancelled: 'false',
+  })
+  try {
+    const r = await glofoxFetch(creds, `/2.0/bookings?${qs.toString()}`)
+    if (!r.ok) return []
+    const body = await r.json()
+    return Array.isArray(body?.data) ? body.data : []
+  } catch {
+    return []
+  }
+}

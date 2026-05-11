@@ -34,6 +34,15 @@ const FIELD_OPTIONS = [
   // falls back to created). Powers "Members > 6 months" anniversary
   // campaigns + cohort analysis.
   { value: 'joined_at',             label: 'Joined (Glofox)',       type: 'date' },
+  // GLOFOX2.1.14 — booking-engagement aggregates from Glofox sync.
+  // Powers re-engagement audiences ("haven't attended in 14 days"),
+  // welcome sequences ("first attendance"), and high-engagement
+  // segmentation ("attended >8 classes this month").
+  { value: 'last_attended_at',      label: 'Last Attended (Glofox)', type: 'date' },
+  { value: 'last_booked_at',        label: 'Last Booked (Glofox)',   type: 'date' },
+  { value: 'total_attended_30d',    label: 'Attended (30d)',         type: 'number' },
+  { value: 'total_bookings_30d',    label: 'Bookings (30d)',         type: 'number' },
+  { value: 'total_noshow_30d',      label: 'No-shows (30d)',         type: 'number' },
   { value: 'glofox_member_id',      label: 'Has Glofox ID',         type: 'exists' },
   { value: 'phone',                 label: 'Has Phone',             type: 'exists' },
 ]
