@@ -3,13 +3,14 @@
 // points at the old site today; we'll flip the routing once DNS is
 // ready — see middleware comment for hostname-based routing path).
 //
-// Design philosophy:
-//   - Brand-aligned with the rest of UN1T's visual identity
-//     (black + white, bold geometric sans, generous negative space)
-//   - Single conversion goal — book a free consultation. Every
-//     section either reinforces credibility or moves the visitor
-//     toward the embedded booking widget further down.
-//   - Mobile-first — most members find their gym from a phone.
+// Conversion-first layout:
+//   1. Compact hero with a single headline (no two-CTA distraction)
+//   2. Embedded booking widget IMMEDIATELY below — the form is the
+//      first thing visitors see above the fold, not buried at the
+//      bottom. This is the conversion goal of the page.
+//   3. Value-prop pillars + social proof live BELOW the form for
+//      visitors who want more context before booking.
+//   4. Footer.
 //
 // Editing today: hand-coded React. Phase 2 will surface a sidebar
 // "Landing page settings" form so operators can edit hero copy + CTA
@@ -55,19 +56,14 @@ export default function WelcomePage() {
           <nav className="hidden md:flex items-center gap-8 text-sm font-medium">
             <a href="#offer"  className="text-white/70 hover:text-white transition-colors">What we do</a>
             <a href="#proof"  className="text-white/70 hover:text-white transition-colors">Members</a>
-            <a href="#book"   className="text-white/70 hover:text-white transition-colors">Visit us</a>
           </nav>
-          <a
-            href="#book"
-            className="text-xs font-semibold uppercase tracking-wider bg-white text-black px-4 py-2 rounded-full hover:bg-white/90 transition-colors"
-          >
-            Book a free intro
-          </a>
         </div>
       </header>
 
-      {/* ── Hero ──────────────────────────────────────────────── */}
-      <section className="relative pt-32 pb-24 md:pt-44 md:pb-36 overflow-hidden">
+      {/* ── Hero — compact, single-headline, immediately above the
+          booking form so the form is in the visitor's first
+          eye-line. ───────────────────────────────────────────── */}
+      <section className="relative pt-24 pb-8 md:pt-32 md:pb-10 overflow-hidden">
         {/* Subtle radial glow behind the headline so the page doesn't
             look like a slab of black. Pure CSS — no image needed. */}
         <div
@@ -78,36 +74,38 @@ export default function WelcomePage() {
           }}
         />
         <div className="relative max-w-5xl mx-auto px-6 text-center">
-          <p className="text-xs md:text-sm uppercase tracking-[0.3em] text-white/60 mb-6">
+          <p className="text-xs md:text-sm uppercase tracking-[0.3em] text-white/60 mb-5">
             Stillorgan, Dublin
           </p>
-          <h1 className="text-5xl md:text-7xl font-black leading-[1.05] tracking-tight mb-6">
+          <h1 className="text-4xl md:text-6xl font-black leading-[1.05] tracking-tight mb-4">
             Train with intent.
             <br />
             <span className="text-white/70">Race with proof.</span>
           </h1>
-          <p className="text-lg md:text-xl text-white/70 max-w-2xl mx-auto mb-10 leading-relaxed">
-            Coach-led strength and conditioning, built around the demands of competitive racing. Open to anyone serious about getting better — beginners welcome.
+          <p className="text-base md:text-lg text-white/70 max-w-2xl mx-auto leading-relaxed">
+            Coach-led strength &amp; conditioning, built for racing. Beginners welcome — book a free 30-minute consultation below.
           </p>
-          <div className="flex items-center justify-center gap-3">
-            <a
-              href="#book"
-              className="inline-flex items-center gap-2 bg-white text-black font-semibold text-sm md:text-base px-6 py-3 md:px-8 md:py-4 rounded-full hover:bg-white/90 transition-colors"
-            >
-              Book a free consultation
-              <span aria-hidden="true">→</span>
-            </a>
-            <a
-              href="#offer"
-              className="inline-flex items-center gap-2 text-white/80 font-medium text-sm md:text-base px-4 py-3 hover:text-white transition-colors"
-            >
-              See what we do
-            </a>
-          </div>
         </div>
       </section>
 
-      {/* ── What we do (3 value props) ─────────────────────────── */}
+      {/* ── Booking section — the conversion target, top of page ── */}
+      <section id="book" className="bg-black pt-2 pb-20 md:pb-28">
+        <div className="max-w-6xl mx-auto px-6">
+          {/* BookingWidget is the same one served at /book/[slug].
+              Embedding it here means the marketing page and the
+              shareable booking link share a single source of truth —
+              one form to maintain, edit it from /bookings/event-types
+              and the changes land everywhere. */}
+          <div className="flex justify-center">
+            <BookingWidget slug={BOOKING_SLUG} />
+          </div>
+          <p className="text-center text-xs text-white/50 mt-6">
+            Or just walk in &mdash; we&apos;re at <span className="text-white/80">UN1T Stillorgan, Dublin</span>.
+          </p>
+        </div>
+      </section>
+
+      {/* ── What we do (3 value props) — for visitors who scroll ── */}
       <section id="offer" className="bg-white text-black py-20 md:py-28">
         <div className="max-w-6xl mx-auto px-6">
           <div className="max-w-2xl mb-16">
@@ -148,35 +146,21 @@ export default function WelcomePage() {
 
           <blockquote className="max-w-3xl mx-auto mt-20 text-center">
             <p className="text-2xl md:text-3xl font-medium leading-snug text-white/90">
-              &ldquo;The coaching is what separates UN1T from any gym I've trained at. I came in for a Hyrox PB. I stayed for the room.&rdquo;
+              &ldquo;The coaching is what separates UN1T from any gym I&apos;ve trained at. I came in for a Hyrox PB. I stayed for the room.&rdquo;
             </p>
             <footer className="mt-6 text-sm uppercase tracking-widest text-white/60">
-              — Member, joined 2024
+              &mdash; Member, joined 2024
             </footer>
           </blockquote>
-        </div>
-      </section>
 
-      {/* ── Booking section (the conversion target) ────────────── */}
-      <section id="book" className="bg-gray-50 text-black py-20 md:py-28">
-        <div className="max-w-6xl mx-auto px-6">
-          <div className="text-center mb-12">
-            <p className="text-xs uppercase tracking-[0.3em] text-black/50 mb-4">Visit us</p>
-            <h2 className="text-3xl md:text-5xl font-black leading-tight mb-4">
+          <div className="text-center mt-14">
+            <a
+              href="#book"
+              className="inline-flex items-center gap-2 bg-white text-black font-semibold text-sm md:text-base px-6 py-3 md:px-8 md:py-4 rounded-full hover:bg-white/90 transition-colors"
+            >
               Book your free consultation
-            </h2>
-            <p className="text-base md:text-lg text-black/70 max-w-2xl mx-auto">
-              30 minutes with a coach. Tour the studio, ask questions, see if UN1T is the right fit. No pressure to sign up.
-            </p>
-          </div>
-
-          {/* BookingWidget is the same one served at /book/[slug].
-              Embedding it here means the marketing page and the
-              shareable booking link share a single source of truth —
-              one form to maintain, edit it from /bookings/event-types
-              and the changes land everywhere. */}
-          <div className="flex justify-center">
-            <BookingWidget slug={BOOKING_SLUG} />
+              <span aria-hidden="true">↑</span>
+            </a>
           </div>
         </div>
       </section>
