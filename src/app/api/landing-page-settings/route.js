@@ -84,7 +84,7 @@ const PutSchema = z.object({
   // here AND by a CHECK constraint in the DB.
   logo_url:           z.string().url().max(2000).nullable().optional(),
   logo_alt:           z.string().trim().max(200).nullable().optional(),
-  logo_width_px:      z.number().int().min(24).max(400).nullable().optional(),
+  logo_width_px:      z.number().int().min(40).max(600).nullable().optional(),
 }).strict()
 
 function isMasterOrLocationOwner(user, locationId) {

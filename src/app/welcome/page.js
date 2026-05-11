@@ -81,9 +81,13 @@ export default async function WelcomePage() {
   const blocks = blocksOrDefault(row?.blocks)
   // Site chrome (mig 129) — logo lives outside the blocks array
   // because it always renders regardless of section ordering.
+  // Width drives the rendered size (height auto-follows aspect
+  // ratio). Default 200px is roughly 2-3x the original cramped
+  // h-10 render that was pinning logos to ~40px tall regardless
+  // of what logo_width_px was set to.
   const logoUrl     = row?.logo_url || null
   const logoAlt     = row?.logo_alt || 'UN1T Dublin'
-  const logoWidthPx = row?.logo_width_px || 96
+  const logoWidthPx = row?.logo_width_px || 200
 
   return (
     <div className="min-h-screen bg-black text-white antialiased">
@@ -95,8 +99,8 @@ export default async function WelcomePage() {
             <img
               src={logoUrl}
               alt={logoAlt}
-              style={{ maxWidth: `${logoWidthPx}px` }}
-              className="h-10 w-auto object-contain"
+              style={{ width: `${logoWidthPx}px`, height: 'auto' }}
+              className="object-contain"
             />
           ) : (
             <div className="text-xl font-black tracking-widest">UN1T</div>

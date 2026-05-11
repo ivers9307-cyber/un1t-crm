@@ -146,11 +146,11 @@ export default function LandingPageSettingsForm({ locationId, initialSettings, a
     try {
       // Coerce + clamp logo width on save (the input keeps it as
       // a string so mid-edit empty state doesn't snap; clamp to
-      // the same 24-400 range as the API + DB CHECK constraint).
+      // the same 40-600 range as the API + DB CHECK constraint).
       let widthPxOrNull = null
       const parsed = parseInt(logoWidthPx, 10)
       if (Number.isFinite(parsed)) {
-        widthPxOrNull = Math.min(400, Math.max(24, parsed))
+        widthPxOrNull = Math.min(600, Math.max(40, parsed))
       }
       const payload = {
         location_id: locationId,
@@ -230,15 +230,15 @@ export default function LandingPageSettingsForm({ locationId, initialSettings, a
           <Field label="Alt text" hint="What screen readers announce. Defaults to &ldquo;UN1T Dublin&rdquo; if blank.">
             <Input value={logoAlt} onChange={setLogoAlt} maxLength={200} placeholder="UN1T Dublin" />
           </Field>
-          <Field label="Logo width (px)" hint="24-400. Defaults to 96px. Tweak if a wide wordmark looks too small or a square logo looks too big.">
+          <Field label="Logo width (px)" hint="40-600. Defaults to 200px. Width drives the rendered size — height auto-follows the image's aspect ratio. Bump it up for a chunky wordmark, down for a square brand mark.">
             <input
               type="number"
-              min={24}
-              max={400}
-              step={4}
+              min={40}
+              max={600}
+              step={10}
               value={logoWidthPx}
               onChange={(e) => setLogoWidthPx(e.target.value)}
-              placeholder="96"
+              placeholder="200"
               className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
             />
           </Field>
