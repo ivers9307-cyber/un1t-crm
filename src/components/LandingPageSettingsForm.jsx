@@ -39,7 +39,7 @@ import {
   ChevronRight, Layers,
 } from 'lucide-react'
 import {
-  BLOCK_TYPES, blocksOrDefault, newBlockOfType, setByPath,
+  BLOCK_TYPES, blocksOrDefault, newBlockOfType, setByPath, newBlockId,
 } from '@/lib/landing-page-blocks'
 
 // PostMessage namespace shared with src/components/landing-page/
@@ -151,6 +151,55 @@ export default function LandingPageSettingsForm({ locationId, initialSettings, a
         setBlocks((prev) => prev.map((b) => (
           b.id === msg.blockId ? setByPath(b, msg.path, msg.value) : b
         )))
+      } else if (msg.type === 'move-block' && msg.blockId && (msg.direction === 'up' || msg.direction === 'down')) {
+        // LP3c.4 — toolbar move arrow on a block in the iframe.
+        setBlocks((prev) => {
+          const i = prev.findIndex((b) => b.id === msg.blockId)
+          if (i < 0) return prev
+          const j = msg.direction === 'up' ? i - 1 : i + 1
+          if (j < 0 || j >= prev.length) return prev
+          const next = prev.slice()
+          ;[next[i], next[j]] = [next[j], next[i]]
+          return next
+        })
+      } else if (msg.type === 'duplicate-block' && msg.blockId) {
+        // LP3c.4 — duplicate inserts a copy directly after the
+        // source. Fresh id so React keys + future drag don't
+        // collide; copy everything else verbatim.
+        setBlocks((prev) => {
+          const i = prev.findIndex((b) => b.id === msg.blockId)
+          if (i < 0) return prev
+          const copy = JSON.parse(JSON.stringify(prev[i]))
+          copy.id = newBlockId()
+          const next = prev.slice()
+          next.splice(i + 1, 0, copy)
+          return next
+        })
+      } else if (msg.type === 'delete-block' && msg.blockId) {
+        // LP3c.4 — toolbar trash on a block in the iframe.
+        // Confirmation already happened in the iframe.
+        setBlocks((prev) => prev.filter((b) => b.id !== msg.blockId))
+        setExpanded((prev) => {
+          const next = new Set(prev)
+          next.delete(msg.blockId)
+          return next
+        })
+      } else if (msg.type === 'add-block' && typeof msg.blockType === 'string' && typeof msg.atIndex === 'number') {
+        // LP3c.4 — InsertGap pick from the iframe. atIndex is the
+        // position the new block should occupy AFTER insertion
+        // (0 = at top; blocks.length = at bottom; n = between
+        // existing[n-1] and existing[n]).
+        let added = null
+        try { added = newBlockOfType(msg.blockType) } catch { return }
+        setBlocks((prev) => {
+          const idx = Math.max(0, Math.min(prev.length, msg.atIndex))
+          const next = prev.slice()
+          next.splice(idx, 0, added)
+          return next
+        })
+        // Auto-expand the freshly-added block in the form list so
+        // the operator can immediately edit its content.
+        setExpanded((prev) => new Set(prev).add(added.id))
       }
     }
     window.addEventListener('message', onMessage)
