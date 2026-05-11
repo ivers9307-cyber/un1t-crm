@@ -4,6 +4,7 @@ import {
   mapMembershipStatus,
   previewMemberSync,
   parseGlofoxDate,
+  parseGlofoxJoinedAt,
   normalizePhone,
   mapGlofoxSource,
   pipelineStageSlugForStatus,
@@ -408,6 +409,61 @@ describe('detectCreditMember', () => {
   })
 })
 
+// GLOFOX2.1.13 — joined_at parsing for tenure audiences.
+describe('parseGlofoxJoinedAt', () => {
+  it('returns null for null / non-object input', () => {
+    expect(parseGlofoxJoinedAt(null)).toBeNull()
+    expect(parseGlofoxJoinedAt('string')).toBeNull()
+    expect(parseGlofoxJoinedAt({})).toBeNull()
+  })
+
+  it('prefers joined_at over created (operator-set wins)', () => {
+    // joined_at set in the past (member transferred from a prior gym),
+    // created is "today" because the Glofox row was made now.
+    const out = parseGlofoxJoinedAt({
+      joined_at: '2024-01-15T00:00:00Z',
+      created: 1778108400, // 2026-04-19
+    })
+    expect(out).toBe('2024-01-15T00:00:00.000Z')
+  })
+
+  it('parses joined_at ISO date-time string', () => {
+    expect(parseGlofoxJoinedAt({ joined_at: '2025-06-01T12:34:56Z' }))
+      .toBe('2025-06-01T12:34:56.000Z')
+  })
+
+  it('falls back to created (Unix seconds) when joined_at is missing', () => {
+    // Cathy: created=1776711606 (April 19, 2026)
+    const out = parseGlofoxJoinedAt({ created: 1776711606 })
+    expect(out).toBe('2026-04-20T19:00:06.000Z')
+  })
+
+  it('handles created as Unix millis (>10-digit guard)', () => {
+    expect(parseGlofoxJoinedAt({ created: 1776711606000 }))
+      .toBe('2026-04-20T19:00:06.000Z')
+  })
+
+  it('rejects out-of-range created timestamps (sentinel garbage)', () => {
+    expect(parseGlofoxJoinedAt({ created: -9_999_999_999 })).toBeNull()
+    expect(parseGlofoxJoinedAt({ created: 99_999_999_999_999 })).toBeNull()
+  })
+
+  it('returns null when joined_at is unparseable AND created is missing', () => {
+    expect(parseGlofoxJoinedAt({ joined_at: 'not a date' })).toBeNull()
+    expect(parseGlofoxJoinedAt({ joined_at: '' })).toBeNull()
+  })
+
+  it('falls back to created when joined_at is unparseable', () => {
+    // Defence-in-depth: bad joined_at shouldn't kill the tenure value
+    // entirely if we have a usable created timestamp.
+    const out = parseGlofoxJoinedAt({
+      joined_at: 'not a date',
+      created: 1776711606,
+    })
+    expect(out).toBe('2026-04-20T19:00:06.000Z')
+  })
+})
+
 describe('parseGlofoxDate', () => {
   it('returns null for null / empty / unparseable input', () => {
     expect(parseGlofoxDate(null)).toBeNull()
@@ -787,6 +843,22 @@ describe('mapGlofoxMember (real Glofox payload — Cathy, comp\'d Credit Member)
 
   it('maps WEBPORTAL source to website lead_source', () => {
     expect(mapGlofoxMember(cathyPayload).lead_source).toBe('website')
+  })
+
+  it('captures joined_at from member.created when joined_at is absent (GLOFOX2.1.13)', () => {
+    // Cathy's payload has created=1776711606 and no explicit
+    // joined_at — we should still surface a tenure date.
+    const payloadWithCreated = { ...cathyPayload, created: 1776711606 }
+    expect(mapGlofoxMember(payloadWithCreated).joined_at).toBe('2026-04-20T19:00:06.000Z')
+  })
+
+  it('captures joined_at from member.joined_at when set (operator import)', () => {
+    const payloadWithJoinedAt = {
+      ...cathyPayload,
+      joined_at: '2024-08-15T00:00:00Z',
+      created: 1776711606,
+    }
+    expect(mapGlofoxMember(payloadWithJoinedAt).joined_at).toBe('2024-08-15T00:00:00.000Z')
   })
 })
 

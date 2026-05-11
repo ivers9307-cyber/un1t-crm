@@ -30,6 +30,10 @@ const FIELD_OPTIONS = [
   { value: 'last_emailed_at',       label: 'Last Emailed',          type: 'date' },
   { value: 'created_at',            label: 'Contact Created',       type: 'date' },
   { value: 'lead_created_at',       label: 'Lead Created',          type: 'date' },
+  // GLOFOX2.1.13 — Glofox-side tenure date (joined_at preferred,
+  // falls back to created). Powers "Members > 6 months" anniversary
+  // campaigns + cohort analysis.
+  { value: 'joined_at',             label: 'Joined (Glofox)',       type: 'date' },
   { value: 'glofox_member_id',      label: 'Has Glofox ID',         type: 'exists' },
   { value: 'phone',                 label: 'Has Phone',             type: 'exists' },
 ]

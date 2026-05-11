@@ -60,6 +60,40 @@ function pluck(obj, paths) {
 // ─────────────────────────────────────────────────────────────
 
 /**
+ * Parse a Glofox tenure-date value into an ISO timestamp string
+ * suitable for contacts.joined_at TIMESTAMPTZ. Tries:
+ *   1. member.joined_at (ISO date-time string per spec) — set by
+ *      operators on imports / member transfers, can be backdated.
+ *   2. member.created (Unix seconds — Glofox row-creation time) —
+ *      fallback when joined_at isn't set (normal sign-up flow).
+ *
+ * Returns null when neither is present or parseable so the column
+ * stays NULL rather than getting garbage. We use ISO timestamps
+ * (TIMESTAMPTZ) rather than dates because the underlying Glofox
+ * values are timestamps; truncating to date-only would lose
+ * information.
+ */
+export function parseGlofoxJoinedAt(member) {
+  if (!member || typeof member !== 'object') return null
+  // Step 1 — joined_at preferred (operator-set, can be in the past).
+  if (typeof member.joined_at === 'string' && member.joined_at.trim()) {
+    const d = new Date(member.joined_at)
+    if (!Number.isNaN(d.getTime())) return d.toISOString()
+  }
+  // Step 2 — fallback to Glofox row-creation timestamp.
+  const created = member.created
+  if (typeof created === 'number' && Number.isFinite(created)) {
+    // Same heuristic as parseGlofoxDate — >10 digits = millis.
+    let secs = created
+    if (secs > 10_000_000_000) secs = Math.floor(secs / 1000)
+    // Sanity-bound: 2000-2100 in unix seconds.
+    if (secs < 946_684_800 || secs > 4_102_444_800) return null
+    return new Date(secs * 1000).toISOString()
+  }
+  return null
+}
+
+/**
  * Parse a Glofox date-ish value into a YYYY-MM-DD string suitable
  * for the contacts.dob DATE column.
  *
@@ -519,6 +553,13 @@ export function mapGlofoxMember(member, ctx = null) {
   // reports. Null when Glofox doesn't have it (most members).
   const dob = parseGlofoxDate(member.birth ?? member.dob ?? null)
 
+  // GLOFOX2.1.13 — tenure date. Prefers Glofox's joined_at (operator-
+  // set, can be backdated for imports), falls back to created (the
+  // Glofox row-creation Unix timestamp) so every synced member has
+  // a tenure anchor. Powers "Members > 6 months" anniversary
+  // sequences + cohort analysis.
+  const joinedAt = parseGlofoxJoinedAt(member)
+
   // GLOFOX2.1.2 — granular source mapping. Glofox's WEBPORTAL /
   // WALK_IN / FACEBOOK etc. → our leadSourceSchema enum
   // (src/lib/schemas.js). Defaults to 'other' for unmapped values.
@@ -540,6 +581,7 @@ export function mapGlofoxMember(member, ctx = null) {
     phone,
     name,
     dob,
+    joined_at: joinedAt,
     lead_source: leadSource,
     glofox_membership_status: membershipStatus,
   }
@@ -777,7 +819,7 @@ export function mapMembershipStatus(member, ctx = null) {
 export async function findExistingContact(db, locationId, mapped) {
   if (!db || !locationId || !mapped) return { byGlofox: null, byEmail: null }
   // Lookup by glofox_member_id and email in parallel.
-  const SELECT_COLS = 'id, email, first_name, last_name, phone, dob, glofox_member_id, glofox_membership_status, lead_source'
+  const SELECT_COLS = 'id, email, first_name, last_name, phone, dob, joined_at, glofox_member_id, glofox_membership_status, lead_source'
   const queries = []
   queries.push(
     db.from('contacts')
@@ -897,6 +939,7 @@ export async function previewMemberSync(db, locationId, member, opts = {}) {
         phone:                    { from: null, to: mapped.phone },
         name:                     { from: null, to: mapped.name },
         dob:                      { from: null, to: mapped.dob },
+        joined_at:                { from: null, to: mapped.joined_at },
         glofox_membership_status: { from: null, to: mapped.glofox_membership_status },
         lead_source:              { from: null, to: mapped.lead_source },
       },
@@ -932,6 +975,17 @@ export async function previewMemberSync(db, locationId, member, opts = {}) {
   }
   if (!existing.dob && mapped.dob) {
     changes.dob = { from: existing.dob, to: mapped.dob }
+  }
+  // GLOFOX2.1.13 — joined_at writes when CRM is empty AND when
+  // Glofox has a backdated joined_at that's earlier than what we
+  // currently have (operator just did an import-with-history).
+  // Otherwise leave the existing value alone (don't churn it).
+  if (mapped.joined_at) {
+    const existingTs = existing.joined_at ? new Date(existing.joined_at).getTime() : null
+    const mappedTs = new Date(mapped.joined_at).getTime()
+    if (existingTs == null || (Number.isFinite(mappedTs) && mappedTs < existingTs)) {
+      changes.joined_at = { from: existing.joined_at, to: mapped.joined_at }
+    }
   }
   // Always stamp synced_at — but represent in the diff so the
   // operator sees we will touch the row.
@@ -1025,6 +1079,7 @@ export async function applyMemberSync(db, locationId, member, opts = {}) {
       phone: m.phone,
       name: m.name,
       dob: m.dob,
+      joined_at: m.joined_at,
       glofox_membership_status: m.glofox_membership_status,
       glofox_synced_at: now,
       lead_source: m.lead_source,
@@ -1041,6 +1096,7 @@ export async function applyMemberSync(db, locationId, member, opts = {}) {
     if ('last_name'  in preview.changes)               updates.last_name                = m.last_name
     if ('phone'      in preview.changes)               updates.phone                    = m.phone
     if ('dob'        in preview.changes)               updates.dob                      = m.dob
+    if ('joined_at'  in preview.changes)               updates.joined_at                = m.joined_at
     // Recompose name only if first_name OR last_name changed.
     if ('first_name' in preview.changes || 'last_name' in preview.changes) {
       updates.name = m.name
