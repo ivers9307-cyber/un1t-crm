@@ -1,11 +1,12 @@
-// /welcome — public marketing landing page (Phase 2 of the eventual
+// /welcome — public marketing landing page (Phase 3a of the eventual
 // un1tdublin.com customer-acquisition surface).
 //
 // Phase 1 was hand-coded React with all copy + media inlined. Phase 2
-// (mig 126) lifts the operator-tweakable bits — hero copy, hero image,
-// booking-form slug, value-prop pillars, stats, testimonial — into the
-// `landing_page_settings` table so master/owner can edit them from
-// /settings/landing-page without a redeploy.
+// (mig 126) lifted the operator-tweakable bits into landing_page_settings
+// + a master/owner form at /settings/landing-page. Phase 3a (mig 127)
+// adds four media types: hero video background (precedence over hero
+// image), photo gallery section, YouTube/Instagram embed section,
+// and an optional photo above each pillar.
 //
 // Render strategy: read the settings row, merge field-by-field with
 // the hard-coded DEFAULTS below. Any NULL/empty column falls back to
@@ -20,13 +21,15 @@
 //   2. Embedded booking widget IMMEDIATELY below — the form is the
 //      first thing visitors see above the fold, not buried at the
 //      bottom. This is the conversion goal of the page.
-//   3. Value-prop pillars + social proof live BELOW the form for
-//      visitors who want more context before booking.
+//   3. Value-prop pillars + (optional) gallery + (optional) embed +
+//      social proof live BELOW the form for visitors who want more
+//      context before booking.
 //   4. Footer.
 
 import Link from 'next/link'
 import BookingWidget from '@/components/BookingWidget'
 import { createServerClient } from '@/lib/supabase'
+import { parseEmbed } from '@/lib/landing-page-embed'
 
 // SINGLE SOURCE OF TRUTH for the default copy + media. Mirrored in
 // LandingPageSettingsForm.jsx — keep these in sync so the operator
@@ -41,10 +44,17 @@ const DEFAULTS = {
   // or any other active booking type from the settings page.
   booking_slug:   'consultation',
   hero_image_url: null,
+  // Mig 127 additions — all opt-in. NULL/empty hides the section.
+  hero_video_url: null,
+  gallery_title:  'Inside the studio',
+  gallery:        [],
+  embed_title:    'See it in motion',
+  embed_url:      null,
+  embed_caption:  null,
   pillars: [
-    { number: '01', title: 'Coach-led, every session', body: "A head coach on the floor for every class — programming, cueing, form-checking. You're not just being timed; you're being taught." },
-    { number: '02', title: 'Race-ready conditioning', body: "Hyrox-style stations built into your week. Whether you're racing or just training like you might, you'll be ready when the day comes." },
-    { number: '03', title: 'A room that shows up',    body: 'Members across every level — first-time movers to elite competitors. Intense, friendly, zero judgment.' },
+    { number: '01', title: 'Coach-led, every session', body: "A head coach on the floor for every class — programming, cueing, form-checking. You're not just being timed; you're being taught.", photo_url: null },
+    { number: '02', title: 'Race-ready conditioning', body: "Hyrox-style stations built into your week. Whether you're racing or just training like you might, you'll be ready when the day comes.", photo_url: null },
+    { number: '03', title: 'A room that shows up',    body: 'Members across every level — first-time movers to elite competitors. Intense, friendly, zero judgment.', photo_url: null },
   ],
   stats: [
     { number: '200+', label: 'Members training every week' },
@@ -59,15 +69,24 @@ const DEFAULTS = {
 // Merge a DB row over DEFAULTS — empty strings count as "use default"
 // so clearing a field in the operator form restores the polished
 // public default rather than rendering blank. JSONB columns
-// (pillars, stats) only override if the saved array is non-empty.
+// (pillars, stats, gallery) only override if the saved array is
+// non-empty (gallery is the exception — it stays empty since an empty
+// gallery legitimately means "hide the section"; handled below).
 function withFallbacks(row) {
   if (!row) return { ...DEFAULTS }
   const out = { ...DEFAULTS }
   for (const k of Object.keys(DEFAULTS)) {
     const v = row[k]
+    // Gallery is opt-in: respect the saved value (including empty
+    // array) so an operator can explicitly hide the section.
+    if (k === 'gallery') {
+      out[k] = Array.isArray(v) ? v : []
+      continue
+    }
     if (Array.isArray(DEFAULTS[k])) {
       if (Array.isArray(v) && v.length > 0) out[k] = v
-    } else if (k === 'hero_image_url') {
+    } else if (k === 'hero_image_url' || k === 'hero_video_url' || k === 'embed_url' || k === 'embed_caption') {
+      // These are also opt-in — honour explicit clearing.
       out[k] = v || null
     } else if (typeof v === 'string' && v.trim().length > 0) {
       out[k] = v
@@ -126,11 +145,12 @@ export async function generateMetadata() {
 
 export default async function WelcomePage() {
   const s = withFallbacks(await loadSettings())
+  const embed = parseEmbed(s.embed_url)
 
   return (
     <div className="min-h-screen bg-black text-white antialiased">
       {/* ── Top nav ───────────────────────────────────────────── */}
-      <header className="absolute inset-x-0 top-0 z-10">
+      <header className="absolute inset-x-0 top-0 z-20">
         <div className="max-w-6xl mx-auto px-6 py-5 flex items-center justify-between">
           <div className="text-xl font-black tracking-widest">UN1T</div>
           <nav className="hidden md:flex items-center gap-8 text-sm font-medium">
@@ -142,13 +162,33 @@ export default async function WelcomePage() {
 
       {/* ── Hero — compact, single-headline, immediately above the
           booking form so the form is in the visitor's first
-          eye-line. ───────────────────────────────────────────── */}
+          eye-line. Backdrop precedence: video > image > gradient.
+          Video uses the image as poster so the hero never flashes
+          black during the load. ─────────────────────────────────── */}
       <section className="relative pt-24 pb-8 md:pt-32 md:pb-10 overflow-hidden">
-        {/* When the operator has uploaded a hero image, layer it
-            behind the headline with a darkening overlay so the white
-            text stays legible. Otherwise fall back to the original
-            radial-gradient — pure CSS, no image needed. */}
-        {s.hero_image_url ? (
+        {s.hero_video_url ? (
+          <>
+            <video
+              className="absolute inset-0 w-full h-full object-cover pointer-events-none"
+              src={s.hero_video_url}
+              poster={s.hero_image_url || undefined}
+              autoPlay
+              muted
+              loop
+              playsInline
+              preload="metadata"
+              aria-hidden="true"
+            />
+            <div
+              className="absolute inset-0 pointer-events-none"
+              style={{
+                background:
+                  'linear-gradient(180deg, rgba(0,0,0,0.55) 0%, rgba(0,0,0,0.7) 60%, rgba(0,0,0,0.95) 100%)',
+              }}
+              aria-hidden="true"
+            />
+          </>
+        ) : s.hero_image_url ? (
           <>
             <div
               className="absolute inset-0 pointer-events-none bg-cover bg-center"
@@ -226,11 +266,74 @@ export default async function WelcomePage() {
                 number={p.number || ''}
                 title={p.title || ''}
                 body={p.body || ''}
+                photoUrl={p.photo_url || null}
               />
             ))}
           </div>
         </div>
       </section>
+
+      {/* ── Gallery (mig 127, optional) ─────────────────────────── */}
+      {s.gallery.length > 0 && (
+        <section id="gallery" className="bg-black py-20 md:py-28 border-t border-white/10">
+          <div className="max-w-6xl mx-auto px-6">
+            <p className="text-xs uppercase tracking-[0.3em] text-white/50 mb-4">{s.gallery_title}</p>
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 md:gap-4">
+              {s.gallery.map((g, i) => (
+                <figure
+                  key={i}
+                  className="relative aspect-square overflow-hidden bg-white/5 group"
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={g.url}
+                    alt={g.alt || ''}
+                    className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
+                    loading="lazy"
+                  />
+                  {g.caption && (
+                    <figcaption className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent p-3 text-xs text-white/90">
+                      {g.caption}
+                    </figcaption>
+                  )}
+                </figure>
+              ))}
+            </div>
+          </div>
+        </section>
+      )}
+
+      {/* ── Embed (mig 127, optional) ───────────────────────────── */}
+      {embed && (
+        <section id="embed" className="bg-black py-20 md:py-28 border-t border-white/10">
+          <div className="max-w-4xl mx-auto px-6">
+            <p className="text-xs uppercase tracking-[0.3em] text-white/50 mb-4">{s.embed_title}</p>
+            {/* 16:9 wrapper for YouTube; Instagram embeds use a
+                taller portrait aspect for reels — we let IG decide
+                its own height inside its own iframe.  */}
+            <div
+              className={
+                embed.provider === 'instagram'
+                  ? 'relative w-full max-w-md mx-auto'
+                  : 'relative w-full aspect-video bg-white/5'
+              }
+              style={embed.provider === 'instagram' ? { minHeight: '600px' } : undefined}
+            >
+              <iframe
+                src={embed.embedUrl}
+                title={s.embed_title || 'Embedded video'}
+                className="absolute inset-0 w-full h-full"
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                referrerPolicy="strict-origin-when-cross-origin"
+                allowFullScreen
+              />
+            </div>
+            {s.embed_caption && (
+              <p className="text-center text-sm text-white/60 mt-4">{s.embed_caption}</p>
+            )}
+          </div>
+        </section>
+      )}
 
       {/* ── Social proof ───────────────────────────────────────── */}
       <section id="proof" className="bg-black text-white py-20 md:py-28 border-t border-white/10">
@@ -299,9 +402,20 @@ export default async function WelcomePage() {
   )
 }
 
-function Pillar({ number, title, body }) {
+function Pillar({ number, title, body, photoUrl }) {
   return (
     <div className="bg-white p-8 md:p-10">
+      {photoUrl && (
+        <div className="aspect-[4/3] mb-6 overflow-hidden -mx-8 -mt-8 md:-mx-10 md:-mt-10 bg-black/5">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={photoUrl}
+            alt=""
+            className="w-full h-full object-cover"
+            loading="lazy"
+          />
+        </div>
+      )}
       <div className="text-xs font-mono text-black/40 mb-6">{number}</div>
       <h3 className="text-xl md:text-2xl font-black mb-3 leading-tight">{title}</h3>
       <p className="text-black/70 leading-relaxed">{body}</p>

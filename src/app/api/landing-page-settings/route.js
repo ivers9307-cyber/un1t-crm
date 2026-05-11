@@ -28,14 +28,27 @@ export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 const PillarSchema = z.object({
-  number: z.string().trim().max(20).optional(),
-  title:  z.string().trim().max(200).optional(),
-  body:   z.string().trim().max(1000).optional(),
+  number:    z.string().trim().max(20).optional(),
+  title:     z.string().trim().max(200).optional(),
+  body:      z.string().trim().max(1000).optional(),
+  // Mig 127 — optional photo above the pillar number/title.
+  photo_url: z.string().url().max(2000).nullable().optional(),
 }).strict()
 
 const StatSchema = z.object({
   number: z.string().trim().max(20).optional(),
   label:  z.string().trim().max(200).optional(),
+}).strict()
+
+// Mig 127 — gallery items. URL is required (no point storing an
+// item without a photo); alt + caption optional. Cap of 24 photos
+// per gallery is way more than the layout can comfortably show but
+// gives operators headroom for "swap to fresh photos every month"
+// workflows without needing schema changes.
+const GalleryItemSchema = z.object({
+  url:     z.string().url().max(2000),
+  alt:     z.string().trim().max(400).nullable().optional(),
+  caption: z.string().trim().max(400).nullable().optional(),
 }).strict()
 
 const PutSchema = z.object({
@@ -46,8 +59,18 @@ const PutSchema = z.object({
   hero_subtext:       z.string().trim().max(2000).nullable().optional(),
   booking_slug:       z.string().trim().max(200).nullable().optional(),
   hero_image_url:     z.string().url().max(2000).nullable().optional(),
+  // Mig 127 — hero video takes precedence over hero image when set.
+  hero_video_url:     z.string().url().max(2000).nullable().optional(),
   pillars:            z.array(PillarSchema).max(6).optional(),
   stats:              z.array(StatSchema).max(6).optional(),
+  // Mig 127 — gallery section. NULL title falls back to the default
+  // render heading; empty array hides the section entirely.
+  gallery_title:      z.string().trim().max(200).nullable().optional(),
+  gallery:            z.array(GalleryItemSchema).max(24).optional(),
+  // Mig 127 — embed section. embed_url empty/NULL hides the section.
+  embed_title:        z.string().trim().max(200).nullable().optional(),
+  embed_url:          z.string().url().max(2000).nullable().optional(),
+  embed_caption:      z.string().trim().max(400).nullable().optional(),
   testimonial_quote:  z.string().trim().max(2000).nullable().optional(),
   testimonial_author: z.string().trim().max(200).nullable().optional(),
 }).strict()
@@ -108,12 +131,15 @@ export async function PUT(request) {
   const payload = { location_id: body.location_id, updated_by: user.id || null }
   for (const key of [
     'hero_eyebrow','hero_headline','hero_subhead','hero_subtext',
-    'booking_slug','hero_image_url','testimonial_quote','testimonial_author',
+    'booking_slug','hero_image_url','hero_video_url',
+    'gallery_title','embed_title','embed_url','embed_caption',
+    'testimonial_quote','testimonial_author',
   ]) {
     if (body[key] !== undefined) payload[key] = body[key]
   }
   if (body.pillars !== undefined) payload.pillars = body.pillars
   if (body.stats   !== undefined) payload.stats   = body.stats
+  if (body.gallery !== undefined) payload.gallery = body.gallery
 
   const db = createServerClient()
   const { data, error } = await db
