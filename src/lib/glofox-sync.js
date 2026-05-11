@@ -200,9 +200,10 @@ const GLOFOX_STATUS_TO_STAGE_SLUG = {
 
 /**
  * Pure mapping: Glofox membership status → CRM pipeline stage
- * slug. Unknown statuses default to 'new_lead' so the member
- * still appears in the pipeline (operator can drag them elsewhere
- * after first sight).
+ * slug FOR FIRST-TIME PLACEMENT (no existing deal yet). Unknown
+ * statuses default to 'new_lead' so the member still appears in
+ * the pipeline. For transitions on EXISTING deals see
+ * targetDealStageForSync below.
  */
 export function pipelineStageSlugForStatus(status) {
   if (!status) return 'new_lead'
@@ -210,67 +211,164 @@ export function pipelineStageSlugForStatus(status) {
 }
 
 /**
- * Ensure the contact has at least one open deal. Backfills the
- * pipeline for existing Glofox-synced contacts that pre-date the
- * deal-creation logic. Returns:
- *   { created: true,  deal_id, stage_slug }  — fresh deal made
- *   { created: false, existing_deal_id }     — already had one
- *   { created: false, error }                 — lookup or insert failed
+ * Transition map for EXISTING deals (GLOFOX2.1.4).
+ *
+ * Decides whether to auto-move a contact's open deal when their
+ * Glofox membership status changes. Returns the target stage
+ * slug — or null to leave the deal alone.
+ *
+ * Auto-move ONLY when the deal is in a "system-default" stage
+ * (one this sync would have put them in). If the operator has
+ * manually moved them to ANY OTHER stage (e.g., follow_up_needed
+ * after a chase call, or returning_member after a comeback chat),
+ * the sync respects that — Glofox owns membership state, but the
+ * operator owns where the deal sits.
+ *
+ * Routing:
+ *   → active     from trial_active / new_lead*  → member         (converted)
+ *   → trial      from new_lead*                  → trial_active   (promoted)
+ *   → cancelled  from member                     → lost_member    (paying customer churned)
+ *   → cancelled  from trial_active / new_lead*   → follow_up_needed (chase them)
+ *   → paused     from member                     → follow_up_needed (at-risk)
+ *   anything else                                → null (leave alone)
  */
-export async function ensureDealForContact(db, locationId, contactId, glofoxStatus) {
-  if (!db || !locationId || !contactId) {
-    return { created: false, error: 'missing arguments' }
+const SYSTEM_DEFAULT_PRE_PAID_STAGES = new Set([
+  'trial_active', 'new_lead', 'new_lead_social',
+])
+
+export function targetDealStageForSync(newStatus, currentStageSlug) {
+  const s = newStatus ? String(newStatus).toLowerCase() : ''
+  switch (s) {
+    case 'active':
+      // Promoted FROM a pre-paid funnel stage → member.
+      if (SYSTEM_DEFAULT_PRE_PAID_STAGES.has(currentStageSlug)) return 'member'
+      return null
+    case 'trial':
+      // Promoted FROM a new-lead stage → trial_active.
+      if (currentStageSlug === 'new_lead' || currentStageSlug === 'new_lead_social') {
+        return 'trial_active'
+      }
+      return null
+    case 'cancelled':
+    case 'expired':
+    case 'inactive':
+      // Paying member churned → lost_member.
+      if (currentStageSlug === 'member') return 'lost_member'
+      // Trial / lead that didn't convert → follow_up_needed so a
+      // team member can call them.
+      if (SYSTEM_DEFAULT_PRE_PAID_STAGES.has(currentStageSlug)) return 'follow_up_needed'
+      return null
+    case 'paused':
+      // Paying member on pause → at-risk; flag for follow-up.
+      if (currentStageSlug === 'member') return 'follow_up_needed'
+      return null
+    default:
+      // 'lead' or unknown → don't touch the deal. Operator wins.
+      return null
   }
-  // 1. Already has an open deal? Don't make a second one.
-  const { data: existing, error: existingErr } = await db
+}
+
+/**
+ * Look up the current open deal for a contact + its stage slug.
+ * Returns null when no open deal exists. Used by both preview
+ * (to compute the proposed action) and apply (to execute it).
+ */
+export async function getOpenDealWithStage(db, contactId) {
+  if (!db || !contactId) return null
+  // Two queries — deal first, then resolve the stage slug. Avoids
+  // Supabase relation-syntax quirks and keeps the test fake simple.
+  const { data: deals, error: dealErr } = await db
     .from('deals')
-    .select('id')
+    .select('id, stage_id')
     .eq('contact_id', contactId)
     .eq('status', 'open')
     .limit(1)
-  if (existingErr) return { created: false, error: existingErr.message }
-  if (existing?.[0]) {
-    return { created: false, existing_deal_id: existing[0].id }
-  }
-  // 2. Look up the stage by slug.
-  const stageSlug = pipelineStageSlugForStatus(glofoxStatus)
-  const { data: stages, error: stageErr } = await db
+  if (dealErr || !deals?.[0]) return null
+  const deal = deals[0]
+  const { data: stages } = await db
+    .from('pipeline_stages')
+    .select('slug')
+    .eq('id', deal.stage_id)
+    .limit(1)
+  return { id: deal.id, stage_id: deal.stage_id, stage_slug: stages?.[0]?.slug || null }
+}
+
+/**
+ * Resolve a pipeline stage slug → stage id at a location. Returns
+ * the id, or null if the stage doesn't exist (caller decides
+ * fallback). Cached-per-call by keeping it inline — sync runs are
+ * low-volume; we don't need a Map cache.
+ */
+async function findStageIdBySlug(db, locationId, stageSlug) {
+  const { data, error } = await db
     .from('pipeline_stages')
     .select('id')
     .eq('location_id', locationId)
     .eq('slug', stageSlug)
     .limit(1)
-  if (stageErr) return { created: false, error: stageErr.message }
-  const stageId = stages?.[0]?.id
-  if (!stageId) {
-    // Stage doesn't exist at this location yet. Falling back to
-    // the new_lead stage rather than failing — at minimum the
-    // contact should be in the pipeline somewhere visible.
-    const { data: fallback } = await db
-      .from('pipeline_stages')
-      .select('id')
-      .eq('location_id', locationId)
-      .eq('slug', 'new_lead')
-      .limit(1)
-    if (!fallback?.[0]) return { created: false, error: `Pipeline stage '${stageSlug}' not found and no new_lead fallback` }
-    return await insertDeal(db, locationId, contactId, fallback[0].id, 'new_lead')
-  }
-  return await insertDeal(db, locationId, contactId, stageId, stageSlug)
+  if (error || !data?.[0]) return null
+  return data[0].id
 }
 
-async function insertDeal(db, locationId, contactId, stageId, stageSlug) {
-  const { data, error } = await db
+/**
+ * Ensure the contact's pipeline placement reflects their Glofox
+ * status. Three terminal states:
+ *
+ *   { action: 'create',  deal_id, stage_slug }              fresh deal made
+ *   { action: 'move',    deal_id, from_slug, to_slug }       existing deal moved
+ *   { action: 'leave',   deal_id, stage_slug }               nothing to do (operator-managed
+ *                                                             stage OR target = current)
+ *   { action: 'error',   error }                              lookup/insert/update failed
+ *
+ * Idempotent: re-running with the same Glofox status is a no-op
+ * for both create + move paths (returns 'leave' once stable).
+ */
+export async function ensureDealForContact(db, locationId, contactId, glofoxStatus) {
+  if (!db || !locationId || !contactId) {
+    return { action: 'error', error: 'missing arguments' }
+  }
+  const existing = await getOpenDealWithStage(db, contactId)
+
+  if (!existing) {
+    // CREATE path — first time this contact has had a deal.
+    const stageSlug = pipelineStageSlugForStatus(glofoxStatus)
+    let stageId = await findStageIdBySlug(db, locationId, stageSlug)
+    let resolvedSlug = stageSlug
+    if (!stageId) {
+      // Stage doesn't exist at this location → fall back to
+      // new_lead so the contact still surfaces in the pipeline.
+      const fallback = await findStageIdBySlug(db, locationId, 'new_lead')
+      if (!fallback) return { action: 'error', error: `Pipeline stage '${stageSlug}' not found and no new_lead fallback` }
+      stageId = fallback
+      resolvedSlug = 'new_lead'
+    }
+    const { data, error } = await db
+      .from('deals')
+      .insert({ contact_id: contactId, stage_id: stageId, location_id: locationId, status: 'open' })
+      .select('id')
+      .single()
+    if (error) return { action: 'error', error: error.message }
+    return { action: 'create', deal_id: data.id, stage_slug: resolvedSlug }
+  }
+
+  // EXISTING deal — compute the transition target.
+  const target = targetDealStageForSync(glofoxStatus, existing.stage_slug)
+  // null target → operator-managed stage OR no transition for
+  // this status. Leave it alone.
+  if (!target || target === existing.stage_slug) {
+    return { action: 'leave', deal_id: existing.id, stage_slug: existing.stage_slug }
+  }
+  // MOVE path.
+  const targetStageId = await findStageIdBySlug(db, locationId, target)
+  if (!targetStageId) {
+    return { action: 'error', deal_id: existing.id, error: `Target stage '${target}' not found at location` }
+  }
+  const { error: moveErr } = await db
     .from('deals')
-    .insert({
-      contact_id: contactId,
-      stage_id: stageId,
-      location_id: locationId,
-      status: 'open',
-    })
-    .select('id')
-    .single()
-  if (error) return { created: false, error: error.message }
-  return { created: true, deal_id: data.id, stage_slug: stageSlug }
+    .update({ stage_id: targetStageId })
+    .eq('id', existing.id)
+  if (moveErr) return { action: 'error', deal_id: existing.id, error: moveErr.message }
+  return { action: 'move', deal_id: existing.id, from_slug: existing.stage_slug, to_slug: target }
 }
 
 const ID_PATHS = [['_id'], ['id'], ['member_id']]
@@ -477,7 +575,7 @@ export async function previewMemberSync(db, locationId, member) {
       },
       // GLOFOX2.1.3 — fresh contact = no existing deal, so we'll
       // create one. Operator sees the stage slug in the dry-run.
-      deal_to_create: { stage_slug: proposedStageSlug },
+      deal_action: { action: 'create', stage_slug: proposedStageSlug },
     }
   }
 
@@ -512,25 +610,38 @@ export async function previewMemberSync(db, locationId, member) {
   // operator sees we will touch the row.
   changes.glofox_synced_at = { from: 'previous timestamp', to: 'now' }
 
-  // GLOFOX2.1.3 — even on UPDATE, check if the contact has an
-  // open deal. If not, the apply path will backfill one. This
-  // catches the case where a Glofox member was synced before
-  // pipeline-deal-creation existed (like Roisin), and re-syncing
-  // them now should slot them into the right stage.
-  const { data: openDeals } = await db
-    .from('deals')
-    .select('id')
-    .eq('contact_id', existing.id)
-    .eq('status', 'open')
-    .limit(1)
-  const dealToCreate = !openDeals?.[0] ? { stage_slug: proposedStageSlug } : null
+  // GLOFOX2.1.4 — compute the deal action by checking existing
+  // open deal + applying the transition map.
+  const openDeal = await getOpenDealWithStage(db, existing.id)
+  let dealAction
+  if (!openDeal) {
+    // No deal yet → backfill (Roisin case).
+    dealAction = { action: 'create', stage_slug: proposedStageSlug }
+  } else {
+    const target = targetDealStageForSync(mapped.glofox_membership_status, openDeal.stage_slug)
+    if (target && target !== openDeal.stage_slug) {
+      dealAction = {
+        action: 'move',
+        deal_id: openDeal.id,
+        from_slug: openDeal.stage_slug,
+        to_slug: target,
+      }
+    } else {
+      dealAction = {
+        action: 'leave',
+        deal_id: openDeal.id,
+        stage_slug: openDeal.stage_slug,
+        reason: target ? 'already in target stage' : 'operator-managed stage; sync respects it',
+      }
+    }
+  }
 
   return {
     action: 'update',
     existing_id: existing.id,
     mapped,
     changes,
-    ...(dealToCreate ? { deal_to_create: dealToCreate } : {}),
+    deal_action: dealAction,
   }
 }
 
@@ -583,21 +694,21 @@ export async function applyMemberSync(db, locationId, member) {
     contactId = preview.existing_id
   }
 
-  // GLOFOX2.1.3 — make sure the contact has a pipeline deal.
-  // Idempotent: ensureDealForContact short-circuits if an open
-  // deal already exists, so re-running sync never duplicates.
-  // Best-effort — a deal-creation failure must not roll back the
+  // GLOFOX2.1.3 + 2.1.4 — ensure the contact's pipeline placement
+  // reflects their Glofox status. ensureDealForContact handles
+  // create / move / leave decisions internally based on the
+  // current open deal + the transition map. Idempotent — running
+  // twice with the same Glofox status converges to 'leave'.
+  // Best-effort: a deal-write failure must not roll back the
   // contact write (we'd rather have the contact synced and tell
-  // the operator to manually drop them into the pipeline).
+  // the operator about the pipeline gap than nothing).
   let dealResult = null
-  if (preview.deal_to_create) {
-    try {
-      dealResult = await ensureDealForContact(
-        db, locationId, contactId, preview.mapped.glofox_membership_status,
-      )
-    } catch (e) {
-      dealResult = { created: false, error: e?.message || 'deal insert threw' }
-    }
+  try {
+    dealResult = await ensureDealForContact(
+      db, locationId, contactId, preview.mapped.glofox_membership_status,
+    )
+  } catch (e) {
+    dealResult = { action: 'error', error: e?.message || 'deal write threw' }
   }
 
   return { ...preview, contact_id: contactId, deal: dealResult }

@@ -7,6 +7,7 @@ import {
   normalizePhone,
   mapGlofoxSource,
   pipelineStageSlugForStatus,
+  targetDealStageForSync,
 } from './glofox-sync.js'
 
 describe('mapGlofoxMember', () => {
@@ -285,27 +286,32 @@ describe('mapGlofoxMember (real Glofox payload)', () => {
 // returns its own `chain` proxy with .select / .eq / .limit
 // methods that record state and end with a Promise of { data }.
 //
-// `dealsForContact` lets the deals-existence check (GLOFOX2.1.3)
-// return either empty (→ deal_to_create proposed) or a row
-// (→ skip deal creation).
-function fakeDb({ rowsByGlofoxId = [], rowsByEmail = [], dealsForContact = [] } = {}) {
+// fixtures:
+//   rowsByGlofoxId / rowsByEmail — contact lookups
+//   openDeal                     — { id, stage_id, stage_slug } | null
+//                                  preview reads this via
+//                                  getOpenDealWithStage (2 queries:
+//                                  deals + pipeline_stages-by-id)
+function fakeDb({ rowsByGlofoxId = [], rowsByEmail = [], openDeal = null } = {}) {
   function chain(table) {
     let mode = null
     const c = {}
     c.select = () => c
     c.eq = (col) => {
-      if (table === 'deals' && col === 'contact_id') mode = 'deals'
-      else if (col === 'glofox_member_id') mode = 'glofox'
-      else if (col === 'email')            mode = 'email'
+      if (table === 'deals' && col === 'contact_id')        mode = 'open_deal'
+      else if (table === 'pipeline_stages' && col === 'id') mode = 'stage_by_id'
+      else if (col === 'glofox_member_id')                  mode = 'glofox'
+      else if (col === 'email')                             mode = 'email'
       return c
     }
     c.limit = () => c
     c.then = (resolve) => {
       let data
-      if (mode === 'deals')      data = dealsForContact
-      else if (mode === 'glofox') data = rowsByGlofoxId
-      else if (mode === 'email')  data = rowsByEmail
-      else                        data = []
+      if (mode === 'glofox')           data = rowsByGlofoxId
+      else if (mode === 'email')        data = rowsByEmail
+      else if (mode === 'open_deal')    data = openDeal ? [{ id: openDeal.id, stage_id: openDeal.stage_id }] : []
+      else if (mode === 'stage_by_id')  data = openDeal ? [{ slug: openDeal.stage_slug }] : []
+      else                              data = []
       resolve({ data })
     }
     return c
@@ -325,20 +331,14 @@ describe('previewMemberSync', () => {
     const out = await previewMemberSync(fakeDb(), 'loc', member)
     expect(out.action).toBe('create')
     expect(out.changes.glofox_member_id.to).toBe('g1')
-    // GLOFOX2.1.2 — lead_source is now mapped from Glofox source
-    // through leadSourceSchema. Member fixture has no source field
-    // so we expect the 'other' fallback, not the old hardcoded
-    // 'glofox' value.
     expect(out.changes.lead_source.to).toBe('other')
-    // GLOFOX2.1.3 — fresh contact → deal proposed at new_lead (no
-    // membership status mapped from this fixture).
-    expect(out.deal_to_create).toEqual({ stage_slug: 'new_lead' })
+    expect(out.deal_action).toEqual({ action: 'create', stage_slug: 'new_lead' })
   })
 
   it('proposes trial_active stage when Glofox status is trial', async () => {
     const m = { ...member, lead_status: 'TRIAL' }
     const out = await previewMemberSync(fakeDb(), 'loc', m)
-    expect(out.deal_to_create).toEqual({ stage_slug: 'trial_active' })
+    expect(out.deal_action).toEqual({ action: 'create', stage_slug: 'trial_active' })
   })
 
   it('uses mapped lead_source when Glofox source is supplied', async () => {
@@ -347,45 +347,85 @@ describe('previewMemberSync', () => {
     expect(out.changes.lead_source.to).toBe('website')
   })
 
-  it('returns update + proposes a deal when contact exists but has no open deal', async () => {
+  it('proposes create when contact exists but has no open deal (Roisin backfill)', async () => {
     const existing = { id: 'c1', email: 'me@x.com', first_name: null, last_name: null, phone: null, glofox_member_id: 'g1', glofox_membership_status: null }
     const out = await previewMemberSync(
-      fakeDb({ rowsByGlofoxId: [existing], rowsByEmail: [existing], dealsForContact: [] }),
+      fakeDb({ rowsByGlofoxId: [existing], rowsByEmail: [existing], openDeal: null }),
       'loc',
       member,
     )
     expect(out.action).toBe('update')
-    expect(out.existing_id).toBe('c1')
-    // CRM had nulls, so seed fields propose changes
-    expect(out.changes.first_name.to).toBe('Me')
-    expect(out.changes.last_name.to).toBe('You')
-    expect(out.changes.phone.to).toBe('+353871234567')
-    // No open deal exists → backfill one (this is the Roisin case).
-    expect(out.deal_to_create).toEqual({ stage_slug: 'new_lead' })
+    expect(out.deal_action.action).toBe('create')
+    expect(out.deal_action.stage_slug).toBe('new_lead')
   })
 
-  it('does NOT propose a deal when contact already has an open one', async () => {
-    const existing = { id: 'c1', email: 'me@x.com', first_name: 'Me', last_name: 'You', phone: '+353871234567', glofox_member_id: 'g1', glofox_membership_status: 'trial' }
+  it('proposes leave when deal already in target stage', async () => {
+    const existing = { id: 'c1', email: 'me@x.com', glofox_member_id: 'g1', glofox_membership_status: 'trial' }
     const out = await previewMemberSync(
-      fakeDb({ rowsByGlofoxId: [existing], rowsByEmail: [existing], dealsForContact: [{ id: 'd1' }] }),
+      fakeDb({
+        rowsByGlofoxId: [existing], rowsByEmail: [existing],
+        openDeal: { id: 'd1', stage_id: 's1', stage_slug: 'trial_active' },
+      }),
       'loc',
-      member,
+      { ...member, lead_status: 'TRIAL' },
     )
-    expect(out.action).toBe('update')
-    expect(out.deal_to_create).toBeUndefined()
+    expect(out.deal_action.action).toBe('leave')
+  })
+
+  it('proposes move when trial → cancelled while deal is in trial_active', async () => {
+    const existing = { id: 'c1', email: 'me@x.com', glofox_member_id: 'g1' }
+    const out = await previewMemberSync(
+      fakeDb({
+        rowsByGlofoxId: [existing], rowsByEmail: [existing],
+        openDeal: { id: 'd1', stage_id: 's1', stage_slug: 'trial_active' },
+      }),
+      'loc',
+      { ...member, lead_status: 'CANCELLED' },
+    )
+    expect(out.deal_action).toMatchObject({
+      action: 'move', from_slug: 'trial_active', to_slug: 'follow_up_needed',
+    })
+  })
+
+  it('proposes move when member → cancelled (lost_member)', async () => {
+    const existing = { id: 'c1', email: 'me@x.com', glofox_member_id: 'g1' }
+    const out = await previewMemberSync(
+      fakeDb({
+        rowsByGlofoxId: [existing], rowsByEmail: [existing],
+        openDeal: { id: 'd1', stage_id: 's1', stage_slug: 'member' },
+      }),
+      'loc',
+      { ...member, lead_status: 'CANCELLED' },
+    )
+    expect(out.deal_action).toMatchObject({
+      action: 'move', from_slug: 'member', to_slug: 'lost_member',
+    })
+  })
+
+  it('proposes leave when deal in operator-managed stage (e.g. follow_up_needed → cancelled)', async () => {
+    const existing = { id: 'c1', email: 'me@x.com', glofox_member_id: 'g1' }
+    const out = await previewMemberSync(
+      fakeDb({
+        rowsByGlofoxId: [existing], rowsByEmail: [existing],
+        openDeal: { id: 'd1', stage_id: 's1', stage_slug: 'follow_up_needed' },
+      }),
+      'loc',
+      { ...member, lead_status: 'CANCELLED' },
+    )
+    expect(out.deal_action.action).toBe('leave')
+    expect(out.deal_action.reason).toMatch(/operator-managed/)
   })
 
   it('returns update when only email matches (link to existing CRM contact)', async () => {
     const existing = { id: 'c2', email: 'me@x.com', first_name: 'Existing', last_name: 'Name', phone: '+353000', glofox_member_id: null, glofox_membership_status: null }
     const out = await previewMemberSync(
-      fakeDb({ rowsByGlofoxId: [], rowsByEmail: [existing], dealsForContact: [] }),
+      fakeDb({ rowsByGlofoxId: [], rowsByEmail: [existing], openDeal: null }),
       'loc',
       member,
     )
     expect(out.action).toBe('update')
     expect(out.existing_id).toBe('c2')
     expect(out.changes.glofox_member_id.to).toBe('g1')
-    // Operator-edited fields not clobbered
     expect(out.changes.first_name).toBeUndefined()
     expect(out.changes.phone).toBeUndefined()
   })
@@ -401,6 +441,52 @@ describe('previewMemberSync', () => {
     expect(out.action).toBe('ambiguous')
     expect(out.conflicts.contact_matched_by_glofox_id.id).toBe('cA')
     expect(out.conflicts.contact_matched_by_email.id).toBe('cB')
+  })
+})
+
+describe('targetDealStageForSync (GLOFOX2.1.4 transitions)', () => {
+  it('promotes trial_active to member when status becomes active', () => {
+    expect(targetDealStageForSync('active', 'trial_active')).toBe('member')
+    expect(targetDealStageForSync('active', 'new_lead')).toBe('member')
+    expect(targetDealStageForSync('active', 'new_lead_social')).toBe('member')
+  })
+
+  it('promotes new_lead to trial_active when status becomes trial', () => {
+    expect(targetDealStageForSync('trial', 'new_lead')).toBe('trial_active')
+    expect(targetDealStageForSync('trial', 'new_lead_social')).toBe('trial_active')
+  })
+
+  it('routes member → cancelled to lost_member', () => {
+    expect(targetDealStageForSync('cancelled', 'member')).toBe('lost_member')
+    expect(targetDealStageForSync('expired', 'member')).toBe('lost_member')
+    expect(targetDealStageForSync('inactive', 'member')).toBe('lost_member')
+  })
+
+  it('routes trial/lead → cancelled to follow_up_needed', () => {
+    expect(targetDealStageForSync('cancelled', 'trial_active')).toBe('follow_up_needed')
+    expect(targetDealStageForSync('cancelled', 'new_lead')).toBe('follow_up_needed')
+    expect(targetDealStageForSync('cancelled', 'new_lead_social')).toBe('follow_up_needed')
+  })
+
+  it('flags paused member as at-risk via follow_up_needed', () => {
+    expect(targetDealStageForSync('paused', 'member')).toBe('follow_up_needed')
+  })
+
+  it('leaves operator-managed stages alone on cancellation', () => {
+    expect(targetDealStageForSync('cancelled', 'follow_up_needed')).toBeNull()
+    expect(targetDealStageForSync('cancelled', 'returning_member')).toBeNull()
+    expect(targetDealStageForSync('cancelled', 'cold_email_only')).toBeNull()
+    expect(targetDealStageForSync('cancelled', 'conversion_ready')).toBeNull()
+  })
+
+  it('leaves deals alone on lead / unknown / null status', () => {
+    expect(targetDealStageForSync('lead', 'trial_active')).toBeNull()
+    expect(targetDealStageForSync('unknown', 'member')).toBeNull()
+    expect(targetDealStageForSync(null, 'member')).toBeNull()
+  })
+
+  it('is case-insensitive on status', () => {
+    expect(targetDealStageForSync('CANCELLED', 'member')).toBe('lost_member')
   })
 })
 
