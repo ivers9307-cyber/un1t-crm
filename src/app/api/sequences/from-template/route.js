@@ -10,6 +10,7 @@
 // the operator's active location.
 
 import { NextResponse } from 'next/server'
+import { randomBytes } from 'node:crypto'
 import { z } from 'zod'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
@@ -52,6 +53,10 @@ export async function POST(request) {
   }
 
   const db = createServerClient()
+  // FLOW2 — auto-generate webhook_token when the template uses
+  // the webhook trigger so the operator gets a working URL the
+  // moment they install (no need to save once first to mint one).
+  const webhookToken = tpl.trigger_type === 'webhook' ? randomBytes(16).toString('hex') : null
   // 1. Insert the sequence as a draft.
   const { data: seq, error: seqErr } = await db
     .from('email_sequences')
@@ -64,6 +69,7 @@ export async function POST(request) {
       send_window: tpl.send_window || null,
       audience_filter: tpl.audience_filter || null,
       re_enrolment_cooldown_days: tpl.re_enrolment_cooldown_days ?? null,
+      webhook_token: webhookToken,
       status: 'draft',
       location_id: locationId,
       created_by: user.id,

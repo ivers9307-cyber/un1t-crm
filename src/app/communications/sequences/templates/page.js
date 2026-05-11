@@ -40,6 +40,8 @@ const triggerLabels = {
   anniversary: 'Yearly anniversary',
   inactivity: 'Member goes quiet',
   achievement_unlocked: 'Heart-rate achievement',
+  // FLOW2 (mig 131) — inbound webhook trigger.
+  webhook: 'External webhook POST',
 }
 
 // Map step_type → { icon, label } for the per-template steps

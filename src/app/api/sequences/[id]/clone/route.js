@@ -12,6 +12,7 @@
 // filter / re-enrolment cooldown all carry over verbatim.
 
 import { NextResponse } from 'next/server'
+import { randomBytes } from 'node:crypto'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
@@ -54,6 +55,12 @@ export async function POST(_request, { params }) {
   // 2. Insert the new sequence as a draft. Pull every config /
   // metadata column from the source so the clone is a true copy
   // minus the runtime state (status, total_enrolled, timestamps).
+  // FLOW2 — webhook_token + webhook_secret are NEVER copied: a
+  // clone needs its own URL (otherwise two sequences would share
+  // a token, which is a unique-index violation anyway), and the
+  // secret is operator-managed per-sequence. Token is freshly
+  // minted here so the clone is immediately usable.
+  const webhookToken = source.trigger_type === 'webhook' ? randomBytes(16).toString('hex') : null
   const { data: cloned, error: cloneErr } = await db
     .from('email_sequences')
     .insert({
@@ -65,6 +72,7 @@ export async function POST(_request, { params }) {
       send_window: source.send_window || null,
       audience_filter: source.audience_filter || null,
       re_enrolment_cooldown_days: source.re_enrolment_cooldown_days ?? null,
+      webhook_token: webhookToken,
       status: 'draft',
       location_id: source.location_id,
       created_by: user.id,

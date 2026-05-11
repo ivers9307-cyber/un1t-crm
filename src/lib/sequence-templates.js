@@ -45,6 +45,34 @@ export const SEQUENCE_TEMPLATES = [
     ],
   },
   {
+    id: 'webhook_external_lead_capture',
+    category: 'Lead conversion',
+    name: 'External lead capture (webhook)',
+    description: 'Inbound-webhook starter template. Wire any external system (n8n / Glofox / Zapier / Stripe) to POST to a unique URL — the contact gets a welcome email + an internal task lands on the operator\'s queue. Edit the steps to match your funnel after install.',
+    trigger_type: 'webhook',
+    trigger_config: {},
+    goal_config: null,
+    steps: [
+      {
+        step_type: 'email',
+        delay_days: 0,
+        delay_hours: 0,
+        subject: 'Welcome to UN1T, {{first_name}}',
+        html_content: '<p>Hi {{first_name}},</p><p>Thanks for getting in touch — someone from the team will be in contact within the next working day.</p><p>In the meantime, the gym is at UN1T Stillorgan, Dublin if you want to drop in.</p>',
+      },
+      {
+        step_type: 'internal_task',
+        delay_days: 0,
+        delay_hours: 0,
+        config: {
+          subject: 'Follow up: external lead capture',
+          note: 'Inbound webhook fired. Confirm next step (call, schedule consultation, send pricing, etc).',
+          due_offset_minutes: 60 * 4,
+        },
+      },
+    ],
+  },
+  {
     id: 'consultation_lead_nurture',
     category: 'Lead conversion',
     name: 'Lead nurture from consultation',

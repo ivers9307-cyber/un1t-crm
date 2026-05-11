@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto'
 import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
@@ -12,12 +13,15 @@ const SequenceCreateSchema = z.object({
   // editor offers (SequenceEditor.jsx TRIGGER_TYPES). The previous
   // enum had stale draft values ('on_signup' / 'on_status_change')
   // that would silently reject legitimate sequences from the editor.
+  // FLOW2 (mig 131): added 'webhook' for inbound webhook-fired
+  // sequences. Token + optional secret on email_sequences.
   trigger_type: z.enum([
     'manual', 'booking_created', 'first_booking', 'status_change',
     'event_reminder', 'tag_added',
     'race_registered', 'race_finished',
     'order_completed', 'order_failed', 'order_abandoned',
     'anniversary', 'inactivity',
+    'webhook',
   ]).optional(),
   trigger_config: z.unknown().optional(),
   goal_config: z.unknown().nullable().optional(),
@@ -71,14 +75,20 @@ export async function POST(request) {
   if (guard) return guard
 
   const db = createServerClient()
+  // FLOW2 — auto-generate a webhook_token whenever the sequence
+  // is created with trigger_type='webhook'. Operator can rotate
+  // it later via the editor's "Regenerate" button.
+  const triggerType = body.trigger_type || 'manual'
+  const webhookToken = triggerType === 'webhook' ? randomBytes(16).toString('hex') : null
   const { data, error } = await db.from('email_sequences').insert({
     name: body.name || 'Untitled Sequence',
     description: body.description || null,
-    trigger_type: body.trigger_type || 'manual',
+    trigger_type: triggerType,
     trigger_config: body.trigger_config || {},
     goal_config: body.goal_config ?? null,
     send_window: body.send_window ?? null,
     re_enrolment_cooldown_days: body.re_enrolment_cooldown_days ?? null,
+    webhook_token: webhookToken,
     status: 'draft',
     location_id: locationId,
     created_by: user.id,

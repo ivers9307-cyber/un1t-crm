@@ -22,6 +22,10 @@ const TRIGGER_TYPES = [
   { value: 'anniversary',      label: 'Anniversary',        description: 'Triggered N days after a contact field (lead_created_at, last_emailed_at)' },
   { value: 'inactivity',       label: 'Inactivity',         description: 'Triggered when a contact has been inactive for N days — win-back sequences' },
   { value: 'achievement_unlocked', label: 'Achievement Unlocked', description: 'Triggered when a member earns a heart-rate achievement. Optional rule_slug filter targets a specific badge.' },
+  // FLOW2 (mig 131) — inbound webhook trigger. External systems
+  // (n8n / Glofox / Stripe / Zapier) POST to a unique URL to enrol
+  // a contact. URL + optional secret rendered in the panel below.
+  { value: 'webhook',          label: 'Webhook (inbound)',  description: 'Triggered when an external system POSTs to a unique URL. Use to wire n8n / Glofox / Stripe / Zapier into this sequence.' },
 ]
 
 // Per-step icon/colour by channel.
@@ -612,6 +616,16 @@ export default function SequenceEditor({ sequence, locationId, userId }) {
   const [reEnrolCooldown, setReEnrolCooldown] = useState(
     sequence?.re_enrolment_cooldown_days ?? ''
   )
+  // FLOW2 (mig 131) — inbound webhook token + optional shared
+  // secret. Token is auto-generated server-side when the sequence
+  // first saves with trigger_type='webhook'; operator can rotate
+  // via the "Regenerate" button below. Secret is operator-managed
+  // (NULL = token-in-URL is the only auth).
+  const [webhookToken, setWebhookToken] = useState(sequence?.webhook_token || null)
+  const [webhookSecret, setWebhookSecret] = useState(sequence?.webhook_secret || '')
+  const [webhookSecretInput, setWebhookSecretInput] = useState('')
+  const [webhookBusy, setWebhookBusy] = useState(false)
+  const [webhookCopied, setWebhookCopied] = useState(false)
   const [stats, setStats] = useState(null) // mig 088 / Tier 3A
   const [status, setStatus] = useState(sequence?.status || 'draft')
   const [steps, setSteps] = useState(sequence?.sequence_steps || [])
@@ -690,6 +704,12 @@ export default function SequenceEditor({ sequence, locationId, userId }) {
       if (!sequenceId && currentSeqId) {
         setSequenceId(currentSeqId)
         window.history.replaceState(null, '', `/email/sequences/${currentSeqId}`)
+      }
+      // FLOW2 — save may have generated a webhook_token (when the
+      // operator switched trigger_type to 'webhook'). Pull it from
+      // the response so the URL panel renders without a refresh.
+      if (seqResult.sequence?.webhook_token && !webhookToken) {
+        setWebhookToken(seqResult.sequence.webhook_token)
       }
 
       // Save steps — for new steps (no id), POST. For existing, bulk PUT.
@@ -929,6 +949,146 @@ export default function SequenceEditor({ sequence, locationId, userId }) {
                   />
                   <span className="text-xs text-un1t-mid">hours before</span>
                 </div>
+              </div>
+            )}
+
+            {/* FLOW2 (mig 131) — webhook trigger config panel.
+                Shows the operator's unique inbound URL + optional
+                shared secret + an example curl. Token is generated
+                server-side on first save with trigger_type='webhook'
+                so before that we show a "save first" hint instead. */}
+            {triggerType === 'webhook' && (
+              <div className="mt-4 space-y-3">
+                {!webhookToken ? (
+                  <div className="bg-un1t-black border border-un1t-gray rounded-md p-3 text-xs text-un1t-light">
+                    Save the sequence first — we&apos;ll generate a unique webhook URL for it.
+                  </div>
+                ) : (
+                  <>
+                    <div>
+                      <label className="block text-xs text-un1t-light mb-1">Webhook URL (POST JSON to this)</label>
+                      <div className="flex items-center gap-2">
+                        <code className="flex-1 bg-un1t-black border border-un1t-gray rounded-md px-2.5 py-1.5 text-xs text-green-400 font-mono break-all">
+                          {typeof window !== 'undefined' ? window.location.origin : ''}/api/webhooks/sequence/{webhookToken}
+                        </code>
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            try {
+                              const url = `${window.location.origin}/api/webhooks/sequence/${webhookToken}`
+                              await navigator.clipboard.writeText(url)
+                              setWebhookCopied(true)
+                              setTimeout(() => setWebhookCopied(false), 1500)
+                            } catch { /* ignore */ }
+                          }}
+                          className="text-xs px-2 py-1.5 bg-un1t-black border border-un1t-gray rounded-md text-un1t-light hover:text-un1t-white"
+                        >
+                          {webhookCopied ? 'Copied' : 'Copy'}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={webhookBusy}
+                          onClick={async () => {
+                            if (!sequenceId) return
+                            if (!confirm('Rotate the webhook token? The old URL will stop working immediately.')) return
+                            setWebhookBusy(true)
+                            try {
+                              const r = await fetch(`/api/sequences/${sequenceId}`, {
+                                method: 'PUT',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ rotate_webhook_token: true }),
+                              })
+                              const j = await r.json()
+                              if (j.success && j.sequence?.webhook_token) {
+                                setWebhookToken(j.sequence.webhook_token)
+                              }
+                            } finally { setWebhookBusy(false) }
+                          }}
+                          className="text-xs px-2 py-1.5 bg-un1t-black border border-un1t-gray rounded-md text-un1t-light hover:text-un1t-white disabled:opacity-50"
+                        >
+                          Regenerate
+                        </button>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs text-un1t-light mb-1">
+                        Shared secret <span className="text-un1t-mid normal-case">(optional — sender posts in <code>X-Webhook-Secret</code> header)</span>
+                      </label>
+                      {webhookSecret ? (
+                        <div className="flex items-center gap-2">
+                          <code className="flex-1 bg-un1t-black border border-un1t-gray rounded-md px-2.5 py-1.5 text-xs text-un1t-light font-mono">
+                            {'•'.repeat(Math.min(32, webhookSecret.length))}
+                          </code>
+                          <button
+                            type="button"
+                            disabled={webhookBusy}
+                            onClick={async () => {
+                              if (!confirm('Clear the shared secret? Anyone with the URL will then be able to enrol contacts.')) return
+                              setWebhookBusy(true)
+                              try {
+                                const r = await fetch(`/api/sequences/${sequenceId}`, {
+                                  method: 'PUT',
+                                  headers: { 'Content-Type': 'application/json' },
+                                  body: JSON.stringify({ webhook_secret: null }),
+                                })
+                                const j = await r.json()
+                                if (j.success) setWebhookSecret('')
+                              } finally { setWebhookBusy(false) }
+                            }}
+                            className="text-xs px-2 py-1.5 bg-un1t-black border border-un1t-gray rounded-md text-un1t-light hover:text-un1t-white disabled:opacity-50"
+                          >
+                            Clear
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="text"
+                            value={webhookSecretInput}
+                            onChange={(e) => setWebhookSecretInput(e.target.value)}
+                            placeholder="e.g. paste a 32-char hex string from a password manager"
+                            maxLength={128}
+                            className="flex-1 bg-un1t-black border border-un1t-gray rounded-md px-2.5 py-1.5 text-xs text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid font-mono"
+                          />
+                          <button
+                            type="button"
+                            disabled={webhookBusy || !webhookSecretInput.trim() || !sequenceId}
+                            onClick={async () => {
+                              setWebhookBusy(true)
+                              try {
+                                const value = webhookSecretInput.trim()
+                                const r = await fetch(`/api/sequences/${sequenceId}`, {
+                                  method: 'PUT',
+                                  headers: { 'Content-Type': 'application/json' },
+                                  body: JSON.stringify({ webhook_secret: value }),
+                                })
+                                const j = await r.json()
+                                if (j.success) {
+                                  setWebhookSecret(value)
+                                  setWebhookSecretInput('')
+                                }
+                              } finally { setWebhookBusy(false) }
+                            }}
+                            className="text-xs px-2 py-1.5 bg-un1t-white text-un1t-black rounded-md hover:bg-un1t-accent disabled:opacity-50 font-medium"
+                          >
+                            Set secret
+                          </button>
+                        </div>
+                      )}
+                    </div>
+
+                    <details className="text-xs text-un1t-light">
+                      <summary className="cursor-pointer hover:text-un1t-white select-none">Example: enrol a contact via curl</summary>
+                      <pre className="mt-2 bg-un1t-black border border-un1t-gray rounded-md p-3 text-[11px] text-green-400 font-mono overflow-x-auto">{`curl -X POST '${typeof window !== 'undefined' ? window.location.origin : 'https://crm.un1tdublin.com'}/api/webhooks/sequence/${webhookToken}' \\
+  -H 'Content-Type: application/json'${webhookSecret ? ` \\\n  -H 'X-Webhook-Secret: ${webhookSecret}'` : ''} \\
+  -d '{"contact_email":"member@example.com","source_ref":"glofox-event-123"}'`}</pre>
+                      <p className="mt-2 text-un1t-mid">
+                        Body must include <code>contact_email</code> OR <code>contact_id</code>. Optional <code>source_ref</code> appears in the audit trail.
+                      </p>
+                    </details>
+                  </>
+                )}
               </div>
             )}
           </div>

@@ -30,6 +30,8 @@ const triggerLabels = {
   order_abandoned: 'Order abandoned',
   anniversary: 'Anniversary',
   inactivity: 'Inactivity',
+  // FLOW2 (mig 131) — inbound webhook trigger.
+  webhook: 'Webhook (inbound)',
 }
 
 const statusConfig = {
