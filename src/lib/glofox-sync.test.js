@@ -13,6 +13,7 @@ import {
   detectCreditMember,
   computeBookingAggregates,
   mapGlofoxInteraction,
+  computeCreditsRemaining,
 } from './glofox-sync.js'
 
 // Helper: build a Plan A ctx for tests. Real call site fetches via
@@ -598,6 +599,61 @@ describe('mapGlofoxInteraction', () => {
     }, CONTACT_ID, LOCATION_ID)
     expect(out.source).toBe('glofox')
     expect(out.done).toBe(true)
+  })
+})
+
+// GLOFOX2.6 — Glofox credits → trial_credits_remaining sync.
+describe('computeCreditsRemaining', () => {
+  it('returns null for null / non-array / empty input', () => {
+    expect(computeCreditsRemaining(null)).toBeNull()
+    expect(computeCreditsRemaining(undefined)).toBeNull()
+    expect(computeCreditsRemaining([])).toBeNull()
+    expect(computeCreditsRemaining('not an array')).toBeNull()
+  })
+
+  it('returns null when no credit packs are active (e.g., unlimited subscription)', () => {
+    expect(computeCreditsRemaining([
+      { active: false, num_sessions: 10, available: 5 },
+    ])).toBeNull()
+  })
+
+  it('uses the available field when present', () => {
+    // Peter's trial pack from the live probe — 3 sessions, 1 used.
+    expect(computeCreditsRemaining([
+      { active: true, num_sessions: 3, bookings: ['b1'], available: 2 },
+    ])).toBe(2)
+  })
+
+  it('falls back to num_sessions - bookings.length when available is missing', () => {
+    expect(computeCreditsRemaining([
+      { active: true, num_sessions: 10, bookings: ['b1', 'b2'] },
+    ])).toBe(8)
+  })
+
+  it('sums across multiple active packs (e.g., subscription + extra pack)', () => {
+    expect(computeCreditsRemaining([
+      { active: true, num_sessions: 10, bookings: ['b1'], available: 9 },
+      { active: true, num_sessions: 4,  bookings: [],     available: 4 },
+    ])).toBe(13)
+  })
+
+  it('ignores inactive packs in the sum', () => {
+    expect(computeCreditsRemaining([
+      { active: true,  num_sessions: 10, available: 8 },
+      { active: false, num_sessions: 20, available: 20 },
+    ])).toBe(8)
+  })
+
+  it('treats negative remaining as 0 (overdrawn pack — defensive)', () => {
+    expect(computeCreditsRemaining([
+      { active: true, num_sessions: 3, bookings: ['b1', 'b2', 'b3', 'b4'], available: -1 },
+    ])).toBe(0)
+  })
+
+  it('returns null when packs are active but missing both available + num_sessions', () => {
+    expect(computeCreditsRemaining([
+      { active: true },
+    ])).toBeNull()
   })
 })
 

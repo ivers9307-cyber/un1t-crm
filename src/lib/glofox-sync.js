@@ -708,6 +708,43 @@ export function isClassPackMembership(membership) {
 }
 
 /**
+ * Sum the ACTIVE credit packs' remaining sessions to give the
+ * member's currently-usable credit balance. Mirrors what Glofox's
+ * portal shows ("X classes remaining" on the member profile).
+ *
+ * Returns null when there are no active packs at all (unlimited
+ * 'time' subscription members, or freshly-signed-up leads with
+ * no pack yet) — null surfaces as '—' in the CRM UI rather than
+ * misleading "0 credits".
+ *
+ * Uses the credit object's `available` field (Glofox-computed:
+ * num_sessions - bookings.length). Falls back to recomputing from
+ * num_sessions/bookings when `available` is missing — defensive
+ * for older firmware shapes.
+ */
+export function computeCreditsRemaining(credits) {
+  if (!Array.isArray(credits) || credits.length === 0) return null
+  const active = credits.filter(c => c?.active === true)
+  if (active.length === 0) return null
+  let total = 0
+  let any = false
+  for (const c of active) {
+    let remaining
+    if (Number.isFinite(c?.available)) {
+      remaining = c.available
+    } else if (Number.isFinite(c?.num_sessions)) {
+      const used = Array.isArray(c.bookings) ? c.bookings.length : 0
+      remaining = c.num_sessions - used
+    } else {
+      continue
+    }
+    if (remaining > 0) total += remaining
+    any = true
+  }
+  return any ? total : null
+}
+
+/**
  * Pure check: does the Plan A context indicate a Credit Member?
  * Takes the raw member payload + a context object built by
  * buildCreditMemberContext (credits + memberships Map).
@@ -825,7 +862,7 @@ export function mapMembershipStatus(member, ctx = null) {
 export async function findExistingContact(db, locationId, mapped) {
   if (!db || !locationId || !mapped) return { byGlofox: null, byEmail: null }
   // Lookup by glofox_member_id and email in parallel.
-  const SELECT_COLS = 'id, email, first_name, last_name, phone, dob, joined_at, glofox_member_id, glofox_membership_status, lead_source, last_booked_at, last_attended_at, total_bookings_30d, total_attended_30d, total_noshow_30d'
+  const SELECT_COLS = 'id, email, first_name, last_name, phone, dob, joined_at, glofox_member_id, glofox_membership_status, lead_source, last_booked_at, last_attended_at, total_bookings_30d, total_attended_30d, total_noshow_30d, trial_credits_remaining'
   const queries = []
   queries.push(
     db.from('contacts')
@@ -1101,6 +1138,16 @@ export async function previewMemberSync(db, locationId, member, opts = {}) {
     return { action: 'invalid', reason: 'Could not extract glofox_member_id from payload', mapped: null }
   }
 
+  // GLOFOX2.6 — sync the live credit balance to the contact.
+  // trial_credits_remaining historically defaulted to 3 from
+  // mig 001 and was operator-edited; from now on Glofox is the
+  // source of truth for any contact with a glofox_member_id. Sum
+  // 'available' across active credit packs (data we already
+  // fetched for credit_member detection — zero extra API cost).
+  if (ctx?.credits) {
+    mapped.trial_credits_remaining = computeCreditsRemaining(ctx.credits)
+  }
+
   // GLOFOX2.1.14 — booking aggregates. Fetched alongside credits when
   // creds are provided. Caller can short-circuit by passing
   // opts.bookings (pre-fetched list) or opts.skipBookings (e.g., for
@@ -1185,6 +1232,9 @@ export async function previewMemberSync(db, locationId, member, opts = {}) {
         joined_at:                { from: null, to: mapped.joined_at },
         glofox_membership_status: { from: null, to: mapped.glofox_membership_status },
         lead_source:              { from: null, to: mapped.lead_source },
+        ...(mapped.trial_credits_remaining != null
+          ? { trial_credits_remaining: { from: null, to: mapped.trial_credits_remaining } }
+          : {}),
         ...(bookingAggs ? {
           last_booked_at:        { from: null, to: bookingAggs.last_booked_at },
           last_attended_at:      { from: null, to: bookingAggs.last_attended_at },
@@ -1238,6 +1288,21 @@ export async function previewMemberSync(db, locationId, member, opts = {}) {
       changes.joined_at = { from: existing.joined_at, to: mapped.joined_at }
     }
   }
+  // GLOFOX2.6 — credit balance is overwritten when we have credit
+  // context. Glofox is source of truth. Operator manual edits to
+  // trial_credits_remaining on Glofox-linked contacts will be
+  // overwritten on next sync — by design (the operator should comp
+  // credits in Glofox, not in the CRM).
+  if (ctx?.credits) {
+    const newRemaining = mapped.trial_credits_remaining
+    if (newRemaining !== existing.trial_credits_remaining) {
+      changes.trial_credits_remaining = {
+        from: existing.trial_credits_remaining ?? null,
+        to: newRemaining,
+      }
+    }
+  }
+
   // GLOFOX2.1.14 — booking aggregates always overwrite when fetched
   // (full recompute is the source of truth; cron is the safety net
   // that corrects any webhook-counter drift).
@@ -1349,6 +1414,13 @@ export async function applyMemberSync(db, locationId, member, opts = {}) {
       glofox_membership_status: m.glofox_membership_status,
       glofox_synced_at: now,
       lead_source: m.lead_source,
+      // GLOFOX2.6 — credit balance from Glofox (only set when we
+      // have credit context; otherwise fall back to the schema
+      // default of 3 so the column constraint is satisfied for
+      // contacts that fail the credits-fetch).
+      ...(m.trial_credits_remaining != null
+        ? { trial_credits_remaining: m.trial_credits_remaining }
+        : {}),
       // GLOFOX2.1.14 — booking aggregates (default to 0/null when
       // we couldn't fetch them, so the row is still well-formed).
       last_booked_at:       m.last_booked_at       ?? null,
@@ -1372,6 +1444,7 @@ export async function applyMemberSync(db, locationId, member, opts = {}) {
     if ('phone'      in preview.changes)               updates.phone                    = m.phone
     if ('dob'        in preview.changes)               updates.dob                      = m.dob
     if ('joined_at'  in preview.changes)               updates.joined_at                = m.joined_at
+    if ('trial_credits_remaining' in preview.changes)  updates.trial_credits_remaining = m.trial_credits_remaining
     // Booking aggregates — write each individually (mapped only
     // carries them when bookings were fetched).
     if ('last_booked_at'     in preview.changes)       updates.last_booked_at     = m.last_booked_at
