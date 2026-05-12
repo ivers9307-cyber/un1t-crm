@@ -33,9 +33,11 @@ import {
   parseGlofoxEvent,
   tagsForGlofoxEvent,
   glofoxCredentialsByBranchId,
+  glofoxFetch,
 } from '@/lib/glofox'
 import { triggerSequencesForTagsAdded } from '@/lib/sequences/triggers'
 import { applyInvoiceWebhook } from '@/lib/glofox-invoices'
+import { applyMemberSync } from '@/lib/glofox-sync'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -168,25 +170,51 @@ export async function POST(request) {
   }
 
   // 6. Find the contact, scoped to the resolved location.
-  if (!parsed.contactEmail) {
-    await markEvent(db, eventRow.id, 'failed', null, 'No contact_email in payload')
+  // Lookup priority:
+  //   a) email — preferred (MEMBER_UPDATED, INVOICE_UPDATED)
+  //   b) glofox_member_id — fallback for BOOKING_* / MEMBERSHIP_*
+  //      events which Glofox's payloads ship without an email
+  //      (GLOFOX5.1).
+  if (!parsed.contactEmail && !parsed.userId) {
+    await markEvent(db, eventRow.id, 'failed', null, 'No contact_email or user_id in payload')
     return NextResponse.json({ success: true, status: 'no_email' })
   }
 
-  const { data: contactRows, error: contactErr } = await db
-    .from('contacts')
-    .select('id')
-    .eq('location_id', creds.locationId)
-    .eq('email', parsed.contactEmail)
-    .limit(1)
-  if (contactErr) {
-    await markEvent(db, eventRow.id, 'failed', null, `Contact lookup: ${contactErr.message}`)
-    return NextResponse.json({ success: true, status: 'lookup_error' })
+  let contact = null
+  if (parsed.contactEmail) {
+    const { data: contactRows, error: contactErr } = await db
+      .from('contacts')
+      .select('id')
+      .eq('location_id', creds.locationId)
+      .eq('email', parsed.contactEmail)
+      .limit(1)
+    if (contactErr) {
+      await markEvent(db, eventRow.id, 'failed', null, `Contact lookup by email: ${contactErr.message}`)
+      return NextResponse.json({ success: true, status: 'lookup_error' })
+    }
+    contact = contactRows?.[0] || null
   }
-  const contact = contactRows?.[0]
+  if (!contact && parsed.userId) {
+    const { data: contactRows, error: contactErr } = await db
+      .from('contacts')
+      .select('id')
+      .eq('location_id', creds.locationId)
+      .eq('glofox_member_id', parsed.userId)
+      .limit(1)
+    if (contactErr) {
+      await markEvent(db, eventRow.id, 'failed', null, `Contact lookup by glofox_member_id: ${contactErr.message}`)
+      return NextResponse.json({ success: true, status: 'lookup_error' })
+    }
+    contact = contactRows?.[0] || null
+  }
   if (!contact) {
     await markEvent(db, eventRow.id, 'contact_not_found', null, null)
-    return NextResponse.json({ success: true, status: 'contact_not_found', email: parsed.contactEmail })
+    return NextResponse.json({
+      success: true,
+      status: 'contact_not_found',
+      email: parsed.contactEmail,
+      user_id: parsed.userId,
+    })
   }
 
   // 7a. GLOFOX2.1.20 — INVOICE_UPDATED side-effect. Mirror the
@@ -245,8 +273,47 @@ export async function POST(request) {
     }
   }
 
+  // 9. GLOFOX5.1 — real-time member sync for state-changing events.
+  // applyMemberSync detects trial-lifecycle transitions and writes
+  // glofox_trial_engaged / _credits_low / _ended / _converted tags
+  // (GLOFOX4.2). Without this, those tags only fired from the daily
+  // 3am cron — a 24-hour delay between an actual class booking and
+  // the operator-built sequences reacting to it.
+  //
+  // We re-fetch from /2.0/members/{id} rather than trust the webhook
+  // payload because:
+  //   - BOOKING events don't include the member's lead_status
+  //   - MEMBERSHIP events don't include the booking aggregates
+  //   - applyMemberSync needs the canonical member shape to compute
+  //     credits + booking counts correctly
+  // Best-effort: failures here log but don't fail the webhook.
+  let memberSyncResult = null
+  const MEMBER_SYNC_EVENTS = new Set([
+    'MEMBER_UPDATED', 'MEMBER_CREATED',
+    'BOOKING_CREATED', 'BOOKING_UPDATED', 'BOOKING_DELETED',
+    'MEMBERSHIP_CREATED', 'MEMBERSHIP_UPDATED', 'MEMBERSHIP_DELETED',
+    'COURSE_BOOKING_CREATED', 'COURSE_BOOKING_DELETED',
+  ])
+  if (parsed.userId && MEMBER_SYNC_EVENTS.has(String(parsed.eventType || '').toUpperCase())) {
+    try {
+      const r = await glofoxFetch(creds, `/2.0/members/${encodeURIComponent(parsed.userId)}`)
+      if (r.ok) {
+        const body = await r.json()
+        const fullMember = body?.data || body?.member || body
+        memberSyncResult = await applyMemberSync(db, creds.locationId, fullMember, { creds })
+      } else {
+        memberSyncResult = { ok: false, status: r.status, reason: 'glofox_fetch_failed' }
+      }
+    } catch (e) {
+      logWarn('glofox-webhook', 'real-time member sync threw', {
+        err: e?.message, user_id: parsed.userId, event_type: parsed.eventType,
+      })
+      memberSyncResult = { ok: false, reason: 'threw', error: e?.message }
+    }
+  }
+
   await markEvent(db, eventRow.id, 'applied', {
-    contact_id: contact.id, tags: appliedTags, ltv: ltvResult,
+    contact_id: contact.id, tags: appliedTags, ltv: ltvResult, member_sync: memberSyncResult,
   }, null)
   return NextResponse.json({
     success: true,
@@ -255,6 +322,7 @@ export async function POST(request) {
     contact_id: contact.id,
     tags: appliedTags,
     ltv: ltvResult,
+    member_sync: memberSyncResult ? { applied: memberSyncResult.action || memberSyncResult.ok || false } : null,
   })
 }
 

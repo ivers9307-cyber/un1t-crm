@@ -45,10 +45,10 @@ describe('verifyGlofoxSignature', () => {
 describe('parseGlofoxEvent', () => {
   it('returns all-nulls for a non-object payload', () => {
     expect(parseGlofoxEvent(null)).toEqual({
-      eventId: null, eventType: null, branchId: null, entityId: null, contactEmail: null,
+      eventId: null, eventType: null, branchId: null, entityId: null, contactEmail: null, userId: null,
     })
     expect(parseGlofoxEvent('string')).toEqual({
-      eventId: null, eventType: null, branchId: null, entityId: null, contactEmail: null,
+      eventId: null, eventType: null, branchId: null, entityId: null, contactEmail: null, userId: null,
     })
   })
 
@@ -65,6 +65,12 @@ describe('parseGlofoxEvent', () => {
       branchId: 'br1',
       entityId: 'b1',
       contactEmail: 'me@example.com',
+      // entityId is 'b1' (data.id), and the userId fallback path
+      // ['data', 'id'] sits last so it ALSO resolves to 'b1' for
+      // member-shaped payloads. That's fine — for booking payloads
+      // a separate ['data', 'user_id'] path takes precedence (see
+      // the BOOKING_CREATED test below).
+      userId: 'b1',
     })
   })
 
@@ -104,6 +110,103 @@ describe('parseGlofoxEvent', () => {
 
   it('treats empty string as missing', () => {
     expect(parseGlofoxEvent({ event_id: '', event_type: 'x' }).eventId).toBeNull()
+  })
+
+  // GLOFOX5.1 — real Glofox webhook payloads. The envelope is
+  // { Type, Payload, Metadata, Timestamp } with capitalised keys.
+  // Captured from the production webhook audit on 2026-05-12.
+  describe('real Glofox payload shapes', () => {
+    it('parses a BOOKING_CREATED payload — uses Payload.user_id for userId, no email', () => {
+      const payload = {
+        Type: 'BOOKING_CREATED',
+        Payload: {
+          id: '6a036003fd8a06e397010ce2',
+          status: 'BOOKED',
+          user_id: '690f97ca89ac348de005a5d7',
+          model_id: '69f0fe43362701c4260529a8',
+          time_start: '2026-05-12T18:00:00Z',
+        },
+        Metadata: { location_id: '6155764859810329ec3826b3', trace_id: 'abc' },
+      }
+      const out = parseGlofoxEvent(payload)
+      expect(out.eventType).toBe('BOOKING_CREATED')
+      expect(out.branchId).toBe('6155764859810329ec3826b3')
+      expect(out.entityId).toBe('6a036003fd8a06e397010ce2')
+      // Critical: BOOKING_* payloads carry NO email — must surface
+      // the user_id so the receiver can fall back to a contacts
+      // lookup by glofox_member_id.
+      expect(out.contactEmail).toBeNull()
+      expect(out.userId).toBe('690f97ca89ac348de005a5d7')
+    })
+
+    it('parses a MEMBER_UPDATED payload — both email AND Payload.id as userId', () => {
+      const payload = {
+        Type: 'MEMBER_UPDATED',
+        Payload: {
+          id: '6536875250972466f2067af3',
+          email: 'clareconnolly8@gmail.com',
+          first_name: 'Clare',
+          last_name: 'Connolly',
+        },
+        Metadata: { location_id: '6155764859810329ec3826b3' },
+      }
+      const out = parseGlofoxEvent(payload)
+      expect(out.contactEmail).toBe('clareconnolly8@gmail.com')
+      // For MEMBER_* events the member IS the entity — entity_id
+      // and user_id are the same. Receiver uses email first, falls
+      // back to user_id if not found.
+      expect(out.userId).toBe('6536875250972466f2067af3')
+      expect(out.entityId).toBe('6536875250972466f2067af3')
+    })
+
+    it('parses an INVOICE_UPDATED payload — Payload.user.email + Payload.user.id', () => {
+      const payload = {
+        Type: 'INVOICE_UPDATED',
+        Payload: {
+          id: '376fa1bf-fb31-451a-b7f2-0dd670d7b77f',
+          status: 'PAID',
+          user: {
+            id: '658b300f48e87a159508c8e7',
+            email: 'skhongoroo@yahoo.ie',
+            first_name: 'Natasha',
+            last_name: 'Shijirbaatar',
+          },
+        },
+        Metadata: { location_id: '6155764859810329ec3826b3' },
+      }
+      const out = parseGlofoxEvent(payload)
+      expect(out.contactEmail).toBe('skhongoroo@yahoo.ie')
+      expect(out.userId).toBe('658b300f48e87a159508c8e7')
+    })
+
+    it('parses a MEMBERSHIP_UPDATED payload — only Payload.user_id (no email)', () => {
+      const payload = {
+        Type: 'MEMBERSHIP_UPDATED',
+        Payload: {
+          id: '65bbba6cfcfa171af06b5717',
+          status: 'ACTIVE',
+          user_id: '658b300f48e87a159508c8e7',
+          membership_definition: { id: '659442d20e66eb19f0074532', type: 'TIME' },
+        },
+        Metadata: { location_id: '6155764859810329ec3826b3' },
+      }
+      const out = parseGlofoxEvent(payload)
+      expect(out.contactEmail).toBeNull()
+      // Critical: lookup-by-glofox_member_id is the only way to
+      // find the contact for MEMBERSHIP_* events.
+      expect(out.userId).toBe('658b300f48e87a159508c8e7')
+    })
+
+    it('parses Payload.contact_email as a fallback for MEMBER payloads', () => {
+      // Some Glofox MEMBER payloads carry contact_email separately
+      // from email — capture both. The email path resolves first;
+      // contact_email is the last-resort fallback.
+      const payload = {
+        Type: 'MEMBER_UPDATED',
+        Payload: { id: 'm1', contact_email: 'fallback@x.com' },
+      }
+      expect(parseGlofoxEvent(payload).contactEmail).toBe('fallback@x.com')
+    })
   })
 })
 

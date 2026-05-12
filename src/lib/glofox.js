@@ -113,6 +113,23 @@ const CONTACT_EMAIL_PATHS = [
   ['email'],
   ['Payload', 'user', 'email'],
   ['Payload', 'email'],
+  ['Payload', 'contact_email'],
+]
+// GLOFOX5.1 — Glofox member ID lookup paths. Many event payloads
+// (BOOKING_*, MEMBERSHIP_*, COURSE_BOOKING_*) carry only user_id +
+// no email — we use this as a fallback contact-lookup key against
+// contacts.glofox_member_id. MEMBER_* events use Payload.id (the
+// member's own ID) since user_id isn't present on a member payload.
+const USER_ID_PATHS = [
+  ['Payload', 'user_id'],
+  ['Payload', 'user', 'id'],
+  ['data', 'user_id'],
+  ['data', 'member_id'],
+  ['data', 'member', 'id'],
+  ['data', 'user', 'id'],
+  // MEMBER_* events: the member ID IS the entity ID.
+  ['Payload', 'id'],
+  ['data', 'id'],
 ]
 
 function pluck(obj, paths) {
@@ -130,7 +147,7 @@ function pluck(obj, paths) {
 
 export function parseGlofoxEvent(payload) {
   if (!payload || typeof payload !== 'object') {
-    return { eventId: null, eventType: null, branchId: null, entityId: null, contactEmail: null }
+    return { eventId: null, eventType: null, branchId: null, entityId: null, contactEmail: null, userId: null }
   }
   const eventId = pluck(payload, EVENT_ID_PATHS)
   const eventType = pluck(payload, EVENT_TYPE_PATHS)
@@ -138,12 +155,16 @@ export function parseGlofoxEvent(payload) {
   const entityId = pluck(payload, ENTITY_ID_PATHS)
   const emailRaw = pluck(payload, CONTACT_EMAIL_PATHS)
   const contactEmail = typeof emailRaw === 'string' ? emailRaw.trim().toLowerCase() : null
+  // GLOFOX5.1 — Glofox member ID for contact lookup when email isn't
+  // in the payload (BOOKING_*, MEMBERSHIP_*).
+  const userId = pluck(payload, USER_ID_PATHS)
   return {
     eventId: eventId != null ? String(eventId) : null,
     eventType: eventType != null ? String(eventType) : null,
     branchId: branchId != null ? String(branchId) : null,
     entityId: entityId != null ? String(entityId) : null,
     contactEmail,
+    userId: userId != null ? String(userId) : null,
   }
 }
 
