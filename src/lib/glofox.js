@@ -439,8 +439,20 @@ export async function fetchMembership(creds, membershipId, cache = null) {
 }
 
 /**
- * Fetch a paginated list of leads/members from a branch via
+ * Fetch a paginated list of leads from a branch via
  * POST /2.1/branches/{branchId}/leads/filter.
+ *
+ * IMPORTANT (GLOFOX2.4): this endpoint scopes to the LEADS funnel
+ * view only — it returns 0 for converted MEMBERs even when
+ * lead_status='MEMBER' is in the filter. Confirmed against live
+ * Stillorgan data (8129 total members, /leads/filter with MEMBER
+ * filter returned 0). For "every user at the studio" use
+ * fetchAllMembersPage instead.
+ *
+ * Kept around for funnel-specific lookups (e.g., "all leads
+ * created in the last hour" — useful for Sales pipeline UIs that
+ * truly only want leads). Not used by bulk-sync or the cron any
+ * more.
  *
  * Per the spec, UserFilters supports:
  *   lead_status: array of LEAD/TRIAL/COLD/MEMBER/NO_SALE_TRIAL/TOUR/NO_SALE_TOUR
@@ -449,9 +461,6 @@ export async function fetchMembership(creds, membershipId, cache = null) {
  *   modified:    { start, end } — Unix seconds
  *   name:        string — searches name/first_name/last_name/email/phone
  *   deleted:     boolean — default false (active users only)
- *
- * Pagination via { skip, limit } in the body. limit max per page
- * is server-defined (typically 50–100); paginate by re-calling.
  *
  * Returns { data, total } shape from the response, OR { data: [],
  * total: 0 } on failure. Best-effort.
@@ -478,6 +487,44 @@ export async function fetchBranchLeads(creds, filters = {}, pagination = { skip:
     }
   } catch {
     return { data: [], total: 0 }
+  }
+}
+
+/**
+ * Fetch a paginated page of ALL members at the branch via
+ * GET /2.0/members?page=N&limit=M. This is the canonical "every
+ * user at the studio" endpoint per Glofox.
+ *
+ * Empirically confirmed (GLOFOX2.4):
+ *   - Returns every user regardless of lead_status (TRIAL / LEAD /
+ *     MEMBER / NO_SALE_* etc all in the same response).
+ *   - Sorted by `modified` DESC (most recently modified first).
+ *     Critical for the daily cron — early-terminate as soon as
+ *     we see a member with modified < cutoff to skip the rest.
+ *   - Response shape: { object, page, limit, has_more, total_count, data: [...] }
+ *   - Uses page+limit (NOT skip+limit). Convert from skip via
+ *     page = Math.floor(skip / limit) + 1.
+ *
+ * Returns { data, total, hasMore } or { data: [], total: 0,
+ * hasMore: false } on failure. Best-effort.
+ */
+export async function fetchAllMembersPage(creds, { page = 1, limit = 50 } = {}) {
+  if (!creds || !creds.branchId) return { data: [], total: 0, hasMore: false }
+  const safePage = Math.max(1, Math.floor(page))
+  const safeLimit = Math.min(Math.max(1, Math.floor(limit)), 100)
+  try {
+    const r = await glofoxFetch(creds, `/2.0/members?page=${safePage}&limit=${safeLimit}`)
+    if (!r.ok) return { data: [], total: 0, hasMore: false }
+    const body = await r.json()
+    return {
+      data: Array.isArray(body?.data) ? body.data : (Array.isArray(body) ? body : []),
+      total: typeof body?.total_count === 'number' ? body.total_count
+           : typeof body?.total === 'number' ? body.total
+           : null,
+      hasMore: body?.has_more === true,
+    }
+  } catch {
+    return { data: [], total: 0, hasMore: false }
   }
 }
 

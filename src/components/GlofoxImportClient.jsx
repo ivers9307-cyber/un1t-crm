@@ -199,6 +199,9 @@ export default function GlofoxImportClient({
                 <span className="text-xs text-neutral-500 px-1 py-1">(no filter — pulls every lead_status)</span>
               )}
             </div>
+            <p className="text-[11px] text-neutral-500 mt-1">
+              Applied client-side after fetching. Pages may show fewer members than the page size when a filter is set.
+            </p>
           </div>
 
           <div>
@@ -213,7 +216,7 @@ export default function GlofoxImportClient({
               className="w-full bg-white border border-neutral-300 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:border-blue-400"
             />
             <p className="text-[11px] text-neutral-500 mt-1">
-              Empty = pull every member regardless of when last modified.
+              Empty = pull every member. /2.0/members is sorted modified-DESC, so a date here is most efficient when used with Auto-paginate (we early-stop once we hit the cutoff).
             </p>
           </div>
         </div>

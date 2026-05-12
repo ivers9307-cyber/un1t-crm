@@ -21,7 +21,7 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
-import { glofoxCredentialsForLocation, fetchBranchLeads } from '@/lib/glofox'
+import { glofoxCredentialsForLocation, fetchAllMembersPage } from '@/lib/glofox'
 import { applyMemberSync } from '@/lib/glofox-sync'
 
 export const runtime = 'nodejs'
@@ -72,11 +72,16 @@ export async function GET(request) {
   }
 
   const lookbackSec = Math.floor((Date.now() - LOOKBACK_HOURS * 3600 * 1000) / 1000)
+  // GLOFOX2.4 — filter shape kept for the audit row (operator can
+  // see "what window did this run cover"). Actual filtering is now
+  // client-side via the modified-DESC early-termination in
+  // syncOneLocation, since /2.0/members doesn't accept a
+  // server-side modified filter.
   const filters = { modified: { start: lookbackSec } }
   const perLocationResults = []
 
   for (const loc of eligibleLocations) {
-    const result = await syncOneLocation(db, loc, filters)
+    const result = await syncOneLocation(db, loc, filters, lookbackSec)
     perLocationResults.push(result)
   }
 
@@ -103,11 +108,14 @@ export async function GET(request) {
 }
 
 /**
- * Sync one location. Inserts an audit row, paginates through the
- * matching leads, calls applyMemberSync per lead, finalises the
- * audit row.
+ * Sync one location. Inserts an audit row, paginates through
+ * /2.0/members in modified-DESC order, calls applyMemberSync per
+ * member who falls within the lookback window, early-terminates
+ * as soon as we hit a member modified BEFORE the cutoff (the
+ * sort order means everything past that point is also outside
+ * the window).
  */
-async function syncOneLocation(db, location, filters) {
+async function syncOneLocation(db, location, filters, lookbackSec) {
   const startedAt = Date.now()
   const summary = { create: 0, update: 0, ambiguous: 0, invalid: 0, error: 0, leave: 0 }
   let firstError = null
@@ -141,40 +149,52 @@ async function syncOneLocation(db, location, filters) {
     // /2.0/memberships/{id} N times.
     const membershipCache = new Map()
 
-    let skip = 0
-    while (true) {
-      const { data: leads, total } = await fetchBranchLeads(creds, filters, {
-        skip, limit: PAGE_SIZE,
+    // GLOFOX2.4 — paginate /2.0/members (sorted modified-DESC).
+    // Early-terminate when we see a member modified < lookbackSec.
+    let page = 1
+    let stopEarly = false
+    while (!stopEarly) {
+      const { data: members, total, hasMore } = await fetchAllMembersPage(creds, {
+        page, limit: PAGE_SIZE,
       })
       if (typeof total === 'number') totalAvailable = total
       pagesFetched++
-      if (!leads || leads.length === 0) break
+      if (!members || members.length === 0) break
 
-      for (const lead of leads) {
+      for (const m of members) {
+        const memberModified = Number(m?.modified) || 0
+        if (memberModified > 0 && memberModified < lookbackSec) {
+          // First member outside the window → because the list is
+          // modified-DESC, EVERY subsequent member is also outside.
+          // Stop the whole loop.
+          stopEarly = true
+          break
+        }
         try {
-          const result = await applyMemberSync(db, location.id, lead, {
+          const result = await applyMemberSync(db, location.id, m, {
             creds, membershipCache,
           })
           summary[result.action] = (summary[result.action] || 0) + 1
           if (result.error && !firstError) {
-            firstError = `[${lead._id || 'unknown'}] ${result.error}`
+            firstError = `[${m._id || 'unknown'}] ${result.error}`
           }
           leadsProcessed++
         } catch (e) {
           summary.error++
-          if (!firstError) firstError = `[${lead._id || 'unknown'}] ${e?.message || 'threw'}`
+          if (!firstError) firstError = `[${m._id || 'unknown'}] ${e?.message || 'threw'}`
           leadsProcessed++
         }
       }
 
-      // Stop when the page wasn't full — we've reached the end of
-      // the filtered set.
-      if (leads.length < PAGE_SIZE) break
-      skip += PAGE_SIZE
+      // No more pages OR we just fetched the last one.
+      if (!hasMore) break
+      page++
 
       // Defensive cap — shouldn't trigger in practice but stops a
-      // pathological infinite-pagination loop.
-      if (skip >= 5000) break
+      // pathological infinite-pagination loop. UN1T's 8129 members
+      // / 50 per page = 163 pages worst case (cron only ever needs
+      // a handful due to early-termination).
+      if (page > 200) break
     }
 
     const duration = Date.now() - startedAt

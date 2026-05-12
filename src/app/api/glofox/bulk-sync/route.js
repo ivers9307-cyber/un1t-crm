@@ -46,7 +46,7 @@ import { NextResponse } from 'next/server'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { uuidLike } from '@/lib/schemas'
-import { glofoxCredentialsForLocation, fetchBranchLeads } from '@/lib/glofox'
+import { glofoxCredentialsForLocation, fetchAllMembersPage } from '@/lib/glofox'
 import { previewMemberSync, applyMemberSync } from '@/lib/glofox-sync'
 
 export const runtime = 'nodejs'
@@ -71,11 +71,18 @@ export async function POST(request) {
     }, { status: 400 })
   }
 
+  // GLOFOX2.4 — Glofox's /2.0/members endpoint uses page+limit
+  // (not skip+limit). The UI still speaks skip; we convert here.
+  // The lead_status filter is now CLIENT-SIDE (applied to the
+  // fetched page below) because /2.0/members doesn't accept it
+  // as a query param. modified_since is also client-side for
+  // the same reason.
   const filters = body.filters || {}
   const pagination = {
     skip: Number(body?.pagination?.skip) || 0,
     limit: Math.min(Math.max(Number(body?.pagination?.limit) || 50, 1), 100),
   }
+  const page = Math.floor(pagination.skip / pagination.limit) + 1
   // Default to dry_run=true — explicit `false` to actually persist.
   const dryRun = body.dry_run !== false
 
@@ -88,8 +95,47 @@ export async function POST(request) {
     }, { status: 400 })
   }
 
-  // Fetch the page of leads matching the filters.
-  const { data: leads, total: totalAvailable, raw } = await fetchBranchLeads(creds, filters, pagination)
+  // GLOFOX2.4 — fetch a page from /2.0/members (the canonical
+  // all-users endpoint). Returns ALL lead_status values; we apply
+  // the operator's lead_status filter client-side below.
+  const { data: pageData, total: totalAvailable, hasMore } = await fetchAllMembersPage(creds, {
+    page, limit: pagination.limit,
+  })
+  // Client-side filtering — operator-supplied lead_status[] +
+  // modified.start narrow the page after fetch.
+  let leads = pageData
+  const wantStatuses = Array.isArray(filters?.lead_status) && filters.lead_status.length > 0
+    ? new Set(filters.lead_status.map(s => String(s).toUpperCase()))
+    : null
+  const modifiedSinceSec = Number(filters?.modified?.start) || null
+  // GLOFOX2.4 — track whether ANY member on this page is older than
+  // the modified-since cutoff. Because /2.0/members is sorted
+  // modified-DESC, a single hit means every later page is also
+  // out-of-window — we set has_more=false to stop the auto-paginate
+  // loop early (mirrors the cron's early-termination logic).
+  let crossedCutoff = false
+  if (wantStatuses || modifiedSinceSec) {
+    leads = leads.filter(m => {
+      if (wantStatuses) {
+        const status = String(m?.lead_status || m?.leads?.status || '').toUpperCase()
+        if (!wantStatuses.has(status)) return false
+      }
+      if (modifiedSinceSec) {
+        const mod = Number(m?.modified) || 0
+        if (mod > 0 && mod < modifiedSinceSec) {
+          crossedCutoff = true
+          return false
+        }
+      }
+      return true
+    })
+  }
+  const filteredCount = leads.length
+  const fetchedRaw = pageData?.length || 0
+  // Override has_more when modified-since cutoff was crossed —
+  // /2.0/members's natural has_more says "more pages of users",
+  // but we know everything past the cutoff is out of window.
+  const effectiveHasMore = crossedCutoff ? false : hasMore
   if (!leads || leads.length === 0) {
     return NextResponse.json({
       ok: true,
@@ -98,10 +144,14 @@ export async function POST(request) {
       filters,
       pagination,
       fetched: 0,
+      raw_page_count: fetchedRaw,
       total_available: totalAvailable,
+      has_more: effectiveHasMore,
       processed: [],
       summary: { create: 0, update: 0, ambiguous: 0, invalid: 0, error: 0 },
-      hint: 'No leads matched the filter for this page.',
+      hint: fetchedRaw > 0
+        ? `Fetched ${fetchedRaw} from this page but none matched the lead_status / modified filter. Try the next page or relax the filter.`
+        : 'No more members available.',
     })
   }
 
@@ -148,14 +198,16 @@ export async function POST(request) {
     filters,
     pagination,
     fetched: leads.length,
+    raw_page_count: fetchedRaw,
+    filtered_out: fetchedRaw - filteredCount,
     total_available: totalAvailable,
-    has_more: typeof totalAvailable === 'number'
-      ? (pagination.skip + leads.length) < totalAvailable
-      : null,
+    // GLOFOX2.4 — has_more comes from the Glofox response (page-level
+    // signal). The /2.0/members has_more reflects "is there another
+    // page of users", not "is there another match" — important for the
+    // auto-paginate loop, which keeps going as long as has_more even if
+    // a page yielded zero matches after client-side filtering.
+    has_more: hasMore,
     processed,
     summary,
-    raw_response_meta: raw && typeof raw === 'object'
-      ? { keys: Object.keys(raw).filter(k => k !== 'data') }
-      : null,
   })
 }
