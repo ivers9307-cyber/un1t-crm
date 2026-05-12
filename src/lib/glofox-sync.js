@@ -1414,13 +1414,16 @@ export async function applyMemberSync(db, locationId, member, opts = {}) {
       glofox_membership_status: m.glofox_membership_status,
       glofox_synced_at: now,
       lead_source: m.lead_source,
-      // GLOFOX2.6 — credit balance from Glofox (only set when we
-      // have credit context; otherwise fall back to the schema
-      // default of 3 so the column constraint is satisfied for
-      // contacts that fail the credits-fetch).
-      ...(m.trial_credits_remaining != null
-        ? { trial_credits_remaining: m.trial_credits_remaining }
-        : {}),
+      // GLOFOX2.6 + 3-followup — credit balance from Glofox.
+      // Always EXPLICITLY set (even to null) so the schema's mig 001
+      // default of 3 doesn't leak into Glofox-linked rows.
+      //   numeric → Trial member with an active pack; render badge
+      //   null    → subscription Member, exhausted/inactive pack,
+      //             OR fetch failure. GlofoxProfileCard guards on
+      //             `credits != null` so the badge disappears in
+      //             all three cases — correct vs. the previous
+      //             behavior of showing a stale "3 credits".
+      trial_credits_remaining: m.trial_credits_remaining ?? null,
       // GLOFOX2.1.14 — booking aggregates (default to 0/null when
       // we couldn't fetch them, so the row is still well-formed).
       last_booked_at:       m.last_booked_at       ?? null,

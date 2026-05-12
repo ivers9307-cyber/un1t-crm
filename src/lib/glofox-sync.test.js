@@ -1219,6 +1219,47 @@ describe('previewMemberSync', () => {
     expect(out.deal_action.stage_slug).toBe('new_lead')
   })
 
+  // GLOFOX2.6.1 regression — Paula Glynn (trial) and two ClassPass
+  // PAYG contacts were imported showing "3 credits" in the CRM
+  // because:
+  //   1. fetchUserCredits returned [] (no active packs / fetch failure)
+  //   2. computeCreditsRemaining([]) returned null
+  //   3. applyMemberSync CREATE path skipped the INSERT when null,
+  //      letting the mig 001 schema default of 3 win.
+  // Fix: CREATE path now always explicit-writes the column.
+  // These previewMemberSync tests lock the upstream contract: ctx
+  // present means the field is authoritatively-mapped, including
+  // null when the member has no credits to count.
+  it('mapped.trial_credits_remaining is null when ctx.credits is empty (CREATE side)', async () => {
+    const out = await previewMemberSync(
+      fakeDb(),
+      'loc',
+      member,
+      { ctx: { credits: [], memberships: new Map() } },
+    )
+    expect(out.action).toBe('create')
+    // CRITICAL: must be null (not undefined, not 3) so the
+    // applyMemberSync CREATE INSERT writes a real NULL instead of
+    // falling back to the schema default of 3.
+    expect(out.mapped.trial_credits_remaining).toBeNull()
+  })
+
+  it('change-detection writes null to trial_credits_remaining on existing contact with no credits', async () => {
+    const existing = {
+      id: 'c1', email: 'me@x.com', glofox_member_id: 'g1',
+      glofox_membership_status: 'trial',
+      trial_credits_remaining: 3, // the leaked default we want to overwrite
+    }
+    const out = await previewMemberSync(
+      fakeDb({ rowsByGlofoxId: [existing], rowsByEmail: [existing] }),
+      'loc',
+      member,
+      { ctx: { credits: [], memberships: new Map() } },
+    )
+    expect(out.action).toBe('update')
+    expect(out.changes.trial_credits_remaining).toEqual({ from: 3, to: null })
+  })
+
   it('proposes leave when status unchanged AND deal already at target', async () => {
     const existing = { id: 'c1', email: 'me@x.com', glofox_member_id: 'g1', glofox_membership_status: 'trial' }
     const out = await previewMemberSync(
