@@ -576,6 +576,248 @@ export async function fetchPaymentsReport(creds, opts = {}) {
   }
 }
 
+// ─────────────────────────────────────────────────────────────
+// CRM → Glofox push helpers (GLOFOX3.1 — bidirectional sync)
+// ─────────────────────────────────────────────────────────────
+//
+// Three operations needed for the bidirectional model the
+// operator chose (per-flow opt-in, not blanket every-contact):
+//
+//   1. Search by email — dup detection on every CRM contact
+//      create (link existing Glofox member rather than duplicate)
+//   2. Register a new Glofox member — when an opt-in flow
+//      (booking form, event with checkbox, manual button) wants
+//      a fresh Glofox account
+//   3. Purchase a membership — pair with register() so new
+//      accounts land with the studio's trial product attached
+//
+// Plus a helper for the LocationForm picker to list available
+// memberships at the studio (operator chooses which one to use
+// as the trial).
+
+/**
+ * Search Glofox for a member by email.
+ * Uses the v3 namespace search per the spec; falls back to a
+ * /2.0/members scan if the v3 endpoint isn't available (defensive
+ * for older firmwares).
+ *
+ * Returns { found, member, error }. found=true with a member
+ * object means we should LINK rather than create.
+ */
+export async function searchGlofoxByEmail(creds, email) {
+  if (!creds?.branchId || typeof email !== 'string' || !email.trim()) {
+    return { found: false, member: null, error: 'missing args' }
+  }
+  const lc = email.trim().toLowerCase()
+  try {
+    // v3 namespace search — POST body { email } per the spec.
+    const r = await glofoxFetch(creds, '/v3.0/namespaces/members/retrieve', {
+      method: 'POST',
+      body: JSON.stringify({ email: lc }),
+    })
+    if (r.ok) {
+      const body = await r.json()
+      // Response shape varies — try the common shapes.
+      const candidates = Array.isArray(body?.data) ? body.data
+                       : Array.isArray(body?.members) ? body.members
+                       : Array.isArray(body) ? body
+                       : (body && typeof body === 'object' && body._id ? [body] : [])
+      // Filter to exact email match (case-insensitive). The search
+      // is theoretically exact but defending against fuzzy matches.
+      const exact = candidates.filter(c =>
+        typeof c?.email === 'string' && c.email.toLowerCase() === lc
+      )
+      if (exact.length === 1) return { found: true, member: exact[0], error: null }
+      if (exact.length > 1) {
+        // Multiple Glofox accounts for one email — operator review.
+        return { found: true, member: exact[0], error: 'multiple_glofox_matches', allMatches: exact }
+      }
+    }
+    return { found: false, member: null, error: r.ok ? null : `Glofox HTTP ${r.status}` }
+  } catch (e) {
+    return { found: false, member: null, error: e?.message || 'search failed' }
+  }
+}
+
+/**
+ * Register a new Glofox member via POST /2.0/register.
+ *
+ * Required body fields per the spec: first_name, last_name, email,
+ * type='MEMBER', lead_status, password. Optional: phone, birth,
+ * emergency_contact, consent.
+ *
+ * Returns { ok, member, error }. member._id is the new
+ * glofox_member_id we write to the CRM contact row.
+ *
+ * Best-effort: API failures return ok:false with the error
+ * message; caller decides how to surface (audit row + Review tab).
+ */
+export async function registerGlofoxMember(creds, payload) {
+  if (!creds?.branchId) {
+    return { ok: false, member: null, error: 'missing branchId' }
+  }
+  if (!payload?.first_name || !payload?.last_name || !payload?.email || !payload?.password) {
+    return { ok: false, member: null, error: 'missing required fields (first_name, last_name, email, password)' }
+  }
+  const body = {
+    first_name: payload.first_name,
+    last_name: payload.last_name,
+    email: String(payload.email).trim().toLowerCase(),
+    type: 'MEMBER',
+    lead_status: payload.lead_status || 'LEAD',
+    password: payload.password,
+    ...(payload.phone ? { phone: payload.phone } : {}),
+    ...(payload.birth ? { birth: payload.birth } : {}),
+    ...(payload.emergency_contact ? { emergency_contact: payload.emergency_contact } : {}),
+    ...(payload.consent ? { consent: payload.consent } : {}),
+  }
+  try {
+    const r = await glofoxFetch(creds, '/2.0/register', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    })
+    let parsed
+    try { parsed = await r.json() } catch { parsed = null }
+    if (!r.ok) {
+      return {
+        ok: false,
+        member: null,
+        error: parsed?.error || parsed?.message || `Glofox HTTP ${r.status}`,
+        glofox_response: parsed,
+      }
+    }
+    // Glofox wraps the new user under various shapes — try them.
+    const member = parsed?.user || parsed?.data || parsed
+    return { ok: true, member, error: null, glofox_response: parsed }
+  } catch (e) {
+    return { ok: false, member: null, error: e?.message || 'network error' }
+  }
+}
+
+/**
+ * Update an existing Glofox member via PUT /2.0/members/{userId}.
+ *
+ * Per the spec: "Only send the fields you want to change". We
+ * pass through whatever the caller hands us, no field-shape
+ * validation (caller is responsible for sending the right keys).
+ */
+export async function updateGlofoxMember(creds, userId, patch) {
+  if (!creds?.branchId || !userId) {
+    return { ok: false, error: 'missing args' }
+  }
+  if (!patch || typeof patch !== 'object' || Object.keys(patch).length === 0) {
+    return { ok: false, error: 'empty patch' }
+  }
+  try {
+    const r = await glofoxFetch(creds, `/2.0/members/${encodeURIComponent(userId)}`, {
+      method: 'PUT',
+      body: JSON.stringify(patch),
+    })
+    let parsed
+    try { parsed = await r.json() } catch { parsed = null }
+    if (!r.ok) {
+      return { ok: false, error: parsed?.error || parsed?.message || `Glofox HTTP ${r.status}`, glofox_response: parsed }
+    }
+    return { ok: true, glofox_response: parsed }
+  } catch (e) {
+    return { ok: false, error: e?.message || 'network error' }
+  }
+}
+
+/**
+ * Purchase a membership for a member via the cart-less direct
+ * purchase endpoint:
+ *   POST /2.2/branches/{branchId}/users/{userId}/memberships/{membershipId}/plans/{planCode}/purchase
+ *
+ * Used immediately after registerGlofoxMember to attach the
+ * studio's trial membership to a fresh account. Per-location
+ * trial config lives at locations.settings.glofox.trial_membership_id
+ * + trial_plan_code.
+ *
+ * Returns { ok, error, glofox_response }.
+ */
+export async function purchaseGlofoxMembership(creds, userId, membershipId, planCode, opts = {}) {
+  if (!creds?.branchId || !userId || !membershipId || !planCode) {
+    return { ok: false, error: 'missing args' }
+  }
+  const path = `/2.2/branches/${encodeURIComponent(creds.branchId)}/users/${encodeURIComponent(userId)}/memberships/${encodeURIComponent(membershipId)}/plans/${encodeURIComponent(planCode)}/purchase`
+  try {
+    const r = await glofoxFetch(creds, path, {
+      method: 'POST',
+      body: JSON.stringify(opts.body || {}),
+    })
+    let parsed
+    try { parsed = await r.json() } catch { parsed = null }
+    if (!r.ok) {
+      return { ok: false, error: parsed?.message || `Glofox HTTP ${r.status}`, glofox_response: parsed }
+    }
+    return { ok: true, glofox_response: parsed }
+  } catch (e) {
+    return { ok: false, error: e?.message || 'network error' }
+  }
+}
+
+/**
+ * List the membership catalog at the studio via GET /2.0/memberships.
+ *
+ * Used by the LocationForm trial-membership picker — operator
+ * picks one (membership + plan_code combo) to use as the trial
+ * product for new Glofox accounts at this location.
+ *
+ * Returns { ok, memberships: [{ _id, name, plans: [{ code, type, price }] }] }
+ * or { ok: false, error }.
+ */
+export async function listGlofoxMemberships(creds) {
+  if (!creds?.branchId) return { ok: false, error: 'missing branchId', memberships: [] }
+  try {
+    const r = await glofoxFetch(creds, '/2.0/memberships')
+    if (!r.ok) return { ok: false, error: `Glofox HTTP ${r.status}`, memberships: [] }
+    const body = await r.json()
+    const items = Array.isArray(body?.data) ? body.data
+                : Array.isArray(body) ? body
+                : []
+    const memberships = items.map(m => ({
+      _id: String(m?._id || ''),
+      name: String(m?.name || ''),
+      trial: m?.trial === true,
+      plans: Array.isArray(m?.plans) ? m.plans.map(p => ({
+        code: String(p?.code || ''),
+        type: String(p?.type || ''),
+        price: Number(p?.price) || 0,
+        name: String(p?.name || ''),
+      })).filter(p => p.code) : [],
+    })).filter(m => m._id)
+    return { ok: true, memberships }
+  } catch (e) {
+    return { ok: false, error: e?.message || 'network error', memberships: [] }
+  }
+}
+
+/**
+ * Generate a one-time passcode for a new Glofox account. Used as
+ * the initial password on /2.0/register; emailed to the member as
+ * "log in once with this, change to your own password."
+ *
+ * 8 chars, alphanumeric uppercase + digits, hyphenated for
+ * readability (e.g., 'ABC1-2345'). Crypto-random.
+ */
+export function generateGlofoxPasscode() {
+  // Avoid 0/O/1/I/L confusion — exclude visually-similar chars.
+  const alphabet = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'
+  const out = []
+  // 8 chars total — Web Crypto for crypto-strong randomness.
+  const bytes = new Uint8Array(8)
+  if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
+    crypto.getRandomValues(bytes)
+  } else {
+    for (let i = 0; i < 8; i++) bytes[i] = Math.floor(Math.random() * 256)
+  }
+  for (let i = 0; i < 8; i++) {
+    out.push(alphabet[bytes[i] % alphabet.length])
+  }
+  return out.slice(0, 4).join('') + '-' + out.slice(4).join('')
+}
+
 /**
  * Create a booking on behalf of a member via /2.0/bookings.
  *

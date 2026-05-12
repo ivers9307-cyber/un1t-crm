@@ -8,6 +8,7 @@ import { triggerSequencesForStatusChange, triggerSequencesForTagsAdded } from '@
 import { logPipelineEvent } from '@/lib/activity-events'
 import { getCurrentUser } from '@/lib/auth'
 import { redactWhatsAppForContact } from '@/lib/contact-merge'
+import { findOrCreateGlofoxMember } from '@/lib/glofox-push'
 import { logWarn } from '@/lib/log'
 
 const ContactUpdateSchema = z.object({
@@ -50,7 +51,7 @@ export async function PUT(request, { params }) {
   // tenant on its timeline row.
   const { data: oldRow } = await db
     .from('contacts')
-    .select('lead_status, tags, location_id')
+    .select('lead_status, tags, location_id, email, glofox_member_id')
     .eq('id', id)
     .single()
 
@@ -93,6 +94,24 @@ export async function PUT(request, { params }) {
           .catch(e => logWarn('contacts.PUT', `tag_added trigger error for ${id}`, { err: e }))
       }
     }
+  }
+
+  // GLOFOX3.1 — dup-prevention on update. Only fires when the
+  // contact has just acquired (or changed) an email AND we don't
+  // already have a glofox link. Skips when the operator manually
+  // pasted in a glofox_member_id (PUT body) — that's already a link.
+  // Search-only, never creates. Best-effort.
+  const emailChanged = typeof body.email !== 'undefined' && body.email && body.email !== oldRow?.email
+  const stillUnlinked = !data.glofox_member_id && !body.glofox_member_id
+  if (emailChanged && stillUnlinked && data.location_id) {
+    findOrCreateGlofoxMember({
+      db,
+      locationId: data.location_id,
+      contact: data,
+      source: 'dup_check',
+      createIfMissing: false,
+      attachTrial: false,
+    }).catch(e => logWarn('contacts.PUT', `glofox dup_check failed for ${id}`, { err: e }))
   }
 
   return NextResponse.json({ success: true, data })

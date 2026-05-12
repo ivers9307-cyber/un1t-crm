@@ -54,6 +54,15 @@ export default function LocationForm({ location, callerRole = 'owner', organizat
   // for a location lives in one place.
   const [glofoxApiToken, setGlofoxApiToken] = useState(settings.glofox?.api_token || '')
   const [glofoxWebhookSecret, setGlofoxWebhookSecret] = useState(settings.glofox?.webhook_secret || '')
+  // GLOFOX3.1 — trial membership config. Picked from a dropdown
+  // backed by /api/locations/[id]/glofox-memberships. Used when
+  // we create a fresh Glofox account for a CRM contact (booking
+  // form opt-in / event opt-in / manual button) — the trial
+  // membership gets attached automatically via Glofox's purchase
+  // endpoint. Stored as a "membershipId:planCode" combined value
+  // so the picker can render both axes in one dropdown.
+  const [glofoxTrialMembershipId, setGlofoxTrialMembershipId] = useState(settings.glofox?.trial_membership_id || '')
+  const [glofoxTrialPlanCode, setGlofoxTrialPlanCode] = useState(settings.glofox?.trial_plan_code || '')
 
   // UniFi Access settings — drives the door-access toggle on staff profiles.
   // host  : public-facing URL of the UniFi Access controller, including
@@ -168,9 +177,11 @@ export default function LocationForm({ location, callerRole = 'owner', organizat
       } : {}),
       settings: {
         ...(settings || {}),
-        glofox: (glofoxBranchId || glofoxApiKey || glofoxApiToken || glofoxWebhookSecret) ? {
+        glofox: (glofoxBranchId || glofoxApiKey || glofoxApiToken || glofoxWebhookSecret || glofoxTrialMembershipId) ? {
           branch_id: glofoxBranchId || null,
           api_key: glofoxApiKey || null,
+          trial_membership_id: glofoxTrialMembershipId || null,
+          trial_plan_code: glofoxTrialPlanCode || null,
           // GLOFOX1.6 — api_token is the third header Glofox auth
           // requires alongside branch_id + api_key. webhook_secret
           // is the HMAC-SHA256 signing secret Glofox provides
@@ -482,6 +493,23 @@ export default function LocationForm({ location, callerRole = 'owner', organizat
           />
           <p className="text-[11px] text-un1t-mid mt-1">HMAC-SHA256 signing secret. Glofox sends this separately when they enable webhooks; until then leave blank and the receiver will reject all events for safety.</p>
         </div>
+
+        {/* GLOFOX3.1 — trial membership picker. Required for the
+            CRM → Glofox push flows (booking forms, events, manual
+            "Create in Glofox" button) to attach a trial product
+            to freshly-created Glofox accounts. Lazy-fetches the
+            membership catalog from /2.0/memberships when the
+            picker is opened. */}
+        <GlofoxTrialMembershipPicker
+          locationId={location?.id}
+          configured={Boolean(glofoxBranchId && glofoxApiKey && glofoxApiToken)}
+          membershipId={glofoxTrialMembershipId}
+          planCode={glofoxTrialPlanCode}
+          onChange={(m, p) => {
+            setGlofoxTrialMembershipId(m || '')
+            setGlofoxTrialPlanCode(p || '')
+          }}
+        />
       </div>
 
       {/* UniFi Access Integration — master only (mig 034). Owners
@@ -711,5 +739,116 @@ export default function LocationForm({ location, callerRole = 'owner', organizat
         </button>
       </div>
     </form>
+  )
+}
+
+// GLOFOX3.1 — trial-membership picker. Lazy-fetches the catalog
+// from /api/locations/[id]/glofox-memberships when expanded so we
+// don't hit Glofox on every LocationForm mount. Disabled until
+// branch_id + api_key + api_token are all set on the same form
+// (otherwise the API call would 400).
+function GlofoxTrialMembershipPicker({ locationId, configured, membershipId, planCode, onChange }) {
+  const [open, setOpen] = useState(false)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState(null)
+  const [memberships, setMemberships] = useState(null)
+
+  const currentLabel = (() => {
+    if (!membershipId) return 'No trial membership configured'
+    if (!memberships) {
+      // Show truncated id until the catalog loads.
+      return `Membership ${membershipId.slice(0, 8)}… · plan ${planCode || '?'}`
+    }
+    const m = memberships.find(x => x._id === membershipId)
+    if (!m) return `Membership ${membershipId.slice(0, 8)}… (not in catalog?)`
+    const p = m.plans.find(x => x.code === planCode)
+    return `${m.name}${p ? ` · ${p.name || p.code} (€${p.price})` : ''}`
+  })()
+
+  async function fetchMemberships() {
+    if (loading || !locationId) return
+    setLoading(true)
+    setError(null)
+    try {
+      const res = await fetch(`/api/locations/${locationId}/glofox-memberships`, { cache: 'no-store' })
+      const json = await res.json()
+      if (!json.success) throw new Error(json.message || json.error || 'Fetch failed')
+      setMemberships(json.memberships || [])
+    } catch (e) {
+      setError(e.message || 'Could not load Glofox memberships')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  function handleToggle() {
+    const next = !open
+    setOpen(next)
+    if (next && memberships === null && configured) fetchMemberships()
+  }
+
+  return (
+    <div className="space-y-1.5">
+      <label className="block text-sm mb-1.5">Trial membership for new Glofox accounts</label>
+      <button
+        type="button"
+        onClick={handleToggle}
+        disabled={!locationId}
+        className="w-full flex items-center justify-between text-left rounded-md border border-un1t-gray bg-un1t-black px-3 py-2 text-sm hover:border-un1t-mid disabled:opacity-50"
+      >
+        <span className="truncate">{currentLabel}</span>
+        <span className="text-un1t-light text-xs ml-2">{open ? '▴' : '▾'}</span>
+      </button>
+      {!configured && (
+        <p className="text-[11px] text-amber-300/80">
+          Save the Glofox host + branch_id + api_key + api_token first, then come back here to pick a trial membership.
+        </p>
+      )}
+      {open && configured && (
+        <div className="rounded-md border border-un1t-gray bg-un1t-black p-2 space-y-1 max-h-80 overflow-y-auto">
+          {loading && <div className="text-xs text-un1t-light px-2 py-1.5">Loading membership catalog…</div>}
+          {error && <div className="text-xs text-red-300 px-2 py-1.5">{error}</div>}
+          {!loading && !error && memberships && (
+            <>
+              <button
+                type="button"
+                onClick={() => { onChange(null, null); setOpen(false) }}
+                className={`w-full text-left text-sm px-2 py-1.5 rounded hover:bg-un1t-gray/40 ${!membershipId ? 'text-blue-300' : ''}`}
+              >
+                Clear
+                <div className="text-xs text-un1t-light">No trial attached on Glofox account creation. CRM will create the account but not assign any membership.</div>
+              </button>
+              <div className="border-t border-un1t-gray/50 my-1" />
+              {memberships.length === 0 && (
+                <div className="text-xs text-un1t-light px-2 py-1.5">No memberships in this Glofox studio yet.</div>
+              )}
+              {memberships.map((m) => (
+                <div key={m._id} className="border-b border-un1t-gray/30 last:border-b-0 pb-1.5 mb-1.5 last:mb-0 last:pb-0">
+                  <div className="px-2 text-xs font-medium text-un1t-light">
+                    {m.name}
+                    {m.trial && <span className="ml-1 text-amber-300/80">· trial</span>}
+                  </div>
+                  {m.plans.map((p) => (
+                    <button
+                      key={p.code}
+                      type="button"
+                      onClick={() => { onChange(m._id, p.code); setOpen(false) }}
+                      className={`w-full text-left text-sm px-3 py-1.5 rounded hover:bg-un1t-gray/40 ${
+                        membershipId === m._id && planCode === p.code ? 'text-blue-300' : ''
+                      }`}
+                    >
+                      <span>{p.name || p.code}</span>
+                      <span className="text-xs text-un1t-light ml-2">
+                        €{p.price} · {p.type}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              ))}
+            </>
+          )}
+        </div>
+      )}
+    </div>
   )
 }
