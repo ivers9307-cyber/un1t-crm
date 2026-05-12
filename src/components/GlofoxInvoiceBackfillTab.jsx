@@ -181,6 +181,33 @@ export default function GlofoxInvoiceBackfillTab() {
               </pre>
             </details>
           )}
+          {/* PIPELINE5.5e — when fetched=0, surface the raw Glofox
+              request + response so the operator can validate the call
+              shape and have evidence to share with Glofox support. */}
+          {result.fetched === 0 && (result.glofox_response_raw || result.glofox_request_body) && (
+            <div className="pt-2 border-t border-un1t-gray/50 space-y-2">
+              <div className="text-[11px] text-un1t-light">
+                Glofox returned HTTP {result.glofox_status}. Body keys:{' '}
+                <code>{JSON.stringify(result.glofox_body_keys)}</code>
+              </div>
+              {result.glofox_request_body && (
+                <details className="text-[11px] text-un1t-light">
+                  <summary className="cursor-pointer">Sent payload</summary>
+                  <pre className="mt-2 bg-un1t-black border border-un1t-gray rounded p-2 overflow-auto max-h-48 text-[10px]">
+                    {JSON.stringify(result.glofox_request_body, null, 2)}
+                  </pre>
+                </details>
+              )}
+              {result.glofox_response_raw && (
+                <details className="text-[11px] text-un1t-light">
+                  <summary className="cursor-pointer">Raw response (truncated 2KB)</summary>
+                  <pre className="mt-2 bg-un1t-black border border-un1t-gray rounded p-2 overflow-auto max-h-48 text-[10px]">
+                    {result.glofox_response_raw}
+                  </pre>
+                </details>
+              )}
+            </div>
+          )}
         </div>
       )}
 

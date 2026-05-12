@@ -78,13 +78,32 @@ export async function POST(request) {
   // Pull the transactions report. Glofox's /Analytics/report can be
   // permission-gated; previous attempts under GLOFOX2.1.19 returned
   // an empty list, which is why we wired LTV via webhooks instead.
-  // Now that webhooks are live the same scope should be unlocked —
-  // worth retrying.
+  // PIPELINE5.5d/e: now defaults to sending the full PaymentMethods
+  // list per the spec example. If this STILL returns 0 we surface
+  // the raw response below so we have evidence for a Glofox ticket.
   const report = await fetchPaymentsReport(creds, {
     start: sinceSec,
     end: nowSec,
     namespace: creds.namespace,
     byMembers: false,
+  })
+
+  // Always log the request + response shape to Vercel runtime logs
+  // so we can validate without re-deploying with extra logging every
+  // time. body keys + length only — never log the full body to keep
+  // PII out of logs.
+  const respBodyKeys = report.body && typeof report.body === 'object' ? Object.keys(report.body) : []
+  const detailsLen = Array.isArray(report.body?.TransactionsList?.details)
+    ? report.body.TransactionsList.details.length
+    : null
+  console.log('[glofox-invoice-backfill] /Analytics/report response', {
+    ok: report.ok,
+    status: report.status,
+    body_keys: respBodyKeys,
+    transactions_list_details_length: detailsLen,
+    request_start: sinceSec,
+    request_end: nowSec,
+    request_window_days: Math.round((nowSec - sinceSec) / 86400),
   })
 
   if (!report.ok) {
@@ -93,6 +112,7 @@ export async function POST(request) {
       error: 'Glofox /Analytics/report rejected the request',
       glofox_status: report.status,
       glofox_body: report.body,
+      glofox_request_body: report.request_body,
       hint: report.status === 403
         ? 'API permission scope likely still restricted. Either ask Glofox to unlock the analytics scope, or export the invoice report from the Glofox UI as CSV and import via a future CSV path.'
         : null,
@@ -113,17 +133,28 @@ export async function POST(request) {
       error: 'Unexpected /Analytics/report shape — no transactions array',
       sample_keys: Object.keys(report.body || {}),
       sample_body: typeof report.body === 'object' ? JSON.stringify(report.body).slice(0, 500) : null,
+      glofox_request_body: report.request_body,
     }, { status: 502 })
   }
 
   if (transactions.length === 0) {
+    // Surface the raw Glofox response in the result so the operator
+    // can see exactly what came back without grepping Vercel logs.
+    // Truncate to 2KB to stay well under any payload limits.
+    const rawBodyJson = (() => {
+      try { return JSON.stringify(report.body) } catch { return null }
+    })()
     return NextResponse.json({
       ok: true,
       since_iso: sinceIso,
       fetched: 0,
       upserted: 0,
       contacts_updated: 0,
-      message: '/Analytics/report returned 0 transactions for this window. Either the studio truly had no paid invoices since the cutoff, OR the Glofox API permission scope is still restricted. Try again after confirming with Glofox support, or fall back to the CSV import path.',
+      message: '/Analytics/report returned 0 transactions for this window. Either the studio truly had no paid invoices since the cutoff, OR the Glofox API permission scope is still restricted. The raw response + sent payload are below — share these with Glofox support if filing a ticket.',
+      glofox_status: report.status,
+      glofox_body_keys: respBodyKeys,
+      glofox_response_raw: rawBodyJson ? rawBodyJson.slice(0, 2000) : null,
+      glofox_request_body: report.request_body,
     })
   }
 
