@@ -173,6 +173,14 @@ export default async function ContactDetailPage({ params }) {
             ))}
           </div>
 
+          {/* GLOFOX2.8 — Glofox bookings (last 10, sorted time_start
+              DESC). Sourced from contacts.recent_bookings JSONB
+              populated during sync (GLOFOX2.1.18). Splits into
+              Upcoming + Past sections client-rendered below. */}
+          {Array.isArray(contact.recent_bookings) && contact.recent_bookings.length > 0 && (
+            <GlofoxBookingsCard bookings={contact.recent_bookings} />
+          )}
+
           {/* WhatsApp Conversations */}
           {(waConversations.length > 0 || contact.wa_phone) && (
             <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-4">
@@ -360,6 +368,82 @@ function InfoRow({ label, value }) {
     <div className="flex justify-between text-sm">
       <span className="text-un1t-light">{label}</span>
       <span className="font-medium">{value ?? '—'}</span>
+    </div>
+  )
+}
+
+// GLOFOX2.8 — render the contacts.recent_bookings JSONB. Splits
+// into Upcoming (time_start in the future) + Recent (in the past)
+// so the operator sees what's coming AND what just happened.
+// Status colour key:
+//   BOOKED + future        — neutral (just on the schedule)
+//   BOOKED + past attended — green ("Attended")
+//   BOOKED + past not attended — amber ("No-show")
+//   CANCELED               — red strikethrough
+//   WAITING                — purple
+function GlofoxBookingsCard({ bookings }) {
+  const nowSec = Math.floor(Date.now() / 1000)
+  const upcoming = bookings.filter(b => Number(b.time_start) > nowSec)
+                           .sort((a, b) => Number(a.time_start) - Number(b.time_start))
+  const past = bookings.filter(b => Number(b.time_start) <= nowSec)
+                       .sort((a, b) => Number(b.time_start) - Number(a.time_start))
+  return (
+    <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-4">
+      <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light mb-3">
+        Glofox bookings
+      </h3>
+      {upcoming.length > 0 && (
+        <div className="mb-3">
+          <p className="text-[10px] uppercase tracking-wider text-un1t-mid mb-1.5">Upcoming</p>
+          <div className="space-y-1.5">
+            {upcoming.map(b => <BookingRow key={b.glofox_id || b.time_start} b={b} when="future" />)}
+          </div>
+        </div>
+      )}
+      {past.length > 0 && (
+        <div>
+          <p className="text-[10px] uppercase tracking-wider text-un1t-mid mb-1.5">Recent</p>
+          <div className="space-y-1.5">
+            {past.map(b => <BookingRow key={b.glofox_id || b.time_start} b={b} when="past" />)}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function BookingRow({ b, when }) {
+  const status = String(b.status || '').toUpperCase()
+  const isCancelled = status === 'CANCELED' || status === 'CANCELLED'
+  let badge = null
+  if (isCancelled) {
+    badge = { label: 'Cancelled', cls: 'bg-red-500/20 text-red-300' }
+  } else if (status === 'WAITING') {
+    badge = { label: 'Waitlist', cls: 'bg-purple-500/20 text-purple-300' }
+  } else if (when === 'past' && status === 'BOOKED') {
+    badge = b.attended === true
+      ? { label: 'Attended', cls: 'bg-green-500/20 text-green-300' }
+      : { label: 'No-show',  cls: 'bg-amber-500/20 text-amber-300' }
+  } else if (when === 'future' && status === 'BOOKED') {
+    badge = { label: 'Booked', cls: 'bg-blue-500/20 text-blue-300' }
+  }
+  const ts = Number(b.time_start) ? new Date(Number(b.time_start) * 1000) : null
+  const dateStr = ts
+    ? ts.toLocaleString('en-IE', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
+    : ''
+  return (
+    <div className="flex items-start justify-between text-sm gap-2">
+      <div className="min-w-0 flex-1">
+        <p className={`font-medium truncate ${isCancelled ? 'line-through text-un1t-mid' : ''}`}>
+          {b.event_name || b.model_name || '—'}
+        </p>
+        <p className="text-xs text-un1t-mid">{dateStr}</p>
+      </div>
+      {badge && (
+        <span className={`text-[10px] px-1.5 py-0.5 rounded whitespace-nowrap ${badge.cls}`}>
+          {badge.label}
+        </span>
+      )}
     </div>
   )
 }
