@@ -59,11 +59,17 @@ export async function GET(request) {
 const SearchBody = z.object({
   filter: audienceFilterSchema,
   search: z.string().max(200).optional(),
-  // .nullable() so the client can send location_id: null when no
-  // active location is set (vs. omitting the key). The route falls
-  // back to user.activeLocation?.id below. Pre-fix, null tripped the
-  // .uuid() validator and returned "location_id: Invalid input".
-  location_id: z.string().uuid().nullable().optional(),
+  // Loose validation: any string or null. We DON'T constrain to
+  // UUID format here because:
+  //   1. zod v4's deprecated z.string().uuid() chain was returning
+  //      "Invalid input" as the error message — operator-confusing.
+  //   2. locationId always comes from user.activeLocation.id which
+  //      is itself a UUID from the locations table.
+  //   3. assertLocationAccess() further down enforces auth + bad-
+  //      string Supabase queries fail with their own clear errors.
+  // So the only thing this schema needs to do is accept the keys
+  // without choking on shape.
+  location_id: z.string().nullable().optional(),
   limit: z.number().int().min(1).max(500).optional(),
   offset: z.number().int().min(0).optional(),
 })
