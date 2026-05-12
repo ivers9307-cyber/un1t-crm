@@ -11,13 +11,15 @@
 // numbers without hammering the API.
 
 import { useEffect, useState, useCallback } from 'react'
-import { Inbox, AlertTriangle } from 'lucide-react'
+import { Inbox, AlertTriangle, Receipt } from 'lucide-react'
 import GlofoxImportClient from './GlofoxImportClient'
 import GlofoxPushReviewTab from './GlofoxPushReviewTab'
+import GlofoxInvoiceBackfillTab from './GlofoxInvoiceBackfillTab'
 
 const TABS = [
-  { id: 'import', label: 'Import', Icon: Inbox },
-  { id: 'review', label: 'Review',  Icon: AlertTriangle },
+  { id: 'import',   label: 'Import',          Icon: Inbox },
+  { id: 'review',   label: 'Review',          Icon: AlertTriangle },
+  { id: 'invoices', label: 'Invoice backfill', Icon: Receipt },
 ]
 
 export default function GlofoxAdminTabs(props) {
@@ -70,8 +72,9 @@ export default function GlofoxAdminTabs(props) {
         })}
       </div>
 
-      {active === 'import' && <GlofoxImportClient {...props} />}
-      {active === 'review' && <GlofoxPushReviewTab />}
+      {active === 'import'   && <GlofoxImportClient {...props} />}
+      {active === 'review'   && <GlofoxPushReviewTab />}
+      {active === 'invoices' && <GlofoxInvoiceBackfillTab />}
     </div>
   )
 }
