@@ -561,7 +561,26 @@ export async function fetchAllMembersPage(creds, { page = 1, limit = 50 } = {}) 
  * PaymentsReportResponse — { TransactionsList: { details: [Transaction] } }
  * by default. The ReportByMembers=true variant isn't documented;
  * surface the raw body so the caller can inspect.
+ *
+ * PIPELINE5.5d: the OpenAPI example for /Analytics/report always
+ * populates filter.PaymentMethods with every documented method
+ * type. Earlier callers that omitted it (GLOFOX2.1.19, PIPELINE5.5)
+ * received HTTP 200 with TransactionsList.details: []. Strong
+ * hypothesis is that filter.PaymentMethods behaves as "match ANY of
+ * these methods" and an absent array filters every transaction out.
+ * We now default to the full list so omitting it from a call site
+ * doesn't silently suppress everything.
  */
+const DEFAULT_PAYMENT_METHODS = [
+  { id: 'cash' },
+  { id: 'credit_card' },
+  { id: 'bank_transfer' },
+  { id: 'paypal' },
+  { id: 'direct_debit' },
+  { id: 'complimentary' },
+  { id: 'wallet' },
+]
+
 export async function fetchPaymentsReport(creds, opts = {}) {
   if (!creds || !creds.branchId) {
     return { ok: false, status: 400, body: { error: 'missing branch credentials' } }
@@ -572,6 +591,13 @@ export async function fetchPaymentsReport(creds, opts = {}) {
   const endSec = Number.isFinite(opts.end)
     ? opts.end
     : Math.floor(Date.now() / 1000)
+  // Default to the full payment-methods list (see comment on
+  // DEFAULT_PAYMENT_METHODS). Caller can pass `paymentMethods: []`
+  // to test the unfiltered behaviour explicitly, or pass a subset
+  // for narrower reports.
+  const paymentMethods = Array.isArray(opts.paymentMethods)
+    ? opts.paymentMethods
+    : DEFAULT_PAYMENT_METHODS
   const body = {
     branch_id: creds.branchId,
     namespace: opts.namespace,
@@ -581,7 +607,7 @@ export async function fetchPaymentsReport(creds, opts = {}) {
     filter: {
       ReportByMembers: opts.byMembers === true,
       CompareToRanges: false,
-      ...(opts.paymentMethods ? { PaymentMethods: opts.paymentMethods } : {}),
+      PaymentMethods: paymentMethods,
     },
   }
   try {
