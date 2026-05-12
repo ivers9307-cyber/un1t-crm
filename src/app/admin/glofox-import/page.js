@@ -18,7 +18,7 @@
 import { redirect } from 'next/navigation'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
-import GlofoxImportClient from '@/components/GlofoxImportClient'
+import GlofoxAdminTabs from '@/components/GlofoxAdminTabs'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
@@ -63,15 +63,16 @@ export default async function GlofoxImportPage() {
 
   return (
     <div className="p-8 max-w-7xl">
-      <h2 className="text-2xl font-bold mb-1">Glofox member import</h2>
+      <h2 className="text-2xl font-bold mb-1">Glofox sync</h2>
       <p className="text-sm text-un1t-light mb-6 max-w-3xl">
-        Pull members from Glofox into the CRM. Use the filter controls to scope a batch,
-        preview before committing, then either apply that batch or auto-paginate through
-        the entire matching set. The daily cron handles ongoing sync automatically — this
-        page is for initial backfills, ad-hoc re-syncs, and dry-run diagnostics.
+        Pull members from Glofox into the CRM, and review CRM → Glofox push events that
+        need attention. Use the Import tab for backfills, ad-hoc re-syncs, and dry-run
+        diagnostics; the Review tab surfaces any opt-in pushes (booking forms, event
+        registrations, manual "Create in Glofox" button) that failed or need operator
+        attention.
       </p>
 
-      <GlofoxImportClient
+      <GlofoxAdminTabs
         activeLocationId={locationId}
         activeLocationName={user.activeLocation?.name || ''}
         crmContactsLinked={crmContactsLinked}
