@@ -142,15 +142,24 @@ export default async function ContactDetailPage({ params }) {
       <div className="grid grid-cols-3 gap-6">
         {/* Left: Contact Info + Deals + Bookings */}
         <div className="col-span-1 space-y-5">
-          {/* Info Card */}
+          {/* Info Card. GLOFOX2.9 — Glofox-specific fields (credits,
+              glofox_member_id) moved to the dedicated Glofox Profile
+              card below. This card now only carries CRM-native
+              identifiers. */}
           <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-4 space-y-3">
             <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light mb-2">Details</h3>
             <InfoRow label="Source" value={contact.lead_source || contact.source} />
-            <InfoRow label="Credits" value={contact.trial_credits_remaining} />
-            <InfoRow label="Glofox ID" value={contact.glofox_member_id || '—'} />
             <InfoRow label="Label" value={contact.label || '—'} />
             <InfoRow label="Created" value={new Date(contact.created_at).toLocaleDateString('en-IE')} />
           </div>
+
+          {/* GLOFOX2.9 — consolidated Glofox Profile card. Always
+              rendered because every CRM contact should also exist in
+              Glofox under the bidirectional-sync model (Glofox is
+              source of truth for users). When not yet linked
+              (glofox_member_id null), the card shows a "not yet
+              synced" empty state instead of being hidden. */}
+          <GlofoxProfileCard contact={contact} />
 
           {/* HR devices: chest strap MAC registry. Member or staff
               register here; bridge auto-routes samples to bookings. */}
@@ -173,13 +182,9 @@ export default async function ContactDetailPage({ params }) {
             ))}
           </div>
 
-          {/* GLOFOX2.8 — Glofox bookings (last 10, sorted time_start
-              DESC). Sourced from contacts.recent_bookings JSONB
-              populated during sync (GLOFOX2.1.18). Splits into
-              Upcoming + Past sections client-rendered below. */}
-          {Array.isArray(contact.recent_bookings) && contact.recent_bookings.length > 0 && (
-            <GlofoxBookingsCard bookings={contact.recent_bookings} />
-          )}
+          {/* GLOFOX2.9 — Glofox bookings now live INSIDE the
+              GlofoxProfileCard above, alongside the rest of the
+              membership data. */}
 
           {/* WhatsApp Conversations */}
           {(waConversations.length > 0 || contact.wa_phone) && (
@@ -216,10 +221,16 @@ export default async function ContactDetailPage({ params }) {
             </div>
           )}
 
-          {/* Upcoming Bookings */}
+          {/* CRM-native event registrations — workshops, masterclasses,
+              open days, races (the /events flow). Distinct from Glofox
+              class bookings which appear in the Glofox Profile card
+              above. Only render when there's something to show OR
+              when the contact has any registrations history (avoids
+              empty-state clutter for trial members). */}
+          {(upcomingBookings.length > 0 || pastBookings.length > 0) && (
           <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-4">
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light mb-3">Upcoming Bookings</h3>
-            {upcomingBookings.length === 0 && <p className="text-sm text-un1t-mid">No upcoming bookings</p>}
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light mb-3">Upcoming event registrations</h3>
+            {upcomingBookings.length === 0 && <p className="text-sm text-un1t-mid">None</p>}
             {upcomingBookings.map(b => (
               <div key={b.id} className="flex items-start gap-3 py-2 border-b border-un1t-gray last:border-0">
                 <div
@@ -240,6 +251,7 @@ export default async function ContactDetailPage({ params }) {
               </div>
             ))}
           </div>
+          )}
 
           {/* Race history (mig 086). Surfaces every race this contact
               has competed in — captain or member — with team, wave,
@@ -250,10 +262,10 @@ export default async function ContactDetailPage({ params }) {
             <ContactRaceHistory contactId={contact.id} />
           </div>
 
-          {/* Past Bookings */}
+          {/* Past event registrations (CRM-native). */}
           {pastBookings.length > 0 && (
             <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-4">
-              <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light mb-3">Past Bookings</h3>
+              <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light mb-3">Past event registrations</h3>
               {pastBookings.map(b => (
                 <div key={b.id} className="flex items-start gap-3 py-2 border-b border-un1t-gray last:border-0 opacity-60">
                   <div
@@ -372,28 +384,164 @@ function InfoRow({ label, value }) {
   )
 }
 
-// GLOFOX2.8 — render the contacts.recent_bookings JSONB. Splits
-// into Upcoming (time_start in the future) + Recent (in the past)
-// so the operator sees what's coming AND what just happened.
-// Status colour key:
-//   BOOKED + future        — neutral (just on the schedule)
-//   BOOKED + past attended — green ("Attended")
-//   BOOKED + past not attended — amber ("No-show")
-//   CANCELED               — red strikethrough
-//   WAITING                — purple
-function GlofoxBookingsCard({ bookings }) {
+// GLOFOX2.9 — consolidated Glofox Profile card. Single rich panel
+// absorbing every Glofox-synced field — status, credits, LTV,
+// tenure, engagement, last payment, upcoming + recent bookings,
+// DOB, Glofox ID. Always rendered (every CRM contact should also
+// exist in Glofox under the bidirectional-sync model — when not
+// yet linked, shows an empty state with a hint instead of being
+// hidden).
+//
+// Operator gets a one-glance view of the member's whole Glofox
+// relationship without scrolling between cards.
+
+const GLOFOX_STATUS_META = {
+  cold:           { label: 'Cold',                  cls: 'bg-gray-500/20    text-gray-300    border-gray-500/30' },
+  tour:           { label: 'Tour booked',           cls: 'bg-blue-500/20    text-blue-300    border-blue-500/30' },
+  no_sale_tour:   { label: 'No sale (tour)',        cls: 'bg-amber-500/20   text-amber-300   border-amber-500/30' },
+  trial:          { label: 'Trial',                 cls: 'bg-blue-500/20    text-blue-300    border-blue-500/30' },
+  no_sale_trial:  { label: 'No sale (trial)',       cls: 'bg-amber-500/20   text-amber-300   border-amber-500/30' },
+  member:         { label: 'Member',                cls: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30' },
+  credit_member:  { label: 'Credit Member',         cls: 'bg-teal-500/20    text-teal-300    border-teal-500/30' },
+  classpass_payg: { label: 'ClassPass PAYG',        cls: 'bg-purple-500/20  text-purple-300  border-purple-500/30' },
+  ex_member:      { label: 'Ex-member',             cls: 'bg-red-500/20     text-red-300     border-red-500/30' },
+  lead:           { label: 'Lead',                  cls: 'bg-gray-500/20    text-gray-300    border-gray-500/30' },
+}
+
+function formatTenure(joinedAtIso) {
+  if (!joinedAtIso) return null
+  const ms = Date.now() - new Date(joinedAtIso).getTime()
+  if (!Number.isFinite(ms) || ms < 0) return null
+  const days = Math.floor(ms / 86_400_000)
+  if (days < 30) return `Joined ${days} day${days === 1 ? '' : 's'} ago`
+  const months = Math.floor(days / 30.44)
+  if (months < 12) return `Joined ${months} month${months === 1 ? '' : 's'} ago`
+  const years = Math.floor(months / 12)
+  const remMonths = months % 12
+  return `Joined ${years}y${remMonths ? ` ${remMonths}mo` : ''} ago`
+}
+
+function relativeTime(iso) {
+  if (!iso) return null
+  const ms = Date.now() - new Date(iso).getTime()
+  if (!Number.isFinite(ms)) return null
+  const abs = Math.abs(ms)
+  const future = ms < 0
+  const days = Math.floor(abs / 86_400_000)
+  if (days < 1) {
+    const hours = Math.floor(abs / 3_600_000)
+    if (hours < 1) return future ? 'in a moment' : 'just now'
+    return future ? `in ${hours}h` : `${hours}h ago`
+  }
+  if (days < 30) return future ? `in ${days}d` : `${days}d ago`
+  const months = Math.floor(days / 30.44)
+  return future ? `in ${months}mo` : `${months}mo ago`
+}
+
+function formatMoney(cents, currency) {
+  if (!Number.isFinite(cents)) return null
+  const amount = cents / 100
+  // Currency code → symbol map covers the common ones; falls back
+  // to the code itself prefixed if unknown.
+  const SYM = { EUR: '€', GBP: '£', USD: '$' }
+  const sym = SYM[currency] || (currency ? `${currency} ` : '€')
+  return sym + amount.toLocaleString('en-IE', { maximumFractionDigits: 0 })
+}
+
+function GlofoxProfileCard({ contact }) {
+  const linked = Boolean(contact.glofox_member_id)
+  const statusMeta = GLOFOX_STATUS_META[contact.glofox_membership_status] || null
+  const tenure = formatTenure(contact.joined_at)
+  const lastAttended = relativeTime(contact.last_attended_at)
+  const lastPayment = relativeTime(contact.last_payment_at)
+  const ltv = Number.isFinite(contact.lifetime_value_cents) && contact.lifetime_value_cents > 0
+    ? formatMoney(contact.lifetime_value_cents, contact.lifetime_currency)
+    : null
+  const credits = contact.trial_credits_remaining
+
+  return (
+    <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-4 space-y-3">
+      <div className="flex items-center justify-between">
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light">Glofox membership</h3>
+        {linked && (
+          <span className="text-[10px] text-un1t-mid">
+            Synced {contact.glofox_synced_at ? relativeTime(contact.glofox_synced_at) : 'never'}
+          </span>
+        )}
+      </div>
+
+      {!linked && (
+        <div className="text-sm text-un1t-mid py-3 text-center">
+          Not yet linked to Glofox.
+          <p className="text-xs mt-1">A bidirectional sync will create them in Glofox automatically (planned in GLOFOX3).</p>
+        </div>
+      )}
+
+      {linked && (
+        <>
+          {/* Status row — badge + headline numbers */}
+          <div className="flex items-center gap-2 flex-wrap">
+            {statusMeta ? (
+              <span className={`text-xs px-2 py-0.5 rounded-full border ${statusMeta.cls}`}>
+                {statusMeta.label}
+              </span>
+            ) : (
+              <span className="text-xs px-2 py-0.5 rounded-full bg-gray-500/20 text-gray-300 border border-gray-500/30">
+                {contact.glofox_membership_status || 'Unknown'}
+              </span>
+            )}
+            {credits != null && (
+              <span className="text-xs text-un1t-light">· {credits} credit{credits === 1 ? '' : 's'}</span>
+            )}
+            {ltv && (
+              <span className="text-xs text-un1t-light">· {ltv} LTV</span>
+            )}
+          </div>
+
+          {/* Tenure + engagement strip */}
+          <div className="text-xs text-un1t-light space-y-1">
+            {tenure && <p>{tenure}</p>}
+            {lastAttended && <p>Last attended {lastAttended}</p>}
+            {Number(contact.total_attended_30d) > 0 && (
+              <p>
+                {contact.total_attended_30d} attended in last 30d
+                {Number(contact.total_noshow_30d) > 0 && (
+                  <span className="text-amber-400/80"> · {contact.total_noshow_30d} no-show{contact.total_noshow_30d === 1 ? '' : 's'}</span>
+                )}
+              </p>
+            )}
+            {lastPayment && contact.lifetime_transaction_count > 0 && (
+              <p>Last paid {lastPayment} · {contact.lifetime_transaction_count} payment{contact.lifetime_transaction_count === 1 ? '' : 's'} total</p>
+            )}
+          </div>
+
+          {/* Bookings sub-section */}
+          {Array.isArray(contact.recent_bookings) && contact.recent_bookings.length > 0 && (
+            <BookingsSubsection bookings={contact.recent_bookings} />
+          )}
+
+          {/* Reference info — small text at the bottom */}
+          <div className="pt-2 border-t border-un1t-gray text-[11px] text-un1t-mid space-y-0.5">
+            {contact.dob && <p>DOB: {contact.dob}</p>}
+            <p className="font-mono truncate">ID: {contact.glofox_member_id}</p>
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+function BookingsSubsection({ bookings }) {
   const nowSec = Math.floor(Date.now() / 1000)
   const upcoming = bookings.filter(b => Number(b.time_start) > nowSec)
                            .sort((a, b) => Number(a.time_start) - Number(b.time_start))
   const past = bookings.filter(b => Number(b.time_start) <= nowSec)
                        .sort((a, b) => Number(b.time_start) - Number(a.time_start))
+  if (upcoming.length === 0 && past.length === 0) return null
   return (
-    <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-4">
-      <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light mb-3">
-        Glofox bookings
-      </h3>
+    <div className="pt-2 border-t border-un1t-gray space-y-3">
       {upcoming.length > 0 && (
-        <div className="mb-3">
+        <div>
           <p className="text-[10px] uppercase tracking-wider text-un1t-mid mb-1.5">Upcoming</p>
           <div className="space-y-1.5">
             {upcoming.map(b => <BookingRow key={b.glofox_id || b.time_start} b={b} when="future" />)}
