@@ -123,21 +123,37 @@ export async function reclassifyAllContacts(db, args) {
     return { ok: true, run_id: runId, contacts_seen: 0, deals_moved: 0, deals_unchanged: 0, deals_created: 0, errors: 0, movement_matrix: {}, samples: [] }
   }
 
-  // 4. Pull the open deal per contact in one query. ~8k rows is
-  //    fine; if this grows past 50k we should switch to a streaming
-  //    cursor approach.
-  const contactIds = contacts.map((c) => c.id)
+  // 4. Pull every open deal at the location in one query.
+  //
+  //    PIPELINE5.8 fix: original implementation did
+  //    .in('contact_id', contactIds) where contactIds was the full
+  //    8k UUID array — which builds a query string longer than
+  //    PostgREST's URL length limit and 400s with "Bad Request"
+  //    (the operator hit this on the first manual run).
+  //
+  //    Filtering by location_id is equivalent at this scale (deals
+  //    are 1:1 with contacts at the same location) and stays well
+  //    inside the URL budget. The `dealByContact` map below still
+  //    only resolves deals whose contact_id is in our `contacts`
+  //    set, so deals belonging to contacts we somehow didn't load
+  //    are silently ignored — which matches the previous behaviour.
+  const contactIdSet = new Set(contacts.map((c) => c.id))
   const { data: dealRows, error: dealsErr } = await db
     .from('deals')
     .select('id, contact_id, stage_id')
-    .in('contact_id', contactIds)
+    .eq('location_id', locationId)
     .eq('status', 'open')
+    .limit(20_000)
   if (dealsErr) {
     await markRun(db, runId, { status: 'failed', error_message: `deal load: ${dealsErr.message}` }, startedAt)
     return { ok: false, error: `deal load: ${dealsErr.message}`, run_id: runId }
   }
   const dealByContact = new Map()
   for (const d of dealRows || []) {
+    // Skip deals belonging to contacts we didn't load (a contact at
+    // a different location somehow joined to a deal here, or a
+    // contact deleted between the two queries).
+    if (!contactIdSet.has(d.contact_id)) continue
     // Multiple open deals per contact shouldn't happen (the rest of
     // the codebase enforces "one open"), but if it does we keep the
     // first one — moving multiples would be ambiguous.
