@@ -53,6 +53,11 @@ function fakeDb({ contacts = [], deals = [], stages = STAGES, runRow = { id: 'ru
     c.single = () => c
     c.eq = () => c
     c.limit = () => c
+    c.order = () => c
+    // .range(start, end) — no-op for the shim; the .then below returns
+    // the full fixture array regardless. Tests use < PAGE_SIZE rows so
+    // the orchestrator's pagination loop breaks after one iteration.
+    c.range = () => c
     c.in = (_col, ids) => { inIds = ids; return c }
     c.update = (fields) => { updateFields = fields; op = 'update'; return c }
     c.insert = (row) => { pendingInsert = row; op = 'insert'; return c }

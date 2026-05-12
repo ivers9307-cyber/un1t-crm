@@ -103,13 +103,38 @@ export async function reclassifyAllContacts(db, args) {
   const stageSlugById = new Map((stages || []).map((s) => [s.id, s.slug]))
 
   // 3. Pull every contact at the location with the classifier inputs.
-  //    Limit guard at 20k — UN1T won't have more than ~10k contacts
-  //    realistically; if we ever do, this needs to chunk.
-  const { data: contacts, error: contactsErr } = await db
-    .from('contacts')
-    .select(SELECT_COLS)
-    .eq('location_id', locationId)
-    .limit(20_000)
+  //
+  //    PIPELINE5.8c fix: .limit(20_000) was being silently capped by
+  //    PostgREST at 1000 rows (the operator hit "1000 contacts seen"
+  //    on an 8.1k pile). Switch to .range() paging — the only
+  //    reliable way to read >1000 rows out of a Supabase project that
+  //    has the default db-max-rows setting.
+  //
+  //    20k hard ceiling is plenty for UN1T (~8k today). Crossing it
+  //    means we should switch to per-stage streaming, not just
+  //    bumping the number again.
+  const PAGE_SIZE = 1000
+  const HARD_LIMIT = 20_000
+  const contacts = []
+  let pageStart = 0
+  let pageErr = null
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const pageEnd = Math.min(pageStart + PAGE_SIZE - 1, HARD_LIMIT - 1)
+    const { data: page, error } = await db
+      .from('contacts')
+      .select(SELECT_COLS)
+      .eq('location_id', locationId)
+      .order('id', { ascending: true })
+      .range(pageStart, pageEnd)
+    if (error) { pageErr = error; break }
+    if (!Array.isArray(page) || page.length === 0) break
+    contacts.push(...page)
+    if (page.length < PAGE_SIZE) break          // ran out of rows
+    if (contacts.length >= HARD_LIMIT) break     // hit the safety cap
+    pageStart += PAGE_SIZE
+  }
+  const contactsErr = pageErr
   if (contactsErr) {
     await markRun(db, runId, { status: 'failed', error_message: `contact load: ${contactsErr.message}` }, startedAt)
     return { ok: false, error: `contact load: ${contactsErr.message}`, run_id: runId }
@@ -137,13 +162,30 @@ export async function reclassifyAllContacts(db, args) {
   //    only resolves deals whose contact_id is in our `contacts`
   //    set, so deals belonging to contacts we somehow didn't load
   //    are silently ignored — which matches the previous behaviour.
+  // Same .range() paging as contacts — db-max-rows caps any single
+  // response at 1000 even when we ask for more. Deals are roughly 1:1
+  // with contacts at this scale (~8k each).
   const contactIdSet = new Set(contacts.map((c) => c.id))
-  const { data: dealRows, error: dealsErr } = await db
-    .from('deals')
-    .select('id, contact_id, stage_id')
-    .eq('location_id', locationId)
-    .eq('status', 'open')
-    .limit(20_000)
+  const dealRows = []
+  let dealsErr = null
+  let dealStart = 0
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const dealEnd = Math.min(dealStart + PAGE_SIZE - 1, HARD_LIMIT - 1)
+    const { data: page, error } = await db
+      .from('deals')
+      .select('id, contact_id, stage_id')
+      .eq('location_id', locationId)
+      .eq('status', 'open')
+      .order('id', { ascending: true })
+      .range(dealStart, dealEnd)
+    if (error) { dealsErr = error; break }
+    if (!Array.isArray(page) || page.length === 0) break
+    dealRows.push(...page)
+    if (page.length < PAGE_SIZE) break
+    if (dealRows.length >= HARD_LIMIT) break
+    dealStart += PAGE_SIZE
+  }
   if (dealsErr) {
     await markRun(db, runId, { status: 'failed', error_message: `deal load: ${dealsErr.message}` }, startedAt)
     return { ok: false, error: `deal load: ${dealsErr.message}`, run_id: runId }
