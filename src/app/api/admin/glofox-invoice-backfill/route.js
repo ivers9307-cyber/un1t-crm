@@ -160,14 +160,43 @@ export async function POST(request) {
 
   // Build a glofox_user_id → contact_id lookup once. Avoids a
   // separate Supabase query for every transaction.
-  const { data: contactRows } = await db
-    .from('contacts')
-    .select('id, glofox_member_id')
-    .eq('location_id', locationId)
-    .not('glofox_member_id', 'is', null)
-  const contactByGlofoxId = new Map(
-    (contactRows || []).map((r) => [String(r.glofox_member_id), r.id]),
-  )
+  //
+  // PIPELINE5.5j fix: PostgREST caps any single response at the
+  // project's db-max-rows (1000 for our project). Loading 8,129
+  // contacts via a single .select() silently truncated to 1000 —
+  // and without an .order() the slice was non-deterministic, so
+  // run-to-run upsert counts varied (605, 320, ...) for the same
+  // 2042 transactions. Page through with .range() up to a 20k
+  // hard ceiling, ordered by id for deterministic chunks.
+  const PAGE_SIZE = 1000
+  const HARD_LIMIT = 20_000
+  const contactByGlofoxId = new Map()
+  let pageStart = 0
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const pageEnd = Math.min(pageStart + PAGE_SIZE - 1, HARD_LIMIT - 1)
+    const { data: page, error } = await db
+      .from('contacts')
+      .select('id, glofox_member_id')
+      .eq('location_id', locationId)
+      .not('glofox_member_id', 'is', null)
+      .order('id', { ascending: true })
+      .range(pageStart, pageEnd)
+    if (error) {
+      console.warn('[glofox-invoice-backfill] contact-page load failed', { err: error.message, page_start: pageStart })
+      break
+    }
+    if (!Array.isArray(page) || page.length === 0) break
+    for (const r of page) {
+      contactByGlofoxId.set(String(r.glofox_member_id), r.id)
+    }
+    if (page.length < PAGE_SIZE) break
+    if (contactByGlofoxId.size >= HARD_LIMIT) break
+    pageStart += PAGE_SIZE
+  }
+  console.log('[glofox-invoice-backfill] contact lookup map built', {
+    entries: contactByGlofoxId.size,
+  })
 
   // PIPELINE5.5g: log the first transaction's shape so we can see
   // which fields actually carry the member/customer ID. The spec's
