@@ -267,30 +267,52 @@ export async function reclassifyAllContacts(db, args) {
       if (!movesByStage.has(m.target_stage_id)) movesByStage.set(m.target_stage_id, [])
       movesByStage.get(m.target_stage_id).push(m)
     }
+    // Chunk size for bulk UPDATE batches. PostgREST encodes the
+    // .in('id', [...]) into a query string ?id=in.(uuid1,uuid2,...)
+    // and 400s "Bad Request" past ~16KB. UUIDs are 36 chars + comma
+    // = 37 bytes each. 500 IDs ≈ 18.5KB plus URL framing, comfortably
+    // under the cap. We hit this on the operator's first commit
+    // (5,810 errors — single batch of ~4,400 deals to Dormant
+    // exploded the URL).
+    const BULK_UPDATE_CHUNK = 500
     for (const [stageId, moves] of movesByStage) {
-      const dealIds = moves.map((m) => m.deal_id)
-      const { error: moveErr } = await db
-        .from('deals')
-        .update({ stage_id: stageId })
-        .in('id', dealIds)
-      if (moveErr) {
-        errors += moves.length
-        logWarn('pipeline-reclassify', `bulk-move failed for stage ${stageId}`, { err: moveErr.message })
-        continue
-      }
-      dealsMoved += moves.length
-      for (const m of moves) {
-        movementMatrix[m.from_slug] = movementMatrix[m.from_slug] || {}
-        movementMatrix[m.from_slug][m.to_slug] = (movementMatrix[m.from_slug][m.to_slug] || 0) + 1
-        if (samples.length < 25) {
-          samples.push({
-            contact_id: m.contact_id,
-            contact_name: m.contact_name,
-            from_slug: m.from_slug,
-            to_slug: m.to_slug,
+      let stageMoved = 0
+      let stageErrored = 0
+      for (let i = 0; i < moves.length; i += BULK_UPDATE_CHUNK) {
+        const chunk = moves.slice(i, i + BULK_UPDATE_CHUNK)
+        const dealIds = chunk.map((m) => m.deal_id)
+        const { error: moveErr } = await db
+          .from('deals')
+          .update({ stage_id: stageId })
+          .in('id', dealIds)
+        if (moveErr) {
+          stageErrored += chunk.length
+          logWarn('pipeline-reclassify', `bulk-move chunk failed for stage ${stageId}`, {
+            err: moveErr.message,
+            chunk_start: i,
+            chunk_size: chunk.length,
           })
+          continue
+        }
+        stageMoved += chunk.length
+        // Movement matrix + samples populated only for chunks that
+        // actually landed — failed chunks still show in the error
+        // counter but not as movement.
+        for (const m of chunk) {
+          movementMatrix[m.from_slug] = movementMatrix[m.from_slug] || {}
+          movementMatrix[m.from_slug][m.to_slug] = (movementMatrix[m.from_slug][m.to_slug] || 0) + 1
+          if (samples.length < 25) {
+            samples.push({
+              contact_id: m.contact_id,
+              contact_name: m.contact_name,
+              from_slug: m.from_slug,
+              to_slug: m.to_slug,
+            })
+          }
         }
       }
+      dealsMoved += stageMoved
+      errors += stageErrored
     }
 
     // Creates one-by-one (only matters for contacts without deals,
