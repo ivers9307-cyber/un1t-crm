@@ -445,7 +445,7 @@ async function findStageIdBySlug(db, locationId, stageSlug) {
  * about to write. Idempotent — re-running with the same status
  * converges to 'leave'.
  */
-export async function ensureDealForContact(db, locationId, contactId, previousStatus, newStatus) {
+export async function ensureDealForContact(db, locationId, contactId, previousStatus, newStatus, contactName = null) {
   if (!db || !locationId || !contactId) {
     return { action: 'error', error: 'missing arguments' }
   }
@@ -464,9 +464,15 @@ export async function ensureDealForContact(db, locationId, contactId, previousSt
       stageId = fallback
       resolvedSlug = 'new_lead'
     }
+    // GLOFOX2.5 — deals.title is NOT NULL (mig 001). Use the
+    // contact's name as the title, fall back to a generic label
+    // when the mapped name is missing (shouldn't happen — mapGlofoxMember
+    // always composes a name — but defence-in-depth so the insert
+    // never trips the constraint again).
+    const title = (contactName && contactName.trim()) || 'Glofox member'
     const { data, error } = await db
       .from('deals')
-      .insert({ contact_id: contactId, stage_id: stageId, location_id: locationId, status: 'open' })
+      .insert({ title, contact_id: contactId, stage_id: stageId, location_id: locationId, status: 'open' })
       .select('id')
       .single()
     if (error) return { action: 'error', error: error.message }
@@ -1395,6 +1401,7 @@ export async function applyMemberSync(db, locationId, member, opts = {}) {
   try {
     dealResult = await ensureDealForContact(
       db, locationId, contactId, previousStatus, newStatus,
+      preview.mapped?.name || null,
     )
   } catch (e) {
     dealResult = { action: 'error', error: e?.message || 'deal write threw' }
