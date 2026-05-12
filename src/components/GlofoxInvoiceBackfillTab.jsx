@@ -173,6 +173,32 @@ export default function GlofoxInvoiceBackfillTab() {
           {result.message && (
             <p className="text-[12px] text-un1t-light pt-2 border-t border-un1t-gray/50">{result.message}</p>
           )}
+          {result.skipped_reasons && Object.keys(result.skipped_reasons).length > 0 && (
+            <div className="pt-2 border-t border-un1t-gray/50">
+              <div className="text-[11px] text-un1t-light">
+                Skipped breakdown:{' '}
+                {Object.entries(result.skipped_reasons).map(([reason, count], i) => (
+                  <span key={reason}>
+                    {i > 0 && ' · '}
+                    <code>{reason}</code>: <span className="text-un1t-white">{count}</span>
+                  </span>
+                ))}
+                {result.distinct_missed_user_ids != null && (
+                  <span className="ml-2">
+                    · <span className="text-un1t-white">{result.distinct_missed_user_ids}</span> distinct missed user_ids
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
+          {result.missed_user_id_sample && result.missed_user_id_sample.length > 0 && (
+            <details className="text-[11px] text-un1t-light pt-2 border-t border-un1t-gray/50">
+              <summary className="cursor-pointer">Missed user_ids sample ({result.missed_user_id_sample.length})</summary>
+              <pre className="mt-2 bg-un1t-black border border-un1t-gray rounded p-2 overflow-auto max-h-40 text-[10px]">
+                {result.missed_user_id_sample.join('\n')}
+              </pre>
+            </details>
+          )}
           {result.failed_sample && result.failed_sample.length > 0 && (
             <details className="text-[11px] text-un1t-light pt-2 border-t border-un1t-gray/50">
               <summary className="cursor-pointer">Failed sample ({result.failed_sample.length})</summary>

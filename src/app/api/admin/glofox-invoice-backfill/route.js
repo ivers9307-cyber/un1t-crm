@@ -310,6 +310,18 @@ export async function POST(request) {
     if (aggs) aggsUpdated++
   }
 
+  // PIPELINE5.5i: aggregate stats on what we missed. Operator
+  // pushed back on the 1437 skipped count — 8,130 contacts were
+  // imported, supposedly every member ever, so a 70% miss rate
+  // means either the import skipped some members or transactions
+  // exist for IDs we don't have. Surface enough to diagnose.
+  const missedReasons = {}
+  const missedUserIds = new Set()
+  for (const f of failed) {
+    missedReasons[f.reason] = (missedReasons[f.reason] || 0) + 1
+    if (f.user_id) missedUserIds.add(String(f.user_id))
+  }
+
   return NextResponse.json({
     ok: true,
     since_iso: sinceIso,
@@ -317,6 +329,9 @@ export async function POST(request) {
     upserted,
     contacts_updated: aggsUpdated,
     skipped: failed.length,
+    skipped_reasons: missedReasons,
+    distinct_missed_user_ids: missedUserIds.size,
+    missed_user_id_sample: Array.from(missedUserIds).slice(0, 50),
     failed_sample: failed.slice(0, 20),
     // PIPELINE5.5g: surface the first transaction's shape so the
     // operator can see exactly what fields the API returned and we
