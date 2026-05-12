@@ -29,6 +29,11 @@ const EventCreateSchema = z.object({
   // booking count). 0 = covered by another role. Drives the studio
   // overview classifier on /schedule.
   staff_required: z.number().int().min(0).max(50).optional(),
+  // Mig 144 (GLOFOX3.2): when true, public bookings on this event
+  // type push the booking customer to Glofox (search-and-link OR
+  // create + attach trial). Default false — operator opts in per
+  // booking type. See /api/public/book/route.js for the call site.
+  create_in_glofox: z.boolean().optional(),
 })
 
 // GET /api/bookings/event-types — List all event types
@@ -77,6 +82,7 @@ export async function POST(request) {
     webhook_url: body.webhook_url || null,
     active: body.active !== false,
     staff_required: body.staff_required ?? 1,
+    create_in_glofox: body.create_in_glofox === true,
     ...(body.location_id ? { location_id: body.location_id } : {}),
   }).select().single()
 

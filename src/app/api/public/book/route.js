@@ -45,8 +45,10 @@ export async function POST(request) {
   // against the event's declared custom_fields. Tier 2 of the Calendly
   // alignment — previously we accepted any shape because Zod only
   // validated the wrapper.
+  // Mig 144 (GLOFOX3.2): also pull create_in_glofox + location_id so
+  // we can fire the opt-in CRM → Glofox push after the booking lands.
   const { data: event } = await db.from('event_types')
-    .select('duration_minutes, custom_fields')
+    .select('duration_minutes, custom_fields, create_in_glofox, location_id')
     .eq('id', body.event_type_id)
     .single()
 
@@ -124,6 +126,57 @@ export async function POST(request) {
     confirmation = await sendBookingConfirmation(db, data.id)
   } catch (e) {
     logWarn('booking', `confirmation send error`, { err: e })
+  }
+
+  // GLOFOX3.2 (mig 144). When the event_type is opted in, push the
+  // booking customer to Glofox in create-and-trial mode. The
+  // handle_new_booking trigger has already created (or matched) the
+  // contact row by email + location_id, so we look it up and feed
+  // it to the orchestrator. Best-effort, fire-and-forget — never
+  // blocks the booking response. Failures land in
+  // glofox_push_events for the operator's Review tab (mig 143).
+  if (event.create_in_glofox && body.customer_email) {
+    ;(async () => {
+      try {
+        const { findOrCreateGlofoxMember } = await import('@/lib/glofox-push')
+        // Find the contact the trigger just upserted. Match on
+        // email + location_id so we don't pick up a same-email
+        // contact at a different studio.
+        let contactQuery = db.from('contacts')
+          .select('id, name, email, first_name, last_name, phone, dob, location_id, glofox_member_id')
+          .eq('email', body.customer_email.toLowerCase().trim())
+          .order('created_at', { ascending: false })
+          .limit(1)
+        if (event.location_id) contactQuery = contactQuery.eq('location_id', event.location_id)
+        const { data: contact } = await contactQuery.maybeSingle()
+        if (!contact) {
+          logWarn('booking.glofox', `no contact found for ${body.customer_email} after booking ${data.id}`)
+          return
+        }
+        // handle_new_booking only writes `name` (not split into
+        // first/last). Glofox /2.0/register insists on both, so
+        // we split out of name here as a fallback. The booking-
+        // form input already has the customer's full name in one
+        // field — splitting on whitespace covers the common case;
+        // single-word names get a "—" last_name placeholder.
+        let { first_name, last_name } = contact
+        if ((!first_name || !last_name) && (contact.name || body.customer_name)) {
+          const full = (contact.name || body.customer_name).trim().split(/\s+/)
+          first_name = first_name || full[0] || ''
+          last_name = last_name || (full.slice(1).join(' ') || '—')
+        }
+        await findOrCreateGlofoxMember({
+          db,
+          locationId: contact.location_id,
+          contact: { ...contact, first_name, last_name },
+          source: 'booking_form',
+          createIfMissing: true,
+          attachTrial: true,
+        })
+      } catch (e) {
+        logWarn('booking.glofox', `push failed for ${body.customer_email}`, { err: e })
+      }
+    })()
   }
 
   return NextResponse.json({

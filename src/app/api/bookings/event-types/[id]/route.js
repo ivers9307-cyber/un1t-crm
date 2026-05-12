@@ -22,6 +22,8 @@ const EventUpdateSchema = z.object({
   active: z.boolean().optional(),
   // Mig 125: editable on update. See POST schema for semantics.
   staff_required: z.number().int().min(0).max(50).optional(),
+  // Mig 144 (GLOFOX3.2): editable on update. See POST schema.
+  create_in_glofox: z.boolean().optional(),
 })
 
 // GET /api/bookings/event-types/:id — Get single event type with bookings count

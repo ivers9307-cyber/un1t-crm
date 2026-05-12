@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { createBrowserClient } from '@/lib/supabase'
-import { Plus, Trash2, Bell, Check, Mail, MessageSquare } from 'lucide-react'
+import { Plus, Trash2, Bell, Check, Mail, MessageSquare, UserPlus } from 'lucide-react'
 
 const DAYS = [
   { key: 'mon', label: 'Monday' },
@@ -61,6 +61,12 @@ export default function EventForm({ event, locationId }) {
   )
   const [color, setColor] = useState(event?.color || '#3B82F6')
   const [webhookUrl, setWebhookUrl] = useState(event?.webhook_url || '')
+  // GLOFOX3.2 (mig 144). When on, public bookings on this event_type
+  // push the booking customer to Glofox: search-by-email first
+  // (search-and-link if found), otherwise create + attach the per-
+  // location trial membership + tag for the welcome sequence.
+  // Default off — operator opts in per booking type.
+  const [createInGlofox, setCreateInGlofox] = useState(!!event?.create_in_glofox)
   const [availability, setAvailability] = useState(event?.availability || defaultAvailability)
   const [customFields, setCustomFields] = useState(event?.custom_fields || [])
   const [saving, setSaving] = useState(false)
@@ -269,6 +275,8 @@ export default function EventForm({ event, locationId }) {
       confirmation_sms_body:
         confirmationActive && confirmationChannels.includes('sms')
           ? (confirmationSmsBody || null) : null,
+      // GLOFOX3.2 — explicit boolean so toggling off persists.
+      create_in_glofox: createInGlofox === true,
       ...(locationId && !isEditing ? { location_id: locationId } : {}),
     }
 
@@ -877,6 +885,42 @@ export default function EventForm({ event, locationId }) {
             </div>
           )
         })}
+      </div>
+
+      {/* Glofox sync (GLOFOX3.2 / mig 144). Operator opts each
+          booking type in. When on, every public booking against
+          this event type fires findOrCreateGlofoxMember in
+          create-and-trial mode after the booking lands. */}
+      <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5 space-y-4">
+        <div className="flex items-center justify-between gap-3">
+          <h3 className="font-semibold text-sm text-un1t-light uppercase tracking-wider flex items-center gap-2">
+            <UserPlus size={14} /> Glofox sync
+          </h3>
+          <label className="text-sm flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={createInGlofox}
+              onChange={e => setCreateInGlofox(e.target.checked)}
+              className="cursor-pointer"
+            />
+            <span>Create in Glofox</span>
+          </label>
+        </div>
+        <p className="text-xs text-un1t-light">
+          When on, every booking on this event type pushes the customer to Glofox:
+          first we search by email and link if a Glofox account already exists; if
+          not, we create a fresh Glofox account, attach this location&apos;s trial
+          membership, and tag the contact for the welcome sequence (which emails
+          the member their one-time passcode).
+        </p>
+        {createInGlofox && (
+          <p className="text-[11px] text-amber-700">
+            Make sure the trial membership picker is set on
+            <span className="text-un1t-white"> Settings → Locations → Glofox Integration</span>
+            {' '}for this location, otherwise the push will land in the Review tab as
+            <em> needs_review</em>.
+          </p>
+        )}
       </div>
 
       {/* Webhook (n8n) */}
