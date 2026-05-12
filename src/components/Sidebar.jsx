@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
-import { LayoutDashboard, Users, Columns3, CheckSquare, Calendar, MessagesSquare, CalendarClock, Settings, LogOut, Car, Flag, Receipt, DoorOpen, Activity, ExternalLink, X, FileSignature, Heart, Globe } from 'lucide-react'
+import { LayoutDashboard, Users, Columns3, CheckSquare, Calendar, MessagesSquare, CalendarClock, Settings, LogOut, Car, Flag, Receipt, DoorOpen, Activity, ExternalLink, X, FileSignature, Heart, Globe, Download } from 'lucide-react'
 import { createBrowserClient } from '@/lib/supabase'
 import LocationSwitcher from './LocationSwitcher'
 import ImpersonatePicker from './ImpersonatePicker'
@@ -90,6 +90,11 @@ const allNav = [
   // role-only gate (matches the API + RLS layer). Custom matcher
   // below uses the masterOrOwnerOnly key.
   { href: '/admin/contracts', label: 'Contracts', icon: FileSignature, masterOrOwnerOnly: true },
+  // GLOFOX2.3 — interactive Glofox member import + sync history.
+  // Master-only because it touches every contact at the location
+  // (initial backfill / bulk re-sync). The /admin layout already
+  // enforces master at the route level.
+  { href: '/admin/glofox-import', label: 'Glofox import', icon: Download, masterOnly: true },
   // Public landing page — preview link. Gated by the
   // 'landing_page' permission (mig 126-130 era) — defaults to
   // owner+master per role, location-feature-gateable + per-user
@@ -153,6 +158,7 @@ export default function Sidebar({ user, mobileOpen = false, onMobileClose }) {
     if (item.dashboardGroup) return DASHBOARD_PERM_KEYS.some(hasPerm)
     if (item.anyPermission) return item.anyPermission.some(hasPerm)
     if (item.masterOrOwnerOnly) return user?.role === 'master' || user?.role === 'owner'
+    if (item.masterOnly) return user?.profileRole === 'master' || user?.role === 'master'
     return hasPerm(item.permission)
   })
 
