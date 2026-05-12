@@ -102,11 +102,19 @@ export async function POST(request) {
   // The count uses head:true so Postgres returns the count without
   // shipping rows back. Both share the same WHERE so the count
   // reflects what the operator actually sees.
+  //
+  // CHAIN-ORDER NOTE: Supabase JS v2 has separate builder types —
+  // PostgrestFilterBuilder (returned from .select/.eq/.or — has
+  // .eq, .gt, .ilike, etc.) and PostgrestTransformBuilder (returned
+  // from .order/.range — drops the filter methods). Once .order or
+  // .range is in the chain, calling .eq on the result throws
+  // "TypeError: e.eq is not a function". So we apply filters FIRST,
+  // then layer the modifiers at the end. Earlier version of this
+  // route built .order().range() up front and crashed any time an
+  // audience filter was set.
   let listQuery = db.from('contacts')
     .select('*')
     .eq('location_id', locationId)
-    .order('created_at', { ascending: false })
-    .range(offset, offset + limit - 1)
   let countQuery = db.from('contacts')
     .select('id', { count: 'exact', head: true })
     .eq('location_id', locationId)
@@ -130,6 +138,13 @@ export async function POST(request) {
     }
     throw e
   }
+
+  // Modifiers (order + range) go LAST so the filter-builder methods
+  // remained available throughout the chain above. Only listQuery
+  // pages — countQuery uses head:true and doesn't need either.
+  listQuery = listQuery
+    .order('created_at', { ascending: false })
+    .range(offset, offset + limit - 1)
 
   const [listRes, countRes] = await Promise.all([listQuery, countQuery])
 
