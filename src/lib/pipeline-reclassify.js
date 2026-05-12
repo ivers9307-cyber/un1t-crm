@@ -1,0 +1,319 @@
+// PIPELINE5.6 + 5.7 — orchestrator that runs the classifier across
+// every contact at a location and moves their deals to the target
+// stage when the classifier says so.
+//
+// Used by:
+//   - Nightly cron (/api/cron/pipeline-classify) — keeps stages
+//     in sync with engagement decay (member silent for 31 days
+//     becomes at_risk_member without needing a Glofox event).
+//   - Manual one-shot via the admin UI / PIPELINE5.7 — operator-
+//     triggered re-classification of the whole 8k contact base
+//     after the classifier first ships.
+//
+// Pure orchestration — calls classifyContact() (PIPELINE5.2) for
+// the rules and ensureDealForContact() (PIPELINE5.4) for the deal
+// move. Records to pipeline_classification_runs (mig 149) for
+// audit.
+//
+// Idempotent: classifier returns the same slug for the same
+// inputs, so a no-op re-run produces 'unchanged' for every
+// contact. Safe to run hourly if needed.
+
+import { classifyContact } from './pipeline-classifier.js'
+import { logWarn } from './log.js'
+
+// Fields the classifier needs from the contacts row.
+const SELECT_COLS = [
+  'id',
+  'name',
+  'email',
+  'glofox_membership_status',
+  'last_attended_at',
+  'total_attended_7d',
+  'total_attended_30d',
+  'last_payment_at',
+  'joined_at',
+  'created_at',
+  'trial_credits_remaining',
+].join(', ')
+
+/**
+ * Re-classify every contact at a location and move deals to match.
+ *
+ * @param {SupabaseClient} db
+ * @param {object} args
+ * @param {string} args.locationId
+ * @param {boolean} [args.dryRun=false]   true → no DB writes; just return plan
+ * @param {string}  [args.source='cron']  audit field
+ * @param {string}  [args.runId]          optional pre-allocated audit row id
+ * @param {string}  [args.userId]         created_by for audit
+ *
+ * @returns {Promise<{
+ *   ok: boolean,
+ *   contacts_seen: number,
+ *   deals_moved: number,
+ *   deals_unchanged: number,
+ *   deals_created: number,
+ *   errors: number,
+ *   movement_matrix: object,
+ *   samples: object[],
+ *   run_id: string|null,
+ *   error?: string,
+ * }>}
+ */
+export async function reclassifyAllContacts(db, args) {
+  const {
+    locationId, dryRun = false, source = 'cron', userId = null,
+  } = args || {}
+  const startedAt = new Date()
+
+  if (!locationId) {
+    return { ok: false, error: 'locationId required' }
+  }
+
+  // 1. Open an audit row up front so the operator sees in-progress
+  //    runs and the cron heartbeat catches stalls. dry-runs don't
+  //    log a row — they're just diagnostic.
+  let runId = null
+  if (!dryRun) {
+    const { data: runRow } = await db
+      .from('pipeline_classification_runs')
+      .insert({
+        location_id: locationId,
+        source,
+        dry_run: false,
+        status: 'running',
+        created_by: userId,
+      })
+      .select('id')
+      .single()
+    runId = runRow?.id || null
+  }
+
+  // 2. Build the slug → stage_id lookup ONCE for this location.
+  const { data: stages, error: stagesErr } = await db
+    .from('pipeline_stages')
+    .select('id, slug')
+    .eq('location_id', locationId)
+  if (stagesErr) {
+    await markRun(db, runId, { status: 'failed', error_message: `stage load: ${stagesErr.message}` }, startedAt)
+    return { ok: false, error: `stage load: ${stagesErr.message}`, run_id: runId }
+  }
+  const stageIdBySlug = new Map((stages || []).map((s) => [s.slug, s.id]))
+  const stageSlugById = new Map((stages || []).map((s) => [s.id, s.slug]))
+
+  // 3. Pull every contact at the location with the classifier inputs.
+  //    Limit guard at 20k — UN1T won't have more than ~10k contacts
+  //    realistically; if we ever do, this needs to chunk.
+  const { data: contacts, error: contactsErr } = await db
+    .from('contacts')
+    .select(SELECT_COLS)
+    .eq('location_id', locationId)
+    .limit(20_000)
+  if (contactsErr) {
+    await markRun(db, runId, { status: 'failed', error_message: `contact load: ${contactsErr.message}` }, startedAt)
+    return { ok: false, error: `contact load: ${contactsErr.message}`, run_id: runId }
+  }
+  if (!Array.isArray(contacts) || contacts.length === 0) {
+    await markRun(db, runId, {
+      status: 'success',
+      contacts_seen: 0, deals_moved: 0, deals_unchanged: 0, deals_created: 0, errors: 0,
+      movement_matrix: {}, samples: [],
+    }, startedAt)
+    return { ok: true, run_id: runId, contacts_seen: 0, deals_moved: 0, deals_unchanged: 0, deals_created: 0, errors: 0, movement_matrix: {}, samples: [] }
+  }
+
+  // 4. Pull the open deal per contact in one query. ~8k rows is
+  //    fine; if this grows past 50k we should switch to a streaming
+  //    cursor approach.
+  const contactIds = contacts.map((c) => c.id)
+  const { data: dealRows, error: dealsErr } = await db
+    .from('deals')
+    .select('id, contact_id, stage_id')
+    .in('contact_id', contactIds)
+    .eq('status', 'open')
+  if (dealsErr) {
+    await markRun(db, runId, { status: 'failed', error_message: `deal load: ${dealsErr.message}` }, startedAt)
+    return { ok: false, error: `deal load: ${dealsErr.message}`, run_id: runId }
+  }
+  const dealByContact = new Map()
+  for (const d of dealRows || []) {
+    // Multiple open deals per contact shouldn't happen (the rest of
+    // the codebase enforces "one open"), but if it does we keep the
+    // first one — moving multiples would be ambiguous.
+    if (!dealByContact.has(d.contact_id)) dealByContact.set(d.contact_id, d)
+  }
+
+  // 5. Classify each contact + decide move / leave / create.
+  let dealsMoved = 0
+  let dealsUnchanged = 0
+  let dealsCreated = 0
+  let errors = 0
+  const movementMatrix = {} // { from_slug: { to_slug: count } }
+  const samples = []
+  const movesToApply = [] // [{ deal_id, contact_id, from_slug, to_slug, target_stage_id, contact_name }]
+  const createsToApply = [] // [{ contact_id, target_stage_id, target_slug, contact_name }]
+
+  for (const c of contacts) {
+    const targetSlug = classifyContact({
+      glofox_membership_status: c.glofox_membership_status,
+      last_attended_at: c.last_attended_at,
+      total_attended_7d: c.total_attended_7d,
+      total_attended_30d: c.total_attended_30d,
+      last_payment_at: c.last_payment_at,
+      joined_at: c.joined_at,
+      created_at: c.created_at,
+      trial_credits_remaining: c.trial_credits_remaining,
+    })
+    const targetStageId = stageIdBySlug.get(targetSlug)
+    if (!targetStageId) {
+      // Migration set should guarantee every slug exists; if not,
+      // count + move on rather than crashing the whole run.
+      errors++
+      continue
+    }
+
+    const existing = dealByContact.get(c.id)
+    if (!existing) {
+      // No open deal yet — create one in the right stage.
+      createsToApply.push({
+        contact_id: c.id,
+        target_stage_id: targetStageId,
+        target_slug: targetSlug,
+        contact_name: c.name || c.email || 'Glofox member',
+      })
+      continue
+    }
+
+    const fromSlug = stageSlugById.get(existing.stage_id) || 'unknown'
+    if (fromSlug === targetSlug) {
+      dealsUnchanged++
+      continue
+    }
+    movesToApply.push({
+      deal_id: existing.id,
+      contact_id: c.id,
+      from_slug: fromSlug,
+      to_slug: targetSlug,
+      target_stage_id: targetStageId,
+      contact_name: c.name || c.email || null,
+    })
+  }
+
+  // 6. Apply moves + creates. Skip writes on dry-run.
+  if (!dryRun) {
+    // Bulk-friendly: group moves by target_stage_id, then UPDATE in
+    // batches with .in('id', [...]). Faster than per-deal UPDATE.
+    const movesByStage = new Map()
+    for (const m of movesToApply) {
+      if (!movesByStage.has(m.target_stage_id)) movesByStage.set(m.target_stage_id, [])
+      movesByStage.get(m.target_stage_id).push(m)
+    }
+    for (const [stageId, moves] of movesByStage) {
+      const dealIds = moves.map((m) => m.deal_id)
+      const { error: moveErr } = await db
+        .from('deals')
+        .update({ stage_id: stageId })
+        .in('id', dealIds)
+      if (moveErr) {
+        errors += moves.length
+        logWarn('pipeline-reclassify', `bulk-move failed for stage ${stageId}`, { err: moveErr.message })
+        continue
+      }
+      dealsMoved += moves.length
+      for (const m of moves) {
+        movementMatrix[m.from_slug] = movementMatrix[m.from_slug] || {}
+        movementMatrix[m.from_slug][m.to_slug] = (movementMatrix[m.from_slug][m.to_slug] || 0) + 1
+        if (samples.length < 25) {
+          samples.push({
+            contact_id: m.contact_id,
+            contact_name: m.contact_name,
+            from_slug: m.from_slug,
+            to_slug: m.to_slug,
+          })
+        }
+      }
+    }
+
+    // Creates one-by-one (only matters for contacts without deals,
+    // which should be rare post-import). Could batch later.
+    for (const c of createsToApply) {
+      const { error: createErr } = await db
+        .from('deals')
+        .insert({
+          title: c.contact_name,
+          contact_id: c.contact_id,
+          stage_id: c.target_stage_id,
+          location_id: locationId,
+          status: 'open',
+        })
+      if (createErr) {
+        errors++
+        logWarn('pipeline-reclassify', `deal create failed for ${c.contact_id}`, { err: createErr.message })
+        continue
+      }
+      dealsCreated++
+      movementMatrix[''] = movementMatrix[''] || {}
+      movementMatrix[''][c.target_slug] = (movementMatrix[''][c.target_slug] || 0) + 1
+    }
+  } else {
+    // Dry-run — populate movement_matrix + samples for the operator
+    // preview without touching DB.
+    for (const m of movesToApply) {
+      movementMatrix[m.from_slug] = movementMatrix[m.from_slug] || {}
+      movementMatrix[m.from_slug][m.to_slug] = (movementMatrix[m.from_slug][m.to_slug] || 0) + 1
+      if (samples.length < 25) {
+        samples.push({
+          contact_id: m.contact_id,
+          contact_name: m.contact_name,
+          from_slug: m.from_slug,
+          to_slug: m.to_slug,
+        })
+      }
+    }
+    dealsMoved = movesToApply.length
+    dealsCreated = createsToApply.length
+  }
+
+  // 7. Close the audit row.
+  const status = errors === 0 ? 'success' : (dealsMoved + dealsCreated > 0 ? 'partial' : 'failed')
+  await markRun(db, runId, {
+    status,
+    contacts_seen: contacts.length,
+    deals_moved: dealsMoved,
+    deals_unchanged: dealsUnchanged,
+    deals_created: dealsCreated,
+    errors,
+    movement_matrix: movementMatrix,
+    samples,
+  }, startedAt)
+
+  return {
+    ok: true,
+    run_id: runId,
+    contacts_seen: contacts.length,
+    deals_moved: dealsMoved,
+    deals_unchanged: dealsUnchanged,
+    deals_created: dealsCreated,
+    errors,
+    movement_matrix: movementMatrix,
+    samples,
+  }
+}
+
+async function markRun(db, runId, fields, startedAt) {
+  if (!runId) return
+  const finishedAt = new Date()
+  try {
+    await db
+      .from('pipeline_classification_runs')
+      .update({
+        ...fields,
+        finished_at: finishedAt.toISOString(),
+        duration_ms: finishedAt.getTime() - startedAt.getTime(),
+      })
+      .eq('id', runId)
+  } catch (e) {
+    logWarn('pipeline-reclassify', 'audit close failed', { err: e?.message, run_id: runId })
+  }
+}
