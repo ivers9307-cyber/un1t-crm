@@ -112,6 +112,65 @@ export async function POST(request) {
       console.warn(`[revolut-race-webhook] confirmations failed for ${payment.id}: ${e.message}`)
       confirmations = { failed: [`unhandled:${e.message}`] }
     }
+
+    // GLOFOX3.3 (mig 145). Post-payment Glofox push for opted-in
+    // events. Race payments don't push at registration time (would
+    // create Glofox accounts for teams that abandon checkout), so
+    // the push fires here instead — once payment is confirmed.
+    // Best-effort, fire-and-forget. Idempotency: every push routes
+    // through findOrCreateGlofoxMember which skips already-linked
+    // contacts, so a Revolut retry can't double-push either.
+    ;(async () => {
+      try {
+        const { data: pay } = await db
+          .from('race_payments')
+          .select(`
+            id,
+            race_registrations:race_registration_id (
+              id, team_id,
+              race_events:race_event_id ( id, create_in_glofox )
+            )
+          `)
+          .eq('id', payment.id)
+          .maybeSingle()
+        const race = pay?.race_registrations?.race_events
+        const teamId = pay?.race_registrations?.team_id
+        if (!race?.create_in_glofox || !teamId) return
+        const { findOrCreateGlofoxMember } = await import('@/lib/glofox-push')
+        const { logWarn } = await import('@/lib/log')
+        const { data: members } = await db
+          .from('team_members')
+          .select(`
+            name, email, role, contact_id,
+            contacts:contact_id ( id, name, email, first_name, last_name, phone, dob, location_id, glofox_member_id )
+          `)
+          .eq('team_id', teamId)
+        for (const m of (members || [])) {
+          if (!m.contacts || !m.contacts.id || !m.contacts.email) continue
+          const c = m.contacts
+          let { first_name, last_name } = c
+          if ((!first_name || !last_name) && (c.name || m.name)) {
+            const full = (c.name || m.name).trim().split(/\s+/)
+            first_name = first_name || full[0] || ''
+            last_name = last_name || (full.slice(1).join(' ') || '—')
+          }
+          try {
+            await findOrCreateGlofoxMember({
+              db,
+              locationId: c.location_id,
+              contact: { ...c, first_name, last_name },
+              source: 'event_registration',
+              createIfMissing: true,
+              attachTrial: true,
+            })
+          } catch (e) {
+            logWarn('revolut-race-webhook.glofox', `push failed for ${c.email}`, { err: e })
+          }
+        }
+      } catch (e) {
+        console.warn(`[revolut-race-webhook] glofox push fetch failed for ${payment.id}: ${e.message}`)
+      }
+    })()
   }
 
   return NextResponse.json({

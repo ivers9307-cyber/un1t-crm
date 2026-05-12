@@ -27,7 +27,7 @@
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { ArrowLeft, Calendar, Clock, Users, Save, AlertCircle, Loader2, Plus, Trash2, BadgeEuro, ImagePlus, X as XIcon, Tv, Flag, GraduationCap, Mic, Star, DoorOpen } from 'lucide-react'
+import { ArrowLeft, Calendar, Clock, Users, Save, AlertCircle, Loader2, Plus, Trash2, BadgeEuro, ImagePlus, X as XIcon, Tv, Flag, GraduationCap, Mic, Star, DoorOpen, UserPlus } from 'lucide-react'
 import Link from 'next/link'
 import { toSlug } from '@/lib/slug'
 
@@ -211,6 +211,13 @@ export default function RaceEventForm({ race, locationId }) {
   })
   const [logoBusy, setLogoBusy] = useState(null) // slot index currently uploading
   const [logoError, setLogoError] = useState(null)
+  // GLOFOX3.3 (mig 145). When on, every confirmed public registration
+  // on this event pushes the registrant + every team_member with a
+  // contact to Glofox: search-by-email first (link if found),
+  // otherwise create + attach the per-location trial membership + tag
+  // for the welcome sequence. Default off — operator opts in per
+  // event.
+  const [createInGlofox, setCreateInGlofox] = useState(!!race?.create_in_glofox)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
 
@@ -346,6 +353,8 @@ export default function RaceEventForm({ race, locationId }) {
       tv_logos: meta.showLogos
         ? logos.filter((u) => typeof u === 'string' && u.length > 0).slice(0, 3)
         : [],
+      // GLOFOX3.3 — explicit boolean so toggling off persists.
+      create_in_glofox: createInGlofox === true,
       waves: outboundWaves.map((w, i) => ({
         ...(w.id ? { id: w.id } : {}),
         start_time: w.start_time,
@@ -795,6 +804,45 @@ export default function RaceEventForm({ race, locationId }) {
           )}
         </div>
       )}
+
+      {/* Glofox sync (GLOFOX3.3 / mig 145). Operator opts each event
+          in. When on, every confirmed public registration on this
+          event pushes the registrant + every team_member with a
+          contact to Glofox in create-and-trial mode after the
+          registration lands. For race kinds this means every team
+          member (captain + others); for non-race kinds, the single
+          registrant. */}
+      <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5 space-y-4">
+        <div className="flex items-center justify-between gap-3">
+          <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light flex items-center gap-2">
+            <UserPlus size={14} /> Glofox sync
+          </h3>
+          <button
+            type="button"
+            onClick={() => setCreateInGlofox(v => !v)}
+            className={`shrink-0 w-10 h-5 rounded-full ${createInGlofox ? 'bg-emerald-500' : 'bg-un1t-gray'}`}
+          >
+            <div className={`w-4 h-4 rounded-full bg-white transition-transform ${createInGlofox ? 'translate-x-5' : 'translate-x-0.5'}`} />
+          </button>
+        </div>
+        <p className="text-[11px] text-un1t-light">
+          When on, every confirmed registration on this {meta.value === 'race' ? 'race' : 'event'} pushes
+          the registrant
+          {meta.value === 'race' ? ' AND every team member ' : ' '}
+          to Glofox: first we search by email and link if a Glofox account already
+          exists; if not, we create a fresh Glofox account, attach this location&apos;s
+          trial membership, and tag the contact for the welcome sequence (which emails
+          the member their one-time passcode).
+        </p>
+        {createInGlofox && (
+          <p className="text-[11px] text-amber-700">
+            Make sure the trial membership picker is set on
+            <span className="text-un1t-white"> Settings → Locations → Glofox Integration</span>
+            {' '}for this location, otherwise pushes will land in the Review tab as
+            <em> needs_review</em>.
+          </p>
+        )}
+      </div>
 
       {isEditing && (
         <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5 flex items-center justify-between">
