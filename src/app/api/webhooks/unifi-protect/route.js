@@ -49,6 +49,12 @@ import { createServerClient } from '@/lib/supabase'
 import { verifySharedSecret } from '@/lib/webhook-auth'
 import { recordWebhookEvent, WEBHOOK_PROVIDERS } from '@/lib/webhook-events'
 import { logInfo, logWarn } from '@/lib/log'
+import {
+  matchArrivalToShift,
+  arrivalToTimeOnly,
+  resolveScheduledAt,
+} from '@/lib/staff-attendance'
+import { findProfileByFaceId } from '@/lib/unifi-protect'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -137,6 +143,7 @@ export async function POST(request) {
     return NextResponse.json({ success: true, ignored: 'unresolved_location' })
   }
   const locationId = location.id
+  const locationTz = location.timezone || 'UTC'
 
   // ── Process each event in the alarm ─────────────────────────
   const results = []
@@ -185,52 +192,162 @@ export async function POST(request) {
       continue
     }
 
-    // ── Persist for inspection ──────────────────────────────
-    // profile_id stays NULL until mig 123 lands the
-    // protect_face_id mapping. unifi_door_id is overloaded for
-    // Phase 2 to mean "camera id" (same column, similar semantics
-    // — the device that observed the event); we'll rename or add
-    // a sibling column if cohabitation gets messy.
+    // unifi_door_id is overloaded for Phase 2 to mean "camera id"
+    // — same column, similar semantics (the device that observed
+    // the event). We'll rename or add a sibling column if
+    // cohabitation gets messy.
     const cameraId = ev.camera || ev.device || ev.device_id || null
+
+    // ── Extract face_id from the event (P2.5) ────────────────
+    // Protect's smart-detection alarm payload is undocumented at
+    // the field level — the operator's dark-launch (P2.1) gave us
+    // the actual shapes, but we're defensive on field names so
+    // future firmware changes don't break us silently. Real-world
+    // candidates seen on Protect ≥ v3.0:
+    //   ev.metadata.recognition_id
+    //   ev.metadata.recognition.id
+    //   ev.smartDetectFaceID
+    //   ev.face_id
+    //   ev.faceId
+    const faceId =
+      ev.metadata?.recognition_id ||
+      ev.metadata?.recognition?.id ||
+      ev.smartDetectFaceID ||
+      ev.face_id ||
+      ev.faceId ||
+      null
+
+    // ── Resolve face → profile ───────────────────────────────
+    let profileId = null
+    let matchOutcome = 'unknown_user'
+    let matchedAssignmentId = null
+    if (faceId) {
+      const link = await findProfileByFaceId(db, locationId, String(faceId))
+      if (link) {
+        profileId = link.profile_id
+        // Default outcome BEFORE we try to match a shift — gets
+        // upgraded to 'matched' OR 'already_stamped' below, or
+        // stays as 'no_shift_in_window' if we can't find a shift.
+        matchOutcome = 'no_shift_in_window'
+      } else {
+        // Face seen but not enrolled at this location. Could be a
+        // staff member from another location (visiting) or an
+        // unmapped face (operator hasn't picked them on the staff
+        // edit page yet). Either way: not stampable.
+        const { data: anyLink } = await db
+          .from('profile_locations')
+          .select('profile_id')
+          .eq('protect_face_id', String(faceId))
+          .maybeSingle()
+        if (anyLink) {
+          profileId = anyLink.profile_id
+          matchOutcome = 'wrong_location'
+        }
+      }
+    }
+
+    // ── Stamp shift if this is a real arrival ────────────────
+    if (profileId && matchOutcome === 'no_shift_in_window') {
+      const dayBefore = new Date(eventAt.getTime() - 24 * 3600_000).toISOString().slice(0, 10)
+      const dayAfter  = new Date(eventAt.getTime() + 24 * 3600_000).toISOString().slice(0, 10)
+
+      const { data: rows } = await db
+        .from('shift_assignments')
+        .select(`
+          id, profile_id, status, start_time_override,
+          block:shift_blocks!inner ( id, location_id, block_date, start_time, end_time )
+        `)
+        .eq('profile_id', profileId)
+        .is('start_time_override', null)
+        .neq('status', 'cancelled')
+        .gte('block.block_date', dayBefore)
+        .lte('block.block_date', dayAfter)
+        .eq('block.location_id', locationId)
+
+      const shifts = (rows || [])
+        .map((r) => {
+          if (!r.block) return null
+          const scheduledAt    = resolveScheduledAt(r.block.block_date, r.block.start_time, locationTz)
+          const scheduledEndAt = resolveScheduledAt(r.block.block_date, r.block.end_time,   locationTz)
+          return scheduledAt ? { id: r.id, scheduledAt, scheduledEndAt, blockDate: r.block.block_date } : null
+        })
+        .filter(Boolean)
+
+      const best = matchArrivalToShift(eventAt, shifts)
+      if (best) {
+        const stamp = arrivalToTimeOnly(eventAt, locationTz)
+        // Race guard: same UPDATE…WHERE start_time_override IS NULL
+        // pattern as the Access receiver. If the Access receiver
+        // already stamped this shift (operator tapped a card AND
+        // walked past the camera), the UPDATE no-ops and we record
+        // 'already_stamped' so the audit row points at the same
+        // matched_assignment_id.
+        const { error: updErr } = await db
+          .from('shift_assignments')
+          .update({ start_time_override: stamp })
+          .eq('id', best.shift.id)
+          .is('start_time_override', null)
+        if (!updErr) {
+          const { data: post } = await db
+            .from('shift_assignments')
+            .select('start_time_override')
+            .eq('id', best.shift.id)
+            .single()
+          if (post && post.start_time_override === stamp) {
+            matchedAssignmentId = best.shift.id
+            matchOutcome = 'matched'
+          } else {
+            // Some other source (Access webhook, operator manual
+            // entry) wrote a different stamp before us. Still link
+            // to the same shift for the audit trail.
+            matchedAssignmentId = best.shift.id
+            matchOutcome = 'already_stamped'
+          }
+        }
+      }
+    }
 
     const { error: insErr } = await db
       .from('staff_attendance_events')
       .insert({
-        profile_id: null,
+        profile_id: profileId,
         location_id: locationId,
         source: 'protect',
-        unifi_user_id: null,        // n/a until face↔profile mapping (mig 123)
+        unifi_user_id: faceId ? String(faceId) : null,  // overloaded: face id for source='protect'
         unifi_door_id: cameraId ? String(cameraId) : null,
         event_at: eventAt.toISOString(),
-        matched_assignment_id: null,
-        match_outcome: 'unknown_user',  // by definition during dark launch
+        matched_assignment_id: matchedAssignmentId,
+        match_outcome: matchOutcome,
         payload: truncatePayload({
           alarm_id: alarmId,
           index: i,
           event_type: eventType,
+          face_id: faceId,
           raw: ev,
         }, 8 * 1024),
       })
     if (insErr) {
       logWarn('webhook-unifi-protect', 'audit insert failed', { err: insErr.message })
     } else {
-      // Verbose log during dark-launch — we want the field names
-      // visible in Vercel runtime logs so writing the parser is a
-      // matter of "look at logs, see what's there, write the regex."
-      logInfo('webhook-unifi-protect', 'event captured (dark launch)', {
+      logInfo('webhook-unifi-protect', 'event processed', {
         alarmId,
         index: i,
         eventType,
         cameraId,
-        eventAt: eventAt.toISOString(),
-        eventKeys: Object.keys(ev).slice(0, 30),
+        faceId,
+        profileId,
+        matchOutcome,
+        matchedAssignmentId,
       })
     }
 
     results.push({
       index: i,
       event_type: eventType,
-      outcome: 'captured',
+      face_id: faceId,
+      profile_id: profileId,
+      match_outcome: matchOutcome,
+      matched_assignment_id: matchedAssignmentId,
     })
   }
 

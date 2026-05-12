@@ -151,12 +151,13 @@ export default function AttendanceReportClient({ activeLocationName }) {
               <th className="px-3 py-2">Scheduled</th>
               <th className="px-3 py-2">Actual</th>
               <th className="px-3 py-2">Status</th>
+              <th className="px-3 py-2">Source</th>
               <th className="px-3 py-2 text-right">Minutes late</th>
             </tr>
           </thead>
           <tbody>
             {filtered.length === 0 && !loading && (
-              <tr><td colSpan={6} className="px-3 py-8 text-center text-sm text-un1t-light">No shifts in this window.</td></tr>
+              <tr><td colSpan={7} className="px-3 py-8 text-center text-sm text-un1t-light">No shifts in this window.</td></tr>
             )}
             {filtered.map((r) => (
               <tr key={r.assignment_id} className="border-t border-neutral-200">
@@ -172,6 +173,9 @@ export default function AttendanceReportClient({ activeLocationName }) {
                     {STATUS_META[r.status]?.label || r.status}
                   </span>
                 </td>
+                <td className="px-3 py-2">
+                  <SourceBadges sources={r.sources} />
+                </td>
                 <td className="px-3 py-2 text-right tabular-nums">
                   {r.minutes_late == null ? '—' : (r.minutes_late > 0 ? `+${r.minutes_late}` : r.minutes_late)}
                 </td>
@@ -180,6 +184,18 @@ export default function AttendanceReportClient({ activeLocationName }) {
           </tbody>
         </table>
       </div>
+
+      {/* P2.7 — Tailgate / unmatched-Protect surfacing.
+          Protect events where the face wasn't enrolled at this
+          location. Three legitimate causes: actual tailgate (member
+          walks in behind a staff card-tap), staff member not yet in
+          the Protect face library, or staff face enrolled but not
+          linked in the CRM (operator forgot the ProtectFacePicker).
+          Show them in a panel below the main report so the operator
+          either enrols/links the face or investigates. */}
+      {data?.tailgates?.length > 0 && (
+        <TailgatesPanel tailgates={data.tailgates} totalCount={data.tailgate_count} />
+      )}
 
       <p className="mt-3 text-xs text-un1t-light">
         Showing data for <strong>{activeLocationName || data?.location?.name || 'active location'}</strong>.
@@ -200,6 +216,77 @@ function SummaryTile({ label, value, accent }) {
     <div className={`rounded-lg border px-3 py-2 ${cls}`}>
       <p className="text-xs uppercase tracking-wide text-neutral-600">{label}</p>
       <p className="mt-0.5 text-2xl font-bold tabular-nums">{value ?? 0}</p>
+    </div>
+  )
+}
+
+// P2.6 — Source badges per stamped shift. Multiple sources can
+// contribute when both Access (card tap) and Protect (face match)
+// fire within seconds — we surface both so the operator can see
+// the corroboration.
+function SourceBadges({ sources }) {
+  if (!sources || sources.length === 0) {
+    return <span className="text-xs text-un1t-light">—</span>
+  }
+  const meta = {
+    unifi_access: { label: 'Access', cls: 'bg-blue-50 text-blue-800 border-blue-200',  title: 'Card tap (UniFi Access)' },
+    protect:      { label: 'Face',   cls: 'bg-purple-50 text-purple-800 border-purple-200', title: 'Face match (UniFi Protect)' },
+    manual:       { label: 'Manual', cls: 'bg-neutral-100 text-neutral-700 border-neutral-200', title: 'Manually entered' },
+  }
+  return (
+    <div className="flex flex-wrap gap-1">
+      {sources.map((s) => {
+        const m = meta[s] || { label: s, cls: 'bg-neutral-100 text-neutral-700 border-neutral-200', title: s }
+        return (
+          <span key={s} title={m.title}
+                className={`inline-block rounded border px-1.5 py-0.5 text-[10px] font-medium ${m.cls}`}>
+            {m.label}
+          </span>
+        )
+      })}
+    </div>
+  )
+}
+
+// P2.7 — Tailgate / unmatched-Protect panel.
+function TailgatesPanel({ tailgates, totalCount }) {
+  return (
+    <div className="mt-6 overflow-hidden rounded-xl border border-amber-200 bg-amber-50">
+      <div className="px-3 py-2 border-b border-amber-200 bg-amber-100/50 flex items-center justify-between">
+        <div>
+          <h3 className="text-sm font-semibold text-amber-900">
+            Unmatched face-recognition events ({totalCount})
+          </h3>
+          <p className="text-xs text-amber-800 mt-0.5">
+            Camera saw a face that isn&apos;t enrolled OR isn&apos;t linked to a CRM staff profile. Could be a tailgate (member walks in behind a staff tap), an unenrolled staff member, or a missing CRM link.
+          </p>
+        </div>
+      </div>
+      <table className="w-full text-sm">
+        <thead className="bg-amber-100/30 text-left text-xs uppercase text-amber-900/80">
+          <tr>
+            <th className="px-3 py-2">When</th>
+            <th className="px-3 py-2">Camera</th>
+            <th className="px-3 py-2">Face id</th>
+            <th className="px-3 py-2">Event type</th>
+          </tr>
+        </thead>
+        <tbody>
+          {tailgates.map((t) => (
+            <tr key={t.id} className="border-t border-amber-200">
+              <td className="px-3 py-2 tabular-nums text-xs">{new Date(t.event_at).toLocaleString()}</td>
+              <td className="px-3 py-2 font-mono text-xs">{t.camera_id || '—'}</td>
+              <td className="px-3 py-2 font-mono text-xs">
+                {t.face_id ? (t.face_id.length > 16 ? t.face_id.slice(0, 12) + '…' : t.face_id) : <span className="text-amber-700/70">no face id</span>}
+              </td>
+              <td className="px-3 py-2 text-xs">{t.event_type || '—'}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <p className="px-3 py-2 text-[11px] text-amber-800 bg-amber-100/30 border-t border-amber-200">
+        To resolve: copy a face id, open the staff member&apos;s profile, paste it into the Protect face picker. Or enrol them in UniFi Protect → Cameras → Smart Detections → Known Faces first if the face id isn&apos;t known yet.
+      </p>
     </div>
   )
 }

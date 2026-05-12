@@ -1286,6 +1286,38 @@ For "I expected to be auto-stamped but wasn't", check this column to know which 
 - Only Stillorgan has UniFi Access today. Hatch Street will follow when the keys arrive — same runbook, new token can stay shared (the receiver fingerprints location from `locations.settings.unifi.host` matching the only-one-configured fallback today; multi-location will need a controller_id mapping).
 - Richard's UniFi user `061ed911-2ca5-4bdf-bd44-614d3bd79dda` is manually linked to his CRM profile at Stillorgan. Other staff are unlinked — they need someone to click through the picker on each profile (or wait for the owner-driven onboarding pass).
 
+### Phase 2 — UniFi Protect face-recognition (mig 142)
+
+**Status: shipped May 12 2026.** Sibling pipeline to Phase 1 — when a Protect camera matches a staff member's enrolled face at the gym door, we auto-stamp their shift the same way Access card-taps do. Both receivers are co-equal: whichever fires first wins the stamp; the loser writes an `already_stamped` audit row pointing at the same matched_assignment_id. Defence in depth: tailgate detection (Protect fires, Access doesn't), card-reader fallback (Access broken, Protect still stamps), audit corroboration (both fire → high confidence).
+
+```
+Protect camera → Smart Detection → Alarm Manager → POST /api/webhooks/unifi-protect
+                                                        │  X-Webhook-Token: <UNIFI_PROTECT_WEBHOOK_TOKEN>
+                                                        ▼
+                                                   1. Verify token
+                                                   2. Resolve location by Protect host
+                                                   3. Extract face_id (best-effort across firmwares)
+                                                   4. profile_locations.protect_face_id → profile_id
+                                                   5. matchArrivalToShift (shared with Access)
+                                                   6. UPDATE shift_assignments WHERE start_time_override IS NULL
+                                                   7. INSERT staff_attendance_events (source='protect')
+```
+
+**Key files:**
+- `src/app/api/webhooks/unifi-protect/route.js` — receiver
+- `src/lib/unifi-protect.js` — config + face-library client
+- `ProtectFacePicker` in `src/components/StaffForm.jsx` — per-location picker (dropdown if Protect API reachable, else free-text fallback)
+- `/api/locations/[id]/protect-faces` — backs the picker
+- `profile_locations.protect_face_id` — the mapping (mig 142)
+- `/schedule/attendance` Source column + Tailgates panel (P2.6/P2.7)
+
+**Operator setup runbook:** `docs/unifi-protect-setup.md` covers prerequisites (AI Key, camera positioning, face enrolment), CRM-side config (`locations.settings.unifi_protect`), Alarm Manager wire-up, picker workflow, and end-to-end verification.
+
+**Resume notes:**
+- Receiver was dark-launched at mig 121 (P2.1) — every Protect alarm landed as `unknown_user` until mig 142 + the wire-up.
+- The face_id field on the event payload is undocumented per-firmware. The receiver tries: `metadata.recognition_id`, `metadata.recognition.id`, `smartDetectFaceID`, `face_id`, `faceId`. Add more paths to that switch as new Protect versions surface different shapes.
+- Faces enrolled in Protect but not linked in CRM appear in the Tailgates panel — operator action is to open the staff profile and use the Protect face picker. The picker degrades to manual text entry when the Protect API can't be reached, so the operator can always paste a face id directly from UniFi.
+
 ## Organizations (multi-tenant tier)
 
 Mig 079 introduced an `organizations` table above `locations`. Every location row carries an `organization_id` (NOT NULL); every existing data table in the system stays scoped by `location_id` and inherits tenant isolation transitively. The org tier is **about grouping and platform admin, not about reshaping the data plane** — RLS policies on data tables didn't change.

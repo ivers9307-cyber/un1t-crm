@@ -316,6 +316,9 @@ export default function StaffForm({
         // send the current state so the operator's "Auto" choice
         // (null) reliably wipes the link.
         unifi_user_id: a.unifi_user_id || null,
+        // P2.4 — Protect face link (mig 142 attendance picker).
+        // Same null/string/omit semantics as unifi_user_id.
+        protect_face_id: a.protect_face_id || null,
         permissions: a.permissions || {},
       })),
       active: form.active,
@@ -554,6 +557,23 @@ export default function StaffForm({
                   value={a.unifi_user_id || null}
                   onChange={(unifi_user_id) =>
                     updateAssignment(a.location_id, { unifi_user_id })
+                  }
+                />
+              )}
+              {/* Protect face link (P2.4 — mig 142 attendance picker).
+                  Sibling of UnifiUserPicker — independent enrolment +
+                  rotation cadence. Always visible at edit time even if
+                  Access isn't configured (a location may run Protect
+                  without Access). The picker degrades to manual face_id
+                  text entry when Protect isn't configured / API can't
+                  reach the controller. */}
+              {isEdit && (
+                <ProtectFacePicker
+                  locationId={a.location_id}
+                  locationName={loc.name}
+                  value={a.protect_face_id || null}
+                  onChange={(protect_face_id) =>
+                    updateAssignment(a.location_id, { protect_face_id })
                   }
                 />
               )}
@@ -1213,6 +1233,151 @@ function SendPasswordResetButton({ staffId, email }) {
       {error && state === 'error' && (
         <div className="text-xs text-red-700 inline-flex items-start gap-1.5">
           <AlertCircle size={11} className="mt-0.5 shrink-0" /> {error}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── ProtectFacePicker ───────────────────────────────────────────────
+//
+// Per-location dropdown that lets the operator pick which UniFi
+// Protect face this CRM profile is linked to (P2.4 — mig 142
+// attendance). The link drives the staff_attendance webhook's
+// face → profile resolution: without it, real face-recognition
+// alarms land as match_outcome='unknown_user' and shifts never
+// auto-stamp from camera traffic.
+//
+// Two operating modes:
+//   1. API-backed dropdown — when /api/locations/{id}/protect-faces
+//      returns a populated list (Protect configured + reachable),
+//      we render the same picker UX as UnifiUserPicker.
+//   2. Manual text fallback — when the API call fails (Protect
+//      not configured, controller unreachable, no faces enrolled),
+//      we surface a free-text input so the operator can copy/paste
+//      the face id directly from the UniFi Protect UI.
+//
+// The two modes coexist on every render so the operator can ALWAYS
+// edit the face id, even when the API isn't cooperating.
+function ProtectFacePicker({ locationId, locationName, value, onChange }) {
+  const [open, setOpen] = useState(false)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState(null)
+  const [faces, setFaces] = useState(null) // null = unfetched
+
+  const currentLabel = (() => {
+    if (!value) return 'No face linked (manual entry below)'
+    const found = faces?.find((f) => f.id === value)
+    if (found) return found.name + ' · ' + (value.length > 12 ? value.slice(0, 8) + '…' : value)
+    return value.length > 12 ? `Linked: ${value.slice(0, 8)}…` : `Linked: ${value}`
+  })()
+
+  async function fetchFaces() {
+    if (loading) return
+    setLoading(true)
+    setError(null)
+    try {
+      const res = await fetch(`/api/locations/${locationId}/protect-faces`, { cache: 'no-store' })
+      const json = await res.json()
+      if (!json.success) throw new Error(json.message || json.error || 'Fetch failed')
+      setFaces(json.faces || [])
+    } catch (e) {
+      setError(e.message || 'Could not load Protect faces')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  function handleToggle() {
+    const next = !open
+    setOpen(next)
+    if (next && faces === null) fetchFaces()
+  }
+
+  return (
+    <div className="space-y-1.5">
+      <button
+        type="button"
+        onClick={handleToggle}
+        className="w-full flex items-center justify-between text-left rounded-md border border-un1t-gray bg-un1t-black px-3 py-2 text-sm hover:border-un1t-mid"
+      >
+        <div className="min-w-0">
+          <div className="text-xs text-un1t-light">UniFi Protect face</div>
+          <div className="truncate">{currentLabel}</div>
+        </div>
+        <span className="text-un1t-light text-xs ml-2">{open ? '▴' : '▾'}</span>
+      </button>
+
+      {open && (
+        <div className="rounded-md border border-un1t-gray bg-un1t-black p-2 space-y-2">
+          {loading && (
+            <div className="text-xs text-un1t-light px-2 py-1.5">Loading faces from {locationName}…</div>
+          )}
+          {error && (
+            <div className="text-xs text-un1t-light px-2 py-1.5">
+              <div className="text-amber-300 mb-1">Could not load Protect faces:</div>
+              <div className="opacity-80">{error}</div>
+              <div className="mt-2">Use the manual text field below to paste the face id directly from UniFi Protect.</div>
+            </div>
+          )}
+          {!loading && !error && faces && faces.length > 0 && (
+            <>
+              <button
+                type="button"
+                onClick={() => { onChange(null); setOpen(false) }}
+                className={`w-full text-left text-sm px-2 py-1.5 rounded hover:bg-un1t-gray/40 ${!value ? 'text-blue-300' : ''}`}
+              >
+                Clear link
+                <div className="text-xs text-un1t-light">Camera matches for this face will land as 'unknown_user'.</div>
+              </button>
+              <div className="border-t border-un1t-gray/50 my-1" />
+              <div className="max-h-64 overflow-y-auto">
+                {faces.map((f) => (
+                  <button
+                    key={f.id}
+                    type="button"
+                    onClick={() => { onChange(f.id); setOpen(false) }}
+                    className={`w-full text-left text-sm px-2 py-1.5 rounded hover:bg-un1t-gray/40 ${value === f.id ? 'text-blue-300' : ''}`}
+                  >
+                    <div>{f.name}</div>
+                    <div className="text-xs text-un1t-light truncate">
+                      id: {f.id}{f.enrolledAt ? ' · enrolled ' + new Date(f.enrolledAt).toLocaleDateString() : ''}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+          {!loading && !error && faces && faces.length === 0 && (
+            <div className="text-xs text-un1t-light px-2 py-1.5">
+              No faces enrolled in Protect at {locationName} yet. Enrol them in the UniFi Protect UI first, then come back.
+            </div>
+          )}
+
+          {/* Manual entry — always available, even when the API works.
+              The operator can hit "Save" without leaving the picker. */}
+          <div className="border-t border-un1t-gray/50 pt-2 mt-2">
+            <label className="text-xs text-un1t-light px-1">Or paste face id manually:</label>
+            <input
+              type="text"
+              defaultValue={value || ''}
+              onBlur={(e) => {
+                const trimmed = e.target.value.trim()
+                onChange(trimmed || null)
+              }}
+              placeholder="e.g. abc123def456…"
+              className="mt-1 w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
+            />
+            <div className="text-[11px] text-un1t-light px-1 mt-1">
+              Find the id in UniFi Protect → Cameras → Smart Detections → Known Faces.
+            </div>
+          </div>
+        </div>
+      )}
+
+      {value && (
+        <div className="text-[11px] text-un1t-light px-1">
+          When the camera at {locationName} matches this face, attendance auto-stamps their shift.
         </div>
       )}
     </div>

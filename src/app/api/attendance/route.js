@@ -78,6 +78,27 @@ export const GET = withAuth(
       return NextResponse.json({ success: false, error: aErr.message }, { status: 500 })
     }
 
+    // P2.6 — pull every staff_attendance_event matched to one of these
+    // assignments so we can surface arrival source on the row. A
+    // single shift can be touched by BOTH Access (card tap) AND
+    // Protect (face match) within seconds — we want to show that.
+    const assignmentIds = (assignments || []).map(a => a.id).filter(Boolean)
+    const sourcesByAssignment = new Map() // assignment_id → Set<source>
+    if (assignmentIds.length > 0) {
+      const { data: events } = await db
+        .from('staff_attendance_events')
+        .select('matched_assignment_id, source')
+        .in('matched_assignment_id', assignmentIds)
+        .in('match_outcome', ['matched', 'already_stamped'])
+      for (const ev of (events || [])) {
+        if (!ev.matched_assignment_id) continue
+        if (!sourcesByAssignment.has(ev.matched_assignment_id)) {
+          sourcesByAssignment.set(ev.matched_assignment_id, new Set())
+        }
+        sourcesByAssignment.get(ev.matched_assignment_id).add(ev.source)
+      }
+    }
+
     const nowMs = Date.now()
     const rows = (assignments || [])
       .filter((a) => a.block) // defensive — should always be present given !inner above
@@ -88,6 +109,7 @@ export const GET = withAuth(
           ? resolveScheduledAt(a.block.block_date, a.start_time_override, tz)
           : null
         const status = bucketLateness(scheduledAt, arrivalAt, { scheduledEndAt, nowMs })
+        const sourceSet = sourcesByAssignment.get(a.id) || new Set()
         return {
           assignment_id: a.id,
           profile_id: a.profile_id,
@@ -101,6 +123,9 @@ export const GET = withAuth(
           actual_start:    a.start_time_override || null,
           status,
           minutes_late:    minutesLate(scheduledAt, arrivalAt),
+          // P2.6 — sources that contributed to the stamp. Empty array
+          // when never auto-stamped (manual entry / pending / no-show).
+          sources: Array.from(sourceSet).sort(),
         }
       })
 
@@ -111,6 +136,45 @@ export const GET = withAuth(
       return acc
     }, { total: 0, on_time: 0, late: 0, no_show: 0, pending: 0 })
 
-    return NextResponse.json({ success: true, rows, summary, location: { id: location.id, name: location.name, timezone: tz } })
+    // P2.7 — tailgate / unmatched-Protect surfacing. A Protect event
+    // that fired but couldn't be mapped to an enrolled face is one
+    // of three things:
+    //   - Genuine tailgate (member walks in behind a staff card-tap)
+    //   - Staff member not yet enrolled in the Protect face library
+    //   - Staff member enrolled in Protect but not linked in the CRM
+    //     (operator forgot to use the ProtectFacePicker)
+    // All three need operator visibility — we surface the recent
+    // unknown_user events so the operator can either enrol the face,
+    // link the existing face, or investigate the tailgate.
+    //
+    // Scope: same date window as the main report, this location.
+    const fromIso = new Date(fromStr + 'T00:00:00Z').toISOString()
+    const toIso   = new Date(toStr   + 'T23:59:59Z').toISOString()
+    const { data: unmatched } = await db
+      .from('staff_attendance_events')
+      .select('id, event_at, source, unifi_door_id, unifi_user_id, payload')
+      .eq('location_id', locationId)
+      .eq('source', 'protect')
+      .eq('match_outcome', 'unknown_user')
+      .gte('event_at', fromIso)
+      .lte('event_at', toIso)
+      .order('event_at', { ascending: false })
+      .limit(200)
+    const tailgates = (unmatched || []).map(ev => ({
+      id: ev.id,
+      event_at: ev.event_at,
+      camera_id: ev.unifi_door_id || null,
+      face_id: ev.unifi_user_id || null,  // overloaded for source='protect'
+      event_type: ev.payload?.event_type || null,
+    }))
+
+    return NextResponse.json({
+      success: true,
+      rows,
+      summary,
+      tailgates,
+      tailgate_count: tailgates.length,
+      location: { id: location.id, name: location.name, timezone: tz },
+    })
   }
 )

@@ -362,6 +362,12 @@ export async function PUT(request, { params }) {
         // Per-location user overrides (mig 058). Default to {} when
         // not provided so existing role-default behaviour kicks in.
         permissions: a.permissions || {},
+        // P2.4 — Protect face link (mig 142). Same null/string/omit
+        // semantics as unifi_user_id: explicit null clears, string
+        // sets, omitting the key leaves DB value unchanged.
+        ...(Object.prototype.hasOwnProperty.call(a, 'protect_face_id')
+          ? { protect_face_id: a.protect_face_id || null }
+          : {}),
       }
 
       if (existing) {
