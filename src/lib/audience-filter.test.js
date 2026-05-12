@@ -181,7 +181,9 @@ describe('resolveTagFilters — fast checks (no DB)', () => {
     expect(p).toBeInstanceOf(Promise)
   })
 
-  it('returns the query unchanged when filter is null', async () => {
+  it('returns { query } unchanged when filter is null', async () => {
+    // Return shape is wrapped to defeat the thenable auto-unwrap —
+    // see resolveTagFilters JSDoc.
     const dummyQuery = { id: 'unchanged' }
     const result = await resolveTagFilters({
       db: { from: () => { throw new Error('should not be called') } },
@@ -189,10 +191,10 @@ describe('resolveTagFilters — fast checks (no DB)', () => {
       filter: null,
       locationId: null,
     })
-    expect(result).toBe(dummyQuery)
+    expect(result.query).toBe(dummyQuery)
   })
 
-  it('returns the query unchanged when no tag filters present', async () => {
+  it('returns { query } unchanged when no tag filters present', async () => {
     const dummyQuery = { id: 'unchanged' }
     const result = await resolveTagFilters({
       db: { from: () => { throw new Error('should not be called') } },
@@ -200,7 +202,7 @@ describe('resolveTagFilters — fast checks (no DB)', () => {
       filter: { filters: [{ field: 'lead_status', op: 'eq', value: 'member' }] },
       locationId: null,
     })
-    expect(result).toBe(dummyQuery)
+    expect(result.query).toBe(dummyQuery)
   })
 
   it('rejects empty / whitespace tag values without hitting the DB', async () => {

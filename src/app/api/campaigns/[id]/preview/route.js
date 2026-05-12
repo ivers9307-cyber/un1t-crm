@@ -29,7 +29,9 @@ export async function GET(request, { params }) {
   // edited record). Surface it as a 400 so the user sees what's wrong.
   let query
   try {
-    query = await buildAudienceQueryAsync(db, campaign.audience_filter, campaign.location_id)
+    // Destructure { query } — see resolveTagFilters in audience-filter.js
+    // for the thenable-unwrap reason.
+    ;({ query } = await buildAudienceQueryAsync(db, campaign.audience_filter, campaign.location_id))
   } catch (err) {
     return NextResponse.json({ success: false, error: err.message }, { status: 400 })
   }

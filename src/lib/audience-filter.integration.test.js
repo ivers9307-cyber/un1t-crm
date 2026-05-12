@@ -101,7 +101,9 @@ describe('resolveTagFilters — integration with real Supabase client', () => {
       locationId: 'loc-A',
     })
     // Trigger the contacts request to inspect the final URL.
-    await out
+    // resolveTagFilters now returns { query } (wrapped) — await
+    // out.query to fire the actual HTTP request.
+    await out.query
     const url = lastContactsUrl()
     expect(url).toBeTruthy()
     expect(url).not.toContain('id=in.')
@@ -121,7 +123,7 @@ describe('resolveTagFilters — integration with real Supabase client', () => {
       filter: { filters: [{ field: 'tag', op: 'eq', value: 'race_completed' }] },
       locationId: 'loc-A',
     })
-    await out
+    await out.query
     const url = lastContactsUrl()
     expect(url).toMatch(/id=in\.\(/)
     // PostgREST URL-encodes the parens as %28/%29 in some clients
@@ -157,7 +159,7 @@ describe('resolveTagFilters — integration with real Supabase client', () => {
       },
       locationId: 'loc-A',
     })
-    await out
+    await out.query
     const url = lastContactsUrl()
     // Intersection of {c1,c2,c3} ∩ {c2,c3,c4} = {c2,c3}.
     expect(url).toMatch(/id=in\.\(/)
@@ -178,7 +180,7 @@ describe('resolveTagFilters — integration with real Supabase client', () => {
       filter: { filters: [{ field: 'tag', op: 'eq', value: 'rare_tag' }] },
       locationId: 'loc-A',
     })
-    await out
+    await out.query
     const url = lastContactsUrl()
     // Sentinel: id=eq.00000000-0000-0000-0000-000000000000
     expect(url).toContain('id=eq.00000000-0000-0000-0000-000000000000')
@@ -195,7 +197,7 @@ describe('resolveTagFilters — integration with real Supabase client', () => {
       filter: { filters: [{ field: 'tag', op: 'neq', value: 'lapsed_payer' }] },
       locationId: 'loc-A',
     })
-    await out
+    await out.query
     const url = lastContactsUrl()
     // PostgREST renders a NOT IN as id=not.in.(c1,c5)
     expect(url).toMatch(/id=not\.in\.\(/)
@@ -240,7 +242,7 @@ describe('resolveTagFilters — integration with real Supabase client', () => {
       },
       locationId: 'loc-A',
     })
-    await out
+    await out.query
     const url = lastContactsUrl()
     // Positive narrows to {c1,c2,c3}, then NOT IN excludes c2.
     // The IN clause is applied first.

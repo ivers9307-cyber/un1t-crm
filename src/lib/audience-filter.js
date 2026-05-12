@@ -216,19 +216,25 @@ export function applyAudienceFilter(query, filter) {
  * `contacts.id NOT IN (…)` respectively. Multiple tag clauses combine
  * with AND inside a single audience filter.
  *
- * Returns the modified query. NULL/empty tag list still applies the
- * constraint (so an `eq` against an unknown tag yields zero rows
- * rather than silently matching everything).
+ * IMPORTANT — return shape is { query } (wrapped), NOT a bare query.
+ * Supabase JS v2 query builders are THENABLE: they have a .then() that
+ * triggers the actual HTTP request. JavaScript's `await` follows the
+ * thenable protocol, so if an async function returns a bare builder,
+ * `await asyncFn()` will FIRE the network call and resolve to
+ * { data, error } instead of the builder. Downstream `query.eq(...)`
+ * then throws "TypeError: e.eq is not a function" because the response
+ * object has no filter methods. Wrapping in a plain object defeats the
+ * auto-unwrap.
  *
  * @param {object} args
  * @param {SupabaseClient} args.db
  * @param {object} args.query     contacts query already scoped by location
  * @param {object|null} args.filter
  * @param {string|null} args.locationId   tightens the contact_tags lookup
- * @returns {Promise<object>}     the modified query
+ * @returns {Promise<{ query: object }>}  wrapped to avoid thenable unwrap
  */
 export async function resolveTagFilters({ db, query, filter, locationId }) {
-  if (!filter?.filters?.length) return query
+  if (!filter?.filters?.length) return { query }
 
   // Collect the AND-combined positive (eq) and negative (neq) tags.
   const positives = []
@@ -243,7 +249,7 @@ export async function resolveTagFilters({ db, query, filter, locationId }) {
     if (f.op === 'eq') positives.push(tag)
     else if (f.op === 'neq') negatives.push(tag)
   }
-  if (positives.length === 0 && negatives.length === 0) return query
+  if (positives.length === 0 && negatives.length === 0) return { query }
 
   // Helper: list of contact_ids currently tagged with `tag` at the
   // given location (or all locations if locationId is null).
@@ -263,7 +269,7 @@ export async function resolveTagFilters({ db, query, filter, locationId }) {
     allowed = allowed === null ? new Set(ids) : new Set([...allowed].filter(x => ids.includes(x)))
     if (allowed.size === 0) {
       // Force an unsatisfiable predicate so the count comes back 0.
-      return query.eq('id', '00000000-0000-0000-0000-000000000000')
+      return { query: query.eq('id', '00000000-0000-0000-0000-000000000000') }
     }
   }
   if (allowed && allowed.size > 0) {
@@ -281,7 +287,7 @@ export async function resolveTagFilters({ db, query, filter, locationId }) {
     query = query.not('id', 'in', `(${ids.join(',')})`)
   }
 
-  return query
+  return { query }
 }
 
 /**
@@ -289,8 +295,14 @@ export async function resolveTagFilters({ db, query, filter, locationId }) {
  * in one call. Use this in async contexts (most route handlers
  * already are). Existing sync callers continue using
  * applyAudienceFilter directly until they need tag support.
+ *
+ * Returns { query } — see resolveTagFilters above for the thenable-
+ * unwrap reason. Callers must destructure:
+ *   const { query: filtered } = await applyAudienceFilterAsync(...)
+ *
+ * @returns {Promise<{ query: object }>}
  */
 export async function applyAudienceFilterAsync({ db, query, filter, locationId }) {
-  query = await resolveTagFilters({ db, query, filter, locationId })
-  return applyAudienceFilter(query, filter)
+  const tagResult = await resolveTagFilters({ db, query, filter, locationId })
+  return { query: applyAudienceFilter(tagResult.query, filter) }
 }

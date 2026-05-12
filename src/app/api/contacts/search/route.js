@@ -75,6 +75,7 @@ const SearchBody = z.object({
 })
 
 export async function POST(request) {
+  try {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
 
@@ -130,8 +131,10 @@ export async function POST(request) {
 
   try {
     // Async path supports the new `tag` field (Phase 3 — mig 085).
-    listQuery = await applyAudienceFilterAsync({ db, query: listQuery, filter: parsed.data.filter, locationId })
-    countQuery = await applyAudienceFilterAsync({ db, query: countQuery, filter: parsed.data.filter, locationId })
+    // Destructure the wrapped { query } return — see resolveTagFilters
+    // header in audience-filter.js for the thenable-unwrap reason.
+    ;({ query: listQuery } = await applyAudienceFilterAsync({ db, query: listQuery, filter: parsed.data.filter, locationId }))
+    ;({ query: countQuery } = await applyAudienceFilterAsync({ db, query: countQuery, filter: parsed.data.filter, locationId }))
   } catch (e) {
     if (e instanceof InvalidAudienceFilterError) {
       return NextResponse.json({ success: false, error: e.message }, { status: 400 })
@@ -162,4 +165,16 @@ export async function POST(request) {
     limit,
     offset,
   })
+  } catch (e) {
+    // Surface the full stack to Vercel logs AND return a usable
+    // JSON error to the client. Without this top-level catch, any
+    // throw bubbles up to Next.js which returns an empty 500 body
+    // — operator sees "Unexpected end of JSON input" instead of the
+    // actual problem.
+    console.error('[contacts.search] uncaught', e?.stack || e)
+    return NextResponse.json({
+      success: false,
+      error: e?.message || 'Internal server error',
+    }, { status: 500 })
+  }
 }

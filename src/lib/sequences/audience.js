@@ -39,12 +39,14 @@ export async function contactMatchesSequenceAudience(db, contactId, filter) {
     .eq('id', contactId)
 
   try {
-    query = await applyAudienceFilterAsync({
+    // Destructure the wrapped { query } return — see resolveTagFilters
+    // header in audience-filter.js for the thenable-unwrap reason.
+    ;({ query } = await applyAudienceFilterAsync({
       db,
       query,
       filter,
       locationId: contact?.location_id || null,
-    })
+    }))
   } catch (e) {
     if (e instanceof InvalidAudienceFilterError) {
       // A bad filter shouldn't crash the cron — treat as no-match

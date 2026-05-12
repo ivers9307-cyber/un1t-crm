@@ -91,19 +91,28 @@ describe('contactMatchesSequenceAudience — DB count outcome', () => {
 
   it('returns true when count > 0 (contact matches)', async () => {
     const db = mockDb({ count: 1 })
-    applyAudienceFilterAsync.mockImplementation(({ query }) => query)
+    // GLOFOX/audience-thenable fix — mock now returns the wrapped { query }
+    // shape that the production helper produces (defeats the await/thenable
+    // auto-unwrap of bare Supabase builders).
+    applyAudienceFilterAsync.mockImplementation(({ query }) => ({ query }))
     expect(await contactMatchesSequenceAudience(db, 'c1', filter)).toBe(true)
   })
 
   it('returns false when count is 0 (contact does not match)', async () => {
     const db = mockDb({ count: 0 })
-    applyAudienceFilterAsync.mockImplementation(({ query }) => query)
+    // GLOFOX/audience-thenable fix — mock now returns the wrapped { query }
+    // shape that the production helper produces (defeats the await/thenable
+    // auto-unwrap of bare Supabase builders).
+    applyAudienceFilterAsync.mockImplementation(({ query }) => ({ query }))
     expect(await contactMatchesSequenceAudience(db, 'c1', filter)).toBe(false)
   })
 
   it('returns false when count is null (defensive)', async () => {
     const db = mockDb({ count: null })
-    applyAudienceFilterAsync.mockImplementation(({ query }) => query)
+    // GLOFOX/audience-thenable fix — mock now returns the wrapped { query }
+    // shape that the production helper produces (defeats the await/thenable
+    // auto-unwrap of bare Supabase builders).
+    applyAudienceFilterAsync.mockImplementation(({ query }) => ({ query }))
     expect(await contactMatchesSequenceAudience(db, 'c1', filter)).toBe(false)
   })
 })
@@ -113,7 +122,10 @@ describe('contactMatchesSequenceAudience — locationId resolution', () => {
 
   it('passes the contact\'s location_id into applyAudienceFilterAsync', async () => {
     const db = mockDb({ contactRow: { location_id: 'loc-42' } })
-    applyAudienceFilterAsync.mockImplementation(({ query }) => query)
+    // GLOFOX/audience-thenable fix — mock now returns the wrapped { query }
+    // shape that the production helper produces (defeats the await/thenable
+    // auto-unwrap of bare Supabase builders).
+    applyAudienceFilterAsync.mockImplementation(({ query }) => ({ query }))
     await contactMatchesSequenceAudience(db, 'c1', filter)
     expect(applyAudienceFilterAsync).toHaveBeenCalledWith(
       expect.objectContaining({ locationId: 'loc-42' })
@@ -122,7 +134,10 @@ describe('contactMatchesSequenceAudience — locationId resolution', () => {
 
   it('passes locationId: null when the contact lookup returns no row', async () => {
     const db = mockDb({ contactRow: null })
-    applyAudienceFilterAsync.mockImplementation(({ query }) => query)
+    // GLOFOX/audience-thenable fix — mock now returns the wrapped { query }
+    // shape that the production helper produces (defeats the await/thenable
+    // auto-unwrap of bare Supabase builders).
+    applyAudienceFilterAsync.mockImplementation(({ query }) => ({ query }))
     await contactMatchesSequenceAudience(db, 'c1', filter)
     expect(applyAudienceFilterAsync).toHaveBeenCalledWith(
       expect.objectContaining({ locationId: null })

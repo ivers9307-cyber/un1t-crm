@@ -223,6 +223,10 @@ export async function buildAudienceQueryAsync(db, filter, locationId) {
     .eq('location_id', locationId)
     .eq('contact_preferences.email_marketing', true)
   query = query.not('email_status', 'in', '("bounced","complained")')
+  // Returns { query } so the caller can destructure without the
+  // thenable-protocol auto-unwrap firing the underlying HTTP call
+  // before the caller intends. See audience-filter.js resolveTagFilters
+  // header for the full reasoning.
   return applyAudienceFilterAsync({ db, query, filter, locationId })
 }
 
@@ -253,7 +257,9 @@ export async function sendCampaign(campaignId) {
   await db.from('campaigns').update({ status: 'sending' }).eq('id', campaignId)
 
   // Get audience — async to support tag-based segments (Phase 3).
-  const audienceQuery = await buildAudienceQueryAsync(db, campaign.audience_filter, campaign.location_id)
+  // Destructure { query } — see resolveTagFilters in audience-filter.js
+  // for the thenable-unwrap reason.
+  const { query: audienceQuery } = await buildAudienceQueryAsync(db, campaign.audience_filter, campaign.location_id)
   const { data: contacts, error: contactError } = await audienceQuery
 
   if (contactError) throw new Error(`Audience query failed: ${contactError.message}`)
