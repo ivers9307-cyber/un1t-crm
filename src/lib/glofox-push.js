@@ -173,9 +173,14 @@ export async function findOrCreateGlofoxMember({
   // Step 4 — write the link to the CRM contact row immediately
   // (before the trial purchase) so even if the membership write
   // fails, we don't leave the contact unlinked.
+  // GLOFOX3.5 (mig 146): stash the passcode on contacts so the
+  // welcome-sequence merge tag {{glofox_passcode}} can read it
+  // at send time. Cleared either by the welcome-sequence
+  // enrolment hook or a future 30-day TTL cron.
   await db.from('contacts').update({
     glofox_member_id: newGlofoxId,
     glofox_synced_at: new Date().toISOString(),
+    glofox_passcode: passcode,
   }).eq('id', contact.id)
 
   // Step 5 — optional trial-membership purchase. Per-location

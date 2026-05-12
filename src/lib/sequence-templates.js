@@ -44,6 +44,93 @@ export const SEQUENCE_TEMPLATES = [
       },
     ],
   },
+  // ─── Welcome ────────────────────────────────────────────────
+  // Fires for every contact that just had a Glofox account created
+  // FROM the CRM — booking-form opt-in (GLOFOX3.2), event-
+  // registration opt-in (GLOFOX3.3), or the manual "Create in
+  // Glofox" button (GLOFOX3.4). The push orchestrator tags the
+  // contact 'glofox_account_created' and stashes the one-time
+  // passcode on contacts.glofox_passcode so this template's
+  // {{glofox_passcode}} merge tag resolves at send time.
+  //
+  // SHIPS INACTIVE — operator clones, reviews copy, fills in app-
+  // store links, then activates. Inactive-by-default avoids us
+  // surprise-emailing brand-new members on a first-deploy.
+  {
+    id: 'glofox_welcome_passcode',
+    category: 'Welcome',
+    name: 'Glofox welcome + passcode',
+    description: 'Fires when CRM creates a new Glofox account for a contact (tag: glofox_account_created). Sends the one-time passcode immediately so the member can log into the Glofox app, with a follow-up nudge the next day if they haven\'t booked yet. SHIPS INACTIVE — operator should review copy and fill in app-store links before activating.',
+    trigger_type: 'tag_added',
+    trigger_config: { tag: 'glofox_account_created' },
+    // No goal_config: this is a transactional welcome, not a
+    // conversion drip. Letting it run to completion is the
+    // intended path even if the member books mid-sequence.
+    goal_config: null,
+    // 365-day cooldown — a passcode is minted once per Glofox
+    // account; if the same contact somehow re-triggers we don't
+    // want to send another passcode (it'd be stale anyway). The
+    // operator would re-mint via the manual button in that case,
+    // which would re-tag and pass the cooldown.
+    re_enrolment_cooldown_days: 365,
+    send_window: { start_hour: 8, end_hour: 21, skip_days: [] },
+    // All templates clone to status='draft' (from-template route) —
+    // the operator MUST review + activate before this sends. Same
+    // safe-by-default as every other template; called out explicitly
+    // here because the placeholder app-store URLs in step 1's HTML
+    // would email broken links to brand-new members.
+    steps: [
+      {
+        // Email 1 — immediate. Lands the passcode + the app links.
+        // Operator MUST fill in the iOS/Android URLs (placeholders
+        // below) before activating, otherwise members get broken
+        // "Download the app" links.
+        step_type: 'email',
+        delay_days: 0,
+        delay_hours: 0,
+        subject: 'Welcome to UN1T — your Glofox login is ready, {{first_name}}',
+        html_content: `<p>Hi {{first_name}},</p>
+<p>Your UN1T account is live. Download the Glofox app and log in with the credentials below to book your first class.</p>
+<p><strong>Email:</strong> {{email}}<br />
+<strong>One-time passcode:</strong> <code>{{glofox_passcode}}</code></p>
+<p>You'll be asked to set your own password the first time you log in.</p>
+<p>
+  <a href="https://apps.apple.com/app/REPLACE-WITH-IOS-LINK">Download on the App Store</a> ·
+  <a href="https://play.google.com/store/apps/details?id=REPLACE-WITH-ANDROID-ID">Get it on Google Play</a>
+</p>
+<p>Once you're in, your trial credits are already loaded — pick a class on the timetable and tap Book.</p>
+<p>See you on the floor.<br />UN1T {{location_name}}</p>`,
+      },
+      {
+        // SMS — same hour-ish window so the member sees the
+        // passcode somewhere even if the email lands in junk.
+        // 15-minute delay rather than 0 so the email arrives
+        // first (most members will see the email and never read
+        // the SMS).
+        step_type: 'sms',
+        delay_days: 0,
+        delay_hours: 0.25,
+        sms_body: 'UN1T: Hi {{first_name}}, your Glofox login is set. Email: {{email}} · Passcode: {{glofox_passcode}}. Open the Glofox app to book your first class.',
+      },
+      {
+        // Day-2 nudge — only if the member hasn't booked yet.
+        // We don't gate on actual booking state from inside the
+        // template (the runner doesn't know about Glofox state);
+        // the operator can layer a goal_config of type
+        // booking_made later if they want auto-exit on first
+        // booking.
+        step_type: 'email',
+        delay_days: 1,
+        delay_hours: 22,
+        subject: 'Need a hand booking your first class?',
+        html_content: `<p>Hi {{first_name}},</p>
+<p>Just checking in — did you manage to get logged in and have a look at the timetable?</p>
+<p>If anything's not working (passcode didn't arrive, app's grumpy, can't see the schedule), reply to this email and someone from the team will sort it within the hour.</p>
+<p>If you'd rather chat in person, we're at the studio Mon–Fri 6am–9pm and weekends 8am–4pm. Just walk in.</p>
+<p>UN1T {{location_name}}</p>`,
+      },
+    ],
+  },
   {
     id: 'glofox_booking_cancelled_re_engage',
     category: 'Recovery',

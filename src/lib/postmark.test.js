@@ -139,4 +139,22 @@ describe('applyMergeTags', () => {
     expect(applyMergeTags('Unknown {{not_a_real_tag}} stays', { name: 'A' }))
       .toBe('Unknown {{not_a_real_tag}} stays')
   })
+
+  // ── GLOFOX3.5 — glofox_passcode tag ──────────────────────────────
+  it('substitutes {{glofox_passcode}} from the contact', () => {
+    // The Glofox welcome sequence relies on this tag — locking
+    // it down so a postmark.js refactor can't accidentally drop
+    // the column read.
+    expect(applyMergeTags(
+      'Passcode: <code>{{glofox_passcode}}</code>',
+      { name: 'Alice', glofox_passcode: 'ABC1-2345' }
+    )).toBe('Passcode: <code>ABC1-2345</code>')
+  })
+
+  it('renders {{glofox_passcode}} as empty when not set on the contact', () => {
+    // A pre-Glofox-create contact won't have one — empty string is
+    // the right fallback (no "undefined" leaking into email body).
+    expect(applyMergeTags('Code: {{glofox_passcode}}', { name: 'Alice' }))
+      .toBe('Code: ')
+  })
 })

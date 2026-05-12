@@ -149,7 +149,10 @@ export async function sendBatch(emails) {
 /**
  * Replace merge tags in HTML with contact data
  * Supported tags: {{first_name}}, {{name}}, {{email}}, {{phone}},
- *   {{lead_status}}, {{location_name}}, {{unsubscribe_url}}
+ *   {{lead_status}}, {{location_name}}, {{unsubscribe_url}},
+ *   {{glofox_passcode}} (GLOFOX3.5; one-time Glofox passcode minted
+ *   when CRM creates a new Glofox account — read by the welcome
+ *   sequence; stored on contacts.glofox_passcode by glofox-push.js).
  */
 export function applyMergeTags(html, contact, extras = {}) {
   if (!html) return html
@@ -165,6 +168,7 @@ export function applyMergeTags(html, contact, extras = {}) {
     '{{unsubscribe_url}}': extras.unsubscribe_url || '',
     '{{preference_url}}': extras.preference_url || '',
     '{{current_year}}': new Date().getFullYear().toString(),
+    '{{glofox_passcode}}': contact.glofox_passcode || '',
   }
 
   let result = html
