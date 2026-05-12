@@ -23,6 +23,12 @@ export default async function ContactsPage({ searchParams }) {
   // adds an advanced filter row, ContactsView swaps to /api/contacts/search.
   let query = db.from('contacts').select('*').eq('location_id', locationId).order('created_at', { ascending: false }).limit(200)
   if (status) query = query.eq('lead_status', status)
+  // Active-trial chip excludes ClassPass PAYG by default — they
+  // inherit lead_status='active_trial' from the contacts INSERT
+  // default but aren't real trialists. Mirror this in ContactsView
+  // for the client-side path. Operator can still see them via the
+  // Advanced filter ('Lead Source' = 'classpass').
+  if (status === 'active_trial') query = query.neq('lead_source', 'classpass')
   if (search) query = query.or(`name.ilike.%${search}%,email.ilike.%${search}%`)
 
   const { data: contacts } = await query

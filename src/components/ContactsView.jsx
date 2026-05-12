@@ -183,14 +183,32 @@ export default function ContactsView({
     fetchContacts()
   }, [apiActive, fetchContacts])
 
-  // Status filter applied client-side over initialContacts when we're
-  // not using the API. This mirrors the previous server-rendered
-  // behaviour (URL ?status=… still drives the chip selection).
+  // Status filter + search + classpass-exclusion applied client-side
+  // over initialContacts when we're not using the API. Mirrors the
+  // server-rendered behaviour (URL ?status=… still drives the chip
+  // selection) but also makes the search box live-filter as you
+  // type without needing the advanced-filter panel open.
+  //
+  // Active-trial chip excludes lead_source='classpass' by default —
+  // ClassPass PAYG members get lead_status='active_trial' from the
+  // contacts INSERT default but they're not real UN1T trialists;
+  // showing them under that chip clutters the operator's view of
+  // who actually needs nurturing.
   const visibleContacts = useMemo(() => {
-    if (clientContacts !== null) return clientContacts
-    if (!status) return initialContacts
-    return initialContacts.filter(c => c.lead_status === status)
-  }, [clientContacts, initialContacts, status])
+    let rows = clientContacts !== null ? clientContacts : initialContacts
+    if (status) rows = rows.filter(c => c.lead_status === status)
+    if (status === 'active_trial') {
+      rows = rows.filter(c => c.lead_source !== 'classpass')
+    }
+    if (search?.trim()) {
+      const needle = search.trim().toLowerCase()
+      rows = rows.filter(c =>
+        (c.name && c.name.toLowerCase().includes(needle))
+        || (c.email && c.email.toLowerCase().includes(needle))
+      )
+    }
+    return rows
+  }, [clientContacts, initialContacts, status, search])
 
   function clearAdvanced() {
     setFilter(null)

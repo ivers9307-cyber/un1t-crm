@@ -59,7 +59,11 @@ export async function GET(request) {
 const SearchBody = z.object({
   filter: audienceFilterSchema,
   search: z.string().max(200).optional(),
-  location_id: z.string().uuid().optional(),
+  // .nullable() so the client can send location_id: null when no
+  // active location is set (vs. omitting the key). The route falls
+  // back to user.activeLocation?.id below. Pre-fix, null tripped the
+  // .uuid() validator and returned "location_id: Invalid input".
+  location_id: z.string().uuid().nullable().optional(),
   limit: z.number().int().min(1).max(500).optional(),
   offset: z.number().int().min(0).optional(),
 })
