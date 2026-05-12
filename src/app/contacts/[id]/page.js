@@ -11,6 +11,7 @@ import ContactRaceHistory from '@/components/ContactRaceHistory'
 import ContactEditDeleteActions from '@/components/ContactEditDeleteActions'
 import InviteToAppButton from '@/components/InviteToAppButton'
 import ContactDevicesCard from '@/components/ContactDevicesCard'
+import CreateInGlofoxButton from '@/components/CreateInGlofoxButton'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
@@ -471,9 +472,12 @@ function GlofoxProfileCard({ contact }) {
       </div>
 
       {!linked && (
-        <div className="text-sm text-un1t-mid py-3 text-center">
-          Not yet linked to Glofox.
-          <p className="text-xs mt-1">A bidirectional sync will create them in Glofox automatically (planned in GLOFOX3).</p>
+        <div className="space-y-2">
+          <div className="text-sm text-un1t-mid py-2 text-center">
+            Not yet linked to Glofox.
+            <p className="text-xs mt-1">Push this contact to Glofox: we&apos;ll search by email first, and create + attach the trial if they don&apos;t exist yet.</p>
+          </div>
+          <CreateInGlofoxButton contact={contact} />
         </div>
       )}
 
