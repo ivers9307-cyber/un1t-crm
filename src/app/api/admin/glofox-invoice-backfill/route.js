@@ -191,27 +191,92 @@ export async function POST(request) {
   const failed = []
   const affectedContactIds = new Set()
   for (const t of transactions) {
-    // Glofox's TransactionsList items use a different shape from
-    // the webhook InvoiceEvent. Normalise into the webhook shape
-    // first so parseInvoicePayload + upsertGlofoxInvoice work.
+    // PIPELINE5.5h: real /Analytics/report TransactionsList shape
+    // (sample we saw on 2026-05-12):
     //
-    // Best-guess mapping based on the InvoiceEvent spec — fields
-    // that look reasonable: id, user{id,email}, total/amount,
-    // currency, status, payment_method, document_type, date.
+    //   {"StripeCharge": {
+    //     "_id": "...", "id": "164025531",
+    //     "transaction_status": "PAID", "status": "paid",
+    //     "amount": 199, "currency": "eur",
+    //     "invoice_id": "cc6174c1-...-2f2e2fd003",
+    //     "customer": "10674006",
+    //     "created": "2026-05-12 20:20:22",      <- space, not T
+    //     "modified": "2026-05-12 20:20:27",
+    //     "metadata": {
+    //       "user_id": "61ae263ed166e80fbf1a75fe",  <- THIS is the member id
+    //       "user_name": "Rebecca Kerr",
+    //       "payment_method": "credit_card",
+    //       "namespace": "untstillorgan",
+    //       "branch_id": "...",
+    //       "glofox_event": "subscription_payment",
+    //       ...
+    //     },
+    //     "amount_refunded": 0,
+    //     "description": "The Monthly Membership (€99 first month)"
+    //   }}
+    //
+    // Other envelopes likely exist for other payment methods
+    // (CashCharge / RevolutCharge / DirectDebitCharge etc) — unwrap
+    // any single-key wrapper whose inner value has metadata.
+    let txn = t
+    if (t && typeof t === 'object') {
+      const keys = Object.keys(t)
+      if (keys.length === 1) {
+        const inner = t[keys[0]]
+        if (inner && typeof inner === 'object' && inner.metadata) {
+          txn = inner
+        }
+      }
+    }
+    const meta = (txn && typeof txn.metadata === 'object') ? txn.metadata : {}
+
+    // Prefer invoice_id (UUID, stable) over the incremental int id —
+    // re-runs of the backfill upsert by id, so a stable PK matters.
+    const invoiceId = txn.invoice_id || txn._id || txn.id || null
+
+    // Customer/member id: metadata.user_id is the canonical Glofox
+    // member id (matches contacts.glofox_member_id). The top-level
+    // `customer` field is a Stripe customer id, not useful for us.
+    const memberId = meta.user_id || null
+
+    // Amount: based on a sample with description "Monthly Membership
+    // (€99 first month)" + amount=199 + plausible UN1T pricing, the
+    // value is in MAJOR units (euros), not Stripe-style cents.
+    // Multiply by 100 to match parseInvoicePayload's cents convention.
+    // If a future audit shows amounts are 100× too high, drop the
+    // *100. Currently safer to over-count than under-count — under-
+    // count would silently suppress the "paid in last 60d"
+    // engagement signal.
+    const amountMajor = Number.isFinite(txn.amount) ? Number(txn.amount) : 0
+    const amountAsCents = Math.round(amountMajor * 100)
+
+    // Status: prefer transaction_status (uppercase per spec). Fall
+    // back to the lowercase status. parseInvoicePayload uppercases.
+    const status = String(txn.transaction_status || txn.status || 'PAID')
+
+    // Dates arrive as "YYYY-MM-DD HH:mm:ss" without ISO T separator.
+    // new Date() parses this OK in V8 but to be safe convert to ISO.
+    const isoise = (s) => {
+      if (!s || typeof s !== 'string') return null
+      // Already has T? leave alone.
+      if (s.includes('T')) return s
+      return s.replace(' ', 'T') + (s.endsWith('Z') ? '' : 'Z')
+    }
+
     const normalised = {
       Payload: {
-        id: t.id || t.invoice_id || t.transaction_id || null,
+        id: invoiceId,
         user: {
-          id: t.user_id || t.user?.id || null,
-          email: t.user_email || t.user?.email || null,
+          id: memberId,
+          email: null, // not present per-transaction; map via member_id
         },
-        total: Number(t.total ?? t.amount ?? 0),
-        currency: t.currency || 'eur',
-        status: String(t.status || 'PAID').toUpperCase(),
-        payment_method: t.payment_method || null,
-        document_type: t.document_type || null,
-        date: t.date || t.created || null,
-        line_items: t.line_items || [],
+        total: amountAsCents,
+        currency: txn.currency || 'eur',
+        status,
+        payment_method: meta.payment_method || null,
+        document_type: meta.glofox_event || null,
+        date: isoise(txn.created) || isoise(txn.modified) || null,
+        line_items: [],
       },
     }
     const parsed = parseInvoicePayload(normalised)
