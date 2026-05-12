@@ -181,6 +181,24 @@ export default function GlofoxInvoiceBackfillTab() {
               </pre>
             </details>
           )}
+          {/* PIPELINE5.5g: shape of the first transaction returned by
+              Glofox. Surfaced when fetched > 0 so we can see fields
+              that AREN'T in the documented spec. */}
+          {result.first_transaction_keys && result.first_transaction_keys.length > 0 && (
+            <details className="text-[11px] text-un1t-light pt-2 border-t border-un1t-gray/50" open>
+              <summary className="cursor-pointer">First transaction shape ({result.first_transaction_keys.length} keys)</summary>
+              <div className="mt-2 space-y-2">
+                <div className="text-[10px]">
+                  Keys: <code>{result.first_transaction_keys.join(', ')}</code>
+                </div>
+                {result.first_transaction_sample && (
+                  <pre className="bg-un1t-black border border-un1t-gray rounded p-2 overflow-auto max-h-64 text-[10px]">
+                    {result.first_transaction_sample}
+                  </pre>
+                )}
+              </div>
+            </details>
+          )}
           {/* PIPELINE5.5e — when fetched=0, surface the raw Glofox
               request + response so the operator can validate the call
               shape and have evidence to share with Glofox support. */}

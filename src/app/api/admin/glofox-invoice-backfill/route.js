@@ -169,6 +169,22 @@ export async function POST(request) {
     (contactRows || []).map((r) => [String(r.glofox_member_id), r.id]),
   )
 
+  // PIPELINE5.5g: log the first transaction's shape so we can see
+  // which fields actually carry the member/customer ID. The spec's
+  // documented Transaction schema has only `sold_by_user_id`
+  // (staff) and no customer ID at all — but the actual API
+  // response often includes more fields. Surface them once.
+  const firstSampleKeys = transactions[0] && typeof transactions[0] === 'object'
+    ? Object.keys(transactions[0])
+    : []
+  const firstSampleJson = transactions[0]
+    ? JSON.stringify(transactions[0]).slice(0, 1500)
+    : null
+  console.log('[glofox-invoice-backfill] first transaction shape', {
+    keys: firstSampleKeys,
+    sample: firstSampleJson,
+  })
+
   // Walk every transaction, upsert + collect affected contact_ids
   // so we can batch the LTV recompute at the end.
   let upserted = 0
@@ -237,5 +253,10 @@ export async function POST(request) {
     contacts_updated: aggsUpdated,
     skipped: failed.length,
     failed_sample: failed.slice(0, 20),
+    // PIPELINE5.5g: surface the first transaction's shape so the
+    // operator can see exactly what fields the API returned and we
+    // can update the normaliser if Glofox uses unexpected names.
+    first_transaction_keys: firstSampleKeys,
+    first_transaction_sample: firstSampleJson,
   })
 }
