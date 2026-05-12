@@ -4,16 +4,32 @@ import { useState } from 'react'
 import DealCard from './DealCard'
 import { createBrowserClient } from '@/lib/supabase'
 
+// Stage dot colors. PIPELINE5.8 introduces the new engagement-aware
+// taxonomy (top block) — these match the hex values in mig 147 so
+// the column dot agrees with whatever the operator picked in the
+// stage settings. The legacy block stays for the transition period
+// (stages still exist + may carry deals until the 5.7 backfill +
+// the post-5.7 cleanup migration archives them).
 const stageColors = {
-  new_lead: '#3B82F6',
-  new_lead_social: '#8B5CF6',
-  trial_active: '#10B981',
-  conversion_ready: '#F59E0B',
-  follow_up_needed: '#EF4444',
-  member: '#059669',
-  cold_email_only: '#9CA3AF',
-  lost_member: '#DC2626',
-  returning_member: '#6366F1',
+  // PIPELINE5.x taxonomy
+  new_lead:           '#3B82F6',
+  active_trial:       '#10B981',
+  hot_conversion:     '#F59E0B',
+  active_member:      '#059669',
+  at_risk_member:     '#EAB308',
+  classpass_active:   '#A855F7',
+  lapsed:             '#EF4444',
+  dormant:            '#6B7280',
+  dormant_classpass:  '#94A3B8',
+  // Legacy stages — kept until cleanup migration retires them
+  new_lead_social:    '#8B5CF6',
+  trial_active:       '#10B981',
+  conversion_ready:   '#F59E0B',
+  follow_up_needed:   '#EF4444',
+  member:             '#059669',
+  cold_email_only:    '#9CA3AF',
+  lost_member:        '#DC2626',
+  returning_member:   '#6366F1',
 }
 
 export default function KanbanBoard({ initialStages, initialDeals, locationId }) {
