@@ -397,6 +397,7 @@ describe('computeBookingAggregates', () => {
       last_attended_at: null,
       total_bookings_30d: 0,
       total_attended_30d: 0,
+      total_attended_7d: 0,  // PIPELINE5.3 — Hot Conversion signal
       total_noshow_30d: 0,
     })
   })
@@ -447,6 +448,23 @@ describe('computeBookingAggregates', () => {
       { created: sec('2026-03-01T10:00:00Z'), time_start: sec('2026-03-02T07:00:00Z'), status: 'BOOKED', attended: true },
     ], NOW)
     expect(out.total_attended_30d).toBe(2)
+  })
+
+  it('counts total_attended_7d separately from 30d (PIPELINE5.3)', () => {
+    // NOW is fixed at 2026-05-12 12:00 UTC. 7d cutoff = 2026-05-05 12:00.
+    // 30d cutoff = 2026-04-12 12:00.
+    const out = computeBookingAggregates([
+      // Inside 7d window (started 2 days ago)
+      { created: sec('2026-05-09T10:00:00Z'), time_start: sec('2026-05-10T07:00:00Z'), status: 'BOOKED', attended: true },
+      // Inside 7d window (yesterday)
+      { created: sec('2026-05-10T10:00:00Z'), time_start: sec('2026-05-11T07:00:00Z'), status: 'BOOKED', attended: true },
+      // Outside 7d but inside 30d (started 12 days ago) — counts for 30d only
+      { created: sec('2026-04-29T10:00:00Z'), time_start: sec('2026-04-30T07:00:00Z'), status: 'BOOKED', attended: true },
+      // Outside both windows — counts for neither
+      { created: sec('2026-03-01T10:00:00Z'), time_start: sec('2026-03-02T07:00:00Z'), status: 'BOOKED', attended: true },
+    ], NOW)
+    expect(out.total_attended_7d).toBe(2)
+    expect(out.total_attended_30d).toBe(3)
   })
 
   it('counts total_noshow_30d (BOOKED + class in past + attended:false)', () => {
@@ -1297,25 +1315,46 @@ function fakeDb({ rowsByGlofoxId = [], rowsByEmail = [], openDeal = null } = {})
 }
 
 describe('previewMemberSync', () => {
+  // PIPELINE5.4 — deal_action stage_slugs reflect the new classifier
+  // taxonomy (active_trial, hot_conversion, active_member, lapsed,
+  // dormant, etc.) not the old GLOFOX_STATUS_TO_STAGE_SLUG map.
+  // A bare member with no joined_at / created_at / engagement now
+  // correctly resolves to 'dormant' rather than 'new_lead' — the
+  // classifier defends against the 8k-import-ghost problem.
   const member = { _id: 'g1', email: 'me@x.com', first_name: 'Me', last_name: 'You', phone: '+353871234567' }
+  const isoNow = new Date().toISOString()
+  const isoDaysAgo = (d) => new Date(Date.now() - d * 86_400_000).toISOString()
 
   it('returns invalid when payload has no _id', async () => {
     const out = await previewMemberSync(fakeDb(), 'loc', { email: 'me@x.com' })
     expect(out.action).toBe('invalid')
   })
 
-  it('returns create when nothing matches + proposes a deal', async () => {
-    const out = await previewMemberSync(fakeDb(), 'loc', member)
+  it('returns create when nothing matches + proposes a deal (recent join → new_lead)', async () => {
+    // To land in new_lead the classifier needs a recent joined_at +
+    // a funnel-top status. Without those the contact is a bare
+    // record and the classifier correctly drops it to dormant.
+    const m = { ...member, joined_at: isoNow, lead_status: 'LEAD' }
+    const out = await previewMemberSync(fakeDb(), 'loc', m)
     expect(out.action).toBe('create')
     expect(out.changes.glofox_member_id.to).toBe('g1')
     expect(out.changes.lead_source.to).toBe('other')
     expect(out.deal_action).toEqual({ action: 'create', stage_slug: 'new_lead' })
   })
 
-  it('proposes trial_active stage when Glofox status is trial', async () => {
-    const m = { ...member, lead_status: 'TRIAL' }
+  it('proposes active_trial stage when Glofox status is trial + just joined', async () => {
+    // 14-day grace window for fresh trial members — no attendance
+    // needed for active_trial classification.
+    const m = { ...member, lead_status: 'TRIAL', joined_at: isoDaysAgo(3) }
     const out = await previewMemberSync(fakeDb(), 'loc', m)
-    expect(out.deal_action).toEqual({ action: 'create', stage_slug: 'trial_active' })
+    expect(out.deal_action).toEqual({ action: 'create', stage_slug: 'active_trial' })
+  })
+
+  it('proposes dormant for a bare member record (no signals at all)', async () => {
+    // Defends the 8k-ghost problem: stale Glofox records with no
+    // joined_at, no engagement, no payment history land in dormant.
+    const out = await previewMemberSync(fakeDb(), 'loc', member)
+    expect(out.deal_action.stage_slug).toBe('dormant')
   })
 
   it('uses mapped lead_source when Glofox source is supplied', async () => {
@@ -1325,11 +1364,14 @@ describe('previewMemberSync', () => {
   })
 
   it('proposes create when contact exists but has no open deal (Roisin backfill)', async () => {
+    // Even though the contact exists, no deal exists → CREATE.
+    // Stage slug comes from the classifier — with a recent
+    // joined_at + LEAD status, that's 'new_lead'.
     const existing = { id: 'c1', email: 'me@x.com', first_name: null, last_name: null, phone: null, glofox_member_id: 'g1', glofox_membership_status: null }
     const out = await previewMemberSync(
       fakeDb({ rowsByGlofoxId: [existing], rowsByEmail: [existing], openDeal: null }),
       'loc',
-      member,
+      { ...member, lead_status: 'LEAD', joined_at: isoNow },
     )
     expect(out.action).toBe('update')
     expect(out.deal_action.action).toBe('create')
@@ -1377,21 +1419,39 @@ describe('previewMemberSync', () => {
     expect(out.changes.trial_credits_remaining).toEqual({ from: 3, to: null })
   })
 
-  it('proposes leave when status unchanged AND deal already at target', async () => {
+  // PIPELINE5.4 — these tests previously encoded the old
+  // status-transition table (trial→no_sale_trial→follow_up_needed,
+  // member+inactive→lost_member, etc.). With the classifier as
+  // source of truth, the equivalent assertions are now:
+  //
+  //   - given (status, engagement), classifier returns the target
+  //   - if existing deal stage matches target → leave
+  //   - if existing deal stage differs from target → move
+  //
+  // Operator-override semantics (was OPERATOR_ONLY_STAGES) are
+  // intentionally NOT re-introduced here. A future commit can
+  // add a manually_placed_at column or similar to defer to operator
+  // intent; for now the classifier always wins.
+
+  it('proposes leave when deal already at the classifier target', async () => {
+    // Bare member record → classifier says 'dormant'. Existing deal
+    // is at 'dormant' → leave.
     const existing = { id: 'c1', email: 'me@x.com', glofox_member_id: 'g1', glofox_membership_status: 'trial' }
     const out = await previewMemberSync(
       fakeDb({
         rowsByGlofoxId: [existing], rowsByEmail: [existing],
-        openDeal: { id: 'd1', stage_id: 's1', stage_slug: 'trial_active' },
+        openDeal: { id: 'd1', stage_id: 's1', stage_slug: 'dormant' },
       }),
       'loc',
-      { ...member, lead_status: 'TRIAL' },
+      { ...member, lead_status: 'TRIAL' },  // no joined_at, no attendance → dormant
     )
     expect(out.deal_action.action).toBe('leave')
-    expect(out.deal_action.reason).toMatch(/no Glofox status change/)
   })
 
-  it('proposes move when trial → no_sale_trial (chase the trialist)', async () => {
+  it('proposes move when the classifier produces a different stage from the current deal', async () => {
+    // Fresh-joined trial member, existing deal sits at the old
+    // 'trial_active' slug. Classifier says 'active_trial' (new
+    // taxonomy) — so move.
     const existing = { id: 'c1', email: 'me@x.com', glofox_member_id: 'g1', glofox_membership_status: 'trial' }
     const out = await previewMemberSync(
       fakeDb({
@@ -1399,15 +1459,17 @@ describe('previewMemberSync', () => {
         openDeal: { id: 'd1', stage_id: 's1', stage_slug: 'trial_active' },
       }),
       'loc',
-      { ...member, lead_status: 'NO_SALE_TRIAL' },
+      { ...member, lead_status: 'TRIAL', joined_at: isoDaysAgo(3) },
     )
-    expect(out.deal_action).toMatchObject({
-      action: 'move', from_slug: 'trial_active', to_slug: 'follow_up_needed',
-      previous_status: 'trial', new_status: 'no_sale_trial',
-    })
+    expect(out.deal_action.action).toBe('move')
+    expect(out.deal_action.from_slug).toBe('trial_active')
+    expect(out.deal_action.to_slug).toBe('active_trial')
   })
 
-  it('proposes move when MEMBER + active:false (ex_member → lost_member)', async () => {
+  it('proposes move when an ex_member with no recent signal lands in dormant', async () => {
+    // Glofox flipped MEMBER → active:false → ex_member mapping. No
+    // recent attendance / payment. Classifier returns 'dormant'
+    // (not the old 'lost_member' slug).
     const existing = { id: 'c1', email: 'me@x.com', glofox_member_id: 'g1', glofox_membership_status: 'member' }
     const out = await previewMemberSync(
       fakeDb({
@@ -1417,44 +1479,8 @@ describe('previewMemberSync', () => {
       'loc',
       { ...member, lead_status: 'MEMBER', active: false },
     )
-    expect(out.deal_action).toMatchObject({
-      action: 'move', from_slug: 'member', to_slug: 'lost_member',
-      previous_status: 'member', new_status: 'ex_member',
-    })
-  })
-
-  it('proposes leave when status changed but deal sits in operator-only stage', async () => {
-    // Operator manually placed the deal in returning_member (a
-    // pure operator-managed slot). Glofox status changes — still
-    // hands off; respect the manual placement.
-    const existing = { id: 'c1', email: 'me@x.com', glofox_member_id: 'g1', glofox_membership_status: 'member' }
-    const out = await previewMemberSync(
-      fakeDb({
-        rowsByGlofoxId: [existing], rowsByEmail: [existing],
-        openDeal: { id: 'd1', stage_id: 's1', stage_slug: 'returning_member' },
-      }),
-      'loc',
-      { ...member, lead_status: 'MEMBER', active: false },
-    )
-    expect(out.deal_action.action).toBe('leave')
-    expect(out.deal_action.reason).toMatch(/operator-only/)
-  })
-
-  it('proposes leave when operator manually moved a member deal to follow_up_needed and status is unchanged', async () => {
-    // Real-world case: member is being chased for renewal — operator
-    // moved the deal to follow_up_needed. Re-syncing must NOT pull
-    // them back to 'member'. The status-change guard handles this.
-    const existing = { id: 'c1', email: 'me@x.com', glofox_member_id: 'g1', glofox_membership_status: 'member' }
-    const out = await previewMemberSync(
-      fakeDb({
-        rowsByGlofoxId: [existing], rowsByEmail: [existing],
-        openDeal: { id: 'd1', stage_id: 's1', stage_slug: 'follow_up_needed' },
-      }),
-      'loc',
-      { ...member, lead_status: 'MEMBER', active: true },
-    )
-    expect(out.deal_action.action).toBe('leave')
-    expect(out.deal_action.reason).toMatch(/no Glofox status change/)
+    expect(out.deal_action.action).toBe('move')
+    expect(out.deal_action.to_slug).toBe('dormant')
   })
 
   it('returns update when only email matches (link to existing CRM contact)', async () => {

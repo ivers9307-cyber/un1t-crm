@@ -6,6 +6,7 @@
 // tomorrow by the daily bulk-sync cron.
 
 import { fetchUserCredits, fetchMembership, fetchUserBookings, fetchUserInteractions } from './glofox.js'
+import { classifyContact } from './pipeline-classifier.js'
 //
 // Source-of-truth contract:
 //   Glofox owns:  glofox_member_id, glofox_membership_status,
@@ -445,30 +446,48 @@ export async function findStageIdBySlug(db, locationId, stageSlug) {
  * about to write. Idempotent — re-running with the same status
  * converges to 'leave'.
  */
-export async function ensureDealForContact(db, locationId, contactId, previousStatus, newStatus, contactName = null) {
+/**
+ * Ensure the contact's pipeline placement reflects the unified
+ * classifier (PIPELINE5.4). Replaces the older Glofox-status-only
+ * transition map: stage is now a function of (status × engagement
+ * × recency), not just status.
+ *
+ * @param {object}  db
+ * @param {string}  locationId
+ * @param {string}  contactId
+ * @param {object}  contactSnapshot   shape consumed by classifyContact:
+ *   { glofox_membership_status, last_attended_at, total_attended_7d,
+ *     total_attended_30d, last_payment_at, joined_at, created_at,
+ *     trial_credits_remaining }
+ * @param {string?} contactName       fallback for deals.title on create
+ */
+export async function ensureDealForContact(db, locationId, contactId, contactSnapshot, contactName = null) {
   if (!db || !locationId || !contactId) {
     return { action: 'error', error: 'missing arguments' }
   }
+  // PIPELINE5.4 — classifier is the source of truth for stage.
+  // Single rule set runs from applyMemberSync (per-event) AND from
+  // the nightly /api/cron/pipeline-classify, so the two converge.
+  const targetSlug = classifyContact(contactSnapshot || {})
+
   const existing = await getOpenDealWithStage(db, contactId)
 
   if (!existing) {
     // CREATE path — first time this contact has had a deal.
-    const stageSlug = pipelineStageSlugForStatus(newStatus)
-    let stageId = await findStageIdBySlug(db, locationId, stageSlug)
-    let resolvedSlug = stageSlug
+    let stageId = await findStageIdBySlug(db, locationId, targetSlug)
+    let resolvedSlug = targetSlug
     if (!stageId) {
-      // Stage doesn't exist at this location → fall back to
-      // new_lead so the contact still surfaces in the pipeline.
+      // New-lead fallback so the contact still surfaces somewhere
+      // visible. Mig 147 ensures every location has the standard
+      // stage set, so this should be unreachable in practice.
       const fallback = await findStageIdBySlug(db, locationId, 'new_lead')
-      if (!fallback) return { action: 'error', error: `Pipeline stage '${stageSlug}' not found and no new_lead fallback` }
+      if (!fallback) return { action: 'error', error: `Pipeline stage '${targetSlug}' not found and no new_lead fallback` }
       stageId = fallback
       resolvedSlug = 'new_lead'
     }
     // GLOFOX2.5 — deals.title is NOT NULL (mig 001). Use the
     // contact's name as the title, fall back to a generic label
-    // when the mapped name is missing (shouldn't happen — mapGlofoxMember
-    // always composes a name — but defence-in-depth so the insert
-    // never trips the constraint again).
+    // when the mapped name is missing.
     const title = (contactName && contactName.trim()) || 'Glofox member'
     const { data, error } = await db
       .from('deals')
@@ -479,22 +498,22 @@ export async function ensureDealForContact(db, locationId, contactId, previousSt
     return { action: 'create', deal_id: data.id, stage_slug: resolvedSlug }
   }
 
-  // EXISTING deal — auto-move only on a status change.
-  const target = targetDealStageForSync(previousStatus, newStatus, existing.stage_slug)
-  if (!target) {
+  // EXISTING deal — move iff the classifier says we should be in a
+  // different stage. The classifier is idempotent for unchanged
+  // inputs, so re-runs on the same data produce 'leave'.
+  if (existing.stage_slug === targetSlug) {
     return { action: 'leave', deal_id: existing.id, stage_slug: existing.stage_slug }
   }
-  // MOVE path.
-  const targetStageId = await findStageIdBySlug(db, locationId, target)
+  const targetStageId = await findStageIdBySlug(db, locationId, targetSlug)
   if (!targetStageId) {
-    return { action: 'error', deal_id: existing.id, error: `Target stage '${target}' not found at location` }
+    return { action: 'error', deal_id: existing.id, error: `Target stage '${targetSlug}' not found at location` }
   }
   const { error: moveErr } = await db
     .from('deals')
     .update({ stage_id: targetStageId })
     .eq('id', existing.id)
   if (moveErr) return { action: 'error', deal_id: existing.id, error: moveErr.message }
-  return { action: 'move', deal_id: existing.id, from_slug: existing.stage_slug, to_slug: target }
+  return { action: 'move', deal_id: existing.id, from_slug: existing.stage_slug, to_slug: targetSlug }
 }
 
 const ID_PATHS = [['_id'], ['id'], ['member_id']]
@@ -908,7 +927,7 @@ export function mapMembershipStatus(member, ctx = null) {
 export async function findExistingContact(db, locationId, mapped) {
   if (!db || !locationId || !mapped) return { byGlofox: null, byEmail: null }
   // Lookup by glofox_member_id and email in parallel.
-  const SELECT_COLS = 'id, email, first_name, last_name, phone, dob, joined_at, glofox_member_id, glofox_membership_status, lead_source, last_booked_at, last_attended_at, total_bookings_30d, total_attended_30d, total_noshow_30d, trial_credits_remaining'
+  const SELECT_COLS = 'id, email, first_name, last_name, phone, dob, joined_at, glofox_member_id, glofox_membership_status, lead_source, last_booked_at, last_attended_at, total_bookings_30d, total_attended_30d, total_attended_7d, total_noshow_30d, trial_credits_remaining'
   const queries = []
   queries.push(
     db.from('contacts')
@@ -1097,15 +1116,18 @@ export function computeBookingAggregates(bookings, now = Date.now()) {
     last_attended_at: null,
     total_bookings_30d: 0,
     total_attended_30d: 0,
+    total_attended_7d: 0,   // PIPELINE5.3 — Hot Conversion signal
     total_noshow_30d: 0,
   }
   if (!Array.isArray(bookings) || bookings.length === 0) return empty
   const nowSec = Math.floor(now / 1000)
+  const cutoff7d  = nowSec - 7  * 24 * 60 * 60
   const cutoff30d = nowSec - 30 * 24 * 60 * 60
   let lastBookedSec = 0
   let lastAttendedSec = 0
   let bookings30d = 0
   let attended30d = 0
+  let attended7d  = 0
   let noshow30d = 0
   for (const b of bookings) {
     if (!b || typeof b !== 'object') continue
@@ -1122,6 +1144,13 @@ export function computeBookingAggregates(bookings, now = Date.now()) {
     if (attended && timeStart >= cutoff30d && timeStart <= nowSec) {
       attended30d++
     }
+    // PIPELINE5.3 — 7-day attended count. Drives the Hot Conversion
+    // classifier signal (≥2 classes in last 7d). Same gating as the
+    // 30d count but a tighter window — counts attended classes
+    // whose start time fell in the last 7 days.
+    if (attended && timeStart >= cutoff7d && timeStart <= nowSec) {
+      attended7d++
+    }
     // No-show: status=BOOKED, class already happened (time_start in
     // past), but they didn't attend. Excludes CANCELED (member
     // cancelled in advance — not a no-show).
@@ -1135,6 +1164,7 @@ export function computeBookingAggregates(bookings, now = Date.now()) {
     last_attended_at: lastAttendedSec ? new Date(lastAttendedSec * 1000).toISOString() : null,
     total_bookings_30d: bookings30d,
     total_attended_30d: attended30d,
+    total_attended_7d: attended7d,
     total_noshow_30d: noshow30d,
   }
 }
@@ -1216,6 +1246,7 @@ export async function previewMemberSync(db, locationId, member, opts = {}) {
     mapped.last_attended_at    = bookingAggs.last_attended_at
     mapped.total_bookings_30d  = bookingAggs.total_bookings_30d
     mapped.total_attended_30d  = bookingAggs.total_attended_30d
+    mapped.total_attended_7d   = bookingAggs.total_attended_7d
     mapped.total_noshow_30d    = bookingAggs.total_noshow_30d
     // GLOFOX2.1.18 — last 10 bookings for the contact-page history view.
     mapped.recent_bookings = trimRecentBookings(bookingsList, 10)
@@ -1242,9 +1273,22 @@ export async function previewMemberSync(db, locationId, member, opts = {}) {
   }
 
   const { byGlofox, byEmail } = await findExistingContact(db, locationId, mapped)
-  // GLOFOX2.1.3 — proposed pipeline placement. Same value goes
-  // into the dry-run preview AND into the live deal insert on apply.
-  const proposedStageSlug = pipelineStageSlugForStatus(mapped.glofox_membership_status)
+  // PIPELINE5.4 — proposed pipeline placement comes from the
+  // unified classifier (status × engagement × recency), not just
+  // glofox_membership_status. Computed from the post-sync mapped
+  // values so the dry-run preview matches what apply will actually
+  // do. existing.last_payment_at + existing.created_at are passed
+  // because applyMemberSync doesn't compute them.
+  const proposedStageSlug = classifyContact({
+    glofox_membership_status: mapped.glofox_membership_status,
+    last_attended_at: mapped.last_attended_at ?? null,
+    total_attended_7d: mapped.total_attended_7d ?? 0,
+    total_attended_30d: mapped.total_attended_30d ?? 0,
+    last_payment_at: (byGlofox || byEmail)?.last_payment_at ?? null,
+    joined_at: mapped.joined_at,
+    created_at: (byGlofox || byEmail)?.created_at ?? null,
+    trial_credits_remaining: mapped.trial_credits_remaining ?? null,
+  })
 
   // Ambiguous: same email already linked to a DIFFERENT glofox member.
   if (byGlofox && byEmail && byGlofox.id !== byEmail.id) {
@@ -1286,6 +1330,7 @@ export async function previewMemberSync(db, locationId, member, opts = {}) {
           last_attended_at:      { from: null, to: bookingAggs.last_attended_at },
           total_bookings_30d:    { from: null, to: bookingAggs.total_bookings_30d },
           total_attended_30d:    { from: null, to: bookingAggs.total_attended_30d },
+          total_attended_7d:     { from: null, to: bookingAggs.total_attended_7d },
           total_noshow_30d:      { from: null, to: bookingAggs.total_noshow_30d },
         } : {}),
       },
@@ -1357,6 +1402,7 @@ export async function previewMemberSync(db, locationId, member, opts = {}) {
     changes.last_attended_at      = { from: existing.last_attended_at ?? null,      to: bookingAggs.last_attended_at }
     changes.total_bookings_30d    = { from: existing.total_bookings_30d ?? 0,       to: bookingAggs.total_bookings_30d }
     changes.total_attended_30d    = { from: existing.total_attended_30d ?? 0,       to: bookingAggs.total_attended_30d }
+    changes.total_attended_7d     = { from: existing.total_attended_7d ?? 0,        to: bookingAggs.total_attended_7d }
     changes.total_noshow_30d      = { from: existing.total_noshow_30d ?? 0,         to: bookingAggs.total_noshow_30d }
     // GLOFOX2.1.18 — recent_bookings JSONB diff is too verbose for
     // the operator preview; surface a lightweight indicator instead.
@@ -1367,44 +1413,39 @@ export async function previewMemberSync(db, locationId, member, opts = {}) {
   // operator sees we will touch the row.
   changes.glofox_synced_at = { from: 'previous timestamp', to: 'now' }
 
-  // GLOFOX2.1.5 — deal action driven by the (previous, new) status
-  // pair. previousStatus comes from contacts.glofox_membership_status
-  // as we last wrote it; newStatus is what we're about to write.
-  // The transition only fires on a status change AND when the deal
-  // isn't in an operator-only slot.
+  // PIPELINE5.4 — deal action driven by the classifier (status ×
+  // engagement × recency). The proposedStageSlug computed above
+  // already used classifyContact; we just compare it against the
+  // open deal's current stage to decide create / move / leave.
+  // Idempotent: classifier returns the same slug for the same
+  // input, so a no-op sync produces 'leave'.
   const previousStatus = existing.glofox_membership_status
   const newStatus = mapped.glofox_membership_status
   const openDeal = await getOpenDealWithStage(db, existing.id)
   let dealAction
   if (!openDeal) {
-    // No deal yet → backfill at the canonical stage for newStatus.
+    // No deal yet → backfill at the classifier's target.
     dealAction = { action: 'create', stage_slug: proposedStageSlug }
+  } else if (openDeal.stage_slug !== proposedStageSlug) {
+    dealAction = {
+      action: 'move',
+      deal_id: openDeal.id,
+      from_slug: openDeal.stage_slug,
+      to_slug: proposedStageSlug,
+      previous_status: previousStatus,
+      new_status: newStatus,
+    }
   } else {
-    const target = targetDealStageForSync(previousStatus, newStatus, openDeal.stage_slug)
-    if (target) {
-      dealAction = {
-        action: 'move',
-        deal_id: openDeal.id,
-        from_slug: openDeal.stage_slug,
-        to_slug: target,
-        previous_status: previousStatus,
-        new_status: newStatus,
-      }
-    } else {
-      // Three reasons we'd leave alone — surface the most useful
-      // one for the operator dry-run.
-      let reason
-      if (previousStatus === newStatus) reason = 'no Glofox status change since last sync'
-      else if (OPERATOR_ONLY_STAGES.has(openDeal.stage_slug)) reason = 'operator-only stage; sync respects it'
-      else reason = 'already in canonical stage for this status'
-      dealAction = {
-        action: 'leave',
-        deal_id: openDeal.id,
-        stage_slug: openDeal.stage_slug,
-        previous_status: previousStatus,
-        new_status: newStatus,
-        reason,
-      }
+    let reason
+    if (previousStatus === newStatus) reason = 'classifier output unchanged'
+    else reason = 'classifier maps both statuses to the same stage'
+    dealAction = {
+      action: 'leave',
+      deal_id: openDeal.id,
+      stage_slug: openDeal.stage_slug,
+      previous_status: previousStatus,
+      new_status: newStatus,
+      reason,
     }
   }
 
@@ -1476,6 +1517,7 @@ export async function applyMemberSync(db, locationId, member, opts = {}) {
       last_attended_at:     m.last_attended_at     ?? null,
       total_bookings_30d:   m.total_bookings_30d   ?? 0,
       total_attended_30d:   m.total_attended_30d   ?? 0,
+      total_attended_7d:    m.total_attended_7d    ?? 0,
       total_noshow_30d:     m.total_noshow_30d     ?? 0,
       // GLOFOX2.1.18 — last 10 bookings as JSONB.
       recent_bookings:      m.recent_bookings      ?? null,
@@ -1500,6 +1542,7 @@ export async function applyMemberSync(db, locationId, member, opts = {}) {
     if ('last_attended_at'   in preview.changes)       updates.last_attended_at   = m.last_attended_at
     if ('total_bookings_30d' in preview.changes)       updates.total_bookings_30d = m.total_bookings_30d
     if ('total_attended_30d' in preview.changes)       updates.total_attended_30d = m.total_attended_30d
+    if ('total_attended_7d'  in preview.changes)       updates.total_attended_7d  = m.total_attended_7d
     if ('total_noshow_30d'   in preview.changes)       updates.total_noshow_30d   = m.total_noshow_30d
     if ('recent_bookings'    in preview.changes)       updates.recent_bookings    = m.recent_bookings
     // Recompose name only if first_name OR last_name changed.
@@ -1511,19 +1554,32 @@ export async function applyMemberSync(db, locationId, member, opts = {}) {
     contactId = preview.existing_id
   }
 
-  // GLOFOX2.1.3 + 2.1.4 — ensure the contact's pipeline placement
-  // reflects their Glofox status. ensureDealForContact handles
-  // create / move / leave decisions internally based on the
-  // current open deal + the transition map. Idempotent — running
-  // twice with the same Glofox status converges to 'leave'.
+  // PIPELINE5.4 — pipeline placement now comes from the unified
+  // classifier (status × engagement × recency), not just Glofox
+  // status. Build the snapshot from the mapped values (post-sync
+  // state); ensureDealForContact runs classifyContact internally.
   // Best-effort: a deal-write failure must not roll back the
-  // contact write (we'd rather have the contact synced and tell
-  // the operator about the pipeline gap than nothing).
+  // contact write.
   let dealResult = null
   try {
+    const m = preview.mapped || {}
+    const contactSnapshot = {
+      glofox_membership_status: m.glofox_membership_status,
+      last_attended_at:    m.last_attended_at,
+      total_attended_7d:   m.total_attended_7d,
+      total_attended_30d:  m.total_attended_30d,
+      // last_payment_at + lifetime_transaction_count come from
+      // INVOICE_UPDATED webhooks (GLOFOX2.1.20) or the PIPELINE5.5
+      // backfill — applyMemberSync doesn't compute them, so we
+      // pull from the existing row when available.
+      last_payment_at:     m.last_payment_at  ?? (preview.existing?.last_payment_at ?? null),
+      joined_at:           m.joined_at,
+      created_at:          preview.existing?.created_at ?? null,
+      trial_credits_remaining: m.trial_credits_remaining,
+    }
     dealResult = await ensureDealForContact(
-      db, locationId, contactId, previousStatus, newStatus,
-      preview.mapped?.name || null,
+      db, locationId, contactId, contactSnapshot,
+      m.name || null,
     )
   } catch (e) {
     dealResult = { action: 'error', error: e?.message || 'deal write threw' }
