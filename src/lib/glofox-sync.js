@@ -417,7 +417,7 @@ export async function getOpenDealWithStage(db, contactId) {
  * fallback). Cached-per-call by keeping it inline — sync runs are
  * low-volume; we don't need a Map cache.
  */
-async function findStageIdBySlug(db, locationId, stageSlug) {
+export async function findStageIdBySlug(db, locationId, stageSlug) {
   const { data, error } = await db
     .from('pipeline_stages')
     .select('id')
@@ -722,6 +722,52 @@ export function isClassPackMembership(membership) {
  * num_sessions/bookings when `available` is missing — defensive
  * for older firmware shapes.
  */
+/**
+ * GLOFOX4.2 — given a member sync's before/after state, return the
+ * list of trial-lifecycle tags that should be written to the
+ * contact. Each tag corresponds to a sequence-trigger signal:
+ *
+ *   glofox_trial_ended       — trial → no_sale_trial (lifecycle)
+ *   glofox_trial_converted   — trial → member | credit_member
+ *   glofox_trial_credits_low — credits ≤ 1 while still on trial
+ *   glofox_trial_engaged     — total_attended_30d ≥ 2 while on trial
+ *
+ * The transition tags (ended / converted) only fire on action='update'
+ * because we need a previous status to compare. The threshold tags
+ * fire on both 'create' and 'update' — writeContactTags handles
+ * idempotency (skips already-active tags) so re-firing during a
+ * no-op sync run is harmless.
+ *
+ * Pure function — input → output, no side effects. Caller passes the
+ * result to writeContactTags.
+ */
+export function detectTrialTransitionTags({
+  action,
+  previousStatus,
+  newStatus,
+  currentCredits,
+  currentAttended,
+}) {
+  const tags = []
+  if (action === 'update') {
+    if (previousStatus === 'trial' && newStatus === 'no_sale_trial') {
+      tags.push('glofox_trial_ended')
+    }
+    if (previousStatus === 'trial' && (newStatus === 'member' || newStatus === 'credit_member')) {
+      tags.push('glofox_trial_converted')
+    }
+  }
+  if (newStatus === 'trial') {
+    if (Number.isFinite(currentCredits) && currentCredits <= 1) {
+      tags.push('glofox_trial_credits_low')
+    }
+    if (Number.isFinite(currentAttended) && currentAttended >= 2) {
+      tags.push('glofox_trial_engaged')
+    }
+  }
+  return tags
+}
+
 export function computeCreditsRemaining(credits) {
   if (!Array.isArray(credits) || credits.length === 0) return null
   const active = credits.filter(c => c?.active === true)
@@ -1498,5 +1544,35 @@ export async function applyMemberSync(db, locationId, member, opts = {}) {
     }
   }
 
-  return { ...preview, contact_id: contactId, deal: dealResult, interactions: interactionsResult }
+  // GLOFOX4.2 — detect trial-lifecycle transitions and write
+  // sequence-triggering tags. Idempotent via writeContactTags.
+  const transitionTags = detectTrialTransitionTags({
+    action: preview.action,
+    previousStatus,
+    newStatus,
+    currentCredits: preview.mapped?.trial_credits_remaining,
+    currentAttended: preview.mapped?.total_attended_30d,
+  })
+  let transitionTagsResult = null
+  if (transitionTags.length > 0) {
+    try {
+      const { writeContactTags } = await import('./contact-tags.js')
+      transitionTagsResult = await writeContactTags(db, {
+        contactId,
+        locationId,
+        tags: transitionTags,
+        metadata: { from_status: previousStatus, to_status: newStatus, source: 'glofox_sync' },
+      })
+    } catch (e) {
+      transitionTagsResult = { error: e?.message || 'tag write threw' }
+    }
+  }
+
+  return {
+    ...preview,
+    contact_id: contactId,
+    deal: dealResult,
+    interactions: interactionsResult,
+    transition_tags: transitionTagsResult,
+  }
 }

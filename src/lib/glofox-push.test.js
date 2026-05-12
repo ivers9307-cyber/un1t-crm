@@ -16,6 +16,13 @@ vi.mock('./glofox-sync.js', () => ({
   applyMemberSync: vi.fn(async () => ({ ok: true })),
 }))
 
+// GLOFOX4.1 — writeContactTag is the centralised "add a tag +
+// trigger sequences" path. Mock it so the orchestrator tests stay
+// pure (no DB writes, no transitive sequences/triggers imports).
+vi.mock('./contact-tags.js', () => ({
+  writeContactTag: vi.fn(async () => ({ written: true, tag: 'mocked', alreadyPresent: false })),
+}))
+
 import { findOrCreateGlofoxMember } from './glofox-push.js'
 import {
   glofoxCredentialsForLocation,

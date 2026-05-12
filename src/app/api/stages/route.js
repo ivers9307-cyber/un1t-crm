@@ -1,11 +1,16 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
-import { requireApiKey } from '@/lib/api-auth'
+import { requireApiKeyOrManager } from '@/lib/api-auth'
 
-// GET /api/stages — List all pipeline stages
+// GET /api/stages — List pipeline stages.
+//
+// Accepts either the n8n bearer token OR a manager+ cookie session
+// — same dual-auth pattern as /api/contacts/[id]. The SequenceEditor
+// uses this client-side (cookie) to populate the move_pipeline_stage
+// step's stage-slug picker; n8n still hits it with the API key.
 export async function GET(request) {
-  const authError = requireApiKey(request)
-  if (authError) return authError
+  const auth = await requireApiKeyOrManager(request)
+  if (!auth.ok) return auth.response
 
   const db = createServerClient()
   const { searchParams } = new URL(request.url)

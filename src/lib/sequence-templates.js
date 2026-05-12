@@ -44,6 +44,180 @@ export const SEQUENCE_TEMPLATES = [
       },
     ],
   },
+  // ─── Trial lifecycle (GLOFOX4.4) ─────────────────────────────
+  // The trial-transition tags (glofox_trial_engaged,
+  // glofox_trial_credits_low, glofox_trial_ended,
+  // glofox_trial_converted — all written by applyMemberSync under
+  // GLOFOX4.2) feed these four templates. Each ships INACTIVE; the
+  // operator reviews copy, fills in any TODOs, then activates per
+  // location.
+  //
+  // The "move_pipeline_stage" step (GLOFOX4.3) lets these sequences
+  // graduate trial members along the funnel as they hit engagement
+  // signals — exactly the gap the operator flagged ("2/3 credits
+  // used → move to Conversion Ready").
+  {
+    id: 'glofox_trial_engaged_to_conversion',
+    category: 'Lead conversion',
+    name: 'Trial engaged → move to Conversion Ready',
+    description: 'Fires when a trial member crosses 2 attended classes in the last 30 days (tag: glofox_trial_engaged). Moves the contact\'s pipeline deal to Conversion Ready AND sends an email + SMS asking if they\'re ready to talk membership. Use this to catch warm trials before their credits run out.',
+    trigger_type: 'tag_added',
+    trigger_config: { tag: 'glofox_trial_engaged' },
+    goal_config: null,
+    re_enrolment_cooldown_days: 365,
+    send_window: { start_hour: 9, end_hour: 20, skip_days: [] },
+    steps: [
+      {
+        // First — move the deal so the operator sees the pipeline
+        // shift immediately on the Kanban. Idempotent: if the deal
+        // is already at conversion_ready (e.g. ClassPass PAYG)
+        // this step logs a no-op and the sequence continues.
+        step_type: 'move_pipeline_stage',
+        delay_days: 0,
+        delay_hours: 0,
+        config: { stage_slug: 'conversion_ready' },
+      },
+      {
+        // Small wait so the email doesn't land at the exact second
+        // the operator sees the Kanban move — keeps the operator
+        // narrative cleaner.
+        step_type: 'wait',
+        delay_days: 0,
+        delay_hours: 2,
+      },
+      {
+        step_type: 'email',
+        delay_days: 0,
+        delay_hours: 0,
+        subject: 'Loving the workouts, {{first_name}}? Let\'s talk membership',
+        html_content: `<p>Hi {{first_name}},</p>
+<p>We've seen you in a couple of classes this week — great work. Before your trial wraps, want to grab 10 minutes with a coach to chat about which membership fits how you train?</p>
+<p>Reply to this email with a day that works, or just walk in and ask for the on-shift coach.</p>
+<p>UN1T {{location_name}}</p>`,
+      },
+      {
+        step_type: 'sms',
+        delay_days: 1,
+        delay_hours: 0,
+        sms_body: 'UN1T: {{first_name}}, loved having you in this week. Want to chat about membership before your trial ends? Reply with a good time.',
+      },
+    ],
+  },
+  {
+    id: 'glofox_trial_credits_low_push',
+    category: 'Lead conversion',
+    name: 'Trial credits low → conversion push',
+    description: 'Fires when a trial member\'s credits drop to ≤1 (tag: glofox_trial_credits_low). Moves to Conversion Ready and sends an SMS-first conversion push — "last class this week, let\'s talk membership". Pairs with the engagement template above; together they cover both "trying hard" and "running out of time" signals.',
+    trigger_type: 'tag_added',
+    trigger_config: { tag: 'glofox_trial_credits_low' },
+    goal_config: null,
+    re_enrolment_cooldown_days: 365,
+    send_window: { start_hour: 9, end_hour: 20, skip_days: [] },
+    steps: [
+      {
+        step_type: 'move_pipeline_stage',
+        delay_days: 0,
+        delay_hours: 0,
+        config: { stage_slug: 'conversion_ready' },
+      },
+      {
+        step_type: 'sms',
+        delay_days: 0,
+        delay_hours: 1,
+        sms_body: 'UN1T: {{first_name}}, your last trial class is on us. After that, want to lock in a membership? Reply MEMBER and a coach will sort you out.',
+      },
+      {
+        step_type: 'email',
+        delay_days: 1,
+        delay_hours: 0,
+        subject: 'One trial class left, {{first_name}}',
+        html_content: `<p>Hi {{first_name}},</p>
+<p>Heads up — your trial credits are nearly used up. Don't let the momentum stall: lock in a membership and keep going while it feels easy.</p>
+<p>Three quick options:</p>
+<ol>
+  <li>Monthly — month-to-month, cancel anytime.</li>
+  <li>Annual — best value, locked in for the year.</li>
+  <li>Class Pack — pay-as-you-go, no membership.</li>
+</ol>
+<p>Reply with your favourite and a coach will set it up. Or walk in and ask at reception.</p>
+<p>UN1T {{location_name}}</p>`,
+      },
+    ],
+  },
+  {
+    id: 'glofox_trial_ended_winback',
+    category: 'Recovery',
+    name: 'Trial ended (no sale) → win-back drip',
+    description: 'Fires when Glofox flips a member from TRIAL → NO_SALE_TRIAL (tag: glofox_trial_ended). 3-touch comeback: a "what got in the way" email day 1, a special-offer SMS day 7, a "last invite" email day 21. Leaves the deal in Follow-up Needed where the auto-mover put it. 180-day cooldown so the same contact isn\'t cycled through every quarter.',
+    trigger_type: 'tag_added',
+    trigger_config: { tag: 'glofox_trial_ended' },
+    goal_config: null,
+    re_enrolment_cooldown_days: 180,
+    send_window: { start_hour: 10, end_hour: 19, skip_days: [0, 6] },
+    steps: [
+      {
+        step_type: 'email',
+        delay_days: 1,
+        delay_hours: 0,
+        subject: 'How was your UN1T trial, {{first_name}}?',
+        html_content: `<p>Hi {{first_name}},</p>
+<p>Saw your trial just ended. Quick honest question — what got in the way? Time, money, the classes themselves, something else? Reply with one word and a coach will read it personally.</p>
+<p>We get it if it wasn't a fit. But if you'd like to give it another go, we can sort that too.</p>
+<p>UN1T {{location_name}}</p>`,
+      },
+      {
+        step_type: 'sms',
+        delay_days: 6,
+        delay_hours: 0,
+        sms_body: 'UN1T: {{first_name}}, one more class on us this week. Reply with a day if you want to give it another shot.',
+      },
+      {
+        step_type: 'email',
+        delay_days: 14,
+        delay_hours: 0,
+        subject: 'Last invite, {{first_name}}',
+        html_content: `<p>Hi {{first_name}},</p>
+<p>Last we'll bother you. If you ever want to drop in for a one-off class, the rate is €20 — no membership required, no questions asked. Just reply.</p>
+<p>Otherwise, all the best from the UN1T team.</p>`,
+      },
+    ],
+  },
+  {
+    id: 'glofox_trial_converted_welcome',
+    category: 'Welcome',
+    name: 'Trial converted → member welcome',
+    description: 'Fires when Glofox flips a member from TRIAL → MEMBER (or CREDIT_MEMBER) — tag: glofox_trial_converted. Sends a welcome-to-membership email + SMS. No pipeline move step needed — applyMemberSync\'s GLOFOX2.1.4 auto-mover has already moved the deal to the Member stage by the time this fires.',
+    trigger_type: 'tag_added',
+    trigger_config: { tag: 'glofox_trial_converted' },
+    goal_config: null,
+    re_enrolment_cooldown_days: 365,
+    send_window: { start_hour: 9, end_hour: 20, skip_days: [] },
+    steps: [
+      {
+        step_type: 'email',
+        delay_days: 0,
+        delay_hours: 1,
+        subject: 'Welcome to UN1T, {{first_name}} 🎉',
+        html_content: `<p>Hi {{first_name}},</p>
+<p>You're officially a member. Welcome to the UN1T family.</p>
+<p>A few things you should know:</p>
+<ul>
+  <li>Book your classes via the Glofox app — your membership credits load automatically.</li>
+  <li>Bring water + your gym kit. We'll handle the rest.</li>
+  <li>If you ever need to pause, switch, or upgrade, just reply to this email.</li>
+</ul>
+<p>See you on the floor.</p>
+<p>UN1T {{location_name}}</p>`,
+      },
+      {
+        step_type: 'sms',
+        delay_days: 0,
+        delay_hours: 4,
+        sms_body: 'UN1T: Welcome aboard, {{first_name}}! Your membership is live. Book your next class in the Glofox app.',
+      },
+    ],
+  },
+
   // ─── Welcome ────────────────────────────────────────────────
   // Fires for every contact that just had a Glofox account created
   // FROM the CRM — booking-form opt-in (GLOFOX3.2), event-

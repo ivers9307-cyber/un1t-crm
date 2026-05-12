@@ -25,6 +25,7 @@ import {
   webhookStep,
   internalTaskStep,
   processBranchStep,
+  movePipelineStageStep,
 } from './steps.js'
 
 export const MAX_ERRORS = 5
@@ -312,6 +313,12 @@ export async function runSequences({ now = new Date() } = {}) {
         // Mig 091 / Tier 3E. No send. Pick the target step_order
         // based on the predicate; the cursor jumps below.
         branchTargetOrder = await processBranchStep(db, { step, contact })
+        sendId = null
+      } else if (step.step_type === 'move_pipeline_stage') {
+        // GLOFOX4.3 — move the contact's open deal to a target
+        // pipeline stage. Config: { stage_slug }. Writes a
+        // 'pipeline' activity row for the audit trail. Idempotent.
+        await movePipelineStageStep(db, { step, contact, sequence })
         sendId = null
       } else {
         throw new Error(`Unknown step_type "${step.step_type}".`)

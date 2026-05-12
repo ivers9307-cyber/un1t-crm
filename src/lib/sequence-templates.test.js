@@ -38,6 +38,61 @@ describe('SEQUENCE_TEMPLATES catalog', () => {
   })
 })
 
+// GLOFOX4.4 — the four trial-lifecycle templates. Locking down the
+// trigger tag + the pipeline-move step config so a refactor to
+// either side can't silently break the conversion flow.
+describe('GLOFOX4.4 trial-lifecycle templates', () => {
+  const engagedTpl = getTemplate('glofox_trial_engaged_to_conversion')
+  const creditsTpl = getTemplate('glofox_trial_credits_low_push')
+  const endedTpl   = getTemplate('glofox_trial_ended_winback')
+  const convertedTpl = getTemplate('glofox_trial_converted_welcome')
+
+  it('engaged template fires on glofox_trial_engaged and moves to conversion_ready', () => {
+    expect(engagedTpl).not.toBeNull()
+    expect(engagedTpl.trigger_type).toBe('tag_added')
+    expect(engagedTpl.trigger_config?.tag).toBe('glofox_trial_engaged')
+    const move = engagedTpl.steps.find((s) => s.step_type === 'move_pipeline_stage')
+    expect(move, 'no move_pipeline_stage step in engaged template').toBeTruthy()
+    expect(move.config?.stage_slug).toBe('conversion_ready')
+  })
+
+  it('credits-low template fires on glofox_trial_credits_low and moves to conversion_ready', () => {
+    expect(creditsTpl).not.toBeNull()
+    expect(creditsTpl.trigger_type).toBe('tag_added')
+    expect(creditsTpl.trigger_config?.tag).toBe('glofox_trial_credits_low')
+    const move = creditsTpl.steps.find((s) => s.step_type === 'move_pipeline_stage')
+    expect(move).toBeTruthy()
+    expect(move.config?.stage_slug).toBe('conversion_ready')
+  })
+
+  it('trial-ended template fires on glofox_trial_ended and does NOT move pipeline', () => {
+    // Win-back drip stays in Follow-up Needed where the GLOFOX2.1.4
+    // auto-mover put them. Sequence just sends comms.
+    expect(endedTpl).not.toBeNull()
+    expect(endedTpl.trigger_type).toBe('tag_added')
+    expect(endedTpl.trigger_config?.tag).toBe('glofox_trial_ended')
+    expect(endedTpl.steps.find((s) => s.step_type === 'move_pipeline_stage')).toBeUndefined()
+  })
+
+  it('trial-converted template fires on glofox_trial_converted and does NOT move pipeline', () => {
+    // applyMemberSync GLOFOX2.1.4 already moves trial → member's
+    // deal to the Member stage. Welcome sequence is comms-only.
+    expect(convertedTpl).not.toBeNull()
+    expect(convertedTpl.trigger_type).toBe('tag_added')
+    expect(convertedTpl.trigger_config?.tag).toBe('glofox_trial_converted')
+    expect(convertedTpl.steps.find((s) => s.step_type === 'move_pipeline_stage')).toBeUndefined()
+  })
+
+  it('every trial-lifecycle template uses a long re-enrolment cooldown', () => {
+    // Re-firing a conversion push or a win-back drip on every cron
+    // pass would harass the same contact repeatedly. Long cooldown
+    // is the safety belt.
+    for (const tpl of [engagedTpl, creditsTpl, endedTpl, convertedTpl]) {
+      expect(tpl.re_enrolment_cooldown_days, `${tpl.id} cooldown too short`).toBeGreaterThanOrEqual(180)
+    }
+  })
+})
+
 describe('GLOFOX3.5 welcome template', () => {
   const tpl = getTemplate('glofox_welcome_passcode')
 

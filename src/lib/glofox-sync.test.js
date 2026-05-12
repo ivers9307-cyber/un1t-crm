@@ -14,6 +14,7 @@ import {
   computeBookingAggregates,
   mapGlofoxInteraction,
   computeCreditsRemaining,
+  detectTrialTransitionTags,
 } from './glofox-sync.js'
 
 // Helper: build a Plan A ctx for tests. Real call site fetches via
@@ -599,6 +600,122 @@ describe('mapGlofoxInteraction', () => {
     }, CONTACT_ID, LOCATION_ID)
     expect(out.source).toBe('glofox')
     expect(out.done).toBe(true)
+  })
+})
+
+// GLOFOX4.2 — pure helper that picks which trial-lifecycle tags
+// applyMemberSync should write based on the before/after of a sync.
+// applyMemberSync hands the result to writeContactTags which fires
+// tag_added sequence triggers + idempotency-guards re-runs.
+describe('detectTrialTransitionTags', () => {
+  // ── Status transitions (UPDATE-only) ─────────────────────────────
+  it('writes glofox_trial_ended when status flips trial → no_sale_trial', () => {
+    expect(detectTrialTransitionTags({
+      action: 'update', previousStatus: 'trial', newStatus: 'no_sale_trial',
+    })).toEqual(['glofox_trial_ended'])
+  })
+
+  it('writes glofox_trial_converted when status flips trial → member', () => {
+    expect(detectTrialTransitionTags({
+      action: 'update', previousStatus: 'trial', newStatus: 'member',
+    })).toEqual(['glofox_trial_converted'])
+  })
+
+  it('writes glofox_trial_converted when status flips trial → credit_member', () => {
+    // Credit Members (class-pack buyers) are still "converted" —
+    // they bought a pack instead of a subscription, but they did
+    // convert from trial.
+    expect(detectTrialTransitionTags({
+      action: 'update', previousStatus: 'trial', newStatus: 'credit_member',
+    })).toEqual(['glofox_trial_converted'])
+  })
+
+  it('does NOT fire trial_ended on CREATE (no prior status to transition from)', () => {
+    // A fresh import that happens to come in as no_sale_trial
+    // shouldn't be welcomed with "your trial ended" comms.
+    expect(detectTrialTransitionTags({
+      action: 'create', previousStatus: null, newStatus: 'no_sale_trial',
+    })).toEqual([])
+  })
+
+  it('does NOT fire on unrelated transitions', () => {
+    // cold → trial is a regular trial-start, not an end / conversion.
+    expect(detectTrialTransitionTags({
+      action: 'update', previousStatus: 'cold', newStatus: 'trial',
+    })).toEqual([])
+  })
+
+  // ── Threshold tags (fire on CREATE + UPDATE; idempotency in helper) ─
+  it('writes glofox_trial_credits_low when credits ≤ 1 on a trial', () => {
+    expect(detectTrialTransitionTags({
+      action: 'update', previousStatus: 'trial', newStatus: 'trial',
+      currentCredits: 1,
+    })).toEqual(['glofox_trial_credits_low'])
+  })
+
+  it('also fires credits_low at exactly 0 (last booked, none left)', () => {
+    expect(detectTrialTransitionTags({
+      action: 'update', previousStatus: 'trial', newStatus: 'trial',
+      currentCredits: 0,
+    })).toEqual(['glofox_trial_credits_low'])
+  })
+
+  it('does NOT fire credits_low when credits > 1', () => {
+    expect(detectTrialTransitionTags({
+      action: 'update', previousStatus: 'trial', newStatus: 'trial',
+      currentCredits: 2,
+    })).toEqual([])
+  })
+
+  it('does NOT fire credits_low when credits is null (no balance to surface)', () => {
+    // Subscription members + Paula-style "fetch returned no active
+    // packs" both surface as null. Neither should trigger the
+    // conversion push — null is "no signal", not "zero".
+    expect(detectTrialTransitionTags({
+      action: 'update', previousStatus: 'trial', newStatus: 'trial',
+      currentCredits: null,
+    })).toEqual([])
+  })
+
+  it('does NOT fire credits_low for non-trial members even at low credits', () => {
+    // Member with 1 credit on a class pack is not a conversion
+    // candidate via this trigger — different lifecycle.
+    expect(detectTrialTransitionTags({
+      action: 'update', previousStatus: 'credit_member', newStatus: 'credit_member',
+      currentCredits: 1,
+    })).toEqual([])
+  })
+
+  it('writes glofox_trial_engaged when ≥2 classes attended in last 30d on a trial', () => {
+    expect(detectTrialTransitionTags({
+      action: 'update', previousStatus: 'trial', newStatus: 'trial',
+      currentAttended: 2,
+    })).toEqual(['glofox_trial_engaged'])
+  })
+
+  it('does NOT fire engaged at < 2 attended', () => {
+    expect(detectTrialTransitionTags({
+      action: 'update', previousStatus: 'trial', newStatus: 'trial',
+      currentAttended: 1,
+    })).toEqual([])
+  })
+
+  it('can fire multiple tags in one sync (engaged + credits_low)', () => {
+    expect(detectTrialTransitionTags({
+      action: 'update', previousStatus: 'trial', newStatus: 'trial',
+      currentCredits: 1, currentAttended: 2,
+    })).toEqual(['glofox_trial_credits_low', 'glofox_trial_engaged'])
+  })
+
+  it('threshold tags fire on CREATE too (fresh import meeting the bar)', () => {
+    // A daily-cron CREATE for a Glofox member who's already
+    // active should still light up the signals — the operator's
+    // sequences enrol them; writeContactTags idempotency stops
+    // re-fires on subsequent syncs.
+    expect(detectTrialTransitionTags({
+      action: 'create', previousStatus: null, newStatus: 'trial',
+      currentCredits: 1, currentAttended: 3,
+    })).toEqual(['glofox_trial_credits_low', 'glofox_trial_engaged'])
   })
 })
 

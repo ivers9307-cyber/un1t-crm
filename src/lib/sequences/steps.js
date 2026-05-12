@@ -507,3 +507,100 @@ export async function internalTaskStep(db, { step, contact, sequence }) {
     due_at: dueAt,
   })
 }
+
+// ── move_pipeline_stage (GLOFOX4.3) ──────────────────────────────
+//
+// Lets a sequence push a contact's open deal to a target pipeline
+// stage as part of an automated flow. Use case: "trial member has
+// attended 2 classes → move them to Conversion Ready AND email
+// them about membership". Pairs cleanly with the trial-transition
+// tags (GLOFOX4.2) on the trigger side.
+//
+// Config:
+//   stage_slug (required) — the target pipeline_stages.slug at the
+//                            sequence's location (e.g. 'conversion_ready')
+//
+// Semantics:
+//   - No open deal → no-op (logged on the timeline as an info entry)
+//   - Already at target stage → no-op (logged)
+//   - Otherwise → UPDATE deals.stage_id AND log activity row
+//                 ("Pipeline: trial_active → conversion_ready ·
+//                  via sequence 'X'") so the operator can audit why.
+//
+// Idempotent — running the step twice with the same target is a
+// no-op the second time (the already-at-target branch).
+export async function movePipelineStageStep(db, { step, contact, sequence }) {
+  const cfg = step.config || {}
+  const targetSlug = String(cfg.stage_slug || '').trim()
+  if (!targetSlug) {
+    throw new Error('move_pipeline_stage step: config.stage_slug is required')
+  }
+
+  // Lazy import to avoid a top-level circular dep — sequences/steps
+  // is imported transitively by glofox-sync via the trigger module
+  // (status_change cascade in updateFieldStep), and glofox-sync
+  // owns these helpers.
+  const { getOpenDealWithStage, findStageIdBySlug } = await import('../glofox-sync.js')
+
+  const locationId = sequence?.location_id || contact.location_id
+  const existing = await getOpenDealWithStage(db, contact.id)
+
+  const seqLabel = sequence?.name ? `sequence "${sequence.name}"` : 'sequence'
+
+  if (!existing) {
+    // No open deal to move — log + continue. Don't throw: the
+    // sequence might also have an email step that's still useful
+    // for a contact without a pipeline entry yet.
+    await db.from('activities').insert({
+      contact_id: contact.id,
+      location_id: locationId,
+      kind: 'event',
+      type: 'pipeline',
+      subject: `Pipeline move skipped (no open deal) — via ${seqLabel}`,
+      note: `Target stage was '${targetSlug}'. Sequence proceeded; no deal was modified.`,
+      done: false,
+    })
+    return
+  }
+
+  if (existing.stage_slug === targetSlug) {
+    // Already at target — log a no-op so the operator sees the
+    // sequence actually executed this step (vs. silently skipping).
+    await db.from('activities').insert({
+      contact_id: contact.id,
+      location_id: locationId,
+      kind: 'event',
+      type: 'pipeline',
+      subject: `Pipeline already at ${targetSlug} — via ${seqLabel}`,
+      note: 'No move required; deal was already at the target stage.',
+      done: false,
+    })
+    return
+  }
+
+  const targetStageId = await findStageIdBySlug(db, locationId, targetSlug)
+  if (!targetStageId) {
+    throw new Error(`move_pipeline_stage step: target stage '${targetSlug}' not found at this location`)
+  }
+
+  const { error: moveErr } = await db
+    .from('deals')
+    .update({ stage_id: targetStageId })
+    .eq('id', existing.id)
+  if (moveErr) {
+    throw new Error(`move_pipeline_stage step: ${moveErr.message}`)
+  }
+
+  // Audit row on the contact timeline — same shape as
+  // logPipelineEvent's CRM-side moves so the activity feed
+  // surfaces both in one consistent format.
+  await db.from('activities').insert({
+    contact_id: contact.id,
+    location_id: locationId,
+    kind: 'event',
+    type: 'pipeline',
+    subject: `Pipeline: ${existing.stage_slug} → ${targetSlug}`,
+    note: `Moved by ${seqLabel}.`,
+    done: false,
+  })
+}

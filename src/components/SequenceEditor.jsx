@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import {
   ArrowLeft, Save, Plus, Trash2, ChevronDown, ChevronUp,
-  Play, Pause, Clock, Mail, MessageCircle, MessageSquare, Hourglass, Zap, AlertCircle, GitBranch
+  Play, Pause, Clock, Mail, MessageCircle, MessageSquare, Hourglass, Zap, AlertCircle, GitBranch, ArrowRightCircle
 } from 'lucide-react'
 
 const TRIGGER_TYPES = [
@@ -35,6 +35,7 @@ const CHANNEL_CONFIG = {
   sms:      { icon: MessageSquare, color: 'bg-cyan-500/20 text-cyan-400',   label: 'SMS' },
   wait:     { icon: Hourglass,     color: 'bg-un1t-gray/40 text-un1t-light', label: 'Wait' },
   branch:   { icon: GitBranch,     color: 'bg-purple-500/20 text-purple-700', label: 'Branch' },
+  move_pipeline_stage: { icon: ArrowRightCircle, color: 'bg-emerald-500/20 text-emerald-400', label: 'Move pipeline' },
 }
 
 // Same segment math used by SMSBroadcastEditor — single GSM7
@@ -82,6 +83,13 @@ function StepCard({ step, index, onUpdate, onDelete, onMoveUp, onMoveDown, isFir
     else if (p?.type === 'field_equals' && p.field) headerLabel = `Branch: ${p.field} = ${JSON.stringify(p.value ?? '')}`
     else if (p?.type === 'field_in' && p.field) headerLabel = `Branch: ${p.field} ∈ […]`
     else headerLabel = `Branch (predicate not configured)`
+  }
+  else if (stepType === 'move_pipeline_stage') {
+    // GLOFOX4.3: surface the target stage in the collapsed header
+    // so the operator can scan a sequence's pipeline moves at a
+    // glance without expanding each card.
+    const slug = step.config?.stage_slug
+    headerLabel = slug ? `Move pipeline → ${slug}` : `Move pipeline (stage not configured)`
   }
   else headerLabel = step.subject || `Step ${index + 1}`
 
@@ -171,6 +179,7 @@ function StepCard({ step, index, onUpdate, onDelete, onMoveUp, onMoveDown, isFir
                   <option value="internal_task">Create internal task</option>
                   <option value="webhook">Webhook (HTTPS)</option>
                   <option value="branch">Branch (if / else)</option>
+                  <option value="move_pipeline_stage">Move pipeline stage</option>
                 </select>
               </div>
               <div>
@@ -596,9 +605,85 @@ function StepCard({ step, index, onUpdate, onDelete, onMoveUp, onMoveDown, isFir
                 </div>
               )
             })()}
+
+            {/* move_pipeline_stage step (GLOFOX4.3). Moves the
+                contact's open deal to a target pipeline stage.
+                Sequences can use this to "graduate" a trial member
+                to Conversion Ready when they hit an engagement
+                signal (≥2 classes attended, ≤1 credit left, etc).
+                Idempotent — re-running with the same target is a
+                no-op (logged on the timeline). */}
+            {stepType === 'move_pipeline_stage' && (
+              <MovePipelineStageEditor step={step} onUpdate={onUpdate} />
+            )}
           </div>
         )}
       </div>
+    </div>
+  )
+}
+
+// Helper subcomponent — fetches the location's pipeline stages once
+// on mount + renders a dropdown. Pulled out of the main StepEditor
+// so the useEffect for fetching doesn't run for every step on the
+// page (only the move_pipeline_stage steps mount this).
+function MovePipelineStageEditor({ step, onUpdate }) {
+  const [stages, setStages] = useState(null) // null = loading
+  const [error, setError] = useState(null)
+
+  useEffect(() => {
+    let cancelled = false
+    fetch('/api/stages')
+      .then(r => r.json())
+      .then(j => {
+        if (cancelled) return
+        if (j.success === false) {
+          setError(j.error || 'Failed to load pipeline stages')
+          setStages([])
+          return
+        }
+        setStages(Array.isArray(j.data) ? j.data : [])
+      })
+      .catch(e => {
+        if (cancelled) return
+        setError(e?.message || 'Network error')
+        setStages([])
+      })
+    return () => { cancelled = true }
+  }, [])
+
+  const currentSlug = step.config?.stage_slug || ''
+
+  return (
+    <div className="space-y-2">
+      <div>
+        <label className="block text-xs text-un1t-light mb-1">Target pipeline stage</label>
+        <select
+          value={currentSlug}
+          onChange={e => onUpdate({ config: { ...(step.config || {}), stage_slug: e.target.value } })}
+          className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
+        >
+          <option value="">— Select a stage —</option>
+          {stages === null && <option disabled>Loading…</option>}
+          {(stages || []).map(s => (
+            <option key={s.id} value={s.slug}>
+              {s.name} ({s.slug})
+            </option>
+          ))}
+        </select>
+        {error && (
+          <p className="text-[11px] text-red-400 mt-1">{error}</p>
+        )}
+        {stages && stages.length === 0 && !error && (
+          <p className="text-[11px] text-amber-700 mt-1">
+            No pipeline stages found at this location. Set them up first under Settings → Pipeline.
+          </p>
+        )}
+      </div>
+      <p className="text-[11px] text-un1t-mid">
+        Moves the contact&apos;s open deal to this stage. If no open deal exists, or the deal is already at the target,
+        the step logs a no-op on the contact&apos;s timeline and the sequence continues. Idempotent — safe to run twice.
+      </p>
     </div>
   )
 }

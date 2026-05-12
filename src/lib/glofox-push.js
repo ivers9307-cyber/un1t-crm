@@ -32,6 +32,7 @@ import {
 } from './glofox.js'
 import { applyMemberSync } from './glofox-sync.js'
 import { glofoxFetch } from './glofox.js'
+import { writeContactTag } from './contact-tags.js'
 
 // Per-location trial config — what membership + plan to attach
 // to a freshly-created Glofox account. Operator picks via the
@@ -203,13 +204,17 @@ export async function findOrCreateGlofoxMember({
     }
   }
 
-  // Step 6 — fire the welcome-sequence trigger via tag. We tag
-  // 'glofox_account_created' (which the welcome sequence template
-  // listens for). The operator-edited welcome sequence template
-  // can include {{passcode}} as a merge tag.
-  await db.from('contact_tags').insert({
-    contact_id: contact.id,
-    location_id: locationId,
+  // Step 6 — fire the welcome-sequence trigger via tag. The
+  // welcome sequence template (GLOFOX3.5) listens for
+  // 'glofox_account_created' and renders {{glofox_passcode}}.
+  // writeContactTag is idempotent AND fires the tag_added
+  // sequence trigger — earlier versions of this code wrote the
+  // tag directly to contact_tags but never called the trigger,
+  // so an activated welcome sequence wouldn't have actually
+  // enrolled the contact (GLOFOX4.1 fix).
+  await writeContactTag(db, {
+    contactId: contact.id,
+    locationId,
     tag: 'glofox_account_created',
   })
 

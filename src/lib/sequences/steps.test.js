@@ -36,6 +36,16 @@ vi.mock('@/lib/twilio', () => ({
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn() }))
 vi.mock('./triggers.js', () => ({ triggerSequencesForStatusChange: vi.fn() }))
 
+// GLOFOX4.3 — movePipelineStageStep dynamically imports the deal /
+// stage helpers from glofox-sync. Mock them at the module level so
+// each test can configure the open-deal lookup + stage resolution.
+const mockGetOpenDeal = vi.fn()
+const mockFindStageId = vi.fn()
+vi.mock('../glofox-sync.js', () => ({
+  getOpenDealWithStage: (...args) => mockGetOpenDeal(...args),
+  findStageIdBySlug: (...args) => mockFindStageId(...args),
+}))
+
 const steps = await import('./steps.js')
 const { triggerSequencesForStatusChange } = await import('./triggers.js')
 
@@ -468,5 +478,113 @@ describe('internalTaskStep — validation', () => {
     expect(insertSpy).toHaveBeenCalledWith(expect.objectContaining({
       location_id: 'loc-SEQUENCE',
     }))
+  })
+})
+
+// ── move_pipeline_stage (GLOFOX4.3) ──────────────────────────────
+
+describe('movePipelineStageStep — guard rails + audit', () => {
+  beforeEach(() => {
+    mockGetOpenDeal.mockReset()
+    mockFindStageId.mockReset()
+  })
+
+  it('throws when config.stage_slug is missing (mis-configured sequence)', async () => {
+    await expect(steps.movePipelineStageStep(mockDb(), {
+      step: { config: {} },
+      contact: { id: 'c1', location_id: 'loc1' },
+      sequence: { id: 's1', name: 'X', location_id: 'loc1' },
+    })).rejects.toThrow(/stage_slug is required/)
+  })
+
+  it('throws when the target stage_slug does not resolve to a stage at the location', async () => {
+    // Operator typo or stage deleted between draft + activate.
+    // We throw so the runner's retry/pause kicks in rather than
+    // silently no-op'ing.
+    mockGetOpenDeal.mockResolvedValue({ id: 'd1', stage_slug: 'trial_active' })
+    mockFindStageId.mockResolvedValue(null)
+    await expect(steps.movePipelineStageStep(mockDb(), {
+      step: { config: { stage_slug: 'does_not_exist' } },
+      contact: { id: 'c1', location_id: 'loc1' },
+      sequence: { id: 's1', name: 'Trial → Conversion', location_id: 'loc1' },
+    })).rejects.toThrow(/'does_not_exist' not found/)
+  })
+
+  it('logs a no-op activity row when contact has no open deal (does not throw)', async () => {
+    mockGetOpenDeal.mockResolvedValue(null)
+    const insertSpy = vi.fn().mockResolvedValue({})
+    const db = { from: vi.fn(() => ({ insert: insertSpy, update: vi.fn() })) }
+    await steps.movePipelineStageStep(db, {
+      step: { config: { stage_slug: 'conversion_ready' } },
+      contact: { id: 'c1', location_id: 'loc1' },
+      sequence: { id: 's1', name: 'Trial engaged', location_id: 'loc1' },
+    })
+    expect(insertSpy).toHaveBeenCalledWith(expect.objectContaining({
+      contact_id: 'c1',
+      type: 'pipeline',
+      subject: expect.stringMatching(/Pipeline move skipped/),
+    }))
+  })
+
+  it('logs a no-op activity row when deal is already at the target stage (idempotent)', async () => {
+    mockGetOpenDeal.mockResolvedValue({ id: 'd1', stage_slug: 'conversion_ready' })
+    const insertSpy = vi.fn().mockResolvedValue({})
+    const updateSpy = vi.fn()
+    const db = { from: vi.fn(() => ({ insert: insertSpy, update: updateSpy })) }
+    await steps.movePipelineStageStep(db, {
+      step: { config: { stage_slug: 'conversion_ready' } },
+      contact: { id: 'c1', location_id: 'loc1' },
+      sequence: { id: 's1', name: 'X', location_id: 'loc1' },
+    })
+    // No UPDATE on deals — already there.
+    expect(updateSpy).not.toHaveBeenCalled()
+    expect(insertSpy).toHaveBeenCalledWith(expect.objectContaining({
+      subject: expect.stringMatching(/already at conversion_ready/),
+    }))
+  })
+
+  it('moves the deal AND writes an audit activity on a real transition', async () => {
+    mockGetOpenDeal.mockResolvedValue({ id: 'd1', stage_slug: 'trial_active' })
+    mockFindStageId.mockResolvedValue('stage-uuid-conversion-ready')
+    const eqSpy = vi.fn().mockResolvedValue({ error: null })
+    const updateSpy = vi.fn(() => ({ eq: eqSpy }))
+    const insertSpy = vi.fn().mockResolvedValue({})
+    const db = {
+      from: vi.fn((table) => {
+        if (table === 'deals') return { update: updateSpy }
+        return { insert: insertSpy }
+      }),
+    }
+    await steps.movePipelineStageStep(db, {
+      step: { config: { stage_slug: 'conversion_ready' } },
+      contact: { id: 'c1', location_id: 'loc1' },
+      sequence: { id: 's1', name: 'Trial engaged → conversion', location_id: 'loc1' },
+    })
+    expect(updateSpy).toHaveBeenCalledWith({ stage_id: 'stage-uuid-conversion-ready' })
+    expect(eqSpy).toHaveBeenCalledWith('id', 'd1')
+    expect(insertSpy).toHaveBeenCalledWith(expect.objectContaining({
+      contact_id: 'c1',
+      location_id: 'loc1',
+      kind: 'event',
+      type: 'pipeline',
+      subject: 'Pipeline: trial_active → conversion_ready',
+      note: 'Moved by sequence "Trial engaged → conversion".',
+    }))
+  })
+
+  it('throws when the deal UPDATE returns an error (so the runner can retry/pause)', async () => {
+    mockGetOpenDeal.mockResolvedValue({ id: 'd1', stage_slug: 'trial_active' })
+    mockFindStageId.mockResolvedValue('stage-uuid')
+    const db = {
+      from: vi.fn(() => ({
+        update: vi.fn(() => ({ eq: vi.fn().mockResolvedValue({ error: { message: 'PG conn lost' } }) })),
+        insert: vi.fn(),
+      })),
+    }
+    await expect(steps.movePipelineStageStep(db, {
+      step: { config: { stage_slug: 'conversion_ready' } },
+      contact: { id: 'c1', location_id: 'loc1' },
+      sequence: { id: 's1', name: 'X', location_id: 'loc1' },
+    })).rejects.toThrow(/PG conn lost/)
   })
 })
