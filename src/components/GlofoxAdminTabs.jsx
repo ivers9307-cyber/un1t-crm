@@ -11,15 +11,17 @@
 // numbers without hammering the API.
 
 import { useEffect, useState, useCallback } from 'react'
-import { Inbox, AlertTriangle, Receipt } from 'lucide-react'
+import { Inbox, AlertTriangle, Receipt, Sparkles } from 'lucide-react'
 import GlofoxImportClient from './GlofoxImportClient'
 import GlofoxPushReviewTab from './GlofoxPushReviewTab'
 import GlofoxInvoiceBackfillTab from './GlofoxInvoiceBackfillTab'
+import PipelineReclassifyTab from './PipelineReclassifyTab'
 
 const TABS = [
-  { id: 'import',   label: 'Import',          Icon: Inbox },
-  { id: 'review',   label: 'Review',          Icon: AlertTriangle },
-  { id: 'invoices', label: 'Invoice backfill', Icon: Receipt },
+  { id: 'import',     label: 'Import',          Icon: Inbox },
+  { id: 'review',     label: 'Review',          Icon: AlertTriangle },
+  { id: 'invoices',   label: 'Invoice backfill', Icon: Receipt },
+  { id: 'reclassify', label: 'Re-classify',     Icon: Sparkles },
 ]
 
 export default function GlofoxAdminTabs(props) {
@@ -72,9 +74,10 @@ export default function GlofoxAdminTabs(props) {
         })}
       </div>
 
-      {active === 'import'   && <GlofoxImportClient {...props} />}
-      {active === 'review'   && <GlofoxPushReviewTab />}
-      {active === 'invoices' && <GlofoxInvoiceBackfillTab />}
+      {active === 'import'     && <GlofoxImportClient {...props} />}
+      {active === 'review'     && <GlofoxPushReviewTab />}
+      {active === 'invoices'   && <GlofoxInvoiceBackfillTab />}
+      {active === 'reclassify' && <PipelineReclassifyTab />}
     </div>
   )
 }
