@@ -314,7 +314,7 @@ const GLOFOX_API_BASE = 'https://gf-api.aws.glofox.com/prod'
  */
 export async function glofoxCredentialsForLocation(db, locationId) {
   if (!db || !locationId) {
-    return { branchId: null, apiKey: null, apiToken: null, webhookSecret: null }
+    return { branchId: null, apiKey: null, apiToken: null, namespace: null, webhookSecret: null }
   }
   const { data } = await db
     .from('locations')
@@ -326,6 +326,14 @@ export async function glofoxCredentialsForLocation(db, locationId) {
     branchId:      cfg.branch_id      || null,
     apiKey:        cfg.api_key        || null,
     apiToken:      cfg.api_token      || null,
+    // PIPELINE5.5e: namespace is required by /Analytics/report and
+    // a few v3 endpoints. We had been silently dropping it from
+    // every call (Glofox returns 200-but-empty when it's absent on
+    // the analytics endpoint). Source of truth: the studio's
+    // namespace as it appears in webhook payload.Payload.namespace
+    // (e.g. "untstillorgan"). Surface it via settings.glofox.namespace
+    // — one row UPDATE per location to backfill.
+    namespace:     cfg.namespace      || null,
     webhookSecret: cfg.webhook_secret || null,
   }
 }
@@ -598,9 +606,13 @@ export async function fetchPaymentsReport(creds, opts = {}) {
   const paymentMethods = Array.isArray(opts.paymentMethods)
     ? opts.paymentMethods
     : DEFAULT_PAYMENT_METHODS
+  // namespace: prefer caller-supplied; fall back to creds.namespace
+  // (read from settings.glofox.namespace by glofoxCredentialsForLocation).
+  // Glofox returns 200-but-empty when this is missing, so make sure
+  // SOMETHING is set rather than silently dropping it from the body.
   const body = {
     branch_id: creds.branchId,
-    namespace: opts.namespace,
+    namespace: opts.namespace || creds.namespace || null,
     start: String(startSec),
     end: String(endSec),
     model: opts.model || 'TransactionsList',
