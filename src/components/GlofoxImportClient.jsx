@@ -42,7 +42,8 @@ export default function GlofoxImportClient({
   crmContactsTotal,
   recentRuns,
 }) {
-  // ── Filter form state ───────────────────────────────────────
+  // ── Mode + filter form state ────────────────────────────────
+  const [mode, setMode] = useState('glofox_pull') // 'glofox_pull' | 'crm_resync'
   const [leadStatuses, setLeadStatuses] = useState([]) // empty = no filter
   const [modifiedSince, setModifiedSince] = useState('') // YYYY-MM-DD
   const [skip, setSkip] = useState(0)
@@ -66,13 +67,17 @@ export default function GlofoxImportClient({
   }, [leadStatuses, modifiedSince])
 
   // Single-batch fetch — used by both Preview and Apply paths.
+  // GLOFOX2.7 — mode controls source: 'glofox_pull' iterates
+  // /2.0/members; 'crm_resync' iterates already-linked CRM
+  // contacts (re-fetching each from Glofox).
   const callBulkSync = useCallback(async ({ dryRun, atSkip }) => {
     const res = await fetch('/api/glofox/bulk-sync', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         location_id: activeLocationId,
-        filters: filterBody,
+        mode,
+        filters: mode === 'glofox_pull' ? filterBody : {},
         pagination: { skip: atSkip, limit },
         dry_run: dryRun,
       }),
@@ -80,7 +85,7 @@ export default function GlofoxImportClient({
     const json = await res.json()
     if (!json.ok) throw new Error(json.error || 'bulk-sync failed')
     return json
-  }, [activeLocationId, filterBody, limit])
+  }, [activeLocationId, mode, filterBody, limit])
 
   // ── Actions ─────────────────────────────────────────────────
 
@@ -173,7 +178,47 @@ export default function GlofoxImportClient({
               value={recentRuns?.[0]?.started_at ? timeAgo(recentRuns[0].started_at) : 'never'} />
       </div>
 
-      {/* Filter form */}
+      {/* GLOFOX2.7 — Mode toggle. Same Preview/Apply/Auto-paginate
+          buttons drive whichever source the operator picks. */}
+      <section className="rounded-xl border border-neutral-200 bg-white p-4">
+        <h3 className="text-sm font-semibold mb-3">Source</h3>
+        <div className="flex flex-col sm:flex-row gap-2">
+          <button
+            type="button"
+            onClick={() => { if (!isBusy) { setMode('glofox_pull'); reset() } }}
+            disabled={isBusy}
+            className={`flex-1 text-left rounded-md border px-3 py-2 text-sm ${
+              mode === 'glofox_pull'
+                ? 'border-blue-300 bg-blue-50'
+                : 'border-neutral-200 bg-white hover:bg-neutral-50'
+            } ${isBusy ? 'opacity-50 cursor-not-allowed' : ''}`}
+          >
+            <div className="font-medium">Pull from Glofox</div>
+            <div className="text-xs text-neutral-600 mt-0.5">
+              Iterate every member at Stillorgan via /2.0/members. Use this for the initial backfill or to pick up new signups.
+            </div>
+          </button>
+          <button
+            type="button"
+            onClick={() => { if (!isBusy) { setMode('crm_resync'); reset() } }}
+            disabled={isBusy || crmContactsLinked === 0}
+            className={`flex-1 text-left rounded-md border px-3 py-2 text-sm ${
+              mode === 'crm_resync'
+                ? 'border-purple-300 bg-purple-50'
+                : 'border-neutral-200 bg-white hover:bg-neutral-50'
+            } ${isBusy || crmContactsLinked === 0 ? 'opacity-50 cursor-not-allowed' : ''}`}
+            title={crmContactsLinked === 0 ? 'No CRM contacts linked to Glofox yet — pull some first' : ''}
+          >
+            <div className="font-medium">Re-sync linked CRM contacts ({crmContactsLinked})</div>
+            <div className="text-xs text-neutral-600 mt-0.5">
+              Iterate every CRM contact with a glofox_member_id and re-fetch their live Glofox state. Use this to validate sync changes immediately without waiting for the cron.
+            </div>
+          </button>
+        </div>
+      </section>
+
+      {/* Filter form (only for glofox_pull mode) */}
+      {mode === 'glofox_pull' && (
       <section className="rounded-xl border border-neutral-200 bg-white p-4">
         <h3 className="text-sm font-semibold mb-3">Filter (optional)</h3>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -248,6 +293,44 @@ export default function GlofoxImportClient({
           </div>
         </div>
       </section>
+      )}
+
+      {/* GLOFOX2.7 — minimal Skip/Limit-only controls for crm_resync. */}
+      {mode === 'crm_resync' && (
+      <section className="rounded-xl border border-neutral-200 bg-white p-4">
+        <h3 className="text-sm font-semibold mb-3">Pagination</h3>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <div>
+            <label className="block text-xs uppercase tracking-wide text-neutral-600 mb-1">Skip</label>
+            <input
+              type="number"
+              min={0}
+              value={skip}
+              onChange={(e) => setSkip(Math.max(0, parseInt(e.target.value || '0', 10)))}
+              disabled={isBusy}
+              className="w-full bg-white border border-neutral-300 rounded-md px-3 py-1.5 text-sm font-mono focus:outline-none focus:border-blue-400"
+            />
+          </div>
+          <div>
+            <label className="block text-xs uppercase tracking-wide text-neutral-600 mb-1">Limit (per page)</label>
+            <input
+              type="number"
+              min={1}
+              max={100}
+              value={limit}
+              onChange={(e) => setLimit(Math.min(100, Math.max(1, parseInt(e.target.value || '50', 10))))}
+              disabled={isBusy}
+              className="w-full bg-white border border-neutral-300 rounded-md px-3 py-1.5 text-sm font-mono focus:outline-none focus:border-blue-400"
+            />
+          </div>
+          <div className="sm:col-span-2 flex items-end">
+            <p className="text-xs text-neutral-600">
+              {crmContactsLinked} CRM contact{crmContactsLinked === 1 ? '' : 's'} linked to Glofox at this location. Each page re-fetches every contact&apos;s current Glofox state and re-applies the sync.
+            </p>
+          </div>
+        </div>
+      </section>
+      )}
 
       {/* Actions */}
       <section className="rounded-xl border border-neutral-200 bg-white p-4">

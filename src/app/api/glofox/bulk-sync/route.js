@@ -46,7 +46,7 @@ import { NextResponse } from 'next/server'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { uuidLike } from '@/lib/schemas'
-import { glofoxCredentialsForLocation, fetchAllMembersPage } from '@/lib/glofox'
+import { glofoxCredentialsForLocation, fetchAllMembersPage, glofoxFetch } from '@/lib/glofox'
 import { previewMemberSync, applyMemberSync } from '@/lib/glofox-sync'
 
 export const runtime = 'nodejs'
@@ -85,6 +85,13 @@ export async function POST(request) {
   const page = Math.floor(pagination.skip / pagination.limit) + 1
   // Default to dry_run=true — explicit `false` to actually persist.
   const dryRun = body.dry_run !== false
+  // GLOFOX2.7 — mode controls where we get the member list from.
+  //   'glofox_pull'  (default) — paginate /2.0/members (everyone at the studio)
+  //   'crm_resync'   — iterate contacts.glofox_member_id IS NOT NULL,
+  //                    fetch each one's current Glofox state and re-apply.
+  //                    Lets the operator validate code changes immediately
+  //                    without waiting for the daily cron.
+  const mode = body.mode === 'crm_resync' ? 'crm_resync' : 'glofox_pull'
 
   const db = createServerClient()
   const creds = await glofoxCredentialsForLocation(db, locationId)
@@ -95,12 +102,56 @@ export async function POST(request) {
     }, { status: 400 })
   }
 
-  // GLOFOX2.4 — fetch a page from /2.0/members (the canonical
-  // all-users endpoint). Returns ALL lead_status values; we apply
-  // the operator's lead_status filter client-side below.
-  const { data: pageData, total: totalAvailable, hasMore } = await fetchAllMembersPage(creds, {
-    page, limit: pagination.limit,
-  })
+  // GLOFOX2.4 / GLOFOX2.7 — two data sources depending on mode.
+  let pageData
+  let totalAvailable
+  let hasMore
+  if (mode === 'crm_resync') {
+    // Iterate already-linked CRM contacts. For each we re-fetch
+    // the live Glofox member object so applyMemberSync sees the
+    // latest data (membership status, credits, bookings,
+    // interactions). Pagination here is over the CRM contacts
+    // table, not the Glofox API.
+    const { data: contacts, count } = await db
+      .from('contacts')
+      .select('id, glofox_member_id, name', { count: 'exact' })
+      .eq('location_id', locationId)
+      .not('glofox_member_id', 'is', null)
+      .order('id', { ascending: true })
+      .range(pagination.skip, pagination.skip + pagination.limit - 1)
+    totalAvailable = count ?? 0
+    hasMore = (pagination.skip + (contacts?.length || 0)) < (totalAvailable || 0)
+    // Fetch each member from Glofox in parallel-ish (sequential
+    // here for simplicity + Glofox rate-limit safety). Drop any
+    // that 404 — operator can investigate via the audit row's
+    // error message.
+    const fetched = []
+    for (const c of (contacts || [])) {
+      try {
+        const r = await glofoxFetch(creds, `/2.0/members/${encodeURIComponent(c.glofox_member_id)}`)
+        if (!r.ok) {
+          fetched.push({ _id: c.glofox_member_id, name: c.name, _resync_error: `Glofox HTTP ${r.status}` })
+          continue
+        }
+        const body = await r.json()
+        const member = body?.data || body?.member || body
+        if (member) fetched.push(member)
+      } catch (e) {
+        fetched.push({ _id: c.glofox_member_id, name: c.name, _resync_error: e?.message || 'fetch failed' })
+      }
+    }
+    pageData = fetched
+  } else {
+    // GLOFOX2.4 — fetch a page from /2.0/members (the canonical
+    // all-users endpoint). Returns ALL lead_status values; we apply
+    // the operator's lead_status filter client-side below.
+    const { data: pd, total, hasMore: hm } = await fetchAllMembersPage(creds, {
+      page, limit: pagination.limit,
+    })
+    pageData = pd
+    totalAvailable = total
+    hasMore = hm
+  }
   // Client-side filtering — operator-supplied lead_status[] +
   // modified.start narrow the page after fetch.
   let leads = pageData
@@ -165,6 +216,18 @@ export async function POST(request) {
   for (const lead of leads) {
     const memberId = lead._id || lead.id || lead.member_id || null
     const name = lead.name || [lead.first_name, lead.last_name].filter(Boolean).join(' ') || null
+    // GLOFOX2.7 — surface re-sync fetch failures inline rather
+    // than trying to map an error stub through applyMemberSync.
+    if (lead._resync_error) {
+      summary.error++
+      processed.push({
+        glofox_member_id: memberId,
+        name,
+        action: 'error',
+        error: `Glofox fetch failed: ${lead._resync_error}`,
+      })
+      continue
+    }
     try {
       const result = dryRun
         ? await previewMemberSync(db, locationId, lead, { creds, membershipCache })
@@ -193,6 +256,7 @@ export async function POST(request) {
   return NextResponse.json({
     ok: true,
     dry_run: dryRun,
+    mode,
     location_id: locationId,
     branch_id: creds.branchId,
     filters,
