@@ -61,17 +61,36 @@ export default async function PipelinePage({ searchParams }) {
   //    don't get loaded on the active view (and vice versa). Empty
   //    visibleStageIds → return zero deals (avoids a degenerate
   //    .in('stage_id', []) which Supabase rejects).
-  let deals = []
+  //
+  //    PIPELINE5.11 fix: same PostgREST 1k cap that bit reclassify
+  //    contacts read, reclassify deals read, and invoice-backfill
+  //    contact lookup. .limit(10_000) was silently capped at 1000,
+  //    and with .order('created_at', desc) the visible 1000 were
+  //    the newest deals — which is mostly New Lead, so older Active
+  //    Members got truncated and the column read 82 instead of 258.
+  //    Page through with .range() up to DEALS_HARD_LIMIT.
+  const PAGE_SIZE = 1000
+  const deals = []
   if (visibleStageIds.length > 0) {
-    const { data } = await db
-      .from('deals')
-      .select('*, contacts(*)')
-      .eq('status', 'open')
-      .eq('location_id', locationId)
-      .in('stage_id', visibleStageIds)
-      .order('created_at', { ascending: false })
-      .limit(DEALS_HARD_LIMIT)
-    deals = data || []
+    let pageStart = 0
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      const pageEnd = Math.min(pageStart + PAGE_SIZE - 1, DEALS_HARD_LIMIT - 1)
+      const { data: page, error } = await db
+        .from('deals')
+        .select('*, contacts(*)')
+        .eq('status', 'open')
+        .eq('location_id', locationId)
+        .in('stage_id', visibleStageIds)
+        .order('created_at', { ascending: false })
+        .range(pageStart, pageEnd)
+      if (error) break
+      if (!Array.isArray(page) || page.length === 0) break
+      deals.push(...page)
+      if (page.length < PAGE_SIZE) break
+      if (deals.length >= DEALS_HARD_LIMIT) break
+      pageStart += PAGE_SIZE
+    }
   }
 
   // 3. Tab badges — total open-deal counts per view. Use HEAD count
