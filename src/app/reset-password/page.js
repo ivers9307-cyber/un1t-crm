@@ -31,35 +31,68 @@ export default function ResetPasswordPage() {
   }, [])
 
   useEffect(() => {
-    // Detect whether we arrived here from an invite or a recovery link.
-    // The hash format Supabase produces is e.g.
-    //   #access_token=...&token_type=bearer&type=recovery
-    // — `type` is the field we want.
-    if (typeof window !== 'undefined' && window.location.hash) {
-      const hash = window.location.hash.replace(/^#/, '')
-      const params = new URLSearchParams(hash)
-      const t = params.get('type')
-      if (t === 'invite') setFlowType('invite')
-      else if (t === 'recovery') setFlowType('recovery')
-    }
+    // Two URL shapes Supabase issues for password-reset / invite links,
+    // depending on which flow the project is configured for:
+    //
+    //   Legacy (implicit / hash-fragment):
+    //     /reset-password#access_token=...&refresh_token=...&type=recovery
+    //     The Supabase JS client auto-parses this on page load and fires
+    //     a PASSWORD_RECOVERY (or SIGNED_IN for invites) auth event.
+    //
+    //   Newer (PKCE / query string):
+    //     /reset-password?code=<one_time_code>&type=recovery
+    //     The client does NOT auto-exchange this — we must call
+    //     supabase.auth.exchangeCodeForSession(code) explicitly. Without
+    //     that call the page sits at "Verifying…" forever and the
+    //     Update Password button stays disabled. (Dean hit this on
+    //     2026-05-13.)
+    //
+    // We handle both. Detect type from either hash OR search params,
+    // and exchange the code if present.
+    if (typeof window === 'undefined') return
 
-    // Supabase automatically picks up the token from the URL hash on page
-    // load and (for invites) signs the user in. We wait for either:
-    //   - PASSWORD_RECOVERY event (recovery flow — Supabase fires this
-    //     specifically so the app knows to surface a password form)
-    //   - SIGNED_IN event (invite flow — magic link signs the user in
-    //     immediately; they then need to set their initial password)
-    //   - An existing session (the token was already exchanged on a
-    //     prior render of this same page)
+    const hashParams   = new URLSearchParams((window.location.hash || '').replace(/^#/, ''))
+    const searchParams = new URLSearchParams(window.location.search || '')
+    const t = hashParams.get('type') || searchParams.get('type')
+    if (t === 'invite') setFlowType('invite')
+    else if (t === 'recovery') setFlowType('recovery')
+
     const supabase = createBrowserClient()
+
+    // Recovery + invite both fire onAuthStateChange. PASSWORD_RECOVERY
+    // for recovery; SIGNED_IN for invites (magic link signs them in
+    // immediately, then they pick a password).
     const { data: sub } = supabase.auth.onAuthStateChange((event) => {
       if (event === 'PASSWORD_RECOVERY' || event === 'SIGNED_IN') {
         setReady(true)
       }
     })
-    supabase.auth.getSession().then(({ data }) => {
-      if (data.session) setReady(true)
-    })
+
+    // PKCE path: exchange ?code=... for a session. The auth event
+    // fires from inside the exchange, so the listener above handles
+    // setReady too. We only setError on hard failure.
+    const code = searchParams.get('code')
+    if (code) {
+      supabase.auth.exchangeCodeForSession(code)
+        .then(({ data, error: exchErr }) => {
+          if (exchErr) {
+            setError(`Reset link could not be verified: ${exchErr.message}. Request a fresh link from the login page.`)
+            return
+          }
+          if (data?.session) setReady(true)
+        })
+        .catch((e) => {
+          setError(`Reset link could not be verified: ${e?.message || 'unknown error'}. Request a fresh link from the login page.`)
+        })
+    } else {
+      // Legacy hash-fragment path: the client auto-exchanges on page
+      // load. Either the listener above will fire OR an existing
+      // session is already there from a prior render.
+      supabase.auth.getSession().then(({ data }) => {
+        if (data.session) setReady(true)
+      })
+    }
+
     return () => sub?.subscription?.unsubscribe?.()
   }, [])
 
