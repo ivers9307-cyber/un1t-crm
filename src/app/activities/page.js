@@ -1,171 +1,83 @@
-// /activities — Tasks list.
+// /activities — Tasks tab (TASKS.1 lightweight PM tool).
 //
-// Activities revamp phase 1 (mig 073). This page filters
-// kind='task' so the upcoming/overdue/done filters mean
-// something. Auto-logged events (SMS sent, booking confirmed,
-// roster published) live on the contact-detail timeline; they
-// don't pollute this list.
+// Server component: pulls the current location's tasks + the
+// profile list (for the assignee dropdown) + a seed of existing
+// project tags, then hands off to TasksPage (client) for the
+// interactive list/board + filters + create flow.
 //
-// Filter tabs (left → right): Today, Overdue, Upcoming, Done,
-// All. Tab labels include a live count so an empty queue is
-// visible before you click.
-//
-// Phase 2 will add an "Add task" button at the top of this
-// page so it works as a standalone task tracker, not just a
-// contact-detail companion.
+// History:
+//   - Phase 1 (mig 073): tasks were contact-scoped, only created
+//     from the contact-detail "Add activity" form. The page was
+//     read-only and most operators didn't realise tasks existed
+//     because there was no "New task" button up here.
+//   - Phase 2 / TASKS.1 (mig 159): standalone tasks (contact_id
+//     nullable was already true; just the UI lacked an entry
+//     point), assignee + priority + status enum + project tags,
+//     kanban board view.
 
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { redirect } from 'next/navigation'
-import Link from 'next/link'
-import { Phone, Mail, Calendar, CheckSquare, Clock, User } from 'lucide-react'
-import ActivityToggle from '@/components/ActivityToggle'
+import TasksPage from '@/components/TasksPage'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
 export const fetchCache = 'force-no-store'
 
-const typeIcons = { call: Phone, email: Mail, meeting: Calendar, task: CheckSquare }
-
-export default async function ActivitiesPage({ searchParams }) {
+export default async function ActivitiesPage() {
   const user = await getCurrentUser()
   if (!user) redirect('/login')
 
-  const db = createServerClient()
-  const filter = searchParams?.filter || 'today'   // default tab → Today
+  const locationId = user.activeLocation?.id
+  if (!locationId) redirect('/')
 
-  // Fetch all tasks for the location once, then bucket in JS.
-  // Volume is low (one location's open + recent tasks), and the
-  // tab counts need a complete picture, not a filtered slice.
-  // Cap at 500 as a sanity bound — well above realistic open
-  // task counts for a single location.
-  const { data: allTasks = [] } = await db.from('activities')
-    .select('*, contacts(id, name)')
-    .eq('location_id', user.activeLocation?.id)
+  const db = createServerClient()
+
+  // 1. Tasks at this location, joined to the contact (if any) for
+  //    the link in the card, and to the assignee profile for the
+  //    "@ <name>" badge. The FK constraint name on assignee_id is
+  //    activities_assignee_id_fkey (auto-generated).
+  const { data: tasks } = await db
+    .from('activities')
+    .select(`
+      *,
+      contacts(id, name),
+      profiles!activities_assignee_id_fkey(id, full_name)
+    `)
+    .eq('location_id', locationId)
     .eq('kind', 'task')
-    .order('due_date', { ascending: true })
+    .order('due_date', { ascending: true, nullsFirst: false })
     .limit(500)
 
-  const todayIso = new Date().toISOString().split('T')[0]
+  // 2. Staff at this location — used to populate the assignee
+  //    dropdowns (filter + create form). profile_locations is
+  //    the join table; pull each profile through it so we only
+  //    see staff who actually belong to this location.
+  const { data: assignableRows } = await db
+    .from('profile_locations')
+    .select('profile_id, profiles!inner(id, full_name, email)')
+    .eq('location_id', locationId)
 
-  // Bucket each task into the tab(s) it belongs to. The tabs are
-  // mutually exclusive for !done tasks (Today | Overdue | Upcoming
-  // are time-disjoint), but Done covers a different axis. All =
-  // every task regardless.
-  const buckets = {
-    today:    (allTasks || []).filter(t => !t.done && t.due_date === todayIso),
-    overdue:  (allTasks || []).filter(t => !t.done && t.due_date && t.due_date < todayIso),
-    upcoming: (allTasks || []).filter(t => !t.done && t.due_date && t.due_date > todayIso),
-    done:     (allTasks || []).filter(t => t.done),
-    all:      allTasks || [],
-  }
-  const visible = buckets[filter] || []
+  const profiles = (assignableRows || [])
+    .map(r => r.profiles)
+    .filter(p => p?.full_name || p?.email)
+    .sort((a, b) => (a.full_name || a.email).localeCompare(b.full_name || b.email))
 
-  const filters = [
-    { key: 'today',    label: 'Today' },
-    { key: 'overdue',  label: 'Overdue' },
-    { key: 'upcoming', label: 'Upcoming' },
-    { key: 'done',     label: 'Done' },
-    { key: 'all',      label: 'All' },
-  ]
+  // 3. Project-tag seed — read-only union of values already
+  //    present on tasks (the client recomputes this from the
+  //    in-memory tasks list too, but seeding from here means the
+  //    filter dropdown is populated on first render with no
+  //    flicker).
+  const projectsSeed = Array.from(new Set(
+    (tasks || []).map(t => t.project).filter(Boolean)
+  )).sort()
 
   return (
-    <div className="p-6">
-      <div className="flex items-baseline justify-between mb-1">
-        <h2 className="text-2xl font-bold">Tasks</h2>
-        <span className="text-xs text-un1t-light">
-          Auto-logged events (SMS / bookings / rosters) live on each contact&apos;s timeline.
-        </span>
-      </div>
-      <p className="text-sm text-un1t-light mb-5">Manual follow-ups, calls and reminders.</p>
-
-      <div className="flex gap-2 mb-5 flex-wrap">
-        {filters.map(f => {
-          const count = buckets[f.key]?.length ?? 0
-          const active = filter === f.key
-          // Overdue is the one tab where a non-zero count is a
-          // problem signal — colour the badge red so it pops even
-          // when the tab isn't selected.
-          const isOverdueWithItems = f.key === 'overdue' && count > 0
-          return (
-            <Link
-              key={f.key}
-              href={`/activities?filter=${f.key}`}
-              className={`text-xs px-3 py-1.5 rounded-full border transition-colors flex items-center gap-1.5 ${
-                active
-                  ? 'border-un1t-white text-un1t-white bg-un1t-gray'
-                  : 'border-un1t-gray text-un1t-light hover:text-un1t-white hover:border-un1t-mid'
-              }`}
-            >
-              <span>{f.label}</span>
-              <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${
-                isOverdueWithItems
-                  ? 'bg-red-500/20 text-red-700'
-                  : active
-                    ? 'bg-un1t-black/40 text-un1t-white'
-                    : 'bg-un1t-gray/40 text-un1t-light'
-              }`}>{count}</span>
-            </Link>
-          )
-        })}
-      </div>
-
-      <div className="bg-un1t-dark border border-un1t-gray rounded-lg divide-y divide-un1t-gray">
-        {visible.length === 0 && (
-          <p className="text-sm text-un1t-mid text-center py-12">
-            {filter === 'today'   && 'No tasks due today.'}
-            {filter === 'overdue' && 'Nothing overdue. 🎉'}
-            {filter === 'upcoming' && 'No upcoming tasks.'}
-            {filter === 'done' && 'No completed tasks yet.'}
-            {filter === 'all' && 'No tasks yet. Tasks get added from the contact detail page.'}
-          </p>
-        )}
-        {visible.map(a => {
-          const Icon = typeIcons[a.type] || CheckSquare
-          const isOverdue = !a.done && a.due_date && a.due_date < todayIso
-          const isToday = !a.done && a.due_date === todayIso
-
-          return (
-            <div key={a.id} className={`flex items-start gap-3 p-4 ${a.done ? 'opacity-50' : ''}`}>
-              <ActivityToggle activityId={a.id} done={a.done} />
-              <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${
-                a.type === 'call' ? 'bg-blue-500/20' :
-                a.type === 'email' ? 'bg-purple-500/20' :
-                a.type === 'meeting' ? 'bg-green-500/20' :
-                'bg-yellow-500/20'
-              }`}>
-                <Icon size={14} className={
-                  a.type === 'call' ? 'text-blue-700' :
-                  a.type === 'email' ? 'text-purple-700' :
-                  a.type === 'meeting' ? 'text-green-700' :
-                  'text-yellow-700'
-                } />
-              </div>
-              <div className="flex-1 min-w-0">
-                <p className={`text-sm font-medium ${a.done ? 'line-through' : ''}`}>{a.subject}</p>
-                {a.contacts?.name && (
-                  <Link href={`/contacts/${a.contacts.id}`} className="text-xs text-un1t-light hover:text-un1t-white flex items-center gap-1 mt-0.5">
-                    <User size={10} /> {a.contacts.name}
-                  </Link>
-                )}
-                {a.note && <p className="text-xs text-un1t-mid mt-1">{a.note}</p>}
-              </div>
-              <div className="text-right shrink-0">
-                {a.due_date && (
-                  <p className={`text-xs flex items-center gap-1 ${
-                    isOverdue ? 'text-red-700 font-medium'
-                    : isToday ? 'text-blue-700 font-medium'
-                    : 'text-un1t-light'
-                  }`}>
-                    <Clock size={10} /> {a.due_date} {a.due_time || ''}
-                  </p>
-                )}
-                <span className="text-[10px] text-un1t-mid uppercase">{a.type}</span>
-              </div>
-            </div>
-          )
-        })}
-      </div>
-    </div>
+    <TasksPage
+      initialTasks={tasks || []}
+      locationId={locationId}
+      profiles={profiles}
+      projectsSeed={projectsSeed}
+    />
   )
 }
