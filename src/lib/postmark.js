@@ -336,14 +336,31 @@ export async function sendCampaign(campaignId) {
   // Update status to sending
   await db.from('campaigns').update({ status: 'sending' }).eq('id', campaignId)
 
-  // Get audience — async to support tag-based segments (Phase 3).
-  // Destructure { query } — see resolveTagFilters in audience-filter.js
-  // for the thenable-unwrap reason.
-  const { query: audienceQuery } = await buildAudienceQueryAsync(db, campaign.audience_filter, campaign.location_id)
-  const { data: contacts, error: contactError } = await audienceQuery
+  // Get audience — paginated to bypass Supabase/PostgREST's default
+  // 1000-row select cap.
+  //
+  // CAMPAIGN.11 — operator's first real campaign ("15 mins?") sent
+  // to 1,000 contacts when 2,998 should have received it. The
+  // truncation was silent: PostgREST returned exactly 1,000 rows
+  // (its default max) and downstream code processed the partial
+  // result as if it were the full audience. Fix is to page through
+  // with .range() until a partial page comes back. Each page
+  // rebuilds the query because PostgrestFilterBuilder instances
+  // are single-use (awaiting once consumes the thenable). Tag-
+  // filter resolution re-runs per page, but that's cheap (one
+  // contact_tags lookup) and audiences rarely have many pages.
+  const AUDIENCE_PAGE_SIZE = 1000
+  const contacts = []
+  for (let from = 0; ; from += AUDIENCE_PAGE_SIZE) {
+    const { query } = await buildAudienceQueryAsync(db, campaign.audience_filter, campaign.location_id)
+    const { data, error } = await query.range(from, from + AUDIENCE_PAGE_SIZE - 1)
+    if (error) throw new Error(`Audience query failed: ${error.message}`)
+    if (!data || data.length === 0) break
+    contacts.push(...data)
+    if (data.length < AUDIENCE_PAGE_SIZE) break
+  }
 
-  if (contactError) throw new Error(`Audience query failed: ${contactError.message}`)
-  if (!contacts?.length) {
+  if (!contacts.length) {
     await db.from('campaigns').update({ status: 'sent', sent_at: new Date().toISOString(), total_recipients: 0 }).eq('id', campaignId)
     return { sent: 0 }
   }
