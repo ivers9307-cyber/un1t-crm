@@ -52,7 +52,24 @@ export default function MarketingPreferencesImportPanel() {
       fd.append('file', file)
       const url = `/api/admin/marketing-preferences-import${preview ? '?preview=1' : ''}`
       const r = await fetch(url, { method: 'POST', body: fd })
-      const j = await r.json()
+
+      // Defensive parse: a Vercel timeout / function crash returns
+      // a plain-text error page (e.g. "An error occurred") rather
+      // than JSON. Pre-CONSENT.5b that broke r.json() with
+      // "Unexpected token 'A'…" giving the operator no useful
+      // signal. Read as text first, parse JSON if it looks like it.
+      const raw = await r.text()
+      let j = null
+      try { j = JSON.parse(raw) } catch { /* not JSON */ }
+
+      if (!j) {
+        if (r.status === 504 || /timeout/i.test(raw)) {
+          setError(`Import timed out (HTTP ${r.status}). The CSV may be too large for a single request — try splitting it in half and uploading each piece, or share the file size and I'll bump the server limit.`)
+        } else {
+          setError(`Server returned a non-JSON response (HTTP ${r.status}). First 200 chars: ${raw.slice(0, 200)}`)
+        }
+        return
+      }
       if (!r.ok || !j.success) {
         setError(j.error || `HTTP ${r.status}`)
         if (j.headers) setResult({ headers: j.headers })

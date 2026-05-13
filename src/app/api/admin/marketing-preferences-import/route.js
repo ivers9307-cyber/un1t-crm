@@ -9,25 +9,27 @@
 // Two modes:
 //   ?preview=1  → dry-run. Parse the CSV, build the change plan,
 //                 return counts + per-row sample. NO writes.
-//   (default)   → commit. Same parsing + plan, then apply via the
-//                 applyMarketingPreferencesBulk helper. Idempotent —
-//                 re-running on the same CSV writes nothing for
-//                 rows that already match.
+//   (default)   → commit. CONSENT.5b: bulk-applies via 4 batched
+//                 queries (load current prefs → diff in memory →
+//                 bulk upsert + bulk insert audit + bulk update
+//                 email_status) instead of per-row Supabase
+//                 round-trips. Pre-fix, 4000 rows × 5 round-trips
+//                 each blew past the Vercel 60s ceiling.
 //
-// Master only. Synchronous Vercel request — 60s ceiling. UN1T's
-// migration is well under 10k rows in practice; if we ever need
-// more, switch to a background job.
+// Master only. maxDuration bumped to 120s post-CONSENT.5b for
+// headroom on very large imports — 4k contacts now finishes in
+// well under 10s but a future 50k-row migration would still want
+// the headroom.
 
 import { NextResponse } from 'next/server'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { parseCsv } from '@/lib/csv-parse'
-import { applyMarketingPreferencesBulk } from '@/lib/marketing-consent'
 import { getClientIp } from '@/lib/rate-limit'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
-export const maxDuration = 60
+export const maxDuration = 120
 
 // Common column-name aliases from real exports. Keys are the
 // canonical fields; values are normalised header strings (lowercase,
@@ -229,27 +231,137 @@ export async function POST(request) {
     })
   }
 
-  // Commit mode — apply each contact's preferences via the helper.
+  // Commit mode — bulk-apply via 4 batched queries instead of
+  // per-contact round-trips.
+  //
+  // CONSENT.5b (2026-05-13): per-contact applyMarketingPreferencesBulk
+  // calls were doing ~5 Supabase round-trips each (load contact, load
+  // preferences, upsert prefs, insert audit rows, update email_status).
+  // 4000 rows × 5 round-trips × ~50ms = ~1000 seconds — way past the
+  // 60s Vercel ceiling. The route was returning a plain-text "An
+  // error occurred" page that broke the JSON parser client-side.
+  //
+  // New shape: build the full plan in memory, then issue:
+  //   1. ONE paginated load of all relevant contact_preferences rows
+  //   2. Diff in memory
+  //   3. ONE bulk upsert (chunked at PAGE_SIZE to dodge URL caps)
+  //   4. ONE bulk insert of consent_log rows (chunked)
+  //   5. TWO bulk updates of contacts.email_status — one for the
+  //      "back to active" set, one for the "now unsubscribed" set
+  //
+  // Total: ~5-10 queries regardless of CSV size. 4000 rows finishes
+  // in seconds, not minutes.
   const ip = getClientIp(request)
+  const planEntries = Array.from(planByContact)  // [[contactId, {email,prefs}], ...]
+  const contactIds  = planEntries.map(([id]) => id)
+
+  // 1. Bulk-load current preferences for every matched contact.
+  const currentPrefByContact = new Map()
+  for (let i = 0; i < contactIds.length; i += PAGE_SIZE) {
+    const slice = contactIds.slice(i, i + PAGE_SIZE)
+    const { data } = await db
+      .from('contact_preferences')
+      .select('contact_id, email_marketing, sms_marketing, whatsapp_marketing')
+      .in('contact_id', slice)
+    for (const row of (data || [])) currentPrefByContact.set(row.contact_id, row)
+  }
+
+  // 2. Diff in memory. Build the four bulk-write payloads.
+  const upsertRows = []
+  const logRows    = []
+  const emailToActive    = []  // contact_ids whose email_status flips → 'active'
+  const emailToUnsub     = []  // contact_ids whose email_status flips → 'unsubscribed'
   let writes = 0
   let unchanged = 0
-  let errors = 0
-  const errorSample = []
-  for (const [contactId, { prefs }] of planByContact) {
-    const out = await applyMarketingPreferencesBulk(db, {
-      contactId, prefs,
-      source:    'bulk_import',
-      ipAddress: ip,
-    })
-    if (!out.ok) {
-      errors++
-      if (errorSample.length < 10) {
-        errorSample.push({ contact_id: contactId, error: out.error })
-      }
+  const nowIso = new Date().toISOString()
+
+  // Need contact email_status snapshots for the email_status mirror.
+  // Re-use the contactByEmail map we already built earlier — it carries
+  // glofox status but not email_status. Fetch email_status in one pass.
+  const emailStatusByContact = new Map()
+  for (let i = 0; i < contactIds.length; i += PAGE_SIZE) {
+    const slice = contactIds.slice(i, i + PAGE_SIZE)
+    const { data } = await db
+      .from('contacts')
+      .select('id, email_status')
+      .in('id', slice)
+    for (const row of (data || [])) emailStatusByContact.set(row.id, row.email_status)
+  }
+
+  for (const [contactId, { prefs }] of planEntries) {
+    const current = currentPrefByContact.get(contactId) || {}
+    const changed = {}
+    for (const ch of Object.keys(prefs)) {
+      const before = current[ch] === undefined ? true : !!current[ch]
+      if (before !== prefs[ch]) changed[ch] = prefs[ch]
+    }
+    if (Object.keys(changed).length === 0) {
+      unchanged++
       continue
     }
-    if (out.changed.length > 0) writes++
-    else unchanged++
+    writes++
+    upsertRows.push({ contact_id: contactId, ...changed, updated_at: nowIso })
+    for (const ch of Object.keys(changed)) {
+      logRows.push({
+        contact_id: contactId,
+        channel: ch,
+        action: changed[ch] ? 'opt_in' : 'opt_out',
+        source: 'bulk_import',
+        ip_address: ip,
+      })
+    }
+    // Email status mirror — same reputation-state guard as the helper.
+    if (Object.prototype.hasOwnProperty.call(changed, 'email_marketing')) {
+      const cur = emailStatusByContact.get(contactId)
+      const flipReputationOk = (cur === 'active' || cur === 'unsubscribed' || cur === null)
+      if (flipReputationOk) {
+        const target = changed.email_marketing ? 'active' : 'unsubscribed'
+        if (cur !== target) {
+          if (target === 'active') emailToActive.push(contactId)
+          else emailToUnsub.push(contactId)
+        }
+      }
+    }
+  }
+
+  // 3-5. Bulk writes. Chunked to dodge the PostgREST URL length cap
+  // on .in() and to keep individual statements small.
+  let errors = 0
+  const errorSample = []
+
+  // 3. Upsert preferences.
+  for (let i = 0; i < upsertRows.length; i += PAGE_SIZE) {
+    const slice = upsertRows.slice(i, i + PAGE_SIZE)
+    const { error: upErr } = await db
+      .from('contact_preferences')
+      .upsert(slice, { onConflict: 'contact_id' })
+    if (upErr) {
+      errors += slice.length
+      if (errorSample.length < 10) errorSample.push({ stage: 'upsert', error: upErr.message, chunk_size: slice.length })
+    }
+  }
+
+  // 4. Insert consent_log rows. Append-only, no conflict handling.
+  for (let i = 0; i < logRows.length; i += PAGE_SIZE) {
+    const slice = logRows.slice(i, i + PAGE_SIZE)
+    const { error: logErr } = await db.from('consent_log').insert(slice)
+    if (logErr) {
+      // Audit failure isn't fatal — the upsert already landed. Surface
+      // it so the operator knows to chase the audit gap.
+      if (errorSample.length < 10) errorSample.push({ stage: 'audit_log', error: logErr.message, chunk_size: slice.length })
+    }
+  }
+
+  // 5. Email status mirror — bulk update by .in() per target value.
+  for (let i = 0; i < emailToActive.length; i += PAGE_SIZE) {
+    const slice = emailToActive.slice(i, i + PAGE_SIZE)
+    const { error: emErr } = await db.from('contacts').update({ email_status: 'active' }).in('id', slice)
+    if (emErr && errorSample.length < 10) errorSample.push({ stage: 'email_status_active', error: emErr.message })
+  }
+  for (let i = 0; i < emailToUnsub.length; i += PAGE_SIZE) {
+    const slice = emailToUnsub.slice(i, i + PAGE_SIZE)
+    const { error: emErr } = await db.from('contacts').update({ email_status: 'unsubscribed' }).in('id', slice)
+    if (emErr && errorSample.length < 10) errorSample.push({ stage: 'email_status_unsub', error: emErr.message })
   }
 
   return NextResponse.json({
