@@ -1,34 +1,64 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
-import { buildAudienceQueryAsync } from '@/lib/postmark'
+import { applyAudienceFilterAsync } from '@/lib/audience-filter'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 
 export const dynamic = 'force-dynamic'
 
-// Shared count logic — used by both GET (saved filter) and POST
-// (in-flight filter override).
+// CAMPAIGN.9 — count without relying on PostgREST's embedded-resource
+// filter. Earlier attempts used buildAudienceQueryAsync which sets up
+// `.select('*, contact_preferences!inner(*)').eq('contact_preferences.email_marketing', true)`.
+// That worked when the query was awaited for full rows (sendCampaign),
+// but when we tried to overlay a count-only select with head:true the
+// embedded filter silently lost its binding and returned 0 — no matter
+// what shape (`id`, `id, contact_preferences!inner(id)`, or
+// `*, contact_preferences!inner(*)`) we used.
+//
+// New approach: pre-fetch the contact_ids at this location that have
+// email_marketing=true, then build the count query against contacts
+// using `.in('id', ids)` — no embed, no PostgREST embedded-filter
+// brittleness. Same final result, ~one extra round-trip.
 async function computeCount(db, filter, locationId) {
-  let query
+  // Step 1 — collect opted-in contact_ids at this location.
+  const optInIds = []
+  const PAGE = 1000
+  let from = 0
+  while (true) {
+    const { data, error } = await db
+      .from('contact_preferences')
+      .select('contact_id, contacts!inner(id)')
+      .eq('email_marketing', true)
+      .eq('contacts.location_id', locationId)
+      .range(from, from + PAGE - 1)
+    if (error) return { ok: false, status: 400, error: error.message }
+    const chunk = (data || []).map(r => r.contact_id).filter(Boolean)
+    optInIds.push(...chunk)
+    if (chunk.length < PAGE) break
+    from += PAGE
+  }
+  if (optInIds.length === 0) return { ok: true, count: 0 }
+
+  // Step 2 — build the count query against contacts. No embed needed.
+  let query = db
+    .from('contacts')
+    .select('id', { count: 'exact', head: true })
+    .eq('location_id', locationId)
+    .in('id', optInIds)
+    .not('email_status', 'in', '("bounced","complained")')
+
+  // Step 3 — apply the user's audience filter on top.
   try {
-    // Destructure { query } — see resolveTagFilters in audience-filter.js
-    // for the thenable-unwrap reason.
-    ;({ query } = await buildAudienceQueryAsync(db, filter, locationId))
+    const result = await applyAudienceFilterAsync({ db, query, filter, locationId })
+    query = result.query
   } catch (err) {
     return { ok: false, status: 400, error: err.message }
   }
-  // CAMPAIGN.8 — preserve the full original embed shape when switching
-  // to a count-only select. With head:true PostgREST still needs the
-  // exact embed declaration the upstream filters reference. The
-  // previous `contact_preferences!inner(id)` form silently dropped
-  // the relationship binding that .eq('contact_preferences.email_marketing', true)
-  // depends on, returning 0 rows even when 673 should match.
-  const { count, error } = await query.select(
-    '*, contact_preferences!inner(*)',
-    { count: 'exact', head: true }
-  )
-  if (error) {
-    return { ok: false, status: 400, error: error.message }
-  }
+
+  // PostgREST has a URL-length cap and very large `.in()` lists can
+  // exceed it. If the opt-in list is huge, paginate the count too.
+  // For Stillorgan's ~3k opt-in list this is fine in a single shot.
+  const { count, error } = await query
+  if (error) return { ok: false, status: 400, error: error.message }
   return { ok: true, count: count || 0 }
 }
 
