@@ -39,6 +39,18 @@ const COLUMN_ALIASES = {
     'email', 'email_address', 'member_email', 'contact_email',
     'e_mail', 'mail', 'recipient',
   ],
+  // CONSENT.5c — match by phone too. Operator's SMS/WhatsApp consent
+  // CSV often has phone numbers without emails. Any column that
+  // contains digits gets normalised (non-digits stripped) and matched
+  // against the digit-stripped contact phone (last-9-digits index)
+  // so format variations don't matter:
+  //   "+353 87 068 8181" / "0870688181" / "353-87-068-8181" all match.
+  phone: [
+    'phone', 'phone_number', 'mobile', 'mobile_number', 'cell',
+    'cell_number', 'tel', 'telephone',
+    'sms', 'sms_number',
+    'whatsapp_number', 'whatsapp_phone', 'wa_number', 'wa_phone',
+  ],
   email_marketing: [
     'email_marketing', 'marketing_email', 'email_opt_in',
     'email_consent', 'newsletter', 'subscribed',
@@ -63,6 +75,19 @@ const COLUMN_ALIASES = {
     'unsubscribed', 'unsubscribed_at', 'opt_out', 'opted_out',
     'suppressed', 'do_not_contact', 'dnc',
   ],
+}
+
+/**
+ * Index a phone for matching. Strips all non-digits and returns the
+ * last 9 digits — the universally-stable "core" of an Irish mobile
+ * (works for "+353 87 068 8181", "0870688181", "871234567" etc.).
+ * Returns null for inputs with fewer than 9 digits (too short to be
+ * usefully indexed).
+ */
+function indexPhone(s) {
+  const digits = String(s || '').replace(/\D/g, '')
+  if (digits.length < 9) return null
+  return digits.slice(-9)
 }
 
 const PAGE_SIZE = 1000
@@ -101,10 +126,13 @@ export async function POST(request) {
     const found = headerKeys.find((k) => aliases.includes(k))
     if (found) mapping[canonical] = found
   }
-  if (!mapping.email) {
+  // CONSENT.5c — need EITHER an email column OR a phone column to
+  // identify the contact. SMS/WhatsApp consent CSVs often carry
+  // phone numbers without emails.
+  if (!mapping.email && !mapping.phone) {
     return NextResponse.json({
       success: false,
-      error: 'No email column found. Add a column named one of: ' + COLUMN_ALIASES.email.join(', '),
+      error: 'Need at least one identifier column. For email matching: ' + COLUMN_ALIASES.email.slice(0, 3).join(', ') + '. For phone matching: ' + COLUMN_ALIASES.phone.slice(0, 4).join(', '),
       headers,
     }, { status: 400 })
   }
@@ -129,27 +157,38 @@ export async function POST(request) {
     return NextResponse.json({ success: false, error: 'No active location' }, { status: 400 })
   }
 
+  // CONSENT.5c — load contacts with both email AND phone so the
+  // import can match on either. .not('email', 'is', null) was
+  // dropped — we want phone-only contacts in the lookup too.
+  // Index by both email (case-folded) AND phone (last-9-digits via
+  // indexPhone); duplicate phones are first-write-wins (rare —
+  // family member sharing a number — operator can de-dupe later).
   const contactIdByEmail = new Map()
+  const contactIdByPhone = new Map()
   let pageStart = 0
   // eslint-disable-next-line no-constant-condition
   while (true) {
     const pageEnd = Math.min(pageStart + PAGE_SIZE - 1, HARD_LIMIT - 1)
     const { data: page, error } = await db
       .from('contacts')
-      .select('id, email, glofox_membership_status')
+      .select('id, email, phone, glofox_membership_status')
       .eq('location_id', locationId)
-      .not('email', 'is', null)
       .order('id', { ascending: true })
       .range(pageStart, pageEnd)
     if (error || !page || page.length === 0) break
     for (const c of page) {
-      const k = String(c.email).toLowerCase().trim()
-      if (!contactIdByEmail.has(k)) {
-        contactIdByEmail.set(k, { id: c.id, classpass: c.glofox_membership_status === 'classpass_payg' })
+      const hit = { id: c.id, classpass: c.glofox_membership_status === 'classpass_payg' }
+      if (c.email) {
+        const k = String(c.email).toLowerCase().trim()
+        if (k && !contactIdByEmail.has(k)) contactIdByEmail.set(k, hit)
+      }
+      if (c.phone) {
+        const phk = indexPhone(c.phone)
+        if (phk && !contactIdByPhone.has(phk)) contactIdByPhone.set(phk, hit)
       }
     }
     if (page.length < PAGE_SIZE) break
-    if (contactIdByEmail.size >= HARD_LIMIT) break
+    if ((contactIdByEmail.size + contactIdByPhone.size) >= HARD_LIMIT * 2) break
     pageStart += PAGE_SIZE
   }
 
@@ -159,33 +198,64 @@ export async function POST(request) {
   const stats = {
     total_rows:        rows.length,
     matched_contacts:  0,
-    unmatched_email:   0,
+    matched_by_email:  0,
+    matched_by_phone:  0,
+    no_identifier:     0,   // row has neither email nor phone with values
+    unmatched:         0,   // CONSENT.5c: renamed from unmatched_email
+                            // — covers both unmatched email + unmatched
+                            // phone now.
     classpass_skipped: 0,
     no_columns:        0,
-    bad_email:         0,
   }
   const samples = {
     matched:    [],
     unmatched:  [],
     classpass:  [],
   }
-  const planByContact = new Map()  // contactId → { prefs }
+  const planByContact = new Map()  // contactId → { id_label, prefs }
 
   for (const row of rows) {
-    const emailRaw = String(row[mapping.email] || '').trim().toLowerCase()
-    if (!emailRaw || !emailRaw.includes('@')) {
-      stats.bad_email++
+    // Pull the identifier values present on this row.
+    const emailRaw = mapping.email
+      ? String(row[mapping.email] || '').trim().toLowerCase()
+      : ''
+    const phoneRaw = mapping.phone
+      ? String(row[mapping.phone] || '').trim()
+      : ''
+    const phoneKey = indexPhone(phoneRaw)
+
+    // Try email first (more reliable), then phone.
+    let hit = null
+    let matchedBy = null
+    let label = ''
+    if (emailRaw && emailRaw.includes('@')) {
+      const h = contactIdByEmail.get(emailRaw)
+      if (h) { hit = h; matchedBy = 'email'; label = emailRaw }
+    }
+    if (!hit && phoneKey) {
+      const h = contactIdByPhone.get(phoneKey)
+      if (h) { hit = h; matchedBy = 'phone'; label = phoneRaw || phoneKey }
+    }
+
+    // No usable identifier on the row at all.
+    if (!emailRaw && !phoneKey) {
+      stats.no_identifier++
       continue
     }
-    const hit = contactIdByEmail.get(emailRaw)
+
     if (!hit) {
-      stats.unmatched_email++
-      if (samples.unmatched.length < 25) samples.unmatched.push(emailRaw)
+      stats.unmatched++
+      if (samples.unmatched.length < 25) {
+        samples.unmatched.push(emailRaw || phoneRaw || '(unknown)')
+      }
       continue
     }
+
     if (hit.classpass) {
       stats.classpass_skipped++
-      if (samples.classpass.length < 25) samples.classpass.push(emailRaw)
+      if (samples.classpass.length < 25) {
+        samples.classpass.push(label)
+      }
       continue
     }
 
@@ -210,11 +280,13 @@ export async function POST(request) {
       continue
     }
 
-    // Last write wins if the same email appears twice.
-    planByContact.set(hit.id, { email: emailRaw, prefs })
+    // Last write wins if the same contact appears twice.
+    planByContact.set(hit.id, { id_label: label, matched_by: matchedBy, prefs })
     stats.matched_contacts++
+    if (matchedBy === 'email') stats.matched_by_email++
+    else stats.matched_by_phone++
     if (samples.matched.length < 25) {
-      samples.matched.push({ email: emailRaw, prefs })
+      samples.matched.push({ email: matchedBy === 'email' ? label : null, phone: matchedBy === 'phone' ? label : null, matched_by: matchedBy, prefs })
     }
   }
 

@@ -19,10 +19,12 @@ import { Loader2, Upload, Eye, Play, AlertTriangle, CheckCircle2, Lock } from 'l
 const STAT_LABELS = {
   total_rows:        'CSV rows',
   matched_contacts:  'Matched contacts',
-  unmatched_email:   'Unmatched emails',
+  matched_by_email:  'Matched by email',
+  matched_by_phone:  'Matched by phone',
+  unmatched:         'Unmatched',
   classpass_skipped: 'ClassPass skipped',
   no_columns:        'No data on row',
-  bad_email:         'Invalid email',
+  no_identifier:     'No identifier on row',
 }
 
 const PREF_LABELS = {
@@ -91,14 +93,24 @@ export default function MarketingPreferencesImportPanel() {
           <h3 className="text-base font-semibold">Upload preferences CSV</h3>
         </div>
         <p className="text-sm text-un1t-light mb-4 max-w-3xl">
-          The file needs an <code>email</code> column plus one or more of:{' '}
+          The file needs at least one identifier column —{' '}
+          <code>email</code> (or <code>email_address</code>, <code>member_email</code>) and / or{' '}
+          <code>phone</code> (or <code>mobile</code>, <code>sms_number</code>, <code>whatsapp_number</code>) —
+          plus one or more preference columns:{' '}
           <code>email_marketing</code>, <code>sms_marketing</code>,{' '}
           <code>whatsapp_marketing</code>, or a single <code>unsubscribed</code> column
           that means &ldquo;opt out of everything&rdquo;. Common header variants
           (<code>Subscribed</code>, <code>opted_out</code>, <code>marketing_consent_email</code>,
           Mailchimp&apos;s <code>Unsubscribed</code> timestamp) are auto-detected.
-          Boolean values can be <code>true/false</code>, <code>yes/no</code>, <code>1/0</code>,
-          or a date (which is read as &ldquo;true, this happened&rdquo;).
+        </p>
+        <p className="text-xs text-un1t-mid mb-4 max-w-3xl">
+          Phones can be in any format —{' '}
+          <code>+353 87 068 8181</code>, <code>0870688181</code>,{' '}
+          <code>(087) 068-8181</code> all match the same contact (we strip non-digits
+          and compare the last 9 digits). When both <code>email</code> and <code>phone</code>
+          are present on a row, email match wins (more reliable). Boolean values can be{' '}
+          <code>true/false</code>, <code>yes/no</code>, <code>1/0</code>, or a date
+          (read as &ldquo;true, this happened&rdquo;).
         </p>
 
         <div className="flex items-end gap-3 mb-4">
@@ -220,7 +232,10 @@ function ResultPanel({ result }) {
           <ul className="text-xs space-y-1 max-h-64 overflow-y-auto">
             {result.samples.matched.map((s, i) => (
               <li key={i} className="flex items-baseline gap-2">
-                <span className="text-un1t-white">{s.email}</span>
+                <span className="text-un1t-white">{s.email || s.phone || '(unknown)'}</span>
+                {s.matched_by === 'phone' && (
+                  <span className="text-[10px] text-un1t-mid bg-un1t-gray/30 px-1 rounded">phone</span>
+                )}
                 <span className="text-un1t-mid">
                   {Object.entries(s.prefs).map(([k, v]) => (
                     <span key={k} className="ml-2">
