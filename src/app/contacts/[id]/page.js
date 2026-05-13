@@ -12,6 +12,7 @@ import ContactEditDeleteActions from '@/components/ContactEditDeleteActions'
 import InviteToAppButton from '@/components/InviteToAppButton'
 import ContactDevicesCard from '@/components/ContactDevicesCard'
 import ContactMarketingPreferencesCard from '@/components/ContactMarketingPreferencesCard'
+import ContactConsentHistoryCard from '@/components/ContactConsentHistoryCard'
 import CreateInGlofoxButton from '@/components/CreateInGlofoxButton'
 
 export const dynamic = 'force-dynamic'
@@ -385,6 +386,17 @@ export default async function ContactDetailPage({ params }) {
             </div>
           </div>
         </div>
+      </div>
+
+      {/* CONSENT.3 — full-width consent history table at the bottom
+          of the page. Collapsed by default; lazy-loads on first
+          expand so the contact page's initial render isn't paying
+          for it. The append-only consent_log table is the audit
+          source of truth — every opt_in / opt_out from any path
+          (preference centre, admin panel, classpass auto-trigger,
+          one-click unsubscribe) writes a row. */}
+      <div className="mt-6">
+        <ContactConsentHistoryCard contactId={contact.id} />
       </div>
     </div>
   )
