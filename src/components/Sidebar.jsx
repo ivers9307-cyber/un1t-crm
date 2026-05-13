@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
-import { LayoutDashboard, Users, Columns3, CheckSquare, Calendar, MessagesSquare, CalendarClock, Settings, LogOut, Car, Flag, Receipt, DoorOpen, Activity, ExternalLink, X, FileSignature, Heart, Globe, Download } from 'lucide-react'
+import { LayoutDashboard, Users, Columns3, CheckSquare, Calendar, MessagesSquare, CalendarClock, Settings, LogOut, Car, Flag, Receipt, DoorOpen, Activity, ExternalLink, X, FileSignature, Heart, Globe, Download, Tv } from 'lucide-react'
 import { createBrowserClient } from '@/lib/supabase'
 import LocationSwitcher from './LocationSwitcher'
 import ImpersonatePicker from './ImpersonatePicker'
@@ -90,6 +90,10 @@ const allNav = [
   // role-only gate (matches the API + RLS layer). Custom matcher
   // below uses the masterOrOwnerOnly key.
   { href: '/admin/contracts', label: 'Contracts', icon: FileSignature, masterOrOwnerOnly: true },
+  // TV.1 — TV display management. UC Cast Pro renders /tv/<token>;
+  // this page registers TVs and pushes content. Master/owner/manager
+  // because it's a marketing surface, not for general staff.
+  { href: '/admin/tv-displays', label: 'TV Displays', icon: Tv, masterOrOwnerOnly: true },
   // GLOFOX2.3 — interactive Glofox member import + sync history.
   // Master-only because it touches every contact at the location
   // (initial backfill / bulk re-sync). The /admin layout already
