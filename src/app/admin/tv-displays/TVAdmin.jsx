@@ -97,8 +97,8 @@ export default function TVAdmin({ initialDisplays, locationId, currentUserId }) 
 function TVCard({ display, currentUserId, onError, onChange, db }) {
   const content = Array.isArray(display.tv_content) ? display.tv_content[0] : display.tv_content
   const tvUrl = typeof window !== 'undefined'
-    ? `${window.location.origin}/tv/${display.token}`
-    : `/tv/${display.token}`
+    ? `${window.location.origin}/tv/cast/${display.token}`
+    : `/tv/cast/${display.token}`
 
   const [copied, setCopied] = useState(false)
   const [pushOpen, setPushOpen] = useState(false)
