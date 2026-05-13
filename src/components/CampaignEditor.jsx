@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { createBrowserClient } from '@/lib/supabase'
-import { ArrowLeft, Save, Send, Users, Code, Paintbrush, Mail, Loader2, CheckCircle2, AlertCircle } from 'lucide-react'
+import { ArrowLeft, Save, Send, Users, Code, Paintbrush, Mail, Loader2, CheckCircle2, AlertCircle, Calendar, X, Trash2 } from 'lucide-react'
 import AudienceBuilder from './AudienceBuilder'
 import Link from 'next/link'
 
@@ -28,6 +28,25 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
   const [designJson, setDesignJson] = useState(campaign?.design_json || null)
   const [saving, setSaving] = useState(false)
   const [sending, setSending] = useState(false)
+
+  // CAMPAIGN.13 — campaign-level status + live progress. The
+  // status here reflects either the row we loaded in (initial)
+  // OR a value the polling effect refreshed from the DB while
+  // a send is in flight. Progress counts come from the same poll.
+  const [campaignStatus, setCampaignStatus] = useState(campaign?.status || 'draft')
+  const [progress, setProgress] = useState({
+    total_sent: campaign?.total_sent || 0,
+    total_recipients: campaign?.total_recipients || 0,
+    cancel_requested_at: campaign?.cancel_requested_at || null,
+  })
+
+  // Schedule-send UI state.
+  const [scheduleOpen, setScheduleOpen] = useState(false)
+  const [scheduleAt, setScheduleAt] = useState(
+    campaign?.scheduled_at
+      ? new Date(campaign.scheduled_at).toISOString().slice(0, 16)
+      : ''
+  )
   const [audienceCount, setAudienceCount] = useState(null)
   // CAMPAIGN.5 — distinguish "haven't fetched yet" from "fetched but
   // errored" from "in flight". Without this the banner showed the same
@@ -270,13 +289,122 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
 
       if (!result.success) throw new Error(result.error)
 
-      router.push(`/email/campaigns/${campaignId}`)
+      // Optimistic state — the cron will pick this up within 60s.
+      setCampaignStatus('queued')
       router.refresh()
     } catch (err) {
       setError(err.message)
       setSending(false)
     }
   }
+
+  // CAMPAIGN.13 — schedule the campaign to send at a future time.
+  // Same write the run-campaigns cron's promote-step picks up
+  // (status='scheduled' AND scheduled_at <= now()). No call to the
+  // send endpoint — the cron will promote and dispatch.
+  async function handleSchedule() {
+    if (!scheduleAt) {
+      setError('Pick a date and time first.')
+      return
+    }
+    const iso = new Date(scheduleAt).toISOString()
+    if (new Date(iso) <= new Date()) {
+      setError('Scheduled time must be in the future.')
+      return
+    }
+    if (!confirm(`Schedule "${name}" to send at ${new Date(iso).toLocaleString('en-IE')}?`)) return
+
+    setSending(true)
+    setError(null)
+    try {
+      await handleSave()
+      const { error: upErr } = await db.from('campaigns')
+        .update({ status: 'scheduled', scheduled_at: iso, cancel_requested_at: null })
+        .eq('id', campaignId)
+      if (upErr) throw new Error(upErr.message)
+      setCampaignStatus('scheduled')
+      setScheduleOpen(false)
+      router.refresh()
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setSending(false)
+    }
+  }
+
+  // CAMPAIGN.13 — cancel a queued/sending/scheduled campaign.
+  // For 'scheduled' we flip back to 'draft' so it stops being a
+  // promotion candidate. For 'queued' / 'sending' we set
+  // cancel_requested_at; the run-campaigns cron sees the flag
+  // between chunks and transitions status='cancelled' + flips
+  // remaining queued recipients to 'cancelled'.
+  async function handleCancel() {
+    if (!confirm('Stop this campaign? Already-sent emails cannot be unsent.')) return
+    setError(null)
+    try {
+      if (campaignStatus === 'scheduled') {
+        const { error: e } = await db.from('campaigns')
+          .update({ status: 'draft', scheduled_at: null })
+          .eq('id', campaignId)
+        if (e) throw new Error(e.message)
+        setCampaignStatus('draft')
+      } else {
+        const { error: e } = await db.from('campaigns')
+          .update({ cancel_requested_at: new Date().toISOString() })
+          .eq('id', campaignId)
+        if (e) throw new Error(e.message)
+        setProgress((p) => ({ ...p, cancel_requested_at: new Date().toISOString() }))
+      }
+      router.refresh()
+    } catch (err) {
+      setError(err.message)
+    }
+  }
+
+  // CAMPAIGN.13 — delete the campaign. Only allowed for
+  // draft/scheduled/cancelled; if it's queued/sending we refuse
+  // and tell the operator to cancel first.
+  async function handleDelete() {
+    if (['queued', 'sending'].includes(campaignStatus)) {
+      setError('Cancel the send first, then delete.')
+      return
+    }
+    if (!confirm(`Delete "${name}"? This can't be undone.`)) return
+    try {
+      const { error: e } = await db.from('campaigns').delete().eq('id', campaignId)
+      if (e) throw new Error(e.message)
+      router.push('/email/campaigns')
+    } catch (err) {
+      setError(err.message)
+    }
+  }
+
+  // CAMPAIGN.13 — poll for live progress while a send is in flight.
+  // Poll every 3s; stop when status transitions out of queued/sending.
+  // GET /api/campaigns/[id] returns the latest row (status + the
+  // total_* counters that CAMPAIGN.12's recalculate_campaign_stats
+  // keeps in sync mid-send).
+  useEffect(() => {
+    if (!campaignId) return
+    if (!['queued', 'sending'].includes(campaignStatus)) return
+    let cancelled = false
+    const tick = async () => {
+      const { data, error } = await db.from('campaigns')
+        .select('status, total_sent, total_recipients, cancel_requested_at')
+        .eq('id', campaignId)
+        .single()
+      if (cancelled || error || !data) return
+      setCampaignStatus(data.status)
+      setProgress({
+        total_sent: data.total_sent || 0,
+        total_recipients: data.total_recipients || 0,
+        cancel_requested_at: data.cancel_requested_at,
+      })
+    }
+    const handle = setInterval(tick, 3000)
+    tick() // immediate first hit
+    return () => { cancelled = true; clearInterval(handle) }
+  }, [campaignId, campaignStatus])
 
   // CAMPAIGN.1 — fire a test send to the operator's chosen address
   // (defaults to themselves). Auto-saves the draft first so the test
@@ -410,16 +538,113 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
             <Mail size={14} />
             Send test
           </button>
-          <button
-            onClick={handleSend}
-            disabled={sending || !subject}
-            className="flex items-center gap-1.5 text-sm bg-un1t-white text-un1t-black font-medium px-4 py-1.5 rounded-md hover:bg-un1t-accent transition-colors disabled:opacity-50"
-          >
-            <Send size={14} />
-            {sending ? 'Sending...' : 'Send Campaign'}
-          </button>
+          {/* CAMPAIGN.13 — status-aware action buttons. The exact set
+              depends on where in the lifecycle the campaign is. */}
+          {(['draft'].includes(campaignStatus)) && (
+            <>
+              <button
+                onClick={() => setScheduleOpen((v) => !v)}
+                disabled={sending || !subject}
+                className="flex items-center gap-1.5 text-sm text-un1t-light hover:text-un1t-white border border-un1t-gray hover:border-un1t-white/30 px-3 py-1.5 rounded-md transition-colors disabled:opacity-50"
+                title="Send at a later date and time"
+              >
+                <Calendar size={14} />
+                Schedule
+              </button>
+              <button
+                onClick={handleSend}
+                disabled={sending || !subject}
+                className="flex items-center gap-1.5 text-sm bg-un1t-white text-un1t-black font-medium px-4 py-1.5 rounded-md hover:bg-un1t-accent transition-colors disabled:opacity-50"
+              >
+                <Send size={14} />
+                {sending ? 'Queueing…' : 'Send Campaign'}
+              </button>
+              <button
+                onClick={handleDelete}
+                className="flex items-center gap-1.5 text-sm text-red-400 hover:text-red-300 border border-un1t-gray hover:border-red-400/40 px-3 py-1.5 rounded-md transition-colors"
+                title="Delete this draft"
+              >
+                <Trash2 size={14} />
+              </button>
+            </>
+          )}
+          {campaignStatus === 'scheduled' && (
+            <>
+              <span className="text-xs text-emerald-400 flex items-center gap-1">
+                <Calendar size={12} />
+                Scheduled {campaign?.scheduled_at ? new Date(campaign.scheduled_at).toLocaleString('en-IE') : ''}
+              </span>
+              <button
+                onClick={handleCancel}
+                className="flex items-center gap-1.5 text-sm text-un1t-light hover:text-un1t-white border border-un1t-gray hover:border-un1t-white/30 px-3 py-1.5 rounded-md transition-colors"
+              >
+                <X size={14} />
+                Unschedule
+              </button>
+              <button
+                onClick={handleDelete}
+                className="flex items-center gap-1.5 text-sm text-red-400 hover:text-red-300 border border-un1t-gray hover:border-red-400/40 px-3 py-1.5 rounded-md transition-colors"
+              >
+                <Trash2 size={14} />
+              </button>
+            </>
+          )}
+          {['queued', 'sending'].includes(campaignStatus) && (
+            <>
+              <span className="text-xs text-un1t-light flex items-center gap-1.5">
+                <Loader2 size={12} className="animate-spin" />
+                {progress.cancel_requested_at
+                  ? 'Cancelling…'
+                  : (campaignStatus === 'queued'
+                      ? 'Queued — sending will start within 60s'
+                      : `Sending ${progress.total_sent.toLocaleString()} / ${progress.total_recipients.toLocaleString()}`)}
+              </span>
+              <button
+                onClick={handleCancel}
+                disabled={!!progress.cancel_requested_at}
+                className="flex items-center gap-1.5 text-sm text-red-400 hover:text-red-300 border border-un1t-gray hover:border-red-400/40 px-3 py-1.5 rounded-md transition-colors disabled:opacity-50"
+              >
+                <X size={14} />
+                Cancel
+              </button>
+            </>
+          )}
+          {['sent', 'cancelled'].includes(campaignStatus) && (
+            <span className="text-xs text-un1t-light">
+              {campaignStatus === 'sent'
+                ? `Sent ${progress.total_sent.toLocaleString()} / ${progress.total_recipients.toLocaleString()}`
+                : 'Cancelled'}
+            </span>
+          )}
         </div>
       </div>
+
+      {/* CAMPAIGN.13 — schedule tray (mirrors the test-send tray). */}
+      {scheduleOpen && (
+        <div className="bg-un1t-dark border-b border-un1t-gray px-5 py-3 flex items-center gap-3">
+          <Calendar size={14} className="text-un1t-light" />
+          <span className="text-sm text-un1t-light">Send at:</span>
+          <input
+            type="datetime-local"
+            value={scheduleAt}
+            onChange={(e) => setScheduleAt(e.target.value)}
+            className="bg-un1t-black border border-un1t-gray rounded-md px-3 py-1.5 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
+          />
+          <button
+            onClick={handleSchedule}
+            disabled={sending || !scheduleAt}
+            className="inline-flex items-center gap-1.5 text-sm bg-emerald-600 text-white font-medium px-4 py-1.5 rounded-md hover:bg-emerald-500 disabled:opacity-50"
+          >
+            {sending ? <><Loader2 size={14} className="animate-spin" /> Scheduling…</> : <><Calendar size={14} /> Schedule</>}
+          </button>
+          <button
+            onClick={() => setScheduleOpen(false)}
+            className="text-sm text-un1t-light hover:text-un1t-white"
+          >
+            Cancel
+          </button>
+        </div>
+      )}
 
       {/* CAMPAIGN.1 — test-send tray. Sits below the top bar so the
           operator can pick a recipient (defaults to their own email

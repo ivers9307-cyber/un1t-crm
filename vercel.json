@@ -43,6 +43,14 @@
     {
       "path": "/api/cron/pipeline-classify",
       "schedule": "30 3 * * *"
+    },
+    {
+      "path": "/api/cron/run-campaigns",
+      "schedule": "* * * * *"
+    },
+    {
+      "path": "/api/cron/process-postmark-webhooks",
+      "schedule": "* * * * *"
     }
   ]
 }
