@@ -360,50 +360,36 @@ function StepCard({ step, index, onUpdate, onDelete, onMoveUp, onMoveDown, isFir
             )}
 
             {/* update_field step (mig 087). Whitelisted fields only —
-                runner enforces the same allowlist server-side. */}
+                runner enforces the same allowlist server-side.
+                CLASSIFY.2: lead_status is gone; pipeline_stage_slug is
+                trigger-derived from deals, not operator-set. The only
+                remaining writable field is `label`. */}
             {stepType === 'update_field' && (
               <div className="space-y-2">
                 <div className="grid grid-cols-2 gap-3">
                   <div>
                     <label className="block text-xs text-un1t-light mb-1">Field</label>
                     <select
-                      value={step.config?.field || 'lead_status'}
+                      value={step.config?.field || 'label'}
                       onChange={e => onUpdate({ config: { ...(step.config || {}), field: e.target.value } })}
                       className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
                     >
-                      <option value="lead_status">lead_status</option>
                       <option value="label">label</option>
                     </select>
                   </div>
                   <div>
                     <label className="block text-xs text-un1t-light mb-1">Value</label>
-                    {(step.config?.field || 'lead_status') === 'lead_status' ? (
-                      <select
-                        value={step.config?.value || ''}
-                        onChange={e => onUpdate({ config: { ...(step.config || {}), value: e.target.value } })}
-                        className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
-                      >
-                        <option value="">(pick one)</option>
-                        <option value="active_trial">active_trial</option>
-                        <option value="cold">cold</option>
-                        <option value="lost_member">lost_member</option>
-                        <option value="member">member</option>
-                        <option value="returning">returning</option>
-                        <option value="competition_competitor">competition_competitor</option>
-                      </select>
-                    ) : (
-                      <input
-                        type="text"
-                        value={step.config?.value || ''}
-                        onChange={e => onUpdate({ config: { ...(step.config || {}), value: e.target.value } })}
-                        placeholder="Value"
-                        className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
-                      />
-                    )}
+                    <input
+                      type="text"
+                      value={step.config?.value || ''}
+                      onChange={e => onUpdate({ config: { ...(step.config || {}), value: e.target.value } })}
+                      placeholder="Value"
+                      className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
+                    />
                   </div>
                 </div>
                 <p className="text-[11px] text-un1t-mid">
-                  Useful to graduate a contact between buckets (e.g. competition_competitor → returning) when they hit a milestone. Setting lead_status will fire the Status Change trigger so other sequences can chain off it.
+                  Useful for tagging contacts into a free-form bucket (e.g. &quot;deposit-paid&quot;) when they hit a milestone. To move a contact between pipeline stages, move the deal on the kanban — pipeline_stage_slug is auto-derived from deals.stage_id.
                 </p>
               </div>
             )}
@@ -536,11 +522,11 @@ function StepCard({ step, index, onUpdate, onDelete, onMoveUp, onMoveDown, isFir
                       <div>
                         <label className="block text-xs text-un1t-light mb-1">Field</label>
                         <select
-                          value={predicate.field || 'lead_status'}
+                          value={predicate.field || 'pipeline_stage_slug'}
                           onChange={e => setPredicate({ field: e.target.value })}
                           className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
                         >
-                          <option value="lead_status">lead_status</option>
+                          <option value="pipeline_stage_slug">pipeline_stage_slug</option>
                           <option value="label">label</option>
                           <option value="email_status">email_status</option>
                           <option value="sms_status">sms_status</option>
@@ -558,7 +544,7 @@ function StepCard({ step, index, onUpdate, onDelete, onMoveUp, onMoveDown, isFir
                             onChange={e => setPredicate({
                               values: e.target.value.split(',').map(s => s.trim()).filter(Boolean),
                             })}
-                            placeholder="member, returning"
+                            placeholder="active_member, hot_conversion"
                             className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
                           />
                         ) : (
@@ -566,7 +552,7 @@ function StepCard({ step, index, onUpdate, onDelete, onMoveUp, onMoveDown, isFir
                             type="text"
                             value={predicate.value ?? ''}
                             onChange={e => setPredicate({ value: e.target.value })}
-                            placeholder="member"
+                            placeholder="active_member"
                             className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
                           />
                         )}
@@ -1199,23 +1185,26 @@ export default function SequenceEditor({ sequence, locationId, userId }) {
                 className="bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
               >
                 <option value="">No goal</option>
-                <option value="lead_status">Lead status reaches…</option>
+                <option value="pipeline_stage">Pipeline stage reaches…</option>
                 <option value="tag_added">Tag is added…</option>
                 <option value="booking_made">Books an event</option>
               </select>
-              {goalConfig?.type === 'lead_status' && (
+              {goalConfig?.type === 'pipeline_stage' && (
                 <select
                   value={goalConfig?.value || ''}
                   onChange={e => setGoalConfig({ ...goalConfig, value: e.target.value })}
                   className="bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid sm:col-span-2"
                 >
                   <option value="">(pick one)</option>
+                  <option value="new_lead">new_lead</option>
                   <option value="active_trial">active_trial</option>
-                  <option value="cold">cold</option>
-                  <option value="lost_member">lost_member</option>
-                  <option value="member">member</option>
-                  <option value="returning">returning</option>
-                  <option value="competition_competitor">competition_competitor</option>
+                  <option value="hot_conversion">hot_conversion</option>
+                  <option value="active_member">active_member</option>
+                  <option value="at_risk_member">at_risk_member</option>
+                  <option value="classpass_active">classpass_active</option>
+                  <option value="lapsed">lapsed</option>
+                  <option value="dormant">dormant</option>
+                  <option value="dormant_classpass">dormant_classpass</option>
                 </select>
               )}
               {goalConfig?.type === 'tag_added' && (

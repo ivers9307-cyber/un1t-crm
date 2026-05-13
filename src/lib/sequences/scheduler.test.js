@@ -130,21 +130,31 @@ describe('isGoalMet', () => {
     expect(await isGoalMet({ db: {}, contact: {}, goalConfig: { type: 'unknown' } })).toBe(false)
   })
 
-  it('lead_status: true when contact.lead_status === value', async () => {
+  it('pipeline_stage: true when contact.pipeline_stage_slug === value', async () => {
     expect(
       await isGoalMet({
         db: {},
-        contact: { lead_status: 'member' },
-        goalConfig: { type: 'lead_status', value: 'member' },
+        contact: { pipeline_stage_slug: 'active_member' },
+        goalConfig: { type: 'pipeline_stage', value: 'active_member' },
       }),
     ).toBe(true)
     expect(
       await isGoalMet({
         db: {},
-        contact: { lead_status: 'trial' },
-        goalConfig: { type: 'lead_status', value: 'member' },
+        contact: { pipeline_stage_slug: 'active_trial' },
+        goalConfig: { type: 'pipeline_stage', value: 'active_member' },
       }),
     ).toBe(false)
+  })
+
+  it('lead_status (deprecated alias): still reads pipeline_stage_slug for back-compat', async () => {
+    expect(
+      await isGoalMet({
+        db: {},
+        contact: { pipeline_stage_slug: 'active_member' },
+        goalConfig: { type: 'lead_status', value: 'active_member' },
+      }),
+    ).toBe(true)
   })
 
   it('tag_added: false when tag is empty/whitespace', async () => {

@@ -18,12 +18,22 @@ import SequencePicker from './SequencePicker'
 import ContactMergeModal from './ContactMergeModal'
 import ContactBulkDeleteModal from './ContactBulkDeleteModal'
 
+// Badge palette keyed by pipeline_stage_slug (PIPELINE5 + CLASSIFY.2).
+// Unmapped slugs fall back to the neutral grey badge.
 const statusBadge = {
-  active_trial: 'bg-green-500/20 text-green-400',
-  member:       'bg-emerald-500/20 text-emerald-400',
-  cold:         'bg-gray-500/20 text-gray-400',
-  lost_member:  'bg-red-500/20 text-red-400',
-  returning:    'bg-indigo-500/20 text-indigo-400',
+  new_lead:           'bg-blue-500/20 text-blue-400',
+  active_trial:       'bg-green-500/20 text-green-400',
+  hot_conversion:     'bg-amber-500/20 text-amber-400',
+  active_member:      'bg-emerald-500/20 text-emerald-400',
+  at_risk_member:     'bg-orange-500/20 text-orange-400',
+  classpass_active:   'bg-purple-500/20 text-purple-400',
+  lapsed:             'bg-red-500/20 text-red-400',
+  dormant:            'bg-gray-500/20 text-gray-400',
+  dormant_classpass:  'bg-gray-500/20 text-gray-400',
+}
+
+function formatStage(slug) {
+  return slug ? slug.replaceAll('_', ' ') : '—'
 }
 
 export default function ContactsTable({ contacts, locationId, canMerge = false, canDelete = false }) {
@@ -173,8 +183,8 @@ export default function ContactsTable({ contacts, locationId, canMerge = false, 
                     <span className="text-xs px-1.5 py-0.5 bg-un1t-gray rounded">{c.lead_source || '—'}</span>
                   </td>
                   <td className="p-3">
-                    <span className={`text-xs px-2 py-0.5 rounded-full ${statusBadge[c.lead_status] || 'bg-un1t-gray text-un1t-light'}`}>
-                      {c.lead_status?.replace('_', ' ') || '—'}
+                    <span className={`text-xs px-2 py-0.5 rounded-full ${statusBadge[c.pipeline_stage_slug] || 'bg-un1t-gray text-un1t-light'}`}>
+                      {formatStage(c.pipeline_stage_slug)}
                     </span>
                   </td>
                   <td className="p-3 text-un1t-light">{c.trial_credits_remaining ?? '—'}</td>
@@ -235,9 +245,9 @@ export default function ContactsTable({ contacts, locationId, canMerge = false, 
                           {c.name}
                         </span>
                         <span className={`text-[10px] px-1.5 py-0.5 rounded-full uppercase tracking-wider ${
-                          statusBadge[c.lead_status] || 'bg-un1t-gray text-un1t-light'
+                          statusBadge[c.pipeline_stage_slug] || 'bg-un1t-gray text-un1t-light'
                         }`}>
-                          {c.lead_status?.replace('_', ' ') || '—'}
+                          {formatStage(c.pipeline_stage_slug)}
                         </span>
                       </div>
                       {(c.email || c.phone) && (

@@ -56,7 +56,7 @@ export function buildSmsAudience(db, filter, locationId) {
   // rows that pre-date the preferences table.
   let query = db
     .from('contacts')
-    .select('id, name, first_name, last_name, email, phone, lead_status, sms_status, location_id, contact_preferences!inner(sms_marketing)')
+    .select('id, name, first_name, last_name, email, phone, pipeline_stage_slug, sms_status, location_id, contact_preferences!inner(sms_marketing)')
     .eq('location_id', locationId)
     .eq('sms_status', 'active')
     .eq('contact_preferences.sms_marketing', true)

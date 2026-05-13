@@ -338,7 +338,7 @@ export const SEQUENCE_TEMPLATES = [
     description: 'Fires when Glofox sends a membership.cancelled or membership.ended webhook (tags: glofox_membership_cancelled OR glofox_membership_ended). Three-touch comeback drip starting two days after cancellation: ask why, offer a return path, then a final discount. 180-day cooldown so the same ex-member doesn\'t keep getting cycled through.',
     trigger_type: 'tag_added',
     trigger_config: { tag: 'glofox_membership_cancelled' },
-    goal_config: { type: 'lead_status', value: 'returning' },
+    goal_config: { type: 'pipeline_stage', value: 'dormant' },
     re_enrolment_cooldown_days: 180,
     send_window: { start_hour: 10, end_hour: 18, skip_days: [0, 6] },
     steps: [
@@ -400,7 +400,7 @@ export const SEQUENCE_TEMPLATES = [
     description: 'Three-touch drip starting the day the prospect books a free consultation. Day 0 thanks + what-to-expect, Day 3 social proof, Day 7 trial-class offer. Goal: contact becomes an active_trial.',
     trigger_type: 'booking_created',
     trigger_config: {},
-    goal_config: { type: 'lead_status', value: 'active_trial' },
+    goal_config: { type: 'pipeline_stage', value: 'active_trial' },
     send_window: { start_hour: 9, end_hour: 19, skip_days: [] },
     steps: [
       {
@@ -467,8 +467,8 @@ export const SEQUENCE_TEMPLATES = [
     description: 'Fires when a non-member finishes a race. Two emails over a week pitching a trial.',
     trigger_type: 'race_finished',
     trigger_config: {},
-    audience_filter: { logic: 'and', filters: [{ field: 'lead_status', op: 'eq', value: 'competition_competitor' }] },
-    goal_config: { type: 'lead_status', value: 'active_trial' },
+    audience_filter: { logic: 'and', filters: [{ field: 'lead_source', op: 'eq', value: 'website' }] },
+    goal_config: { type: 'pipeline_stage', value: 'active_trial' },
     steps: [
       {
         step_type: 'email',
@@ -495,7 +495,7 @@ export const SEQUENCE_TEMPLATES = [
     description: 'Fires only on the contact\'s very first booking. 3 emails: prep guide, day-after follow-up, week-on check-in.',
     trigger_type: 'first_booking',
     trigger_config: {},
-    goal_config: { type: 'lead_status', value: 'member' },
+    goal_config: { type: 'pipeline_stage', value: 'active_member' },
     send_window: { start_hour: 9, end_hour: 18, skip_days: [] },
     steps: [
       {
@@ -525,9 +525,9 @@ export const SEQUENCE_TEMPLATES = [
     id: 'lead_status_member_welcome',
     category: 'Welcome',
     name: 'New member welcome',
-    description: 'Fires when a contact\'s status flips to member. One email + a tag for downstream targeting.',
-    trigger_type: 'status_change',
-    trigger_config: { to_status: 'member' },
+    description: 'Fires when a contact\'s pipeline stage flips to active_member. One email + a tag for downstream targeting.',
+    trigger_type: 'pipeline_stage_change',
+    trigger_config: { to_status: 'active_member' },
     goal_config: null,
     steps: [
       {

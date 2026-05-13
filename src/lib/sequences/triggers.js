@@ -74,27 +74,31 @@ export async function triggerSequencesForBooking(bookingId) {
   }
 }
 
-// ── status_change ────────────────────────────────────────────────
+// ── pipeline_stage_change ────────────────────────────────────────
 
 /**
- * Called from PUT /api/contacts/[id] when a contact's lead_status
- * value actually changes. Finds every active sequence with
- * trigger_type='status_change' for the contact's location whose
- * trigger_config matches:
- *   - cfg.to_status   (optional)  — only fire when status flipped TO this value
- *   - cfg.from_status (optional)  — only fire when status flipped FROM this value
- * Empty config = fire on any status change. Sequence's audience_filter
+ * Called from POST /api/contacts and (downstream of deal stage moves)
+ * when a contact's pipeline_stage_slug value actually changes. Finds
+ * every active sequence with trigger_type='pipeline_stage_change' for
+ * the contact's location whose trigger_config matches:
+ *   - cfg.to_status   (optional)  — only fire when stage flipped TO this slug
+ *   - cfg.from_status (optional)  — only fire when stage flipped FROM this slug
+ * Empty config = fire on any stage change. Sequence's audience_filter
  * (if set) is then evaluated against the contact — non-matches skip.
  *
- * Best-effort — errors are swallowed so the contact update isn't
+ * CLASSIFY.2: renamed from triggerSequencesForStatusChange. Trigger
+ * taxonomy keys (cfg.to_status, cfg.from_status) kept for back-compat
+ * with existing sequence rows; semantics read pipeline_stage_slug.
+ *
+ * Best-effort — errors are swallowed so the upstream mutation isn't
  * blocked by a sequence enrol failure.
  *
  * @param {string} contactId
- * @param {string|null} oldStatus
- * @param {string|null} newStatus
+ * @param {string|null} oldStage  pipeline_stage_slug before the change
+ * @param {string|null} newStage  pipeline_stage_slug after the change
  */
-export async function triggerSequencesForStatusChange(contactId, oldStatus, newStatus) {
-  if (oldStatus === newStatus) return
+export async function triggerSequencesForPipelineStageChange(contactId, oldStage, newStage) {
+  if (oldStage === newStage) return
   const db = createServerClient()
   try {
     const { data: contact } = await db
@@ -108,25 +112,25 @@ export async function triggerSequencesForStatusChange(contactId, oldStatus, newS
       .from('email_sequences')
       .select('id, trigger_config, audience_filter')
       .eq('location_id', contact.location_id)
-      .eq('trigger_type', 'status_change')
+      .eq('trigger_type', 'pipeline_stage_change')
       .eq('status', 'active')
     if (!sequences || sequences.length === 0) return
 
     for (const seq of sequences) {
       const cfg = seq.trigger_config || {}
-      if (cfg.to_status && cfg.to_status !== newStatus) continue
-      if (cfg.from_status && cfg.from_status !== oldStatus) continue
+      if (cfg.to_status && cfg.to_status !== newStage) continue
+      if (cfg.from_status && cfg.from_status !== oldStage) continue
       const matches = await contactMatchesSequenceAudience(db, contactId, seq.audience_filter)
       if (!matches) continue
       await enrolContacts({
         sequenceId: seq.id,
         contactIds: [contactId],
-        sourceType: 'status_change',
-        sourceRef: `${oldStatus || 'null'}→${newStatus || 'null'}`,
+        sourceType: 'pipeline_stage_change',
+        sourceRef: `${oldStage || 'null'}→${newStage || 'null'}`,
       })
     }
   } catch (e) {
-    logWarn('sequences', `status_change trigger failed for ${contactId}`, { err: e })
+    logWarn('sequences', `pipeline_stage_change trigger failed for ${contactId}`, { err: e })
   }
 }
 

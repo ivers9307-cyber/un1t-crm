@@ -149,7 +149,10 @@ export async function sendBatch(emails) {
 /**
  * Replace merge tags in HTML with contact data
  * Supported tags: {{first_name}}, {{name}}, {{email}}, {{phone}},
- *   {{lead_status}}, {{location_name}}, {{unsubscribe_url}},
+ *   {{pipeline_stage}} (canonical, CLASSIFY.2 — reads
+ *   contacts.pipeline_stage_slug), {{lead_status}} (deprecated alias,
+ *   kept for back-compat with existing campaign HTML — also reads
+ *   pipeline_stage_slug), {{location_name}}, {{unsubscribe_url}},
  *   {{glofox_passcode}} (GLOFOX3.5; one-time Glofox passcode minted
  *   when CRM creates a new Glofox account — read by the welcome
  *   sequence; stored on contacts.glofox_passcode by glofox-push.js).
@@ -157,13 +160,18 @@ export async function sendBatch(emails) {
 export function applyMergeTags(html, contact, extras = {}) {
   if (!html) return html
 
+  const stageLabel = contact.pipeline_stage_slug?.replaceAll('_', ' ') || ''
   const replacements = {
     '{{first_name}}': contact.first_name || contact.name?.split(' ')[0] || '',
     '{{last_name}}': contact.last_name || '',
     '{{name}}': contact.name || '',
     '{{email}}': contact.email || '',
     '{{phone}}': contact.phone || '',
-    '{{lead_status}}': contact.lead_status?.replace('_', ' ') || '',
+    '{{pipeline_stage}}': stageLabel,
+    // Deprecated alias — kept so existing campaign HTML / sequence
+    // step bodies that reference {{lead_status}} keep rendering.
+    // Now reads pipeline_stage_slug (CLASSIFY.2).
+    '{{lead_status}}': stageLabel,
     '{{location_name}}': extras.location_name || '',
     '{{unsubscribe_url}}': extras.unsubscribe_url || '',
     '{{preference_url}}': extras.preference_url || '',

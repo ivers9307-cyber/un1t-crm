@@ -63,7 +63,6 @@ async function executeTool(toolName, input, context) {
         email: input.email,
         phone: input.phone || null,
         lead_source: input.lead_source || 'other',
-        lead_status: 'active_trial',
       }).select().single()
       if (error) return { error: error.message }
       return { success: true, contact: { id: data.id, name: data.name, email: data.email } }
@@ -71,7 +70,7 @@ async function executeTool(toolName, input, context) {
 
     case 'search_contacts': {
       const { data } = await db.from('contacts')
-        .select('id, name, email, phone, lead_status, lead_source')
+        .select('id, name, email, phone, pipeline_stage_slug, lead_source')
         .or(`name.ilike.%${input.query}%,email.ilike.%${input.query}%`)
         .limit(10)
       return { contacts: data || [], count: (data || []).length }

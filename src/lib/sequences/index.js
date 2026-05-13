@@ -19,7 +19,7 @@
 export { enrolContacts } from './enrol.js'
 export {
   triggerSequencesForBooking,
-  triggerSequencesForStatusChange,
+  triggerSequencesForPipelineStageChange,
   triggerSequencesForTagsAdded,
   triggerSequencesForRaceRegistered,
   triggerSequencesForRaceFinished,

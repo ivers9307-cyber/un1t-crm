@@ -51,7 +51,7 @@ describe('buildSmsAudience', () => {
     expect(cols).toContain('sms_status')
     expect(cols).toContain('first_name')
     expect(cols).toContain('name')
-    expect(cols).toContain('lead_status')
+    expect(cols).toContain('pipeline_stage_slug')
     expect(cols).toContain('location_id')
     // Mig 064 — inner-join the preferences table so sms_marketing
     // can be filtered in the same query.

@@ -172,7 +172,7 @@ export default function ContactsView({
       // that pre-dates the audience filter and stays as a quick
       // filter affordance.
       const filtered = status
-        ? (json.contacts || []).filter(c => c.lead_status === status)
+        ? (json.contacts || []).filter(c => c.pipeline_stage_slug === status)
         : (json.contacts || [])
       setClientContacts(filtered)
       setCount(json.count)
@@ -202,13 +202,12 @@ export default function ContactsView({
   // type without needing the advanced-filter panel open.
   //
   // Active-trial chip excludes lead_source='classpass' by default —
-  // ClassPass PAYG members get lead_status='active_trial' from the
-  // contacts INSERT default but they're not real UN1T trialists;
-  // showing them under that chip clutters the operator's view of
-  // who actually needs nurturing.
+  // ClassPass PAYG members share the 'active_trial' pipeline stage
+  // slug but aren't real UN1T trialists; showing them under that
+  // chip clutters the operator's view of who actually needs nurturing.
   const visibleContacts = useMemo(() => {
     let rows = clientContacts !== null ? clientContacts : initialContacts
-    if (status) rows = rows.filter(c => c.lead_status === status)
+    if (status) rows = rows.filter(c => c.pipeline_stage_slug === status)
     if (status === 'active_trial') {
       rows = rows.filter(c => c.lead_source !== 'classpass')
     }

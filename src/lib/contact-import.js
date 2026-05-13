@@ -22,7 +22,7 @@
 // every branch is unit-testable without standing up Supabase.
 
 import { z } from 'zod'
-import { leadSourceSchema, leadStatusSchema, email as emailSchema, phone as phoneSchema } from './schemas'
+import { leadSourceSchema, email as emailSchema, phone as phoneSchema } from './schemas'
 
 // Fields the import is authoritative for. Anything outside this
 // list is silently dropped. Order matters for the CSV template
@@ -32,7 +32,6 @@ export const IMPORT_FIELDS = Object.freeze([
   { key: 'last_name',          label: 'Last name',          hint: '' },
   { key: 'email',              label: 'Email',              hint: 'Required. Match key for update vs create.' },
   { key: 'phone',              label: 'Phone',              hint: 'E.164 format ideally (+353871234567).' },
-  { key: 'lead_status',        label: 'Lead status',        hint: 'active_trial / member / cold / lost_member / returning / competition_competitor' },
   { key: 'lead_source',        label: 'Lead source',        hint: 'booking / meta / tiktok / walkin / referral / website / whatsapp / other' },
   { key: 'label',              label: 'Label',              hint: 'Free-form bucket — e.g. VIP, deposit-paid.' },
   { key: 'glofox_member_id',   label: 'Glofox member ID',   hint: '' },
@@ -48,7 +47,6 @@ const AUTO_MAP = {
   'last name': 'last_name',       'lastname': 'last_name',       'lname': 'last_name',   'surname': 'last_name',  'family name': 'last_name',
   'email': 'email',               'email address': 'email',      'e-mail': 'email',      'mail': 'email',
   'phone': 'phone',                'phone number': 'phone',       'mobile': 'phone',      'mobile number': 'phone', 'tel': 'phone',
-  'lead status': 'lead_status',    'status': 'lead_status',
   'lead source': 'lead_source',    'source': 'lead_source',
   'label': 'label',
   'glofox member id': 'glofox_member_id', 'glofox id': 'glofox_member_id', 'member id': 'glofox_member_id',
@@ -165,7 +163,6 @@ const RowSchema = z.object({
   last_name: z.string().max(100).optional().nullable(),
   email: emailSchema,
   phone: phoneSchema.optional().nullable(),
-  lead_status: leadStatusSchema.optional().nullable(),
   lead_source: leadSourceSchema.optional().nullable(),
   label: z.string().max(100).optional().nullable(),
   glofox_member_id: z.string().max(100).optional().nullable(),

@@ -138,9 +138,9 @@ function mockDb({ contact = null, error = null } = {}) {
 }
 
 describe('validateMemberByEmail', () => {
-  it('returns is_member=true when contact has lead_status=member', async () => {
+  it('returns is_member=true when contact has pipeline_stage_slug=active_member', async () => {
     const db = mockDb({
-      contact: { id: 'c-1', first_name: 'Sarah', name: 'Sarah Doe', lead_status: 'member' },
+      contact: { id: 'c-1', first_name: 'Sarah', name: 'Sarah Doe', pipeline_stage_slug: 'active_member' },
     })
     const r = await validateMemberByEmail({ db, email: 'sarah@example.com', locationId: 'loc-1' })
     expect(r.is_member).toBe(true)
@@ -149,9 +149,9 @@ describe('validateMemberByEmail', () => {
     expect(r.status).toBe('verified')
   })
 
-  it('returns is_member=false when contact exists but is not a member', async () => {
+  it('returns is_member=false when contact exists but is not an active member', async () => {
     const db = mockDb({
-      contact: { id: 'c-2', first_name: 'Bob', name: 'Bob Smith', lead_status: 'active_trial' },
+      contact: { id: 'c-2', first_name: 'Bob', name: 'Bob Smith', pipeline_stage_slug: 'active_trial' },
     })
     const r = await validateMemberByEmail({ db, email: 'bob@example.com', locationId: 'loc-1' })
     expect(r.is_member).toBe(false)

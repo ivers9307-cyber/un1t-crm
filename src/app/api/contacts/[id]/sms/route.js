@@ -62,7 +62,7 @@ export async function POST(request, { params }) {
   // second query.
   const { data: contact, error: contactErr } = await db
     .from('contacts')
-    .select('id, name, first_name, last_name, email, phone, lead_status, sms_status, location_id, locations:location_id(id, name, twilio_alpha_sender_id)')
+    .select('id, name, first_name, last_name, email, phone, pipeline_stage_slug, sms_status, location_id, locations:location_id(id, name, twilio_alpha_sender_id)')
     .eq('id', contactId)
     .single()
 

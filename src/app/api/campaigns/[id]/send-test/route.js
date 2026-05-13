@@ -79,7 +79,7 @@ export async function POST(request, { params }) {
   if (user.email) {
     const { data } = await db
       .from('contacts')
-      .select('id, name, first_name, last_name, email, phone, lead_status')
+      .select('id, name, first_name, last_name, email, phone, pipeline_stage_slug')
       .eq('email', user.email.toLowerCase())
       .eq('location_id', campaign.location_id)
       .maybeSingle()
@@ -92,7 +92,7 @@ export async function POST(request, { params }) {
     last_name:  (user.full_name || 'Recipient').split(/\s+/).slice(1).join(' ') || 'Recipient',
     email:      recipient,
     phone:      null,
-    lead_status: 'cold',
+    pipeline_stage_slug: 'new_lead',
   }
 
   // Mirror the real send's URL building so the unsubscribe + preference

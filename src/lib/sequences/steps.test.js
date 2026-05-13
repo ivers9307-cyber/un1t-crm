@@ -34,7 +34,7 @@ vi.mock('@/lib/twilio', () => ({
   },
 }))
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn() }))
-vi.mock('./triggers.js', () => ({ triggerSequencesForStatusChange: vi.fn() }))
+vi.mock('./triggers.js', () => ({ triggerSequencesForPipelineStageChange: vi.fn() }))
 
 // GLOFOX4.3 — movePipelineStageStep dynamically imports the deal /
 // stage helpers from glofox-sync. Mock them at the module level so
@@ -47,10 +47,10 @@ vi.mock('../glofox-sync.js', () => ({
 }))
 
 const steps = await import('./steps.js')
-const { triggerSequencesForStatusChange } = await import('./triggers.js')
+const { triggerSequencesForPipelineStageChange } = await import('./triggers.js')
 
 beforeEach(() => {
-  triggerSequencesForStatusChange.mockReset()
+  triggerSequencesForPipelineStageChange.mockReset()
 })
 
 // Helper: chainable Supabase mock with configurable returns.
@@ -97,8 +97,8 @@ describe('updateFieldStep — whitelist + cascade', () => {
 
   it('throws when value is not a string and not null', async () => {
     await expect(steps.updateFieldStep(db, {
-      step: { config: { field: 'lead_status', value: 42 } },
-      contact: { id: 'c1', lead_status: 'cold' },
+      step: { config: { field: 'label', value: 42 } },
+      contact: { id: 'c1', label: 'VIP' },
     })).rejects.toThrow(/must be a string or null/)
   })
 
@@ -106,8 +106,8 @@ describe('updateFieldStep — whitelist + cascade', () => {
     const update = vi.fn()
     const noopDb = { from: vi.fn(() => ({ update })) }
     await steps.updateFieldStep(noopDb, {
-      step: { config: { field: 'lead_status', value: 'member' } },
-      contact: { id: 'c1', lead_status: 'member' },
+      step: { config: { field: 'label', value: 'VIP' } },
+      contact: { id: 'c1', label: 'VIP' },
     })
     expect(update).not.toHaveBeenCalled()
   })
@@ -124,37 +124,20 @@ describe('updateFieldStep — whitelist + cascade', () => {
     expect(eqSpy).toHaveBeenCalledWith('id', 'c1')
   })
 
-  it('cascades status_change trigger ONLY when field is lead_status', async () => {
-    const eqSpy = vi.fn().mockResolvedValue({})
-    const updateSpy = vi.fn(() => ({ eq: eqSpy }))
-    const writeDb = { from: vi.fn(() => ({ update: updateSpy })) }
-    await steps.updateFieldStep(writeDb, {
+  // CLASSIFY.2: lead_status is no longer writable — pipeline_stage_slug
+  // is denormalised from deals, not stamped by sequence steps.
+  it('rejects lead_status (removed from whitelist in CLASSIFY.2)', async () => {
+    await expect(steps.updateFieldStep(db, {
       step: { config: { field: 'lead_status', value: 'member' } },
-      contact: { id: 'c1', lead_status: 'cold' },
-    })
-    expect(triggerSequencesForStatusChange).toHaveBeenCalledWith('c1', 'cold', 'member')
+      contact: { id: 'c1' },
+    })).rejects.toThrow(/not allowed/)
   })
 
-  it('does NOT cascade when field is `label`', async () => {
-    const eqSpy = vi.fn().mockResolvedValue({})
-    const updateSpy = vi.fn(() => ({ eq: eqSpy }))
-    const writeDb = { from: vi.fn(() => ({ update: updateSpy })) }
-    await steps.updateFieldStep(writeDb, {
-      step: { config: { field: 'label', value: 'VIP' } },
-      contact: { id: 'c1', label: null },
-    })
-    expect(triggerSequencesForStatusChange).not.toHaveBeenCalled()
-  })
-
-  it('treats trigger cascade failure as best-effort (does not throw)', async () => {
-    triggerSequencesForStatusChange.mockRejectedValue(new Error('trigger boom'))
-    const eqSpy = vi.fn().mockResolvedValue({})
-    const updateSpy = vi.fn(() => ({ eq: eqSpy }))
-    const writeDb = { from: vi.fn(() => ({ update: updateSpy })) }
-    await expect(steps.updateFieldStep(writeDb, {
-      step: { config: { field: 'lead_status', value: 'member' } },
-      contact: { id: 'c1', lead_status: 'cold' },
-    })).resolves.toBeUndefined()
+  it('rejects pipeline_stage_slug (denormalised, not operator-writable)', async () => {
+    await expect(steps.updateFieldStep(db, {
+      step: { config: { field: 'pipeline_stage_slug', value: 'active_member' } },
+      contact: { id: 'c1' },
+    })).rejects.toThrow(/not allowed/)
   })
 })
 
@@ -194,7 +177,7 @@ describe('applyTagStep — validation + idempotency', () => {
 // ── branch ──────────────────────────────────────────────────────
 
 describe('evaluateBranchPredicate', () => {
-  const contact = { id: 'c1', lead_status: 'member', label: 'VIP', email_status: 'active', sms_status: 'active', marketing_opt_in: true }
+  const contact = { id: 'c1', pipeline_stage_slug: 'active_member', label: 'VIP', email_status: 'active', sms_status: 'active', marketing_opt_in: true }
 
   it('throws when predicate is missing', async () => {
     await expect(steps.evaluateBranchPredicate(mockDb(), { contact, predicate: null }))
@@ -239,13 +222,13 @@ describe('evaluateBranchPredicate', () => {
 
     it('returns true when contact[field] === value', async () => {
       expect(await steps.evaluateBranchPredicate(mockDb(), {
-        contact, predicate: { type: 'field_equals', field: 'lead_status', value: 'member' },
+        contact, predicate: { type: 'field_equals', field: 'pipeline_stage_slug', value: 'active_member' },
       })).toBe(true)
     })
 
     it('returns false on mismatch', async () => {
       expect(await steps.evaluateBranchPredicate(mockDb(), {
-        contact, predicate: { type: 'field_equals', field: 'lead_status', value: 'cold' },
+        contact, predicate: { type: 'field_equals', field: 'pipeline_stage_slug', value: 'dormant' },
       })).toBe(false)
     })
   })
@@ -259,33 +242,33 @@ describe('evaluateBranchPredicate', () => {
 
     it('throws when values is empty', async () => {
       await expect(steps.evaluateBranchPredicate(mockDb(), {
-        contact, predicate: { type: 'field_in', field: 'lead_status', values: [] },
+        contact, predicate: { type: 'field_in', field: 'pipeline_stage_slug', values: [] },
       })).rejects.toThrow(/non-empty array/)
     })
 
     it('returns true when contact[field] is in the values', async () => {
       expect(await steps.evaluateBranchPredicate(mockDb(), {
-        contact, predicate: { type: 'field_in', field: 'lead_status', values: ['member', 'active_trial'] },
+        contact, predicate: { type: 'field_in', field: 'pipeline_stage_slug', values: ['active_member', 'active_trial'] },
       })).toBe(true)
     })
 
     it('returns false when contact[field] is not in the values', async () => {
       expect(await steps.evaluateBranchPredicate(mockDb(), {
-        contact, predicate: { type: 'field_in', field: 'lead_status', values: ['cold', 'lost_member'] },
+        contact, predicate: { type: 'field_in', field: 'pipeline_stage_slug', values: ['dormant', 'lapsed'] },
       })).toBe(false)
     })
   })
 })
 
 describe('processBranchStep — pointer + loop guard', () => {
-  const contact = { id: 'c1', lead_status: 'member' }
+  const contact = { id: 'c1', pipeline_stage_slug: 'active_member' }
 
   it('returns then_step_order when predicate matches', async () => {
     const result = await steps.processBranchStep(mockDb(), {
       step: {
         step_order: 3,
         config: {
-          predicate: { type: 'field_equals', field: 'lead_status', value: 'member' },
+          predicate: { type: 'field_equals', field: 'pipeline_stage_slug', value: 'active_member' },
           then_step_order: 5,
           else_step_order: 9,
         },
@@ -300,7 +283,7 @@ describe('processBranchStep — pointer + loop guard', () => {
       step: {
         step_order: 3,
         config: {
-          predicate: { type: 'field_equals', field: 'lead_status', value: 'cold' },
+          predicate: { type: 'field_equals', field: 'pipeline_stage_slug', value: 'dormant' },
           then_step_order: 5,
           else_step_order: 9,
         },
@@ -314,7 +297,7 @@ describe('processBranchStep — pointer + loop guard', () => {
     const result = await steps.processBranchStep(mockDb(), {
       step: {
         step_order: 7,
-        config: { predicate: { type: 'field_equals', field: 'lead_status', value: 'member' } },
+        config: { predicate: { type: 'field_equals', field: 'pipeline_stage_slug', value: 'active_member' } },
       },
       contact,
     })
@@ -325,7 +308,7 @@ describe('processBranchStep — pointer + loop guard', () => {
     const result = await steps.processBranchStep(mockDb(), {
       step: {
         step_order: 7,
-        config: { predicate: { type: 'field_equals', field: 'lead_status', value: 'cold' } },
+        config: { predicate: { type: 'field_equals', field: 'pipeline_stage_slug', value: 'dormant' } },
       },
       contact,
     })
@@ -337,7 +320,7 @@ describe('processBranchStep — pointer + loop guard', () => {
       step: {
         step_order: 5,
         config: {
-          predicate: { type: 'field_equals', field: 'lead_status', value: 'member' },
+          predicate: { type: 'field_equals', field: 'pipeline_stage_slug', value: 'active_member' },
           then_step_order: 3, // ← jumps backwards
         },
       },
@@ -350,7 +333,7 @@ describe('processBranchStep — pointer + loop guard', () => {
       step: {
         step_order: 5,
         config: {
-          predicate: { type: 'field_equals', field: 'lead_status', value: 'member' },
+          predicate: { type: 'field_equals', field: 'pipeline_stage_slug', value: 'active_member' },
           then_step_order: 5, // ← same step
         },
       },

@@ -14,8 +14,9 @@ import { classifyContact } from './pipeline-classifier.js'
 //   Glofox seeds: first_name, last_name, phone, email
 //                 (only writes when the CRM field is null/empty
 //                  — operator edits win)
-//   CRM owns:     lead_status, tags, lead_source, label, notes,
-//                 activities, deals (NEVER touched by sync)
+//   CRM owns:     pipeline_stage_slug (derived from deals.stage_id by
+//                 the mig 155 trigger), tags, lead_source, label,
+//                 notes, activities, deals (NEVER touched by sync)
 //
 // Match precedence:
 //   1. existing contact with this glofox_member_id → that's our row

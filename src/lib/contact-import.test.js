@@ -64,9 +64,9 @@ describe('autoMapHeaders', () => {
   })
 
   it('case-insensitive + whitespace-tolerant', () => {
-    const m = autoMapHeaders(['  EMAIL  ', 'Lead   Status', 'GLOFOX  ID'])
+    const m = autoMapHeaders(['  EMAIL  ', 'Lead   Source', 'GLOFOX  ID'])
     expect(m['  EMAIL  ']).toBe('email')
-    expect(m['Lead   Status']).toBe('lead_status')
+    expect(m['Lead   Source']).toBe('lead_source')
     expect(m['GLOFOX  ID']).toBe('glofox_member_id')
   })
 
@@ -83,7 +83,7 @@ describe('validateRow', () => {
     'First Name': 'first_name',
     'Last Name': 'last_name',
     'Phone': 'phone',
-    'Lead Status': 'lead_status',
+    'Lead Source': 'lead_source',
     'Tags': 'tags',
   }
 
@@ -93,14 +93,14 @@ describe('validateRow', () => {
       'First Name': 'Alice',
       'Last Name': 'Smith',
       'Phone': '+353871234567',
-      'Lead Status': 'member',
+      'Lead Source': 'website',
       'Tags': 'vip, paid',
     }, mapping)
     expect(r.ok).toBe(true)
     expect(r.payload.email).toBe('alice@example.com')   // lowercased
     expect(r.payload.first_name).toBe('Alice')
     expect(r.payload.tags).toEqual(['vip', 'paid'])
-    expect(r.payload.lead_status).toBe('member')
+    expect(r.payload.lead_source).toBe('website')
   })
 
   it('rejects an invalid email', () => {
@@ -109,13 +109,13 @@ describe('validateRow', () => {
     expect(r.error).toMatch(/email/i)
   })
 
-  it('rejects an unknown lead_status value', () => {
+  it('rejects an unknown lead_source value', () => {
     const r = validateRow({
       'Email': 'a@x.com',
-      'Lead Status': 'gold_member',
+      'Lead Source': 'pigeon_carrier',
     }, mapping)
     expect(r.ok).toBe(false)
-    expect(r.error).toMatch(/lead_status/i)
+    expect(r.error).toMatch(/lead_source/i)
   })
 
   it('drops empty cells (operator uploads partial data)', () => {
@@ -190,7 +190,7 @@ describe('buildCsvTemplate', () => {
     // Headers are the human labels, NOT the field keys.
     expect(t).toMatch(/Email/)
     expect(t).toMatch(/First name/)
-    expect(t).toMatch(/Lead status/)
+    expect(t).toMatch(/Lead source/)
   })
 
   it('every IMPORT_FIELDS key is recognised by autoMapHeaders', () => {

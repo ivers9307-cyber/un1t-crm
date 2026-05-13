@@ -3,9 +3,9 @@ import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { requireApiKey, requireApiKeyOrManager } from '@/lib/api-auth'
 import { validateBody } from '@/lib/validate'
-import { uuidLike, email, phone, leadSourceSchema, leadStatusSchema, MANAGER_ROLES } from '@/lib/schemas'
+import { uuidLike, email, phone, leadSourceSchema, MANAGER_ROLES } from '@/lib/schemas'
 import { sendPushToRolesAtLocation } from '@/lib/push'
-import { triggerSequencesForStatusChange } from '@/lib/sequences'
+import { triggerSequencesForPipelineStageChange } from '@/lib/sequences'
 import { findOrCreateGlofoxMember } from '@/lib/glofox-push'
 import { logWarn } from '@/lib/log'
 
@@ -19,7 +19,6 @@ const ContactCreateSchema = z.object({
   glofox_member_id: z.string().max(100).nullable().optional(),
   trial_credits_remaining: z.number().int().min(0).max(100).optional(),
   lead_source: leadSourceSchema.optional(),
-  lead_status: leadStatusSchema.optional(),
   lead_created_at: z.string().datetime().optional(),
   location_id: uuidLike.optional(),
 })
@@ -54,7 +53,6 @@ export async function POST(request) {
     glofox_member_id: body.glofox_member_id,
     trial_credits_remaining: body.trial_credits_remaining ?? 3,
     lead_source: body.lead_source,
-    lead_status: body.lead_status || 'active_trial',
     lead_created_at: body.lead_created_at || new Date().toISOString(),
     ...(body.location_id ? { location_id: body.location_id } : {}),
   }).select().single()
@@ -63,11 +61,11 @@ export async function POST(request) {
     return NextResponse.json({ success: false, error: error.message }, { status: 400 })
   }
 
-  // Fire the status_change sequence trigger with oldStatus=null
+  // Fire the pipeline_stage_change sequence trigger with oldStage=null
   // so any "when contact becomes X" sequence picks the new
   // contact up. Best-effort — never blocks the create response.
   try {
-    await triggerSequencesForStatusChange(data.id, null, data.lead_status)
+    await triggerSequencesForPipelineStageChange(data.id, null, data.pipeline_stage_slug)
   } catch (e) {
     logWarn('contacts', `insert trigger failed for ${data.id}`, { err: e })
   }
@@ -129,8 +127,10 @@ export async function GET(request) {
   if (locationId) query = query.eq('location_id', locationId)
 
   // Filters
-  const status = searchParams.get('lead_status')
-  if (status) query = query.eq('lead_status', status)
+  // Accepts ?lead_status= or ?pipeline_stage_slug= for the canonical
+  // stage slug (CLASSIFY.2 — old name kept as alias for n8n/back-compat).
+  const status = searchParams.get('pipeline_stage_slug') || searchParams.get('lead_status')
+  if (status) query = query.eq('pipeline_stage_slug', status)
 
   const source = searchParams.get('lead_source')
   if (source) query = query.eq('lead_source', source)

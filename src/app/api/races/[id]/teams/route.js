@@ -1,4 +1,4 @@
-// /api/events/[id]/teams
+// /api/races/[id]/teams
 //
 // GET   — list all registrations for a race with team + members
 // POST  — manually create a team registration (no payment flow)

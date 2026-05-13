@@ -33,8 +33,8 @@ describe('applyAudienceFilter', () => {
   })
 
   it('applies a select-field eq filter', () => {
-    applyAudienceFilter(q.query, { filters: [{ field: 'lead_status', op: 'eq', value: 'member' }] })
-    expect(q.calls).toEqual([['eq', 'lead_status', 'member']])
+    applyAudienceFilter(q.query, { filters: [{ field: 'pipeline_stage_slug', op: 'eq', value: 'active_member' }] })
+    expect(q.calls).toEqual([['eq', 'pipeline_stage_slug', 'active_member']])
   })
 
   it('applies a contains filter as ilike with %wrapping%', () => {
@@ -58,7 +58,7 @@ describe('applyAudienceFilter', () => {
   })
 
   it('rejects an op not on the field allowlist', () => {
-    expect(() => applyAudienceFilter(q.query, { filters: [{ field: 'lead_status', op: 'contains', value: 'mem' }] }))
+    expect(() => applyAudienceFilter(q.query, { filters: [{ field: 'pipeline_stage_slug', op: 'contains', value: 'mem' }] }))
       .toThrow(/not allowed on field/)
   })
 
@@ -149,11 +149,11 @@ describe('applyAudienceFilter — tag is a virtual field', () => {
     applyAudienceFilter(q.query, {
       filters: [
         { field: 'tag', op: 'eq', value: 'race_completed' },
-        { field: 'lead_status', op: 'eq', value: 'member' },
+        { field: 'pipeline_stage_slug', op: 'eq', value: 'active_member' },
       ],
     })
-    // Tag clause did NOT call query.eq — only the lead_status one did.
-    expect(q.calls).toEqual([['eq', 'lead_status', 'member']])
+    // Tag clause did NOT call query.eq — only the pipeline_stage_slug one did.
+    expect(q.calls).toEqual([['eq', 'pipeline_stage_slug', 'active_member']])
   })
 
   it('still validates the operator allowlist for tag', () => {
@@ -199,7 +199,7 @@ describe('resolveTagFilters — fast checks (no DB)', () => {
     const result = await resolveTagFilters({
       db: { from: () => { throw new Error('should not be called') } },
       query: dummyQuery,
-      filter: { filters: [{ field: 'lead_status', op: 'eq', value: 'member' }] },
+      filter: { filters: [{ field: 'pipeline_stage_slug', op: 'eq', value: 'active_member' }] },
       locationId: null,
     })
     expect(result.query).toBe(dummyQuery)

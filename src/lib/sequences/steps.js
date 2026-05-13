@@ -30,8 +30,6 @@ import {
   getOrCreateConversation,
 } from '@/lib/whatsapp'
 import { sendLocationSms, TwilioError } from '@/lib/twilio'
-import { logWarn } from '@/lib/log'
-import { triggerSequencesForStatusChange } from './triggers.js'
 
 // ── email ───────────────────────────────────────────────────────
 
@@ -262,15 +260,15 @@ export async function applyTagStep(db, { step, contact, sequence }) {
 
 /**
  * update_field step. Whitelisted fields only — operators can't
- * stamp arbitrary columns. Currently allows lead_status + label;
- * extend the WHITELIST set below to add more.
+ * stamp arbitrary columns. Currently allows 'label' only.
  *
- * Fires the status_change sequence trigger when lead_status changes
- * so chains compose ("on first race, set status=active_trial → that
- * triggers a different sequence").
+ * CLASSIFY.2: lead_status was removed from the whitelist. To move
+ * a contact between pipeline stages use the move_pipeline_stage
+ * step type instead — pipeline_stage_slug is trigger-derived from
+ * deals.stage_id and must not be written directly by app code.
  */
 export async function updateFieldStep(db, { step, contact }) {
-  const WHITELIST = new Set(['lead_status', 'label'])
+  const WHITELIST = new Set(['label'])
   const field = String(step.config?.field || '').trim()
   const value = step.config?.value
   if (!WHITELIST.has(field)) {
@@ -284,15 +282,6 @@ export async function updateFieldStep(db, { step, contact }) {
   if (oldValue === value) return // no-op
 
   await db.from('contacts').update({ [field]: value }).eq('id', contact.id)
-
-  // Cascade for lead_status only — lets sequences chain.
-  if (field === 'lead_status') {
-    try {
-      await triggerSequencesForStatusChange(contact.id, oldValue || null, value || null)
-    } catch (e) {
-      logWarn('sequences', `update_field cascade trigger failed`, { err: e })
-    }
-  }
 }
 
 // ── branch (Tier 3E / mig 091) ──────────────────────────────────
@@ -323,7 +312,7 @@ export async function updateFieldStep(db, { step, contact }) {
 // rules out infinite loops while we don't have a per-enrolment loop
 // counter; revisit if real loop patterns show up.
 const BRANCH_FIELD_WHITELIST = new Set([
-  'lead_status',
+  'pipeline_stage_slug',
   'label',
   'email_status',
   'sms_status',
@@ -436,7 +425,7 @@ export async function webhookStep(_db, { step, contact, sequence, enrollment }) 
       name: contact.name,
       email: contact.email,
       phone: contact.phone,
-      lead_status: contact.lead_status,
+      pipeline_stage_slug: contact.pipeline_stage_slug,
       location_id: contact.location_id,
     },
     sequence: {

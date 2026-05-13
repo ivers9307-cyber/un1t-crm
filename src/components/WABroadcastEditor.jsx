@@ -34,7 +34,7 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, us
     { value: 'email', label: 'Email' },
     { value: 'phone', label: 'Phone' },
     { value: 'location_name', label: 'Location Name' },
-    { value: 'lead_status', label: 'Lead Status' },
+    { value: 'pipeline_stage', label: 'Pipeline Stage' },
   ]
 
   async function handleSave() {

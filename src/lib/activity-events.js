@@ -29,7 +29,7 @@ function humanise(status) {
 /**
  * Log a "pipeline stage changed" event to the contact timeline.
  * Called from PUT /api/contacts/[id] alongside the existing
- * triggerSequencesForStatusChange path.
+ * triggerSequencesForPipelineStageChange path.
  *
  * @param {SupabaseClient} db   service-role client
  * @param {object} args

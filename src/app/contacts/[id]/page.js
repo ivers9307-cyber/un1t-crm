@@ -77,12 +77,17 @@ export default async function ContactDetailPage({ params }) {
     ...activities.map(a => ({ type: 'activity', activityType: a.type || 'task', date: a.created_at, ...a })),
   ].sort((a, b) => new Date(b.date) - new Date(a.date))
 
+  // Keyed on pipeline_stage_slug (PIPELINE5 + CLASSIFY.2).
   const statusColors = {
-    active_trial: 'bg-green-500/20 text-green-400 border-green-500/30',
-    member: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30',
-    cold: 'bg-gray-500/20 text-gray-400 border-gray-500/30',
-    lost_member: 'bg-red-500/20 text-red-400 border-red-500/30',
-    returning: 'bg-indigo-500/20 text-indigo-400 border-indigo-500/30',
+    new_lead:          'bg-blue-500/20 text-blue-400 border-blue-500/30',
+    active_trial:      'bg-green-500/20 text-green-400 border-green-500/30',
+    hot_conversion:    'bg-amber-500/20 text-amber-400 border-amber-500/30',
+    active_member:     'bg-emerald-500/20 text-emerald-400 border-emerald-500/30',
+    at_risk_member:    'bg-orange-500/20 text-orange-400 border-orange-500/30',
+    classpass_active:  'bg-purple-500/20 text-purple-400 border-purple-500/30',
+    lapsed:            'bg-red-500/20 text-red-400 border-red-500/30',
+    dormant:           'bg-gray-500/20 text-gray-400 border-gray-500/30',
+    dormant_classpass: 'bg-gray-500/20 text-gray-400 border-gray-500/30',
   }
 
   const bookingStatusColors = {
@@ -136,8 +141,8 @@ export default async function ContactDetailPage({ params }) {
               hasUserAccount={Boolean(contact.user_id)}
             />
           )}
-          <span className={`px-3 py-1 rounded-full text-sm border ${statusColors[contact.lead_status] || 'bg-un1t-gray text-un1t-light border-un1t-gray'}`}>
-            {contact.lead_status?.replace('_', ' ')}
+          <span className={`px-3 py-1 rounded-full text-sm border ${statusColors[contact.pipeline_stage_slug] || 'bg-un1t-gray text-un1t-light border-un1t-gray'}`}>
+            {contact.pipeline_stage_slug?.replaceAll('_', ' ')}
           </span>
         </div>
       </div>

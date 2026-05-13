@@ -63,7 +63,7 @@ export default function WAInbox({ locationId, userId, initialConversationId }) {
   const [loading, setLoading] = useState(true)
   const [showAddContact, setShowAddContact] = useState(false)
   const [addContactForm, setAddContactForm] = useState({
-    name: '', first_name: '', email: '', lead_status: 'new_lead', add_to_pipeline: true, pipeline_stage: 'new',
+    name: '', first_name: '', email: '', add_to_pipeline: true, pipeline_stage: 'new',
   })
   const [addingContact, setAddingContact] = useState(false)
   const [templates, setTemplates] = useState([])
@@ -410,8 +410,8 @@ export default function WAInbox({ locationId, userId, initialConversationId }) {
                 </div>
                 <p className="text-xs text-un1t-mid">
                   {conversation?.wa_phone}
-                  {conversation?.contacts?.lead_status && (
-                    <span> · {conversation.contacts.lead_status.replace(/_/g, ' ')}</span>
+                  {conversation?.contacts?.pipeline_stage_slug && (
+                    <span> · {conversation.contacts.pipeline_stage_slug.replace(/_/g, ' ')}</span>
                   )}
                 </p>
               </div>
@@ -480,20 +480,6 @@ export default function WAInbox({ locationId, userId, initialConversationId }) {
                       placeholder="john@example.com"
                       className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-1.5 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid"
                     />
-                  </div>
-                  <div>
-                    <label className="block text-xs text-un1t-light mb-1">Lead Status</label>
-                    <select
-                      value={addContactForm.lead_status}
-                      onChange={e => setAddContactForm({ ...addContactForm, lead_status: e.target.value })}
-                      className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-1.5 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
-                    >
-                      <option value="new_lead">New Lead</option>
-                      <option value="contacted">Contacted</option>
-                      <option value="active_trial">Active Trial</option>
-                      <option value="member">Member</option>
-                      <option value="past_member">Past Member</option>
-                    </select>
                   </div>
                   <div>
                     <label className="block text-xs text-un1t-light mb-1">Pipeline Stage</label>

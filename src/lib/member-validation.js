@@ -2,17 +2,18 @@
 // signup form (mig 084).
 //
 // We match strictly by (location_id, lower(email)) against contacts
-// where lead_status = 'member'. The match is intentionally narrow
-// for v1:
+// where pipeline_stage_slug = 'active_member'. The match is
+// intentionally narrow for v1:
 //
 //   - Email-only: lowest friction. The signup form shows a notice
 //     telling members to use the email on their UN1T account.
 //   - Location-scoped: a contact only counts as a member of THIS
 //     race's location. Cross-location membership is a future call
 //     (and would belong to organisations, not contacts).
-//   - lead_status='member' is the membership signal — see mig 001
-//     where the enum was defined. Glofox sync sets this; manual
-//     operator adds also use it.
+//   - pipeline_stage_slug='active_member' is the membership signal.
+//     The deal trigger (mig 155) auto-syncs this from the contact's
+//     open deal stage, so Glofox sync + manual moves both flow
+//     through here without app code touching the column.
 //
 // We never leak whether an email exists in contacts when the lookup
 // fails — the route returns { is_member: false } whether the email
@@ -45,13 +46,13 @@ export async function validateMemberByEmail({ db, email, locationId }) {
   // case differences match. Tight scope: location + active membership.
   const { data, error } = await db
     .from('contacts')
-    .select('id, first_name, name, lead_status')
+    .select('id, first_name, name, pipeline_stage_slug')
     .eq('location_id', locationId)
     .ilike('email', normalised)
     .maybeSingle()
 
   if (error || !data) return fail
-  if (data.lead_status !== 'member') return fail
+  if (data.pipeline_stage_slug !== 'active_member') return fail
 
   return {
     is_member: true,

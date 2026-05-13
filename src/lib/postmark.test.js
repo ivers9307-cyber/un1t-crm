@@ -70,15 +70,21 @@ describe('applyMergeTags', () => {
     expect(applyMergeTags('{{email}}|{{phone}}', {})).toBe('|')
   })
 
-  // ── lead_status humanisation ────────────────────────────────────
-  it('replaces underscore in lead_status with space', () => {
-    expect(applyMergeTags('Status: {{lead_status}}', { lead_status: 'active_trial' }))
-      .toBe('Status: active trial')
+  // ── pipeline_stage humanisation ─────────────────────────────────
+  it('replaces underscores in {{pipeline_stage}} with spaces', () => {
+    expect(applyMergeTags('Stage: {{pipeline_stage}}', { pipeline_stage_slug: 'active_trial' }))
+      .toBe('Stage: active trial')
   })
 
-  it('leaves lead_status without underscores untouched', () => {
-    expect(applyMergeTags('{{lead_status}}', { lead_status: 'member' }))
-      .toBe('member')
+  it('leaves single-word slugs untouched', () => {
+    expect(applyMergeTags('{{pipeline_stage}}', { pipeline_stage_slug: 'dormant' }))
+      .toBe('dormant')
+  })
+
+  // ── {{lead_status}} back-compat alias (CLASSIFY.2) ──────────────
+  it('{{lead_status}} alias reads pipeline_stage_slug', () => {
+    expect(applyMergeTags('Status: {{lead_status}}', { pipeline_stage_slug: 'active_member' }))
+      .toBe('Status: active member')
   })
 
   // ── extras ──────────────────────────────────────────────────────

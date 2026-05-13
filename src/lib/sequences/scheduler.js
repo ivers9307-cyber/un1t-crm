@@ -139,9 +139,14 @@ export function clampToSendWindow(candidate, window) {
  * Returns true → enrolment auto-exits with exit_reason='goal_met'.
  *
  * Goal types (mig 088):
- *   { type: 'tag_added',    tag: '<tag>'      }
- *   { type: 'lead_status',  value: '<status>' }
- *   { type: 'booking_made', event_type_id?: '<uuid>' }
+ *   { type: 'tag_added',       tag: '<tag>'      }
+ *   { type: 'pipeline_stage',  value: '<slug>'   }
+ *   { type: 'booking_made',    event_type_id?: '<uuid>' }
+ *
+ * Deprecated goal-type alias (CLASSIFY.2):
+ *   { type: 'lead_status', value: '<slug>' } — kept for back-compat
+ *   with existing sequence rows. Reads pipeline_stage_slug. Emits a
+ *   console.warn on first hit so operators can migrate the config.
  *
  * Best-effort — DB hiccup → return false (don't auto-exit on
  * uncertainty; let the next pass try again).
@@ -155,8 +160,15 @@ export function clampToSendWindow(candidate, window) {
 export async function isGoalMet({ db, contact, goalConfig }) {
   if (!goalConfig?.type) return false
   try {
+    if (goalConfig.type === 'pipeline_stage') {
+      return contact.pipeline_stage_slug === goalConfig.value
+    }
     if (goalConfig.type === 'lead_status') {
-      return contact.lead_status === goalConfig.value
+      // Deprecated alias — reads pipeline_stage_slug for back-compat.
+      console.warn(
+        '[sequences] goal type "lead_status" is deprecated; use "pipeline_stage" — reading pipeline_stage_slug'
+      )
+      return contact.pipeline_stage_slug === goalConfig.value
     }
     if (goalConfig.type === 'tag_added') {
       const tag = String(goalConfig.tag || '').trim()

@@ -8,7 +8,7 @@ export async function GET(request, { params }) {
   const limit = parseInt(searchParams.get('limit') || '50')
 
   const { data: conversation, error } = await db.from('whatsapp_conversations')
-    .select('*, contacts(id, name, first_name, email, phone, wa_phone, lead_status)')
+    .select('*, contacts(id, name, first_name, email, phone, wa_phone, pipeline_stage_slug)')
     .eq('id', params.id)
     .single()
 

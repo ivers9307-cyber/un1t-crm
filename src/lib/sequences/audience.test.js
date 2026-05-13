@@ -87,7 +87,7 @@ describe('contactMatchesSequenceAudience — empty filter shortcut', () => {
 })
 
 describe('contactMatchesSequenceAudience — DB count outcome', () => {
-  const filter = { logic: 'and', filters: [{ field: 'lead_status', op: 'eq', value: 'member' }] }
+  const filter = { logic: 'and', filters: [{ field: 'pipeline_stage_slug', op: 'eq', value: 'active_member' }] }
 
   it('returns true when count > 0 (contact matches)', async () => {
     const db = mockDb({ count: 1 })

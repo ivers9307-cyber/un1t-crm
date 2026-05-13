@@ -3,9 +3,8 @@ import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { requireApiKey, requireApiKeyOrManager } from '@/lib/api-auth'
 import { validateBody } from '@/lib/validate'
-import { email, phone, leadSourceSchema, leadStatusSchema, MANAGER_ROLES } from '@/lib/schemas'
-import { triggerSequencesForStatusChange, triggerSequencesForTagsAdded } from '@/lib/sequences'
-import { logPipelineEvent } from '@/lib/activity-events'
+import { email, phone, leadSourceSchema, MANAGER_ROLES } from '@/lib/schemas'
+import { triggerSequencesForTagsAdded } from '@/lib/sequences'
 import { getCurrentUser } from '@/lib/auth'
 import { redactWhatsAppForContact } from '@/lib/contact-merge'
 import { findOrCreateGlofoxMember } from '@/lib/glofox-push'
@@ -21,7 +20,6 @@ const ContactUpdateSchema = z.object({
   glofox_member_id: z.string().max(100).nullable().optional(),
   trial_credits_remaining: z.number().int().min(0).max(100).optional(),
   lead_source: leadSourceSchema.optional(),
-  lead_status: leadStatusSchema.optional(),
   // tags is a TEXT[] in Postgres. Frontend code that wants to "add a tag"
   // fetches current tags, appends, and PUTs the full new array. Sequence
   // tag_added triggers (sequences.js) fire on the set difference of
@@ -43,15 +41,15 @@ export async function PUT(request, { params }) {
   const body = validation.data
   const db = createServerClient()
 
-  // Read the old row first so we can detect lead_status flips and
-  // tag additions for the sequence triggers below. One extra round
-  // trip on every contact update; cheap (PK lookup) and only on
-  // mutations, not reads. location_id is also pulled here so the
-  // activities phase-1 pipeline-event writer can stamp the right
-  // tenant on its timeline row.
+  // Read the old row first so we can detect tag additions for the
+  // sequence trigger below. One extra round trip on every contact
+  // update; cheap (PK lookup) and only on mutations, not reads.
+  // CLASSIFY.2: status_change triggers now fire from deal stage moves
+  // (where pipeline_stage_slug is the source of truth), not from
+  // contact PUTs. Contact PUTs no longer accept a status field.
   const { data: oldRow } = await db
     .from('contacts')
-    .select('lead_status, tags, location_id, email, glofox_member_id')
+    .select('tags, location_id, email, glofox_member_id')
     .eq('id', id)
     .single()
 
@@ -67,32 +65,17 @@ export async function PUT(request, { params }) {
     return NextResponse.json({ success: false, error: error.message }, { status: 400 })
   }
 
-  // Fire sequence triggers AFTER the update lands. Both helpers are
-  // best-effort and swallow their own errors so a sequence misconfig
+  // Fire sequence triggers AFTER the update lands. The helper is
+  // best-effort and swallows its own errors so a sequence misconfig
   // can't fail a legit contact mutation. We don't await — the
-  // response can ship while the triggers run; enrolments land in
+  // response can ship while the trigger runs; enrolments land in
   // sequence_enrollments and the next cron tick picks them up.
-  if (oldRow) {
-    if (typeof body.lead_status !== 'undefined' && body.lead_status !== oldRow.lead_status) {
-      triggerSequencesForStatusChange(id, oldRow.lead_status, body.lead_status)
-        .catch(e => logWarn('contacts.PUT', `status_change trigger error for ${id}`, { err: e }))
-
-      // Activities revamp phase 1 (mig 073) — log the stage change
-      // to the contact's timeline. Best-effort, fire-and-forget.
-      logPipelineEvent(db, {
-        contactId: id,
-        locationId: oldRow.location_id,
-        oldStatus: oldRow.lead_status,
-        newStatus: body.lead_status,
-      }).catch(e => logWarn('contacts.PUT', `pipeline-event log failed for ${id}`, { err: e }))
-    }
-    if (Array.isArray(body.tags)) {
-      const oldTags = new Set(oldRow.tags || [])
-      const added = body.tags.filter(t => !oldTags.has(t))
-      if (added.length > 0) {
-        triggerSequencesForTagsAdded(id, added)
-          .catch(e => logWarn('contacts.PUT', `tag_added trigger error for ${id}`, { err: e }))
-      }
+  if (oldRow && Array.isArray(body.tags)) {
+    const oldTags = new Set(oldRow.tags || [])
+    const added = body.tags.filter(t => !oldTags.has(t))
+    if (added.length > 0) {
+      triggerSequencesForTagsAdded(id, added)
+        .catch(e => logWarn('contacts.PUT', `tag_added trigger error for ${id}`, { err: e }))
     }
   }
 

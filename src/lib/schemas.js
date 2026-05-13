@@ -116,21 +116,16 @@ export const OWNER_ASSIGNABLE_ROLES = Object.freeze(['owner', 'manager', 'head_c
 // instead of hardcoding hex values.
 export const DEFAULT_COLOR = '#3B82F6'
 
-// Lead source / status — mirror the values surfaced in AudienceBuilder.jsx.
+// Lead source — mirror the values surfaced in AudienceBuilder.jsx.
 // 'classpass' added in GLOFOX2.1.8 — preserves the 3rd-party origin signal
 // for ClassPass-sourced contacts (Glofox surfaces this on member.origin,
 // distinct from member.source which is 'UNKNOWN' for ClassPass).
+//
+// NOTE: leadStatusSchema removed in CLASSIFY.2 (mig 155 follow-up) — the
+// contacts.lead_status column is being dropped. Audience classification
+// now lives on contacts.pipeline_stage_slug (denormalised from deals).
 export const leadSourceSchema = z.enum([
   'booking', 'meta', 'tiktok', 'walkin', 'referral', 'website', 'whatsapp', 'classpass', 'other',
-])
-export const leadStatusSchema = z.enum([
-  'active_trial', 'cold', 'lost_member', 'member', 'returning',
-  // Mig 086 — race-contact-linking. A non-member who registered for
-  // a race gets stamped with this status so they can be filtered /
-  // sequenced separately from gym leads. Schema was missing it,
-  // which made the contacts PUT route reject this value even though
-  // race-contact-linking writes it directly.
-  'competition_competitor',
 ])
 
 // Deal status — open/won/lost from migration 001.

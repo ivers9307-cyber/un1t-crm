@@ -15,15 +15,10 @@ import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { ArrowLeft, Save, AlertCircle, Loader2 } from 'lucide-react'
 
-const LEAD_STATUSES = [
-  { value: '',                       label: '(none)' },
-  { value: 'active_trial',           label: 'Active trial' },
-  { value: 'member',                 label: 'Member' },
-  { value: 'cold',                   label: 'Cold' },
-  { value: 'lost_member',            label: 'Lost member' },
-  { value: 'returning',              label: 'Returning' },
-  { value: 'competition_competitor', label: 'Competition competitor' },
-]
+// CLASSIFY.2 — the lead_status picker is gone. Pipeline stage is now
+// auto-derived from the contact's open deal (trigger from mig 155),
+// so operators move stage by moving the deal on the kanban, not by
+// flipping a select on the contact form.
 
 const LEAD_SOURCES = [
   { value: '',          label: '(none)' },
@@ -45,7 +40,6 @@ export default function ContactForm({ contact = null, onCancelHref = '/contacts'
   const [lastName, setLastName] = useState(contact?.last_name || '')
   const [email, setEmail] = useState(contact?.email || '')
   const [phone, setPhone] = useState(contact?.phone || '')
-  const [leadStatus, setLeadStatus] = useState(contact?.lead_status || '')
   const [leadSource, setLeadSource] = useState(contact?.lead_source || '')
   const [label, setLabel] = useState(contact?.label || '')
   const [glofoxId, setGlofoxId] = useState(contact?.glofox_member_id || '')
@@ -80,7 +74,6 @@ export default function ContactForm({ contact = null, onCancelHref = '/contacts'
       last_name: trimmedLast || null,
       email: email.trim(),
       phone: phone.trim() || null,
-      lead_status: leadStatus || undefined,
       lead_source: leadSource || undefined,
       label: label.trim() || null,
       glofox_member_id: glofoxId.trim() || null,
@@ -179,31 +172,20 @@ export default function ContactForm({ contact = null, onCancelHref = '/contacts'
 
       <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5 space-y-4">
         <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light">Pipeline</h3>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <div>
-            <label className="block text-sm text-un1t-light mb-1">Lead status</label>
-            <select
-              value={leadStatus}
-              onChange={e => setLeadStatus(e.target.value)}
-              className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
-            >
-              {LEAD_STATUSES.map(s => (
-                <option key={s.value} value={s.value}>{s.label}</option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label className="block text-sm text-un1t-light mb-1">Lead source</label>
-            <select
-              value={leadSource}
-              onChange={e => setLeadSource(e.target.value)}
-              className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
-            >
-              {LEAD_SOURCES.map(s => (
-                <option key={s.value} value={s.value}>{s.label}</option>
-              ))}
-            </select>
-          </div>
+        <div>
+          <label className="block text-sm text-un1t-light mb-1">Lead source</label>
+          <select
+            value={leadSource}
+            onChange={e => setLeadSource(e.target.value)}
+            className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
+          >
+            {LEAD_SOURCES.map(s => (
+              <option key={s.value} value={s.value}>{s.label}</option>
+            ))}
+          </select>
+          <p className="text-[11px] text-un1t-mid mt-2">
+            Pipeline stage is set automatically when you move the contact&apos;s deal on the kanban board.
+          </p>
         </div>
       </div>
 

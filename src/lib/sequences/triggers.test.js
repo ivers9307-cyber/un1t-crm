@@ -154,33 +154,33 @@ describe('triggerSequencesForBooking', () => {
   })
 })
 
-// ── status_change ───────────────────────────────────────────────
+// ── pipeline_stage_change ───────────────────────────────────────
 
-describe('triggerSequencesForStatusChange', () => {
-  it('no-ops when oldStatus === newStatus', async () => {
-    await triggers.triggerSequencesForStatusChange('c1', 'member', 'member')
+describe('triggerSequencesForPipelineStageChange', () => {
+  it('no-ops when oldStage === newStage', async () => {
+    await triggers.triggerSequencesForPipelineStageChange('c1', 'active_member', 'active_member')
     expect(createServerClient).not.toHaveBeenCalled()
   })
 
-  it('skips a sequence whose trigger_config.to_status does not match newStatus', async () => {
+  it('skips a sequence whose trigger_config.to_status does not match newStage', async () => {
     createServerClient.mockReturnValue(mockDb({
       contacts: { single: { id: 'c1', location_id: 'loc-1' } },
       email_sequences: { list: [
-        { id: 's1', trigger_config: { to_status: 'member' }, audience_filter: null },
+        { id: 's1', trigger_config: { to_status: 'active_member' }, audience_filter: null },
       ] },
     }))
-    await triggers.triggerSequencesForStatusChange('c1', 'cold', 'lost_member')
+    await triggers.triggerSequencesForPipelineStageChange('c1', 'new_lead', 'lapsed')
     expect(enrolContacts).not.toHaveBeenCalled()
   })
 
-  it('skips when from_status does not match oldStatus', async () => {
+  it('skips when from_status does not match oldStage', async () => {
     createServerClient.mockReturnValue(mockDb({
       contacts: { single: { id: 'c1', location_id: 'loc-1' } },
       email_sequences: { list: [
-        { id: 's1', trigger_config: { from_status: 'member' }, audience_filter: null },
+        { id: 's1', trigger_config: { from_status: 'active_member' }, audience_filter: null },
       ] },
     }))
-    await triggers.triggerSequencesForStatusChange('c1', 'cold', 'active_trial')
+    await triggers.triggerSequencesForPipelineStageChange('c1', 'new_lead', 'active_trial')
     expect(enrolContacts).not.toHaveBeenCalled()
   })
 
@@ -188,35 +188,35 @@ describe('triggerSequencesForStatusChange', () => {
     createServerClient.mockReturnValue(mockDb({
       contacts: { single: { id: 'c1', location_id: 'loc-1' } },
       email_sequences: { list: [
-        { id: 's1', trigger_config: { from_status: 'cold', to_status: 'member' }, audience_filter: null },
+        { id: 's1', trigger_config: { from_status: 'new_lead', to_status: 'active_member' }, audience_filter: null },
       ] },
     }))
-    await triggers.triggerSequencesForStatusChange('c1', 'cold', 'member')
+    await triggers.triggerSequencesForPipelineStageChange('c1', 'new_lead', 'active_member')
     expect(enrolContacts).toHaveBeenCalledWith(expect.objectContaining({
       sequenceId: 's1',
       contactIds: ['c1'],
-      sourceType: 'status_change',
-      sourceRef: 'cold→member',
+      sourceType: 'pipeline_stage_change',
+      sourceRef: 'new_lead→active_member',
     }))
   })
 
-  it('enrols on any-status-change when trigger_config is empty', async () => {
+  it('enrols on any-stage-change when trigger_config is empty', async () => {
     createServerClient.mockReturnValue(mockDb({
       contacts: { single: { id: 'c1', location_id: 'loc-1' } },
       email_sequences: { list: [{ id: 's1', trigger_config: {}, audience_filter: null }] },
     }))
-    await triggers.triggerSequencesForStatusChange('c1', 'cold', 'member')
+    await triggers.triggerSequencesForPipelineStageChange('c1', 'new_lead', 'active_member')
     expect(enrolContacts).toHaveBeenCalledTimes(1)
   })
 
-  it('formats sourceRef with null sentinel for missing oldStatus', async () => {
+  it('formats sourceRef with null sentinel for missing oldStage', async () => {
     createServerClient.mockReturnValue(mockDb({
       contacts: { single: { id: 'c1', location_id: 'loc-1' } },
       email_sequences: { list: [{ id: 's1', trigger_config: {}, audience_filter: null }] },
     }))
-    await triggers.triggerSequencesForStatusChange('c1', null, 'member')
+    await triggers.triggerSequencesForPipelineStageChange('c1', null, 'active_member')
     expect(enrolContacts).toHaveBeenCalledWith(expect.objectContaining({
-      sourceRef: 'null→member',
+      sourceRef: 'null→active_member',
     }))
   })
 
@@ -226,7 +226,7 @@ describe('triggerSequencesForStatusChange', () => {
       contacts: { single: { id: 'c1', location_id: 'loc-1' } },
       email_sequences: { list: [{ id: 's1', trigger_config: {}, audience_filter: { filters: [] } }] },
     }))
-    await triggers.triggerSequencesForStatusChange('c1', 'cold', 'member')
+    await triggers.triggerSequencesForPipelineStageChange('c1', 'new_lead', 'active_member')
     expect(enrolContacts).not.toHaveBeenCalled()
   })
 })

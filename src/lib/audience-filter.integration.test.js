@@ -97,7 +97,7 @@ describe('resolveTagFilters — integration with real Supabase client', () => {
     const out = await resolveTagFilters({
       db,
       query: baseQuery,
-      filter: { filters: [{ field: 'lead_status', op: 'eq', value: 'member' }] },
+      filter: { filters: [{ field: 'pipeline_stage_slug', op: 'eq', value: 'active_member' }] },
       locationId: 'loc-A',
     })
     // Trigger the contacts request to inspect the final URL.

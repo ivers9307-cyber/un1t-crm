@@ -1,4 +1,4 @@
-// POST /api/public/events/[slug]/register
+// POST /api/public/races/[slug]/register
 //
 // Public team registration for a standalone race event. No auth.
 // Rate-limited per IP same as /api/public/book.
@@ -49,10 +49,6 @@ const RegisterSchema = z.object({
     email: z.string().email().max(320).nullable().optional(),
   })).max(50).optional(),
   source: z.string().max(50).optional(),
-  // CONSENT.4 — soft opt-in for marketing comms. Defaulted true
-  // client-side; missing/undefined here is treated as true to
-  // preserve back-compat for older form deployments still in cache.
-  marketing_consent: z.boolean().optional(),
 })
 
 export async function POST(request, { params }) {
@@ -77,7 +73,7 @@ export async function POST(request, { params }) {
       id, location_id, name, slug, race_date, allowed_team_sizes,
       registration_opens_at, registration_closes_at, active,
       member_pricing_enabled, member_fee_cents, non_member_fee_cents,
-      members_only, payment_currency, create_in_glofox,
+      members_only, payment_currency,
       waves:race_waves ( id, start_time, capacity, label )
     `)
     .eq('slug', params.slug)
@@ -165,23 +161,6 @@ export async function POST(request, { params }) {
       success: false,
       error: 'Could not create captain contact.',
     }, { status: 500 })
-  }
-
-  // CONSENT.4 — soft opt-in for marketing comms. Applies to the
-  // captain (the only contact whose phone we collect and the
-  // registrant of record). Helper short-circuits for ClassPass
-  // contacts. Best-effort — never blocks the registration response.
-  try {
-    const consent = body.marketing_consent !== false  // default true
-    const { applyFormMarketingConsent } = await import('@/lib/marketing-consent')
-    await applyFormMarketingConsent(db, {
-      contactId: captainContactId,
-      consent,
-      source:    'event_form',
-      ipAddress: ip,
-    })
-  } catch (e) {
-    logWarn('event-register', 'marketing consent write error', { err: e })
   }
 
   // Find-or-create the team by (location_id, name).
@@ -355,7 +334,7 @@ export async function POST(request, { params }) {
   let paymentResult
   try {
     const baseUrl = getAppUrl()
-    const returnUrl = `${baseUrl}/event/${race.slug}/confirmed?registration=${registration.id}`
+    const returnUrl = `${baseUrl}/race/${race.slug}/confirmed?registration=${registration.id}`
     paymentResult = await createRacePayment({
       db,
       race,
@@ -387,60 +366,6 @@ export async function POST(request, { params }) {
     } catch (e) {
       logWarn('race-register', `free-entry confirmations failed`, { err: e })
     }
-  }
-
-  // GLOFOX3.3 (mig 145). When the event is opted in AND the
-  // registration is already confirmed (free entry), push every team
-  // member with a contact to Glofox in create-and-trial mode. For
-  // paid registrations we DON'T push here — the Revolut webhook
-  // flips status to 'confirmed' after payment lands, and the push
-  // fires from there (see /api/webhooks/revolut for the post-pay
-  // path). Pushing pre-payment would create Glofox accounts for
-  // teams that abandon checkout.
-  // Fire-and-forget; failures land in glofox_push_events for the
-  // operator's Review tab (mig 143).
-  if (race.create_in_glofox && paymentResult.checkout.free) {
-    ;(async () => {
-      try {
-        const { findOrCreateGlofoxMember } = await import('@/lib/glofox-push')
-        // Pull every team_member row we just inserted. team_members
-        // already point at contact_id (mig 086) — only push members
-        // with a contact_id (i.e. those who supplied an email).
-        const { data: members } = await db
-          .from('team_members')
-          .select(`
-            name, email, role, contact_id,
-            contacts:contact_id ( id, name, email, first_name, last_name, phone, dob, location_id, glofox_member_id )
-          `)
-          .eq('team_id', teamId)
-        for (const m of (members || [])) {
-          if (!m.contacts || !m.contacts.id || !m.contacts.email) continue
-          const c = m.contacts
-          // Split name → first/last if either is missing (Glofox
-          // /2.0/register insists on both).
-          let { first_name, last_name } = c
-          if ((!first_name || !last_name) && (c.name || m.name)) {
-            const full = (c.name || m.name).trim().split(/\s+/)
-            first_name = first_name || full[0] || ''
-            last_name = last_name || (full.slice(1).join(' ') || '—')
-          }
-          try {
-            await findOrCreateGlofoxMember({
-              db,
-              locationId: c.location_id,
-              contact: { ...c, first_name, last_name },
-              source: 'event_registration',
-              createIfMissing: true,
-              attachTrial: true,
-            })
-          } catch (e) {
-            logWarn('race-register.glofox', `push failed for ${c.email}`, { err: e })
-          }
-        }
-      } catch (e) {
-        logWarn('race-register.glofox', `team-member fetch failed`, { err: e })
-      }
-    })()
   }
 
   return NextResponse.json({

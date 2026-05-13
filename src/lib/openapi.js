@@ -17,7 +17,7 @@ import {
   uuidLike, isoDate, timeOfDay, email, phone,
   money, hours, days,
   roleSchema, employmentTypeSchema,
-  leadSourceSchema, leadStatusSchema, dealStatusSchema,
+  leadSourceSchema, dealStatusSchema,
   timeOffTypeSchema, timeOffStatusSchema, swapStatusSchema,
   reportFrequencySchema, reportTypeSchema,
   permissionsSchema, audienceFilterSchema,
@@ -61,7 +61,6 @@ const ContactCreate = z.object({
   glofox_member_id: z.string().max(100).nullable().optional(),
   trial_credits_remaining: z.number().int().min(0).max(100).optional(),
   lead_source: leadSourceSchema.optional(),
-  lead_status: leadStatusSchema.optional(),
   lead_created_at: z.string().datetime().optional(),
   location_id: uuidLike.optional(),
 }).openapi('ContactCreate')
@@ -74,7 +73,7 @@ const Contact = z.object({
   email: z.string(),
   phone: z.string().nullable(),
   lead_source: leadSourceSchema.nullable(),
-  lead_status: leadStatusSchema.nullable(),
+  pipeline_stage_slug: z.string().nullable(),
   location_id: uuidLike.nullable(),
   created_at: z.string().datetime(),
   updated_at: z.string().datetime(),
@@ -238,7 +237,7 @@ registry.registerPath({
   request: {
     query: z.object({
       location_id: uuidLike.optional(),
-      lead_status: leadStatusSchema.optional(),
+      pipeline_stage_slug: z.string().optional(),
       lead_source: leadSourceSchema.optional(),
       min_credits: z.coerce.number().int().min(0).optional(),
       limit: z.coerce.number().int().min(1).max(200).optional().default(50),

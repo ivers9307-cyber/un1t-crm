@@ -26,7 +26,7 @@ const isEmpty = (v) =>
 // before showing what the merge will look like.
 function previewMergedFields(survivor, loser) {
   const out = {}
-  for (const f of ['name', 'email', 'phone', 'lead_status', 'lead_source', 'label', 'glofox_member_id']) {
+  for (const f of ['name', 'email', 'phone', 'pipeline_stage_slug', 'lead_source', 'label', 'glofox_member_id']) {
     out[f] = isEmpty(survivor[f]) && !isEmpty(loser[f]) ? loser[f] : survivor[f]
   }
   return out
@@ -153,7 +153,7 @@ export default function ContactMergeModal({ contactIds, contacts, onClose }) {
                     <ul className="text-xs text-un1t-light space-y-0.5">
                       <li>{c.email || <span className="text-un1t-mid">no email</span>}</li>
                       <li>{c.phone || <span className="text-un1t-mid">no phone</span>}</li>
-                      <li>Status: {c.lead_status || <span className="text-un1t-mid">none</span>}</li>
+                      <li>Stage: {c.pipeline_stage_slug || <span className="text-un1t-mid">none</span>}</li>
                       <li>Source: {c.lead_source || <span className="text-un1t-mid">none</span>}</li>
                       <li>Created: {c.created_at ? new Date(c.created_at).toLocaleDateString() : '—'}</li>
                     </ul>
@@ -180,7 +180,7 @@ export default function ContactMergeModal({ contactIds, contacts, onClose }) {
                 <li><span className="text-un1t-light">Name:</span> {merged.name || '—'}</li>
                 <li><span className="text-un1t-light">Email:</span> {merged.email || '—'}</li>
                 <li><span className="text-un1t-light">Phone:</span> {merged.phone || '—'}</li>
-                <li><span className="text-un1t-light">Status:</span> {merged.lead_status || '—'}</li>
+                <li><span className="text-un1t-light">Stage:</span> {merged.pipeline_stage_slug || '—'}</li>
                 <li><span className="text-un1t-light">Source:</span> {merged.lead_source || '—'}</li>
               </ul>
               <p className="text-[11px] text-un1t-mid mt-2">

@@ -264,7 +264,7 @@ export function pickMergedFields(survivor, loser) {
     'name', 'first_name', 'last_name',
     'email', 'phone', 'label',
     'glofox_member_id', 'trial_credits_remaining',
-    'lead_source', 'lead_status', 'lead_created_at',
+    'lead_source', 'lead_created_at',
     'last_emailed_at', 'last_active_at',
   ]
   const isEmpty = (v) =>

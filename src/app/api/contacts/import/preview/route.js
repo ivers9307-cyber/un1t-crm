@@ -167,7 +167,7 @@ export async function POST(request) {
       // value. Tags are special: an "incoming" tag list always
       // adds (we union on commit), so a non-empty existing tag set
       // isn't really a conflict — only flag if the operator's
-      // mapping would set lead_status, lead_source, label, etc.
+      // mapping would set lead_source, label, etc.
       // to a different value than what's there.
       const conflicts = []
       for (const f of touchedFields) {

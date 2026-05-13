@@ -169,7 +169,6 @@ export async function runImportCommit(db, {
           ...p.payload,
           name: deriveName(p.payload.first_name, p.payload.last_name, p.payload.email),
           location_id: locationId,
-          lead_status: p.payload.lead_status || 'active_trial',
           created_via_import_id: importId,
         }
         const { data: created, error: insErr } = await db

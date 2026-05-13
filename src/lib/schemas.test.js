@@ -3,7 +3,7 @@ import {
   isoDate, timeOfDay, hexColor, email, url,
   money, hours, days,
   roleSchema, locationRoleSchema, assignmentSchema,
-  employmentTypeSchema, leadStatusSchema,
+  employmentTypeSchema,
   dealStatusSchema,
   reportFrequencySchema,
   permissionsSchema, audienceFilterSchema,
@@ -79,12 +79,6 @@ describe('enum schemas', () => {
     expect(employmentTypeSchema.safeParse('parttime').success).toBe(false)
   })
 
-  it('leadStatusSchema matches AudienceBuilder options', () => {
-    for (const s of ['active_trial', 'cold', 'lost_member', 'member', 'returning']) {
-      expect(leadStatusSchema.safeParse(s).success).toBe(true)
-    }
-  })
-
   it('dealStatusSchema only allows open/won/lost', () => {
     expect(dealStatusSchema.safeParse('open').success).toBe(true)
     expect(dealStatusSchema.safeParse('pending').success).toBe(false)
@@ -116,7 +110,7 @@ describe('audienceFilterSchema', () => {
   it('accepts a well-formed filter object', () => {
     const r = audienceFilterSchema.safeParse({
       logic: 'and',
-      filters: [{ field: 'lead_status', op: 'eq', value: 'member' }],
+      filters: [{ field: 'pipeline_stage_slug', op: 'eq', value: 'active_member' }],
     })
     expect(r.success).toBe(true)
   })
