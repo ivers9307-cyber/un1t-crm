@@ -45,7 +45,7 @@ function StagePill({ stage, count, selected, onPress }) {
 function DealRow({ deal, onPress }) {
   const c = deal.contacts
   const name = c?.name || [c?.first_name, c?.last_name].filter(Boolean).join(' ') || 'Unknown'
-  const sub = c?.lead_status ? c.lead_status.replace(/_/g, ' ') : (c?.email || c?.phone || '')
+  const sub = c?.pipeline_stage_slug ? c.pipeline_stage_slug.replace(/_/g, ' ') : (c?.email || c?.phone || '')
   return (
     <Pressable
       onPress={onPress}

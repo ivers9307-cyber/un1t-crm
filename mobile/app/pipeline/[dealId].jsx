@@ -232,9 +232,9 @@ export default function DealDetail() {
               </View>
               <View className="flex-1">
                 <Text className="text-base font-semibold text-un1t-white">{name}</Text>
-                {contact?.lead_status && (
+                {contact?.pipeline_stage_slug && (
                   <Text className="text-xs text-un1t-light capitalize">
-                    {contact.lead_status.replace(/_/g, ' ')}
+                    {contact.pipeline_stage_slug.replace(/_/g, ' ')}
                     {contact.lead_source ? ` · ${contact.lead_source}` : ''}
                   </Text>
                 )}
