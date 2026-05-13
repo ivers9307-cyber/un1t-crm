@@ -139,12 +139,19 @@ export default function ContactsView({
   // Build the body for /api/contacts/search. Memoised so the effect
   // doesn't re-run on every render — it should only re-fire when the
   // composite state changes.
+  //
+  // SEARCH.1 fix-up: send `filter` ONLY when there's a real filter
+  // object — pre-fix it was gated on `apiActive` which now also turns
+  // true on search-only, sending `filter: null` and tripping the
+  // zod schema's "Invalid input" reject. The two flags are now
+  // independent: apiActive controls whether we hit the API at all,
+  // filterRowCount controls whether we send a filter clause.
   const body = useMemo(() => ({
-    filter: apiActive ? filter : undefined,
+    filter: filterRowCount > 0 ? filter : undefined,
     search: search || undefined,
     location_id: locationId,
     limit: 200,
-  }), [apiActive, filter, search, locationId])
+  }), [filterRowCount, filter, search, locationId])
 
   const fetchContacts = useCallback(async () => {
     setLoading(true)
