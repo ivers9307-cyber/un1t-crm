@@ -499,6 +499,37 @@ export async function POST(request) {
 
 **No new `console.log` in production paths.** Either remove, gate behind `if (process.env.NODE_ENV !== 'production')`, or use `console.error` for genuine error paths so Vercel captures them.
 
+**Always paginate Supabase reads of >1k rows.** PostgREST silently caps every response at the project's `db-max-rows` (1000 on this project). `.limit(20_000)` does NOT override it — the cap applies regardless. Worse, without an `.order()` the row order on a capped response is non-deterministic, so re-runs of the same query return *different* slices of the same 1000 rows.
+
+This bit us **three times** in the PIPELINE5.x rollout (re-classify contacts read, re-classify deals read, invoice-backfill contact lookup) before we caught the pattern. Symptoms: silently truncated maps, run-to-run variance on idempotent operations, member lookups missing for contacts that definitely exist.
+
+Use `.range(start, end)` pagination with an explicit `.order()` whenever the result set could plausibly cross 1k rows:
+
+```js
+const PAGE_SIZE = 1000
+const HARD_LIMIT = 20_000
+const rows = []
+let pageStart = 0
+// eslint-disable-next-line no-constant-condition
+while (true) {
+  const pageEnd = Math.min(pageStart + PAGE_SIZE - 1, HARD_LIMIT - 1)
+  const { data: page, error } = await db
+    .from('contacts')
+    .select('id, glofox_member_id')
+    .eq('location_id', locationId)
+    .order('id', { ascending: true })
+    .range(pageStart, pageEnd)
+  if (error) { /* handle */ break }
+  if (!Array.isArray(page) || page.length === 0) break
+  rows.push(...page)
+  if (page.length < PAGE_SIZE) break
+  if (rows.length >= HARD_LIMIT) break
+  pageStart += PAGE_SIZE
+}
+```
+
+Reference implementations: `src/lib/pipeline-reclassify.js` (contacts + deals), `src/app/api/admin/glofox-invoice-backfill/route.js` (contact-id map). Don't re-roll — copy from one of those.
+
 **Light theme palette — text on light cards.** The codebase migrated to a light theme; `un1t-dark` (#F7F8FA) is a near-white card background, not the dark name suggests. Status text on these cards needs the **-700 ramp**, not -300. The dark-theme-tuned values (`text-amber-300`, `text-red-300`, `text-blue-100`) look washed-out and unreadable against the light surface.
 
 | Use case | Class |

@@ -54,6 +54,12 @@ export default function LocationForm({ location, callerRole = 'owner', organizat
   // for a location lives in one place.
   const [glofoxApiToken, setGlofoxApiToken] = useState(settings.glofox?.api_token || '')
   const [glofoxWebhookSecret, setGlofoxWebhookSecret] = useState(settings.glofox?.webhook_secret || '')
+  // PIPELINE5.10 — namespace is required by /Analytics/report (and a
+  // few v3 endpoints). Glofox returns 200-but-empty when it's
+  // missing, which masked the bug for ages until 5.5f. Visible to
+  // operators here so future locations don't repeat the manual SQL
+  // backfill we ran for Stillorgan.
+  const [glofoxNamespace, setGlofoxNamespace] = useState(settings.glofox?.namespace || '')
   // GLOFOX3.1 — trial membership config. Picked from a dropdown
   // backed by /api/locations/[id]/glofox-memberships. Used when
   // we create a fresh Glofox account for a CRM contact (booking
@@ -177,9 +183,10 @@ export default function LocationForm({ location, callerRole = 'owner', organizat
       } : {}),
       settings: {
         ...(settings || {}),
-        glofox: (glofoxBranchId || glofoxApiKey || glofoxApiToken || glofoxWebhookSecret || glofoxTrialMembershipId) ? {
+        glofox: (glofoxBranchId || glofoxApiKey || glofoxApiToken || glofoxWebhookSecret || glofoxNamespace || glofoxTrialMembershipId) ? {
           branch_id: glofoxBranchId || null,
           api_key: glofoxApiKey || null,
+          namespace: glofoxNamespace || null,
           trial_membership_id: glofoxTrialMembershipId || null,
           trial_plan_code: glofoxTrialPlanCode || null,
           // GLOFOX1.6 — api_token is the third header Glofox auth
@@ -480,6 +487,23 @@ export default function LocationForm({ location, callerRole = 'owner', organizat
             className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid font-mono"
           />
           <p className="text-[11px] text-un1t-mid mt-1">Sent as the <code>x-glofox-api-token</code> header. Different from the API Key — Glofox issues both.</p>
+        </div>
+
+        <div>
+          <label className="block text-sm mb-1.5">Namespace</label>
+          <input
+            type="text"
+            value={glofoxNamespace}
+            onChange={e => setGlofoxNamespace(e.target.value)}
+            placeholder="e.g. untstillorgan"
+            className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid font-mono"
+          />
+          <p className="text-[11px] text-un1t-mid mt-1">
+            Studio namespace as it appears in Glofox URLs and webhook payloads (e.g.{' '}
+            <code>untstillorgan</code>). Required by <code>/Analytics/report</code> for the invoice backfill —
+            without it the endpoint returns 200 with an empty result and no error. You can find it in any
+            recent webhook payload at <code>Payload.namespace</code>, or in your Glofox studio URL.
+          </p>
         </div>
 
         <div>
