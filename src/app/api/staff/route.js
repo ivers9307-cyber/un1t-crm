@@ -39,8 +39,8 @@ const CreateStaffSchema = z.object({
 })
 
 // Slim fields visible to non-admin staff. Includes employment_type and
-// contracted_hours_per_week so head_coach can see schedule capacity warnings,
-// but excludes salary / hourly_rate / overtime_rate (HR-sensitive).
+// contracted_hours_per_week so head_coach can see schedule capacity
+// warnings, but excludes salary / hourly_rate / overtime_rate (HR-sensitive).
 const STAFF_PUBLIC_FIELDS = 'id, full_name, email, role, avatar_url, active, employment_type, contracted_hours_per_week'
 
 // GET /api/staff — List staff in the caller's locations.
@@ -204,6 +204,10 @@ export async function POST(request) {
   const updates = { role: profileRole }
   if (body.permissions) updates.permissions = body.permissions
   if (body.employment_type) updates.employment_type = body.employment_type
+  // SECURITY.1 (mig 152) — comp fields dual-write: profiles columns
+  // stay in sync for existing readers; profile_compensation gets the
+  // canonical copy. Follow-up commit migrates readers + drops the
+  // profiles columns.
   if (body.annual_salary != null) updates.annual_salary = body.annual_salary
   if (body.hourly_rate != null) updates.hourly_rate = body.hourly_rate
   if (body.contracted_hours_per_week != null) updates.contracted_hours_per_week = body.contracted_hours_per_week
@@ -211,6 +215,18 @@ export async function POST(request) {
   if (body.overtime_rate !== undefined) updates.overtime_rate = body.overtime_rate
 
   await db.from('profiles').update(updates).eq('id', newUserId)
+
+  // SECURITY.1 — second leg of the dual-write.
+  const compFields = {}
+  if (body.annual_salary != null)             compFields.annual_salary             = body.annual_salary
+  if (body.hourly_rate != null)               compFields.hourly_rate               = body.hourly_rate
+  if (body.contracted_hours_per_week != null) compFields.contracted_hours_per_week = body.contracted_hours_per_week
+  if (body.annual_leave_entitlement != null)  compFields.annual_leave_entitlement  = body.annual_leave_entitlement
+  if (body.overtime_rate !== undefined)       compFields.overtime_rate             = body.overtime_rate
+  if (Object.keys(compFields).length > 0) {
+    const { upsertCompensationForProfile } = await import('@/lib/profile-compensation')
+    await upsertCompensationForProfile(db, newUserId, compFields, { actorId: user.id })
+  }
 
   // Insert assignments. The trigger that auto-created the profile may
   // also have inserted a default profile_locations row — clear first
