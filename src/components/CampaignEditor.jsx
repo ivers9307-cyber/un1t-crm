@@ -29,6 +29,12 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
   const [saving, setSaving] = useState(false)
   const [sending, setSending] = useState(false)
   const [audienceCount, setAudienceCount] = useState(null)
+  // CAMPAIGN.5 — distinguish "haven't fetched yet" from "fetched but
+  // errored" from "in flight". Without this the banner showed the same
+  // "Save the campaign to compute the recipient count" copy whether the
+  // campaign was unsaved OR the API call had silently 400'd.
+  const [audienceState, setAudienceState] = useState('idle')  // idle | loading | ready | error
+  const [audienceError, setAudienceError] = useState(null)
   const [campaignId, setCampaignId] = useState(campaign?.id || null)
   const [error, setError] = useState(null)
   const [editorMode, setEditorMode] = useState(designJson ? 'visual' : 'visual')  // visual or code
@@ -307,20 +313,43 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
   }
 
   // Fetch audience count
-  const refreshAudienceCount = useCallback(async () => {
-    if (!campaignId) return
-
-    try {
-      const response = await fetch(`/api/campaigns/${campaignId}/preview`)
-      const result = await response.json()
-      if (result.success) setAudienceCount(result.audience_count)
-    } catch (err) {
-      console.error('Failed to get audience count:', err)
+  // CAMPAIGN.5 — POSTs the in-flight filter so the count reflects what
+  // the operator is currently editing (not just what's been saved).
+  // Falls back to the saved filter server-side if body.filter is omitted.
+  // Tracks loading + error state so the banner can show what's actually
+  // happening rather than always saying "Save the campaign to compute".
+  const refreshAudienceCount = useCallback(async (filterOverride) => {
+    if (!campaignId) {
+      setAudienceState('idle')
+      return
     }
-  }, [campaignId])
+    setAudienceState('loading')
+    setAudienceError(null)
+    try {
+      const response = await fetch(`/api/campaigns/${campaignId}/preview`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filter: filterOverride ?? audienceFilter }),
+      })
+      const result = await response.json().catch(() => ({}))
+      if (!response.ok || !result.success) {
+        setAudienceState('error')
+        setAudienceError(result?.error || `HTTP ${response.status}`)
+        return
+      }
+      setAudienceCount(result.audience_count)
+      setAudienceState('ready')
+    } catch (err) {
+      setAudienceState('error')
+      setAudienceError(err?.message || 'Network error')
+    }
+  }, [campaignId, audienceFilter])
 
   useEffect(() => {
     if (campaignId) refreshAudienceCount()
+    // audienceFilter is intentionally a dep — re-counts whenever the
+    // operator edits the filter. refreshAudienceCount is stable per
+    // campaignId + audienceFilter via useCallback.
   }, [campaignId, audienceFilter, refreshAudienceCount])
 
   const tabs = [
@@ -510,19 +539,39 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
                 ClassPass contacts (CONSENT.2), unsubscribed contacts,
                 and bounced/complained email statuses — same gates the
                 actual send applies. */}
-            <div className="bg-emerald-500/10 border border-emerald-500/40 rounded-lg p-4 mb-6 flex items-center gap-3">
-              <Users size={20} className="text-emerald-400 shrink-0" />
-              <div>
-                <div className="text-2xl font-semibold text-un1t-white tabular-nums">
-                  {audienceCount === null ? '—' : audienceCount.toLocaleString()}
+            {/* CAMPAIGN.5 — banner has four distinct states so the
+                operator can see what's actually happening rather than a
+                generic dash. */}
+            {(() => {
+              const isError = audienceState === 'error'
+              const isLoading = audienceState === 'loading'
+              const tone = isError
+                ? 'bg-red-500/10 border-red-500/40'
+                : 'bg-emerald-500/10 border-emerald-500/40'
+              const iconColor = isError ? 'text-red-400' : 'text-emerald-400'
+              const showCount = audienceState === 'ready' && audienceCount !== null
+              return (
+                <div className={`${tone} border rounded-lg p-4 mb-6 flex items-center gap-3`}>
+                  <Users size={20} className={`${iconColor} shrink-0`} />
+                  <div>
+                    <div className="text-2xl font-semibold text-un1t-white tabular-nums">
+                      {showCount
+                        ? audienceCount.toLocaleString()
+                        : isLoading ? 'Computing…' : '—'}
+                    </div>
+                    <div className="text-xs text-un1t-light">
+                      {showCount
+                        ? `contact${audienceCount === 1 ? '' : 's'} will receive this campaign — already filtered for marketing opt-in, valid email, non-ClassPass.`
+                        : isError
+                          ? `Couldn't compute recipient count: ${audienceError || 'unknown error'}`
+                          : isLoading
+                            ? 'Counting matching contacts…'
+                            : 'Save the campaign to compute the recipient count.'}
+                    </div>
+                  </div>
                 </div>
-                <div className="text-xs text-un1t-light">
-                  {audienceCount === null
-                    ? 'Save the campaign to compute the recipient count.'
-                    : `contact${audienceCount === 1 ? '' : 's'} will receive this campaign — already filtered for marketing opt-in, valid email, non-ClassPass.`}
-                </div>
-              </div>
-            </div>
+              )
+            })()}
             <AudienceBuilder
               filter={audienceFilter}
               onChange={(f) => {

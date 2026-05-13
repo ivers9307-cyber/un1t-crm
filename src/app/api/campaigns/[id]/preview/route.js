@@ -3,13 +3,32 @@ import { createServerClient } from '@/lib/supabase'
 import { buildAudienceQueryAsync } from '@/lib/postmark'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 
-// GET /api/campaigns/[id]/preview — Get audience count preview
-export async function GET(request, { params }) {
+export const dynamic = 'force-dynamic'
+
+// Shared count logic — used by both GET (saved filter) and POST
+// (in-flight filter override).
+async function computeCount(db, filter, locationId) {
+  let query
+  try {
+    // Destructure { query } — see resolveTagFilters in audience-filter.js
+    // for the thenable-unwrap reason.
+    ;({ query } = await buildAudienceQueryAsync(db, filter, locationId))
+  } catch (err) {
+    return { ok: false, status: 400, error: err.message }
+  }
+  const { count, error } = await query.select('id', { count: 'exact', head: true })
+  if (error) {
+    return { ok: false, status: 400, error: error.message }
+  }
+  return { ok: true, count: count || 0 }
+}
+
+// GET /api/campaigns/[id]/preview — Audience count for the SAVED filter.
+export async function GET(_request, { params }) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
 
   const db = createServerClient()
-
   const { data: campaign } = await db.from('campaigns')
     .select('audience_filter, location_id')
     .eq('id', params.id)
@@ -18,29 +37,48 @@ export async function GET(request, { params }) {
   if (!campaign) {
     return NextResponse.json({ success: false, error: 'Campaign not found' }, { status: 404 })
   }
-
-  // The campaign's location must be one the caller belongs to.
   const guard = assertLocationAccess(user, campaign.location_id)
   if (guard) return guard
 
-  // Count matching contacts. buildAudienceQuery throws
-  // InvalidAudienceFilterError if the saved filter contains an unknown
-  // field or unsupported operator (e.g. after a downgrade or a manually
-  // edited record). Surface it as a 400 so the user sees what's wrong.
-  let query
-  try {
-    // Destructure { query } — see resolveTagFilters in audience-filter.js
-    // for the thenable-unwrap reason.
-    ;({ query } = await buildAudienceQueryAsync(db, campaign.audience_filter, campaign.location_id))
-  } catch (err) {
-    return NextResponse.json({ success: false, error: err.message }, { status: 400 })
+  const r = await computeCount(db, campaign.audience_filter, campaign.location_id)
+  if (!r.ok) return NextResponse.json({ success: false, error: r.error }, { status: r.status })
+  return NextResponse.json({ success: true, audience_count: r.count })
+}
+
+// POST /api/campaigns/[id]/preview — Audience count for an IN-FLIGHT
+// filter (what the operator is currently editing). Body: { filter }.
+//
+// CAMPAIGN.5 — the count banner used to GET this endpoint and so always
+// reflected the SAVED filter, not what the operator was looking at. Even
+// worse, if the saved filter was malformed (older shape, unknown field)
+// the GET 400'd and the banner silently stayed as "Save the campaign to
+// compute the recipient count" — even though the campaign WAS saved.
+// POST lets the editor compute against the live filter so the number is
+// always meaningful, and errors actually surface.
+export async function POST(request, { params }) {
+  const user = await getCurrentUser()
+  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+
+  const db = createServerClient()
+  const { data: campaign } = await db.from('campaigns')
+    .select('audience_filter, location_id')
+    .eq('id', params.id)
+    .single()
+
+  if (!campaign) {
+    return NextResponse.json({ success: false, error: 'Campaign not found' }, { status: 404 })
   }
+  const guard = assertLocationAccess(user, campaign.location_id)
+  if (guard) return guard
 
-  const { count, error } = await query.select('id', { count: 'exact', head: true })
+  // Use the filter the operator is editing, fall back to the saved one.
+  let body = {}
+  try { body = await request.json() } catch { body = {} }
+  const filter = (body && typeof body === 'object' && body.filter !== undefined)
+    ? body.filter
+    : campaign.audience_filter
 
-  if (error) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 400 })
-  }
-
-  return NextResponse.json({ success: true, audience_count: count || 0 })
+  const r = await computeCount(db, filter, campaign.location_id)
+  if (!r.ok) return NextResponse.json({ success: false, error: r.error }, { status: r.status })
+  return NextResponse.json({ success: true, audience_count: r.count })
 }
