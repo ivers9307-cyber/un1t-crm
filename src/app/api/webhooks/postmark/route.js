@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { verifySharedSecret } from '@/lib/webhook-auth'
 import { recordWebhookEvent, WEBHOOK_PROVIDERS } from '@/lib/webhook-events'
+import { applyMarketingPreferencesBulk } from '@/lib/marketing-consent'
 
 // Force Node.js runtime so node:crypto is available for the timing-safe compare.
 export const runtime = 'nodejs'
@@ -273,7 +274,32 @@ export async function POST(request) {
           .update({ status: 'bounced', bounced_at: now, bounce_type: bounceType })
           .eq('postmark_message_id', messageId)
 
-        // Hard bounce — mark contact as bounced to prevent future sends
+        // Hard bounce — mark contact as bounced AND auto-unsubscribe
+        // them from email marketing.
+        //
+        // UNSUB.2 — operator request: "implement an automation to
+        // unsubscribe everybody who returns bounced". Previously this
+        // handler only set contacts.email_status='bounced', which the
+        // campaign prefilter already excludes. But the contact's
+        // email_marketing pref stayed true, which (a) meant the
+        // audience builder still showed them as opted-in, (b) any
+        // future query that filters on email_marketing alone (no
+        // email_status check) would still target them, and (c) the
+        // recipient's consent record had no trail for the bounce.
+        //
+        // Flipping email_marketing=false via applyMarketingPreferencesBulk
+        // gets us upsert semantics, the consent_log audit entry
+        // (source='postmark_hard_bounce'), ClassPass safety (PAYG
+        // contacts skip — they're managed separately by the auto-
+        // unsubscribe-classpass cron from mig 151), and the
+        // email_status reputation guard that won't trample our
+        // freshly-set 'bounced' value.
+        //
+        // We only do this on HARD bounce. Soft + transient bounces
+        // come through here as bounceType='soft'/'transient' and
+        // get logged at the send/recipient level only, so transient
+        // mailbox-full / greylist-style failures don't burn the
+        // contact's opt-in state.
         if (bounceType === 'hard') {
           const { data: bounceSend } = await db.from('email_sends')
             .select('contact_id, campaign_id')
@@ -284,6 +310,18 @@ export async function POST(request) {
             await db.from('contacts')
               .update({ email_status: 'bounced' })
               .eq('id', bounceSend.contact_id)
+
+            // Auto-unsubscribe. Failures here shouldn't break the
+            // bounce ack (Postmark would retry the webhook and we'd
+            // double-update email_status), so we log and continue.
+            const unsubResult = await applyMarketingPreferencesBulk(db, {
+              contactId: bounceSend.contact_id,
+              prefs: { email_marketing: false },
+              source: 'postmark_hard_bounce',
+            })
+            if (!unsubResult.ok) {
+              console.error('[postmark webhook] auto-unsubscribe on hard bounce failed:', unsubResult.error, { contactId: bounceSend.contact_id })
+            }
 
             if (bounceSend.campaign_id) {
               await db.from('campaigns')
@@ -325,17 +363,21 @@ export async function POST(request) {
             .update({ email_status: 'complained' })
             .eq('id', complaintSend.contact_id)
 
-          await db.from('contact_preferences')
-            .update({ email_marketing: false })
-            .eq('contact_id', complaintSend.contact_id)
-
-          // Log consent change
-          await db.from('consent_log').insert({
-            contact_id: complaintSend.contact_id,
-            channel: 'email_marketing',
-            action: 'opted_out',
-            source: 'spam_complaint',
+          // UNSUB.2 — same auto-unsubscribe path as HardBounce, but
+          // with source='postmark_spam_complaint'. Replaces an
+          // earlier inline implementation that (1) used .update()
+          // instead of upsert, so contacts with no preferences row
+          // silently stayed opted-in, and (2) wrote 'opted_out' to
+          // consent_log.action where the canonical value used
+          // everywhere else is 'opt_out'.
+          const unsubResult = await applyMarketingPreferencesBulk(db, {
+            contactId: complaintSend.contact_id,
+            prefs: { email_marketing: false },
+            source: 'postmark_spam_complaint',
           })
+          if (!unsubResult.ok) {
+            console.error('[postmark webhook] auto-unsubscribe on spam complaint failed:', unsubResult.error, { contactId: complaintSend.contact_id })
+          }
 
           if (complaintSend.campaign_id) {
             await db.from('campaigns')
