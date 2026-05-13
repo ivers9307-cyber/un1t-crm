@@ -91,9 +91,14 @@ export async function POST(request) {
     return NextResponse.json({ success: false, error: 'This time slot is no longer available' }, { status: 409 })
   }
 
-  // Create booking — the DB trigger handles contact creation, deal creation, and webhook
+  // Create booking — the DB trigger handles contact creation, deal creation, and webhook.
+  // BOOKING.1 — copy event.location_id onto the booking. Without this
+  // the booking was invisible in /bookings (location-scoped) and any
+  // downstream code that reads booking.location_id directly (instead
+  // of going through event_types) was getting nulls.
   const { data, error } = await db.from('bookings').insert({
     event_type_id: body.event_type_id,
+    location_id: event.location_id || null,
     booking_date: body.booking_date,
     start_time: body.start_time,
     end_time: endTime,

@@ -18,14 +18,32 @@
 import { sendTransactionalEmail, applyMergeTags } from './postmark'
 import { sendLocationSms, TwilioError } from './twilio'
 import { logWarn } from './log'
-import { formatWeekdayShortDateTimeInTZ } from './dates'
 
+// BOOKING.2 — booking_date (YYYY-MM-DD) and start_time (HH:MM:SS) are
+// stored as Dublin-local wall-clock values without timezone semantics.
+// The old implementation did `new Date(\`${dateStr}T${timeStr}Z\`)` —
+// the trailing `Z` parsed the time as UTC, then
+// formatWeekdayShortDateTimeInTZ rendered it in Europe/Dublin which
+// in BST (May→Oct) is UTC+1 — adding an hour. 17:00 booking → SMS
+// said 18:00. Don't go through Date at all for the clock time;
+// derive only the weekday/date label from a Date and append the
+// stored time string verbatim.
 function fmtBookingTime(dateStr, timeStr) {
+  if (!dateStr) return ''
+  const timePart = String(timeStr || '').slice(0, 5)  // "17:00"
+  // Use noon UTC on the booking date to derive the weekday label —
+  // any same-day UTC instant is fine here since we're only rendering
+  // the weekday + day + month in Europe/Dublin (no time involved).
   try {
-    const dt = new Date(`${dateStr}T${timeStr}Z`)
-    return formatWeekdayShortDateTimeInTZ(dt) || `${dateStr} ${timeStr}`
+    const dayLabel = new Intl.DateTimeFormat('en-IE', {
+      timeZone: 'Europe/Dublin',
+      weekday: 'short',
+      day: 'numeric',
+      month: 'short',
+    }).format(new Date(`${dateStr}T12:00:00Z`))
+    return timePart ? `${dayLabel}, ${timePart}` : dayLabel
   } catch {
-    return `${dateStr} ${timeStr}`
+    return `${dateStr} ${timePart}`
   }
 }
 
