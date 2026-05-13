@@ -11,19 +11,26 @@ export const dynamic = 'force-dynamic'
 // head:true works cleanly because there's no embedded resource for
 // PostgREST to drop its filter binding on.
 //
-// History: CAMPAIGN.6-9 each tried to thread the embedded-resource
-// filter through a count-only select and each fix exposed a new seam
-// (silently zero rows, then URL-length 400s when we tried to
-// pre-fetch ids and use `.in(...)`). Mig 155 makes those workarounds
-// obsolete.
+// CAMPAIGN.10 — request the count via the FIRST .select() call.
+// postgrest-js's PostgrestTransformBuilder.select(columns) (the one
+// you reach after applying any .eq/.not/etc filter) accepts ONLY a
+// columns argument; a chained .select('id', { count, head }) silently
+// drops the options. We were getting GET (not HEAD) requests with no
+// Prefer:count=exact header, supabase-js parsed count as null, and
+// `count || 0` always rendered 0. CAMPAIGN.6-9 each tried to fix a
+// nearby symptom (the embedded-resource filter) and didn't catch this
+// underlying bug because CLASSIFY.1's denormalisation came first.
 async function computeCount(db, filter, locationId) {
   let query
   try {
-    ;({ query } = await buildAudienceQueryAsync(db, filter, locationId))
+    ;({ query } = await buildAudienceQueryAsync(db, filter, locationId, {
+      columns: 'id',
+      selectOpts: { count: 'exact', head: true },
+    }))
   } catch (err) {
     return { ok: false, status: 400, error: err.message }
   }
-  const { count, error } = await query.select('id', { count: 'exact', head: true })
+  const { count, error } = await query
   if (error) return { ok: false, status: 400, error: error.message }
   return { ok: true, count: count || 0 }
 }

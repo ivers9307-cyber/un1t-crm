@@ -199,16 +199,28 @@ export function applyMergeTags(html, contact, extras = {}) {
  * Supported ops: eq, neq, gt, lt, gte, lte, contains, not_contains, is_null, is_not_null,
  *   days_since_gt, days_since_lt (for date fields)
  */
-export function buildAudienceQuery(db, filter, locationId) {
+export function buildAudienceQuery(db, filter, locationId, { columns = '*', selectOpts } = {}) {
   // CLASSIFY.1 — uses denormalised contacts.email_marketing instead of
   // an inner-join on contact_preferences. Single-table filtering kills
   // a long line of PostgREST embedded-resource bugs in the count path
   // (head:true + .select() override silently dropping the relationship
   // binding). The trigger in mig 155 keeps contacts.email_marketing in
   // sync with contact_preferences.email_marketing.
+  //
+  // CAMPAIGN.10 — pass count/head via the FIRST .select() call.
+  // postgrest-js v2 has two select() overloads:
+  //   - PostgrestQueryBuilder.select(columns, options) — accepts
+  //     { count, head }, sets HTTP method to HEAD, adds the
+  //     Prefer: count=exact header.
+  //   - PostgrestTransformBuilder.select(columns) — accepts ONLY
+  //     columns. Any options object passed in is silently ignored.
+  // Calling .select() again AFTER filters (i.e. on the filter builder)
+  // hits the TransformBuilder overload — the head/count options vanish.
+  // Callers that need a count must therefore request it on the FIRST
+  // select(), which is what this helper does for them.
   let query = db
     .from('contacts')
-    .select('*')
+    .select(columns, selectOpts)
     .eq('location_id', locationId)
     .eq('email_marketing', true)
     .not('email_status', 'in', '("bounced","complained")')
@@ -221,11 +233,19 @@ export function buildAudienceQuery(db, filter, locationId) {
  * (Phase 3 retargeting). Use from any async caller that handles
  * an audience filter from the UI; the AudienceBuilder may contain
  * tag clauses now.
+ *
+ * To get a count without fetching rows, pass:
+ *   buildAudienceQueryAsync(db, filter, locationId, {
+ *     columns: 'id',
+ *     selectOpts: { count: 'exact', head: true },
+ *   })
+ * See buildAudienceQuery's CAMPAIGN.10 comment for the postgrest-js
+ * select-overload gotcha.
  */
-export async function buildAudienceQueryAsync(db, filter, locationId) {
+export async function buildAudienceQueryAsync(db, filter, locationId, { columns = '*', selectOpts } = {}) {
   let query = db
     .from('contacts')
-    .select('*')
+    .select(columns, selectOpts)
     .eq('location_id', locationId)
     .eq('email_marketing', true)
     .not('email_status', 'in', '("bounced","complained")')
