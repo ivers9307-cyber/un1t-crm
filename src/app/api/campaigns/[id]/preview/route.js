@@ -82,12 +82,27 @@ export async function POST(request, { params }) {
 
   // Use the filter the operator is editing, fall back to the saved one.
   let body = {}
-  try { body = await request.json() } catch { body = {} }
-  const filter = (body && typeof body === 'object' && body.filter !== undefined)
-    ? body.filter
-    : campaign.audience_filter
+  let rawBody = ''
+  let bodyParseError = null
+  try {
+    rawBody = await request.text()
+    body = rawBody ? JSON.parse(rawBody) : {}
+  } catch (e) {
+    bodyParseError = e?.message || String(e)
+    body = {}
+  }
+  const hasInFlight = body && typeof body === 'object' && body.filter !== undefined
+  const filter = hasInFlight ? body.filter : campaign.audience_filter
 
   const r = await computeCount(db, filter, campaign.location_id)
-  if (!r.ok) return NextResponse.json({ success: false, error: r.error }, { status: r.status })
-  return NextResponse.json({ success: true, audience_count: r.count })
+  const _debug = {
+    rawBodyLen: rawBody.length,
+    bodyParseError,
+    hasInFlight,
+    receivedFilter: body?.filter,
+    savedFilter: campaign.audience_filter,
+    filterUsed: filter,
+  }
+  if (!r.ok) return NextResponse.json({ success: false, error: r.error, _debug }, { status: r.status })
+  return NextResponse.json({ success: true, audience_count: r.count, _debug })
 }
