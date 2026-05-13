@@ -112,17 +112,36 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [unlayerLoaded, tab, editorMode])
 
-  // Get HTML and design JSON from Unlayer
+  // Get HTML and design JSON from Unlayer.
+  // CAMPAIGN.3 — the exportHtml callback never fires when the Unlayer
+  // iframe isn't mounted (e.g., operator clicked Save while on the
+  // Audience tab). Without a timeout the promise hung forever, which
+  // locked Save and Send-Test in a permanent spinner.
   const exportFromUnlayer = useCallback(() => {
     return new Promise((resolve) => {
-      if (!window.unlayer) {
+      if (!window.unlayer || typeof window.unlayer.exportHtml !== 'function') {
         resolve({ html: htmlContent, design: designJson })
         return
       }
-
-      window.unlayer.exportHtml((data) => {
-        resolve({ html: data.html, design: data.design })
-      })
+      let done = false
+      const timer = setTimeout(() => {
+        if (done) return
+        done = true
+        resolve({ html: htmlContent, design: designJson })
+      }, 2500)
+      try {
+        window.unlayer.exportHtml((data) => {
+          if (done) return
+          done = true
+          clearTimeout(timer)
+          resolve({ html: data?.html ?? htmlContent, design: data?.design ?? designJson })
+        })
+      } catch {
+        if (done) return
+        done = true
+        clearTimeout(timer)
+        resolve({ html: htmlContent, design: designJson })
+      }
     })
   }, [htmlContent, designJson])
 
@@ -136,7 +155,14 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
   // Returns { html, design } so handleSave can use the values
   // directly without waiting for setState to flush.
   const stashUnlayerToState = useCallback(async () => {
-    if (editorMode !== 'visual' || !window.unlayer) {
+    // CAMPAIGN.3 — only attempt to export from Unlayer when the Design
+    // tab is actually mounted. The Design tab is conditionally rendered
+    // ({tab === 'design' && ...}), so on the Audience/Settings tabs the
+    // Unlayer iframe is gone and exportHtml's callback never fires —
+    // hanging Save and Send-Test forever. When we're not on the Design
+    // tab the React state (htmlContent/designJson) already holds the
+    // latest stashed content from when the operator last left the tab.
+    if (tab !== 'design' || editorMode !== 'visual' || !window.unlayer) {
       return { html: htmlContent, design: designJson }
     }
     try {
@@ -149,7 +175,7 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
     } catch {
       return { html: htmlContent, design: designJson }
     }
-  }, [editorMode, exportFromUnlayer, htmlContent, designJson])
+  }, [tab, editorMode, exportFromUnlayer, htmlContent, designJson])
 
   async function handleSave() {
     setSaving(true)
