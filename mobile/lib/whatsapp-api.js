@@ -16,7 +16,7 @@ export async function listConversations(locationId) {
       id, location_id, contact_id, wa_phone, wa_profile_name, status,
       last_message_at, last_message_direction, last_message_preview,
       unread_count, window_expires_at, assigned_to, created_at,
-      contacts:contact_id (id, name, first_name, last_name, lead_status)
+      contacts:contact_id (id, name, first_name, last_name, pipeline_stage_slug)
     `)
     .order('last_message_at', { ascending: false, nullsFirst: false })
     .limit(100)
@@ -29,7 +29,7 @@ export async function getConversation(id) {
   const { data, error } = await supabase.from('whatsapp_conversations')
     .select(`
       *,
-      contacts:contact_id (id, name, first_name, last_name, email, phone, wa_phone, lead_status)
+      contacts:contact_id (id, name, first_name, last_name, email, phone, wa_phone, pipeline_stage_slug)
     `)
     .eq('id', id)
     .single()

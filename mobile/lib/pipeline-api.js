@@ -25,7 +25,7 @@ export async function listDealsByStage(stageId, locationId) {
   let q = supabase.from('deals')
     .select(`
       id, title, status, value, stage_id, created_at, updated_at, location_id,
-      contacts:contact_id (id, name, first_name, last_name, lead_status, phone, wa_phone, email)
+      contacts:contact_id (id, name, first_name, last_name, pipeline_stage_slug, phone, wa_phone, email)
     `)
     .eq('stage_id', stageId)
     .eq('status', 'open')

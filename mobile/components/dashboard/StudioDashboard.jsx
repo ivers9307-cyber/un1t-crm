@@ -14,17 +14,19 @@ import {
   KpiCard, KpiRow, SectionHeader, PendingRow, ListCard,
 } from './cards'
 
-// Friendlier labels for the lead_status enum than the raw snake_case
-// the DB stores. Anything not in the map falls back to a title-cased
-// version of the key.
+// Friendlier labels for the pipeline_stage_slug values than the raw
+// snake_case the DB stores. Anything not in the map falls back to a
+// title-cased version of the key.
 const STATUS_LABEL = {
   new_lead: 'New leads',
   active_trial: 'On trial',
-  trial_complete: 'Trial done',
-  member: 'Members',
+  hot_conversion: 'Hot conversion',
+  active_member: 'Members',
+  at_risk_member: 'At risk',
+  classpass_active: 'ClassPass',
   lapsed: 'Lapsed',
-  lost: 'Lost',
-  archived: 'Archived',
+  dormant: 'Dormant',
+  dormant_classpass: 'Dormant CP',
   unknown: 'Other',
 }
 
@@ -66,7 +68,7 @@ export default function StudioDashboard({ refreshKey }) {
 
   // Funnel display: pull the headline statuses to a 2x2 grid; everything
   // else is rolled into the contact total.
-  const headlineStatuses = ['new_lead', 'active_trial', 'member', 'lapsed']
+  const headlineStatuses = ['new_lead', 'active_trial', 'active_member', 'lapsed']
   const headline = headlineStatuses.map(k => ({ key: k, count: funnel[k] || 0 }))
 
   return (
