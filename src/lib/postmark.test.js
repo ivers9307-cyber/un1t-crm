@@ -14,7 +14,11 @@
 // follow-up commit.
 
 import { describe, it, expect } from 'vitest'
-import { applyMergeTags } from './postmark.js'
+import {
+  applyMergeTags,
+  buildUnsubscribeUrl,
+  appendUnsubscribeFooter,
+} from './postmark.js'
 
 describe('applyMergeTags', () => {
   // ── falsy / pass-through ────────────────────────────────────────
@@ -162,5 +166,99 @@ describe('applyMergeTags', () => {
     // the right fallback (no "undefined" leaking into email body).
     expect(applyMergeTags('Code: {{glofox_passcode}}', { name: 'Alice' }))
       .toBe('Code: ')
+  })
+})
+
+// ============================================================
+// UNSUB.1 — buildUnsubscribeUrl + appendUnsubscribeFooter
+// ============================================================
+
+describe('buildUnsubscribeUrl', () => {
+  it('uses contact_preferences.unsubscribe_token when present', () => {
+    const contact = {
+      id: 'contact-uuid',
+      contact_preferences: [{ unsubscribe_token: 'tok-abc123' }],
+    }
+    expect(buildUnsubscribeUrl(contact, 'https://crm.un1t.ie'))
+      .toBe('https://crm.un1t.ie/unsubscribe/tok-abc123')
+  })
+
+  it('accepts contact_preferences as a single object (not array)', () => {
+    // Supabase embedded resources can come back as either shape
+    // depending on whether the relationship is many-to-one or
+    // one-to-one. Both must work.
+    const contact = {
+      id: 'contact-uuid',
+      contact_preferences: { unsubscribe_token: 'tok-xyz789' },
+    }
+    expect(buildUnsubscribeUrl(contact, 'https://crm.un1t.ie'))
+      .toBe('https://crm.un1t.ie/unsubscribe/tok-xyz789')
+  })
+
+  it('falls back to contact.id when no preferences row exists', () => {
+    // The unsubscribe page accepts either token shape — see
+    // src/app/unsubscribe/[token]/page.js — so this fallback gives
+    // the recipient a working link even pre-CONSENT.1 contacts.
+    const contact = { id: 'contact-uuid' }
+    expect(buildUnsubscribeUrl(contact, 'https://crm.un1t.ie'))
+      .toBe('https://crm.un1t.ie/unsubscribe/contact-uuid')
+  })
+})
+
+describe('appendUnsubscribeFooter', () => {
+  const URL = 'https://crm.un1t.ie/unsubscribe/tok-1'
+
+  it('appends a 7pt Unsubscribe link with the URL', () => {
+    const out = appendUnsubscribeFooter('<p>Hi</p>', URL)
+    expect(out).toContain('font-size:7pt')
+    expect(out).toContain(`href="${URL}"`)
+    expect(out).toContain('>Unsubscribe</a>')
+  })
+
+  it('inserts BEFORE </body> when the html has one', () => {
+    // Footer lands inside <body> so email clients render it as part
+    // of the email content, not loose markup after the closing tag.
+    const out = appendUnsubscribeFooter(
+      '<html><body><p>Hi</p></body></html>',
+      URL
+    )
+    expect(out.indexOf('Unsubscribe</a>')).toBeLessThan(out.indexOf('</body>'))
+    expect(out.endsWith('</body></html>')).toBe(true)
+  })
+
+  it('case-insensitive — matches </BODY> too', () => {
+    const out = appendUnsubscribeFooter('<HTML><BODY>x</BODY></HTML>', URL)
+    expect(out.indexOf('Unsubscribe</a>')).toBeLessThan(out.indexOf('</BODY>'))
+  })
+
+  it('appends at end when the html has no body tag', () => {
+    // Some operators paste partial HTML snippets without a
+    // <body> wrapper. We still need the footer.
+    const out = appendUnsubscribeFooter('<p>fragment</p>', URL)
+    expect(out.startsWith('<p>fragment</p>')).toBe(true)
+    expect(out).toContain('Unsubscribe')
+  })
+
+  it('always appends — even when {{unsubscribe_url}} was already inlined', () => {
+    // Operator spec: "always append auto-footer". Even if the body
+    // already has an unsubscribe link, the auto footer still goes
+    // in. Both links must point at the same URL.
+    const body = `<p>Read more: <a href="${URL}">unsubscribe here</a></p>`
+    const out = appendUnsubscribeFooter(body, URL)
+    // Two occurrences of the URL — operator's + the auto footer.
+    expect((out.match(new RegExp(URL.replace(/[/.]/g, '\\$&'), 'g')) || []).length)
+      .toBe(2)
+  })
+
+  it('returns input unchanged when html is empty', () => {
+    expect(appendUnsubscribeFooter('', URL)).toBe('')
+    expect(appendUnsubscribeFooter(null, URL)).toBeNull()
+  })
+
+  it('returns input unchanged when unsubscribeUrl is missing', () => {
+    // Defensive — if the caller forgot to build the URL, we
+    // shouldn't emit `<a href="">Unsubscribe</a>` which would 404.
+    expect(appendUnsubscribeFooter('<p>Hi</p>', '')).toBe('<p>Hi</p>')
+    expect(appendUnsubscribeFooter('<p>Hi</p>', null)).toBe('<p>Hi</p>')
   })
 })

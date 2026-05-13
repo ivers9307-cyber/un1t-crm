@@ -188,6 +188,60 @@ export function applyMergeTags(html, contact, extras = {}) {
 }
 
 // ============================================================
+// UNSUBSCRIBE FOOTER — appended automatically to every marketing
+// email (campaign broadcasts + sequence step emails). Transactional
+// emails (booking confirmation, password reset, deposit receipt,
+// etc.) do NOT call this — they go through sendTransactionalEmail
+// directly without the footer wrapper.
+// ============================================================
+
+/**
+ * Build the canonical /unsubscribe/<token> URL for a contact.
+ * Prefers the per-contact unsubscribe_token (from
+ * contact_preferences) and falls back to contact.id, mirroring the
+ * lookup logic the unsubscribe page already accepts. The caller
+ * provides baseUrl from getAppUrl() so this is unit-testable
+ * without env vars.
+ */
+export function buildUnsubscribeUrl(contact, baseUrl) {
+  const prefs = contact?.contact_preferences?.[0] || contact?.contact_preferences
+  const token = prefs?.unsubscribe_token || contact?.id
+  return `${baseUrl}/unsubscribe/${token}`
+}
+
+/**
+ * Append a small "Unsubscribe" footer (7pt, muted) to a fully-
+ * rendered marketing email body. Always appends regardless of
+ * whether the operator already placed a {{unsubscribe_url}} link
+ * in the body — operator choice was "always append" so the
+ * compliance link is guaranteed and nobody has to remember.
+ *
+ * Insertion strategy: insert immediately before the LAST </body>
+ * tag if one exists (so the footer lands inside the body), else
+ * append at the end. Either way the link is the last visual
+ * element in the rendered email.
+ *
+ * Email-client safe: table layout, inline styles only, no
+ * external CSS, no JS. font-size:7pt matches the operator's
+ * spec; color #888 is muted-grey on white/light backgrounds
+ * (the email itself owns its background — we don't try to match).
+ */
+export function appendUnsubscribeFooter(html, unsubscribeUrl) {
+  if (!html || !unsubscribeUrl) return html
+
+  const footer = `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:24px 0 0 0;border-collapse:collapse;"><tr><td align="center" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;font-size:7pt;color:#888888;padding:16px 8px;line-height:1.4;"><a href="${unsubscribeUrl}" style="color:#888888;text-decoration:underline;">Unsubscribe</a></td></tr></table>`
+
+  // Case-insensitive search for the LAST </body>. Most HTML
+  // emails have exactly one; some templates have none (snippet
+  // bodies). lastIndexOf is fine for single-occurrence — and for
+  // the pathological multi-body case, the operator's last body
+  // close is where the footer logically belongs.
+  const bodyCloseIdx = html.toLowerCase().lastIndexOf('</body>')
+  if (bodyCloseIdx === -1) return html + footer
+  return html.slice(0, bodyCloseIdx) + footer + html.slice(bodyCloseIdx)
+}
+
+// ============================================================
 // AUDIENCE BUILDER — filter contacts for campaigns
 // ============================================================
 
@@ -301,15 +355,20 @@ export async function sendCampaign(campaignId) {
 
   // Prepare batch emails
   const emailBatch = contacts.map(contact => {
+    const unsubscribeUrl = buildUnsubscribeUrl(contact, baseUrl)
     const prefs = contact.contact_preferences?.[0] || contact.contact_preferences
-    const unsubscribeUrl = `${baseUrl}/unsubscribe/${prefs?.unsubscribe_token || contact.id}`
     const preferenceUrl = `${baseUrl}/preferences/${prefs?.unsubscribe_token || contact.id}`
 
-    const personalizedHtml = applyMergeTags(campaign.html_content, contact, {
+    const merged = applyMergeTags(campaign.html_content, contact, {
       location_name: campaign.locations?.name || '',
       unsubscribe_url: unsubscribeUrl,
       preference_url: preferenceUrl,
     })
+    // Compliance footer — auto-appended for every marketing send so
+    // no operator has to remember to add {{unsubscribe_url}} to the
+    // body. Operator-placed inline links via the merge tag still
+    // work; this just guarantees a final-line "Unsubscribe" link.
+    const personalizedHtml = appendUnsubscribeFooter(merged, unsubscribeUrl)
 
     return {
       to: contact.email,

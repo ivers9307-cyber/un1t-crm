@@ -23,7 +23,13 @@
 // `wait` is not a handler — the runner just bumps next_step_at and
 // returns; nothing to send.
 
-import { sendTransactionalEmail, applyMergeTags } from '@/lib/postmark'
+import {
+  sendTransactionalEmail,
+  applyMergeTags,
+  buildUnsubscribeUrl,
+  appendUnsubscribeFooter,
+} from '@/lib/postmark'
+import { getAppUrl } from '@/lib/app-url'
 import {
   sendTemplateMessage,
   buildTemplateComponents,
@@ -56,8 +62,20 @@ export async function sendEmailStep(db, { enrollment: _enrollment, step, sequenc
 
   // Merge tags substitution — supports {{first_name}}, {{full_name}}
   // etc, same shape as campaigns (see src/lib/postmark.js#applyMergeTags).
+  // UNSUB.1 — pass the per-contact unsubscribe URL through so inline
+  // {{unsubscribe_url}} tokens still resolve; then auto-append the
+  // 7pt "Unsubscribe" footer so every marketing sequence email has a
+  // compliance link without the operator having to remember it. The
+  // append always runs — it doesn't try to detect an operator-placed
+  // inline link, per the operator's "always append" spec.
+  const baseUrl = getAppUrl()
+  const unsubscribeUrl = buildUnsubscribeUrl(contact, baseUrl)
   const mergedSubject = applyMergeTags(subject, contact)
-  const mergedHtml = applyMergeTags(html, contact)
+  const merged = applyMergeTags(html, contact, {
+    unsubscribe_url: unsubscribeUrl,
+    preference_url: `${baseUrl}/preferences/${unsubscribeUrl.split('/unsubscribe/')[1]}`,
+  })
+  const mergedHtml = appendUnsubscribeFooter(merged, unsubscribeUrl)
 
   const result = await sendTransactionalEmail({
     to: contact.email,
