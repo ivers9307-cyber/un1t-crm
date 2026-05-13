@@ -16,7 +16,16 @@ async function computeCount(db, filter, locationId) {
   } catch (err) {
     return { ok: false, status: 400, error: err.message }
   }
-  const { count, error } = await query.select('id', { count: 'exact', head: true })
+  // CAMPAIGN.6 — preserve the contact_preferences!inner join when
+  // switching to a count-only select. Plain `.select('id', ...)` here
+  // would overwrite the join that buildAudienceQueryAsync set up, and
+  // PostgREST would then reject the `.eq('contact_preferences.email_marketing', true)`
+  // filter with "'contact_preferences' is not an embedded resource in
+  // this request".
+  const { count, error } = await query.select(
+    'id, contact_preferences!inner(id)',
+    { count: 'exact', head: true }
+  )
   if (error) {
     return { ok: false, status: 400, error: error.message }
   }
