@@ -21,6 +21,9 @@ const SOURCE_LABELS = {
   // alongside a booking or event registration submission.
   booking_form:             { label: 'Booking form',              tone: 'emerald' },
   event_form:               { label: 'Event registration form',   tone: 'emerald' },
+  // CONSENT.5 — operator-driven CSV import migrating consent from
+  // an external platform (Mailchimp / Klaviyo / etc).
+  bulk_import:              { label: 'Bulk import',               tone: 'amber' },
 }
 
 const CHANNEL_LABELS = {

@@ -95,6 +95,11 @@ const allNav = [
   // (initial backfill / bulk re-sync). The /admin layout already
   // enforces master at the route level.
   { href: '/admin/glofox-import', label: 'Glofox import', icon: Download, masterOnly: true },
+  // CONSENT.5 — bulk import of marketing preferences from external
+  // platforms. Master-only because it touches consent state across
+  // the whole contact base. Reuses the csv-parse helper + the same
+  // ClassPass safety as the rest of the consent stack.
+  { href: '/admin/marketing-import', label: 'Preferences import', icon: Download, masterOnly: true },
   // Public landing page — preview link. Gated by the
   // 'landing_page' permission (mig 126-130 era) — defaults to
   // owner+master per role, location-feature-gateable + per-user
