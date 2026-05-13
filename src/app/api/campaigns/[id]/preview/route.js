@@ -82,12 +82,35 @@ export async function POST(request, { params }) {
 
   // Use the filter the operator is editing, fall back to the saved one.
   let body = {}
-  try { body = await request.json() } catch { body = {} }
-  const filter = (body && typeof body === 'object' && body.filter !== undefined)
-    ? body.filter
-    : campaign.audience_filter
+  let bodyParseError = null
+  try {
+    body = await request.json()
+  } catch (e) {
+    bodyParseError = e?.message || String(e)
+    body = {}
+  }
+  const hasInFlight = body && typeof body === 'object' && body.filter !== undefined
+  const filter = hasInFlight ? body.filter : campaign.audience_filter
+
+  // TEMP DEBUG (CAMPAIGN.7 diagnostic) — log what the server actually
+  // sees so we can find why the count is 0 even though the in-flight
+  // filter should match 3,205 rows. Remove once root cause is fixed.
+  console.log('[preview POST debug]', JSON.stringify({
+    campaignId: params.id,
+    bodyParseError,
+    hasInFlightFilter: hasInFlight,
+    savedFilter: campaign.audience_filter,
+    receivedFilter: body?.filter,
+    filterUsed: filter,
+    locationId: campaign.location_id,
+  }))
 
   const r = await computeCount(db, filter, campaign.location_id)
+
+  console.log('[preview POST debug] result', JSON.stringify({
+    ok: r.ok, count: r.count, error: r.error,
+  }))
+
   if (!r.ok) return NextResponse.json({ success: false, error: r.error }, { status: r.status })
   return NextResponse.json({ success: true, audience_count: r.count })
 }
