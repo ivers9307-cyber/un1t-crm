@@ -129,7 +129,12 @@ export default function ContactsView({
   // navigation + URL sharing keep working. The search box re-fetches
   // because it has no URL counterpart in client mode.
   const filterRowCount = filter?.filters?.length || 0
-  const apiActive = filterRowCount > 0
+  // SEARCH.1 (2026-05-13): search ALSO triggers the API path. Pre-fix,
+  // search-only with no advanced filter was client-side-only filtering
+  // over the first 200 server-rendered contacts, so a contact outside
+  // that 200-row window was unfindable. The API path searches the
+  // whole table.
+  const apiActive = filterRowCount > 0 || !!(search?.trim())
 
   // Build the body for /api/contacts/search. Memoised so the effect
   // doesn't re-run on every render — it should only re-fire when the
@@ -200,7 +205,13 @@ export default function ContactsView({
     if (status === 'active_trial') {
       rows = rows.filter(c => c.lead_source !== 'classpass')
     }
-    if (search?.trim()) {
+    // SEARCH.1: when apiActive, the API has already done a wider
+    // search (name + email + first_name + last_name + phone, multi-
+    // token). Re-applying a name/email-only filter client-side would
+    // strip phone-matched / surname-matched rows. Only run the
+    // client-side search filter when we're using the initial server-
+    // rendered list (no advanced filter, no search box value).
+    if (search?.trim() && !apiActive) {
       const needle = search.trim().toLowerCase()
       rows = rows.filter(c =>
         (c.name && c.name.toLowerCase().includes(needle))
@@ -208,7 +219,7 @@ export default function ContactsView({
       )
     }
     return rows
-  }, [clientContacts, initialContacts, status, search])
+  }, [clientContacts, initialContacts, status, search, apiActive])
 
   function clearAdvanced() {
     setFilter(null)

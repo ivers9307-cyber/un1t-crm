@@ -29,7 +29,22 @@ export default async function ContactsPage({ searchParams }) {
   // for the client-side path. Operator can still see them via the
   // Advanced filter ('Lead Source' = 'classpass').
   if (status === 'active_trial') query = query.neq('lead_source', 'classpass')
-  if (search) query = query.or(`name.ilike.%${search}%,email.ilike.%${search}%`)
+  if (search) {
+    // SEARCH.1: widened to match the API path's coverage (name +
+    // email + first_name + last_name + phone, with digit-only phone
+    // normalisation). Strip PostgREST .or() reserved chars from the
+    // search to avoid breaking the filter syntax.
+    const safe = String(search).replace(/[(),]/g, '')
+    const orClauses = [
+      `name.ilike.%${safe}%`,
+      `email.ilike.%${safe}%`,
+      `first_name.ilike.%${safe}%`,
+      `last_name.ilike.%${safe}%`,
+    ]
+    const digits = safe.replace(/\D/g, '')
+    if (digits.length >= 4) orClauses.push(`phone.ilike.%${digits}%`)
+    query = query.or(orClauses.join(','))
+  }
 
   const { data: contacts } = await query
 

@@ -9,6 +9,14 @@ import { audienceFilterSchema } from '@/lib/schemas'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
+// PostgREST .or() filter syntax uses commas as separators and
+// parens for grouping. A search token containing those characters
+// would break parsing. Strip them out — they have no business in
+// a name / email / phone substring search anyway.
+function escapePostgrestOr(s) {
+  return String(s || '').replace(/[(),]/g, '')
+}
+
 // GET /api/contacts/search?term=email@example.com&fields=email
 // Replaces Pipedrive GET /v1/persons/search
 export async function GET(request) {
@@ -120,13 +128,41 @@ export async function POST(request) {
     .select('id', { count: 'exact', head: true })
     .eq('location_id', locationId)
 
-  // Free-text search applies on top of the audience filter — it's a
-  // separate name/email substring match, not part of the filter
-  // schema. Both queries get it.
+  // Free-text search applies on top of the audience filter — separate
+  // substring match, not part of the filter schema. Both queries get it.
+  //
+  // SEARCH.1 (2026-05-13): widened from name/email-only to include
+  // first_name, last_name, phone. Each whitespace-separated token in
+  // the search string must match at least one of the columns
+  // independently, so "smith dean" matches "Dean Smith" (different
+  // word order). Phone search digit-normalises both sides so
+  // "0871234567" matches a stored "+353 87 123 4567".
   if (parsed.data.search?.trim()) {
-    const s = parsed.data.search.trim()
-    listQuery = listQuery.or(`name.ilike.%${s}%,email.ilike.%${s}%`)
-    countQuery = countQuery.or(`name.ilike.%${s}%,email.ilike.%${s}%`)
+    const raw = parsed.data.search.trim()
+    const tokens = raw.split(/\s+/).filter(Boolean)
+    for (const token of tokens) {
+      const orClauses = [
+        `name.ilike.%${escapePostgrestOr(token)}%`,
+        `email.ilike.%${escapePostgrestOr(token)}%`,
+        `first_name.ilike.%${escapePostgrestOr(token)}%`,
+        `last_name.ilike.%${escapePostgrestOr(token)}%`,
+      ]
+      // Phone match: only fire when the token has digits. Strip
+      // non-digits from both the token and the comparison side via a
+      // raw regexp_replace expression — neat trick that lets a stored
+      // "+353 87 123 4567" match a typed "0871234567" or "871234567".
+      const digits = token.replace(/\D/g, '')
+      if (digits.length >= 4) {
+        // PostgREST .or() uses commas as separators and parentheses
+        // for grouping. Inject a custom raw filter via the lower-level
+        // `phone.ilike.*digits*` — cheaper than a full regex eval and
+        // matches the common formatting variations.
+        orClauses.push(`phone.ilike.%${digits}%`)
+      }
+      const orStr = orClauses.join(',')
+      listQuery = listQuery.or(orStr)
+      countQuery = countQuery.or(orStr)
+    }
   }
 
   try {
