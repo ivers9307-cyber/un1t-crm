@@ -11,6 +11,7 @@ import ContactRaceHistory from '@/components/ContactRaceHistory'
 import ContactEditDeleteActions from '@/components/ContactEditDeleteActions'
 import InviteToAppButton from '@/components/InviteToAppButton'
 import ContactDevicesCard from '@/components/ContactDevicesCard'
+import ContactMarketingPreferencesCard from '@/components/ContactMarketingPreferencesCard'
 import CreateInGlofoxButton from '@/components/CreateInGlofoxButton'
 
 export const dynamic = 'force-dynamic'
@@ -167,6 +168,15 @@ export default async function ContactDetailPage({ params }) {
           <ContactDevicesCard
             contactId={contact.id}
             canEdit={user?.isMaster || ['owner', 'manager', 'head_coach'].includes(user?.role)}
+          />
+
+          {/* CONSENT.1 — operator toggles for marketing email / SMS /
+              WhatsApp. Transactional sends stay on regardless. PATCH
+              path is master/owner only; everyone else sees the panel
+              read-only so they at least know the contact's status. */}
+          <ContactMarketingPreferencesCard
+            contactId={contact.id}
+            canEdit={user?.isMaster || ['owner'].includes(user?.role)}
           />
 
           {/* Deals */}
