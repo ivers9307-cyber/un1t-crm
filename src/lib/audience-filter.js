@@ -20,14 +20,21 @@
  */
 export const AUDIENCE_FIELDS = Object.freeze({
   // Identity / classification
-  lead_status:               { type: 'select',  ops: ['eq', 'neq'] },
+  //
+  // CLASSIFY.1 — pipeline_stage_slug is the canonical funnel position
+  // (PIPELINE5 redesign). Denormalised from deals.stage_id →
+  // pipeline_stages.slug onto contacts via the trigger in mig 155.
+  // Replaces lead_status, which was effectively unmaintained — 99.9%
+  // of contacts at Stillorgan had the import default 'active_trial'
+  // and no code reliably wrote 'member' or other values back.
+  pipeline_stage_slug:       { type: 'select',  ops: ['eq', 'neq', 'is_null', 'is_not_null', 'not_null'] },
   email_status:              { type: 'select',  ops: ['eq', 'neq'] },
   lead_source:               { type: 'select',  ops: ['eq', 'neq'] },
-  // GLOFOX2.1.8 — Glofox-side membership status (mig 133). Distinct
-  // from local lead_status; mirrors Glofox's Client Status with three
-  // synthesised canonicals (credit_member, classpass_payg, ex_member).
-  // Adds the ability to target Credit Members specifically for
-  // subscription-upsell sequences.
+  // GLOFOX2.1.8 — Glofox-side raw membership status. This feeds the
+  // pipeline classifier — most operators should NOT filter on it
+  // directly; use pipeline_stage_slug instead. Kept as an advanced
+  // filter for power users targeting credit_member upsells, classpass
+  // _payg cohorts, etc.
   glofox_membership_status:  { type: 'select',  ops: ['eq', 'neq', 'is_null', 'is_not_null', 'not_null'] },
   wa_status:                 { type: 'select',  ops: ['eq', 'neq'] },
   // contacts.sms_status (mig 059) — mirrors wa_status. Used by the

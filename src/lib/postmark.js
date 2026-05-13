@@ -192,21 +192,19 @@ export function applyMergeTags(html, contact, extras = {}) {
  *   days_since_gt, days_since_lt (for date fields)
  */
 export function buildAudienceQuery(db, filter, locationId) {
+  // CLASSIFY.1 — uses denormalised contacts.email_marketing instead of
+  // an inner-join on contact_preferences. Single-table filtering kills
+  // a long line of PostgREST embedded-resource bugs in the count path
+  // (head:true + .select() override silently dropping the relationship
+  // binding). The trigger in mig 155 keeps contacts.email_marketing in
+  // sync with contact_preferences.email_marketing.
   let query = db
     .from('contacts')
-    .select('*, contact_preferences!inner(*)')
+    .select('*')
     .eq('location_id', locationId)
-    .eq('contact_preferences.email_marketing', true)  // Always respect consent
+    .eq('email_marketing', true)
+    .not('email_status', 'in', '("bounced","complained")')
 
-  // Exclude bounced/complained contacts
-  query = query.not('email_status', 'in', '("bounced","complained")')
-
-  // Apply user-supplied filters via the whitelisted helper. Throws
-  // InvalidAudienceFilterError if the filter contains an unknown field
-  // or unsupported operator — let it bubble up so the caller returns 400.
-  // NOTE: this sync version cannot resolve `tag` filters. Use
-  // buildAudienceQueryAsync below if the filter may contain tags
-  // (Phase 3 — segments).
   return applyAudienceFilter(query, filter)
 }
 
@@ -219,10 +217,10 @@ export function buildAudienceQuery(db, filter, locationId) {
 export async function buildAudienceQueryAsync(db, filter, locationId) {
   let query = db
     .from('contacts')
-    .select('*, contact_preferences!inner(*)')
+    .select('*')
     .eq('location_id', locationId)
-    .eq('contact_preferences.email_marketing', true)
-  query = query.not('email_status', 'in', '("bounced","complained")')
+    .eq('email_marketing', true)
+    .not('email_status', 'in', '("bounced","complained")')
   // Returns { query } so the caller can destructure without the
   // thenable-protocol auto-unwrap firing the underlying HTTP call
   // before the caller intends. See audience-filter.js resolveTagFilters

@@ -4,14 +4,22 @@ import { useEffect, useState } from 'react'
 import { Plus, Trash2, Users } from 'lucide-react'
 
 const FIELD_OPTIONS = [
-  { value: 'lead_status',           label: 'Lead Status',           type: 'select',
-    options: ['active_trial', 'cold', 'lost_member', 'member', 'returning', 'competition_competitor'] },
-  // GLOFOX2.1.8 — Glofox-side Client Status (synced from Glofox via
-  // /api/glofox/sync-member). Distinct from lead_status (which is
-  // local-CRM). Three of the values are synthesised from deeper
-  // Glofox payload signals (credit_member, classpass_payg, ex_member)
-  // — see src/lib/glofox-sync.js for the detection rules.
-  { value: 'glofox_membership_status', label: 'Glofox Status',      type: 'select',
+  // CLASSIFY.1 — primary funnel-stage filter. Denormalised onto
+  // contacts.pipeline_stage_slug by mig 155 (synced from deals.stage_id
+  // via trigger). These are the canonical PIPELINE5 slugs.
+  // pipeline_stage_slug is what operators reach for intuitively
+  // ("Active Member", "Hot Conversion") — it replaced the legacy
+  // "Lead Status" filter that was effectively dead (>99% defaulted to
+  // 'active_trial' on import and was never reliably updated).
+  { value: 'pipeline_stage_slug',   label: 'Stage',                 type: 'select',
+    options: ['new_lead', 'active_trial', 'hot_conversion', 'active_member',
+              'at_risk_member', 'classpass_active', 'lapsed', 'dormant',
+              'dormant_classpass'] },
+  // GLOFOX2.1.8 — Glofox-side raw membership status. This is what the
+  // pipeline classifier reads — most operators should filter on
+  // "Stage" above instead. Kept as an advanced filter for power users
+  // (credit_member upsells, classpass_payg cohorts).
+  { value: 'glofox_membership_status', label: 'Glofox Raw Status (advanced)', type: 'select',
     options: ['cold', 'tour', 'no_sale_tour', 'trial', 'no_sale_trial',
               'member', 'credit_member', 'classpass_payg', 'ex_member', 'lead'] },
   { value: 'email_status',          label: 'Email Status',          type: 'select',
@@ -124,9 +132,12 @@ export default function AudienceBuilder({ filter, onChange, audienceCount }) {
   }
 
   function addFilter() {
+    // CLASSIFY.1 — default new rows to Stage = active_member. lead_status
+    // is no longer in FIELD_OPTIONS; the audience-filter allowlist
+    // would reject it.
     updateFilter([
       ...filters,
-      { field: 'lead_status', op: 'eq', value: 'member' },
+      { field: 'pipeline_stage_slug', op: 'eq', value: 'active_member' },
     ])
   }
 
