@@ -354,7 +354,7 @@ export async function fetchStudioDashboardData(supabase, locationId) {
 
     supabase
       .from('contacts')
-      .select('lead_status')
+      .select('pipeline_stage_slug')
       .eq('location_id', locationId),
 
     supabase
@@ -366,7 +366,7 @@ export async function fetchStudioDashboardData(supabase, locationId) {
 
   const funnel = {}
   for (const c of contactsByStatus.data || []) {
-    const k = c.lead_status || 'unknown'
+    const k = c.pipeline_stage_slug || 'unknown'
     funnel[k] = (funnel[k] || 0) + 1
   }
   const totalContacts = (contactsByStatus.data || []).length
