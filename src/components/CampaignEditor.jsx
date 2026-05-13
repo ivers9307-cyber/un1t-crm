@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { createBrowserClient } from '@/lib/supabase'
-import { ArrowLeft, Save, Send, Users, Code, Paintbrush } from 'lucide-react'
+import { ArrowLeft, Save, Send, Users, Code, Paintbrush, Mail, Loader2, CheckCircle2, AlertCircle } from 'lucide-react'
 import AudienceBuilder from './AudienceBuilder'
 import Link from 'next/link'
 
@@ -33,6 +33,12 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
   const [error, setError] = useState(null)
   const [editorMode, setEditorMode] = useState(designJson ? 'visual' : 'visual')  // visual or code
   const [unlayerLoaded, setUnlayerLoaded] = useState(false)
+
+  // CAMPAIGN.1 — send-test state. testEmail defaults to the
+  // operator's address; testStatus is { kind: 'idle'|'sending'|'sent'|'error', msg? }.
+  const [testOpen, setTestOpen] = useState(false)
+  const [testEmail, setTestEmail] = useState('')
+  const [testStatus, setTestStatus] = useState({ kind: 'idle' })
 
   // Load Unlayer script
   useEffect(() => {
@@ -196,6 +202,40 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
     }
   }
 
+  // CAMPAIGN.1 — fire a test send to the operator's chosen address
+  // (defaults to themselves). Auto-saves the draft first so the test
+  // matches the latest edits.
+  async function handleSendTest() {
+    if (!subject || !htmlContent) {
+      setTestStatus({ kind: 'error', msg: 'Add a subject and body before sending a test.' })
+      return
+    }
+    setTestStatus({ kind: 'sending' })
+    try {
+      // Save first so the test renders the latest content.
+      if (!campaignId) await handleSave()
+      else await handleSave()
+      const r = await fetch(`/api/campaigns/${campaignId}/send-test`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(testEmail ? { to: testEmail } : {}),
+      })
+      const j = await r.json().catch(() => ({}))
+      if (!r.ok || !j.success) {
+        setTestStatus({ kind: 'error', msg: j.error || `HTTP ${r.status}` })
+        return
+      }
+      setTestStatus({
+        kind: 'sent',
+        msg: j.message || `Sent to ${j.to}.`,
+      })
+      // Clear the success state after 4s so the operator can send again.
+      setTimeout(() => setTestStatus((s) => (s.kind === 'sent' ? { kind: 'idle' } : s)), 4000)
+    } catch (e) {
+      setTestStatus({ kind: 'error', msg: e?.message || 'Network error' })
+    }
+  }
+
   // Fetch audience count
   const refreshAudienceCount = useCallback(async () => {
     if (!campaignId) return
@@ -252,6 +292,17 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
             <Save size={14} />
             {saving ? 'Saving...' : 'Save'}
           </button>
+          {/* CAMPAIGN.1 — send-test button. Click opens a small inline
+              form pre-filled with the operator's address; submit
+              actually sends. Toast-style status sits below the bar. */}
+          <button
+            onClick={() => setTestOpen((v) => !v)}
+            className="flex items-center gap-1.5 text-sm text-un1t-light hover:text-un1t-white border border-un1t-gray hover:border-un1t-white/30 px-3 py-1.5 rounded-md transition-colors"
+            title="Send a test copy to your inbox before broadcasting"
+          >
+            <Mail size={14} />
+            Send test
+          </button>
           <button
             onClick={handleSend}
             disabled={sending || !subject}
@@ -262,6 +313,44 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
           </button>
         </div>
       </div>
+
+      {/* CAMPAIGN.1 — test-send tray. Sits below the top bar so the
+          operator can pick a recipient (defaults to their own email
+          if blank), fire it, and see the status without leaving the
+          editor view. */}
+      {testOpen && (
+        <div className="bg-un1t-dark border-b border-un1t-gray px-5 py-3 flex items-center gap-3">
+          <Mail size={14} className="text-un1t-light" />
+          <span className="text-sm text-un1t-light">Send a test copy to:</span>
+          <input
+            type="email"
+            value={testEmail}
+            onChange={(e) => setTestEmail(e.target.value)}
+            placeholder="your@email.com (defaults to your account email)"
+            className="flex-1 max-w-md bg-un1t-black border border-un1t-gray rounded-md px-3 py-1.5 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid"
+          />
+          <button
+            type="button"
+            onClick={handleSendTest}
+            disabled={testStatus.kind === 'sending'}
+            className="inline-flex items-center gap-1.5 text-sm bg-emerald-600 text-white font-medium px-4 py-1.5 rounded-md hover:bg-emerald-500 disabled:opacity-50"
+          >
+            {testStatus.kind === 'sending'
+              ? <><Loader2 size={14} className="animate-spin" /> Sending…</>
+              : <><Send size={14} /> Send</>}
+          </button>
+          {testStatus.kind === 'sent' && (
+            <span className="inline-flex items-center gap-1.5 text-xs text-emerald-400">
+              <CheckCircle2 size={12} /> {testStatus.msg}
+            </span>
+          )}
+          {testStatus.kind === 'error' && (
+            <span className="inline-flex items-center gap-1.5 text-xs text-rose-400">
+              <AlertCircle size={12} /> {testStatus.msg}
+            </span>
+          )}
+        </div>
+      )}
 
       {error && (
         <div className="bg-red-500/10 border-b border-red-500/30 text-red-400 text-sm px-5 py-2">
@@ -335,9 +424,27 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
         {tab === 'audience' && (
           <div className="p-6 max-w-3xl">
             <h3 className="text-lg font-semibold mb-1">Audience</h3>
-            <p className="text-sm text-un1t-light mb-6">
+            <p className="text-sm text-un1t-light mb-4">
               Define who receives this campaign. Only contacts who have opted in to email marketing will be included.
             </p>
+            {/* CAMPAIGN.1 — prominent recipient-count banner. Updates
+                whenever the audience filter changes. Excludes
+                ClassPass contacts (CONSENT.2), unsubscribed contacts,
+                and bounced/complained email statuses — same gates the
+                actual send applies. */}
+            <div className="bg-emerald-500/10 border border-emerald-500/40 rounded-lg p-4 mb-6 flex items-center gap-3">
+              <Users size={20} className="text-emerald-400 shrink-0" />
+              <div>
+                <div className="text-2xl font-semibold text-un1t-white tabular-nums">
+                  {audienceCount === null ? '—' : audienceCount.toLocaleString()}
+                </div>
+                <div className="text-xs text-un1t-light">
+                  {audienceCount === null
+                    ? 'Save the campaign to compute the recipient count.'
+                    : `contact${audienceCount === 1 ? '' : 's'} will receive this campaign — already filtered for marketing opt-in, valid email, non-ClassPass.`}
+                </div>
+              </div>
+            </div>
             <AudienceBuilder
               filter={audienceFilter}
               onChange={(f) => {
