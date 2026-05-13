@@ -40,6 +40,11 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
   const [testEmail, setTestEmail] = useState('')
   const [testStatus, setTestStatus] = useState({ kind: 'idle' })
 
+  // CAMPAIGN.2 — visible save confirmation. Without this the operator
+  // hits Save and gets no signal whether anything happened. Cleared
+  // automatically after 3s.
+  const [savedAt, setSavedAt] = useState(null)
+
   // Load Unlayer script
   useEffect(() => {
     if (typeof window !== 'undefined' && !window.unlayer) {
@@ -122,19 +127,36 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
   }, [htmlContent, designJson])
 
   // Save campaign
+  // CAMPAIGN.2 — single source of truth for "get the latest content
+  // out of Unlayer and into React state". Used by:
+  //   - handleSave (so the persisted payload includes in-progress edits)
+  //   - switchTab  (so a Design → Audience → Design round-trip doesn't
+  //                  re-init Unlayer with a stale designJson and wipe
+  //                  the operator's work)
+  // Returns { html, design } so handleSave can use the values
+  // directly without waiting for setState to flush.
+  const stashUnlayerToState = useCallback(async () => {
+    if (editorMode !== 'visual' || !window.unlayer) {
+      return { html: htmlContent, design: designJson }
+    }
+    try {
+      const exported = await exportFromUnlayer()
+      // Update React state so the next Design-tab mount has the
+      // latest design to load from.
+      setHtmlContent(exported.html)
+      setDesignJson(exported.design)
+      return exported
+    } catch {
+      return { html: htmlContent, design: designJson }
+    }
+  }, [editorMode, exportFromUnlayer, htmlContent, designJson])
+
   async function handleSave() {
     setSaving(true)
     setError(null)
 
     try {
-      let html = htmlContent
-      let design = designJson
-
-      if (editorMode === 'visual' && window.unlayer) {
-        const exported = await exportFromUnlayer()
-        html = exported.html
-        design = exported.design
-      }
+      const { html, design } = await stashUnlayerToState()
 
       const payload = {
         name: name || 'Untitled Campaign',
@@ -164,12 +186,34 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
         // Update URL without navigation
         window.history.replaceState(null, '', `/email/campaigns/${result.data.id}`)
       }
+
+      // CAMPAIGN.2 — visible save confirmation. Cleared after 3s.
+      setSavedAt(new Date())
     } catch (err) {
       setError(err.message)
     } finally {
       setSaving(false)
     }
   }
+
+  // CAMPAIGN.2 — wrap setTab so leaving the Design tab stashes the
+  // current Unlayer content into React state. Without this, switching
+  // to another tab and back re-initialises Unlayer with the stale
+  // designJson and wipes in-progress edits.
+  async function switchTab(nextTab) {
+    if (nextTab === tab) return
+    if (tab === 'design') {
+      await stashUnlayerToState()
+    }
+    setTab(nextTab)
+  }
+
+  // Auto-clear the "Saved" indicator after 3s.
+  useEffect(() => {
+    if (!savedAt) return
+    const t = setTimeout(() => setSavedAt(null), 3000)
+    return () => clearTimeout(t)
+  }, [savedAt])
 
   // Send campaign
   async function handleSend() {
@@ -292,6 +336,14 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
             <Save size={14} />
             {saving ? 'Saving...' : 'Save'}
           </button>
+          {/* CAMPAIGN.2 — visible save confirmation. Without this the
+              operator hit Save and got no signal anything happened. */}
+          {savedAt && !saving && (
+            <span className="inline-flex items-center gap-1 text-xs text-emerald-400">
+              <CheckCircle2 size={12} />
+              Saved {savedAt.toLocaleTimeString('en-IE', { hour: '2-digit', minute: '2-digit' })}
+            </span>
+          )}
           {/* CAMPAIGN.1 — send-test button. Click opens a small inline
               form pre-filled with the operator's address; submit
               actually sends. Toast-style status sits below the bar. */}
@@ -363,7 +415,7 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
         {tabs.map(t => (
           <button
             key={t.key}
-            onClick={() => setTab(t.key)}
+            onClick={() => switchTab(t.key)}
             className={`px-5 py-2.5 text-sm font-medium border-b-2 transition-colors ${
               tab === t.key
                 ? 'text-un1t-white border-un1t-white'
