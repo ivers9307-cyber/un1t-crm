@@ -131,15 +131,16 @@ export async function POST(request) {
           .single()
 
         if (send?.campaign_id) {
-          await db.rpc('increment_campaign_metric', {
+          // CAMPAIGN.12 — increment_campaign_metric is now a real
+          // SQL function (mig 157). Previously this catch-block
+          // fallback tried db.raw(...) which doesn't exist in
+          // supabase-js, so the metric never incremented. Drop
+          // the dead fallback; surface real errors to the log.
+          const { error } = await db.rpc('increment_campaign_metric', {
             p_campaign_id: send.campaign_id,
             p_field: 'total_delivered',
-          }).catch(() => {
-            // Fallback if RPC doesn't exist
-            db.from('campaigns')
-              .update({ total_delivered: db.raw('total_delivered + 1') })
-              .eq('id', send.campaign_id)
           })
+          if (error) console.error('[postmark webhook] total_delivered increment failed:', error.message)
         }
         break
       }
@@ -183,19 +184,19 @@ export async function POST(request) {
             .eq('postmark_message_id', messageId)
             .in('status', ['sent', 'delivered'])
 
-          // Increment campaign open count (first open only)
+          // CAMPAIGN.12 — atomic increment via mig 157's RPC.
+          // The previous select-then-update pattern looked like it
+          // worked, but the inner .update().eq() never got awaited
+          // and supabase-js's filter builder only sends a request
+          // when its thenable is consumed — so the metric never
+          // incremented and every campaign's total_opened stuck
+          // at 0 forever.
           if (body.FirstOpen && openSend.campaign_id) {
-            await db.from('campaigns')
-              .select('total_opened')
-              .eq('id', openSend.campaign_id)
-              .single()
-              .then(({ data }) => {
-                if (data) {
-                  db.from('campaigns')
-                    .update({ total_opened: (data.total_opened || 0) + 1 })
-                    .eq('id', openSend.campaign_id)
-                }
-              })
+            const { error } = await db.rpc('increment_campaign_metric', {
+              p_campaign_id: openSend.campaign_id,
+              p_field: 'total_opened',
+            })
+            if (error) console.error('[postmark webhook] total_opened increment failed:', error.message)
           }
         }
         break
@@ -239,19 +240,14 @@ export async function POST(request) {
               .eq('postmark_message_id', messageId)
           }
 
-          // Increment campaign click count
+          // CAMPAIGN.12 — atomic increment via mig 157 (see total_opened
+          // path above for the bug history).
           if (clickSend.campaign_id) {
-            await db.from('campaigns')
-              .select('total_clicked')
-              .eq('id', clickSend.campaign_id)
-              .single()
-              .then(({ data }) => {
-                if (data) {
-                  db.from('campaigns')
-                    .update({ total_clicked: (data.total_clicked || 0) + 1 })
-                    .eq('id', clickSend.campaign_id)
-                }
-              })
+            const { error } = await db.rpc('increment_campaign_metric', {
+              p_campaign_id: clickSend.campaign_id,
+              p_field: 'total_clicked',
+            })
+            if (error) console.error('[postmark webhook] total_clicked increment failed:', error.message)
           }
 
           // Update contact stats
@@ -323,18 +319,13 @@ export async function POST(request) {
               console.error('[postmark webhook] auto-unsubscribe on hard bounce failed:', unsubResult.error, { contactId: bounceSend.contact_id })
             }
 
+            // CAMPAIGN.12 — atomic increment via mig 157.
             if (bounceSend.campaign_id) {
-              await db.from('campaigns')
-                .select('total_bounced')
-                .eq('id', bounceSend.campaign_id)
-                .single()
-                .then(({ data }) => {
-                  if (data) {
-                    db.from('campaigns')
-                      .update({ total_bounced: (data.total_bounced || 0) + 1 })
-                      .eq('id', bounceSend.campaign_id)
-                  }
-                })
+              const { error: incErr } = await db.rpc('increment_campaign_metric', {
+                p_campaign_id: bounceSend.campaign_id,
+                p_field: 'total_bounced',
+              })
+              if (incErr) console.error('[postmark webhook] total_bounced increment failed:', incErr.message)
             }
           }
         }
@@ -379,18 +370,13 @@ export async function POST(request) {
             console.error('[postmark webhook] auto-unsubscribe on spam complaint failed:', unsubResult.error, { contactId: complaintSend.contact_id })
           }
 
+          // CAMPAIGN.12 — atomic increment via mig 157.
           if (complaintSend.campaign_id) {
-            await db.from('campaigns')
-              .select('total_complained')
-              .eq('id', complaintSend.campaign_id)
-              .single()
-              .then(({ data }) => {
-                if (data) {
-                  db.from('campaigns')
-                    .update({ total_complained: (data.total_complained || 0) + 1 })
-                    .eq('id', complaintSend.campaign_id)
-                }
-              })
+            const { error: incErr } = await db.rpc('increment_campaign_metric', {
+              p_campaign_id: complaintSend.campaign_id,
+              p_field: 'total_complained',
+            })
+            if (incErr) console.error('[postmark webhook] total_complained increment failed:', incErr.message)
           }
         }
         break

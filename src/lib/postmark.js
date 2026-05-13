@@ -478,6 +478,16 @@ export async function sendCampaign(campaignId) {
     total_sent: sentCount,
   }).eq('id', campaignId)
 
+  // CAMPAIGN.12 — final pass: recompute every counter from email_sends
+  // (the source of truth) so the campaign rollup is consistent even
+  // if any individual webhook fires before this finalise step lands
+  // (webhooks would otherwise increment a then-yet-unwritten value).
+  // Idempotent — running it again does nothing.
+  await db.rpc('recalculate_campaign_stats', { p_campaign_id: campaignId })
+    .then(({ error }) => {
+      if (error) console.error('[sendCampaign] recalculate_campaign_stats failed:', error.message)
+    })
+
   return { sent: sentCount, total: contacts.length }
 }
 
