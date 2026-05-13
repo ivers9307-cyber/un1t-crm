@@ -34,13 +34,19 @@ function StatCard({ icon: Icon, label, value, subValue, color }) {
 export default function CampaignDetail({ campaign, recipients = [], locationId: _locationId, userId: _userId }) {
   const router = useRouter()
   const [tab, setTab] = useState('overview')  // overview, recipients, preview
-  const isDraft = campaign.status === 'draft'
 
-  // If draft, redirect to editor
-  if (isDraft) {
-    // Dynamic import — rendered from the page, just redirect
-    router.replace(`/email/campaigns/${campaign.id}?edit=1`)
-    return null
+  // CAMPAIGN.4 — drafts are routed to <CampaignEditor> by the page.
+  // If we somehow get here with a draft, send the user to the editor
+  // explicitly rather than returning null and showing a blank page.
+  if (campaign.status === 'draft') {
+    if (typeof window !== 'undefined') {
+      router.replace(`/email/campaigns/${campaign.id}?edit=1`)
+    }
+    return (
+      <div className="flex items-center justify-center h-screen text-un1t-light">
+        Opening draft editor…
+      </div>
+    )
   }
 
   const totalSent = campaign.total_sent || campaign.total_recipients || 0

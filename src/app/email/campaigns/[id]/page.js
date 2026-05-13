@@ -2,12 +2,13 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { redirect, notFound } from 'next/navigation'
 import CampaignDetail from '@/components/CampaignDetail'
+import CampaignEditor from '@/components/CampaignEditor'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
 export const fetchCache = 'force-no-store'
 
-export default async function CampaignDetailPage({ params }) {
+export default async function CampaignDetailPage({ params, searchParams }) {
   const user = await getCurrentUser()
   if (!user) redirect('/login')
 
@@ -19,17 +20,20 @@ export default async function CampaignDetailPage({ params }) {
 
   if (!campaign) notFound()
 
-  // If draft, redirect to editor
-  if (campaign.status === 'draft') {
+  // CAMPAIGN.4 — drafts (and any URL with ?edit=1) open in the editor.
+  // Previously this rendered <CampaignDetail> for drafts, which then
+  // tried to router.replace(...?edit=1) — but nothing actually reads
+  // ?edit=1 to render the editor, so the page sat blank.
+  const editRequested = searchParams?.edit === '1' || searchParams?.edit === 'true'
+  const isDraft = campaign.status === 'draft'
+
+  if (isDraft || editRequested) {
     return (
-      <div>
-        {/* Dynamic import of editor for drafts */}
-        <CampaignDetail
-          campaign={campaign}
-          locationId={user.activeLocation?.id}
-          userId={user.id}
-        />
-      </div>
+      <CampaignEditor
+        campaign={campaign}
+        locationId={campaign.location_id || user.activeLocation?.id}
+        userId={user.id}
+      />
     )
   }
 
