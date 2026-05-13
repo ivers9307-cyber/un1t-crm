@@ -83,8 +83,10 @@ export async function POST(request, { params }) {
   // Use the filter the operator is editing, fall back to the saved one.
   let body = {}
   let bodyParseError = null
+  let rawBody = ''
   try {
-    body = await request.json()
+    rawBody = await request.text()
+    body = rawBody ? JSON.parse(rawBody) : {}
   } catch (e) {
     bodyParseError = e?.message || String(e)
     body = {}
@@ -92,25 +94,28 @@ export async function POST(request, { params }) {
   const hasInFlight = body && typeof body === 'object' && body.filter !== undefined
   const filter = hasInFlight ? body.filter : campaign.audience_filter
 
-  // TEMP DEBUG (CAMPAIGN.7 diagnostic) — log what the server actually
-  // sees so we can find why the count is 0 even though the in-flight
-  // filter should match 3,205 rows. Remove once root cause is fixed.
-  console.log('[preview POST debug]', JSON.stringify({
-    campaignId: params.id,
-    bodyParseError,
-    hasInFlightFilter: hasInFlight,
-    savedFilter: campaign.audience_filter,
-    receivedFilter: body?.filter,
-    filterUsed: filter,
-    locationId: campaign.location_id,
-  }))
-
   const r = await computeCount(db, filter, campaign.location_id)
-
-  console.log('[preview POST debug] result', JSON.stringify({
-    ok: r.ok, count: r.count, error: r.error,
-  }))
-
-  if (!r.ok) return NextResponse.json({ success: false, error: r.error }, { status: r.status })
-  return NextResponse.json({ success: true, audience_count: r.count })
+  if (!r.ok) {
+    return NextResponse.json({
+      success: false,
+      error: r.error,
+      _debug: { bodyParseError, hasInFlight, rawBodyLen: rawBody.length, receivedFilter: body?.filter, savedFilter: campaign.audience_filter, filterUsed: filter },
+    }, { status: r.status })
+  }
+  return NextResponse.json({
+    success: true,
+    audience_count: r.count,
+    // CAMPAIGN.7 — temporary diagnostic. Embeds what the server saw +
+    // used so it's visible in the browser DevTools Network response,
+    // without depending on Vercel log viewing.
+    _debug: {
+      bodyParseError,
+      rawBodyLen: rawBody.length,
+      hasInFlight,
+      receivedFilter: body?.filter,
+      savedFilter: campaign.audience_filter,
+      filterUsed: filter,
+      contentType: request.headers.get('content-type'),
+    },
+  })
 }
