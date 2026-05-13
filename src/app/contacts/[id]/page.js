@@ -173,10 +173,14 @@ export default async function ContactDetailPage({ params }) {
           {/* CONSENT.1 — operator toggles for marketing email / SMS /
               WhatsApp. Transactional sends stay on regardless. PATCH
               path is master/owner only; everyone else sees the panel
-              read-only so they at least know the contact's status. */}
+              read-only so they at least know the contact's status.
+              CONSENT.2 — passes glofox_membership_status so the card
+              can show the "Auto-unsubscribed (ClassPass policy)"
+              banner when relevant. */}
           <ContactMarketingPreferencesCard
             contactId={contact.id}
             canEdit={user?.isMaster || ['owner'].includes(user?.role)}
+            glofoxMembershipStatus={contact.glofox_membership_status}
           />
 
           {/* Deals */}

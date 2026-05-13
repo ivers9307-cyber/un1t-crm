@@ -46,7 +46,15 @@ const TRANSACTIONAL_CHANNELS = [
   { key: 'whatsapp_administrative', label: 'WhatsApp', Icon: MessageCircle },
 ]
 
-export default function ContactMarketingPreferencesCard({ contactId, canEdit }) {
+export default function ContactMarketingPreferencesCard({ contactId, canEdit, glofoxMembershipStatus }) {
+  // CONSENT.2 — flag this card when the contact is a ClassPass user.
+  // Mig 151's trigger blanket-disables every channel (marketing AND
+  // administrative) on transition to classpass_payg, so any ClassPass
+  // contact's panel will appear all-off. Show a banner so the
+  // operator understands why and knows that re-enabling a channel
+  // here will stick (the trigger only fires on STATUS transitions,
+  // not on every contact write).
+  const isClasspass = glofoxMembershipStatus === 'classpass_payg'
   const [prefs, setPrefs] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
@@ -126,6 +134,21 @@ export default function ContactMarketingPreferencesCard({ contactId, canEdit }) 
         <div className="flex items-start gap-2 text-xs text-red-700 bg-red-500/10 border border-red-500/30 rounded p-2 mb-3">
           <AlertCircle size={12} className="mt-0.5 shrink-0" />
           <span>{error}</span>
+        </div>
+      )}
+
+      {!loading && isClasspass && (
+        <div className="flex items-start gap-2 text-[11px] text-amber-700 bg-amber-500/10 border border-amber-500/30 rounded p-2 mb-3">
+          <AlertCircle size={12} className="mt-0.5 shrink-0 text-amber-600" />
+          <div>
+            <div className="font-medium text-amber-800">Auto-unsubscribed (ClassPass policy)</div>
+            <div className="mt-0.5">
+              Every channel — marketing AND transactional — is disabled by default for
+              ClassPass contacts to protect deliverability. You can re-enable individual
+              channels below if you genuinely need to message this person; the trigger
+              won&apos;t override your choice on subsequent contact updates.
+            </div>
+          </div>
         </div>
       )}
 
