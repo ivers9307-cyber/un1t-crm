@@ -21,6 +21,22 @@ function getPostmarkToken() {
 // ============================================================
 
 /**
+ * UNSUB.3 — derive the POST-able one-click unsubscribe URL from
+ * a friendly page URL. The body-visible link stays on /unsubscribe/
+ * (a Next.js page); the List-Unsubscribe header needs an endpoint
+ * that actually accepts POST. /api/unsubscribe/[token] is that
+ * endpoint — it parses an optional `{ channels: [...] }` body and
+ * defaults to ['email_marketing'] when called with no body
+ * (which is what email-client one-click sends).
+ *
+ * Exported so the test suite can lock the URL transform.
+ */
+export function toListUnsubscribeUrl(pageUrl) {
+  if (!pageUrl || typeof pageUrl !== 'string') return pageUrl
+  return pageUrl.replace('/unsubscribe/', '/api/unsubscribe/')
+}
+
+/**
  * Send a single email via Postmark
  * @param {Object} options
  * @param {string} options.to - recipient email
@@ -63,10 +79,19 @@ export async function sendEmail({
     TrackLinks: 'HtmlOnly',
   }
 
-  // Add List-Unsubscribe header for GDPR compliance (required for marketing emails)
+  // Add List-Unsubscribe header for GDPR compliance (required for
+  // marketing emails). UNSUB.3 — point the header URL at the POST
+  // endpoint, NOT the friendly page. Gmail / Outlook / Apple Mail
+  // do List-Unsubscribe=One-Click by POSTing to this URL with an
+  // empty body. If the URL resolves to a Next.js page route, the
+  // POST returns 405 and the unsubscribe is silently lost (the
+  // bug we hit: user clicks Unsubscribe in Gmail, Postmark records
+  // nothing changed on our side, contact stays opted-in).
+  // /api/unsubscribe/[token] does accept POST and writes
+  // contact_preferences + consent_log correctly.
   if (stream === 'broadcast' && unsubscribeUrl) {
     body.Headers = [
-      { Name: 'List-Unsubscribe', Value: `<${unsubscribeUrl}>` },
+      { Name: 'List-Unsubscribe', Value: `<${toListUnsubscribeUrl(unsubscribeUrl)}>` },
       { Name: 'List-Unsubscribe-Post', Value: 'List-Unsubscribe=One-Click' },
     ]
   }
@@ -123,7 +148,9 @@ export async function sendBatch(emails) {
       TrackLinks: 'HtmlOnly',
       ...(email.stream !== 'outbound' && email.unsubscribeUrl ? {
         Headers: [
-          { Name: 'List-Unsubscribe', Value: `<${email.unsubscribeUrl}>` },
+          // UNSUB.3 — POST endpoint, not the friendly page (see
+          // sendEmail above for the bug history).
+          { Name: 'List-Unsubscribe', Value: `<${toListUnsubscribeUrl(email.unsubscribeUrl)}>` },
           { Name: 'List-Unsubscribe-Post', Value: 'List-Unsubscribe=One-Click' },
         ],
       } : {}),

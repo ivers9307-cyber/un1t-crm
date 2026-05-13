@@ -18,6 +18,7 @@ import {
   applyMergeTags,
   buildUnsubscribeUrl,
   appendUnsubscribeFooter,
+  toListUnsubscribeUrl,
 } from './postmark.js'
 
 describe('applyMergeTags', () => {
@@ -260,5 +261,33 @@ describe('appendUnsubscribeFooter', () => {
     // shouldn't emit `<a href="">Unsubscribe</a>` which would 404.
     expect(appendUnsubscribeFooter('<p>Hi</p>', '')).toBe('<p>Hi</p>')
     expect(appendUnsubscribeFooter('<p>Hi</p>', null)).toBe('<p>Hi</p>')
+  })
+})
+
+// ============================================================
+// UNSUB.3 — toListUnsubscribeUrl
+// ============================================================
+
+describe('toListUnsubscribeUrl', () => {
+  it('rewrites the page URL into the API POST endpoint', () => {
+    // Gmail / Outlook / Apple Mail POST to the List-Unsubscribe
+    // URL when the user clicks the built-in Unsubscribe button.
+    // The page route 405s on POST; /api/unsubscribe/<token> is
+    // the correct handler.
+    expect(toListUnsubscribeUrl('https://crm.un1t.ie/unsubscribe/tok-abc'))
+      .toBe('https://crm.un1t.ie/api/unsubscribe/tok-abc')
+  })
+
+  it('only rewrites the /unsubscribe/ path segment', () => {
+    // Defensive — we don't want a contact whose token happens to
+    // contain the substring "/unsubscribe/" to break.
+    expect(toListUnsubscribeUrl('https://x.test/unsubscribe/tok-with-/unsubscribe/-in-it'))
+      .toBe('https://x.test/api/unsubscribe/tok-with-/unsubscribe/-in-it')
+  })
+
+  it('returns falsy / non-string inputs unchanged', () => {
+    expect(toListUnsubscribeUrl('')).toBe('')
+    expect(toListUnsubscribeUrl(null)).toBeNull()
+    expect(toListUnsubscribeUrl(undefined)).toBeUndefined()
   })
 })
