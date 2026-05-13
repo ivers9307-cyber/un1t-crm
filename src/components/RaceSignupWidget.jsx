@@ -154,6 +154,11 @@ export default function RaceSignupWidget({ slug }) {
   const [captainName, setCaptainName] = useState('')
   const [captainEmail, setCaptainEmail] = useState('')
   const [captainPhone, setCaptainPhone] = useState('')
+  // CONSENT.4 — soft opt-in for marketing comms. Defaulted to true;
+  // applies to the captain (the only contact we collect a phone for
+  // and the registrant of record). Per CONSENT.2, ClassPass contacts
+  // are excluded server-side regardless.
+  const [marketingConsent, setMarketingConsent] = useState(true)
 
   // Member-validation cache. Key = lower email; value =
   //   { state: 'idle'|'checking'|'verified'|'not_member', first_name?, applicable }
@@ -348,6 +353,7 @@ export default function RaceSignupWidget({ slug }) {
           email: m.email.trim() || null,
         })),
         source: 'race_signup_widget',
+        marketing_consent: marketingConsent,
       }),
     })
     const json = await res.json()
@@ -664,6 +670,24 @@ export default function RaceSignupWidget({ slug }) {
                   </div>
                 </div>
               )}
+
+              {/* CONSENT.4 — soft opt-in for marketing comms.
+                  Defaulted on; the registration is the legitimate-
+                  interest service relationship that qualifies under
+                  PECR / GDPR soft opt-in. Operator-side helper
+                  excludes ClassPass contacts regardless. */}
+              <label className="flex items-start gap-2 text-xs text-gray-600 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={marketingConsent}
+                  onChange={(e) => setMarketingConsent(e.target.checked)}
+                  className="mt-0.5 shrink-0"
+                />
+                <span>
+                  Yes, send me UN1T promotional updates and offers via email, SMS or WhatsApp.
+                  You can unsubscribe at any time. Event-related notifications are sent regardless.
+                </span>
+              </label>
 
               {submitError && (
                 <div className="p-3 bg-red-50 border border-red-200 text-red-700 text-sm rounded-md inline-flex items-start gap-2">

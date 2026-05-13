@@ -12,11 +12,15 @@ import { useState, useCallback } from 'react'
 import { ChevronDown, ChevronRight, ShieldCheck, Loader2, AlertCircle, ArrowDown, ArrowUp } from 'lucide-react'
 
 const SOURCE_LABELS = {
-  preference_centre:        { label: 'Customer self-service',   tone: 'blue' },
-  admin_panel:              { label: 'Admin panel',             tone: 'amber' },
-  auto_classpass:           { label: 'Auto (ClassPass)',        tone: 'purple' },
+  preference_centre:        { label: 'Customer self-service',     tone: 'blue' },
+  admin_panel:              { label: 'Admin panel',               tone: 'amber' },
+  auto_classpass:           { label: 'Auto (ClassPass)',          tone: 'purple' },
   auto_classpass_backfill:  { label: 'Auto (ClassPass backfill)', tone: 'purple' },
-  unsubscribe_one_click:    { label: 'One-click unsubscribe',   tone: 'blue' },
+  unsubscribe_one_click:    { label: 'One-click unsubscribe',     tone: 'blue' },
+  // CONSENT.4 — public-form soft opt-in / explicit opt-out captured
+  // alongside a booking or event registration submission.
+  booking_form:             { label: 'Booking form',              tone: 'emerald' },
+  event_form:               { label: 'Event registration form',   tone: 'emerald' },
 }
 
 const CHANNEL_LABELS = {
@@ -29,10 +33,11 @@ const CHANNEL_LABELS = {
 }
 
 const TONE_CLASS = {
-  blue:   'bg-blue-500/10 text-blue-700 border-blue-500/30',
-  amber:  'bg-amber-500/10 text-amber-700 border-amber-500/30',
-  purple: 'bg-purple-500/10 text-purple-700 border-purple-500/30',
-  gray:   'bg-un1t-gray/30 text-un1t-light border-un1t-gray',
+  blue:    'bg-blue-500/10 text-blue-700 border-blue-500/30',
+  amber:   'bg-amber-500/10 text-amber-700 border-amber-500/30',
+  purple:  'bg-purple-500/10 text-purple-700 border-purple-500/30',
+  emerald: 'bg-emerald-500/10 text-emerald-700 border-emerald-500/30',
+  gray:    'bg-un1t-gray/30 text-un1t-light border-un1t-gray',
 }
 
 function fmtSource(s) {

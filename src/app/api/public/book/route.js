@@ -17,6 +17,11 @@ const BookingSchema = z.object({
   customer_phone: z.string().max(50).nullable().optional(),
   custom_responses: z.record(z.string(), z.unknown()).optional(),
   source: z.string().max(50).optional(),
+  // CONSENT.4 — soft opt-in for marketing comms. Defaulted true
+  // client-side; missing/undefined here is treated as true to
+  // preserve back-compat for any older form deployments still in
+  // a customer's browser cache.
+  marketing_consent: z.boolean().optional(),
 })
 
 // POST /api/public/book — Public: create a booking
@@ -101,6 +106,33 @@ export async function POST(request) {
 
   if (error) {
     return NextResponse.json({ success: false, error: error.message }, { status: 400 })
+  }
+
+  // CONSENT.4 — soft opt-in for marketing. The handle_new_booking
+  // trigger has already created/matched a contact for this email +
+  // location, so look it up and apply the form's consent value.
+  // ClassPass contacts are skipped server-side by the helper. Best-
+  // effort: a consent-write hiccup never breaks the booking response.
+  try {
+    const consent = body.marketing_consent !== false  // default true
+    const { data: c } = await db.from('contacts')
+      .select('id')
+      .eq('email', body.customer_email.toLowerCase().trim())
+      .eq('location_id', event.location_id)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    if (c?.id) {
+      const { applyFormMarketingConsent } = await import('@/lib/marketing-consent')
+      await applyFormMarketingConsent(db, {
+        contactId: c.id,
+        consent,
+        source:    'booking_form',
+        ipAddress: ip,
+      })
+    }
+  } catch (e) {
+    logWarn('booking', `marketing consent write error`, { err: e })
   }
 
   // Fire booking_created + first_booking triggers for active

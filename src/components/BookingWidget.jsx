@@ -52,6 +52,12 @@ export default function BookingWidget({ slug }) {
   const [submitting, setSubmitting] = useState(false)
   const [, setBookingResult] = useState(null)
   const [fieldErrors, setFieldErrors] = useState({})
+  // CONSENT.4 — soft opt-in for marketing. Defaulted to true; the
+  // booking is the legitimate-interest service relationship that
+  // qualifies under PECR. Unchecked = explicit opt-out for this
+  // submission. Per CONSENT.2, ClassPass contacts are excluded
+  // server-side regardless of this value.
+  const [marketingConsent, setMarketingConsent] = useState(true)
 
   // (mig 081 race-tracking state removed in mig 082 — races now have
   // their own standalone signup widget at /race/[slug] and don't
@@ -215,6 +221,7 @@ export default function BookingWidget({ slug }) {
         customer_email: formData.email.trim().toLowerCase(),
         customer_phone: formData.phone ? phoneToE164(formData.phone) : null,
         custom_responses: customResponses,
+        marketing_consent: marketingConsent,
       }),
     })
     const data = await res.json()
@@ -534,6 +541,23 @@ export default function BookingWidget({ slug }) {
                   )}
                 </div>
               ))}
+
+              {/* CONSENT.4 — marketing soft-opt-in. Defaulted on; the
+                  booking relationship is the legitimate-interest
+                  basis under PECR / GDPR soft opt-in. Operator-side
+                  helper still excludes ClassPass contacts regardless. */}
+              <label className="flex items-start gap-2 text-xs text-gray-600 cursor-pointer select-none mb-3">
+                <input
+                  type="checkbox"
+                  checked={marketingConsent}
+                  onChange={(e) => setMarketingConsent(e.target.checked)}
+                  className="mt-0.5 shrink-0"
+                />
+                <span>
+                  Yes, send me UN1T promotional updates and offers via email, SMS or WhatsApp.
+                  You can unsubscribe at any time. Booking confirmations are sent regardless.
+                </span>
+              </label>
 
               <button
                 type="submit"

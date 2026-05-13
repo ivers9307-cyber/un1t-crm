@@ -49,6 +49,10 @@ const RegisterSchema = z.object({
     email: z.string().email().max(320).nullable().optional(),
   })).max(50).optional(),
   source: z.string().max(50).optional(),
+  // CONSENT.4 — soft opt-in for marketing comms. Defaulted true
+  // client-side; missing/undefined here is treated as true to
+  // preserve back-compat for older form deployments still in cache.
+  marketing_consent: z.boolean().optional(),
 })
 
 export async function POST(request, { params }) {
@@ -162,6 +166,23 @@ export async function POST(request, { params }) {
       success: false,
       error: 'Could not create captain contact.',
     }, { status: 500 })
+  }
+
+  // CONSENT.4 — soft opt-in for marketing comms. Applies to the
+  // captain (the only contact whose phone we collect and the
+  // registrant of record). Helper short-circuits for ClassPass
+  // contacts. Best-effort — never blocks the registration response.
+  try {
+    const consent = body.marketing_consent !== false  // default true
+    const { applyFormMarketingConsent } = await import('@/lib/marketing-consent')
+    await applyFormMarketingConsent(db, {
+      contactId: captainContactId,
+      consent,
+      source:    'event_form',
+      ipAddress: ip,
+    })
+  } catch (e) {
+    logWarn('event-register', 'marketing consent write error', { err: e })
   }
 
   // Find-or-create the team by (location_id, name).
