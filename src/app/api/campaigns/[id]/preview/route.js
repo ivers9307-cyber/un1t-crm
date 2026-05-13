@@ -82,40 +82,12 @@ export async function POST(request, { params }) {
 
   // Use the filter the operator is editing, fall back to the saved one.
   let body = {}
-  let bodyParseError = null
-  let rawBody = ''
-  try {
-    rawBody = await request.text()
-    body = rawBody ? JSON.parse(rawBody) : {}
-  } catch (e) {
-    bodyParseError = e?.message || String(e)
-    body = {}
-  }
-  const hasInFlight = body && typeof body === 'object' && body.filter !== undefined
-  const filter = hasInFlight ? body.filter : campaign.audience_filter
+  try { body = await request.json() } catch { body = {} }
+  const filter = (body && typeof body === 'object' && body.filter !== undefined)
+    ? body.filter
+    : campaign.audience_filter
 
   const r = await computeCount(db, filter, campaign.location_id)
-  if (!r.ok) {
-    return NextResponse.json({
-      success: false,
-      error: r.error,
-      _debug: { bodyParseError, hasInFlight, rawBodyLen: rawBody.length, receivedFilter: body?.filter, savedFilter: campaign.audience_filter, filterUsed: filter },
-    }, { status: r.status })
-  }
-  return NextResponse.json({
-    success: true,
-    audience_count: r.count,
-    // CAMPAIGN.7 — temporary diagnostic. Embeds what the server saw +
-    // used so it's visible in the browser DevTools Network response,
-    // without depending on Vercel log viewing.
-    _debug: {
-      bodyParseError,
-      rawBodyLen: rawBody.length,
-      hasInFlight,
-      receivedFilter: body?.filter,
-      savedFilter: campaign.audience_filter,
-      filterUsed: filter,
-      contentType: request.headers.get('content-type'),
-    },
-  })
+  if (!r.ok) return NextResponse.json({ success: false, error: r.error }, { status: r.status })
+  return NextResponse.json({ success: true, audience_count: r.count })
 }
