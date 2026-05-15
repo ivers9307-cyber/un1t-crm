@@ -10,6 +10,7 @@ import StartWhatsAppButton from '@/components/StartWhatsAppButton'
 import ContactRaceHistory from '@/components/ContactRaceHistory'
 import ContactEditDeleteActions from '@/components/ContactEditDeleteActions'
 import InviteToAppButton from '@/components/InviteToAppButton'
+import MemberPasswordOverrideButton from '@/components/MemberPasswordOverrideButton'
 import ContactDevicesCard from '@/components/ContactDevicesCard'
 import ContactMarketingPreferencesCard from '@/components/ContactMarketingPreferencesCard'
 import ContactConsentHistoryCard from '@/components/ContactConsentHistoryCard'
@@ -117,6 +118,16 @@ export default async function ContactDetailPage({ params }) {
           </div>
         </div>
         <div className="flex items-center gap-3">
+          {/* AUTH.1 — admin password override for members with a
+              linked CRM auth account. Master/owner only. Contacts
+              without a user_id link have no CRM login to reset, so
+              the button is hidden rather than shown disabled. */}
+          {contact.user_id && ['master', 'owner'].includes(user?.role) && (
+            <MemberPasswordOverrideButton
+              contactId={contact.id}
+              contactLabel={contact.name || contact.email || 'this contact'}
+            />
+          )}
           <ContactEditDeleteActions
             contact={contact}
             canEdit={MANAGER_ROLES.includes(user?.role)}

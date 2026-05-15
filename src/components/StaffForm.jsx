@@ -3,7 +3,8 @@
 import { useState, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { ArrowLeft, Plus, Trash2, Crown, KeyRound, AlertCircle, Loader2, UserX, UserCheck, Skull } from 'lucide-react'
+import { ArrowLeft, Plus, Trash2, Crown, KeyRound, AlertCircle, Loader2, UserX, UserCheck, Skull, ShieldAlert } from 'lucide-react'
+import PasswordOverrideModal from './PasswordOverrideModal'
 import {
   OWNER_ASSIGNABLE_ROLES, MASTER_ASSIGNABLE_ROLES,
 } from '@/lib/schemas'
@@ -420,7 +421,16 @@ export default function StaffForm({
         )}
 
         {isEdit && staff?.id && (
-          <SendPasswordResetButton staffId={staff.id} email={form.email} />
+          <div className="space-y-2">
+            <SendPasswordResetButton staffId={staff.id} email={form.email} />
+            {callerIsMaster && (
+              <OverridePasswordButton
+                targetType="staff"
+                targetId={staff.id}
+                targetLabel={form.full_name || form.email || 'this staff member'}
+              />
+            )}
+          </div>
         )}
       </div>
 
@@ -1236,6 +1246,34 @@ function SendPasswordResetButton({ staffId, email }) {
         </div>
       )}
     </div>
+  )
+}
+
+// AUTH.1 — "Override password" — direct admin reset. Master-only
+// in the UI (the API allows master+owner; UI is the stricter of the
+// two). Sits next to "Send password reset" as a more direct action
+// for cases where the user is in front of you and can't access their
+// email, or you need to lock them out immediately.
+function OverridePasswordButton({ targetType, targetId, targetLabel }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="text-xs text-amber-300 hover:text-amber-200 inline-flex items-center gap-1.5"
+      >
+        <ShieldAlert size={11} />
+        Override password
+      </button>
+      <PasswordOverrideModal
+        open={open}
+        onClose={() => setOpen(false)}
+        targetType={targetType}
+        targetId={targetId}
+        targetLabel={targetLabel}
+      />
+    </>
   )
 }
 
