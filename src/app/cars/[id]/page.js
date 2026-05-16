@@ -21,5 +21,23 @@ export default async function CarDetailPage({ params }) {
   const guard = assertLocationAccess(user, car.location_id)
   if (guard) redirect('/cars')
 
-  return <CarDetail car={car} liveFxRate={fx?.rate ?? null} fxFetchedAt={fx?.fetched_at ?? null} />
+  // Look up the BCA feature flag for the car's location so CarDetail
+  // can decide whether to render BcaSubmitCard. Full config is fetched
+  // client-side by the card itself — we only need the boolean here so
+  // the card chunk isn't shipped on locations where the feature is off.
+  const { data: locationFeatures } = await db
+    .from('locations')
+    .select('features')
+    .eq('id', car.location_id)
+    .single()
+  const bcaEnabled = locationFeatures?.features?.bca_submit === true
+
+  return (
+    <CarDetail
+      car={car}
+      liveFxRate={fx?.rate ?? null}
+      fxFetchedAt={fx?.fetched_at ?? null}
+      bcaEnabled={bcaEnabled}
+    />
+  )
 }

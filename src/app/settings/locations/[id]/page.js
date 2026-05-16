@@ -1,7 +1,8 @@
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { redirect, notFound } from 'next/navigation'
-import { ToggleRight, Image as ImageIcon } from 'lucide-react'
+import Link from 'next/link'
+import { ToggleRight, Image as ImageIcon, FileCheck, ChevronRight } from 'lucide-react'
 import { isFeatureEnabledAtLocation } from '@shared/permissions'
 import { canEditLocationFeatures } from '@/lib/staff-access'
 import LocationForm from '@/components/LocationForm'
@@ -72,6 +73,31 @@ export default async function EditLocationPage({ params }) {
           calls router.refresh() after save). */}
       {isFeatureEnabledAtLocation(location, 'car_processing') && (
         <CarDepositSettings location={location} />
+      )}
+
+      {/* BCA Submit settings — only when the bca_submit feature flag
+          is explicitly on (opt-in per location; CCFA is the only one
+          today). Links out to a dedicated sub-page because the config
+          surface is substantial (emails, templates, 10 doc labels). */}
+      {location.features?.bca_submit === true && canEditLocationFeatures(user) && (
+        <section className="mt-10">
+          <div className="flex items-center gap-2 mb-3">
+            <FileCheck size={16} className="text-un1t-light" />
+            <h3 className="text-lg font-semibold">BCA Submit</h3>
+          </div>
+          <Link
+            href={`/settings/locations/${location.id}/bca`}
+            className="bg-un1t-dark border border-un1t-gray hover:border-un1t-light rounded-lg p-4 flex items-center justify-between text-sm group transition-colors"
+          >
+            <div>
+              <div className="text-un1t-white">Edit document labels + email config</div>
+              <div className="text-xs text-un1t-light mt-0.5">
+                10-doc UK VAT claim pack — send-from / send-to / subject / body / slot labels
+              </div>
+            </div>
+            <ChevronRight size={16} className="text-un1t-light group-hover:text-un1t-white" />
+          </Link>
+        </section>
       )}
     </div>
   )

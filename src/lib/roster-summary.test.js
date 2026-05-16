@@ -2,6 +2,20 @@
 
 import { describe, it, expect } from 'vitest'
 import { summarizeWeek, summarizeMonth, leaveHoursInWeek } from './roster-summary'
+import { formatDate } from './roster'
+
+// Local-TZ-safe ISO date for a day offset from `base`. Mirrors how
+// production code (formatDate in ./roster) reads the LOCAL date
+// components — needed because the test's weekStart is parsed as
+// local time (no Z suffix), but a naive `d.toISOString().slice(0,10)`
+// formats in UTC and drifts a day off in timezones east of UTC
+// (e.g. Europe/Dublin in BST). Keeping the test internally consistent
+// with the production formatter is the right shape.
+function isoDay(base, offset = 0) {
+  const d = new Date(base)
+  d.setDate(d.getDate() + offset)
+  return formatDate(d)
+}
 
 // Helper: build a block with N assigned coaches.
 function block({ id, date, start, end, max = 15, coaches = [] }) {
@@ -92,9 +106,7 @@ describe('summarizeWeek', () => {
     const blocks = []
     // 35 hours of work: 7 days × 5h.
     for (let i = 0; i < 7; i++) {
-      const d = new Date(weekStart); d.setDate(d.getDate() + i)
-      const iso = d.toISOString().slice(0, 10)
-      blocks.push(block({ id: `b${i}`, date: iso, start: '09:00', end: '14:00', coaches: ['sarah'] }))
+      blocks.push(block({ id: `b${i}`, date: isoDay(weekStart, i), start: '09:00', end: '14:00', coaches: ['sarah'] }))
     }
     const r = summarizeWeek({ blocks, staff: [fteSarah], weekStart })
     expect(r.fte[0].status).toBe('overtime')
@@ -155,10 +167,9 @@ describe('summarizeWeek', () => {
     const fteGamma = { ...fteSarah, id: 'c', full_name: 'Gamma', contracted_hours_per_week: 0, annual_salary: null }
     const blocks = [
       // Alpha: 35h overtime
-      ...Array.from({ length: 7 }, (_, i) => {
-        const d = new Date(weekStart); d.setDate(d.getDate() + i)
-        return block({ id: `a${i}`, date: d.toISOString().slice(0, 10), start: '09:00', end: '14:00', coaches: ['a'] })
-      }),
+      ...Array.from({ length: 7 }, (_, i) =>
+        block({ id: `a${i}`, date: isoDay(weekStart, i), start: '09:00', end: '14:00', coaches: ['a'] })
+      ),
       // Beta: 5h underused
       block({ id: 'b1', date: '2026-05-04', start: '09:00', end: '14:00', coaches: ['b'] }),
       // Gamma: 5h no_contract (contracted=0)
@@ -305,10 +316,9 @@ describe('summarizeWeek leave-awareness (phase 6)', () => {
     const blocks = [
       block({ id: 'b1', date: '2026-05-04', start: '09:00', end: '12:00', coaches: ['a'] }), // Alpha — 3h, on full leave → on_leave
       // Beta — full overtime: 7 days × 5h = 35h
-      ...Array.from({ length: 7 }, (_, i) => {
-        const d = new Date(weekStart); d.setDate(d.getDate() + i)
-        return block({ id: `bt${i}`, date: d.toISOString().slice(0, 10), start: '09:00', end: '14:00', coaches: ['b'] })
-      }),
+      ...Array.from({ length: 7 }, (_, i) =>
+        block({ id: `bt${i}`, date: isoDay(weekStart, i), start: '09:00', end: '14:00', coaches: ['b'] })
+      ),
       block({ id: 'c1', date: '2026-05-04', start: '09:00', end: '14:00', coaches: ['c'] }), // Charlie — 5h underused
     ]
     const timeOff = [

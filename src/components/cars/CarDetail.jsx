@@ -27,8 +27,12 @@ const DepositCard = dynamic(() => import('./DepositCard'), { ssr: true })
 // day one (description, condition, internal flags) — so it's NOT
 // inside the status-gated block below.
 const NotesCard = dynamic(() => import('./NotesCard'), { ssr: true })
+// BcaSubmitCard renders only when the car's location has the
+// bca_submit feature flag on (CCFA only today). Dynamic-imported so
+// UN1T locations never ship the chunk.
+const BcaSubmitCard = dynamic(() => import('./BcaSubmitCard'), { ssr: true })
 
-export default function CarDetail({ car: initialCar, liveFxRate = null, fxFetchedAt = null }) {
+export default function CarDetail({ car: initialCar, liveFxRate = null, fxFetchedAt = null, bcaEnabled = false }) {
   const [car, setCar] = useState(initialCar)
   const router = useRouter()
   const [error, setError] = useState(null)
@@ -151,6 +155,7 @@ export default function CarDetail({ car: initialCar, liveFxRate = null, fxFetche
           <XeroCard car={car} setCar={setCar} setError={setError} busy={busy} setBusy={setBusy} disabled={car.status === 'completed'} />
           <UkVatRefundCard car={car} patch={patch} disabled={car.status === 'completed' || busy} />
           <DocumentsCard car={car} setCar={setCar} setError={setError} disabled={car.status === 'completed'} />
+          {bcaEnabled && <BcaSubmitCard car={car} />}
         </>
       )}
 
