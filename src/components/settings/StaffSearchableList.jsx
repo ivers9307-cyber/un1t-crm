@@ -30,7 +30,7 @@ const ROLE_LABELS = {
 // pre-computed server-side and passed in keyed by staff id — but
 // kept on the prop list as a forward-compat hook in case future
 // row-level behaviour wants the caller's role.
-// eslint-disable-next-line no-unused-vars
+ 
 export default function StaffSearchableList({ staff, user: _user, canEditFns }) {
   const [query, setQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState('all')  // 'all' | 'active' | 'inactive'

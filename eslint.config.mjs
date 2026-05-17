@@ -26,7 +26,7 @@
 import nextCoreWebVitals from 'eslint-config-next/core-web-vitals'
 import globals from 'globals'
 
-export default [
+const config = [
   {
     // `next lint` used to ignore these by default. With flat-config
     // we declare them explicitly — must be the first entry in the
@@ -60,43 +60,50 @@ export default [
       }],
       'react/no-unescaped-entities': 'off',
       '@next/next/no-img-element': 'off',
-      // ─── Next 14 → 16 upgrade rule tuning ────────────────────────
+      // ─── react-hooks plugin: post-Next-16 rule tuning ─────────────
       //
       // The react-hooks plugin shipped with eslint-config-next@16
-      // adds several stricter rules that were absent (or only
-      // warnings) under @14. Downgrading them to warnings rather
-      // than fixing every existing call site:
+      // adds several stricter rules that the codebase pre-dates.
+      // CODEQUAL.1 walked every flagged site after the NEXT.16
+      // upgrade landed (47 set-state-in-effect + 10 purity, plus
+      // 1 refs + 1 immutability singleton). The two singletons got
+      // per-line disables with documented justifications (see the
+      // file headers in LocationSwitcher.jsx + LiveClassClient.jsx).
       //
-      //   • set-state-in-effect (47 hits) — flags `setState` inside
-      //     `useEffect` bodies, which is technically a cascading-
-      //     render anti-pattern but extremely common in real React
-      //     code (e.g. async-load → setData on success). Rewriting
-      //     all 47 into useReducer / event-driven shapes is a
-      //     separate refactor sprint, not part of this upgrade.
+      // The two volume rules are turned OFF here as a policy
+      // decision, not silenced site-by-site:
       //
-      //   • purity (10 hits) — flags side-effects in render bodies.
-      //     Same story — most hits are intentional one-time
-      //     initialisation patterns that the rule can't distinguish
-      //     from genuine impurities.
+      //   • set-state-in-effect — flags `setState` inside
+      //     `useEffect` bodies. Every flagged site in this codebase
+      //     is either (a) the standard async-fetch-on-mount →
+      //     setState-on-success pattern, or (b) a side-effect on
+      //     navigation / prop change (e.g. close-drawer-on-route-
+      //     change). Both are widely-accepted React conventions;
+      //     the canonical "you might not need an effect" doc treats
+      //     them as legitimate. Rewriting all 47 into useReducer /
+      //     SWR is a multi-day refactor and would introduce real
+      //     regression risk; we'd rather invest that time in
+      //     adopting a data-fetching library (SWR / TanStack Query)
+      //     end-to-end at a later date and revisit then.
       //
-      //   • refs / immutability (1 each) — same severity as the
-      //     pre-upgrade exhaustive-deps default (warn).
+      //   • purity — every flagged site is reading `Date.now()` or
+      //     `new Date()` during render to derive "is this expired
+      //     now" / "minutes remaining" / "current time" displays.
+      //     The render output legitimately depends on current time.
+      //     The rule's recommended fix (move into state, tick via
+      //     useEffect) is theoretically purer but adds unneeded
+      //     state for every component that wants to show a clock —
+      //     not worth the boilerplate for a non-bug.
       //
-      // Existing `exhaustive-deps` violations were already warnings
-      // under @14 and stay that way.
-      //
-      // None of these flag correctness bugs that would crash the
-      // app — they're stylistic / hygienic warnings. The upgrade's
-      // job is "make it compile + pass tests under Next 16"; rules
-      // tuning is a follow-up audit.
-      'react-hooks/set-state-in-effect': 'warn',
-      'react-hooks/purity':              'warn',
-      'react-hooks/refs':                'warn',
-      'react-hooks/immutability':        'warn',
+      // Other rules in the plugin stay enabled at the eslint-config-
+      // next default (warn). exhaustive-deps in particular is
+      // valuable — keep it as a warning, fix individually as new
+      // ones appear.
+      'react-hooks/set-state-in-effect': 'off',
+      'react-hooks/purity':              'off',
       'react-hooks/exhaustive-deps':     'warn',
-      // Single import/no-anonymous-default-export error — fix in place
-      // rather than blanket-disable. Leaving the rule as the
-      // eslint-config-next default (warn).
     },
   },
 ]
+
+export default config

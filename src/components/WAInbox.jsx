@@ -213,7 +213,7 @@ export default function WAInbox({ locationId, userId, initialConversationId }) {
       } else {
         alert(data.error || 'Failed to send message')
       }
-    } catch (err) {
+    } catch {
       alert('Failed to send message')
     } finally {
       setSending(false)
@@ -239,7 +239,7 @@ export default function WAInbox({ locationId, userId, initialConversationId }) {
       } else {
         alert(data.error || 'Failed to add contact')
       }
-    } catch (err) {
+    } catch {
       alert('Failed to add contact')
     } finally {
       setAddingContact(false)
@@ -297,7 +297,7 @@ export default function WAInbox({ locationId, userId, initialConversationId }) {
       } else {
         alert(data.error || 'Failed to send template')
       }
-    } catch (err) {
+    } catch {
       alert('Failed to send template')
     } finally {
       setSendingTemplate(false)

@@ -779,7 +779,7 @@ function GalleryEdit({ block, onUpdate, uploadMedia, uploading, uploadErr }) {
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           {items.map((g, i) => (
             <div key={i} className="relative group border border-un1t-gray rounded-md overflow-hidden bg-un1t-black">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
+              { }
               <img src={g.url} alt={g.alt || ''} className="w-full aspect-square object-cover" />
               <div className="p-2 space-y-1">
                 <input
@@ -936,7 +936,7 @@ function MediaSlot({ url, onClear, onUpload, uploading, error, accept, label, ki
           {kind === 'video' ? (
             <video src={url} className="w-40 h-24 object-cover rounded-md border border-un1t-gray bg-black" muted playsInline autoPlay loop />
           ) : (
-            // eslint-disable-next-line @next/next/no-img-element
+             
             <img src={url} alt="Preview" className="w-40 h-24 object-cover rounded-md border border-un1t-gray" />
           )}
           <button

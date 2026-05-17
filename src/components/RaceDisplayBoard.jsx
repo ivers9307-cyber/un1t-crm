@@ -191,7 +191,7 @@ export default function RaceDisplayBoard({ slug }) {
         </div>
         <div className="flex items-center justify-center gap-10 min-h-[96px]">
           {(race.tv_logos || []).map((src, i) => (
-            // eslint-disable-next-line @next/next/no-img-element
+             
             <img
               key={`${src}-${i}`}
               src={src}

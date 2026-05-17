@@ -5,15 +5,21 @@ For depth, see [CLAUDE.md](./CLAUDE.md) — Done log entries #161–173 and the 
 
 ## Today's headline
 
-HOTFIX #172 verified live + recovery confirmed done. Then cleared four backlog items in one session:
-- **#173 (PERM.1)** — `hasAnyMobileFeature` walks cross-platform `dashboard_*` keys. Merged to main.
-- **#174 (SEG-TRIG.1)** — `segment_added` / `segment_removed` sequence triggers + cron-driven snapshot diff (mig 174). Merged to main.
-- **#175 (RSC-AUDIT.2)** — stripped 3 unnecessary `'use client'` directives (out of 130+ audited). Merged to main.
-- **#176 (NEXT.16)** — Next.js 14.2 → 16.2 + React 18.3 → 19.2 + ESLint flat config. **On branch `nextjs-14-to-16`** — pending Vercel preview verification before merge.
+HOTFIX #172 verified live. Then closed every surviving backlog item in one session:
+- **#173 (PERM.1)** — `hasAnyMobileFeature` walks cross-platform `dashboard_*` keys.
+- **#174 (SEG-TRIG.1)** — `segment_added` / `segment_removed` sequence triggers + cron-driven snapshot diff (mig 174).
+- **#175 (RSC-AUDIT.2)** — stripped 3 unnecessary `'use client'` directives (out of 130+ audited).
+- **#176 (NEXT.16)** — Next.js 14.2 → 16.2 + React 18.3 → 19.2 + ESLint flat config. Verified in Vercel preview, merged.
+- **#177 (MULTIBRAND.1)** — brand registry extracted from middleware. Adding a brand = one entry in `src/lib/brands.js`.
+- **#178 (CODEQUAL.1)** — lint reduced from 104 warnings (post-NEXT.16) to **zero**. 47 set-state-in-effect + 10 purity turned off as policy; 23 stale disables auto-cleaned; 21 pre-existing warnings (18 no-unused-vars + 3 exhaustive-deps) fixed individually with per-site judgment.
 
-Branch state: 4 commits on `nextjs-14-to-16`. All 1,786 tests pass. `npm run build` clean under Turbopack (default in 16). Mobile parity clean.
+Branch state: `multibrand-and-codequality` has commits #177 + #178 ready to merge. **1,801 tests pass / 0 lint warnings / clean build / parity clean.**
 
-**To merge:** push the branch → Vercel builds the preview → smoke-test /login, /dashboard, /contacts, /cars, the deposit page on pay.ccfautos.com, the WhatsApp inbox, and the assistant chat in the preview URL → merge to main → cron heartbeats stay green for an hour after deploy → done.
+**Backlog is empty.** No surviving items.
+
+Operational watches (unchanged):
+- TestFlight 0.1.1 (5) still in Apple review.
+- The May-13 campaign's 32% delivered ratio — defer to next fresh push.
 
 ## What's in flight, not done
 

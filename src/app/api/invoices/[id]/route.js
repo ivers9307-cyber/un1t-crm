@@ -10,7 +10,7 @@
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
+import { getCurrentUser } from '@/lib/auth'
 import { computeScheduledForPeriod } from '@/lib/contractor-invoices'
 
 export const runtime = 'nodejs'

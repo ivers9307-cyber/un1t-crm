@@ -53,7 +53,7 @@ export default function LogoSwapper({ src, alt, widthPx = 200, locationId, onCha
       onClick={(e) => e.stopPropagation()}
     >
       {src ? (
-        // eslint-disable-next-line @next/next/no-img-element
+         
         <img
           src={src}
           alt={alt || 'Site logo'}

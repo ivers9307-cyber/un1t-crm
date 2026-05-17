@@ -373,7 +373,7 @@ export default function WATemplateEditor({ template, locationId, userId }) {
                   ) : (
                     <div className="flex items-center gap-2 p-2.5 bg-un1t-black border border-un1t-gray rounded-md">
                       {headerFormat === 'IMAGE' && mediaUrl && (
-                        // eslint-disable-next-line @next/next/no-img-element
+                         
                         <img src={mediaUrl} alt="" className="w-10 h-10 object-cover rounded" />
                       )}
                       {headerFormat === 'VIDEO' && <Video size={20} className="text-un1t-light" />}

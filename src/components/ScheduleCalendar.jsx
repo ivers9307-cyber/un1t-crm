@@ -19,7 +19,7 @@
 // those writes back into shift_blocks/shift_assignments.
 
 import { useState, useEffect, useCallback } from 'react'
-import { ChevronLeft, ChevronRight, Copy, Send, Plus, Users, User, Clock, X, ArrowLeftRight, CalendarOff, Palmtree, ThermometerSun, Ban, AlertTriangle, AlertCircle, CalendarDays, CalendarRange, Pencil, Check, Receipt } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Copy, Send, Plus, Users, User, Clock, X, ArrowLeftRight, CalendarOff, Palmtree, ThermometerSun, Ban, AlertTriangle, AlertCircle, CalendarDays, CalendarRange, Pencil, Check } from 'lucide-react'
 import Link from 'next/link'
 import { computeWeeklyCost } from '@/lib/payroll'
 import { indexByDate } from '@/lib/bank-holidays'
@@ -249,13 +249,9 @@ export default function ScheduleCalendar({ user, onRangeChange }) {
     }
   }
 
-  async function handleUnassign(assignmentId) {
-    if (!confirm('Remove this coach from the shift?')) return
-    const res = await fetch(`/api/schedule/assignments/${assignmentId}`, { method: 'DELETE' })
-    const data = await res.json()
-    if (data.success) fetchData()
-    else alert(data.error || 'Failed to remove')
-  }
+  // (handleUnassign was dead code — assignment-removal logic now lives
+  // inline as the onUnassign={async ...} prop on BlockDetailModal further
+  // down. Removed during CODEQUAL.1.)
 
   // Partial shift save — used by BlockDetailModal. payload is
   // { start, end, reason } where null on any field clears the
@@ -296,13 +292,9 @@ export default function ScheduleCalendar({ user, onRangeChange }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [blocks])
 
-  async function handleDeleteBlock(blockId) {
-    if (!confirm('Delete this entire shift slot? Any assigned coaches are removed too. (The template will regenerate it on next save unless you remove the matching weekday from the template.)')) return
-    const res = await fetch(`/api/schedule/blocks/${blockId}`, { method: 'DELETE' })
-    const data = await res.json()
-    if (data.success) fetchData()
-    else alert(data.error || 'Failed to delete block')
-  }
+  // (handleDeleteBlock was dead code — block-deletion logic now lives
+  // inline as the onDeleteBlock={async () => ...} prop on BlockDetailModal.
+  // Removed during CODEQUAL.1.)
 
   async function handleCreateBlock(date, templateId) {
     const res = await fetch('/api/schedule/blocks', {
@@ -1320,7 +1312,7 @@ function SwapModal({ shift, onSubmit, onClose }) {
 // useEffect keeps `block` here in sync with the latest data. So the
 // modal updates live as overrides are saved without a re-mount.
 function BlockDetailModal({
-  block, user, isManager, flatShifts,
+  block, user, isManager, flatShifts: _flatShifts,
   onClose, onAddCoach, onUnassign, onPartialSave, onDeleteBlock, onSwapRequest,
 }) {
   const tmpl = block.shift_templates || {}

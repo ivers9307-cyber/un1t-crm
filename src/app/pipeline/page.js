@@ -74,7 +74,7 @@ export default async function PipelinePage(props) {
   const deals = []
   if (visibleStageIds.length > 0) {
     let pageStart = 0
-    // eslint-disable-next-line no-constant-condition
+     
     while (true) {
       const pageEnd = Math.min(pageStart + PAGE_SIZE - 1, DEALS_HARD_LIMIT - 1)
       const { data: page, error } = await db

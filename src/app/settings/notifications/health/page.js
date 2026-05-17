@@ -48,7 +48,7 @@ function fmtRelative(iso) {
   return `${mo}mo ago`
 }
 
-function statusForUser(tokens, pushesLast30d) {
+function statusForUser(tokens, _pushesLast30d) {
   if (!tokens.length) return { kind: 'red', label: 'No app' }
   const newest = tokens.reduce((max, t) =>
     !max || (t.last_seen_at && t.last_seen_at > max) ? t.last_seen_at : max, null)

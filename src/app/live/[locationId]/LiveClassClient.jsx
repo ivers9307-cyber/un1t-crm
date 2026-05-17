@@ -363,6 +363,7 @@ function RefreshIndicator({ lastTickRef }) {
     const t = setInterval(() => force((n) => n + 1), 1000)
     return () => clearInterval(t)
   }, [])
+  // eslint-disable-next-line react-hooks/refs -- reading lastTickRef.current during render is intentional: the parent component mutates this ref each time it refreshes; we re-render via the force-tick above and read the ref here to compute the freshness label. Moving the timestamp into state would force a re-render on every parent tick, which is the opposite of what we want.
   const sinceMs = Date.now() - lastTickRef.current
   return (
     <span className="inline-flex items-center gap-1 text-xs text-un1t-light">

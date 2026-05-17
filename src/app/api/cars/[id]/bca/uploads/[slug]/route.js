@@ -96,7 +96,7 @@ export async function POST(request, props) {
   let formData
   try {
     formData = await request.formData()
-  } catch (e) {
+  } catch {
     return NextResponse.json({ success: false, error: 'Expected multipart/form-data' }, { status: 400 })
   }
   const file = formData.get('file')

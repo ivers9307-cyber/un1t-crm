@@ -57,7 +57,7 @@ export default function AcControlPanel() {
     load()
     pollTimer.current = setInterval(load, POLL_INTERVAL_MS)
     return () => clearInterval(pollTimer.current)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [])
 
   // Drive the countdown locally so it updates every second without

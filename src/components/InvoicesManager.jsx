@@ -16,7 +16,7 @@
 
 import { useState, useEffect, useMemo } from 'react'
 import {
-  Upload, FileText, CheckCircle2, XCircle, Clock, AlertCircle,
+  Upload, CheckCircle2, XCircle, Clock, AlertCircle,
   RefreshCw, Loader2, Eye, ExternalLink, Undo2, History,
 } from 'lucide-react'
 import { recentMonthOptions, defaultMonthKey, periodLabel } from '@/lib/contractor-invoices'
@@ -408,6 +408,10 @@ function InvoiceDetailModal({ invoiceId, reviewerMode, onClose, onChanged }) {
     if (r2.success) setPdfUrl(r2.url)
     setLoading(false)
   }
+  // `load` is defined in this component; we only want to re-fetch when
+  // the invoiceId changes, not on every render. Excluding load from
+  // the deps avoids the refire-loop the auto-fix would create.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { load() }, [invoiceId])
 
   async function approve() {
