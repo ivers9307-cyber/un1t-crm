@@ -279,7 +279,8 @@ export async function runSequences({ now = new Date() } = {}) {
           last_processed_at: now.toISOString(),
           next_step_at: null,
         }).eq('id', enrollment.id)
-        await db.rpc('increment_sequence_completed', { p_sequence_id: sequence.id, p_delta: 1 }).catch(() => {})
+        // supabase-js builders don't have .catch — try/catch around await.
+        try { await db.rpc('increment_sequence_completed', { p_sequence_id: sequence.id, p_delta: 1 }) } catch {}
         stats.completed++
         continue
       }
@@ -383,7 +384,8 @@ export async function runSequences({ now = new Date() } = {}) {
       }).eq('id', enrollment.id)
 
       if (newStatus === 'completed') {
-        await db.rpc('increment_sequence_completed', { p_sequence_id: sequence.id, p_delta: 1 }).catch(() => {})
+        // supabase-js builders don't have .catch — try/catch around await.
+        try { await db.rpc('increment_sequence_completed', { p_sequence_id: sequence.id, p_delta: 1 }) } catch {}
         stats.completed++
       }
       stats.sent++

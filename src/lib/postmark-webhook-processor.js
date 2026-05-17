@@ -92,7 +92,9 @@ export async function processPostmarkEvent(db, body) {
             .eq('id', openSend.id)
 
           if (body.FirstOpen) {
-            await db.rpc('increment_contact_opens', { p_contact_id: openSend.contact_id }).catch(() => {})
+            // supabase-js builders are thenables, not Promises — they
+            // have .then but no .catch. Wrap in try/catch around await.
+            try { await db.rpc('increment_contact_opens', { p_contact_id: openSend.contact_id }) } catch {}
           }
 
           await db.from('campaign_recipients')
@@ -155,7 +157,7 @@ export async function processPostmarkEvent(db, body) {
             if (error) console.error('[postmark processor] total_clicked increment failed:', error.message)
           }
 
-          await db.rpc('increment_contact_clicks', { p_contact_id: clickSend.contact_id }).catch(() => {})
+          try { await db.rpc('increment_contact_clicks', { p_contact_id: clickSend.contact_id }) } catch {}
         }
         break
       }

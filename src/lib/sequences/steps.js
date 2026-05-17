@@ -100,7 +100,8 @@ export async function sendEmailStep(db, { enrollment: _enrollment, step, sequenc
   }
 
   // Bump per-step metric.
-  await db.rpc('increment_step_sent', { p_step_id: step.id }).catch(() => {})
+  // supabase-js builders don't have .catch — try/catch around await.
+  try { await db.rpc('increment_step_sent', { p_step_id: step.id }) } catch {}
 
   return result?.messageId || null
 }
@@ -164,7 +165,8 @@ export async function sendWhatsappStep(db, { step, sequence, contact }) {
   }
 
   // Bump per-step metric.
-  await db.rpc('increment_step_sent', { p_step_id: step.id }).catch(() => {})
+  // supabase-js builders don't have .catch — try/catch around await.
+  try { await db.rpc('increment_step_sent', { p_step_id: step.id }) } catch {}
 
   return result?.messageId || null
 }
@@ -227,7 +229,8 @@ export async function sendSmsStep(db, { step, sequence, contact }) {
   })
 
   // Bump per-step metric.
-  await db.rpc('increment_step_sent', { p_step_id: step.id }).catch(() => {})
+  // supabase-js builders don't have .catch — try/catch around await.
+  try { await db.rpc('increment_step_sent', { p_step_id: step.id }) } catch {}
 
   return result?.sid || null
 }
