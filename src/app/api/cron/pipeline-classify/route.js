@@ -60,7 +60,11 @@ export async function GET(request) {
     })
   }
 
-  await stampHeartbeat(db, 'pipeline-classify').catch(() => {})
+  // Mig 172 audit caught: stampHeartbeat(name) only takes one arg.
+  // Passing `db` as the first arg silently fails the type check and
+  // returns without stamping. Heartbeat row also wasn't seeded in
+  // cron_heartbeats until mig 172.
+  await stampHeartbeat('pipeline-classify').catch(() => {})
 
   return NextResponse.json({
     success: true,
