@@ -26,11 +26,17 @@ export {
   triggerSequencesForOrderStatus,
   triggerSequencesForFirstBooking,
   triggerSequencesForAchievement,
+  triggerSequencesForSegmentAdded,
+  triggerSequencesForSegmentRemoved,
 } from './triggers.js'
 export {
   runEventReminderTriggers,
   runAnniversaryTriggers,
   runInactivityTriggers,
 } from './cron-triggers.js'
+export {
+  syncSegmentMemberships,
+  computeSegmentMembers,
+} from './segment-sync.js'
 export { evaluateBranchPredicate, processBranchStep } from './steps.js'
 export { runSequences, setEnrollmentStatus } from './scheduler.js'

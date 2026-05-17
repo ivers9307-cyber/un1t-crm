@@ -5,7 +5,12 @@ For depth, see [CLAUDE.md](./CLAUDE.md) — Done log entries #161–173 and the 
 
 ## Today's headline
 
-HOTFIX #172 (supabase-js builder `.catch()` bug) **verified live in production** — recovery had already run before this session: the 728 stranded Postmark Open + Click events drained cleanly at 18:00 UTC under the new code path, zero errors, all 15 cron heartbeats fresh. Now picking up the smallest open backlog item — extending `hasAnyMobileFeature` to honour cross-platform `dashboard_*` keys so master at a partial-features location doesn't see the wrong empty-state on mobile Home.
+HOTFIX #172 verified live + recovery confirmed done. Then cleared three backlog items:
+- **#173 (PERM.1)** — `hasAnyMobileFeature` now walks the cross-platform `dashboard_*` keys too. Correct empty-state semantics for every role on mobile Home.
+- **#174 (SEG-TRIG.1)** — new `segment_added` / `segment_removed` sequence triggers, cron-driven snapshot diff over `contact_segment_memberships` (mig 174). Saved /contacts segments can now drive sequence enrolment alongside status_change + tag_added.
+- **#175 (RSC-AUDIT.2)** — audited 130+ `'use client'` files for genuine client-only feature use. 3 had the directive without using any (XeroIntegrationTab, BcaIntegrationTab, RosterSummaryPanel). Stripped. Heuristic preserved in `_rsc_audit.sh` for future passes.
+
+Next-shaped: Next.js 14 → 16 upgrade as the next focused PR (in isolation).
 
 ## What's in flight, not done
 

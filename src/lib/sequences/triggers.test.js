@@ -379,3 +379,146 @@ describe('triggerSequencesForFirstBooking', () => {
     expect(enrolContacts).not.toHaveBeenCalled()
   })
 })
+
+// ── segment_added / segment_removed (SEG-TRIG.1) ────────────────
+
+describe('triggerSequencesForSegmentAdded', () => {
+  it('no-ops when contactIds is empty', async () => {
+    await triggers.triggerSequencesForSegmentAdded('seg-1', [])
+    expect(createServerClient).not.toHaveBeenCalled()
+  })
+
+  it('no-ops when segmentId is missing', async () => {
+    await triggers.triggerSequencesForSegmentAdded(null, ['c1'])
+    expect(createServerClient).not.toHaveBeenCalled()
+  })
+
+  it('no-ops when the segment does not exist', async () => {
+    createServerClient.mockReturnValue(mockDb({
+      contact_segments: { single: null },
+    }))
+    await triggers.triggerSequencesForSegmentAdded('seg-1', ['c1'])
+    expect(enrolContacts).not.toHaveBeenCalled()
+  })
+
+  it('skips a sequence whose trigger_config.segment_id does not match', async () => {
+    createServerClient.mockReturnValue(mockDb({
+      contact_segments: { single: { id: 'seg-1', location_id: 'loc-1' } },
+      email_sequences: { list: [
+        { id: 's1', trigger_config: { segment_id: 'seg-OTHER' }, audience_filter: null },
+      ] },
+    }))
+    await triggers.triggerSequencesForSegmentAdded('seg-1', ['c1', 'c2'])
+    expect(enrolContacts).not.toHaveBeenCalled()
+  })
+
+  it('skips a sequence with no segment_id in trigger_config (required field)', async () => {
+    createServerClient.mockReturnValue(mockDb({
+      contact_segments: { single: { id: 'seg-1', location_id: 'loc-1' } },
+      email_sequences: { list: [
+        { id: 's1', trigger_config: {}, audience_filter: null },
+      ] },
+    }))
+    await triggers.triggerSequencesForSegmentAdded('seg-1', ['c1'])
+    expect(enrolContacts).not.toHaveBeenCalled()
+  })
+
+  it('enrols every matched contact when segment_id matches', async () => {
+    createServerClient.mockReturnValue(mockDb({
+      contact_segments: { single: { id: 'seg-1', location_id: 'loc-1' } },
+      email_sequences: { list: [
+        { id: 's1', trigger_config: { segment_id: 'seg-1' }, audience_filter: null },
+      ] },
+    }))
+    await triggers.triggerSequencesForSegmentAdded('seg-1', ['c1', 'c2', 'c3'])
+    expect(enrolContacts).toHaveBeenCalledWith({
+      sequenceId: 's1',
+      contactIds: ['c1', 'c2', 'c3'],
+      sourceType: 'segment_added',
+      sourceRef: 'seg-1',
+    })
+  })
+
+  it('drops contacts that fail the audience filter, enrols the rest', async () => {
+    createServerClient.mockReturnValue(mockDb({
+      contact_segments: { single: { id: 'seg-1', location_id: 'loc-1' } },
+      email_sequences: { list: [
+        { id: 's1', trigger_config: { segment_id: 'seg-1' }, audience_filter: { logic: 'and', filters: [{ field: 'email_status', op: 'eq', value: 'active' }] } },
+      ] },
+    }))
+    // c1 matches, c2 doesn't, c3 matches.
+    contactMatchesSequenceAudience
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true)
+    await triggers.triggerSequencesForSegmentAdded('seg-1', ['c1', 'c2', 'c3'])
+    expect(enrolContacts).toHaveBeenCalledWith({
+      sequenceId: 's1',
+      contactIds: ['c1', 'c3'],
+      sourceType: 'segment_added',
+      sourceRef: 'seg-1',
+    })
+  })
+
+  it('does not enrol if every contact fails the audience filter', async () => {
+    createServerClient.mockReturnValue(mockDb({
+      contact_segments: { single: { id: 'seg-1', location_id: 'loc-1' } },
+      email_sequences: { list: [
+        { id: 's1', trigger_config: { segment_id: 'seg-1' }, audience_filter: { logic: 'and', filters: [{ field: 'x', op: 'eq', value: 'y' }] } },
+      ] },
+    }))
+    contactMatchesSequenceAudience.mockResolvedValue(false)
+    await triggers.triggerSequencesForSegmentAdded('seg-1', ['c1', 'c2'])
+    expect(enrolContacts).not.toHaveBeenCalled()
+  })
+})
+
+describe('triggerSequencesForSegmentRemoved', () => {
+  // Removed mirrors Added — only the trigger_type query and the
+  // sourceType label differ. One end-to-end happy-path test plus a
+  // sourceType-label assertion is enough; the Added describe block
+  // covers the shared filter/audience logic.
+  it('enrols matched contacts and stamps sourceType="segment_removed"', async () => {
+    createServerClient.mockReturnValue(mockDb({
+      contact_segments: { single: { id: 'seg-1', location_id: 'loc-1' } },
+      email_sequences: { list: [
+        { id: 's1', trigger_config: { segment_id: 'seg-1' }, audience_filter: null },
+      ] },
+    }))
+    await triggers.triggerSequencesForSegmentRemoved('seg-1', ['c1', 'c2'])
+    expect(enrolContacts).toHaveBeenCalledWith({
+      sequenceId: 's1',
+      contactIds: ['c1', 'c2'],
+      sourceType: 'segment_removed',
+      sourceRef: 'seg-1',
+    })
+  })
+
+  it('queries email_sequences with trigger_type=segment_removed (not segment_added)', async () => {
+    const eqSpy = vi.fn().mockReturnThis()
+    createServerClient.mockReturnValue({
+      from: vi.fn((table) => {
+        if (table === 'contact_segments') {
+          return {
+            select: vi.fn().mockReturnThis(),
+            eq: vi.fn().mockReturnThis(),
+            single: vi.fn().mockResolvedValue({ data: { id: 'seg-1', location_id: 'loc-1' }, error: null }),
+          }
+        }
+        if (table === 'email_sequences') {
+          return {
+            select: vi.fn().mockReturnThis(),
+            eq: eqSpy,
+            then: (onF) => Promise.resolve({ data: [], error: null }).then(onF),
+          }
+        }
+        throw new Error(`unexpected table: ${table}`)
+      }),
+    })
+    await triggers.triggerSequencesForSegmentRemoved('seg-1', ['c1'])
+    // Find the eq() call with the trigger_type pair.
+    const triggerTypeCall = eqSpy.mock.calls.find(call => call[0] === 'trigger_type')
+    expect(triggerTypeCall).toBeDefined()
+    expect(triggerTypeCall[1]).toBe('segment_removed')
+  })
+})

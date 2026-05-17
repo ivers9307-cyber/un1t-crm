@@ -24,6 +24,131 @@ import { logWarn } from '@/lib/log'
 import { contactMatchesSequenceAudience } from './audience.js'
 import { enrolContacts } from './enrol.js'
 
+// ── segment_added / segment_removed (SEG-TRIG.1) ─────────────────
+//
+// Called by syncSegmentMemberships() in segment-sync.js after a
+// snapshot diff. Unlike the other handlers in this file, the caller
+// is cron-driven (not a webhook), and the contact batch can be
+// large — a one-off bulk import can move hundreds of contacts in
+// and out of a segment in a single tick.
+//
+// trigger_config:
+//   - segment_id (REQUIRED) — the segment whose transitions fire
+//     this sequence. We don't support "fire on any segment" because
+//     segment semantics are too varied to make that useful.
+//
+// audience_filter is still respected — the segment defines who can
+// enter the sequence by segment-membership transition, the audience
+// filter narrows that to who actually gets enrolled. Most operators
+// won't set both, but layering is legal.
+//
+// Per-contact errors during audience-match propagate up to the
+// caller (segment-sync.js), which swallows them per-segment. We
+// don't try/catch inside the handler because the cron-driven
+// caller already does so at the right granularity.
+
+/**
+ * Fire segment_added triggers for the given batch of contact IDs that
+ * just entered the segment.
+ *
+ * @param {string} segmentId
+ * @param {string[]} contactIds  Newly-added contact IDs (already deduped against the prior snapshot)
+ */
+export async function triggerSequencesForSegmentAdded(segmentId, contactIds) {
+  if (!segmentId || !Array.isArray(contactIds) || contactIds.length === 0) return
+  const db = createServerClient()
+
+  // Sequences are location-scoped; the segment is too. Match via
+  // segment.location_id rather than trusting trigger_config.
+  const { data: segment } = await db
+    .from('contact_segments')
+    .select('id, location_id')
+    .eq('id', segmentId)
+    .single()
+  if (!segment?.location_id) return
+
+  const { data: sequences } = await db
+    .from('email_sequences')
+    .select('id, trigger_config, audience_filter')
+    .eq('location_id', segment.location_id)
+    .eq('trigger_type', 'segment_added')
+    .eq('status', 'active')
+  if (!sequences || sequences.length === 0) return
+
+  for (const seq of sequences) {
+    const cfg = seq.trigger_config || {}
+    // segment_id is REQUIRED for segment_* triggers — a sequence
+    // without it would otherwise fire on every segment's diff.
+    if (!cfg.segment_id || cfg.segment_id !== segmentId) continue
+
+    // Audience-filter per contact (some may match, others may not).
+    // Bulk additions are common during a backfill — accept the
+    // per-contact cost rather than try to build one composite query.
+    const matched = []
+    for (const cid of contactIds) {
+      const ok = await contactMatchesSequenceAudience(db, cid, seq.audience_filter)
+      if (ok) matched.push(cid)
+    }
+    if (matched.length === 0) continue
+
+    await enrolContacts({
+      sequenceId: seq.id,
+      contactIds: matched,
+      sourceType: 'segment_added',
+      sourceRef: segmentId,
+    })
+  }
+}
+
+/**
+ * Mirror of triggerSequencesForSegmentAdded for the removal direction.
+ *
+ * Note: removals fire when a contact's attributes change such that
+ * they no longer satisfy the segment filter. Contact deletion does
+ * NOT fire a removal — the ON DELETE CASCADE on
+ * contact_segment_memberships drops the snapshot row directly, the
+ * diff doesn't see it. "Customer churned out of 'active member'"
+ * → fires. "Customer record purged" → doesn't.
+ */
+export async function triggerSequencesForSegmentRemoved(segmentId, contactIds) {
+  if (!segmentId || !Array.isArray(contactIds) || contactIds.length === 0) return
+  const db = createServerClient()
+
+  const { data: segment } = await db
+    .from('contact_segments')
+    .select('id, location_id')
+    .eq('id', segmentId)
+    .single()
+  if (!segment?.location_id) return
+
+  const { data: sequences } = await db
+    .from('email_sequences')
+    .select('id, trigger_config, audience_filter')
+    .eq('location_id', segment.location_id)
+    .eq('trigger_type', 'segment_removed')
+    .eq('status', 'active')
+  if (!sequences || sequences.length === 0) return
+
+  for (const seq of sequences) {
+    const cfg = seq.trigger_config || {}
+    if (!cfg.segment_id || cfg.segment_id !== segmentId) continue
+
+    const matched = []
+    for (const cid of contactIds) {
+      const ok = await contactMatchesSequenceAudience(db, cid, seq.audience_filter)
+      if (ok) matched.push(cid)
+    }
+    if (matched.length === 0) continue
+
+    await enrolContacts({
+      sequenceId: seq.id,
+      contactIds: matched,
+      sourceType: 'segment_removed',
+      sourceRef: segmentId,
+    })
+  }
+}
+
 // ── booking_created ──────────────────────────────────────────────
 
 /**

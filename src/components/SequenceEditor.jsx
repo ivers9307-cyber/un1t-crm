@@ -14,6 +14,14 @@ const TRIGGER_TYPES = [
   { value: 'status_change',    label: 'Status Change',      description: 'Triggered when lead status changes' },
   { value: 'event_reminder',   label: 'Event Reminder',     description: 'Triggered before an event starts' },
   { value: 'tag_added',        label: 'Tag Added',          description: 'Triggered when a tag is added to a contact' },
+  // SEG-TRIG.1 (mig 174) — segment membership transitions, driven by
+  // /api/cron/sync-segment-memberships every 5 min. Differs from
+  // tag_added in that membership is implicit (it's a saved filter),
+  // so the cron diffs the filter result against a snapshot table.
+  // Operator picks the segment from a dropdown — segments are saved
+  // on the /contacts page via "Save as segment".
+  { value: 'segment_added',    label: 'Segment Entered',    description: 'Triggered when a contact first matches a saved segment\'s filter — perfect for "welcome to the VIP cohort" flows.' },
+  { value: 'segment_removed',  label: 'Segment Exited',     description: 'Triggered when a contact stops matching a saved segment — perfect for "we miss you" win-back flows.' },
   { value: 'race_registered',  label: 'Race Registered',    description: 'Triggered when a team signs up for a race — fires for every team member' },
   { value: 'race_finished',    label: 'Race Finished',      description: 'Triggered when an operator marks a team done at the finish line' },
   { value: 'order_completed',  label: 'Order Completed',    description: 'Triggered when a paid order (race or car deposit) lands' },
@@ -702,6 +710,11 @@ export default function SequenceEditor({ sequence, locationId, userId }) {
   const [steps, setSteps] = useState(sequence?.sequence_steps || [])
   const [testStatus, setTestStatus] = useState(null) // { ok, message }
   const [whatsappTemplates, setWhatsappTemplates] = useState([])
+  // SEG-TRIG.1 — list of saved segments at the active location.
+  // Lazy-loaded the first time the operator selects segment_added
+  // or segment_removed so the dropdown can render. Empty until then.
+  const [segments, setSegments] = useState([])
+  const [segmentsLoaded, setSegmentsLoaded] = useState(false)
 
   // Lazy-load the location's WhatsApp templates so the StepCard
   // can offer a dropdown when a step is set to channel=whatsapp.
@@ -717,6 +730,23 @@ export default function SequenceEditor({ sequence, locationId, userId }) {
       })
       .catch(() => {})
   }, [locationId])
+
+  // SEG-TRIG.1 — fetch saved segments the first time the operator
+  // picks a segment_* trigger. Deferred so the rest of the editor
+  // doesn't pay for a /api/contacts/segments round-trip when the
+  // operator isn't using the feature.
+  useEffect(() => {
+    if (segmentsLoaded) return
+    if (!locationId) return
+    if (triggerType !== 'segment_added' && triggerType !== 'segment_removed') return
+    setSegmentsLoaded(true) // optimistic — even an empty list means "we tried"
+    fetch(`/api/contacts/segments?location_id=${locationId}`)
+      .then(r => r.ok ? r.json() : { success: false })
+      .then(j => {
+        if (j?.success && Array.isArray(j.segments)) setSegments(j.segments)
+      })
+      .catch(() => {})
+  }, [triggerType, locationId, segmentsLoaded])
   const [sequenceId, setSequenceId] = useState(sequence?.id || null)
 
   // Fetch per-step + enrolment stats once on load (Tier 3A).
@@ -1004,6 +1034,41 @@ export default function SequenceEditor({ sequence, locationId, userId }) {
                   placeholder="e.g. new_member, trial_expired"
                   className="bg-un1t-black border border-un1t-gray rounded-md px-2.5 py-1.5 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid w-64"
                 />
+              </div>
+            )}
+
+            {/* SEG-TRIG.1 — segment_added / segment_removed share one
+                config: pick the segment that drives the transition.
+                Empty list means the operator hasn't saved any
+                segments yet — point them at /contacts. */}
+            {(triggerType === 'segment_added' || triggerType === 'segment_removed') && (
+              <div className="mt-4">
+                <label className="block text-xs text-un1t-light mb-1">
+                  {triggerType === 'segment_added' ? 'Trigger when a contact enters this segment:' : 'Trigger when a contact exits this segment:'}
+                </label>
+                {segments.length === 0 ? (
+                  <div className="bg-un1t-black border border-un1t-gray rounded-md p-3 text-xs text-un1t-light">
+                    No saved segments at this location yet.{' '}
+                    <Link href="/contacts" className="text-blue-400 hover:underline">
+                      Build a filter on /contacts and save it as a segment
+                    </Link>
+                    {' '}— it&apos;ll show up here.
+                  </div>
+                ) : (
+                  <select
+                    value={triggerConfig.segment_id || ''}
+                    onChange={e => setTriggerConfig({ ...triggerConfig, segment_id: e.target.value })}
+                    className="bg-un1t-black border border-un1t-gray rounded-md px-2.5 py-1.5 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid w-72"
+                  >
+                    <option value="">— Select a segment —</option>
+                    {segments.map(s => (
+                      <option key={s.id} value={s.id}>{s.name}</option>
+                    ))}
+                  </select>
+                )}
+                <p className="text-xs text-un1t-mid mt-1.5">
+                  Membership is snapshotted every 5 min by a background sweep — transitions surface on the next tick after the contact&apos;s attributes change.
+                </p>
               </div>
             )}
 
