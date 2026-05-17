@@ -18,7 +18,8 @@
 
 import { useRouter, useSearchParams } from 'next/navigation'
 import {
-  Plug, Zap, DoorOpen, Snowflake, FileCheck, AlertCircle, CheckCircle2,
+  Plug, Zap, DoorOpen, Snowflake, FileCheck, MessageSquare,
+  AlertCircle, CheckCircle2,
 } from 'lucide-react'
 import { isFeatureEnabledAtLocation } from '@shared/permissions'
 
@@ -27,6 +28,7 @@ import GlofoxIntegrationTab from './integrations/GlofoxIntegrationTab'
 import UnifiIntegrationTab from './integrations/UnifiIntegrationTab'
 import SensiboIntegrationTab from './integrations/SensiboIntegrationTab'
 import BcaIntegrationTab from './integrations/BcaIntegrationTab'
+import TwilioIntegrationTab from './integrations/TwilioIntegrationTab'
 
 export default function LocationIntegrations({ location, xeroConnection, user, sampleBcaCar }) {
   const router = useRouter()
@@ -54,6 +56,17 @@ export default function LocationIntegrations({ location, xeroConnection, user, s
       label: 'Glofox',
       Icon: Zap,
       status: location.settings?.glofox?.api_key ? 'connected' : 'not-configured',
+    })
+  }
+  // Twilio (SMS) — alpha sender ID. Twilio account creds are global
+  // env vars; this tab is only useful when SMS feature is on at the
+  // location AND the operator wants a per-location branded sender.
+  if (isOwnerOrMaster && (features.sms !== false || location.twilio_alpha_sender_id)) {
+    tabs.push({
+      key: 'twilio',
+      label: 'Twilio (SMS)',
+      Icon: MessageSquare,
+      status: location.twilio_alpha_sender_id ? 'connected' : 'not-configured',
     })
   }
   if (isFeatureEnabledAtLocation(location, 'studio_management') && isMaster) {
@@ -146,6 +159,9 @@ export default function LocationIntegrations({ location, xeroConnection, user, s
           )}
           {activeKey === 'bca' && (
             <BcaIntegrationTab location={location} canEdit={isMaster} sampleCar={sampleBcaCar} />
+          )}
+          {activeKey === 'twilio' && (
+            <TwilioIntegrationTab location={location} canEdit={isOwnerOrMaster} />
           )}
         </div>
       </div>

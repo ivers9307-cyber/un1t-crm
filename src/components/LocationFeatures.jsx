@@ -12,7 +12,7 @@
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { Check, AlertCircle } from 'lucide-react'
+import { Check, AlertCircle, ChevronRight } from 'lucide-react'
 import { WEB_PERMISSIONS, MOBILE_PERMISSIONS, isFeatureGatedByLocation } from '@shared/permissions'
 
 // Resolve current state of a key — explicit false → off, anything
@@ -85,59 +85,81 @@ export default function LocationFeatures({ location }) {
     }
   }
 
+  // SETTINGS.1 follow-up — collapsed by default. The full toggle list
+  // is long (20 web + ~15 mobile features); the operator usually opens
+  // this section to flip one thing, not browse it. Using <details>
+  // gives us accessible expand/collapse without React state plumbing.
+  // `webFeaturesOpen` / `mobileFeaturesOpen` aren't strictly needed —
+  // the native <details> element handles open state. We use a single
+  // wrapper <details> around the whole component so one click expands
+  // both sub-sections.
+
   return (
-    <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5 space-y-5">
-      <div>
-        <p className="text-xs text-un1t-light">
-          Toggle features off to hide them for every user at this location.
-          User-level permissions and role defaults are still applied <em>within</em> the features that are on.
-        </p>
-        {error && (
-          <div className="mt-3 bg-red-500/10 border border-red-500/30 text-red-400 text-xs rounded-md p-2 flex items-start gap-2">
-            <AlertCircle size={12} className="mt-0.5" /> {error}
+    <details className="bg-un1t-dark border border-un1t-gray rounded-lg group">
+      <summary className="cursor-pointer list-none px-5 py-4 flex items-center justify-between">
+        <div className="flex-1 min-w-0">
+          <div className="text-sm font-semibold text-un1t-white">Per-location feature toggles</div>
+          <div className="text-xs text-un1t-light mt-0.5">
+            {webFeatures.length + mobileFeatures.length} features — click to expand.
+            Toggling off hides a feature for every user at this location.
           </div>
-        )}
-        {savedAt && !error && (
-          <div className="mt-3 text-[11px] text-green-500 inline-flex items-center gap-1">
-            <Check size={11} /> Saved at {savedAt.toLocaleTimeString()}
+        </div>
+        <ChevronRight size={14} className="text-un1t-light transition-transform group-open:rotate-90 shrink-0" />
+      </summary>
+
+      <div className="border-t border-un1t-gray p-5 space-y-5">
+        <div>
+          <p className="text-xs text-un1t-light">
+            Toggle features off to hide them for every user at this location.
+            User-level permissions and role defaults are still applied <em>within</em> the features that are on.
+          </p>
+          {error && (
+            <div className="mt-3 bg-red-500/10 border border-red-500/30 text-red-400 text-xs rounded-md p-2 flex items-start gap-2">
+              <AlertCircle size={12} className="mt-0.5" /> {error}
+            </div>
+          )}
+          {savedAt && !error && (
+            <div className="mt-3 text-[11px] text-green-500 inline-flex items-center gap-1">
+              <Check size={11} /> Saved at {savedAt.toLocaleTimeString()}
+            </div>
+          )}
+        </div>
+
+        <section>
+          <h4 className="text-xs font-semibold uppercase tracking-wider text-un1t-light mb-2">Web features</h4>
+          <div className="divide-y divide-un1t-gray/40 border border-un1t-gray rounded-md px-3">
+            {webFeatures.map(f => (
+              <FeatureToggle
+                key={`web-${f.key}`}
+                on={isOn(features, f.key)}
+                onToggle={() => toggle(f.key)}
+                busy={busyKey === f.key}
+                label={f.label}
+                hint={f.hint}
+              />
+            ))}
           </div>
-        )}
+        </section>
+
+        <section>
+          <h4 className="text-xs font-semibold uppercase tracking-wider text-un1t-light mb-2">Mobile features</h4>
+          <p className="text-[11px] text-un1t-light mb-2">
+            Notification preferences (per-user) are intentionally not listed here.
+          </p>
+          <div className="divide-y divide-un1t-gray/40 border border-un1t-gray rounded-md px-3">
+            {mobileFeatures.map(f => (
+              <FeatureToggle
+                key={`mobile-${f.key}`}
+                on={isOn(features, f.key)}
+                onToggle={() => toggle(f.key)}
+                busy={busyKey === f.key}
+                label={f.label}
+                hint={f.hint}
+              />
+            ))}
+          </div>
+        </section>
       </div>
-
-      <section>
-        <h4 className="text-xs font-semibold uppercase tracking-wider text-un1t-light mb-2">Web features</h4>
-        <div className="divide-y divide-un1t-gray/40 border border-un1t-gray rounded-md px-3">
-          {webFeatures.map(f => (
-            <FeatureToggle
-              key={`web-${f.key}`}
-              on={isOn(features, f.key)}
-              onToggle={() => toggle(f.key)}
-              busy={busyKey === f.key}
-              label={f.label}
-              hint={f.hint}
-            />
-          ))}
-        </div>
-      </section>
-
-      <section>
-        <h4 className="text-xs font-semibold uppercase tracking-wider text-un1t-light mb-2">Mobile features</h4>
-        <p className="text-[11px] text-un1t-light mb-2">
-          Notification preferences (per-user) are intentionally not listed here.
-        </p>
-        <div className="divide-y divide-un1t-gray/40 border border-un1t-gray rounded-md px-3">
-          {mobileFeatures.map(f => (
-            <FeatureToggle
-              key={`mobile-${f.key}`}
-              on={isOn(features, f.key)}
-              onToggle={() => toggle(f.key)}
-              busy={busyKey === f.key}
-              label={f.label}
-              hint={f.hint}
-            />
-          ))}
-        </div>
-      </section>
-    </div>
+    </details>
   )
 }
