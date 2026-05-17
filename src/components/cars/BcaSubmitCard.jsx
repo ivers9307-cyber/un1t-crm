@@ -23,12 +23,16 @@
 import { useEffect, useState, useRef } from 'react'
 import {
   FileText, Upload, X, Check, AlertCircle, Send, Loader2, Eye,
+  Download, ChevronDown, ChevronRight,
 } from 'lucide-react'
 
 export default function BcaSubmitCard({ car }) {
   const [state, setState] = useState({ loading: true, config: null, staged: {}, submissions: [], error: null })
   const [uploadingSlot, setUploadingSlot] = useState(null)
   const [removingSlot, setRemovingSlot] = useState(null)
+  const [submitting, setSubmitting] = useState(false)
+  const [submitResult, setSubmitResult] = useState(null)  // {messageId, attachmentName, sizeBytes} | null
+  const [historyOpen, setHistoryOpen] = useState(false)
 
   // Initial load + a `refresh()` we re-call after every mutation.
   async function refresh() {
@@ -83,6 +87,38 @@ export default function BcaSubmitCard({ car }) {
     }
   }
 
+  async function submit() {
+    if (!confirm(
+      `Submit this ${totalSlots}-document pack to BCA?\n\n` +
+      `Email will go to ${config.send_to}` +
+      (config.cc ? ` (cc ${config.cc})` : '') +
+      ` from ${config.send_from}.\n\n` +
+      `Once sent, this becomes the active submission for this car.`
+    )) return
+    setSubmitting(true)
+    setSubmitResult(null)
+    setState(s => ({ ...s, error: null }))
+    try {
+      const r = await fetch(`/api/cars/${car.id}/bca/submit`, { method: 'POST' })
+      const j = await r.json()
+      if (!r.ok || j.success === false) {
+        setState(s => ({ ...s, error: j.error || `Submit failed (${r.status})` }))
+        return
+      }
+      setSubmitResult({
+        messageId: j.data.postmark_message_id,
+        attachmentName: j.data.attachment_name,
+        sizeBytes: j.data.attachment_size_bytes,
+      })
+      setHistoryOpen(true)
+      await refresh()
+    } catch (e) {
+      setState(s => ({ ...s, error: e.message || 'Network error' }))
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
   if (state.loading) {
     return (
       <div className="bg-un1t-dark border border-un1t-gray rounded-2xl p-5 mb-4 flex items-center gap-2 text-xs text-un1t-light">
@@ -95,11 +131,14 @@ export default function BcaSubmitCard({ car }) {
   // detail parent already gates on this, but defence in depth.)
   if (!state.config) return null
 
-  const { config, staged } = state
+  const { config, staged, submissions } = state
   const totalSlots = config.documents.length
   const filledCount = config.documents.filter(d => staged[d.slug]).length
   const allFilled = filledCount === totalSlots
-  const hasActiveSubmission = (state.submissions || []).some(s => !s.superseded_at && !s.postmark_error_code)
+  const hasActiveSubmission = (submissions || []).some(
+    s => !s.superseded_at && s.postmark_message_id
+  )
+  const canSubmit = allFilled && !submitting && !!config.send_from && !!config.send_to
 
   return (
     <div className="bg-un1t-dark border border-un1t-gray rounded-2xl p-5 mb-4">
@@ -144,6 +183,19 @@ export default function BcaSubmitCard({ car }) {
         ))}
       </div>
 
+      {submitResult && (
+        <div className="bg-green-500/10 border border-green-500/30 text-green-400 text-xs rounded-md p-3 mb-3 flex items-start gap-2">
+          <Check size={14} className="mt-0.5 shrink-0" />
+          <div>
+            <div className="font-semibold">Sent to BCA</div>
+            <div className="text-un1t-light mt-1">
+              {submitResult.attachmentName} · {(submitResult.sizeBytes / 1024).toFixed(0)} KB ·
+              Postmark message id <span className="font-mono">{submitResult.messageId}</span>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="flex items-center justify-between gap-3 pt-3 border-t border-un1t-gray/40">
         <div className="text-xs text-un1t-light">
           {filledCount} / {totalSlots} document{totalSlots === 1 ? '' : 's'} staged.
@@ -152,14 +204,22 @@ export default function BcaSubmitCard({ car }) {
               {' '}Submit available when all {totalSlots} {totalSlots === 1 ? 'is' : 'are'} uploaded.
             </span>
           )}
+          {allFilled && (!config.send_from || !config.send_to) && (
+            <span className="text-amber-400">
+              {' '}Configure send-from + send-to in Settings → BCA Submit before submitting.
+            </span>
+          )}
         </div>
         <button
           type="button"
-          disabled
-          title={`Coming in Phase 2 — submit will merge the ${totalSlots} doc${totalSlots === 1 ? '' : 's'} into one PDF and email BCA.`}
-          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-un1t-gray/40 text-un1t-mid text-xs font-semibold cursor-not-allowed"
+          onClick={submit}
+          disabled={!canSubmit}
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-un1t-white text-un1t-black text-xs font-semibold hover:bg-un1t-accent disabled:bg-un1t-gray/40 disabled:text-un1t-mid disabled:cursor-not-allowed"
         >
-          <Send size={11} /> Submit to BCA
+          {submitting
+            ? <><Loader2 size={11} className="animate-spin" /> Submitting…</>
+            : <><Send size={11} /> {hasActiveSubmission ? 'Resubmit to BCA' : 'Submit to BCA'}</>
+          }
         </button>
       </div>
 
@@ -170,7 +230,110 @@ export default function BcaSubmitCard({ car }) {
         </a>
         .
       </p>
+
+      {submissions && submissions.length > 0 && (
+        <BcaSubmissionHistory
+          submissions={submissions}
+          open={historyOpen}
+          onToggle={() => setHistoryOpen(o => !o)}
+        />
+      )}
     </div>
+  )
+}
+
+function BcaSubmissionHistory({ submissions, open, onToggle }) {
+  return (
+    <div className="mt-4 pt-3 border-t border-un1t-gray/40">
+      <button
+        type="button"
+        onClick={onToggle}
+        className="inline-flex items-center gap-1 text-xs text-un1t-light hover:text-un1t-white"
+      >
+        {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+        Submission history ({submissions.length})
+      </button>
+      {open && (
+        <ul className="mt-2 space-y-2">
+          {submissions.map(s => (
+            <li key={s.id} className="border border-un1t-gray/40 rounded-md p-2.5 text-xs">
+              <div className="flex items-center justify-between gap-2 mb-1">
+                <span className="text-un1t-white">
+                  {new Date(s.submitted_at).toLocaleString()}
+                </span>
+                <BcaSubmissionStatus row={s} />
+              </div>
+              <div className="text-un1t-light truncate" title={s.email_subject}>
+                <span className="text-un1t-mid">Subject:</span> {s.email_subject}
+              </div>
+              <div className="text-un1t-light mt-0.5">
+                <span className="text-un1t-mid">To:</span> {s.email_to}
+                {' · '}
+                <span className="text-un1t-mid">From:</span> {s.email_from}
+              </div>
+              {s.merged_pdf_size > 0 && (
+                <div className="text-un1t-light mt-0.5">
+                  <span className="text-un1t-mid">Merged PDF:</span>{' '}
+                  {(s.merged_pdf_size / 1024).toFixed(0)} KB
+                  {' · '}
+                  {Array.isArray(s.documents) ? s.documents.length : 0} source doc{(s.documents?.length || 0) === 1 ? '' : 's'}
+                </div>
+              )}
+              {s.postmark_error_msg && (
+                <div className="text-red-400 mt-1 flex items-start gap-1">
+                  <AlertCircle size={11} className="mt-0.5 shrink-0" />
+                  <span>Postmark error {s.postmark_error_code}: {s.postmark_error_msg}</span>
+                </div>
+              )}
+              {s.postmark_message_id && (
+                <div className="text-[10px] text-un1t-mid mt-1 font-mono truncate">
+                  Postmark id: {s.postmark_message_id}
+                </div>
+              )}
+              {s.merged_pdf_signed_url && (
+                <a
+                  href={s.merged_pdf_signed_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 mt-2 text-un1t-light hover:text-un1t-white"
+                >
+                  <Download size={11} /> Download merged PDF
+                </a>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
+
+function BcaSubmissionStatus({ row }) {
+  if (row.postmark_error_code) {
+    return (
+      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] uppercase font-semibold bg-red-500/20 text-red-400">
+        <AlertCircle size={9} /> Failed
+      </span>
+    )
+  }
+  if (row.superseded_at) {
+    return (
+      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] uppercase font-semibold bg-un1t-gray/40 text-un1t-light">
+        Superseded
+      </span>
+    )
+  }
+  if (row.postmark_message_id) {
+    return (
+      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] uppercase font-semibold bg-green-500/20 text-green-400">
+        <Check size={9} /> Active
+      </span>
+    )
+  }
+  return (
+    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] uppercase font-semibold bg-amber-500/20 text-amber-400">
+      Pending
+    </span>
   )
 }
 

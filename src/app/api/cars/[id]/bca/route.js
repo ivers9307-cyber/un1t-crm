@@ -87,10 +87,28 @@ export async function GET(_request, { params }) {
     }
   }
 
-  // Phase 1: no real submissions yet. The shape is reserved so the UI
-  // can render a placeholder "Submission history (none yet)" section
-  // and the client code doesn't need to change in Phase 2.
+  // Pull every submission row for this car (active + superseded +
+  // failed), newest first. Each row gets a short-lived signed URL
+  // for its merged PDF so the operator can re-download what was sent.
+  const { data: rows, error: subErr } = await db
+    .from('car_bca_submissions')
+    .select('id, email_from, email_to, email_subject, documents, merged_pdf_path, merged_pdf_size, submitted_by, submitted_at, postmark_message_id, postmark_error_code, postmark_error_msg, superseded_at, superseded_by')
+    .eq('car_id', car.id)
+    .order('submitted_at', { ascending: false })
+  if (subErr) {
+    return NextResponse.json({ success: false, error: `Submissions read failed: ${subErr.message}` }, { status: 500 })
+  }
   const submissions = []
+  for (const row of rows || []) {
+    let mergedSignedUrl = null
+    if (row.merged_pdf_path) {
+      const { data: signed } = await db.storage
+        .from(BCA_STORAGE.bucket)
+        .createSignedUrl(row.merged_pdf_path, 3600)
+      mergedSignedUrl = signed?.signedUrl || null
+    }
+    submissions.push({ ...row, merged_pdf_signed_url: mergedSignedUrl })
+  }
 
   return NextResponse.json({ success: true, data: { config, staged, submissions } })
 }
