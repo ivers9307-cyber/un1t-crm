@@ -96,8 +96,9 @@ export default function BcaSubmitCard({ car }) {
   if (!state.config) return null
 
   const { config, staged } = state
+  const totalSlots = config.documents.length
   const filledCount = config.documents.filter(d => staged[d.slug]).length
-  const allFilled = filledCount === 10
+  const allFilled = filledCount === totalSlots
   const hasActiveSubmission = (state.submissions || []).some(s => !s.superseded_at && !s.postmark_error_code)
 
   return (
@@ -107,15 +108,18 @@ export default function BcaSubmitCard({ car }) {
         <BcaStatusPill
           hasActive={hasActiveSubmission}
           filled={filledCount}
+          totalSlots={totalSlots}
           ukVatRefunded={car.uk_vat_refund_received}
         />
       </div>
 
       <p className="text-xs text-un1t-light mb-3">
-        Upload all 10 documents required for the UK VAT claim, then submit to BCA.
+        Upload all {totalSlots} document{totalSlots === 1 ? '' : 's'} required for the UK VAT claim, then submit to BCA.
         Once submitted, the merged PDF is emailed to{' '}
         <span className="text-un1t-white font-mono">{config.send_to || '—'}</span>{' '}
-        from <span className="text-un1t-white font-mono">{config.send_from || '—'}</span>.
+        from <span className="text-un1t-white font-mono">{config.send_from || '—'}</span>
+        {config.cc && <>{' '}(cc <span className="text-un1t-white font-mono">{config.cc}</span>)</>}
+        .
       </p>
 
       {state.error && (
@@ -142,13 +146,17 @@ export default function BcaSubmitCard({ car }) {
 
       <div className="flex items-center justify-between gap-3 pt-3 border-t border-un1t-gray/40">
         <div className="text-xs text-un1t-light">
-          {filledCount} / 10 documents staged.
-          {!allFilled && <span className="text-amber-400"> Submit available when all 10 are uploaded.</span>}
+          {filledCount} / {totalSlots} document{totalSlots === 1 ? '' : 's'} staged.
+          {!allFilled && (
+            <span className="text-amber-400">
+              {' '}Submit available when all {totalSlots} {totalSlots === 1 ? 'is' : 'are'} uploaded.
+            </span>
+          )}
         </div>
         <button
           type="button"
           disabled
-          title="Coming in Phase 2 — submit will merge the 10 docs into one PDF and email BCA."
+          title={`Coming in Phase 2 — submit will merge the ${totalSlots} doc${totalSlots === 1 ? '' : 's'} into one PDF and email BCA.`}
           className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-un1t-gray/40 text-un1t-mid text-xs font-semibold cursor-not-allowed"
         >
           <Send size={11} /> Submit to BCA
@@ -166,7 +174,7 @@ export default function BcaSubmitCard({ car }) {
   )
 }
 
-function BcaStatusPill({ hasActive, filled, ukVatRefunded }) {
+function BcaStatusPill({ hasActive, filled, totalSlots, ukVatRefunded }) {
   if (ukVatRefunded) {
     return (
       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] uppercase font-semibold bg-green-500/20 text-green-400">
@@ -181,7 +189,7 @@ function BcaStatusPill({ hasActive, filled, ukVatRefunded }) {
       </span>
     )
   }
-  if (filled === 10) {
+  if (filled === totalSlots) {
     return (
       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] uppercase font-semibold bg-blue-500/20 text-blue-400">
         Ready to submit

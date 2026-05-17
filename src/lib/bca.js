@@ -43,13 +43,25 @@ export const DEFAULT_BCA_DOCUMENTS = Object.freeze([
 export const DEFAULT_BCA_CONFIG = Object.freeze({
   send_from: '',
   send_to: '',
+  // CC: optional. Use this when send_from is a send-only Postmark
+  // sender (no inbox) and you still want a copy to land in a human-
+  // monitorable mailbox. Empty string = no CC line in the email.
+  cc: '',
   subject_template: 'BCA VAT claim — {{uk_reg}} ({{vin}})',
   body_template:
-    'Please find attached the 10-document pack for the UK VAT claim on {{uk_reg}}, {{make}} {{model}} {{vehicle_year}}.\n\n' +
+    'Please find attached the document pack for the UK VAT claim on {{uk_reg}}, {{make}} {{model}} {{vehicle_year}}.\n\n' +
     'Buyer: {{buyer_name}}\nXero invoice: {{xero_invoice_number}}\n\n' +
     'Thanks,\nCCF Autos',
   documents: DEFAULT_BCA_DOCUMENTS,
 })
+
+// Bounds on the documents array — 1 minimum (otherwise there's
+// nothing to attach), 20 maximum (BCA's pack is 10 today; cap gives
+// headroom without letting the operator accidentally turn the
+// settings page into a 100-row form). Adjust if BCA's checklist
+// expands beyond this.
+export const MIN_BCA_DOCUMENTS = 1
+export const MAX_BCA_DOCUMENTS = 20
 
 // Merge tags supported in subject_template + body_template. Anything
 // not on this list passes through unchanged. Add to this list when
@@ -80,27 +92,59 @@ export function isBcaSubmitEnabled(location) {
  * emails, never edited labels) are filled in from DEFAULT_BCA_CONFIG.
  *
  * @param {{features?: object|null, bca_config?: object|null} | null} location
- * @returns {null | {send_from, send_to, subject_template, body_template, documents: Array<{slug,label}>}}
+ * @returns {null | {send_from, send_to, cc, subject_template, body_template, documents: Array<{slug,label}>}}
  */
 export function getBcaConfig(location) {
   if (!isBcaSubmitEnabled(location)) return null
   const stored = location?.bca_config || {}
+  const docsValid = Array.isArray(stored.documents)
+    && stored.documents.length >= MIN_BCA_DOCUMENTS
+    && stored.documents.length <= MAX_BCA_DOCUMENTS
   return {
     send_from: typeof stored.send_from === 'string' ? stored.send_from : DEFAULT_BCA_CONFIG.send_from,
     send_to: typeof stored.send_to === 'string' ? stored.send_to : DEFAULT_BCA_CONFIG.send_to,
+    cc: typeof stored.cc === 'string' ? stored.cc : DEFAULT_BCA_CONFIG.cc,
     subject_template: typeof stored.subject_template === 'string'
       ? stored.subject_template
       : DEFAULT_BCA_CONFIG.subject_template,
     body_template: typeof stored.body_template === 'string'
       ? stored.body_template
       : DEFAULT_BCA_CONFIG.body_template,
-    documents: Array.isArray(stored.documents) && stored.documents.length === 10
+    documents: docsValid
       ? stored.documents.map((d, i) => ({
-          slug: typeof d?.slug === 'string' && /^doc_\d{2}$/.test(d.slug) ? d.slug : `doc_${String(i + 1).padStart(2, '0')}`,
-          label: typeof d?.label === 'string' && d.label.trim() ? d.label : DEFAULT_BCA_DOCUMENTS[i].label,
+          // Slugs are stable identifiers — they don't get renumbered
+          // when slots are added/removed mid-list, so a doc_05 deleted
+          // and re-added comes back as doc_05. If a stored slug is
+          // missing or malformed, fall back to a slot-position-derived
+          // default; this is a defensive repair, not the normal path.
+          slug: typeof d?.slug === 'string' && /^doc_\d{2}$/.test(d.slug)
+            ? d.slug
+            : `doc_${String(i + 1).padStart(2, '0')}`,
+          label: typeof d?.label === 'string' && d.label.trim()
+            ? d.label
+            : (DEFAULT_BCA_DOCUMENTS[i]?.label || `Document ${i + 1} (placeholder)`),
         }))
       : DEFAULT_BCA_DOCUMENTS.map(d => ({ ...d })),
   }
+}
+
+/**
+ * Returns the next free slug for an "add document slot" action. Walks
+ * doc_01 → doc_99 and returns the first slug not in `currentDocuments`.
+ * Used by the settings UI so adding-then-removing slots doesn't keep
+ * reusing the same number and confusing the operator about which
+ * staged files belong where.
+ *
+ * @param {Array<{slug: string}>} currentDocuments
+ * @returns {string | null}  null if all 99 slugs are taken
+ */
+export function nextBcaSlotSlug(currentDocuments) {
+  const taken = new Set((currentDocuments || []).map(d => d?.slug))
+  for (let i = 1; i <= 99; i++) {
+    const s = `doc_${String(i).padStart(2, '0')}`
+    if (!taken.has(s)) return s
+  }
+  return null
 }
 
 // Loose email regex — we just want a sanity check; Postmark does the
@@ -136,6 +180,14 @@ export function validateBcaConfig(input) {
   else if (!EMAIL_RE.test(st)) errors.send_to = "That doesn't look like a valid email address."
   else value.send_to = st
 
+  // cc — optional. Empty string means "no CC line in the email".
+  const cc = typeof input?.cc === 'string' ? input.cc.trim() : ''
+  if (cc && !EMAIL_RE.test(cc)) {
+    errors.cc = "That doesn't look like a valid email address. Leave blank for no CC."
+  } else {
+    value.cc = cc
+  }
+
   // subject_template
   const sub = typeof input?.subject_template === 'string' ? input.subject_template.trim() : ''
   if (!sub) errors.subject_template = 'Subject is required.'
@@ -150,15 +202,15 @@ export function validateBcaConfig(input) {
   else if (bodyTrimmed.length > 5000) errors.body_template = 'Body is too long (max 5000 chars).'
   else value.body_template = body  // keep operator's whitespace + newlines
 
-  // documents
+  // documents — must have MIN_BCA_DOCUMENTS..MAX_BCA_DOCUMENTS entries
   const docs = Array.isArray(input?.documents) ? input.documents : []
-  if (docs.length !== 10) {
-    errors.documents = 'Must have exactly 10 documents.'
+  if (docs.length < MIN_BCA_DOCUMENTS || docs.length > MAX_BCA_DOCUMENTS) {
+    errors.documents = `Must have between ${MIN_BCA_DOCUMENTS} and ${MAX_BCA_DOCUMENTS} documents (got ${docs.length}).`
   } else {
     const seenSlugs = new Set()
     const out = []
     let docError = null
-    for (let i = 0; i < 10; i++) {
+    for (let i = 0; i < docs.length; i++) {
       const d = docs[i] || {}
       const slug = typeof d.slug === 'string' ? d.slug.trim() : ''
       const label = typeof d.label === 'string' ? d.label.trim() : ''

@@ -15,8 +15,16 @@
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { Check, AlertCircle, RotateCcw, Mail, ChevronDown } from 'lucide-react'
-import { validateBcaConfig, DEFAULT_BCA_CONFIG, BCA_MERGE_TAGS } from '@/lib/bca'
+import { Check, AlertCircle, RotateCcw, Mail, ChevronDown, Plus, X } from 'lucide-react'
+import {
+  validateBcaConfig,
+  DEFAULT_BCA_CONFIG,
+  DEFAULT_BCA_DOCUMENTS,
+  BCA_MERGE_TAGS,
+  MIN_BCA_DOCUMENTS,
+  MAX_BCA_DOCUMENTS,
+  nextBcaSlotSlug,
+} from '@/lib/bca'
 
 export default function BcaSubmitSettings({ location, initialConfig, sampleCar }) {
   const router = useRouter()
@@ -40,7 +48,34 @@ export default function BcaSubmitSettings({ location, initialConfig, sampleCar }
     if (fieldErrors.documents) setFieldErrors(fe => ({ ...fe, documents: undefined }))
   }
   function resetDoc(i) {
-    updateDoc(i, { label: DEFAULT_BCA_CONFIG.documents[i].label })
+    // For positions beyond the default-10, fall back to a generic
+    // "Document N (placeholder)" label.
+    const fallback = DEFAULT_BCA_CONFIG.documents[i]?.label || `Document ${i + 1} (placeholder)`
+    updateDoc(i, { label: fallback })
+  }
+  function addDoc() {
+    setConfig(c => {
+      if (c.documents.length >= MAX_BCA_DOCUMENTS) return c
+      const slug = nextBcaSlotSlug(c.documents)
+      if (!slug) return c
+      // Default label numbered by the new slot's position, not its
+      // slug — operator-friendly when there are gaps in the slug
+      // sequence ("Document 4" reads better than the slug suggests).
+      const label = `Document ${c.documents.length + 1} (placeholder)`
+      return { ...c, documents: [...c.documents, { slug, label }] }
+    })
+    if (fieldErrors.documents) setFieldErrors(fe => ({ ...fe, documents: undefined }))
+  }
+  function removeDoc(i) {
+    if (config.documents.length <= MIN_BCA_DOCUMENTS) return
+    const doc = config.documents[i]
+    if (!confirm(
+      `Remove slot ${i + 1} (${doc.label})?\n\n` +
+      `If any file is currently staged in this slot on a car, it'll stay in storage but won't ` +
+      `be visible — re-adding the slot later (same slug ${doc.slug.toUpperCase()}) brings it back.`
+    )) return
+    setConfig(c => ({ ...c, documents: c.documents.filter((_, idx) => idx !== i) }))
+    if (fieldErrors.documents) setFieldErrors(fe => ({ ...fe, documents: undefined }))
   }
 
   async function save() {
@@ -144,6 +179,20 @@ export default function BcaSubmitSettings({ location, initialConfig, sampleCar }
         </Field>
 
         <Field
+          label="CC (optional)"
+          hint="Use this when the send-from address is a Postmark send-only sender (no inbox). The CC lands in a mailbox you actually monitor so you can confirm BCA received the pack. Leave blank for no CC."
+          error={fieldErrors.cc}
+        >
+          <input
+            type="email"
+            value={config.cc || ''}
+            onChange={e => update({ cc: e.target.value })}
+            className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid"
+            placeholder="ops@ccfautos.com"
+          />
+        </Field>
+
+        <Field
           label="Subject template"
           hint={<>Supports merge vars: {BCA_MERGE_TAGS.map(t => <code key={t} className="text-[10px] mx-0.5 px-1 py-0.5 bg-un1t-gray/40 rounded">{'{{'}{t}{'}}'}</code>)}</>}
           error={fieldErrors.subject_template}
@@ -195,8 +244,11 @@ export default function BcaSubmitSettings({ location, initialConfig, sampleCar }
       <section className="bg-un1t-dark border border-un1t-gray rounded-lg p-5">
         <h3 className="text-sm font-semibold text-un1t-white mb-1">Document slots</h3>
         <p className="text-xs text-un1t-light mb-4">
-          The 10 documents BCA requires for the UK VAT claim. Edit the labels to match BCA's
-          checklist — slot keys (DOC_01…DOC_10) are managed by the system and shouldn't be changed.
+          The documents BCA requires for the UK VAT claim. Edit labels to match BCA's checklist;
+          add or remove slots if their requirements change. Slot keys (DOC_01…) are managed by
+          the system and stable across renames — a removed slot re-added later keeps the same key.
+          Currently {config.documents.length} slot{config.documents.length === 1 ? '' : 's'}
+          (min {MIN_BCA_DOCUMENTS}, max {MAX_BCA_DOCUMENTS}).
         </p>
         {fieldErrors.documents && (
           <div className="bg-red-500/10 border border-red-500/30 text-red-400 text-xs rounded-md p-2 mb-3">
@@ -213,7 +265,7 @@ export default function BcaSubmitSettings({ location, initialConfig, sampleCar }
                 onChange={e => updateDoc(i, { label: e.target.value })}
                 maxLength={80}
                 className="flex-1 bg-un1t-black border border-un1t-gray rounded-md px-2.5 py-1.5 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
-                placeholder={DEFAULT_BCA_CONFIG.documents[i].label}
+                placeholder={DEFAULT_BCA_DOCUMENTS[i]?.label || `Document ${i + 1} (placeholder)`}
               />
               <button
                 type="button"
@@ -223,8 +275,33 @@ export default function BcaSubmitSettings({ location, initialConfig, sampleCar }
               >
                 <RotateCcw size={12} />
               </button>
+              <button
+                type="button"
+                onClick={() => removeDoc(i)}
+                disabled={config.documents.length <= MIN_BCA_DOCUMENTS}
+                title={config.documents.length <= MIN_BCA_DOCUMENTS
+                  ? `Can't remove — at least ${MIN_BCA_DOCUMENTS} slot required.`
+                  : 'Remove this slot'}
+                className="text-un1t-light hover:text-red-400 p-1 disabled:opacity-30 disabled:hover:text-un1t-light disabled:cursor-not-allowed"
+              >
+                <X size={12} />
+              </button>
             </div>
           ))}
+        </div>
+
+        <div className="mt-3 pt-3 border-t border-un1t-gray/40 flex items-center justify-between">
+          <button
+            type="button"
+            onClick={addDoc}
+            disabled={config.documents.length >= MAX_BCA_DOCUMENTS}
+            className="inline-flex items-center gap-1 text-xs text-un1t-light hover:text-un1t-white px-2 py-1 rounded border border-un1t-gray hover:border-un1t-light disabled:opacity-40 disabled:hover:text-un1t-light disabled:cursor-not-allowed"
+          >
+            <Plus size={11} /> Add document slot
+          </button>
+          {config.documents.length >= MAX_BCA_DOCUMENTS && (
+            <span className="text-[11px] text-un1t-mid">Maximum {MAX_BCA_DOCUMENTS} reached.</span>
+          )}
         </div>
       </section>
 
