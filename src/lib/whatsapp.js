@@ -1,29 +1,34 @@
 import { createServerClient } from './supabase'
 import { applyAudienceFilter } from './audience-filter'
+import { getWhatsAppConfig, META_API_URL } from './whatsapp-config'
 
-const META_API_VERSION = 'v21.0'
-const META_API_URL = `https://graph.facebook.com/${META_API_VERSION}`
+// WA-MULTI.1 — config is now per-location. Resolution helper +
+// env fallback live in whatsapp-config.js; the META_API_URL +
+// version constants are re-exported from there for consistency.
+//
+// Every public function in this file takes an optional `opts`
+// object as its last argument. Supported keys:
+//
+//   opts.locationId  — resolve credentials from whatsapp_numbers
+//                       for this location. If no row exists, falls
+//                       back to env vars (transitional backwards-
+//                       compat). New callers should always pass.
+//   opts.config      — pre-resolved config object (the caller
+//                       already did the lookup, e.g. to send from
+//                       a specific non-default number). When set,
+//                       locationId is ignored.
+//
+// Calling with no opts → env vars only. Existing callers that
+// haven't been updated yet keep working unchanged.
 
-function getConfig() {
-  const token = process.env.WHATSAPP_ACCESS_TOKEN
-  const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID
-  const businessAccountId = process.env.WHATSAPP_BUSINESS_ACCOUNT_ID
-
-  if (!token || !phoneNumberId) {
-    throw new Error(
-      'WhatsApp not configured. Set WHATSAPP_ACCESS_TOKEN and WHATSAPP_PHONE_NUMBER_ID in environment variables. ' +
-      `WHATSAPP_ACCESS_TOKEN=${token ? 'SET' : 'MISSING'}, ` +
-      `WHATSAPP_PHONE_NUMBER_ID=${phoneNumberId ? 'SET' : 'MISSING'}`
-    )
-  }
-
-  return { token, phoneNumberId, businessAccountId }
+async function resolveConfig(opts = {}) {
+  if (opts.config) return opts.config
+  return await getWhatsAppConfig(opts.locationId || null)
 }
 
-function headers() {
-  const { token } = getConfig()
+function headersFor(config) {
   return {
-    'Authorization': `Bearer ${token}`,
+    'Authorization': `Bearer ${config.token}`,
     'Content-Type': 'application/json',
   }
 }
@@ -33,14 +38,16 @@ function headers() {
 // ============================================================
 
 /**
- * Send a text message (only works within 24h window)
+ * Send a text message (only works within 24h window).
+ * Pass `opts.locationId` to route from a specific location's WA
+ * number; omit for env-fallback (legacy single-number behaviour).
  */
-export async function sendTextMessage(to, text) {
-  const { phoneNumberId } = getConfig()
+export async function sendTextMessage(to, text, opts = {}) {
+  const config = await resolveConfig(opts)
 
-  const response = await fetch(`${META_API_URL}/${phoneNumberId}/messages`, {
+  const response = await fetch(`${META_API_URL}/${config.phoneNumberId}/messages`, {
     method: 'POST',
-    headers: headers(),
+    headers: headersFor(config),
     body: JSON.stringify({
       messaging_product: 'whatsapp',
       recipient_type: 'individual',
@@ -65,8 +72,8 @@ export async function sendTextMessage(to, text) {
 /**
  * Send a template message (works anytime — no 24h window needed)
  */
-export async function sendTemplateMessage(to, templateName, language = 'en', components = []) {
-  const { phoneNumberId } = getConfig()
+export async function sendTemplateMessage(to, templateName, language = 'en', components = [], opts = {}) {
+  const config = await resolveConfig(opts)
 
   const body = {
     messaging_product: 'whatsapp',
@@ -84,9 +91,9 @@ export async function sendTemplateMessage(to, templateName, language = 'en', com
     body.template.components = components
   }
 
-  const response = await fetch(`${META_API_URL}/${phoneNumberId}/messages`, {
+  const response = await fetch(`${META_API_URL}/${config.phoneNumberId}/messages`, {
     method: 'POST',
-    headers: headers(),
+    headers: headersFor(config),
     body: JSON.stringify(body),
   })
 
@@ -105,8 +112,8 @@ export async function sendTemplateMessage(to, templateName, language = 'en', com
 /**
  * Send a media message (image, video, document) — 24h window only
  */
-export async function sendMediaMessage(to, type, mediaUrl, caption) {
-  const { phoneNumberId } = getConfig()
+export async function sendMediaMessage(to, type, mediaUrl, caption, opts = {}) {
+  const config = await resolveConfig(opts)
 
   const mediaTypes = {
     image: { image: { link: mediaUrl, caption } },
@@ -115,9 +122,9 @@ export async function sendMediaMessage(to, type, mediaUrl, caption) {
     audio: { audio: { link: mediaUrl } },
   }
 
-  const response = await fetch(`${META_API_URL}/${phoneNumberId}/messages`, {
+  const response = await fetch(`${META_API_URL}/${config.phoneNumberId}/messages`, {
     method: 'POST',
-    headers: headers(),
+    headers: headersFor(config),
     body: JSON.stringify({
       messaging_product: 'whatsapp',
       recipient_type: 'individual',
@@ -139,12 +146,12 @@ export async function sendMediaMessage(to, type, mediaUrl, caption) {
 /**
  * Mark a message as read (sends blue ticks)
  */
-export async function markAsRead(messageId) {
-  const { phoneNumberId } = getConfig()
+export async function markAsRead(messageId, opts = {}) {
+  const config = await resolveConfig(opts)
 
-  await fetch(`${META_API_URL}/${phoneNumberId}/messages`, {
+  await fetch(`${META_API_URL}/${config.phoneNumberId}/messages`, {
     method: 'POST',
-    headers: headers(),
+    headers: headersFor(config),
     body: JSON.stringify({
       messaging_product: 'whatsapp',
       status: 'read',
@@ -173,11 +180,11 @@ export async function markAsRead(messageId) {
  * @param {string} mimeType
  * @returns {Promise<string>} the header handle to use in example.header_handle
  */
-export async function uploadMediaForTemplate(bytes, mimeType) {
-  const { token } = getConfig()
-  const appId = process.env.WHATSAPP_APP_ID
+export async function uploadMediaForTemplate(bytes, mimeType, opts = {}) {
+  const config = await resolveConfig(opts)
+  const appId = config.appId || process.env.WHATSAPP_APP_ID
   if (!appId) {
-    throw new Error('WHATSAPP_APP_ID is not configured. Set the Meta App ID in environment variables.')
+    throw new Error('WhatsApp App ID is not configured. Set it on the location\'s WhatsApp number row or as WHATSAPP_APP_ID env var.')
   }
 
   // Step 1 — create upload session.
@@ -185,7 +192,7 @@ export async function uploadMediaForTemplate(bytes, mimeType) {
     `${META_API_URL}/${appId}/uploads?file_length=${bytes.length}&file_type=${encodeURIComponent(mimeType)}`,
     {
       method: 'POST',
-      headers: { Authorization: `Bearer ${token}` },
+      headers: { Authorization: `Bearer ${config.token}` },
     }
   )
   const sessionJson = await sessionRes.json()
@@ -199,7 +206,7 @@ export async function uploadMediaForTemplate(bytes, mimeType) {
   const uploadRes = await fetch(`${META_API_URL}/${sessionJson.id}`, {
     method: 'POST',
     headers: {
-      Authorization: `OAuth ${token}`,
+      Authorization: `OAuth ${config.token}`,
       file_offset: '0',
       'Content-Type': mimeType,
     },
@@ -213,14 +220,20 @@ export async function uploadMediaForTemplate(bytes, mimeType) {
 }
 
 /**
- * Create a message template (submits to Meta for approval)
+ * Create a message template (submits to Meta for approval).
+ * Note: templates are scoped to a WhatsApp Business Account, so
+ * multi-number locations sharing one WABA share templates. The
+ * config's businessAccountId drives the target WABA.
  */
-export async function createTemplate({ name, category, language, components }) {
-  const { businessAccountId } = getConfig()
+export async function createTemplate({ name, category, language, components }, opts = {}) {
+  const config = await resolveConfig(opts)
+  if (!config.businessAccountId) {
+    throw new Error('WhatsApp Business Account ID is not configured for this number.')
+  }
 
-  const response = await fetch(`${META_API_URL}/${businessAccountId}/message_templates`, {
+  const response = await fetch(`${META_API_URL}/${config.businessAccountId}/message_templates`, {
     method: 'POST',
-    headers: headers(),
+    headers: headersFor(config),
     body: JSON.stringify({
       name,
       category: category || 'MARKETING',
@@ -245,12 +258,15 @@ export async function createTemplate({ name, category, language, components }) {
 /**
  * Get all templates from Meta
  */
-export async function getTemplates(limit = 100) {
-  const { businessAccountId } = getConfig()
+export async function getTemplates(limit = 100, opts = {}) {
+  const config = await resolveConfig(opts)
+  if (!config.businessAccountId) {
+    throw new Error('WhatsApp Business Account ID is not configured for this number.')
+  }
 
   const response = await fetch(
-    `${META_API_URL}/${businessAccountId}/message_templates?limit=${limit}`,
-    { headers: headers() }
+    `${META_API_URL}/${config.businessAccountId}/message_templates?limit=${limit}`,
+    { headers: headersFor(config) }
   )
 
   const result = await response.json()
@@ -262,12 +278,15 @@ export async function getTemplates(limit = 100) {
 /**
  * Get a single template by name
  */
-export async function getTemplate(templateName) {
-  const { businessAccountId } = getConfig()
+export async function getTemplate(templateName, opts = {}) {
+  const config = await resolveConfig(opts)
+  if (!config.businessAccountId) {
+    throw new Error('WhatsApp Business Account ID is not configured for this number.')
+  }
 
   const response = await fetch(
-    `${META_API_URL}/${businessAccountId}/message_templates?name=${templateName}`,
-    { headers: headers() }
+    `${META_API_URL}/${config.businessAccountId}/message_templates?name=${templateName}`,
+    { headers: headersFor(config) }
   )
 
   const result = await response.json()
@@ -279,12 +298,15 @@ export async function getTemplate(templateName) {
 /**
  * Delete a template
  */
-export async function deleteTemplate(templateName) {
-  const { businessAccountId } = getConfig()
+export async function deleteTemplate(templateName, opts = {}) {
+  const config = await resolveConfig(opts)
+  if (!config.businessAccountId) {
+    throw new Error('WhatsApp Business Account ID is not configured for this number.')
+  }
 
   const response = await fetch(
-    `${META_API_URL}/${businessAccountId}/message_templates?name=${templateName}`,
-    { method: 'DELETE', headers: headers() }
+    `${META_API_URL}/${config.businessAccountId}/message_templates?name=${templateName}`,
+    { method: 'DELETE', headers: headersFor(config) }
   )
 
   const result = await response.json()
@@ -335,6 +357,12 @@ export async function sendBroadcast(broadcastId) {
   // Update status to sending
   await db.from('whatsapp_broadcasts').update({ status: 'sending' }).eq('id', broadcastId)
 
+  // WA-MULTI.1 — resolve the location's WA config ONCE upfront and
+  // reuse for every recipient. Cheaper than re-resolving per-send;
+  // also ensures the whole broadcast goes from one consistent
+  // number even if someone reconfigures defaults mid-send.
+  const broadcastConfig = await getWhatsAppConfig(broadcast.location_id)
+
   // Get audience
   const audienceQuery = buildWhatsAppAudience(db, broadcast.audience_filter, broadcast.location_id)
   const { data: contacts, error: cErr } = await audienceQuery
@@ -363,7 +391,8 @@ export async function sendBroadcast(broadcastId) {
         contact.wa_phone,
         template.name,
         template.language,
-        components
+        components,
+        { config: broadcastConfig }
       )
 
       // Create recipient record

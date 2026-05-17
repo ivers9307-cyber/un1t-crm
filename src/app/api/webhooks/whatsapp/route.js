@@ -1,6 +1,7 @@
 import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
 import { refreshWindow } from '@/lib/whatsapp'
+import { resolveWhatsAppNumberByPhoneNumberId } from '@/lib/whatsapp-config'
 import { verifyMetaSignature, safeEqual } from '@/lib/webhook-auth'
 import { sendPush, sendPushToRolesAtLocation } from '@/lib/push'
 import { MANAGER_ROLES } from '@/lib/schemas'
@@ -122,7 +123,7 @@ export async function POST(request) {
   return NextResponse.json({ success: true })
 }
 
-async function handleIncomingMessage(db, message, contacts, _phoneNumberId) {
+async function handleIncomingMessage(db, message, contacts, phoneNumberId) {
   const senderPhone = message.from  // E.164 format
   const messageId = message.id
   const timestamp = message.timestamp ? new Date(parseInt(message.timestamp) * 1000) : new Date()
@@ -131,10 +132,29 @@ async function handleIncomingMessage(db, message, contacts, _phoneNumberId) {
   const metaContact = contacts?.find(c => c.wa_id === senderPhone)
   const senderName = metaContact?.profile?.name || null
 
-  // Get default location
-  let defaultLocationId = null
-  const { data: locations } = await db.from('locations').select('id').limit(1)
-  if (locations?.length) defaultLocationId = locations[0].id
+  // WA-MULTI.1 — route inbound to the location that owns the
+  // recipient phone_number_id. Falls back to first-location if
+  // the phone_number_id isn't registered (env-var-only setups +
+  // any genuine misroutes both land somewhere sensible).
+  let phoneOwnerLocationId = null
+  if (phoneNumberId) {
+    try {
+      const owningNumber = await resolveWhatsAppNumberByPhoneNumberId(phoneNumberId)
+      if (owningNumber?.locationId) {
+        phoneOwnerLocationId = owningNumber.locationId
+      }
+    } catch (e) {
+      console.warn('[wa-webhook] phone_number_id resolution failed:', e.message)
+    }
+  }
+
+  // Final fallback — first location (matches the historical
+  // single-number behaviour).
+  let defaultLocationId = phoneOwnerLocationId
+  if (!defaultLocationId) {
+    const { data: locations } = await db.from('locations').select('id').limit(1)
+    if (locations?.length) defaultLocationId = locations[0].id
+  }
 
   // Try to find existing contact by phone number
   // Meta sends phone without '+' (e.g. 353873147675), but contacts may store it
@@ -158,7 +178,9 @@ async function handleIncomingMessage(db, message, contacts, _phoneNumberId) {
       .is('wa_phone', null)
   }
 
-  // Determine location — use contact's location if known, otherwise default
+  // Determine location: contact's location wins if known (their
+  // existing CRM placement), otherwise the WA-number owner, then
+  // first-location fallback.
   const locationId = contact?.location_id || defaultLocationId
 
   // Get or create conversation (keyed by phone number, NOT by contact)
