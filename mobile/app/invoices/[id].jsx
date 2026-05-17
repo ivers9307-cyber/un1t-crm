@@ -12,6 +12,7 @@ import { useLocalSearchParams, useRouter, Stack } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import * as WebBrowser from 'expo-web-browser'
 import { getInvoice, getInvoicePdfUrl, revokeInvoice, periodLabel } from '../../lib/invoices-api'
+import BackHeaderLeft from '../../components/BackHeaderLeft'
 
 const STATUS_STYLE = {
   submitted: { label: 'Awaiting review', tint: '#D97706', bg: 'bg-amber-500/20', text: 'text-amber-700', icon: 'time-outline' },
@@ -109,7 +110,15 @@ export default function InvoiceDetailScreen() {
 
   return (
     <>
-      <Stack.Screen options={{ title: periodLabel(data.period_start) }} />
+      <Stack.Screen
+        options={{
+          title: periodLabel(data.period_start),
+          // invoices/[id] is the only screen in its sub-stack and is
+          // pushed from (tabs)/invoices — iOS won't auto-render a
+          // back chevron across the navigator boundary. Opt in.
+          headerLeft: () => <BackHeaderLeft label="Invoices" fallbackHref="/(tabs)/invoices" />,
+        }}
+      />
       <ScrollView
         className="flex-1 bg-un1t-black"
         contentContainerStyle={{ padding: 16, paddingBottom: 32 }}

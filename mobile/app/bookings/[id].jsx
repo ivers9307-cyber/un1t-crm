@@ -11,9 +11,10 @@ import {
   View, Text, ScrollView, Pressable, ActivityIndicator, Linking,
   RefreshControl,
 } from 'react-native'
-import { useLocalSearchParams, useRouter } from 'expo-router'
+import { useLocalSearchParams, useRouter, Stack } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { getBooking, formatBookingTime } from '../../lib/bookings-api'
+import BackHeaderLeft from '../../components/BackHeaderLeft'
 
 export default function BookingDetail() {
   const { id } = useLocalSearchParams()
@@ -42,9 +43,18 @@ export default function BookingDetail() {
     setRefreshing(false)
   }
 
+  // Booking detail is the only screen in its sub-stack, so iOS won't
+  // auto-render a back chevron — we have to opt in via headerLeft.
+  // The fallback handles cold-start deep-links from a notification
+  // tap (no previous screen on the stack → router.back() is a noop).
+  const headerOptions = {
+    headerLeft: () => <BackHeaderLeft label="Bookings" fallbackHref="/(tabs)/bookings" />,
+  }
+
   if (loading) {
     return (
       <View className="flex-1 bg-un1t-black items-center justify-center">
+        <Stack.Screen options={{ ...headerOptions, title: 'Booking' }} />
         <ActivityIndicator />
       </View>
     )
@@ -53,6 +63,7 @@ export default function BookingDetail() {
   if (error || !booking) {
     return (
       <View className="flex-1 bg-un1t-black items-center justify-center px-6">
+        <Stack.Screen options={{ ...headerOptions, title: 'Booking' }} />
         <Ionicons name="alert-circle-outline" size={28} color="#DC2626" />
         <Text className="text-base text-un1t-white mt-2">{error || 'Booking not found'}</Text>
         <Pressable
@@ -78,6 +89,7 @@ export default function BookingDetail() {
         <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#111827" />
       }
     >
+      <Stack.Screen options={{ ...headerOptions, title: evt?.name || 'Booking' }} />
       <View className="flex-row items-center mb-2">
         <View
           className="w-2.5 h-2.5 rounded-full mr-2"

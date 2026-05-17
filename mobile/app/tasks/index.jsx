@@ -11,10 +11,11 @@ import { useState, useEffect, useCallback, useMemo } from 'react'
 import {
   View, Text, ScrollView, Pressable, RefreshControl, ActivityIndicator,
 } from 'react-native'
-import { useRouter } from 'expo-router'
+import { useRouter, Stack } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { useAuth } from '../../lib/auth-context'
 import { listMyTasks, statusLabel } from '../../lib/tasks-api'
+import BackHeaderLeft from '../../components/BackHeaderLeft'
 
 const PRIORITY_COLOR = {
   urgent: '#DC2626',
@@ -125,6 +126,14 @@ export default function TasksIndex() {
 
   return (
     <View className="flex-1 bg-un1t-black">
+      {/* tasks/ is a single-screen sub-stack pushed from /more,
+          so iOS won't auto-render a back chevron — opt in. */}
+      <Stack.Screen
+        options={{
+          title: 'Your tasks',
+          headerLeft: () => <BackHeaderLeft label="More" fallbackHref="/(tabs)/more" />,
+        }}
+      />
       <View className="flex-row gap-2 px-4 pt-3 pb-2">
         <Pressable
           onPress={() => setFilter('open')}

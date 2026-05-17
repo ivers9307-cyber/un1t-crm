@@ -13,9 +13,10 @@ import {
   View, Text, ScrollView, Pressable, ActivityIndicator, Alert,
   RefreshControl, Linking,
 } from 'react-native'
-import { useLocalSearchParams, useRouter } from 'expo-router'
+import { useLocalSearchParams, useRouter, Stack } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { getTask, setTaskStatus, statusLabel, nextStatus } from '../../lib/tasks-api'
+import BackHeaderLeft from '../../components/BackHeaderLeft'
 
 function StatusPill({ status }) {
   const tone =
@@ -92,9 +93,18 @@ export default function TaskDetail() {
     )
   }
 
+  // iOS auto-renders back when /tasks (index) is below us in the
+  // stack — but a cold-start push notification tap lands here with
+  // an empty stack and no chevron. The BackHeaderLeft fallback
+  // replaces to /tasks in that case.
+  const headerOptions = {
+    headerLeft: () => <BackHeaderLeft label="Tasks" fallbackHref="/tasks" />,
+  }
+
   if (loading) {
     return (
       <View className="flex-1 bg-un1t-black items-center justify-center">
+        <Stack.Screen options={{ ...headerOptions, title: 'Task' }} />
         <ActivityIndicator />
       </View>
     )
@@ -103,6 +113,7 @@ export default function TaskDetail() {
   if (error || !task) {
     return (
       <View className="flex-1 bg-un1t-black items-center justify-center px-6">
+        <Stack.Screen options={{ ...headerOptions, title: 'Task' }} />
         <Ionicons name="alert-circle-outline" size={28} color="#DC2626" />
         <Text className="text-base text-un1t-white mt-2">{error || 'Task not found'}</Text>
         <Pressable
@@ -122,6 +133,7 @@ export default function TaskDetail() {
 
   return (
     <View className="flex-1 bg-un1t-black">
+      <Stack.Screen options={{ ...headerOptions, title: task.subject || 'Task' }} />
       <ScrollView
         contentContainerClassName="px-4 pt-4 pb-32"
         refreshControl={

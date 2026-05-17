@@ -8,8 +8,9 @@
 import { useState, useEffect, useCallback } from 'react'
 import { View, Text, FlatList, Pressable, RefreshControl, ActivityIndicator } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
-import { useRouter, useFocusEffect } from 'expo-router'
+import { useRouter, useFocusEffect, Stack } from 'expo-router'
 import { listContracts } from '../../lib/contracts-api'
+import BackHeaderLeft from '../../components/BackHeaderLeft'
 
 const STATUS_LABEL = {
   issued:   { text: 'Awaiting signature', bg: 'bg-blue-500/15',    fg: 'text-blue-700' },
@@ -62,9 +63,17 @@ export default function ContractsList() {
     setRefreshing(false)
   }
 
+  // contracts/index is reached from the More tab, so iOS won't
+  // auto-render a back chevron — opt in explicitly (cross-navigator
+  // push convention, see CLAUDE.md "iOS auto-back-button").
+  const headerOptions = {
+    headerLeft: () => <BackHeaderLeft label="More" fallbackHref="/(tabs)/more" />,
+  }
+
   if (rows == null) {
     return (
       <View className="flex-1 bg-un1t-black items-center justify-center">
+        <Stack.Screen options={{ ...headerOptions, title: 'Your contracts' }} />
         <ActivityIndicator />
       </View>
     )
@@ -73,6 +82,7 @@ export default function ContractsList() {
   if (error) {
     return (
       <View className="flex-1 bg-un1t-black p-6">
+        <Stack.Screen options={{ ...headerOptions, title: 'Your contracts' }} />
         <View className="bg-red-500/10 border border-red-500/30 rounded-2xl p-4">
           <Text className="text-sm font-semibold text-red-700">Couldn't load contracts</Text>
           <Text className="text-xs text-red-700 mt-1">{error}</Text>
@@ -90,6 +100,7 @@ export default function ContractsList() {
   if (rows.length === 0) {
     return (
       <View className="flex-1 bg-un1t-black items-center justify-center px-8">
+        <Stack.Screen options={{ ...headerOptions, title: 'Your contracts' }} />
         <Ionicons name="document-text-outline" size={32} color="#94A3B8" />
         <Text className="text-sm text-un1t-light mt-3 text-center">
           No contracts on file yet.
@@ -117,7 +128,9 @@ export default function ContractsList() {
   }
 
   return (
-    <FlatList
+    <>
+      <Stack.Screen options={{ ...headerOptions, title: 'Your contracts' }} />
+      <FlatList
       className="flex-1 bg-un1t-black"
       contentContainerClassName="p-4"
       data={items}
@@ -160,5 +173,6 @@ export default function ContractsList() {
         )
       }}
     />
+    </>
   )
 }
