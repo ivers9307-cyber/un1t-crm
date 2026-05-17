@@ -153,7 +153,7 @@ export default function PasswordOverrideModal({
 
             {mode === 'manual' && (
               <div className="mb-3">
-                <label className="block text-xs text-un1t-light mb-1">New password (min 12 chars)</label>
+                <label className="block text-xs text-un1t-light mb-1">New password</label>
                 <input
                   type="text"
                   autoFocus
@@ -162,9 +162,22 @@ export default function PasswordOverrideModal({
                   placeholder="Type or paste the new password"
                   className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm font-mono text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid"
                 />
-                <p className="text-[10px] text-un1t-mid mt-1">
-                  Text input (not password-masked) so you can verify what you're sending.
-                </p>
+                <div className="flex items-center justify-between mt-1">
+                  <p className="text-[10px] text-un1t-mid">
+                    Text input (not password-masked) so you can verify what you&apos;re sending.
+                  </p>
+                  {/* Live character count — colour-coded so the operator
+                      knows exactly why 'Override password' is greyed
+                      out (silently-disabled buttons were confusing). */}
+                  <p className={`text-[10px] font-mono ${
+                    manualPassword.length >= 12 ? 'text-emerald-400' : 'text-amber-400'
+                  }`}>
+                    {manualPassword.length} / 12 chars
+                    {manualPassword.length < 12 && manualPassword.length > 0 && (
+                      <> · need {12 - manualPassword.length} more</>
+                    )}
+                  </p>
+                </div>
               </div>
             )}
 
@@ -198,7 +211,14 @@ export default function PasswordOverrideModal({
                 type="button"
                 onClick={submit}
                 disabled={busy || (mode === 'manual' && manualPassword.length < 12)}
-                className="text-sm bg-un1t-white text-un1t-black font-medium px-4 py-1.5 rounded-md hover:bg-un1t-accent disabled:opacity-50"
+                title={
+                  busy
+                    ? 'Sending…'
+                    : (mode === 'manual' && manualPassword.length < 12)
+                      ? `Password must be at least 12 characters (currently ${manualPassword.length}). Or switch to 'Generate random'.`
+                      : undefined
+                }
+                className="text-sm bg-un1t-white text-un1t-black font-medium px-4 py-1.5 rounded-md hover:bg-un1t-accent disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {busy ? 'Overriding…' : 'Override password'}
               </button>
