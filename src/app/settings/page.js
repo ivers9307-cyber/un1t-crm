@@ -1,12 +1,11 @@
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
-import { canEditStaffMember } from '@/lib/staff-access'
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
-import { Users, MapPin, Shield, UserCog, LayoutGrid, FileClock, Trophy, Cable } from 'lucide-react'
+import { Users, MapPin, Shield, UserCog, LayoutGrid, FileClock, Trophy, Cable, ChevronRight } from 'lucide-react'
 
-// SETTINGS.3 — reorganized this page:
+// SETTINGS.3/.4 — reorganized this page:
 //   - Master tools moved to TOP (was mid-page)
 //   - Removed Shift Templates + Bank Holidays sections (now linked
 //     from the per-location settings page since both are location-
@@ -15,6 +14,8 @@ import { Users, MapPin, Shield, UserCog, LayoutGrid, FileClock, Trophy, Cable } 
 //     under Settings → Locations → <name> → Integrations)
 //   - Removed top-level Branding section (was duplicated; per-
 //     location branding lives on Settings → Locations → <name>)
+//   - SETTINGS.4: Team Members inline table replaced with a link
+//     card → /settings/staff (searchable + status-filtered list)
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
@@ -31,27 +32,14 @@ export default async function SettingsPage() {
   if (!hasPermission(user, 'settings')) redirect('/')
 
   const db = createServerClient()
-  const [staffRes, locationsRes] = await Promise.all([
-    db.from('profiles').select('*, profile_locations(*, locations(*))').order('created_at'),
+  // We only need counts on this index page now — the full staff list
+  // lives at /settings/staff. Pull head=true + count so we don't drag
+  // 50+ rows + profile_locations joins for what's effectively a badge.
+  const [{ count: staffCount }, locationsRes] = await Promise.all([
+    db.from('profiles').select('id', { count: 'exact', head: true }),
     db.from('locations').select('*').order('created_at'),
   ])
-
-  const staff = staffRes.data || []
   const locations = locationsRes.data || []
-
-  const roleColors = {
-    owner: 'bg-purple-500/20 text-purple-400',
-    manager: 'bg-blue-500/20 text-blue-400',
-    head_coach: 'bg-emerald-500/20 text-emerald-400',
-    staff: 'bg-gray-500/20 text-gray-400',
-  }
-
-  const roleLabels = {
-    owner: 'Owner',
-    manager: 'Manager',
-    head_coach: 'Head Coach',
-    staff: 'Staff',
-  }
 
   return (
     <div className="p-8 max-w-4xl">
@@ -109,13 +97,17 @@ export default async function SettingsPage() {
         </div>
       )}
 
-      {/* Staff Section */}
+      {/* Team Members — link card to /settings/staff (searchable list).
+          SETTINGS.4 moved the inline table out of this index page;
+          /settings/staff now hosts the full searchable + status-
+          filterable list. The Add Staff CTA hangs off this card so
+          common-action ergonomics aren't lost. */}
       <div className="mb-10">
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-2">
             <Users size={18} className="text-un1t-light" />
             <h3 className="text-lg font-semibold">Team Members</h3>
-            <span className="text-xs bg-un1t-gray text-un1t-light px-2 py-0.5 rounded-full ml-1">{staff.length}</span>
+            <span className="text-xs bg-un1t-gray text-un1t-light px-2 py-0.5 rounded-full ml-1">{staffCount || 0}</span>
           </div>
           <Link
             href="/settings/staff/new"
@@ -125,62 +117,18 @@ export default async function SettingsPage() {
           </Link>
         </div>
 
-        <div className="bg-un1t-dark border border-un1t-gray rounded-lg overflow-x-auto">
-          <table className="w-full text-sm min-w-[600px]">
-            <thead>
-              <tr className="border-b border-un1t-gray text-un1t-light text-xs uppercase tracking-wider">
-                <th className="text-left p-3">Name</th>
-                <th className="text-left p-3">Email</th>
-                <th className="text-left p-3">Role</th>
-                <th className="text-left p-3">Locations</th>
-                <th className="text-left p-3">Status</th>
-                <th className="w-8"></th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-un1t-gray">
-              {staff.map(s => (
-                <tr key={s.id} className="hover:bg-un1t-gray/20 transition-colors">
-                  <td className="p-3 font-medium">{s.full_name}</td>
-                  <td className="p-3 text-un1t-light">{s.email}</td>
-                  <td className="p-3">
-                    <span className={`text-xs px-2 py-0.5 rounded-full ${roleColors[s.role] || roleColors.staff}`}>
-                      {roleLabels[s.role] || s.role}
-                    </span>
-                  </td>
-                  <td className="p-3 text-un1t-light text-xs">
-                    {(s.profile_locations || []).map(pl => pl.locations?.name).filter(Boolean).join(', ') || '—'}
-                  </td>
-                  <td className="p-3">
-                    <span className={`text-xs px-2 py-0.5 rounded-full ${s.active ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`}>
-                      {s.active ? 'Active' : 'Inactive'}
-                    </span>
-                  </td>
-                  <td className="p-3">
-                    {/* Hide the Edit link for rows the caller can't
-                        modify (owner-self, owner-peer). Saves a
-                        click + keeps the staff list honest with the
-                        new policy. */}
-                    {canEditStaffMember(
-                      { id: user.id, role: user.role, isMaster: user.isMaster },
-                      { id: s.id, role: s.role },
-                    ) ? (
-                      <Link
-                        href={`/settings/staff/${s.id}`}
-                        className="text-xs text-blue-400 hover:text-blue-300"
-                      >
-                        Edit
-                      </Link>
-                    ) : (
-                      <span className="text-xs text-un1t-mid" title="Master only — owners can't edit themselves or other owners">
-                        Locked
-                      </span>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <Link
+          href="/settings/staff"
+          className="bg-un1t-dark border border-un1t-gray hover:border-un1t-light rounded-lg p-4 flex items-center justify-between text-sm group transition-colors"
+        >
+          <div>
+            <div className="text-un1t-white">View team</div>
+            <div className="text-xs text-un1t-light mt-0.5">
+              Searchable list of all {staffCount || 0} team members. Filter by status, role, location, or name.
+            </div>
+          </div>
+          <ChevronRight size={16} className="text-un1t-light group-hover:text-un1t-white" />
+        </Link>
       </div>
 
       {/* Locations Section */}
