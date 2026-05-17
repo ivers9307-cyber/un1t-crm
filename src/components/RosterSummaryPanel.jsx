@@ -1,5 +1,3 @@
-'use client'
-
 // Roster v2 phase 4 — week + month summary panel rendered below
 // the schedule calendar. Read-only / advisory: no enforcement,
 // just shows the operator what they're staffing toward. Phase 5
@@ -11,6 +9,13 @@
 //   - Per-coach FTE utilisation bars (allocated / contracted)
 //   - Contractor euro spend for the focused month vs the
 //     location's monthly_contractor_budget_eur
+//
+// RSC-AUDIT.2: no own state / events / refs / browser APIs —
+// pure data transformation via summarizeWeek / summarizeMonth +
+// JSX render. Intl.NumberFormat + new Date(y, m, 1) are universal
+// (not browser-only). Parent ScheduleCalendar is a Client
+// Component, so this gets implicit-client-bundled with the same
+// end result. Drops one explicit boundary directive.
 
 import { TrendingUp, TrendingDown, AlertTriangle, Wallet } from 'lucide-react'
 import { summarizeWeek, summarizeMonth } from '@/lib/roster-summary'

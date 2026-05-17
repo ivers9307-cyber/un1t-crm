@@ -1,10 +1,13 @@
-'use client'
-
 // BCA Submit integration tab. Wraps the existing BcaSubmitSettings
 // component (originally rendered on the standalone /settings/locations/
 // [id]/bca page that we're deleting as part of SETTINGS.1). The form,
 // validator, live preview etc. are unchanged — just embedded in the
 // tabbed Integrations container now.
+//
+// RSC-AUDIT.2: no own state / events / browser APIs — every
+// interactive bit lives in BcaSubmitSettings. Parent
+// LocationIntegrations is a Client Component, so this gets
+// implicit-client-bundled with the same end result.
 
 import { getBcaConfig, DEFAULT_BCA_CONFIG } from '@/lib/bca'
 import BcaSubmitSettings from '@/components/settings/BcaSubmitSettings'

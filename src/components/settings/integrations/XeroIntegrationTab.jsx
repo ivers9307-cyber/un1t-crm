@@ -1,10 +1,14 @@
-'use client'
-
 // Xero integration tab. Wraps the existing XeroLocationCard which
 // already handles the OAuth start + status display + reconnect /
 // disconnect. The cross-location overview at /settings/integrations
 // stays as-is (kept per the SETTINGS.1 spec) — this tab is the
 // single-location surface.
+//
+// RSC-AUDIT.2: no own state / events / browser APIs — every
+// interactive bit lives in XeroLocationCard. Parent
+// LocationIntegrations is a Client Component, so this gets
+// implicit-client-bundled with the same end result and one less
+// directive cluttering the file.
 
 import XeroLocationCard from '@/components/settings/XeroLocationCard'
 
