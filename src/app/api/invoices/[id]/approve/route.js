@@ -18,7 +18,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { computeScheduledForPeriod, periodLabel } from '@/lib/contractor-invoices'
 import { sendContractorInvoiceBillEmail } from '@/lib/xero/contractor-bills'
 import { sendInvoiceApprovedEmail } from '@/lib/contractor-invoice-email'
-import { sendPush } from '@/lib/push'
+import { notifyUsers } from '@/lib/notify'
 import { logWarn } from '@/lib/log'
 
 export const runtime = 'nodejs'
@@ -112,25 +112,24 @@ export async function POST(_request, { params }) {
     warnings.push(`Approval email failed: ${e?.message || String(e)}. The contractor will see the status next time they open Invoices.`)
   }
 
-  // Push notification (best-effort). category=invoice_approved
-  // maps to notify_invoice_approved on the contractor's profile,
-  // and the master push_notifications switch is honoured by
-  // sendPush itself.
+  // NOTIF.9 — migrated to notifyUsers so contractors without the
+  // mobile app get an email fallback (category invoice_approved
+  // opts in via fallbackEmail: true in notifications-registry).
+  // Honours notify_invoice_approved + the master push_notifications
+  // switch the same way sendPush did.
   try {
-    await sendPush([approved.contractor_id], {
+    await notifyUsers([approved.contractor_id], {
       title: 'Invoice approved',
       body: `€${Number(approved.invoice_amount).toFixed(2)} for ${periodLabel(approved.period_start)} has been approved and forwarded to accounts.`,
       category: 'invoice_approved',
+      emailSubject: `Your invoice has been approved — €${Number(approved.invoice_amount).toFixed(2)}`,
       data: {
         type: 'invoice_approved',
         invoice_id: approved.id,
       },
     })
   } catch (e) {
-    // Pushed are non-blocking; don't surface as a warning unless
-    // the entire transport is broken — and even then operators can
-    // see this in logs. Log only.
-    logWarn('invoice-approve', `push failed for ${approved.id}`, { err: e })
+    logWarn('invoice-approve', `notify failed for ${approved.id}`, { err: e })
   }
 
   return NextResponse.json({

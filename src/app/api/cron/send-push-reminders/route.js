@@ -207,15 +207,39 @@ export async function GET(request) {
       .gte('booking_date', fetchLowerDay)
       .lte('booking_date', fetchUpperDay)
 
+    // NOTIF.10 — loop inverted to support per-user lead-time
+    // overrides. For each booking, resolve the role-set, fetch each
+    // recipient's profile_locations.permissions.mobile, then for
+    // EACH recipient walk their effective lead times and decide
+    // whether to fire. Previously the lead-times were the outer
+    // loop (one set per location); now they're per-recipient.
     if (bErr) {
       logError('cron-push-reminders', 'booking fetch failed', { err: bErr })
-    } else {
-      for (const b of bookings || []) {
+    } else if (bookings && bookings.length > 0) {
+      // Batch-fetch all candidate recipients' permissions across the
+      // location set, keyed on (profile_id, location_id). The
+      // (notify_roles, active) filtering still happens per-booking
+      // but we avoid N round-trips by pulling them all up front.
+      const bookingLocIds = [...new Set(bookings.map(b => b.location_id).filter(Boolean))]
+      const { data: locLinks } = await db
+        .from('profile_locations')
+        .select('profile_id, location_id, permissions, profiles!inner(id, role, active)')
+        .in('location_id', bookingLocIds)
+      const recipientsByLocation = new Map() // location_id -> [{ profile_id, role, perms }]
+      for (const link of locLinks || []) {
+        if (!link.profiles?.active) continue
+        if (!recipientsByLocation.has(link.location_id)) recipientsByLocation.set(link.location_id, [])
+        recipientsByLocation.get(link.location_id).push({
+          profile_id: link.profile_id,
+          role: link.profiles.role,
+          perms: link.permissions?.mobile || {},
+        })
+      }
+
+      for (const b of bookings) {
         if (!b.location_id || !b.booking_date || !b.start_time) continue
         const loc = locById.get(b.location_id)
         if (!loc) continue
-        const leadTimes = loc.cfg.categories?.bookings?.lead_times_minutes || []
-        if (!leadTimes.length) continue
         const notifyRoles = loc.cfg.categories?.bookings?.notify_roles || []
         if (!notifyRoles.length) continue
 
@@ -223,60 +247,62 @@ export async function GET(request) {
         if (!startUtc) continue
         const minutesAway = (startUtc.getTime() - nowMs) / 60000
 
-        for (const lead of leadTimes) {
-          if (Math.abs(minutesAway - lead) > WINDOW_MIN) continue
-          summary.booking_candidates++
+        const candidates = (recipientsByLocation.get(b.location_id) || [])
+          .filter(r => notifyRoles.includes(r.role))
+        if (!candidates.length) continue
 
-          // Resolve recipient set at this location with the
-          // configured roles.
-          const { data: links } = await db
-            .from('profile_locations')
-            .select('profile_id, profiles!inner(id, role, active)')
-            .eq('location_id', b.location_id)
+        const eventName = b.event_type?.name || 'booking'
 
-          const recipientIds = (links || [])
-            .filter(l => l.profiles?.active && notifyRoles.includes(l.profiles.role))
-            .map(l => l.profile_id)
-          if (!recipientIds.length) continue
+        // For each recipient, walk THEIR effective lead times and
+        // check the window. A recipient with a 30-min override at
+        // a location that defaults to 60-min will fire at the
+        // 30-min mark instead.
+        for (const recipient of candidates) {
+          const leadTimes = getEffectiveLeadTimesForUser(
+            loc.cfg ? { categories: loc.cfg.categories } : null,
+            recipient.perms,
+            'bookings',
+          )
+          if (!leadTimes.length) continue
 
-          // Per-recipient dedup.
-          const { data: alreadySent } = await db
-            .from('push_reminder_sends')
-            .select('recipient_id')
-            .eq('entity_type', 'booking')
-            .eq('entity_id', b.id)
-            .eq('lead_time_minutes', lead)
-            .in('recipient_id', recipientIds)
+          for (const lead of leadTimes) {
+            if (Math.abs(minutesAway - lead) > WINDOW_MIN) continue
+            summary.booking_candidates++
 
-          const alreadySetIds = new Set((alreadySent || []).map(r => r.recipient_id))
-          const fresh = recipientIds.filter(id => !alreadySetIds.has(id))
-          summary.booking_skipped_dup += alreadySetIds.size
-          if (!fresh.length) continue
+            // Dedup per (booking, recipient, lead).
+            const { data: existing } = await db
+              .from('push_reminder_sends')
+              .select('id')
+              .eq('entity_type', 'booking')
+              .eq('entity_id', b.id)
+              .eq('recipient_id', recipient.profile_id)
+              .eq('lead_time_minutes', lead)
+              .maybeSingle()
+            if (existing) { summary.booking_skipped_dup++; continue }
 
-          const eventName = b.event_type?.name || 'booking'
-          const label = leadLabel(lead)
-          const result = await sendPush(fresh, {
-            title: `${eventName} ${label}`,
-            body: `${b.customer_name || 'Guest'} · ${formatLocalTime(b.start_time)}`,
-            category: 'bookings',
-            data: { type: 'booking_reminder', booking_id: b.id, lead_minutes: lead },
-          })
+            const label = leadLabel(lead)
+            const result = await sendPush([recipient.profile_id], {
+              title: `${eventName} ${label}`,
+              body: `${b.customer_name || 'Guest'} · ${formatLocalTime(b.start_time)}`,
+              category: 'bookings',
+              data: { type: 'booking_reminder', booking_id: b.id, lead_minutes: lead },
+            })
 
-          const rows = fresh.map(rid => ({
-            entity_type: 'booking',
-            entity_id: b.id,
-            recipient_id: rid,
-            lead_time_minutes: lead,
-            push_count: 1,
-            push_invalidated: 0,
-          }))
-          await db.from('push_reminder_sends').insert(rows).then(({ error }) => {
-            if (error && error.code !== '23505') {
-              logWarn('cron-push-reminders', 'booking ledger insert failed', { err: error, b: b.id })
-            }
-          })
+            await db.from('push_reminder_sends').insert({
+              entity_type: 'booking',
+              entity_id: b.id,
+              recipient_id: recipient.profile_id,
+              lead_time_minutes: lead,
+              push_count: result.sent || 0,
+              push_invalidated: result.invalidated || 0,
+            }).then(({ error }) => {
+              if (error && error.code !== '23505') {
+                logWarn('cron-push-reminders', 'booking ledger insert failed', { err: error, b: b.id })
+              }
+            })
 
-          if (result.sent > 0) summary.booking_pushed++
+            if (result.sent > 0) summary.booking_pushed++
+          }
         }
       }
     }

@@ -170,3 +170,33 @@ function escapeHtml(s) {
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#039;')
 }
+
+/**
+ * Sister of notifyUsers for the fan-out shape — notify every active
+ * staff member at `locationId` with one of the supplied `roles`.
+ *
+ * Replaces the existing push.js sendPushToRolesAtLocation pattern
+ * for callers that want email fallback (e.g. "new time-off request"
+ * to owner/manager). Resolves the role set to a user-id list, then
+ * delegates to notifyUsers — so it gets fallback eligibility from
+ * the same registry flag.
+ *
+ * Same { sent, skipped, invalidated, emailed, email_failed } return
+ * shape as notifyUsers.
+ */
+export async function notifyUsersAtRoles(locationId, roles, payload) {
+  if (!locationId || !roles?.length) {
+    return { sent: 0, skipped: 0, invalidated: 0, emailed: 0, email_failed: 0 }
+  }
+  const db = createServerClient()
+  const { data: links } = await db
+    .from('profile_locations')
+    .select('profile_id, profiles!inner(id, role, active)')
+    .eq('location_id', locationId)
+
+  const ids = (links || [])
+    .filter(l => l.profiles?.active && roles.includes(l.profiles.role))
+    .map(l => l.profile_id)
+
+  return notifyUsers(ids, payload)
+}

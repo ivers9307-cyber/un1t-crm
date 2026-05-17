@@ -1,16 +1,17 @@
 'use client'
 
-// NOTIF.7 — per-user lead-time override editor for the StaffForm
-// mobile-permissions section.
+// NOTIF.7 + NOTIF.10 — per-user lead-time override editor for the
+// StaffForm mobile-permissions section.
 //
 // Stored shape under permissions.mobile.lead_time_overrides:
 //
-//   { tasks: { lead_times_minutes: [30, 60] } }
+//   { tasks:    { lead_times_minutes: [30, 60] },
+//     bookings: { lead_times_minutes: [15] } }
 //
-// Only tasks are user-overridable today (bookings are operator-side
-// at the location level). Empty / null = "use the location's
-// default". The cron's getEffectiveLeadTimesForUser does the
-// fallback chain.
+// Both categories are user-overridable. Empty / null on either =
+// "use the location's default for that category". The cron's
+// getEffectiveLeadTimesForUser does the resolution chain
+// (user → location → built-in default).
 
 import { useState } from 'react'
 import { Plus, X, Bell } from 'lucide-react'
@@ -18,30 +19,36 @@ import { formatLeadTime, LEAD_TIME_MIN_MINUTES, LEAD_TIME_MAX_MINUTES } from '@/
 
 const LEAD_PRESETS_MIN = [15, 30, 60, 120, 240, 1440, 2880]
 
-export default function LeadTimeOverrideRow({ overrides, onChange }) {
-  const taskValues = overrides?.tasks?.lead_times_minutes
-  const isOverridden = Array.isArray(taskValues) && taskValues.length > 0
+const CATEGORY_LABELS = {
+  tasks:    { title: 'Task reminder lead times', subtitle: 'When this user gets pinged before their assigned tasks are due.' },
+  bookings: { title: 'Booking reminder lead times', subtitle: 'When this user gets pinged before bookings at this location. Per-user override beats the location default — useful when one operator wants earlier nudges than the team norm.' },
+}
+
+export default function LeadTimeOverrideRow({ overrides, onChange, category = 'tasks' }) {
+  const labels = CATEGORY_LABELS[category] || CATEGORY_LABELS.tasks
+  const currentValues = overrides?.[category]?.lead_times_minutes
+  const isOverridden = Array.isArray(currentValues) && currentValues.length > 0
   const [expanded, setExpanded] = useState(isOverridden)
   const [customMin, setCustomMin] = useState('')
 
-  function setTasks(next) {
-    // null / empty = remove the override
+  function setValues(next) {
+    // null / empty = remove the override for this category
     if (!next || next.length === 0) {
-      const { tasks: _drop, ...rest } = overrides || {}
+      const { [category]: _drop, ...rest } = overrides || {}
       onChange(rest)
       return
     }
-    onChange({ ...(overrides || {}), tasks: { lead_times_minutes: next } })
+    onChange({ ...(overrides || {}), [category]: { lead_times_minutes: next } })
   }
 
   function add(min) {
-    const current = taskValues || []
+    const current = currentValues || []
     const next = [...current, min].filter((v, i, a) => a.indexOf(v) === i).sort((a, b) => a - b)
-    setTasks(next)
+    setValues(next)
   }
   function remove(idx) {
-    const current = taskValues || []
-    setTasks(current.filter((_, i) => i !== idx))
+    const current = currentValues || []
+    setValues(current.filter((_, i) => i !== idx))
   }
   function addCustom() {
     const n = Number(customMin)
@@ -50,7 +57,7 @@ export default function LeadTimeOverrideRow({ overrides, onChange }) {
     setCustomMin('')
   }
   function clearOverride() {
-    setTasks(null)
+    setValues(null)
   }
 
   if (!expanded) {
@@ -59,9 +66,7 @@ export default function LeadTimeOverrideRow({ overrides, onChange }) {
         <div className="flex items-center gap-2">
           <Bell size={14} className="text-un1t-light" />
           <div>
-            <div className="text-xs font-semibold text-un1t-white">
-              Task reminder lead times
-            </div>
+            <div className="text-xs font-semibold text-un1t-white">{labels.title}</div>
             <div className="text-[11px] text-un1t-light">
               Using location default (1h + 24h before due).
             </div>
@@ -78,7 +83,7 @@ export default function LeadTimeOverrideRow({ overrides, onChange }) {
     )
   }
 
-  const presets = LEAD_PRESETS_MIN.filter(p => !(taskValues || []).includes(p))
+  const presets = LEAD_PRESETS_MIN.filter(p => !(currentValues || []).includes(p))
 
   return (
     <div className="bg-un1t-black/40 border border-un1t-gray rounded-md p-3 mb-3">
@@ -87,10 +92,10 @@ export default function LeadTimeOverrideRow({ overrides, onChange }) {
           <Bell size={14} className="text-un1t-light" />
           <div>
             <div className="text-xs font-semibold text-un1t-white">
-              Task reminder lead times — user override
+              {labels.title} — user override
             </div>
             <div className="text-[11px] text-un1t-light">
-              When set, overrides this location&apos;s default for THIS user only.
+              {labels.subtitle}
             </div>
           </div>
         </div>
@@ -111,7 +116,7 @@ export default function LeadTimeOverrideRow({ overrides, onChange }) {
             No override set — using location default (1h + 24h).
           </span>
         )}
-        {(taskValues || []).map((v, i) => (
+        {(currentValues || []).map((v, i) => (
           <span
             key={`${v}-${i}`}
             className="inline-flex items-center gap-1 bg-un1t-gray/40 border border-un1t-gray rounded-full px-2 py-0.5 text-xs text-un1t-white"

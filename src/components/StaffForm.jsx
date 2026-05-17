@@ -864,16 +864,24 @@ export default function StaffForm({
             <TestPushButton recipientId={staff.id} recipientName={form.full_name || staff.email} />
           </div>
         )}
-        {/* NOTIF.7 — per-user task-reminder lead-time override. Stored
-            under permissions.mobile.lead_time_overrides.tasks. When
-            empty, the location's default (60 + 1440) is used. The
-            cron resolves user override → location config → built-in
-            default in that order. */}
+        {/* NOTIF.7 + NOTIF.10 — per-user lead-time overrides for
+            tasks AND bookings. Stored under
+            permissions.mobile.lead_time_overrides.<category>. Empty
+            for either category = use the location's default. The
+            cron resolves user → location → built-in default. */}
         {selectedPermLocationId && (
-          <LeadTimeOverrideRow
-            overrides={selectedMobilePerms.lead_time_overrides || {}}
-            onChange={(next) => patchSelectedMobilePerms({ lead_time_overrides: next })}
-          />
+          <>
+            <LeadTimeOverrideRow
+              category="tasks"
+              overrides={selectedMobilePerms.lead_time_overrides || {}}
+              onChange={(next) => patchSelectedMobilePerms({ lead_time_overrides: next })}
+            />
+            <LeadTimeOverrideRow
+              category="bookings"
+              overrides={selectedMobilePerms.lead_time_overrides || {}}
+              onChange={(next) => patchSelectedMobilePerms({ lead_time_overrides: next })}
+            />
+          </>
         )}
 
         <div className="space-y-2">

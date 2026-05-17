@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, getUserLocationIds, assertLocationAccess } from '@/lib/auth'
 import { validateBody, uuidLike } from '@/lib/validate'
-import { sendPushToRolesAtLocation } from '@/lib/push'
+import { notifyUsersAtRoles } from '@/lib/notify'
 
 const ISO_DATE = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD')
 
@@ -145,12 +145,16 @@ export async function POST(request) {
     const range = data.start_date === data.end_date
       ? data.start_date
       : `${data.start_date} – ${data.end_date}`
-    sendPushToRolesAtLocation(targetLocation, ['owner', 'manager'], {
+    // NOTIF.9 — migrated to notifyUsersAtRoles. Owners/managers
+    // who don't have the mobile app get the request by email so
+    // they can still review and decide within reasonable hours.
+    notifyUsersAtRoles(targetLocation, ['owner', 'manager'], {
       title: 'New time-off request',
       body: `${user.full_name} requested ${data.type} for ${range}.`,
       category: 'time_off',
+      emailSubject: `Time-off request from ${user.full_name}`,
       data: { type: 'time_off_inbound', request_id: data.id },
-    }).catch(err => console.error('[time-off] push failed', err))
+    }).catch(err => console.error('[time-off] notify failed', err))
   }
 
   return NextResponse.json({ success: true, data }, { status: 201 })

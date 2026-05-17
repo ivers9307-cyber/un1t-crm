@@ -4,7 +4,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { timeOffStatusSchema , MANAGER_ROLES} from '@/lib/schemas'
-import { sendPush } from '@/lib/push'
+import { notifyUsers } from '@/lib/notify'
 
 const TimeOffReviewSchema = z.object({
   status: timeOffStatusSchema,
@@ -77,18 +77,23 @@ export async function PUT(request, { params }) {
     const range = existing.start_date === existing.end_date
       ? existing.start_date
       : `${existing.start_date} – ${existing.end_date}`
-    sendPush([existing.profile_id], {
+    // NOTIF.9 — migrated to notifyUsers. Push first; if the
+    // requester has no device tokens, they get a fallback email
+    // via Postmark (category 'time_off' opts in via fallbackEmail:
+    // true in notifications-registry).
+    notifyUsers([existing.profile_id], {
       title: `Time off ${verb}`,
       body: `Your ${existing.type} request for ${range} was ${verb}${review_note ? ` — “${review_note}”` : ''}.`,
       category: 'time_off',
+      emailSubject: `Time-off request ${verb}`,
       data: {
         type: 'time_off_decision',
         request_id: existing.id,
         status,
       },
     }).catch(err => {
-      // Best-effort — never block the API response on push.
-      console.error('[time-off] push failed', err)
+      // Best-effort — never block the API response on notify.
+      console.error('[time-off] notify failed', err)
     })
   }
 

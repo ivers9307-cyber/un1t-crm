@@ -10,7 +10,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { sendInvoiceDeclinedEmail } from '@/lib/contractor-invoice-email'
-import { sendPush } from '@/lib/push'
+import { notifyUsers } from '@/lib/notify'
 import { periodLabel } from '@/lib/contractor-invoices'
 import { logWarn } from '@/lib/log'
 
@@ -84,24 +84,25 @@ export async function POST(request, { params }) {
     warnings.push(`Decline email failed: ${e?.message || String(e)}. Contractor will see the status next time they open Invoices.`)
   }
 
-  // Push notification (best-effort). Tap deep-link routes the
-  // mobile app to the invoice detail where the operator can read
-  // the reason and resubmit.
+  // NOTIF.9 — migrated to notifyUsers so contractors without the
+  // mobile app get an email fallback explaining why the invoice
+  // was declined.
   try {
     const reasonSnippet = (declined.decline_reason || '').slice(0, 100)
-    await sendPush([declined.contractor_id], {
+    await notifyUsers([declined.contractor_id], {
       title: 'Invoice needs adjustment',
       body: reasonSnippet
         ? `${periodLabel(declined.period_start)} — ${reasonSnippet}${declined.decline_reason.length > 100 ? '…' : ''}`
         : `Your ${periodLabel(declined.period_start)} invoice was declined. Tap to view and resubmit.`,
       category: 'invoice_declined',
+      emailSubject: `Your invoice needs adjustment — ${periodLabel(declined.period_start)}`,
       data: {
         type: 'invoice_declined',
         invoice_id: declined.id,
       },
     })
   } catch (e) {
-    logWarn('invoice-decline', `push failed for ${declined.id}`, { err: e })
+    logWarn('invoice-decline', `notify failed for ${declined.id}`, { err: e })
   }
 
   return NextResponse.json({

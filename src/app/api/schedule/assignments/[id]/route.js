@@ -18,7 +18,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { MANAGER_ROLES, timeOfDay } from '@/lib/schemas'
-import { sendPush } from '@/lib/push'
+import { notifyUsers } from '@/lib/notify'
 import { logWarn } from '@/lib/log'
 
 // All fields optional. To CLEAR an override, send null explicitly
@@ -134,10 +134,15 @@ export async function PUT(request, { params }) {
         : `${tplName} ${dateLabel}: now ${newStart}–${newEnd}` +
           (data.partial_reason ? ` · ${data.partial_reason}` : '')
 
-      await sendPush([data.profile_id], {
+      // NOTIF.9 — migrated to notifyUsers. Shift changes are
+      // important enough to email-fallback when the coach doesn't
+      // have the app (they need to know their hours changed before
+      // they show up to the wrong shift).
+      await notifyUsers([data.profile_id], {
         title: 'Shift adjusted',
         body,
         category: 'shift_adjusted',
+        emailSubject: `Shift adjustment — ${tplName} ${dateLabel}`,
         data: {
           type: 'shift_adjusted',
           assignment_id: data.id,
@@ -145,7 +150,7 @@ export async function PUT(request, { params }) {
         },
       })
     } catch (e) {
-      logWarn('assignment-update', `push failed for ${data.id}`, { err: e })
+      logWarn('assignment-update', `notify failed for ${data.id}`, { err: e })
     }
   }
 
