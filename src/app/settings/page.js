@@ -1,12 +1,20 @@
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
-import { isFeatureEnabledAtLocation } from '@shared/permissions'
 import { canEditStaffMember } from '@/lib/staff-access'
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
-import { Users, MapPin, Shield, Clock, Palette, CalendarDays, Plug, UserCog, LayoutGrid, FileClock, Trophy, Cable } from 'lucide-react'
-import BrandingSettings from '@/components/BrandingSettings'
+import { Users, MapPin, Shield, UserCog, LayoutGrid, FileClock, Trophy, Cable } from 'lucide-react'
+
+// SETTINGS.3 — reorganized this page:
+//   - Master tools moved to TOP (was mid-page)
+//   - Removed Shift Templates + Bank Holidays sections (now linked
+//     from the per-location settings page since both are location-
+//     scoped data)
+//   - Removed standalone Integrations section (Xero is now a tab
+//     under Settings → Locations → <name> → Integrations)
+//   - Removed top-level Branding section (was duplicated; per-
+//     location branding lives on Settings → Locations → <name>)
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
@@ -49,6 +57,57 @@ export default async function SettingsPage() {
     <div className="p-8 max-w-4xl">
       <h2 className="text-2xl font-bold mb-1">Settings</h2>
       <p className="text-sm text-un1t-light mb-8">Manage your team, locations, and permissions</p>
+
+      {/* Master tools — platform-level admin links. Moved to the TOP
+          of the settings page in SETTINGS.3 since this is the most
+          frequently-used section for masters. Visible only to masters
+          (or someone currently impersonating). The /admin/* segment
+          is master-only at the layout level (mig 079). */}
+      {(user.role === 'master' || user.impersonatingFrom) && (
+        <div className="mb-10">
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-2">
+              <UserCog size={18} className="text-amber-400" />
+              <h3 className="text-lg font-semibold">Master tools</h3>
+            </div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <Link
+                href="/admin/matrix"
+                className="text-xs bg-un1t-white text-un1t-black px-3 py-1.5 rounded-md hover:bg-un1t-accent transition-colors font-medium inline-flex items-center gap-1.5"
+              >
+                <LayoutGrid size={12} /> Platform admin
+              </Link>
+              <Link
+                href="/admin/audit-log"
+                className="text-xs bg-un1t-white text-un1t-black px-3 py-1.5 rounded-md hover:bg-un1t-accent transition-colors font-medium inline-flex items-center gap-1.5"
+              >
+                <FileClock size={12} /> Audit log
+              </Link>
+              <Link
+                href="/admin/achievements"
+                className="text-xs bg-un1t-white text-un1t-black px-3 py-1.5 rounded-md hover:bg-un1t-accent transition-colors font-medium inline-flex items-center gap-1.5"
+              >
+                <Trophy size={12} /> Achievements
+              </Link>
+              <Link
+                href="/admin/integrations"
+                className="text-xs bg-un1t-white text-un1t-black px-3 py-1.5 rounded-md hover:bg-un1t-accent transition-colors font-medium inline-flex items-center gap-1.5"
+              >
+                <Cable size={12} /> Integrations
+              </Link>
+              <Link
+                href="/settings/impersonate"
+                className="text-xs bg-amber-500 text-un1t-black px-3 py-1.5 rounded-md hover:bg-amber-400 transition-colors font-medium"
+              >
+                View as user
+              </Link>
+            </div>
+          </div>
+          <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5">
+            <p className="text-sm text-un1t-light">Sign in as another user to debug their experience. Every session is audited.</p>
+          </div>
+        </div>
+      )}
 
       {/* Staff Section */}
       <div className="mb-10">
@@ -165,136 +224,17 @@ export default async function SettingsPage() {
         </div>
       </div>
 
-      {/* Shift Templates Section */}
-      <div className="mb-10">
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center gap-2">
-            <Clock size={18} className="text-un1t-light" />
-            <h3 className="text-lg font-semibold">Shift Templates</h3>
-          </div>
-          <Link
-            href="/settings/shifts"
-            className="text-xs bg-un1t-white text-un1t-black px-3 py-1.5 rounded-md hover:bg-un1t-accent transition-colors font-medium"
-          >
-            Manage Shifts
-          </Link>
-        </div>
-        <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-4">
-          <p className="text-sm text-un1t-light">Define named shift templates (Morning, Afternoon, Evening) used when building the weekly roster.</p>
-        </div>
-      </div>
-
-      {/* Bank Holidays Section */}
-      <div className="mb-10">
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center gap-2">
-            <CalendarDays size={18} className="text-un1t-light" />
-            <h3 className="text-lg font-semibold">Bank Holidays</h3>
-          </div>
-          <Link
-            href="/settings/holidays"
-            className="text-xs bg-un1t-white text-un1t-black px-3 py-1.5 rounded-md hover:bg-un1t-accent transition-colors font-medium"
-          >
-            Manage Holidays
-          </Link>
-        </div>
-        <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-4">
-          <p className="text-sm text-un1t-light">Irish public holidays are highlighted on the schedule automatically. Add custom closures (Good Friday, Christmas Eve early-close) per location.</p>
-        </div>
-      </div>
-
-      {/* Master tools — platform-level admin links. Visible only to
-          masters (or someone currently impersonating, so they can
-          switch targets from this page too). The /admin/* segment
-          is master-only at the layout level (mig 079). */}
-      {(user.role === 'master' || user.impersonatingFrom) && (
-        <div className="mb-10">
-          <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center gap-2">
-              <UserCog size={18} className="text-amber-400" />
-              <h3 className="text-lg font-semibold">Master tools</h3>
-            </div>
-            <div className="flex items-center gap-2">
-              <Link
-                href="/admin/matrix"
-                className="text-xs bg-un1t-white text-un1t-black px-3 py-1.5 rounded-md hover:bg-un1t-accent transition-colors font-medium inline-flex items-center gap-1.5"
-              >
-                <LayoutGrid size={12} /> Platform admin
-              </Link>
-              <Link
-                href="/admin/audit-log"
-                className="text-xs bg-un1t-white text-un1t-black px-3 py-1.5 rounded-md hover:bg-un1t-accent transition-colors font-medium inline-flex items-center gap-1.5"
-              >
-                <FileClock size={12} /> Audit log
-              </Link>
-              <Link
-                href="/admin/achievements"
-                className="text-xs bg-un1t-white text-un1t-black px-3 py-1.5 rounded-md hover:bg-un1t-accent transition-colors font-medium inline-flex items-center gap-1.5"
-              >
-                <Trophy size={12} /> Achievements
-              </Link>
-              <Link
-                href="/admin/integrations"
-                className="text-xs bg-un1t-white text-un1t-black px-3 py-1.5 rounded-md hover:bg-un1t-accent transition-colors font-medium inline-flex items-center gap-1.5"
-              >
-                <Cable size={12} /> Integrations
-              </Link>
-              <Link
-                href="/settings/impersonate"
-                className="text-xs bg-amber-500 text-un1t-black px-3 py-1.5 rounded-md hover:bg-amber-400 transition-colors font-medium"
-              >
-                View as user
-              </Link>
-            </div>
-          </div>
-          <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5">
-            <p className="text-sm text-un1t-light">Sign in as another user to debug their experience. Every session is audited.</p>
-          </div>
-        </div>
-      )}
-
-      {/* Integrations Section.
-          Currently surfaces the Xero connection — only used by the
-          Car Processing flow. Hidden when no location the user has
-          access to has Car Processing enabled, so gym-only operators
-          don't see settings that would never apply. We check the
-          per-location feature gate directly (not hasPermission)
-          since this is "is this feature live at any of my locations"
-          rather than "do I personally have access." The
-          /settings/integrations page itself filters its location
-          list the same way. */}
-      {locations.some(l => isFeatureEnabledAtLocation(l, 'car_processing')) && (
-        <div className="mb-10">
-          <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center gap-2">
-              <Plug size={18} className="text-un1t-light" />
-              <h3 className="text-lg font-semibold">Integrations</h3>
-            </div>
-            <Link
-              href="/settings/integrations"
-              className="text-xs bg-un1t-white text-un1t-black px-3 py-1.5 rounded-md hover:bg-un1t-accent transition-colors font-medium"
-            >
-              Manage
-            </Link>
-          </div>
-          <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5">
-            <p className="text-sm text-un1t-light">Xero connection per location — used for pushing customer invoices when a car is marked completed.</p>
-          </div>
-        </div>
-      )}
-
-      {/* Branding Section — Owner or master */}
-      {(user.role === 'owner' || user.role === 'master') && (
-        <div className="mb-10">
-          <div className="flex items-center gap-2 mb-4">
-            <Palette size={18} className="text-un1t-light" />
-            <h3 className="text-lg font-semibold">Branding</h3>
-          </div>
-          <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5">
-            <BrandingSettings user={user} />
-          </div>
-        </div>
-      )}
+      {/* SETTINGS.3 — Shift Templates / Bank Holidays / Integrations /
+          Branding sections removed from this top-level page:
+            - Shift Templates + Bank Holidays moved to per-location
+              settings (location-scoped data; lives next to the
+              location's other config now)
+            - Integrations (Xero) moved to per-location Integrations
+              tab (was duplicated as a standalone cross-location
+              overview; per-location tab is the single source now)
+            - Branding moved to per-location settings (was duplicated;
+              branding has always been per-location at the data
+              layer via locations.company_settings) */}
 
       {/* Security Section */}
       <div>
