@@ -19,7 +19,8 @@ async function requireMaster() {
 
 const ALLOWED_FIELDS = ['client_id', 'client_secret', 'redirect_uri', 'scopes', 'is_enabled', 'notes']
 
-export async function PATCH(request, { params }) {
+export async function PATCH(request, props) {
+  const params = await props.params;
   const user = await requireMaster()
   if (!user) return NextResponse.json({ ok: false, error: 'Forbidden' }, { status: 403 })
   const id = params?.id

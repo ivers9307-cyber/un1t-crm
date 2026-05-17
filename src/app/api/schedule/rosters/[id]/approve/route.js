@@ -11,7 +11,8 @@ import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
 import { notifyStaffOfPublish } from '@/lib/roster-notify'
 import { logWarn } from '@/lib/log'
 
-export async function POST(_request, { params }) {
+export async function POST(_request, props) {
+  const params = await props.params;
   const user = await getCurrentUser()
   if (!user) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })

@@ -14,7 +14,8 @@ import { hasPermission } from '@/lib/permissions'
 
 export const dynamic = 'force-dynamic'
 
-export default async function TemplatesListPage({ searchParams }) {
+export default async function TemplatesListPage(props) {
+  const searchParams = await props.searchParams;
   const user = await getCurrentUser()
   if (!user) redirect('/login')
   const canEmail = hasPermission(user, 'email')

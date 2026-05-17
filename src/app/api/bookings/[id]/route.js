@@ -14,7 +14,8 @@ const BookingUpdateSchema = z.object({
 })
 
 // PUT /api/bookings/:id — Update booking (status changes, notes)
-export async function PUT(request, { params }) {
+export async function PUT(request, props) {
+  const params = await props.params;
   const authError = requireApiKey(request)
   if (authError) return authError
 

@@ -11,7 +11,8 @@ import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 
 export const dynamic = 'force-dynamic'
 
-export async function POST(_request, { params }) {
+export async function POST(_request, props) {
+  const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
 

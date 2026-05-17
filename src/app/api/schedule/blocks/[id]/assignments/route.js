@@ -24,7 +24,8 @@ const AssignSchema = z.object({
   allow_over_capacity: z.boolean().optional(),
 })
 
-export async function POST(request, { params }) {
+export async function POST(request, props) {
+  const params = await props.params;
   const user = await getCurrentUser()
   if (!user || !MANAGER_ROLES.includes(user.role)) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })

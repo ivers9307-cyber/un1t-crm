@@ -9,6 +9,7 @@ export const metadata = {
   title: 'Unsubscribe — UN1T',
 }
 
-export default function Unsubscribe({ params }) {
+export default async function Unsubscribe(props) {
+  const params = await props.params;
   return <UnsubscribePage token={params.token} />
 }

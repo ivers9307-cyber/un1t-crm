@@ -20,7 +20,8 @@ const DeclineSchema = z.object({
   reason: z.string().trim().min(1, 'Reason is required').max(1000),
 })
 
-export async function POST(request, { params }) {
+export async function POST(request, props) {
+  const params = await props.params;
   const user = await getCurrentUser()
   if (!user) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })

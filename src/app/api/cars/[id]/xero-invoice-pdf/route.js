@@ -14,7 +14,8 @@ export const dynamic = 'force-dynamic'
 
 const STORAGE_BUCKET = 'car-documents'
 
-export async function GET(_request, { params }) {
+export async function GET(_request, props) {
+  const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
   if (!hasPermission(user, 'car_processing')) {

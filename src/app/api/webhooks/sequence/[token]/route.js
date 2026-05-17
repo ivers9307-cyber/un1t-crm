@@ -57,7 +57,8 @@ function constantTimeEqual(a, b) {
   return timingSafeEqual(Buffer.from(a), Buffer.from(b))
 }
 
-export async function POST(request, { params }) {
+export async function POST(request, props) {
+  const params = await props.params;
   const token = String(params?.token || '')
   if (!TOKEN_RE.test(token)) {
     return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })

@@ -41,7 +41,8 @@ const SmsBodySchema = z.object({
   body: z.string().min(1).max(1600),
 })
 
-export async function POST(request, { params }) {
+export async function POST(request, props) {
+  const params = await props.params;
   const user = await getCurrentUser()
   if (!user) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })

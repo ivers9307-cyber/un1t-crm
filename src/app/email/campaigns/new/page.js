@@ -4,7 +4,8 @@ import CampaignEditor from '@/components/CampaignEditor'
 
 export const dynamic = 'force-dynamic'
 
-export default async function NewCampaignPage({ searchParams }) {
+export default async function NewCampaignPage(props) {
+  const searchParams = await props.searchParams;
   const user = await getCurrentUser()
   if (!user) redirect('/login')
 

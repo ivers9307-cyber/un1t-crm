@@ -2,7 +2,8 @@ import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
 
 // GET /api/whatsapp/conversations/[id] — get conversation with messages
-export async function GET(request, { params }) {
+export async function GET(request, props) {
+  const params = await props.params;
   const db = createServerClient()
   const { searchParams } = new URL(request.url)
   const limit = parseInt(searchParams.get('limit') || '50')

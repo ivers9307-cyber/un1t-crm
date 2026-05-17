@@ -25,7 +25,8 @@ import { dublinTodayStr, dublinNowMinutes, addDaysISO } from '@/lib/dublin-time'
 //   - The day-of-week lookup parses the input date string as UTC
 //     midnight + getUTCDay() so the weekday is stable regardless
 //     of where the route runs (Vercel UTC or local dev machine).
-export async function GET(request, { params }) {
+export async function GET(request, props) {
+  const params = await props.params;
   const db = createServerClient()
   const { searchParams } = new URL(request.url)
   const date = searchParams.get('date')

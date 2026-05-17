@@ -35,7 +35,8 @@ function fmtDate(iso) {
   })
 }
 
-export default async function ContractDetailAdmin({ params }) {
+export default async function ContractDetailAdmin(props) {
+  const params = await props.params;
   const user = await getCurrentUser()
   if (!user) redirect('/login')
   if (!isOwnerOrMaster(user)) redirect('/')

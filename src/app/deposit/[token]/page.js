@@ -15,7 +15,8 @@ export const revalidate = 0   // status changes between visits — never cache t
 // gym-side car would surface UN1T's. Falls back to the root layout
 // metadata (UN1T) when the car can't be found or the location has
 // no company_settings row yet.
-export async function generateMetadata({ params }) {
+export async function generateMetadata(props) {
+  const params = await props.params;
   try {
     const db = createServerClient()
     const { data: car } = await db
@@ -48,6 +49,7 @@ export async function generateMetadata({ params }) {
   }
 }
 
-export default function DepositPage({ params }) {
+export default async function DepositPage(props) {
+  const params = await props.params;
   return <CarDepositPage token={params.token} />
 }

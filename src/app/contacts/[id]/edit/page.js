@@ -10,7 +10,8 @@ import ContactForm from '@/components/ContactForm'
 
 export const dynamic = 'force-dynamic'
 
-export default async function EditContactPage({ params }) {
+export default async function EditContactPage(props) {
+  const params = await props.params;
   const user = await getCurrentUser()
   if (!user) redirect('/login')
   if (!MANAGER_ROLES.includes(user.role)) redirect(`/contacts/${params.id}`)

@@ -17,7 +17,8 @@ import { logInfo, logWarn } from '@/lib/log'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function POST(_request, { params }) {
+export async function POST(_request, props) {
+  const params = await props.params;
   const user = await getCurrentUser()
   if (!user) {
     return NextResponse.json({ ok: false, error: 'Unauthorised' }, { status: 401 })

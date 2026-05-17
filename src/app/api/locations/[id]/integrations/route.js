@@ -11,7 +11,8 @@ const IntegrationsUpdateSchema = z.object({
 
 // GET /api/locations/[id]/integrations — Get integration credentials for a location
 // Used by n8n to fetch Glofox API keys, webhook URLs, etc. per location
-export async function GET(request, { params }) {
+export async function GET(request, props) {
+  const params = await props.params;
   const authError = requireApiKey(request)
   if (authError) return authError
 
@@ -40,7 +41,8 @@ export async function GET(request, { params }) {
 }
 
 // PUT /api/locations/[id]/integrations — Update integration credentials
-export async function PUT(request, { params }) {
+export async function PUT(request, props) {
+  const params = await props.params;
   const authError = requireApiKey(request)
   if (authError) return authError
 

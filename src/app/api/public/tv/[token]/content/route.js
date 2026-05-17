@@ -17,7 +17,8 @@ import { createServerClient } from '@/lib/supabase'
 export const dynamic = 'force-dynamic'
 export const fetchCache = 'force-no-store'
 
-export async function GET(_request, { params }) {
+export async function GET(_request, props) {
+  const params = await props.params;
   const { token } = params
   if (!token) return NextResponse.json({ error: 'missing_token' }, { status: 400 })
 

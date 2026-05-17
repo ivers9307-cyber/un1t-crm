@@ -37,7 +37,8 @@ export const dynamic = 'force-dynamic'
 const POSTMARK_API_URL = 'https://api.postmarkapp.com'
 const POSTMARK_ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024  // 10 MB
 
-export async function POST(_request, { params }) {
+export async function POST(_request, props) {
+  const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
   if (!hasPermission(user, 'car_processing')) {

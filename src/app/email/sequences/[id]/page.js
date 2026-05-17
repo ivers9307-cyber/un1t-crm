@@ -5,7 +5,8 @@ import SequenceEditor from '@/components/SequenceEditor'
 
 export const dynamic = 'force-dynamic'
 
-export default async function EditSequencePage({ params }) {
+export default async function EditSequencePage(props) {
+  const params = await props.params;
   const user = await getCurrentUser()
   if (!user) redirect('/login')
 

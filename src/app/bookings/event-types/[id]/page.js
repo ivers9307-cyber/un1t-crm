@@ -33,7 +33,8 @@ function formatTime(time) {
   return `${h12}:${m} ${ampm}`
 }
 
-export default async function BookingTypeDetailPage({ params }) {
+export default async function BookingTypeDetailPage(props) {
+  const params = await props.params;
   const { event, bookings } = await getEvent(params.id)
 
   if (!event) {

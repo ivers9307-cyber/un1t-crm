@@ -17,7 +17,8 @@ import { recordBcaDownload, getClientIp } from '@/lib/bca-events'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function GET(request, { params }) {
+export async function GET(request, props) {
+  const params = await props.params;
   const db = createServerClient()
   const { data: row } = await db
     .from('car_bca_submissions')

@@ -23,7 +23,8 @@ export const runtime = 'nodejs'
 const RL = { max: 20, windowMs: 15 * 60_000 }
 
 // GET /api/preferences/[token] — fetch current preferences
-export async function GET(request, { params }) {
+export async function GET(request, props) {
+  const params = await props.params;
   const db = createServerClient()
   const { token } = params
 
@@ -59,7 +60,8 @@ export async function GET(request, { params }) {
 }
 
 // PUT /api/preferences/[token] — update preferences
-export async function PUT(request, { params }) {
+export async function PUT(request, props) {
+  const params = await props.params;
   const db = createServerClient()
   const { token } = params
 

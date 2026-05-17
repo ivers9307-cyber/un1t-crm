@@ -36,7 +36,8 @@ async function loadReg(db, regId) {
     .single()
 }
 
-export async function PUT(request, { params }) {
+export async function PUT(request, props) {
+  const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
   if (!MANAGER_ROLES.includes(user.role)) {
@@ -82,7 +83,8 @@ export async function PUT(request, { params }) {
   return NextResponse.json({ success: true, data: { applied: updates } })
 }
 
-export async function DELETE(_request, { params }) {
+export async function DELETE(_request, props) {
+  const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
   if (!MANAGER_ROLES.includes(user.role)) {

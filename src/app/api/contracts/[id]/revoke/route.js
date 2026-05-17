@@ -22,7 +22,8 @@ function isOwnerOrMaster(user) {
   return user?.role === 'master' || user?.role === 'owner'
 }
 
-export async function POST(request, { params }) {
+export async function POST(request, props) {
+  const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
   if (!isOwnerOrMaster(user)) {

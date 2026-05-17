@@ -7,7 +7,8 @@ import RaceEventForm from '@/components/RaceEventForm'
 
 export const dynamic = 'force-dynamic'
 
-export default async function EditRacePage({ params }) {
+export default async function EditRacePage(props) {
+  const params = await props.params;
   const user = await getCurrentUser()
   if (!user) redirect('/login')
   if (!MANAGER_ROLES.includes(user.role)) redirect('/')

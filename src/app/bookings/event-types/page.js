@@ -45,7 +45,8 @@ function getAvailableDays(availability) {
   return days.map((d, i) => availability[d] ? labels[i] : null).filter(Boolean).join(', ') || 'None'
 }
 
-export default async function BookingTypesPage({ searchParams }) {
+export default async function BookingTypesPage(props) {
+  const searchParams = await props.searchParams;
   const user = await getCurrentUser()
   if (!user) redirect('/login')
   const events = await getEvents(user.activeLocation?.id)

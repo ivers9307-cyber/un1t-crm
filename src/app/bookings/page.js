@@ -42,7 +42,8 @@ function formatTime(time) {
   return `${h12}:${m} ${ampm}`
 }
 
-export default async function BookingsPage({ searchParams }) {
+export default async function BookingsPage(props) {
+  const searchParams = await props.searchParams;
   const user = await getCurrentUser()
   if (!user) redirect('/login')
 

@@ -5,7 +5,8 @@ import WABroadcastEditor from '@/components/WABroadcastEditor'
 
 export const dynamic = 'force-dynamic'
 
-export default async function EditBroadcastPage({ params }) {
+export default async function EditBroadcastPage(props) {
+  const params = await props.params;
   const user = await getCurrentUser()
   if (!user) redirect('/login')
 

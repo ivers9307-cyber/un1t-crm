@@ -21,7 +21,8 @@ const CampaignUpdateSchema = z.object({
 })
 
 // GET /api/campaigns/[id] — Get campaign with metrics
-export async function GET(request, { params }) {
+export async function GET(request, props) {
+  const params = await props.params;
   const authError = requireApiKey(request)
   if (authError) return authError
 
@@ -39,7 +40,8 @@ export async function GET(request, { params }) {
 }
 
 // PUT /api/campaigns/[id] — Update campaign (only drafts)
-export async function PUT(request, { params }) {
+export async function PUT(request, props) {
+  const params = await props.params;
   const authError = requireApiKey(request)
   if (authError) return authError
 
@@ -60,7 +62,8 @@ export async function PUT(request, { params }) {
 }
 
 // DELETE /api/campaigns/[id]
-export async function DELETE(request, { params }) {
+export async function DELETE(request, props) {
+  const params = await props.params;
   const authError = requireApiKey(request)
   if (authError) return authError
 

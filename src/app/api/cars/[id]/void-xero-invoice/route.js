@@ -33,7 +33,8 @@ const CLEARED_INVOICE_FIELDS = {
   xero_invoice_issued_at: null,
 }
 
-export async function POST(request, { params }) {
+export async function POST(request, props) {
+  const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
   if (!hasPermission(user, 'car_processing')) {

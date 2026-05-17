@@ -23,7 +23,8 @@ const Body = z.object({
   features: z.record(z.unknown()),
 })
 
-export async function PUT(request, { params }) {
+export async function PUT(request, props) {
+  const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
   if (!canEditLocationFeatures(user)) {

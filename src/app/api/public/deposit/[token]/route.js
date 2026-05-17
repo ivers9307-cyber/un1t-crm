@@ -11,7 +11,8 @@ import { createServerClient } from '@/lib/supabase'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function GET(_request, { params }) {
+export async function GET(_request, props) {
+  const params = await props.params;
   const db = createServerClient()
   // The nested company_settings join lets the public page render
   // the per-location logo without a second round-trip. Buyer-facing

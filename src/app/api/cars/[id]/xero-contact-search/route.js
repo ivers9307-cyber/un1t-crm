@@ -21,10 +21,11 @@ export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 function escapeXeroWhere(s) {
-  return String(s).replace(/"/g, '""')
+  return String(s).replace(/"/g, '""');
 }
 
-export async function GET(request, { params }) {
+export async function GET(request, props) {
+  const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
   if (!hasPermission(user, 'car_processing')) {

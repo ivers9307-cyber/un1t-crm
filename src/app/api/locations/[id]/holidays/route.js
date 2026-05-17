@@ -22,7 +22,8 @@ const HolidayCreateSchema = z.object({
 // Each holiday in the response has:
 //   { date, name, source: 'national' | 'custom', id?, location_id? }
 // Static (national) holidays have no id; custom ones do.
-export async function GET(request, { params }) {
+export async function GET(request, props) {
+  const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
 
@@ -59,7 +60,8 @@ export async function GET(request, { params }) {
 
 // POST /api/locations/[id]/holidays — add a custom holiday (manager+).
 // Same-date entries override the static name when GET merges them.
-export async function POST(request, { params }) {
+export async function POST(request, props) {
+  const params = await props.params;
   const user = await getCurrentUser()
   if (!user || !MANAGER_ROLES.includes(user.role)) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })

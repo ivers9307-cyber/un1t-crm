@@ -20,7 +20,8 @@ export const revalidate = 0
 // has practical platform limits (Twitter cards cap around 200,
 // some preview generators truncate even shorter). Keeps the
 // preview readable rather than truncating mid-bullet.
-export async function generateMetadata({ params }) {
+export async function generateMetadata(props) {
+  const params = await props.params;
   try {
     const db = createServerClient()
     const { data } = await db
@@ -52,7 +53,8 @@ export async function generateMetadata({ params }) {
   }
 }
 
-export default function PublicRaceSignupPage({ params }) {
+export default async function PublicRaceSignupPage(props) {
+  const params = await props.params;
   return (
     <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
       <RaceSignupWidget slug={params.slug} />

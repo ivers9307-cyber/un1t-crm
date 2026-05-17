@@ -19,7 +19,8 @@ const SendMessageSchema = z.object({
 })
 
 // POST /api/whatsapp/conversations/[id]/send — send a message in a conversation
-export async function POST(request, { params }) {
+export async function POST(request, props) {
+  const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
 

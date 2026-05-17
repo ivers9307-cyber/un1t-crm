@@ -33,7 +33,8 @@ export const dynamic = 'force-dynamic'
 const CHAMP_APP_URL = process.env.NEXT_PUBLIC_CHAMP_APP_URL || 'https://app.champfitness.ie'
 const ALLOWED_INVITE_ROLES = ['owner', 'manager']
 
-export async function POST(_request, { params }) {
+export async function POST(_request, props) {
+  const params = await props.params;
   const user = await getCurrentUser()
   if (!user) {
     return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })

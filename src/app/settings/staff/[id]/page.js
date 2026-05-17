@@ -6,7 +6,8 @@ import { canEditStaffMember, mapProfileLocationToAssignment } from '@/lib/staff-
 
 export const dynamic = 'force-dynamic'
 
-export default async function EditStaffPage({ params }) {
+export default async function EditStaffPage(props) {
+  const params = await props.params;
   const user = await getCurrentUser()
   if (!user || (!user.isMaster && user.role !== 'owner')) redirect('/')
 

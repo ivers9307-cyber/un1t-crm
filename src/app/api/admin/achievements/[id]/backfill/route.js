@@ -28,7 +28,8 @@ async function requireMaster() {
   return user
 }
 
-export async function POST(request, { params }) {
+export async function POST(request, props) {
+  const params = await props.params;
   const user = await requireMaster()
   if (!user) return NextResponse.json({ ok: false, error: 'Forbidden' }, { status: 403 })
 

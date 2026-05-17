@@ -5,7 +5,8 @@ import TemplateEditor from '@/components/TemplateEditor'
 
 export const dynamic = 'force-dynamic'
 
-export default async function EditTemplatePage({ params }) {
+export default async function EditTemplatePage(props) {
+  const params = await props.params;
   const user = await getCurrentUser()
   if (!user) redirect('/login')
 

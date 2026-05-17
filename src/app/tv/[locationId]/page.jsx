@@ -16,6 +16,7 @@ import LiveTvClient from './LiveTvClient'
 
 export const dynamic = 'force-dynamic'
 
-export default async function TvPage({ params }) {
+export default async function TvPage(props) {
+  const params = await props.params;
   return <LiveTvClient locationId={params.locationId} />
 }

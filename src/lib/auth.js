@@ -63,9 +63,14 @@ export function resolveActiveLocationRole({ profile, rolesByLocation, activeLoca
   return highest || profile?.role
 }
 
-// Auth-aware server client for SSR pages (reads session from cookies)
-export function createAuthClient() {
-  const cookieStore = cookies()
+// Auth-aware server client for SSR pages (reads session from cookies).
+//
+// Next 15+: `cookies()` returns a Promise, so this is now async and
+// every caller must await it. The cookie store object itself is still
+// sync once awaited — `getAll`, `set` inside the SSR-client callbacks
+// stay synchronous.
+export async function createAuthClient() {
+  const cookieStore = await cookies()
   return createSSRClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
@@ -95,7 +100,7 @@ export function createAuthClient() {
 async function getUserFromBearer() {
   let auth = ''
   try {
-    auth = headers().get('authorization') || ''
+    auth = (await headers()).get('authorization') || ''
   } catch {
     // headers() throws outside a request scope (e.g. unit tests). Let
     // the caller fall back to cookie auth.
@@ -138,7 +143,7 @@ export const getCurrentUser = cache(async function getCurrentUser() {
   // the cookie-based session (web).
   let user = await getUserFromBearer()
   if (!user) {
-    const supabase = createAuthClient()
+    const supabase = await createAuthClient()
     const result = await supabase.auth.getUser()
     user = result.data.user
   }
@@ -175,7 +180,7 @@ export const getCurrentUser = cache(async function getCurrentUser() {
   let profile = realProfile
   let impersonatingFrom = null
   if (realProfile.role === 'master') {
-    const targetId = readImpersonationTarget()
+    const targetId = await readImpersonationTarget()
     if (targetId && targetId !== realProfile.id) {
       const { data: target } = await db
         .from('profiles')
@@ -280,13 +285,13 @@ export const getCurrentUser = cache(async function getCurrentUser() {
   // wins. This keeps the existing IDOR guarantees.
   let headerLocation = null
   try {
-    const headerVal = headers().get('x-active-location') || ''
+    const headerVal = (await headers()).get('x-active-location') || ''
     headerLocation = headerVal ? locations.find(l => l.id === headerVal) : null
   } catch {
     // headers() throws outside a request scope; ignore.
   }
 
-  const cookieStore = cookies()
+  const cookieStore = await cookies()
   const locationCookie = cookieStore.get('un1t_active_location')?.value
   const cookieLocation = locationCookie
     ? locations.find(l => l.id === locationCookie)

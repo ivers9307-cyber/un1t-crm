@@ -44,7 +44,8 @@ function todayIsoDublin() {
   return fmt.format(new Date())
 }
 
-export default async function EventsIndexPage({ searchParams }) {
+export default async function EventsIndexPage(props) {
+  const searchParams = await props.searchParams;
   const user = await getCurrentUser()
   if (!user) redirect('/login')
   if (!MANAGER_ROLES.includes(user.role)) redirect('/')

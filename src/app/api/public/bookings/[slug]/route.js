@@ -19,7 +19,8 @@ import { createServerClient } from '@/lib/supabase'
 // from /events to /bookings/event-types (E2 / commit 2d5c779). No
 // back-compat rewrite — the only consumer was BookingWidget itself,
 // updated in the same commit.
-export async function GET(request, { params }) {
+export async function GET(request, props) {
+  const params = await props.params;
   const db = createServerClient()
 
   const { data, error } = await db.from('event_types')

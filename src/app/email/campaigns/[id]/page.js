@@ -8,7 +8,9 @@ export const dynamic = 'force-dynamic'
 export const revalidate = 0
 export const fetchCache = 'force-no-store'
 
-export default async function CampaignDetailPage({ params, searchParams }) {
+export default async function CampaignDetailPage(props) {
+  const searchParams = await props.searchParams;
+  const params = await props.params;
   const user = await getCurrentUser()
   if (!user) redirect('/login')
 

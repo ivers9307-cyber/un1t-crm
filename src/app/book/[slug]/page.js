@@ -11,6 +11,7 @@ export const dynamicParams = true
 export const revalidate = 3600
 
 // It can also be embedded as an iframe on your website
-export default function PublicBookingPage({ params }) {
+export default async function PublicBookingPage(props) {
+  const params = await props.params;
   return <BookingWidget slug={params.slug} />
 }

@@ -30,7 +30,8 @@ const Body = z.object({
 // because the operator just needs to spot-check, not see the whole list.
 const PREVIEW_SAMPLE_SIZE = 20
 
-export async function POST(request, { params }) {
+export async function POST(request, props) {
+  const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
   if (!hasPermission(user, 'email')) {
