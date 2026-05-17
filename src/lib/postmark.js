@@ -1,5 +1,4 @@
 import { createServerClient } from './supabase'
-import { getAppUrl } from './app-url'
 import { applyAudienceFilter, applyAudienceFilterAsync } from './audience-filter'
 
 const POSTMARK_API_URL = 'https://api.postmarkapp.com'

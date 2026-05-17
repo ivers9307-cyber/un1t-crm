@@ -118,7 +118,7 @@ export async function reclassifyAllContacts(db, args) {
   const contacts = []
   let pageStart = 0
   let pageErr = null
-  // eslint-disable-next-line no-constant-condition
+   
   while (true) {
     const pageEnd = Math.min(pageStart + PAGE_SIZE - 1, HARD_LIMIT - 1)
     const { data: page, error } = await db
@@ -169,7 +169,7 @@ export async function reclassifyAllContacts(db, args) {
   const dealRows = []
   let dealsErr = null
   let dealStart = 0
-  // eslint-disable-next-line no-constant-condition
+   
   while (true) {
     const dealEnd = Math.min(dealStart + PAGE_SIZE - 1, HARD_LIMIT - 1)
     const { data: page, error } = await db

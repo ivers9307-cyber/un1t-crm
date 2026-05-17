@@ -86,7 +86,7 @@ export async function GET(_request, props) {
   // Strip the race-level deprecated capacity from the public response
   // too (defensive; the field is supposed to be deprecated but it
   // could still be on existing rows).
-  // eslint-disable-next-line no-unused-vars
+   
   const { capacity: _omit, ...racePublic } = data
   return NextResponse.json({
     success: true,

@@ -37,7 +37,6 @@ import {
   WEB_PERMISSIONS,
   MOBILE_PERMISSIONS,
   WEB_PERMISSION_KEYS,
-  MOBILE_PERMISSION_KEYS,
   CROSS_PLATFORM_KEYS,
 } from '../shared/permissions.js'
 

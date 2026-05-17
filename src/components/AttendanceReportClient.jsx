@@ -45,8 +45,12 @@ export default function AttendanceReportClient({ activeLocationName }) {
     }
   }
 
-  // Initial + on-change load.
-  useEffect(() => { load() /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [from, to])
+  // Initial + on-change load. `load` is defined in this component so
+  // it's stable across renders; refiring only when the from/to window
+  // changes is intentional. Excluding `load` from the deps avoids the
+  // refire-loop that would happen if the linter auto-fix added it.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { load() }, [from, to])
 
   const filtered = useMemo(() => {
     if (!data?.rows) return []

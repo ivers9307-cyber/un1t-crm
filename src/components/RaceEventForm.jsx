@@ -880,7 +880,7 @@ function LogoSlot({ slot, url, busy, onPick, onRemove }) {
   if (url) {
     return (
       <div className="relative bg-un1t-black border border-un1t-gray rounded-md aspect-video flex items-center justify-center p-3 group">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
+        { }
         <img src={url} alt={`Logo ${slot + 1}`} className="max-h-full max-w-full object-contain" />
         <button
           type="button"

@@ -209,7 +209,7 @@ export default function CarDepositPage({ token }) {
         <div className="bg-green-50 border border-green-200 rounded-xl p-8 text-center">
           {paidBrandLogo && (
             <div className="flex justify-center mb-3">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
+              { }
               <img src={paidBrandLogo} alt={paidBrandName || 'Dealer'} className="max-h-12 w-auto object-contain" />
             </div>
           )}
@@ -246,7 +246,7 @@ export default function CarDepositPage({ token }) {
       <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-6 sm:p-8">
         {brandLogo && (
           <div className="flex justify-center mb-5">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
+            { }
             <img
               src={brandLogo}
               alt={brandName || 'Dealer'}

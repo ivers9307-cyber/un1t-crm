@@ -404,6 +404,11 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
     const handle = setInterval(tick, 3000)
     tick() // immediate first hit
     return () => { cancelled = true; clearInterval(handle) }
+    // `db` is captured from the closure and is stable for the
+    // component's lifetime. We only want the polling loop to reset
+    // when campaignId / status change — not on every render that
+    // re-resolves the db client.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [campaignId, campaignStatus])
 
   // CAMPAIGN.1 — fire a test send to the operator's chosen address

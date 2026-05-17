@@ -22,7 +22,7 @@
 import { useState, useEffect } from 'react'
 import { Plus, X, Bell, Loader2, Check, AlertTriangle } from 'lucide-react'
 import {
-  CONFIGURABLE_CATEGORIES, getNotificationCategory,
+  CONFIGURABLE_CATEGORIES,
 } from '@/lib/notifications-registry'
 import {
   validateConfig, formatLeadTime, VALID_NOTIFY_ROLES,

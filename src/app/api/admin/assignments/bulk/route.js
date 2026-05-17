@@ -153,7 +153,7 @@ export async function POST(request) {
             })
             continue
           }
-        } catch (e) {
+        } catch {
           results.push({ pair: pairKey, outcome: 'failed', reason: 'guard_check_failed' })
           continue
         }

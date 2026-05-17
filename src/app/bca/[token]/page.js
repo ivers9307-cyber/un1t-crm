@@ -114,7 +114,7 @@ export default async function BcaDownloadPage(props) {
     <div className="min-h-screen bg-zinc-50 text-zinc-900">
       <div className="max-w-2xl mx-auto p-6">
         {settings.logo_url && (
-          // eslint-disable-next-line @next/next/no-img-element
+           
           (<img src={settings.logo_url} alt={settings.company_name || ''} className="h-12 mb-6 object-contain" />)
         )}
 
@@ -184,7 +184,7 @@ function ExpiredState({ companyName, logoUrl, carLabel, expiredAt }) {
     <div className="min-h-screen bg-zinc-50 text-zinc-900 flex items-center justify-center p-6">
       <div className="max-w-md w-full bg-white border border-zinc-300 rounded-lg p-6 text-center">
         {logoUrl && (
-          // eslint-disable-next-line @next/next/no-img-element
+           
           (<img src={logoUrl} alt={companyName || ''} className="h-10 mx-auto mb-4 object-contain" />)
         )}
         <h1 className="text-xl font-bold">Download window expired</h1>

@@ -23,7 +23,8 @@ export default function LocationSwitcher({ locations, activeLocationId }) {
   const active = locations.find(l => l.id === activeLocationId) || locations[0]
 
   function switchLocation(locationId) {
-    // Set cookie (expires in 1 year)
+    // Set cookie (expires in 1 year).
+    // eslint-disable-next-line react-hooks/immutability -- document.cookie write is a user-action side-effect inside an onClick handler, not render. The rule's "Consider using an effect" suggestion is wrong here: an effect would fire on every render cycle, not just when the user picks a location.
     document.cookie = `un1t_active_location=${locationId}; path=/; max-age=${365 * 24 * 60 * 60}; SameSite=Lax`
     setOpen(false)
     router.refresh()

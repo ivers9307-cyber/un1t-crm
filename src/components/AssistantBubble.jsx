@@ -72,7 +72,7 @@ export default function AssistantBubble({ user }) {
           router.push(data.navigateTo)
         }
       }
-    } catch (err) {
+    } catch {
       setMessages([...newMessages, { role: 'assistant', content: 'Sorry, I couldn\'t connect to the assistant. Please try again.' }])
     }
 

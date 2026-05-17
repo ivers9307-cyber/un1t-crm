@@ -228,7 +228,7 @@ export function GalleryBlock({ block, onEdit, locationId }) {
                   }}
                 />
               ) : (
-                // eslint-disable-next-line @next/next/no-img-element
+                 
                 <img
                   src={g.url}
                   alt={g.alt || ''}
@@ -399,7 +399,7 @@ function Pillar({ number, title, body, photoUrl, onEdit, locationId, itemIndex }
               className="absolute inset-0"
             />
           ) : (
-            // eslint-disable-next-line @next/next/no-img-element
+             
             <img
               src={photoUrl}
               alt=""
@@ -464,7 +464,7 @@ export function SiteHeader({
             onChange={onChangeLogo}
           />
         ) : logoUrl ? (
-          // eslint-disable-next-line @next/next/no-img-element
+           
           <img
             src={logoUrl}
             alt={logoAlt}

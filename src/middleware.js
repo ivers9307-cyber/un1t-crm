@@ -1,5 +1,6 @@
 import { createServerClient } from '@supabase/ssr'
 import { NextResponse } from 'next/server'
+import { resolveBrand, isFrameworkAsset } from '@/lib/brands'
 
 // Constant-time string compare. Implemented inline because middleware runs
 // in the Edge runtime which doesn't expose node:crypto.timingSafeEqual. The
@@ -15,95 +16,57 @@ function timingSafeEqualEdge(a, b) {
   return mismatch === 0
 }
 
-// Hostname of the dedicated payment subdomain (e.g. pay.ccfautos.com).
-// On this hostname ONLY the buyer-facing deposit pages + their backing
-// public API are reachable; every other path is blocked so the CRM
-// itself isn't accessible from the customer-facing brand.
-const PAY_HOST = process.env.PAY_HOSTNAME || 'pay.ccfautos.com'
-
-// Paths exposed on the pay.* hostname. Tightly scoped on purpose —
-// adding a new public path here is a deliberate decision.
-const PAY_HOST_ALLOWED = ['/deposit/', '/api/public/deposit/']
-
-// Hostnames of the public-facing marketing site (the apex + www).
-// On these hosts, "/" rewrites to "/welcome" (the operator-editable
-// landing page from mig 126+), and only customer-facing paths are
-// reachable — CRM URLs like /dashboard, /pipeline, /contacts get
-// rewritten to /welcome too so the CRM never bleeds through under
-// the public brand. Operators continue to use crm.un1tdublin.com,
-// where "/" still routes to /dashboard via src/app/page.js.
-//
-// Comma-separated env override for staging / preview hostnames;
-// defaults to the production apex + www.
-const MARKETING_HOSTS = new Set(
-  (process.env.MARKETING_HOSTNAMES || 'un1tdublin.com,www.un1tdublin.com')
-    .split(',').map(s => s.trim()).filter(Boolean)
-)
-
-// Paths the marketing host serves directly (everything else gets
-// rewritten to /welcome). Same "explicit allowlist" pattern as the
-// pay-host block below — adding a new customer-facing path here is
-// a deliberate decision.
-const MARKETING_HOST_ALLOWED = [
-  '/welcome',
-  '/book/',          // public Calendly-style booking pages
-  '/event/',         // public race / workshop / etc. signup pages
-  '/race/',          // race kiosk + signup
-  '/api/public/',    // backing API for all of the above
-  '/api/webhooks/',  // future-proof if a payment redirect lands here
-]
-
 export async function middleware(request) {
   const hostname = request.headers.get('host') || ''
 
-  // ── Pay subdomain isolation ──────────────────────────────────────
-  // Anything that reaches us on pay.* and isn't a deposit path is
-  // 404'd (don't redirect — leaking the CRM domain would defeat the
-  // brand isolation). The Next.js notFound() page renders generically.
-  if (hostname === PAY_HOST || hostname.startsWith(`${PAY_HOST}:`)) {
+  // ── Multi-brand routing (MULTIBRAND.1) ───────────────────────────
+  // Tenant brands sharing this deployment (pay.ccfautos.com, the
+  // un1tdublin.com marketing site, future partner studios, etc.)
+  // are declared as data in src/lib/brands.js. resolveBrand() returns
+  // null on the default CRM hostname so we fall through to the CRM
+  // auth path below; otherwise it returns a brand entry and we apply
+  // the per-brand allowlist + handler.
+  //
+  // Two handlers per brand:
+  //   • 'reject'   — disallowed paths 404 (buyer-facing payment
+  //                   hostnames that must not hint at the CRM's
+  //                   existence)
+  //   • 'rewrite'  — disallowed paths rewrite to a marketing
+  //                   landing (public marketing hosts)
+  //
+  // Adding a third brand is one entry in src/lib/brands.js — no
+  // edit to this file required.
+  const brand = resolveBrand(hostname)
+  if (brand) {
     const path = request.nextUrl.pathname
-    const allowed = PAY_HOST_ALLOWED.some(p => path.startsWith(p))
-    // Allow Next's framework assets (_next/static, _next/image, etc.)
-    // and the favicon — without these the deposit page itself can't
-    // load CSS / JS / images.
-    const isFrameworkAsset = path.startsWith('/_next/')
-      || path === '/favicon.ico'
-      || path === '/robots.txt'
-    if (!allowed && !isFrameworkAsset) {
-      return new NextResponse('Not found', { status: 404 })
-    }
-    // Deposit paths on pay.* are unconditionally public — skip the
-    // CRM auth gate below.
-    return NextResponse.next()
-  }
+    // Framework assets pass through unconditionally — the brand
+    // landing page itself can't render without them.
+    if (isFrameworkAsset(path)) return NextResponse.next()
 
-  // ── Public marketing host (un1tdublin.com / www.un1tdublin.com) ──
-  // Same isolation pattern as the pay subdomain: only customer-
-  // facing paths are reachable; CRM URLs get bounced to /welcome so
-  // operators / nosy visitors can't poke at /dashboard, /pipeline,
-  // /contacts, etc. via the public brand. The "/" → "/welcome"
-  // rewrite is a rewrite (not a redirect) so the URL bar stays
-  // clean — the marketing URL is un1tdublin.com/, not /welcome.
-  const marketingHostKey = hostname.split(':')[0]
-  if (MARKETING_HOSTS.has(marketingHostKey)) {
-    const path = request.nextUrl.pathname
-    const isFrameworkAsset = path.startsWith('/_next/')
-      || path === '/favicon.ico'
-      || path === '/robots.txt'
-      || path === '/sitemap.xml'
-    if (isFrameworkAsset) return NextResponse.next()
+    // Root path handling. 'rewrite' brands map "/" to a landing
+    // (e.g. /welcome) so the URL bar stays clean; 'reject' brands
+    // 404 "/" to keep the brand isolation tight.
     if (path === '/') {
-      return NextResponse.rewrite(new URL('/welcome', request.url))
+      if (brand.rootHandler === 'rewrite') {
+        return NextResponse.rewrite(new URL(brand.rootRewriteTo, request.url))
+      }
+      if (brand.rootHandler === 'reject') {
+        return new NextResponse('Not found', { status: 404 })
+      }
     }
-    const allowed = MARKETING_HOST_ALLOWED.some((p) => path.startsWith(p))
+
+    // Per-brand allowlist. Anything outside it gets the fallback
+    // treatment for the brand (404 or rewrite home).
+    const allowed = brand.allowedPaths.some((p) => path.startsWith(p))
     if (!allowed) {
-      // Anything CRM-flavoured (/dashboard, /login, /settings, etc.)
-      // gets rewritten home rather than 404'd — most stray hits are
-      // typos / stale links and the marketing page is the right
-      // landing place for those.
-      return NextResponse.rewrite(new URL('/welcome', request.url))
+      if (brand.fallbackHandler === 'reject') {
+        return new NextResponse('Not found', { status: 404 })
+      }
+      if (brand.fallbackHandler === 'rewrite') {
+        return NextResponse.rewrite(new URL(brand.fallbackRewriteTo, request.url))
+      }
     }
-    // Allowlisted customer-facing path — let it through, no auth gate.
+    // Allowlisted brand path — let it through, no CRM auth gate.
     return NextResponse.next()
   }
 

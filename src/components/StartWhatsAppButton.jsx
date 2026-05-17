@@ -26,7 +26,7 @@ export default function StartWhatsAppButton({ contactId, contactPhone, waPhone }
       } else {
         alert(data.error || 'Failed to start conversation')
       }
-    } catch (err) {
+    } catch {
       alert('Failed to start conversation')
     } finally {
       setLoading(false)
