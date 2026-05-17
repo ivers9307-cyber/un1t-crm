@@ -8,7 +8,6 @@ import { createServerClient } from '@/lib/supabase'
 // fetches /api/public/events/[slug] client-side anyway, so the page
 // shell is essentially a thin React mount-point — no perf loss.
 export const dynamic = 'force-dynamic'
-export const revalidate = 0
 
 // Per-event Open Graph metadata so WhatsApp / iMessage / email
 // previews show the actual event name + description instead of the

@@ -5,8 +5,6 @@ import { createServerClient } from '@/lib/supabase'
 import IntegrationsAdmin from '@/components/IntegrationsAdmin'
 
 export const dynamic = 'force-dynamic'
-export const revalidate = 0
-export const fetchCache = 'force-no-store'
 
 export default async function AdminIntegrationsPage() {
   const db = createServerClient()

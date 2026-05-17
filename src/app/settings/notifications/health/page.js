@@ -30,7 +30,6 @@ import { ArrowLeft, ShieldCheck, Smartphone, Mail } from 'lucide-react'
 import TestPushButton from '@/components/settings/TestPushButton'
 
 export const dynamic = 'force-dynamic'
-export const revalidate = 0
 
 const HEALTHY_DAYS = 14
 

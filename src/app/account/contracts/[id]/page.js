@@ -17,7 +17,6 @@ import ContractSignForm from '@/components/ContractSignForm'
 import ContractPrintButton from '@/components/ContractPrintButton'
 
 export const dynamic = 'force-dynamic'
-export const revalidate = 0
 
 function fmtDate(iso) {
   if (!iso) return ''

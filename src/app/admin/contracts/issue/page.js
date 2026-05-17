@@ -6,7 +6,6 @@ import { getCurrentUser } from '@/lib/auth'
 import ContractIssueWizard from '@/components/ContractIssueWizard'
 
 export const dynamic = 'force-dynamic'
-export const revalidate = 0
 
 function isOwnerOrMaster(user) {
   return user?.role === 'master' || user?.role === 'owner'

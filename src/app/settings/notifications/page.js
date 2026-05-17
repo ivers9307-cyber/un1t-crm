@@ -26,7 +26,6 @@ import { NOTIFICATION_REGISTRY } from '@/lib/notifications-registry'
 import { getEffectiveConfig, formatLeadTimes } from '@/lib/notification-config'
 
 export const dynamic = 'force-dynamic'
-export const revalidate = 0
 
 function TriggerIcon({ kind }) {
   if (kind === 'cron')    return <Clock size={14} className="text-blue-400" />

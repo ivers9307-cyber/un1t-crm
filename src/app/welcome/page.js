@@ -46,7 +46,6 @@ async function loadSettings() {
 }
 
 export const dynamic = 'force-dynamic'
-export const revalidate = 0
 
 // Per-request metadata. Pull og:image from the first hero block's
 // image (operator-uploaded photos show up in WhatsApp / Slack link

@@ -10,7 +10,6 @@ import { MANAGER_ROLES } from '@/lib/schemas'
 import OrdersTable from '@/components/OrdersTable'
 
 export const dynamic = 'force-dynamic'
-export const revalidate = 0
 
 export default async function OrdersIndexPage() {
   const user = await getCurrentUser()

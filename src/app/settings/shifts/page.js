@@ -4,8 +4,6 @@ import ShiftTemplateManager from '@/components/ShiftTemplateManager'
 import { MANAGER_ROLES } from '@/lib/schemas'
 
 export const dynamic = 'force-dynamic'
-export const revalidate = 0
-export const fetchCache = 'force-no-store'
 
 export default async function ShiftSettingsPage() {
   const user = await getCurrentUser()

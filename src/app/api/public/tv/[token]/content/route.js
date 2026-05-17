@@ -15,7 +15,6 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 
 export const dynamic = 'force-dynamic'
-export const fetchCache = 'force-no-store'
 
 export async function GET(_request, props) {
   const params = await props.params;

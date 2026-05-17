@@ -7,7 +7,6 @@
 import CarDepositPage from '@/components/CarDepositPage'
 
 export const dynamicParams = true
-export const revalidate = 0
 
 export const metadata = {
   title: 'Tesla Car Deposit',

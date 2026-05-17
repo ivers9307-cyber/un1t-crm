@@ -8,7 +8,6 @@ import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 
 export const dynamic = 'force-dynamic'
-export const revalidate = 0
 
 function isOwnerOrMaster(user) {
   return user?.role === 'master' || user?.role === 'owner'

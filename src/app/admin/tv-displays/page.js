@@ -9,7 +9,6 @@ import { redirect } from 'next/navigation'
 import TVAdmin from './TVAdmin'
 
 export const dynamic = 'force-dynamic'
-export const fetchCache = 'force-no-store'
 
 export default async function TVDisplaysAdmin() {
   const user = await getCurrentUser()

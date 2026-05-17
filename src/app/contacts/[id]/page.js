@@ -17,8 +17,6 @@ import ContactConsentHistoryCard from '@/components/ContactConsentHistoryCard'
 import CreateInGlofoxButton from '@/components/CreateInGlofoxButton'
 
 export const dynamic = 'force-dynamic'
-export const revalidate = 0
-export const fetchCache = 'force-no-store'
 
 function formatTime(time) {
   if (!time) return ''

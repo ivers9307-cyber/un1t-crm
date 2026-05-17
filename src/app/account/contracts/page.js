@@ -10,7 +10,6 @@ import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 
 export const dynamic = 'force-dynamic'
-export const revalidate = 0
 
 const STATUS_BADGE = {
   issued:   { label: 'Awaiting your signature', class: 'bg-blue-500/15 text-blue-700' },

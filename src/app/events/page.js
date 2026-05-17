@@ -14,7 +14,6 @@ import { Plus, Flag, ExternalLink, Users } from 'lucide-react'
 import { getAppUrl } from '@/lib/app-url'
 
 export const dynamic = 'force-dynamic'
-export const revalidate = 0
 
 // Kind label + colour map. Per-kind pill uses these on the index.
 // Race uses the existing emerald pillstyling, others get muted blues

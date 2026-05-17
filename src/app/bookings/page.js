@@ -8,8 +8,6 @@ import BookingSkipReminderToggle from '@/components/BookingSkipReminderToggle'
 import CalendlyTabs from '@/components/CalendlyTabs'
 
 export const dynamic = 'force-dynamic'
-export const revalidate = 0
-export const fetchCache = 'force-no-store'
 
 async function getBookings(filter, locationId) {
   const db = createServerClient()
