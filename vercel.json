@@ -55,6 +55,10 @@
     {
       "path": "/api/cron/send-push-reminders",
       "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/cron/sweep-stale-push-tokens",
+      "schedule": "0 4 * * *"
     }
   ]
 }

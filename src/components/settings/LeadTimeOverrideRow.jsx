@@ -1,0 +1,164 @@
+'use client'
+
+// NOTIF.7 — per-user lead-time override editor for the StaffForm
+// mobile-permissions section.
+//
+// Stored shape under permissions.mobile.lead_time_overrides:
+//
+//   { tasks: { lead_times_minutes: [30, 60] } }
+//
+// Only tasks are user-overridable today (bookings are operator-side
+// at the location level). Empty / null = "use the location's
+// default". The cron's getEffectiveLeadTimesForUser does the
+// fallback chain.
+
+import { useState } from 'react'
+import { Plus, X, Bell } from 'lucide-react'
+import { formatLeadTime, LEAD_TIME_MIN_MINUTES, LEAD_TIME_MAX_MINUTES } from '@/lib/notification-config'
+
+const LEAD_PRESETS_MIN = [15, 30, 60, 120, 240, 1440, 2880]
+
+export default function LeadTimeOverrideRow({ overrides, onChange }) {
+  const taskValues = overrides?.tasks?.lead_times_minutes
+  const isOverridden = Array.isArray(taskValues) && taskValues.length > 0
+  const [expanded, setExpanded] = useState(isOverridden)
+  const [customMin, setCustomMin] = useState('')
+
+  function setTasks(next) {
+    // null / empty = remove the override
+    if (!next || next.length === 0) {
+      const { tasks: _drop, ...rest } = overrides || {}
+      onChange(rest)
+      return
+    }
+    onChange({ ...(overrides || {}), tasks: { lead_times_minutes: next } })
+  }
+
+  function add(min) {
+    const current = taskValues || []
+    const next = [...current, min].filter((v, i, a) => a.indexOf(v) === i).sort((a, b) => a - b)
+    setTasks(next)
+  }
+  function remove(idx) {
+    const current = taskValues || []
+    setTasks(current.filter((_, i) => i !== idx))
+  }
+  function addCustom() {
+    const n = Number(customMin)
+    if (!Number.isInteger(n) || n < LEAD_TIME_MIN_MINUTES || n > LEAD_TIME_MAX_MINUTES) return
+    add(n)
+    setCustomMin('')
+  }
+  function clearOverride() {
+    setTasks(null)
+  }
+
+  if (!expanded) {
+    return (
+      <div className="bg-un1t-black/40 border border-un1t-gray rounded-md p-3 mb-3 flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Bell size={14} className="text-un1t-light" />
+          <div>
+            <div className="text-xs font-semibold text-un1t-white">
+              Task reminder lead times
+            </div>
+            <div className="text-[11px] text-un1t-light">
+              Using location default (1h + 24h before due).
+            </div>
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={() => setExpanded(true)}
+          className="text-[11px] text-blue-400 hover:text-blue-300"
+        >
+          Customize for this user
+        </button>
+      </div>
+    )
+  }
+
+  const presets = LEAD_PRESETS_MIN.filter(p => !(taskValues || []).includes(p))
+
+  return (
+    <div className="bg-un1t-black/40 border border-un1t-gray rounded-md p-3 mb-3">
+      <div className="flex items-start justify-between mb-2">
+        <div className="flex items-center gap-2">
+          <Bell size={14} className="text-un1t-light" />
+          <div>
+            <div className="text-xs font-semibold text-un1t-white">
+              Task reminder lead times — user override
+            </div>
+            <div className="text-[11px] text-un1t-light">
+              When set, overrides this location&apos;s default for THIS user only.
+            </div>
+          </div>
+        </div>
+        {isOverridden && (
+          <button
+            type="button"
+            onClick={() => { clearOverride(); setExpanded(false) }}
+            className="text-[11px] text-un1t-light hover:text-un1t-white"
+          >
+            Reset to default
+          </button>
+        )}
+      </div>
+
+      <div className="flex flex-wrap gap-1.5 mb-2 min-h-6">
+        {!isOverridden && (
+          <span className="text-[11px] text-un1t-mid italic">
+            No override set — using location default (1h + 24h).
+          </span>
+        )}
+        {(taskValues || []).map((v, i) => (
+          <span
+            key={`${v}-${i}`}
+            className="inline-flex items-center gap-1 bg-un1t-gray/40 border border-un1t-gray rounded-full px-2 py-0.5 text-xs text-un1t-white"
+          >
+            {formatLeadTime(v)}
+            <button
+              type="button"
+              onClick={() => remove(i)}
+              className="text-un1t-light hover:text-un1t-white"
+              aria-label={`Remove ${formatLeadTime(v)}`}
+            >
+              <X size={10} />
+            </button>
+          </span>
+        ))}
+      </div>
+
+      <div className="flex items-center gap-2 flex-wrap">
+        {presets.map(p => (
+          <button
+            key={p}
+            type="button"
+            onClick={() => add(p)}
+            className="text-[11px] text-un1t-light hover:text-un1t-white border border-un1t-gray rounded px-2 py-0.5 inline-flex items-center gap-1"
+          >
+            <Plus size={10} /> {formatLeadTime(p)}
+          </button>
+        ))}
+        <span className="text-[11px] text-un1t-mid">or custom min:</span>
+        <input
+          type="number"
+          min={LEAD_TIME_MIN_MINUTES}
+          max={LEAD_TIME_MAX_MINUTES}
+          value={customMin}
+          onChange={(e) => setCustomMin(e.target.value)}
+          placeholder="45"
+          className="w-16 bg-un1t-black border border-un1t-gray rounded px-2 py-0.5 text-[11px] text-un1t-white"
+        />
+        <button
+          type="button"
+          onClick={addCustom}
+          disabled={!customMin}
+          className="text-[11px] text-un1t-light hover:text-un1t-white border border-un1t-gray rounded px-2 py-0.5 disabled:opacity-40"
+        >
+          Add
+        </button>
+      </div>
+    </div>
+  )
+}

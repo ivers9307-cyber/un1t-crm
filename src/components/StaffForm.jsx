@@ -5,6 +5,8 @@ import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { ArrowLeft, Plus, Trash2, Crown, KeyRound, AlertCircle, Loader2, UserX, UserCheck, Skull, ShieldAlert } from 'lucide-react'
 import PasswordOverrideModal from './PasswordOverrideModal'
+import TestPushButton from './settings/TestPushButton'
+import LeadTimeOverrideRow from './settings/LeadTimeOverrideRow'
 import {
   OWNER_ASSIGNABLE_ROLES, MASTER_ASSIGNABLE_ROLES,
 } from '@/lib/schemas'
@@ -833,8 +835,8 @@ export default function StaffForm({
         </div>
       )}
 
-      {/* Mobile Features (per-location, scoped to the currently
-          selected tab above). */}
+      {/* Mobile Features + lead-time overrides (per-location, scoped
+          to the currently selected tab above). */}
       {form.assignments.length > 0 && (
       <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5">
         <div className="flex items-center justify-between mb-3">
@@ -852,6 +854,28 @@ export default function StaffForm({
             <button type="button" onClick={() => setAllMobilePermissions(false)} className="text-xs text-blue-400 hover:text-blue-300">All off</button>
           </div>
         </div>
+        {/* NOTIF.6 — admin can fire a test push at this user to
+            confirm their device tokens are alive without leaving the
+            staff profile. Only shown when editing an existing staff
+            member (no profile id yet on the create form). */}
+        {isEdit && staff?.id && (
+          <div className="flex items-center gap-3 mb-3 pb-3 border-b border-un1t-gray">
+            <span className="text-xs text-un1t-light">Verify delivery to this user&apos;s phone:</span>
+            <TestPushButton recipientId={staff.id} recipientName={form.full_name || staff.email} />
+          </div>
+        )}
+        {/* NOTIF.7 — per-user task-reminder lead-time override. Stored
+            under permissions.mobile.lead_time_overrides.tasks. When
+            empty, the location's default (60 + 1440) is used. The
+            cron resolves user override → location config → built-in
+            default in that order. */}
+        {selectedPermLocationId && (
+          <LeadTimeOverrideRow
+            overrides={selectedMobilePerms.lead_time_overrides || {}}
+            onChange={(next) => patchSelectedMobilePerms({ lead_time_overrides: next })}
+          />
+        )}
+
         <div className="space-y-2">
           {allMobilePermissions.map(perm => {
             const isNotifyRow = perm.key.startsWith('notify_')

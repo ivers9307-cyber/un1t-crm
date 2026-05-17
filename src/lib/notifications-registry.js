@@ -45,6 +45,10 @@ export const NOTIFICATION_REGISTRY = Object.freeze([
     trigger: { kind: 'cron', source: '/api/cron/send-push-reminders (every 5 min)' },
     recipients: { kind: 'assignee', detail: 'activities.assignee_id' },
     configurable: { leadTimes: true, roles: false },
+    // No email fallback: time-sensitive ±5min window, email lag (often
+    // 30s–5min through Postmark + recipient mail server) would render
+    // a 1h reminder useless. Operator on-mobile-or-bust.
+    fallbackEmail: false,
     defaults: { leadTimesMinutes: [60, 1440] },
   },
   {
@@ -54,6 +58,7 @@ export const NOTIFICATION_REGISTRY = Object.freeze([
     trigger: { kind: 'cron', source: '/api/cron/send-push-reminders (every 5 min)' },
     recipients: { kind: 'roles_at_location', detail: 'owner / manager / head_coach by default' },
     configurable: { leadTimes: true, roles: true },
+    fallbackEmail: false,  // same reasoning as tasks
     defaults: {
       leadTimesMinutes: [60, 1440],
       notifyRoles: ['owner', 'manager', 'head_coach'],
@@ -66,6 +71,8 @@ export const NOTIFICATION_REGISTRY = Object.freeze([
     trigger: { kind: 'event', source: 'PUT /api/schedule/time-off/[id] (status change) + POST /api/schedule/time-off (new request)' },
     recipients: { kind: 'individual_or_creator', detail: 'Requester (on decision) or owner/manager (on new request)' },
     configurable: { leadTimes: false, roles: false },
+    fallbackEmail: true,
+    emailSubject: 'Time-off update',
   },
   {
     category: 'schedule',
@@ -74,6 +81,7 @@ export const NOTIFICATION_REGISTRY = Object.freeze([
     trigger: { kind: 'event', source: 'POST /api/schedule/publish' },
     recipients: { kind: 'roles_at_location', detail: 'All staff with shifts in the published week' },
     configurable: { leadTimes: false, roles: false },
+    fallbackEmail: false,  // weekly, not time-critical, would be noisy
   },
   {
     category: 'swap',
@@ -82,6 +90,7 @@ export const NOTIFICATION_REGISTRY = Object.freeze([
     trigger: { kind: 'event', source: 'POST/PUT /api/schedule/swaps' },
     recipients: { kind: 'individual_or_creator', detail: 'Managers (new request) or requester (decision)' },
     configurable: { leadTimes: false, roles: false },
+    fallbackEmail: false,
   },
   {
     category: 'lead',
@@ -90,6 +99,7 @@ export const NOTIFICATION_REGISTRY = Object.freeze([
     trigger: { kind: 'event', source: 'POST /api/contacts + WhatsApp inbound + Calendly webhook' },
     recipients: { kind: 'roles_at_location', detail: 'owner / manager / head_coach' },
     configurable: { leadTimes: false, roles: false },
+    fallbackEmail: false,  // high volume; email per lead would be a nightmare
   },
   {
     category: 'whatsapp',
@@ -98,6 +108,7 @@ export const NOTIFICATION_REGISTRY = Object.freeze([
     trigger: { kind: 'webhook', source: 'WhatsApp Cloud API → /api/webhooks/whatsapp' },
     recipients: { kind: 'roles_at_location', detail: 'All users with whatsapp permission at the location' },
     configurable: { leadTimes: false, roles: false },
+    fallbackEmail: false,
   },
   {
     category: 'invoice_approved',
@@ -106,6 +117,8 @@ export const NOTIFICATION_REGISTRY = Object.freeze([
     trigger: { kind: 'event', source: 'PUT /api/contractor-invoices/[id] (status=approved)' },
     recipients: { kind: 'specific_user', detail: 'Invoice submitter (contractor)' },
     configurable: { leadTimes: false, roles: false },
+    fallbackEmail: true,
+    emailSubject: 'Your invoice has been approved',
   },
   {
     category: 'invoice_declined',
@@ -114,6 +127,8 @@ export const NOTIFICATION_REGISTRY = Object.freeze([
     trigger: { kind: 'event', source: 'PUT /api/contractor-invoices/[id] (status=declined)' },
     recipients: { kind: 'specific_user', detail: 'Invoice submitter (contractor)' },
     configurable: { leadTimes: false, roles: false },
+    fallbackEmail: true,
+    emailSubject: 'Your invoice needs adjustment',
   },
   {
     category: 'shift_adjusted',
@@ -122,6 +137,8 @@ export const NOTIFICATION_REGISTRY = Object.freeze([
     trigger: { kind: 'event', source: 'PUT /api/schedule/shift-assignments/[id]' },
     recipients: { kind: 'assignee', detail: 'Coach whose shift was edited' },
     configurable: { leadTimes: false, roles: false },
+    fallbackEmail: true,
+    emailSubject: 'A shift has been adjusted',
   },
   {
     category: 'contract_issued',
@@ -130,6 +147,8 @@ export const NOTIFICATION_REGISTRY = Object.freeze([
     trigger: { kind: 'event', source: 'POST /api/contracts/issue' },
     recipients: { kind: 'specific_user', detail: 'Contract recipient' },
     configurable: { leadTimes: false, roles: false },
+    fallbackEmail: true,
+    emailSubject: 'New contract ready for your signature',
   },
 ])
 

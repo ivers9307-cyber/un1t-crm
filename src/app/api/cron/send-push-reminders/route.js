@@ -31,7 +31,7 @@ import { sendPush } from '@/lib/push'
 import { logInfo, logWarn, logError } from '@/lib/log'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { localToUtc, formatLocalTime } from '@/lib/push-reminders'
-import { getEffectiveConfig } from '@/lib/notification-config'
+import { getEffectiveConfig, getEffectiveLeadTimesForUser } from '@/lib/notification-config'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -94,6 +94,13 @@ export async function GET(request) {
   }
 
   // -------------------------- TASKS --------------------------
+  //
+  // NOTIF.7 — assignee-level lead-time overrides supported. If the
+  // assignee has set lead_time_overrides.tasks on their mobile
+  // permissions, we use that; otherwise fall back to the location's
+  // notification_config; otherwise the built-in default [60, 1440].
+  // Bookings stay location-only (operator on-duty preference, not
+  // personal).
   try {
     const { data: tasks, error: tErr } = await db
       .from('activities')
@@ -107,11 +114,35 @@ export async function GET(request) {
 
     if (tErr) {
       logError('cron-push-reminders', 'task fetch failed', { err: tErr })
-    } else {
-      for (const t of tasks || []) {
+    } else if (tasks && tasks.length > 0) {
+      // Batch-fetch the assignees' mobile permissions for THIS LOCATION.
+      // Mobile permissions live on profile_locations.permissions (not
+      // on profiles.permissions) — they're per (user × location). The
+      // task's location_id determines which row to read for that user.
+      const assigneeIds = [...new Set(tasks.map(t => t.assignee_id))]
+      const locationIds = [...new Set(tasks.map(t => t.location_id))]
+      const { data: pls } = await db
+        .from('profile_locations')
+        .select('profile_id, location_id, permissions')
+        .in('profile_id', assigneeIds)
+        .in('location_id', locationIds)
+      // Map keyed by `${profileId}|${locationId}` for O(1) lookup.
+      const mobilePermsByPair = new Map(
+        (pls || []).map(pl => [`${pl.profile_id}|${pl.location_id}`, pl.permissions?.mobile || {}])
+      )
+
+      for (const t of tasks) {
         const loc = locById.get(t.location_id)
         if (!loc) continue
-        const leadTimes = loc.cfg.categories?.tasks?.lead_times_minutes || []
+        const userPerms = mobilePermsByPair.get(`${t.assignee_id}|${t.location_id}`) || {}
+        const leadTimes = getEffectiveLeadTimesForUser(
+          loc.cfg ? { categories: loc.cfg.categories } : null,
+          userPerms,
+          'tasks',
+        )
+        // Fall back to the location config getter if the helper
+        // returned empty (shouldn't happen — built-in default kicks in
+        // — but defensive).
         if (!leadTimes.length) continue
 
         const dueUtc = localToUtc(t.due_date, t.due_time || '09:00:00', loc.tz)
