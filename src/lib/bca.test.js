@@ -7,8 +7,11 @@ import {
   validateBcaConfig,
   renderBcaTemplate,
   nextBcaSlotSlug,
+  buildBcaDownloadUrl,
+  appendBcaDownloadFooter,
   DEFAULT_BCA_CONFIG,
   BCA_STORAGE,
+  BCA_DOWNLOAD_WINDOW_DAYS,
   MIN_BCA_DOCUMENTS,
   MAX_BCA_DOCUMENTS,
 } from './bca'
@@ -292,6 +295,57 @@ describe('MIN/MAX bounds', () => {
   it('exports sane bounds', () => {
     expect(MIN_BCA_DOCUMENTS).toBe(1)
     expect(MAX_BCA_DOCUMENTS).toBe(20)
+  })
+})
+
+describe('buildBcaDownloadUrl', () => {
+  it('builds a clean URL', () => {
+    expect(buildBcaDownloadUrl('abc123', 'https://crm.example.com'))
+      .toBe('https://crm.example.com/bca/abc123')
+  })
+  it('strips trailing slashes from the base', () => {
+    expect(buildBcaDownloadUrl('abc', 'https://crm.example.com///'))
+      .toBe('https://crm.example.com/bca/abc')
+  })
+  it('returns null when either input is missing', () => {
+    expect(buildBcaDownloadUrl(null, 'https://example.com')).toBeNull()
+    expect(buildBcaDownloadUrl('abc', null)).toBeNull()
+    expect(buildBcaDownloadUrl('', 'https://example.com')).toBeNull()
+  })
+})
+
+describe('appendBcaDownloadFooter', () => {
+  it('returns body unchanged when no URL', () => {
+    expect(appendBcaDownloadFooter('Body text', null)).toBe('Body text')
+    expect(appendBcaDownloadFooter('Body text', '')).toBe('Body text')
+  })
+  it('appends the link block to body ending in non-newline', () => {
+    const out = appendBcaDownloadFooter('Hello.', 'https://crm.example.com/bca/abc')
+    expect(out).toContain('Hello.')
+    expect(out).toContain('https://crm.example.com/bca/abc')
+    expect(out).toContain(`${BCA_DOWNLOAD_WINDOW_DAYS} days`)
+    // Has separator between body and footer
+    expect(out).toMatch(/Hello\.\n\n---\n/)
+  })
+  it('normalises trailing-newline body to the same blank-line separator', () => {
+    // Both 'Hello.' and 'Hello.\n' should produce the same separator
+    // shape — exactly one blank line before the '---' divider — so
+    // the visual output is identical regardless of how the operator
+    // ends their body template.
+    const noNl = appendBcaDownloadFooter('Hello.', 'https://crm.example.com/bca/abc')
+    const withNl = appendBcaDownloadFooter('Hello.\n', 'https://crm.example.com/bca/abc')
+    expect(noNl).toBe(withNl)
+    expect(withNl).toMatch(/Hello\.\n\n---\n/)
+  })
+  it('handles empty body', () => {
+    const out = appendBcaDownloadFooter('', 'https://crm.example.com/bca/abc')
+    expect(out).toContain('https://crm.example.com/bca/abc')
+  })
+})
+
+describe('BCA_DOWNLOAD_WINDOW_DAYS', () => {
+  it('is 60 days', () => {
+    expect(BCA_DOWNLOAD_WINDOW_DAYS).toBe(60)
   })
 })
 
