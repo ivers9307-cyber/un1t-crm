@@ -83,9 +83,13 @@ export async function GET(request) {
   return NextResponse.json({ success: true, data })
 }
 
-// POST /api/cars — create a new car (always lands in 'new' status).
+// POST /api/cars — create a car (lands directly in 'pending' so the
+// operator skips straight to the buyer-details / Xero invoice / BCA
+// upload workflow without a separate 'Move to Pending' click). The
+// 'new' status is preserved in the enum + the existing few 'new' rows
+// for backwards compatibility, but no new code path lands a car there.
 // All identifying / cost fields are optional at creation; the operator
-// fills them in iteratively from the new tab.
+// fills them in iteratively from the car detail page.
 export async function POST(request) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
@@ -118,7 +122,7 @@ export async function POST(request) {
   const db = createServerClient()
   const { data, error } = await db.from('cars').insert({
     location_id: locationId,
-    status: 'new',
+    status: 'pending',
     uk_reg: body.uk_reg || null,
     irish_reg: body.irish_reg || null,
     vin: body.vin || null,
