@@ -28,7 +28,8 @@ function fmtDate(iso) {
   })
 }
 
-export default async function AccountContractDetail({ params }) {
+export default async function AccountContractDetail(props) {
+  const params = await props.params;
   const user = await getCurrentUser()
   if (!user) redirect('/login')
 

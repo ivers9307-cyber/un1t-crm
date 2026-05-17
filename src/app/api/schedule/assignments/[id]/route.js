@@ -32,7 +32,8 @@ const UpdateAssignmentSchema = z.object({
   status: z.enum(['scheduled', 'confirmed', 'declined', 'completed']).optional(),
 })
 
-export async function PUT(request, { params }) {
+export async function PUT(request, props) {
+  const params = await props.params;
   const user = await getCurrentUser()
   if (!user) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
@@ -157,7 +158,8 @@ export async function PUT(request, { params }) {
   return NextResponse.json({ success: true, data })
 }
 
-export async function DELETE(_request, { params }) {
+export async function DELETE(_request, props) {
+  const params = await props.params;
   const user = await getCurrentUser()
   if (!user) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })

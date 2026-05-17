@@ -12,7 +12,8 @@ const TimeOffReviewSchema = z.object({
 })
 
 // PUT /api/schedule/time-off/:id — Approve, reject, or cancel a request
-export async function PUT(request, { params }) {
+export async function PUT(request, props) {
+  const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
 

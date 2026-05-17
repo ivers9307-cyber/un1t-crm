@@ -69,7 +69,8 @@ const AUDIT_FK_NULLOUT = [
   { table: 'xero_connections', column: 'connected_by' },
 ]
 
-export async function DELETE(_request, { params }) {
+export async function DELETE(_request, props) {
+  const params = await props.params;
   const user = await getCurrentUser()
   if (!user) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })

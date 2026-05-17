@@ -9,7 +9,9 @@ import RaceConfirmedPage from '@/components/RaceConfirmedPage'
 
 export const runtime = 'nodejs'
 
-export default function Page({ params, searchParams }) {
+export default async function Page(props) {
+  const searchParams = await props.searchParams;
+  const params = await props.params;
   return (
     <RaceConfirmedPage
       slug={params.slug}

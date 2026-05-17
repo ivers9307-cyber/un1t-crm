@@ -16,7 +16,8 @@ import { ArrowLeft } from 'lucide-react'
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
 
-export default async function RaceTeamsPage({ params }) {
+export default async function RaceTeamsPage(props) {
+  const params = await props.params;
   const user = await getCurrentUser()
   if (!user) redirect('/login')
   if (!MANAGER_ROLES.includes(user.role)) redirect('/')

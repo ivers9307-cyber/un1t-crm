@@ -5,12 +5,15 @@ For depth, see [CLAUDE.md](./CLAUDE.md) — Done log entries #161–173 and the 
 
 ## Today's headline
 
-HOTFIX #172 verified live + recovery confirmed done. Then cleared three backlog items:
-- **#173 (PERM.1)** — `hasAnyMobileFeature` now walks the cross-platform `dashboard_*` keys too. Correct empty-state semantics for every role on mobile Home.
-- **#174 (SEG-TRIG.1)** — new `segment_added` / `segment_removed` sequence triggers, cron-driven snapshot diff over `contact_segment_memberships` (mig 174). Saved /contacts segments can now drive sequence enrolment alongside status_change + tag_added.
-- **#175 (RSC-AUDIT.2)** — audited 130+ `'use client'` files for genuine client-only feature use. 3 had the directive without using any (XeroIntegrationTab, BcaIntegrationTab, RosterSummaryPanel). Stripped. Heuristic preserved in `_rsc_audit.sh` for future passes.
+HOTFIX #172 verified live + recovery confirmed done. Then cleared four backlog items in one session:
+- **#173 (PERM.1)** — `hasAnyMobileFeature` walks cross-platform `dashboard_*` keys. Merged to main.
+- **#174 (SEG-TRIG.1)** — `segment_added` / `segment_removed` sequence triggers + cron-driven snapshot diff (mig 174). Merged to main.
+- **#175 (RSC-AUDIT.2)** — stripped 3 unnecessary `'use client'` directives (out of 130+ audited). Merged to main.
+- **#176 (NEXT.16)** — Next.js 14.2 → 16.2 + React 18.3 → 19.2 + ESLint flat config. **On branch `nextjs-14-to-16`** — pending Vercel preview verification before merge.
 
-Next-shaped: Next.js 14 → 16 upgrade as the next focused PR (in isolation).
+Branch state: 4 commits on `nextjs-14-to-16`. All 1,786 tests pass. `npm run build` clean under Turbopack (default in 16). Mobile parity clean.
+
+**To merge:** push the branch → Vercel builds the preview → smoke-test /login, /dashboard, /contacts, /cars, the deposit page on pay.ccfautos.com, the WhatsApp inbox, and the assistant chat in the preview URL → merge to main → cron heartbeats stay green for an hour after deploy → done.
 
 ## What's in flight, not done
 

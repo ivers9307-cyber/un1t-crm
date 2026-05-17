@@ -14,7 +14,8 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
 import { MANAGER_ROLES } from '@/lib/schemas'
 
-export async function DELETE(_request, { params }) {
+export async function DELETE(_request, props) {
+  const params = await props.params;
   const user = await getCurrentUser()
   if (!user || !MANAGER_ROLES.includes(user.role)) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })

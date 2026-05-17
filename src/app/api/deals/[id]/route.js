@@ -15,7 +15,8 @@ const DealUpdateSchema = z.object({
 
 // PUT /api/deals/:id — Update a deal (replaces Pipedrive PUT /v1/deals/:id)
 // This triggers the deal_webhook_trigger in Postgres if stage/status changes
-export async function PUT(request, { params }) {
+export async function PUT(request, props) {
+  const params = await props.params;
   const authError = requireApiKey(request)
   if (authError) return authError
 

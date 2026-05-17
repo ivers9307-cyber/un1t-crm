@@ -9,6 +9,7 @@ export const metadata = {
   title: 'Communication Preferences — UN1T',
 }
 
-export default function PreferencePage({ params }) {
+export default async function PreferencePage(props) {
+  const params = await props.params;
   return <PreferenceCentre token={params.token} />
 }

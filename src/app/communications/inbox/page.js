@@ -8,7 +8,8 @@ import WAInbox from '@/components/WAInbox'
 
 export const dynamic = 'force-dynamic'
 
-export default async function InboxPage({ searchParams }) {
+export default async function InboxPage(props) {
+  const searchParams = await props.searchParams;
   const user = await getCurrentUser()
   if (!user) redirect('/login')
   if (!hasPermission(user, 'whatsapp')) redirect('/communications')

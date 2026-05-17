@@ -15,7 +15,8 @@ export const runtime = 'nodejs'
 const VALID_TYPES = new Set(ALL_DOCUMENT_TYPES.map(t => t.key))
 const MAX_BYTES = 25 * 1024 * 1024  // 25 MB
 
-export async function POST(request, { params }) {
+export async function POST(request, props) {
+  const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
   if (!hasPermission(user, 'car_processing')) {

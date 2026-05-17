@@ -18,7 +18,8 @@ async function loadTemplateLocation(db, id) {
 }
 
 // GET /api/templates/[id]
-export async function GET(request, { params }) {
+export async function GET(request, props) {
+  const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
 
@@ -36,7 +37,8 @@ export async function GET(request, { params }) {
 }
 
 // PUT /api/templates/[id]
-export async function PUT(request, { params }) {
+export async function PUT(request, props) {
+  const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
 
@@ -61,7 +63,8 @@ export async function PUT(request, { params }) {
 }
 
 // DELETE /api/templates/[id]
-export async function DELETE(request, { params }) {
+export async function DELETE(request, props) {
+  const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
 

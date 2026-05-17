@@ -34,7 +34,8 @@ async function loadBroadcast(db, id) {
   return { broadcast: data, error }
 }
 
-export async function GET(request, { params }) {
+export async function GET(request, props) {
+  const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
   if (!hasPermission(user, 'sms')) {
@@ -61,7 +62,8 @@ export async function GET(request, { params }) {
   return NextResponse.json({ success: true, broadcast, recipients: recipients || [] })
 }
 
-export async function PATCH(request, { params }) {
+export async function PATCH(request, props) {
+  const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
   if (!hasPermission(user, 'sms')) {
@@ -120,7 +122,8 @@ export async function PATCH(request, { params }) {
   return NextResponse.json({ success: true, broadcast: data })
 }
 
-export async function DELETE(request, { params }) {
+export async function DELETE(request, props) {
+  const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
   if (!hasPermission(user, 'sms')) {

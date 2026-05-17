@@ -31,7 +31,8 @@ const UNSUB_CHANNELS = ['email_marketing', 'whatsapp_marketing', 'sms_marketing'
 // silently dropped. Empty / absent → defaults to ['email_marketing'].
 //
 // POST /api/unsubscribe/[token]
-export async function POST(request, { params }) {
+export async function POST(request, props) {
+  const params = await props.params;
   const db = createServerClient()
   const { token } = params
 
@@ -112,7 +113,8 @@ export async function POST(request, { params }) {
 // GET redirects to preference centre. Use the request's own origin so the
 // redirect always lands on the same domain the user typed — no env var
 // dependency, no chance of redirecting to a stale domain.
-export async function GET(request, { params }) {
+export async function GET(request, props) {
+  const params = await props.params;
   const { token } = params
   return NextResponse.redirect(`${getRequestOrigin(request)}/preferences/${token}`)
 }

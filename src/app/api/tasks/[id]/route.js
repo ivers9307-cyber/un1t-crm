@@ -24,7 +24,8 @@ const UpdateTaskSchema = z.object({
   contact_id:  uuidLike.nullable().optional(),
 })
 
-export async function GET(request, { params }) {
+export async function GET(request, props) {
+  const params = await props.params;
   const authError = requireApiKey(request)
   if (authError) return authError
 
@@ -40,7 +41,8 @@ export async function GET(request, { params }) {
   return NextResponse.json({ success: true, data })
 }
 
-export async function PATCH(request, { params }) {
+export async function PATCH(request, props) {
+  const params = await props.params;
   const authError = requireApiKey(request)
   if (authError) return authError
 
@@ -60,7 +62,8 @@ export async function PATCH(request, { params }) {
   return NextResponse.json({ success: true, data })
 }
 
-export async function DELETE(request, { params }) {
+export async function DELETE(request, props) {
+  const params = await props.params;
   const authError = requireApiKey(request)
   if (authError) return authError
 

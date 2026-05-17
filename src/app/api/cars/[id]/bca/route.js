@@ -27,7 +27,8 @@ import { getBcaBaseUrl } from '@/lib/app-url'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function GET(_request, { params }) {
+export async function GET(_request, props) {
+  const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
   if (!hasPermission(user, 'car_processing')) {

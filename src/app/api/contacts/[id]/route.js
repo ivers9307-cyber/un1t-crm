@@ -31,7 +31,8 @@ const ContactUpdateSchema = z.object({
 //
 // Accepts either the n8n API key OR a logged-in manager+. Web UI
 // uses the cookie path; n8n keeps using the bearer token.
-export async function PUT(request, { params }) {
+export async function PUT(request, props) {
+  const params = await props.params;
   const auth = await requireApiKeyOrManager(request)
   if (!auth.ok) return auth.response
 
@@ -101,7 +102,8 @@ export async function PUT(request, { params }) {
 }
 
 // GET /api/contacts/:id
-export async function GET(request, { params }) {
+export async function GET(request, props) {
+  const params = await props.params;
   const authError = requireApiKey(request)
   if (authError) return authError
 
@@ -127,7 +129,8 @@ export async function GET(request, { params }) {
 // messages, CASCADE on broadcast_recipients) handle the link.
 // Cascades CASCADE_TABLES; SET-NULL tables keep the row with the
 // FK nulled (booking + revenue history preserved).
-export async function DELETE(_request, { params }) {
+export async function DELETE(_request, props) {
+  const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
   if (!MANAGER_ROLES.includes(user.role)) {

@@ -44,7 +44,8 @@ const EditSchema = z.object({
   { message: 'At least one of started_at / finished_at is required.' },
 )
 
-export async function PATCH(request, { params }) {
+export async function PATCH(request, props) {
+  const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
   if (!MANAGER_ROLES.includes(user.role)) {

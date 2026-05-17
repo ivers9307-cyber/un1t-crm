@@ -12,6 +12,7 @@ import RaceCheckoutPage from '@/components/RaceCheckoutPage'
 
 export const runtime = 'nodejs'
 
-export default function Page({ params }) {
+export default async function Page(props) {
+  const params = await props.params;
   return <RaceCheckoutPage paymentId={params.paymentId} />
 }

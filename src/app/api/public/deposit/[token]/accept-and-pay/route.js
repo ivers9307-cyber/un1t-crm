@@ -27,7 +27,8 @@ const Body = z.object({
   terms_version: z.number().int().min(1),
 })
 
-export async function POST(request, { params }) {
+export async function POST(request, props) {
+  const params = await props.params;
   const raw = await request.json().catch(() => ({}))
   const parsed = Body.safeParse(raw)
   if (!parsed.success) {

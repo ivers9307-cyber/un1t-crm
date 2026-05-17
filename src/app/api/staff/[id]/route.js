@@ -88,7 +88,8 @@ async function applyDoorAccessChange({ profile, location, enable, role, existing
 // caller's REACHABLE subset of the user's assignments. Master
 // gets the full set; owners only see/manipulate the assignments at
 // their own locations.
-export async function PUT(request, { params }) {
+export async function PUT(request, props) {
+  const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
   if (!user.isMaster && user.role !== 'owner') {
@@ -462,7 +463,8 @@ export async function PUT(request, { params }) {
 //
 // Revokes any UniFi door-access policies the staff member had — we
 // don't want a deactivated employee still able to walk into the studio.
-export async function DELETE(request, { params }) {
+export async function DELETE(request, props) {
+  const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
   if (!user.isMaster && user.role !== 'owner') {

@@ -51,7 +51,8 @@ const RegisterSchema = z.object({
   source: z.string().max(50).optional(),
 })
 
-export async function POST(request, { params }) {
+export async function POST(request, props) {
+  const params = await props.params;
   const db = createServerClient()
 
   const ip = getClientIp(request)

@@ -9,7 +9,8 @@ export const dynamic = 'force-dynamic'
 export const revalidate = 0
 export const fetchCache = 'force-no-store'
 
-export default async function ContactsPage({ searchParams }) {
+export default async function ContactsPage(props) {
+  const searchParams = await props.searchParams;
   const user = await getCurrentUser()
   if (!user) redirect('/login')
 

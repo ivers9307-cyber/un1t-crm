@@ -15,7 +15,8 @@ export const dynamic = 'force-dynamic'
 
 const WRITE_ROLES = ['owner', 'manager', 'head_coach']
 
-export async function DELETE(_request, { params }) {
+export async function DELETE(_request, props) {
+  const params = await props.params;
   const user = await getCurrentUser()
   if (!user) {
     return NextResponse.json({ ok: false, error: 'Unauthorised' }, { status: 401 })
@@ -40,7 +41,8 @@ export async function DELETE(_request, { params }) {
   return NextResponse.json({ ok: true })
 }
 
-export async function PATCH(request, { params }) {
+export async function PATCH(request, props) {
+  const params = await props.params;
   const user = await getCurrentUser()
   if (!user) {
     return NextResponse.json({ ok: false, error: 'Unauthorised' }, { status: 401 })

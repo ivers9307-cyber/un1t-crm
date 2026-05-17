@@ -37,7 +37,8 @@ const EXT_BY_TYPE = {
   'image/svg+xml': 'svg',
 }
 
-export async function POST(request, { params }) {
+export async function POST(request, props) {
+  const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
   if (!MANAGER_ROLES.includes(user.role)) {
@@ -123,7 +124,8 @@ export async function POST(request, { params }) {
 // DELETE /api/events/[id]/logo?slot=N — remove a single slot's bytes.
 // Caller is still expected to PUT the race with an updated
 // tv_logos array (slot positions get re-packed client-side).
-export async function DELETE(request, { params }) {
+export async function DELETE(request, props) {
+  const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
   if (!MANAGER_ROLES.includes(user.role)) {

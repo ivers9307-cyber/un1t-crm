@@ -74,7 +74,8 @@ export async function generateMetadata() {
   }
 }
 
-export default async function WelcomePage({ searchParams }) {
+export default async function WelcomePage(props) {
+  const searchParams = await props.searchParams;
   const row = await loadSettings()
   const blocks = blocksOrDefault(row?.blocks)
   // Site chrome (mig 129) — logo lives outside the blocks array

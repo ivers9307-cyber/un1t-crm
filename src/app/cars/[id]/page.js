@@ -7,7 +7,8 @@ import CarDetail from '@/components/cars/CarDetail'
 
 export const dynamic = 'force-dynamic'
 
-export default async function CarDetailPage({ params }) {
+export default async function CarDetailPage(props) {
+  const params = await props.params;
   const user = await getCurrentUser()
   if (!user) redirect('/login')
   if (!hasPermission(user, 'car_processing')) redirect('/')

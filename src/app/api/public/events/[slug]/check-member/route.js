@@ -32,7 +32,8 @@ const Schema = z.object({
   email: z.string().email().max(320),
 })
 
-export async function POST(request, { params }) {
+export async function POST(request, props) {
+  const params = await props.params;
   const db = createServerClient()
 
   const ip = getClientIp(request)

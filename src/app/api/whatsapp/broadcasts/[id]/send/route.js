@@ -2,7 +2,8 @@ import { NextResponse } from 'next/server'
 import { sendBroadcast } from '@/lib/whatsapp'
 
 // POST /api/whatsapp/broadcasts/[id]/send
-export async function POST(request, { params }) {
+export async function POST(request, props) {
+  const params = await props.params;
   try {
     const result = await sendBroadcast(params.id)
     return NextResponse.json({ success: true, ...result })

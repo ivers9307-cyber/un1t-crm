@@ -23,7 +23,8 @@ const ACTION_BADGE = {
   rolled_back: 'bg-un1t-gray/30 text-un1t-light',
 }
 
-export default async function ImportDetailPage({ params }) {
+export default async function ImportDetailPage(props) {
+  const params = await props.params;
   const user = await getCurrentUser()
   if (!user) redirect('/login')
   if (!MANAGER_ROLES.includes(user.role)) redirect('/contacts')

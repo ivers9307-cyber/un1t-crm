@@ -9,7 +9,8 @@ import Link from 'next/link'
 
 export const dynamic = 'force-dynamic'
 
-export default async function EditBookingTypePage({ params }) {
+export default async function EditBookingTypePage(props) {
+  const params = await props.params;
   const user = await getCurrentUser()
   if (!user) redirect('/login')
   const db = createServerClient()

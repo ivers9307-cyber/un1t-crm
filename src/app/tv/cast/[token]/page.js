@@ -21,11 +21,12 @@ export const metadata = {
   viewport: 'width=device-width, initial-scale=1, viewport-fit=cover',
 }
 
-export default async function TVPage({ params }) {
+export default async function TVPage(props) {
+  const params = await props.params;
   // Pre-fetch initial content server-side so the screen renders
   // immediately without waiting for the first client-side poll.
-  const proto = headers().get('x-forwarded-proto') || 'https'
-  const host  = headers().get('host')
+  const proto = (await headers()).get('x-forwarded-proto') || 'https'
+  const host  = (await headers()).get('host')
   const initialRes = await fetch(`${proto}://${host}/api/public/tv/${params.token}/content`, {
     cache: 'no-store',
   }).catch(() => null)

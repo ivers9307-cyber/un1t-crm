@@ -34,7 +34,8 @@ const EventUpdateSchema = z.object({
 // the only consumer was n8n; once the in-CRM operator UI started
 // invoking these (EventActions delete button), cookie auth had to
 // be allowed. Same pattern as /api/contacts/[id] (mig 109 contact CRUD).
-export async function GET(request, { params }) {
+export async function GET(request, props) {
+  const params = await props.params;
   const auth = await requireApiKeyOrManager(request)
   if (!auth.ok) return auth.response
 
@@ -46,7 +47,8 @@ export async function GET(request, { params }) {
 }
 
 // PUT /api/bookings/event-types/:id — Update event type
-export async function PUT(request, { params }) {
+export async function PUT(request, props) {
+  const params = await props.params;
   const auth = await requireApiKeyOrManager(request)
   if (!auth.ok) return auth.response
 
@@ -69,7 +71,8 @@ export async function PUT(request, { params }) {
 }
 
 // DELETE /api/bookings/event-types/:id — Deactivate event type (soft delete)
-export async function DELETE(request, { params }) {
+export async function DELETE(request, props) {
+  const params = await props.params;
   const auth = await requireApiKeyOrManager(request)
   if (!auth.ok) return auth.response
 

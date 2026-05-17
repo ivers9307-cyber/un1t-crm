@@ -27,11 +27,13 @@ const ONE_DAY_SECONDS = 24 * 60 * 60
  * Read the impersonation cookie. Returns the target user's UUID
  * (still validated downstream — never trusted on its own — getCurrentUser
  * also re-checks that the underlying session belongs to a master).
+ *
+ * Next 15+: cookies() returns a Promise so this is async.
  */
-export function readImpersonationCookie() {
+export async function readImpersonationCookie() {
   try {
-    const v = cookies().get(IMPERSONATE_COOKIE)?.value
-    return v && /^[0-9a-f-]{36}$/i.test(v) ? v : null
+    const v = (await cookies()).get(IMPERSONATE_COOKIE)?.value
+    return v && /^[0-9a-f-]{36}$/i.test(v) ? v : null;
   } catch {
     // Not in a request context.
     return null
@@ -44,11 +46,13 @@ export function readImpersonationCookie() {
  * Like the cookie path, the value is still master-gated downstream
  * inside getCurrentUser() — a non-master JWT sending this header has
  * the value silently ignored. Returns the target user's UUID.
+ *
+ * Next 15+: headers() returns a Promise so this is async.
  */
-export function readImpersonationHeader() {
+export async function readImpersonationHeader() {
   try {
-    const v = headers().get(IMPERSONATE_HEADER) || ''
-    return v && /^[0-9a-f-]{36}$/i.test(v) ? v : null
+    const v = (await headers()).get(IMPERSONATE_HEADER) || ''
+    return v && /^[0-9a-f-]{36}$/i.test(v) ? v : null;
   } catch {
     return null
   }
@@ -58,9 +62,11 @@ export function readImpersonationHeader() {
  * Combined cookie+header read. Header wins if both are set (mobile
  * client should be authoritative when both are present, e.g. a
  * developer running the iOS sim against a logged-in dev cookie).
+ *
+ * Next 15+: async to match the underlying header/cookie readers.
  */
-export function readImpersonationTarget() {
-  return readImpersonationHeader() || readImpersonationCookie()
+export async function readImpersonationTarget() {
+  return (await readImpersonationHeader()) || (await readImpersonationCookie())
 }
 
 /**
@@ -109,7 +115,7 @@ export async function startImpersonation({ masterProfile, targetUserId, reason, 
   if (insErr) throw new Error(`Failed to start impersonation log: ${insErr.message}`)
 
   // Set the impersonation cookie.
-  cookies().set(IMPERSONATE_COOKIE, targetUserId, {
+  (await cookies()).set(IMPERSONATE_COOKIE, targetUserId, {
     httpOnly: true,
     sameSite: 'lax',
     secure: process.env.NODE_ENV === 'production',
@@ -123,7 +129,7 @@ export async function startImpersonation({ masterProfile, targetUserId, reason, 
   // to be assigned to the same location as the master sees that
   // location's feature gate (often quite different from their own
   // default's), which is misleading for "view as user" debugging.
-  cookies().set('un1t_active_location', '', { maxAge: 0, path: '/' })
+  (await cookies()).set('un1t_active_location', '', { maxAge: 0, path: '/' })
 
   return { targetUserId, targetName: target.full_name, targetRole: target.role }
 }
@@ -141,12 +147,12 @@ export async function stopImpersonation({ masterUserId }) {
     .eq('master_user_id', masterUserId)
     .is('ended_at', null)
 
-  cookies().set(IMPERSONATE_COOKIE, '', { maxAge: 0, path: '/' })
+  (await cookies()).set(IMPERSONATE_COOKIE, '', { maxAge: 0, path: '/' })
   // Also clear any stale active-location cookie that was leftover
   // from the impersonated user's preferred location — masters
   // returning to their own session should land on their own default
   // rather than wherever the target was. (Master sees every location
   // anyway via auth_is_master, so the worst case is "wrong default
   // pre-selected".)
-  cookies().set('un1t_active_location', '', { maxAge: 0, path: '/' })
+  (await cookies()).set('un1t_active_location', '', { maxAge: 0, path: '/' })
 }

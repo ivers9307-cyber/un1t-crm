@@ -26,7 +26,8 @@ async function loadCar(db, carId) {
   return data
 }
 
-export async function GET(_request, { params }) {
+export async function GET(_request, props) {
+  const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
   if (!hasPermission(user, 'car_processing')) {
@@ -54,7 +55,8 @@ const PostBody = z.object({
   content: z.string().min(1).max(5000),
 })
 
-export async function POST(request, { params }) {
+export async function POST(request, props) {
+  const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
   if (!hasPermission(user, 'car_processing')) {

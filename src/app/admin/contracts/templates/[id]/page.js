@@ -14,7 +14,8 @@ function isOwnerOrMaster(user) {
   return user?.role === 'master' || user?.role === 'owner'
 }
 
-export default async function EditTemplatePage({ params }) {
+export default async function EditTemplatePage(props) {
+  const params = await props.params;
   const user = await getCurrentUser()
   if (!user) redirect('/login')
   if (!isOwnerOrMaster(user)) redirect('/')

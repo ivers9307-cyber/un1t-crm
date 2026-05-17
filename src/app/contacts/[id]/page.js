@@ -45,7 +45,8 @@ const activityIcons = {
   sms_sent: { bg: 'bg-cyan-500/20', color: 'text-cyan-400', label: 'SMS Sent' },
 }
 
-export default async function ContactDetailPage({ params }) {
+export default async function ContactDetailPage(props) {
+  const params = await props.params;
   const db = createServerClient()
   const user = await getCurrentUser()
   const { id } = params

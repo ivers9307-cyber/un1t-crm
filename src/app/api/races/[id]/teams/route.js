@@ -37,7 +37,8 @@ async function loadRaceForAccess(db, raceId) {
     .single()
 }
 
-export async function GET(_request, { params }) {
+export async function GET(_request, props) {
+  const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
   if (!MANAGER_ROLES.includes(user.role)) {
@@ -73,7 +74,8 @@ export async function GET(_request, { params }) {
   return NextResponse.json({ success: true, data: registrations || [] })
 }
 
-export async function POST(request, { params }) {
+export async function POST(request, props) {
+  const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
   if (!MANAGER_ROLES.includes(user.role)) {

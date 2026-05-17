@@ -31,19 +31,19 @@ describe('readImpersonationCookie', () => {
 
   it('returns null when no cookie is set', async () => {
     const { readImpersonationCookie } = await import('./impersonation.js')
-    expect(readImpersonationCookie()).toBe(null)
+    expect(await readImpersonationCookie()).toBe(null)
   })
 
   it('returns the value when it is a UUID', async () => {
     cookieMap.set('un1t_impersonate', VALID)
     const { readImpersonationCookie } = await import('./impersonation.js')
-    expect(readImpersonationCookie()).toBe(VALID)
+    expect(await readImpersonationCookie()).toBe(VALID)
   })
 
   it('rejects non-UUID values (defence-in-depth — the cookie is httpOnly, but trust nothing)', async () => {
     cookieMap.set('un1t_impersonate', 'not-a-uuid')
     const { readImpersonationCookie } = await import('./impersonation.js')
-    expect(readImpersonationCookie()).toBe(null)
+    expect(await readImpersonationCookie()).toBe(null)
   })
 })
 
@@ -55,19 +55,19 @@ describe('readImpersonationHeader', () => {
 
   it('returns null when no header is set', async () => {
     const { readImpersonationHeader } = await import('./impersonation.js')
-    expect(readImpersonationHeader()).toBe(null)
+    expect(await readImpersonationHeader()).toBe(null)
   })
 
   it('returns the value when x-impersonate-target is a UUID', async () => {
     headerMap.set('x-impersonate-target', VALID)
     const { readImpersonationHeader } = await import('./impersonation.js')
-    expect(readImpersonationHeader()).toBe(VALID)
+    expect(await readImpersonationHeader()).toBe(VALID)
   })
 
   it('rejects non-UUID header values', async () => {
     headerMap.set('x-impersonate-target', 'malicious; DROP TABLE')
     const { readImpersonationHeader } = await import('./impersonation.js')
-    expect(readImpersonationHeader()).toBe(null)
+    expect(await readImpersonationHeader()).toBe(null)
   })
 })
 
@@ -83,17 +83,17 @@ describe('readImpersonationTarget (combined)', () => {
     cookieMap.set('un1t_impersonate', COOKIE_TARGET)
     headerMap.set('x-impersonate-target', HEADER_TARGET)
     const { readImpersonationTarget } = await import('./impersonation.js')
-    expect(readImpersonationTarget()).toBe(HEADER_TARGET)
+    expect(await readImpersonationTarget()).toBe(HEADER_TARGET)
   })
 
   it('falls back to the cookie when the header is missing', async () => {
     cookieMap.set('un1t_impersonate', VALID)
     const { readImpersonationTarget } = await import('./impersonation.js')
-    expect(readImpersonationTarget()).toBe(VALID)
+    expect(await readImpersonationTarget()).toBe(VALID)
   })
 
   it('returns null when both are absent', async () => {
     const { readImpersonationTarget } = await import('./impersonation.js')
-    expect(readImpersonationTarget()).toBe(null)
+    expect(await readImpersonationTarget()).toBe(null)
   })
 })

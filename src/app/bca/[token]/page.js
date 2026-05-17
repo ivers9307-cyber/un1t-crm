@@ -30,7 +30,8 @@ import { recordBcaPageView } from '@/lib/bca-events'
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
 
-export async function generateMetadata({ params }) {
+export async function generateMetadata(props) {
+  const params = await props.params;
   const db = createServerClient()
   const { data: row } = await db
     .from('car_bca_submissions')
@@ -47,7 +48,8 @@ export async function generateMetadata({ params }) {
   return { title, icons }
 }
 
-export default async function BcaDownloadPage({ params }) {
+export default async function BcaDownloadPage(props) {
+  const params = await props.params;
   const db = createServerClient()
 
   const { data: row } = await db
@@ -86,7 +88,7 @@ export default async function BcaDownloadPage({ params }) {
   // Counts + first/last viewed roll up onto the submission row for
   // the operator-side BcaSubmitCard.
   try {
-    const h = headers()
+    const h = await headers()
     const ip = (h.get('x-forwarded-for') || '').split(',')[0].trim() || h.get('x-real-ip') || null
     const ua = h.get('user-agent') || null
     await recordBcaPageView(db, row.id, { ip, userAgent: ua })
@@ -113,7 +115,7 @@ export default async function BcaDownloadPage({ params }) {
       <div className="max-w-2xl mx-auto p-6">
         {settings.logo_url && (
           // eslint-disable-next-line @next/next/no-img-element
-          <img src={settings.logo_url} alt={settings.company_name || ''} className="h-12 mb-6 object-contain" />
+          (<img src={settings.logo_url} alt={settings.company_name || ''} className="h-12 mb-6 object-contain" />)
         )}
 
         <h1 className="text-2xl font-bold">BCA document pack</h1>
@@ -174,7 +176,7 @@ export default async function BcaDownloadPage({ params }) {
         </p>
       </div>
     </div>
-  )
+  );
 }
 
 function ExpiredState({ companyName, logoUrl, carLabel, expiredAt }) {
@@ -183,7 +185,7 @@ function ExpiredState({ companyName, logoUrl, carLabel, expiredAt }) {
       <div className="max-w-md w-full bg-white border border-zinc-300 rounded-lg p-6 text-center">
         {logoUrl && (
           // eslint-disable-next-line @next/next/no-img-element
-          <img src={logoUrl} alt={companyName || ''} className="h-10 mx-auto mb-4 object-contain" />
+          (<img src={logoUrl} alt={companyName || ''} className="h-10 mx-auto mb-4 object-contain" />)
         )}
         <h1 className="text-xl font-bold">Download window expired</h1>
         {carLabel && <p className="text-sm text-zinc-600 mt-1">{carLabel}</p>}
@@ -200,5 +202,5 @@ function ExpiredState({ companyName, logoUrl, carLabel, expiredAt }) {
         </Link>
       </div>
     </div>
-  )
+  );
 }

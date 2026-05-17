@@ -19,7 +19,8 @@ const UpdateBody = z.object({
   filter: audienceFilterSchema,
 })
 
-export async function PUT(request, { params }) {
+export async function PUT(request, props) {
+  const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
 
@@ -63,7 +64,8 @@ export async function PUT(request, { params }) {
   return NextResponse.json({ success: true, segment: data })
 }
 
-export async function DELETE(request, { params }) {
+export async function DELETE(request, props) {
+  const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
 

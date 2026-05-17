@@ -16,7 +16,8 @@ const AddContactSchema = z.object({
 
 // POST /api/whatsapp/conversations/[id]/add-contact
 // Promotes an unknown WhatsApp sender to a full contact, optionally adds to pipeline
-export async function POST(request, { params }) {
+export async function POST(request, props) {
+  const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
 

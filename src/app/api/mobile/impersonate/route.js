@@ -67,7 +67,7 @@ export async function POST(request) {
     .eq('master_user_id', realMasterId)
     .is('ended_at', null)
 
-  const h = headers()
+  const h = await headers()
   const ip = h.get('x-forwarded-for')?.split(',')[0]?.trim() || null
   const userAgent = h.get('user-agent') || null
 

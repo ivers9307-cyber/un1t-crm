@@ -23,7 +23,8 @@ import NotificationConfigCard from '@/components/settings/NotificationConfigCard
 
 export const dynamic = 'force-dynamic'
 
-export default async function EditLocationPage({ params }) {
+export default async function EditLocationPage(props) {
+  const params = await props.params;
   const user = await getCurrentUser()
   // Master OR owner can edit existing locations. Master sees every
   // location automatically; owners see locations they're members of

@@ -14,7 +14,8 @@ export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
 
-export async function GET(_request, { params }) {
+export async function GET(_request, props) {
+  const params = await props.params;
   const db = createServerClient()
   const { data, error } = await db
     .from('race_events')

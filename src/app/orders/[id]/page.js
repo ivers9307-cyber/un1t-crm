@@ -11,7 +11,8 @@ import OrderDetail from '@/components/OrderDetail'
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
 
-export default async function OrderDetailPage({ params }) {
+export default async function OrderDetailPage(props) {
+  const params = await props.params;
   const user = await getCurrentUser()
   if (!user) redirect('/login')
   if (!MANAGER_ROLES.includes(user.role)) redirect('/')

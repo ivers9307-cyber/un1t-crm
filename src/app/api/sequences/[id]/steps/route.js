@@ -46,7 +46,8 @@ async function loadSequenceLocation(db, sequenceId) {
 }
 
 // GET /api/sequences/[id]/steps
-export async function GET(request, { params }) {
+export async function GET(request, props) {
+  const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
 
@@ -66,7 +67,8 @@ export async function GET(request, { params }) {
 }
 
 // POST /api/sequences/[id]/steps — add a step
-export async function POST(request, { params }) {
+export async function POST(request, props) {
+  const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
 
@@ -121,7 +123,8 @@ export async function POST(request, { params }) {
 }
 
 // PUT /api/sequences/[id]/steps — bulk update step order
-export async function PUT(request, { params }) {
+export async function PUT(request, props) {
+  const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
 

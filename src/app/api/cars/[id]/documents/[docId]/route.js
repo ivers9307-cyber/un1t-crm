@@ -25,7 +25,8 @@ async function loadDocAndCheckAccess(db, user, carId, docId) {
 
 // GET — returns a 1-hour signed URL the browser can use to fetch
 // the file directly from Supabase Storage.
-export async function GET(_request, { params }) {
+export async function GET(_request, props) {
+  const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
   if (!hasPermission(user, 'car_processing')) {
@@ -45,7 +46,8 @@ export async function GET(_request, { params }) {
   return NextResponse.json({ success: true, data: { url: data.signedUrl, filename: doc.filename } })
 }
 
-export async function DELETE(_request, { params }) {
+export async function DELETE(_request, props) {
+  const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
   if (!hasPermission(user, 'car_processing')) {

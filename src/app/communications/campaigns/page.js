@@ -25,7 +25,8 @@ const filters = [
   { key: 'scheduled', label: 'Scheduled' },
 ]
 
-export default async function CampaignsListPage({ searchParams }) {
+export default async function CampaignsListPage(props) {
+  const searchParams = await props.searchParams;
   const user = await getCurrentUser()
   if (!user) redirect('/login')
   if (!hasPermission(user, 'email')) redirect('/communications')

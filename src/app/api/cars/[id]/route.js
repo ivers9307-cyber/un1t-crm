@@ -42,7 +42,8 @@ async function loadCar(db, id) {
   return db.from('cars').select('*, car_documents(*)').eq('id', id).single()
 }
 
-export async function GET(_request, { params }) {
+export async function GET(_request, props) {
+  const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
   if (!hasPermission(user, 'car_processing')) {
@@ -58,7 +59,8 @@ export async function GET(_request, { params }) {
   return NextResponse.json({ success: true, data: car })
 }
 
-export async function PATCH(request, { params }) {
+export async function PATCH(request, props) {
+  const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
   if (!hasPermission(user, 'car_processing')) {
@@ -89,7 +91,8 @@ export async function PATCH(request, { params }) {
   return NextResponse.json({ success: true, data })
 }
 
-export async function DELETE(_request, { params }) {
+export async function DELETE(_request, props) {
+  const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
   if (!hasPermission(user, 'car_processing')) {

@@ -11,7 +11,8 @@ import SMSBroadcastEditor from '@/components/SMSBroadcastEditor'
 
 export const dynamic = 'force-dynamic'
 
-export default async function SmsBroadcastDetailPage({ params }) {
+export default async function SmsBroadcastDetailPage(props) {
+  const params = await props.params;
   const user = await getCurrentUser()
   if (!user) redirect('/login')
   if (!hasPermission(user, 'sms')) redirect('/communications')

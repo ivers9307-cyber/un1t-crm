@@ -5,7 +5,8 @@ import WATemplateEditor from '@/components/WATemplateEditor'
 
 export const dynamic = 'force-dynamic'
 
-export default async function EditWATemplatePage({ params }) {
+export default async function EditWATemplatePage(props) {
+  const params = await props.params;
   const user = await getCurrentUser()
   if (!user) redirect('/login')
 

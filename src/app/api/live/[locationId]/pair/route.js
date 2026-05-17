@@ -22,7 +22,8 @@ export const dynamic = 'force-dynamic'
 
 const ALLOWED_ROLES = ['owner', 'manager', 'head_coach', 'coach']
 
-export async function POST(request, { params }) {
+export async function POST(request, props) {
+  const params = await props.params;
   const user = await getCurrentUser()
   if (!user) {
     return NextResponse.json({ ok: false, error: 'Unauthorised' }, { status: 401 })

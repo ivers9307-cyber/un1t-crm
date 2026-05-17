@@ -16,7 +16,8 @@ async function requireMaster() {
   return user
 }
 
-export async function PATCH(request, { params }) {
+export async function PATCH(request, props) {
+  const params = await props.params;
   const user = await requireMaster()
   if (!user) return NextResponse.json({ ok: false, error: 'Forbidden' }, { status: 403 })
 
@@ -50,7 +51,8 @@ export async function PATCH(request, { params }) {
   return NextResponse.json({ ok: true, rule: data })
 }
 
-export async function DELETE(request, { params }) {
+export async function DELETE(request, props) {
+  const params = await props.params;
   const user = await requireMaster()
   if (!user) return NextResponse.json({ ok: false, error: 'Forbidden' }, { status: 403 })
 

@@ -70,7 +70,8 @@ async function loadRace(db, id) {
     .single()
 }
 
-export async function GET(_request, { params }) {
+export async function GET(_request, props) {
+  const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
   if (!MANAGER_ROLES.includes(user.role)) {
@@ -91,7 +92,8 @@ export async function GET(_request, { params }) {
   return NextResponse.json({ success: true, data })
 }
 
-export async function PUT(request, { params }) {
+export async function PUT(request, props) {
+  const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
   if (!MANAGER_ROLES.includes(user.role)) {
@@ -208,7 +210,8 @@ export async function PUT(request, { params }) {
   return NextResponse.json({ success: true, data: refreshed })
 }
 
-export async function DELETE(_request, { params }) {
+export async function DELETE(_request, props) {
+  const params = await props.params;
   // Soft delete via active=false — preserves race_registrations
   // for historical record.
   const user = await getCurrentUser()

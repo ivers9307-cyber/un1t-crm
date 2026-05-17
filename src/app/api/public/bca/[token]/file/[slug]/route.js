@@ -17,7 +17,8 @@ import { recordBcaDownload, getClientIp } from '@/lib/bca-events'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function GET(request, { params }) {
+export async function GET(request, props) {
+  const params = await props.params;
   if (!/^doc_\d{2}$/.test(params.slug)) {
     return NextResponse.json({ error: 'Invalid slug' }, { status: 400 })
   }

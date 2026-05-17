@@ -28,7 +28,8 @@ export const fetchCache = 'force-no-store'
 
 const DEALS_HARD_LIMIT = 10_000
 
-export default async function PipelinePage({ searchParams }) {
+export default async function PipelinePage(props) {
+  const searchParams = await props.searchParams;
   const user = await getCurrentUser()
   if (!user) redirect('/login')
   const locationId = user.activeLocation?.id

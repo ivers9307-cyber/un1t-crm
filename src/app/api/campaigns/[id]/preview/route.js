@@ -36,7 +36,8 @@ async function computeCount(db, filter, locationId) {
 }
 
 // GET /api/campaigns/[id]/preview — Audience count for the SAVED filter.
-export async function GET(_request, { params }) {
+export async function GET(_request, props) {
+  const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
 
@@ -64,7 +65,8 @@ export async function GET(_request, { params }) {
 // reflected the SAVED filter, not what the operator was looking at.
 // POST lets the editor compute against the live filter so the number
 // is always meaningful, and errors actually surface.
-export async function POST(request, { params }) {
+export async function POST(request, props) {
+  const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
 

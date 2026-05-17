@@ -17,7 +17,8 @@ const ShiftUpdateSchema = z.object({
 })
 
 // PUT /api/schedule/shifts/:id
-export async function PUT(request, { params }) {
+export async function PUT(request, props) {
+  const params = await props.params;
   const user = await getCurrentUser()
   if (!user || !MANAGER_ROLES.includes(user.role)) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
@@ -44,7 +45,8 @@ export async function PUT(request, { params }) {
 }
 
 // DELETE /api/schedule/shifts/:id
-export async function DELETE(request, { params }) {
+export async function DELETE(request, props) {
+  const params = await props.params;
   const user = await getCurrentUser()
   if (!user || !MANAGER_ROLES.includes(user.role)) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })

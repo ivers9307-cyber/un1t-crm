@@ -13,7 +13,8 @@ export const metadata = {
   title: 'Tesla Car Deposit',
 }
 
-export default function DepositReturnPage({ params }) {
+export default async function DepositReturnPage(props) {
+  const params = await props.params;
   // Same component handles 'paid' and 'pending' states uniformly —
   // if the webhook has landed the page renders the receipt; if not,
   // the buyer can re-attempt.

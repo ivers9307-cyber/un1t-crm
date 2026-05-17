@@ -15,6 +15,7 @@ import RaceDisplayBoard from '@/components/RaceDisplayBoard'
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
 
-export default function RaceDisplayPage({ params }) {
+export default async function RaceDisplayPage(props) {
+  const params = await props.params;
   return <RaceDisplayBoard slug={params.slug} />
 }
