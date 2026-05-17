@@ -3,7 +3,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
-import { Users, MapPin, Shield, UserCog, LayoutGrid, FileClock, Trophy, Cable, ChevronRight } from 'lucide-react'
+import { Users, MapPin, Shield, UserCog, LayoutGrid, FileClock, Trophy, Cable, ChevronRight, Bell } from 'lucide-react'
 
 // SETTINGS.3/.4 — reorganized this page:
 //   - Master tools moved to TOP (was mid-page)
@@ -170,6 +170,29 @@ export default async function SettingsPage() {
             </div>
           ))}
         </div>
+      </div>
+
+      {/* NOTIF.3 — Push Notifications registry. Read-only catalogue
+          of every notification type the CRM sends, with who fires it
+          and who receives it. Per-location lead-time config lives on
+          each location's edit page. */}
+      <div className="mb-10">
+        <div className="flex items-center gap-2 mb-4">
+          <Bell size={18} className="text-un1t-light" />
+          <h3 className="text-lg font-semibold">Push Notifications</h3>
+        </div>
+        <Link
+          href="/settings/notifications"
+          className="bg-un1t-dark border border-un1t-gray hover:border-un1t-light rounded-lg p-4 flex items-center justify-between text-sm group transition-colors"
+        >
+          <div>
+            <div className="text-un1t-white">Notification registry</div>
+            <div className="text-xs text-un1t-light mt-0.5">
+              Every notification the CRM sends — who fires it, who receives it, lead-time config per category.
+            </div>
+          </div>
+          <ChevronRight size={16} className="text-un1t-light group-hover:text-un1t-white" />
+        </Link>
       </div>
 
       {/* SETTINGS.3 — Shift Templates / Bank Holidays / Integrations /

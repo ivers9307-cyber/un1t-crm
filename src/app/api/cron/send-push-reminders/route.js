@@ -1,29 +1,27 @@
-// NOTIF.1 — push reminder cron.
+// NOTIF.1 + NOTIF.3 — push reminder cron.
 //
 // Runs every 5 minutes. Scans for tasks and bookings whose due/start
-// time lands in either of two windows:
+// time falls in any of their location's configured lead-time windows
+// (default: 60 min and 1440 min before due, configurable per-location
+// via locations.notification_config — mig 170).
 //
-//   - 1h reminder:   55–65 minutes from now
-//   - 24h reminder:  23h55m–24h05m from now
-//
-// The ±5 min spread is wider than the 5-minute cron tick so we never
-// miss a row sitting on the boundary; the push_reminder_sends ledger
-// (mig 169) guarantees we never double-send.
+// The ±5 min spread around each lead time is wider than the 5-minute
+// cron tick so we never miss a row sitting on the boundary; the
+// push_reminder_sends ledger (mig 169) guarantees we never
+// double-send via UNIQUE (entity, recipient, lead_time_minutes).
 //
 // Routing:
 //   - Tasks (activities WHERE kind='task' AND status IN ('todo',
 //     'in_progress') AND assignee_id IS NOT NULL) → push to the
 //     assignee only, category='tasks'.
-//   - Bookings (status='confirmed', no skip_reminder, no
-//     reminder_sent_at) → push to all owner/manager/head_coach at
-//     the location, category='bookings'.
+//   - Bookings (status='confirmed', no skip_reminder) → push to all
+//     users with the location's configured booking roles
+//     (default owner/manager/head_coach), category='bookings'.
 //
-// Bookings deliberately fan out to a role-set rather than a single
-// staff member because the bookings table has no "assigned coach"
-// column — the staff member who runs the session is determined by
+// Bookings fan out to a role-set rather than a single staff member
+// because the bookings table has no "assigned coach" column — the
+// staff member who runs each session is determined by
 // shift_assignments, which we don't want to denormalise here.
-// "Operator on shift sees what's coming up at their location" is
-// what the operator asked for.
 //
 // Auth: CRON_SECRET bearer, same as every other cron.
 
@@ -33,21 +31,12 @@ import { sendPush } from '@/lib/push'
 import { logInfo, logWarn, logError } from '@/lib/log'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { localToUtc, formatLocalTime } from '@/lib/push-reminders'
+import { getEffectiveConfig } from '@/lib/notification-config'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 const WINDOW_MIN = 5 // ±5 min around each target lead time
-
-// Lead times we fire at. Keep in sync with mig 169 CHECK constraint
-// (lead_time_minutes IN (60, 1440)).
-const LEAD_TIMES = [
-  { minutes: 60,   label: 'in 1 hour' },
-  { minutes: 1440, label: 'tomorrow' },
-]
-
-// Roles that should receive booking reminders at a location.
-const BOOKING_NOTIFY_ROLES = ['owner', 'manager', 'head_coach']
 
 export async function POST(request) { return GET(request) }
 
@@ -59,6 +48,39 @@ export async function GET(request) {
 
   const db = createServerClient()
   const now = new Date()
+  const nowMs = now.getTime()
+
+  // Pull location configs upfront. One round-trip; locations are
+  // few (single-digit) so this is cheap regardless of size.
+  const { data: locations, error: locErr } = await db
+    .from('locations')
+    .select('id, timezone, notification_config')
+
+  if (locErr) {
+    logError('cron-push-reminders', 'location fetch failed', { err: locErr })
+    return NextResponse.json({ ok: false, error: locErr.message }, { status: 500 })
+  }
+
+  // Per-location effective config + the union of all lead times
+  // across all locations (used to bound our DB queries).
+  const locById = new Map()
+  let maxLeadMinutes = 0
+  for (const l of locations || []) {
+    const cfg = getEffectiveConfig(l.notification_config)
+    locById.set(l.id, { tz: l.timezone || 'Europe/Dublin', cfg })
+    for (const cat of ['tasks', 'bookings']) {
+      for (const lt of cfg.categories?.[cat]?.lead_times_minutes || []) {
+        if (lt > maxLeadMinutes) maxLeadMinutes = lt
+      }
+    }
+  }
+
+  // DB-side time window: anything due between now+5min and now+max+5min
+  // could be in *some* location's lead-time window. We refine in JS.
+  const fetchLowerDate = new Date(nowMs - WINDOW_MIN * 60 * 1000)
+  const fetchUpperDate = new Date(nowMs + (maxLeadMinutes + WINDOW_MIN) * 60 * 1000)
+  const fetchLowerDay = fetchLowerDate.toISOString().slice(0, 10)
+  const fetchUpperDay = fetchUpperDate.toISOString().slice(0, 10)
 
   const summary = {
     task_candidates: 0,
@@ -68,89 +90,67 @@ export async function GET(request) {
     booking_candidates: 0,
     booking_pushed: 0,
     booking_skipped_dup: 0,
+    lead_time_buckets: [], // for logging / debugging
   }
 
-  for (const lead of LEAD_TIMES) {
-    const targetMs = now.getTime() + lead.minutes * 60 * 1000
-    const lowerIso = new Date(targetMs - WINDOW_MIN * 60 * 1000).toISOString()
-    const upperIso = new Date(targetMs + WINDOW_MIN * 60 * 1000).toISOString()
+  // -------------------------- TASKS --------------------------
+  try {
+    const { data: tasks, error: tErr } = await db
+      .from('activities')
+      .select('id, subject, assignee_id, location_id, due_date, due_time')
+      .eq('kind', 'task')
+      .in('status', ['todo', 'in_progress'])
+      .not('assignee_id', 'is', null)
+      .not('due_date', 'is', null)
+      .gte('due_date', fetchLowerDay)
+      .lte('due_date', fetchUpperDay)
 
-    // -------------------------- TASKS --------------------------
-    //
-    // activities.due_date (DATE) + due_time (TIME, nullable) →
-    // construct a timestamptz at the LOCATION's timezone. If
-    // due_time is null we treat the task as due at 09:00 local
-    // (matches the implicit assumption in the existing tasks UI
-    // where a date-only task shows at the top of that day).
-    //
-    // We do the date-arithmetic in SQL (Postgres handles tz
-    // conversion correctly) and filter to the window in JS for
-    // clarity. RPC would be cleaner — but for ~9k activity rows
-    // total a single bounded query is fine.
-    try {
-      const { data: tasks, error: tErr } = await db
-        .from('activities')
-        .select(`
-          id, subject, assignee_id, location_id, due_date, due_time,
-          location:locations!inner(timezone)
-        `)
-        .eq('kind', 'task')
-        .in('status', ['todo', 'in_progress'])
-        .not('assignee_id', 'is', null)
-        .not('due_date', 'is', null)
-        .gte('due_date', new Date(targetMs - 36 * 3600 * 1000).toISOString().slice(0, 10))
-        .lte('due_date', new Date(targetMs + 36 * 3600 * 1000).toISOString().slice(0, 10))
+    if (tErr) {
+      logError('cron-push-reminders', 'task fetch failed', { err: tErr })
+    } else {
+      for (const t of tasks || []) {
+        const loc = locById.get(t.location_id)
+        if (!loc) continue
+        const leadTimes = loc.cfg.categories?.tasks?.lead_times_minutes || []
+        if (!leadTimes.length) continue
 
-      if (tErr) {
-        logError('cron-push-reminders', 'task fetch failed', { err: tErr, lead: lead.minutes })
-      } else {
-        const candidates = []
-        for (const t of tasks || []) {
-          const tz = t.location?.timezone || 'Europe/Dublin'
-          const timeStr = t.due_time || '09:00:00'
-          // ISO-like local string → Postgres-style. Convert via
-          // Intl: build a Date that means "this local time in tz".
-          const due = localToUtc(t.due_date, timeStr, tz)
-          if (!due) continue
-          if (due.toISOString() >= lowerIso && due.toISOString() <= upperIso) {
-            candidates.push({ ...t, due_at: due.toISOString() })
-          }
-        }
-        summary.task_candidates += candidates.length
+        const dueUtc = localToUtc(t.due_date, t.due_time || '09:00:00', loc.tz)
+        if (!dueUtc) continue
+        const minutesAway = (dueUtc.getTime() - nowMs) / 60000
 
-        for (const t of candidates) {
-          // Dedup: have we already pushed this lead-time to this assignee?
+        for (const lead of leadTimes) {
+          if (Math.abs(minutesAway - lead) > WINDOW_MIN) continue
+          summary.task_candidates++
+
+          // Per-(task, assignee, lead) dedup.
           const { data: existing } = await db
             .from('push_reminder_sends')
             .select('id')
             .eq('entity_type', 'task')
             .eq('entity_id', t.id)
             .eq('recipient_id', t.assignee_id)
-            .eq('lead_time_minutes', lead.minutes)
+            .eq('lead_time_minutes', lead)
             .maybeSingle()
           if (existing) { summary.task_skipped_dup++; continue }
 
+          const label = leadLabel(lead)
           const result = await sendPush([t.assignee_id], {
-            title: `Task due ${lead.label}`,
+            title: `Task due ${label}`,
             body: t.subject || 'Untitled task',
             category: 'tasks',
-            data: { type: 'task_reminder', task_id: t.id, lead_minutes: lead.minutes },
+            data: { type: 'task_reminder', task_id: t.id, lead_minutes: lead },
           })
 
-          // Even on 0 sent (no device tokens) we still insert the
-          // ledger row so a freshly-installed device doesn't get
-          // a back-blast of stale reminders.
           await db.from('push_reminder_sends').insert({
             entity_type: 'task',
             entity_id: t.id,
             recipient_id: t.assignee_id,
-            lead_time_minutes: lead.minutes,
+            lead_time_minutes: lead,
             push_count: result.sent || 0,
             push_invalidated: result.invalidated || 0,
           }).then(({ error }) => {
-            // ON CONFLICT (uniq) is fine — race with another tick.
             if (error && error.code !== '23505') {
-              logWarn('cron-push-reminders', 'ledger insert failed', { err: error, t: t.id })
+              logWarn('cron-push-reminders', 'task ledger insert failed', { err: error, t: t.id })
             }
           })
 
@@ -158,67 +158,63 @@ export async function GET(request) {
           else summary.task_skipped_no_recipient++
         }
       }
-    } catch (err) {
-      logError('cron-push-reminders', 'task block threw', { err, lead: lead.minutes })
     }
+  } catch (err) {
+    logError('cron-push-reminders', 'task block threw', { err })
+  }
 
-    // -------------------------- BOOKINGS --------------------------
-    //
-    // Same shape, but recipients = role-set at the location. We
-    // dedup per recipient_id in the ledger; the first recipient who
-    // gets the push inserts a row, the rest follow. If two cron
-    // ticks race, the second one's INSERT hits the uniq constraint
-    // and we skip cleanly.
-    try {
-      const { data: bookings, error: bErr } = await db
-        .from('bookings')
-        .select(`
-          id, customer_name, booking_date, start_time, status, location_id, skip_reminder,
-          location:locations!inner(timezone),
-          event_type:event_types(name)
-        `)
-        .eq('status', 'confirmed')
-        .eq('skip_reminder', false)
-        .gte('booking_date', new Date(targetMs - 36 * 3600 * 1000).toISOString().slice(0, 10))
-        .lte('booking_date', new Date(targetMs + 36 * 3600 * 1000).toISOString().slice(0, 10))
+  // -------------------------- BOOKINGS --------------------------
+  try {
+    const { data: bookings, error: bErr } = await db
+      .from('bookings')
+      .select(`
+        id, customer_name, booking_date, start_time, status, location_id, skip_reminder,
+        event_type:event_types(name)
+      `)
+      .eq('status', 'confirmed')
+      .eq('skip_reminder', false)
+      .gte('booking_date', fetchLowerDay)
+      .lte('booking_date', fetchUpperDay)
 
-      if (bErr) {
-        logError('cron-push-reminders', 'booking fetch failed', { err: bErr, lead: lead.minutes })
-      } else {
-        const candidates = []
-        for (const b of bookings || []) {
-          if (!b.location_id || !b.booking_date || !b.start_time) continue
-          const tz = b.location?.timezone || 'Europe/Dublin'
-          const start = localToUtc(b.booking_date, b.start_time, tz)
-          if (!start) continue
-          if (start.toISOString() >= lowerIso && start.toISOString() <= upperIso) {
-            candidates.push({ ...b, start_at: start.toISOString() })
-          }
-        }
-        summary.booking_candidates += candidates.length
+    if (bErr) {
+      logError('cron-push-reminders', 'booking fetch failed', { err: bErr })
+    } else {
+      for (const b of bookings || []) {
+        if (!b.location_id || !b.booking_date || !b.start_time) continue
+        const loc = locById.get(b.location_id)
+        if (!loc) continue
+        const leadTimes = loc.cfg.categories?.bookings?.lead_times_minutes || []
+        if (!leadTimes.length) continue
+        const notifyRoles = loc.cfg.categories?.bookings?.notify_roles || []
+        if (!notifyRoles.length) continue
 
-        for (const b of candidates) {
-          // Resolve recipient set (owner/manager/head_coach at location).
+        const startUtc = localToUtc(b.booking_date, b.start_time, loc.tz)
+        if (!startUtc) continue
+        const minutesAway = (startUtc.getTime() - nowMs) / 60000
+
+        for (const lead of leadTimes) {
+          if (Math.abs(minutesAway - lead) > WINDOW_MIN) continue
+          summary.booking_candidates++
+
+          // Resolve recipient set at this location with the
+          // configured roles.
           const { data: links } = await db
             .from('profile_locations')
             .select('profile_id, profiles!inner(id, role, active)')
             .eq('location_id', b.location_id)
 
           const recipientIds = (links || [])
-            .filter(l => l.profiles?.active && BOOKING_NOTIFY_ROLES.includes(l.profiles.role))
+            .filter(l => l.profiles?.active && notifyRoles.includes(l.profiles.role))
             .map(l => l.profile_id)
-
           if (!recipientIds.length) continue
 
-          // Per-recipient dedup. We fan out individually so a partial
-          // failure (one recipient already sent, others fresh) still
-          // delivers to the fresh ones.
+          // Per-recipient dedup.
           const { data: alreadySent } = await db
             .from('push_reminder_sends')
             .select('recipient_id')
             .eq('entity_type', 'booking')
             .eq('entity_id', b.id)
-            .eq('lead_time_minutes', lead.minutes)
+            .eq('lead_time_minutes', lead)
             .in('recipient_id', recipientIds)
 
           const alreadySetIds = new Set((alreadySent || []).map(r => r.recipient_id))
@@ -227,21 +223,20 @@ export async function GET(request) {
           if (!fresh.length) continue
 
           const eventName = b.event_type?.name || 'booking'
-          const timeLabel = formatLocalTime(b.start_time)
+          const label = leadLabel(lead)
           const result = await sendPush(fresh, {
-            title: `${eventName} ${lead.label}`,
-            body: `${b.customer_name || 'Guest'} · ${timeLabel}`,
+            title: `${eventName} ${label}`,
+            body: `${b.customer_name || 'Guest'} · ${formatLocalTime(b.start_time)}`,
             category: 'bookings',
-            data: { type: 'booking_reminder', booking_id: b.id, lead_minutes: lead.minutes },
+            data: { type: 'booking_reminder', booking_id: b.id, lead_minutes: lead },
           })
 
-          // Insert one ledger row per fresh recipient.
           const rows = fresh.map(rid => ({
             entity_type: 'booking',
             entity_id: b.id,
             recipient_id: rid,
-            lead_time_minutes: lead.minutes,
-            push_count: 1, // approximate — sendPush returns aggregate
+            lead_time_minutes: lead,
+            push_count: 1,
             push_invalidated: 0,
           }))
           await db.from('push_reminder_sends').insert(rows).then(({ error }) => {
@@ -253,12 +248,12 @@ export async function GET(request) {
           if (result.sent > 0) summary.booking_pushed++
         }
       }
-    } catch (err) {
-      logError('cron-push-reminders', 'booking block threw', { err, lead: lead.minutes })
     }
+  } catch (err) {
+    logError('cron-push-reminders', 'booking block threw', { err })
   }
 
-  if (Object.values(summary).some(v => v > 0)) {
+  if (Object.values(summary).some(v => Array.isArray(v) ? v.length > 0 : v > 0)) {
     logInfo('cron-push-reminders', 'tick', summary)
   }
 
@@ -268,5 +263,23 @@ export async function GET(request) {
   return NextResponse.json({ ok: true, ...summary })
 }
 
-// Helpers (localToUtc, formatLocalTime) extracted to
-// @/lib/push-reminders so they're unit-testable.
+// Human-friendly label for a lead-time in minutes. Used as the
+// notification title suffix ("Task due in 1 hour", "Task due
+// tomorrow"). Falls back to a relative string for non-canonical
+// lead times the operator configured ("in 30m", "in 4d").
+function leadLabel(minutes) {
+  if (minutes === 60)   return 'in 1 hour'
+  if (minutes === 1440) return 'tomorrow'
+  if (minutes < 60)     return `in ${minutes}m`
+  if (minutes % 1440 === 0) {
+    const d = minutes / 1440
+    return d === 1 ? 'tomorrow' : `in ${d} days`
+  }
+  if (minutes % 60 === 0) {
+    const h = minutes / 60
+    return `in ${h} hours`
+  }
+  const h = Math.floor(minutes / 60)
+  const m = minutes % 60
+  return `in ${h}h${m}m`
+}

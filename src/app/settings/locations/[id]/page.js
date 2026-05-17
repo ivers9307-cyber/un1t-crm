@@ -11,7 +11,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { redirect, notFound } from 'next/navigation'
 import Link from 'next/link'
-import { ToggleRight, Image as ImageIcon, Clock, CalendarDays, ChevronRight } from 'lucide-react'
+import { ToggleRight, Image as ImageIcon, Clock, CalendarDays, ChevronRight, Bell } from 'lucide-react'
 import { isFeatureEnabledAtLocation } from '@shared/permissions'
 import { canEditLocationFeatures } from '@/lib/staff-access'
 import LocationForm from '@/components/LocationForm'
@@ -19,6 +19,7 @@ import LocationFeatures from '@/components/LocationFeatures'
 import CarDepositSettings from '@/components/CarDepositSettings'
 import BrandingSettings from '@/components/BrandingSettings'
 import LocationIntegrations from '@/components/settings/LocationIntegrations'
+import NotificationConfigCard from '@/components/settings/NotificationConfigCard'
 
 export const dynamic = 'force-dynamic'
 
@@ -136,6 +137,18 @@ export default async function EditLocationPage({ params }) {
             <ChevronRight size={16} className="text-un1t-light group-hover:text-un1t-white" />
           </Link>
         </div>
+      </section>
+
+      {/* Notification config (NOTIF.3) — lead times + booking
+          notify-roles for the send-push-reminders cron. Not
+          credential-bearing so it lives outside the Integrations
+          tab strip; owner + master can edit. */}
+      <section className="mt-10">
+        <div className="flex items-center gap-2 mb-3">
+          <Bell size={16} className="text-un1t-light" />
+          <h3 className="text-lg font-semibold">Push notifications</h3>
+        </div>
+        <NotificationConfigCard locationId={location.id} callerRole={user.role} />
       </section>
 
       {/* Tabbed Integrations — Xero / Glofox / Twilio / UniFi / Sensibo
