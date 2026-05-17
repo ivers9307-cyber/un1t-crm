@@ -21,7 +21,8 @@ import { NextResponse } from 'next/server'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { hasPermission } from '@/lib/permissions'
-import { getBcaConfig, BCA_STORAGE } from '@/lib/bca'
+import { getBcaConfig, BCA_STORAGE, buildBcaDownloadUrl } from '@/lib/bca'
+import { getBcaBaseUrl } from '@/lib/app-url'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -92,12 +93,31 @@ export async function GET(_request, { params }) {
   // for its merged PDF so the operator can re-download what was sent.
   const { data: rows, error: subErr } = await db
     .from('car_bca_submissions')
-    .select('id, email_from, email_to, email_subject, documents, merged_pdf_path, merged_pdf_size, submitted_by, submitted_at, postmark_message_id, postmark_error_code, postmark_error_msg, superseded_at, superseded_by')
+    .select(`
+      id, email_from, email_to, email_subject,
+      documents, merged_pdf_path, merged_pdf_size,
+      submitted_by, submitted_at,
+      postmark_message_id, postmark_error_code, postmark_error_msg,
+      superseded_at, superseded_by,
+      download_token, download_expires_at,
+      delivered_at, delivered_to,
+      first_opened_at, last_opened_at, open_count,
+      first_clicked_at, last_clicked_at, click_count,
+      bounced_at, bounce_type, bounce_description,
+      complaint_at, last_postmark_event_at,
+      first_viewed_at, last_viewed_at, view_count,
+      first_merged_download_at, last_merged_download_at, merged_download_count
+    `)
     .eq('car_id', car.id)
     .order('submitted_at', { ascending: false })
   if (subErr) {
     return NextResponse.json({ success: false, error: `Submissions read failed: ${subErr.message}` }, { status: 500 })
   }
+  // BCA base URL needed for the operator-facing public_download_url.
+  // Wrapped because getBcaBaseUrl() throws on misconfigured deploys;
+  // surfacing as per-row null is more useful than 500ing.
+  let bcaBaseUrl = null
+  try { bcaBaseUrl = getBcaBaseUrl() } catch { bcaBaseUrl = null }
   const submissions = []
   for (const row of rows || []) {
     let mergedSignedUrl = null
@@ -107,7 +127,14 @@ export async function GET(_request, { params }) {
         .createSignedUrl(row.merged_pdf_path, 3600)
       mergedSignedUrl = signed?.signedUrl || null
     }
-    submissions.push({ ...row, merged_pdf_signed_url: mergedSignedUrl })
+    const publicDownloadUrl = row.download_token && bcaBaseUrl
+      ? buildBcaDownloadUrl(row.download_token, bcaBaseUrl)
+      : null
+    submissions.push({
+      ...row,
+      merged_pdf_signed_url: mergedSignedUrl,
+      public_download_url: publicDownloadUrl,
+    })
   }
 
   return NextResponse.json({ success: true, data: { config, staged, submissions } })

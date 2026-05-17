@@ -13,6 +13,7 @@
 // increment_campaign_metric RPC.
 
 import { applyMarketingPreferencesBulk } from './marketing-consent.js'
+import { findBcaSubmissionByMessageId, recordBcaPostmarkEvent } from './bca-events.js'
 
 /**
  * Process a single Postmark webhook payload.
@@ -27,6 +28,24 @@ export async function processPostmarkEvent(db, body) {
     return { ok: false, error: 'missing_message_id' }
   }
   const recordType = body.RecordType
+
+  // BCA submission events ride on the same Postmark webhook firehose
+  // but tagged 'bca-submit'. They never match an email_sends or
+  // campaign_recipients row, so the existing handlers below silently
+  // no-op on them. Route them here first; if the message id maps to
+  // a car_bca_submissions row, handle it and return — the rest of
+  // the switch is for marketing / transactional / campaign events.
+  if (body?.Tag === 'bca-submit') {
+    const bca = await findBcaSubmissionByMessageId(db, messageId)
+    if (bca) {
+      const r = await recordBcaPostmarkEvent(db, bca.id, body)
+      return r.ok ? { ok: true } : { ok: false, error: r.error }
+    }
+    // Tag says bca-submit but no row matches — could be a webhook
+    // for a deleted submission. Fall through to no-op rather than
+    // erroring (the dedup gate has already done its job).
+    return { ok: true }
+  }
 
   try {
     switch (recordType) {

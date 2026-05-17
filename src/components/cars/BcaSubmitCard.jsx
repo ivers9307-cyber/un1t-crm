@@ -24,7 +24,8 @@ import { useEffect, useState, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import {
   FileText, Upload, X, Check, AlertCircle, Send, Loader2, Eye,
-  Download, ChevronDown, ChevronRight,
+  Download, ChevronDown, ChevronRight, Mail, MousePointerClick,
+  Globe, RefreshCw,
 } from 'lucide-react'
 
 export default function BcaSubmitCard({ car }) {
@@ -141,9 +142,10 @@ export default function BcaSubmitCard({ car }) {
   const totalSlots = config.documents.length
   const filledCount = config.documents.filter(d => staged[d.slug]).length
   const allFilled = filledCount === totalSlots
-  const hasActiveSubmission = (submissions || []).some(
+  const activeSubmission = (submissions || []).find(
     s => !s.superseded_at && s.postmark_message_id
-  )
+  ) || null
+  const hasActiveSubmission = !!activeSubmission
   const canSubmit = allFilled && !submitting && !!config.send_from && !!config.send_to
 
   return (
@@ -166,6 +168,15 @@ export default function BcaSubmitCard({ car }) {
         {config.cc && <>{' '}(cc <span className="text-un1t-white font-mono">{config.cc}</span>)</>}
         .
       </p>
+
+      {activeSubmission && (
+        <div className="bg-un1t-gray/20 border border-un1t-gray/40 rounded-md p-2.5 mb-3">
+          <div className="text-[10px] uppercase tracking-wider text-un1t-mid mb-1">
+            Activity on the active submission
+          </div>
+          <BcaMetricStrip row={activeSubmission} />
+        </div>
+      )}
 
       {state.error && (
         <div className="bg-red-500/10 border border-red-500/30 text-red-400 text-xs rounded-md p-2 mb-3 flex items-start gap-2">
@@ -285,6 +296,7 @@ function BcaSubmissionHistory({ submissions, open, onToggle }) {
                   {Array.isArray(s.documents) ? s.documents.length : 0} source doc{(s.documents?.length || 0) === 1 ? '' : 's'}
                 </div>
               )}
+              <BcaMetricStrip row={s} />
               {s.postmark_error_msg && (
                 <div className="text-red-400 mt-1 flex items-start gap-1">
                   <AlertCircle size={11} className="mt-0.5 shrink-0" />
@@ -296,22 +308,136 @@ function BcaSubmissionHistory({ submissions, open, onToggle }) {
                   Postmark id: {s.postmark_message_id}
                 </div>
               )}
-              {s.merged_pdf_signed_url && (
-                <a
-                  href={s.merged_pdf_signed_url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1 mt-2 text-un1t-light hover:text-un1t-white"
-                >
-                  <Download size={11} /> Download merged PDF
-                </a>
-              )}
+              <div className="flex flex-wrap items-center gap-3 mt-2">
+                {s.merged_pdf_signed_url && (
+                  <a
+                    href={s.merged_pdf_signed_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 text-un1t-light hover:text-un1t-white"
+                  >
+                    <Download size={11} /> Download merged PDF
+                  </a>
+                )}
+                {s.public_download_url && (
+                  <a
+                    href={s.public_download_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    title={s.download_expires_at
+                      ? `Public re-download link for BCA — expires ${new Date(s.download_expires_at).toLocaleDateString()}`
+                      : 'Public re-download link for BCA'}
+                    className="inline-flex items-center gap-1 text-un1t-light hover:text-un1t-white"
+                  >
+                    <Eye size={11} /> Public link
+                    {s.download_expires_at && (
+                      <span className="text-[10px] text-un1t-mid">
+                        (exp {new Date(s.download_expires_at).toLocaleDateString()})
+                      </span>
+                    )}
+                  </a>
+                )}
+              </div>
             </li>
           ))}
         </ul>
       )}
     </div>
   )
+}
+
+// Per-row metric strip: email delivery / open / click / bounce / spam
+// (from Postmark webhooks) + link page-views and merged-PDF downloads
+// (from the /api/public/bca tracking redirects). Nothing renders for
+// metric categories with no data — keeps the row tight until BCA
+// actually engages.
+function BcaMetricStrip({ row }) {
+  const chips = []
+
+  if (row.delivered_at) {
+    chips.push({
+      key: 'delivered',
+      Icon: Mail,
+      label: `Delivered ${shortDate(row.delivered_at)}`,
+      cls: 'text-green-400',
+    })
+  }
+  if (row.open_count > 0) {
+    chips.push({
+      key: 'opened',
+      Icon: Eye,
+      label: `Opened ${row.open_count}× · last ${shortDate(row.last_opened_at)}`,
+      cls: 'text-blue-400',
+    })
+  }
+  if (row.click_count > 0) {
+    chips.push({
+      key: 'clicked',
+      Icon: MousePointerClick,
+      label: `Clicked ${row.click_count}×`,
+      cls: 'text-cyan-400',
+    })
+  }
+  if (row.bounced_at) {
+    chips.push({
+      key: 'bounced',
+      Icon: AlertCircle,
+      label: `Bounced (${row.bounce_type || 'unknown'})`,
+      cls: 'text-red-400',
+    })
+  }
+  if (row.complaint_at) {
+    chips.push({
+      key: 'complaint',
+      Icon: AlertCircle,
+      label: 'Spam complaint',
+      cls: 'text-red-400',
+    })
+  }
+  if (row.view_count > 0) {
+    chips.push({
+      key: 'viewed',
+      Icon: Globe,
+      label: `Page viewed ${row.view_count}× · last ${shortDate(row.last_viewed_at)}`,
+      cls: 'text-amber-300',
+    })
+  }
+  if (row.merged_download_count > 0) {
+    chips.push({
+      key: 'merged_dl',
+      Icon: Download,
+      label: `Merged PDF downloaded ${row.merged_download_count}×`,
+      cls: 'text-amber-300',
+    })
+  }
+
+  // Nothing yet (most likely: just-sent, BCA hasn't opened) — render
+  // a small "waiting on activity" hint so the strip doesn't disappear
+  // entirely from the row layout.
+  if (chips.length === 0) {
+    return (
+      <div className="mt-1.5 text-[10px] text-un1t-mid inline-flex items-center gap-1">
+        <RefreshCw size={10} /> No activity yet from BCA.
+      </div>
+    )
+  }
+
+  return (
+    <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1">
+      {chips.map(({ key, Icon, label, cls }) => (
+        <span key={key} className={`inline-flex items-center gap-1 text-[10px] ${cls}`}>
+          <Icon size={10} /> {label}
+        </span>
+      ))}
+    </div>
+  )
+}
+
+function shortDate(iso) {
+  if (!iso) return ''
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return ''
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
 }
 
 function BcaSubmissionStatus({ row }) {

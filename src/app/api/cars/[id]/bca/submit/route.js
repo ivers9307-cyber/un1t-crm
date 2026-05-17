@@ -23,9 +23,13 @@ import { hasPermission } from '@/lib/permissions'
 import {
   getBcaConfig,
   renderBcaTemplate,
+  buildBcaDownloadUrl,
+  appendBcaDownloadFooter,
   BCA_STORAGE,
+  BCA_DOWNLOAD_WINDOW_DAYS,
 } from '@/lib/bca'
 import { mergeAndCompressBcaPack } from '@/lib/bca-merge'
+import { getBcaBaseUrl } from '@/lib/app-url'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -175,9 +179,25 @@ export async function POST(_request, { params }) {
     return NextResponse.json({ success: false, error: `Failed to save merged PDF: ${mergedUploadErr.message}` }, { status: 500 })
   }
 
-  // 8. Render email subject + body templates
+  // 8. Render email subject + body templates, then append the public
+  // re-download link (60-day window per BCA.1 Phase 4 spec). Token
+  // is URL-safe base64, ~190 bits of entropy — infeasible to guess.
+  const downloadToken = crypto.randomBytes(24).toString('base64url')
+  const downloadExpiresAt = new Date(Date.now() + BCA_DOWNLOAD_WINDOW_DAYS * 24 * 3600 * 1000).toISOString()
+  let downloadUrl = null
+  try {
+    // getBcaBaseUrl prefers BCA_BASE_URL (e.g. https://ccfautos.com)
+    // then DEPOSIT_BASE_URL (already CCFA-branded at pay.ccfautos.com
+    // for the existing payment surface) then NEXT_PUBLIC_APP_URL.
+    // Throws on no env set at all — submit still succeeds, just
+    // without the footer.
+    downloadUrl = buildBcaDownloadUrl(downloadToken, getBcaBaseUrl())
+  } catch {
+    downloadUrl = null
+  }
   const subject = renderBcaTemplate(config.subject_template, car)
-  const body = renderBcaTemplate(config.body_template, car)
+  const renderedBody = renderBcaTemplate(config.body_template, car)
+  const body = downloadUrl ? appendBcaDownloadFooter(renderedBody, downloadUrl) : renderedBody
 
   // 9. Build the attachment filename — `BCA_<reg-or-vin>_<short>.pdf`,
   // safe for any email client (alphanumeric + dash + underscore).
@@ -204,6 +224,8 @@ export async function POST(_request, { params }) {
     merged_pdf_path: mergedPath,
     merged_pdf_size: mergedPdf.length,
     submitted_by: user.id,
+    download_token: downloadToken,
+    download_expires_at: downloadExpiresAt,
   }
   // Stash cc on the row even though the schema doesn't have a column
   // for it — append to email_body as the simplest audit shape v1.
@@ -245,8 +267,13 @@ export async function POST(_request, { params }) {
       ContentType: 'application/pdf',
     }],
     MessageStream: 'outbound',
-    TrackOpens: false,
-    TrackLinks: 'None',
+    // Track opens (pixel) + link clicks so the operator sees on the
+    // car detail page whether BCA actually engaged. Postmark fires
+    // a separate webhook per event; the bca-submit-tagged events
+    // get routed by postmark-webhook-processor.js into the
+    // car_bca_submissions metric columns + events table.
+    TrackOpens: true,
+    TrackLinks: 'HtmlAndText',
     Tag: 'bca-submit',
     Metadata: {
       car_id: car.id,

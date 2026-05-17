@@ -60,3 +60,33 @@ export function getDepositBaseUrl() {
   }
   return raw.replace(/\/+$/, '')
 }
+
+/**
+ * Returns the base URL for BCA-recipient-facing pages — the per-
+ * submission re-download page at /bca/<token>. Distinct from the
+ * deposit base so the operator can serve BCA links on a different
+ * (or apex) CCFA-branded domain (e.g. https://ccfautos.com) without
+ * coupling it to the payment subdomain.
+ *
+ * Resolution order:
+ *   1. BCA_BASE_URL env var (production: dedicated BCA domain)
+ *   2. DEPOSIT_BASE_URL fallback (already CCFA-branded — sensible default)
+ *   3. NEXT_PUBLIC_APP_URL final fallback (CRM host)
+ *
+ * Throws if none are set so a misconfigured deploy fails loudly.
+ *
+ * @returns {string} no trailing slash
+ */
+export function getBcaBaseUrl() {
+  const raw =
+    process.env.BCA_BASE_URL ||
+    process.env.DEPOSIT_BASE_URL ||
+    process.env.NEXT_PUBLIC_APP_URL
+  if (!raw) {
+    throw new Error(
+      'No BCA base URL configured. Set BCA_BASE_URL (preferred — e.g. ' +
+      'https://ccfautos.com), or DEPOSIT_BASE_URL, or NEXT_PUBLIC_APP_URL.'
+    )
+  }
+  return raw.replace(/\/+$/, '')
+}
