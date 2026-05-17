@@ -18,11 +18,12 @@
 
 import '../global.css'
 
-import { Stack, SplashScreen } from 'expo-router'
+import { Stack, SplashScreen, useRouter } from 'expo-router'
 import { StatusBar } from 'expo-status-bar'
 import { SafeAreaProvider } from 'react-native-safe-area-context'
 import { GestureHandlerRootView } from 'react-native-gesture-handler'
 import { useEffect } from 'react'
+import * as Notifications from 'expo-notifications'
 import { AuthProvider, useAuth } from '../lib/auth-context'
 
 // Keep the splash screen up until auth bootstrap finishes — avoids a
@@ -40,6 +41,50 @@ function SplashGate() {
   return null
 }
 
+// NOTIF.2 — deep-link the user into the relevant detail screen when
+// they tap a push notification. The payload's `data` object carries
+// `type` ('task_reminder' | 'booking_reminder' | …) and the entity
+// id. We also handle the *cold-start* case via
+// getLastNotificationResponseAsync() — taps that opened the app
+// from killed state fire the listener before the navigation tree is
+// ready, so we replay them once on mount.
+function NotificationRouter() {
+  const router = useRouter()
+  const { session, loading } = useAuth()
+
+  useEffect(() => {
+    if (loading || !session) return
+
+    function handle(response) {
+      const data = response?.notification?.request?.content?.data
+      if (!data) return
+      switch (data.type) {
+        case 'task_reminder':
+          if (data.task_id) router.push(`/tasks/${data.task_id}`)
+          break
+        case 'booking_reminder':
+          if (data.booking_id) router.push(`/bookings/${data.booking_id}`)
+          break
+        default:
+          // Other categories (time_off, swap, contract_issued, etc.)
+          // already have screen-level handlers or no-op deep links.
+          break
+      }
+    }
+
+    // Cold-start: replay the last tap that opened the app.
+    let cancelled = false
+    Notifications.getLastNotificationResponseAsync().then(r => {
+      if (!cancelled && r) handle(r)
+    }).catch(() => { /* best-effort */ })
+
+    const sub = Notifications.addNotificationResponseReceivedListener(handle)
+    return () => { cancelled = true; sub.remove() }
+  }, [router, session, loading])
+
+  return null
+}
+
 export default function RootLayout() {
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
@@ -47,9 +92,12 @@ export default function RootLayout() {
         <AuthProvider>
           <StatusBar style="dark" />
           <SplashGate />
+          <NotificationRouter />
           <Stack screenOptions={{ headerShown: false }}>
             <Stack.Screen name="(auth)" options={{ headerShown: false }} />
             <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+            <Stack.Screen name="tasks" options={{ headerShown: false }} />
+            <Stack.Screen name="bookings" options={{ headerShown: false }} />
           </Stack>
         </AuthProvider>
       </SafeAreaProvider>

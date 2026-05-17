@@ -74,8 +74,10 @@ for (const m of MOBILE_PERMISSIONS) {
 const WEB_ONLY_OK = {
   contacts:       'Searchable contact list lives only on web for now (mobile uses pipeline drill-in).',
   events:         'Booking-link / event-type management is admin-only and rare on mobile.',
-  bookings:       'Bookings list lives in the web sidebar; mobile shows no equivalent.',
-  activities:     'Activity log timeline; mobile surfaces this inside deal detail.',
+  // NOTIF.2 (mig 169): Bookings + Tasks now ship on mobile.
+  //   - bookings  → mobile `bookings` permission (today/tomorrow op view)
+  //   - activities → mobile `tasks` permission (assigned-to-me + complete)
+  // Web still owns creation; mobile is read+complete.
   email:          'Campaign editor is desktop-only.',
   sms:            'SMS broadcasts/sequences/automations + ad-hoc sends from the contact profile are web-only — alpha sender ID is configured per-location in Location Settings (mig 059). No mobile SMS UI by design.',
   settings:       'Staff/branding/billing settings are managed on web.',

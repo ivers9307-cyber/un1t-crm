@@ -13,7 +13,7 @@ export default ({ config }) => ({
   ...config,
   name: 'UN1T CRM',
   slug: 'un1t-crm-mobile',
-  version: '0.1.0',
+  version: '0.1.1',
   orientation: 'portrait',
   icon: './assets/icon.png',
   scheme: 'un1tcrm',

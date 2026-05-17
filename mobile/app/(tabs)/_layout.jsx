@@ -46,6 +46,10 @@ export default function TabsLayout() {
   const showSchedule = canMobile(profile, 'schedule', activeLocation)
   const showPipeline = canMobile(profile, 'pipeline', activeLocation)
   const showWhatsapp = canMobile(profile, 'whatsapp', activeLocation)
+  // NOTIF.2 — Bookings tab. Sits between Schedule and Pipeline in the
+  // bottom bar. Tasks goes under More (less time-sensitive at the front
+  // desk than a customer who's about to walk in).
+  const showBookings = canMobile(profile, 'bookings', activeLocation)
   // Invoices tab: contractor employment_type only. Owners/masters
   // approve from the web; on mobile the tab would just be noise for
   // them. (mig 101)
@@ -98,6 +102,16 @@ export default function TabsLayout() {
           href: showSchedule ? '/(tabs)/schedule' : null,
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="calendar-outline" size={size} color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="bookings"
+        options={{
+          title: 'Bookings',
+          href: showBookings ? '/(tabs)/bookings' : null,
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="calendar-clear-outline" size={size} color={color} />
           ),
         }}
       />

@@ -158,6 +158,15 @@ export const MOBILE_PERMISSIONS = Object.freeze([
   { key: 'schedule',           label: 'Schedule',                 hint: 'View shifts, request time off, swap requests',                 webEquivalent: 'schedule' },
   { key: 'pipeline',           label: 'Pipeline & Deals',         hint: 'Move deals, log calls, see new leads',                          webEquivalent: 'pipeline' },
   { key: 'whatsapp',           label: 'WhatsApp Inbox',           hint: 'Reply to inbound WhatsApp messages on the go',                  webEquivalent: 'whatsapp' },
+  // NOTIF.2: mobile mirror of the web 'activities' feature (Tasks tab).
+  // Different name from the web key because 'tasks' reads better on a
+  // small screen — the parity linter uses webEquivalent='activities'
+  // to match them up.
+  { key: 'tasks',              label: 'Tasks',                    hint: 'View and complete tasks assigned to you',                      webEquivalent: 'activities' },
+  // NOTIF.2: mobile mirror of the web 'bookings' feature. Operator
+  // view — today + tomorrow's bookings at the active location. New
+  // bookings still get created on the web (Calendly hub).
+  { key: 'bookings',           label: 'Bookings (today/tomorrow)', hint: "Operator view of today's and tomorrow's bookings",            webEquivalent: 'bookings' },
   { key: 'time_off',           label: 'Time Off Requests',        hint: 'Submit and view leave requests',                                webEquivalent: 'schedule' },
   { key: 'assistant',          label: 'AI Assistant',             hint: 'Use the in-app assistant from mobile',                          webEquivalent: 'assistant' },
   // Mig 093: door_unlock was promoted to a cross-platform key
@@ -185,6 +194,13 @@ export const MOBILE_PERMISSIONS = Object.freeze([
   // master/owner issues them a contract for signature. Default-on
   // for every role because the prompt-to-sign flow depends on it.
   { key: 'notify_contract_issued',  label: '… Contract issued',    hint: 'Notify when UN1T issues you a contract that needs signing',     mobileOnly: true, isNotify: true },
+  // NOTIF.1: lead-time reminders for tasks + bookings. The
+  // send-push-reminders cron (every 5 min) sends two reminders
+  // per item — one 24h ahead and one 1h ahead. Categories are
+  // 'tasks' and 'bookings' — push.js gates on
+  // permissions.mobile.notify_<category>.
+  { key: 'notify_tasks',            label: '… Task reminders',     hint: 'Notify 24h and 1h before a task is due',                        mobileOnly: true, isNotify: true },
+  { key: 'notify_bookings',         label: '… Booking reminders',  hint: 'Notify 24h and 1h before bookings at your location',            mobileOnly: true, isNotify: true },
 ])
 
 export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
@@ -192,6 +208,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
   // also short-circuits true for master regardless of these values.
   master: {
     schedule: true, pipeline: true, whatsapp: true,
+    tasks: true, bookings: true,
     time_off: true, assistant: true,
     push_notifications: true,
     notify_time_off: true, notify_schedule: true, notify_swap: true,
@@ -199,9 +216,14 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     notify_invoice_approved: true, notify_invoice_declined: true,
     notify_shift_adjusted: true,
     notify_contract_issued: true,
+    notify_tasks: true, notify_bookings: true,
   },
   staff: {
     schedule: true, pipeline: false, whatsapp: false,
+    // Coaches see tasks (they get assigned them) but not booking
+    // reminders by default — those are for the on-shift operator,
+    // surfaced through the manager/head_coach defaults below.
+    tasks: true, bookings: false,
     time_off: true, assistant: false,
     push_notifications: true,
     notify_time_off: true, notify_schedule: true, notify_swap: true,
@@ -209,9 +231,11 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     notify_invoice_approved: true, notify_invoice_declined: true,
     notify_shift_adjusted: true,
     notify_contract_issued: true,
+    notify_tasks: true, notify_bookings: false,
   },
   head_coach: {
     schedule: true, pipeline: true, whatsapp: true,
+    tasks: true, bookings: true,
     time_off: true, assistant: true,
     push_notifications: true,
     notify_time_off: true, notify_schedule: true, notify_swap: true,
@@ -219,9 +243,11 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     notify_invoice_approved: true, notify_invoice_declined: true,
     notify_shift_adjusted: true,
     notify_contract_issued: true,
+    notify_tasks: true, notify_bookings: true,
   },
   manager: {
     schedule: true, pipeline: true, whatsapp: true,
+    tasks: true, bookings: true,
     time_off: true, assistant: true,
     push_notifications: true,
     notify_time_off: true, notify_schedule: true, notify_swap: true,
@@ -229,9 +255,11 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     notify_invoice_approved: true, notify_invoice_declined: true,
     notify_shift_adjusted: true,
     notify_contract_issued: true,
+    notify_tasks: true, notify_bookings: true,
   },
   owner: {
     schedule: true, pipeline: true, whatsapp: true,
+    tasks: true, bookings: true,
     time_off: true, assistant: true,
     push_notifications: true,
     notify_time_off: true, notify_schedule: true, notify_swap: true,
@@ -239,6 +267,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     notify_invoice_approved: true, notify_invoice_declined: true,
     notify_shift_adjusted: true,
     notify_contract_issued: true,
+    notify_tasks: true, notify_bookings: true,
   },
 })
 

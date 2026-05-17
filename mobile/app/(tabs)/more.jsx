@@ -10,6 +10,7 @@ import { View, Text, ScrollView, Pressable, Alert } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { useRouter } from 'expo-router'
 import { useAuth } from '../../lib/auth-context'
+import { canMobile } from '../../lib/permissions'
 
 function Section({ title, children }) {
   return (
@@ -71,6 +72,9 @@ export default function More() {
   // target's, so also check impersonatingFrom (the underlying caller
   // is then implicitly a master).
   const canImpersonate = profile?.role === 'master' || profile?.isMaster || !!impersonatingFrom
+  // NOTIF.2 — Tasks lives in More (less time-sensitive than Bookings,
+  // which is a bottom tab). Gate on the same key the back-end uses.
+  const showTasks = profile && canMobile(profile, 'tasks', activeLocation)
 
   function pickLocation() {
     if (!locations.length) return
@@ -120,6 +124,20 @@ export default function More() {
         />
       </Section>
 
+      {/* NOTIF.2 — Tasks. Surfaces tasks assigned to the signed-in
+          user. Hidden when the user's `tasks` mobile permission is
+          off (admin can disable per-user from StaffForm). */}
+      {showTasks && (
+        <Section title="Work">
+          <Row
+            icon="checkbox-outline"
+            label="Your tasks"
+            onPress={() => router.push('/tasks')}
+            isLast
+          />
+        </Section>
+      )}
+
       {/* Documents — your contracts. Always shown (every staff
           member is potentially a recipient); the screen shows an
           empty-state if none have been issued yet. */}
@@ -159,7 +177,7 @@ export default function More() {
       </Section>
 
       <Text className="text-xs text-un1t-mid text-center mt-4">
-        UN1T CRM mobile · v0.1.0
+        UN1T CRM mobile · v0.1.1
       </Text>
     </ScrollView>
   )
