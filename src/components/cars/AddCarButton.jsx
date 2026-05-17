@@ -29,7 +29,10 @@ export default function AddCarButton({ locationId, liveFxRate = null }) {
     ferry_cost: '',
     import_customs_cost: '',
     nct_cost: '',
-    additional_costs: '',     // 'Commission payout' — see COST_FIELDS
+    // 'Commission payout' (see COST_FIELDS). Standard CCFA payout is
+    // €500 per car so we pre-fill — operator can still clear or edit
+    // before save.
+    additional_costs: '500',
     notes: '',
   })
 
@@ -81,7 +84,7 @@ export default function AddCarButton({ locationId, liveFxRate = null }) {
       ferry_cost: '',
       import_customs_cost: '',
       nct_cost: '',
-      additional_costs: '',
+      additional_costs: '500',  // 'Commission payout' — default
       notes: '',
     })
     router.refresh()
