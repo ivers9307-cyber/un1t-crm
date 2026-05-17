@@ -19,7 +19,6 @@ import { summariseSession, zoneForBpm } from '@/lib/heart-rate'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
-export const revalidate = 0
 
 const RECENT_BPM_WINDOW_MS = 30 * 1000   // moving-avg window for "current"
 const STALE_AFTER_MS = 2 * 60 * 1000     // strap silent for 2min → flag

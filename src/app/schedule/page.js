@@ -4,8 +4,6 @@ import { redirect } from 'next/navigation'
 import ScheduleTabs from '@/components/ScheduleTabs'
 
 export const dynamic = 'force-dynamic'
-export const revalidate = 0
-export const fetchCache = 'force-no-store'
 
 export default async function SchedulePage() {
   const user = await getCurrentUser()

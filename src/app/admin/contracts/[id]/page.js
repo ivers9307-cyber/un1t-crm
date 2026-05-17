@@ -11,7 +11,6 @@ import ContractRevokeButton from '@/components/ContractRevokeButton'
 import ContractPrintButton from '@/components/ContractPrintButton'
 
 export const dynamic = 'force-dynamic'
-export const revalidate = 0
 
 function isOwnerOrMaster(user) {
   return user?.role === 'master' || user?.role === 'owner'

@@ -13,7 +13,6 @@ import { MANAGER_ROLES } from '@/lib/schemas'
 import ImportRollbackButton from '@/components/ImportRollbackButton'
 
 export const dynamic = 'force-dynamic'
-export const revalidate = 0
 
 const ACTION_BADGE = {
   created:     'bg-emerald-500/20 text-emerald-700',

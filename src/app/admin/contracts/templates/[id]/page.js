@@ -8,7 +8,6 @@ import { createServerClient } from '@/lib/supabase'
 import ContractTemplateForm from '@/components/ContractTemplateForm'
 
 export const dynamic = 'force-dynamic'
-export const revalidate = 0
 
 function isOwnerOrMaster(user) {
   return user?.role === 'master' || user?.role === 'owner'

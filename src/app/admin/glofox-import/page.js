@@ -21,7 +21,6 @@ import { createServerClient } from '@/lib/supabase'
 import GlofoxAdminTabs from '@/components/GlofoxAdminTabs'
 
 export const dynamic = 'force-dynamic'
-export const revalidate = 0
 
 export default async function GlofoxImportPage() {
   const user = await getCurrentUser()

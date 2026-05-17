@@ -28,7 +28,6 @@ import { BCA_DOWNLOAD_WINDOW_DAYS } from '@/lib/bca'
 import { recordBcaPageView } from '@/lib/bca-events'
 
 export const dynamic = 'force-dynamic'
-export const revalidate = 0
 
 export async function generateMetadata(props) {
   const params = await props.params;

@@ -12,7 +12,6 @@ export const runtime = 'nodejs'
 // immediately on the public page — Next.js' default caching for
 // route handlers would otherwise hold stale data for a few minutes.
 export const dynamic = 'force-dynamic'
-export const revalidate = 0
 
 export async function GET(_request, props) {
   const params = await props.params;

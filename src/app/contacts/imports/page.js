@@ -11,7 +11,6 @@ import { getCurrentUser } from '@/lib/auth'
 import { MANAGER_ROLES } from '@/lib/schemas'
 
 export const dynamic = 'force-dynamic'
-export const revalidate = 0
 
 export default async function ImportsPage() {
   const user = await getCurrentUser()

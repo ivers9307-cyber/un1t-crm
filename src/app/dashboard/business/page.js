@@ -11,7 +11,6 @@ import {
 } from '@/components/dashboard/Cards'
 
 export const dynamic = 'force-dynamic'
-export const revalidate = 0
 
 export default async function BusinessDashboardPage() {
   const user = await getCurrentUser()

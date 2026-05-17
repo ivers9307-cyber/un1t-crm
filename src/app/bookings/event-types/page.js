@@ -14,8 +14,6 @@ import EventActions from '@/components/EventActions'
 import CalendlyTabs from '@/components/CalendlyTabs'
 
 export const dynamic = 'force-dynamic'
-export const revalidate = 0
-export const fetchCache = 'force-no-store'
 
 async function getEvents(locationId) {
   const db = createServerClient()

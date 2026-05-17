@@ -12,7 +12,6 @@ import { MANAGER_ROLES } from '@/lib/schemas'
 import RaceControlPanel from '@/components/RaceControlPanel'
 
 export const dynamic = 'force-dynamic'
-export const revalidate = 0
 
 export default async function RaceControlPage(props) {
   const params = await props.params;

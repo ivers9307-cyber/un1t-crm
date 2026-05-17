@@ -23,8 +23,6 @@ import KanbanBoard from '@/components/KanbanBoard'
 import PipelineViewSwitcher from '@/components/PipelineViewSwitcher'
 
 export const dynamic = 'force-dynamic'
-export const revalidate = 0
-export const fetchCache = 'force-no-store'
 
 const DEALS_HARD_LIMIT = 10_000
 

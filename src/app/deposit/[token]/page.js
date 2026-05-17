@@ -7,7 +7,10 @@ import CarDepositPage from '@/components/CarDepositPage'
 import { createServerClient } from '@/lib/supabase'
 
 export const dynamicParams = true
-export const revalidate = 0   // status changes between visits — never cache the shell
+// status changes between visits — never cache the shell. Under Next 14
+// this was `revalidate = 0`; the modern equivalent (Next 15+) is
+// `dynamic = 'force-dynamic'`, which makes the intent clearer.
+export const dynamic = 'force-dynamic'
 
 // Per-location favicon + tab title. The car's location_id determines
 // the brand the buyer sees — CCF Autos cars on pay.ccfautos.com

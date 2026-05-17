@@ -17,7 +17,6 @@ import { resolveLandingPreference } from '@shared/permissions'
 import AccountForm from '@/components/AccountForm'
 
 export const dynamic = 'force-dynamic'
-export const revalidate = 0
 
 export default async function AccountPage() {
   const user = await getCurrentUser()

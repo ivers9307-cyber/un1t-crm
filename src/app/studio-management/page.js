@@ -10,7 +10,6 @@ import { hasPermission } from '@/lib/permissions'
 import StudioManagementPanel from '@/components/StudioManagementPanel'
 
 export const dynamic = 'force-dynamic'
-export const revalidate = 0
 
 export default async function StudioManagementPage() {
   const user = await getCurrentUser()

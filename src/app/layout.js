@@ -43,7 +43,7 @@ export const metadata = {
   },
 }
 
-// Explicit viewport — Next 14 ships a sensible default but pinning
+// Explicit viewport — Next.js ships a sensible default but pinning
 // it lets us add `viewportFit: 'cover'` so iOS Safari respects the
 // notch / Dynamic Island and our content uses the full screen
 // instead of leaving the safe-area inset on the sides. Also locks

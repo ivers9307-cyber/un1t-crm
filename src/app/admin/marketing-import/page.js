@@ -10,7 +10,6 @@ import { getCurrentUser } from '@/lib/auth'
 import MarketingPreferencesImportPanel from '@/components/MarketingPreferencesImportPanel'
 
 export const dynamic = 'force-dynamic'
-export const revalidate = 0
 
 export default async function MarketingImportPage() {
   const user = await getCurrentUser()

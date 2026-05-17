@@ -11,7 +11,6 @@ import { MANAGER_ROLES } from '@/lib/schemas'
 import RosterApprovalActions from '@/components/RosterApprovalActions'
 
 export const dynamic = 'force-dynamic'
-export const revalidate = 0
 
 function formatEur(n) {
   if (n == null) return '—'

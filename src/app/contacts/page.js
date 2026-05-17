@@ -6,8 +6,6 @@ import ContactsView from '@/components/ContactsView'
 import ContactsHeaderActions from '@/components/ContactsHeaderActions'
 
 export const dynamic = 'force-dynamic'
-export const revalidate = 0
-export const fetchCache = 'force-no-store'
 
 export default async function ContactsPage(props) {
   const searchParams = await props.searchParams;

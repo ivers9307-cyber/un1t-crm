@@ -14,8 +14,10 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import { Lock, Mail } from 'lucide-react'
 import { createBrowserClient } from '@/lib/supabase'
 
-// useSearchParams wants dynamic rendering; Suspense lets Next 14
-// skip prerender at build time.
+// useSearchParams wants dynamic rendering; the Suspense boundary
+// lets Next.js skip prerender at build time. Still required under
+// React 19 / Next 16 — this is a permanent React pattern, not a
+// version artifact.
 export default function LoginPageWrapper() {
   return (
     <Suspense fallback={<div className="min-h-screen bg-un1t-black" />}>

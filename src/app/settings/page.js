@@ -18,8 +18,6 @@ import { Users, MapPin, Shield, UserCog, LayoutGrid, FileClock, Trophy, Cable, C
 //     card → /settings/staff (searchable + status-filtered list)
 
 export const dynamic = 'force-dynamic'
-export const revalidate = 0
-export const fetchCache = 'force-no-store'
 
 export default async function SettingsPage() {
   const user = await getCurrentUser()

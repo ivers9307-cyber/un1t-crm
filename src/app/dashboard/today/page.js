@@ -22,7 +22,6 @@ import {
 } from '@/components/dashboard/Cards'
 
 export const dynamic = 'force-dynamic'
-export const revalidate = 0
 
 function shiftTime(shift) {
   const start = (shift.start_time_override || shift.shift_templates?.start_time || '').slice(0, 5)

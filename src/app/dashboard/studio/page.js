@@ -12,7 +12,6 @@ import {
 } from '@/components/dashboard/Cards'
 
 export const dynamic = 'force-dynamic'
-export const revalidate = 0
 
 const STATUS_LABEL = {
   new_lead: 'New leads',
