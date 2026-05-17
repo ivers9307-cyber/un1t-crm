@@ -21,7 +21,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
-import { Bell, Clock, Users, User, Mail, Cog, Webhook, ArrowLeft, ChevronRight } from 'lucide-react'
+import { Bell, Clock, Users, User, Mail, Cog, Webhook, ArrowLeft, ChevronRight, ShieldCheck } from 'lucide-react'
 import { NOTIFICATION_REGISTRY } from '@/lib/notifications-registry'
 import { getEffectiveConfig, formatLeadTimes } from '@/lib/notification-config'
 
@@ -84,6 +84,22 @@ export default async function NotificationRegistryPage() {
       <p className="text-sm text-un1t-light mb-6">
         Every push notification the CRM sends. {totalProfiles} active staff member{totalProfiles === 1 ? '' : 's'} can receive notifications, subject to per-user toggles in their profile.
       </p>
+
+      <Link
+        href="/settings/notifications/health"
+        className="bg-un1t-dark border border-un1t-gray hover:border-un1t-light rounded-lg p-4 flex items-center justify-between text-sm group transition-colors mb-6"
+      >
+        <div className="flex items-start gap-3">
+          <ShieldCheck size={16} className="text-un1t-light mt-0.5" />
+          <div>
+            <div className="text-un1t-white">Delivery health</div>
+            <div className="text-xs text-un1t-light mt-0.5">
+              See which staff have the mobile app installed and tokens registered. Send test pushes to verify end-to-end delivery.
+            </div>
+          </div>
+        </div>
+        <ChevronRight size={16} className="text-un1t-light group-hover:text-un1t-white" />
+      </Link>
 
       <div className="space-y-3">
         {NOTIFICATION_REGISTRY.map(n => (
