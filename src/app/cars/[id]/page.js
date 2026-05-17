@@ -21,16 +21,26 @@ export default async function CarDetailPage({ params }) {
   const guard = assertLocationAccess(user, car.location_id)
   if (guard) redirect('/cars')
 
-  // Look up the BCA feature flag for the car's location so CarDetail
-  // can decide whether to render BcaSubmitCard. Full config is fetched
-  // client-side by the card itself — we only need the boolean here so
-  // the card chunk isn't shipped on locations where the feature is off.
-  const { data: locationFeatures } = await db
-    .from('locations')
-    .select('features')
-    .eq('id', car.location_id)
-    .single()
+  // Look up the BCA feature flag for the car's location + whether
+  // there's an active non-error submission for this car. CarDetail
+  // uses the first to decide whether to render BcaSubmitCard at all,
+  // and both feed into completionGaps() so the "Mark completed" gate
+  // refuses without a successful submission when the feature is on.
+  // BcaSubmitCard fetches its own data client-side; these two
+  // booleans are the minimum the server-render needs.
+  const [
+    { data: locationFeatures },
+    { count: activeBcaCount },
+  ] = await Promise.all([
+    db.from('locations').select('features').eq('id', car.location_id).single(),
+    db.from('car_bca_submissions')
+      .select('id', { count: 'exact', head: true })
+      .eq('car_id', car.id)
+      .is('superseded_at', null)
+      .not('postmark_message_id', 'is', null),
+  ])
   const bcaEnabled = locationFeatures?.features?.bca_submit === true
+  const hasActiveBcaSubmission = (activeBcaCount || 0) > 0
 
   return (
     <CarDetail
@@ -38,6 +48,7 @@ export default async function CarDetailPage({ params }) {
       liveFxRate={fx?.rate ?? null}
       fxFetchedAt={fx?.fetched_at ?? null}
       bcaEnabled={bcaEnabled}
+      hasActiveBcaSubmission={hasActiveBcaSubmission}
     />
   )
 }

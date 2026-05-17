@@ -21,12 +21,14 @@
 // staged docs are still there).
 
 import { useEffect, useState, useRef } from 'react'
+import { useRouter } from 'next/navigation'
 import {
   FileText, Upload, X, Check, AlertCircle, Send, Loader2, Eye,
   Download, ChevronDown, ChevronRight,
 } from 'lucide-react'
 
 export default function BcaSubmitCard({ car }) {
+  const router = useRouter()
   const [state, setState] = useState({ loading: true, config: null, staged: {}, submissions: [], error: null })
   const [uploadingSlot, setUploadingSlot] = useState(null)
   const [removingSlot, setRemovingSlot] = useState(null)
@@ -112,6 +114,10 @@ export default function BcaSubmitCard({ car }) {
       })
       setHistoryOpen(true)
       await refresh()
+      // Bump the server-rendered view so completionGaps re-evaluates
+      // with the new active submission and the Mark Completed gate
+      // unblocks without requiring a manual reload.
+      router.refresh()
     } catch (e) {
       setState(s => ({ ...s, error: e.message || 'Network error' }))
     } finally {

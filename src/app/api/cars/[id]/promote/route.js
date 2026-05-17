@@ -46,7 +46,22 @@ export async function POST(request, { params }) {
   if (guard) return guard
 
   if (to === 'completed') {
-    const gaps = completionGaps(car)
+    // BCA gate (Phase 3) — fetch the car's location feature flag + a
+    // boolean for "is there an active non-error BCA submission for
+    // this car". Both default to false so locations without the
+    // feature stay green via completionGaps's defensive defaults.
+    const [{ data: location }, { count: activeBcaCount }] = await Promise.all([
+      db.from('locations').select('features').eq('id', car.location_id).single(),
+      db.from('car_bca_submissions')
+        .select('id', { count: 'exact', head: true })
+        .eq('car_id', car.id)
+        .is('superseded_at', null)
+        .not('postmark_message_id', 'is', null),
+    ])
+    const bcaEnabled = location?.features?.bca_submit === true
+    const hasActiveBcaSubmission = (activeBcaCount || 0) > 0
+
+    const gaps = completionGaps(car, { bcaEnabled, hasActiveBcaSubmission })
     if (gaps.length) {
       return NextResponse.json({
         success: false,

@@ -31,10 +31,23 @@ export const ALL_DOCUMENT_TYPES = Object.freeze([
  * close.
  *
  * @param {{ buyer_name?: string, xero_invoice_id?: string, uk_vat_refund_received?: boolean, car_documents?: {doc_type: string, xero_sent_at?: string}[] }} car
+ * @param {object} [opts]
+ * @param {boolean} [opts.bcaEnabled=false]
+ *   True iff the car's location has features.bca_submit = true.
+ *   When false the BCA gap is never added (pre-BCA-feature behaviour
+ *   is preserved — UN1T locations / pre-Phase-3 callers stay green).
+ * @param {boolean} [opts.hasActiveBcaSubmission=false]
+ *   True iff there's a car_bca_submissions row for this car with
+ *   superseded_at IS NULL AND postmark_message_id IS NOT NULL (i.e.
+ *   the BCA pack was sent successfully and hasn't been replaced).
+ *   Failed submissions (postmark_error_code populated) and in-flight
+ *   ones (no message_id, no error) both fail the gate — the operator
+ *   must resubmit successfully.
  * @returns {string[]}
  */
-export function completionGaps(car) {
+export function completionGaps(car, opts = {}) {
   if (!car) return ['No car data']
+  const { bcaEnabled = false, hasActiveBcaSubmission = false } = opts
   const gaps = []
   if (!car.buyer_name) gaps.push('Buyer details')
   if (!car.xero_invoice_id) gaps.push('Xero customer invoice issued')
@@ -56,6 +69,14 @@ export function completionGaps(car) {
     const anySent = docs.some(d => d.xero_sent_at)
     if (!anySent) gaps.push(`${req.label} — send to Xero`)
   }
+
+  // BCA pack submission (Phase 3 — gate only fires when the feature is
+  // on at this location). Listed last so the upstream gaps still
+  // appear first; the operator typically fixes them in order.
+  if (bcaEnabled && !hasActiveBcaSubmission) {
+    gaps.push('BCA pack submitted to claim UK VAT')
+  }
+
   return gaps
 }
 

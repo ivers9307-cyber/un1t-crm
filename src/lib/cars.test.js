@@ -188,6 +188,32 @@ describe('completionGaps', () => {
     ])
     expect(completionGaps(fullCar({ car_documents: docs }))).toEqual([])
   })
+
+  // BCA gate (Phase 3). Defaults preserve pre-feature behaviour for
+  // every existing caller — only opts.bcaEnabled=true changes anything.
+  describe('BCA gate', () => {
+    it('does not add the BCA gap when the feature is off (default)', () => {
+      expect(completionGaps(fullCar())).toEqual([])
+      // Even if hasActiveBcaSubmission is also false, the gap stays
+      // absent because bcaEnabled defaults to false.
+      expect(completionGaps(fullCar(), { hasActiveBcaSubmission: false })).toEqual([])
+    })
+    it('adds the BCA gap when bcaEnabled=true and no active submission', () => {
+      const gaps = completionGaps(fullCar(), { bcaEnabled: true, hasActiveBcaSubmission: false })
+      expect(gaps).toContain('BCA pack submitted to claim UK VAT')
+    })
+    it('clears the BCA gap when there is an active submission', () => {
+      expect(completionGaps(fullCar(), { bcaEnabled: true, hasActiveBcaSubmission: true })).toEqual([])
+    })
+    it('appends BCA after the other gaps so the operator fixes upstream items first', () => {
+      const gaps = completionGaps(fullCar({ buyer_name: null }), {
+        bcaEnabled: true,
+        hasActiveBcaSubmission: false,
+      })
+      expect(gaps[0]).toBe('Buyer details')
+      expect(gaps[gaps.length - 1]).toBe('BCA pack submitted to claim UK VAT')
+    })
+  })
 })
 
 describe('computeReportMetrics', () => {

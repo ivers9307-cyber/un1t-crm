@@ -32,7 +32,13 @@ const NotesCard = dynamic(() => import('./NotesCard'), { ssr: true })
 // UN1T locations never ship the chunk.
 const BcaSubmitCard = dynamic(() => import('./BcaSubmitCard'), { ssr: true })
 
-export default function CarDetail({ car: initialCar, liveFxRate = null, fxFetchedAt = null, bcaEnabled = false }) {
+export default function CarDetail({
+  car: initialCar,
+  liveFxRate = null,
+  fxFetchedAt = null,
+  bcaEnabled = false,
+  hasActiveBcaSubmission = false,
+}) {
   const [car, setCar] = useState(initialCar)
   const router = useRouter()
   const [error, setError] = useState(null)
@@ -76,7 +82,12 @@ export default function CarDetail({ car: initialCar, liveFxRate = null, fxFetche
     router.push('/cars')
   }
 
-  const gaps = completionGaps(car)
+  // BCA gate (Phase 3) flows through opts so legacy locations stay
+  // green via completionGaps's defaults. hasActiveBcaSubmission is
+  // server-side rendered for the initial paint — when the operator
+  // submits via BcaSubmitCard the page hits router.refresh() (via
+  // the post-promote / post-patch path) which re-evaluates this.
+  const gaps = completionGaps(car, { bcaEnabled, hasActiveBcaSubmission })
 
   return (
     <div className="max-w-3xl">
