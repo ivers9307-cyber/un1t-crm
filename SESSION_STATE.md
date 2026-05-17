@@ -1,38 +1,33 @@
 # Session State — May 17, 2026
 
 One-screen "state of the world" so a fresh chat can orient in 30 seconds.
-For depth, see [CLAUDE.md](./CLAUDE.md) — Done log entries #161–172 and the new lesson at the top of "Lessons learned".
+For depth, see [CLAUDE.md](./CLAUDE.md) — Done log entries #161–173 and the new lesson at the top of "Lessons learned".
 
 ## Today's headline
 
-Shipped the **end-to-end push notification system** (NOTIF.1–10) and caught **one silent production bug** in the pre-onboarding audit: supabase-js builder `.catch()` was a no-op for ~4 days, 728 Postmark Open + Click webhook events stranded. Fix shipped in HOTFIX #172.
-
-## What just deployed (last hour)
-
-- **HOTFIX**: `try { await db.rpc(...) } catch {}` across 7 sites in `postmark-webhook-processor.js`, `sequences/scheduler.js`, `sequences/steps.js`. Three files committed in the latest push.
-
-## Manual recovery — DO IF NOT YET DONE
-
-Run in Supabase SQL editor once Vercel finishes deploying (check `/api/cron/health-check` returns 200, or just wait 3 min):
-
-```sql
--- 1. Re-arm the 728 stuck Postmark webhooks under the fix
-UPDATE postmark_webhook_queue
-SET attempts = 0, error = NULL
-WHERE processed_at IS NULL AND attempts >= 5;
-
--- 2. Watch them drain (should fall to 0 in ~8 min)
-SELECT COUNT(*) FROM postmark_webhook_queue WHERE processed_at IS NULL;
-
--- 3. After drain, refresh open/click rollups on recent campaigns
-SELECT recalculate_campaign_stats(id) FROM campaigns
-WHERE created_at > NOW() - INTERVAL '14 days';
-```
+HOTFIX #172 (supabase-js builder `.catch()` bug) **verified live in production** — recovery had already run before this session: the 728 stranded Postmark Open + Click events drained cleanly at 18:00 UTC under the new code path, zero errors, all 15 cron heartbeats fresh. Now picking up the smallest open backlog item — extending `hasAnyMobileFeature` to honour cross-platform `dashboard_*` keys so master at a partial-features location doesn't see the wrong empty-state on mobile Home.
 
 ## What's in flight, not done
 
 - **TestFlight 0.1.1 (5)** sitting in Apple review. Click "Remove from Review" on the ASC build page → internal testers can install → device tokens get registered → the no-token gap closes naturally. Until then, **most staff can't receive pushes** because they don't have the app.
 - Once testers install, the Bookings tab + Tasks-under-More + push-tap deep-link + back-buttons-everywhere all become testable end-to-end.
+
+## Recovery — confirmed done (May 17, 21:00 UTC)
+
+| Check | Result |
+|---|---|
+| `postmark_webhook_queue` stuck rows (attempts >= 5) | 0 |
+| `postmark_webhook_queue` total unprocessed | 0 |
+| Rows with errors anywhere | 0 |
+| Cron heartbeats stale | 0 of 15 |
+| Most recent processed rows (10) | all `attempts=0`, `outcome=ok` (Open + Delivery flowing clean) |
+| `recalculate_campaign_stats` re-run on May-13 "15 mins?" campaign | No counter shift — rollups were already current after the drain |
+
+**Side note:** the "15 mins?" campaign shows 964 delivered / 2,970 sent — 32%. Not a `.catch` artifact (Delivery events were unaffected by that bug). Owner plans to analyse this from a fresh marketing push later this week.
+
+## Now picking up
+
+**`hasAnyMobileFeature` cross-platform dashboard gate** — the only open Permissions backlog item. Bug: `hasAnyMobileFeature(profile, activeLocation)` in `mobile/lib/permissions.js` only iterates `MOBILE_PERMISSION_KEYS` (the `.mobile.*` namespaced keys). It does NOT consider the cross-platform `dashboard_personal` / `dashboard_studio` / `dashboard_business` keys, which live at the top level of the per-location permissions blob. Failure scenario: a master at a location where every `.mobile.*` key is off but `dashboard_personal` is on sees the "Mobile features off — ask an admin" empty-state on Home, instead of the personal dashboard they're entitled to. Fix: also walk `CROSS_PLATFORM_DASHBOARD_KEYS` through `canDashboard` and OR the result. Small, low-risk, one helper + one test.
 
 ## Live state of the world
 
@@ -64,8 +59,14 @@ End-to-end:
 
 ## Backlog status
 
-**Empty.** All earlier backlog items shipped this session. Next-shaped concerns:
-- Watch the `push_reminder_sends` ledger grow as TestFlight rolls out. If it stays flat after staff install, something's filtering too aggressively.
-- Per-user notification overrides on `permissions.mobile.notify_<category>` already exist via StaffForm — confirm at least one user has flipped one before assuming the path works.
-- Per-location notification config defaults to `60min + 24h` for both categories. Stillorgan currently has `notify_roles=[owner,manager,head_coach,staff]` (operator-set). Other locations are on built-in defaults.
-- Cron route `pipeline-classify` is still a low-traffic surface — only 4 active locations, runs nightly. Was missing a heartbeat seed + had a wrong call signature; both fixed in #169 audit follow-up.
+**Near-empty.** Surviving items:
+- ~~Extend `MOBILE_PERMISSION_KEYS` iteration in `hasAnyMobileFeature` to also evaluate cross-platform `dashboard_*` keys~~ — **in progress this session**.
+- New sequence trigger: `segment_added` / `segment_removed` so saved segments can drive sequence enrolment.
+- React Server Components audit pass #2 — components touched after the first audit may have re-introduced `'use client'` unnecessarily.
+- Next.js 14 → 16 upgrade (focused PR, two majors — async params, async `headers()`/`cookies()`, `next/image` defaults). Closes outstanding `npm audit` advisories.
+- Multi-brand middleware factoring (third brand becomes a config row, not new code).
+
+Next-shaped concerns to watch as TestFlight rolls out:
+- `push_reminder_sends` ledger growth — if it stays flat after staff install, something's filtering too aggressively.
+- Per-user notification overrides — confirm at least one user has flipped one before assuming the path works.
+- The May-13 campaign's 32% delivery rate, to be analysed against the next fresh push.

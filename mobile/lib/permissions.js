@@ -28,6 +28,7 @@
 
 import {
   MOBILE_PERMISSION_KEYS,
+  CROSS_PLATFORM_DASHBOARD_KEYS,
   DEFAULT_MOBILE_PERMISSIONS_BY_ROLE, DEFAULT_WEB_PERMISSIONS_BY_ROLE,
   resolvePermission,
 } from '../../shared/permissions'
@@ -63,14 +64,36 @@ export function canMobile(profile, key, activeLocation = null) {
 }
 
 /**
- * Returns true if any mobile feature is enabled at the user's active
- * location. Used to decide whether to show the empty-state "ask an
- * admin" nudge on Home. Walks every defined mobile key through
- * canMobile so any tier-2 / tier-3 override is honoured.
+ * Returns true if any mobile-visible feature is enabled at the
+ * user's active location. Used to decide whether to show the
+ * empty-state "ask an admin" nudge on Home.
+ *
+ * Walks two key spaces:
+ *
+ *   1. The mobile-namespaced keys (.mobile.<key> in the assignment
+ *      blob) via canMobile — anything that controls a bottom-tab
+ *      or sub-screen on the iOS app.
+ *
+ *   2. The cross-platform dashboard keys (top-level on the
+ *      assignment blob — no .mobile namespace) via canDashboard.
+ *      These are the three dashboard tiers (personal / studio /
+ *      business) that render on the Home tab itself. A master at
+ *      a partial-features location can have every .mobile.* key
+ *      off but still be entitled to at least one dashboard tier —
+ *      in that case Home should render the dashboard, not the
+ *      "mobile features off" empty state.
+ *
+ * Any tier-2 (per-user override) or tier-3 (role default) result
+ * is honoured by the underlying resolver, so this gate flips
+ * exactly when at least one of the user's visible surfaces would
+ * actually render.
  */
 export function hasAnyMobileFeature(profile, activeLocation = null) {
   if (!profile) return false
-  return MOBILE_PERMISSION_KEYS.some(k => canMobile(profile, k, activeLocation))
+  if (MOBILE_PERMISSION_KEYS.some(k => canMobile(profile, k, activeLocation))) {
+    return true
+  }
+  return CROSS_PLATFORM_DASHBOARD_KEYS.some(k => canDashboard(profile, k, activeLocation))
 }
 
 /**
