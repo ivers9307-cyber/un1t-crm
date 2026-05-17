@@ -1,14 +1,23 @@
+// /settings/locations/[id] — per-location edit page.
+//
+// SETTINGS.1 reorganized this page: every credential-bearing
+// integration (Xero / Glofox / UniFi / Sensibo / BCA Submit) now
+// lives in a tabbed "Integrations" section at the bottom. The
+// LocationForm above only owns location identity + Twilio alpha +
+// contractor budget. Features matrix + Branding + Car Deposit are
+// unchanged, sitting between LocationForm and Integrations.
+
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { redirect, notFound } from 'next/navigation'
-import Link from 'next/link'
-import { ToggleRight, Image as ImageIcon, FileCheck, ChevronRight } from 'lucide-react'
+import { ToggleRight, Image as ImageIcon } from 'lucide-react'
 import { isFeatureEnabledAtLocation } from '@shared/permissions'
 import { canEditLocationFeatures } from '@/lib/staff-access'
 import LocationForm from '@/components/LocationForm'
 import LocationFeatures from '@/components/LocationFeatures'
 import CarDepositSettings from '@/components/CarDepositSettings'
 import BrandingSettings from '@/components/BrandingSettings'
+import LocationIntegrations from '@/components/settings/LocationIntegrations'
 
 export const dynamic = 'force-dynamic'
 
@@ -23,23 +32,39 @@ export default async function EditLocationPage({ params }) {
   const [{ data: location }, { data: organizations }] = await Promise.all([
     db.from('locations').select('*').eq('id', params.id).single(),
     // Orgs powers the read-only org display in LocationForm (mig 079).
-    // Fetched even on edit so the form can resolve organization_id → name.
     db.from('organizations').select('*').eq('active', true).order('name'),
   ])
 
   if (!location) notFound()
 
+  // Pull the Xero connection row (if any) and a sample car for the
+  // BCA template preview. Both feed into LocationIntegrations.
+  const [{ data: xeroConnection }, { data: sampleBcaCar }] = await Promise.all([
+    db.from('xero_connections')
+      .select('location_id, tenant_id, tenant_name, tenant_type, connected_at, last_refreshed_at, expires_at, scopes, bills_email_address')
+      .eq('location_id', location.id)
+      .maybeSingle(),
+    location.features?.bca_submit === true
+      ? db.from('cars')
+          .select('uk_reg, irish_reg, vin, make, model, vehicle_year, buyer_name, buyer_email, xero_invoice_number')
+          .eq('location_id', location.id)
+          .in('status', ['pending', 'completed'])
+          .order('updated_at', { ascending: false })
+          .limit(1)
+          .maybeSingle()
+      : Promise.resolve({ data: null }),
+  ])
+
   return (
-    <div className="p-8 max-w-2xl">
+    <div className="p-8 max-w-3xl">
       <h2 className="text-2xl font-bold mb-1">Edit Location</h2>
       <p className="text-sm text-un1t-light mb-6">Update {location.name} details and integrations</p>
+
       <LocationForm location={location} callerRole={user.role} organizations={organizations || []} />
 
-      {/* Features matrix is master-only. Owners can still edit
-          their location's name / address / branding / UniFi config
-          via LocationForm above; only the per-location feature
-          toggles are restricted. canEditLocationFeatures() is the
-          canonical check (`@/lib/staff-access`). */}
+      {/* Features matrix — master only. Hides for owners (RLS would
+          allow it but per the audit it's a master-only knob since
+          features affect every operator at the location). */}
       {canEditLocationFeatures(user) && (
         <section className="mt-10">
           <div className="flex items-center gap-2 mb-3">
@@ -50,13 +75,9 @@ export default async function EditLocationPage({ params }) {
         </section>
       )}
 
-      {/* Per-location branding (logo + favicon + company name).
-          Drives the favicon and tab title on this location's
-          buyer-facing surfaces — the deposit page on
-          pay.ccfautos.com pulls the car's location's branding so
-          CCF Autos buyers see CCF Autos branding while UN1T's
-          gym-side pages still get UN1T's. Same access gate as the
-          rest of the page (master OR owner-at-this-location). */}
+      {/* Branding — logo + favicon + company name. Drives buyer-
+          facing surfaces (deposit page, BCA download page, etc).
+          Same access gate as the rest of the page. */}
       <section className="mt-10">
         <div className="flex items-center gap-2 mb-3">
           <ImageIcon size={16} className="text-un1t-light" />
@@ -65,40 +86,23 @@ export default async function EditLocationPage({ params }) {
         <BrandingSettings user={user} locationId={location.id} />
       </section>
 
-      {/* Car deposit settings are only relevant when this location
-          has the Car Processing feature enabled. Hides the section
-          for gym-only locations so the page doesn't carry settings
-          that would never apply. Toggling Car Processing back on
-          restores the section without a refresh (LocationFeatures
-          calls router.refresh() after save). */}
+      {/* Car deposit settings — operational config (default amount,
+          terms, WhatsApp template) for the car-processing flow. Stays
+          out of Integrations because it's not credential-bearing. */}
       {isFeatureEnabledAtLocation(location, 'car_processing') && (
         <CarDepositSettings location={location} />
       )}
 
-      {/* BCA Submit settings — only when the bca_submit feature flag
-          is explicitly on (opt-in per location; CCFA is the only one
-          today). Links out to a dedicated sub-page because the config
-          surface is substantial (emails, templates, 10 doc labels). */}
-      {location.features?.bca_submit === true && canEditLocationFeatures(user) && (
-        <section className="mt-10">
-          <div className="flex items-center gap-2 mb-3">
-            <FileCheck size={16} className="text-un1t-light" />
-            <h3 className="text-lg font-semibold">BCA Submit</h3>
-          </div>
-          <Link
-            href={`/settings/locations/${location.id}/bca`}
-            className="bg-un1t-dark border border-un1t-gray hover:border-un1t-light rounded-lg p-4 flex items-center justify-between text-sm group transition-colors"
-          >
-            <div>
-              <div className="text-un1t-white">Edit document labels + email config</div>
-              <div className="text-xs text-un1t-light mt-0.5">
-                10-doc UK VAT claim pack — send-from / send-to / subject / body / slot labels
-              </div>
-            </div>
-            <ChevronRight size={16} className="text-un1t-light group-hover:text-un1t-white" />
-          </Link>
-        </section>
-      )}
+      {/* Tabbed Integrations — Xero / Glofox / UniFi / Sensibo / BCA.
+          Each tab visible only when its feature is on at this
+          location. Tab strip uses ?tab= query param for shareable
+          URLs. */}
+      <LocationIntegrations
+        location={location}
+        xeroConnection={xeroConnection || null}
+        user={user}
+        sampleBcaCar={sampleBcaCar || null}
+      />
     </div>
   )
 }
