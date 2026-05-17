@@ -116,7 +116,11 @@ export default function PasswordOverrideModal({
             <KeyRound size={16} /> Override password
           </h3>
           {!newPassword && (
-            <button onClick={onClose} className="text-un1t-light hover:text-un1t-white">
+            <button
+              type="button"
+              onClick={onClose}
+              className="text-un1t-light hover:text-un1t-white"
+            >
               <X size={16} />
             </button>
           )}
@@ -136,6 +140,7 @@ export default function PasswordOverrideModal({
               ].map(({ key, label, Icon }) => (
                 <button
                   key={key}
+                  type="button"
                   onClick={() => setMode(key)}
                   className={`inline-flex items-center gap-1.5 text-xs px-3 py-1.5 ${
                     mode === key ? 'bg-un1t-gray text-un1t-white' : 'text-un1t-light hover:bg-un1t-gray/30'
@@ -183,12 +188,14 @@ export default function PasswordOverrideModal({
 
             <div className="flex justify-end gap-2">
               <button
+                type="button"
                 onClick={onClose}
                 className="text-sm text-un1t-light hover:text-un1t-white px-3 py-1.5 rounded-md"
               >
                 Cancel
               </button>
               <button
+                type="button"
                 onClick={submit}
                 disabled={busy || (mode === 'manual' && manualPassword.length < 12)}
                 className="text-sm bg-un1t-white text-un1t-black font-medium px-4 py-1.5 rounded-md hover:bg-un1t-accent disabled:opacity-50"
@@ -213,6 +220,7 @@ export default function PasswordOverrideModal({
                 {newPassword}
               </code>
               <button
+                type="button"
                 onClick={copyPassword}
                 className="shrink-0 inline-flex items-center gap-1 text-xs text-un1t-light hover:text-un1t-white px-2 py-1 rounded border border-un1t-gray"
               >
@@ -231,6 +239,7 @@ export default function PasswordOverrideModal({
 
             <div className="flex justify-end">
               <button
+                type="button"
                 onClick={onClose}
                 className="text-sm bg-un1t-white text-un1t-black font-medium px-4 py-1.5 rounded-md hover:bg-un1t-accent"
               >
