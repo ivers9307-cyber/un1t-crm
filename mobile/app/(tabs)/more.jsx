@@ -177,7 +177,7 @@ export default function More() {
       </Section>
 
       <Text className="text-xs text-un1t-mid text-center mt-4">
-        UN1T CRM mobile · v0.1.1
+        CF Studio · v1.0.0
       </Text>
     </ScrollView>
   )

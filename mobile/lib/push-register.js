@@ -6,7 +6,7 @@
 //
 // On iOS, requesting permission shows the system "Allow Notifications?"
 // modal the first time. If the user declines, we silently exit — they
-// can re-enable later from iOS Settings → UN1T CRM → Notifications.
+// can re-enable later from iOS Settings → CF Studio → Notifications.
 //
 // In Expo Go (dev), the token is an Expo-channel token; in a custom
 // build with Apple Developer credentials, it's an APNs-backed Expo

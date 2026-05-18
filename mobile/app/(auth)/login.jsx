@@ -47,7 +47,7 @@ export default function Login() {
       >
         <View className="flex-1 px-6 justify-center">
           {/* Large title — iOS-native feeling */}
-          <Text className="text-3xl font-bold text-un1t-white mb-1">UN1T CRM</Text>
+          <Text className="text-3xl font-bold text-un1t-white mb-1">CF Studio</Text>
           <Text className="text-base text-un1t-light mb-10">Sign in to continue</Text>
 
           {error ? (
