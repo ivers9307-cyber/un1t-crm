@@ -127,7 +127,7 @@ function flattenBlocksToShifts(blocks) {
   return rows
 }
 
-export default function ScheduleCalendar({ user, onRangeChange }) {
+export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) {
   const [weekStart, setWeekStart] = useState(() => getMonday(new Date()))
   const [monthStart, setMonthStart] = useState(() => getMonthStart(new Date()))
   const [viewType, setViewType] = useState('week')
@@ -224,7 +224,7 @@ export default function ScheduleCalendar({ user, onRangeChange }) {
         message: j.warnings.length > 0 ? `${message}. ${j.warnings.join('. ')}` : message,
       })
       exitSelectMode()
-      await fetchData()
+      await refreshAfterMutation()
     } catch (e) {
       setBulkToast({ kind: 'error', message: e.message || 'Bulk assign failed' })
     } finally {
@@ -265,6 +265,20 @@ export default function ScheduleCalendar({ user, onRangeChange }) {
     setHolidays(holidaysRes.data || [])
     setLoading(false)
   }, [locationId, viewType, weekStart, monthStart])
+
+  // OVERVIEW-REFRESH.1 — call this from mutation handlers (assign,
+  // unassign, create, delete, bulk-assign, publish, copy-week, etc.)
+  // instead of fetchData() directly. It refetches the calendar AND
+  // bumps the parent's dataVersion counter so StudioOverviewStrip
+  // refetches in lockstep. We deliberately don't put this in fetchData
+  // itself because fetchData also runs on navigation (week / month /
+  // date change) — and the overview strip already refetches on those
+  // via its own `range` dep, so an extra bump there would just cause
+  // a redundant overview fetch.
+  const refreshAfterMutation = useCallback(async () => {
+    await fetchData()
+    onDataChange?.()
+  }, [fetchData, onDataChange])
 
   useEffect(() => { fetchData() }, [fetchData])
 
@@ -310,7 +324,7 @@ export default function ScheduleCalendar({ user, onRangeChange }) {
         alert('Assigned with warning:\n\n' + data.warnings.join('\n'))
       }
       setAssignTarget(null)
-      fetchData()
+      refreshAfterMutation()
     } else {
       alert(data.error || 'Failed to assign coach')
     }
@@ -335,7 +349,7 @@ export default function ScheduleCalendar({ user, onRangeChange }) {
     })
     const data = await res.json()
     if (data.success) {
-      await fetchData()
+      await refreshAfterMutation()
       // Re-pull the latest block from the freshly-fetched list so
       // the modal shows the updated override values without the
       // operator having to close and reopen.
@@ -376,7 +390,7 @@ export default function ScheduleCalendar({ user, onRangeChange }) {
     const data = await res.json()
     if (data.success) {
       setCreateTarget(null)
-      fetchData()
+      refreshAfterMutation()
     } else {
       alert(data.error || 'Failed to add slot')
     }
@@ -434,7 +448,7 @@ export default function ScheduleCalendar({ user, onRangeChange }) {
         })
       }
       setPublishModal(null)
-      fetchData()
+      refreshAfterMutation()
       return data.needs_approval
         ? { needsApproval: true }
         : { published: true, impact: data.impact }
@@ -461,7 +475,7 @@ export default function ScheduleCalendar({ user, onRangeChange }) {
     })
     const data = await res.json()
     setCopying(false)
-    if (data.success) fetchData()
+    if (data.success) refreshAfterMutation()
     else alert(data.error || 'Failed to copy week')
   }
 
@@ -486,7 +500,7 @@ export default function ScheduleCalendar({ user, onRangeChange }) {
       if (skipped > 0) {
         alert(`Copied ${data.copied} shifts. ${skipped} skipped (day-of-month doesn't exist in target — usually Jan 31 → Feb).`)
       }
-      fetchData()
+      refreshAfterMutation()
     } else {
       alert(data.error || 'Failed to copy month')
     }
@@ -1037,7 +1051,7 @@ export default function ScheduleCalendar({ user, onRangeChange }) {
             if (!confirm('Remove this coach from the shift?')) return
             const res = await fetch(`/api/schedule/assignments/${assignmentId}`, { method: 'DELETE' })
             const data = await res.json()
-            if (data.success) await fetchData()
+            if (data.success) await refreshAfterMutation()
             else alert(data.error || 'Failed to remove')
           }}
           onPartialSave={handlePartialSave}
@@ -1045,7 +1059,7 @@ export default function ScheduleCalendar({ user, onRangeChange }) {
             if (!confirm('Delete this entire shift slot? Any assigned coaches are removed too.')) return
             const res = await fetch(`/api/schedule/blocks/${blockDetail.id}`, { method: 'DELETE' })
             const data = await res.json()
-            if (data.success) { setBlockDetail(null); fetchData() }
+            if (data.success) { setBlockDetail(null); refreshAfterMutation() }
             else alert(data.error || 'Failed to delete')
           }}
           onSwapRequest={(myAssignmentId) => {
