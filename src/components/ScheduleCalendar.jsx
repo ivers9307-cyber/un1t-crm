@@ -21,6 +21,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { ChevronLeft, ChevronRight, Copy, Send, Plus, Users, User, Clock, X, ArrowLeftRight, CalendarOff, Palmtree, ThermometerSun, Ban, AlertTriangle, AlertCircle, CalendarDays, CalendarRange, Pencil, Check } from 'lucide-react'
 import Link from 'next/link'
+import { useRouter, usePathname, useSearchParams } from 'next/navigation'
 import { computeWeeklyCost } from '@/lib/payroll'
 import { indexByDate } from '@/lib/bank-holidays'
 import { MANAGER_ROLES } from '@/lib/schemas'
@@ -53,6 +54,18 @@ function formatDate(date) {
   const m = String(date.getMonth() + 1).padStart(2, '0')
   const d = String(date.getDate()).padStart(2, '0')
   return `${y}-${m}-${d}`
+}
+
+// Inverse of formatDate — parse a YYYY-MM-DD URL param into a local
+// Date at midnight. Critical for SCHEDULE-PERSIST.1: `new Date('2026-
+// 05-20')` parses as UTC midnight which becomes 01:00 Sunday in BST
+// — the wrong day. We split the string and use the (y, m, d) ctor
+// which is timezone-naive.
+function parseLocalDate(s) {
+  if (typeof s !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(s)) return null
+  const [y, m, d] = s.split('-').map(Number)
+  const dt = new Date(y, m - 1, d)
+  return Number.isNaN(dt.getTime()) ? null : dt
 }
 
 function addDays(date, days) {
@@ -128,9 +141,48 @@ function flattenBlocksToShifts(blocks) {
 }
 
 export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) {
-  const [weekStart, setWeekStart] = useState(() => getMonday(new Date()))
-  const [monthStart, setMonthStart] = useState(() => getMonthStart(new Date()))
-  const [viewType, setViewType] = useState('week')
+  // SCHEDULE-PERSIST.1 — week / month / view persisted in the URL so
+  // refresh keeps the operator's position. Before this, the state
+  // initialised from `new Date()` on every mount, so a page refresh
+  // bounced back to "this week". URL params (`?view=...&week=...&
+  // month=...`) also enable bookmarking and link-sharing — managers
+  // can paste "look at this week's staffing" links to colleagues.
+  //
+  // Reads on mount, writes on every state change via router.replace
+  // (no history entries so back-button doesn't have to undo N week
+  // clicks). Both date params are normalised at parse time —
+  // weekStart snaps to its Monday, monthStart snaps to its first.
+  const router = useRouter()
+  const pathname = usePathname()
+  const searchParams = useSearchParams()
+
+  const [weekStart, setWeekStart] = useState(() => {
+    const parsed = parseLocalDate(searchParams.get('week'))
+    return getMonday(parsed || new Date())
+  })
+  const [monthStart, setMonthStart] = useState(() => {
+    const parsed = parseLocalDate(searchParams.get('month'))
+    return getMonthStart(parsed || new Date())
+  })
+  const [viewType, setViewType] = useState(() => {
+    const v = searchParams.get('view')
+    return v === 'month' || v === 'week' ? v : 'week'
+  })
+
+  // Mirror state → URL whenever the operator navigates / switches
+  // view. Uses window.location.search (not the searchParams hook) to
+  // build off the current URL because including searchParams in the
+  // dep array would re-fire this effect every time `router.replace`
+  // updates the URL, creating a churn loop. window.location.search is
+  // safe inside useEffect (client-only). Preserves any unrelated query
+  // params (defensive — the /schedule route doesn't have any today).
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    params.set('view', viewType)
+    params.set('week', formatDate(weekStart))
+    params.set('month', formatDate(monthStart))
+    router.replace(`${pathname}?${params.toString()}`, { scroll: false })
+  }, [viewType, weekStart, monthStart, pathname, router])
 
   // Mig 125: notify parent (ScheduleTabs) of the visible date range
   // so the StudioOverviewStrip above us can re-fetch its per-day demand
