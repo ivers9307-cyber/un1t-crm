@@ -165,6 +165,73 @@ export default function ScheduleCalendar({ user, onRangeChange }) {
   // remove, etc.). Replaces the cramped inline pencil/X icons.
   const [blockDetail, setBlockDetail] = useState(null) // shift_block row
 
+  // BULK-ASSIGN.1 — multi-select mode for staffing a week's worth
+  // of recurring shifts in one go. Toggle button in the header
+  // flips clicks into selection-toggle behaviour; floating action
+  // bar at the bottom takes a coach + posts /bulk-assign.
+  const [selectMode, setSelectMode] = useState(false)
+  const [selectedBlockIds, setSelectedBlockIds] = useState(new Set())
+  const [bulkAssignBusy, setBulkAssignBusy] = useState(false)
+  const [bulkAssignProfile, setBulkAssignProfile] = useState('')
+  const [bulkToast, setBulkToast] = useState(null) // { kind, message }
+
+  function toggleBlockSelection(blockId) {
+    setSelectedBlockIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(blockId)) next.delete(blockId)
+      else next.add(blockId)
+      return next
+    })
+  }
+
+  function exitSelectMode() {
+    setSelectMode(false)
+    setSelectedBlockIds(new Set())
+    setBulkAssignProfile('')
+  }
+
+  async function bulkAssign() {
+    if (!bulkAssignProfile || selectedBlockIds.size === 0) return
+    setBulkAssignBusy(true)
+    setBulkToast(null)
+    try {
+      const res = await fetch('/api/schedule/blocks/bulk-assign', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          block_ids: [...selectedBlockIds],
+          profile_id: bulkAssignProfile,
+        }),
+      })
+      const j = await res.json()
+      if (!j.success) {
+        setBulkToast({ kind: 'error', message: j.error || 'Bulk assign failed' })
+        return
+      }
+      const parts = [`${j.assigned.length} assigned`]
+      if (j.skipped.length > 0) {
+        // Group skipped by reason for a compact summary.
+        const counts = j.skipped.reduce((acc, s) => {
+          acc[s.reason] = (acc[s.reason] || 0) + 1
+          return acc
+        }, {})
+        const skippedSummary = Object.entries(counts).map(([k, v]) => `${v} ${k.replace(/_/g, ' ')}`).join(', ')
+        parts.push(`${j.skipped.length} skipped (${skippedSummary})`)
+      }
+      const message = parts.join(' · ')
+      setBulkToast({
+        kind: j.warnings.length > 0 ? 'warning' : 'success',
+        message: j.warnings.length > 0 ? `${message}. ${j.warnings.join('. ')}` : message,
+      })
+      exitSelectMode()
+      await fetchData()
+    } catch (e) {
+      setBulkToast({ kind: 'error', message: e.message || 'Bulk assign failed' })
+    } finally {
+      setBulkAssignBusy(false)
+    }
+  }
+
   const locationId = user.activeLocation?.id
   const isManager = canManage(user.role)
   const todayStr = formatDate(new Date())
@@ -496,6 +563,25 @@ export default function ScheduleCalendar({ user, onRangeChange }) {
 
           {isManager && (
             <>
+              {/* BULK-ASSIGN.1 — multi-select mode toggle. Off by
+                  default so single-block edits still work as
+                  before. On entry, the floating action bar at the
+                  bottom of the page takes over until the operator
+                  hits Cancel or Assign. */}
+              <button
+                onClick={() => {
+                  if (selectMode) exitSelectMode()
+                  else setSelectMode(true)
+                }}
+                className={`flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg border transition-colors ${
+                  selectMode
+                    ? 'bg-amber-500/20 border-amber-500/50 text-amber-300'
+                    : 'border-un1t-gray text-un1t-light hover:text-un1t-white hover:border-un1t-white/30'
+                }`}
+                title={selectMode ? 'Exit multi-select' : 'Select multiple shifts to assign a coach in bulk'}
+              >
+                <Check size={14} /> {selectMode ? `Selecting (${selectedBlockIds.size})` : 'Select multiple'}
+              </button>
               <button
                 onClick={viewType === 'month' ? handleCopyMonth : handleCopyWeek}
                 disabled={copying}
@@ -799,13 +885,21 @@ export default function ScheduleCalendar({ user, onRangeChange }) {
                       const blockColor = tmpl.color || '#3B82F6'
                       const atCapacity = count >= max
 
+                      const isSelected = selectedBlockIds.has(block.id)
                       return (
                         <div
                           key={block.id}
-                          onClick={() => setBlockDetail(block)}
-                          className={`rounded-md p-2 text-xs relative group cursor-pointer hover:ring-1 hover:ring-un1t-light/40 ${myAssignment ? 'ring-1 ring-blue-400/50' : ''} ${unstaffed ? 'border border-red-500/50' : ''}`}
+                          onClick={() => {
+                            // BULK-ASSIGN.1 — in select mode, clicks
+                            // toggle selection instead of opening
+                            // the detail modal. The action bar at
+                            // the bottom takes the bulk-assign call.
+                            if (selectMode) toggleBlockSelection(block.id)
+                            else setBlockDetail(block)
+                          }}
+                          className={`rounded-md p-2 text-xs relative group cursor-pointer hover:ring-1 hover:ring-un1t-light/40 ${myAssignment ? 'ring-1 ring-blue-400/50' : ''} ${unstaffed ? 'border border-red-500/50' : ''} ${isSelected ? 'ring-2 ring-amber-400 ring-offset-1 ring-offset-un1t-black' : ''}`}
                           style={{ backgroundColor: unstaffed ? '#7F1D1D20' : blockColor + '20', borderLeft: `3px solid ${unstaffed ? '#EF4444' : blockColor}` }}
-                          title="Click to manage this shift"
+                          title={selectMode ? 'Click to select / deselect' : 'Click to manage this shift'}
                         >
                           <div className="flex items-center justify-between gap-1">
                             <div className="font-semibold truncate" style={{ color: unstaffed ? '#FCA5A5' : 'inherit' }}>
@@ -983,6 +1077,81 @@ export default function ScheduleCalendar({ user, onRangeChange }) {
           onClose={() => setPublishModal(null)}
           publishing={publishing}
         />
+      )}
+
+      {/* BULK-ASSIGN.1 — floating action bar. Appears whenever
+          select mode is on; coach picker becomes active once at
+          least one block is selected. Sits fixed at the bottom of
+          the viewport so the operator can keep clicking blocks to
+          add/remove from the selection without losing the picker.
+          Cancel exits select mode + clears selection. */}
+      {selectMode && (
+        <div className="fixed bottom-0 left-0 right-0 z-40 bg-un1t-dark border-t border-amber-500/50 shadow-2xl shadow-amber-500/10">
+          <div className="max-w-7xl mx-auto px-4 py-3 flex items-center gap-3 flex-wrap">
+            <div className="flex items-center gap-2 text-sm">
+              <Check size={16} className="text-amber-400" />
+              <span className="font-semibold text-un1t-white">
+                {selectedBlockIds.size === 0
+                  ? 'Click shifts on the calendar to select'
+                  : `${selectedBlockIds.size} shift${selectedBlockIds.size === 1 ? '' : 's'} selected`}
+              </span>
+            </div>
+            <div className="flex-1 min-w-[200px]">
+              <select
+                value={bulkAssignProfile}
+                onChange={(e) => setBulkAssignProfile(e.target.value)}
+                disabled={selectedBlockIds.size === 0 || bulkAssignBusy}
+                className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white disabled:opacity-50"
+              >
+                <option value="">— Select a coach —</option>
+                {locationStaff.map((s) => (
+                  <option key={s.id} value={s.id}>{s.full_name}</option>
+                ))}
+              </select>
+            </div>
+            <button
+              type="button"
+              onClick={bulkAssign}
+              disabled={!bulkAssignProfile || selectedBlockIds.size === 0 || bulkAssignBusy}
+              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-md bg-amber-500 text-un1t-black text-sm font-semibold hover:bg-amber-400 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {bulkAssignBusy ? 'Assigning…' : `Assign to ${selectedBlockIds.size || 0}`}
+            </button>
+            <button
+              type="button"
+              onClick={exitSelectMode}
+              disabled={bulkAssignBusy}
+              className="text-sm text-un1t-light hover:text-un1t-white disabled:opacity-50"
+            >
+              Cancel
+            </button>
+          </div>
+          {bulkToast && (
+            <div className={`max-w-7xl mx-auto px-4 pb-2 text-xs ${
+              bulkToast.kind === 'error' ? 'text-red-400' :
+              bulkToast.kind === 'warning' ? 'text-amber-300' :
+              'text-emerald-400'
+            }`}>
+              {bulkToast.message}
+            </div>
+          )}
+        </div>
+      )}
+      {/* Standalone toast — shows after a successful assign that
+          closed select mode, so the operator sees what happened. */}
+      {!selectMode && bulkToast && (
+        <div className={`fixed bottom-4 right-4 z-40 max-w-md rounded-md border px-4 py-3 text-sm shadow-2xl ${
+          bulkToast.kind === 'error' ? 'border-red-500/50 bg-red-950/80 text-red-200' :
+          bulkToast.kind === 'warning' ? 'border-amber-500/50 bg-amber-950/80 text-amber-200' :
+          'border-emerald-500/50 bg-emerald-950/80 text-emerald-200'
+        }`}>
+          <div className="flex items-start justify-between gap-3">
+            <span>{bulkToast.message}</span>
+            <button type="button" onClick={() => setBulkToast(null)} className="text-current opacity-70 hover:opacity-100">
+              <X size={14} />
+            </button>
+          </div>
+        </div>
       )}
     </div>
   )
