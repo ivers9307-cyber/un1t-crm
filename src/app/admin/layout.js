@@ -1,21 +1,36 @@
-// /admin/* — master-only home for platform-level tools.
+// /admin/* — historically master-only home for platform-level tools.
 //
 // Distinct from /settings/* which is for per-location operator
-// admin (locations, staff, integrations, etc.). Anything that
-// crosses tenant/org boundaries lives here:
-//   - /admin/matrix — locations × features grid + access overview
-//   - (future)      audit log, API keys, tenant management
+// admin (locations, staff, integrations, etc.). The hard-master-only
+// gate was relaxed by STUDIO-GROUP.1 (May 2026) so that the four
+// Studio Management children that live under /admin/* (contracts,
+// tv-displays, glofox-import, marketing-import) can be opened up to
+// non-master users via their own per-user permissions.
 //
-// The gate is a hard redirect to / for non-master callers. RLS at
-// the data layer is the second line of defence — even if a non-
-// master somehow reached an /admin/* page (impersonation flow gone
-// wrong, route mistake), they'd see no data because most of what
-// these pages render requires master-level visibility anyway.
+// New rule:
+//   - master: always allowed (unchanged).
+//   - non-master: allowed if they hold ANY of the four Studio
+//     Management child permissions. Per-page guards then enforce
+//     the specific permission for the page they're on.
+//   - other /admin/* pages (achievements, audit-log, integrations,
+//     matrix) keep their own page-level master gates so the relax
+//     here doesn't accidentally open them.
+//
+// RLS at the data layer is the second line of defence — even if a
+// non-master somehow reached an /admin/* page they don't have
+// permission for, they'd see no data because RLS enforces tenancy
+// + role at the row level.
 
 import { redirect } from 'next/navigation'
 import { getCurrentUser } from '@/lib/auth'
+import { hasPermission } from '@/lib/permissions'
 
 export const dynamic = 'force-dynamic'
+
+// Permissions that grant access to the /admin/* tree. Each target
+// page enforces its own specific permission; we only need ONE of
+// these here to let the user past the parent layout.
+const ADMIN_CHILD_PERMS = ['contracts', 'tv_displays', 'glofox_import', 'preferences_import']
 
 export default async function AdminLayout({ children }) {
   const user = await getCurrentUser()
@@ -23,7 +38,10 @@ export default async function AdminLayout({ children }) {
   // user.role flips per active location; profileRole is the canonical
   // global value. Master is platform-wide so we read from profileRole
   // (which is 'master') rather than the per-location role.
-  if (user.profileRole !== 'master') redirect('/')
-
-  return children
+  if (user.profileRole === 'master') return children
+  // Non-master: at least one Studio Management child permission must
+  // be held. Per-page guards inside each /admin/* page enforce the
+  // specific permission for that page.
+  if (ADMIN_CHILD_PERMS.some((k) => hasPermission(user, k))) return children
+  redirect('/')
 }

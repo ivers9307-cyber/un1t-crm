@@ -14,6 +14,8 @@
 // reflects the master's full visibility. The components themselves
 // are client components for the interactive bits.
 
+import { redirect } from 'next/navigation'
+import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import AdminFeatureMatrix from '@/components/AdminFeatureMatrix'
 import AdminAccessMatrix from '@/components/AdminAccessMatrix'
@@ -22,6 +24,10 @@ import AddOrganizationButton from '@/components/AddOrganizationButton'
 export const dynamic = 'force-dynamic'
 
 export default async function AdminMatrixPage() {
+  // STUDIO-GROUP.1 — page-level master gate (layout relaxed).
+  const user = await getCurrentUser()
+  if (!user || user.profileRole !== 'master') redirect('/')
+
   const db = createServerClient()
 
   const [orgsRes, locsRes, staffRes] = await Promise.all([

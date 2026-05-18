@@ -5,6 +5,7 @@
 
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
+import { hasPermission } from '@/lib/permissions'
 import { redirect } from 'next/navigation'
 import TVAdmin from './TVAdmin'
 
@@ -13,9 +14,10 @@ export const dynamic = 'force-dynamic'
 export default async function TVDisplaysAdmin() {
   const user = await getCurrentUser()
   if (!user) redirect('/login')
-  // Master/owner/manager only — TV management is a marketing /
-  // operator concern, not for general staff.
-  if (!['master', 'owner', 'manager'].includes(user.role)) {
+  // STUDIO-GROUP.1 — was role-gated to master/owner/manager; now
+  // uses the `tv_displays` permission. Role defaults preserve the
+  // old behaviour (ON for those three, OFF for staff + head_coach).
+  if (!hasPermission(user, 'tv_displays')) {
     return (
       <div className="p-6">
         <p className="text-sm text-un1t-light">You don&apos;t have access to TV management.</p>

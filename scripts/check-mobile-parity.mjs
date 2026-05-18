@@ -101,6 +101,13 @@ const WEB_ONLY_OK = {
   // experience than just opening the laptop, and the iframe
   // preview needs screen real estate the iOS app doesn't have.
   landing_page: 'Landing-page editor (mig 126-130) — operator-side WYSIWYG marketing-page editor. Desktop-only by design; the live-preview iframe needs the screen real estate the iOS app does not have.',
+  // STUDIO-GROUP.1 — four web-only sidebar children moved under
+  // the Studio Management section. Each got its own permission so
+  // operators can grant access per user (previously role-only gated).
+  contracts:          'Digital contract issue + sign + revoke flow lives at /admin/contracts. Desktop-only — managing legal documents on a phone is a worse experience than the laptop, and the typed-name signature ceremony already uses a dedicated mobile flow under /contracts (gated by `notify_contract_issued`).',
+  tv_displays:        'TV display registration + content push (UC Cast Pro) at /admin/tv-displays. Studio-TV surface — operators configure these from the laptop while looking at the actual TV, not from a phone.',
+  glofox_import:      'Interactive Glofox member import + sync history at /admin/glofox-import. Bulk-data CSV / preview operation that needs desktop screen real estate; the daily cron handles the ongoing sync without operator input.',
+  preferences_import: 'Bulk marketing-preferences CSV import at /admin/marketing-import. Same shape as glofox_import — a preview-and-commit flow that wants a wide screen.',
 }
 
 const webDrift = []

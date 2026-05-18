@@ -17,6 +17,7 @@
 
 import { redirect } from 'next/navigation'
 import { getCurrentUser } from '@/lib/auth'
+import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import GlofoxAdminTabs from '@/components/GlofoxAdminTabs'
 
@@ -25,9 +26,10 @@ export const dynamic = 'force-dynamic'
 export default async function GlofoxImportPage() {
   const user = await getCurrentUser()
   if (!user) redirect('/login')
-  // Belt-and-braces — /admin/layout.js enforces master too, but
-  // this layer protects the data fetches below.
-  if (user.profileRole !== 'master') redirect('/')
+  // STUDIO-GROUP.1 — was master-only via profileRole; now uses
+  // the `glofox_import` permission. Default still master-only via
+  // role defaults; operators can grant per user from StaffForm.
+  if (!hasPermission(user, 'glofox_import')) redirect('/')
 
   const db = createServerClient()
 

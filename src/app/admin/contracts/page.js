@@ -2,20 +2,19 @@
 // for the org (RLS handles the filter) plus a button to issue a
 // new one and a link to the templates manager.
 //
-// Master/owner only — gated server-side here AND by RLS on the
-// contracts/contract_templates tables (mig 106).
+// STUDIO-GROUP.1 — was master/owner role-gated; now uses the
+// `contracts` permission. Default still owner/master via the role
+// defaults in shared/permissions.js, but operators can now grant
+// access per user from StaffForm.
 
 import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { Plus, FileText, Settings as SettingsIcon, ChevronRight } from 'lucide-react'
 import { getCurrentUser } from '@/lib/auth'
+import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 
 export const dynamic = 'force-dynamic'
-
-function isOwnerOrMaster(user) {
-  return user?.role === 'master' || user?.role === 'owner'
-}
 
 const STATUS_BADGE = {
   issued:   { label: 'Sent',     class: 'bg-blue-500/15 text-blue-700' },
@@ -38,7 +37,7 @@ function fmtDate(iso) {
 export default async function ContractsAdminPage() {
   const user = await getCurrentUser()
   if (!user) redirect('/login')
-  if (!isOwnerOrMaster(user)) redirect('/')
+  if (!hasPermission(user, 'contracts')) redirect('/')
 
   const db = createServerClient()
   const { data: contracts } = await db
