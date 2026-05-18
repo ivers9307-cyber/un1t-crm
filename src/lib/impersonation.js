@@ -114,8 +114,18 @@ export async function startImpersonation({ masterProfile, targetUserId, reason, 
   })
   if (insErr) throw new Error(`Failed to start impersonation log: ${insErr.message}`)
 
-  // Set the impersonation cookie.
-  (await cookies()).set(IMPERSONATE_COOKIE, targetUserId, {
+  // Set the impersonation cookie. Resolve the cookies store ONCE
+  // up-front — two reasons: avoids a duplicate `await cookies()`,
+  // and dodges JS's automatic-semicolon-insertion gotcha where two
+  // back-to-back `(await cookies()).set(...)` statements get
+  // parsed as `set(...)(await cookies())` — calling the cookie
+  // store as a function (TypeError). The Next-14 sync version
+  // didn't trip this because `cookies().set(...)` doesn't start
+  // with `(`. Migrating to async made the leading-paren explicit
+  // and silently broke the feature. See SESSION_STATE for the
+  // bug write-up.
+  const cookieStore = await cookies()
+  cookieStore.set(IMPERSONATE_COOKIE, targetUserId, {
     httpOnly: true,
     sameSite: 'lax',
     secure: process.env.NODE_ENV === 'production',
@@ -129,7 +139,7 @@ export async function startImpersonation({ masterProfile, targetUserId, reason, 
   // to be assigned to the same location as the master sees that
   // location's feature gate (often quite different from their own
   // default's), which is misleading for "view as user" debugging.
-  (await cookies()).set('un1t_active_location', '', { maxAge: 0, path: '/' })
+  cookieStore.set('un1t_active_location', '', { maxAge: 0, path: '/' })
 
   return { targetUserId, targetName: target.full_name, targetRole: target.role }
 }
@@ -147,12 +157,17 @@ export async function stopImpersonation({ masterUserId }) {
     .eq('master_user_id', masterUserId)
     .is('ended_at', null)
 
-  (await cookies()).set(IMPERSONATE_COOKIE, '', { maxAge: 0, path: '/' })
+  // Same ASI-safety pattern as startImpersonation — resolve the
+  // cookie store once and reuse, otherwise two leading-paren
+  // `(await cookies()).set(...)` lines get parsed as a function
+  // call on the first .set's return value.
+  const cookieStore = await cookies()
+  cookieStore.set(IMPERSONATE_COOKIE, '', { maxAge: 0, path: '/' })
   // Also clear any stale active-location cookie that was leftover
   // from the impersonated user's preferred location — masters
   // returning to their own session should land on their own default
   // rather than wherever the target was. (Master sees every location
   // anyway via auth_is_master, so the worst case is "wrong default
   // pre-selected".)
-  (await cookies()).set('un1t_active_location', '', { maxAge: 0, path: '/' })
+  cookieStore.set('un1t_active_location', '', { maxAge: 0, path: '/' })
 }
