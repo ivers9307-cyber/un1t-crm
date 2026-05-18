@@ -3,7 +3,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
-import { Users, MapPin, Shield, UserCog, LayoutGrid, FileClock, Trophy, Cable, ChevronRight, Bell } from 'lucide-react'
+import { Users, MapPin, Shield, UserCog, LayoutGrid, Trophy, Cable, ChevronRight, Bell } from 'lucide-react'
 
 // SETTINGS.3/.4 — reorganized this page:
 //   - Master tools moved to TOP (was mid-page)
@@ -57,17 +57,20 @@ export default async function SettingsPage() {
               <h3 className="text-lg font-semibold">Master tools</h3>
             </div>
             <div className="flex items-center gap-2 flex-wrap">
+              {/* SETTINGS.5 — collapsed Platform admin + Audit log
+                  buttons into one Admin entry pointing at /admin
+                  (the new hub page that lists every admin tool the
+                  caller has access to). The hub itself surfaces the
+                  feature matrix, audit log, achievements, and
+                  integrations as cards, so we don't need top-level
+                  shortcuts for each one here. Kept Achievements +
+                  Integrations as direct shortcuts because they're
+                  the two masters reach for most often. */}
               <Link
-                href="/admin/matrix"
+                href="/admin"
                 className="text-xs bg-un1t-white text-un1t-black px-3 py-1.5 rounded-md hover:bg-un1t-accent transition-colors font-medium inline-flex items-center gap-1.5"
               >
-                <LayoutGrid size={12} /> Platform admin
-              </Link>
-              <Link
-                href="/admin/audit-log"
-                className="text-xs bg-un1t-white text-un1t-black px-3 py-1.5 rounded-md hover:bg-un1t-accent transition-colors font-medium inline-flex items-center gap-1.5"
-              >
-                <FileClock size={12} /> Audit log
+                <LayoutGrid size={12} /> Admin
               </Link>
               <Link
                 href="/admin/achievements"
