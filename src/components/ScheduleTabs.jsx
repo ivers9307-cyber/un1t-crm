@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useCallback } from 'react'
 import { CalendarClock, CheckCircle, BarChart3, Receipt, UserCheck } from 'lucide-react'
 import ScheduleCalendar from './ScheduleCalendar'
 import ScheduleApprovals from './ScheduleApprovals'
@@ -22,6 +22,22 @@ export default function ScheduleTabs({ user }) {
   // pipes the resulting visible range up here via onRangeChange so the
   // strip above can re-fetch its per-day demand summary in sync.
   const [scheduleRange, setScheduleRange] = useState(null)
+
+  // OVERVIEW-REFRESH.1 — monotonic counter the calendar bumps after
+  // every successful mutation (assign / unassign / create / delete /
+  // bulk-assign / publish / copy week / partial save). Pass into
+  // the overview strip's useEffect deps so it auto-refetches when
+  // the underlying data changes — operators no longer need to hard-
+  // refresh the page to see updated coverage / under-min flags.
+  //
+  // Note: bumpDataVersion is wrapped in useCallback so the callback
+  // identity is stable across renders. ScheduleCalendar puts it in
+  // its fetchData useCallback deps; without the stable identity
+  // we'd churn the memo and re-fire fetchData on every parent render.
+  const [scheduleDataVersion, setScheduleDataVersion] = useState(0)
+  const bumpDataVersion = useCallback(() => {
+    setScheduleDataVersion((v) => v + 1)
+  }, [])
 
   // Invoices is shown to:
   //   - contractors (employment_type = 'contractor') — to submit
@@ -73,9 +89,17 @@ export default function ScheduleTabs({ user }) {
               Sits above the calendar; demand-vs-supply summary scoped
               to whatever date range the calendar is showing. Mig 125. */}
           {isManager && user.activeLocation?.id && (
-            <StudioOverviewStrip range={scheduleRange} locationId={user.activeLocation.id} />
+            <StudioOverviewStrip
+              range={scheduleRange}
+              locationId={user.activeLocation.id}
+              dataVersion={scheduleDataVersion}
+            />
           )}
-          <ScheduleCalendar user={user} onRangeChange={setScheduleRange} />
+          <ScheduleCalendar
+            user={user}
+            onRangeChange={setScheduleRange}
+            onDataChange={bumpDataVersion}
+          />
         </>
       )}
       {activeTab === 'approvals' && isManager && <ScheduleApprovals user={user} />}

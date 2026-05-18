@@ -36,7 +36,14 @@ function fmtTime(t) {
   return String(t).slice(0, 5)
 }
 
-export default function StudioOverviewStrip({ range, locationId }) {
+// OVERVIEW-REFRESH.1 — `dataVersion` is a monotonic counter the parent
+// (ScheduleTabs) bumps every time ScheduleCalendar reports a successful
+// mutation (assign / unassign / create / delete / bulk-assign / publish
+// / copy-week / partial save). Including it in the useEffect deps
+// causes this strip to re-fetch in lockstep with the calendar, so
+// operators no longer need to hard-refresh to see updated coverage
+// numbers or under-min flags.
+export default function StudioOverviewStrip({ range, locationId, dataVersion = 0 }) {
   const [data, setData] = useState(null)
   const [error, setError] = useState(null)
   const [loading, setLoading] = useState(false)
@@ -62,7 +69,7 @@ export default function StudioOverviewStrip({ range, locationId }) {
       .catch((e) => { if (!cancelled) setError(e.message || 'Network error') })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
-  }, [range?.from, range?.to, locationId])
+  }, [range?.from, range?.to, locationId, dataVersion])
 
   // ESC closes modal — common modal UX, free win.
   useEffect(() => {
