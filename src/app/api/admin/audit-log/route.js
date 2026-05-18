@@ -1,15 +1,25 @@
-// GET /api/admin/audit-log — Master-only paginated read of
-// assignment_change_log with filters.
+// GET /api/admin/audit-log — Master/owner-only paginated read of
+// audit_events with filters.
+//
+// AUDIT-EXPAND.1: this used to read from assignment_change_log
+// directly. It now reads from the unified audit_events table
+// introduced in migration 180, which covers auth + business +
+// assignment + mutation events. The legacy assignment_change_log
+// is still being WRITTEN to (in parallel) during the transition
+// cycle, but the UI reads from audit_events exclusively.
 //
 // Query params:
 //   actor_id?           Filter by who performed the change.
 //   target_profile_id?  Filter by who was affected.
 //   location_id?        Filter to a specific location.
-//   action?             Filter to a single action type
-//                       (assignment_create / _update / _delete /
-//                       master_promote / _demote / profile_*).
-//   from?               ISO 8601 — only entries created at or after.
-//   to?                 ISO 8601 — only entries created at or before.
+//   category?           One of 'auth' | 'business' | 'mutation'
+//                       | 'assignment'. Filter to a top-level
+//                       category of event.
+//   action?             Filter to an exact action key
+//                       (e.g. 'contract.issued', 'auth.sign_in',
+//                       'assignment.assignment_create').
+//   from?               ISO 8601 — only entries at or after.
+//   to?                 ISO 8601 — only entries at or before.
 //   page?               1-indexed (default 1).
 //   page_size?          Default 50, max 200.
 //   format?             'json' (default) or 'csv'. csv triggers a
@@ -20,8 +30,6 @@
 //
 // Returns:
 //   { success: true, data: [...rows], page, page_size, total }
-//
-// Or on format=csv: text/csv body with the same rows flattened.
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
@@ -32,11 +40,14 @@ import { uuidLike } from '@/lib/schemas'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
+const CATEGORIES = ['auth', 'business', 'mutation', 'assignment']
+
 const QuerySchema = z.object({
   actor_id: uuidLike.optional(),
   target_profile_id: uuidLike.optional(),
   location_id: uuidLike.optional(),
-  action: z.string().min(1).max(50).optional(),
+  category: z.enum(CATEGORIES).optional(),
+  action: z.string().min(1).max(80).optional(),
   from: z.string().datetime().optional(),
   to: z.string().datetime().optional(),
   page: z.coerce.number().int().positive().default(1),
@@ -49,8 +60,11 @@ export async function GET(request) {
   if (!user) {
     return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
   }
-  if (user.profileRole !== 'master') {
-    return NextResponse.json({ success: false, error: 'Master only' }, { status: 403 })
+  // RLS allows master + owner SELECT. The page itself is master-only
+  // (admin layout), but allow owner via API so future per-location
+  // audit pages don't need a separate route.
+  if (user.profileRole !== 'master' && user.role !== 'owner') {
+    return NextResponse.json({ success: false, error: 'Master or owner only' }, { status: 403 })
   }
 
   const url = new URL(request.url)
@@ -68,24 +82,30 @@ export async function GET(request) {
   const db = createServerClient()
 
   // Build the query. Foreign-key joins via PostgREST embed syntax.
-  // The actor and target both reference profiles, so we need disambiguating
-  // alias names (the FKs are actor_id and target_profile_id).
+  // actor_id and target_profile_id both reference profiles; the
+  // explicit FK aliases avoid ambiguity. target_label /
+  // actor_label are persisted on the row at write-time so we still
+  // have something to show after a profile is deleted (FK is ON
+  // DELETE SET NULL).
   let query = db
-    .from('assignment_change_log')
+    .from('audit_events')
     .select(`
-      id, action, before, after, created_at,
+      id, occurred_at, category, action,
+      actor_label, target_label, target_resource,
+      details, ip_address, user_agent,
       actor:actor_id ( id, full_name, email ),
       target:target_profile_id ( id, full_name, email ),
       location:location_id ( id, name )
     `, { count: 'exact' })
-    .order('created_at', { ascending: false })
+    .order('occurred_at', { ascending: false })
 
   if (q.actor_id) query = query.eq('actor_id', q.actor_id)
   if (q.target_profile_id) query = query.eq('target_profile_id', q.target_profile_id)
   if (q.location_id) query = query.eq('location_id', q.location_id)
+  if (q.category) query = query.eq('category', q.category)
   if (q.action) query = query.eq('action', q.action)
-  if (q.from) query = query.gte('created_at', q.from)
-  if (q.to) query = query.lte('created_at', q.to)
+  if (q.from) query = query.gte('occurred_at', q.from)
+  if (q.to) query = query.lte('occurred_at', q.to)
 
   // CSV export bypasses pagination — returns the full filtered set
   // up to a hard cap to avoid OOM. 5000 is plenty for any reasonable
@@ -101,6 +121,14 @@ export async function GET(request) {
   const { data, count, error } = await query
   if (error) {
     return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+  }
+
+  // For the UI's category/action picker dropdowns we surface the
+  // full known-action set in a single call. Skip on CSV to keep
+  // the response tight.
+  let facets = null
+  if (!isCsv && q.page === 1) {
+    facets = await loadFacets(db, q)
   }
 
   if (isCsv) {
@@ -121,37 +149,63 @@ export async function GET(request) {
     page: q.page,
     page_size: q.page_size,
     total: count || 0,
+    facets,
   })
 }
 
+// Pulls a deduped list of distinct action keys (within the
+// currently-filtered category, if any) so the UI's action <select>
+// is auto-populated from the data instead of being hardcoded. Cheap
+// — the per-category indexes from migration 180 make this a quick
+// index scan.
+async function loadFacets(db, q) {
+  try {
+    let actionsQuery = db
+      .from('audit_events')
+      .select('action', { count: 'exact', head: false })
+      .order('action', { ascending: true })
+      .limit(500)
+    if (q.category) actionsQuery = actionsQuery.eq('category', q.category)
+    const { data: actionRows } = await actionsQuery
+    const actions = Array.from(new Set((actionRows || []).map((r) => r.action))).sort()
+    return { categories: CATEGORIES, actions }
+  } catch {
+    return { categories: CATEGORIES, actions: [] }
+  }
+}
+
 // CSV serialiser — spreadsheet-friendly. Flattens the joined
-// actor/target/location into named columns. Keeps before/after as
-// JSON strings (CSV can't represent nested data well; importers
+// actor/target/location into named columns. Keeps details as a
+// JSON string (CSV can't represent nested data well; importers
 // can re-parse the column when needed).
 function toCsv(rows) {
   const header = [
-    'created_at',
+    'occurred_at',
+    'category',
     'action',
     'actor_name',
     'actor_email',
     'target_name',
     'target_email',
+    'target_resource',
     'location_name',
-    'before_json',
-    'after_json',
+    'ip_address',
+    'details_json',
   ]
   const lines = [header.join(',')]
   for (const r of rows) {
     lines.push([
-      csvField(r.created_at),
+      csvField(r.occurred_at),
+      csvField(r.category),
       csvField(r.action),
-      csvField(r.actor?.full_name),
+      csvField(r.actor?.full_name || r.actor_label),
       csvField(r.actor?.email),
-      csvField(r.target?.full_name),
+      csvField(r.target?.full_name || r.target_label),
       csvField(r.target?.email),
+      csvField(r.target_resource),
       csvField(r.location?.name),
-      csvField(r.before ? JSON.stringify(r.before) : ''),
-      csvField(r.after ? JSON.stringify(r.after) : ''),
+      csvField(r.ip_address),
+      csvField(r.details ? JSON.stringify(r.details) : ''),
     ].join(','))
   }
   return lines.join('\n')

@@ -15,6 +15,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { contractRevokeSchema } from '@/lib/schemas'
 import { canTransition } from '@/lib/contracts'
 import { sendContractRevokedEmail } from '@/lib/contracts-email'
+import { logAuditEvent } from '@/lib/audit'
 
 export const runtime = 'nodejs'
 
@@ -81,6 +82,26 @@ export async function POST(request, props) {
     `)
     .eq('id', updated.id)
     .maybeSingle()
+
+  // AUDIT-EXPAND.1 — record the revoke. Actor is the issuer
+  // (master/owner); target is the recipient (the person who'll no
+  // longer be on the hook for signing it).
+  await logAuditEvent({
+    category: 'business',
+    action: 'contract.revoked',
+    actor: { id: user.id, full_name: user.full_name, email: user.email },
+    target: {
+      id: detail?.profile ? updated.profile_id : null,
+      label: detail?.profile?.full_name || null,
+      resource: `contracts/${updated.id}`,
+    },
+    locationId: updated.location_id || null,
+    details: {
+      template_name: detail?.template?.name || null,
+      revoked_reason: parsed.data.revoked_reason,
+    },
+    request,
+  })
 
   const emailResult = await sendContractRevokedEmail({
     contract: updated,

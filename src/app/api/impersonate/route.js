@@ -13,6 +13,7 @@ import { headers } from 'next/headers'
 import { getCurrentUser } from '@/lib/auth'
 import { startImpersonation } from '@/lib/impersonation'
 import { createServerClient } from '@/lib/supabase'
+import { logAuditEvent } from '@/lib/audit'
 
 export const runtime = 'nodejs'
 
@@ -72,6 +73,27 @@ export async function POST(request) {
       reason: parsed.data.reason || null,
       ip, userAgent,
     })
+
+    // AUDIT-EXPAND.1 — impersonation start. Actor is the REAL
+    // master (not the visible user, which is the target). The
+    // reason is captured in details since it's typed at start
+    // time but not surfaced anywhere else.
+    await logAuditEvent({
+      category: 'auth',
+      action: 'auth.impersonate_start',
+      actor: { id: realMasterId },
+      target: {
+        id: target.id,
+        label: target.full_name,
+        resource: `profiles/${target.id}`,
+      },
+      details: {
+        reason: parsed.data.reason || null,
+        target_role: target.role,
+      },
+      request,
+    })
+
     return NextResponse.json({ success: true, ...result })
   } catch (e) {
     return NextResponse.json({ success: false, error: e.message || 'Impersonation failed' }, { status: 500 })

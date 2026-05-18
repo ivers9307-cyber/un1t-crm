@@ -75,6 +75,19 @@ export default function PasswordChangeForm({ email }) {
         setBusy(false)
         return
       }
+      // AUDIT-EXPAND.1 — record the change. Fire-and-forget; the
+      // password update has already succeeded server-side, so if the
+      // log endpoint fails we lose only the audit row, not the
+      // change itself. Endpoint cross-checks getCurrentUser, so we
+      // don't need to pass the actor email.
+      try {
+        fetch('/api/auth/log-event', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ action: 'auth.password_changed', surface: 'account' }),
+          keepalive: true,
+        }).catch(() => {})
+      } catch { /* ignore */ }
       setSuccess(true)
       setCurrentPassword('')
       setNewPassword('')

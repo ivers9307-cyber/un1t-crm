@@ -33,6 +33,7 @@ import {
 } from '@/lib/contracts'
 import { sendContractIssuedEmail } from '@/lib/contracts-email'
 import { sendPush } from '@/lib/push'
+import { logAuditEvent } from '@/lib/audit'
 
 export const runtime = 'nodejs'
 
@@ -192,6 +193,24 @@ export async function POST(request) {
     .select('name')
     .eq('id', template.id)
     .maybeSingle()
+
+  // AUDIT-EXPAND.1 — record the contract issue in the unified log.
+  await logAuditEvent({
+    category: 'business',
+    action: 'contract.issued',
+    actor: { id: user.id, full_name: user.full_name, email: user.email },
+    target: {
+      id: recipient.id,
+      label: recipient.full_name,
+      resource: `contracts/${contract.id}`,
+    },
+    locationId,
+    details: {
+      template_id: template.id,
+      template_name: tplRow?.name || null,
+    },
+    request,
+  })
 
   const emailResult = await sendContractIssuedEmail({
     contract,
