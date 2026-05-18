@@ -11,12 +11,24 @@
 
 export default ({ config }) => ({
   ...config,
-  name: 'UN1T CRM',
+  // REBRAND.1 — display name flipped from "UN1T CRM" to "CF Studio" for
+  // the new App Store Connect app record (Path 1 rebrand: same Bundle
+  // ID, new ASC record after the previous Custom App record is removed).
+  // The Expo `slug` stays at 'un1t-crm-mobile' so the existing EAS
+  // project (and its projectId / build history / OTA update channel)
+  // remains intact — only the user-facing name and home-screen icon
+  // change. Version reset to 1.0.0 for the fresh ASC record (the
+  // previous Custom App's 1.1 lives on a different ASC record so
+  // Apple's per-record version tracking doesn't conflict).
+  name: 'CF Studio',
   slug: 'un1t-crm-mobile',
-  version: '0.1.1',
+  version: '1.0.0',
   orientation: 'portrait',
   icon: './assets/icon.png',
-  scheme: 'un1tcrm',
+  // Deep-link scheme — `cfstudio://...`. Renamed from un1tcrm. Safe to
+  // change today because no existing code/email/push payload references
+  // the old scheme (verified by grep across the repo before the rename).
+  scheme: 'cfstudio',
   userInterfaceStyle: 'automatic',
   splash: {
     image: './assets/splash.png',
@@ -44,7 +56,7 @@ export default ({ config }) => ({
       // Developer account is wired up. Until then, Expo Go uses Expo's
       // own push channel for development.
       UIBackgroundModes: ['remote-notification'],
-      // US export-control declaration. UN1T CRM uses only HTTPS
+      // US export-control declaration. CF Studio uses only HTTPS
       // (standard) and the iOS Keychain (standard) — no custom or
       // proprietary cryptography — so the app is EXEMPT from export
       // compliance review. Setting this to `false` here means we
@@ -57,7 +69,7 @@ export default ({ config }) => ({
     package: 'com.un1tdublin.crmmobileios',
     adaptiveIcon: {
       foregroundImage: './assets/adaptive-icon.png',
-      // Android adaptive icon background — UN1T identity is black/white
+      // Android adaptive icon background — CF Studio identity is black/white
       // and the foreground is a white wordmark, so the background must
       // be black to match the iOS icon visually.
       backgroundColor: '#000000',
