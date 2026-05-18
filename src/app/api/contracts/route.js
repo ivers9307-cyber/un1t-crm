@@ -29,6 +29,7 @@ import {
   mergeVariables,
   renderTemplate,
   validateCustomVariables,
+  extractPlaceholders,
 } from '@/lib/contracts'
 import { sendContractIssuedEmail } from '@/lib/contracts-email'
 import { sendPush } from '@/lib/push'
@@ -150,6 +151,21 @@ export async function POST(request) {
   //    sees this exact text on their signing page.
   const merged = mergeVariables(recipient, parsed.data.variables)
   const bodyRendered = renderTemplate(template.body_markdown, merged)
+
+  // 5a. CONTRACT-VARS.1 — reject if any placeholder remains in the
+  //     rendered body. The wizard surfaces these in step 2 as an
+  //     "Unmapped variables" form, so an issuer who's made it this
+  //     far has had a chance to fill them in. This server check is
+  //     the safety net for any other client (API consumer, bulk
+  //     script, future mobile-issuer flow) that might miss it.
+  const leftover = extractPlaceholders(bodyRendered)
+  if (leftover.length > 0) {
+    return NextResponse.json({
+      success: false,
+      error: `Unmapped variables in the rendered body: ${leftover.map((k) => `{{${k}}}`).join(', ')}. Fill values for each before issuing.`,
+      unmapped_keys: leftover,
+    }, { status: 400 })
+  }
 
   // 6. Insert. status defaults to 'issued' via the column default.
   const { data: contract, error: insErr } = await db

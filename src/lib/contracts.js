@@ -188,6 +188,32 @@ export function extractPlaceholders(bodyMarkdown) {
   return out
 }
 
+/**
+ * CONTRACT-VARS.1 — given the template body, the recipient profile,
+ * and the issuer-supplied custom variables, return the placeholder
+ * keys that would render LITERALLY (i.e. as `{{foo}}`) in the final
+ * document — neither auto-fillable from the profile nor supplied as
+ * a custom variable.
+ *
+ * Used both client-side (the wizard surfaces these as inputs) and
+ * server-side (the API rejects issue if any remain). Keeping the
+ * detection in one place keeps both layers in sync.
+ *
+ * Returns [] when everything resolves.
+ */
+export function unresolvedPlaceholders(bodyMarkdown, recipient, customVariables) {
+  const declared = new Set(Object.keys(profileVariables(recipient || {}) || {}))
+  for (const k of Object.keys(customVariables || {})) {
+    // Only count a key as "supplied" if it has a non-empty value.
+    // Empty string or null should still trigger the prompt.
+    const v = customVariables[k]
+    if (v !== null && v !== undefined && String(v).trim() !== '') {
+      declared.add(k)
+    }
+  }
+  return extractPlaceholders(bodyMarkdown).filter((k) => !declared.has(k))
+}
+
 // =============================================================
 // Pure status-machine helpers
 // =============================================================
