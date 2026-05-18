@@ -121,8 +121,14 @@ export async function POST(request) {
   // then layer the modifiers at the end. Earlier version of this
   // route built .order().range() up front and crashed any time an
   // audience filter was set.
+  // PERF.2 — narrowed from select('*') to the same explicit field
+  // set that /contacts page.js uses for the no-filter path, so
+  // ContactsView gets a stable shape whichever code path it took.
+  // Keep this list in lock-step with `CONTACT_LIST_FIELDS` in
+  // src/app/contacts/page.js.
+  const CONTACT_LIST_FIELDS = 'id, name, email, phone, lead_source, pipeline_stage_slug, trial_credits_remaining, created_at'
   let listQuery = db.from('contacts')
-    .select('*')
+    .select(CONTACT_LIST_FIELDS)
     .eq('location_id', locationId)
   let countQuery = db.from('contacts')
     .select('id', { count: 'exact', head: true })
