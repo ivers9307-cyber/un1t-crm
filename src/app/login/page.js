@@ -51,13 +51,35 @@ function LoginInner() {
       .catch(() => {})
   }, [])
 
+  // Fire-and-forget audit logger. The Supabase signInWithPassword
+  // path bypasses our Node server entirely, so the only way to log
+  // an attempt is for the client to tell us about it after the
+  // fact. Swallow all errors — audit must never break sign-in.
+  function logAuthEvent(payload) {
+    try {
+      // No-await keepalive; the page may navigate away (login
+      // success path), so we use the keepalive: true flag to let
+      // the browser finish the request after navigation.
+      fetch('/api/auth/log-event', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(payload),
+        keepalive: true,
+      }).catch(() => {})
+    } catch { /* ignore */ }
+  }
+
   async function handleLogin(e) {
     e.preventDefault()
     setBusy(true); setError(null)
     try {
       const supa = createBrowserClient()
       const { error } = await supa.auth.signInWithPassword({ email, password })
-      if (error) throw error
+      if (error) {
+        logAuthEvent({ action: 'auth.sign_in', ok: false, email, reason: error.message })
+        throw error
+      }
+      logAuthEvent({ action: 'auth.sign_in', ok: true, email })
       router.push(redirect)
       router.refresh()
     } catch (err) {
@@ -77,6 +99,7 @@ function LoginInner() {
         redirectTo: `${window.location.origin}/reset-password`,
       })
       if (error) throw error
+      logAuthEvent({ action: 'auth.password_reset_requested', email })
       setSuccess('Check your email for a password reset link.')
     } catch (err) {
       setError(err.message || 'Could not send the link.')

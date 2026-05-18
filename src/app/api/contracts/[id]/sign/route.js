@@ -20,6 +20,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { contractSignSchema } from '@/lib/schemas'
 import { canTransition } from '@/lib/contracts'
 import { sendContractSignedEmails } from '@/lib/contracts-email'
+import { logAuditEvent } from '@/lib/audit'
 
 export const runtime = 'nodejs'
 
@@ -96,6 +97,26 @@ export async function POST(request, props) {
     `)
     .eq('id', updated.id)
     .maybeSingle()
+
+  // AUDIT-EXPAND.1 — record the contract signing. The actor here
+  // is the recipient (they signed it). target_resource links back
+  // to the contract row in /admin/contracts/<id>.
+  await logAuditEvent({
+    category: 'business',
+    action: 'contract.signed',
+    actor: { id: user.id, full_name: user.full_name, email: user.email },
+    target: {
+      id: user.id,
+      label: detail?.profile?.full_name || user.full_name,
+      resource: `contracts/${updated.id}`,
+    },
+    locationId: updated.location_id || null,
+    details: {
+      template_name: detail?.template?.name || null,
+      signature_method: parsed.data.signature_method,
+    },
+    request,
+  })
 
   const emailResults = await sendContractSignedEmails({
     contract: updated,

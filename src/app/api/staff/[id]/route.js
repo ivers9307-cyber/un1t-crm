@@ -13,6 +13,7 @@ import {
 } from '@/lib/unifi-access'
 import { canEditStaffMember } from '@/lib/staff-access'
 import { upsertCompensationForProfile, splitCompFromProfilePatch } from '@/lib/profile-compensation'
+import { logAuditEvent } from '@/lib/audit'
 
 export const runtime = 'nodejs'
 
@@ -455,6 +456,56 @@ export async function PUT(request, props) {
     .eq('id', id)
     .single()
 
+  // AUDIT-EXPAND.1 — emit individual events for the high-stakes
+  // profile-level changes that happened in this request. Skipping
+  // routine HR/comp edits (those are captured by the DB-trigger
+  // pass in v2). Per-assignment changes are handled by
+  // logAssignmentChange in the dedicated assignment routes; the
+  // bulk diff above doesn't go through there yet but assignment
+  // routes are the more common surface.
+  try {
+    const actorRef = { id: user.id, full_name: user.full_name, email: user.email }
+    const targetRef = {
+      id: targetBefore.id,
+      label: targetBefore.full_name,
+      resource: `profiles/${targetBefore.id}`,
+    }
+    if (body.is_master !== undefined && body.is_master !== (targetBefore.role === 'master')) {
+      await logAuditEvent({
+        category: 'auth',
+        action: body.is_master ? 'master.granted' : 'master.revoked',
+        actor: actorRef,
+        target: targetRef,
+        details: { before: targetBefore.role === 'master', after: body.is_master },
+        request,
+      })
+    }
+    if (body.active !== undefined && body.active !== targetBefore.active) {
+      await logAuditEvent({
+        category: 'business',
+        action: body.active ? 'profile.reactivated' : 'profile.deactivated',
+        actor: actorRef,
+        target: targetRef,
+        details: { before: targetBefore.active, after: body.active },
+        request,
+      })
+    }
+    if (body.permissions !== undefined) {
+      const beforeP = JSON.stringify(targetBefore.permissions || {})
+      const afterP = JSON.stringify(body.permissions || {})
+      if (beforeP !== afterP) {
+        await logAuditEvent({
+          category: 'business',
+          action: 'permissions.updated',
+          actor: actorRef,
+          target: targetRef,
+          details: { before: targetBefore.permissions || {}, after: body.permissions || {} },
+          request,
+        })
+      }
+    }
+  } catch { /* audit must never break the response */ }
+
   return NextResponse.json({ success: true, data: final })
 }
 
@@ -543,6 +594,22 @@ export async function DELETE(request, props) {
     .from('profile_locations')
     .update({ unifi_door_access: false })
     .eq('profile_id', id)
+
+  // AUDIT-EXPAND.1 — staff deactivation is high-stakes (revokes
+  // door access + access to the platform). Logged as a business
+  // event so it appears alongside contract issuance / policy
+  // publish in the unified log.
+  await logAuditEvent({
+    category: 'business',
+    action: 'profile.deactivated',
+    actor: { id: user.id, full_name: user.full_name, email: user.email },
+    target: {
+      id,
+      resource: `profiles/${id}`,
+    },
+    details: { via: 'staff_delete' },
+    request,
+  })
 
   return NextResponse.json({ success: true })
 }

@@ -16,6 +16,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { publishVersion } from '@/lib/policies'
+import { logAuditEvent } from '@/lib/audit'
 
 export const runtime = 'nodejs'
 
@@ -59,6 +60,31 @@ export async function POST(request, { params }) {
       effectiveDate: body.effective_date,
       publishedBy: user.id,
     })
+
+    // AUDIT-EXPAND.1 — policy versioning is high-stakes (it's the
+    // employment-handbook source of truth + view-tracking baseline)
+    // so every published version is logged. target_resource uses
+    // the slug so an admin reading the log can click straight to
+    // /policies/<slug>.
+    await logAuditEvent({
+      category: 'business',
+      action: 'policy.published',
+      actor: { id: user.id, full_name: user.full_name, email: user.email },
+      target: {
+        id: null,
+        label: slug,
+        resource: `policies/${slug}`,
+      },
+      details: {
+        policy_id: policy.id,
+        version_id: version?.id || null,
+        version_number: version?.version_number || null,
+        change_summary: body.change_summary || null,
+        effective_date: body.effective_date,
+      },
+      request,
+    })
+
     return NextResponse.json({ success: true, version })
   } catch (e) {
     return NextResponse.json({ success: false, error: e.message || 'Publish failed' }, { status: 500 })

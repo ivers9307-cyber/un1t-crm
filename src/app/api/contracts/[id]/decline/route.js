@@ -15,6 +15,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { contractDeclineSchema } from '@/lib/schemas'
 import { canTransition } from '@/lib/contracts'
 import { sendContractDeclinedEmail } from '@/lib/contracts-email'
+import { logAuditEvent } from '@/lib/audit'
 
 export const runtime = 'nodejs'
 
@@ -77,6 +78,27 @@ export async function POST(request, props) {
     `)
     .eq('id', updated.id)
     .maybeSingle()
+
+  // AUDIT-EXPAND.1 — record the decline. The recipient is the
+  // actor here (they declined). details includes the reason so an
+  // admin reviewing the audit log can see WHY without opening the
+  // contract page.
+  await logAuditEvent({
+    category: 'business',
+    action: 'contract.declined',
+    actor: { id: user.id, full_name: user.full_name, email: user.email },
+    target: {
+      id: user.id,
+      label: detail?.profile?.full_name || user.full_name,
+      resource: `contracts/${updated.id}`,
+    },
+    locationId: updated.location_id || null,
+    details: {
+      template_name: detail?.template?.name || null,
+      declined_reason: parsed.data.declined_reason,
+    },
+    request,
+  })
 
   const emailResult = await sendContractDeclinedEmail({
     contract: updated,

@@ -1,29 +1,69 @@
 'use client'
 
-// AuditLogTable — interactive client component for the
-// assignment_change_log viewer at /admin/audit-log. Filters,
-// pagination, expandable rows showing the before/after diff, and
-// CSV export.
+// AuditLogTable — interactive client component for the unified
+// audit log viewer at /admin/audit-log.
 //
-// All reads go through /api/admin/audit-log; the parent page
-// pre-loads only the dropdown source data (staff, locations) so the
-// dropdowns render without an extra fetch.
+// AUDIT-EXPAND.1: previously a viewer for assignment_change_log
+// only; now reads from audit_events which covers auth, business,
+// mutation, and assignment events. The filter bar gains a
+// Category control to slice by top-level event type, and the
+// Action dropdown is populated dynamically from facets returned by
+// the API (so newly-instrumented actions show up without a code
+// change here).
+//
+// Expandable rows render the JSONB `details` payload. For
+// assignment + mutation events `details` carries `before` / `after`
+// snapshots; for auth + business events it's whatever the
+// instrumentation site supplied. The panel handles both shapes.
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Download, ChevronDown, ChevronRight, RefreshCw, AlertCircle, Loader2 } from 'lucide-react'
 
-const ACTION_OPTIONS = [
-  { value: '', label: 'All actions' },
-  { value: 'assignment_create', label: 'Assignment created' },
-  { value: 'assignment_update', label: 'Assignment updated' },
-  { value: 'assignment_delete', label: 'Assignment deleted' },
-  { value: 'master_promote', label: 'Master promoted' },
-  { value: 'master_demote', label: 'Master demoted' },
-  { value: 'profile_deactivate', label: 'Profile deactivated' },
-  { value: 'profile_reactivate', label: 'Profile reactivated' },
+const CATEGORY_LABELS = {
+  auth: 'Authentication',
+  business: 'Business event',
+  mutation: 'Data mutation',
+  assignment: 'Assignment / role',
+}
+
+const CATEGORY_OPTIONS = [
+  { value: '', label: 'All categories' },
+  { value: 'auth', label: CATEGORY_LABELS.auth },
+  { value: 'business', label: CATEGORY_LABELS.business },
+  { value: 'mutation', label: CATEGORY_LABELS.mutation },
+  { value: 'assignment', label: CATEGORY_LABELS.assignment },
 ]
 
-const ACTION_LABELS = Object.fromEntries(ACTION_OPTIONS.map((o) => [o.value, o.label]))
+// Friendly labels for known actions. Anything not in this map
+// falls through to the raw action key (e.g. 'contract.issued').
+const ACTION_LABELS = {
+  // legacy assignment events (still present from mig 080 backfill)
+  'assignment.assignment_create': 'Assignment created',
+  'assignment.assignment_update': 'Assignment updated',
+  'assignment.assignment_delete': 'Assignment deleted',
+  'assignment.master_promote': 'Master promoted',
+  'assignment.master_demote': 'Master demoted',
+  'assignment.profile_deactivate': 'Profile deactivated',
+  'assignment.profile_reactivate': 'Profile reactivated',
+  // auth
+  'auth.sign_in': 'Sign-in',
+  'auth.sign_out': 'Sign-out',
+  'auth.password_reset_requested': 'Password reset requested',
+  'auth.password_changed': 'Password changed',
+  'auth.impersonate_start': 'Impersonation started',
+  'auth.impersonate_stop': 'Impersonation stopped',
+  'master.granted': 'Master granted',
+  'master.revoked': 'Master revoked',
+  // business
+  'contract.issued': 'Contract issued',
+  'contract.signed': 'Contract signed',
+  'contract.declined': 'Contract declined',
+  'contract.revoked': 'Contract revoked',
+  'policy.published': 'Policy version published',
+  'profile.deactivated': 'Profile deactivated',
+  'profile.reactivated': 'Profile reactivated',
+  'permissions.updated': 'Permissions updated',
+}
 
 function fmtDt(iso) {
   if (!iso) return '—'
@@ -44,6 +84,7 @@ export default function AuditLogTable({ staff, locations }) {
     actor_id: '',
     target_profile_id: '',
     location_id: '',
+    category: '',
     action: '',
     from: '',
     to: '',
@@ -56,6 +97,7 @@ export default function AuditLogTable({ staff, locations }) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const [expanded, setExpanded] = useState(new Set())
+  const [facetActions, setFacetActions] = useState([])
 
   async function fetchRows() {
     setLoading(true)
@@ -84,6 +126,9 @@ export default function AuditLogTable({ staff, locations }) {
       }
       setRows(body.data || [])
       setTotal(body.total || 0)
+      // Facets only come back on page=1; otherwise leave the
+      // existing dropdown alone so the user's choice doesn't reset.
+      if (body.facets?.actions) setFacetActions(body.facets.actions)
     } catch (e) {
       setError(e.message || 'Fetch failed')
     } finally {
@@ -98,7 +143,10 @@ export default function AuditLogTable({ staff, locations }) {
     fetchRows()
   }
   function resetFilters() {
-    setFilters({ actor_id: '', target_profile_id: '', location_id: '', action: '', from: '', to: '' })
+    setFilters({
+      actor_id: '', target_profile_id: '', location_id: '',
+      category: '', action: '', from: '', to: '',
+    })
     setPage(1)
     setTimeout(fetchRows, 0)
   }
@@ -129,12 +177,35 @@ export default function AuditLogTable({ staff, locations }) {
     window.location.href = `/api/admin/audit-log?${params}`
   }
 
+  // Action options derive from the facets the API returns, scoped
+  // to the active category. If the user changes category we reset
+  // the action filter so a stale value doesn't survive.
+  const actionOptions = useMemo(() => {
+    const base = [{ value: '', label: 'All actions' }]
+    for (const a of facetActions) {
+      base.push({ value: a, label: ACTION_LABELS[a] || a })
+    }
+    return base
+  }, [facetActions])
+
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
 
   return (
     <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5">
       {/* Filters */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+        <FilterSelect
+          label="Category"
+          value={filters.category}
+          onChange={(v) => setFilters({ ...filters, category: v, action: '' })}
+          options={CATEGORY_OPTIONS}
+        />
+        <FilterSelect
+          label="Action"
+          value={filters.action}
+          onChange={(v) => setFilters({ ...filters, action: v })}
+          options={actionOptions}
+        />
         <FilterSelect
           label="Actor"
           value={filters.actor_id}
@@ -153,12 +224,6 @@ export default function AuditLogTable({ staff, locations }) {
           onChange={(v) => setFilters({ ...filters, location_id: v })}
           options={[{ value: '', label: 'Any location' }, ...locations.map((l) => ({ value: l.id, label: l.name }))]}
         />
-        <FilterSelect
-          label="Action"
-          value={filters.action}
-          onChange={(v) => setFilters({ ...filters, action: v })}
-          options={ACTION_OPTIONS}
-        />
         <FilterDate
           label="From"
           value={filters.from}
@@ -169,7 +234,7 @@ export default function AuditLogTable({ staff, locations }) {
           value={filters.to}
           onChange={(v) => setFilters({ ...filters, to: v })}
         />
-        <div className="col-span-2 flex items-end gap-2">
+        <div className="flex items-end gap-2">
           <button
             type="button"
             onClick={applyFilters}
@@ -232,6 +297,7 @@ export default function AuditLogTable({ staff, locations }) {
             <tr className="text-un1t-light text-[11px] uppercase tracking-wider">
               <th className="text-left p-2 w-6"></th>
               <th className="text-left p-2 whitespace-nowrap">When</th>
+              <th className="text-left p-2 whitespace-nowrap">Category</th>
               <th className="text-left p-2 whitespace-nowrap">Actor</th>
               <th className="text-left p-2 whitespace-nowrap">Action</th>
               <th className="text-left p-2 whitespace-nowrap">Affected user</th>
@@ -241,7 +307,7 @@ export default function AuditLogTable({ staff, locations }) {
           <tbody className="divide-y divide-un1t-gray/40">
             {rows.length === 0 && !loading && (
               <tr>
-                <td colSpan={6} className="p-6 text-center text-un1t-light text-sm">
+                <td colSpan={7} className="p-6 text-center text-un1t-light text-sm">
                   No audit entries match the current filters.
                 </td>
               </tr>
@@ -290,16 +356,26 @@ export default function AuditLogTable({ staff, locations }) {
 }
 
 function Row({ row, isOpen, onToggle }) {
+  const actorName = row.actor?.full_name || row.actor_label
+  const targetName = row.target?.full_name || row.target_label
+  // Details may carry the legacy { before, after } shape (assignment
+  // events) OR be a flat payload (auth/business). Detect and render.
+  const details = row.details || null
+  const hasBeforeAfter = details && (Object.prototype.hasOwnProperty.call(details, 'before')
+    || Object.prototype.hasOwnProperty.call(details, 'after'))
   return (
     <>
       <tr className="hover:bg-un1t-gray/10 cursor-pointer" onClick={onToggle}>
         <td className="p-2 text-un1t-light">
           {isOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
         </td>
-        <td className="p-2 whitespace-nowrap font-mono text-[11px]">{fmtDt(row.created_at)}</td>
+        <td className="p-2 whitespace-nowrap font-mono text-[11px]">{fmtDt(row.occurred_at)}</td>
         <td className="p-2 whitespace-nowrap">
-          {row.actor ? (
-            <span title={row.actor.email}>{row.actor.full_name}</span>
+          <CategoryPill category={row.category} />
+        </td>
+        <td className="p-2 whitespace-nowrap">
+          {actorName ? (
+            <span title={row.actor?.email || row.actor_label || ''}>{actorName}</span>
           ) : (
             <span className="text-un1t-mid italic">system</span>
           )}
@@ -308,8 +384,8 @@ function Row({ row, isOpen, onToggle }) {
           <span className="text-[11px] text-un1t-white">{ACTION_LABELS[row.action] || row.action}</span>
         </td>
         <td className="p-2 whitespace-nowrap">
-          {row.target ? (
-            <span title={row.target.email}>{row.target.full_name}</span>
+          {targetName ? (
+            <span title={row.target?.email || ''}>{targetName}</span>
           ) : (
             <span className="text-un1t-mid">—</span>
           )}
@@ -320,15 +396,60 @@ function Row({ row, isOpen, onToggle }) {
       </tr>
       {isOpen && (
         <tr>
-          <td colSpan={6} className="p-3 bg-un1t-black/40">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-[11px]">
-              <DiffPanel title="Before" data={row.before} />
-              <DiffPanel title="After" data={row.after} />
-            </div>
+          <td colSpan={7} className="p-3 bg-un1t-black/40">
+            {hasBeforeAfter ? (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-[11px]">
+                <DiffPanel title="Before" data={details.before} />
+                <DiffPanel title="After" data={details.after} />
+              </div>
+            ) : (
+              <DetailsPanel row={row} />
+            )}
           </td>
         </tr>
       )}
     </>
+  )
+}
+
+function CategoryPill({ category }) {
+  const styles = {
+    auth: 'bg-blue-500/10 text-blue-300 border-blue-500/30',
+    business: 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30',
+    mutation: 'bg-orange-500/10 text-orange-300 border-orange-500/30',
+    assignment: 'bg-purple-500/10 text-purple-300 border-purple-500/30',
+  }
+  const cls = styles[category] || 'bg-un1t-gray/20 text-un1t-light border-un1t-gray'
+  return (
+    <span className={`text-[10px] uppercase tracking-wider border rounded px-1.5 py-0.5 ${cls}`}>
+      {category || '—'}
+    </span>
+  )
+}
+
+function DetailsPanel({ row }) {
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-[11px]">
+      <div>
+        <div className="text-[10px] uppercase tracking-wider text-un1t-light mb-1">Details</div>
+        <pre className="bg-un1t-black border border-un1t-gray rounded p-2 text-[10px] text-un1t-white whitespace-pre-wrap break-words font-mono leading-relaxed">
+          {row.details
+            ? JSON.stringify(row.details, null, 2)
+            : <span className="text-un1t-mid italic">(none)</span>}
+        </pre>
+      </div>
+      <div>
+        <div className="text-[10px] uppercase tracking-wider text-un1t-light mb-1">Context</div>
+        <dl className="bg-un1t-black border border-un1t-gray rounded p-2 text-[11px] grid grid-cols-[auto_1fr] gap-x-2 gap-y-1">
+          <dt className="text-un1t-light">Resource</dt>
+          <dd className="text-un1t-white font-mono break-all">{row.target_resource || '—'}</dd>
+          <dt className="text-un1t-light">IP</dt>
+          <dd className="text-un1t-white font-mono">{row.ip_address || '—'}</dd>
+          <dt className="text-un1t-light">User agent</dt>
+          <dd className="text-un1t-white break-words">{row.user_agent || '—'}</dd>
+        </dl>
+      </div>
+    </div>
   )
 }
 

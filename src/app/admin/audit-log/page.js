@@ -1,4 +1,10 @@
-// /admin/audit-log — Master-only browser for assignment_change_log.
+// /admin/audit-log — Master-only browser for the unified audit log.
+//
+// AUDIT-EXPAND.1: previously a viewer for assignment_change_log
+// only; now backed by the audit_events table which spans auth,
+// business, mutation, and assignment events. Filters at the top of
+// the page slice by Category / Action / Actor / Affected user /
+// Location / date range — all in one view.
 //
 // Server component: fetches the dropdown source data (active staff for
 // the actor / target filters, locations for the location filter) so the
@@ -32,9 +38,12 @@ export default async function AdminAuditLogPage() {
     <div className="p-8 max-w-7xl">
       <h2 className="text-2xl font-bold mb-1">Audit log</h2>
       <p className="text-sm text-un1t-light mb-8">
-        Every assignment change made through the admin matrix v2 (and any future route that calls
-        the assignment-changes audit writer). Append-only — entries are never deleted or edited.
-        CSV export available for compliance and external review.
+        Unified record of authentication events, high-value business
+        actions, and assignment / role changes across the platform.
+        Append-only — entries are never edited or deleted. Filter at the
+        top to narrow by category, actor, target, location, or date; click
+        any row to expand the full event payload. CSV export available for
+        compliance and external review.
       </p>
       <AuditLogTable
         staff={staffRes.data || []}

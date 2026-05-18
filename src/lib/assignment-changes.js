@@ -113,6 +113,7 @@ export async function logAssignmentChange(db, {
   if (!targetProfileId || !action) {
     return { logged: false, error: 'missing_required_field' }
   }
+  let primaryResult = { logged: true }
   try {
     const { error } = await db.from('assignment_change_log').insert({
       actor_id: actorId,
@@ -124,13 +125,31 @@ export async function logAssignmentChange(db, {
     })
     if (error) {
       logWarn('assignment-changes', 'audit insert failed', { err: error })
-      return { logged: false, error: error.message }
+      primaryResult = { logged: false, error: error.message }
     }
-    return { logged: true }
   } catch (e) {
     logWarn('assignment-changes', `audit threw`, { err: e })
-    return { logged: false, error: e?.message || 'unknown' }
+    primaryResult = { logged: false, error: e?.message || 'unknown' }
   }
+  // AUDIT-EXPAND.1 — mirror the same row into the new unified
+  // audit_events table so it shows up in the expanded /admin/audit-log
+  // alongside auth/business/mutation events. Best-effort; never
+  // surfaces an error if it fails (the legacy insert is still the
+  // authoritative record during the transition cycle).
+  try {
+    const { logAuditEvent } = await import('@/lib/audit')
+    await logAuditEvent({
+      category: 'assignment',
+      action: `assignment.${action}`,
+      actor: actorId ? { id: actorId } : null,
+      target: targetProfileId ? { id: targetProfileId } : null,
+      locationId,
+      details: { before, after },
+    })
+  } catch (e) {
+    logWarn('assignment-changes', 'audit-events mirror failed', { err: e?.message })
+  }
+  return primaryResult
 }
 
 /**

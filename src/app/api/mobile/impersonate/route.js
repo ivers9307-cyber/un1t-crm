@@ -16,6 +16,7 @@ import { z } from 'zod'
 import { headers } from 'next/headers'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
+import { logAuditEvent } from '@/lib/audit'
 
 export const runtime = 'nodejs'
 
@@ -81,6 +82,25 @@ export async function POST(request) {
   if (insErr) {
     return NextResponse.json({ success: false, error: insErr.message }, { status: 500 })
   }
+
+  // AUDIT-EXPAND.1 — mirror the cookie-path event so mobile-initiated
+  // impersonation shows up in /admin/audit-log alongside web events.
+  await logAuditEvent({
+    category: 'auth',
+    action: 'auth.impersonate_start',
+    actor: { id: realMasterId },
+    target: {
+      id: target.id,
+      label: target.full_name,
+      resource: `profiles/${target.id}`,
+    },
+    details: {
+      reason: parsed.data.reason || null,
+      target_role: target.role,
+      surface: 'mobile',
+    },
+    request,
+  })
 
   return NextResponse.json({
     success: true,

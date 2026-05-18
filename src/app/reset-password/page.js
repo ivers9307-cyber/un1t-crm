@@ -176,6 +176,17 @@ export default function ResetPasswordPage() {
       setError(error.message)
       setLoading(false)
     } else {
+      // AUDIT-EXPAND.1 — record the reset-link password change.
+      // Fire-and-forget so the redirect isn't blocked. surface='reset'
+      // disambiguates this path from the in-app /account flow.
+      try {
+        fetch('/api/auth/log-event', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ action: 'auth.password_changed', surface: 'reset' }),
+          keepalive: true,
+        }).catch(() => {})
+      } catch { /* ignore */ }
       router.push('/')
       router.refresh()
     }
