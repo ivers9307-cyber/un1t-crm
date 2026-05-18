@@ -97,3 +97,75 @@ describe('readImpersonationTarget (combined)', () => {
     expect(await readImpersonationTarget()).toBe(null)
   })
 })
+
+// Regression test for the ASI gotcha that broke "View as user" after
+// the NEXT.16 async-cookies migration. Two adjacent
+// `(await cookies()).set(...)` lines without an explicit semicolon
+// got parsed as `set(...)(await cookies())` — calling the first
+// .set's return value as a function. TypeError mid-handler, route
+// returns 500, cookie never persists. Symptom: clicking "View as
+// user" redirects you back to your own profile.
+//
+// The fix in production is to resolve the cookie store once and
+// reuse the binding. This test asserts that startImpersonation
+// calls `.set` for BOTH the impersonation cookie AND the
+// active-location clear — under the bug, the second call never
+// fires because the first throws.
+describe('startImpersonation — ASI regression (cookie store reuse)', () => {
+  it('writes both the impersonation cookie AND clears the active-location cookie', async () => {
+    // Reset the vitest module cache so the doMocks below take effect
+    // — earlier tests in this file already loaded impersonation.js
+    // with the top-of-file `vi.mock('next/headers', ...)` shape, and
+    // we need a fresh module graph here that includes the supabase
+    // mock as well.
+    vi.resetModules()
+
+    const setSpy = vi.fn()
+    vi.doMock('next/headers', () => ({
+      cookies: async () => ({
+        get: () => undefined,
+        set: setSpy,
+      }),
+      headers: async () => ({ get: () => null }),
+    }))
+
+    // Mock the Supabase client — we need the impersonation insert + the
+    // target lookup to succeed so we reach the cookie-set path.
+    vi.doMock('./supabase.js', () => ({
+      createServerClient: () => ({
+        from: () => ({
+          select: () => ({
+            eq: () => ({
+              single: async () => ({
+                data: { id: 'target-1', full_name: 'Target', role: 'staff', active: true },
+                error: null,
+              }),
+            }),
+          }),
+          update: () => ({
+            eq: () => ({
+              is: async () => ({ data: null, error: null }),
+            }),
+          }),
+          insert: async () => ({ error: null }),
+        }),
+      }),
+    }))
+
+    // Fresh import so the module-level mocks above take effect.
+    const { startImpersonation } = await import('./impersonation.js')
+    await startImpersonation({
+      masterProfile: { id: 'master-1', role: 'master' },
+      targetUserId: 'target-1',
+      reason: 'debug',
+    })
+
+    // Both .set calls must fire — the impersonation cookie + the
+    // active-location clear. Under the ASI bug, the second never
+    // ran because the first one's return value got called-as-fn.
+    const cookieNames = setSpy.mock.calls.map((c) => c[0])
+    expect(cookieNames).toContain('un1t_impersonate')
+    expect(cookieNames).toContain('un1t_active_location')
+    expect(setSpy).toHaveBeenCalledTimes(2)
+  })
+})
