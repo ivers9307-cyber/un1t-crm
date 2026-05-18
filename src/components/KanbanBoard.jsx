@@ -32,10 +32,25 @@ const stageColors = {
   returning_member:   '#6366F1',
 }
 
+// PERF.3 — per-column initial render cap. At 8.1k open deals
+// concentrated mostly in a couple of stages, mounting every card up
+// front blew /pipeline TTI out: each card has a few event listeners
+// + an actions-menu state, so 8k cards = 24k+ event-listener attaches
+// before the page is interactive. We now render only the first N
+// cards per column and let the operator click "Show all" if they
+// want the rest. The PER_COLUMN_CAP value is deliberately generous —
+// most operator workflows only ever look at the top of each column.
+const PER_COLUMN_CAP = 50
+
 export default function KanbanBoard({ initialStages, initialDeals, locationId }) {
   const [deals, setDeals] = useState(initialDeals)
   const [draggedDeal, setDraggedDeal] = useState(null)
   const [dragOverStage, setDragOverStage] = useState(null)
+  // Per-column expand state — operator click on "Show all" flips
+  // the stage_id to true and unmasks the rest of that column. Drag
+  // operations are unaffected: the deal data is in state, just
+  // un-rendered, so it can still move.
+  const [expandedColumns, setExpandedColumns] = useState({})
 
   async function handleDrop(stageId) {
     if (!draggedDeal || draggedDeal.stage_id === stageId) {
@@ -83,9 +98,12 @@ export default function KanbanBoard({ initialStages, initialDeals, locationId })
               </span>
             </div>
 
-            {/* Deal Cards */}
+            {/* Deal Cards — render only the first PER_COLUMN_CAP
+                unless the operator has clicked "Show all" for this
+                column. Mirrors the count badge on the stage header
+                so the operator can see what's hidden. */}
             <div className="p-2 space-y-0 min-h-[100px]">
-              {stageDeals.map(deal => (
+              {(expandedColumns[stage.id] ? stageDeals : stageDeals.slice(0, PER_COLUMN_CAP)).map(deal => (
                 <div
                   key={deal.id}
                   draggable
@@ -96,6 +114,15 @@ export default function KanbanBoard({ initialStages, initialDeals, locationId })
                   <DealCard deal={deal} locationId={locationId} />
                 </div>
               ))}
+              {!expandedColumns[stage.id] && stageDeals.length > PER_COLUMN_CAP && (
+                <button
+                  type="button"
+                  onClick={() => setExpandedColumns((p) => ({ ...p, [stage.id]: true }))}
+                  className="w-full mt-1 py-1.5 text-[11px] text-un1t-light hover:text-un1t-white border border-dashed border-un1t-gray rounded-md hover:border-un1t-light transition-colors"
+                >
+                  Show all {stageDeals.length} (+{stageDeals.length - PER_COLUMN_CAP} hidden)
+                </button>
+              )}
             </div>
           </div>
         )

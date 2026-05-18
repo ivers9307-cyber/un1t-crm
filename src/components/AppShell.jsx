@@ -8,6 +8,11 @@ import AssistantBubble from './AssistantBubble'
 import ImpersonationBanner from './ImpersonationBanner'
 import PendingContractsAlert from './PendingContractsAlert'
 import { hasPermission } from '@/lib/permissions'
+// PERF.3 — Vercel scripts moved here from the root layout. Mounted
+// only inside the authenticated branch so /login + public booking
+// pages don't pay for two extra JS bundles before the user is in.
+import { SpeedInsights } from '@vercel/speed-insights/next'
+import { Analytics } from '@vercel/analytics/next'
 
 // Routes that should NOT show the CRM sidebar (i.e. anything a
 // non-CRM user might land on — public booking, unsubscribe, deposit
@@ -100,6 +105,10 @@ export default function AppShell({ children, user }) {
         </div>
         {hasPermission(user, 'assistant') && <AssistantBubble user={user} />}
       </div>
+      {/* PERF.3 — Speed Insights + Analytics only on authenticated
+          pages. Public surfaces never render this branch. */}
+      <SpeedInsights />
+      <Analytics />
     </div>
   )
 }
