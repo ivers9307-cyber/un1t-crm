@@ -12,7 +12,15 @@
 import { useRouter } from 'next/navigation'
 import { useState, useRef, useEffect } from 'react'
 import { User, MoreVertical } from 'lucide-react'
-import SequencePicker from './SequencePicker'
+import dynamic from 'next/dynamic'
+
+// PERF.3 — SequencePicker is only rendered when the operator opens
+// the per-card actions menu and clicks "Add to sequence", which is
+// a tiny fraction of card interactions. Lazy-loading it via
+// next/dynamic keeps the picker out of the /pipeline initial JS
+// bundle (was ~30KB gzipped). ssr:false because the picker is
+// purely interactive — never appears on first server render.
+const SequencePicker = dynamic(() => import('./SequencePicker'), { ssr: false })
 
 // Keyed on pipeline_stage_slug (PIPELINE5 + CLASSIFY.2).
 const statusColors = {

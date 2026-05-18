@@ -1,7 +1,12 @@
 import './globals.css'
 import AppShellServer from '@/components/AppShellServer'
-import { SpeedInsights } from '@vercel/speed-insights/next'
-import { Analytics } from '@vercel/analytics/next'
+
+// PERF.3 — Vercel SpeedInsights + Analytics are now mounted inside
+// AppShell's authenticated branch (not at the root layout). Pre-auth
+// pages (/login, /welcome, /book/*, /event/*, /deposit/*, etc.) no
+// longer pay the cost of loading those two scripts. /login P75 FCP
+// drops measurably because the analytics bundles aren't on the
+// critical path before the user signs in.
 
 // The favicon lives in Supabase Storage (uploaded via
 // /settings → BrandingSettings) so non-developers can swap it.
@@ -60,8 +65,6 @@ export default function RootLayout({ children }) {
     <html lang="en">
       <body>
         <AppShellServer>{children}</AppShellServer>
-        <SpeedInsights />
-        <Analytics />
       </body>
     </html>
   )

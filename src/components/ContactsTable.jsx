@@ -14,9 +14,16 @@
 import { useState, useMemo } from 'react'
 import Link from 'next/link'
 import { ChevronRight, Mail, X, GitMerge, Trash2 } from 'lucide-react'
-import SequencePicker from './SequencePicker'
-import ContactMergeModal from './ContactMergeModal'
-import ContactBulkDeleteModal from './ContactBulkDeleteModal'
+import dynamic from 'next/dynamic'
+
+// PERF.3 — three modal components that only render when the operator
+// actively picks the matching bulk action. Lazy-loaded so the
+// /contacts initial JS bundle doesn't ship the merge / bulk-delete /
+// sequence-picker code for users who only ever scroll the list.
+// ssr:false because these are pure click-to-open modals.
+const SequencePicker = dynamic(() => import('./SequencePicker'), { ssr: false })
+const ContactMergeModal = dynamic(() => import('./ContactMergeModal'), { ssr: false })
+const ContactBulkDeleteModal = dynamic(() => import('./ContactBulkDeleteModal'), { ssr: false })
 
 // Badge palette keyed by pipeline_stage_slug (PIPELINE5 + CLASSIFY.2).
 // Unmapped slugs fall back to the neutral grey badge.
