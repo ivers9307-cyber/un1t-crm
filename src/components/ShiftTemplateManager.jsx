@@ -233,6 +233,12 @@ function TemplateFormModal({ template, onSave, onClose }) {
   const [roleLabel, setRoleLabel] = useState(template?.role_label || '')
   const [days, setDays] = useState(template?.days_of_week || [])
   const [maxCoaches, setMaxCoaches] = useState(template?.max_coaches || 15)
+  // SHIFTMIN.1 — minimum coaches required. Default 1 on new templates;
+  // existing templates default to 1 via the migration so the feature
+  // delivers value on day 1 (any 0-assignment block flips amber).
+  const [minCoaches, setMinCoaches] = useState(
+    template?.min_coaches === 0 ? 0 : (template?.min_coaches || 1)
+  )
 
   function toggleDay(code) {
     setDays(prev => prev.includes(code) ? prev.filter(d => d !== code) : [...prev, code])
@@ -326,19 +332,44 @@ function TemplateFormModal({ template, onSave, onClose }) {
             </p>
           </div>
 
-          <div>
-            <label className="block text-xs text-un1t-light mb-1">Maximum coaches per shift *</label>
-            <input
-              type="number"
-              min={1}
-              max={50}
-              value={maxCoaches}
-              onChange={e => setMaxCoaches(Math.max(1, Math.min(50, parseInt(e.target.value || '1', 10))))}
-              className="w-32 bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
-            />
-            <p className="text-[11px] text-un1t-light mt-1.5">
-              How many coaches can be assigned to this slot. Set high enough to cover an &ldquo;all-hands&rdquo; day.
-            </p>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs text-un1t-light mb-1">Minimum coaches *</label>
+              <input
+                type="number"
+                min={0}
+                max={maxCoaches}
+                value={minCoaches}
+                onChange={e => {
+                  const v = Math.max(0, Math.min(maxCoaches, parseInt(e.target.value || '0', 10)))
+                  setMinCoaches(v)
+                }}
+                className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
+              />
+              <p className="text-[11px] text-un1t-light mt-1.5">
+                Blocks with fewer assigned flip the Studio Overview to amber. 0 = no floor.
+              </p>
+            </div>
+            <div>
+              <label className="block text-xs text-un1t-light mb-1">Maximum coaches *</label>
+              <input
+                type="number"
+                min={Math.max(1, minCoaches)}
+                max={50}
+                value={maxCoaches}
+                onChange={e => {
+                  const v = Math.max(1, Math.min(50, parseInt(e.target.value || '1', 10)))
+                  setMaxCoaches(v)
+                  // Keep min ≤ max — if the operator lowered max below
+                  // the current min, snap min down too.
+                  if (minCoaches > v) setMinCoaches(v)
+                }}
+                className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
+              />
+              <p className="text-[11px] text-un1t-light mt-1.5">
+                Set high enough to cover an &ldquo;all-hands&rdquo; day.
+              </p>
+            </div>
           </div>
 
           <div>
@@ -381,6 +412,7 @@ function TemplateFormModal({ template, onSave, onClose }) {
               role_label: roleLabel || null,
               days_of_week: days,
               max_coaches: maxCoaches,
+              min_coaches: minCoaches,
             })
           }
           disabled={!name || !startTime || !endTime}

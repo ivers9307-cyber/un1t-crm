@@ -117,11 +117,21 @@ export function aggregateDayDemand({ events, event_types, date }) {
  * @param {number} input.demand
  * @param {number} input.staff_scheduled
  * @param {number} input.staff_on_leave
+ * @param {number} [input.blocks_below_min]  SHIFTMIN.1 — count of
+ *   shift_blocks on this date where assigned coach count is less
+ *   than the block's min_coaches floor. Any positive value flips
+ *   the classification to amber (red still wins on zero supply).
  * @returns {'red' | 'amber' | 'green'}
  */
-export function classifyDayLoad({ demand, staff_scheduled, staff_on_leave }) {
+export function classifyDayLoad({ demand, staff_scheduled, staff_on_leave, blocks_below_min }) {
   const supply = Math.max(0, (staff_scheduled || 0) - (staff_on_leave || 0))
   if (demand > 0 && supply === 0) return 'red'
   if (demand > 0 && supply < demand) return 'amber'
+  // SHIFTMIN.1 — even when event demand vs. headcount supply
+  // aggregates green, any individual block below its minimum
+  // coach floor flips the day to amber. Surfaces "the 9:30 slot
+  // has 1 coach but the template requires 2" before the operator
+  // discovers it at 9:00am.
+  if ((blocks_below_min || 0) > 0) return 'amber'
   return 'green'
 }

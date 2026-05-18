@@ -149,4 +149,33 @@ describe('classifyDayLoad', () => {
   it('clamps negative effective supply to 0 (more on leave than scheduled — defensive)', () => {
     expect(classifyDayLoad({ demand: 1, staff_scheduled: 1, staff_on_leave: 5 })).toBe('red')
   })
+
+  // SHIFTMIN.1 — blocks_below_min escalation. Even when day-level
+  // supply vs. event demand is fine, undermanned individual shifts
+  // flip the classification to amber so operators notice before
+  // the morning of.
+  describe('blocks_below_min escalation', () => {
+    it('flips green → amber when at least one block is under min', () => {
+      expect(classifyDayLoad({ demand: 0, staff_scheduled: 5, staff_on_leave: 0, blocks_below_min: 1 })).toBe('amber')
+      // Even with demand fully covered, an undermanned block still escalates.
+      expect(classifyDayLoad({ demand: 3, staff_scheduled: 5, staff_on_leave: 0, blocks_below_min: 2 })).toBe('amber')
+    })
+
+    it('stays green when no blocks are under min', () => {
+      expect(classifyDayLoad({ demand: 0, staff_scheduled: 5, staff_on_leave: 0, blocks_below_min: 0 })).toBe('green')
+      // Omitted blocks_below_min should be treated as 0 (backwards compat).
+      expect(classifyDayLoad({ demand: 0, staff_scheduled: 5, staff_on_leave: 0 })).toBe('green')
+    })
+
+    it('red still wins over under-min when both apply (supply=0, demand>0, blocks under)', () => {
+      // The day is "uncovered" first; undermanned-block detail is secondary.
+      expect(classifyDayLoad({ demand: 3, staff_scheduled: 0, staff_on_leave: 0, blocks_below_min: 2 })).toBe('red')
+    })
+
+    it('demand-vs-supply amber still wins over green when blocks_below_min is 0', () => {
+      // Under-demand supply already classifies as amber; this just
+      // confirms the existing path isn't broken by the new arg.
+      expect(classifyDayLoad({ demand: 5, staff_scheduled: 3, staff_on_leave: 0, blocks_below_min: 0 })).toBe('amber')
+    })
+  })
 })

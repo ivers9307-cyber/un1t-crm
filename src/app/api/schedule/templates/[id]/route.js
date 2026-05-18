@@ -16,6 +16,8 @@ const TemplateUpdateSchema = z.object({
   display_order: z.number().int().min(0).max(1000).optional(),
   days_of_week: z.array(z.enum(WEEKDAY_CODES)).optional(),
   max_coaches: z.number().int().min(1).max(50).optional(),
+  // SHIFTMIN.1 — minimum coaches floor.
+  min_coaches: z.number().int().min(0).max(50).optional(),
 })
 
 // PUT /api/schedule/templates/:id
@@ -79,6 +81,11 @@ export async function PUT(request, props) {
   }
   if (Object.prototype.hasOwnProperty.call(updates, 'max_coaches')) {
     futureFieldUpdates.max_coaches = template.max_coaches
+  }
+  // SHIFTMIN.1 — same propagation rule as max_coaches: future-only,
+  // past blocks keep their snapshotted minimum.
+  if (Object.prototype.hasOwnProperty.call(updates, 'min_coaches')) {
+    futureFieldUpdates.min_coaches = template.min_coaches
   }
   let futureBlocksUpdated = 0
   if (Object.keys(futureFieldUpdates).length > 0) {

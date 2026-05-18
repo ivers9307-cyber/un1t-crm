@@ -20,6 +20,11 @@ const CreateTemplateSchema = z.object({
   display_order: z.number().int().min(0).max(1000).optional(),
   days_of_week: z.array(z.enum(WEEKDAY_CODES)).optional(),
   max_coaches: z.number().int().min(1).max(50).optional(),
+  // SHIFTMIN.1 — minimum coaches floor. 0 = no minimum.
+  // DB CHECK enforces min ≤ max; we don't cross-validate here
+  // because max might also be in the same payload — let Postgres
+  // be the source of truth for the relational invariant.
+  min_coaches: z.number().int().min(0).max(50).optional(),
 })
 
 // GET /api/schedule/templates?location_id=xxx
@@ -71,6 +76,11 @@ export async function POST(request) {
     display_order: body.display_order || 0,
     days_of_week: body.days_of_week || [],
     max_coaches: body.max_coaches || 15,
+    // 1 is the chosen default per SHIFTMIN.1 scoping — every shift
+    // needs at least one coach to function. body.min_coaches === 0
+    // is a legitimate explicit choice ("no minimum"), so coalesce
+    // only on undefined, not falsy.
+    min_coaches: body.min_coaches ?? 1,
   }).select().single()
 
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })

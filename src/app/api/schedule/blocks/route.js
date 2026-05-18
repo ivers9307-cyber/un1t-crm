@@ -27,6 +27,7 @@ const BlockCreateSchema = z.object({
   start_time: timeOfDay.optional(),
   end_time: timeOfDay.optional(),
   max_coaches: z.number().int().min(1).max(50).optional(),
+  min_coaches: z.number().int().min(0).max(50).optional(),
   notes: z.string().max(2000).nullable().optional(),
 })
 
@@ -100,14 +101,18 @@ export async function POST(request) {
 
   const db = createServerClient()
 
-  // If start/end weren't supplied, snapshot from the template.
+  // If start/end/max/min weren't supplied, snapshot from the
+  // template. SHIFTMIN.1 — min_coaches uses `??` (not `||`) on the
+  // body value because `0` is a legitimate explicit choice and
+  // shouldn't fall through to the template default.
   let start = body.start_time
   let end = body.end_time
   let max = body.max_coaches
-  if (!start || !end || !max) {
+  let min = body.min_coaches
+  if (!start || !end || !max || min === undefined) {
     const { data: tpl, error: tplErr } = await db
       .from('shift_templates')
-      .select('start_time, end_time, max_coaches')
+      .select('start_time, end_time, max_coaches, min_coaches')
       .eq('id', body.template_id)
       .single()
     if (tplErr || !tpl) {
@@ -119,6 +124,7 @@ export async function POST(request) {
     start = start || tpl.start_time
     end = end || tpl.end_time
     max = max || tpl.max_coaches || 15
+    min = min ?? (tpl.min_coaches ?? 1)
   }
 
   const { data, error } = await db
@@ -130,6 +136,7 @@ export async function POST(request) {
       start_time: start,
       end_time: end,
       max_coaches: max,
+      min_coaches: min,
       notes: body.notes || null,
       created_by: user.id,
     })
