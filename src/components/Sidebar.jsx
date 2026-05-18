@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
-import { LayoutDashboard, Users, Columns3, CheckSquare, Calendar, MessagesSquare, CalendarClock, Settings, LogOut, Car, Flag, Receipt, DoorOpen, Activity, ExternalLink, X, FileSignature, Heart, Globe, Download, Tv, ChevronDown, ChevronRight as ChevronRightIcon } from 'lucide-react'
+import { LayoutDashboard, Users, Columns3, CheckSquare, Calendar, MessagesSquare, CalendarClock, Settings, LogOut, Car, Flag, Receipt, DoorOpen, Activity, ExternalLink, X, FileSignature, Heart, Globe, Download, Tv, ChevronDown, ChevronRight as ChevronRightIcon, BookOpen } from 'lucide-react'
 import { createBrowserClient } from '@/lib/supabase'
 import LocationSwitcher from './LocationSwitcher'
 import ImpersonatePicker from './ImpersonatePicker'
@@ -113,6 +113,11 @@ const allNav = [
   // Studio Management because operationally it's its own surface
   // (live HR is a primary screen, not an admin task).
   { href: '/live', label: 'Live HR', icon: Heart, permission: 'studio_management' },
+  // Policies (POLICIES.1) — versioned HR policies, open to every
+  // authenticated employee. No permission gate; sidebar always shows
+  // the entry to anyone signed in so they can find the documents
+  // they're being asked to acknowledge.
+  { href: '/policies',   label: 'Policies',     icon: BookOpen,        openToAll: true },
   { href: '/settings',   label: 'Settings',     icon: Settings,        permission: 'settings' },
 ]
 
@@ -165,6 +170,7 @@ export default function Sidebar({ user, mobileOpen = false, onMobileClose }) {
   // Privileged actions (staff management, branding, location config)
   // remain owner-only via separate role gates inside those pages.
   function matches(item) {
+    if (item.openToAll) return !!user
     if (item.dashboardGroup) return DASHBOARD_PERM_KEYS.some(hasPerm)
     if (item.anyPermission) return item.anyPermission.some(hasPerm)
     if (item.masterOrOwnerOnly) return user?.role === 'master' || user?.role === 'owner'
