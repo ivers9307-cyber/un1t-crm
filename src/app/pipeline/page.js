@@ -75,9 +75,19 @@ export default async function PipelinePage(props) {
      
     while (true) {
       const pageEnd = Math.min(pageStart + PAGE_SIZE - 1, DEALS_HARD_LIMIT - 1)
+      // PERF.2 — narrow the SELECT to fields actually rendered by
+      // KanbanBoard + DealCard. The previous `*, contacts(*)` shipped
+      // every column on every deal AND every nested contact, blowing
+      // the response to ~9 MB at 8k deals when the card only renders
+      // 5 contact fields. Field list mirrors DealCard.jsx exactly.
       const { data: page, error } = await db
         .from('deals')
-        .select('*, contacts(*)')
+        .select(`
+          id, title, stage_id, created_at,
+          contacts (
+            id, name, lead_source, pipeline_stage_slug, trial_credits_remaining
+          )
+        `)
         .eq('status', 'open')
         .eq('location_id', locationId)
         .in('stage_id', visibleStageIds)
