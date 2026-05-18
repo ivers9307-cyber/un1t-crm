@@ -1,14 +1,13 @@
 // /policies — staff-facing list of HR policies.
 //
-// No permission gate — every authenticated employee can read the
-// policies. Each row shows read/unread status and the most-recent
-// version's effective date. Clicking a row goes to the viewer at
-// /policies/[slug] where the body renders and the Acknowledge
-// button appears.
+// No permission gate — every authenticated employee can read.
+// Status reflects whether the user has opened (viewed) the current
+// version at least once. POLICIES-VIEWS.1 replaced the previous
+// "acknowledged / not acknowledged" model with passive view tracking.
 
 import Link from 'next/link'
 import { redirect } from 'next/navigation'
-import { CheckCircle, AlertCircle, ChevronRight, FileText } from 'lucide-react'
+import { Eye, AlertCircle, ChevronRight, FileText } from 'lucide-react'
 import { getCurrentUser } from '@/lib/auth'
 import { listPoliciesWithStatus } from '@/lib/policies'
 
@@ -26,20 +25,21 @@ export default async function PoliciesPage() {
   if (!user) redirect('/login')
 
   const policies = await listPoliciesWithStatus(user)
-  const outstanding = policies.filter((p) => p.current_version && !p.acknowledged_at).length
+  const outstanding = policies.filter((p) => p.current_version && !p.viewed_at).length
 
   return (
     <div className="p-6 md:p-8 max-w-3xl">
       <h2 className="text-2xl font-bold mb-1">Policies</h2>
       <p className="text-sm text-un1t-light mb-6">
-        Read and acknowledge the policies that apply to you. We'll let
-        you know when something changes and ask you to re-acknowledge.
+        The policies that apply to you. We track when each one is opened
+        so we know what's been read; you don't need to actively
+        acknowledge anything — just have a look.
       </p>
 
       {outstanding > 0 && (
         <div className="bg-amber-500/10 border border-amber-500/30 text-amber-700 rounded-md px-4 py-3 mb-5 inline-flex items-center gap-2 text-sm">
           <AlertCircle size={14} />
-          You have {outstanding} {outstanding === 1 ? 'policy' : 'policies'} to acknowledge.
+          You have {outstanding} {outstanding === 1 ? 'policy' : 'policies'} you haven't opened yet.
         </div>
       )}
 
@@ -50,7 +50,7 @@ export default async function PoliciesPage() {
           </div>
         )}
         {policies.map((p, i) => {
-          const acked = !!p.acknowledged_at
+          const opened = !!p.viewed_at
           const ver = p.current_version
           return (
             <Link
@@ -79,13 +79,13 @@ export default async function PoliciesPage() {
                   </div>
                 )}
               </div>
-              {acked ? (
+              {opened ? (
                 <span className="inline-flex items-center gap-1 text-[11px] text-emerald-700 shrink-0">
-                  <CheckCircle size={12} /> Acknowledged
+                  <Eye size={12} /> Opened
                 </span>
               ) : (
                 <span className="inline-flex items-center gap-1 text-[11px] text-amber-700 shrink-0">
-                  <AlertCircle size={12} /> Unread
+                  <AlertCircle size={12} /> Not opened
                 </span>
               )}
               <ChevronRight size={14} className="text-un1t-mid shrink-0" />

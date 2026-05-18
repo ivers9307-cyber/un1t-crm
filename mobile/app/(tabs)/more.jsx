@@ -6,11 +6,13 @@
 // Future: notification preferences (read/write the per-category mobile
 // permission flags), dark mode toggle, "open web app", about screen.
 
+import { useState, useCallback } from 'react'
 import { View, Text, ScrollView, Pressable, Alert } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
-import { useRouter } from 'expo-router'
+import { useRouter, useFocusEffect } from 'expo-router'
 import { useAuth } from '../../lib/auth-context'
 import { canMobile } from '../../lib/permissions'
+import { getOutstandingPolicyCount } from '../../lib/policies-api'
 
 function Section({ title, children }) {
   return (
@@ -76,6 +78,17 @@ export default function More() {
   // which is a bottom tab). Gate on the same key the back-end uses.
   const showTasks = profile && canMobile(profile, 'tasks', activeLocation)
 
+  // POLICIES-VIEWS.1 — outstanding policies the user hasn't opened
+  // yet. Re-fetched on each focus so opening a policy in the viewer
+  // reflects here on the back-bounce. Negative sentinel (network
+  // error) hides the badge silently rather than showing "?".
+  const [outstandingPolicies, setOutstandingPolicies] = useState(0)
+  useFocusEffect(useCallback(() => {
+    let alive = true
+    getOutstandingPolicyCount().then((n) => { if (alive && n >= 0) setOutstandingPolicies(n) })
+    return () => { alive = false }
+  }, []))
+
   function pickLocation() {
     if (!locations.length) return
     if (locations.length === 1) {
@@ -138,14 +151,22 @@ export default function More() {
         </Section>
       )}
 
-      {/* Documents — your contracts. Always shown (every staff
-          member is potentially a recipient); the screen shows an
-          empty-state if none have been issued yet. */}
+      {/* Documents — contracts and HR policies. Always shown (every
+          staff member is potentially a recipient of either); the
+          screens show empty-states if none are applicable.
+          POLICIES-VIEWS.1 — Policies row shows a "N new" badge when
+          the user has policies they haven't opened yet. */}
       <Section title="Documents">
         <Row
           icon="document-text-outline"
           label="Your contracts"
           onPress={() => router.push('/contracts')}
+        />
+        <Row
+          icon="book-outline"
+          label="Policies"
+          value={outstandingPolicies > 0 ? `${outstandingPolicies} new` : undefined}
+          onPress={() => router.push('/policies')}
           isLast
         />
       </Section>

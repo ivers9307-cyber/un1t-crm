@@ -1,6 +1,7 @@
 // /admin/policies — master/owner-only admin for the policies hub.
-// Lists policies with current version + ack counts. Click a row to
-// drill into version history, ack report, and publish-new-version.
+// Lists policies with current version + view counts (POLICIES-VIEWS.1
+// replaced the previous acknowledgement model). Click a row to drill
+// into version history, viewer report, and the publish-new-version form.
 
 import Link from 'next/link'
 import { redirect } from 'next/navigation'
@@ -25,8 +26,6 @@ export default async function AdminPoliciesPage() {
   if (!isOwnerOrMaster(user)) redirect('/')
 
   const db = createServerClient()
-  // Pull policies + their current versions + the ack count for that
-  // version. Two queries to keep the SQL legible.
   const { data: policies } = await db
     .from('policies')
     .select(`
@@ -40,18 +39,25 @@ export default async function AdminPoliciesPage() {
     .map((p) => (p.policy_versions || []).find((v) => v.is_current)?.id)
     .filter(Boolean)
 
-  let ackCounts = new Map()
+  // Count UNIQUE viewers (distinct profile_id with at least one
+  // completed view of the current version). One row per session
+  // would over-count repeat readers.
+  const viewerCount = new Map()
   if (currentVersionIds.length > 0) {
-    const { data: acks } = await db
-      .from('policy_acknowledgements')
-      .select('policy_version_id')
+    const { data: views } = await db
+      .from('policy_views')
+      .select('policy_version_id, profile_id, ended_at')
       .in('policy_version_id', currentVersionIds)
-    for (const a of acks || []) {
-      ackCounts.set(a.policy_version_id, (ackCounts.get(a.policy_version_id) || 0) + 1)
+      .not('ended_at', 'is', null)
+    const setsByVersion = new Map()
+    for (const v of views || []) {
+      const set = setsByVersion.get(v.policy_version_id) || new Set()
+      set.add(v.profile_id)
+      setsByVersion.set(v.policy_version_id, set)
     }
+    for (const [vid, set] of setsByVersion) viewerCount.set(vid, set.size)
   }
 
-  // Total active employee count for the "X / Y acknowledged" display.
   const { count: activeStaffCount } = await db
     .from('profiles')
     .select('id', { count: 'exact', head: true })
@@ -61,15 +67,15 @@ export default async function AdminPoliciesPage() {
     <div className="p-6 md:p-8 max-w-4xl">
       <h2 className="text-2xl font-bold mb-1">Policies</h2>
       <p className="text-sm text-un1t-light mb-6 max-w-2xl">
-        Manage the policies staff are required to acknowledge. Publishing
-        a new version of any policy resets acknowledgements — every
-        active employee will be prompted to read and re-acknowledge.
+        Manage the policies staff can read. Publishing a new version
+        resets the view-tracking state — every active employee shows
+        as "not opened" until they next open the new version.
       </p>
 
       <div className="border border-un1t-gray rounded-lg overflow-hidden">
         {(policies || []).map((p, i) => {
           const ver = (p.policy_versions || []).find((v) => v.is_current)
-          const acks = ver ? ackCounts.get(ver.id) || 0 : 0
+          const viewers = ver ? viewerCount.get(ver.id) || 0 : 0
           return (
             <Link
               key={p.id}
@@ -101,10 +107,10 @@ export default async function AdminPoliciesPage() {
               </div>
               <div className="text-right shrink-0">
                 <div className="text-sm text-un1t-white tabular-nums">
-                  {acks}
+                  {viewers}
                   {activeStaffCount != null && <span className="text-un1t-mid"> / {activeStaffCount}</span>}
                 </div>
-                <div className="text-[10px] uppercase tracking-wider text-un1t-mid">acknowledged</div>
+                <div className="text-[10px] uppercase tracking-wider text-un1t-mid">opened</div>
               </div>
               <ChevronRight size={14} className="text-un1t-mid shrink-0" />
             </Link>

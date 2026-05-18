@@ -84,7 +84,10 @@ export default async function AdminPolicyDetailPage({ params }) {
                   {v.change_summary && ` · ${v.change_summary}`}
                 </div>
               </div>
-              <div className="text-sm tabular-nums text-un1t-white shrink-0">{v.ack_count}</div>
+              <div className="text-right shrink-0">
+                <div className="text-sm tabular-nums text-un1t-white">{v.completed_view_count}</div>
+                <div className="text-[10px] uppercase tracking-wider text-un1t-mid">views</div>
+              </div>
             </Link>
           ))}
         </div>

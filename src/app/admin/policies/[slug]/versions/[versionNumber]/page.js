@@ -1,13 +1,18 @@
 // /admin/policies/[slug]/versions/[versionNumber] — admin per-version
-// view showing the body and a "who's acknowledged / who's outstanding"
-// report. Used to chase outstanding acks ahead of an audit or after
-// a material change.
+// view showing the body, the list of staff who've opened (and how
+// many sessions / how long), the staff who haven't, and the "hot
+// sections" aggregate (which sections people spent the longest on
+// collectively).
+//
+// POLICIES-VIEWS.1 — replaces the previous acknowledgement-based
+// report.
 
 import Link from 'next/link'
 import { notFound, redirect } from 'next/navigation'
-import { ChevronLeft, CheckCircle, AlertCircle } from 'lucide-react'
+import { ChevronLeft, Eye, AlertCircle, Flame } from 'lucide-react'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
+import { listVersionViewers, sectionDwellAggregate } from '@/lib/policies'
 
 export const dynamic = 'force-dynamic'
 
@@ -21,6 +26,15 @@ function fmtDateTime(iso) {
     day: 'numeric', month: 'short', year: 'numeric',
     hour: '2-digit', minute: '2-digit',
   })
+}
+
+function fmtDuration(secs) {
+  if (!secs || secs <= 0) return '0s'
+  const m = Math.floor(secs / 60)
+  const s = secs % 60
+  if (m === 0) return `${s}s`
+  if (s === 0) return `${m}m`
+  return `${m}m ${s}s`
 }
 
 export default async function AdminPolicyVersionPage({ params }) {
@@ -48,23 +62,13 @@ export default async function AdminPolicyVersionPage({ params }) {
     .maybeSingle()
   if (!version) notFound()
 
-  // Ack list + outstanding-staff list.
-  const [acksRes, staffRes] = await Promise.all([
-    db.from('policy_acknowledgements')
-      .select('profile_id, acknowledged_at, acknowledged_via, profiles!profile_id(full_name, email)')
-      .eq('policy_version_id', version.id)
-      .order('acknowledged_at'),
-    db.from('profiles')
-      .select('id, full_name, email')
-      .eq('active', true)
-      .order('full_name'),
+  const [{ viewers, outstanding }, hotSections] = await Promise.all([
+    listVersionViewers(version.id),
+    sectionDwellAggregate(version.id),
   ])
-  const acks = acksRes.data || []
-  const ackedIds = new Set(acks.map((a) => a.profile_id))
-  const outstanding = (staffRes.data || []).filter((s) => !ackedIds.has(s.id))
 
   return (
-    <div className="p-6 md:p-8 max-w-4xl">
+    <div className="p-6 md:p-8 max-w-5xl">
       <Link href={`/admin/policies/${slug}`} className="inline-flex items-center gap-1 text-xs text-un1t-light hover:text-un1t-white mb-4">
         <ChevronLeft size={12} /> {policy.title} — version history
       </Link>
@@ -93,20 +97,51 @@ export default async function AdminPolicyVersionPage({ params }) {
         </article>
       </details>
 
+      {/* Hot-sections aggregate — surfaces which sections drew the
+          most attention across all viewers. Empty until enough data
+          accrues. */}
+      {hotSections.length > 0 && (
+        <section className="mb-6">
+          <h3 className="text-xs uppercase tracking-wider text-un1t-light font-semibold mb-3 inline-flex items-center gap-2">
+            <Flame size={12} className="text-amber-700" /> Hot sections
+          </h3>
+          <div className="border border-un1t-gray rounded-lg overflow-hidden">
+            {hotSections.slice(0, 10).map((s, i) => (
+              <div
+                key={s.section}
+                className={`px-4 py-2 text-xs flex items-center justify-between gap-3 ${
+                  i < hotSections.length - 1 ? 'border-b border-un1t-gray' : ''
+                }`}
+              >
+                <span className="text-un1t-white truncate flex-1">{s.section}</span>
+                <span className="text-un1t-light tabular-nums whitespace-nowrap">
+                  {fmtDuration(s.total_seconds)} total · avg {fmtDuration(s.avg_seconds)} across {s.sessions} sessions
+                </span>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
       <section className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <div>
           <h3 className="text-xs uppercase tracking-wider text-un1t-light font-semibold mb-3 inline-flex items-center gap-2">
-            <CheckCircle size={12} className="text-emerald-700" /> Acknowledged ({acks.length})
+            <Eye size={12} className="text-emerald-700" /> Opened ({viewers.length})
           </h3>
           <div className="border border-un1t-gray rounded-lg overflow-hidden">
-            {acks.length === 0 && (
-              <div className="px-4 py-6 text-center text-sm text-un1t-mid">No acknowledgements yet.</div>
+            {viewers.length === 0 && (
+              <div className="px-4 py-6 text-center text-sm text-un1t-mid">No one has opened this version yet.</div>
             )}
-            {acks.map((a, i) => (
-              <div key={a.profile_id} className={`px-4 py-2 text-xs ${i < acks.length - 1 ? 'border-b border-un1t-gray' : ''}`}>
-                <div className="text-un1t-white">{a.profiles?.full_name || '—'}</div>
+            {viewers.map((v, i) => (
+              <div key={v.profile_id} className={`px-4 py-2 text-xs ${i < viewers.length - 1 ? 'border-b border-un1t-gray' : ''}`}>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-un1t-white truncate">{v.full_name || '—'}</span>
+                  <span className="text-un1t-light tabular-nums whitespace-nowrap">
+                    {v.session_count} {v.session_count === 1 ? 'session' : 'sessions'} · {fmtDuration(v.total_seconds)}
+                  </span>
+                </div>
                 <div className="text-un1t-mid">
-                  {a.profiles?.email} · {fmtDateTime(a.acknowledged_at)} · {a.acknowledged_via}
+                  {v.email} · last {fmtDateTime(v.latest_at)} · {v.latest_via}
                 </div>
               </div>
             ))}
@@ -115,11 +150,11 @@ export default async function AdminPolicyVersionPage({ params }) {
 
         <div>
           <h3 className="text-xs uppercase tracking-wider text-un1t-light font-semibold mb-3 inline-flex items-center gap-2">
-            <AlertCircle size={12} className="text-amber-700" /> Outstanding ({outstanding.length})
+            <AlertCircle size={12} className="text-amber-700" /> Haven't opened ({outstanding.length})
           </h3>
           <div className="border border-un1t-gray rounded-lg overflow-hidden">
             {outstanding.length === 0 && (
-              <div className="px-4 py-6 text-center text-sm text-un1t-mid">Everyone is up to date.</div>
+              <div className="px-4 py-6 text-center text-sm text-un1t-mid">Everyone has opened this version.</div>
             )}
             {outstanding.map((s, i) => (
               <div key={s.id} className={`px-4 py-2 text-xs ${i < outstanding.length - 1 ? 'border-b border-un1t-gray' : ''}`}>
