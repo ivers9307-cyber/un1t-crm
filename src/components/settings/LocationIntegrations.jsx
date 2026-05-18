@@ -18,7 +18,7 @@
 
 import { useRouter, useSearchParams } from 'next/navigation'
 import {
-  Plug, Zap, DoorOpen, Snowflake, FileCheck, MessageSquare,
+  Plug, Zap, DoorOpen, Snowflake, FileCheck, MessageSquare, MessageCircle,
   AlertCircle, CheckCircle2,
 } from 'lucide-react'
 import { isFeatureEnabledAtLocation } from '@shared/permissions'
@@ -29,6 +29,7 @@ import UnifiIntegrationTab from './integrations/UnifiIntegrationTab'
 import SensiboIntegrationTab from './integrations/SensiboIntegrationTab'
 import BcaIntegrationTab from './integrations/BcaIntegrationTab'
 import TwilioIntegrationTab from './integrations/TwilioIntegrationTab'
+import WhatsAppIntegrationTab from './integrations/WhatsAppIntegrationTab'
 
 export default function LocationIntegrations({ location, xeroConnection, user, sampleBcaCar }) {
   const router = useRouter()
@@ -67,6 +68,18 @@ export default function LocationIntegrations({ location, xeroConnection, user, s
       label: 'Twilio (SMS)',
       Icon: MessageSquare,
       status: location.twilio_alpha_sender_id ? 'connected' : 'not-configured',
+    })
+  }
+  // WA-MULTI.1 — WhatsApp per-location numbers. Tab is visible when
+  // the location has the whatsapp feature on, OR when the master is
+  // looking (so a not-yet-enabled location still surfaces the
+  // first-time setup path). Statuses come from the API on render.
+  if ((features.whatsapp !== false || isMaster) && isOwnerOrMaster) {
+    tabs.push({
+      key: 'whatsapp',
+      label: 'WhatsApp',
+      Icon: MessageCircle,
+      status: 'not-configured', // populated lazily by the tab component
     })
   }
   if (isFeatureEnabledAtLocation(location, 'studio_management') && isMaster) {
@@ -162,6 +175,9 @@ export default function LocationIntegrations({ location, xeroConnection, user, s
           )}
           {activeKey === 'twilio' && (
             <TwilioIntegrationTab location={location} canEdit={isOwnerOrMaster} />
+          )}
+          {activeKey === 'whatsapp' && (
+            <WhatsAppIntegrationTab location={location} canEdit={isOwnerOrMaster} />
           )}
         </div>
       </div>
