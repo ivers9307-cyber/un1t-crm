@@ -12,6 +12,7 @@ import {
   renderTemplate,
   validateCustomVariables,
   extractPlaceholders,
+  unresolvedPlaceholders,
   canTransition,
 } from './contracts.js'
 
@@ -204,6 +205,46 @@ describe('extractPlaceholders', () => {
 
   it('ignores invalid placeholder names (with dashes / dots)', () => {
     expect(extractPlaceholders('See {{my-var}} and {{a.b}}')).toEqual([])
+  })
+})
+
+describe('unresolvedPlaceholders', () => {
+  const recipient = {
+    full_name: 'Sarah Smith',
+    email: 'sarah@example.com',
+    role: 'coach',
+    hourly_rate: '18.50',
+  }
+
+  it('returns [] when every placeholder is either profile- or user-supplied', () => {
+    const body = 'Hi {{full_name}}, rate: {{hourly_rate}}, starts on {{commencement_date}}.'
+    expect(unresolvedPlaceholders(body, recipient, { commencement_date: '2026-06-01' }))
+      .toEqual([])
+  })
+
+  it('returns the keys that have neither auto-fill nor a value', () => {
+    const body = 'Hi {{full_name}}, sign by {{commencement_date}}, deposit {{deposit_amount}}.'
+    expect(unresolvedPlaceholders(body, recipient, {}))
+      .toEqual(['commencement_date', 'deposit_amount'])
+  })
+
+  it('treats an empty / whitespace-only custom value as still unfilled', () => {
+    const body = 'Start: {{commencement_date}}'
+    expect(unresolvedPlaceholders(body, recipient, { commencement_date: '   ' }))
+      .toEqual(['commencement_date'])
+    expect(unresolvedPlaceholders(body, recipient, { commencement_date: '' }))
+      .toEqual(['commencement_date'])
+  })
+
+  it('treats null/undefined custom values as unfilled', () => {
+    const body = 'X: {{x}}'
+    expect(unresolvedPlaceholders(body, recipient, { x: null })).toEqual(['x'])
+    expect(unresolvedPlaceholders(body, recipient, { x: undefined })).toEqual(['x'])
+  })
+
+  it('handles missing recipient defensively (no auto-fills available)', () => {
+    const body = 'Hello {{full_name}}.'
+    expect(unresolvedPlaceholders(body, null, {})).toEqual(['full_name'])
   })
 })
 

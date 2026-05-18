@@ -12,10 +12,10 @@
 // Recipient list is fetched from /api/staff. Templates from
 // /api/contract-templates.
 
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, Fragment } from 'react'
 import { useRouter } from 'next/navigation'
-import { ChevronRight, FileText } from 'lucide-react'
-import { renderTemplate, profileVariables } from '@/lib/contracts'
+import { ChevronRight, FileText, AlertCircle } from 'lucide-react'
+import { renderTemplate, profileVariables, unresolvedPlaceholders } from '@/lib/contracts'
 
 export default function ContractIssueWizard({ issuerName }) {
   const router = useRouter()
@@ -59,13 +59,46 @@ export default function ContractIssueWizard({ issuerName }) {
     )
   }, [templates, recipient])
 
-  const customVarDefs = template?.variables_schema || []
+  const customVarDefs = useMemo(
+    () => template?.variables_schema || [],
+    [template],
+  )
+  const declaredKeys = useMemo(
+    () => new Set(customVarDefs.map((v) => v.key)),
+    [customVarDefs],
+  )
+
+  // CONTRACT-VARS.1 — placeholders in the body that are NEITHER
+  // auto-fillable from the profile NOR declared in variables_schema.
+  // Recomputed whenever the issuer fills more values so the list
+  // shortens as they go. The wizard surfaces these as their own
+  // input section so an issuer can't accidentally send a contract
+  // with `{{notice_period}}` literally in the text.
+  const unmappedKeys = useMemo(() => {
+    if (!template || !recipient) return []
+    // Compute against an EMPTY variables object so we get every
+    // unfilled-and-undeclared placeholder, including the ones the
+    // issuer is currently typing into. Then subtract declared keys
+    // (those have their own field) — what's left is "this template
+    // references {{foo}} but {{foo}} isn't declared anywhere".
+    const undeclared = unresolvedPlaceholders(template.body_markdown, recipient, {})
+      .filter((k) => !declaredKeys.has(k))
+    return undeclared
+  }, [template, recipient, declaredKeys])
 
   // Live preview using merged variables for step 3.
   const preview = useMemo(() => {
     if (!template || !recipient) return ''
     const merged = { ...profileVariables(recipient), ...vars }
     return renderTemplate(template.body_markdown, merged)
+  }, [template, recipient, vars])
+
+  // Placeholders that would render literally given current values.
+  // Drives both the "still missing" warning + the visual highlight
+  // in the preview.
+  const stillUnfilled = useMemo(() => {
+    if (!template || !recipient) return []
+    return unresolvedPlaceholders(template.body_markdown, recipient, vars)
   }, [template, recipient, vars])
 
   function setVar(key, val) {
@@ -79,6 +112,13 @@ export default function ContractIssueWizard({ issuerName }) {
   function canAdvanceStep2() {
     for (const v of customVarDefs) {
       if (v.required && !vars[v.key]) return false
+    }
+    // CONTRACT-VARS.1 — every unmapped key must also be filled
+    // before advancing. Treats empty string + whitespace-only as
+    // unfilled.
+    for (const k of unmappedKeys) {
+      const v = vars[k]
+      if (v == null || String(v).trim() === '') return false
     }
     return true
   }
@@ -168,29 +208,79 @@ export default function ContractIssueWizard({ issuerName }) {
             auto-filled from the recipient&apos;s record. Just supply any custom variables this
             template needs.
           </p>
-          {customVarDefs.length === 0 ? (
+          {customVarDefs.length === 0 && unmappedKeys.length === 0 ? (
             <p className="text-xs text-un1t-mid italic">
               This template has no custom variables. Click Next to preview &amp; issue.
             </p>
           ) : (
-            <div className="space-y-3">
-              {customVarDefs.map(v => (
-                <div key={v.key}>
-                  <label className="block text-sm text-un1t-light mb-1">
-                    {v.label}
-                    {v.required && <span className="text-red-700"> *</span>}
-                    <code className="ml-2 text-[10px] text-un1t-mid">{`{{${v.key}}}`}</code>
-                  </label>
-                  <input
-                    type={v.type === 'number' ? 'number' : v.type === 'date' ? 'date' : 'text'}
-                    required={v.required}
-                    value={vars[v.key] ?? ''}
-                    onChange={e => setVar(v.key, e.target.value)}
-                    className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm"
-                  />
+            <>
+              {customVarDefs.length > 0 && (
+                <div className="space-y-3">
+                  {customVarDefs.map(v => (
+                    <div key={v.key}>
+                      <label className="block text-sm text-un1t-light mb-1">
+                        {v.label}
+                        {v.required && <span className="text-red-700"> *</span>}
+                        <code className="ml-2 text-[10px] text-un1t-mid">{`{{${v.key}}}`}</code>
+                      </label>
+                      <input
+                        type={v.type === 'number' ? 'number' : v.type === 'date' ? 'date' : 'text'}
+                        required={v.required}
+                        value={vars[v.key] ?? ''}
+                        onChange={e => setVar(v.key, e.target.value)}
+                        className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm"
+                      />
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
+              )}
+
+              {/* CONTRACT-VARS.1 — placeholders in the template body
+                  that aren't declared in variables_schema. Surface them
+                  as required inputs so the issuer fills values before
+                  the contract goes out. The right long-term fix is to
+                  add the key to the template's variables_schema, but
+                  the per-contract override here means a bad template
+                  doesn't block a real send. */}
+              {unmappedKeys.length > 0 && (
+                <div className="bg-amber-500/10 border border-amber-500/30 rounded-md p-3 mt-4">
+                  <div className="flex items-start gap-2 mb-2">
+                    <AlertCircle size={14} className="text-amber-700 mt-0.5 shrink-0" />
+                    <div className="text-xs text-amber-700">
+                      <div className="font-semibold">
+                        {unmappedKeys.length === 1
+                          ? 'One variable in this template isn\'t auto-filled or declared.'
+                          : `${unmappedKeys.length} variables in this template aren't auto-filled or declared.`}
+                      </div>
+                      <div className="mt-0.5">
+                        Fill values here so they don’t appear literally in the issued
+                        contract. For long-term hygiene, add them to the template’s
+                        custom-variables list.
+                      </div>
+                    </div>
+                  </div>
+                  <div className="space-y-3 mt-3">
+                    {unmappedKeys.map((k) => (
+                      <div key={k}>
+                        <label className="block text-sm text-un1t-light mb-1">
+                          {k.replace(/_/g, ' ')}
+                          <span className="text-red-700"> *</span>
+                          <code className="ml-2 text-[10px] text-un1t-mid">{`{{${k}}}`}</code>
+                        </label>
+                        <input
+                          type="text"
+                          required
+                          value={vars[k] ?? ''}
+                          onChange={(e) => setVar(k, e.target.value)}
+                          className="w-full bg-un1t-black border border-amber-500/40 rounded-md px-3 py-2 text-sm"
+                          placeholder={`Value for ${k}`}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </>
           )}
           <div className="flex justify-between pt-2">
             <button
@@ -210,10 +300,32 @@ export default function ContractIssueWizard({ issuerName }) {
 
       {step === 3 && (
         <div className="space-y-4 mt-5">
+          {stillUnfilled.length > 0 && (
+            <div className="bg-amber-500/10 border border-amber-500/30 rounded-md p-3 flex items-start gap-2">
+              <AlertCircle size={14} className="text-amber-700 mt-0.5 shrink-0" />
+              <div className="text-xs text-amber-700">
+                <div className="font-semibold">
+                  {stillUnfilled.length === 1
+                    ? 'One placeholder still has no value.'
+                    : `${stillUnfilled.length} placeholders still have no value.`}
+                </div>
+                <div className="mt-0.5">
+                  Go back and fill: {stillUnfilled.map((k) => (
+                    <Fragment key={k}>
+                      <code className="bg-amber-500/15 text-amber-800 rounded px-1 mr-1">{`{{${k}}}`}</code>
+                    </Fragment>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
           <div>
             <label className="block text-sm text-un1t-light mb-1">Preview</label>
             <div className="bg-white text-gray-900 border border-un1t-gray rounded-md p-4 max-h-[400px] overflow-auto whitespace-pre-wrap text-sm leading-relaxed">
-              {preview}
+              {/* Highlight any {{placeholder}} that's still literal,
+                  so the issuer can see exactly where they'll appear
+                  in the final document. */}
+              {renderPreviewWithHighlights(preview)}
             </div>
           </div>
           <div>
@@ -241,8 +353,13 @@ export default function ContractIssueWizard({ issuerName }) {
             >← Back</button>
             <button
               type="button"
-              disabled={!issuerSig || busy}
+              disabled={!issuerSig || busy || stillUnfilled.length > 0}
               onClick={handleIssue}
+              title={
+                stillUnfilled.length > 0
+                  ? `Fill ${stillUnfilled.length} remaining placeholder${stillUnfilled.length === 1 ? '' : 's'} before issuing.`
+                  : undefined
+              }
               className="text-xs bg-un1t-white text-un1t-black px-4 py-1.5 rounded-md font-medium hover:bg-un1t-accent disabled:opacity-50 inline-flex items-center gap-1"
             >
               <FileText size={11} /> {busy ? 'Issuing…' : 'Issue contract'}
@@ -252,6 +369,28 @@ export default function ContractIssueWizard({ issuerName }) {
       )}
     </div>
   )
+}
+
+// Splits the preview text into runs and wraps any literal {{...}}
+// placeholder in a yellow-highlighted span so the issuer can see
+// exactly where unfilled values would appear in the final document.
+// Returns an array of strings + <mark> elements ready for React.
+function renderPreviewWithHighlights(text) {
+  if (!text) return text
+  const re = /\{\{\s*[a-zA-Z0-9_]+\s*\}\}/g
+  const parts = []
+  let last = 0
+  let m
+  let i = 0
+  while ((m = re.exec(text)) !== null) {
+    if (m.index > last) parts.push(text.slice(last, m.index))
+    parts.push(
+      <mark key={`m${i++}`} className="bg-amber-300 text-amber-900 rounded px-0.5">{m[0]}</mark>,
+    )
+    last = m.index + m[0].length
+  }
+  if (last < text.length) parts.push(text.slice(last))
+  return parts
 }
 
 function StepHeader({ step }) {
