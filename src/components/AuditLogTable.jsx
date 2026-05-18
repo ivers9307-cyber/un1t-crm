@@ -61,9 +61,19 @@ export default function AuditLogTable({ staff, locations }) {
     setLoading(true)
     setError(null)
     try {
+      // AUDIT-DATE-FIX — `from` and `to` live in state as the native
+      // datetime-local string (YYYY-MM-DDTHH:MM, local time). Convert
+      // to ISO only here at the API boundary; everywhere else keeps
+      // the input-friendly shape so the picker can round-trip cleanly.
       const params = new URLSearchParams()
       for (const [k, v] of Object.entries(filters)) {
-        if (v) params.set(k, v)
+        if (!v) continue
+        if (k === 'from' || k === 'to') {
+          const iso = toApiDate(v)
+          if (iso) params.set(k, iso)
+        } else {
+          params.set(k, v)
+        }
       }
       params.set('page', String(page))
       params.set('page_size', String(PAGE_SIZE))
@@ -102,9 +112,16 @@ export default function AuditLogTable({ staff, locations }) {
   }
 
   function handleExportCsv() {
+    // Same ISO conversion as fetchRows — see comment there.
     const params = new URLSearchParams()
     for (const [k, v] of Object.entries(filters)) {
-      if (v) params.set(k, v)
+      if (!v) continue
+      if (k === 'from' || k === 'to') {
+        const iso = toApiDate(v)
+        if (iso) params.set(k, iso)
+      } else {
+        params.set(k, v)
+      }
     }
     params.set('format', 'csv')
     // Trigger a regular download via window.location — the route's
@@ -343,6 +360,18 @@ function FilterSelect({ label, value, onChange, options }) {
   )
 }
 
+// AUDIT-DATE-FIX — `<input type="datetime-local">` expects values in
+// the form `YYYY-MM-DDTHH:MM` (local-time, no seconds or tz). The
+// previous version of this component converted the input value to an
+// ISO 8601 string (`new Date(value).toISOString()`) on every change
+// and fed that ISO string back to the input. The browser rejected the
+// out-of-spec value, the input rendered empty, and the user could
+// never lock in a date.
+//
+// Fix: store the input's NATIVE local-time string in state. Convert
+// to ISO ONLY at the moment the value leaves the component (the
+// audit-log API call), via the helper exported below. That way the
+// round-trip into the input stays valid and the picker locks in.
 function FilterDate({ label, value, onChange }) {
   return (
     <label className="block">
@@ -350,9 +379,18 @@ function FilterDate({ label, value, onChange }) {
       <input
         type="datetime-local"
         value={value}
-        onChange={(e) => onChange(e.target.value ? new Date(e.target.value).toISOString() : '')}
+        onChange={(e) => onChange(e.target.value)}
         className="w-full text-xs bg-un1t-black border border-un1t-gray rounded px-2 py-1.5 text-un1t-white"
       />
     </label>
   )
+}
+
+// Convert the input's `YYYY-MM-DDTHH:MM` (local time) into the ISO
+// string the API expects. Empty string → '' (signal "no filter").
+function toApiDate(localValue) {
+  if (!localValue) return ''
+  const d = new Date(localValue)
+  if (Number.isNaN(d.getTime())) return ''
+  return d.toISOString()
 }
