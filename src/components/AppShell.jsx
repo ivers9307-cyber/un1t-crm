@@ -7,7 +7,6 @@ import Sidebar from './Sidebar'
 import AssistantBubble from './AssistantBubble'
 import ImpersonationBanner from './ImpersonationBanner'
 import PendingContractsAlert from './PendingContractsAlert'
-import UnreadPoliciesBanner from './UnreadPoliciesBanner'
 import { hasPermission } from '@/lib/permissions'
 
 // Routes that should NOT show the CRM sidebar (i.e. anything a
@@ -95,7 +94,6 @@ export default function AppShell({ children, user }) {
             main content area without scrolling away with the page. */}
         <div className="flex-1 flex flex-col overflow-hidden">
           <PendingContractsAlert />
-          <UnreadPoliciesBanner />
           <main className="flex-1 overflow-auto">
             {children}
           </main>
