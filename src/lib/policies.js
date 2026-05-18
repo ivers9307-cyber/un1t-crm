@@ -1,25 +1,30 @@
-// POLICIES.1 — server-side helpers for the policies hub.
+// POLICIES.1 + POLICIES-VIEWS.1 — server-side helpers for the
+// policies hub. Acknowledgement model (mig 178) was replaced with
+// passive view tracking (mig 179) — a user is "viewed" a policy
+// version if at least one completed (ended_at IS NOT NULL) view row
+// exists for that (profile_id, policy_version_id).
 //
-// Single source of truth for the queries the policy pages use:
+// Public surface:
 //   - listPoliciesWithStatus(user)   for the staff /policies page
-//   - getPolicyBySlug(slug)          for the staff /policies/[slug] page
-//   - outstandingPolicyCount(user)   for the unread-policies banner
-//   - listVersions(policyId)         for the admin version history
-//   - publishVersion(...)            for the admin publish-new-version
-//
-// Keeps the route handlers thin and gives us a single place to test
-// the "current version + ack status" join logic.
+//   - getPolicyBySlug(slug, user)    for the /policies/[slug] page
+//   - outstandingPolicyCount(user)   for the banner badge
+//   - listVersions(policyId)         for the admin version list
+//   - publishVersion(...)            admin publish flow
+//   - sectionDwellAggregate(versionId)  admin "hot sections" report
+//   - listVersionViewers(versionId)   admin per-version viewer list
 
 import { createServerClient } from '@/lib/supabase'
 
 /**
  * Returns all active policies with their current version metadata
- * and whether the given user has acknowledged that version.
+ * and whether the given user has viewed (i.e. has at least one
+ * COMPLETED view of) that version.
  *
  *   [{ id, slug, title, description, display_order,
  *      current_version: { id, version_number, effective_date,
  *                         published_at, change_summary, body_markdown },
- *      acknowledged_at: timestamptz | null }]
+ *      viewed_at: timestamptz | null,    // most recent completed view
+ *      view_count: number }]
  *
  * Sorted by display_order then title.
  */
@@ -43,19 +48,29 @@ export async function listPoliciesWithStatus(user) {
     .map((p) => (p.policy_versions || []).find((v) => v.is_current)?.id)
     .filter(Boolean)
 
-  let acksByVersionId = new Map()
+  // Fetch the user's completed views for those versions. Group
+  // client-side for speed (small N).
+  let viewsByVersionId = new Map()
   if (versionIds.length > 0) {
-    const { data: acks, error: acksErr } = await db
-      .from('policy_acknowledgements')
-      .select('policy_version_id, acknowledged_at')
+    const { data: views, error: viewsErr } = await db
+      .from('policy_views')
+      .select('policy_version_id, ended_at')
       .eq('profile_id', user.id)
       .in('policy_version_id', versionIds)
-    if (acksErr) throw acksErr
-    acksByVersionId = new Map((acks || []).map((a) => [a.policy_version_id, a.acknowledged_at]))
+      .not('ended_at', 'is', null)
+      .order('ended_at', { ascending: false })
+    if (viewsErr) throw viewsErr
+    for (const v of views || []) {
+      const cur = viewsByVersionId.get(v.policy_version_id) || { latest: null, count: 0 }
+      cur.count += 1
+      if (!cur.latest || v.ended_at > cur.latest) cur.latest = v.ended_at
+      viewsByVersionId.set(v.policy_version_id, cur)
+    }
   }
 
   return (policies || []).map((p) => {
     const current = (p.policy_versions || []).find((v) => v.is_current) || null
+    const viewInfo = current ? viewsByVersionId.get(current.id) || null : null
     return {
       id: p.id,
       slug: p.slug,
@@ -72,15 +87,15 @@ export async function listPoliciesWithStatus(user) {
             published_at: current.published_at,
           }
         : null,
-      acknowledged_at: current ? acksByVersionId.get(current.id) || null : null,
+      viewed_at: viewInfo?.latest || null,
+      view_count: viewInfo?.count || 0,
     }
   })
 }
 
 /**
- * Returns a single active policy by slug with its current version
- * and the calling user's ack status for that version. Returns null
- * if the policy doesn't exist or is inactive.
+ * Single policy lookup with the calling user's view status. Returns
+ * null if the policy is missing or inactive.
  */
 export async function getPolicyBySlug(slug, user) {
   if (!slug) return null
@@ -101,15 +116,18 @@ export async function getPolicyBySlug(slug, user) {
 
   const current = (policy.policy_versions || []).find((v) => v.is_current) || null
 
-  let acknowledged_at = null
+  let viewed_at = null
+  let view_count = 0
   if (current && user?.id) {
-    const { data: ack } = await db
-      .from('policy_acknowledgements')
-      .select('acknowledged_at')
+    const { data: views } = await db
+      .from('policy_views')
+      .select('ended_at')
       .eq('policy_version_id', current.id)
       .eq('profile_id', user.id)
-      .maybeSingle()
-    acknowledged_at = ack?.acknowledged_at || null
+      .not('ended_at', 'is', null)
+      .order('ended_at', { ascending: false })
+    view_count = (views || []).length
+    viewed_at = views?.[0]?.ended_at || null
   }
 
   return {
@@ -118,28 +136,24 @@ export async function getPolicyBySlug(slug, user) {
     title: policy.title,
     description: policy.description,
     current_version: current,
-    acknowledged_at,
+    viewed_at,
+    view_count,
   }
 }
 
 /**
- * How many policies does this user have outstanding (active policies
- * whose current version they have NOT acknowledged)? Powers the
- * unread-policies banner.
- *
- * Defensive on null user — returns 0 (no banner).
+ * Policies the user has not yet opened (no completed view of the
+ * current version). Drives the badge in the More tab and banner.
  */
 export async function outstandingPolicyCount(user) {
   if (!user?.id) return 0
-  // Reuse listPoliciesWithStatus to keep the join logic in one place.
-  // Cheap: 3 small tables, indexed lookups.
   const policies = await listPoliciesWithStatus(user)
-  return policies.filter((p) => p.current_version && !p.acknowledged_at).length
+  return policies.filter((p) => p.current_version && !p.viewed_at).length
 }
 
 /**
  * Admin: full version history for a single policy. Returns versions
- * in descending order (newest first) with ack counts.
+ * descending (newest first) with completed view counts.
  */
 export async function listVersions(policyId) {
   const db = createServerClient()
@@ -148,7 +162,7 @@ export async function listVersions(policyId) {
     .select(`
       id, version_number, change_summary, effective_date,
       published_at, published_by, is_current,
-      policy_acknowledgements ( id )
+      policy_views ( id, ended_at )
     `)
     .eq('policy_id', policyId)
     .order('version_number', { ascending: false })
@@ -161,26 +175,109 @@ export async function listVersions(policyId) {
     published_at: v.published_at,
     published_by: v.published_by,
     is_current: v.is_current,
-    ack_count: (v.policy_acknowledgements || []).length,
+    completed_view_count: (v.policy_views || []).filter((vw) => !!vw.ended_at).length,
   }))
 }
 
 /**
- * Admin: publish a new version of a policy. Transactionally:
- *   1. flip the previous is_current to false
- *   2. compute the next version_number = max(existing) + 1
- *   3. insert the new row with is_current = true
+ * Admin: per-version viewer summary. Returns one row per profile
+ * who's viewed at least once, with their session count, total time
+ * across sessions, and most-recent view timestamp. Plus the list of
+ * staff who haven't viewed.
+ */
+export async function listVersionViewers(versionId) {
+  const db = createServerClient()
+  const [viewsRes, staffRes] = await Promise.all([
+    db.from('policy_views')
+      .select(`
+        profile_id, started_at, ended_at, total_duration_seconds,
+        section_dwell, viewed_via,
+        profiles!profile_id ( full_name, email )
+      `)
+      .eq('policy_version_id', versionId)
+      .order('started_at', { ascending: false }),
+    db.from('profiles')
+      .select('id, full_name, email')
+      .eq('active', true)
+      .order('full_name'),
+  ])
+
+  const views = viewsRes.data || []
+  const completed = views.filter((v) => v.ended_at)
+
+  // Group by profile.
+  const byProfile = new Map()
+  for (const v of completed) {
+    const cur = byProfile.get(v.profile_id) || {
+      profile_id: v.profile_id,
+      full_name: v.profiles?.full_name || null,
+      email: v.profiles?.email || null,
+      session_count: 0,
+      total_seconds: 0,
+      latest_at: null,
+      latest_via: null,
+    }
+    cur.session_count += 1
+    cur.total_seconds += v.total_duration_seconds || 0
+    if (!cur.latest_at || v.started_at > cur.latest_at) {
+      cur.latest_at = v.started_at
+      cur.latest_via = v.viewed_via
+    }
+    byProfile.set(v.profile_id, cur)
+  }
+
+  const viewers = [...byProfile.values()].sort((a, b) =>
+    (b.latest_at || '').localeCompare(a.latest_at || ''))
+
+  const viewedIds = new Set(viewers.map((v) => v.profile_id))
+  const outstanding = (staffRes.data || []).filter((s) => !viewedIds.has(s.id))
+
+  return { viewers, outstanding, all_views: views }
+}
+
+/**
+ * Admin "hot sections" aggregate. Sums section_dwell across every
+ * completed view of the given version and returns an array of
+ * `{ section, total_seconds, avg_seconds, sessions }` sorted by
+ * total_seconds desc. Sessions is the number of unique view
+ * sessions that touched that section (dwell > 0).
  *
- * Done via two sequential writes because Supabase JS doesn't expose
- * a transactional helper here; the partial unique index on
- * (policy_id) where is_current = true means a race would fail-closed
- * (the second writer's INSERT would violate the unique constraint),
- * which is the safe direction.
+ * If no completed views exist or no section_dwell was reported,
+ * returns [].
+ */
+export async function sectionDwellAggregate(versionId) {
+  const db = createServerClient()
+  const { data: views } = await db
+    .from('policy_views')
+    .select('section_dwell')
+    .eq('policy_version_id', versionId)
+    .not('ended_at', 'is', null)
+    .not('section_dwell', 'is', null)
+
+  const agg = new Map()
+  for (const v of views || []) {
+    const dwell = v.section_dwell || {}
+    for (const [section, secsRaw] of Object.entries(dwell)) {
+      const secs = Number(secsRaw)
+      if (!Number.isFinite(secs) || secs <= 0) continue
+      const cur = agg.get(section) || { section, total_seconds: 0, sessions: 0 }
+      cur.total_seconds += secs
+      cur.sessions += 1
+      agg.set(section, cur)
+    }
+  }
+  return [...agg.values()]
+    .map((r) => ({ ...r, avg_seconds: Math.round(r.total_seconds / r.sessions) }))
+    .sort((a, b) => b.total_seconds - a.total_seconds)
+}
+
+/**
+ * Admin publish-new-version flow. Race-safe via the partial unique
+ * index on (policy_id) where is_current.
  */
 export async function publishVersion({ policyId, bodyMarkdown, changeSummary, effectiveDate, publishedBy }) {
   const db = createServerClient()
 
-  // Compute next version_number.
   const { data: prevRows } = await db
     .from('policy_versions')
     .select('version_number')
@@ -189,7 +286,6 @@ export async function publishVersion({ policyId, bodyMarkdown, changeSummary, ef
     .limit(1)
   const nextVersion = (prevRows?.[0]?.version_number || 0) + 1
 
-  // Flip previous current → false.
   const { error: flipErr } = await db
     .from('policy_versions')
     .update({ is_current: false })
@@ -197,7 +293,6 @@ export async function publishVersion({ policyId, bodyMarkdown, changeSummary, ef
     .eq('is_current', true)
   if (flipErr) throw flipErr
 
-  // Insert new current.
   const { data: inserted, error: insertErr } = await db
     .from('policy_versions')
     .insert({
@@ -214,4 +309,47 @@ export async function publishVersion({ policyId, bodyMarkdown, changeSummary, ef
   if (insertErr) throw insertErr
 
   return inserted
+}
+
+// --------------------------------------------------------------------
+// Section-detection helper.
+//
+// Given the body markdown of a policy, return an ordered array of
+// section heading strings. We treat a line as a section heading if
+// it matches either:
+//   - a numbered heading like "1. PURPOSE AND SCOPE" (the AUP /
+//     Privacy Notice style), or
+//   - an ALL-CAPS line of >= 5 non-whitespace chars (the Handbook /
+//     contract-template style).
+// Surrounded by blank lines is a strong tell — we require the next
+// line to be blank.
+//
+// This is exported for the client to share the same detection logic
+// as any server-side report code.
+// --------------------------------------------------------------------
+
+export function detectSectionHeadings(bodyMarkdown) {
+  if (!bodyMarkdown) return []
+  const lines = bodyMarkdown.split(/\r?\n/)
+  const out = []
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim()
+    if (!line) continue
+    const next = (lines[i + 1] || '').trim()
+    if (next !== '') continue  // heading must be followed by blank line
+
+    // Numbered heading: 1. SOMETHING IN CAPS or 1. Something
+    if (/^\d+\.\s+\S/.test(line)) {
+      // accept "1. Title" — most numbered headings are title-case
+      out.push(line)
+      continue
+    }
+    // ALL-CAPS heading: at least 5 chars, no lowercase letters
+    const noLower = !/[a-z]/.test(line)
+    const hasAlpha = /[A-Z]/.test(line)
+    if (noLower && hasAlpha && line.replace(/\s+/g, '').length >= 5) {
+      out.push(line)
+    }
+  }
+  return out
 }

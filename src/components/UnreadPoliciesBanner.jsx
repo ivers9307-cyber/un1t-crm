@@ -1,16 +1,17 @@
 'use client'
 
-// POLICIES.1 — top-of-page banner shown when the user has at least
-// one policy with a current version they haven't acknowledged.
-// Modelled on PendingContractsAlert but without a modal — policy
-// updates aren't as time-critical as unsigned contracts, so a soft
-// banner with a call-to-action is right.
+// POLICIES.1 + POLICIES-VIEWS.1 — top-of-page banner shown when the
+// user has at least one policy with a current version they have NOT
+// yet opened (no completed view session). Modelled on
+// PendingContractsAlert but without a modal — policy updates aren't
+// as time-critical as unsigned contracts, so a soft banner with a
+// call-to-action is right.
 //
 // Hidden on /policies and /policies/* (user is already there).
 // Persists across navigation — there's no "dismiss" affordance,
 // because the dismiss state would mask material HR updates and
-// undermine the audit value of the system. The way to make it go
-// away is to read the policies and click Acknowledge.
+// undermine the visibility value of the system. The way to make it
+// go away is to open the policy (which records a view session).
 
 import { useEffect, useState } from 'react'
 import { usePathname } from 'next/navigation'
@@ -34,7 +35,7 @@ export default function UnreadPoliciesBanner() {
       .then((json) => {
         if (!alive) return
         const list = json?.data || []
-        const unread = list.filter((p) => p.current_version && !p.acknowledged_at).length
+        const unread = list.filter((p) => p.current_version && !p.viewed_at).length
         setCount(unread)
         setLoaded(true)
       })
@@ -55,8 +56,8 @@ export default function UnreadPoliciesBanner() {
       <AlertCircle size={14} />
       <span className="flex-1 min-w-0 truncate">
         {count === 1
-          ? 'You have a policy update to read and acknowledge.'
-          : `You have ${count} policy updates to read and acknowledge.`}
+          ? 'You have a policy you haven\'t opened yet.'
+          : `You have ${count} policies you haven\'t opened yet.`}
       </span>
       <Link
         href="/policies"
