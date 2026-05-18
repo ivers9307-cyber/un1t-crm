@@ -151,9 +151,13 @@ async function handleGet(request) {
     // Shift blocks in the range, with embedded assignment count.
     // Each distinct profile_id assigned counts as 1 supply unit
     // for that day. shift_assignments.status='cancelled' excluded.
+    // SHIFTMIN.1 — also pull min_coaches + start/end + template
+    // name so the day-detail modal can list specific undermanned
+    // blocks ("9:30–10:30 Morning · 1 of 2 assigned").
     db.from('shift_blocks')
       .select(`
-        id, block_date,
+        id, block_date, start_time, end_time, min_coaches, max_coaches,
+        shift_templates ( name, color ),
         shift_assignments ( profile_id, status )
       `)
       .eq('location_id', location_id)
@@ -192,13 +196,27 @@ async function handleGet(request) {
   // contributes 1 supply, even if they have multiple blocks on the
   // same day — they're one human).
   const staffByDate = new Map()  // date → Set<profile_id>
+  // SHIFTMIN.1 — per-date list of blocks that are below their
+  // min_coaches floor. Drives the amber escalation in
+  // classifyDayLoad + powers the day-detail modal listing.
+  const underMinByDate = new Map() // date → Array<{ id, label, time, assigned, min }>
   for (const block of blocks) {
     const assignments = block.shift_assignments || []
-    for (const a of assignments) {
-      if (a.status === 'cancelled') continue
-      if (!a.profile_id) continue
+    const activeAssignments = assignments.filter((a) => a.status !== 'cancelled' && a.profile_id)
+    for (const a of activeAssignments) {
       if (!staffByDate.has(block.block_date)) staffByDate.set(block.block_date, new Set())
       staffByDate.get(block.block_date).add(a.profile_id)
+    }
+    const min = block.min_coaches || 0
+    if (min > 0 && activeAssignments.length < min) {
+      if (!underMinByDate.has(block.block_date)) underMinByDate.set(block.block_date, [])
+      underMinByDate.get(block.block_date).push({
+        id: block.id,
+        label: block.shift_templates?.name || 'Shift',
+        time: `${String(block.start_time || '').slice(0, 5)}–${String(block.end_time || '').slice(0, 5)}`,
+        assigned: activeAssignments.length,
+        min,
+      })
     }
   }
 
@@ -236,6 +254,7 @@ async function handleGet(request) {
     const [yy, mm, dd] = date.split('-').map(Number)
     const dayKey = DAY_NAMES[new Date(Date.UTC(yy, mm - 1, dd)).getUTCDay()]
 
+    const underMinBlocks = underMinByDate.get(date) || []
     days.push({
       date,
       events: eventsToday.map((e) => ({
@@ -261,7 +280,17 @@ async function handleGet(request) {
       staff_scheduled,
       staff_on_leave,
       demand,
-      classification: classifyDayLoad({ demand, staff_scheduled, staff_on_leave }),
+      // SHIFTMIN.1 — list of blocks below their min coach floor.
+      // Empty array on green days; populated when undermanned.
+      // Surfaces to the day-detail modal so operators can jump
+      // straight to the relevant slot in the schedule calendar.
+      under_min_blocks: underMinBlocks,
+      classification: classifyDayLoad({
+        demand,
+        staff_scheduled,
+        staff_on_leave,
+        blocks_below_min: underMinBlocks.length,
+      }),
     })
   }
 

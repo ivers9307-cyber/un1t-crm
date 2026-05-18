@@ -14,7 +14,7 @@
 // types/[id]/edit, /schedule).
 
 import { useState, useEffect } from 'react'
-import { Calendar, AlertCircle, Loader2, Flag, Palmtree, Users, X as XIcon, Clock } from 'lucide-react'
+import { Calendar, AlertCircle, Loader2, Flag, Palmtree, Users, X as XIcon, Clock, UserX } from 'lucide-react'
 
 const STATUS_STYLES = {
   red:   { border: 'border-red-500/60',    bg: 'bg-red-500/5',    label: 'Uncovered' },
@@ -175,6 +175,13 @@ function DayCard({ day, onClick }) {
             <Palmtree size={10} /> {day.time_off.length}
           </div>
         )}
+        {/* SHIFTMIN.1 — surface undermanned-block count on the card.
+            Modal opens with the per-block breakdown when clicked. */}
+        {(day.under_min_blocks?.length || 0) > 0 && (
+          <div className="flex items-center gap-1 text-amber-700" title={`${day.under_min_blocks.length} shift${day.under_min_blocks.length === 1 ? '' : 's'} below minimum coach floor`}>
+            <UserX size={10} /> {day.under_min_blocks.length} undermanned
+          </div>
+        )}
       </div>
     </button>
   )
@@ -229,6 +236,32 @@ function DayDetailModal({ day, onClose }) {
             </span>
           </div>
         </div>
+
+        {/* SHIFTMIN.1 — undermanned shifts callout. Only renders
+            when at least one block is below its min_coaches floor.
+            Above events so it's the first thing the operator sees
+            when the day is flagged. */}
+        {(day.under_min_blocks?.length || 0) > 0 && (
+          <DetailSection icon={UserX} title="Undermanned shifts">
+            <ul className="space-y-1.5">
+              {day.under_min_blocks.map((b) => (
+                <li key={b.id} className="flex items-baseline justify-between gap-3 text-sm">
+                  <div className="min-w-0">
+                    <div className="text-un1t-white truncate">{b.label}</div>
+                    <div className="text-[10px] text-un1t-mid">
+                      <span className="inline-flex items-center gap-1">
+                        <Clock size={9} /> {b.time}
+                      </span>
+                    </div>
+                  </div>
+                  <span className="text-xs text-amber-700 tabular-nums shrink-0">
+                    {b.assigned} of {b.min} assigned
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </DetailSection>
+        )}
 
         {/* Events section */}
         <DetailSection icon={Flag} title="Events">
