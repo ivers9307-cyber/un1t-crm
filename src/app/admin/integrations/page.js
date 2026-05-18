@@ -1,12 +1,18 @@
 // /admin/integrations — master-only credentials store for
 // third-party services (Strava etc).
 
+import { redirect } from 'next/navigation'
+import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import IntegrationsAdmin from '@/components/IntegrationsAdmin'
 
 export const dynamic = 'force-dynamic'
 
 export default async function AdminIntegrationsPage() {
+  // STUDIO-GROUP.1 — page-level master gate (layout relaxed).
+  const user = await getCurrentUser()
+  if (!user || user.profileRole !== 'master') redirect('/')
+
   const db = createServerClient()
   const { data: integrations } = await db
     .from('service_integrations')

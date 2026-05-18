@@ -65,6 +65,18 @@ export const WEB_PERMISSIONS = Object.freeze([
   // future studio-ops actions (alarm arm/disarm, camera live view,
   // etc.) will land under the same gate.
   { key: 'studio_management', label: 'Studio Management',       hint: 'Remote door unlock + future on-site operations. Requires UniFi Access configured for the location.' },
+  // STUDIO-GROUP.1 — sidebar regroup (May 2026): the four items
+  // below used to be top-level sidebar entries gated to master/
+  // owner via role-only checks (no per-user permission). They now
+  // live as children of the expandable Studio Management section
+  // in the sidebar, and each gets its own per-user permission so
+  // operators can grant access individually. Defaults mirror the
+  // old role gates: contracts + tv_displays were owner/master,
+  // glofox_import + preferences_import were master-only.
+  { key: 'contracts',          label: '… Contracts',             hint: 'Digital staff/contractor contracts. Issue, sign, revoke. Owner + master by default.' },
+  { key: 'tv_displays',        label: '… TV Displays',           hint: 'Register and push content to studio TVs via UC Cast Pro. Owner/master/manager by default — marketing surface.' },
+  { key: 'glofox_import',      label: '… Glofox import',         hint: 'Interactive Glofox member import + sync history. Master-only by default — touches every contact at the location.' },
+  { key: 'preferences_import', label: '… Preferences import',    hint: 'Bulk import of marketing preferences from external platforms (Mailchimp / Klaviyo / CSV). Master-only by default — touches consent state across the contact base.' },
   // — Revenue —
   // Mig 092 split: orders used to inherit `events|car_processing`
   // OR via the sidebar. Standalone key lets a location hide /orders
@@ -94,6 +106,8 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     events: true, bookings: true, races: true,
     email: true, whatsapp: true, sms: true,
     schedule: true, attendance_reports: true, assistant: true, studio_management: true,
+    // Studio Management children (STUDIO-GROUP.1) — master has all.
+    contracts: true, tv_displays: true, glofox_import: true, preferences_import: true,
     orders: true, car_processing: true,
     settings: true,
     landing_page: true,
@@ -104,6 +118,8 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     events: true, bookings: true, races: true,    // race-day starts/finishes are a front-of-house duty
     email: false, whatsapp: false, sms: false,
     schedule: true, attendance_reports: false, assistant: false, studio_management: false,
+    // Studio Management children — all off for staff.
+    contracts: false, tv_displays: false, glofox_import: false, preferences_import: false,
     orders: false, car_processing: false,         // financial views off by default
     settings: false,
     landing_page: false,                          // marketing copy isn't a staff concern
@@ -115,6 +131,8 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     email: true, whatsapp: true, sms: true,
     schedule: true, attendance_reports: false,    // head coaches don't see attendance — owner/manager only
     assistant: true, studio_management: false,    // explicit opt-in
+    // Studio Management children — all off for head_coach (explicit opt-in by admin).
+    contracts: false, tv_displays: false, glofox_import: false, preferences_import: false,
     orders: false, car_processing: false,         // head coach doesn't need orders by default
     settings: false,
     landing_page: false,
@@ -125,6 +143,10 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     events: true, bookings: true, races: true,
     email: true, whatsapp: true, sms: true,
     schedule: true, attendance_reports: true, assistant: true, studio_management: true,
+    // Studio Management children — manager gets TV displays (marketing
+    // surface they handle day-to-day). Contracts + imports stay
+    // off — those are owner/master decisions.
+    contracts: false, tv_displays: true, glofox_import: false, preferences_import: false,
     orders: true, car_processing: false,          // managers run revenue ops; CCF Autos is per-user opt-in
     settings: true,
     landing_page: false,                          // owner/master decision; per-user override available
@@ -135,6 +157,10 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     events: true, bookings: true, races: true,
     email: true, whatsapp: true, sms: true,
     schedule: true, attendance_reports: true, assistant: true, studio_management: true,
+    // Studio Management children — owner gets contracts + TV displays
+    // by default (mirroring the old role-only gates). Imports stay
+    // master-only on first install; owners can opt-in per user.
+    contracts: true, tv_displays: true, glofox_import: false, preferences_import: false,
     orders: true, car_processing: false,          // OFF for owner too — explicit opt-in per profile
     settings: true,
     landing_page: true,

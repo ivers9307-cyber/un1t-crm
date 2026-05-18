@@ -6,12 +6,20 @@
 // log read goes through /api/admin/audit-log so the same backend
 // powers an eventual programmatic export.
 
+import { redirect } from 'next/navigation'
+import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import AuditLogTable from '@/components/AuditLogTable'
 
 export const dynamic = 'force-dynamic'
 
 export default async function AdminAuditLogPage() {
+  // STUDIO-GROUP.1 — page-level master gate. /admin layout relaxed
+  // so non-master users with Studio Management child permissions
+  // can pass; audit log stays master-only at the page level.
+  const user = await getCurrentUser()
+  if (!user || user.profileRole !== 'master') redirect('/')
+
   const db = createServerClient()
 
   // Filter source data — small enough to load whole-cloth.

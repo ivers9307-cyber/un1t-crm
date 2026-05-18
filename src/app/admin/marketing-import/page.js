@@ -7,6 +7,7 @@
 
 import { redirect } from 'next/navigation'
 import { getCurrentUser } from '@/lib/auth'
+import { hasPermission } from '@/lib/permissions'
 import MarketingPreferencesImportPanel from '@/components/MarketingPreferencesImportPanel'
 
 export const dynamic = 'force-dynamic'
@@ -14,7 +15,10 @@ export const dynamic = 'force-dynamic'
 export default async function MarketingImportPage() {
   const user = await getCurrentUser()
   if (!user) redirect('/login')
-  if (!user.isMaster) redirect('/')
+  // STUDIO-GROUP.1 — was master-only via isMaster flag; now uses
+  // the `preferences_import` permission. Default still master-only
+  // via role defaults; operators can grant per user from StaffForm.
+  if (!hasPermission(user, 'preferences_import')) redirect('/')
 
   return (
     <div className="p-8 max-w-5xl">

@@ -10,12 +10,21 @@
 // All edits go through /api/admin/achievements/* — same shape as
 // /admin/audit-log, /admin/matrix.
 
+import { redirect } from 'next/navigation'
+import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import AchievementsAdminTable from '@/components/AchievementsAdminTable'
 
 export const dynamic = 'force-dynamic'
 
 export default async function AdminAchievementsPage() {
+  // STUDIO-GROUP.1 — the /admin layout gate was relaxed to allow
+  // non-master users in (for the Studio Management children). This
+  // page is still master-only — add an explicit page-level gate so
+  // we don't accidentally inherit visibility from the relaxed layout.
+  const user = await getCurrentUser()
+  if (!user || user.profileRole !== 'master') redirect('/')
+
   const db = createServerClient()
 
   const [rulesRes, eventTypesRes, locationsRes, earnedRes] = await Promise.all([

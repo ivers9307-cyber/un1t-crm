@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
-import { LayoutDashboard, Users, Columns3, CheckSquare, Calendar, MessagesSquare, CalendarClock, Settings, LogOut, Car, Flag, Receipt, DoorOpen, Activity, ExternalLink, X, FileSignature, Heart, Globe, Download, Tv } from 'lucide-react'
+import { LayoutDashboard, Users, Columns3, CheckSquare, Calendar, MessagesSquare, CalendarClock, Settings, LogOut, Car, Flag, Receipt, DoorOpen, Activity, ExternalLink, X, FileSignature, Heart, Globe, Download, Tv, ChevronDown, ChevronRight as ChevronRightIcon } from 'lucide-react'
 import { createBrowserClient } from '@/lib/supabase'
 import LocationSwitcher from './LocationSwitcher'
 import ImpersonatePicker from './ImpersonatePicker'
@@ -75,46 +75,44 @@ const allNav = [
   // The top-level entry is gone, the /segments URL still works
   // (legacy redirect).
   { href: '/orders',     label: 'Orders',       icon: Receipt,         permission: 'orders' },
-  // Studio Management — mig 093 cross-platform key. Replaces the
-  // mobile-only `door_unlock` flag. Surface today is remote door
-  // unlock via UniFi; future on-site ops land here.
-  { href: '/studio-management', label: 'Studio Management', icon: DoorOpen, permission: 'studio_management' },
+  // Studio Management — expandable section. Parent route
+  // /studio-management renders the door-unlock panel (mig 093 cross-
+  // platform key). The six children below used to be top-level
+  // sidebar entries; STUDIO-GROUP.1 (May 2026) grouped them under
+  // this section so the sidebar collapses operator/admin surfaces
+  // that all relate to on-site studio operations. Each child has
+  // its own per-user permission (mig: STUDIO-GROUP.1 added four
+  // new keys — contracts, tv_displays, glofox_import,
+  // preferences_import) so operators can grant access individually.
+  {
+    href: '/studio-management',
+    label: 'Studio Management',
+    icon: DoorOpen,
+    permission: 'studio_management',
+    groupId: 'studio',  // localStorage key for expand state
+    children: [
+      // Contracts (mig 106) — digital staff/contractor contracts.
+      { href: '/admin/contracts',         label: 'Contracts',             icon: FileSignature, permission: 'contracts' },
+      // TV.1 — TV display management. UC Cast Pro renders /tv/<token>.
+      { href: '/admin/tv-displays',       label: 'TV Displays',           icon: Tv,            permission: 'tv_displays' },
+      // GLOFOX2.3 — interactive Glofox member import + sync history.
+      { href: '/admin/glofox-import',     label: 'Glofox import',         icon: Download,      permission: 'glofox_import' },
+      // CONSENT.5 — bulk import of marketing preferences.
+      { href: '/admin/marketing-import',  label: 'Preferences import',    icon: Download,      permission: 'preferences_import' },
+      // Public landing page — preview link, opens in new tab.
+      { href: '/welcome',                 label: 'Landing page',          icon: Globe,         permission: 'landing_page', openInNewTab: true },
+      // Landing page settings — operator form for the /welcome page.
+      { href: '/settings/landing-page',   label: 'Landing page settings', icon: Globe,         permission: 'landing_page' },
+    ],
+  },
   // Live class — coach view of in-studio HR (mig 110-113). Renders
   // attendees with current zone color, available straps panel, and
   // override-pairing flow. /live redirects to /live/<activeLocation>.
   // Same permission gate as Studio Management — anyone running
-  // class can use it.
+  // class can use it. Stays top-level rather than nested under
+  // Studio Management because operationally it's its own surface
+  // (live HR is a primary screen, not an admin task).
   { href: '/live', label: 'Live HR', icon: Heart, permission: 'studio_management' },
-  // Contracts (mig 106) — digital staff/contractor contracts with
-  // typed-name signatures. Master/owner only — no permission flag,
-  // role-only gate (matches the API + RLS layer). Custom matcher
-  // below uses the masterOrOwnerOnly key.
-  { href: '/admin/contracts', label: 'Contracts', icon: FileSignature, masterOrOwnerOnly: true },
-  // TV.1 — TV display management. UC Cast Pro renders /tv/<token>;
-  // this page registers TVs and pushes content. Master/owner/manager
-  // because it's a marketing surface, not for general staff.
-  { href: '/admin/tv-displays', label: 'TV Displays', icon: Tv, masterOrOwnerOnly: true },
-  // GLOFOX2.3 — interactive Glofox member import + sync history.
-  // Master-only because it touches every contact at the location
-  // (initial backfill / bulk re-sync). The /admin layout already
-  // enforces master at the route level.
-  { href: '/admin/glofox-import', label: 'Glofox import', icon: Download, masterOnly: true },
-  // CONSENT.5 — bulk import of marketing preferences from external
-  // platforms. Master-only because it touches consent state across
-  // the whole contact base. Reuses the csv-parse helper + the same
-  // ClassPass safety as the rest of the consent stack.
-  { href: '/admin/marketing-import', label: 'Preferences import', icon: Download, masterOnly: true },
-  // Public landing page — preview link. Gated by the
-  // 'landing_page' permission (mig 126-130 era) — defaults to
-  // owner+master per role, location-feature-gateable + per-user
-  // overrideable. Replaces the older masterOrOwnerOnly: true flag
-  // so the LocationFeatures matrix can disable it per-location and
-  // operators can grant/revoke it per-user via StaffForm.
-  { href: '/welcome', label: 'Landing page', icon: Globe, permission: 'landing_page', openInNewTab: true },
-  // Landing page settings — operator form for the /welcome page.
-  // Same gate as the preview link above — same permission key,
-  // same default-on-for-owner behaviour.
-  { href: '/settings/landing-page', label: 'Landing page settings', icon: Globe, permission: 'landing_page' },
   { href: '/settings',   label: 'Settings',     icon: Settings,        permission: 'settings' },
 ]
 
@@ -156,20 +154,73 @@ export default function Sidebar({ user, mobileOpen = false, onMobileClose }) {
   // hides everything except Car Processing for non-master users).
   const hasPerm = (key) => hasPermission(user, key)
 
-  // Filter nav based on permissions. Three matching modes:
+  // Match-permission predicate. Used both for top-level items and
+  // for children of expandable sections.
   //   - dashboardGroup: any of dashboard_personal/studio/business
   //   - anyPermission: any of the listed keys (e.g. communications
   //     shows if either email OR whatsapp is held)
   //   - permission (default): the single key listed
+  //   - masterOrOwnerOnly / masterOnly: legacy role-only gates,
+  //     retained for entries that never grew per-user permissions.
   // Privileged actions (staff management, branding, location config)
   // remain owner-only via separate role gates inside those pages.
-  const nav = allNav.filter(item => {
+  function matches(item) {
     if (item.dashboardGroup) return DASHBOARD_PERM_KEYS.some(hasPerm)
     if (item.anyPermission) return item.anyPermission.some(hasPerm)
     if (item.masterOrOwnerOnly) return user?.role === 'master' || user?.role === 'owner'
     if (item.masterOnly) return user?.profileRole === 'master' || user?.role === 'master'
     return hasPerm(item.permission)
-  })
+  }
+
+  // Filter nav. Top-level items with children retain themselves +
+  // their visible children if EITHER (a) the parent's own permission
+  // is held, OR (b) at least one child is visible. This way an
+  // operator who grants `contracts` to a head_coach (who normally
+  // doesn't have `studio_management`) still sees the Studio
+  // Management section in the sidebar with Contracts inside.
+  const nav = allNav
+    .map((item) => {
+      if (!item.children) return item
+      const visibleChildren = item.children.filter(matches)
+      const parentVisible = matches(item) || visibleChildren.length > 0
+      if (!parentVisible) return null
+      return { ...item, _children: visibleChildren, _parentHasPerm: matches(item) }
+    })
+    .filter((item) => {
+      if (!item) return false
+      if (item.children) return true  // already filtered above
+      return matches(item)
+    })
+
+  // STUDIO-GROUP.1 — expand/collapse state for the Studio Management
+  // group, persisted to localStorage so it survives navigation. Auto-
+  // opens the section if the current pathname matches the parent
+  // href OR any child href (so deep-linking into a child shows the
+  // operator their context).
+  const [openGroups, setOpenGroups] = useState({})
+  useEffect(() => {
+    // Hydrate from localStorage on mount.
+    try {
+      const raw = window.localStorage.getItem('sidebar.openGroups')
+      if (raw) setOpenGroups(JSON.parse(raw))
+    } catch { /* ignore */ }
+  }, [])
+  // Persist on change.
+  useEffect(() => {
+    try {
+      window.localStorage.setItem('sidebar.openGroups', JSON.stringify(openGroups))
+    } catch { /* ignore */ }
+  }, [openGroups])
+  function toggleGroup(groupId) {
+    setOpenGroups((prev) => ({ ...prev, [groupId]: !prev[groupId] }))
+  }
+  function isGroupOpen(item) {
+    if (!item.groupId) return false
+    // Auto-open if URL is the parent or any of its children.
+    const autoOpen = pathname === item.href
+      || (item._children || []).some((c) => pathname === c.href || (c.href !== '/' && pathname.startsWith(c.href)))
+    return openGroups[item.groupId] ?? autoOpen
+  }
 
   async function handleLogout() {
     const supabase = createBrowserClient()
@@ -233,41 +284,26 @@ export default function Sidebar({ user, mobileOpen = false, onMobileClose }) {
 
       {/* Navigation */}
       <nav className="flex-1 py-4">
-        {nav.map(({ href, label, icon: Icon, extraActivePaths, openInNewTab }) => {
-          // Active when the URL matches the entry's href OR any of
-          // the merged-feature aliases (e.g. /events highlights the
-          // Calendly entry that points at /bookings).
-          const active = pathname === href
-            || (href !== '/' && pathname.startsWith(href))
-            || (extraActivePaths || []).some(p => pathname.startsWith(p))
-
-          // Public surfaces (e.g. the marketing landing page) open in
-          // a new tab so the operator doesn't lose their CRM context
-          // when previewing the customer-facing view. Uses a plain
-          // <a> with target+rel rather than next/link prefetch since
-          // we want a real new browser tab, not a soft client-side
-          // navigation.
-          const className = clsx(
-            'flex items-center gap-3 px-5 py-2.5 text-sm transition-colors',
-            active
-              ? 'text-un1t-white bg-un1t-gray/50 border-l-2 border-un1t-white'
-              : 'text-un1t-light hover:text-un1t-white hover:bg-un1t-gray/30 border-l-2 border-transparent'
-          )
-
-          if (openInNewTab) {
+        {nav.map((item) => {
+          // Expandable parent (Studio Management). The parent label
+          // navigates; a separate chevron toggles expand/collapse.
+          if (item.children) {
             return (
-              <a key={href} href={href} target="_blank" rel="noopener noreferrer" className={className}>
-                <Icon size={18} />
-                {label}
-                <ExternalLink size={11} className="opacity-60 ml-1" />
-              </a>
+              <SidebarGroup
+                key={item.href}
+                item={item}
+                pathname={pathname}
+                open={isGroupOpen(item)}
+                onToggle={() => toggleGroup(item.groupId)}
+              />
             )
           }
           return (
-            <Link key={href} href={href} className={className}>
-              <Icon size={18} />
-              {label}
-            </Link>
+            <SidebarItem
+              key={item.href}
+              item={item}
+              pathname={pathname}
+            />
           )
         })}
       </nav>
@@ -326,5 +362,95 @@ export default function Sidebar({ user, mobileOpen = false, onMobileClose }) {
         </div>
       </div>
     </aside>
+  )
+}
+
+// ----- Sidebar item renderers ------------------------------------
+// Pulled out into small components so the main Sidebar map() stays
+// readable. SidebarItem handles a single leaf nav entry; SidebarGroup
+// handles a parent + chevron + indented children list.
+
+function leafClassName(active, isChild = false) {
+  return clsx(
+    'flex items-center gap-3 text-sm transition-colors',
+    isChild ? 'pl-12 pr-5 py-2' : 'px-5 py-2.5',
+    active
+      ? 'text-un1t-white bg-un1t-gray/50 border-l-2 border-un1t-white'
+      : 'text-un1t-light hover:text-un1t-white hover:bg-un1t-gray/30 border-l-2 border-transparent'
+  )
+}
+
+function isPathActive(pathname, href, extraActivePaths) {
+  return pathname === href
+    || (href !== '/' && pathname.startsWith(href))
+    || (extraActivePaths || []).some((p) => pathname.startsWith(p))
+}
+
+function SidebarItem({ item, pathname, isChild = false }) {
+  const { href, label, icon: Icon, extraActivePaths, openInNewTab } = item
+  const active = isPathActive(pathname, href, extraActivePaths)
+  const className = leafClassName(active, isChild)
+  if (openInNewTab) {
+    return (
+      <a href={href} target="_blank" rel="noopener noreferrer" className={className}>
+        <Icon size={isChild ? 14 : 18} />
+        {label}
+        <ExternalLink size={11} className="opacity-60 ml-1" />
+      </a>
+    )
+  }
+  return (
+    <Link href={href} className={className}>
+      <Icon size={isChild ? 14 : 18} />
+      {label}
+    </Link>
+  )
+}
+
+function SidebarGroup({ item, pathname, open, onToggle }) {
+  const { href, label, icon: Icon, extraActivePaths, _children: children, _parentHasPerm: parentHasPerm } = item
+  const parentActive = isPathActive(pathname, href, extraActivePaths)
+  const Chevron = open ? ChevronDown : ChevronRightIcon
+
+  // Parent row: clickable link to /studio-management (if perm), or
+  // an inert label if the user has no parent perm but can see a
+  // child. The chevron is a separate clickable area so toggling the
+  // section open/closed doesn't navigate the user away.
+  return (
+    <div>
+      <div className="flex items-stretch">
+        {parentHasPerm ? (
+          <Link href={href} className={clsx(leafClassName(parentActive), 'flex-1')}>
+            <Icon size={18} />
+            {label}
+          </Link>
+        ) : (
+          // No parent perm — still surface the section header so the
+          // user can find their accessible children. Render as a
+          // plain row, not a link, with reduced opacity to hint at
+          // the read-only state.
+          <div className={clsx(leafClassName(false), 'flex-1 cursor-default opacity-80')}>
+            <Icon size={18} />
+            {label}
+          </div>
+        )}
+        <button
+          type="button"
+          onClick={onToggle}
+          aria-expanded={open}
+          aria-label={open ? `Collapse ${label}` : `Expand ${label}`}
+          className="px-3 text-un1t-light hover:text-un1t-white transition-colors"
+        >
+          <Chevron size={14} />
+        </button>
+      </div>
+      {open && (
+        <div>
+          {children.map((child) => (
+            <SidebarItem key={child.href} item={child} pathname={pathname} isChild />
+          ))}
+        </div>
+      )}
+    </div>
   )
 }
