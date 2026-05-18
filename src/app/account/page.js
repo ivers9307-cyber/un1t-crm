@@ -15,6 +15,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { resolveLandingPreference } from '@shared/permissions'
 import AccountForm from '@/components/AccountForm'
+import PasswordChangeForm from '@/components/PasswordChangeForm'
 
 export const dynamic = 'force-dynamic'
 
@@ -48,6 +49,10 @@ export default async function AccountPage() {
         initialPreference={currentPreference}
         allowed={allowed}
       />
+
+      <div className="mt-8 pt-6 border-t border-un1t-gray">
+        <PasswordChangeForm email={user.email} />
+      </div>
 
       <div className="mt-8 pt-6 border-t border-un1t-gray">
         <h2 className="text-sm font-semibold uppercase tracking-wider text-un1t-light mb-3">
