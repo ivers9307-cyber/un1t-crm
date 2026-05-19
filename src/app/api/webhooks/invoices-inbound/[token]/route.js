@@ -137,9 +137,29 @@ export async function POST(request, { params }) {
   }
 
   // Resolve recipient → slug → location.
-  const slug = parseInboundAddress(body.ToFull) || parseInboundAddress(body.To)
+  //
+  // Postmark gives us three places the slug might appear, in
+  // priority order:
+  //   1. ToFull[] — typed-recipient list (preferred — already
+  //      normalised by Postmark into { Email, Name, MailboxHash })
+  //   2. To — display string "Name <addr>, Name <addr>"
+  //   3. OriginalRecipient — the actual envelope RCPT TO from
+  //      the SMTP transaction. Per the Postmark spec, when an
+  //      email is CC'd or BCC'd or routed via a forwarding domain
+  //      that rewrote the visible To, this is the ground truth
+  //      of where Postmark received the mail.
+  //
+  // Falling back through all three avoids silently dropping
+  // legitimate invoices that were addressed to the slug via Cc/Bcc
+  // or a forwarding hop.
+  const slug =
+    parseInboundAddress(body.ToFull) ||
+    parseInboundAddress(body.To) ||
+    parseInboundAddress(body.OriginalRecipient)
   if (!slug) {
-    console.warn('[invoices-inbound] could not parse slug from recipient', { To: body.To, ToFull: body.ToFull })
+    console.warn('[invoices-inbound] could not parse slug from recipient', {
+      To: body.To, ToFull: body.ToFull, OriginalRecipient: body.OriginalRecipient,
+    })
     return NextResponse.json({ success: true, ignored: 'unparseable_recipient' })
   }
 

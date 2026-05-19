@@ -41,6 +41,19 @@ describe('parseInboundAddress', () => {
     expect(parseInboundAddress(toFull)).toBe('foo')
   })
 
+  it('handles the OriginalRecipient single-string form (Postmark spec)', () => {
+    // Per Postmark docs OriginalRecipient is a plain string with
+    // the envelope RCPT TO. The same parser handles it because we
+    // accept either string or { Email } objects.
+    expect(parseInboundAddress('dublin-invoices@un1tdublin.com')).toBe('dublin')
+  })
+
+  it('handles plus-addressing on the slug local part', () => {
+    // Postmark uses MailboxHash for the +-suffix. Our parser
+    // strips it from the local part so the slug still matches.
+    expect(parseInboundAddress('dublin-invoices+ref-123@un1tdublin.com')).toBe('dublin')
+  })
+
   it('returns null on a wrong domain', () => {
     expect(parseInboundAddress('dublin-invoices@example.com')).toBeNull()
   })
