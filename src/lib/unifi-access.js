@@ -129,70 +129,72 @@ async function call(cfg, method, path, body) {
 /**
  * Search for a user by email. Returns the first matching user or null.
  *
- * Wraps §3.24 POST /users/search with a phrase-match on user_email. The
- * controller can return multiple users (different first names, same
- * email is normally rejected by UniFi but happened to one staffer once,
- * so we tolerate it and pick the first).
+ * UNIFI-DOORS-SCOPE (Bug 1): previously wrapped §3.24 POST
+ * /users/search. Two problems with that:
+ *   1. The endpoint requires UniFi Access 3.1.30+; older firmware
+ *      404s the path entirely. The 404 surfaces in the staff edit
+ *      UniFi user picker as "404: The API was not found".
+ *   2. The official docs (assets.identity.ui.com/unifi-access/
+ *      api_reference.pdf §3.24) document the method as GET, not POST,
+ *      so even on 3.1.30+ the POST call returns 404 because no
+ *      handler is bound to that verb.
+ *
+ * Fixed path: delegate to listUnifiUsers() (which calls GET /users —
+ * §3.5, available on every firmware version) and filter by email
+ * client-side. The list is bounded so this stays cheap.
  */
 export async function findUnifiUserByEmail(cfg, email) {
   if (!email) return null
-  const data = await call(cfg, 'POST', '/users/search', {
-    keyword: email,
-    page_num: 1,
-    page_size: 25,
-  })
-  // Response shape: { users: [...], pagination: {...} } per docs §3.24.
-  const users = Array.isArray(data?.users) ? data.users : Array.isArray(data) ? data : []
-  const exact = users.find(u =>
+  const all = await listUnifiUsers(cfg)
+  const exact = all.find(u =>
     (u.user_email || '').toLowerCase() === email.toLowerCase()
   )
   return exact || null
 }
 
 /**
- * List all UniFi Access users at the controller, paginated. Returns a
- * flat array of { id, full_name, user_email, employee_number, status,
- * nfc_cards } objects (we map UniFi's first_name + last_name into a
- * combined full_name for picker UI convenience).
+ * List all UniFi Access users at the controller. Returns a flat array
+ * of { id, full_name, user_email, employee_number, status, nfc_count }
+ * objects (we map UniFi's first_name + last_name into a combined
+ * full_name for picker UI convenience).
  *
- * Used by the staff-edit UniFi user picker (mig 120 attendance) so the
- * operator can manually link a CRM profile to an existing UniFi user
- * — the alternative to the auto-create path findOrCreateUnifiUser
- * takes when the door-access toggle is flipped on.
+ * Used by:
+ *   - the staff-edit UniFi user picker (mig 120 attendance) so the
+ *     operator can manually link a CRM profile to an existing UniFi
+ *     user
+ *   - findUnifiUserByEmail() above for the auto-link-on-first-email-
+ *     match path
  *
- * Implementation: /users/search with an empty keyword returns the
- * full user list from the controller, paginated. We walk pages until
- * we run out, capping at 1000 to keep the response bounded for
- * studios with thousands of registered cards.
+ * UNIFI-DOORS-SCOPE (Bug 1): previously walked §3.24 POST
+ * /users/search with paginated keyword='' calls. That endpoint requires
+ * 3.1.30+ and is documented as GET-only — POSTing to it 404s on all
+ * versions. Switched to §3.5 GET /api/v1/developer/users which:
+ *   - Has been available since the earliest UniFi Access API versions
+ *   - Returns the full unpaginated list in one call (the docs don't
+ *     surface a pagination param for §3.5)
+ *   - Carries the same permission key (view:user) as the search
+ *     endpoint, so existing API tokens keep working
+ *
+ * The maxUsers cap is preserved as a defensive trim — if a controller
+ * ever returns a runaway list, we cap and continue rather than blowing
+ * up the picker.
  */
-export async function listUnifiUsers(cfg, { maxUsers = 1000, pageSize = 100 } = {}) {
-  const out = []
-  let page = 1
-  // Hard cap on pages so a misbehaving controller can't walk us forever.
-  while (out.length < maxUsers && page <= 50) {
-    const data = await call(cfg, 'POST', '/users/search', {
-      keyword: '',          // empty keyword → return all
-      page_num: page,
-      page_size: pageSize,
-    })
-    const batch = Array.isArray(data?.users) ? data.users : Array.isArray(data) ? data : []
-    if (batch.length === 0) break
-    for (const u of batch) {
-      out.push({
-        id:               u.id,
-        full_name:        [u.first_name, u.last_name].filter(Boolean).join(' ').trim() || u.user_email || u.id,
-        first_name:       u.first_name || '',
-        last_name:        u.last_name || '',
-        user_email:       u.user_email || null,
-        employee_number:  u.employee_number || null,
-        status:           u.status || null,
-        nfc_count:        Array.isArray(u.nfc_cards) ? u.nfc_cards.length : 0,
-      })
-      if (out.length >= maxUsers) break
-    }
-    if (batch.length < pageSize) break  // last page
-    page++
-  }
+export async function listUnifiUsers(cfg, { maxUsers = 1000 } = {}) {
+  const data = await call(cfg, 'GET', '/users')
+  // Response shape per §3.5: either a bare array, or { users: [...] }
+  // depending on firmware. Tolerate both.
+  const raw = Array.isArray(data) ? data : Array.isArray(data?.users) ? data.users : []
+  const trimmed = raw.slice(0, maxUsers)
+  const out = trimmed.map((u) => ({
+    id:               u.id,
+    full_name:        [u.first_name, u.last_name].filter(Boolean).join(' ').trim() || u.user_email || u.id,
+    first_name:       u.first_name || '',
+    last_name:        u.last_name || '',
+    user_email:       u.user_email || null,
+    employee_number:  u.employee_number || null,
+    status:           u.status || null,
+    nfc_count:        Array.isArray(u.nfc_cards) ? u.nfc_cards.length : 0,
+  }))
   // Sort alphabetically — the picker is much friendlier when names
   // come back in a stable order.
   out.sort((a, b) => a.full_name.localeCompare(b.full_name))

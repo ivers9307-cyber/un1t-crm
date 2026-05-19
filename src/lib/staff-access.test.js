@@ -13,6 +13,42 @@ import {
   canEditLocationFeatures,
 } from './staff-access.js'
 
+describe('mapProfileLocationToAssignment — surfaces UNIFI-DOORS-SCOPE fields', () => {
+  it('passes unifi_door_ids through as-is when present', () => {
+    const pl = {
+      location_id: 'loc-A',
+      role: 'staff',
+      unifi_door_ids: ['door-main', 'door-physio'],
+      permissions: {},
+    }
+    const a = mapProfileLocationToAssignment(pl)
+    expect(a.unifi_door_ids).toEqual(['door-main', 'door-physio'])
+  })
+
+  it('passes empty array through (means "no doors visible")', () => {
+    const pl = { location_id: 'loc-A', role: 'staff', unifi_door_ids: [], permissions: {} }
+    const a = mapProfileLocationToAssignment(pl)
+    expect(a.unifi_door_ids).toEqual([])
+  })
+
+  it('passes null through (legacy fallback for manager+ roles after mig 182)', () => {
+    const pl = { location_id: 'loc-A', role: 'manager', unifi_door_ids: null, permissions: {} }
+    const a = mapProfileLocationToAssignment(pl)
+    expect(a.unifi_door_ids).toBeNull()
+  })
+
+  it('surfaces protect_face_id alongside the other UniFi fields', () => {
+    const pl = {
+      location_id: 'loc-A',
+      role: 'staff',
+      protect_face_id: 'face-uuid-1',
+      permissions: {},
+    }
+    const a = mapProfileLocationToAssignment(pl)
+    expect(a.protect_face_id).toBe('face-uuid-1')
+  })
+})
+
 describe('mapProfileLocationToAssignment — preserves permissions', () => {
   it('passes the permissions JSONB through unmodified', () => {
     // The bug was that the staff edit page narrowed its SELECT to

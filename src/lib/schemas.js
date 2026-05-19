@@ -86,6 +86,15 @@ export const assignmentSchema = z.object({
   // hint by the staff PUT — when present and door access is ON, the
   // route uses this id rather than calling findOrCreateUnifiUser.
   unifi_user_id: z.string().nullable().optional(),
+  // UNIFI-DOORS-SCOPE (mig 182) — per-location allowlist of UniFi
+  // Access door IDs this user can remote-unlock from the iOS Studio
+  // Management screen. NULL = legacy fallback (route shows all doors
+  // for manager+ roles only). Empty array = no doors visible.
+  // Populated = exactly those doors. Strings are UniFi-controller-
+  // assigned door IDs; the staff edit UI fetches the door list from
+  // /api/locations/[id]/unifi-doors and the operator ticks the ones
+  // the member is allowed to see.
+  unifi_door_ids: z.array(z.string().min(1).max(200)).nullable().optional(),
   // Per-location user permission overrides (mig 058). Empty `{}` =
   // "use the role default at this assignment's role". Top-level
   // keys mirror WEB_PERMISSIONS; nested `mobile` sub-object mirrors

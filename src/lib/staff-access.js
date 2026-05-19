@@ -36,7 +36,7 @@
  * updating this single shape.
  *
  * @param {object} pl  profile_locations row
- * @returns {{ location_id, role, is_default, unifi_door_access, unifi_user_id, permissions }}
+ * @returns {{ location_id, role, is_default, unifi_door_access, unifi_user_id, unifi_door_ids, protect_face_id, permissions }}
  */
 export function mapProfileLocationToAssignment(pl) {
   if (!pl) return null
@@ -48,6 +48,16 @@ export function mapProfileLocationToAssignment(pl) {
     // Surfaced so the staff edit UniFi user picker (mig 120) can show
     // which UniFi user is currently linked. Empty/null = unlinked.
     unifi_user_id: pl.unifi_user_id || null,
+    // UNIFI-DOORS-SCOPE (mig 182) — per-location door allowlist.
+    // Hydrated as an array so the form's multi-select renders the
+    // current selection. NULL from the DB (legacy fallback for
+    // manager+ roles after mig 182 backfill) surfaces here as null,
+    // which the form treats as "all doors" mode. An empty array
+    // means "no doors visible".
+    unifi_door_ids: Array.isArray(pl.unifi_door_ids) ? pl.unifi_door_ids : (pl.unifi_door_ids ?? null),
+    // P2.4 — Protect face link (mig 142). Surfaced here so the
+    // ProtectFacePicker can pre-select the current value.
+    protect_face_id: pl.protect_face_id || null,
     // CRITICAL: keep the permissions blob. StaffForm's hydration
     // path (initialAssignments in StaffForm.jsx) only renders the
     // saved overrides when permissions has keys; an empty/undefined
