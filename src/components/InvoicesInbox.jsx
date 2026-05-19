@@ -21,6 +21,26 @@
 
 import { useEffect, useMemo, useState, useCallback } from 'react'
 import Link from 'next/link'
+import { INVOICE_CATEGORIES } from '@/lib/invoice-extraction'
+
+// INVOICES.3 — friendly labels for the category dropdown. Keys
+// match the enum in INVOICE_CATEGORIES exactly; the underscore →
+// space + Title Case mapping is done here so the UI stays readable.
+const CATEGORY_LABEL = {
+  utilities: 'Utilities',
+  cleaning: 'Cleaning',
+  equipment: 'Equipment',
+  marketing: 'Marketing',
+  insurance: 'Insurance',
+  rent: 'Rent',
+  maintenance: 'Maintenance & Repairs',
+  professional_services: 'Professional services',
+  staff_training: 'Staff training',
+  office_supplies: 'Office supplies',
+  software: 'Software & subscriptions',
+  bank_fees: 'Bank & merchant fees',
+  other: 'Other',
+}
 
 const TAB_DEFS = [
   { key: 'quality',   label: 'Quality review', statuses: ['received'] },
@@ -519,6 +539,23 @@ function StageTwoBlock({ row, busy, onSaveFields, onApprove, onReject }) {
         <FieldRow label="Subtotal"     value={numField('subtotal')}        onChange={(v) => setField('subtotal', v === '' ? null : Number(v))} type="number" />
         <FieldRow label="VAT / tax"    value={numField('tax_amount')}      onChange={(v) => setField('tax_amount', v === '' ? null : Number(v))} type="number" />
         <FieldRow label="Total"        value={numField('total')}           onChange={(v) => setField('total', v === '' ? null : Number(v))} type="number" />
+        {/* INVOICES.3 — Claude-suggested category + account code.
+            Category is a dropdown sourced from INVOICE_CATEGORIES;
+            account_code is free-text so it survives a non-standard
+            Xero chart of accounts. Both flow into the Xero email
+            forward body as hints to the bookkeeper. */}
+        <SelectRow
+          label="Category (suggested)"
+          value={strField('category')}
+          onChange={(v) => setField('category', v || null)}
+          options={INVOICE_CATEGORIES.map((k) => ({ value: k, label: CATEGORY_LABEL[k] || k }))}
+        />
+        <FieldRow
+          label="Xero account code"
+          value={strField('account_code')}
+          onChange={(v) => setField('account_code', v || null)}
+          placeholder="e.g. 400"
+        />
       </div>
 
       <div className="flex gap-2 flex-wrap">
@@ -588,6 +625,27 @@ function FieldRow({ label, value, onChange, type = 'text', placeholder }) {
   )
 }
 
+// INVOICES.3 — dropdown for the category field. Same outer shape
+// as FieldRow so the grid lays out cleanly; empty option renders
+// as "—" (null in the data).
+function SelectRow({ label, value, onChange, options }) {
+  return (
+    <label className="block">
+      <span className="text-xs uppercase tracking-wide text-un1t-light">{label}</span>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="mt-1 w-full bg-un1t-black border border-un1t-grey rounded-md px-2 py-1.5 text-sm text-un1t-white"
+      >
+        <option value="">—</option>
+        {options.map((o) => (
+          <option key={o.value} value={o.value}>{o.label}</option>
+        ))}
+      </select>
+    </label>
+  )
+}
+
 function ForwardedSummary({ row }) {
   const f = row.extracted_fields || {}
   return (
@@ -629,6 +687,8 @@ function ReadOnlyFieldsSummary({ fields }) {
     ['Subtotal',      fields.subtotal],
     ['VAT / tax',     fields.tax_amount],
     ['Total',         fields.total],
+    ['Category',      fields.category ? (CATEGORY_LABEL[fields.category] || fields.category) : null],
+    ['Account code',  fields.account_code],
   ].filter(([, v]) => v != null && v !== '')
   if (rows.length === 0) return null
   return (
