@@ -3,7 +3,7 @@
 //
 // Postmark routes mail addressed to *@<server>.inbound.postmarkapp.com
 // (or our configured custom inbound domain) here. We rely on the
-// recipient address — `<slug>-invoices@un1tdublin.com` — to pick
+// recipient address — `<slug>-invoices@mail.un1tdublin.com` — to pick
 // the location. The slug column on `locations` is unique partial,
 // so a slug-collision is impossible.
 //

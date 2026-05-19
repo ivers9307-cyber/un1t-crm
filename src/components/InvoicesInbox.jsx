@@ -152,7 +152,7 @@ function ForwardingAddresses({ locations }) {
           <li key={l.id} className="flex justify-between gap-3">
             <span className="text-un1t-white">{l.name}</span>
             {l.invoices_inbound_slug ? (
-              <code className="text-un1t-light">{l.invoices_inbound_slug}-invoices@un1tdublin.com</code>
+              <code className="text-un1t-light">{l.invoices_inbound_slug}-invoices@mail.un1tdublin.com</code>
             ) : (
               <Link href={`/settings/locations/${l.id}`} className="text-un1t-light underline">
                 Configure forwarding slug

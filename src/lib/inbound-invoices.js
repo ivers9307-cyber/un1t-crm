@@ -2,8 +2,10 @@
 //
 // Owns:
 //   • parseInboundAddress(toAddress)  — extract slug from
-//     <slug>-invoices@un1tdublin.com (case insensitive, robust to
-//     "Display Name <addr>" and "+tag" variants)
+//     <slug>-invoices@mail.un1tdublin.com (case insensitive, robust
+//     to "Display Name <addr>" and "+tag" variants). mail. subdomain
+//     is the dedicated inbound MX host so the marketing apex
+//     (un1tdublin.com) is free to keep its own MX records.
 //   • status transition validation — the inbox UI and the API
 //     routes both reach for this to enforce the legal state moves
 //   • storage path helper — keeps per-location partitioning
@@ -13,7 +15,11 @@
 // Pure functions only. No DB calls — those live in the API routes
 // so they can be tested without mocking Supabase.
 
-const DOMAIN = 'un1tdublin.com'
+// Inbound mail subdomain. The marketing site keeps un1tdublin.com's
+// MX records pointing at the public mailbox; mail.un1tdublin.com
+// has its MX delegated to Postmark's inbound infra so supplier
+// invoices route here without colliding with the apex.
+const DOMAIN = 'mail.un1tdublin.com'
 const SLUG_SUFFIX = '-invoices'
 
 // MIME types we accept. Matches src/lib/invoice-extraction.js so
@@ -57,7 +63,7 @@ function normaliseAddress(input) {
  * Postmark's ToFull), return the location slug or null.
  *
  * Match rule: local part must end with "-invoices" and domain must
- * match un1tdublin.com (case-insensitive). The portion before
+ * match mail.un1tdublin.com (case-insensitive). The portion before
  * "-invoices" must satisfy the slug regex.
  */
 export function parseInboundAddress(toAddress) {

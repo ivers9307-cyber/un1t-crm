@@ -18,25 +18,25 @@ import {
 
 describe('parseInboundAddress', () => {
   it('extracts slug from a plain string recipient', () => {
-    expect(parseInboundAddress('dublin-city-invoices@un1tdublin.com')).toBe('dublin-city')
+    expect(parseInboundAddress('dublin-city-invoices@mail.un1tdublin.com')).toBe('dublin-city')
   })
 
   it('case-folds the local part and domain', () => {
-    expect(parseInboundAddress('DUBLIN-CITY-Invoices@UN1Tdublin.COM')).toBe('dublin-city')
+    expect(parseInboundAddress('DUBLIN-CITY-Invoices@MAIL.UN1Tdublin.COM')).toBe('dublin-city')
   })
 
   it('strips display name from "Name <addr>" format', () => {
-    expect(parseInboundAddress('Vendor Co <accounts-invoices@un1tdublin.com>')).toBe('accounts')
+    expect(parseInboundAddress('Vendor Co <accounts-invoices@mail.un1tdublin.com>')).toBe('accounts')
   })
 
   it('strips Postmark +tag suffix', () => {
-    expect(parseInboundAddress('dublin-invoices+x@un1tdublin.com')).toBe('dublin')
+    expect(parseInboundAddress('dublin-invoices+x@mail.un1tdublin.com')).toBe('dublin')
   })
 
   it('accepts the Postmark ToFull array shape', () => {
     const toFull = [
       { Email: 'other@example.com', Name: 'Other' },
-      { Email: 'foo-invoices@un1tdublin.com', Name: 'Foo Address' },
+      { Email: 'foo-invoices@mail.un1tdublin.com', Name: 'Foo Address' },
     ]
     expect(parseInboundAddress(toFull)).toBe('foo')
   })
@@ -45,13 +45,13 @@ describe('parseInboundAddress', () => {
     // Per Postmark docs OriginalRecipient is a plain string with
     // the envelope RCPT TO. The same parser handles it because we
     // accept either string or { Email } objects.
-    expect(parseInboundAddress('dublin-invoices@un1tdublin.com')).toBe('dublin')
+    expect(parseInboundAddress('dublin-invoices@mail.un1tdublin.com')).toBe('dublin')
   })
 
   it('handles plus-addressing on the slug local part', () => {
     // Postmark uses MailboxHash for the +-suffix. Our parser
     // strips it from the local part so the slug still matches.
-    expect(parseInboundAddress('dublin-invoices+ref-123@un1tdublin.com')).toBe('dublin')
+    expect(parseInboundAddress('dublin-invoices+ref-123@mail.un1tdublin.com')).toBe('dublin')
   })
 
   it('returns null on a wrong domain', () => {
@@ -60,11 +60,11 @@ describe('parseInboundAddress', () => {
 
   it('returns null on a slug that fails the regex', () => {
     // Starts with a hyphen — DB CHECK would reject this too.
-    expect(parseInboundAddress('-bad-invoices@un1tdublin.com')).toBeNull()
+    expect(parseInboundAddress('-bad-invoices@mail.un1tdublin.com')).toBeNull()
   })
 
   it('returns null when the local part is not the *-invoices form', () => {
-    expect(parseInboundAddress('hello@un1tdublin.com')).toBeNull()
+    expect(parseInboundAddress('hello@mail.un1tdublin.com')).toBeNull()
   })
 
   it('returns null on garbage input', () => {

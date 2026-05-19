@@ -329,7 +329,7 @@ export default function LocationForm({ location, callerRole = 'owner', organizat
       <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5 space-y-4">
         <h3 className="font-semibold text-sm text-un1t-light uppercase tracking-wider">Invoice Forwarding</h3>
         <p className="text-xs text-un1t-mid">
-          Forward supplier invoices to <code className="text-un1t-light">{(invoicesInboundSlug || '<slug>')}-invoices@un1tdublin.com</code> and they&apos;ll land in <a href="/invoices" className="underline text-un1t-light">Invoices</a> awaiting quality review. Lowercase letters, digits, hyphens only. Must be unique across locations. Leave blank to disable.
+          Forward supplier invoices to <code className="text-un1t-light">{(invoicesInboundSlug || '<slug>')}-invoices@mail.un1tdublin.com</code> and they&apos;ll land in <a href="/invoices" className="underline text-un1t-light">Invoices</a> awaiting quality review. Lowercase letters, digits, hyphens only. Must be unique across locations. Leave blank to disable.
         </p>
 
         <div>
