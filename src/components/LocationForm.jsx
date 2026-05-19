@@ -40,6 +40,16 @@ export default function LocationForm({ location, callerRole = 'owner', organizat
     location?.monthly_contractor_budget_eur != null ? String(location.monthly_contractor_budget_eur) : ''
   )
 
+  // INVOICES.1 — local part of the per-location invoice forwarding
+  // address. Empty = inbound ingest off. DB CHECK enforces the slug
+  // regex (`^[a-z0-9][a-z0-9-]{1,40}$`); we mirror it client-side
+  // for a nicer error and to keep the input feedback immediate.
+  const [invoicesInboundSlug, setInvoicesInboundSlug] = useState(
+    location?.invoices_inbound_slug || ''
+  )
+  const INVOICE_SLUG_RE = /^[a-z0-9][a-z0-9-]{1,40}$/
+  const invoiceSlugInvalid = invoicesInboundSlug.length > 0 && !INVOICE_SLUG_RE.test(invoicesInboundSlug)
+
   // SETTINGS.1 — Glofox / UniFi / Sensibo / AC are now their own
   // tabs under <LocationIntegrations> below this form. Their state
   // + save logic lives in the per-tab components; LocationForm
@@ -61,6 +71,11 @@ export default function LocationForm({ location, callerRole = 'owner', organizat
     // and we fall back to the existing value.
     if (!isEditing && !organizationId) {
       setError('Pick an organization for this location.')
+      setSaving(false)
+      return
+    }
+    if (invoiceSlugInvalid) {
+      setError('Invoice forwarding slug must be 2–41 chars: lowercase letters, digits, hyphens (must start with a letter or digit).')
       setSaving(false)
       return
     }
@@ -88,6 +103,10 @@ export default function LocationForm({ location, callerRole = 'owner', organizat
       monthly_contractor_budget_eur: contractorBudget.trim() === ''
         ? null
         : (Number.isFinite(Number(contractorBudget)) ? Number(contractorBudget) : null),
+      // INVOICES.1 — null = inbound invoice ingest disabled. The DB
+      // CHECK accepts only the slug regex; we already block bad
+      // inputs at submit time, but trim defensively just in case.
+      invoices_inbound_slug: invoicesInboundSlug.trim() === '' ? null : invoicesInboundSlug.trim(),
       // SETTINGS.1 — sensibo_api_key / sensibo_pod_id / ac_default_*,
       // settings.glofox, and settings.unifi are deliberately NOT
       // included in this payload. Postgres leaves untouched columns
@@ -298,6 +317,37 @@ export default function LocationForm({ location, callerRole = 'owner', organizat
           <p className="text-[11px] text-un1t-mid mt-1">
             Phase 5 will add an owner-approval gate when a published roster exceeds this budget. Right now the summary panel below the schedule is read-only / advisory.
           </p>
+        </div>
+      </div>
+
+
+      {/* INVOICES.1 — Dext-style inbound invoice ingest. Slug must
+          be unique across all locations (partial unique index in
+          mig 184). Leave blank to disable inbound ingest for this
+          studio — the /invoices inbox still works for direct
+          uploads but no forwarded email will route here. */}
+      <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5 space-y-4">
+        <h3 className="font-semibold text-sm text-un1t-light uppercase tracking-wider">Invoice Forwarding</h3>
+        <p className="text-xs text-un1t-mid">
+          Forward supplier invoices to <code className="text-un1t-light">{(invoicesInboundSlug || '<slug>')}-invoices@un1tdublin.com</code> and they&apos;ll land in <a href="/invoices" className="underline text-un1t-light">Invoices</a> awaiting quality review. Lowercase letters, digits, hyphens only. Must be unique across locations. Leave blank to disable.
+        </p>
+
+        <div>
+          <label className="block text-sm mb-1.5">Forwarding slug</label>
+          <input
+            type="text"
+            value={invoicesInboundSlug}
+            onChange={e => setInvoicesInboundSlug(e.target.value.toLowerCase())}
+            placeholder="e.g. dublin-city"
+            className={`w-64 bg-un1t-black border rounded-md px-3 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid ${
+              invoiceSlugInvalid ? 'border-red-500' : 'border-un1t-gray'
+            }`}
+          />
+          {invoiceSlugInvalid && (
+            <p className="text-[11px] text-red-400 mt-1">
+              Must be 2–41 chars, start with a letter or digit, lowercase only.
+            </p>
+          )}
         </div>
       </div>
 
