@@ -17,7 +17,7 @@ export const runtime = 'nodejs'
 export const metadata = {
   title: 'Privacy policy · UN1T Dublin',
   description:
-    'How UN1T Dublin Ltd collects, uses, and protects personal data in the UN1T CRM web and iOS applications.',
+    'How UN1T Dublin Ltd collects, uses, and protects personal data in the UN1T CRM web application and the CF Studio iOS app.',
 }
 
 export default function PrivacyPolicy() {
@@ -27,7 +27,7 @@ export default function PrivacyPolicy() {
         <header className="mb-10">
           <h1 className="text-3xl font-bold tracking-tight">Privacy policy</h1>
           <p className="mt-2 text-sm text-gray-500">
-            Last updated 6 May 2026
+            Last updated 19 May 2026
           </p>
         </header>
 
@@ -36,9 +36,10 @@ export default function PrivacyPolicy() {
             This policy explains how UN1T Dublin Ltd (&ldquo;we&rdquo;,
             &ldquo;us&rdquo;) handles personal data when you use the UN1T CRM
             web application at <strong>crm.un1tdublin.com</strong> and the
-            UN1T CRM iOS application (collectively, the &ldquo;Service&rdquo;).
-            We are the data controller for the Service under the EU General
-            Data Protection Regulation and the Irish Data Protection Act 2018.
+            <strong> CF Studio</strong> iOS application (collectively, the
+            &ldquo;Service&rdquo;). We are the data controller for the
+            Service under the EU General Data Protection Regulation and
+            the Irish Data Protection Act 2018.
           </p>
 
           <h2 className="text-xl font-semibold mt-8 mb-3">1. Who this applies to</h2>
@@ -120,7 +121,7 @@ export default function PrivacyPolicy() {
 
           <h2 className="text-xl font-semibold mt-8 mb-3">8. Mobile-app specifics</h2>
           <p>
-            The UN1T CRM iOS app stores its session token and a small impersonation flag (used by master accounts to debug what another staff member sees) inside the iOS Keychain via Apple&rsquo;s SecureStore. It does not write to iCloud, the camera roll, contacts, or any other shared system store. The app uses Expo&rsquo;s over-the-air update channel to ship JavaScript updates between native releases; only the app bundle is downloaded — no personal data is sent during update checks.
+            The CF Studio iOS app (bundle ID <code>com.un1tdublin.crm</code>) stores its session token and a small impersonation flag (used by master accounts to debug what another staff member sees) inside the iOS Keychain via Apple&rsquo;s SecureStore. It does not write to iCloud, the camera roll, contacts, or any other shared system store. The app uses Expo&rsquo;s over-the-air update channel to ship JavaScript updates between native releases; only the app bundle is downloaded — no personal data is sent during update checks.
           </p>
 
           <h2 className="text-xl font-semibold mt-8 mb-3">9. Your rights</h2>
