@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
-import { LayoutDashboard, Users, Columns3, CheckSquare, Calendar, MessagesSquare, CalendarClock, Settings, LogOut, Car, Flag, Receipt, DoorOpen, Activity, ExternalLink, X, FileSignature, Heart, Globe, Download, Tv, ChevronDown, ChevronRight as ChevronRightIcon, BookOpen, Inbox } from 'lucide-react'
+import { LayoutDashboard, Users, Columns3, CheckSquare, Calendar, MessagesSquare, CalendarClock, Settings, LogOut, Car, Flag, Receipt, DoorOpen, Activity, ExternalLink, X, FileSignature, Heart, Globe, Download, Tv, ChevronDown, ChevronRight as ChevronRightIcon, BookOpen, Inbox, ClipboardCheck } from 'lucide-react'
 import { createBrowserClient } from '@/lib/supabase'
 import LocationSwitcher from './LocationSwitcher'
 import ImpersonatePicker from './ImpersonatePicker'
@@ -79,6 +79,13 @@ const allNav = [
   // default. Per-location forwarding addresses are shown at the top
   // of the page; quality + data approvals run before forward-to-Xero.
   { href: '/invoices',   label: 'Invoices',     icon: Inbox,           permission: 'invoices_inbox' },
+  // APPROVALS.1 — central approvals dashboard. Aggregates contractor
+  // invoices, FTE expense claims, time-off, swap requests, and any
+  // future approval surfaces (extensible via src/lib/approvals
+  // registry). Sidebar badge shows total pending count for items
+  // the user can approve. Default-on for master + owner + manager —
+  // head_coach + staff see nothing approvable so it's off for them.
+  { href: '/approvals',  label: 'Approvals',    icon: ClipboardCheck,  permission: 'approvals_inbox' },
   // Studio Management — expandable section. Parent route
   // /studio-management renders the door-unlock panel (mig 093 cross-
   // platform key). The six children below used to be top-level
@@ -125,26 +132,24 @@ const allNav = [
   { href: '/settings',   label: 'Settings',     icon: Settings,        permission: 'settings' },
 ]
 
-// INVOICES.2 — sidebar badge polling. Drives the red circle next to
-// the Invoices nav item showing how many rows are awaiting operator
-// action ('received' + 'extracted' states). Polled every 60s and
-// refreshed when the tab regains focus so the count drops promptly
-// after the operator approves something.
+// Sidebar badge polling. Drives the red circles next to nav items
+// that surface pending counts (INVOICES.2: /invoices,
+// APPROVALS.1: /approvals). Polls every 60s and refreshes on tab
+// refocus so the count drops promptly after an action elsewhere.
 //
-// Kept module-local rather than hoisted to a shared hook because no
-// other sidebar item needs a badge today. If a second badge ever
-// arrives (e.g. unread comms, pending swaps), refactor into a
-// generic useBadgeCounts({ keys }) hook driven by a map.
+// Generic shape — pass a URL + a "selector" that extracts the
+// numeric count from the JSON envelope. Both endpoints follow the
+// same { success, data: { count } } convention.
 const POLL_INTERVAL_MS = 60_000
 
-function useInvoicesPendingCount({ enabled }) {
+function usePolledCount({ enabled, url }) {
   const [count, setCount] = useState(0)
   useEffect(() => {
     if (!enabled) { setCount(0); return }
     let cancelled = false
     async function load() {
       try {
-        const r = await fetch('/api/invoices-inbox/unread-count', { cache: 'no-store' })
+        const r = await fetch(url, { cache: 'no-store' })
         if (!r.ok) return
         const j = await r.json()
         if (!cancelled && j?.success) setCount(j.data?.count || 0)
@@ -152,9 +157,6 @@ function useInvoicesPendingCount({ enabled }) {
     }
     load()
     const id = setInterval(load, POLL_INTERVAL_MS)
-    // Tab refocus → immediate refresh. The operator just came back
-    // from approving an invoice in another tab; show the new total
-    // without waiting for the next poll tick.
     const onFocus = () => load()
     window.addEventListener('focus', onFocus)
     return () => {
@@ -162,7 +164,7 @@ function useInvoicesPendingCount({ enabled }) {
       clearInterval(id)
       window.removeEventListener('focus', onFocus)
     }
-  }, [enabled])
+  }, [enabled, url])
   return count
 }
 
@@ -204,33 +206,44 @@ export default function Sidebar({ user, mobileOpen = false, onMobileClose }) {
   // hides everything except Car Processing for non-master users).
   const hasPerm = (key) => hasPermission(user, key)
 
-  // INVOICES.2 — poll only for users who can actually see the inbox.
-  // Other users get count=0 from the API regardless, but skipping
+  // INVOICES.2 + APPROVALS.1 — poll only for users who can see each
+  // surface. The API short-circuits to 0 for others, but skipping
   // the fetch entirely saves 60 RPM × every-staff-session.
-  const invoicesPendingCount = useInvoicesPendingCount({ enabled: hasPerm('invoices_inbox') })
+  const invoicesPendingCount = usePolledCount({
+    enabled: hasPerm('invoices_inbox'),
+    url: '/api/invoices-inbox/unread-count',
+  })
+  const approvalsPendingCount = usePolledCount({
+    enabled: hasPerm('approvals_inbox'),
+    url: '/api/approvals/count',
+  })
   // Badge map by href. Add more entries here when another nav item
-  // needs a notification dot (and update useInvoicesPendingCount /
-  // SidebarItem in parallel).
-  const badges = { '/invoices': invoicesPendingCount }
+  // needs a notification dot.
+  const badges = {
+    '/invoices': invoicesPendingCount,
+    '/approvals': approvalsPendingCount,
+  }
 
-  // Browser tab title prefix — surfaces the pending count even when
-  // the operator is on a different tab. Format: "(3) CF Studio · …"
-  // Restores the original title on unmount / count-zero so we don't
-  // leak the badge into other pages.
+  // Browser tab title prefix — surfaces the combined pending count
+  // even when the operator is on a different tab. Format:
+  // "(3) CF Studio · …". Combines INVOICES.2 + APPROVALS.1 so the
+  // operator sees one total rather than the prefix flickering
+  // between two values; the per-tab breakdown lives in the sidebar.
+  // Restores the original title on cleanup so a stale "(3)" doesn't
+  // survive a navigation that triggers a Sidebar unmount.
+  const titleBadgeCount = invoicesPendingCount + approvalsPendingCount
   useEffect(() => {
     if (typeof document === 'undefined') return
-    const original = document.title.replace(/^\(\d+\)\s+/, '')
-    document.title = invoicesPendingCount > 0
-      ? `(${invoicesPendingCount > 99 ? '99+' : invoicesPendingCount}) ${original}`
+    const original = document.title.replace(/^\(\d+\+?\)\s+/, '')
+    document.title = titleBadgeCount > 0
+      ? `(${titleBadgeCount > 99 ? '99+' : titleBadgeCount}) ${original}`
       : original
     return () => {
-      // Strip any leftover prefix on cleanup so a stale "(3)" doesn't
-      // survive a navigation that triggers a Sidebar unmount.
       if (typeof document !== 'undefined') {
         document.title = document.title.replace(/^\(\d+\+?\)\s+/, '')
       }
     }
-  }, [invoicesPendingCount])
+  }, [titleBadgeCount])
 
   // Match-permission predicate. Used both for top-level items and
   // for children of expandable sections.
