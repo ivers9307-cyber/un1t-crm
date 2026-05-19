@@ -28,7 +28,7 @@ import * as DocumentPicker from 'expo-document-picker'
 import {
   getExpenseClaim, addExpenseItem, deleteExpenseItem,
   submitExpenseClaim, revokeExpenseClaim, deleteExpenseClaim,
-  getReceiptUrl, periodLabel,
+  getReceiptUrl, extractReceiptFields, periodLabel,
   EXPENSE_CATEGORIES, EXPENSE_CATEGORY_LABELS,
 } from '../../lib/expenses-api'
 
@@ -337,6 +337,42 @@ function AddItemForm({ claimId, busy, setBusy, onCancel, onSaved }) {
     receipt: null,
   })
   const [error, setError] = useState(null)
+  // FTE-EXPENSES.4 — OCR auto-fill state. Same shape as the web
+  // version (src/components/ExpensesManager.jsx) for consistency.
+  // ocrState ∈ idle | running | done | failed.
+  const [ocrState, setOcrState] = useState('idle')
+  const [ocrConfidence, setOcrConfidence] = useState(null)
+  const [ocrError, setOcrError] = useState(null)
+
+  // Centralised "you have a receipt now" handler. Sets it on the
+  // form, then fires Claude Vision in the background to pre-fill
+  // the other fields. Used by all three pickers (camera / library /
+  // PDF) so the OCR behaviour is identical regardless of source.
+  async function attachReceiptAndRunOcr(receipt) {
+    setForm((f) => ({ ...f, receipt }))
+    setOcrState('running'); setOcrConfidence(null); setOcrError(null)
+    try {
+      const r = await extractReceiptFields(receipt)
+      if (!r.success) throw new Error(r.error || 'OCR failed')
+      setOcrConfidence(r.confidence)
+      // Patch ONLY empty fields. If the operator has already started
+      // typing while OCR ran, don't clobber their input. Same
+      // courtesy the web version offers.
+      setForm((prev) => ({
+        ...prev,
+        expense_date: r.fields.expense_date || prev.expense_date,
+        category:     r.fields.category || prev.category,
+        amount:       prev.amount || (r.fields.amount != null ? String(r.fields.amount) : prev.amount),
+        vat_amount:   prev.vat_amount || (r.fields.vat_amount != null ? String(r.fields.vat_amount) : prev.vat_amount),
+        vendor:       prev.vendor || r.fields.vendor || '',
+        description:  prev.description || r.fields.description || '',
+      }))
+      setOcrState('done')
+    } catch (e) {
+      setOcrState('failed')
+      setOcrError(e.message || 'OCR failed')
+    }
+  }
 
   async function captureFromCamera() {
     setError(null)
@@ -349,14 +385,11 @@ function AddItemForm({ claimId, busy, setBusy, onCancel, onSaved }) {
     })
     if (r.canceled || !r.assets?.[0]) return
     const a = r.assets[0]
-    setForm((f) => ({
-      ...f,
-      receipt: {
-        uri: a.uri,
-        name: a.fileName || `receipt-${Date.now()}.jpg`,
-        mimeType: a.mimeType || 'image/jpeg',
-      },
-    }))
+    attachReceiptAndRunOcr({
+      uri: a.uri,
+      name: a.fileName || `receipt-${Date.now()}.jpg`,
+      mimeType: a.mimeType || 'image/jpeg',
+    })
   }
 
   async function pickFromLibrary() {
@@ -370,14 +403,11 @@ function AddItemForm({ claimId, busy, setBusy, onCancel, onSaved }) {
     })
     if (r.canceled || !r.assets?.[0]) return
     const a = r.assets[0]
-    setForm((f) => ({
-      ...f,
-      receipt: {
-        uri: a.uri,
-        name: a.fileName || `receipt-${Date.now()}.jpg`,
-        mimeType: a.mimeType || 'image/jpeg',
-      },
-    }))
+    attachReceiptAndRunOcr({
+      uri: a.uri,
+      name: a.fileName || `receipt-${Date.now()}.jpg`,
+      mimeType: a.mimeType || 'image/jpeg',
+    })
   }
 
   async function pickPdf() {
@@ -389,14 +419,11 @@ function AddItemForm({ claimId, busy, setBusy, onCancel, onSaved }) {
     })
     if (r.canceled || !r.assets?.[0]) return
     const a = r.assets[0]
-    setForm((f) => ({
-      ...f,
-      receipt: {
-        uri: a.uri,
-        name: a.name || `receipt-${Date.now()}.pdf`,
-        mimeType: a.mimeType || 'application/pdf',
-      },
-    }))
+    attachReceiptAndRunOcr({
+      uri: a.uri,
+      name: a.name || `receipt-${Date.now()}.pdf`,
+      mimeType: a.mimeType || 'application/pdf',
+    })
   }
 
   async function submit() {
@@ -425,15 +452,60 @@ function AddItemForm({ claimId, busy, setBusy, onCancel, onSaved }) {
       {/* Receipt capture */}
       <Text className="text-[11px] uppercase tracking-wider text-un1t-light mb-2">Receipt</Text>
       {form.receipt ? (
-        <View className="flex-row items-center justify-between bg-un1t-black border border-un1t-gray rounded-xl p-3 mb-3">
-          <View className="flex-row items-center gap-2 flex-1 min-w-0">
-            <Ionicons name="document-attach" size={18} color="#059669" />
-            <Text className="text-xs text-un1t-light flex-1" numberOfLines={1}>{form.receipt.name}</Text>
+        <>
+          <View className="flex-row items-center justify-between bg-un1t-black border border-un1t-gray rounded-xl p-3 mb-2">
+            <View className="flex-row items-center gap-2 flex-1 min-w-0">
+              <Ionicons name="document-attach" size={18} color="#059669" />
+              <Text className="text-xs text-un1t-light flex-1" numberOfLines={1}>{form.receipt.name}</Text>
+            </View>
+            <Pressable
+              onPress={() => {
+                setForm({ ...form, receipt: null })
+                setOcrState('idle'); setOcrConfidence(null); setOcrError(null)
+              }}
+              className="p-1"
+            >
+              <Ionicons name="close" size={18} color="#DC2626" />
+            </Pressable>
           </View>
-          <Pressable onPress={() => setForm({ ...form, receipt: null })} className="p-1">
-            <Ionicons name="close" size={18} color="#DC2626" />
-          </Pressable>
-        </View>
+
+          {/* FTE-EXPENSES.4 — OCR status banner. Auto-fires when a
+              receipt is attached; surfaces progress + Claude's self-
+              rated confidence so the operator knows when to double-
+              check the pre-filled values. */}
+          {ocrState === 'running' && (
+            <View className="bg-blue-500/10 border border-blue-500/30 rounded-xl p-2.5 mb-3 flex-row items-center gap-2">
+              <ActivityIndicator color="#2563EB" size="small" />
+              <Text className="text-xs text-blue-700">Reading receipt with Claude…</Text>
+            </View>
+          )}
+          {ocrState === 'done' && (
+            <View className={`rounded-xl p-2.5 mb-3 flex-row items-center gap-2 border ${
+              ocrConfidence === 'high'   ? 'bg-emerald-500/10 border-emerald-500/30'
+              : ocrConfidence === 'medium' ? 'bg-amber-500/10 border-amber-500/30'
+              :                              'bg-red-500/10 border-red-500/30'
+            }`}>
+              <Ionicons name="sparkles" size={14} color={
+                ocrConfidence === 'high' ? '#059669'
+                : ocrConfidence === 'medium' ? '#D97706'
+                : '#DC2626'
+              } />
+              <Text className={`text-xs flex-1 ${
+                ocrConfidence === 'high' ? 'text-emerald-700'
+                : ocrConfidence === 'medium' ? 'text-amber-700'
+                : 'text-red-700'
+              }`}>
+                Auto-filled ({ocrConfidence || 'medium'} confidence)
+                {ocrConfidence !== 'high' && ' — check values below'}
+              </Text>
+            </View>
+          )}
+          {ocrState === 'failed' && ocrError && (
+            <View className="bg-un1t-gray/30 border border-un1t-gray rounded-xl p-2.5 mb-3">
+              <Text className="text-xs text-un1t-light">Auto-fill failed — fill in below manually.</Text>
+            </View>
+          )}
+        </>
       ) : (
         <View className="flex-row gap-2 mb-3">
           <Pressable onPress={captureFromCamera} className="flex-1 bg-un1t-black border border-un1t-gray rounded-xl py-3 items-center active:opacity-70">
