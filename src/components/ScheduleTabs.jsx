@@ -1,11 +1,12 @@
 'use client'
 
 import { useState, useCallback } from 'react'
-import { CalendarClock, CheckCircle, BarChart3, Receipt, UserCheck } from 'lucide-react'
+import { CalendarClock, CheckCircle, BarChart3, Receipt, UserCheck, Wallet } from 'lucide-react'
 import ScheduleCalendar from './ScheduleCalendar'
 import ScheduleApprovals from './ScheduleApprovals'
 import ScheduleReporting from './ScheduleReporting'
 import InvoicesManager from './InvoicesManager'
+import ExpensesManager from './ExpensesManager'
 import AttendanceReportClient from './AttendanceReportClient'
 import StudioOverviewStrip from './StudioOverviewStrip'
 import { MANAGER_ROLES } from '@/lib/schemas'
@@ -47,6 +48,14 @@ export default function ScheduleTabs({ user }) {
   const isApprover = user.role === 'master' || user.role === 'owner'
   const showInvoices = isContractor || isApprover
 
+  // FTE-EXPENSES.1 — Expenses tab. Same gate pattern as Invoices but
+  // flipped on the employment_type side: FTE staff submit; master +
+  // owner review. Contractors use the Invoices tab instead (and pay
+  // themselves via their own service invoice rather than receipt-
+  // based reimbursement).
+  const isFte = user.employment_type === 'fte'
+  const showExpenses = isFte || isApprover
+
   // Attendance: same gate as the standalone /schedule/attendance page
   // (still reachable directly — this is just an additional surface).
   // attendance_reports defaults on for owner/manager/master, off for
@@ -59,6 +68,7 @@ export default function ScheduleTabs({ user }) {
     { key: 'approvals',  label: 'Approvals',  icon: CheckCircle,   show: isManager },
     { key: 'reporting',  label: 'Reporting',  icon: BarChart3,     show: isManager },
     { key: 'invoices',   label: 'Invoices',   icon: Receipt,       show: showInvoices },
+    { key: 'expenses',   label: 'Expenses',   icon: Wallet,        show: showExpenses },
     { key: 'attendance', label: 'Attendance', icon: UserCheck,     show: showAttendance },
   ].filter(t => t.show)
 
@@ -105,6 +115,14 @@ export default function ScheduleTabs({ user }) {
       {activeTab === 'approvals' && isManager && <ScheduleApprovals user={user} />}
       {activeTab === 'reporting' && isManager && <ScheduleReporting user={user} />}
       {activeTab === 'invoices' && <InvoicesManager user={user} />}
+      {activeTab === 'expenses' && (
+        <ExpensesManager
+          userId={user.id}
+          isFte={isFte}
+          isApprover={isApprover}
+          locations={user.locations || []}
+        />
+      )}
       {activeTab === 'attendance' && showAttendance && (
         <AttendanceReportClient activeLocationName={user.activeLocation?.name || ''} />
       )}
