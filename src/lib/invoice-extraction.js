@@ -73,6 +73,31 @@ const lineItem = z.object({
   account_code: z.string().max(50).nullable().optional(),
 })
 
+// INVOICES.3 — top-level category suggestion. A fixed enum so the
+// dropdown in the inbox UI has a stable contract and the field can
+// be aggregated for reporting later. Designed around how a gym
+// actually spends money — generic "other" catches everything else.
+//
+// Mapped to Xero account codes per-location later (kept out of this
+// lib so the OCR is org-agnostic). The forwarded email body
+// includes the category as a hint to the bookkeeper finishing the
+// draft in Xero.
+export const INVOICE_CATEGORIES = Object.freeze([
+  'utilities',
+  'cleaning',
+  'equipment',
+  'marketing',
+  'insurance',
+  'rent',
+  'maintenance',
+  'professional_services',
+  'staff_training',
+  'office_supplies',
+  'software',
+  'bank_fees',
+  'other',
+])
+
 const invoiceFields = z.object({
   supplier_name: z.string().min(1).max(300),
   supplier_address: z.string().max(1000).nullable().optional(),
@@ -83,12 +108,23 @@ const invoiceFields = z.object({
   subtotal: z.coerce.number(),
   tax_amount: z.coerce.number(),
   total: z.coerce.number(),
+  // INVOICES.3 — top-level category. Optional because the existing
+  // car_documents invoice flow doesn't ask for one (we only added
+  // the prompt instruction for the inbound_invoices path). Validated
+  // against the enum so the inbox UI can rely on the value if set.
+  category: z.enum(INVOICE_CATEGORIES).nullable().optional(),
+  // INVOICES.3 — operator-editable account code free-text field.
+  // Claude can suggest one if the supplier maps obviously to a
+  // standard chart-of-accounts entry; otherwise this stays null and
+  // the operator fills it in (or leaves it for Xero's own OCR to
+  // assign during the draft-bill flow).
+  account_code: z.string().max(50).nullable().optional(),
   line_items: z.array(lineItem).min(0).max(200),
 })
 
 export { invoiceFields as invoiceFieldsSchema }
 
-const SYSTEM_PROMPT = `You are an invoice data extractor. The user will attach a single supplier invoice as a PDF or image. Extract the fields below into a JSON object and return ONLY the JSON — no prose, no markdown code fences, no commentary.
+const SYSTEM_PROMPT = `You are an invoice data extractor for a chain of gym studios in Ireland. The user will attach a single supplier invoice as a PDF or image. Extract the fields below into a JSON object and return ONLY the JSON — no prose, no markdown code fences, no commentary.
 
 Required fields:
 - supplier_name (string) — the company that issued the invoice
@@ -100,7 +136,24 @@ Required fields:
 - subtotal (number) — pre-tax total
 - tax_amount (number) — VAT / GST / sales tax total
 - total (number) — invoice total including tax. Must equal subtotal + tax_amount within 0.01.
+- category (string | null) — one of: utilities, cleaning, equipment, marketing, insurance, rent, maintenance, professional_services, staff_training, office_supplies, software, bank_fees, other. Pick the SINGLE best match for the whole invoice based on the supplier name and line items. Use null only if genuinely unclear.
+- account_code (string | null) — only suggest a value if the supplier matches an obvious accounting category (e.g. an electric utility → "Utilities" account code if visible on the invoice). Otherwise null and let the operator decide.
 - line_items (array) — each line as { description, quantity, unit_amount, account_code (optional, null if none) }
+
+Category guidance:
+- utilities: electricity, gas, water, internet, phone, broadband
+- cleaning: cleaning services, sanitiser, paper goods, mops, bin liners
+- equipment: gym equipment, weights, racks, treadmills, rowers, fit-out
+- marketing: ad spend, design services, photography, video, social media tooling
+- insurance: any insurance premium (public liability, contents, employer's liability)
+- rent: studio space rent, lease payments
+- maintenance: HVAC servicing, equipment repairs, plumbing, electrical, building works
+- professional_services: accountancy, legal, consultancy, financial advice
+- staff_training: PT certifications, courses, conferences for staff
+- office_supplies: stationery, printer cartridges, low-value office goods
+- software: SaaS subscriptions, Glofox, Stripe, Xero, accounting tools, scheduling tools
+- bank_fees: bank charges, merchant processor fees not tied to a transaction
+- other: anything that doesn't fit cleanly into one of the above
 
 Rules:
 - Numbers must be JSON numbers, not strings. Strip currency symbols, commas, and any other formatting.

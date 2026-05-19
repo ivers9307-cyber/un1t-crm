@@ -125,6 +125,47 @@ const allNav = [
   { href: '/settings',   label: 'Settings',     icon: Settings,        permission: 'settings' },
 ]
 
+// INVOICES.2 — sidebar badge polling. Drives the red circle next to
+// the Invoices nav item showing how many rows are awaiting operator
+// action ('received' + 'extracted' states). Polled every 60s and
+// refreshed when the tab regains focus so the count drops promptly
+// after the operator approves something.
+//
+// Kept module-local rather than hoisted to a shared hook because no
+// other sidebar item needs a badge today. If a second badge ever
+// arrives (e.g. unread comms, pending swaps), refactor into a
+// generic useBadgeCounts({ keys }) hook driven by a map.
+const POLL_INTERVAL_MS = 60_000
+
+function useInvoicesPendingCount({ enabled }) {
+  const [count, setCount] = useState(0)
+  useEffect(() => {
+    if (!enabled) { setCount(0); return }
+    let cancelled = false
+    async function load() {
+      try {
+        const r = await fetch('/api/invoices-inbox/unread-count', { cache: 'no-store' })
+        if (!r.ok) return
+        const j = await r.json()
+        if (!cancelled && j?.success) setCount(j.data?.count || 0)
+      } catch { /* network blip — keep last good count */ }
+    }
+    load()
+    const id = setInterval(load, POLL_INTERVAL_MS)
+    // Tab refocus → immediate refresh. The operator just came back
+    // from approving an invoice in another tab; show the new total
+    // without waiting for the next poll tick.
+    const onFocus = () => load()
+    window.addEventListener('focus', onFocus)
+    return () => {
+      cancelled = true
+      clearInterval(id)
+      window.removeEventListener('focus', onFocus)
+    }
+  }, [enabled])
+  return count
+}
+
 export default function Sidebar({ user, mobileOpen = false, onMobileClose }) {
   const pathname = usePathname()
   const router = useRouter()
@@ -162,6 +203,34 @@ export default function Sidebar({ user, mobileOpen = false, onMobileClose }) {
   // sidebar honest about location-disabled features (e.g. CCF Autos
   // hides everything except Car Processing for non-master users).
   const hasPerm = (key) => hasPermission(user, key)
+
+  // INVOICES.2 — poll only for users who can actually see the inbox.
+  // Other users get count=0 from the API regardless, but skipping
+  // the fetch entirely saves 60 RPM × every-staff-session.
+  const invoicesPendingCount = useInvoicesPendingCount({ enabled: hasPerm('invoices_inbox') })
+  // Badge map by href. Add more entries here when another nav item
+  // needs a notification dot (and update useInvoicesPendingCount /
+  // SidebarItem in parallel).
+  const badges = { '/invoices': invoicesPendingCount }
+
+  // Browser tab title prefix — surfaces the pending count even when
+  // the operator is on a different tab. Format: "(3) CF Studio · …"
+  // Restores the original title on unmount / count-zero so we don't
+  // leak the badge into other pages.
+  useEffect(() => {
+    if (typeof document === 'undefined') return
+    const original = document.title.replace(/^\(\d+\)\s+/, '')
+    document.title = invoicesPendingCount > 0
+      ? `(${invoicesPendingCount > 99 ? '99+' : invoicesPendingCount}) ${original}`
+      : original
+    return () => {
+      // Strip any leftover prefix on cleanup so a stale "(3)" doesn't
+      // survive a navigation that triggers a Sidebar unmount.
+      if (typeof document !== 'undefined') {
+        document.title = document.title.replace(/^\(\d+\+?\)\s+/, '')
+      }
+    }
+  }, [invoicesPendingCount])
 
   // Match-permission predicate. Used both for top-level items and
   // for children of expandable sections.
@@ -313,6 +382,7 @@ export default function Sidebar({ user, mobileOpen = false, onMobileClose }) {
               key={item.href}
               item={item}
               pathname={pathname}
+              badge={badges[item.href] || 0}
             />
           )
         })}
@@ -396,15 +466,27 @@ function isPathActive(pathname, href, extraActivePaths) {
     || (extraActivePaths || []).some((p) => pathname.startsWith(p))
 }
 
-function SidebarItem({ item, pathname, isChild = false }) {
+function SidebarItem({ item, pathname, isChild = false, badge = 0 }) {
   const { href, label, icon: Icon, extraActivePaths, openInNewTab } = item
   const active = isPathActive(pathname, href, extraActivePaths)
   const className = leafClassName(active, isChild)
+  // INVOICES.2 — notification badge. Renders to the right of the
+  // label with `ml-auto`. Capped at 99+ to stop the pill stretching
+  // the sidebar layout. Hidden when the count is zero.
+  const badgeNode = badge > 0 ? (
+    <span
+      aria-label={`${badge} pending`}
+      className="ml-auto inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 text-[10px] font-semibold rounded-full bg-red-500 text-white"
+    >
+      {badge > 99 ? '99+' : badge}
+    </span>
+  ) : null
   if (openInNewTab) {
     return (
       <a href={href} target="_blank" rel="noopener noreferrer" className={className}>
         <Icon size={isChild ? 14 : 18} />
         {label}
+        {badgeNode}
         <ExternalLink size={11} className="opacity-60 ml-1" />
       </a>
     )
@@ -413,6 +495,7 @@ function SidebarItem({ item, pathname, isChild = false }) {
     <Link href={href} className={className}>
       <Icon size={isChild ? 14 : 18} />
       {label}
+      {badgeNode}
     </Link>
   )
 }

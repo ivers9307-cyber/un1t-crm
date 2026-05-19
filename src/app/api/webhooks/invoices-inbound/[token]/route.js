@@ -3,14 +3,25 @@
 //
 // Postmark routes mail addressed to *@<server>.inbound.postmarkapp.com
 // (or our configured custom inbound domain) here. We rely on the
-// recipient address — `<slug>-invoices@un1tdublin.com` — to pick
+// recipient address — `<slug>-invoices@mail.un1tdublin.com` — to pick
 // the location. The slug column on `locations` is unique partial,
 // so a slug-collision is impossible.
 //
+// Auth — token-in-URL pattern:
+//   Postmark's inbound webhook config only lets you set a URL, NOT
+//   custom headers, so we can't use the X-Webhook-Token shared-
+//   secret pattern the outbound delivery webhook uses. Instead the
+//   secret lives in the URL path: configure Postmark to POST to
+//   https://crm.un1tdublin.com/api/webhooks/invoices-inbound/<token>
+//   where <token> is a long random string set in env as
+//   POSTMARK_INBOUND_WEBHOOK_TOKEN. We constant-time compare on
+//   each request. Same pattern as the sequence webhook (mig 131).
+//   For rotation: set POSTMARK_INBOUND_WEBHOOK_TOKEN_PREVIOUS to
+//   the old value, switch Postmark to the new URL, then unset
+//   PREVIOUS once you've confirmed traffic is on the new token.
+//
 // Flow:
-//   1. Auth via shared-secret header (POSTMARK_INBOUND_WEBHOOK_TOKEN).
-//      Same pattern as the outbound delivery webhook (rotation-capable
-//      via _PREVIOUS variant).
+//   1. URL-token auth (above).
 //   2. Parse the payload — Postmark Inbound shape: { To, ToFull,
 //      From, FromFull, Subject, MessageID, Attachments[...] }.
 //   3. Find the slug from ToFull (preferred — array of { Email, Name })
@@ -53,21 +64,37 @@ export const dynamic = 'force-dynamic'
 
 const STORAGE_BUCKET = 'inbound-invoices'
 
-export function verifyInboundRequest({ headerValue, primarySecret, previousSecret }) {
+/**
+ * Token-in-URL auth — Postmark inbound webhooks don't allow custom
+ * headers, so the shared secret lives in the URL path itself. We
+ * timing-safe compare to defend against length-leak side channels.
+ * Both the primary token and an optional PREVIOUS rotation token
+ * are accepted; configure Postmark to POST to the URL containing
+ * the primary, set PREVIOUS to the old token during rotation, then
+ * unset PREVIOUS once you've confirmed the switchover.
+ *
+ * Exported for the route test so it can exercise the auth gate
+ * without standing up a full request fixture.
+ */
+export function verifyInboundRequest({ urlToken, primarySecret, previousSecret }) {
   if (!primarySecret) return { ok: false, status: 500, reason: 'missing_secret' }
-  if (!headerValue) return { ok: false, status: 403, reason: 'missing_header' }
-  const primary = verifySharedSecret(headerValue, primarySecret)
+  if (!urlToken) return { ok: false, status: 404, reason: 'missing_token' }
+  const primary = verifySharedSecret(urlToken, primarySecret)
   if (primary.ok) return { ok: true, matched: 'primary' }
   if (previousSecret) {
-    const previous = verifySharedSecret(headerValue, previousSecret)
+    const previous = verifySharedSecret(urlToken, previousSecret)
     if (previous.ok) return { ok: true, matched: 'previous' }
   }
-  return { ok: false, status: 403, reason: 'token_mismatch' }
+  // We 404 (not 403) on a wrong token — denies an attacker the
+  // signal "yes, this URL pattern exists, you just got the token
+  // wrong". Same approach as the sequence webhook.
+  return { ok: false, status: 404, reason: 'token_mismatch' }
 }
 
-export async function POST(request) {
+export async function POST(request, { params }) {
+  const { token } = await params
   const auth = verifyInboundRequest({
-    headerValue: request.headers.get('x-webhook-token'),
+    urlToken: token,
     primarySecret: process.env.POSTMARK_INBOUND_WEBHOOK_TOKEN,
     previousSecret: process.env.POSTMARK_INBOUND_WEBHOOK_TOKEN_PREVIOUS,
   })
@@ -78,6 +105,12 @@ export async function POST(request) {
       console.warn(`[security] Inbound invoice webhook rejected: ${auth.reason}`)
     }
     return NextResponse.json({ success: false, error: auth.reason }, { status: auth.status })
+  }
+  if (auth.matched === 'previous') {
+    console.warn(
+      '[security] Inbound invoice webhook accepted via POSTMARK_INBOUND_WEBHOOK_TOKEN_PREVIOUS — ' +
+      'finish rotating the Postmark inbound URL to the new token, then unset PREVIOUS.'
+    )
   }
 
   let body
@@ -104,9 +137,29 @@ export async function POST(request) {
   }
 
   // Resolve recipient → slug → location.
-  const slug = parseInboundAddress(body.ToFull) || parseInboundAddress(body.To)
+  //
+  // Postmark gives us three places the slug might appear, in
+  // priority order:
+  //   1. ToFull[] — typed-recipient list (preferred — already
+  //      normalised by Postmark into { Email, Name, MailboxHash })
+  //   2. To — display string "Name <addr>, Name <addr>"
+  //   3. OriginalRecipient — the actual envelope RCPT TO from
+  //      the SMTP transaction. Per the Postmark spec, when an
+  //      email is CC'd or BCC'd or routed via a forwarding domain
+  //      that rewrote the visible To, this is the ground truth
+  //      of where Postmark received the mail.
+  //
+  // Falling back through all three avoids silently dropping
+  // legitimate invoices that were addressed to the slug via Cc/Bcc
+  // or a forwarding hop.
+  const slug =
+    parseInboundAddress(body.ToFull) ||
+    parseInboundAddress(body.To) ||
+    parseInboundAddress(body.OriginalRecipient)
   if (!slug) {
-    console.warn('[invoices-inbound] could not parse slug from recipient', { To: body.To, ToFull: body.ToFull })
+    console.warn('[invoices-inbound] could not parse slug from recipient', {
+      To: body.To, ToFull: body.ToFull, OriginalRecipient: body.OriginalRecipient,
+    })
     return NextResponse.json({ success: true, ignored: 'unparseable_recipient' })
   }
 

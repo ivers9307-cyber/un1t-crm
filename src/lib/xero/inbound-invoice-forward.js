@@ -127,6 +127,16 @@ export async function sendInboundInvoiceBillEmail(invoiceId) {
   const total = inv.extracted_fields?.total
   const currency = inv.extracted_fields?.currency || 'EUR'
   const currencySymbol = currency === 'EUR' ? '€' : currency === 'GBP' ? '£' : currency === 'USD' ? '$' : ''
+  // INVOICES.3 — operator-confirmed category + account code. Bookkeepers
+  // pick up the draft bill in Xero (created by Xero's own OCR from
+  // the attachment) and use these as hints when posting it to the
+  // right account. We pretty-print the snake_case category for
+  // readability.
+  const category = inv.extracted_fields?.category
+  const categoryLabel = category
+    ? category.split('_').map((w) => w[0].toUpperCase() + w.slice(1)).join(' ')
+    : null
+  const accountCode = inv.extracted_fields?.account_code
 
   const safeSupplier = supplier.replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 80)
   const fallbackExt = (inv.attachment_mime_type === 'application/pdf') ? 'pdf'
@@ -150,10 +160,12 @@ export async function sendInboundInvoiceBillEmail(invoiceId) {
       ${invoiceNumber ? `<li>Invoice #: <strong>${invoiceNumber}</strong></li>` : ''}
       ${invoiceDate ? `<li>Invoice date: <strong>${invoiceDate}</strong></li>` : ''}
       ${typeof total === 'number' ? `<li>Total: <strong>${currencySymbol}${total.toFixed(2)} ${currency}</strong></li>` : ''}
+      ${categoryLabel ? `<li>Suggested category: <strong>${categoryLabel}</strong></li>` : ''}
+      ${accountCode ? `<li>Suggested Xero account: <strong>${accountCode}</strong></li>` : ''}
       <li>Location: ${inv.location?.name || 'n/a'}</li>
       ${inv.sender_email ? `<li>Originally received from: ${inv.sender_email}</li>` : ''}
     </ul>
-    <p>Xero will OCR this attachment and create a draft bill in Bills to pay → Draft.</p>
+    <p>Xero will OCR this attachment and create a draft bill in Bills to pay → Draft. The category and account hints above were suggested by Claude Vision and confirmed by the approver — use them when posting the draft, or override if your chart of accounts disagrees.</p>
   `.trim()
 
   const result = await postmarkSendWithAttachment({
