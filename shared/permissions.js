@@ -88,6 +88,12 @@ export const WEB_PERMISSIONS = Object.freeze([
   // under Studio Management because it's about supplier bills not
   // on-site operations.
   { key: 'invoices_inbox', label: 'Invoices',                   hint: 'Operator inbox for supplier invoices emailed in to <slug>-invoices@un1tdublin.com. Quality + data approval before forwarding to Xero. Master + owner only by default.' },
+  // APPROVALS.1 — central approvals dashboard. Aggregates everything
+  // awaiting the operator's review: contractor invoices, FTE
+  // expense claims, time-off, swap requests, and any future
+  // approval surfaces. Master + owner + manager by default; head
+  // coach + staff don't approve anything so it's off for them.
+  { key: 'approvals_inbox', label: 'Approvals',                 hint: 'Central inbox aggregating contractor invoices, FTE expenses, time-off and swap requests awaiting your review. Master + owner + manager by default.' },
   // — Infra —
   { key: 'settings',   label: 'Settings & Staff Management',    hint: 'Location settings, staff management, integrations, branding.' },
   // Landing-page editor (mig 126-130, Phase LP1-3c). Operator
@@ -115,6 +121,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     contracts: true, tv_displays: true, glofox_import: true, preferences_import: true,
     orders: true, car_processing: true,
     invoices_inbox: true,
+    approvals_inbox: true,
     settings: true,
     landing_page: true,
   },
@@ -128,6 +135,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     contracts: false, tv_displays: false, glofox_import: false, preferences_import: false,
     orders: false, car_processing: false,         // financial views off by default
     invoices_inbox: false,                         // supplier-invoice approval is finance, not staff
+    approvals_inbox: false,                        // staff don't approve anything
     settings: false,
     landing_page: false,                          // marketing copy isn't a staff concern
   },
@@ -142,6 +150,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     contracts: false, tv_displays: false, glofox_import: false, preferences_import: false,
     orders: false, car_processing: false,         // head coach doesn't need orders by default
     invoices_inbox: false,
+    approvals_inbox: false,                        // head coach isn't an approver by default
     settings: false,
     landing_page: false,
   },
@@ -157,6 +166,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     contracts: false, tv_displays: true, glofox_import: false, preferences_import: false,
     orders: true, car_processing: false,          // managers run revenue ops; CCF Autos is per-user opt-in
     invoices_inbox: false,                         // manager isn't an approver — owner/master only
+    approvals_inbox: true,                         // managers approve schedule items (time-off, swaps)
     settings: true,
     landing_page: false,                          // owner/master decision; per-user override available
   },
@@ -172,6 +182,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     contracts: true, tv_displays: true, glofox_import: false, preferences_import: false,
     orders: true, car_processing: false,          // OFF for owner too — explicit opt-in per profile
     invoices_inbox: true,                          // owner approves their location's supplier invoices
+    approvals_inbox: true,                         // owner approves invoices, expenses, schedule items
     settings: true,
     landing_page: true,
   },
