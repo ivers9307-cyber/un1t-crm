@@ -44,11 +44,14 @@ export default ({ config }) => ({
     // iPad would show stretched single-column layouts which isn't a
     // good user experience anyway.
     supportsTablet: false,
-    // NOTE: Apple bundle IDs use reverse-DNS. The literal string
-    // "crmmobileios.un1tdublin.com" the user wrote isn't valid; this is
-    // the equivalent in Apple-acceptable form. Change before App Store
-    // submission if a different ID is preferred.
-    bundleIdentifier: 'com.un1tdublin.crmmobileios',
+    // BUNDLE-ID-RESET — the previous bundle ID
+    // (com.un1tdublin.crmmobileios) was submitted for App Store review
+    // and then deleted from App Store Connect. Apple permanently
+    // reserves submitted bundle IDs to the team, so it could not be
+    // reused. Switched to com.un1tdublin.crm — registered fresh in
+    // Apple Developer → Identifiers and paired with a new App Store
+    // Connect app record.
+    bundleIdentifier: 'com.un1tdublin.crm',
     // buildNumber omitted — eas.json sets appVersionSource: 'remote',
     // so build numbers are managed by EAS, not the local config.
     infoPlist: {
@@ -66,7 +69,10 @@ export default ({ config }) => ({
     },
   },
   android: {
-    package: 'com.un1tdublin.crmmobileios',
+    // BUNDLE-ID-RESET — kept in lockstep with the iOS bundle ID for
+    // consistency, even though Android doesn't have Apple's reuse
+    // restriction. One namespace, one app, both stores.
+    package: 'com.un1tdublin.crm',
     adaptiveIcon: {
       foregroundImage: './assets/adaptive-icon.png',
       // Android adaptive icon background — CF Studio identity is black/white
