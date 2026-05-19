@@ -417,6 +417,13 @@ function SidebarGroup({ item, pathname, open, onToggle }) {
   const { href, label, icon: Icon, extraActivePaths, _children: children, _parentHasPerm: parentHasPerm } = item
   const parentActive = isPathActive(pathname, href, extraActivePaths)
   const Chevron = open ? ChevronDown : ChevronRightIcon
+  // SIDEBAR-CHEVRON — only render the expand toggle when the user
+  // actually has visible children. The filter step above (line 190)
+  // can produce an empty _children array when the user has the
+  // parent's permission but none of the child permissions —
+  // previously the chevron rendered anyway and clicking it expanded
+  // an empty list. Now treat that case as a plain leaf.
+  const hasChildren = Array.isArray(children) && children.length > 0
 
   // Parent row: clickable link to /studio-management (if perm), or
   // an inert label if the user has no parent perm but can see a
@@ -440,17 +447,19 @@ function SidebarGroup({ item, pathname, open, onToggle }) {
             {label}
           </div>
         )}
-        <button
-          type="button"
-          onClick={onToggle}
-          aria-expanded={open}
-          aria-label={open ? `Collapse ${label}` : `Expand ${label}`}
-          className="px-3 text-un1t-light hover:text-un1t-white transition-colors"
-        >
-          <Chevron size={14} />
-        </button>
+        {hasChildren && (
+          <button
+            type="button"
+            onClick={onToggle}
+            aria-expanded={open}
+            aria-label={open ? `Collapse ${label}` : `Expand ${label}`}
+            className="px-3 text-un1t-light hover:text-un1t-white transition-colors"
+          >
+            <Chevron size={14} />
+          </button>
+        )}
       </div>
-      {open && (
+      {hasChildren && open && (
         <div>
           {children.map((child) => (
             <SidebarItem key={child.href} item={child} pathname={pathname} isChild />
