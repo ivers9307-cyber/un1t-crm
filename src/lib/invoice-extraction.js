@@ -157,55 +157,44 @@ function stripJsonFences(raw) {
 }
 
 /**
- * Extract structured invoice fields from a stored car_document
- * row. Returns the validated object on success, or an error
- * envelope. Never throws — callers can branch on `ok`.
+ * Pure extraction over raw bytes — no Supabase, no storage. Shared
+ * by both the car_documents OCR (storage-backed) and the
+ * INVOICES.1 inbound_invoices OCR (also storage-backed but a
+ * different bucket) so the model+prompt path lives in one place.
  *
- * @param {string} documentId  car_documents.id
+ * @param {Buffer|Uint8Array} bytes  the file contents
+ * @param {string} mime              MIME type — must be in SUPPORTED_MIME
  * @returns {Promise<{ ok: true, fields, raw_response } | { ok: false, error, raw_response? }>}
  */
-export async function extractInvoiceFields(documentId) {
+export async function extractInvoiceFieldsFromBytes(bytes, mime) {
   const apiKey = process.env.ANTHROPIC_API_KEY
   if (!apiKey) {
     return { ok: false, error: 'ANTHROPIC_API_KEY is not configured.' }
   }
-
-  const db = createServerClient()
-
-  // Load the document row + its file from storage.
-  const { data: document, error: loadErr } = await db
-    .from('car_documents')
-    .select('id, car_id, storage_path, mime_type, filename')
-    .eq('id', documentId)
-    .single()
-  if (loadErr || !document) {
-    return { ok: false, error: `Document not found: ${loadErr?.message || documentId}` }
+  if (!bytes || !bytes.length) {
+    return { ok: false, error: 'No file bytes provided to extractor.' }
+  }
+  if (!SUPPORTED_MIME.has(mime || '')) {
+    return {
+      ok: false,
+      error: `Unsupported MIME type for OCR: ${mime || '(missing)'}. Supported: PDF, JPEG, PNG, GIF, WebP.`,
+    }
   }
 
-  const dl = await fetchDocumentAsBase64(db, document)
-  if (!dl.ok) return dl
+  const base64 = Buffer.from(bytes).toString('base64')
 
   // The Anthropic Messages API takes different content-block types
-  // for images vs PDFs. PDFs use type=document with a "document"
-  // source; images use type=image with an "image" source. Same
-  // base64 transport, different envelope.
-  const isPdf = dl.mediaType === 'application/pdf'
+  // for images vs PDFs. PDFs use type=document; images use
+  // type=image. Same base64 transport, different envelope.
+  const isPdf = mime === 'application/pdf'
   const documentBlock = isPdf
     ? {
         type: 'document',
-        source: {
-          type: 'base64',
-          media_type: dl.mediaType,
-          data: dl.base64,
-        },
+        source: { type: 'base64', media_type: mime, data: base64 },
       }
     : {
         type: 'image',
-        source: {
-          type: 'base64',
-          media_type: dl.mediaType,
-          data: dl.base64,
-        },
+        source: { type: 'base64', media_type: mime, data: base64 },
       }
 
   let claudeRes
@@ -249,8 +238,6 @@ export async function extractInvoiceFields(documentId) {
     return { ok: false, error: 'Anthropic returned non-JSON response body.' }
   }
 
-  // Messages API returns content as an array of blocks. We expect
-  // exactly one text block from the model.
   const textBlock = (claudeData.content || []).find((b) => b.type === 'text')
   const raw = textBlock?.text || ''
   if (!raw) {
@@ -261,11 +248,7 @@ export async function extractInvoiceFields(documentId) {
   try {
     parsed = JSON.parse(stripJsonFences(raw))
   } catch (e) {
-    return {
-      ok: false,
-      error: `Failed to parse extracted JSON: ${e.message}`,
-      raw_response: raw,
-    }
+    return { ok: false, error: `Failed to parse extracted JSON: ${e.message}`, raw_response: raw }
   }
 
   const validation = invoiceFields.safeParse(parsed)
@@ -278,4 +261,34 @@ export async function extractInvoiceFields(documentId) {
   }
 
   return { ok: true, fields: validation.data, raw_response: raw }
+}
+
+/**
+ * Extract structured invoice fields from a stored car_document
+ * row. Returns the validated object on success, or an error
+ * envelope. Never throws — callers can branch on `ok`.
+ *
+ * Thin wrapper around extractInvoiceFieldsFromBytes that handles
+ * the car_documents storage path.
+ *
+ * @param {string} documentId  car_documents.id
+ * @returns {Promise<{ ok: true, fields, raw_response } | { ok: false, error, raw_response? }>}
+ */
+export async function extractInvoiceFields(documentId) {
+  const db = createServerClient()
+
+  const { data: document, error: loadErr } = await db
+    .from('car_documents')
+    .select('id, car_id, storage_path, mime_type, filename')
+    .eq('id', documentId)
+    .single()
+  if (loadErr || !document) {
+    return { ok: false, error: `Document not found: ${loadErr?.message || documentId}` }
+  }
+
+  const dl = await fetchDocumentAsBase64(db, document)
+  if (!dl.ok) return dl
+
+  const bytes = Buffer.from(dl.base64, 'base64')
+  return extractInvoiceFieldsFromBytes(bytes, dl.mediaType)
 }

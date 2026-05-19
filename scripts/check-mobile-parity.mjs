@@ -108,6 +108,11 @@ const WEB_ONLY_OK = {
   tv_displays:        'TV display registration + content push (UC Cast Pro) at /admin/tv-displays. Studio-TV surface — operators configure these from the laptop while looking at the actual TV, not from a phone.',
   glofox_import:      'Interactive Glofox member import + sync history at /admin/glofox-import. Bulk-data CSV / preview operation that needs desktop screen real estate; the daily cron handles the ongoing sync without operator input.',
   preferences_import: 'Bulk marketing-preferences CSV import at /admin/marketing-import. Same shape as glofox_import — a preview-and-commit flow that wants a wide screen.',
+  // INVOICES.1 — Dext-style email-in inbox for supplier invoices.
+  // The two-step quality + data review needs to look at the actual
+  // attachment (PDF preview) alongside the extracted fields side by
+  // side. That's a laptop workflow; no mobile UI by design.
+  invoices_inbox: 'Supplier-invoice inbox (INVOICES.1) — quality + data review for emailed invoices before forwarding to Xero. PDF preview alongside editable extracted fields wants screen real estate; finance approval is desktop work.',
 }
 
 const webDrift = []

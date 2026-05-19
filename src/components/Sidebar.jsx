@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
-import { LayoutDashboard, Users, Columns3, CheckSquare, Calendar, MessagesSquare, CalendarClock, Settings, LogOut, Car, Flag, Receipt, DoorOpen, Activity, ExternalLink, X, FileSignature, Heart, Globe, Download, Tv, ChevronDown, ChevronRight as ChevronRightIcon, BookOpen } from 'lucide-react'
+import { LayoutDashboard, Users, Columns3, CheckSquare, Calendar, MessagesSquare, CalendarClock, Settings, LogOut, Car, Flag, Receipt, DoorOpen, Activity, ExternalLink, X, FileSignature, Heart, Globe, Download, Tv, ChevronDown, ChevronRight as ChevronRightIcon, BookOpen, Inbox } from 'lucide-react'
 import { createBrowserClient } from '@/lib/supabase'
 import LocationSwitcher from './LocationSwitcher'
 import ImpersonatePicker from './ImpersonatePicker'
@@ -75,6 +75,10 @@ const allNav = [
   // The top-level entry is gone, the /segments URL still works
   // (legacy redirect).
   { href: '/orders',     label: 'Orders',       icon: Receipt,         permission: 'orders' },
+  // INVOICES.1 — Dext-style email-in inbox. Master + owner only by
+  // default. Per-location forwarding addresses are shown at the top
+  // of the page; quality + data approvals run before forward-to-Xero.
+  { href: '/invoices',   label: 'Invoices',     icon: Inbox,           permission: 'invoices_inbox' },
   // Studio Management — expandable section. Parent route
   // /studio-management renders the door-unlock panel (mig 093 cross-
   // platform key). The six children below used to be top-level

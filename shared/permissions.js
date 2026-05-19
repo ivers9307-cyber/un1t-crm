@@ -83,6 +83,11 @@ export const WEB_PERMISSIONS = Object.freeze([
   // even if they have race events or car processing on.
   { key: 'orders',     label: 'Orders',                          hint: 'Unified revenue view across race signups + car deposits (mig 085). Refund + retry-recovery flows live here.' },
   { key: 'car_processing', label: 'Car Processing',             hint: 'Tesla import tracker (CCF Autos). Off by default at user level — enable per user.' },
+  // INVOICES.1 — Dext-style email-in inbox for supplier invoices.
+  // Master + owner only by default. Finance surface; doesn't fit
+  // under Studio Management because it's about supplier bills not
+  // on-site operations.
+  { key: 'invoices_inbox', label: 'Invoices',                   hint: 'Operator inbox for supplier invoices emailed in to <slug>-invoices@un1tdublin.com. Quality + data approval before forwarding to Xero. Master + owner only by default.' },
   // — Infra —
   { key: 'settings',   label: 'Settings & Staff Management',    hint: 'Location settings, staff management, integrations, branding.' },
   // Landing-page editor (mig 126-130, Phase LP1-3c). Operator
@@ -109,6 +114,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     // Studio Management children (STUDIO-GROUP.1) — master has all.
     contracts: true, tv_displays: true, glofox_import: true, preferences_import: true,
     orders: true, car_processing: true,
+    invoices_inbox: true,
     settings: true,
     landing_page: true,
   },
@@ -121,6 +127,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     // Studio Management children — all off for staff.
     contracts: false, tv_displays: false, glofox_import: false, preferences_import: false,
     orders: false, car_processing: false,         // financial views off by default
+    invoices_inbox: false,                         // supplier-invoice approval is finance, not staff
     settings: false,
     landing_page: false,                          // marketing copy isn't a staff concern
   },
@@ -134,6 +141,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     // Studio Management children — all off for head_coach (explicit opt-in by admin).
     contracts: false, tv_displays: false, glofox_import: false, preferences_import: false,
     orders: false, car_processing: false,         // head coach doesn't need orders by default
+    invoices_inbox: false,
     settings: false,
     landing_page: false,
   },
@@ -148,6 +156,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     // off — those are owner/master decisions.
     contracts: false, tv_displays: true, glofox_import: false, preferences_import: false,
     orders: true, car_processing: false,          // managers run revenue ops; CCF Autos is per-user opt-in
+    invoices_inbox: false,                         // manager isn't an approver — owner/master only
     settings: true,
     landing_page: false,                          // owner/master decision; per-user override available
   },
@@ -162,6 +171,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     // master-only on first install; owners can opt-in per user.
     contracts: true, tv_displays: true, glofox_import: false, preferences_import: false,
     orders: true, car_processing: false,          // OFF for owner too — explicit opt-in per profile
+    invoices_inbox: true,                          // owner approves their location's supplier invoices
     settings: true,
     landing_page: true,
   },
