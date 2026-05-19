@@ -20,9 +20,17 @@ export default ({ config }) => ({
   // change. Version reset to 1.0.0 for the fresh ASC record (the
   // previous Custom App's 1.1 lives on a different ASC record so
   // Apple's per-record version tracking doesn't conflict).
+  //
+  // 1.1.0 (May 2026) — bundles the FTE expense reimbursement flow
+  // (Expenses tab + claims + per-item receipt capture + Claude
+  // Vision OCR auto-fill), the UniFi door allowlist tightening,
+  // the audit-log expansion, the WhatsApp coexistence scaffolding,
+  // and the reduced-motion accessibility wiring. Minor bump
+  // because it adds new user-visible surfaces; buildNumber is
+  // managed by EAS (autoIncrement: true on the production profile).
   name: 'CF Studio',
   slug: 'un1t-crm-mobile',
-  version: '1.0.0',
+  version: '1.1.0',
   orientation: 'portrait',
   icon: './assets/icon.png',
   // Deep-link scheme — `cfstudio://...`. Renamed from un1tcrm. Safe to
