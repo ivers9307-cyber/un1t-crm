@@ -1,47 +1,53 @@
-# Session State — May 17, 2026
+# Session State — May 20, 2026
 
 One-screen "state of the world" so a fresh chat can orient in 30 seconds.
-For depth, see [CLAUDE.md](./CLAUDE.md) — Done log entries #161–173 and the new lesson at the top of "Lessons learned".
+For depth, see [CLAUDE.md](./CLAUDE.md) — Done log entries #193–199, the new "Shipping from the sandbox" section, and the new branch + PR Lesson Learned.
 
 ## Today's headline
 
-HOTFIX #172 verified live. Then closed every surviving backlog item in one session:
-- **#173 (PERM.1)** — `hasAnyMobileFeature` walks cross-platform `dashboard_*` keys.
-- **#174 (SEG-TRIG.1)** — `segment_added` / `segment_removed` sequence triggers + cron-driven snapshot diff (mig 174).
-- **#175 (RSC-AUDIT.2)** — stripped 3 unnecessary `'use client'` directives (out of 130+ audited).
-- **#176 (NEXT.16)** — Next.js 14.2 → 16.2 + React 18.3 → 19.2 + ESLint flat config. Verified in Vercel preview, merged.
-- **#177 (MULTIBRAND.1)** — brand registry extracted from middleware. Adding a brand = one entry in `src/lib/brands.js`.
-- **#178 (CODEQUAL.1)** — lint reduced from 104 warnings (post-NEXT.16) to **zero**. 47 set-state-in-effect + 10 purity turned off as policy; 23 stale disables auto-cleaned; 21 pre-existing warnings (18 no-unused-vars + 3 exhaustive-deps) fixed individually with per-site judgment.
+Two big features landed across the day, plus a flurry of FTE-EXPENSES polish from the morning. **Both shipping PRs are open against main**:
 
-Branch state: `multibrand-and-codequality` has commits #177 + #178 ready to merge. **1,801 tests pass / 0 lint warnings / clean build / parity clean.**
+- **PR #43 — `invoices-inbox`**: INVOICES.1 (Dext-style email-in supplier invoices) + INVOICES.2 (sidebar badge) + INVOICES.3 (Claude Vision auto-categorisation). Mig 184 already applied to prod Supabase.
+- **PR #44 — `approvals-dashboard`**: APPROVALS.1 — central approvals page aggregating contractor invoices, FTE expenses, time-off, swap requests, and over-budget rosters. Sidebar badge + extensible provider registry.
 
-**Backlog is empty.** No surviving items.
+Both branched off latest main; merge order doesn't matter.
 
-Operational watches (unchanged):
-- TestFlight 0.1.1 (5) still in Apple review.
-- The May-13 campaign's 32% delivered ratio — defer to next fresh push.
+The FTE expenses surface (mobile + web + Claude Vision receipt OCR + auto-fill manual-trigger) shipped earlier in the session as #193–194.
 
-## What's in flight, not done
+## What's in flight, not yet merged
 
-- **TestFlight 0.1.1 (5)** sitting in Apple review. Click "Remove from Review" on the ASC build page → internal testers can install → device tokens get registered → the no-token gap closes naturally. Until then, **most staff can't receive pushes** because they don't have the app.
-- Once testers install, the Bookings tab + Tasks-under-More + push-tap deep-link + back-buttons-everywhere all become testable end-to-end.
+| PR | Branch | What's in it | Status |
+|---|---|---|---|
+| **[#43](https://github.com/ivers9307-cyber/un1t-crm/pull/43)** | `invoices-inbox` | INVOICES.1/.2/.3 + mail subdomain switch | Awaiting merge. Mig 184 applied. Postmark inbound MX + webhook config still need post-merge wiring (see "Post-merge ops" below). |
+| **[#44](https://github.com/ivers9307-cyber/un1t-crm/pull/44)** | `approvals-dashboard` | APPROVALS.1 central dashboard | Awaiting merge. No migration, no env vars, no DNS. Just merge. |
 
-## Recovery — confirmed done (May 17, 21:00 UTC)
+## Post-merge ops (operator action required after PR #43 lands)
 
-| Check | Result |
-|---|---|
-| `postmark_webhook_queue` stuck rows (attempts >= 5) | 0 |
-| `postmark_webhook_queue` total unprocessed | 0 |
-| Rows with errors anywhere | 0 |
-| Cron heartbeats stale | 0 of 15 |
-| Most recent processed rows (10) | all `attempts=0`, `outcome=ok` (Open + Delivery flowing clean) |
-| `recalculate_campaign_stats` re-run on May-13 "15 mins?" campaign | No counter shift — rollups were already current after the drain |
+1. **DNS**: confirm `mail.un1tdublin.com` MX → Postmark inbound (priority 10). Done before merge.
+2. **Vercel env var**: `POSTMARK_INBOUND_WEBHOOK_TOKEN` set to the value generated this session (64-char hex from `openssl rand -hex 32`). Already in Vercel as of session end.
+3. **Postmark inbound stream config**: set the webhook URL to `https://crm.un1tdublin.com/api/webhooks/invoices-inbound/<TOKEN>` and the inbound domain to `mail.un1tdublin.com`. **Webhook URL is the only place the literal token appears** — don't add it to the repo.
+4. **Per-location forwarding slugs**: configure in Location Settings → Invoice Forwarding for each location that should accept inbound invoices (e.g. slug `dublin-city` → addr `dublin-city-invoices@mail.un1tdublin.com`).
 
-**Side note:** the "15 mins?" campaign shows 964 delivered / 2,970 sent — 32%. Not a `.catch` artifact (Delivery events were unaffected by that bug). Owner plans to analyse this from a fresh marketing push later this week.
+## Today's shipped (chronological, oldest first)
 
-## Now picking up
+| # | Feature | Notes |
+|---|---|---|
+| 193 | **FTE-EXPENSES.1/.2** (already shipped pre-session) | Mig 183. Monthly FTE claims with per-item receipts. Web + mobile (CF Studio 1.1.0). Same Xero email forward as contractor invoices. |
+| 194 | **FTE-EXPENSES.3/.4 + FIX series** | Claude Vision receipt OCR. Converted from auto-fire to **manual trigger** ("Auto-fill from receipt" button) per operator feedback on cost protection. Fixed missing `expo-image-picker` dep + viewer_role ordering bug where master-FTE users couldn't add items on mobile. |
+| 195 | **MAIL-SUBDOMAIN.1** | Inbound mail moved from apex `un1tdublin.com` to dedicated `mail.un1tdublin.com` subdomain so marketing apex MX is untouched. |
+| 196 | **INVOICES.1** | Dext-style email-in inbox at `/invoices`. Mig 184. Postmark webhook with token-in-URL auth (Postmark doesn't allow header auth on inbound). Two-stage manual approval (quality → extract → data review → forward to Xero) so Claude Vision only runs after operator approves the attachment. |
+| 197 | **INVOICES.2** | Red sidebar badge + browser tab title prefix for pending invoices. 60s poll + tab-refocus refresh. |
+| 198 | **INVOICES.3** | Claude Vision auto-categorisation. 13-value enum tuned for gym operations. Category + account code surfaced in the data-review form and in the Xero forward email body as hints. |
+| 199 | **APPROVALS.1** | Central `/approvals` dashboard aggregating contractor invoices, FTE expenses, time-off, swap requests, and over-budget rosters. Sidebar badge. Extensible registry — adding a new approvable surface is one provider file + one line. |
 
-**`hasAnyMobileFeature` cross-platform dashboard gate** — the only open Permissions backlog item. Bug: `hasAnyMobileFeature(profile, activeLocation)` in `mobile/lib/permissions.js` only iterates `MOBILE_PERMISSION_KEYS` (the `.mobile.*` namespaced keys). It does NOT consider the cross-platform `dashboard_personal` / `dashboard_studio` / `dashboard_business` keys, which live at the top level of the per-location permissions blob. Failure scenario: a master at a location where every `.mobile.*` key is off but `dashboard_personal` is on sees the "Mobile features off — ask an admin" empty-state on Home, instead of the personal dashboard they're entitled to. Fix: also walk `CROSS_PLATFORM_DASHBOARD_KEYS` through `canDashboard` and OR the result. Small, low-risk, one helper + one test.
+## Operational watches (carried over)
+
+- **TestFlight 0.1.1 (5)** — still in Apple review (was carried over from May-17). Most staff still can't receive pushes until they install the build.
+- The May-13 "15 mins?" campaign's 32% delivery ratio — still deferred to a fresh push for analysis.
+
+New watch from this session:
+
+- **Vercel deploys for both open PRs** — preview URLs should be checked before merging. Smoke-test: forward a real PDF to `<slug>-invoices@mail.un1tdublin.com` → confirm it lands in `/invoices` → walk the two stages → confirm it appears as a draft bill in Xero. Then check `/approvals` shows the right items per the logged-in user's role.
 
 ## Live state of the world
 
@@ -49,38 +55,43 @@ Operational watches (unchanged):
 |---|---|
 | Active locations | 4 (Stillorgan / Hatch Street / CCF Autos / Test Studio) |
 | Active staff | 13 |
-| Contacts | 8,151 |
-| Open deals | 8,153 |
-| Open tasks | 0 (operator hasn't started using the tab yet) |
-| Cron heartbeats | 15/15 healthy |
-| Stillorgan staff with device tokens | 1 of 11 (Richard, master) |
-| Last applied migration | 173_seed_sweep_stale_push_tokens_heartbeat |
+| Open PRs | 2 (#43 invoices-inbox, #44 approvals-dashboard) |
+| Last applied migration | 184_inbound_invoices |
+| Total tests | 1938 (8 new for APPROVALS.1, 25 for INVOICES.1, plus FTE-EXPENSES) |
+| Web permissions | 26 |
+| Mobile permissions | 19 |
 
-## Notification system — what was built
+## Branch state
 
-End-to-end:
-- **Backend cron** (`/api/cron/send-push-reminders`, every 5 min) scans tasks + bookings, fires 60-min and 24-hour reminders. Per-location lead times + booking notify-roles configurable. Per-user lead-time overrides for both tasks and bookings (stored on `profile_locations.permissions.mobile.lead_time_overrides`).
-- **Mobile screens**: `(tabs)/bookings.jsx` for today/tomorrow operator view + `app/tasks/*` for assigned-to-me list and detail. Push-tap deep-links via `NotificationRouter` in `mobile/app/_layout.jsx`. Back chevrons work cross-navigator via shared `BackHeaderLeft` component (also fixed on Contracts + Invoices in the audit).
-- **Web admin**: `/settings/notifications` (registry of every push category + per-location config strip), `/settings/notifications/health` (per-staff traffic-light delivery status + per-row "Test push" button), `NotificationConfigCard` on the per-location settings page, `LeadTimeOverrideRow` (×2 — tasks + bookings) in StaffForm.
-- **Email fallback**: `notifyUsers()` wrapper at `src/lib/notify.js` adds Postmark fallback when a recipient has 0 device tokens, for categories that opt in via `fallbackEmail: true` in the registry. Currently: time_off, invoice_approved, invoice_declined, shift_adjusted. Five routes migrated (time-off decision + new request, invoice approve + decline, shift adjusted). Contracts intentionally NOT migrated — it has its own templated email path.
+```
+main                              ─── HEAD: a65cede (pre-session)
+  ├── invoices-inbox       PR #43 ─── 2ce4f26, e8befcb, ...
+  └── approvals-dashboard  PR #44 ─── (commits on branch)
+  └── docs-session-2026-05-20      ─── this doc update (in progress)
+```
 
-## Recent lessons (top 4, summarised — full versions in CLAUDE.md)
+## Where to look next
 
-1. **supabase-js builders are thenables, not Promises.** No `.catch` method on `db.rpc(...)` / `db.from(...)`. Use `try { await ... } catch {}`. Just bit us for 4 days silently.
-2. **`stampHeartbeat` is UPDATE-only.** New crons need a row pre-seeded in `cron_heartbeats` or the heartbeat silently never lands. Migration template at the bottom of `_audit_hotfix_ship.sh` history.
-3. **Mobile permissions live on `profile_locations.permissions.mobile`**, NOT `profiles.permissions.mobile`. Discovered during the audit — only 2 of 13 profiles have anything under `profiles.permissions.mobile`, all 16 profile_locations rows have it.
-4. **iOS auto-back-button only renders WITHIN one navigator.** Pushing from `(tabs)/X` to `app/X/[id]` is a cross-navigator nav; iOS doesn't see a previous screen so no chevron. Use the shared `BackHeaderLeft` component.
+- **If a feature regression**: PRs #43 + #44 are the new code. The /approvals page wraps existing per-feature pages so issues there could be in the provider's query shape, not the UI.
+- **If a webhook doesn't fire**: check the Postmark inbound webhook config matches `POSTMARK_INBOUND_WEBHOOK_TOKEN` exactly (constant-time compared). Wrong token returns 404 (not 403) by design — Postmark will retry.
+- **If a row gets stuck mid-pipeline**: `inbound_invoices` has six states. `quality_approved` + `data_approved` are the async intermediate stops — if OCR or Xero forward fails, the row stays in those states and the UI shows a Retry button on the detail panel. Look at `extraction_error` or `xero_error` columns for the failure reason.
+
+## Recent lessons (top 5 — full versions in CLAUDE.md)
+
+1. **Shipping = branch + commit + push + PR**. Stopping at `git push` is not shipping. New canonical loop in "Shipping from the sandbox" section of CLAUDE.md uses curl + GitHub API since the sandbox has no `gh` CLI. Codified this session because the assistant initially stopped at the push for INVOICES.1.
+2. **Postmark inbound webhooks don't allow custom headers** — only a URL. Token-in-URL auth (same pattern as the sequence webhook) is the substitute. 404 on wrong token to avoid leaking URL existence.
+3. **`supabase-js` builders are thenables, not Promises.** Use `try { await ... } catch {}`, not `.catch(() => {})`. Bit us silently for 4 days in May.
+4. **`stampHeartbeat` is UPDATE-only.** Pre-seed the `cron_heartbeats` row in the same migration that adds the cron.
+5. **Mobile permissions live on `profile_locations.permissions.mobile`**, not `profiles.permissions.mobile`. Discovered during the May audit.
 
 ## Backlog status
 
-**Near-empty.** Surviving items:
-- ~~Extend `MOBILE_PERMISSION_KEYS` iteration in `hasAnyMobileFeature` to also evaluate cross-platform `dashboard_*` keys~~ — **in progress this session**.
-- New sequence trigger: `segment_added` / `segment_removed` so saved segments can drive sequence enrolment.
-- React Server Components audit pass #2 — components touched after the first audit may have re-introduced `'use client'` unnecessarily.
-- Next.js 14 → 16 upgrade (focused PR, two majors — async params, async `headers()`/`cookies()`, `next/image` defaults). Closes outstanding `npm audit` advisories.
-- Multi-brand middleware factoring (third brand becomes a config row, not new code).
+**Effectively empty.** Two open PRs are the only in-flight code.
 
-Next-shaped concerns to watch as TestFlight rolls out:
-- `push_reminder_sends` ledger growth — if it stays flat after staff install, something's filtering too aggressively.
-- Per-user notification overrides — confirm at least one user has flipped one before assuming the path works.
-- The May-13 campaign's 32% delivery rate, to be analysed against the next fresh push.
+Surviving items worth attention:
+- **AUDIT-EXPAND.2** (task #129) — DB triggers for mutation logging on key tables. Deferred when AUDIT-EXPAND.1 shipped because the app-level instrumentation covered the high-value surfaces.
+- The May-13 campaign delivery rate analysis (deferred).
+
+Next-shaped concerns once both PRs merge:
+- **Invoices observability**: a row that hangs in `quality_approved` because OCR keeps failing should be surfaced somewhere — possibly a Sentinel alert when any row sits in an intermediate state >24h.
+- **Approvals notifications on mobile**: APPROVALS.1 is desktop-only by design (drills into desktop-only source pages). Mobile keeps using per-category `notify_*` flags. Worth considering an aggregate "you have N pending approvals" mobile badge if operator demand emerges.
