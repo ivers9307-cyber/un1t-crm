@@ -130,6 +130,39 @@ export const NOTIFICATION_REGISTRY = Object.freeze([
     fallbackEmail: true,
     emailSubject: 'Your invoice needs adjustment',
   },
+  // FTE-EXPENSES.1 — three categories for the monthly expense
+  // reimbursement flow. Same shape as invoice_approved/_declined
+  // but for FTE staff rather than contractors; submitter gets the
+  // outcome notifications, approvers get the queue notification.
+  {
+    category: 'expense_submitted',
+    label: 'Expense claim awaiting approval',
+    description: 'An FTE has submitted an expense claim for the month — owner/master needs to review.',
+    trigger: { kind: 'event', source: 'POST /api/expenses/[id]/submit' },
+    recipients: { kind: 'roles_at_location', detail: 'Owners at the location + masters platform-wide' },
+    configurable: { leadTimes: false, roles: false },
+    fallbackEmail: false,
+  },
+  {
+    category: 'expense_approved',
+    label: 'Expense claim approved',
+    description: 'Your monthly expense claim has been approved. Reimbursement goes through the next payroll run.',
+    trigger: { kind: 'event', source: 'POST /api/expenses/[id]/approve' },
+    recipients: { kind: 'specific_user', detail: 'Claim submitter (FTE)' },
+    configurable: { leadTimes: false, roles: false },
+    fallbackEmail: true,
+    emailSubject: 'Your expense claim has been approved',
+  },
+  {
+    category: 'expense_declined',
+    label: 'Expense claim declined',
+    description: 'Your expense claim needs adjustment — see the decline reason and submit a fresh claim.',
+    trigger: { kind: 'event', source: 'POST /api/expenses/[id]/decline' },
+    recipients: { kind: 'specific_user', detail: 'Claim submitter (FTE)' },
+    configurable: { leadTimes: false, roles: false },
+    fallbackEmail: true,
+    emailSubject: 'Your expense claim needs adjustment',
+  },
   {
     category: 'shift_adjusted',
     label: 'Shift adjusted',
