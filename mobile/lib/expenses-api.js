@@ -147,6 +147,49 @@ export async function getReceiptUrl(claimId, itemId) {
   return res.json().catch(() => ({ success: false, error: `Bad response (${res.status})` }))
 }
 
+/**
+ * FTE-EXPENSES.4 — extract receipt fields via Claude Vision before
+ * the operator commits the item. Same fire-and-forget pattern as
+ * the web flow: the moment a receipt is selected, this kicks off an
+ * OCR call. The returned `fields` pre-fill the add-item form so the
+ * operator just reviews + taps Save instead of typing everything.
+ *
+ * Stateless on the server side — the file isn't persisted by this
+ * call. Persistence happens via addExpenseItem() once the operator
+ * confirms. That way a failed extraction or a "blurry photo, let me
+ * retake" never leaves orphaned bytes in Storage.
+ *
+ * Backend lives in src/app/api/expenses/extract-receipt/route.js
+ * (FTE-EXPENSES.3). This call 404s until that PR is also merged —
+ * the caller treats the failure the same as any other OCR error
+ * and lets the operator fill the form manually.
+ *
+ * @param {{ uri: string, name?: string, mimeType?: string }} receipt
+ * @returns {Promise<{
+ *   success: true,
+ *   fields: { expense_date, vendor, amount, vat_amount, category, description, confidence },
+ *   confidence: 'high' | 'medium' | 'low',
+ * } | { success: false, error: string }>}
+ */
+export async function extractReceiptFields(receipt) {
+  const headers = await authHeaders()
+  const fd = new FormData()
+  // RN multipart file shape: { uri, name, type } — same as
+  // addExpenseItem() above. Don't set Content-Type — RN's fetch
+  // sets the boundary automatically when body is FormData.
+  fd.append('receipt', {
+    uri: receipt.uri,
+    name: receipt.name || 'receipt.jpg',
+    type: receipt.mimeType || 'image/jpeg',
+  })
+  const res = await fetch(`${API_BASE}/api/expenses/extract-receipt`, {
+    method: 'POST',
+    headers,
+    body: fd,
+  })
+  return res.json().catch(() => ({ success: false, error: `Bad response (${res.status})` }))
+}
+
 // ────────────────────────────────────────────────────────────────
 // Helpers — kept in lockstep with src/lib/fte-expenses.js
 // ────────────────────────────────────────────────────────────────
