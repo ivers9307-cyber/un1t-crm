@@ -322,6 +322,12 @@ export default function StaffForm({
         // P2.4 — Protect face link (mig 142 attendance picker).
         // Same null/string/omit semantics as unifi_user_id.
         protect_face_id: a.protect_face_id || null,
+        // UNIFI-DOORS-SCOPE (mig 182) — door allowlist for studio
+        // mgmt. Always sent so toggling the picker reliably clears
+        // or replaces the existing array. Empty array = no doors;
+        // null is reserved for the manager+ legacy "all doors"
+        // fallback and isn't reachable from this form.
+        unifi_door_ids: Array.isArray(a.unifi_door_ids) ? a.unifi_door_ids : [],
         permissions: a.permissions || {},
       })),
       active: form.active,
@@ -586,6 +592,26 @@ export default function StaffForm({
                   value={a.protect_face_id || null}
                   onChange={(protect_face_id) =>
                     updateAssignment(a.location_id, { protect_face_id })
+                  }
+                />
+              )}
+              {/* UNIFI-DOORS-SCOPE — per-location door allowlist
+                  (mig 182). Operator ticks the doors this user can
+                  remote-unlock from the iOS Studio Management screen.
+                  Empty array = the user sees no doors. Distinct from
+                  UnifiUserPicker (which controls physical card-tap
+                  access via UniFi policy) — this only controls the
+                  in-app unlock UI. Always visible at edit time
+                  regardless of unifi_door_access toggle, because the
+                  studio management screen permission is independent
+                  from physical-door access. */}
+              {isEdit && configured && (
+                <DoorAllowlistPicker
+                  locationId={a.location_id}
+                  locationName={loc.name}
+                  value={Array.isArray(a.unifi_door_ids) ? a.unifi_door_ids : []}
+                  onChange={(unifi_door_ids) =>
+                    updateAssignment(a.location_id, { unifi_door_ids })
                   }
                 />
               )}
@@ -1566,6 +1592,186 @@ function UnifiUserPicker({ locationId, locationName, value, onChange }) {
           When this person taps a door at {locationName}, attendance auto-stamps their shift.
         </div>
       )}
+    </div>
+  )
+}
+
+// ── DoorAllowlistPicker ─────────────────────────────────────────────
+//
+// UNIFI-DOORS-SCOPE — per-location door allowlist for the iOS Studio
+// Management remote-unlock screen (mig 182). Operator ticks the doors
+// this user is allowed to remote-unlock. Persisted to
+// profile_locations.unifi_door_ids on save.
+//
+// Distinct from UnifiUserPicker (which controls physical card-tap
+// access via the user's UniFi policy assignment): this only affects
+// the in-app UI. The unlock endpoint independently verifies the
+// allowlist before forwarding to the controller.
+//
+// `value` is always an array (we never pass `null` from the form —
+// `null` is reserved for the manager+ legacy fallback that was
+// backfilled by mig 182 and isn't editable here).
+//
+// Lazy-fetches /api/locations/[id]/unifi-doors on first expand, same
+// caching pattern as UnifiUserPicker.
+function DoorAllowlistPicker({ locationId, locationName, value, onChange }) {
+  const [open, setOpen] = useState(false)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState(null)
+  const [doors, setDoors] = useState(null) // null = unfetched
+
+  const selected = Array.isArray(value) ? value : []
+  const selectedSet = new Set(selected)
+
+  const currentLabel = (() => {
+    if (selected.length === 0) return 'No doors selected'
+    if (!doors) {
+      return `${selected.length} door${selected.length === 1 ? '' : 's'} selected`
+    }
+    const names = selected
+      .map((id) => doors.find((d) => d.id === id)?.name || id)
+      .slice(0, 3)
+    const more = selected.length - names.length
+    return more > 0 ? `${names.join(', ')} +${more} more` : names.join(', ')
+  })()
+
+  async function fetchDoors() {
+    if (loading) return
+    setLoading(true); setError(null)
+    try {
+      const res = await fetch(`/api/locations/${locationId}/unifi-doors`, { cache: 'no-store' })
+      const json = await res.json()
+      if (!json.success) throw new Error(json.message || json.error || 'Fetch failed')
+      setDoors(json.doors || [])
+    } catch (e) {
+      setError(e.message || 'Could not load doors')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  function handleToggle() {
+    const next = !open
+    setOpen(next)
+    if (next && doors === null) fetchDoors()
+  }
+
+  function toggleDoor(doorId) {
+    if (selectedSet.has(doorId)) {
+      onChange(selected.filter((id) => id !== doorId))
+    } else {
+      onChange([...selected, doorId])
+    }
+  }
+
+  function selectAll() {
+    if (!doors) return
+    onChange(doors.map((d) => d.id))
+  }
+  function selectNone() {
+    onChange([])
+  }
+
+  return (
+    <div className="space-y-1.5">
+      <button
+        type="button"
+        onClick={handleToggle}
+        className="w-full flex items-center justify-between text-left rounded-md border border-un1t-gray bg-un1t-black px-3 py-2 text-sm hover:border-un1t-mid"
+      >
+        <div className="min-w-0">
+          <div className="text-xs text-un1t-light">Studio Management doors</div>
+          <div className="truncate">{currentLabel}</div>
+        </div>
+        <span className="text-un1t-light text-xs ml-2">{open ? '▴' : '▾'}</span>
+      </button>
+
+      {open && (
+        <div className="rounded-md border border-un1t-gray bg-un1t-black p-2 space-y-1">
+          {loading && (
+            <div className="text-xs text-un1t-light px-2 py-1.5">Loading doors from {locationName}…</div>
+          )}
+          {error && (
+            <div className="text-xs text-red-300 px-2 py-1.5">{error}</div>
+          )}
+          {!loading && !error && doors && (
+            <>
+              <div className="flex items-center justify-between px-2 py-1">
+                <span className="text-[11px] text-un1t-light uppercase tracking-wider">
+                  {selected.length} of {doors.length} selected
+                </span>
+                <div className="flex items-center gap-2 text-[11px]">
+                  <button
+                    type="button"
+                    onClick={selectAll}
+                    className="text-blue-300 hover:text-blue-200"
+                  >
+                    Select all
+                  </button>
+                  <span className="text-un1t-gray">·</span>
+                  <button
+                    type="button"
+                    onClick={selectNone}
+                    className="text-blue-300 hover:text-blue-200"
+                  >
+                    Clear
+                  </button>
+                </div>
+              </div>
+              <div className="border-t border-un1t-gray/50 my-1" />
+              <div className="max-h-64 overflow-y-auto">
+                {doors.length === 0 && (
+                  <div className="text-xs text-un1t-light px-2 py-1.5">No doors registered at this controller.</div>
+                )}
+                {doors.map((d) => {
+                  const isOn = selectedSet.has(d.id)
+                  return (
+                    <button
+                      key={d.id}
+                      type="button"
+                      onClick={() => toggleDoor(d.id)}
+                      className={`w-full text-left text-sm px-2 py-1.5 rounded hover:bg-un1t-gray/40 flex items-center gap-2 ${isOn ? 'text-blue-300' : ''}`}
+                    >
+                      <span className={`inline-block w-3.5 h-3.5 rounded border ${isOn ? 'bg-blue-500 border-blue-500' : 'border-un1t-gray'} flex items-center justify-center text-[10px] text-white`}>
+                        {isOn ? '✓' : ''}
+                      </span>
+                      <span className="truncate">{d.name}</span>
+                    </button>
+                  )
+                })}
+              </div>
+              {/* Render any selected IDs that aren't in the current
+                  controller list — e.g. a door that was deleted in
+                  UniFi after being assigned here. Operator can
+                  untick to clean up. */}
+              {doors && selected.filter((id) => !doors.find((d) => d.id === id)).length > 0 && (
+                <>
+                  <div className="border-t border-un1t-gray/50 my-1" />
+                  <div className="text-[11px] text-amber-300 px-2 py-1">
+                    Unknown / removed doors still in this user's allowlist:
+                  </div>
+                  {selected.filter((id) => !doors.find((d) => d.id === id)).map((id) => (
+                    <button
+                      key={id}
+                      type="button"
+                      onClick={() => toggleDoor(id)}
+                      className="w-full text-left text-sm px-2 py-1.5 rounded hover:bg-un1t-gray/40 flex items-center gap-2 text-amber-300"
+                    >
+                      <span className="inline-block w-3.5 h-3.5 rounded border bg-amber-500 border-amber-500 flex items-center justify-center text-[10px] text-black">✓</span>
+                      <span className="truncate font-mono text-xs">{id}</span>
+                    </button>
+                  ))}
+                </>
+              )}
+            </>
+          )}
+        </div>
+      )}
+
+      <div className="text-[11px] text-un1t-light px-1">
+        Doors this user can remote-unlock from the Studio Management screen at {locationName}.
+        UniFi card-tap access is controlled separately by the user's policy.
+      </div>
     </div>
   )
 }

@@ -23,7 +23,7 @@ export default async function EditStaffPage(props) {
     // centralises the shape so a future SELECT change can't recur
     // the same bug without breaking the helper's contract test.
     db.from('profiles')
-      .select('*, profile_locations(location_id, role, unifi_door_access, unifi_user_id, is_default, permissions)')
+      .select('*, profile_locations(location_id, role, unifi_door_access, unifi_user_id, unifi_door_ids, protect_face_id, is_default, permissions)')
       .eq('id', params.id)
       .single(),
     db.from('locations').select('*').eq('active', true).order('name'),

@@ -49,6 +49,30 @@ export async function POST(request) {
   const { door_id, door_name } = validation.data
 
   const db = createServerClient()
+
+  // UNIFI-DOORS-SCOPE — verify door_id is in the caller's allowlist
+  // for this location. The /doors GET endpoint already filters the
+  // visible list, but a hand-crafted POST (e.g. devtools or a
+  // misbehaving client) could try to unlock a door it shouldn't see.
+  // This is the actual security barrier.
+  //
+  // NULL allowlist (mig 182 left manager+ roles as NULL) = legacy
+  // fallback, all doors permitted. Empty array = no doors permitted.
+  const { data: assignment } = await db
+    .from('profile_locations')
+    .select('unifi_door_ids')
+    .eq('profile_id', user.id)
+    .eq('location_id', locationId)
+    .maybeSingle()
+  const allowlist = assignment?.unifi_door_ids
+  const isUnrestricted = allowlist === null || allowlist === undefined
+  if (!isUnrestricted && !allowlist.includes(door_id)) {
+    return NextResponse.json({
+      success: false,
+      error: 'You are not authorised to unlock this door. Ask an admin to add it to your access list.',
+    }, { status: 403 })
+  }
+
   const { data: location } = await db
     .from('locations')
     .select('id, name, settings')

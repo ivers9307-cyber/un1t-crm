@@ -398,6 +398,15 @@ export async function PUT(request, props) {
         ...(Object.prototype.hasOwnProperty.call(a, 'protect_face_id')
           ? { protect_face_id: a.protect_face_id || null }
           : {}),
+        // UNIFI-DOORS-SCOPE (mig 182) — per-location door allowlist.
+        // null/undefined → leave unchanged (omit from row so the DB
+        // value isn't overwritten). Empty array → clear. Array of
+        // strings → set. Mirrors the unifi_user_id semantics so the
+        // staff form can patch this field alone without touching
+        // anything else.
+        ...(Object.prototype.hasOwnProperty.call(a, 'unifi_door_ids')
+          ? { unifi_door_ids: a.unifi_door_ids === null ? null : (a.unifi_door_ids || []) }
+          : {}),
       }
 
       if (existing) {
