@@ -54,6 +54,12 @@ export default function TabsLayout() {
   // approve from the web; on mobile the tab would just be noise for
   // them. (mig 101)
   const showInvoices = profile?.employment_type === 'contractor'
+  // FTE-EXPENSES.2 — Expenses tab: mirror of Invoices but for FTE
+  // staff. Same rationale (approvers use the web). Surfaces the
+  // monthly receipt-capture flow at the front desk so staff can
+  // photograph receipts as they collect them rather than batching
+  // at month-end.
+  const showExpenses = profile?.employment_type === 'fte'
   // Studio Management tab — same gate as web sidebar (mig 093 cross-
   // platform key). Door unlock + AC control. Promoted from a More-tab
   // row to a primary tab per operator request — managers running
@@ -152,6 +158,16 @@ export default function TabsLayout() {
           href: showInvoices ? '/(tabs)/invoices' : null,
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="receipt-outline" size={size} color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="expenses"
+        options={{
+          title: 'Expenses',
+          href: showExpenses ? '/(tabs)/expenses' : null,
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="wallet-outline" size={size} color={color} />
           ),
         }}
       />
