@@ -14,9 +14,25 @@ import { periodForMonth } from '@/lib/fte-expenses'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
+// 'self' wins over 'master' / 'owner' so a privileged user viewing
+// their OWN claim sees the submitter UI (Add item, Submit, Revoke,
+// Delete-draft) rather than the approver UI (Approve, Decline).
+// A user can't approve their own claim anyway — the underlying
+// /submit, /approve, /decline, /revoke routes enforce the
+// claim.profile_id === user.id check independently — so this
+// ordering is purely a UI hint to surface the actions the user
+// can actually take.
+//
+// Prior to the fix, a master who created a draft for themselves
+// got viewer_role='master' and the mobile detail screen (which
+// gates the Add item button on viewer_role === 'self') hid the
+// button, leaving the operator with a draft they could neither
+// edit nor submit from mobile. Web flow was unaffected because
+// ExpensesManager.jsx compares claim.profile_id to the logged-in
+// user id directly rather than reading viewer_role.
 function viewerRole(user, claim) {
-  if (user.profileRole === 'master' || user.role === 'master') return 'master'
   if (claim.profile_id === user.id) return 'self'
+  if (user.profileRole === 'master' || user.role === 'master') return 'master'
   const ownsLocation = Object.entries(user.rolesByLocation || {})
     .some(([loc, r]) => r === 'owner' && loc === claim.location_id)
   if (ownsLocation) return 'owner'
