@@ -16,9 +16,9 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { computeScheduledForPeriod, periodLabel } from '@/lib/contractor-invoices'
-import { sendContractorInvoiceBillEmail } from '@/lib/xero/contractor-bills'
 import { sendInvoiceApprovedEmail } from '@/lib/contractor-invoice-email'
 import { notifyUsers } from '@/lib/notify'
+import { enqueueFromContractorInvoice } from '@/lib/invoices-queue/enqueue'
 import { logWarn } from '@/lib/log'
 
 export const runtime = 'nodejs'
@@ -64,10 +64,13 @@ export async function POST(_request, props) {
   })
 
   const now = new Date().toISOString()
+  // INVOICES-QUEUE.1 — owner approval flips status straight to
+  // awaiting_accountant_review. Direct Xero forward is now the
+  // bookkeeper's job from /invoices (queue handles it).
   const { data: approved, error: updErr } = await db
     .from('contractor_invoices')
     .update({
-      status: 'approved',
+      status: 'awaiting_accountant_review',
       reviewed_by: user.id,
       reviewed_at: now,
       approved_at: now,
@@ -92,18 +95,14 @@ export async function POST(_request, props) {
 
   const warnings = []
 
-  // Forward to Xero (best-effort).
-  try {
-    const xero = await sendContractorInvoiceBillEmail(approved.id)
-    await db
-      .from('contractor_invoices')
-      .update({
-        xero_email_message_id: xero.messageId,
-        xero_synced_at: new Date().toISOString(),
-      })
-      .eq('id', approved.id)
-  } catch (e) {
-    warnings.push(`Xero forward failed: ${e?.message || String(e)}. The approval is saved — retry the Xero forward from the invoice detail page.`)
+  // Drop into the central invoices_queue. Bookkeeper runs Claude
+  // Vision + final Xero forward from /invoices. Best-effort: if
+  // enqueue fails the approval is still recorded; operator can
+  // retry from PR 2's queue UI.
+  const enq = await enqueueFromContractorInvoice(approved.id)
+  if (!enq.ok) {
+    logWarn('invoice-approve', 'enqueue failed', { err: enq.error, invoiceId: approved.id })
+    warnings.push(`Queue insert failed: ${enq.error}. The approval is recorded; retry enqueue from /invoices.`)
   }
 
   // Email contractor (best-effort).

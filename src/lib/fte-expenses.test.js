@@ -44,12 +44,21 @@ describe('canTransition', () => {
     }
   })
 
-  it('treats approved/declined/revoked as terminal', () => {
-    for (const terminal of ['approved', 'declined', 'revoked']) {
+  it('treats declined/revoked/awaiting_accountant_review as terminal-from-submitter', () => {
+    // INVOICES-QUEUE.1 — 'approved' is no longer terminal; it
+    // transitions onward to 'awaiting_accountant_review' as part of
+    // the central-queue handoff. 'approved' is now a transient
+    // marker recorded via approved_at timestamp; the canonical
+    // terminal-from-submitter state is awaiting_accountant_review.
+    for (const terminal of ['awaiting_accountant_review', 'declined', 'revoked']) {
       for (const target of EXPENSE_STATUSES) {
         expect(canTransition(terminal, target)).toBe(false)
       }
     }
+  })
+
+  it('allows approved → awaiting_accountant_review (INVOICES-QUEUE.1)', () => {
+    expect(canTransition('approved', 'awaiting_accountant_review')).toBe(true)
   })
 
   it('rejects draft → terminal directly (must submit first)', () => {

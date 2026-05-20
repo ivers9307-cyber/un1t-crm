@@ -42,12 +42,38 @@ const CATEGORY_LABEL = {
   other: 'Other',
 }
 
-const TAB_DEFS = [
-  { key: 'quality',   label: 'Quality review', statuses: ['received'] },
-  { key: 'data',      label: 'Data review',    statuses: ['quality_approved', 'extracted', 'data_approved'] },
-  { key: 'forwarded', label: 'Forwarded',      statuses: ['forwarded'] },
-  { key: 'rejected',  label: 'Rejected',       statuses: ['rejected'] },
+// INVOICES-QUEUE.1 PR 2 — source_type is the primary nav. Status
+// becomes a secondary filter via STATUS_FILTERS. "Awaiting action"
+// (the default) means everything except forwarded + rejected — i.e.
+// rows that need bookkeeper attention.
+const SOURCE_TABS = [
+  { key: 'all',                label: 'All',          sourceTypes: null },
+  { key: 'supplier_email',     label: 'Supplier',     sourceTypes: ['supplier_email'] },
+  { key: 'contractor_invoice', label: 'Contractor',   sourceTypes: ['contractor_invoice'] },
+  { key: 'fte_expense_item',   label: 'Expenses',     sourceTypes: ['fte_expense_item'] },
+  { key: 'car_document',       label: 'Car documents',sourceTypes: ['car_document'] },
 ]
+
+const STATUS_FILTERS = [
+  { key: 'pending',   label: 'Awaiting action', statuses: ['received', 'quality_approved', 'extracted', 'data_approved'] },
+  { key: 'forwarded', label: 'Forwarded',       statuses: ['forwarded'] },
+  { key: 'rejected',  label: 'Rejected',        statuses: ['rejected'] },
+  { key: 'all',       label: 'All',             statuses: null },
+]
+
+const SOURCE_TYPE_LABEL = {
+  supplier_email: 'Supplier email',
+  contractor_invoice: 'Contractor invoice',
+  fte_expense_item: 'Employee expense',
+  car_document: 'Car document',
+}
+
+const SOURCE_TYPE_TONE = {
+  supplier_email:     'bg-blue-500/20 text-blue-300 border-blue-500/40',
+  contractor_invoice: 'bg-purple-500/20 text-purple-300 border-purple-500/40',
+  fte_expense_item:   'bg-orange-500/20 text-orange-300 border-orange-500/40',
+  car_document:       'bg-teal-500/20 text-teal-300 border-teal-500/40',
+}
 
 function formatBytes(n) {
   if (!n) return '—'
@@ -63,17 +89,29 @@ function formatDateTime(s) {
   } catch { return s }
 }
 
-export default function InvoicesInbox({ locations, isMaster }) {
-  const [tab, setTab] = useState('quality')
+export default function InvoicesInbox({ locations, isMaster, isBookkeeper = false }) {
+  const [sourceTab, setSourceTab] = useState('all')
+  const [statusFilter, setStatusFilter] = useState('pending')
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [selectedId, setSelectedId] = useState(null)
   const [locationFilter, setLocationFilter] = useState('all')
+  // INVOICES-QUEUE.1 PR 2 — multi-select state for bulk actions.
+  // Selection persists across tab switches (Set tracks ids; rows
+  // not in the current filter just don't render their checkbox).
+  const [bulkSelection, setBulkSelection] = useState(() => new Set())
+  const [bulkBusy, setBulkBusy] = useState(null)
+  const [bulkError, setBulkError] = useState(null)
+  const [bulkSummary, setBulkSummary] = useState(null)
 
   const activeStatuses = useMemo(
-    () => TAB_DEFS.find((t) => t.key === tab)?.statuses || [],
-    [tab],
+    () => STATUS_FILTERS.find((s) => s.key === statusFilter)?.statuses,
+    [statusFilter],
+  )
+  const activeSourceTypes = useMemo(
+    () => SOURCE_TABS.find((t) => t.key === sourceTab)?.sourceTypes,
+    [sourceTab],
   )
 
   const loadRows = useCallback(async () => {
@@ -81,13 +119,13 @@ export default function InvoicesInbox({ locations, isMaster }) {
     setError(null)
     try {
       const params = new URLSearchParams()
-      params.set('status', activeStatuses.join(','))
+      if (activeStatuses) params.set('status', activeStatuses.join(','))
+      if (activeSourceTypes) params.set('source_type', activeSourceTypes.join(','))
       if (locationFilter !== 'all') params.set('location_id', locationFilter)
       const res = await fetch(`/api/invoices-inbox?${params.toString()}`)
       const j = await res.json()
       if (!j.success) throw new Error(j.error || 'Failed to load')
       setRows(j.data || [])
-      // Preserve selection if still present; otherwise auto-select first row.
       setSelectedId((prev) => {
         if (prev && (j.data || []).some((r) => r.id === prev)) return prev
         return (j.data || [])[0]?.id || null
@@ -97,45 +135,121 @@ export default function InvoicesInbox({ locations, isMaster }) {
     } finally {
       setLoading(false)
     }
-  }, [activeStatuses, locationFilter])
+  }, [activeStatuses, activeSourceTypes, locationFilter])
 
   useEffect(() => { loadRows() }, [loadRows])
 
   const selected = rows.find((r) => r.id === selectedId) || null
 
+  // Tab counts — quick lookup so each tab's badge reflects pending
+  // work without re-fetching per tab. We re-derive whenever rows
+  // change. Caveat: the counts reflect what's CURRENTLY loaded
+  // (post-filter on status + location). For the cross-tab counts
+  // to be fully accurate would require a separate count endpoint;
+  // for PR 2 the local count is "close enough" — the operator
+  // clicks a tab to see the real list anyway.
+  const sourceCounts = useMemo(() => {
+    const acc = { all: rows.length }
+    for (const r of rows) acc[r.source_type] = (acc[r.source_type] || 0) + 1
+    return acc
+  }, [rows])
+
+  // Bulk-action helpers.
+  function toggleSelection(id) {
+    setBulkSelection((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+  function clearSelection() { setBulkSelection(new Set()); setBulkSummary(null) }
+  function selectAllVisible() {
+    const next = new Set(bulkSelection)
+    for (const r of rows) next.add(r.id)
+    setBulkSelection(next)
+  }
+  async function runBulk(action, body) {
+    setBulkBusy(action)
+    setBulkError(null)
+    setBulkSummary(null)
+    try {
+      const res = await fetch(`/api/invoices-inbox/bulk-${action}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      const j = await res.json()
+      if (!j.success) throw new Error(j.error || `Bulk ${action} failed`)
+      setBulkSummary({ action, ...j.data })
+      await loadRows()
+    } catch (e) {
+      setBulkError(e.message)
+    } finally {
+      setBulkBusy(null)
+    }
+  }
+
+  const selectedRows = useMemo(
+    () => rows.filter((r) => bulkSelection.has(r.id)),
+    [rows, bulkSelection],
+  )
+
   return (
     <div className="space-y-6">
       <ForwardingAddresses locations={locations} />
 
+      {/* Source-type tabs — primary navigation */}
       <div className="flex items-center justify-between flex-wrap gap-3">
-        <div className="flex items-center gap-1 border border-un1t-grey rounded-lg p-1 bg-un1t-black/40">
-          {TAB_DEFS.map((t) => (
-            <button
-              key={t.key}
-              type="button"
-              onClick={() => setTab(t.key)}
-              className={`px-3 py-1.5 text-sm rounded-md transition-colors ${
-                tab === t.key
-                  ? 'bg-un1t-white text-un1t-black font-medium'
-                  : 'text-un1t-light hover:text-un1t-white'
-              }`}
-            >
-              {t.label}
-            </button>
-          ))}
+        <div className="flex items-center gap-1 border border-un1t-grey rounded-lg p-1 bg-un1t-black/40 flex-wrap">
+          {SOURCE_TABS.map((t) => {
+            const count = sourceCounts[t.key === 'all' ? 'all' : t.sourceTypes[0]] || 0
+            const isActive = sourceTab === t.key
+            return (
+              <button
+                key={t.key}
+                type="button"
+                onClick={() => setSourceTab(t.key)}
+                className={`px-3 py-1.5 text-sm rounded-md transition-colors flex items-center gap-2 ${
+                  isActive
+                    ? 'bg-un1t-white text-un1t-black font-medium'
+                    : 'text-un1t-light hover:text-un1t-white'
+                }`}
+              >
+                {t.label}
+                {count > 0 && (
+                  <span className={`inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 text-[10px] font-semibold rounded-full ${
+                    isActive ? 'bg-un1t-black text-un1t-white' : 'bg-un1t-grey/40 text-un1t-light'
+                  }`}>{count}</span>
+                )}
+              </button>
+            )
+          })}
         </div>
-        {locations.length > 1 && (
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* Status filter (secondary) */}
           <select
-            value={locationFilter}
-            onChange={(e) => setLocationFilter(e.target.value)}
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value)}
             className="bg-un1t-black border border-un1t-grey rounded-md px-3 py-1.5 text-sm text-un1t-white"
           >
-            <option value="all">All locations</option>
-            {locations.map((l) => (
-              <option key={l.id} value={l.id}>{l.name}</option>
+            {STATUS_FILTERS.map((s) => (
+              <option key={s.key} value={s.key}>{s.label}</option>
             ))}
           </select>
-        )}
+          {locations.length > 1 && (
+            <select
+              value={locationFilter}
+              onChange={(e) => setLocationFilter(e.target.value)}
+              className="bg-un1t-black border border-un1t-grey rounded-md px-3 py-1.5 text-sm text-un1t-white"
+            >
+              <option value="all">All locations</option>
+              {locations.map((l) => (
+                <option key={l.id} value={l.id}>{l.name}</option>
+              ))}
+            </select>
+          )}
+        </div>
       </div>
 
       {error && (
@@ -151,6 +265,11 @@ export default function InvoicesInbox({ locations, isMaster }) {
           selectedId={selectedId}
           onSelect={setSelectedId}
           isMaster={isMaster}
+          isBookkeeper={isBookkeeper}
+          bulkSelection={bulkSelection}
+          onToggleSelect={toggleSelection}
+          onSelectAll={selectAllVisible}
+          onClearSelection={clearSelection}
         />
         <InboxDetail
           row={selected}
@@ -158,6 +277,23 @@ export default function InvoicesInbox({ locations, isMaster }) {
           isMaster={isMaster}
         />
       </div>
+
+      {/* Bookkeeper-gated floating action bar — sticks to the bottom
+          of the viewport when rows are selected. Hidden entirely for
+          non-bookkeepers (no point teasing actions they can't run). */}
+      {isBookkeeper && bulkSelection.size > 0 && (
+        <BulkActionBar
+          selectedCount={bulkSelection.size}
+          selectedRows={selectedRows}
+          busy={bulkBusy}
+          error={bulkError}
+          summary={bulkSummary}
+          onAnalyse={() => runBulk('analyse', { ids: Array.from(bulkSelection) })}
+          onSend={() => runBulk('send', { ids: Array.from(bulkSelection) })}
+          onReject={(reason) => runBulk('reject', { ids: Array.from(bulkSelection), reason })}
+          onClear={clearSelection}
+        />
+      )}
     </div>
   )
 }
@@ -185,11 +321,26 @@ function ForwardingAddresses({ locations }) {
   )
 }
 
-function InboxList({ rows, loading, selectedId, onSelect, isMaster }) {
+function InboxList({
+  rows, loading, selectedId, onSelect, isMaster, isBookkeeper,
+  bulkSelection, onToggleSelect, onSelectAll, onClearSelection,
+}) {
+  const allVisibleSelected = rows.length > 0 && rows.every((r) => bulkSelection.has(r.id))
   return (
     <aside className="border border-un1t-grey rounded-lg overflow-hidden">
-      <header className="px-3 py-2 border-b border-un1t-grey text-xs uppercase tracking-wide text-un1t-light">
-        {loading ? 'Loading…' : `${rows.length} ${rows.length === 1 ? 'item' : 'items'}`}
+      <header className="px-3 py-2 border-b border-un1t-grey flex items-center justify-between gap-2">
+        <span className="text-xs uppercase tracking-wide text-un1t-light">
+          {loading ? 'Loading…' : `${rows.length} ${rows.length === 1 ? 'item' : 'items'}`}
+        </span>
+        {isBookkeeper && rows.length > 0 && (
+          <button
+            type="button"
+            onClick={allVisibleSelected ? onClearSelection : onSelectAll}
+            className="text-xs text-un1t-light hover:text-un1t-white underline underline-offset-2"
+          >
+            {allVisibleSelected ? 'Clear selection' : 'Select all'}
+          </button>
+        )}
       </header>
       <ul className="divide-y divide-un1t-grey/50 max-h-[70vh] overflow-y-auto">
         {rows.length === 0 && !loading && (
@@ -197,34 +348,162 @@ function InboxList({ rows, loading, selectedId, onSelect, isMaster }) {
         )}
         {rows.map((r) => {
           const active = r.id === selectedId
+          const checked = bulkSelection.has(r.id)
           return (
-            <li key={r.id}>
-              <button
-                type="button"
-                onClick={() => onSelect(r.id)}
-                className={`w-full text-left p-3 transition-colors ${
-                  active ? 'bg-un1t-white/10' : 'hover:bg-un1t-white/5'
-                }`}
-              >
-                <div className="flex justify-between items-start gap-2">
-                  <div className="text-sm font-medium text-un1t-white truncate">
-                    {r.extracted_fields?.supplier_name || r.sender_email || '(no sender)'}
+            <li key={r.id} className={checked ? 'bg-un1t-white/10' : ''}>
+              <div className="flex items-stretch">
+                {isBookkeeper && (
+                  <label className="flex items-center pl-3 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => onToggleSelect(r.id)}
+                      // Stop the row click handler from firing when
+                      // the operator clicks the checkbox itself.
+                      onClick={(e) => e.stopPropagation()}
+                      className="h-4 w-4 accent-un1t-white"
+                    />
+                  </label>
+                )}
+                <button
+                  type="button"
+                  onClick={() => onSelect(r.id)}
+                  className={`flex-1 text-left p-3 transition-colors ${
+                    active ? 'bg-un1t-white/10' : 'hover:bg-un1t-white/5'
+                  }`}
+                >
+                  <div className="flex justify-between items-start gap-2">
+                    <div className="text-sm font-medium text-un1t-white truncate">
+                      {r.extracted_fields?.supplier_name || r.sender_email || '(no sender)'}
+                    </div>
+                    <StatusPill status={r.status} stage={r.rejected_stage} />
                   </div>
-                  <StatusPill status={r.status} stage={r.rejected_stage} />
-                </div>
-                <div className="text-xs text-un1t-light truncate mt-1">
-                  {r.subject || r.attachment_filename || '(no subject)'}
-                </div>
-                <div className="text-xs text-un1t-light mt-1 flex justify-between">
-                  <span>{formatDateTime(r.received_at)}</span>
-                  {isMaster && <span>{r.location?.name}</span>}
-                </div>
-              </button>
+                  <div className="text-xs text-un1t-light truncate mt-1">
+                    {r.subject || r.attachment_filename || '(no subject)'}
+                  </div>
+                  <div className="text-xs text-un1t-light mt-1 flex justify-between items-center gap-2">
+                    <span className="flex items-center gap-1.5 min-w-0">
+                      <SourceTypePill source={r.source_type} />
+                      <span className="truncate">{formatDateTime(r.received_at)}</span>
+                    </span>
+                    {isMaster && <span className="shrink-0">{r.location?.name}</span>}
+                  </div>
+                </button>
+              </div>
             </li>
           )
         })}
       </ul>
     </aside>
+  )
+}
+
+function SourceTypePill({ source }) {
+  const label = SOURCE_TYPE_LABEL[source] || source
+  const tone = SOURCE_TYPE_TONE[source] || 'bg-un1t-grey/30 text-un1t-light border-un1t-grey'
+  return (
+    <span className={`text-[9px] uppercase tracking-wide border rounded px-1 py-0.5 whitespace-nowrap ${tone}`}>
+      {label}
+    </span>
+  )
+}
+
+function BulkActionBar({
+  selectedCount, selectedRows, busy, error, summary,
+  onAnalyse, onSend, onReject, onClear,
+}) {
+  const [showRejectForm, setShowRejectForm] = useState(false)
+  const [rejectReason, setRejectReason] = useState('')
+
+  // Per-action eligibility — the backend skips bad rows anyway, but
+  // disabling the buttons when zero selected rows match the action's
+  // legal states is friendlier UX.
+  const analysableCount = selectedRows.filter((r) =>
+    ['quality_approved', 'extracted'].includes(r.status)).length
+  const sendableCount = selectedRows.filter((r) =>
+    ['extracted', 'data_approved'].includes(r.status) && r.extracted_fields).length
+  const rejectableCount = selectedRows.filter((r) =>
+    ['received', 'quality_approved', 'extracted', 'data_approved'].includes(r.status)).length
+
+  return (
+    <div className="fixed inset-x-0 bottom-0 z-40 border-t border-un1t-grey bg-un1t-black/95 backdrop-blur p-4">
+      <div className="max-w-7xl mx-auto flex items-center gap-3 flex-wrap">
+        <span className="text-sm text-un1t-white font-medium">
+          {selectedCount} selected
+        </span>
+
+        <div className="flex items-center gap-2 ml-auto flex-wrap">
+          <button
+            type="button"
+            disabled={analysableCount === 0 || !!busy}
+            onClick={onAnalyse}
+            className="px-3 py-1.5 text-sm rounded-md border border-un1t-grey text-un1t-white disabled:opacity-40"
+            title={analysableCount === 0 ? 'No selected rows are eligible for analysis' : ''}
+          >
+            {busy === 'analyse' ? 'Analysing…' : `Analyse (${analysableCount})`}
+          </button>
+          <button
+            type="button"
+            disabled={sendableCount === 0 || !!busy}
+            onClick={onSend}
+            className="px-3 py-1.5 text-sm rounded-md bg-un1t-white text-un1t-black font-medium disabled:opacity-40"
+            title={sendableCount === 0 ? 'No selected rows have extracted fields ready to send' : ''}
+          >
+            {busy === 'send' ? 'Sending…' : `Send to Xero (${sendableCount})`}
+          </button>
+          <button
+            type="button"
+            disabled={rejectableCount === 0 || !!busy}
+            onClick={() => setShowRejectForm((v) => !v)}
+            className="px-3 py-1.5 text-sm rounded-md border border-un1t-grey text-un1t-light disabled:opacity-40"
+          >
+            Reject ({rejectableCount})…
+          </button>
+          <button
+            type="button"
+            onClick={onClear}
+            className="px-3 py-1.5 text-sm rounded-md text-un1t-light hover:text-un1t-white"
+          >
+            Clear
+          </button>
+        </div>
+      </div>
+
+      {showRejectForm && (
+        <div className="max-w-7xl mx-auto mt-3 space-y-2 border border-un1t-grey rounded-md p-3">
+          <label className="text-xs uppercase tracking-wide text-un1t-light">Reject reason (applied to all selected)</label>
+          <textarea
+            value={rejectReason}
+            onChange={(e) => setRejectReason(e.target.value)}
+            rows={2}
+            className="w-full bg-un1t-black border border-un1t-grey rounded-md p-2 text-sm text-un1t-white"
+            placeholder="e.g. Wrong attachment uploaded; duplicate of #1234; not an invoice"
+          />
+          <button
+            type="button"
+            disabled={!rejectReason.trim() || !!busy}
+            onClick={() => { onReject(rejectReason.trim()); setShowRejectForm(false); setRejectReason('') }}
+            className="px-3 py-1.5 text-sm rounded-md bg-red-500 text-white font-medium disabled:opacity-50"
+          >
+            {busy === 'reject' ? 'Rejecting…' : 'Confirm reject'}
+          </button>
+        </div>
+      )}
+
+      {error && (
+        <div className="max-w-7xl mx-auto mt-3 border border-red-500/40 bg-red-500/10 text-red-300 rounded-lg p-2 text-xs">
+          {error}
+        </div>
+      )}
+      {summary && (
+        <div className="max-w-7xl mx-auto mt-3 border border-un1t-grey rounded-lg p-2 text-xs text-un1t-light flex flex-wrap gap-3">
+          <strong className="text-un1t-white">{summary.action} result:</strong>
+          {Object.entries(summary.counts || {}).map(([k, v]) => (
+            <span key={k}>{k}: <strong className="text-un1t-white">{v}</strong></span>
+          ))}
+        </div>
+      )}
+    </div>
   )
 }
 

@@ -72,7 +72,7 @@ export async function POST(_request, { params }) {
     // quality_approved so the operator can retry without re-doing
     // the legibility approve.
     await db
-      .from('inbound_invoices')
+      .from('invoices_queue')
       .update({
         extraction_error: result.error,
         extracted_at: new Date().toISOString(),
@@ -92,7 +92,7 @@ export async function POST(_request, { params }) {
   const confidence = allRequired && reconciles ? 'high' : 'medium'
 
   const { data: updated, error: updErr } = await db
-    .from('inbound_invoices')
+    .from('invoices_queue')
     .update({
       status: 'extracted',
       extracted_at: new Date().toISOString(),

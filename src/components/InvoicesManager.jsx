@@ -50,7 +50,14 @@ export default function InvoicesManager({ user }) {
 
   const grouped = useMemo(() => ({
     submitted: invoices.filter(i => i.status === 'submitted'),
-    approved: invoices.filter(i => i.status === 'approved'),
+    // INVOICES-QUEUE.1 — the "Approved" tab now includes both the
+    // legacy 'approved' state (in-flight items at the old direct-
+    // to-Xero path) AND the new 'awaiting_accountant_review' state
+    // (owner approved, queued for accountant). Both represent
+    // "owner has approved this" from the operator's POV — the
+    // distinction matters to the bookkeeper, not to the
+    // contractor or approver browsing this list.
+    approved: invoices.filter(i => i.status === 'approved' || i.status === 'awaiting_accountant_review'),
     declined: invoices.filter(i => i.status === 'declined'),
     revoked: invoices.filter(i => i.status === 'revoked'),
     all: invoices,
@@ -375,13 +382,19 @@ function InvoiceListRow({ invoice, reviewerMode, onOpen }) {
 }
 
 function StatusIcon({ status }) {
-  if (status === 'approved') return <CheckCircle2 size={18} className="text-green-400 shrink-0" />
+  // INVOICES-QUEUE.1 — awaiting_accountant_review uses the same
+  // green tick as approved (both happy-path post-owner-approval).
+  if (status === 'approved' || status === 'awaiting_accountant_review') return <CheckCircle2 size={18} className="text-green-400 shrink-0" />
   if (status === 'declined') return <XCircle size={18} className="text-red-400 shrink-0" />
   if (status === 'revoked') return <Undo2 size={18} className="text-un1t-light shrink-0" />
   return <Clock size={18} className="text-amber-400 shrink-0" />
 }
 function StatusLabel({ status }) {
   if (status === 'approved') return <span className="text-green-300 font-medium">Approved</span>
+  // Different short label so the contractor can see WHERE their
+  // invoice sits even though it's already been signed off by the
+  // owner.
+  if (status === 'awaiting_accountant_review') return <span className="text-green-300 font-medium">With accountant</span>
   if (status === 'declined') return <span className="text-red-300 font-medium">Declined</span>
   if (status === 'revoked') return <span className="text-un1t-light font-medium">Revoked by contractor</span>
   return <span className="text-amber-300 font-medium">Awaiting review</span>

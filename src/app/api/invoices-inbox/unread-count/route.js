@@ -48,7 +48,7 @@ export async function GET() {
 
   const db = createServerClient()
   let query = db
-    .from('inbound_invoices')
+    .from('invoices_queue')
     .select('*', { count: 'exact', head: true })
     .in('status', PENDING_STATUSES)
 

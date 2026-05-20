@@ -120,6 +120,11 @@ const WEB_ONLY_OK = {
   // individual items via existing push-notification entry points
   // (e.g. notify_time_off, notify_invoice_*).
   approvals_inbox: 'Central approvals dashboard (APPROVALS.1) — aggregates contractor invoices, FTE expenses, time-off and swap requests. Drills into per-feature pages, all of which are desktop-only. Mobile users get per-category push notifications via existing notify_* flags.',
+  // INVOICES-QUEUE.1 — bookkeeper flag. Gates the analyse + send-
+  // to-Xero actions inside /invoices and the Bookkeeper queue tab
+  // in /approvals. Both surfaces are desktop-only (PDF preview +
+  // bulk analyse + multi-row review), so the permission is too.
+  bookkeeper: 'Bookkeeper sign-off flag (INVOICES-QUEUE.1) — gates the analyse + send-to-Xero actions inside /invoices and the Bookkeeper queue tab inside /approvals. Both surfaces are desktop-only by design.',
 }
 
 const webDrift = []

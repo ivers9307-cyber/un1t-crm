@@ -40,7 +40,7 @@ export async function POST(request, { params }) {
   const { reason } = validation.data
 
   const { data: updated, error } = await db
-    .from('inbound_invoices')
+    .from('invoices_queue')
     .update({
       status: 'rejected',
       rejected_stage: 'quality',

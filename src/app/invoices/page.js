@@ -13,6 +13,7 @@
 import { redirect } from 'next/navigation'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
+import { hasPermission } from '@/lib/permissions'
 import InvoicesInbox from '@/components/InvoicesInbox'
 
 export const dynamic = 'force-dynamic'
@@ -59,7 +60,11 @@ export default async function InvoicesInboxPage() {
           Forward supplier invoices to the per-location email address below. Each invoice gets a two-step review — quality, then extracted data — before forwarding to Xero.
         </p>
       </header>
-      <InvoicesInbox locations={locations} isMaster={isMaster} />
+      <InvoicesInbox
+        locations={locations}
+        isMaster={isMaster}
+        isBookkeeper={hasPermission(user, 'bookkeeper')}
+      />
     </div>
   )
 }

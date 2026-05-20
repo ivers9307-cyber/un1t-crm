@@ -39,7 +39,7 @@ export async function DELETE(_request, { params }) {
   }
 
   const { error: delErr } = await db
-    .from('inbound_invoices')
+    .from('invoices_queue')
     .delete()
     .eq('id', id)
     .eq('status', 'rejected') // belt + braces against a race

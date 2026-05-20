@@ -187,12 +187,19 @@ export async function POST(request, { params }) {
     // Still create a row so the operator can see the email arrived
     // with no usable attachment — they can reject it manually.
     const senderEmail = body.FromFull?.Email || body.From || null
-    const { error: insErr } = await db.from('inbound_invoices').insert({
+    const { error: insErr } = await db.from('invoices_queue').insert({
       location_id: location.id,
       sender_email: senderEmail,
       subject: body.Subject || null,
       email_message_id: messageId,
       status: 'received',
+      // INVOICES-QUEUE.1 — supplier_email rows are their own
+      // source-of-record (no per-source FK is set). The bucket
+      // column points at the bucket the attachment lives in;
+      // even for the no-attachment empty-row case we set it
+      // because it's NOT NULL.
+      source_type: 'supplier_email',
+      attachment_bucket: STORAGE_BUCKET,
     })
     if (insErr) {
       console.error('[invoices-inbound] empty-attachment row insert failed:', insErr.message)
@@ -228,7 +235,7 @@ export async function POST(request, { params }) {
     // yet) so we have an id to use in the storage path. Then upload.
     // On upload failure we delete the row to avoid orphans.
     const { data: row, error: insErr } = await db
-      .from('inbound_invoices')
+      .from('invoices_queue')
       .insert({
         location_id: location.id,
         sender_email: senderEmail,
@@ -238,6 +245,8 @@ export async function POST(request, { params }) {
         attachment_size_bytes: bytes.length,
         attachment_mime_type: att.ContentType,
         status: 'received',
+        source_type: 'supplier_email',
+        attachment_bucket: STORAGE_BUCKET,
       })
       .select('id')
       .single()
@@ -261,12 +270,12 @@ export async function POST(request, { params }) {
     if (upErr) {
       console.error('[invoices-inbound] storage upload failed:', upErr.message)
       // Roll back the row so we don't leave a phantom inbox entry.
-      await db.from('inbound_invoices').delete().eq('id', row.id)
+      await db.from('invoices_queue').delete().eq('id', row.id)
       return NextResponse.json({ success: false, error: 'storage_upload_failed' }, { status: 500 })
     }
 
     const { error: updErr } = await db
-      .from('inbound_invoices')
+      .from('invoices_queue')
       .update({ attachment_path: storagePath })
       .eq('id', row.id)
     if (updErr) {

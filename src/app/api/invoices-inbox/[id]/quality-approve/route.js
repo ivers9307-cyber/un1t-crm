@@ -29,7 +29,7 @@ export async function POST(_request, { params }) {
   }
 
   const { data: updated, error } = await db
-    .from('inbound_invoices')
+    .from('invoices_queue')
     .update({
       status: 'quality_approved',
       quality_reviewed_at: new Date().toISOString(),
