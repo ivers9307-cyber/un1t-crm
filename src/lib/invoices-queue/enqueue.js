@@ -37,11 +37,57 @@ const STORAGE_BUCKETS = Object.freeze({
 })
 
 /**
- * Enqueue every receipt from an FTE expense claim. One queue row
- * per fte_expense_items row that has a receipt_path. Items without
- * a receipt are skipped silently (the bookkeeper can chase them
- * via the existing /schedule/expenses approval surface; the queue
- * is for things-with-attachments).
+ * Build a synthetic extracted_fields payload for a receiptless
+ * expense item (mileage, cash-in-hand, etc). We have the
+ * submitter's typed vendor + amount + date, which is everything
+ * the bookkeeper needs to push to Xero — there's just no scanned
+ * receipt for Claude Vision to OCR.
+ *
+ * Returns an object matching invoiceFieldsSchema's required fields
+ * so the row can be marked status='extracted' and skip the Analyse
+ * stage entirely. The bookkeeper still reviews + picks Xero refs
+ * before send.
+ *
+ * RECEIPTLESS-EXPENSE-QUEUE — added so receiptless items appear in
+ * the bookkeeper queue. Previously they were silently dropped and
+ * the claim got stuck in 'awaiting_accountant_review' with nothing
+ * for the bookkeeper to act on.
+ */
+function syntheticFieldsForReceiptlessItem(item) {
+  const amount = Number(item.amount) || 0
+  const supplier = (item.vendor && String(item.vendor).trim()) || 'Mileage / cash expense'
+  const invoiceDate = item.expense_date || new Date().toISOString().slice(0, 10)
+  // Synthetic invoice number — stable + unique within Xero, with
+  // an EXP- prefix so the bookkeeper can tell it's a synthesised
+  // reference (not a real invoice number).
+  const invoiceNumber = `EXP-${String(item.id).slice(0, 8).toUpperCase()}`
+  return {
+    supplier_name: supplier,
+    invoice_number: invoiceNumber,
+    invoice_date: invoiceDate,
+    currency: 'EUR',
+    subtotal: amount,
+    tax_amount: 0,
+    total: amount,
+    line_items: [{
+      description: supplier,
+      quantity: 1,
+      unit_amount: amount,
+    }],
+  }
+}
+
+/**
+ * Enqueue every item from an FTE expense claim. One queue row per
+ * fte_expense_items row, regardless of whether the item has a
+ * receipt:
+ *   • Items WITH receipts land at status='quality_approved' with
+ *     the attachment pointer set; bookkeeper clicks Analyse →
+ *     Claude Vision → extracted_fields populated.
+ *   • Items WITHOUT receipts land at status='extracted' with
+ *     synthetic extracted_fields built from the submitter's typed
+ *     vendor + amount + date. No Analyse needed; bookkeeper just
+ *     picks Xero refs + sends.
  *
  * Caller is responsible for first flipping the claim status to
  * 'awaiting_accountant_review' — this function does NOT touch the
@@ -75,30 +121,49 @@ export async function enqueueFromFteExpenseClaim(claimId) {
     return { ok: true, queueIds: [] }
   }
 
-  // Filter to items with receipts. An item without a receipt is a
-  // claim line (e.g. a mileage entry) that doesn't need OCR or
-  // bookkeeper sign-off via the queue — the operator's manager-
-  // level approval is the audit record for those.
-  const itemsWithReceipts = items.filter((it) => it.receipt_path)
-  if (itemsWithReceipts.length === 0) return { ok: true, queueIds: [] }
-
-  const rows = itemsWithReceipts.map((it) => ({
-    location_id: claim.location_id,
-    source_type: 'fte_expense_item',
-    source_fte_expense_item_id: it.id,
-    attachment_bucket: STORAGE_BUCKETS.fte_expense_item,
-    attachment_path: it.receipt_path,
-    attachment_filename: it.receipt_path?.split('/').pop() || null,
-    attachment_size_bytes: it.receipt_size_bytes || null,
-    attachment_mime_type: it.receipt_mime_type || null,
-    // Sender/subject derived for the inbox UI display. Supplier
-    // emails carry these from Postmark; FTE rows synthesise them
-    // so the same row component renders consistently.
-    sender_email: null,
-    subject: it.vendor ? `${it.vendor}${it.expense_date ? ` · ${it.expense_date}` : ''}` : 'FTE expense receipt',
-    // Skip stage-1 quality review — owner has already approved.
-    status: 'quality_approved',
-  }))
+  // RECEIPTLESS-EXPENSE-QUEUE — queue ALL items. Items with
+  // receipts go through the normal Analyse → Send flow; receiptless
+  // items land pre-extracted (from the typed item data) so the
+  // bookkeeper can review + send without a no-op Analyse click.
+  const rows = items.map((it) => {
+    const hasReceipt = !!it.receipt_path
+    const base = {
+      location_id: claim.location_id,
+      source_type: 'fte_expense_item',
+      source_fte_expense_item_id: it.id,
+      // attachment_bucket is NOT NULL — set the FTE bucket even
+      // for receiptless rows so the column constraint is honoured.
+      // attachment_path stays null and the queue UI skips the
+      // attachment preview / Analyse for these rows.
+      attachment_bucket: STORAGE_BUCKETS.fte_expense_item,
+      attachment_path: hasReceipt ? it.receipt_path : null,
+      attachment_filename: hasReceipt ? (it.receipt_path?.split('/').pop() || null) : null,
+      attachment_size_bytes: hasReceipt ? (it.receipt_size_bytes || null) : null,
+      attachment_mime_type: hasReceipt ? (it.receipt_mime_type || null) : null,
+      // Sender/subject derived for the inbox UI display. Supplier
+      // emails carry these from Postmark; FTE rows synthesise them
+      // so the same row component renders consistently.
+      sender_email: null,
+      subject: it.vendor
+        ? `${it.vendor}${it.expense_date ? ` · ${it.expense_date}` : ''}${hasReceipt ? '' : ' (no receipt)'}`
+        : (hasReceipt ? 'FTE expense receipt' : 'FTE expense (no receipt)'),
+    }
+    if (hasReceipt) {
+      // Skip stage-1 quality review — owner has already approved.
+      // Bookkeeper picks the row up, clicks Analyse, Vision runs.
+      return { ...base, status: 'quality_approved' }
+    }
+    // Receiptless: there's nothing to OCR. Skip straight to
+    // 'extracted' with synthetic fields so the bookkeeper sees the
+    // row ready for review + send.
+    return {
+      ...base,
+      status: 'extracted',
+      extracted_at: new Date().toISOString(),
+      extraction_confidence: 'high', // it's not OCR'd, it's the submitter's typed data
+      extracted_fields: syntheticFieldsForReceiptlessItem(it),
+    }
+  })
 
   const { data: inserted, error: insErr } = await db
     .from('invoices_queue')

@@ -65,17 +65,59 @@ describe('enqueueFromFteExpenseClaim', () => {
     expect(r).toEqual({ ok: true, queueIds: [] })
   })
 
-  it('returns ok with empty queueIds when items have no receipts', async () => {
-    const claimChain = buildChainable({ data: { id: 'c1', location_id: 'loc1', status: 'approved' }, error: null })
-    const itemsChain = buildChainable({
+  // RECEIPTLESS-EXPENSE-QUEUE — receiptless items used to be dropped
+  // on the floor. Now they get queued with status='extracted' and
+  // synthetic extracted_fields so the bookkeeper can still review
+  // + send to Xero. Lock that contract here.
+  it('queues receiptless items pre-extracted with synthetic fields', async () => {
+    // Bespoke chainable that's actually thenable for the items
+    // fetch — the shared buildChainable() has `then: undefined`
+    // which makes awaits short-circuit (existing tests rely on
+    // that quirk; we don't here).
+    const itemsResult = {
       data: [
-        { id: 'i1', claim_id: 'c1', receipt_path: null, vendor: 'Mileage', amount: 10 },
+        { id: 'i1', claim_id: 'c1', receipt_path: null, vendor: 'Mileage', amount: 12.34, expense_date: '2026-05-20' },
       ],
       error: null,
+    }
+    const itemsChain = {
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn(() => Promise.resolve(itemsResult)),
+    }
+    const claimChain = buildChainable({ data: { id: 'c1', location_id: 'loc1', status: 'approved' }, error: null })
+    const insertedRows = []
+    const queueChain = {
+      insert: vi.fn((rows) => {
+        insertedRows.push(...rows)
+        return queueChain
+      }),
+      select: vi.fn().mockResolvedValue({ data: [{ id: 'q-new' }], error: null }),
+    }
+    mockDb.from.mockImplementation((t) => {
+      if (t === 'fte_expense_claims') return claimChain
+      if (t === 'fte_expense_items') return itemsChain
+      if (t === 'invoices_queue') return queueChain
+      throw new Error(`unexpected table ${t}`)
     })
-    mockDb.from.mockImplementation((t) => t === 'fte_expense_claims' ? claimChain : itemsChain)
+
     const r = await enqueueModule.enqueueFromFteExpenseClaim('c1')
-    expect(r).toEqual({ ok: true, queueIds: [] })
+    expect(r).toEqual({ ok: true, queueIds: ['q-new'] })
+    expect(insertedRows).toHaveLength(1)
+    const row = insertedRows[0]
+    expect(row.status).toBe('extracted')
+    expect(row.attachment_path).toBeNull()
+    expect(row.attachment_bucket).toBe('fte-expense-receipts')
+    expect(row.extracted_fields).toMatchObject({
+      supplier_name: 'Mileage',
+      invoice_date: '2026-05-20',
+      currency: 'EUR',
+      total: 12.34,
+      subtotal: 12.34,
+      tax_amount: 0,
+    })
+    expect(row.extracted_fields.invoice_number).toMatch(/^EXP-/)
+    expect(row.extracted_fields.line_items).toHaveLength(1)
+    expect(row.subject).toMatch(/no receipt/i)
   })
 
   it('returns error when claim not found', async () => {
