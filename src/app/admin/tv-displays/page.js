@@ -29,15 +29,22 @@ export default async function TVDisplaysAdmin() {
   if (!locationId) redirect('/')
 
   const db = createServerClient()
-  const { data: displays } = await db
-    .from('tv_displays')
-    .select('*, tv_content(*)')
-    .eq('location_id', locationId)
-    .order('created_at', { ascending: true })
+  const [{ data: displays }, { data: templates }] = await Promise.all([
+    db.from('tv_displays')
+      .select('*, tv_content(*)')
+      .eq('location_id', locationId)
+      .order('created_at', { ascending: true }),
+    // TV-TEMPLATE.1 — reusable base-image templates for this location.
+    db.from('tv_templates')
+      .select('*')
+      .eq('location_id', locationId)
+      .order('name', { ascending: true }),
+  ])
 
   return (
     <TVAdmin
       initialDisplays={displays || []}
+      initialTemplates={templates || []}
       locationId={locationId}
       currentUserId={user.id}
     />
