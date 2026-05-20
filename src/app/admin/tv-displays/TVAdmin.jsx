@@ -713,24 +713,38 @@ function PushModal({ onClose, onPush, locationId, templates }) {
 function ZonePushEditor({ zone, value, onChange }) {
   const v = value || {}
   const taRef = useRef(null)
+  // Last non-empty selection the user made in the textarea. A real
+  // mouse click on Apply blurs the textarea and the live selection
+  // is gone by the time the click handler runs — so we capture it
+  // continuously (on select / mouseup / keyup / blur, and on the
+  // button's own mousedown) and Apply uses the captured range.
+  const selRef = useRef({ start: 0, end: 0 })
   const [selColor, setSelColor] = useState('#FFD400')
   const [selNote, setSelNote] = useState('')
   const cls = 'w-full bg-un1t-black border border-un1t-gray rounded px-2 py-1 text-xs text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid'
 
-  // Read the textarea's live selection at click time. A blurred
-  // textarea still reports its last selectionStart/End, so this is
-  // far more reliable than tracking the selection in React state.
-  function selectionRange() {
+  function captureSelection() {
     const ta = taRef.current
-    if (!ta) return null
-    const start = ta.selectionStart
-    const end = ta.selectionEnd
-    return end > start ? { start, end } : null
+    if (ta && ta.selectionEnd > ta.selectionStart) {
+      selRef.current = { start: ta.selectionStart, end: ta.selectionEnd }
+    }
+  }
+  // The live selection if the textarea still has one, else the last
+  // one we captured before focus left.
+  function currentSelection() {
+    const ta = taRef.current
+    if (ta && ta.selectionEnd > ta.selectionStart) {
+      return { start: ta.selectionStart, end: ta.selectionEnd }
+    }
+    const r = selRef.current
+    return r.end > r.start ? r : null
   }
 
   // Any text edit remaps the colour runs so each colour stays
-  // attached to the same words through inserts + deletes.
+  // attached to the same words through inserts + deletes. The
+  // captured selection is dropped — offsets no longer apply.
   function changeText(next) {
+    selRef.current = { start: 0, end: 0 }
     onChange({ text: next, colorRuns: shiftRuns(v.colorRuns || [], v.text ?? '', next) })
   }
 
@@ -749,7 +763,7 @@ function ZonePushEditor({ zone, value, onChange }) {
   }
 
   function applySelColor() {
-    const r = selectionRange()
+    const r = currentSelection()
     if (!r) { setSelNote('Highlight some text in the box above first.'); return }
     setSelNote('')
     onChange({ colorRuns: setRunColor(v.colorRuns || [], r.start, r.end, selColor) })
@@ -759,7 +773,7 @@ function ZonePushEditor({ zone, value, onChange }) {
     })
   }
   function clearSelColor() {
-    const r = selectionRange()
+    const r = currentSelection()
     if (!r) { setSelNote('Highlight some text in the box above first.'); return }
     setSelNote('')
     onChange({ colorRuns: clearRunColor(v.colorRuns || [], r.start, r.end) })
@@ -776,6 +790,10 @@ function ZonePushEditor({ zone, value, onChange }) {
         ref={taRef}
         value={v.text ?? ''}
         onChange={e => changeText(e.target.value)}
+        onSelect={captureSelection}
+        onMouseUp={captureSelection}
+        onKeyUp={captureSelection}
+        onBlur={captureSelection}
         rows={7}
         placeholder={zone.defaultText || 'Type the text for this zone…'}
         className={`${cls} resize-y mb-1.5`}
@@ -806,13 +824,13 @@ function ZonePushEditor({ zone, value, onChange }) {
           className="w-7 h-7 bg-un1t-black border border-un1t-gray rounded cursor-pointer"
         />
         <button
-          type="button" onClick={applySelColor}
+          type="button" onMouseDown={captureSelection} onClick={applySelColor}
           className="text-[11px] px-2 py-1 rounded border border-un1t-gray text-un1t-light hover:text-un1t-white hover:border-un1t-white/40"
         >
           Apply
         </button>
         <button
-          type="button" onClick={clearSelColor}
+          type="button" onMouseDown={captureSelection} onClick={clearSelColor}
           className="text-[11px] px-2 py-1 rounded border border-un1t-gray text-un1t-light hover:text-un1t-white hover:border-un1t-white/40"
         >
           Reset
