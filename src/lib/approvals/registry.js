@@ -9,11 +9,18 @@
 //
 // Provider contract:
 //   {
-//     key:        stable identifier, used in URLs + tab ids
-//     label:      operator-facing tab title
-//     reviewBase: source page operators jump to for the actual
-//                 review (clicked item appends `?focus=<id>`)
+//     key:           stable identifier, used in URLs + tab ids
+//     label:         operator-facing tab title
+//     reviewBase:    source page operators jump to for the actual
+//                    review (clicked item appends `?focus=<id>`)
 //     fetchPending(db, user) → Promise<{ count: number, items: ApprovalItem[] }>
+//     // BOOKKEEPER-APPROVALS.1 — optional. Synchronous gate that
+//     // runs BEFORE fetchPending. Return false to skip this
+//     // provider entirely for this user (the tab won't render).
+//     // Default = always visible. Use for permission-gated tabs
+//     // where showing a permanently-empty tab to non-permitted
+//     // users would just confuse them.
+//     isVisible?(user) → boolean
 //   }
 //
 // ApprovalItem shape (uniform across categories so the UI can
@@ -43,8 +50,14 @@ import { fteExpensesProvider } from './providers/fte-expenses'
 import { timeOffProvider } from './providers/time-off'
 import { shiftSwapsProvider } from './providers/shift-swaps'
 import { rostersProvider } from './providers/rosters'
+import { invoicesQueueProvider } from './providers/invoices-queue'
 
 export const APPROVALS_PROVIDERS = Object.freeze([
+  // BOOKKEEPER-APPROVALS.1 — invoices_queue tab first so bookkeepers
+  // see their work front-and-centre. fetchPending self-gates on the
+  // bookkeeper permission; non-bookkeepers see a 0-count empty tab
+  // (the inbox UI hides 0-count tabs by default in another change).
+  invoicesQueueProvider,
   contractorInvoicesProvider,
   fteExpensesProvider,
   timeOffProvider,
@@ -62,8 +75,14 @@ export const APPROVALS_PROVIDERS = Object.freeze([
  * @returns {Promise<{ providers: Array<{key, label, count, items, reviewBase}>, total: number }>}
  */
 export async function getPendingApprovals(db, user) {
+  // BOOKKEEPER-APPROVALS.1 — apply isVisible() filter first so
+  // hidden providers don't even fire their query.
+  const visible = APPROVALS_PROVIDERS.filter(
+    (p) => typeof p.isVisible !== 'function' || p.isVisible(user)
+  )
+
   const settled = await Promise.allSettled(
-    APPROVALS_PROVIDERS.map(async (p) => {
+    visible.map(async (p) => {
       const { count, items } = await p.fetchPending(db, user)
       return {
         key: p.key,
@@ -77,7 +96,7 @@ export async function getPendingApprovals(db, user) {
 
   const providers = settled.map((s, i) => {
     if (s.status === 'fulfilled') return s.value
-    const p = APPROVALS_PROVIDERS[i]
+    const p = visible[i]
     // One bad provider shouldn't blank the whole inbox. Log + return
     // an empty bucket so the UI still renders the other tabs.
     console.warn(`[approvals] provider '${p.key}' failed: ${s.reason?.message || s.reason}`)
@@ -95,8 +114,13 @@ export async function getPendingApprovals(db, user) {
  * fetchPending + read .count off the result.
  */
 export async function getPendingApprovalsCount(db, user) {
+  // Mirror the isVisible() filter from getPendingApprovals so the
+  // sidebar badge matches what the inbox renders.
+  const visible = APPROVALS_PROVIDERS.filter(
+    (p) => typeof p.isVisible !== 'function' || p.isVisible(user)
+  )
   const settled = await Promise.allSettled(
-    APPROVALS_PROVIDERS.map(async (p) => {
+    visible.map(async (p) => {
       if (typeof p.countPending === 'function') {
         return p.countPending(db, user)
       }
