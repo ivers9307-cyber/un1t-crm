@@ -160,7 +160,12 @@ function buildInvoicePayload(car, contactId, brandingThemeId, accountCode, taxTy
       Date: fmt(today),
       DueDate: fmt(dueDate),
       LineAmountTypes: 'Exclusive',
-      Reference: car.uk_reg || car.vin || `Car ${car.id}`,
+      // CAR-INVOICE-REF — operator-requested format: "<model> - <Irish reg>"
+      // e.g. "Model 3 - 221D37742". model can carry trailing
+      // whitespace from import so trim it. Falls back to whatever
+      // identifier is available if either part is missing.
+      Reference: [car.model?.trim(), car.irish_reg].filter(Boolean).join(' - ')
+        || car.uk_reg || car.vin || `Car ${car.id}`,
       CurrencyCode: 'EUR',
       Status: 'AUTHORISED',
       ...(brandingThemeId ? { BrandingThemeID: brandingThemeId } : {}),
