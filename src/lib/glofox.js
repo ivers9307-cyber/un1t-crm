@@ -976,9 +976,28 @@ export async function fetchUserInteractions(creds, userId) {
  * @param {number} [opts.limit]      page size (default 100, max 100)
  */
 export async function fetchUserBookings(creds, userId, opts = {}) {
-  if (!creds || !userId) return []
+  return (await fetchUserBookingsResult(creds, userId, opts)).bookings
+}
+
+/**
+ * Error-aware variant of fetchUserBookings.
+ *
+ * fetchUserBookings collapses "no bookings" and "request failed"
+ * into the same []. That's fine for the delta sync (which writes
+ * the contact regardless), but a full attendance refresh must NOT
+ * overwrite a member's aggregates with zeros on a transient Glofox
+ * error. This variant reports which it was:
+ *
+ *   { ok: true,  bookings: [...] }  — request succeeded (may be empty)
+ *   { ok: false, bookings: [] }     — request failed; caller should
+ *                                     skip and retry on the next run
+ *
+ * @returns {Promise<{ ok: boolean, bookings: Array }>}
+ */
+export async function fetchUserBookingsResult(creds, userId, opts = {}) {
+  if (!creds || !userId) return { ok: false, bookings: [] }
   const branchId = opts.branchId || creds.branchId
-  if (!branchId) return []
+  if (!branchId) return { ok: false, bookings: [] }
   const windowDays = Number.isFinite(opts.windowDays) ? opts.windowDays : 30
   const limit = Math.min(opts.limit || 100, 100)
   const cutoffSec = Math.floor((Date.now() - windowDays * 24 * 60 * 60 * 1000) / 1000)
@@ -997,10 +1016,10 @@ export async function fetchUserBookings(creds, userId, opts = {}) {
   })
   try {
     const r = await glofoxFetch(creds, `/2.0/bookings?${qs.toString()}`)
-    if (!r.ok) return []
+    if (!r.ok) return { ok: false, bookings: [] }
     const body = await r.json()
-    return Array.isArray(body?.data) ? body.data : []
+    return { ok: true, bookings: Array.isArray(body?.data) ? body.data : [] }
   } catch {
-    return []
+    return { ok: false, bookings: [] }
   }
 }
