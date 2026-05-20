@@ -1,16 +1,21 @@
 // INVOICES.1 stage 2 approve — operator confirms the extracted
 // fields are correct. Moves extracted → data_approved → forwarded
 // (the latter happens synchronously inside this route after the
-// Xero forward email lands).
+// Xero push lands).
 //
-// On Xero forward success → status='forwarded'.
-// On Xero forward failure → row stays in data_approved with
-// xero_error populated so the inbox shows a retry button.
+// On Xero push success → status='forwarded' with xero_bill_id +
+//   xero_deep_link_url stamped.
+// On Xero push failure → row stays in data_approved with
+//   xero_error populated so the inbox shows a retry button.
+//
+// XERO-API.3 — swapped from the Postmark/Hubdoc email forward to
+// direct /Invoices API push. The push helper enforces the
+// account + supplier picks server-side.
 
 import { NextResponse } from 'next/server'
 import { loadInvoiceForUser } from '../../_helpers'
 import { canTransitionInboundInvoice } from '@/lib/inbound-invoices'
-import { sendInboundInvoiceBillEmail } from '@/lib/xero/inbound-invoice-forward'
+import { pushQueueRowToXero } from '@/lib/invoices-queue/push-xero'
 import { XeroError } from '@/lib/xero/client'
 
 export const runtime = 'nodejs'
@@ -64,11 +69,13 @@ export async function POST(_request, { params }) {
     }
   }
 
-  // Now forward to Xero. The helper throws XeroError on
-  // configuration / Postmark / storage problems.
-  let forwardResult
+  // XERO-API.3 — push directly to /Invoices. The helper throws
+  // XeroError on missing refs (the picks from PR 2), token /
+  // network failure, or Xero-side validation. The row stays at
+  // data_approved so the inbox UI shows a retry button.
+  let pushResult
   try {
-    forwardResult = await sendInboundInvoiceBillEmail(id)
+    pushResult = await pushQueueRowToXero(id)
   } catch (e) {
     const msg = e instanceof XeroError ? e.message : (e?.message || String(e))
     await db
@@ -78,19 +85,21 @@ export async function POST(_request, { params }) {
     return NextResponse.json({ success: false, error: msg }, { status: 502 })
   }
 
-  // Stamp success state.
+  // Stamp success state with the bill_id + deep link.
   const { data: updated, error: updErr } = await db
     .from('invoices_queue')
     .update({
       status: 'forwarded',
       forwarded_at: new Date().toISOString(),
-      xero_email_message_id: forwardResult.messageId,
+      xero_bill_id: pushResult.billId,
+      xero_bill_number: pushResult.billNumber,
+      xero_deep_link_url: pushResult.deepLinkUrl,
       xero_synced_at: new Date().toISOString(),
       xero_error: null,
     })
     .eq('id', id)
     .eq('status', 'data_approved')
-    .select('id, status, forwarded_at, xero_email_message_id, xero_synced_at')
+    .select('id, status, forwarded_at, xero_bill_id, xero_bill_number, xero_deep_link_url, xero_synced_at')
     .single()
   if (updErr) return NextResponse.json({ success: false, error: updErr.message }, { status: 500 })
   if (!updated) {
@@ -103,6 +112,11 @@ export async function POST(_request, { params }) {
   return NextResponse.json({
     success: true,
     data: updated,
-    forward: { sentTo: forwardResult.sentTo, filename: forwardResult.filename },
+    push: {
+      billId: pushResult.billId,
+      billNumber: pushResult.billNumber,
+      deepLinkUrl: pushResult.deepLinkUrl,
+      sentTo: pushResult.sentTo,
+    },
   })
 }

@@ -964,11 +964,35 @@ function SelectRow({ label, value, onChange, options }) {
 
 function ForwardedSummary({ row }) {
   const f = row.extracted_fields || {}
+  // XERO-API.3 — new rows have xero_bill_id + xero_deep_link_url.
+  // Historical rows (forwarded via the old Postmark/Hubdoc path)
+  // only have xero_email_message_id — render whichever is present.
   return (
     <div className="space-y-3">
       <div className="border border-green-500/40 bg-green-500/10 text-green-300 rounded-lg p-3 text-sm">
-        Forwarded to Xero at {formatDateTime(row.forwarded_at)}.
-        {row.xero_email_message_id && <> Message ID <code className="text-xs">{row.xero_email_message_id}</code>.</>}
+        <div>Sent to Xero at {formatDateTime(row.forwarded_at)}.</div>
+        {row.xero_bill_id && (
+          <div className="mt-1.5 flex flex-wrap items-center gap-3">
+            {row.xero_bill_number && (
+              <span>Bill <code className="text-xs">{row.xero_bill_number}</code></span>
+            )}
+            {row.xero_deep_link_url && (
+              <a
+                href={row.xero_deep_link_url}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-un1t-white text-un1t-black text-xs font-medium hover:bg-un1t-accent"
+              >
+                Open in Xero ↗
+              </a>
+            )}
+          </div>
+        )}
+        {!row.xero_bill_id && row.xero_email_message_id && (
+          <div className="mt-1 text-xs text-green-300/80">
+            (Legacy email forward — Message ID <code>{row.xero_email_message_id}</code>)
+          </div>
+        )}
       </div>
       <ReadOnlyFieldsSummary fields={f} />
     </div>

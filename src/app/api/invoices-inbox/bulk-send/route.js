@@ -1,10 +1,13 @@
-// INVOICES-QUEUE.1 PR 2 — bulk send-to-Xero.
+// INVOICES-QUEUE.1 PR 2 + XERO-API.3 — bulk send-to-Xero.
 //
 // Bookkeeper-gated. For each row in 'extracted' state, this route:
 //   1. Flips status to 'data_approved' (audit checkpoint).
-//   2. Calls forwardQueueRowToXero (sends the Postmark email).
-//   3. On success: row → 'forwarded' with xero_email_message_id +
-//      xero_synced_at stamped.
+//   2. Calls pushQueueRowToXero — direct /Invoices API push that
+//      reads the bookkeeper-picked xero_account_id + supplier ref
+//      from extracted_fields (XERO-API.2) and creates a structured
+//      ACCPAY draft bill in Xero.
+//   3. On success: row → 'forwarded' with xero_bill_id +
+//      xero_deep_link_url + xero_synced_at stamped.
 //   4. On failure: row stays at 'data_approved' with xero_error
 //      populated so the UI can retry.
 //
@@ -12,14 +15,16 @@
 // Send — same semantics as the single-row /data-approve route's
 // two-step pattern.
 //
-// Sequential per-row send rather than parallel — Postmark allows
-// it but ordering matters for the operator's mental model (rows
-// turn 'forwarded' one-by-one in the inbox as the operator
-// watches). Throughput isn't the bottleneck at realistic batch
-// sizes (5-20 rows per click).
+// Sequential per-row send rather than parallel — keeps the
+// inbox's "row-by-row going green" feel that the bookkeeper
+// already relies on. Realistic batch sizes (5-20 rows) make this
+// well within Xero's 60 calls/min budget.
 
 import { NextResponse } from 'next/server'
-import { forwardQueueRowToXero } from '@/lib/invoices-queue/forward'
+// XERO-API.3 — swapped from forwardQueueRowToXero (Postmark email
+// → Hubdoc OCR) to pushQueueRowToXero (direct /Invoices API push).
+// See src/lib/invoices-queue/push-xero.js header for why.
+import { pushQueueRowToXero } from '@/lib/invoices-queue/push-xero'
 import { XeroError } from '@/lib/xero/client'
 import {
   BulkIdsSchema,
@@ -90,10 +95,12 @@ export async function POST(request) {
       }
     }
 
-    // Step 2: send via Postmark.
-    let forwardResult
+    // Step 2: push directly to Xero /Invoices (XERO-API.3).
+    // Throws if xero_account_id / xero_contact_ref are missing —
+    // server-side enforcement of the PR 2 UI gate.
+    let pushResult
     try {
-      forwardResult = await forwardQueueRowToXero(id)
+      pushResult = await pushQueueRowToXero(id)
     } catch (e) {
       const msg = e instanceof XeroError ? e.message : (e?.message || String(e))
       await db.from('invoices_queue').update({ xero_error: msg }).eq('id', id)
@@ -101,13 +108,15 @@ export async function POST(request) {
       continue
     }
 
-    // Step 3: stamp forwarded.
+    // Step 3: stamp forwarded with the new bill_id + deep link.
     const { error: updErr } = await db
       .from('invoices_queue')
       .update({
         status: 'forwarded',
         forwarded_at: new Date().toISOString(),
-        xero_email_message_id: forwardResult.messageId,
+        xero_bill_id: pushResult.billId,
+        xero_bill_number: pushResult.billNumber,
+        xero_deep_link_url: pushResult.deepLinkUrl,
         xero_synced_at: new Date().toISOString(),
         xero_error: null,
       })
@@ -121,8 +130,10 @@ export async function POST(request) {
     results.push({
       id,
       outcome: 'ok',
-      message_id: forwardResult.messageId,
-      sent_to: forwardResult.sentTo,
+      bill_id: pushResult.billId,
+      bill_number: pushResult.billNumber,
+      deep_link_url: pushResult.deepLinkUrl,
+      sent_to: pushResult.sentTo,
     })
   }
 
