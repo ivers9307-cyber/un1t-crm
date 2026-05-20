@@ -137,7 +137,7 @@ async function upsertContact(xfetch, { name, email, phone, address }) {
 }
 
 // ── Invoice payload ─────────────────────────────────────────────
-function buildInvoicePayload(car, contactId, brandingThemeId, accountCode) {
+function buildInvoicePayload(car, contactId, brandingThemeId, accountCode, taxType) {
   const exVat = Number(car.irish_sale_price_ex_vat || 0)
   const description = [
     'Tesla',
@@ -168,7 +168,7 @@ function buildInvoicePayload(car, contactId, brandingThemeId, accountCode) {
         Description: description || 'Tesla import — vehicle',
         Quantity: 1,
         UnitAmount: exVat,
-        TaxType: IE_OUTPUT_VAT,
+        TaxType: taxType,
         AccountCode: accountCode,
       }],
       Url: process.env.NEXT_PUBLIC_APP_URL
@@ -207,10 +207,27 @@ export async function issueCarInvoice(car) {
   // CAR-SALES-ACCOUNT.1 — pull the location's configured car-sales
   // account code (mig 188) with env + '200' fallback for any
   // location that hasn't picked one yet. The Settings UI added in
-  // this PR makes the picker the canonical place to set it.
+  // CAR-SALES-ACCOUNT.1 makes the picker the canonical place to
+  // set it.
   const accountCode = conn.car_sales_account_code
     || process.env.XERO_SALES_ACCOUNT_CODE
     || '200'
+
+  // CAR-SALES-ACCOUNT.2 — look up the account's default tax_type
+  // from the local xero_accounts cache (mig 186). Each Xero account
+  // has its own valid tax_types — using a hardcoded 'OUTPUT2' broke
+  // for accounts like Champ Fitness Ltd's '215 Sales of motor
+  // vehicles' which uses TAX004. Falling back to OUTPUT2 if the
+  // cache is empty (legacy path) or the picked code can't be
+  // resolved.
+  const db = createServerClient()
+  const { data: accountRow } = await db
+    .from('xero_accounts')
+    .select('tax_type')
+    .eq('location_id', car.location_id)
+    .eq('code', accountCode)
+    .maybeSingle()
+  const taxType = accountRow?.tax_type || IE_OUTPUT_VAT
 
   const brandingThemeId = await resolveBrandingThemeId(xfetch)
 
@@ -224,7 +241,7 @@ export async function issueCarInvoice(car) {
     throw new XeroError('Failed to resolve a Xero Contact for the buyer.')
   }
 
-  const payload = buildInvoicePayload(car, contact.ContactID, brandingThemeId, accountCode)
+  const payload = buildInvoicePayload(car, contact.ContactID, brandingThemeId, accountCode, taxType)
   const created = await xfetch('/Invoices', { method: 'POST', body: payload })
   const inv = created?.Invoices?.[0]
   if (!inv?.InvoiceID) {
