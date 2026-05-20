@@ -42,18 +42,84 @@ cd mobile && npm install --package-lock-only && cd -
 
 Skipping this step was what burned the first iOS production EAS build (commit `52c38a3` on 2026-05-06): two packages from the contractor-invoices sprint (`expo-document-picker`, `expo-web-browser`) were in `package.json` but missing from `package-lock.json`, so EAS aborted with `npm error Missing: <pkg> from lock file` before any native build started.
 
-### Pushing commits from the sandbox
+### Shipping from the sandbox — branch → push → PR
 
-The sandboxed bash has no GitHub credentials configured (no `~/.gitconfig`, no `GH_TOKEN`, no credential helper). Plain `git push` will fail with `fatal: could not read Username for 'https://github.com'`.
+Every non-trivial change ships as a branch + PR, not a direct push to `main`. The Cowork sandbox can do the whole loop end-to-end including the PR creation. **Stop at the push and the work is not shipped** — the user has to manually open the PR, which is the wrong default. Always open the PR yourself once the push succeeds.
 
-A GitHub PAT lives at `/Users/richardivers/code/.github-pat` (one directory above this repo). To push from the sandbox:
+#### Where the GitHub PAT lives
+
+Two equivalent options. **The `.git/config` route is the path of least resistance from the sandbox** — the Cowork harness embeds a scoped PAT into the repo's `origin` remote URL when it mounts the workspace, so the credential is already wired up:
 
 ```bash
-PAT=$(cat /Users/richardivers/code/.github-pat | tr -d '[:space:]') && \
-  git push "https://x-access-token:${PAT}@github.com/ivers9307-cyber/un1t-crm.git" main
+# Extract the PAT from the remote URL that the harness configured.
+TOKEN=$(git config --get remote.origin.url | sed -E 's|.*x-access-token:([^@]+)@.*|\1|')
 ```
 
-Inside the sandbox the file is at `/sessions/<session>/mnt/code/.github-pat` — same content, mounted from the host. The file lives one directory above this repo so it's already outside the working tree (no `.gitignore` entry needed). Don't echo the token in the conversation.
+Backup: a longer-lived PAT also lives at `/Users/richardivers/code/.github-pat` (one directory above this repo, mounted into the sandbox at `/sessions/<session>/mnt/code/.github-pat`). Use this when the `.git/config` token has been rotated or is missing:
+
+```bash
+TOKEN=$(cat /Users/richardivers/code/.github-pat | tr -d '[:space:]')
+```
+
+**Never echo the token into the conversation or commit it to the repo** — GitHub's secret scanner will revoke it the moment a commit lands with a `github_pat_…` literal in it.
+
+#### The canonical ship loop
+
+```bash
+# 1. Branch off main (always — even one-line fixes).
+cd /sessions/<session>/mnt/code/un1t-crm
+git checkout main && git pull origin main
+git checkout -b descriptive-kebab-case-branch
+
+# 2. Make changes, then run the full CI mirror locally before pushing.
+npm test && npm run lint && npm run check:mobile-parity
+
+# 3. Commit with a structured message — first line = subject, blank line, body.
+git add -A
+git commit -m "TICKET.X — one-line summary
+
+Longer description: what changed, why, what the user/operator sees.
+Cite migrations, file paths, and any non-obvious tradeoffs.
+
+Verified: N tests pass, lint clean, build clean, parity clean."
+
+# 4. Push.
+git push -u origin descriptive-kebab-case-branch
+
+# 5. OPEN THE PR. This step is mandatory — pushing is not shipping.
+TOKEN=$(git config --get remote.origin.url | sed -E 's|.*x-access-token:([^@]+)@.*|\1|')
+curl -sS -X POST \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Accept: application/vnd.github+json" \
+  -H "X-GitHub-Api-Version: 2022-11-28" \
+  https://api.github.com/repos/ivers9307-cyber/un1t-crm/pulls \
+  -d @- <<'JSON' | python3 -c "import sys,json; r=json.load(sys.stdin); print(r.get('html_url') or r.get('message') or r)"
+{
+  "title": "TICKET.X — one-line summary",
+  "head": "descriptive-kebab-case-branch",
+  "base": "main",
+  "body": "Markdown body — same structure as the commit message but with **headings**, bullet lists, code blocks, and any verification notes. Cite the affected migrations, files, env vars. End with a 'Verified:' line summarising tests/lint/build/parity."
+}
+JSON
+```
+
+The curl returns the PR's `html_url` (e.g. `https://github.com/ivers9307-cyber/un1t-crm/pull/45`) on success, or the GitHub API error message on failure. Report the URL back to the user.
+
+#### Why every change branches
+
+- **Vercel** auto-deploys every push to `main` so direct commits to `main` ship to production with no review window.
+- **CI** (`.github/workflows/web-ci.yml`) runs on `pull_request` too (since #192 CI-FIX.1), so the PR gets a green check before merge.
+- **Rollback** is one click on a merged PR vs. surgical revert commits on `main`.
+
+#### Common variations
+
+- **Stacked PRs**: branch off the parent branch (`git checkout -b child-feature parent-feature`) instead of `main`. After the parent merges, GitHub auto-rebases the child onto `main` if there's no conflict. Use sparingly — easier to land independent branches in any order.
+- **Doc-only changes**: still branch + PR. The session-state docs and CLAUDE.md updates ride the same workflow as code.
+- **Hotfixes** that need to bypass CI: still branch + PR + merge, then deploy. Don't push to `main` directly.
+
+#### Why the sandbox doesn't have `gh`
+
+The `gh` CLI isn't installed in the Cowork sandbox image. The curl-against-`api.github.com` pattern above is the substitute and is functionally identical for opening PRs (and could be extended to comment/review/merge if needed — see the [PRs API docs](https://docs.github.com/en/rest/pulls/pulls)).
 
 ## API Reference
 
@@ -832,6 +898,14 @@ Supabase for database + auth + file storage (`branding` bucket for logos). Migra
 
 **New pipeline stage:** Insert row in `pipeline_stages`, add colour to `stageColors` in `tailwind.config.js` and `KanbanBoard.jsx`.
 
+**New approval surface (APPROVALS.1 registry):** the `/approvals` dashboard aggregates everything awaiting operator review behind a single sidebar entry. Adding a new approvable surface (e.g. customer dispute reviews, contract revision requests, refund authorisations) is one new file plus one line:
+
+1. Create `src/lib/approvals/providers/<key>.js` exporting a provider object — `{ key, label, reviewBase, fetchPending(db, user), countPending(db, user) }`. Look at `providers/contractor-invoices.js` as the canonical template — same select-shape + role-scoping (master sees all, owner sees their locations, manager/head_coach get schedule items via `scheduleApproverLocationIds`). Return `ApprovalItem`s with the standard `{ id, title, subtitle, meta, submittedAt, amount, currency, reviewUrl }` shape so the inbox UI renders without modification.
+2. Register it in `src/lib/approvals/registry.js`'s `APPROVALS_PROVIDERS` array.
+3. Make sure the underlying table's `?focus=<id>` URL param actually highlights the row on the source page — that's the drill-in target from the inbox.
+
+The sidebar badge, browser tab title, count endpoint, and `/approvals` tab all pick up the new provider automatically. **No new permission, no new sidebar entry, no new API route.** Existing tests in `src/lib/approvals/registry.test.js` exercise the registry shape contract; a new provider only needs unit coverage for its own scoping logic if it does anything non-standard.
+
 **New cron job:** API route at `src/app/api/cron/[name]/route.js` (auth via `Authorization: Bearer ${CRON_SECRET}`) + entry in `vercel.json` `crons` array.
 
 **New role or role-list change:** Update `roleSchema`, `ADMIN_ROLES`, `MANAGER_ROLES` in `src/lib/schemas.js` (single source of truth) and the `defaultPermissionsByRole` map in `src/components/StaffForm.jsx`. The `private.auth_is_owner_or_manager()` / `private.auth_role()` helpers (originally migration 014, moved to `private` schema in 022) may also need a follow-up migration if the new role has elevated DB-level write access.
@@ -1095,6 +1169,8 @@ When Claude is operating on this repo from inside Cowork mode, it runs in an iso
 **If you're using Claude Code (CLI) instead of Cowork, none of this applies.** Claude Code runs natively in the user's terminal with their actual `~/.gitconfig`, `~/.ssh`, and `gh` CLI — `git push` just works. The sandbox-specific knobs (PAT helper, file-delete permission tool) are Cowork-only operational concerns.
 
 ## Lessons learned
+
+**Shipping = branch + commit + push + PR. Stopping at the push is not shipping.** Pushing a feature branch without also opening a PR leaves the work in limbo — Vercel doesn't preview branches without a PR, CI doesn't run the `pull_request` workflow until the PR is opened, and the operator has to manually click through GitHub's "create PR" UI. The Cowork sandbox doesn't ship with `gh` but the GitHub REST API + curl is functionally equivalent — see the canonical loop in "Shipping from the sandbox" above. Whenever a change ships, the response to the user should include the PR URL, not just "I pushed it." This bit on the INVOICES.1 ship — the user explicitly asked "why no pr?" because the assistant stopped at `git push`. Now codified.
 
 **Read vendor docs for the version you've pinned.** When integrating a third-party API (Revolut, Twilio, Stripe, etc.), always parse the OpenAPI spec / SDK source for the EXACT version you're targeting before writing client code. Don't work from cached knowledge of an older version. Two specific cases that bit on the Revolut integration: `capture_mode` enum casing (changed from `AUTOMATIC` upper-snake to lowercase `automatic` between versions) and the SDK token field name (`public_id` deprecated, replaced by `token`). Both produced misleading error messages that cost a round-trip with the user to fix. The OpenAPI spec is authoritative — if the docs page is a JS-rendered SPA that doesn't fetch cleanly, get the YAML from the vendor's openapi GitHub repo instead.
 
@@ -1577,6 +1653,13 @@ Mirror of the Cowork task list — kept here as the durable record so that a fre
 
 | # | Item | Notes |
 |---|------|-------|
+| 199 | APPROVALS.1 — central approvals dashboard (branch `approvals-dashboard`, PR #44) | One page (`/approvals`) aggregating everything awaiting operator review across the platform. Tabbed UI, drills out to existing per-feature pages — no inline review UI, no duplicated logic. Sidebar nav entry (ClipboardCheck icon) with a red badge showing the per-user pending count; browser tab title prefix `(N) CF Studio · …` combines INVOICES.2 + APPROVALS.1 counts. **Architecture — extensible registry pattern**. `src/lib/approvals/registry.js` + `src/lib/approvals/providers/`. Each provider declares `{ key, label, reviewBase, fetchPending(db, user), countPending(db, user) }`. Adding a future category = one new provider file + one line in the registry. `Promise.allSettled` fan-out so a single broken provider degrades to an empty bucket rather than blanking the whole inbox. **Providers shipped**: `contractor_invoices` (status=submitted, master + owner), `fte_expenses` (status=submitted, master + owner), `time_off` (status=pending, manager + head_coach + owner + master), `shift_swaps` (status=pending, same approver set), `rosters` (status=draft over-budget publishes, master + owner — folds the existing `/schedule/approvals` queue into the central inbox). **API**: `GET /api/approvals/pending` (full payload), `GET /api/approvals/count` (lightweight HEAD-count for sidebar polling). **Permission key**: new `approvals_inbox` in `shared/permissions.js`; defaults master + owner + manager ON, head_coach + staff OFF; added to `WEB_ONLY_OK` in parity linter (mobile uses per-category `notify_*` flags). **Sidebar refactor**: previous `useInvoicesPendingCount` became generic `usePolledCount({ url })` shared by INVOICES.2 + APPROVALS.1. 1938 tests pass (8 new for registry shape + scoping helpers). |
+| 198 | INVOICES.3 — Claude Vision auto-categorisation (folded into PR #43) | Extended `invoiceFieldsSchema` with optional top-level `category` (fixed enum: utilities, cleaning, equipment, marketing, insurance, rent, maintenance, professional_services, staff_training, office_supplies, software, bank_fees, other) and `account_code` (free-text). Claude Vision prompt updated with category guidance mapping common gym suppliers to buckets (Glofox→software, electric utility→utilities, public liability premium→insurance). Data-review form gets a Category dropdown + Xero account code field — operator confirms or overrides. Forwarded confirmation panel + Xero email forward body both include the chosen category + code as hints to the bookkeeper finishing the draft in Xero. Email body explicitly tells the bookkeeper these are AI suggestions, override if the chart of accounts disagrees. |
+| 197 | INVOICES.2 — sidebar notification badge for pending invoices (folded into PR #43) | New `GET /api/invoices-inbox/unread-count` returns the count of rows in `received` or `extracted` state, scoped (master = all locations, owner = their locations, anyone else = quiet 0). Sidebar polls every 60s and on tab refocus. Red pill renders next to the Invoices nav item with count capped at `99+`. Browser tab title gains a `(N) CF Studio · …` prefix so the count is visible from any tab. Refactored later into a generic `usePolledCount({ url })` hook as part of APPROVALS.1 so both Invoices and Approvals badges share the same plumbing. |
+| 196 | INVOICES.1 — Dext-style email-in supplier invoice ingest (mig 184, branch `invoices-inbox`, PR #43) | Forward supplier invoices to `<slug>-invoices@mail.un1tdublin.com` (one slug per location, unique partial index, configured in Location settings). Postmark inbound webhook lands them in `/invoices` as `received`. **Two-stage manual approval before any cost**: stage 1 = quality review (operator confirms the attachment is legible and a real invoice — reject here means Claude Vision **never runs**, protecting cost on bad inputs); stage 2 = data review (Claude Vision OCRs supplier / dates / amounts / line items / category via shared `extractInvoiceFieldsFromBytes(bytes, mime)` — refactored out of the existing car-document OCR so both flows share the prompt + Anthropic call). Operator edits anything wrong, approves → original attachment forwarded to the location's Xero `bills_email_address`. **Mig 184**: `locations.invoices_inbound_slug` (regex `^[a-z0-9][a-z0-9-]{1,40}$`, unique partial index), `inbound_invoices` table (6-state status enum: received → quality_approved → extracted → data_approved → forwarded, plus rejected as terminal from each non-terminal state), audit timestamps per transition, `inbound-invoices` private storage bucket, master + owner-at-location RLS. **Postmark webhook**: `/api/webhooks/invoices-inbound/[token]` — token-in-URL auth because Postmark's inbound config doesn't allow custom headers (unlike outbound delivery webhook). 404 (not 403) on wrong token to avoid leaking URL existence; same pattern as the sequence webhook (mig 131). Slug resolution falls back through `ToFull → To → OriginalRecipient` so CC'd/BCC'd invoices route correctly. **CRUD + transition routes**: `/api/invoices-inbox` (list, direct upload), `/api/invoices-inbox/[id]` (detail, delete-rejected-only), `/quality-approve`, `/quality-reject`, `/extract`, `/fields` PATCH, `/data-approve`, `/data-reject`, `/attachment` (signed URL, 5min TTL). **Web UI**: `/invoices` page with `InvoicesInbox` — tabbed master/detail with PDF preview alongside editable extracted-fields form. Sidebar entry (Inbox icon) gated by new `invoices_inbox` permission key (master + owner default ON, everyone else OFF, in `WEB_ONLY_OK` for parity linter — desktop workflow because PDF preview alongside fields wants screen real estate). **Per-location slug config**: new "Invoice Forwarding" section in `LocationForm.jsx` with live `<slug>-invoices@mail.un1tdublin.com` preview. **DNS**: MX for `mail.un1tdublin.com` → Postmark's inbound MX (dedicated subdomain keeps marketing apex `un1tdublin.com` free for its own mail). **Env**: `POSTMARK_INBOUND_WEBHOOK_TOKEN` (token used in the URL path; the value is generated via `openssl rand -hex 32` and lives in Vercel env vars only — see operational notes at the bottom of this file). 25 new tests cover address parsing (including +tag, MailboxHash, OriginalRecipient fallback, wrong-domain rejection), status machine transitions (terminal-state absorption, illegal-skip rejection), storage path partitioning, and filename safety. 1953 total tests pass. |
+| 195 | MAIL-SUBDOMAIN.1 — dedicated `mail.un1tdublin.com` for Postmark inbound (folded into PR #43) | The Postmark inbound MX got delegated to `mail.un1tdublin.com` rather than the apex `un1tdublin.com` so the marketing site keeps its own MX records pointing at the public mailbox. All inbound supplier-invoice traffic routes via the subdomain; the apex is untouched. Updated the `DOMAIN` constant in `src/lib/inbound-invoices.js`, the slug-preview UI in `LocationForm.jsx`, the inbox header display in `InvoicesInbox.jsx`, the webhook route's comment header, and 8 test cases. |
+| 194 | FTE-EXPENSES.3/.4 + FIX series — Claude Vision receipt OCR auto-fill (mobile-first) | Built on top of FTE-EXPENSES.1/.2 (already shipped pre-session). `src/lib/expense-receipt-extraction.js` — Claude Vision call mirroring `invoice-extraction.js` but tuned for receipts (vendor + date + amount + VAT + category from a fixed list matching the FTE expense categories). New `POST /api/expenses/extract-receipt` accepts a multipart receipt upload, returns the extracted fields. Both the web (`ExpensesManager.jsx`) and mobile (`mobile/app/expenses/[id].jsx`) item-add forms now have an "Auto-fill from receipt" button. **Originally auto-fired on file pick** — converted to a **manual trigger** (FTE-EXPENSES-FIX.3) per operator feedback: cost protection + correctness review before any AI call. Same pattern then propagated to contractor invoices (already manual via "Extract with AI" in `DocumentsCard.jsx`) and later to INVOICES.1's two-stage approval. **FTE-EXPENSES-FIX**: missing `expo-image-picker` dep in `mobile/package.json` was breaking the EAS build (`npx expo export:embed --eager` exited non-zero). Added via `npx expo install` (pinned ~17.0.11 for SDK 54). Why CI didn't catch it: ESLint doesn't check transitive resolves, tests don't import the file, `npm run build` is web-only, parity linter validates permission keys not package completeness. **FTE-EXPENSES-FIX.2**: `viewerRole()` in `/api/expenses/[id]/route.js` checked `user.role === 'master'` BEFORE `claim.profile_id === user.id`, so a master testing their own draft got `viewer_role: 'master'` and the mobile Add-item button (gated on `viewer_role === 'self'`) was hidden. Reordered so `self` wins over `master`. Web was unaffected because `ExpensesManager.jsx` compares `claim.profile_id` to `userId` directly. |
+| 193 | FTE-EXPENSES.1/.2 — FTE employee expense reimbursement flow (mig 183, mobile in 1.1.0) | First-class expense reimbursement for FTE staff to mirror the existing contractor invoice flow. Monthly claims with per-item receipts. **Mig 183**: `fte_expense_claims` (monthly buckets, status enum draft → submitted → approved/declined → revoked, denormalised totals via trigger), `fte_expense_items` (per-receipt rows with category enum: travel, meals, supplies, mileage, training, other), `fte-expense-receipts` private storage bucket. Partial unique index prevents two non-terminal claims for the same (profile, location, month). Same Xero email forward as contractor invoices. **Web UI**: `/schedule/expenses` with role-aware `ExpensesManager` — submitter sees their own claims + new-claim button, approver sees the review queue at their locations. **Mobile**: full Expenses tab on iOS (CF Studio 1.1.0) with claim list + detail screen, per-item receipt capture (camera / library / PDF picker via expo-image-picker + expo-document-picker), submit/revoke/delete-draft from the device. Notification categories `expense_submitted` + `expense_approved` + `expense_declined` registered in the notifications registry. |
 | 192 | CI-FIX.1 — Web CI typescript devDep + PR trigger (branch `ci-fix-typescript-dep`) | Every Web CI run on `main` had been failing for 8 consecutive merges with `Cannot find module 'typescript'` thrown from `eslint-config-next` → `@typescript-eslint/parser` → `@typescript-eslint/typescript-estree`. The transitive plugin chain `require`s `typescript` at load time even on a pure-JS project. Locally my `node_modules/typescript` was hoisted from another resolution so lint passed; CI's clean `npm install` never pulled it. **Fix 1**: add `typescript ^5.9.3` to `devDependencies` (still pure-JS project — just satisfies the plugin loader). **Fix 2**: add `pull_request` trigger to `.github/workflows/web-ci.yml` so future PRs get CI before merge. Previously only `push: branches: [main]` was wired, so we found out about failures only AFTER merging — exactly how this dep gap went undetected for so long. Also added `eslint.config.mjs` to the watched paths (had been missed when the project switched from `.eslintrc.json` to flat config). The streak's broken — first green Web CI in 8 merges. |
 | 191 | CONTRACT-VARS.1 — surface unmapped variables in the issue wizard (branch `contract-unmapped-vars`) | Operator reported that contracts were going out with `{{variable_name}}` text appearing literally because templates were referencing placeholders that weren't in `variables_schema` and weren't auto-fillable from the profile. **New lib helper** `unresolvedPlaceholders(body, recipient, customVariables)` in `src/lib/contracts.js` — returns the placeholder keys that would render literally given the current value bag. Treats empty/whitespace/null as unfilled. Used in three places. **Wizard step 2** (`ContractIssueWizard.jsx`): new "Unmapped variables" amber-bordered section appears under the declared-variables form whenever the template references placeholders that aren't in `variables_schema` and aren't profile-auto-fills. Inputs are required, the wizard refuses to advance until they're all filled. Pre-existing `customVarDefs` was inlined per-render which the new `useMemo` deps flagged as stale — wrapped in `useMemo` so the lint stays green. **Wizard step 3**: new "Still unfilled" amber callout above the preview when any placeholder remains; preview body is run through `renderPreviewWithHighlights` which wraps every literal `{{...}}` in a yellow `<mark>` span so the issuer can see exactly where the gap is. Issue button is disabled with a tooltip ("Fill N remaining placeholder(s) before issuing.") until everything resolves. **API safety net** (`/api/contracts` POST): after rendering the body, `extractPlaceholders(bodyRendered)` runs one more time — if anything remains, the route returns 400 with `unmapped_keys: [...]` so any other client (script, future mobile-issuer, API consumer) can't bypass the check. **Tests**: 5 new cases on `unresolvedPlaceholders` (everything-filled, mix of unfilled, whitespace-as-unfilled, null/undefined-as-unfilled, defensive null-recipient). 1868 tests / lint zero / parity clean / build clean. |
 | 190 | POLICIES-VIEWS.1 — replace policy acknowledgement with passive view tracking (mig 179, branch `admin-hub-and-policy-views`) | Operator preference: drop the explicit "I have read and understood" affordance and replace with passive telemetry — record when a policy is opened, how long, and which sections drew the longest attention. **Mig 179**: drops `policy_acknowledgements` (no rows existed — policies were seeded the same day this swap landed) and adds `policy_views` (`id`, `policy_version_id`, `profile_id`, `started_at`, `ended_at`, `total_duration_seconds`, `section_dwell` JSONB `{heading: seconds}`, `viewed_via`, `ip_address`, `user_agent`). RLS: SELECT own or master/owner; INSERT/UPDATE own only; no DELETE. **Lib** (`src/lib/policies.js`) rewritten: `listPoliciesWithStatus` now returns `viewed_at` + `view_count` per policy (computed from the most-recent **completed** view for that user — `ended_at IS NOT NULL`). New helpers: `listVersionViewers(versionId)` (admin report: per-profile session count + total seconds + most-recent timestamp + outstanding-staff split), `sectionDwellAggregate(versionId)` (sums section dwell across all completed views → `{section, total_seconds, avg_seconds, sessions}` sorted desc — drives the "Hot sections" admin panel), and `detectSectionHeadings(body)` (heuristic: numbered headings like "1. PURPOSE AND SCOPE" OR ALL-CAPS lines ≥5 non-whitespace chars, both followed by a blank line). **API**: removed `/api/policies/[slug]/acknowledge`; added `POST /api/policies/[slug]/views` (open a session, returns `view_id`) and `PATCH /api/policies/[slug]/views` (close/progress; idempotent — server takes `max(prev, new)` on duration so visibility-change + pagehide + unmount flushes all converge). **Web viewer**: `AcknowledgePolicyButton.jsx` deleted; new `PolicyViewTracker.jsx` client component splits the body into sections at heading boundaries, mounts an IntersectionObserver per section to detect which one's centred in the viewport (`rootMargin: '0px 0px -50% 0px'` + threshold grid), runs a 1Hz ticker while the tab is visible, and flushes via `fetch(..., { keepalive: true })` on visibilitychange/pagehide/beforeunload/unmount. `sendBeacon` ruled out (POST-only — can't issue PATCH). `flush()` is declared above the `useEffect` that closes over it (avoids the `react-hooks/immutability` lint flagging the function-declaration hoisting). **Mobile viewer**: same approach, native-flavoured — `onLayout` on each section View captures `y + height`, `onScroll` tracks `scrollY`, ticker every 1s picks the section whose midpoint is closest to viewport-centre and increments that key. Flush triggers: `useFocusEffect` cleanup, `AppState` 'background', a 30s periodic timer (so a long read doesn't lose everything on force-kill). **Admin reports**: `/admin/policies` list now shows distinct viewer count vs. active staff count; `/admin/policies/[slug]/versions/[N]` shows Opened (with sessions + total time + via) vs. Haven't-opened split AND a "Hot sections" panel at the top (top 10 sections by total dwell across viewers, with avg per session). **Staff list + banner copy** flipped from "acknowledged / unread" to "Opened / Not opened" + "you haven't opened yet". **Mobile More tab**: Policies row shows "N new" badge. **Tests**: lib test suite rebuilt — 10 cases covering view-status join, outstanding count, and the section-heading detector (numbered, ALL-CAPS, blank-line gating, short-line rejection, empty-input safety). 1863 tests / lint zero / parity clean / build clean. **Privacy implications**: the AUP Section 12 + Staff Privacy Notice Sections 2.5 and 4 already cover operational telemetry under legitimate interest — view-tracking falls under the same umbrella. Worth a one-line note in the next privacy-notice publish describing the per-policy view tracking specifically. |
@@ -1753,6 +1836,93 @@ These are not commitments, just durable notes so we don't re-derive them every s
 **Multi-brand / platform**
 - ~~Factor the multi-domain middleware so adding a third brand (e.g. another car business or a partner gym) is a config row, not new code.~~ — **shipped** (#177). New `src/lib/brands.js` registry; middleware iterates. Adding a brand = one entry. 15 contract tests.
 - Brand-aware AppShell — pull header logo + favicon + theme tokens off the active location so CCF Autos visitors at `crm.un1tdublin.com` see car-brand chrome, not gym chrome, without separate deployments.
+
+### INVOICES-QUEUE.1 — restructure approval-to-Xero flow (3 PRs, designed May 20, build in next session)
+
+**The architectural shift the operator wants** (codified before merging the three open PRs so the next chat picks up with the full plan):
+
+Today every source-of-an-invoice (FTE expense claims, contractor invoices, supplier emails via INVOICES.1, car documents) runs its own Claude Vision OCR call at its own moment in its own flow, and forwards to Xero independently. That's three OCR call sites, four direct-to-Xero paths, and no single place to see "what's about to hit my accounts this month".
+
+The replacement model: **owner approval = source feature's job; accountant sign-off = the Invoices feature's job**. Everything Xero-bound funnels through one queue.
+
+```
+Source feature              Owner action                       Lands in Invoices queue
+────────────────────────    ──────────────────────────────     ────────────────────────────────
+FTE expense claims          Owner approves the claim           "Expenses" sub-section (1 row/receipt)
+Contractor invoices         Owner approves the bill            "Contractor" sub-section
+Inbound supplier invoices   (no owner step — direct)           "Supplier" sub-section (existing)
+Car documents               (no explicit approval — auto)      "Car documents" sub-section
+
+           Inside the Invoices queue (= accountant sign-off):
+           ──────────────────────────────────────────────────────────
+           • SINGLE Claude Vision OCR pipeline (per-receipt; one
+             call per document — empirically cleanest extraction)
+           • Bulk review / analyse / approve / send to Xero
+           • On final approval (bookkeeper permission required) →
+             forward to Xero
+```
+
+**The "accountant" role** is a new `bookkeeper` permission key in `shared/permissions.js`, NOT a new role. Defaults master ON, everyone else OFF. Grantable per-user via the existing StaffForm permission picker so a senior manager can be made bookkeeper temporarily (month-end coverage) and the flag flipped off again. Cleanly separates "I approve this expense" (owner) from "I sign this off to the accountant" (bookkeeper).
+
+**Phased ship — 3 PRs**
+
+**PR 1 — Drop into the queue on owner-approval (next session, start here)**
+
+Schema work (mig 185):
+- Rename `inbound_invoices` → `invoices_queue` (table barely used yet; INVOICES.1 just shipped).
+- Add `source_type text NOT NULL CHECK (source_type in ('supplier_email','contractor_invoice','fte_expense_item','car_document'))`. Existing rows backfill to `supplier_email`.
+- Add per-source nullable FK columns (NOT a polymorphic FK — Postgres doesn't support those cleanly): `source_contractor_invoice_id`, `source_fte_expense_item_id`, `source_car_document_id`. Each FK has its own `ON DELETE CASCADE` so source-row delete cleans the queue row.
+- Add new status `awaiting_accountant_review` to BOTH `fte_expense_claims.status` CHECK and `contractor_invoices.status` CHECK. State machine for both becomes `draft → submitted → approved → awaiting_accountant_review → forwarded` (with `declined` as the terminal branch from `submitted`).
+
+Behaviour:
+- Owner-approve route on FTE expense claims (`/api/expenses/[id]/approve`): after status flip to `approved`, immediately set to `awaiting_accountant_review` AND insert N rows into `invoices_queue` (one per receipt on the claim, source_type=`fte_expense_item`). **The existing direct-to-Xero forward stops happening here** — queue handles it in PR 2.
+- Owner-approve route on contractor invoices (`/api/invoices/[id]/approve`): same shape. Status to `awaiting_accountant_review` + one queue row source_type=`contractor_invoice`.
+- Car documents on upload: auto-create one queue row source_type=`car_document` (no explicit approval step — same as supplier emails today). Car documents UI gets a "Sent for review" indicator.
+- Inbound supplier emails (`/api/webhooks/invoices-inbound/[token]`): unchanged shape — still inserts one row per attachment, source_type=`supplier_email`. The existing quality + extract + data-review flow keeps running; PR 3 collapses it into the unified pipeline.
+- Submitter-facing UI copy: FTE expenses + contractor invoices show `awaiting_accountant_review` as "Approved by your manager · Awaiting accountant sign-off before forwarding to Xero." with a green-ish neutral colour (not amber — it's not waiting on the SUBMITTER for anything).
+
+Permission key: new `bookkeeper` in `shared/permissions.js#WEB_PERMISSIONS`. Defaults master ON, owner/manager/head_coach/staff OFF. Add to `WEB_ONLY_OK` in `check-mobile-parity.mjs` with reason (it's a desktop finance workflow). Three-tier resolver picks it up automatically; StaffForm renders the toggle automatically.
+
+Hard cutover: already-approved-not-yet-forwarded items stay on the old direct-to-Xero path until they finish naturally. New submissions take the new path. No backfill migration.
+
+**PR 2 — Bulk operations UI in `/invoices`**
+
+Tabbed view inside `/invoices`: **All · Supplier · Contractor · Expenses · Car documents**. Each tab filtered by `source_type`. The Expenses tab groups rows by the parent claim (since one claim = N rows = N receipts). Card per row showing: attachment thumbnail, extracted-fields summary if already analysed, source-row link, suggested category, amount.
+
+Bulk actions (gated on `bookkeeper` permission):
+- **Analyse selected** — runs Claude Vision per-row (parallelisable; per-receipt is the cheapest + most accurate path). Confirmation modal shows estimated token cost before firing.
+- **Send to Xero** — forwards every selected row's attachment to the destination location's `bills_email_address` via the existing Postmark path. One email per row (Xero's OCR creates one draft bill per email). Status flip → `forwarded`.
+- **Reject** with reason — row goes to `rejected` terminal state, source row's `awaiting_accountant_review` flips back to a new `accountant_rejected` status which surfaces to the submitter ("Accountant flagged this for revision — see reason below").
+
+`/approvals` gains a new **Bookkeeper queue** tab, gated on the `bookkeeper` permission. The tab is HIDDEN entirely for anyone without the flag (not just disabled — it shouldn't be visible). Shows the count of queued items awaiting their action; click-through to `/invoices` with that tab pre-selected.
+
+Sidebar badge logic (existing `usePolledCount` hook): the existing Invoices badge stays as "items the operator can see in the inbox" but a new `bookkeeper-aware` filter happens server-side — non-bookkeepers see the count of items in their inbox-readable state (owner can audit), bookkeepers see the count of items needing THEIR action (queued + analysed but not yet forwarded).
+
+**PR 3 — Centralise Claude Vision**
+
+Move all OCR invocation INTO the queue. After this PR, there is ONE place Claude Vision runs from: the bookkeeper clicking "Analyse" in `/invoices`.
+
+Removal work:
+- Drop the "Auto-fill from receipt" button from FTE expense item forms (web `ExpensesManager.jsx` + mobile `expenses/[id].jsx`). The submitter just attaches a receipt; no AI runs at their stage.
+- Drop "Extract with AI" from car documents (`DocumentsCard.jsx`). Upload alone enqueues; bookkeeper runs analysis later.
+- Collapse INVOICES.1's two-stage approval inside `/invoices`. The existing quality-review step (operator confirms attachment is legible) stays — that's the cost-protection gate that proved its worth. The data-review step becomes the unified "Analyse" action.
+
+Single shared service `src/lib/extraction/` with one entry point: `extractInvoiceFieldsFromBytes(bytes, mime, hints)` (already exists — refactor to be the only call site). The `hints` arg lets callers pass source-type-specific guidance (e.g. for `fte_expense_item`, restrict categories to the FTE expense enum rather than the supplier-invoice enum).
+
+Once PR 3 ships:
+- Token spend visibility lands in one place (the queue's per-row `extraction_token_cost` column added by mig 186)
+- A new admin page `/admin/extraction-cost` (master-only) shows monthly extraction spend per source-type + extraction success rate per source-type, so the operator can spot if (e.g.) car-document OCR is consistently 3× the cost of FTE-receipt OCR and decide whether to downsample uploads before sending to Claude.
+- Per-source caching kicks in — system prompt is identical across every call, so `cache_control: { type: 'ephemeral' }` on the system block (the existing "enable prompt caching" backlog item, line above) saves ~50% of input tokens once monthly volume crosses ~200 invoices.
+
+**Open questions deferred to the build**
+
+- Bulk forward-to-Xero: do we batch N attachments into one Postmark send or one-per-row? Xero's bills-email pipe creates ONE draft per email regardless of attachment count — so one-per-row is right. Confirm at PR 2 time.
+- Rejection-with-reason on FTE expenses: does the rejected receipt's parent claim get held entirely, or just that receipt? Probably hold the whole claim (the submitter shouldn't get partial reimbursement on a claim the accountant doesn't agree with). Pin at PR 2 design time.
+- Mobile surface: the queue itself stays desktop-only (PDF preview alongside fields needs the screen real estate). But a "1 invoice awaiting your sign-off" mobile push to the bookkeeper would be a nice-to-have if operator demand surfaces.
+
+**Why we're not building it today**
+
+Three open PRs (#43 invoices-inbox, #44 approvals-dashboard, #45 docs) touch the same surface and haven't merged yet. Branching the restructure off `main` today would mean the restructure PR doesn't make sense in isolation (it'd reference tables that haven't been created on main yet). Order of operations: merge #43 → merge #44 → merge #45 → start INVOICES-QUEUE.1 PR 1 off a clean main. Hard cutover means no data migration concern — already-approved items in flight stay on the old path until they drain.
 
 ### Process notes
 

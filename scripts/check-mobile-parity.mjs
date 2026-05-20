@@ -113,6 +113,13 @@ const WEB_ONLY_OK = {
   // attachment (PDF preview) alongside the extracted fields side by
   // side. That's a laptop workflow; no mobile UI by design.
   invoices_inbox: 'Supplier-invoice inbox (INVOICES.1) — quality + data review for emailed invoices before forwarding to Xero. PDF preview alongside editable extracted fields wants screen real estate; finance approval is desktop work.',
+  // APPROVALS.1 — central approvals dashboard aggregating
+  // contractor invoices, FTE expenses, time-off, swap requests.
+  // Drills into existing per-feature pages — desktop-only because
+  // each source page is desktop-only. Mobile reviewers approve
+  // individual items via existing push-notification entry points
+  // (e.g. notify_time_off, notify_invoice_*).
+  approvals_inbox: 'Central approvals dashboard (APPROVALS.1) — aggregates contractor invoices, FTE expenses, time-off and swap requests. Drills into per-feature pages, all of which are desktop-only. Mobile users get per-category push notifications via existing notify_* flags.',
   // INVOICES-QUEUE.1 — bookkeeper flag. Gates the analyse + send-
   // to-Xero actions inside /invoices and the Bookkeeper queue tab
   // in /approvals. Both surfaces are desktop-only (PDF preview +
