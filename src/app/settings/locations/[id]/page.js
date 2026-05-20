@@ -44,7 +44,13 @@ export default async function EditLocationPage(props) {
   // BCA template preview. Both feed into LocationIntegrations.
   const [{ data: xeroConnection }, { data: sampleBcaCar }] = await Promise.all([
     db.from('xero_connections')
-      .select('location_id, tenant_id, tenant_name, tenant_type, connected_at, last_refreshed_at, expires_at, scopes, bills_email_address')
+      .select(`
+        location_id, tenant_id, tenant_name, tenant_type,
+        connected_at, last_refreshed_at, expires_at, scopes,
+        bills_email_address,
+        accounts_last_synced_at, contacts_last_synced_at,
+        accounts_sync_error, contacts_sync_error
+      `)
       .eq('location_id', location.id)
       .maybeSingle(),
     location.features?.bca_submit === true
