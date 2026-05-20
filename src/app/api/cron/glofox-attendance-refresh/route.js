@@ -1,6 +1,6 @@
 // Vercel cron — daily at 04:00 Dublin time.
 //
-// CHURN-PREP.1 — full member attendance refresh.
+// CHURN-PREP.1 / .2 — full member data refresh (attendance + plan).
 //
 // WHY THIS EXISTS
 // ───────────────
@@ -17,24 +17,28 @@
 //
 // WHAT THIS DOES
 // ──────────────
-// Every day, re-fetch bookings for ALL paying members ('member' /
-// 'credit_member') and recompute the six engagement columns, so
-// attendance data is complete and current — the prerequisite for
-// the churn-risk radar.
+// Every day, for ALL paying members ('member' / 'credit_member'):
+//   1. re-fetch bookings and recompute the six engagement columns,
+//      so attendance data is complete and current, and
+//   2. re-fetch the single-member payload and store the current
+//      membership plan name (glofox_membership_plan) — the
+//      /2.0/members LIST + /2.0/bookings payloads don't carry it,
+//      so this is the only place the whole base gets it refreshed.
+// Together these are the prerequisite for the churn-risk radar.
 //
 // Members are processed stalest-glofox_synced_at-first and the run
 // is time-budgeted: if a run can't finish the whole base it stops
 // cleanly and the next run resumes from the stalest remaining
 // members. A transient Glofox error on a member leaves that
-// member's existing aggregates untouched (never wiped to zero).
+// member's existing aggregates / plan untouched (never wiped).
 //
 // Auth: same CRON_SECRET pattern as the other Vercel crons.
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
-import { glofoxCredentialsForLocation, fetchUserBookingsResult } from '@/lib/glofox'
-import { computeBookingAggregates, trimRecentBookings } from '@/lib/glofox-sync'
+import { glofoxCredentialsForLocation, fetchUserBookingsResult, fetchMemberResult } from '@/lib/glofox'
+import { computeBookingAggregates, trimRecentBookings, extractMembershipPlan } from '@/lib/glofox-sync'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -96,7 +100,7 @@ export async function GET(request) {
  * location, stalest first, within the shared time budget.
  */
 async function refreshLocation(db, location, startedAt) {
-  const summary = { refreshed: 0, fetch_failed: 0, update_failed: 0 }
+  const summary = { refreshed: 0, fetch_failed: 0, update_failed: 0, membership_failed: 0 }
   let budgetExhausted = false
 
   // Audit row up-front so a mid-run timeout still leaves a trace.
@@ -142,18 +146,28 @@ async function refreshLocation(db, location, startedAt) {
       }
 
       const aggs = computeBookingAggregates(bookings)
+      const update = {
+        last_booked_at:     aggs.last_booked_at,
+        last_attended_at:   aggs.last_attended_at,
+        total_bookings_30d: aggs.total_bookings_30d,
+        total_attended_30d: aggs.total_attended_30d,
+        total_attended_7d:  aggs.total_attended_7d,
+        total_noshow_30d:   aggs.total_noshow_30d,
+        recent_bookings:    trimRecentBookings(bookings, 10),
+        glofox_synced_at:   new Date().toISOString(),
+      }
+
+      // CHURN-PREP.2 — also refresh the current membership plan from
+      // the single-member payload. On a fetch failure we simply omit
+      // glofox_membership_plan from the update (existing value kept)
+      // rather than failing the whole member — attendance still saves.
+      const { ok: memberOk, member } = await fetchMemberResult(creds, m.glofox_member_id)
+      if (memberOk) update.glofox_membership_plan = extractMembershipPlan(member)
+      else summary.membership_failed++
+
       const { error: upErr } = await db
         .from('contacts')
-        .update({
-          last_booked_at:     aggs.last_booked_at,
-          last_attended_at:   aggs.last_attended_at,
-          total_bookings_30d: aggs.total_bookings_30d,
-          total_attended_30d: aggs.total_attended_30d,
-          total_attended_7d:  aggs.total_attended_7d,
-          total_noshow_30d:   aggs.total_noshow_30d,
-          recent_bookings:    trimRecentBookings(bookings, 10),
-          glofox_synced_at:   new Date().toISOString(),
-        })
+        .update(update)
         .eq('id', m.id)
       if (upErr) summary.update_failed++
       else summary.refreshed++

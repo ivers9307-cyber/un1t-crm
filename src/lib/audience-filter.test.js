@@ -112,6 +112,28 @@ describe('applyAudienceFilter', () => {
     })
     expect(q.calls).toEqual([['is', 'glofox_membership_status', null]])
   })
+
+  // CHURN-PREP.2 — glofox_membership_plan is the synced plan name.
+  it('applies glofox_membership_plan eq to target a specific plan', () => {
+    applyAudienceFilter(q.query, {
+      filters: [{ field: 'glofox_membership_plan', op: 'eq', value: '10 Class Pack' }],
+    })
+    expect(q.calls).toEqual([['eq', 'glofox_membership_plan', '10 Class Pack']])
+  })
+
+  it('applies glofox_membership_plan is_null for "no membership plan applied"', () => {
+    applyAudienceFilter(q.query, {
+      filters: [{ field: 'glofox_membership_plan', op: 'is_null' }],
+    })
+    expect(q.calls).toEqual([['is', 'glofox_membership_plan', null]])
+  })
+
+  it('applies glofox_membership_plan not_null for "has any membership plan"', () => {
+    applyAudienceFilter(q.query, {
+      filters: [{ field: 'glofox_membership_plan', op: 'not_null' }],
+    })
+    expect(q.calls).toEqual([['not', 'glofox_membership_plan', 'is', null]])
+  })
 })
 
 describe('AUDIENCE_FIELDS allowlist', () => {

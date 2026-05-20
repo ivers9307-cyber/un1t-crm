@@ -36,6 +36,12 @@ export const AUDIENCE_FIELDS = Object.freeze({
   // filter for power users targeting credit_member upsells, classpass
   // _payg cohorts, etc.
   glofox_membership_status:  { type: 'select',  ops: ['eq', 'neq', 'is_null', 'is_not_null', 'not_null'] },
+  // CHURN-PREP.2 — the contact's current Glofox membership plan name
+  // ("3 Month Membership", "10 Class Pack", ...), synced by the
+  // glofox-attendance-refresh cron. Lets operators target a specific
+  // plan, or "no membership plan applied" via is_null. The builder
+  // populates the value dropdown from /api/contacts/membership-plans.
+  glofox_membership_plan:    { type: 'select',  ops: ['eq', 'neq', 'is_null', 'is_not_null', 'not_null'] },
   wa_status:                 { type: 'select',  ops: ['eq', 'neq'] },
   // contacts.sms_status (mig 059) — mirrors wa_status. Used by the
   // upcoming SMS broadcasts/sequences/automations to filter out

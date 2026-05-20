@@ -543,6 +543,11 @@ function GlofoxProfileCard({ contact }) {
             )}
           </div>
 
+          {/* Current membership plan (CHURN-PREP.2) */}
+          {contact.glofox_membership_plan && (
+            <p className="text-sm font-medium text-un1t-white">{contact.glofox_membership_plan}</p>
+          )}
+
           {/* Tenure + engagement strip */}
           <div className="text-xs text-un1t-light space-y-1">
             {tenure && <p>{tenure}</p>}

@@ -22,6 +22,10 @@ const FIELD_OPTIONS = [
   { value: 'glofox_membership_status', label: 'Glofox Raw Status (advanced)', type: 'select',
     options: ['cold', 'tour', 'no_sale_tour', 'trial', 'no_sale_trial',
               'member', 'credit_member', 'classpass_payg', 'ex_member', 'lead'] },
+  // CHURN-PREP.2 — current Glofox membership plan. The plan list is
+  // operator-defined (not a fixed enum), so the value dropdown is
+  // loaded dynamically from /api/contacts/membership-plans at mount.
+  { value: 'glofox_membership_plan', label: 'Membership Plan',      type: 'plan-select' },
   { value: 'email_status',          label: 'Email Status',          type: 'select',
     options: ['active', 'bounced', 'complained', 'unsubscribed'] },
   { value: 'lead_source',           label: 'Lead Source',           type: 'select',
@@ -72,6 +76,14 @@ const OPS_BY_TYPE = {
   'tag-select': [
     { value: 'eq',  label: 'has tag' },
     { value: 'neq', label: 'does not have tag' },
+  ],
+  // plan-select — dynamic membership-plan dropdown. is_null / not_null
+  // need no value (the value selector hides via needsValue()).
+  'plan-select': [
+    { value: 'eq',       label: 'is' },
+    { value: 'neq',      label: 'is not' },
+    { value: 'not_null', label: 'has any plan' },
+    { value: 'is_null',  label: 'has no plan' },
   ],
   text:    [
     { value: 'eq',           label: 'equals' },
@@ -126,6 +138,21 @@ export default function AudienceBuilder({ filter, onChange, audienceCount }) {
     }).catch(() => { if (!cancelled) setTagOptions([]) })
     return () => { cancelled = true }
   }, [usesTagField, tagOptions])
+
+  // CHURN-PREP.2 — membership-plan options, loaded once the user
+  // adds a "Membership Plan" row. The plan list is operator-defined,
+  // so it's fetched live rather than hardcoded as an enum.
+  const [planOptions, setPlanOptions] = useState(null)
+  const usesPlanField = filters.some(f => f.field === 'glofox_membership_plan')
+  useEffect(() => {
+    if (!usesPlanField || planOptions !== null) return
+    let cancelled = false
+    fetch('/api/contacts/membership-plans').then(r => r.json()).then(j => {
+      if (!cancelled && j?.success) setPlanOptions(j.data || [])
+      else if (!cancelled) setPlanOptions([])
+    }).catch(() => { if (!cancelled) setPlanOptions([]) })
+    return () => { cancelled = true }
+  }, [usesPlanField, planOptions])
 
   function updateFilter(newFilters, newLogic) {
     onChange({ filters: newFilters, logic: newLogic || logic })
@@ -252,6 +279,19 @@ export default function AudienceBuilder({ filter, onChange, audienceCount }) {
                     <option key={opt.tag} value={opt.tag}>
                       {opt.tag} ({opt.count})
                     </option>
+                  ))}
+                </select>
+              ) : showValue && fieldConfig.type === 'plan-select' ? (
+                <select
+                  value={f.value || ''}
+                  onChange={e => updateRow(index, { value: e.target.value })}
+                  className="bg-un1t-black border border-un1t-gray rounded-md px-2.5 py-1.5 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid flex-1"
+                >
+                  <option value="">
+                    {planOptions === null ? 'Loading plans…' : '— pick a plan —'}
+                  </option>
+                  {(planOptions || []).map(plan => (
+                    <option key={plan} value={plan}>{plan}</option>
                   ))}
                 </select>
               ) : showValue && fieldConfig.type === 'number' ? (
