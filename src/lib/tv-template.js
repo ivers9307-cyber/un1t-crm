@@ -60,7 +60,107 @@ export function resolveZone(zone = {}, value) {
     y: pickNum(v.y, pickNum(zone.y, 0)),
     width: pickNum(v.width, pickNum(zone.width, 100)),
     height: pickNum(v.height, pickNum(zone.height, 100)),
+    // TV-TEMPLATE.5 — per-character colour overrides. Array of
+    // { start, end, color }; any text not covered uses `color`.
+    colorRuns: Array.isArray(v.colorRuns)
+      ? v.colorRuns
+      : (Array.isArray(zone.colorRuns) ? zone.colorRuns : []),
   }
+}
+
+// ── Colour runs (TV-TEMPLATE.5) ─────────────────────────────────
+//
+// A zone's text is one string with one base colour. To colour part
+// of it, the push screen records "colour runs" — half-open
+// character ranges { start, end, color } — kept sorted and
+// non-overlapping. The base colour fills any gap.
+
+// Sort runs, drop empties, and merge touching runs of equal colour.
+export function mergeRuns(runs) {
+  const sorted = (runs || [])
+    .filter(r => r && Number.isFinite(r.start) && Number.isFinite(r.end) && r.end > r.start)
+    .map(r => ({ start: Math.floor(r.start), end: Math.floor(r.end), color: r.color }))
+    .sort((a, b) => a.start - b.start)
+  const out = []
+  for (const r of sorted) {
+    const last = out[out.length - 1]
+    if (last && last.color === r.color && last.end >= r.start) {
+      last.end = Math.max(last.end, r.end)
+    } else {
+      out.push({ ...r })
+    }
+  }
+  return out
+}
+
+// Clip every existing run so nothing covers [start, end).
+function carve(runs, start, end) {
+  const out = []
+  for (const r of runs || []) {
+    if (r.end <= start || r.start >= end) { out.push(r); continue }
+    if (r.start < start) out.push({ ...r, end: start })
+    if (r.end > end) out.push({ ...r, start: end })
+  }
+  return out
+}
+
+// Paint [start, end) with `color` (replacing any run there).
+export function setRunColor(runs, start, end, color) {
+  if (!(end > start)) return mergeRuns(runs)
+  return mergeRuns([...carve(runs, start, end), { start, end, color }])
+}
+
+// Revert [start, end) to the base colour (remove runs there).
+export function clearRunColor(runs, start, end) {
+  if (!(end > start)) return mergeRuns(runs)
+  return mergeRuns(carve(runs, start, end))
+}
+
+// Remap run offsets after the text is edited, by diffing the old
+// and new strings (common prefix / suffix). Keeps colour roughly
+// attached to the same words through inserts + deletes.
+export function shiftRuns(runs, oldText, newText) {
+  const o = oldText || '', n = newText || ''
+  if (o === n) return mergeRuns(runs)
+  let p = 0
+  while (p < o.length && p < n.length && o[p] === n[p]) p++
+  let s = 0
+  while (s < o.length - p && s < n.length - p &&
+         o[o.length - 1 - s] === n[n.length - 1 - s]) s++
+  const oldMid = o.length - p - s
+  const delta = (n.length - p - s) - oldMid
+  const remap = (i) => {
+    if (i <= p) return i
+    if (i >= p + oldMid) return i + delta
+    return p   // inside the edited span — collapse to its start
+  }
+  return mergeRuns((runs || []).map(r => ({
+    start: remap(r.start), end: remap(r.end), color: r.color,
+  })))
+}
+
+// Split `text` into contiguous { text, color } segments for render.
+export function textSegments(text, runs, baseColor) {
+  const str = text == null ? '' : String(text)
+  const base = baseColor || '#FFFFFF'
+  const n = str.length
+  if (n === 0) return [{ text: '', color: base }]
+  const colors = new Array(n).fill(base)
+  for (const r of runs || []) {
+    if (!r || !Number.isFinite(r.start) || !Number.isFinite(r.end)) continue
+    const a = Math.max(0, Math.floor(r.start))
+    const b = Math.min(n, Math.floor(r.end))
+    for (let i = a; i < b; i++) colors[i] = r.color || base
+  }
+  const segs = []
+  let start = 0
+  for (let i = 1; i <= n; i++) {
+    if (i === n || colors[i] !== colors[start]) {
+      segs.push({ text: str.slice(start, i), color: colors[start] })
+      start = i
+    }
+  }
+  return segs
 }
 
 // flex mappings — shared so the cast page and the previews line up.

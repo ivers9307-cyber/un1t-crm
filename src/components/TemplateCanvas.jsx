@@ -20,7 +20,7 @@
 // new geometry is reported through `onZoneChange`.
 
 import { useEffect, useState, useRef } from 'react'
-import { resolveZone, FLEX_V, FLEX_H } from '@/lib/tv-template'
+import { resolveZone, textSegments, FLEX_V, FLEX_H } from '@/lib/tv-template'
 
 const clamp = (n, lo, hi) => Math.min(hi, Math.max(lo, n))
 
@@ -180,7 +180,12 @@ function Zone({ s, frame, editable, onChange }) {
           pointerEvents: 'none',
         }}
       >
-        {s.text}
+        {/* Per-selection colour (TV-TEMPLATE.5): the text is split
+            into runs; each renders in its own colour, the base
+            colour fills the gaps. */}
+        {textSegments(s.text, s.colorRuns, s.color).map((seg, i) => (
+          <span key={i} style={{ color: seg.color }}>{seg.text}</span>
+        ))}
       </div>
       {editable && (
         <div

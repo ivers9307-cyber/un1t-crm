@@ -20,6 +20,7 @@ import { createBrowserClient } from '@/lib/supabase'
 import { Tv, Plus, Copy, Check, Trash2, Upload, Link2, X, Image as ImageIcon, AlertCircle, RotateCcw, RotateCw, LayoutTemplate, Pencil, Type } from 'lucide-react'
 import TemplateEditor, { bucketPublicUrl } from './TemplateEditor'
 import TemplateCanvas from '@/components/TemplateCanvas'
+import { setRunColor, clearRunColor, shiftRuns } from '@/lib/tv-template'
 
 // TV-TEMPLATE.2 — weight options offered on the push screen.
 const PUSH_FONT_WEIGHTS = [
@@ -482,6 +483,8 @@ function PushModal({ onClose, onPush, locationId, templates }) {
         y: z.y ?? 0,
         width: z.width ?? 100,
         height: z.height ?? 100,
+        // Per-selection colour overrides start empty.
+        colorRuns: Array.isArray(z.colorRuns) ? z.colorRuns : [],
       }
     }
     setZoneText(seed)
@@ -701,30 +704,53 @@ function PushModal({ onClose, onPush, locationId, templates }) {
 
 // ── Per-zone push editor ────────────────────────────────────────
 //
-// TV-TEMPLATE.4 — on the push screen each zone gets its text, a
-// quick-insert emoji palette, and full styling controls. Size is
-// the *exact* rendered size (no auto-fit); the zone's position and
-// box size are set by dragging it on the preview. Every change is
-// snapshotted into tv_content.template_values.
+// TV-TEMPLATE.5 — on the push screen each zone gets its text, an
+// emoji palette, per-selection text colouring, and full styling
+// controls. Size is exact (no auto-fit); position + box size are
+// set by dragging on the preview. Everything is snapshotted into
+// tv_content.template_values.
 
 function ZonePushEditor({ zone, value, onChange }) {
   const v = value || {}
   const taRef = useRef(null)
+  const [sel, setSel] = useState({ start: 0, end: 0 })
+  const [selColor, setSelColor] = useState('#FFD400')
   const cls = 'w-full bg-un1t-black border border-un1t-gray rounded px-2 py-1 text-xs text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid'
+
+  const hasSelection = sel.end > sel.start
+
+  // Any text edit remaps the colour runs so each colour stays
+  // attached to the same words through inserts + deletes.
+  function changeText(next) {
+    onChange({ text: next, colorRuns: shiftRuns(v.colorRuns || [], v.text ?? '', next) })
+  }
 
   function insertEmoji(emoji) {
     const ta = taRef.current
     const text = v.text ?? ''
-    if (!ta) { onChange({ text: text + emoji }); return }
-    const start = ta.selectionStart ?? text.length
-    const end = ta.selectionEnd ?? text.length
-    onChange({ text: text.slice(0, start) + emoji + text.slice(end) })
-    // Put the caret back, just after the inserted emoji.
+    const start = ta?.selectionStart ?? text.length
+    const end = ta?.selectionEnd ?? text.length
+    changeText(text.slice(0, start) + emoji + text.slice(end))
     requestAnimationFrame(() => {
+      if (!ta) return
       ta.focus()
       const pos = start + emoji.length
       ta.setSelectionRange(pos, pos)
+      setSel({ start: pos, end: pos })
     })
+  }
+
+  function applySelColor() {
+    if (!hasSelection) return
+    onChange({ colorRuns: setRunColor(v.colorRuns || [], sel.start, sel.end, selColor) })
+    requestAnimationFrame(() => {
+      taRef.current?.focus()
+      taRef.current?.setSelectionRange(sel.start, sel.end)
+    })
+  }
+  function clearSelColor() {
+    if (!hasSelection) return
+    onChange({ colorRuns: clearRunColor(v.colorRuns || [], sel.start, sel.end) })
   }
 
   return (
@@ -733,7 +759,8 @@ function ZonePushEditor({ zone, value, onChange }) {
       <textarea
         ref={taRef}
         value={v.text ?? ''}
-        onChange={e => onChange({ text: e.target.value })}
+        onChange={e => changeText(e.target.value)}
+        onSelect={e => setSel({ start: e.target.selectionStart, end: e.target.selectionEnd })}
         rows={7}
         placeholder={zone.defaultText || 'Type the text for this zone…'}
         className={`${cls} resize-y mb-1.5`}
@@ -753,6 +780,34 @@ function ZonePushEditor({ zone, value, onChange }) {
           </button>
         ))}
       </div>
+
+      {/* Per-selection colour — recolour just the highlighted words. */}
+      <div className="flex items-center gap-1.5 mb-1 flex-wrap">
+        <span className="text-[10px] text-un1t-mid">Colour selected text:</span>
+        <input
+          type="color"
+          value={selColor}
+          onChange={e => setSelColor(e.target.value)}
+          className="w-7 h-7 bg-un1t-black border border-un1t-gray rounded cursor-pointer"
+        />
+        <button
+          type="button" onClick={applySelColor} disabled={!hasSelection}
+          className="text-[11px] px-2 py-1 rounded border border-un1t-gray text-un1t-light hover:text-un1t-white disabled:opacity-40"
+        >
+          Apply
+        </button>
+        <button
+          type="button" onClick={clearSelColor} disabled={!hasSelection}
+          className="text-[11px] px-2 py-1 rounded border border-un1t-gray text-un1t-light hover:text-un1t-white disabled:opacity-40"
+        >
+          Reset
+        </button>
+      </div>
+      <p className="text-[10px] text-un1t-mid mb-2">
+        {hasSelection
+          ? 'Pick a colour, then Apply — only the highlighted words change.'
+          : 'Highlight words in the box above to colour just them.'}
+      </p>
 
       <div className="grid grid-cols-2 gap-2">
         <label className="block">
@@ -802,7 +857,7 @@ function ZonePushEditor({ zone, value, onChange }) {
           </select>
         </label>
         <label className="block">
-          <span className="block text-[10px] text-un1t-mid mb-0.5">Colour</span>
+          <span className="block text-[10px] text-un1t-mid mb-0.5">Base colour</span>
           <input
             type="color"
             value={v.color ?? '#FFFFFF'}
