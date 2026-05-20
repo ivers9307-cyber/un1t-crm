@@ -119,6 +119,29 @@ const invoiceFields = z.object({
   // the operator fills it in (or leaves it for Xero's own OCR to
   // assign during the draft-bill flow).
   account_code: z.string().max(50).nullable().optional(),
+  // XERO-API.2 — Xero AccountID for the picked chart-of-accounts
+  // line (uuid-shaped string from /Accounts). Mirrored alongside
+  // account_code (the human-visible code, e.g. "400") so the
+  // existing audit / hint surfaces still read it.
+  xero_account_id: z.string().max(100).nullable().optional(),
+  // XERO-API.2 — structured ref for the picked supplier. Two shapes:
+  //   { kind: 'existing', xero_contact_id, name, email? }
+  //   { kind: 'new', name }
+  // PR 3's /Invoices push branches on .kind: existing → attach
+  // ContactID; new → upsertSupplierContact (creates inline) then
+  // attach the new ContactID.
+  xero_contact_ref: z.union([
+    z.object({
+      kind: z.literal('existing'),
+      xero_contact_id: z.string().min(1).max(100),
+      name: z.string().min(1).max(500),
+      email: z.string().email().max(320).nullable().optional(),
+    }),
+    z.object({
+      kind: z.literal('new'),
+      name: z.string().min(1).max(500),
+    }),
+  ]).nullable().optional(),
   line_items: z.array(lineItem).min(0).max(200),
 })
 

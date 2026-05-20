@@ -22,6 +22,8 @@
 import { useEffect, useMemo, useState, useCallback } from 'react'
 import Link from 'next/link'
 import { INVOICE_CATEGORIES } from '@/lib/invoice-extraction'
+import XeroAccountPicker from '@/components/invoices/XeroAccountPicker'
+import XeroContactPicker from '@/components/invoices/XeroContactPicker'
 
 // INVOICES.3 — friendly labels for the category dropdown. Keys
 // match the enum in INVOICE_CATEGORIES exactly; the underscore →
@@ -810,7 +812,7 @@ function StageTwoBlock({ row, busy, onSaveFields, onApprove, onReject }) {
       )}
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-        <FieldRow label="Supplier"     value={strField('supplier_name')}   onChange={(v) => setField('supplier_name', v)} />
+        <FieldRow label="Supplier (label)" value={strField('supplier_name')}   onChange={(v) => setField('supplier_name', v)} />
         <FieldRow label="Invoice #"    value={strField('invoice_number')}  onChange={(v) => setField('invoice_number', v)} />
         <FieldRow label="Invoice date" value={strField('invoice_date')}    onChange={(v) => setField('invoice_date', v)} placeholder="YYYY-MM-DD" />
         <FieldRow label="Due date"     value={strField('due_date')}        onChange={(v) => setField('due_date', v)} placeholder="YYYY-MM-DD" />
@@ -818,22 +820,39 @@ function StageTwoBlock({ row, busy, onSaveFields, onApprove, onReject }) {
         <FieldRow label="Subtotal"     value={numField('subtotal')}        onChange={(v) => setField('subtotal', v === '' ? null : Number(v))} type="number" />
         <FieldRow label="VAT / tax"    value={numField('tax_amount')}      onChange={(v) => setField('tax_amount', v === '' ? null : Number(v))} type="number" />
         <FieldRow label="Total"        value={numField('total')}           onChange={(v) => setField('total', v === '' ? null : Number(v))} type="number" />
-        {/* INVOICES.3 — Claude-suggested category + account code.
-            Category is a dropdown sourced from INVOICE_CATEGORIES;
-            account_code is free-text so it survives a non-standard
-            Xero chart of accounts. Both flow into the Xero email
-            forward body as hints to the bookkeeper. */}
+        {/* INVOICES.3 — Claude-suggested category. Stays as a
+            human-friendly hint that flows into the audit log.
+            (Xero categorisation now driven by the account picker
+            below — categories were a transitional INVOICES.3
+            pattern from when there was no account picker.) */}
         <SelectRow
           label="Category (suggested)"
           value={strField('category')}
           onChange={(v) => setField('category', v || null)}
           options={INVOICE_CATEGORIES.map((k) => ({ value: k, label: CATEGORY_LABEL[k] || k }))}
         />
-        <FieldRow
-          label="Xero account code"
-          value={strField('account_code')}
-          onChange={(v) => setField('account_code', v || null)}
-          placeholder="e.g. 400"
+        {/* XERO-API.2 — Xero account picker (replaces the old free-
+            text account_code field). Stores xero_account_id on
+            extracted_fields so PR 3's /Invoices API push can wire
+            up the LineItem to the right AccountCode. The legacy
+            account_code field is also kept in sync from the
+            picker's code so existing audit views still render. */}
+        <XeroAccountPicker
+          locationId={row.location_id}
+          value={strField('xero_account_id') || null}
+          onChange={(xid, full) => {
+            setField('xero_account_id', xid || null)
+            setField('account_code', full?.code || null)
+          }}
+        />
+        {/* XERO-API.2 — Xero supplier picker. Stores a structured
+            xero_contact_ref so the send step knows whether to
+            attach an existing ContactID or create one inline. */}
+        <XeroContactPicker
+          locationId={row.location_id}
+          initialName={strField('supplier_name')}
+          value={fields.xero_contact_ref || null}
+          onChange={(ref) => setField('xero_contact_ref', ref)}
         />
       </div>
 
@@ -846,15 +865,33 @@ function StageTwoBlock({ row, busy, onSaveFields, onApprove, onReject }) {
         >
           {busy === 'fields' ? 'Saving…' : 'Save edits'}
         </button>
-        <button
-          type="button"
-          disabled={dirty || !!busy}
-          onClick={onApprove}
-          className="px-4 py-2 rounded-md bg-un1t-white text-un1t-black font-medium disabled:opacity-50"
-          title={dirty ? 'Save edits before approving' : ''}
-        >
-          {busy === 'data-approve' ? (isApproved ? 'Retrying send…' : 'Approving + sending…') : (isApproved ? 'Retry send to Xero' : 'Approve + send to Xero')}
-        </button>
+        {/* XERO-API.2 — both Xero refs must be picked before we
+            can send. Surface why the button is disabled in the
+            title so the bookkeeper isn't left guessing. */}
+        {(() => {
+          const hasAccount = !!fields.xero_account_id
+          const hasContact = !!fields.xero_contact_ref
+          const missing = []
+          if (!hasAccount) missing.push('Xero account')
+          if (!hasContact) missing.push('Xero supplier')
+          const gate = missing.length > 0
+          const title = dirty
+            ? 'Save edits before approving'
+            : gate
+              ? `Pick a ${missing.join(' + ')} before sending`
+              : ''
+          return (
+            <button
+              type="button"
+              disabled={dirty || !!busy || gate}
+              onClick={onApprove}
+              className="px-4 py-2 rounded-md bg-un1t-white text-un1t-black font-medium disabled:opacity-50"
+              title={title}
+            >
+              {busy === 'data-approve' ? (isApproved ? 'Retrying send…' : 'Approving + sending…') : (isApproved ? 'Retry send to Xero' : 'Approve + send to Xero')}
+            </button>
+          )
+        })()}
         <button
           type="button"
           disabled={!!busy}
