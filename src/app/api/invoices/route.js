@@ -203,17 +203,23 @@ export async function GET(request) {
 
   if (statusFilter) query = query.eq('status', statusFilter)
 
-  // Scope.
-  if (user.role === 'master') {
-    // No additional filter.
-  } else if (isOwnerOrMaster(user)) {
-    // Owner — limit to locations they own.
+  // Scope — ORG-ISOLATION: each location is its own business.
+  //   • master / owner → active location only. Switch active to see
+  //     another studio. (Master can still override via ?location_id
+  //     query param below.)
+  //   • everyone else → only their own invoices.
+  if (isOwnerOrMaster(user)) {
+    const isMaster = user.role === 'master'
     const ownerLocations = Object.entries(user.rolesByLocation || {})
       .filter(([, r]) => r === 'owner').map(([loc]) => loc)
-    if (ownerLocations.length === 0) {
-      return NextResponse.json({ success: true, data: [] })
+    const explicit = new URL(request.url).searchParams.get('location_id')
+    const activeId = user.activeLocation?.id || null
+    const target = explicit || activeId
+    if (!target) return NextResponse.json({ success: true, data: [] })
+    if (!isMaster && !ownerLocations.includes(target)) {
+      return NextResponse.json({ success: false, error: 'Forbidden — not your location' }, { status: 403 })
     }
-    query = query.in('location_id', ownerLocations)
+    query = query.eq('location_id', target)
   } else {
     // Everyone else — only their own.
     query = query.eq('contractor_id', user.id)
