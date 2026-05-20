@@ -46,15 +46,25 @@ export async function GET() {
     return NextResponse.json({ success: true, data: { count: 0 } })
   }
 
+  // ORG-ISOLATION — the badge reflects the user's active studio
+  // only, regardless of role. master switches active to see
+  // another studio's badge. No active location set → 0 (badge has
+  // no actionable target anyway). Non-owner viewing a non-owned
+  // active location → 0 (e.g. a manager visiting another studio).
+  const activeId = user.activeLocation?.id || null
+  if (!activeId) {
+    return NextResponse.json({ success: true, data: { count: 0 } })
+  }
+  if (!isMaster && !ownerLocations.includes(activeId)) {
+    return NextResponse.json({ success: true, data: { count: 0 } })
+  }
+
   const db = createServerClient()
-  let query = db
+  const query = db
     .from('invoices_queue')
     .select('*', { count: 'exact', head: true })
     .in('status', PENDING_STATUSES)
-
-  if (!isMaster) {
-    query = query.in('location_id', ownerLocations)
-  }
+    .eq('location_id', activeId)
 
   const { count, error } = await query
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
