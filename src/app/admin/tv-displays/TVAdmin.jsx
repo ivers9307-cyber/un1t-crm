@@ -15,7 +15,7 @@
 // service-role through /api/tv/[token]/content; this page never
 // needs to touch that public path.
 
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useRef } from 'react'
 import { createBrowserClient } from '@/lib/supabase'
 import { Tv, Plus, Copy, Check, Trash2, Upload, Link2, X, Image as ImageIcon, AlertCircle, RotateCcw, RotateCw, LayoutTemplate, Pencil, Type } from 'lucide-react'
 import TemplateEditor, { bucketPublicUrl } from './TemplateEditor'
@@ -28,6 +28,13 @@ const PUSH_FONT_WEIGHTS = [
   { value: 700, label: 'Bold' },
   { value: 800, label: 'Extrabold' },
   { value: 900, label: 'Black' },
+]
+
+// TV-TEMPLATE.4 — quick-insert emoji palette for the zone editor.
+const PUSH_EMOJIS = [
+  '🔥', '💪', '🏆', '⚡', '✅', '❌', '⭐', '🎯',
+  '⏰', '📅', '📍', '💯', '👏', '🙌', '🤝', '🚀',
+  '❤️', '🏃', '🏋️', '🤸', '🥇', '➕', '‼️', '👉',
 ]
 
 // TV-ROTATION.1 — screen-rotation options offered per display.
@@ -468,6 +475,13 @@ function PushModal({ onClose, onPush, locationId, templates }) {
         align: z.align || 'center',
         vAlign: z.vAlign || 'middle',
         uppercase: !!z.uppercase,
+        lineHeight: z.lineHeight ?? 1.15,
+        // Geometry — seeded from the template; the operator can
+        // drag/resize the zone on the preview to override it.
+        x: z.x ?? 0,
+        y: z.y ?? 0,
+        width: z.width ?? 100,
+        height: z.height ?? 100,
       }
     }
     setZoneText(seed)
@@ -583,9 +597,17 @@ function PushModal({ onClose, onPush, locationId, templates }) {
                   <div className="p-4 text-xs text-un1t-mid">Choose a template to preview and edit it.</div>
                 ) : (
                   <div className="flex gap-4 flex-1 min-h-0 p-4">
-                    {/* Live preview — identical render to the TV */}
+                    {/* Live preview — identical render to the TV.
+                        Editable: zones can be dragged + corner-resized. */}
                     <div className="flex-1 min-w-0 relative rounded-md border border-un1t-gray bg-black overflow-hidden">
-                      <TemplateCanvas content={previewContent} />
+                      <TemplateCanvas
+                        content={previewContent}
+                        editable
+                        onZoneChange={(zoneId, patch) => setZoneText(v => ({
+                          ...v,
+                          [zoneId]: { ...v[zoneId], ...patch },
+                        }))}
+                      />
                     </div>
                     {/* Per-zone text editing */}
                     <div className="w-80 shrink-0 overflow-y-auto pr-0.5">
@@ -679,34 +701,80 @@ function PushModal({ onClose, onPush, locationId, templates }) {
 
 // ── Per-zone push editor ────────────────────────────────────────
 //
-// TV-TEMPLATE.2 — on the push screen each zone gets its text plus
-// full styling controls. Defaults are seeded from the template;
-// changes are snapshotted into tv_content.template_values. Size is
-// a *max* — FittedText shrinks below it so text never overflows.
+// TV-TEMPLATE.4 — on the push screen each zone gets its text, a
+// quick-insert emoji palette, and full styling controls. Size is
+// the *exact* rendered size (no auto-fit); the zone's position and
+// box size are set by dragging it on the preview. Every change is
+// snapshotted into tv_content.template_values.
 
 function ZonePushEditor({ zone, value, onChange }) {
   const v = value || {}
+  const taRef = useRef(null)
   const cls = 'w-full bg-un1t-black border border-un1t-gray rounded px-2 py-1 text-xs text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid'
+
+  function insertEmoji(emoji) {
+    const ta = taRef.current
+    const text = v.text ?? ''
+    if (!ta) { onChange({ text: text + emoji }); return }
+    const start = ta.selectionStart ?? text.length
+    const end = ta.selectionEnd ?? text.length
+    onChange({ text: text.slice(0, start) + emoji + text.slice(end) })
+    // Put the caret back, just after the inserted emoji.
+    requestAnimationFrame(() => {
+      ta.focus()
+      const pos = start + emoji.length
+      ta.setSelectionRange(pos, pos)
+    })
+  }
 
   return (
     <div className="bg-un1t-black/50 border border-un1t-gray rounded-md p-2.5">
       <div className="text-[11px] text-un1t-light uppercase tracking-wide mb-1.5">{zone.label}</div>
       <textarea
+        ref={taRef}
         value={v.text ?? ''}
         onChange={e => onChange({ text: e.target.value })}
         rows={7}
         placeholder={zone.defaultText || 'Type the text for this zone…'}
-        className={`${cls} resize-y mb-2`}
+        className={`${cls} resize-y mb-1.5`}
       />
+
+      {/* Emoji palette — inserts at the caret. */}
+      <div className="flex flex-wrap gap-0.5 mb-2">
+        {PUSH_EMOJIS.map(em => (
+          <button
+            key={em}
+            type="button"
+            onClick={() => insertEmoji(em)}
+            title={`Insert ${em}`}
+            className="w-7 h-7 text-base leading-none rounded hover:bg-un1t-gray/60"
+          >
+            {em}
+          </button>
+        ))}
+      </div>
+
       <div className="grid grid-cols-2 gap-2">
         <label className="block">
-          <span className="block text-[10px] text-un1t-mid mb-0.5">Max size</span>
+          <span className="block text-[10px] text-un1t-mid mb-0.5">Size</span>
           <input
             type="number" min={2} max={40} step={0.5}
             value={v.fontSize ?? 6}
             onChange={e => {
               const n = Number(e.target.value)
               onChange({ fontSize: Number.isFinite(n) ? Math.min(40, Math.max(2, n)) : 6 })
+            }}
+            className={cls}
+          />
+        </label>
+        <label className="block">
+          <span className="block text-[10px] text-un1t-mid mb-0.5">Line spacing</span>
+          <input
+            type="number" min={0.8} max={3} step={0.05}
+            value={v.lineHeight ?? 1.15}
+            onChange={e => {
+              const n = Number(e.target.value)
+              onChange({ lineHeight: Number.isFinite(n) ? Math.min(3, Math.max(0.8, n)) : 1.15 })
             }}
             className={cls}
           />
@@ -747,6 +815,10 @@ function ZonePushEditor({ zone, value, onChange }) {
           UPPERCASE
         </label>
       </div>
+
+      <p className="text-[10px] text-un1t-mid mt-2">
+        Drag the zone on the preview to move it; drag the green corner to resize.
+      </p>
     </div>
   )
 }
