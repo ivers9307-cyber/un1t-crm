@@ -7,20 +7,23 @@
 // done. The bookkeeper then runs Analyse + Send-to-Xero from
 // inside /invoices.
 //
-// What counts as "awaiting bookkeeper" for this tab:
-//   - status='extracted'     — Claude Vision has parsed the
-//                              fields; the bookkeeper just needs
-//                              to data-approve + send.
-//   - status='data_approved' — flipped to data_approved but the
-//                              Xero push failed; bookkeeper has
-//                              to retry from the inbox.
+// What counts as "awaiting bookkeeper" for this tab — every
+// pre-terminal status. Each one represents a stop where the
+// bookkeeper still has to do something:
+//   - 'received'         — supplier email just landed via Postmark;
+//                          bookkeeper opens it + clicks Analyse to
+//                          run Claude Vision.
+//   - 'quality_approved' — pre-set when an upstream approval
+//                          enqueued it (FTE expense, contractor
+//                          invoice, car doc). Bookkeeper clicks
+//                          Analyse to run Claude Vision.
+//   - 'extracted'        — Vision parsed the fields; bookkeeper
+//                          picks Xero account + supplier and clicks
+//                          Send.
+//   - 'data_approved'    — flip-to-Xero failed; bookkeeper retries.
 //
-// We deliberately EXCLUDE 'received' and 'quality_approved' —
-// those need a human to look at the raw attachment first
-// (quality review), which is bookkeeper work but a different
-// stage than the structured "awaiting send" rows this tab
-// surfaces. If we ever want a separate "Quality review" tab we
-// can add another provider.
+// Terminal states ('forwarded', 'rejected') are excluded — the
+// bookkeeper is done with them.
 //
 // Scope:
 //   - bookkeeper permission required (per-user grantable). The
@@ -37,8 +40,9 @@
 
 import { userIsMaster, viewerActiveLocationId } from '../registry'
 
-// Statuses the bookkeeper needs to action from /invoices.
-const PENDING_STATUSES = ['extracted', 'data_approved']
+// Statuses the bookkeeper needs to action from /invoices. See
+// the status-stop notes in the header above.
+const PENDING_STATUSES = ['received', 'quality_approved', 'extracted', 'data_approved']
 
 // Heuristic — does the user have a path to act on these rows? We
 // can't import shared/permissions.js without circular trouble
@@ -105,11 +109,22 @@ export const invoicesQueueProvider = {
       const sourceLabel = SOURCE_LABEL[r.source_type] || 'Invoice'
       const supplier = f.supplier_name || r.sender_email || '(no supplier)'
       const invoiceNumber = f.invoice_number
+      // BOOKKEEPER-QUEUE-STATUS — surface the action the bookkeeper
+      // needs to take per status, so the queue is self-documenting
+      // without opening each row.
+      const actionHint = (() => {
+        if (r.status === 'received' || r.status === 'quality_approved') {
+          return 'Needs analyse'
+        }
+        if (r.status === 'extracted') return 'Awaiting review + send'
+        if (r.status === 'data_approved' && r.xero_error) return 'Retry — Xero push failed'
+        if (r.status === 'data_approved') return 'Sending to Xero…'
+        return null
+      })()
       const subtitleBits = [
         `${sourceLabel}: ${supplier}`,
         invoiceNumber ? `#${invoiceNumber}` : null,
-        r.status === 'data_approved' && r.xero_error ? 'Retry — Xero push failed' : null,
-        r.status === 'data_approved' && !r.xero_error ? 'Approved, sending…' : null,
+        actionHint,
       ].filter(Boolean)
 
       return {
