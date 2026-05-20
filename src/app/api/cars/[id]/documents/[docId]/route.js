@@ -58,9 +58,34 @@ export async function DELETE(_request, props) {
   const { doc, error } = await loadDocAndCheckAccess(db, user, params.id, params.docId)
   if (error) return error
 
+  // CAR-DOC-DELETE-GUARD — refuse delete if the linked invoices_queue
+  // row is already in Xero. Cascade-deleting at that point would
+  // orphan the draft bill in Xero (cleanup-impossible from here) and
+  // silently drop the local link to it. Other queue states (received
+  // / quality_approved / extracted / data_approved / rejected) are
+  // safe to cascade because nothing has been pushed to Xero yet.
+  const { data: queueRow } = await db
+    .from('invoices_queue')
+    .select('id, status, xero_bill_id, xero_bill_number, xero_deep_link_url')
+    .eq('source_car_document_id', doc.id)
+    .maybeSingle()
+  if (queueRow?.status === 'forwarded') {
+    return NextResponse.json({
+      success: false,
+      error: `Can't remove — this document is already in Xero as draft bill ${queueRow.xero_bill_number || queueRow.xero_bill_id || ''}. Void the bill in Xero first, then remove here.`,
+      data: {
+        xero_bill_id: queueRow.xero_bill_id,
+        xero_bill_number: queueRow.xero_bill_number,
+        xero_deep_link_url: queueRow.xero_deep_link_url,
+      },
+    }, { status: 409 })
+  }
+
   // Best-effort: remove the storage object first, then the row. If
   // storage fails we still drop the row — better to have an orphaned
-  // file than a broken database reference.
+  // file than a broken database reference. The FK ON DELETE CASCADE
+  // on invoices_queue.source_car_document_id (mig 185) takes the
+  // linked queue row with it.
   await db.storage.from('car-documents').remove([doc.storage_path]).catch(() => {})
   const { error: delErr } = await db.from('car_documents').delete().eq('id', doc.id)
   if (delErr) return NextResponse.json({ success: false, error: delErr.message }, { status: 500 })
