@@ -31,10 +31,15 @@ function pickEnum(value, allowed, fallback) {
 /**
  * Merge a zone's template default with the pusher's per-zone value.
  *
+ * Covers text, styling AND geometry: the push screen (TV-TEMPLATE.4)
+ * lets the operator drag/resize a zone, so x/y/width/height can be
+ * overridden per push just like the text and colours.
+ *
  * @param {object} zone  one entry of tv_templates.zones
  * @param {object|string|null|undefined} value  template_values[zone.id]
  * @returns {{text:string,fontSize:number,fontWeight:number,color:string,
- *            align:string,vAlign:string,uppercase:boolean}}
+ *            align:string,vAlign:string,uppercase:boolean,lineHeight:number,
+ *            x:number,y:number,width:number,height:number}}
  */
 export function resolveZone(zone = {}, value) {
   // Legacy plain-string value → treat as a text-only override.
@@ -49,6 +54,12 @@ export function resolveZone(zone = {}, value) {
     align: pickEnum(v.align, ALIGN, pickEnum(zone.align, ALIGN, 'center')),
     vAlign: pickEnum(v.vAlign, VALIGN, pickEnum(zone.vAlign, VALIGN, 'middle')),
     uppercase: typeof v.uppercase === 'boolean' ? v.uppercase : !!zone.uppercase,
+    lineHeight: pickNum(v.lineHeight, pickNum(zone.lineHeight, 1.15)),
+    // Geometry — all % of the base image.
+    x: pickNum(v.x, pickNum(zone.x, 0)),
+    y: pickNum(v.y, pickNum(zone.y, 0)),
+    width: pickNum(v.width, pickNum(zone.width, 100)),
+    height: pickNum(v.height, pickNum(zone.height, 100)),
   }
 }
 

@@ -12,13 +12,19 @@
 //
 // Used both by the live cast page (TVDisplay) and by the push
 // modal's preview, so what an operator previews is pixel-identical
-// to what the TV shows. Fills its nearest positioned ancestor.
+// to what the TV shows.
+//
+// TV-TEMPLATE.4 — text renders at the operator's exact size (no
+// auto-fit); it's clipped if it overflows. With `editable`, zones
+// can be dragged + corner-resized straight on the preview and the
+// new geometry is reported through `onZoneChange`.
 
 import { useEffect, useState, useRef } from 'react'
 import { resolveZone, FLEX_V, FLEX_H } from '@/lib/tv-template'
-import FittedText from './FittedText'
 
-export default function TemplateCanvas({ content }) {
+const clamp = (n, lo, hi) => Math.min(hi, Math.max(lo, n))
+
+export default function TemplateCanvas({ content, editable = false, onZoneChange }) {
   const boxRef = useRef(null)
   const imgRef = useRef(null)
   const [box, setBox] = useState({ w: 0, h: 0 })
@@ -74,38 +80,124 @@ export default function TemplateCanvas({ content }) {
           objectFit: 'contain',
         }}
       />
-      {frame && zones.map(z => {
-        // resolveZone merges the zone's template default with the
-        // operator's per-zone push override (TV-TEMPLATE.2).
-        const s = resolveZone(z, values[z.id])
-        return (
-          <div
-            key={z.id}
-            style={{
-              position: 'absolute',
-              left: frame.left + (z.x / 100) * frame.w,
-              top: frame.top + (z.y / 100) * frame.h,
-              width: (z.width / 100) * frame.w,
-              height: (z.height / 100) * frame.h,
-              display: 'flex',
-              alignItems: FLEX_V[s.vAlign],
-              justifyContent: FLEX_H[s.align],
-              overflow: 'hidden',
-            }}
-          >
-            {/* fontSize is a % of the base-image height; FittedText
-                treats it as the cap and shrinks to fit if needed. */}
-            <FittedText
-              text={s.text}
-              maxFontSize={(s.fontSize / 100) * frame.h}
-              color={s.color}
-              fontWeight={s.fontWeight}
-              align={s.align}
-              uppercase={s.uppercase}
-            />
-          </div>
-        )
-      })}
+      {frame && zones.map(z => (
+        <Zone
+          key={z.id}
+          // resolveZone merges the zone's template default with the
+          // operator's per-zone push override (text, style, geometry).
+          s={resolveZone(z, values[z.id])}
+          frame={frame}
+          editable={editable}
+          onChange={editable && onZoneChange ? patch => onZoneChange(z.id, patch) : undefined}
+        />
+      ))}
+    </div>
+  )
+}
+
+// ── One text zone ───────────────────────────────────────────────
+
+function Zone({ s, frame, editable, onChange }) {
+  const boxRef = useRef(null)
+  const dragRef = useRef(null)
+
+  // Geometry + font size resolved against the contained-image rect.
+  const left = frame.left + (s.x / 100) * frame.w
+  const top = frame.top + (s.y / 100) * frame.h
+  const w = (s.width / 100) * frame.w
+  const h = (s.height / 100) * frame.h
+  const fontPx = (s.fontSize / 100) * frame.h
+
+  function begin(e, mode) {
+    if (!onChange) return
+    e.stopPropagation()
+    dragRef.current = {
+      mode,
+      sx: e.clientX,
+      sy: e.clientY,
+      fw: frame.w || 1,
+      fh: frame.h || 1,
+      orig: { x: s.x, y: s.y, width: s.width, height: s.height },
+    }
+    boxRef.current?.setPointerCapture(e.pointerId)
+  }
+  function move(e) {
+    const d = dragRef.current
+    if (!d) return
+    const dx = ((e.clientX - d.sx) / d.fw) * 100
+    const dy = ((e.clientY - d.sy) / d.fh) * 100
+    if (d.mode === 'move') {
+      onChange({
+        x: clamp(d.orig.x + dx, 0, 100 - d.orig.width),
+        y: clamp(d.orig.y + dy, 0, 100 - d.orig.height),
+      })
+    } else {
+      onChange({
+        width: clamp(d.orig.width + dx, 5, 100 - d.orig.x),
+        height: clamp(d.orig.height + dy, 4, 100 - d.orig.y),
+      })
+    }
+  }
+  function end(e) {
+    dragRef.current = null
+    boxRef.current?.releasePointerCapture?.(e.pointerId)
+  }
+
+  return (
+    <div
+      ref={boxRef}
+      onPointerDown={editable ? e => begin(e, 'move') : undefined}
+      onPointerMove={editable ? move : undefined}
+      onPointerUp={editable ? end : undefined}
+      style={{
+        position: 'absolute',
+        left, top, width: w, height: h,
+        display: 'flex',
+        alignItems: FLEX_V[s.vAlign],
+        justifyContent: FLEX_H[s.align],
+        overflow: 'hidden',
+        ...(editable
+          ? {
+              border: '1px dashed rgba(255,255,255,0.65)',
+              boxSizing: 'border-box',
+              cursor: 'move',
+              touchAction: 'none',
+            }
+          : {}),
+      }}
+    >
+      <div
+        style={{
+          width: '100%',
+          fontSize: `${fontPx}px`,
+          color: s.color,
+          fontWeight: s.fontWeight,
+          textAlign: s.align,
+          textTransform: s.uppercase ? 'uppercase' : 'none',
+          lineHeight: s.lineHeight,
+          whiteSpace: 'pre-wrap',
+          wordBreak: 'break-word',
+          pointerEvents: 'none',
+        }}
+      >
+        {s.text}
+      </div>
+      {editable && (
+        <div
+          onPointerDown={e => begin(e, 'resize')}
+          title="Drag to resize"
+          style={{
+            position: 'absolute',
+            right: -1,
+            bottom: -1,
+            width: 16,
+            height: 16,
+            background: '#4ade80',
+            cursor: 'nwse-resize',
+            touchAction: 'none',
+          }}
+        />
+      )}
     </div>
   )
 }

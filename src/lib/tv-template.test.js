@@ -1,8 +1,9 @@
-// TV-TEMPLATE.2 — resolveZone coverage.
+// TV-TEMPLATE — resolveZone coverage.
 //
 // Locks the merge contract: a push-time value overrides the zone
-// default field-by-field; anything missing or malformed falls back
-// to the zone default; a legacy plain-string value is text-only.
+// default field-by-field (text, styling AND geometry); anything
+// missing or malformed falls back to the zone default; a legacy
+// plain-string value is text-only.
 
 import { describe, it, expect } from 'vitest'
 import { resolveZone } from './tv-template'
@@ -17,28 +18,34 @@ const ZONE = {
   align: 'center',
   vAlign: 'middle',
   uppercase: true,
+  lineHeight: 1.2,
+  x: 10, y: 20, width: 80, height: 30,
+}
+
+const FULL = {
+  text: 'Welcome',
+  fontSize: 9,
+  fontWeight: 800,
+  color: '#FFFFFF',
+  align: 'center',
+  vAlign: 'middle',
+  uppercase: true,
+  lineHeight: 1.2,
+  x: 10, y: 20, width: 80, height: 30,
 }
 
 describe('resolveZone', () => {
   it('returns the zone defaults when there is no push value', () => {
-    expect(resolveZone(ZONE, undefined)).toEqual({
-      text: 'Welcome',
-      fontSize: 9,
-      fontWeight: 800,
-      color: '#FFFFFF',
-      align: 'center',
-      vAlign: 'middle',
-      uppercase: true,
-    })
+    expect(resolveZone(ZONE, undefined)).toEqual(FULL)
   })
 
   it('treats a legacy plain-string value as a text-only override', () => {
     const r = resolveZone(ZONE, 'Class at 6pm')
     expect(r.text).toBe('Class at 6pm')
-    // styling still comes from the zone default
+    // styling + geometry still come from the zone default
     expect(r.fontSize).toBe(9)
-    expect(r.fontWeight).toBe(800)
     expect(r.uppercase).toBe(true)
+    expect(r.width).toBe(80)
   })
 
   it('applies per-field push overrides', () => {
@@ -50,6 +57,8 @@ describe('resolveZone', () => {
       align: 'left',
       vAlign: 'top',
       uppercase: false,
+      lineHeight: 1.6,
+      x: 5, y: 5, width: 50, height: 40,
     })
     expect(r).toEqual({
       text: 'BIG NEWS',
@@ -59,7 +68,17 @@ describe('resolveZone', () => {
       align: 'left',
       vAlign: 'top',
       uppercase: false,
+      lineHeight: 1.6,
+      x: 5, y: 5, width: 50, height: 40,
     })
+  })
+
+  it('overrides geometry (drag/resize on the push screen) field-by-field', () => {
+    const r = resolveZone(ZONE, { x: 42, width: 33 })
+    expect(r.x).toBe(42)        // dragged
+    expect(r.width).toBe(33)    // resized
+    expect(r.y).toBe(20)        // untouched → zone default
+    expect(r.height).toBe(30)   // untouched → zone default
   })
 
   it('falls back per-field when the override omits some keys', () => {
@@ -68,7 +87,7 @@ describe('resolveZone', () => {
     expect(r.fontSize).toBe(5)        // overridden
     expect(r.fontWeight).toBe(800)    // default
     expect(r.color).toBe('#FFFFFF')   // default
-    expect(r.align).toBe('center')    // default
+    expect(r.lineHeight).toBe(1.2)    // default
   })
 
   it('respects uppercase:false as an explicit override (not a fallback)', () => {
@@ -78,11 +97,14 @@ describe('resolveZone', () => {
   it('ignores malformed override values and falls back', () => {
     const r = resolveZone(ZONE, {
       fontSize: 'huge', fontWeight: null, color: 42, align: 'sideways',
+      x: 'left', width: NaN,
     })
     expect(r.fontSize).toBe(9)
     expect(r.fontWeight).toBe(800)
     expect(r.color).toBe('#FFFFFF')
     expect(r.align).toBe('center')
+    expect(r.x).toBe(10)
+    expect(r.width).toBe(80)
   })
 
   it('empty text override resolves to an empty string, not the default', () => {
@@ -90,8 +112,7 @@ describe('resolveZone', () => {
   })
 
   it('defends against a bare/empty zone', () => {
-    const r = resolveZone({}, undefined)
-    expect(r).toEqual({
+    expect(resolveZone({}, undefined)).toEqual({
       text: '',
       fontSize: 6,
       fontWeight: 700,
@@ -99,6 +120,8 @@ describe('resolveZone', () => {
       align: 'center',
       vAlign: 'middle',
       uppercase: false,
+      lineHeight: 1.15,
+      x: 0, y: 0, width: 100, height: 100,
     })
   })
 })
