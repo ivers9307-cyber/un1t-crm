@@ -19,6 +19,17 @@ import { useState, useCallback, useRef, useEffect } from 'react'
 import { createBrowserClient } from '@/lib/supabase'
 import { Tv, Plus, Copy, Check, Trash2, Upload, Link2, X, Image as ImageIcon, AlertCircle, RotateCcw, RotateCw, LayoutTemplate, Pencil, Type } from 'lucide-react'
 import TemplateEditor, { bucketPublicUrl } from './TemplateEditor'
+import { resolveZone, FLEX_V, FLEX_H } from '@/lib/tv-template'
+import FittedText from '@/components/FittedText'
+
+// TV-TEMPLATE.2 — weight options offered on the push screen.
+const PUSH_FONT_WEIGHTS = [
+  { value: 400, label: 'Regular' },
+  { value: 600, label: 'Semibold' },
+  { value: 700, label: 'Bold' },
+  { value: 800, label: 'Extrabold' },
+  { value: 900, label: 'Black' },
+]
 
 // TV-ROTATION.1 — screen-rotation options offered per display.
 // Value is clockwise degrees, matched 1:1 by the CSS rotate() the
@@ -436,7 +447,8 @@ function PushModal({ onClose, onPush, locationId, templates }) {
   const [externalUrl, setExternalUrl] = useState('')
   const [label, setLabel] = useState('')
   const [templateId, setTemplateId] = useState('')
-  const [zoneText, setZoneText] = useState({})   // { zoneId: text }
+  // { zoneId: { text, fontSize, fontWeight, color, align, vAlign, uppercase } }
+  const [zoneText, setZoneText] = useState({})
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
 
@@ -445,9 +457,20 @@ function PushModal({ onClose, onPush, locationId, templates }) {
   function pickTemplate(id) {
     setTemplateId(id)
     const tpl = templates?.find(t => t.id === id)
-    // Seed each zone's input with its default text.
+    // Seed each zone with its template defaults — the operator then
+    // tweaks the text + styling per zone before pushing (TV-TEMPLATE.2).
     const seed = {}
-    for (const z of tpl?.zones || []) seed[z.id] = z.defaultText || ''
+    for (const z of tpl?.zones || []) {
+      seed[z.id] = {
+        text: z.defaultText || '',
+        fontSize: z.fontSize ?? 6,
+        fontWeight: z.fontWeight ?? 700,
+        color: z.color || '#FFFFFF',
+        align: z.align || 'center',
+        vAlign: z.vAlign || 'middle',
+        uppercase: !!z.uppercase,
+      }
+    }
     setZoneText(seed)
   }
 
@@ -496,7 +519,7 @@ function PushModal({ onClose, onPush, locationId, templates }) {
 
   return (
     <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-un1t-dark border border-un1t-gray rounded-lg w-full max-w-md max-h-[92vh] overflow-auto p-5" onClick={e => e.stopPropagation()}>
+      <div className="bg-un1t-dark border border-un1t-gray rounded-lg w-full max-w-lg max-h-[92vh] overflow-auto p-5" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-lg font-semibold">Push to TV</h3>
           <button onClick={onClose} className="text-un1t-light hover:text-un1t-white"><X size={16} /></button>
@@ -544,15 +567,15 @@ function PushModal({ onClose, onPush, locationId, templates }) {
                     ) : (
                       <div className="mt-3 space-y-2">
                         {(selectedTemplate.zones || []).map(z => (
-                          <div key={z.id}>
-                            <label className="block text-[11px] text-un1t-mid mb-1">{z.label}</label>
-                            <input
-                              value={zoneText[z.id] ?? ''}
-                              onChange={e => setZoneText(v => ({ ...v, [z.id]: e.target.value }))}
-                              placeholder={z.defaultText || ''}
-                              className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-1.5 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid"
-                            />
-                          </div>
+                          <ZonePushEditor
+                            key={z.id}
+                            zone={z}
+                            value={zoneText[z.id]}
+                            onChange={patch => setZoneText(v => ({
+                              ...v,
+                              [z.id]: { ...v[z.id], ...patch },
+                            }))}
+                          />
                         ))}
                       </div>
                     )}
@@ -653,30 +676,106 @@ function TemplatePreview({ template, values }) {
         alt=""
         style={{ display: 'block', width: '100%', height: 'auto' }}
       />
-      {(template.zones || []).map(z => (
-        <div
-          key={z.id}
-          style={{
-            position: 'absolute',
-            left: `${z.x}%`, top: `${z.y}%`,
-            width: `${z.width}%`, height: `${z.height}%`,
-            display: 'flex',
-            alignItems: { top: 'flex-start', middle: 'center', bottom: 'flex-end' }[z.vAlign] || 'center',
-            justifyContent: { left: 'flex-start', center: 'center', right: 'flex-end' }[z.align] || 'center',
-            textAlign: z.align || 'center',
-            color: z.color || '#fff',
-            fontWeight: z.fontWeight || 700,
-            fontSize: `${((z.fontSize || 6) / 100) * h}px`,
-            lineHeight: 1.12,
-            textTransform: z.uppercase ? 'uppercase' : 'none',
-            overflow: 'hidden',
-          }}
-        >
-          <span style={{ width: '100%', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-            {values[z.id] ?? z.defaultText ?? ''}
-          </span>
-        </div>
-      ))}
+      {(template.zones || []).map(z => {
+        const s = resolveZone(z, values[z.id])
+        return (
+          <div
+            key={z.id}
+            style={{
+              position: 'absolute',
+              left: `${z.x}%`, top: `${z.y}%`,
+              width: `${z.width}%`, height: `${z.height}%`,
+              display: 'flex',
+              alignItems: FLEX_V[s.vAlign],
+              justifyContent: FLEX_H[s.align],
+              overflow: 'hidden',
+            }}
+          >
+            <FittedText
+              text={s.text}
+              maxFontSize={(s.fontSize / 100) * h}
+              color={s.color}
+              fontWeight={s.fontWeight}
+              align={s.align}
+              uppercase={s.uppercase}
+            />
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+// ── Per-zone push editor ────────────────────────────────────────
+//
+// TV-TEMPLATE.2 — on the push screen each zone gets its text plus
+// full styling controls. Defaults are seeded from the template;
+// changes are snapshotted into tv_content.template_values. Size is
+// a *max* — FittedText shrinks below it so text never overflows.
+
+function ZonePushEditor({ zone, value, onChange }) {
+  const v = value || {}
+  const cls = 'w-full bg-un1t-black border border-un1t-gray rounded px-2 py-1 text-xs text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid'
+
+  return (
+    <div className="bg-un1t-black/50 border border-un1t-gray rounded-md p-2.5">
+      <div className="text-[11px] text-un1t-light uppercase tracking-wide mb-1.5">{zone.label}</div>
+      <textarea
+        value={v.text ?? ''}
+        onChange={e => onChange({ text: e.target.value })}
+        rows={2}
+        placeholder={zone.defaultText || 'Text…'}
+        className={`${cls} resize-none mb-2`}
+      />
+      <div className="grid grid-cols-2 gap-2">
+        <label className="block">
+          <span className="block text-[10px] text-un1t-mid mb-0.5">Max size</span>
+          <input
+            type="number" min={2} max={40} step={0.5}
+            value={v.fontSize ?? 6}
+            onChange={e => {
+              const n = Number(e.target.value)
+              onChange({ fontSize: Number.isFinite(n) ? Math.min(40, Math.max(2, n)) : 6 })
+            }}
+            className={cls}
+          />
+        </label>
+        <label className="block">
+          <span className="block text-[10px] text-un1t-mid mb-0.5">Weight</span>
+          <select value={v.fontWeight ?? 700} onChange={e => onChange({ fontWeight: Number(e.target.value) })} className={cls}>
+            {PUSH_FONT_WEIGHTS.map(w => <option key={w.value} value={w.value}>{w.label}</option>)}
+          </select>
+        </label>
+        <label className="block">
+          <span className="block text-[10px] text-un1t-mid mb-0.5">Align</span>
+          <select value={v.align ?? 'center'} onChange={e => onChange({ align: e.target.value })} className={cls}>
+            <option value="left">Left</option>
+            <option value="center">Centre</option>
+            <option value="right">Right</option>
+          </select>
+        </label>
+        <label className="block">
+          <span className="block text-[10px] text-un1t-mid mb-0.5">Vertical</span>
+          <select value={v.vAlign ?? 'middle'} onChange={e => onChange({ vAlign: e.target.value })} className={cls}>
+            <option value="top">Top</option>
+            <option value="middle">Middle</option>
+            <option value="bottom">Bottom</option>
+          </select>
+        </label>
+        <label className="block">
+          <span className="block text-[10px] text-un1t-mid mb-0.5">Colour</span>
+          <input
+            type="color"
+            value={v.color ?? '#FFFFFF'}
+            onChange={e => onChange({ color: e.target.value })}
+            className="w-full h-7 bg-un1t-black border border-un1t-gray rounded cursor-pointer"
+          />
+        </label>
+        <label className="flex items-center gap-1.5 text-xs text-un1t-light pt-4">
+          <input type="checkbox" checked={!!v.uppercase} onChange={e => onChange({ uppercase: e.target.checked })} />
+          UPPERCASE
+        </label>
+      </div>
     </div>
   )
 }
