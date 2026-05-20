@@ -713,11 +713,20 @@ function PushModal({ onClose, onPush, locationId, templates }) {
 function ZonePushEditor({ zone, value, onChange }) {
   const v = value || {}
   const taRef = useRef(null)
-  const [sel, setSel] = useState({ start: 0, end: 0 })
   const [selColor, setSelColor] = useState('#FFD400')
+  const [selNote, setSelNote] = useState('')
   const cls = 'w-full bg-un1t-black border border-un1t-gray rounded px-2 py-1 text-xs text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid'
 
-  const hasSelection = sel.end > sel.start
+  // Read the textarea's live selection at click time. A blurred
+  // textarea still reports its last selectionStart/End, so this is
+  // far more reliable than tracking the selection in React state.
+  function selectionRange() {
+    const ta = taRef.current
+    if (!ta) return null
+    const start = ta.selectionStart
+    const end = ta.selectionEnd
+    return end > start ? { start, end } : null
+  }
 
   // Any text edit remaps the colour runs so each colour stays
   // attached to the same words through inserts + deletes.
@@ -736,21 +745,28 @@ function ZonePushEditor({ zone, value, onChange }) {
       ta.focus()
       const pos = start + emoji.length
       ta.setSelectionRange(pos, pos)
-      setSel({ start: pos, end: pos })
     })
   }
 
   function applySelColor() {
-    if (!hasSelection) return
-    onChange({ colorRuns: setRunColor(v.colorRuns || [], sel.start, sel.end, selColor) })
+    const r = selectionRange()
+    if (!r) { setSelNote('Highlight some text in the box above first.'); return }
+    setSelNote('')
+    onChange({ colorRuns: setRunColor(v.colorRuns || [], r.start, r.end, selColor) })
     requestAnimationFrame(() => {
       taRef.current?.focus()
-      taRef.current?.setSelectionRange(sel.start, sel.end)
+      taRef.current?.setSelectionRange(r.start, r.end)
     })
   }
   function clearSelColor() {
-    if (!hasSelection) return
-    onChange({ colorRuns: clearRunColor(v.colorRuns || [], sel.start, sel.end) })
+    const r = selectionRange()
+    if (!r) { setSelNote('Highlight some text in the box above first.'); return }
+    setSelNote('')
+    onChange({ colorRuns: clearRunColor(v.colorRuns || [], r.start, r.end) })
+    requestAnimationFrame(() => {
+      taRef.current?.focus()
+      taRef.current?.setSelectionRange(r.start, r.end)
+    })
   }
 
   return (
@@ -760,7 +776,6 @@ function ZonePushEditor({ zone, value, onChange }) {
         ref={taRef}
         value={v.text ?? ''}
         onChange={e => changeText(e.target.value)}
-        onSelect={e => setSel({ start: e.target.selectionStart, end: e.target.selectionEnd })}
         rows={7}
         placeholder={zone.defaultText || 'Type the text for this zone…'}
         className={`${cls} resize-y mb-1.5`}
@@ -791,22 +806,20 @@ function ZonePushEditor({ zone, value, onChange }) {
           className="w-7 h-7 bg-un1t-black border border-un1t-gray rounded cursor-pointer"
         />
         <button
-          type="button" onClick={applySelColor} disabled={!hasSelection}
-          className="text-[11px] px-2 py-1 rounded border border-un1t-gray text-un1t-light hover:text-un1t-white disabled:opacity-40"
+          type="button" onClick={applySelColor}
+          className="text-[11px] px-2 py-1 rounded border border-un1t-gray text-un1t-light hover:text-un1t-white hover:border-un1t-white/40"
         >
           Apply
         </button>
         <button
-          type="button" onClick={clearSelColor} disabled={!hasSelection}
-          className="text-[11px] px-2 py-1 rounded border border-un1t-gray text-un1t-light hover:text-un1t-white disabled:opacity-40"
+          type="button" onClick={clearSelColor}
+          className="text-[11px] px-2 py-1 rounded border border-un1t-gray text-un1t-light hover:text-un1t-white hover:border-un1t-white/40"
         >
           Reset
         </button>
       </div>
-      <p className="text-[10px] text-un1t-mid mb-2">
-        {hasSelection
-          ? 'Pick a colour, then Apply — only the highlighted words change.'
-          : 'Highlight words in the box above to colour just them.'}
+      <p className={`text-[10px] mb-2 ${selNote ? 'text-amber-400' : 'text-un1t-mid'}`}>
+        {selNote || 'Highlight words in the text box, pick a colour, then Apply — only those words change.'}
       </p>
 
       <div className="grid grid-cols-2 gap-2">
