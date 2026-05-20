@@ -21,6 +21,9 @@
 
 import { useEffect, useMemo, useState, useCallback } from 'react'
 import Link from 'next/link'
+// BOOKKEEPER-APPROVALS.1 — read `?focus=<id>` so the drill-in from
+// /approvals lands on the right row + correct tab.
+import { useSearchParams } from 'next/navigation'
 import { INVOICE_CATEGORIES } from '@/lib/invoice-extraction'
 import XeroAccountPicker from '@/components/invoices/XeroAccountPicker'
 import XeroContactPicker from '@/components/invoices/XeroContactPicker'
@@ -92,12 +95,18 @@ function formatDateTime(s) {
 }
 
 export default function InvoicesInbox({ locations, isMaster, isBookkeeper = false }) {
+  // BOOKKEEPER-APPROVALS.1 — `?focus=<id>` arrives when the user
+  // clicked a row in /approvals. We seed selectedId from it and
+  // remember whether we've already consumed it so the focus is
+  // sticky across re-fetches (but the user can still click off it).
+  const searchParams = useSearchParams()
+  const focusId = searchParams?.get('focus') || null
   const [sourceTab, setSourceTab] = useState('all')
   const [statusFilter, setStatusFilter] = useState('pending')
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
-  const [selectedId, setSelectedId] = useState(null)
+  const [selectedId, setSelectedId] = useState(focusId)
   const [locationFilter, setLocationFilter] = useState('all')
   // INVOICES-QUEUE.1 PR 2 — multi-select state for bulk actions.
   // Selection persists across tab switches (Set tracks ids; rows
@@ -129,7 +138,11 @@ export default function InvoicesInbox({ locations, isMaster, isBookkeeper = fals
       if (!j.success) throw new Error(j.error || 'Failed to load')
       setRows(j.data || [])
       setSelectedId((prev) => {
-        if (prev && (j.data || []).some((r) => r.id === prev)) return prev
+        // Prefer the URL-supplied focus on first load if it's in
+        // the result set; otherwise keep the user's last pick if
+        // still visible; otherwise default to the top row.
+        const desired = prev || focusId
+        if (desired && (j.data || []).some((r) => r.id === desired)) return desired
         return (j.data || [])[0]?.id || null
       })
     } catch (e) {
@@ -137,9 +150,27 @@ export default function InvoicesInbox({ locations, isMaster, isBookkeeper = fals
     } finally {
       setLoading(false)
     }
-  }, [activeStatuses, activeSourceTypes, locationFilter])
+  }, [activeStatuses, activeSourceTypes, locationFilter, focusId])
 
   useEffect(() => { loadRows() }, [loadRows])
+
+  // BOOKKEEPER-APPROVALS.1 — if we arrived with a `?focus=<id>` but
+  // the row isn't in the current view (e.g. drilled in from
+  // /approvals while we're on the Forwarded tab), broaden filters
+  // once so the row IS visible. Runs after the first load resolves.
+  useEffect(() => {
+    if (!focusId || loading) return
+    if (rows.some((r) => r.id === focusId)) return
+    // Row not in view — open it up.
+    setStatusFilter('all')
+    setSourceTab('all')
+    if (locationFilter !== 'all') setLocationFilter('all')
+  // We want this to fire ONCE the first time we discover the row
+  // is missing; subsequent rows changes shouldn't keep re-opening
+  // filters. The dependency on `rows.length === 0` would be too
+  // aggressive; key on rows identity instead.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusId, loading])
 
   const selected = rows.find((r) => r.id === selectedId) || null
 
