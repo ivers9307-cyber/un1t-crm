@@ -6,48 +6,18 @@
 // hits) this chunk doesn't need to be in the initial bundle.
 
 import { useRef, useState } from 'react'
-import { Check, X, FileText, Send, Upload, Sparkles, Loader2 } from 'lucide-react'
+import { Check, X, FileText, Send, Upload } from 'lucide-react'
 import { ALL_DOCUMENT_TYPES, REQUIRED_DOCUMENT_TYPES } from '@/lib/cars'
-import InvoiceExtractionReview from './InvoiceExtractionReview'
 
 export default function DocumentsCard({ car, setCar, setError, disabled }) {
   const [uploadingType, setUploadingType] = useState(null)
   const [sendingDocId, setSendingDocId] = useState(null)
-  // INVOICE-OCR.1 — id of doc whose AI-extract is currently running,
-  // and id of doc whose review panel is currently expanded.
-  const [extractingDocId, setExtractingDocId] = useState(null)
-  const [reviewingDocId, setReviewingDocId] = useState(null)
 
-  // INVOICE-OCR.1 — kick off Claude Vision extraction. On success
-  // the doc gains extracted_invoice_fields + review_status='extracted',
-  // and the review panel opens for operator edit + push.
-  async function extractWithAi(docId) {
-    setExtractingDocId(docId); setError(null)
-    try {
-      const res = await fetch(`/api/cars/${car.id}/documents/${docId}/extract`, { method: 'POST' })
-      const j = await res.json()
-      if (!j.success) { setError(j.error || 'Extraction failed'); return }
-      setCar(c => ({
-        ...c,
-        car_documents: (c.car_documents || []).map(d =>
-          d.id === docId ? { ...d, ...(j.document || {}) } : d
-        ),
-      }))
-      setReviewingDocId(docId)
-    } finally {
-      setExtractingDocId(null)
-    }
-  }
-
-  function updateDocFromReview(updatedDoc) {
-    if (!updatedDoc) return
-    setCar(c => ({
-      ...c,
-      car_documents: (c.car_documents || []).map(d =>
-        d.id === updatedDoc.id ? { ...d, ...updatedDoc } : d
-      ),
-    }))
-  }
+  // INVOICES-QUEUE.1 PR 3 — car-document "AI Extract" + per-row
+  // "Push to Xero" surface removed. Uploads now auto-enqueue into
+  // the central invoices_queue (PR 1) and the bookkeeper runs
+  // Claude Vision + Xero forward from /invoices. Operators just
+  // upload; the rest is handled accountant-side.
 
   async function upload(type, file) {
     setUploadingType(type); setError(null)
@@ -169,49 +139,35 @@ export default function DocumentsCard({ car, setCar, setError, disabled }) {
                           <span className="truncate">{d.filename}</span>
                         </button>
                         <div className="flex items-center gap-1 shrink-0">
-                          {/* INVOICE-OCR.1 — AI extract + push state.
-                              Visual hierarchy: 'Pushed' badge wins;
-                              else 'Review' button if extraction
-                              landed; else 'AI Extract' to kick off. */}
-                          {d.xero_bill_id ? (
+                          {/* INVOICES-QUEUE.1 PR 3 — Xero state is
+                              now tracked on the corresponding
+                              invoices_queue row, not here. Show the
+                              legacy badges if they're still set
+                              (in-flight items from pre-cutover) but
+                              don't offer new operator actions —
+                              everything new flows through /invoices. */}
+                          {d.xero_bill_id && (
                             <span className="inline-flex items-center gap-1 text-[10px] uppercase text-green-500" title={`Xero bill ${d.xero_bill_id}, pushed ${d.xero_pushed_at ? new Date(d.xero_pushed_at).toLocaleString() : ''}`}>
                               <Check size={11} /> Pushed
                             </span>
-                          ) : d.review_status === 'extracted' || d.review_status === 'reviewed' ? (
-                            !disabled && (
-                              <button
-                                onClick={() => setReviewingDocId(reviewingDocId === d.id ? null : d.id)}
-                                className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-blue-500/20 text-blue-300 text-[10px] font-semibold hover:bg-blue-500/30"
-                                title="Review and push to Xero"
-                              >
-                                <Sparkles size={10} />
-                                {reviewingDocId === d.id ? 'Hide' : 'Review'}
-                              </button>
-                            )
-                          ) : !disabled && (
-                            <button
-                              onClick={() => extractWithAi(d.id)}
-                              disabled={extractingDocId === d.id}
-                              className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-blue-500/20 text-blue-300 text-[10px] font-semibold hover:bg-blue-500/30 disabled:opacity-50"
-                              title="Extract invoice fields with Claude Vision"
-                            >
-                              {extractingDocId === d.id ? <Loader2 size={10} className="animate-spin" /> : <Sparkles size={10} />}
-                              {extractingDocId === d.id ? 'Extracting…' : 'AI Extract'}
-                            </button>
                           )}
-                          {/* Legacy 'Send to Xero' (email path) — kept
-                              as a fallback for cases where AI extraction
-                              isn't desired (e.g. non-invoice attachments). */}
-                          {d.xero_sent_at ? (
+                          {d.xero_sent_at && !d.xero_bill_id && (
                             <span className="inline-flex items-center gap-1 text-[10px] uppercase text-green-500/70" title={`Emailed ${new Date(d.xero_sent_at).toLocaleString()}`}>
                               Emailed
                             </span>
-                          ) : !d.xero_bill_id && !disabled && (
+                          )}
+                          {/* Legacy single-row email path kept as a
+                              safety hatch for non-invoice attachments
+                              (e.g. customer photos uploaded into the
+                              docs section that should never enter the
+                              accountant queue). Hidden once any new
+                              Xero state is present. */}
+                          {!d.xero_bill_id && !d.xero_sent_at && !disabled && (
                             <button
                               onClick={() => sendToXero(d.id)}
                               disabled={sendingDocId === d.id}
                               className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-un1t-white text-un1t-black text-[10px] font-semibold hover:bg-un1t-accent disabled:opacity-50"
-                              title="Email the raw PDF to Xero's bills inbox (Hubdoc OCR)"
+                              title="Email the raw PDF to Xero's bills inbox (legacy direct path; the new flow auto-enqueues uploads into /invoices)"
                             >
                               <Send size={10} />
                               {sendingDocId === d.id ? 'Sending…' : 'Email'}
@@ -224,15 +180,6 @@ export default function DocumentsCard({ car, setCar, setError, disabled }) {
                           )}
                         </div>
                       </div>
-                      {reviewingDocId === d.id && d.extracted_invoice_fields && (
-                        <InvoiceExtractionReview
-                          carId={car.id}
-                          document={d}
-                          onChange={updateDocFromReview}
-                          onError={(msg) => setError(msg)}
-                          onClose={() => setReviewingDocId(null)}
-                        />
-                      )}
                     </div>
                   ))}
                 </div>

@@ -12,7 +12,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { EXPENSE_CATEGORIES, EXPENSE_CATEGORY_LABELS } from '@/lib/fte-expenses'
 import {
   Plus, Loader2, AlertCircle, X, ChevronRight,
-  Trash2, Send, RotateCcw, ThumbsUp, ThumbsDown, Eye, Sparkles,
+  Trash2, Send, RotateCcw, ThumbsUp, ThumbsDown, Eye,
 } from 'lucide-react'
 
 const STATUS_LABEL = {
@@ -481,50 +481,17 @@ function AddItemForm({ claimId, onCancel, onSaved }) {
   })
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
-  // FTE-EXPENSES.3 — OCR auto-fill state. ocrState ∈ idle | running |
-  // done | failed. ocrConfidence is the Claude self-rating (high /
-  // medium / low) — surfaced in the UI so the operator double-checks
-  // medium / low extractions before saving.
-  const [ocrState, setOcrState] = useState('idle')
-  const [ocrConfidence, setOcrConfidence] = useState(null)
-  const [ocrError, setOcrError] = useState(null)
 
-  // FTE-EXPENSES.3 — when a receipt is selected, fire-and-forget the
-  // OCR call so by the time the operator looks back at the form the
-  // amount / VAT / date / vendor are already filled. The operator
-  // reviews and edits if needed before clicking Add item.
-  async function runOcr(file) {
-    setOcrState('running'); setOcrError(null); setOcrConfidence(null)
-    try {
-      const fd = new FormData()
-      fd.set('receipt', file)
-      const r = await fetch('/api/expenses/extract-receipt', { method: 'POST', body: fd })
-      const j = await r.json()
-      if (!j.success) throw new Error(j.error)
-      setOcrConfidence(j.confidence)
-      // Patch form fields only when Claude has a value for them. The
-      // operator may have already typed something while OCR ran;
-      // don't clobber non-empty fields.
-      setForm((prev) => ({
-        ...prev,
-        expense_date: j.fields.expense_date || prev.expense_date,
-        category:     j.fields.category || prev.category,
-        amount:       prev.amount || String(j.fields.amount || ''),
-        vat_amount:   prev.vat_amount || String(j.fields.vat_amount || 0),
-        vendor:       prev.vendor || j.fields.vendor || '',
-        description:  prev.description || j.fields.description || '',
-      }))
-      setOcrState('done')
-    } catch (e) {
-      setOcrState('failed')
-      setOcrError(e.message || 'OCR failed')
-    }
-  }
+  // INVOICES-QUEUE.1 PR 3 — receipt-side Claude Vision OCR removed.
+  // OCR now runs exclusively inside the central invoices queue
+  // (bookkeeper clicks Analyse). The submitter just attaches the
+  // receipt and types the fields manually; the bookkeeper's
+  // Claude run later happens against the same receipt file. This
+  // removes the per-feature OCR cost surface and keeps extraction
+  // in one place for cost visibility + caching (PR 3 design).
 
   function handleReceiptChange(file) {
     setForm((prev) => ({ ...prev, receipt: file || null }))
-    if (file) runOcr(file)
-    else { setOcrState('idle'); setOcrConfidence(null); setOcrError(null) }
   }
 
   async function submit() {
@@ -578,32 +545,6 @@ function AddItemForm({ claimId, onCancel, onSaved }) {
           />
         </Field>
       </div>
-
-      {/* FTE-EXPENSES.3 — OCR status banner. Sits below the form
-          fields so the operator sees the source of the pre-fill
-          before they review + submit. */}
-      {ocrState === 'running' && (
-        <div className="text-xs text-blue-300 bg-blue-500/10 border border-blue-500/30 rounded p-2 inline-flex items-center gap-2">
-          <Loader2 size={12} className="animate-spin" />
-          Reading receipt with Claude Vision…
-        </div>
-      )}
-      {ocrState === 'done' && (
-        <div className={`text-xs rounded p-2 inline-flex items-center gap-2 border ${
-          ocrConfidence === 'high'   ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
-          : ocrConfidence === 'medium' ? 'bg-amber-500/10 border-amber-500/30 text-amber-300'
-          :                              'bg-red-500/10 border-red-500/30 text-red-300'
-        }`}>
-          <Sparkles size={12} />
-          Auto-filled from receipt ({ocrConfidence || 'medium'} confidence)
-          {ocrConfidence !== 'high' && ' — double-check the values below.'}
-        </div>
-      )}
-      {ocrState === 'failed' && ocrError && (
-        <div className="text-xs text-un1t-light bg-un1t-gray/20 border border-un1t-gray rounded p-2">
-          Auto-fill failed: {ocrError}. Fill the fields manually and submit.
-        </div>
-      )}
 
       {error && <div className="text-xs text-red-400">{error}</div>}
       <div className="flex items-center gap-2 pt-1">
