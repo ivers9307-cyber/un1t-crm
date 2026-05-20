@@ -1,10 +1,15 @@
 // APPROVALS.1 provider — contractor invoices awaiting approval.
 //
-// Source: contractor_invoices.status='submitted' (mig 101). Master
-// sees all; owner sees their locations; everyone else gets nothing
-// (managers don't approve contractor invoices — finance surface).
+// Source: contractor_invoices.status='submitted' (mig 101). Owner +
+// master can approve at their active location; everyone else gets
+// nothing (managers don't approve contractor invoices — finance
+// surface).
+//
+// APPROVALS-LOCATION-SCOPE — scoped to user.activeLocation only.
 
-import { userIsMaster, ownerLocationIds } from '../registry'
+import { canApproveAtActiveLocation, viewerActiveLocationId } from '../registry'
+
+const FINANCE_APPROVER_ROLES = ['owner']
 
 export const contractorInvoicesProvider = {
   key: 'contractor_invoices',
@@ -12,11 +17,13 @@ export const contractorInvoicesProvider = {
   reviewBase: '/schedule/invoices',
 
   async fetchPending(db, user) {
-    const isMaster = userIsMaster(user)
-    const owners = ownerLocationIds(user)
-    if (!isMaster && owners.length === 0) return { count: 0, items: [] }
+    const activeId = viewerActiveLocationId(user)
+    if (!activeId) return { count: 0, items: [] }
+    if (!canApproveAtActiveLocation(user, FINANCE_APPROVER_ROLES)) {
+      return { count: 0, items: [] }
+    }
 
-    let q = db
+    const q = db
       .from('contractor_invoices')
       .select(`
         id, period_start, period_end, invoice_amount, invoice_number,
@@ -25,10 +32,9 @@ export const contractorInvoicesProvider = {
         location:location_id ( id, name )
       `)
       .eq('status', 'submitted')
+      .eq('location_id', activeId)
       .order('created_at', { ascending: false })
       .limit(50)
-
-    if (!isMaster) q = q.in('location_id', owners)
 
     const { data, error } = await q
     if (error) throw new Error(`contractor_invoices: ${error.message}`)
@@ -47,14 +53,14 @@ export const contractorInvoicesProvider = {
   },
 
   async countPending(db, user) {
-    const isMaster = userIsMaster(user)
-    const owners = ownerLocationIds(user)
-    if (!isMaster && owners.length === 0) return 0
-    let q = db
+    const activeId = viewerActiveLocationId(user)
+    if (!activeId) return 0
+    if (!canApproveAtActiveLocation(user, FINANCE_APPROVER_ROLES)) return 0
+    const q = db
       .from('contractor_invoices')
       .select('*', { count: 'exact', head: true })
       .eq('status', 'submitted')
-    if (!isMaster) q = q.in('location_id', owners)
+      .eq('location_id', activeId)
     const { count, error } = await q
     if (error) throw new Error(`contractor_invoices count: ${error.message}`)
     return count || 0

@@ -27,12 +27,6 @@ export default function TimeOffManager({ user }) {
   // their own holidays instead of the request they clicked.
   const searchParams = useSearchParams()
   const focusId = searchParams?.get('focus') || null
-  // APPROVALS-VISIBILITY-FIX — the time-off provider passes the
-  // request's location_id in the URL so we can query that location
-  // (rather than the master's active one) when arriving via the
-  // /approvals drill-in. Falls back to user.activeLocation when no
-  // override is present.
-  const overrideLocationId = searchParams?.get('location_id') || null
   const isManager = MANAGER_ROLES.includes(user.role)
   const hasFocus = !!focusId && isManager
 
@@ -47,7 +41,10 @@ export default function TimeOffManager({ user }) {
   const rowRefs = useRef(new Map())
   const focusScrolled = useRef(false)
 
-  const locationId = overrideLocationId || user.activeLocation?.id
+  // APPROVALS-LOCATION-SCOPE — drop the old override-location-id
+  // plumbing. The /approvals provider now filters by activeLocation
+  // so the drill-in always lands on the right list.
+  const locationId = user.activeLocation?.id
 
   const fetchData = useCallback(async () => {
     setLoading(true)
@@ -131,18 +128,6 @@ export default function TimeOffManager({ user }) {
     else alert(data.error || 'Failed to cancel')
   }
 
-  // APPROVALS-VISIBILITY-FIX — surface when the master arrived via
-  // /approvals at a non-active location, so they aren't confused
-  // about why the list isn't showing their default studio's data.
-  const reviewingOtherLocation = overrideLocationId && overrideLocationId !== user.activeLocation?.id
-  // Find the location name from the loaded requests (cheap — first row
-  // at the override location has it). Falls back to the id string.
-  const otherLocationName = reviewingOtherLocation
-    ? (requests.find((r) => r.location_id === overrideLocationId)?.locations?.name
-       || requests[0]?.locations?.name
-       || overrideLocationId.slice(0, 8))
-    : null
-
   return (
     <div>
       {/* Header */}
@@ -150,9 +135,7 @@ export default function TimeOffManager({ user }) {
         <div>
           <h2 className="text-2xl font-bold">Time Off</h2>
           <p className="text-sm text-un1t-light mt-1">
-            {reviewingOtherLocation
-              ? <>Reviewing requests at <strong className="text-un1t-white">{otherLocationName}</strong> (via Approvals)</>
-              : <>{user.activeLocation?.name} — Holiday & leave management</>}
+            {user.activeLocation?.name} — Holiday & leave management
           </p>
         </div>
         <button

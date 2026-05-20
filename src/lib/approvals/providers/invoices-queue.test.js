@@ -28,7 +28,7 @@ function makeChain(terminal) {
 
 describe('invoicesQueueProvider.isVisible', () => {
   it('returns true for master (default ON)', () => {
-    expect(invoicesQueueProvider.isVisible({ role: 'master' })).toBe(true)
+    expect(invoicesQueueProvider.isVisible({ role: 'master', activeLocation: { id: 'loc1' } })).toBe(true)
   })
 
   it('returns false for owner without an explicit permission', () => {
@@ -60,7 +60,7 @@ describe('invoicesQueueProvider.fetchPending', () => {
     expect(db.from).not.toHaveBeenCalled()
   })
 
-  it('returns empty for a non-master bookkeeper with no owner locations', async () => {
+  it('returns empty when no active location is set', async () => {
     const db = { from: vi.fn() }
     const r = await invoicesQueueProvider.fetchPending(db, {
       role: 'manager', permissions: { bookkeeper: true }, rolesByLocation: {},
@@ -89,7 +89,7 @@ describe('invoicesQueueProvider.fetchPending', () => {
       error: null,
     })
     const db = { from: vi.fn(() => chain) }
-    const r = await invoicesQueueProvider.fetchPending(db, { role: 'master' })
+    const r = await invoicesQueueProvider.fetchPending(db, { role: 'master', activeLocation: { id: 'loc1' } })
     expect(r.count).toBe(1)
     expect(r.items[0]).toMatchObject({
       id: 'q1',
@@ -121,7 +121,7 @@ describe('invoicesQueueProvider.fetchPending', () => {
       error: null,
     })
     const db = { from: vi.fn(() => chain) }
-    const r = await invoicesQueueProvider.fetchPending(db, { role: 'master' })
+    const r = await invoicesQueueProvider.fetchPending(db, { role: 'master', activeLocation: { id: 'loc1' } })
     expect(r.items[0].subtitle).toContain('Retry')
   })
 
@@ -141,24 +141,29 @@ describe('invoicesQueueProvider.fetchPending', () => {
       error: null,
     })
     const db = { from: vi.fn(() => chain) }
-    const r = await invoicesQueueProvider.fetchPending(db, { role: 'master' })
+    const r = await invoicesQueueProvider.fetchPending(db, { role: 'master', activeLocation: { id: 'loc1' } })
     expect(r.items[0].subtitle).toContain('unknown@vendor.com')
   })
 
-  it('scopes non-master users to owner locations via .in()', async () => {
+  it('scopes the query to user.activeLocation only', async () => {
     const chain = makeChain({ data: [], error: null })
     const db = { from: vi.fn(() => chain) }
     await invoicesQueueProvider.fetchPending(db, {
       role: 'owner', permissions: { bookkeeper: true },
-      rolesByLocation: { 'loc-A': 'owner', 'loc-B': 'manager' },
+      activeLocation: { id: 'loc-ACTIVE' },
+      rolesByLocation: { 'loc-ACTIVE': 'owner', 'loc-OTHER': 'manager' },
     })
-    // status filter via .in()
+    // status filter is an .in() call with the pending statuses array.
     const inCalls = chain.in.mock.calls
     expect(inCalls.some((c) => c[0] === 'status')).toBe(true)
-    // location filter via .in() on the owner locations only.
+    // location filter is now .eq() on the single active location id —
+    // not .in() against owner-locations.
+    const eqCalls = chain.eq.mock.calls
+    expect(eqCalls.some((c) => c[0] === 'location_id' && c[1] === 'loc-ACTIVE')).toBe(true)
+    // And NOT scoping to loc-OTHER (the user's other location).
     expect(inCalls.some((c) =>
-      c[0] === 'location_id' && Array.isArray(c[1]) && c[1].includes('loc-A') && !c[1].includes('loc-B')
-    )).toBe(true)
+      c[0] === 'location_id' && Array.isArray(c[1]) && c[1].includes('loc-OTHER')
+    )).toBe(false)
   })
 })
 
@@ -170,14 +175,16 @@ describe('invoicesQueueProvider.countPending', () => {
     expect(db.from).not.toHaveBeenCalled()
   })
 
-  it('reads the count via head:true select', async () => {
+  it('reads the count via head:true select scoped to active location', async () => {
     const chain = {
       select: vi.fn().mockReturnThis(),
-      in: vi.fn(() => Promise.resolve({ count: 7, error: null })),
+      in: vi.fn().mockReturnThis(),
+      eq: vi.fn(() => Promise.resolve({ count: 7, error: null })),
     }
     const db = { from: vi.fn(() => chain) }
-    const c = await invoicesQueueProvider.countPending(db, { role: 'master' })
+    const c = await invoicesQueueProvider.countPending(db, { role: 'master', activeLocation: { id: 'loc1' } })
     expect(c).toBe(7)
+    expect(chain.eq).toHaveBeenCalledWith('location_id', 'loc1')
     // head:true means no rows fetched, only the count.
     const selectArg = chain.select.mock.calls[0][1]
     expect(selectArg.head).toBe(true)

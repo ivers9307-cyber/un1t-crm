@@ -35,7 +35,7 @@
 //     mig 184 already enforces this — we mirror it here so the
 //     count is right).
 
-import { userIsMaster, ownerLocationIds } from '../registry'
+import { userIsMaster, viewerActiveLocationId } from '../registry'
 
 // Statuses the bookkeeper needs to action from /invoices.
 const PENDING_STATUSES = ['extracted', 'data_approved']
@@ -78,11 +78,13 @@ export const invoicesQueueProvider = {
 
   async fetchPending(db, user) {
     if (!userIsBookkeeper(user)) return { count: 0, items: [] }
-    const isMaster = userIsMaster(user)
-    const owners = ownerLocationIds(user)
-    if (!isMaster && owners.length === 0) return { count: 0, items: [] }
+    // APPROVALS-LOCATION-SCOPE — bookkeepers only see invoices for
+    // the studio they're currently in. Switch active location to
+    // see another studio's queue.
+    const activeId = viewerActiveLocationId(user)
+    if (!activeId) return { count: 0, items: [] }
 
-    let q = db
+    const q = db
       .from('invoices_queue')
       .select(`
         id, status, source_type, sender_email, subject,
@@ -91,10 +93,7 @@ export const invoicesQueueProvider = {
         location:location_id ( id, name )
       `)
       .in('status', PENDING_STATUSES)
-
-    // Apply location scoping BEFORE ordering+limit so we don't
-    // execute the query mid-chain.
-    if (!isMaster) q = q.in('location_id', owners)
+      .eq('location_id', activeId)
 
     const { data, error } = await q
       .order('received_at', { ascending: false })
@@ -134,15 +133,13 @@ export const invoicesQueueProvider = {
   // the tab shows.
   async countPending(db, user) {
     if (!userIsBookkeeper(user)) return 0
-    const isMaster = userIsMaster(user)
-    const owners = ownerLocationIds(user)
-    if (!isMaster && owners.length === 0) return 0
-
-    let q = db
+    const activeId = viewerActiveLocationId(user)
+    if (!activeId) return 0
+    const q = db
       .from('invoices_queue')
       .select('*', { count: 'exact', head: true })
       .in('status', PENDING_STATUSES)
-    if (!isMaster) q = q.in('location_id', owners)
+      .eq('location_id', activeId)
     const { count, error } = await q
     if (error) throw new Error(`invoices_queue count: ${error.message}`)
     return count || 0
