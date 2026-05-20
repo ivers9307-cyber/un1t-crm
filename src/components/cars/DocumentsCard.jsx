@@ -4,20 +4,21 @@
 // from the parent — DocumentsCard only renders when the car is in pending
 // or completed state, so for new-status cars (the bulk of detail page
 // hits) this chunk doesn't need to be in the initial bundle.
+//
+// CAR-DOCS-XERO-FLOW (May 2026) — removed the legacy per-row "Email"
+// button + "Send all to Xero" header action + "Last Xero error" line.
+// Every car-document upload now auto-enqueues into the central
+// invoices_queue (INVOICES-QUEUE.1 PR 1 wires this on the upload
+// route); the bookkeeper handles Claude Vision + Xero push from
+// /invoices. Operators here only upload — the rest is finance work
+// and shouldn't be exposed in the car-processing UI.
 
 import { useRef, useState } from 'react'
-import { Check, X, FileText, Send, Upload } from 'lucide-react'
+import { Check, X, FileText, Inbox, Upload } from 'lucide-react'
 import { ALL_DOCUMENT_TYPES, REQUIRED_DOCUMENT_TYPES } from '@/lib/cars'
 
 export default function DocumentsCard({ car, setCar, setError, disabled }) {
   const [uploadingType, setUploadingType] = useState(null)
-  const [sendingDocId, setSendingDocId] = useState(null)
-
-  // INVOICES-QUEUE.1 PR 3 — car-document "AI Extract" + per-row
-  // "Push to Xero" surface removed. Uploads now auto-enqueue into
-  // the central invoices_queue (PR 1) and the bookkeeper runs
-  // Claude Vision + Xero forward from /invoices. Operators just
-  // upload; the rest is handled accountant-side.
 
   async function upload(type, file) {
     setUploadingType(type); setError(null)
@@ -46,77 +47,34 @@ export default function DocumentsCard({ car, setCar, setError, disabled }) {
     setCar(c => ({ ...c, car_documents: (c.car_documents || []).filter(d => d.id !== docId) }))
   }
 
-  // Forward an uploaded document to Xero's Files Inbox where its
-  // auto-bill OCR turns it into a draft Bill. The button surfaces
-  // on every uploaded row; required-doc-type rows additionally
-  // gate completion until at least one upload has been sent.
-  async function sendToXero(docId) {
-    setSendingDocId(docId); setError(null)
-    try {
-      const res = await fetch(`/api/cars/${car.id}/documents/${docId}/send-to-xero`, { method: 'POST' })
-      const j = await res.json()
-      if (!j.success) { setError(j.error || 'Send to Xero failed'); return }
-      setCar(c => ({
-        ...c,
-        car_documents: (c.car_documents || []).map(d =>
-          d.id === docId ? { ...d, ...(j.document || {}) } : d
-        ),
-      }))
-    } finally {
-      setSendingDocId(null)
-    }
-  }
-
-  // "Send all unsent" — finds every uploaded doc that hasn't been
-  // forwarded to Xero yet and pushes them sequentially. Useful at
-  // the end of the registration process when you've uploaded
-  // multiple docs in one sitting and don't want to click through
-  // each row. Skips errors silently per-row (errors surface on the
-  // individual rows via xero_send_error from the existing flow).
-  async function sendAllUnsent() {
-    setError(null)
-    const unsent = (car.car_documents || []).filter(d => !d.xero_sent_at)
-    for (const d of unsent) {
-      // Sequential — Xero rate-limits per-org and we'd rather not
-      // hammer Postmark either. Each takes <1s typically.
-      await sendToXero(d.id)
-    }
-  }
-
-  const unsentCount = (car.car_documents || []).filter(d => !d.xero_sent_at).length
-
   return (
     <div className="bg-un1t-dark border border-un1t-gray rounded-2xl p-5 mb-4">
       <div className="flex items-center justify-between mb-3 gap-3">
         <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light">Documents & invoices</h3>
-        {!disabled && unsentCount > 0 && (
-          <button
-            onClick={sendAllUnsent}
-            disabled={sendingDocId !== null}
-            className="text-xs inline-flex items-center gap-1 px-3 py-1 rounded-md bg-un1t-white text-un1t-black font-semibold hover:bg-un1t-accent disabled:opacity-50"
-            title="Forward every uploaded document that hasn't been sent to Xero yet"
-          >
-            <Send size={11} /> Send all to Xero ({unsentCount})
-          </button>
-        )}
       </div>
       <p className="text-xs text-un1t-light mb-3">
-        Required uploads must be sent to Xero (auto-billed via Xero&rsquo;s OCR) before this car can be marked completed.
+        Uploads automatically enter the bookkeeper queue at <a href="/invoices" className="underline">/invoices</a>.
+        The accountant reviews + pushes each one to Xero from there.
       </p>
       <div className="space-y-2">
         {ALL_DOCUMENT_TYPES.map(t => {
           const docs = (car.car_documents || []).filter(d => d.doc_type === t.key)
           const required = REQUIRED_DOCUMENT_TYPES.some(r => r.key === t.key)
-          const anySentToXero = docs.some(d => d.xero_sent_at)
-          // Status badge: required + nothing uploaded → Required (amber);
-          // required + uploaded but not sent → Send to Xero (amber);
-          // required + at least one sent → Sent (green); optional rows
-          // get no badge.
+          const anyPushed = docs.some(d => d.xero_bill_id)
+          const hasUpload = docs.length > 0
+          // CAR-DOCS-XERO-FLOW — status badges reflect the new
+          // bookkeeper-queue flow:
+          //   Required + nothing uploaded → 'Required' (amber)
+          //   Uploaded, awaiting bookkeeper → 'Awaiting bookkeeper' (amber)
+          //   Pushed to Xero (xero_bill_id set on doc) → 'In Xero' (green)
+          // Optional rows show no badge until they have a Xero push.
           let badge = null
-          if (required) {
-            if (!docs.length) badge = { label: 'Required', cls: 'text-amber-500' }
-            else if (!anySentToXero) badge = { label: 'Send to Xero', cls: 'text-amber-500' }
-            else badge = { label: 'Sent to Xero', cls: 'text-green-500' }
+          if (required && !hasUpload) {
+            badge = { label: 'Required', cls: 'text-amber-500' }
+          } else if (hasUpload && !anyPushed) {
+            badge = { label: 'Awaiting bookkeeper', cls: 'text-amber-500' }
+          } else if (anyPushed) {
+            badge = { label: 'In Xero', cls: 'text-green-500' }
           }
           return (
             <div key={t.key} className="border border-un1t-gray rounded-md p-3">
@@ -139,39 +97,29 @@ export default function DocumentsCard({ car, setCar, setError, disabled }) {
                           <span className="truncate">{d.filename}</span>
                         </button>
                         <div className="flex items-center gap-1 shrink-0">
-                          {/* INVOICES-QUEUE.1 PR 3 — Xero state is
-                              now tracked on the corresponding
-                              invoices_queue row, not here. Show the
-                              legacy badges if they're still set
-                              (in-flight items from pre-cutover) but
-                              don't offer new operator actions —
-                              everything new flows through /invoices. */}
-                          {d.xero_bill_id && (
-                            <span className="inline-flex items-center gap-1 text-[10px] uppercase text-green-500" title={`Xero bill ${d.xero_bill_id}, pushed ${d.xero_pushed_at ? new Date(d.xero_pushed_at).toLocaleString() : ''}`}>
-                              <Check size={11} /> Pushed
-                            </span>
-                          )}
-                          {d.xero_sent_at && !d.xero_bill_id && (
-                            <span className="inline-flex items-center gap-1 text-[10px] uppercase text-green-500/70" title={`Emailed ${new Date(d.xero_sent_at).toLocaleString()}`}>
-                              Emailed
-                            </span>
-                          )}
-                          {/* Legacy single-row email path kept as a
-                              safety hatch for non-invoice attachments
-                              (e.g. customer photos uploaded into the
-                              docs section that should never enter the
-                              accountant queue). Hidden once any new
-                              Xero state is present. */}
-                          {!d.xero_bill_id && !d.xero_sent_at && !disabled && (
-                            <button
-                              onClick={() => sendToXero(d.id)}
-                              disabled={sendingDocId === d.id}
-                              className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-un1t-white text-un1t-black text-[10px] font-semibold hover:bg-un1t-accent disabled:opacity-50"
-                              title="Email the raw PDF to Xero's bills inbox (legacy direct path; the new flow auto-enqueues uploads into /invoices)"
+                          {d.xero_bill_id ? (
+                            // Pushed by the bookkeeper — deep link to
+                            // the draft bill in Xero.
+                            <a
+                              href={d.xero_deep_link_url || `https://go.xero.com/AccountsPayable/View.aspx?InvoiceID=${d.xero_bill_id}`}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="inline-flex items-center gap-1 text-[10px] uppercase text-green-500 hover:underline"
+                              title={`Open ${d.xero_bill_number || d.xero_bill_id} in Xero`}
                             >
-                              <Send size={10} />
-                              {sendingDocId === d.id ? 'Sending…' : 'Email'}
-                            </button>
+                              <Check size={11} /> In Xero
+                            </a>
+                          ) : (
+                            // Not yet pushed — surfaces a stable
+                            // 'In bookkeeper queue' affordance with a
+                            // link to /invoices.
+                            <a
+                              href="/invoices"
+                              className="inline-flex items-center gap-1 text-[10px] uppercase text-un1t-light hover:text-un1t-white"
+                              title="Bookkeeper handles the Xero push from /invoices"
+                            >
+                              <Inbox size={11} /> In queue
+                            </a>
                           )}
                           {!disabled && (
                             <button onClick={() => remove(d.id)} className="text-un1t-light hover:text-red-500 p-0.5">
@@ -183,11 +131,6 @@ export default function DocumentsCard({ car, setCar, setError, disabled }) {
                     </div>
                   ))}
                 </div>
-              )}
-              {docs.some(d => d.xero_send_error) && (
-                <p className="mt-2 text-[11px] text-red-400">
-                  Last Xero error: {docs.find(d => d.xero_send_error)?.xero_send_error}
-                </p>
               )}
             </div>
           )
