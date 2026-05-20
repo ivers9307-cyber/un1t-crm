@@ -57,7 +57,7 @@ export async function GET(request) {
   const db = createServerClient()
 
   let query = db
-    .from('inbound_invoices')
+    .from('invoices_queue')
     .select(`
       id, location_id,
       sender_email, subject,
@@ -156,7 +156,7 @@ export async function POST(request) {
 
   // Insert first, get an id, then upload — same pattern as the webhook.
   const { data: row, error: insErr } = await db
-    .from('inbound_invoices')
+    .from('invoices_queue')
     .insert({
       location_id,
       sender_email: sender_email || null,
@@ -165,6 +165,8 @@ export async function POST(request) {
       attachment_size_bytes: bytes.length,
       attachment_mime_type: file.type,
       status: 'received',
+      source_type: 'supplier_email',
+      attachment_bucket: STORAGE_BUCKET,
     })
     .select('id, location_id, status, created_at')
     .single()
@@ -181,12 +183,12 @@ export async function POST(request) {
     .from(STORAGE_BUCKET)
     .upload(storagePath, bytes, { contentType: file.type, upsert: false })
   if (upErr) {
-    await db.from('inbound_invoices').delete().eq('id', row.id)
+    await db.from('invoices_queue').delete().eq('id', row.id)
     return NextResponse.json({ success: false, error: `Upload failed: ${upErr.message}` }, { status: 500 })
   }
 
   const { error: updErr } = await db
-    .from('inbound_invoices')
+    .from('invoices_queue')
     .update({ attachment_path: storagePath })
     .eq('id', row.id)
   if (updErr) {

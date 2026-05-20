@@ -88,6 +88,15 @@ export const WEB_PERMISSIONS = Object.freeze([
   // under Studio Management because it's about supplier bills not
   // on-site operations.
   { key: 'invoices_inbox', label: 'Invoices',                   hint: 'Operator inbox for supplier invoices emailed in to <slug>-invoices@un1tdublin.com. Quality + data approval before forwarding to Xero. Master + owner only by default.' },
+  // INVOICES-QUEUE.1 (mig 185) — bookkeeper flag. Gates the
+  // analyse + send-to-Xero actions inside /invoices (PR 2) and
+  // unlocks a dedicated Bookkeeper queue tab in /approvals. Owners
+  // can still SEE the inbox via invoices_inbox (audit); only
+  // bookkeepers can ACT on it. Defaults: master ON, everyone else
+  // OFF — operator grants per-user via StaffForm for month-end
+  // coverage (typical: senior manager gets the flag for a week,
+  // then it flips back off).
+  { key: 'bookkeeper', label: 'Bookkeeper (accountant sign-off)', hint: 'Grants the final-sign-off step inside /invoices: run Claude Vision analysis on queued items and send approved invoices to Xero. Owners approve at the source feature (FTE expenses, contractor invoices); bookkeepers approve at the queue. Default master only — grant temporarily to a senior manager for month-end cover and remove again.' },
   // — Infra —
   { key: 'settings',   label: 'Settings & Staff Management',    hint: 'Location settings, staff management, integrations, branding.' },
   // Landing-page editor (mig 126-130, Phase LP1-3c). Operator
@@ -115,6 +124,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     contracts: true, tv_displays: true, glofox_import: true, preferences_import: true,
     orders: true, car_processing: true,
     invoices_inbox: true,
+    bookkeeper: true,
     settings: true,
     landing_page: true,
   },
@@ -128,6 +138,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     contracts: false, tv_displays: false, glofox_import: false, preferences_import: false,
     orders: false, car_processing: false,         // financial views off by default
     invoices_inbox: false,                         // supplier-invoice approval is finance, not staff
+    bookkeeper: false,                              // accountant sign-off — never the default
     settings: false,
     landing_page: false,                          // marketing copy isn't a staff concern
   },
@@ -142,6 +153,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     contracts: false, tv_displays: false, glofox_import: false, preferences_import: false,
     orders: false, car_processing: false,         // head coach doesn't need orders by default
     invoices_inbox: false,
+    bookkeeper: false,
     settings: false,
     landing_page: false,
   },
@@ -157,6 +169,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     contracts: false, tv_displays: true, glofox_import: false, preferences_import: false,
     orders: true, car_processing: false,          // managers run revenue ops; CCF Autos is per-user opt-in
     invoices_inbox: false,                         // manager isn't an approver — owner/master only
+    bookkeeper: false,                              // grant temporarily for month-end cover if needed
     settings: true,
     landing_page: false,                          // owner/master decision; per-user override available
   },
@@ -172,6 +185,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     contracts: true, tv_displays: true, glofox_import: false, preferences_import: false,
     orders: true, car_processing: false,          // OFF for owner too — explicit opt-in per profile
     invoices_inbox: true,                          // owner approves their location's supplier invoices
+    bookkeeper: false,                              // owner approves at the source; accountant sign-off is master/dedicated only
     settings: true,
     landing_page: true,
   },

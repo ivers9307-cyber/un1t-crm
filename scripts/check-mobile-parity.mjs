@@ -113,6 +113,11 @@ const WEB_ONLY_OK = {
   // attachment (PDF preview) alongside the extracted fields side by
   // side. That's a laptop workflow; no mobile UI by design.
   invoices_inbox: 'Supplier-invoice inbox (INVOICES.1) — quality + data review for emailed invoices before forwarding to Xero. PDF preview alongside editable extracted fields wants screen real estate; finance approval is desktop work.',
+  // INVOICES-QUEUE.1 — bookkeeper flag. Gates the analyse + send-
+  // to-Xero actions inside /invoices and the Bookkeeper queue tab
+  // in /approvals. Both surfaces are desktop-only (PDF preview +
+  // bulk analyse + multi-row review), so the permission is too.
+  bookkeeper: 'Bookkeeper sign-off flag (INVOICES-QUEUE.1) — gates the analyse + send-to-Xero actions inside /invoices and the Bookkeeper queue tab inside /approvals. Both surfaces are desktop-only by design.',
 }
 
 const webDrift = []

@@ -44,7 +44,7 @@ export async function POST(_request, { params }) {
   // record of the approval even if the forward fails).
   if (row.status === 'extracted') {
     const { data: stepped, error: stepErr } = await db
-      .from('inbound_invoices')
+      .from('invoices_queue')
       .update({
         status: 'data_approved',
         data_reviewed_at: new Date().toISOString(),
@@ -72,7 +72,7 @@ export async function POST(_request, { params }) {
   } catch (e) {
     const msg = e instanceof XeroError ? e.message : (e?.message || String(e))
     await db
-      .from('inbound_invoices')
+      .from('invoices_queue')
       .update({ xero_error: msg })
       .eq('id', id)
     return NextResponse.json({ success: false, error: msg }, { status: 502 })
@@ -80,7 +80,7 @@ export async function POST(_request, { params }) {
 
   // Stamp success state.
   const { data: updated, error: updErr } = await db
-    .from('inbound_invoices')
+    .from('invoices_queue')
     .update({
       status: 'forwarded',
       forwarded_at: new Date().toISOString(),

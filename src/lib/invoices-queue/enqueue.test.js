@@ -1,0 +1,170 @@
+// INVOICES-QUEUE.1 — enqueue test coverage.
+//
+// The enqueue helpers are thin orchestrators around supabase-js;
+// the integration story (mig 185 CHECK constraint enforces source
+// xor, FK cascade cleans queue on source delete) is left to
+// route-level + DB integration tests. Here we lock the SHAPE of
+// each function's output and the error-envelope contract — the
+// approval routes use the {ok,error} shape to decide whether to
+// surface a warning, so a shape regression silently breaks the
+// caller pattern.
+
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+
+// Stub the Supabase server client BEFORE importing the lib so
+// `enqueueFromX` picks up the stub instead of the real one.
+const mockDb = {
+  from: vi.fn(),
+}
+vi.mock('@/lib/supabase', () => ({ createServerClient: () => mockDb }))
+
+// Helper to build a fluent chainable mock that resolves to a
+// fixed value at the end of the chain. supabase-js's
+// PostgrestQueryBuilder + Filter + Transform builders are
+// thenables — `await db.from(...).select(...).eq(...).maybeSingle()`
+// resolves the chain. We stub each step to return `this` (the same
+// chainable) plus a final `.then`/`.maybeSingle`/`.single` that
+// resolves.
+function buildChainable(finalValue) {
+  const chain = {
+    select: vi.fn().mockReturnThis(),
+    eq: vi.fn().mockReturnThis(),
+    in: vi.fn().mockReturnThis(),
+    maybeSingle: vi.fn().mockResolvedValue(finalValue),
+    single: vi.fn().mockResolvedValue(finalValue),
+    insert: vi.fn().mockReturnThis(),
+    then: undefined, // not awaited at the top level
+  }
+  return chain
+}
+
+let enqueueModule
+
+beforeEach(async () => {
+  vi.resetModules()
+  mockDb.from.mockReset()
+  enqueueModule = await import('./enqueue')
+})
+
+afterEach(() => {
+  vi.clearAllMocks()
+})
+
+describe('enqueueFromFteExpenseClaim', () => {
+  it('returns ok with empty queueIds when claim has no items', async () => {
+    // First .from('fte_expense_claims') call returns the claim row.
+    // Second .from('fte_expense_items') call returns an empty array.
+    const claimChain = buildChainable({ data: { id: 'c1', location_id: 'loc1', status: 'approved' }, error: null })
+    const itemsChain = buildChainable({ data: [], error: null })
+    mockDb.from.mockImplementation((table) => {
+      if (table === 'fte_expense_claims') return claimChain
+      if (table === 'fte_expense_items') return itemsChain
+      throw new Error(`unexpected table ${table}`)
+    })
+    const r = await enqueueModule.enqueueFromFteExpenseClaim('c1')
+    expect(r).toEqual({ ok: true, queueIds: [] })
+  })
+
+  it('returns ok with empty queueIds when items have no receipts', async () => {
+    const claimChain = buildChainable({ data: { id: 'c1', location_id: 'loc1', status: 'approved' }, error: null })
+    const itemsChain = buildChainable({
+      data: [
+        { id: 'i1', claim_id: 'c1', receipt_path: null, vendor: 'Mileage', amount: 10 },
+      ],
+      error: null,
+    })
+    mockDb.from.mockImplementation((t) => t === 'fte_expense_claims' ? claimChain : itemsChain)
+    const r = await enqueueModule.enqueueFromFteExpenseClaim('c1')
+    expect(r).toEqual({ ok: true, queueIds: [] })
+  })
+
+  it('returns error when claim not found', async () => {
+    const claimChain = buildChainable({ data: null, error: null })
+    mockDb.from.mockReturnValue(claimChain)
+    const r = await enqueueModule.enqueueFromFteExpenseClaim('missing')
+    expect(r.ok).toBe(false)
+    expect(r.error).toMatch(/not found/i)
+  })
+
+  it('returns error envelope (not throw) on db error', async () => {
+    const claimChain = buildChainable({ data: null, error: { message: 'boom' } })
+    mockDb.from.mockReturnValue(claimChain)
+    const r = await enqueueModule.enqueueFromFteExpenseClaim('c1')
+    expect(r.ok).toBe(false)
+    expect(r.error).toContain('boom')
+  })
+})
+
+describe('enqueueFromContractorInvoice', () => {
+  it('returns ok + queueId on success', async () => {
+    const invChain = buildChainable({
+      data: {
+        id: 'inv1', location_id: 'loc1', status: 'approved',
+        pdf_path: 'inv1.pdf', invoice_number: 'A001',
+        period_start: '2026-05-01', period_end: '2026-05-31',
+        invoice_amount: 100,
+        contractor: { id: 'p1', full_name: 'Coach Sam', email: 'sam@x.com' },
+      },
+      error: null,
+    })
+    const queueChain = buildChainable({ data: { id: 'q1' }, error: null })
+    mockDb.from.mockImplementation((t) => t === 'contractor_invoices' ? invChain : queueChain)
+    const r = await enqueueModule.enqueueFromContractorInvoice('inv1')
+    expect(r).toEqual({ ok: true, queueIds: ['q1'] })
+  })
+
+  it('refuses to enqueue when invoice has no PDF', async () => {
+    const invChain = buildChainable({
+      data: { id: 'inv1', location_id: 'loc1', status: 'approved', pdf_path: null },
+      error: null,
+    })
+    mockDb.from.mockReturnValue(invChain)
+    const r = await enqueueModule.enqueueFromContractorInvoice('inv1')
+    expect(r.ok).toBe(false)
+    expect(r.error).toMatch(/no PDF/i)
+  })
+
+  it('returns error when invoice not found', async () => {
+    const invChain = buildChainable({ data: null, error: null })
+    mockDb.from.mockReturnValue(invChain)
+    const r = await enqueueModule.enqueueFromContractorInvoice('missing')
+    expect(r.ok).toBe(false)
+    expect(r.error).toMatch(/not found/i)
+  })
+})
+
+describe('enqueueFromCarDocument', () => {
+  it('returns ok + queueId on success', async () => {
+    const docChain = buildChainable({
+      data: {
+        id: 'd1', car_id: 'car1', storage_path: 'car1/d1.pdf', filename: 'invoice.pdf',
+        mime_type: 'application/pdf', size_bytes: 12345,
+        car: { id: 'car1', location_id: 'loc1', make: 'Tesla', model: 'Model 3', uk_reg: 'AB12 CDE' },
+      },
+      error: null,
+    })
+    const queueChain = buildChainable({ data: { id: 'q1' }, error: null })
+    mockDb.from.mockImplementation((t) => t === 'car_documents' ? docChain : queueChain)
+    const r = await enqueueModule.enqueueFromCarDocument('d1')
+    expect(r).toEqual({ ok: true, queueIds: ['q1'] })
+  })
+
+  it('refuses when car has no location_id', async () => {
+    const docChain = buildChainable({
+      data: { id: 'd1', car_id: 'car1', storage_path: 'p.pdf', car: { id: 'car1', location_id: null } },
+      error: null,
+    })
+    mockDb.from.mockReturnValue(docChain)
+    const r = await enqueueModule.enqueueFromCarDocument('d1')
+    expect(r.ok).toBe(false)
+    expect(r.error).toMatch(/location/i)
+  })
+
+  it('returns error when document not found', async () => {
+    const docChain = buildChainable({ data: null, error: null })
+    mockDb.from.mockReturnValue(docChain)
+    const r = await enqueueModule.enqueueFromCarDocument('missing')
+    expect(r.ok).toBe(false)
+    expect(r.error).toMatch(/not found/i)
+  })
+})
