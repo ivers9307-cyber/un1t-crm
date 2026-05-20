@@ -1,6 +1,17 @@
 // INVOICES.1 — short-lived signed URL for the inbox UI to display
-// the original attachment. The bucket is private; signed URLs are
-// the standard pattern (mirrors car_documents + fte_expense_items).
+// the original attachment.
+//
+// QUEUE-ATTACHMENT-BUCKET — INVOICES-QUEUE.1 PR 1 (mig 185) widened
+// the queue beyond supplier emails. Each row's storage location is
+// now recorded on attachment_bucket:
+//   supplier_email     → 'inbound-invoices'
+//   contractor_invoice → 'contractor-invoices'
+//   fte_expense_item   → 'fte-expense-receipts'
+//   car_document       → 'car-documents'
+// Use the per-row bucket so previews work for every source. The
+// old hardcoded 'inbound-invoices' meant car/contractor/FTE rows
+// returned 404 and the UI showed 'No attachment available' even
+// though the file was sitting fine in its own bucket.
 
 import { NextResponse } from 'next/server'
 import { loadInvoiceForUser } from '../../_helpers'
@@ -8,8 +19,10 @@ import { loadInvoiceForUser } from '../../_helpers'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-const STORAGE_BUCKET = 'inbound-invoices'
 const SIGNED_URL_TTL_SECONDS = 300 // 5 minutes
+// Fallback for any legacy row written before mig 185 added the
+// attachment_bucket column. New rows always have it populated.
+const FALLBACK_BUCKET = 'inbound-invoices'
 
 export async function GET(_request, { params }) {
   const { id } = await params
@@ -21,8 +34,9 @@ export async function GET(_request, { params }) {
     return NextResponse.json({ success: false, error: 'No attachment.' }, { status: 404 })
   }
 
+  const bucket = row.attachment_bucket || FALLBACK_BUCKET
   const { data, error } = await db.storage
-    .from(STORAGE_BUCKET)
+    .from(bucket)
     .createSignedUrl(row.attachment_path, SIGNED_URL_TTL_SECONDS)
   if (error || !data?.signedUrl) {
     return NextResponse.json({

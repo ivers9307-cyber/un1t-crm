@@ -10,7 +10,7 @@ import { getCurrentUser } from '@/lib/auth'
 
 export const ROW_SELECT = `
   id, location_id, sender_email, subject, email_message_id,
-  attachment_path, attachment_filename, attachment_size_bytes, attachment_mime_type,
+  attachment_bucket, attachment_path, attachment_filename, attachment_size_bytes, attachment_mime_type,
   status, received_at,
   quality_reviewed_at, quality_reviewed_by,
   extracted_at, extraction_confidence, extraction_error,
