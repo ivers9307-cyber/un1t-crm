@@ -52,6 +52,10 @@ export async function GET(request) {
   const { searchParams } = new URL(request.url)
   const statusFilter = searchParams.get('status')
   const locationFilter = searchParams.get('location_id')
+  // INVOICES-QUEUE.1 PR 2 — source_type filter drives the new
+  // per-source tabs in /invoices. Accept comma-separated list for
+  // future "supplier+contractor" combo tabs.
+  const sourceTypeFilter = searchParams.get('source_type')
   const limit = Math.min(Number(searchParams.get('limit') || 100), 500)
 
   const db = createServerClient()
@@ -59,9 +63,10 @@ export async function GET(request) {
   let query = db
     .from('invoices_queue')
     .select(`
-      id, location_id,
+      id, location_id, source_type,
+      source_contractor_invoice_id, source_fte_expense_item_id, source_car_document_id,
       sender_email, subject,
-      attachment_filename, attachment_size_bytes, attachment_mime_type,
+      attachment_bucket, attachment_path, attachment_filename, attachment_size_bytes, attachment_mime_type,
       status, received_at,
       quality_reviewed_at, quality_reviewed_by,
       extracted_at, extraction_confidence, extraction_error,
@@ -89,6 +94,10 @@ export async function GET(request) {
   if (statusFilter) {
     const statuses = statusFilter.split(',').map((s) => s.trim()).filter(Boolean)
     if (statuses.length > 0) query = query.in('status', statuses)
+  }
+  if (sourceTypeFilter) {
+    const types = sourceTypeFilter.split(',').map((s) => s.trim()).filter(Boolean)
+    if (types.length > 0) query = query.in('source_type', types)
   }
 
   const { data, error } = await query
