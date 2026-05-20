@@ -5,8 +5,10 @@
 // Polls /api/public/tv/[token]/content every 3s. Re-renders only
 // when content.pushed_at changes (so a steady-state poll is cheap).
 // Renders one of:
-//   - <img>      for source_type 'storage' or 'url'
-//   - Idle view (UN1T mark + live clock) if no content row
+//   - <img>        for source_type 'storage' or 'url'
+//   - TemplateView for source_type 'template' (TV-TEMPLATE.1) —
+//                  a fixed base image with text zones overlaid
+//   - Idle view    (UN1T mark + live clock) if no content row
 //
 // TV-ROTATION.1 — the whole stage is counter-rotated by
 // display.rotation degrees so content designed landscape fills a
@@ -81,6 +83,27 @@ export default function TVDisplay({ token, initial }) {
         containerType: 'size',
       }
 
+  let body
+  if (content?.source_type === 'template' && content?.resolved_url) {
+    body = <TemplateView content={content} />
+  } else if (content?.resolved_url) {
+    body = (
+      <img
+        src={`${content.resolved_url}${content.resolved_url.includes('?') ? '&' : '?'}t=${encodeURIComponent(content.pushed_at)}`}
+        alt={content.label || ''}
+        style={{
+          position: 'absolute',
+          inset: 0,
+          width: '100%',
+          height: '100%',
+          objectFit: 'contain',
+        }}
+      />
+    )
+  } else {
+    body = <IdleView now={now} />
+  }
+
   return (
     <div
       style={{
@@ -92,26 +115,98 @@ export default function TVDisplay({ token, initial }) {
         fontFamily: 'system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif',
       }}
     >
-      <div style={stageStyle}>
-        {content?.resolved_url ? (
-          <img
-            src={`${content.resolved_url}${content.resolved_url.includes('?') ? '&' : '?'}t=${encodeURIComponent(content.pushed_at)}`}
-            alt={content.label || ''}
-            style={{
-              position: 'absolute',
-              inset: 0,
-              width: '100%',
-              height: '100%',
-              objectFit: 'contain',
-            }}
-          />
-        ) : (
-          <IdleView now={now} />
-        )}
-      </div>
+      <div style={stageStyle}>{body}</div>
     </div>
   )
 }
+
+// ── Template view ───────────────────────────────────────────────
+//
+// TV-TEMPLATE.1 — a fixed base image with text zones laid over it.
+// Zone geometry is stored as % of the base image, so the overlay
+// only lines up if it's positioned relative to the *rendered image
+// rectangle* — not the stage, which letterboxes the image when the
+// panel aspect ratio differs. We measure the stage box + the
+// image's natural size and compute that contained rectangle, then
+// position every zone inside it.
+
+function TemplateView({ content }) {
+  const boxRef = useRef(null)
+  const [box, setBox] = useState({ w: 0, h: 0 })
+  const [nat, setNat] = useState({ w: 0, h: 0 })
+
+  useEffect(() => {
+    const el = boxRef.current
+    if (!el) return
+    const measure = () => setBox({ w: el.clientWidth, h: el.clientHeight })
+    measure()
+    const ro = new ResizeObserver(measure)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+
+  const zones = content.template?.zones || []
+  const values = content.template?.values || {}
+
+  // object-fit: contain rectangle for the base image inside the box.
+  let frame = null
+  if (box.w > 0 && box.h > 0 && nat.w > 0 && nat.h > 0) {
+    const scale = Math.min(box.w / nat.w, box.h / nat.h)
+    const w = nat.w * scale
+    const h = nat.h * scale
+    frame = { w, h, left: (box.w - w) / 2, top: (box.h - h) / 2 }
+  }
+
+  return (
+    <div ref={boxRef} style={{ position: 'absolute', inset: 0 }}>
+      <img
+        src={content.resolved_url}
+        alt={content.label || ''}
+        onLoad={e => setNat({ w: e.target.naturalWidth, h: e.target.naturalHeight })}
+        style={{
+          position: 'absolute',
+          inset: 0,
+          width: '100%',
+          height: '100%',
+          objectFit: 'contain',
+        }}
+      />
+      {frame && zones.map(z => {
+        const text = (values[z.id] ?? z.defaultText ?? '').toString()
+        return (
+          <div
+            key={z.id}
+            style={{
+              position: 'absolute',
+              left: frame.left + (z.x / 100) * frame.w,
+              top: frame.top + (z.y / 100) * frame.h,
+              width: (z.width / 100) * frame.w,
+              height: (z.height / 100) * frame.h,
+              display: 'flex',
+              alignItems: V_ALIGN[z.vAlign] || 'center',
+              justifyContent: H_ALIGN[z.align] || 'center',
+              textAlign: z.align || 'center',
+              color: z.color || '#FFFFFF',
+              fontWeight: z.fontWeight || 700,
+              // fontSize is stored as % of the base image height.
+              fontSize: ((z.fontSize || 6) / 100) * frame.h,
+              lineHeight: 1.12,
+              textTransform: z.uppercase ? 'uppercase' : 'none',
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-word',
+              overflow: 'hidden',
+            }}
+          >
+            <span style={{ width: '100%' }}>{text}</span>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+const V_ALIGN = { top: 'flex-start', middle: 'center', bottom: 'flex-end' }
+const H_ALIGN = { left: 'flex-start', center: 'center', right: 'flex-end' }
 
 function IdleView({ now }) {
   const hh = String(now.getHours()).padStart(2, '0')

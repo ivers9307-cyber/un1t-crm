@@ -15,9 +15,10 @@
 // service-role through /api/tv/[token]/content; this page never
 // needs to touch that public path.
 
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useRef, useEffect } from 'react'
 import { createBrowserClient } from '@/lib/supabase'
-import { Tv, Plus, Copy, Check, Trash2, Upload, Link2, X, Image as ImageIcon, AlertCircle, RotateCcw, RotateCw } from 'lucide-react'
+import { Tv, Plus, Copy, Check, Trash2, Upload, Link2, X, Image as ImageIcon, AlertCircle, RotateCcw, RotateCw, LayoutTemplate, Pencil, Type } from 'lucide-react'
+import TemplateEditor, { bucketPublicUrl } from './TemplateEditor'
 
 // TV-ROTATION.1 — screen-rotation options offered per display.
 // Value is clockwise degrees, matched 1:1 by the CSS rotate() the
@@ -29,9 +30,10 @@ const ORIENTATION_OPTIONS = [
   { value: 180, label: 'Landscape — upside down' },
 ]
 
-export default function TVAdmin({ initialDisplays, locationId, currentUserId }) {
+export default function TVAdmin({ initialDisplays, initialTemplates, locationId, currentUserId }) {
   const db = createBrowserClient()
   const [displays, setDisplays] = useState(initialDisplays)
+  const [templates, setTemplates] = useState(initialTemplates || [])
   const [registerOpen, setRegisterOpen] = useState(false)
   const [error, setError] = useState(null)
 
@@ -41,6 +43,14 @@ export default function TVAdmin({ initialDisplays, locationId, currentUserId }) 
       .eq('location_id', locationId)
       .order('created_at', { ascending: true })
     setDisplays(data || [])
+  }, [db, locationId])
+
+  const refreshTemplates = useCallback(async () => {
+    const { data } = await db.from('tv_templates')
+      .select('*')
+      .eq('location_id', locationId)
+      .order('name', { ascending: true })
+    setTemplates(data || [])
   }, [db, locationId])
 
   return (
@@ -77,6 +87,7 @@ export default function TVAdmin({ initialDisplays, locationId, currentUserId }) 
           <TVCard
             key={d.id}
             display={d}
+            templates={templates}
             currentUserId={currentUserId}
             onError={setError}
             onChange={refresh}
@@ -84,6 +95,16 @@ export default function TVAdmin({ initialDisplays, locationId, currentUserId }) 
           />
         ))}
       </div>
+
+      {/* TV-TEMPLATE.1 — reusable base-image templates. */}
+      <TemplatesSection
+        templates={templates}
+        locationId={locationId}
+        currentUserId={currentUserId}
+        db={db}
+        onError={setError}
+        onChange={refreshTemplates}
+      />
 
       {registerOpen && (
         <RegisterTVModal
@@ -102,9 +123,99 @@ export default function TVAdmin({ initialDisplays, locationId, currentUserId }) 
   )
 }
 
+// ── Templates section ───────────────────────────────────────────
+//
+// TV-TEMPLATE.1 — a template is a fixed branded base image plus
+// fixed text zones. Built once here; staff fill the zone text and
+// push it from the "Push image → Template" tab.
+
+function TemplatesSection({ templates, locationId, currentUserId, db, onError, onChange }) {
+  const [editing, setEditing] = useState(null)   // template object | 'new' | null
+
+  async function deleteTemplate(tpl) {
+    if (!confirm(`Delete template "${tpl.name}"? Any TV currently showing it will fall back to the idle screen.`)) return
+    onError(null)
+    const { error } = await db.from('tv_templates').delete().eq('id', tpl.id)
+    if (error) { onError(error.message); return }
+    await onChange()
+  }
+
+  return (
+    <section className="mt-10">
+      <div className="flex items-baseline justify-between mb-1 flex-wrap gap-2">
+        <h3 className="text-lg font-semibold inline-flex items-center gap-2">
+          <LayoutTemplate size={16} className="text-un1t-light" /> Templates
+        </h3>
+        <button
+          onClick={() => setEditing('new')}
+          className="inline-flex items-center gap-1.5 text-sm bg-un1t-white text-un1t-black font-medium px-3 py-1.5 rounded-md hover:bg-un1t-accent"
+        >
+          <Plus size={14} /> New template
+        </button>
+      </div>
+      <p className="text-sm text-un1t-light mb-4">
+        A fixed branded image with text zones. Staff retype the text and push it to a TV — the design stays on-brand.
+      </p>
+
+      {templates.length === 0 ? (
+        <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-8 text-center">
+          <LayoutTemplate size={28} className="text-un1t-mid mx-auto mb-3" />
+          <p className="text-sm text-un1t-light mb-1">No templates yet.</p>
+          <p className="text-xs text-un1t-mid">Create one to let staff push branded messages without designing a fresh image each time.</p>
+        </div>
+      ) : (
+        <div className="grid sm:grid-cols-2 gap-3">
+          {templates.map(t => (
+            <div key={t.id} className="bg-un1t-dark border border-un1t-gray rounded-lg overflow-hidden flex">
+              <div className="w-28 shrink-0 bg-un1t-black flex items-center justify-center">
+                <img
+                  src={bucketPublicUrl(t.base_image_path)}
+                  alt=""
+                  className="w-full h-full object-cover"
+                />
+              </div>
+              <div className="flex-1 min-w-0 p-3 flex flex-col">
+                <div className="text-sm font-medium text-un1t-white truncate">{t.name}</div>
+                <div className="text-xs text-un1t-mid mt-0.5 inline-flex items-center gap-1">
+                  <Type size={11} /> {(t.zones?.length || 0)} text {t.zones?.length === 1 ? 'zone' : 'zones'}
+                </div>
+                <div className="mt-auto pt-2 flex items-center gap-2">
+                  <button
+                    onClick={() => setEditing(t)}
+                    className="inline-flex items-center gap-1 text-xs text-un1t-light hover:text-un1t-white border border-un1t-gray hover:border-un1t-white/30 px-2 py-1 rounded-md"
+                  >
+                    <Pencil size={12} /> Edit
+                  </button>
+                  <button
+                    onClick={() => deleteTemplate(t)}
+                    className="inline-flex items-center text-xs text-red-400 hover:text-red-300 border border-un1t-gray hover:border-red-400/40 px-2 py-1 rounded-md"
+                  >
+                    <Trash2 size={12} />
+                  </button>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {editing && (
+        <TemplateEditor
+          template={editing === 'new' ? null : editing}
+          locationId={locationId}
+          currentUserId={currentUserId}
+          db={db}
+          onClose={() => setEditing(null)}
+          onSaved={onChange}
+        />
+      )}
+    </section>
+  )
+}
+
 // ── Per-TV row ──────────────────────────────────────────────────
 
-function TVCard({ display, currentUserId, onError, onChange, db }) {
+function TVCard({ display, templates, currentUserId, onError, onChange, db }) {
   const content = Array.isArray(display.tv_content) ? display.tv_content[0] : display.tv_content
   const tvUrl = typeof window !== 'undefined'
     ? `${window.location.origin}/tv/cast/${display.token}`
@@ -205,13 +316,16 @@ function TVCard({ display, currentUserId, onError, onChange, db }) {
       {pushOpen && (
         <PushModal
           onClose={() => setPushOpen(false)}
-          onPush={async ({ source_type, source_ref, label }) => {
+          onPush={async ({ source_type, source_ref, label, template_values }) => {
             onError(null)
             const { error } = await db.from('tv_content').upsert({
               tv_display_id: display.id,
               source_type,
               source_ref,
               label,
+              // Reset to null for non-template pushes so a previous
+              // template's text never lingers on the row.
+              template_values: template_values ?? null,
               pushed_at: new Date().toISOString(),
               pushed_by: currentUserId,
               triggered_by: `manual:${currentUserId}`,
@@ -221,6 +335,7 @@ function TVCard({ display, currentUserId, onError, onChange, db }) {
             setPushOpen(false)
           }}
           locationId={display.location_id}
+          templates={templates}
           db={db}
         />
       )}
@@ -314,15 +429,28 @@ function RegisterTVModal({ onClose, onCreate }) {
   )
 }
 
-// ── Push modal — upload or URL ──────────────────────────────────
+// ── Push modal — upload / URL / template ────────────────────────
 
-function PushModal({ onClose, onPush, locationId, db }) {
-  const [mode, setMode] = useState('upload')   // 'upload' | 'url'
+function PushModal({ onClose, onPush, locationId, templates, db }) {
+  const [mode, setMode] = useState('upload')   // 'upload' | 'url' | 'template'
   const [file, setFile] = useState(null)
   const [externalUrl, setExternalUrl] = useState('')
   const [label, setLabel] = useState('')
+  const [templateId, setTemplateId] = useState('')
+  const [zoneText, setZoneText] = useState({})   // { zoneId: text }
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
+
+  const selectedTemplate = templates?.find(t => t.id === templateId) || null
+
+  function pickTemplate(id) {
+    setTemplateId(id)
+    const tpl = templates?.find(t => t.id === id)
+    // Seed each zone's input with its default text.
+    const seed = {}
+    for (const z of tpl?.zones || []) seed[z.id] = z.defaultText || ''
+    setZoneText(seed)
+  }
 
   async function submit() {
     setError(null)
@@ -343,12 +471,20 @@ function PushModal({ onClose, onPush, locationId, db }) {
           source_ref: path,
           label: label.trim() || file.name,
         })
-      } else {
+      } else if (mode === 'url') {
         if (!externalUrl.trim()) { setError('Paste a URL.'); setBusy(false); return }
         await onPush({
           source_type: 'url',
           source_ref: externalUrl.trim(),
           label: label.trim() || null,
+        })
+      } else {
+        if (!selectedTemplate) { setError('Pick a template.'); setBusy(false); return }
+        await onPush({
+          source_type: 'template',
+          source_ref: selectedTemplate.id,
+          label: label.trim() || selectedTemplate.name,
+          template_values: zoneText,
         })
       }
     } catch (err) {
@@ -360,7 +496,7 @@ function PushModal({ onClose, onPush, locationId, db }) {
 
   return (
     <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-un1t-dark border border-un1t-gray rounded-lg w-full max-w-md p-5" onClick={e => e.stopPropagation()}>
+      <div className="bg-un1t-dark border border-un1t-gray rounded-lg w-full max-w-md max-h-[92vh] overflow-auto p-5" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-lg font-semibold">Push to TV</h3>
           <button onClick={onClose} className="text-un1t-light hover:text-un1t-white"><X size={16} /></button>
@@ -368,8 +504,9 @@ function PushModal({ onClose, onPush, locationId, db }) {
 
         <div className="inline-flex border border-un1t-gray rounded-md overflow-hidden mb-3">
           {[
-            { key: 'upload', Icon: Upload, label: 'Upload' },
-            { key: 'url',    Icon: Link2,  label: 'URL' },
+            { key: 'template', Icon: LayoutTemplate, label: 'Template' },
+            { key: 'upload',   Icon: Upload,         label: 'Upload' },
+            { key: 'url',      Icon: Link2,          label: 'URL' },
           ].map(({ key, Icon, label }) => (
             <button
               key={key}
@@ -380,6 +517,51 @@ function PushModal({ onClose, onPush, locationId, db }) {
             </button>
           ))}
         </div>
+
+        {mode === 'template' && (
+          <div className="mb-3">
+            {(!templates || templates.length === 0) ? (
+              <p className="text-xs text-un1t-mid bg-un1t-black border border-un1t-gray rounded-md px-3 py-3">
+                No templates yet. Create one in the Templates section to push branded messages.
+              </p>
+            ) : (
+              <>
+                <label className="block text-xs text-un1t-light mb-1">Template</label>
+                <select
+                  value={templateId}
+                  onChange={e => pickTemplate(e.target.value)}
+                  className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
+                >
+                  <option value="">Choose a template…</option>
+                  {templates.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                </select>
+
+                {selectedTemplate && (
+                  <>
+                    <TemplatePreview template={selectedTemplate} values={zoneText} />
+                    {(selectedTemplate.zones || []).length === 0 ? (
+                      <p className="text-[11px] text-un1t-mid mt-2">This template has no text zones — it pushes as-is.</p>
+                    ) : (
+                      <div className="mt-3 space-y-2">
+                        {(selectedTemplate.zones || []).map(z => (
+                          <div key={z.id}>
+                            <label className="block text-[11px] text-un1t-mid mb-1">{z.label}</label>
+                            <input
+                              value={zoneText[z.id] ?? ''}
+                              onChange={e => setZoneText(v => ({ ...v, [z.id]: e.target.value }))}
+                              placeholder={z.defaultText || ''}
+                              className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-1.5 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid"
+                            />
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </>
+                )}
+              </>
+            )}
+          </div>
+        )}
 
         {mode === 'upload' && (
           <div className="mb-3">
@@ -435,6 +617,66 @@ function PushModal({ onClose, onPush, locationId, db }) {
           </button>
         </div>
       </div>
+    </div>
+  )
+}
+
+// ── Template preview ────────────────────────────────────────────
+//
+// Read-only render of a template with the staff-typed values, so
+// the pusher sees what the TV will show. Same %-geometry the cast
+// page uses (TVDisplay.jsx) — the base image fills the box width
+// and zones are positioned as a % of it.
+
+function TemplatePreview({ template, values }) {
+  const ref = useRef(null)
+  const [h, setH] = useState(0)
+
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    const measure = () => setH(el.clientHeight)
+    measure()
+    const ro = new ResizeObserver(measure)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+
+  return (
+    <div
+      ref={ref}
+      className="relative mt-2 border border-un1t-gray rounded-md overflow-hidden"
+      style={{ background: '#000' }}
+    >
+      <img
+        src={bucketPublicUrl(template.base_image_path)}
+        alt=""
+        style={{ display: 'block', width: '100%', height: 'auto' }}
+      />
+      {(template.zones || []).map(z => (
+        <div
+          key={z.id}
+          style={{
+            position: 'absolute',
+            left: `${z.x}%`, top: `${z.y}%`,
+            width: `${z.width}%`, height: `${z.height}%`,
+            display: 'flex',
+            alignItems: { top: 'flex-start', middle: 'center', bottom: 'flex-end' }[z.vAlign] || 'center',
+            justifyContent: { left: 'flex-start', center: 'center', right: 'flex-end' }[z.align] || 'center',
+            textAlign: z.align || 'center',
+            color: z.color || '#fff',
+            fontWeight: z.fontWeight || 700,
+            fontSize: `${((z.fontSize || 6) / 100) * h}px`,
+            lineHeight: 1.12,
+            textTransform: z.uppercase ? 'uppercase' : 'none',
+            overflow: 'hidden',
+          }}
+        >
+          <span style={{ width: '100%', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+            {values[z.id] ?? z.defaultText ?? ''}
+          </span>
+        </div>
+      ))}
     </div>
   )
 }
