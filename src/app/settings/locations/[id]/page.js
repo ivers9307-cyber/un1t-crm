@@ -49,7 +49,8 @@ export default async function EditLocationPage(props) {
         connected_at, last_refreshed_at, expires_at, scopes,
         bills_email_address,
         accounts_last_synced_at, contacts_last_synced_at,
-        accounts_sync_error, contacts_sync_error
+        accounts_sync_error, contacts_sync_error,
+        car_sales_account_code
       `)
       .eq('location_id', location.id)
       .maybeSingle(),

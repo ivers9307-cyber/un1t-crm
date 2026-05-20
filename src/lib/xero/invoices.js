@@ -137,7 +137,7 @@ async function upsertContact(xfetch, { name, email, phone, address }) {
 }
 
 // ── Invoice payload ─────────────────────────────────────────────
-function buildInvoicePayload(car, contactId, brandingThemeId) {
+function buildInvoicePayload(car, contactId, brandingThemeId, accountCode) {
   const exVat = Number(car.irish_sale_price_ex_vat || 0)
   const description = [
     'Tesla',
@@ -169,7 +169,7 @@ function buildInvoicePayload(car, contactId, brandingThemeId) {
         Quantity: 1,
         UnitAmount: exVat,
         TaxType: IE_OUTPUT_VAT,
-        AccountCode: process.env.XERO_SALES_ACCOUNT_CODE || '200',
+        AccountCode: accountCode,
       }],
       Url: process.env.NEXT_PUBLIC_APP_URL
         ? `${process.env.NEXT_PUBLIC_APP_URL}/cars/${car.id}`
@@ -204,6 +204,14 @@ export async function issueCarInvoice(car) {
   }
 
   const { xfetch, conn } = await withFreshToken(car.location_id)
+  // CAR-SALES-ACCOUNT.1 — pull the location's configured car-sales
+  // account code (mig 188) with env + '200' fallback for any
+  // location that hasn't picked one yet. The Settings UI added in
+  // this PR makes the picker the canonical place to set it.
+  const accountCode = conn.car_sales_account_code
+    || process.env.XERO_SALES_ACCOUNT_CODE
+    || '200'
+
   const brandingThemeId = await resolveBrandingThemeId(xfetch)
 
   const contact = await upsertContact(xfetch, {
@@ -216,7 +224,7 @@ export async function issueCarInvoice(car) {
     throw new XeroError('Failed to resolve a Xero Contact for the buyer.')
   }
 
-  const payload = buildInvoicePayload(car, contact.ContactID, brandingThemeId)
+  const payload = buildInvoicePayload(car, contact.ContactID, brandingThemeId, accountCode)
   const created = await xfetch('/Invoices', { method: 'POST', body: payload })
   const inv = created?.Invoices?.[0]
   if (!inv?.InvoiceID) {

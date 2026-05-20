@@ -6,9 +6,9 @@
 // Xero "Email to Bills" address so the document → draft bill
 // auto-forward has somewhere to send to.
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
-import { Plug, RefreshCw, Unlink, Database, Users } from 'lucide-react'
+import { Plug, RefreshCw, Unlink, Database, Users, Check } from 'lucide-react'
 
 function fmt(d) {
   if (!d) return '—'
@@ -244,6 +244,115 @@ export default function XeroLocationCard({ location, connection }) {
               )}
             </div>
           </div>
+        </div>
+      )}
+
+      {/* CAR-SALES-ACCOUNT.1 — per-location car-sales account code.
+          Surfaces the connected tenant's chart of accounts (from
+          the xero_accounts cache) so the operator picks the right
+          REVENUE/SALES account for car-invoice pushes. */}
+      {connection && (
+        <CarSalesAccountSection location={location} connection={connection} />
+      )}
+    </div>
+  )
+}
+
+// CAR-SALES-ACCOUNT.1 — picker for the per-location car-invoice
+// sales account. Reads options from the cached xero_accounts via
+// /api/locations/[id]/xero/accounts?type=ALL and filters client-
+// side to REVENUE + SALES + ACTIVE. Saves via POST
+// /api/locations/[id]/xero/car-sales-account.
+function CarSalesAccountSection({ location, connection }) {
+  const router = useRouter()
+  const [accounts, setAccounts] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(null)
+  const [stale, setStale] = useState(false)
+  const [picked, setPicked] = useState(connection?.car_sales_account_code || '')
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    fetch(`/api/locations/${location.id}/xero/accounts?type=ALL`)
+      .then((r) => r.json())
+      .then((j) => {
+        if (cancelled) return
+        if (!j.success) {
+          setError(j.error || 'Failed to load accounts')
+          return
+        }
+        // Filter client-side: REVENUE or SALES account types that
+        // are ACTIVE. Status filter is already applied server-side.
+        const filtered = (j.accounts || []).filter((a) =>
+          a.account_type === 'REVENUE' || a.account_type === 'SALES'
+        )
+        setAccounts(filtered)
+        setStale(!!j.stale)
+      })
+      .catch((e) => !cancelled && setError(e.message || 'Network error'))
+      .finally(() => !cancelled && setLoading(false))
+    return () => { cancelled = true }
+  }, [location.id])
+
+  async function onSave(e) {
+    e?.preventDefault?.()
+    setSaving(true); setSaved(false)
+    try {
+      const res = await fetch(`/api/locations/${location.id}/xero/car-sales-account`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ account_code: picked || null }),
+      })
+      const j = await res.json()
+      if (!j.success) { alert(j.error || 'Save failed'); return }
+      setSaved(true)
+      setTimeout(() => setSaved(false), 1500)
+      router.refresh()
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="mt-4 pt-3 border-t border-un1t-gray/50">
+      <label className="block text-xs uppercase tracking-wider text-un1t-light font-semibold mb-1">
+        Car-invoice sales account
+      </label>
+      <p className="text-[11px] text-un1t-light mb-2">
+        Used when issuing a car invoice from car processing → push to Xero. Pick the REVENUE/SALES
+        account this location books car sales against. Sourced from the cached chart of accounts —
+        if a new one is missing, hit <strong>Refresh</strong> on the chart-of-accounts panel above.
+      </p>
+      <form onSubmit={onSave} className="flex items-center gap-2">
+        <select
+          value={picked}
+          onChange={(e) => setPicked(e.target.value)}
+          disabled={loading || saving || accounts.length === 0}
+          className="flex-1 bg-un1t-black/30 border border-un1t-gray rounded-md px-3 py-1.5 text-xs text-un1t-white focus:outline-none focus:border-un1t-light disabled:opacity-50"
+        >
+          <option value="">{loading ? 'Loading…' : (accounts.length === 0 ? 'No REVENUE/SALES accounts cached — refresh above' : '— Use default (env or 200) —')}</option>
+          {accounts.map((a) => (
+            <option key={a.xero_account_id} value={a.code || ''}>
+              {a.code ? `${a.code} — ` : ''}{a.name}{a.account_type === 'SALES' ? ' (sales)' : ''}
+            </option>
+          ))}
+        </select>
+        <button
+          type="submit"
+          disabled={saving || loading}
+          className="text-xs px-3 py-1.5 bg-un1t-white text-un1t-black rounded-md font-semibold hover:bg-un1t-accent disabled:opacity-50 inline-flex items-center gap-1"
+        >
+          {saved ? <><Check size={12} /> Saved</> : (saving ? 'Saving…' : 'Save')}
+        </button>
+      </form>
+      {error && <div className="mt-1 text-[10px] text-red-400">{error}</div>}
+      {stale && !error && accounts.length > 0 && (
+        <div className="mt-1 text-[10px] text-amber-400">
+          Chart of accounts cache is older than 30 days. Hit Refresh above to make sure your
+          options are current.
         </div>
       )}
     </div>

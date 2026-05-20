@@ -79,6 +79,28 @@ export async function POST(_request, props) {
     return NextResponse.json({ success: true, invoice: result })
   } catch (e) {
     const status = e instanceof XeroError && e.status ? Math.min(Math.max(e.status, 400), 599) : 500
-    return NextResponse.json({ success: false, error: e.message || 'Xero error' }, { status })
+    // CAR-SALES-ACCOUNT.1 — Xero's top-level message for invoice
+    // validation failures is just "A validation exception occurred"
+    // which is useless to the operator. The real detail is buried
+    // in body.Elements[*].ValidationErrors[*].Message. Surface it.
+    const validationDetails = []
+    const elements = e?.body?.Elements
+    if (Array.isArray(elements)) {
+      for (const el of elements) {
+        if (Array.isArray(el?.ValidationErrors)) {
+          for (const v of el.ValidationErrors) {
+            if (v?.Message) validationDetails.push(v.Message)
+          }
+        }
+      }
+    }
+    const message = validationDetails.length
+      ? `${e.message || 'Xero error'} — ${validationDetails.join(' · ')}`
+      : (e.message || 'Xero error')
+    return NextResponse.json({
+      success: false,
+      error: message,
+      ...(validationDetails.length ? { validationDetails } : {}),
+    }, { status })
   }
 }
