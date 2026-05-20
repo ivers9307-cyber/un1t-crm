@@ -86,7 +86,13 @@ main                              ─── HEAD: a65cede (pre-session)
 
 ## Backlog status
 
-**Effectively empty.** Two open PRs are the only in-flight code.
+**Three open PRs + one big design doc waiting to build.**
+
+- **PR #43** `invoices-inbox` — needs merge
+- **PR #44** `approvals-dashboard` — needs merge
+- **PR #45** `docs-session-2026-05-20` — needs merge
+
+**INVOICES-QUEUE.1** (3-PR plan, designed end-of-session) — restructures the approval-to-Xero flow so owner approval drops into a centralised Invoices queue and a new `bookkeeper` permission gates the final accountant sign-off. Full design now in CLAUDE.md → Backlog → "INVOICES-QUEUE.1". **Don't start PR 1 of this until the three PRs above merge** — it touches the same tables (`inbound_invoices` → `invoices_queue` rename) and would conflict otherwise. Hard cutover, no data migration. Tasks #186–#190 are already in the Cowork list for next session.
 
 Surviving items worth attention:
 - **AUDIT-EXPAND.2** (task #129) — DB triggers for mutation logging on key tables. Deferred when AUDIT-EXPAND.1 shipped because the app-level instrumentation covered the high-value surfaces.
