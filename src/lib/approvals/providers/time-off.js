@@ -47,7 +47,12 @@ export const timeOffProvider = {
       submittedAt: r.created_at,
       amount: null,
       currency: null,
-      reviewUrl: `/schedule/time-off?focus=${r.id}`,
+      // APPROVALS-VISIBILITY-FIX — include location_id so TimeOffManager
+      // overrides its default of user.activeLocation. Without this, a
+      // master drilling in from /approvals lands on their own active
+      // location and the request (at a different location) never
+      // appears in either tab — so they can't approve it.
+      reviewUrl: `/schedule/time-off?focus=${r.id}&location_id=${r.location_id}`,
     }))
     return { count: items.length, items }
   },
