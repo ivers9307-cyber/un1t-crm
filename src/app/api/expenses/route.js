@@ -116,22 +116,30 @@ export async function GET(request) {
     .order('created_at', { ascending: false })
     .limit(limit)
 
-  // Scope. Master sees everything; owner sees their locations; FTE
-  // submitter sees their own.
-  if (user.role !== 'master' && user.profileRole !== 'master') {
-    const ownerLocations = Object.entries(user.rolesByLocation || {})
-      .filter(([, r]) => r === 'owner')
-      .map(([loc]) => loc)
-    if (ownerLocations.length > 0) {
-      // Owner: see anyone's claim AT my locations PLUS my own claims
-      // anywhere. The .or() form covers both.
-      query = query.or(
-        `profile_id.eq.${user.id},location_id.in.(${ownerLocations.join(',')})`
-      )
-    } else {
-      // Plain staff: only my own claims.
+  // Scope — ORG-ISOLATION: each location is its own business.
+  //   • master + owner: see all claims AT the active location only,
+  //     plus their own claims anywhere. Switch active to see
+  //     another studio.
+  //   • Plain staff: only their own claims.
+  const isMaster = user.role === 'master' || user.profileRole === 'master'
+  const ownerLocations = Object.entries(user.rolesByLocation || {})
+    .filter(([, r]) => r === 'owner')
+    .map(([loc]) => loc)
+  const activeId = user.activeLocation?.id || null
+  const canViewLocationScope = isMaster || ownerLocations.length > 0
+  if (canViewLocationScope) {
+    if (!activeId) {
+      // No active location → caller sees own claims only.
       query = query.eq('profile_id', user.id)
+    } else if (!isMaster && !ownerLocations.includes(activeId)) {
+      // Active location isn't one they own (e.g. they're a manager
+      // visiting another studio) — fall back to own claims only.
+      query = query.eq('profile_id', user.id)
+    } else {
+      query = query.or(`profile_id.eq.${user.id},location_id.eq.${activeId}`)
     }
+  } else {
+    query = query.eq('profile_id', user.id)
   }
 
   if (statusFilter) {

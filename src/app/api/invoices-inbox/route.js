@@ -28,18 +28,28 @@ export const dynamic = 'force-dynamic'
 const STORAGE_BUCKET = 'inbound-invoices'
 const MAX_UPLOAD_BYTES = 25 * 1024 * 1024 // 25 MB — bigger than a typical PDF; smaller than the Postmark inbound cap.
 
-// Helper — returns the set of location_ids the user can view inbox
-// rows for. master returns null (= unrestricted).
+// Helper — returns the user's effective scope for the inbox.
+//
+// ORG-ISOLATION — each location is treated as its own business
+// regardless of role. Default = active location only. master no
+// longer bypasses — they switch active location to see another
+// studio's queue. Caller MAY still pass `?location_id=<id>` to
+// query a specific location, but the API enforces that the user
+// has access to it (master can address any; owner only their
+// owned ones).
 function inboxScope(user) {
   if (!user) return { allowed: false }
-  if (user.role === 'master' || user.profileRole === 'master') {
-    return { allowed: true, ownerLocations: null }
-  }
+  const isMaster = user.role === 'master' || user.profileRole === 'master'
   const ownerLocations = Object.entries(user.rolesByLocation || {})
     .filter(([, r]) => r === 'owner')
     .map(([loc]) => loc)
-  if (ownerLocations.length === 0) return { allowed: false }
-  return { allowed: true, ownerLocations }
+  if (!isMaster && ownerLocations.length === 0) return { allowed: false }
+  return {
+    allowed: true,
+    isMaster,
+    ownerLocations,
+    activeLocationId: user.activeLocation?.id || null,
+  }
 }
 
 export async function GET(request) {
@@ -84,14 +94,20 @@ export async function GET(request) {
     .order('received_at', { ascending: false })
     .limit(limit)
 
-  if (scope.ownerLocations) {
-    query = query.in('location_id', scope.ownerLocations)
+  // ORG-ISOLATION — default to active location only. Explicit
+  // `?location_id=<id>` query param overrides (allows a master to
+  // address a specific location via API URL), but only if they
+  // have access to it.
+  let effectiveLocationId = locationFilter || scope.activeLocationId
+  if (locationFilter && !scope.isMaster && !scope.ownerLocations.includes(locationFilter)) {
+    return NextResponse.json({ success: false, error: 'Forbidden — not your location' }, { status: 403 })
   }
-  if (locationFilter) {
-    // Re-apply explicit filter — also blocks an owner trying to look
-    // at a location they don't own.
-    query = query.eq('location_id', locationFilter)
+  if (!effectiveLocationId) {
+    // No active location set + no explicit filter → nothing to show.
+    // Better than silently returning everything for master.
+    return NextResponse.json({ success: true, data: [] })
   }
+  query = query.eq('location_id', effectiveLocationId)
   if (statusFilter) {
     const statuses = statusFilter.split(',').map((s) => s.trim()).filter(Boolean)
     if (statuses.length > 0) query = query.in('status', statuses)
