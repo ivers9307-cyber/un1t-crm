@@ -336,7 +336,6 @@ function TVCard({ display, templates, currentUserId, onError, onChange, db }) {
           }}
           locationId={display.location_id}
           templates={templates}
-          db={db}
         />
       )}
     </div>
@@ -431,7 +430,7 @@ function RegisterTVModal({ onClose, onCreate }) {
 
 // ── Push modal — upload / URL / template ────────────────────────
 
-function PushModal({ onClose, onPush, locationId, templates, db }) {
+function PushModal({ onClose, onPush, locationId, templates }) {
   const [mode, setMode] = useState('upload')   // 'upload' | 'url' | 'template'
   const [file, setFile] = useState(null)
   const [externalUrl, setExternalUrl] = useState('')
@@ -458,17 +457,18 @@ function PushModal({ onClose, onPush, locationId, templates, db }) {
     try {
       if (mode === 'upload') {
         if (!file) { setError('Pick an image to upload.'); setBusy(false); return }
-        const ext = (file.name.split('.').pop() || 'jpg').toLowerCase()
-        const path = `${locationId}/${crypto.randomUUID()}.${ext}`
-        const { error: upErr } = await db.storage.from('tv-content').upload(path, file, {
-          cacheControl: '3600',
-          upsert: false,
-          contentType: file.type || undefined,
-        })
-        if (upErr) throw new Error(upErr.message)
+        // Server-side upload — the browser client can't write the
+        // tv-content bucket (see /api/admin/tv-displays/upload).
+        const fd = new FormData()
+        fd.append('file', file)
+        fd.append('kind', 'content')
+        fd.append('location_id', locationId)
+        const res = await fetch('/api/admin/tv-displays/upload', { method: 'POST', body: fd })
+        const json = await res.json().catch(() => ({}))
+        if (!res.ok || !json.success) throw new Error(json.error || 'Upload failed.')
         await onPush({
           source_type: 'storage',
-          source_ref: path,
+          source_ref: json.path,
           label: label.trim() || file.name,
         })
       } else if (mode === 'url') {

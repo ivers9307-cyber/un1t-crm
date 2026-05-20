@@ -83,15 +83,16 @@ export default function TemplateEditor({ template, locationId, currentUserId, db
     setError(null)
     setBusy(true)
     try {
-      const ext = (file.name.split('.').pop() || 'jpg').toLowerCase()
-      const path = `${locationId}/templates/${crypto.randomUUID()}.${ext}`
-      const { error: upErr } = await db.storage.from('tv-content').upload(path, file, {
-        cacheControl: '3600',
-        upsert: false,
-        contentType: file.type || undefined,
-      })
-      if (upErr) throw new Error(upErr.message)
-      setBaseImagePath(path)
+      // Server-side upload — the browser client can't write the
+      // tv-content bucket (see the upload route's header note).
+      const fd = new FormData()
+      fd.append('file', file)
+      fd.append('kind', 'template')
+      fd.append('location_id', locationId)
+      const res = await fetch('/api/admin/tv-displays/upload', { method: 'POST', body: fd })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok || !json.success) throw new Error(json.error || 'Upload failed.')
+      setBaseImagePath(json.path)
     } catch (err) {
       setError(err.message)
     } finally {
