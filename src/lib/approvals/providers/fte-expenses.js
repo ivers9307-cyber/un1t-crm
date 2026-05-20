@@ -1,9 +1,13 @@
 // APPROVALS.1 provider — FTE expense claims awaiting approval.
 //
 // Source: fte_expense_claims.status='submitted' (mig 183). Same
-// approver scope as contractor invoices — master + owner only.
+// approver scope as contractor invoices — owner + master only.
+//
+// APPROVALS-LOCATION-SCOPE — scoped to user.activeLocation only.
 
-import { userIsMaster, ownerLocationIds } from '../registry'
+import { canApproveAtActiveLocation, viewerActiveLocationId } from '../registry'
+
+const FINANCE_APPROVER_ROLES = ['owner']
 
 export const fteExpensesProvider = {
   key: 'fte_expenses',
@@ -11,11 +15,13 @@ export const fteExpensesProvider = {
   reviewBase: '/schedule/expenses',
 
   async fetchPending(db, user) {
-    const isMaster = userIsMaster(user)
-    const owners = ownerLocationIds(user)
-    if (!isMaster && owners.length === 0) return { count: 0, items: [] }
+    const activeId = viewerActiveLocationId(user)
+    if (!activeId) return { count: 0, items: [] }
+    if (!canApproveAtActiveLocation(user, FINANCE_APPROVER_ROLES)) {
+      return { count: 0, items: [] }
+    }
 
-    let q = db
+    const q = db
       .from('fte_expense_claims')
       .select(`
         id, period_start, period_end, total_amount, item_count,
@@ -24,10 +30,9 @@ export const fteExpensesProvider = {
         location:location_id ( id, name )
       `)
       .eq('status', 'submitted')
+      .eq('location_id', activeId)
       .order('submitted_at', { ascending: false })
       .limit(50)
-
-    if (!isMaster) q = q.in('location_id', owners)
 
     const { data, error } = await q
     if (error) throw new Error(`fte_expense_claims: ${error.message}`)
@@ -50,14 +55,14 @@ export const fteExpensesProvider = {
   },
 
   async countPending(db, user) {
-    const isMaster = userIsMaster(user)
-    const owners = ownerLocationIds(user)
-    if (!isMaster && owners.length === 0) return 0
-    let q = db
+    const activeId = viewerActiveLocationId(user)
+    if (!activeId) return 0
+    if (!canApproveAtActiveLocation(user, FINANCE_APPROVER_ROLES)) return 0
+    const q = db
       .from('fte_expense_claims')
       .select('*', { count: 'exact', head: true })
       .eq('status', 'submitted')
-    if (!isMaster) q = q.in('location_id', owners)
+      .eq('location_id', activeId)
     const { count, error } = await q
     if (error) throw new Error(`fte_expense_claims count: ${error.message}`)
     return count || 0

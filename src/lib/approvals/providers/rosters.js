@@ -4,8 +4,12 @@
 // queue). A manager publishes a draft that's over the location's
 // monthly contractor budget → owner needs to approve before it
 // goes live. Owner + master only.
+//
+// APPROVALS-LOCATION-SCOPE — scoped to user.activeLocation only.
 
-import { userIsMaster, ownerLocationIds } from '../registry'
+import { canApproveAtActiveLocation, viewerActiveLocationId } from '../registry'
+
+const ROSTER_APPROVER_ROLES = ['owner']
 
 export const rostersProvider = {
   key: 'rosters',
@@ -13,11 +17,13 @@ export const rostersProvider = {
   reviewBase: '/schedule/approvals',
 
   async fetchPending(db, user) {
-    const isMaster = userIsMaster(user)
-    const owners = ownerLocationIds(user)
-    if (!isMaster && owners.length === 0) return { count: 0, items: [] }
+    const activeId = viewerActiveLocationId(user)
+    if (!activeId) return { count: 0, items: [] }
+    if (!canApproveAtActiveLocation(user, ROSTER_APPROVER_ROLES)) {
+      return { count: 0, items: [] }
+    }
 
-    let q = db
+    const q = db
       .from('rosters')
       .select(`
         id, period_start, period_end, projected_contractor_eur,
@@ -26,10 +32,9 @@ export const rostersProvider = {
         location:location_id ( id, name )
       `)
       .eq('status', 'draft')
+      .eq('location_id', activeId)
       .order('created_at', { ascending: false })
       .limit(50)
-
-    if (!isMaster) q = q.in('location_id', owners)
 
     const { data, error } = await q
     if (error) throw new Error(`rosters: ${error.message}`)
@@ -54,14 +59,14 @@ export const rostersProvider = {
   },
 
   async countPending(db, user) {
-    const isMaster = userIsMaster(user)
-    const owners = ownerLocationIds(user)
-    if (!isMaster && owners.length === 0) return 0
-    let q = db
+    const activeId = viewerActiveLocationId(user)
+    if (!activeId) return 0
+    if (!canApproveAtActiveLocation(user, ROSTER_APPROVER_ROLES)) return 0
+    const q = db
       .from('rosters')
       .select('*', { count: 'exact', head: true })
       .eq('status', 'draft')
-    if (!isMaster) q = q.in('location_id', owners)
+      .eq('location_id', activeId)
     const { count, error } = await q
     if (error) throw new Error(`rosters count: ${error.message}`)
     return count || 0

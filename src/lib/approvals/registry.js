@@ -148,9 +148,60 @@ export function ownerLocationIds(user) {
  * Locations where the user holds a role that can approve schedule
  * items (time-off, swaps): manager, head_coach, owner. Master is
  * handled separately (sees all locations).
+ *
+ * KEPT FOR BACK-COMPAT — providers should prefer the
+ * active-location-scoped helpers below (APPROVALS-LOCATION-SCOPE).
  */
 export function scheduleApproverLocationIds(user) {
   return Object.entries(user?.rolesByLocation || {})
     .filter(([, r]) => r === 'manager' || r === 'head_coach' || r === 'owner')
     .map(([loc]) => loc)
+}
+
+// ===========================================================
+// APPROVALS-LOCATION-SCOPE — active-location-only helpers.
+//
+// /approvals is now scoped to the user's CURRENT active location
+// rather than aggregating across every location they have access
+// to. Why: operators switch into a studio context ("I'm in
+// Stillorgan today") and expect everything they see — including
+// approvals — to be that studio's data only. Cross-studio
+// aggregation invited mistakes (approving Naas requests while
+// thinking you were in Stillorgan).
+//
+// To work across studios, switch active location (top-right
+// switcher). No more implicit cross-location bleed-through.
+// ===========================================================
+
+/**
+ * The single location the user is currently operating in. Returns
+ * null if no active location is set (treated by callers as "no
+ * scope, show nothing").
+ */
+export function viewerActiveLocationId(user) {
+  return user?.activeLocation?.id || null
+}
+
+/**
+ * Can the user act on approvals at their active location?
+ *
+ * @param {object} user
+ * @param {Array<string>} allowedRoles — e.g. ['manager','head_coach','owner']
+ *                                       for schedule items; ['owner']
+ *                                       for finance items.
+ *
+ * Returns:
+ *   - true if master (master can act anywhere)
+ *   - true if non-master user holds one of allowedRoles at their
+ *     active location.
+ *   - false otherwise (e.g. staff member, or owner-at-other-studio
+ *     who is just-visiting another studio as a manager).
+ */
+export function canApproveAtActiveLocation(user, allowedRoles) {
+  if (!user) return false
+  if (userIsMaster(user)) return true
+  const activeId = viewerActiveLocationId(user)
+  if (!activeId) return false
+  const role = user.rolesByLocation?.[activeId]
+  return !!role && allowedRoles.includes(role)
 }

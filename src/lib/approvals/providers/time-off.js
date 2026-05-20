@@ -3,8 +3,16 @@
 // Source: time_off_requests.status='pending' (mig 011). Schedule-
 // approver scope: manager / head_coach / owner / master can
 // approve; staff cannot.
+//
+// APPROVALS-LOCATION-SCOPE — scoped to user.activeLocation only.
+// Switching studio = switching what /approvals shows.
 
-import { userIsMaster, scheduleApproverLocationIds } from '../registry'
+import {
+  canApproveAtActiveLocation,
+  viewerActiveLocationId,
+} from '../registry'
+
+const SCHEDULE_APPROVER_ROLES = ['manager', 'head_coach', 'owner']
 
 const TYPE_LABELS = {
   holiday: 'Holiday',
@@ -18,11 +26,13 @@ export const timeOffProvider = {
   reviewBase: '/schedule/time-off',
 
   async fetchPending(db, user) {
-    const isMaster = userIsMaster(user)
-    const approverLocations = scheduleApproverLocationIds(user)
-    if (!isMaster && approverLocations.length === 0) return { count: 0, items: [] }
+    const activeId = viewerActiveLocationId(user)
+    if (!activeId) return { count: 0, items: [] }
+    if (!canApproveAtActiveLocation(user, SCHEDULE_APPROVER_ROLES)) {
+      return { count: 0, items: [] }
+    }
 
-    let q = db
+    const q = db
       .from('time_off_requests')
       .select(`
         id, type, start_date, end_date, total_days, reason,
@@ -31,10 +41,9 @@ export const timeOffProvider = {
         location:location_id ( id, name )
       `)
       .eq('status', 'pending')
+      .eq('location_id', activeId)
       .order('created_at', { ascending: false })
       .limit(50)
-
-    if (!isMaster) q = q.in('location_id', approverLocations)
 
     const { data, error } = await q
     if (error) throw new Error(`time_off_requests: ${error.message}`)
@@ -47,25 +56,25 @@ export const timeOffProvider = {
       submittedAt: r.created_at,
       amount: null,
       currency: null,
-      // APPROVALS-VISIBILITY-FIX — include location_id so TimeOffManager
-      // overrides its default of user.activeLocation. Without this, a
-      // master drilling in from /approvals lands on their own active
-      // location and the request (at a different location) never
-      // appears in either tab — so they can't approve it.
-      reviewUrl: `/schedule/time-off?focus=${r.id}&location_id=${r.location_id}`,
+      // APPROVALS-LOCATION-SCOPE — the active-location filter at the
+      // provider level already guarantees the request and the viewer
+      // share an active location, so a bare `?focus=<id>` lands on
+      // the right list. The location_id query param previously
+      // overrode user.activeLocation but is no longer needed.
+      reviewUrl: `/schedule/time-off?focus=${r.id}`,
     }))
     return { count: items.length, items }
   },
 
   async countPending(db, user) {
-    const isMaster = userIsMaster(user)
-    const approverLocations = scheduleApproverLocationIds(user)
-    if (!isMaster && approverLocations.length === 0) return 0
-    let q = db
+    const activeId = viewerActiveLocationId(user)
+    if (!activeId) return 0
+    if (!canApproveAtActiveLocation(user, SCHEDULE_APPROVER_ROLES)) return 0
+    const q = db
       .from('time_off_requests')
       .select('*', { count: 'exact', head: true })
       .eq('status', 'pending')
-    if (!isMaster) q = q.in('location_id', approverLocations)
+      .eq('location_id', activeId)
     const { count, error } = await q
     if (error) throw new Error(`time_off_requests count: ${error.message}`)
     return count || 0

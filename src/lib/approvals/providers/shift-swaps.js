@@ -3,8 +3,12 @@
 // Source: shift_swap_requests.status='pending' (mig 010). Same
 // approver scope as time-off — manager / head_coach / owner /
 // master can approve.
+//
+// APPROVALS-LOCATION-SCOPE — scoped to user.activeLocation only.
 
-import { userIsMaster, scheduleApproverLocationIds } from '../registry'
+import { canApproveAtActiveLocation, viewerActiveLocationId } from '../registry'
+
+const SCHEDULE_APPROVER_ROLES = ['manager', 'head_coach', 'owner']
 
 export const shiftSwapsProvider = {
   key: 'shift_swaps',
@@ -12,11 +16,13 @@ export const shiftSwapsProvider = {
   reviewBase: '/schedule/swaps',
 
   async fetchPending(db, user) {
-    const isMaster = userIsMaster(user)
-    const approverLocations = scheduleApproverLocationIds(user)
-    if (!isMaster && approverLocations.length === 0) return { count: 0, items: [] }
+    const activeId = viewerActiveLocationId(user)
+    if (!activeId) return { count: 0, items: [] }
+    if (!canApproveAtActiveLocation(user, SCHEDULE_APPROVER_ROLES)) {
+      return { count: 0, items: [] }
+    }
 
-    let q = db
+    const q = db
       .from('shift_swap_requests')
       .select(`
         id, reason, created_at, location_id,
@@ -26,10 +32,9 @@ export const shiftSwapsProvider = {
         requester_shift:requester_shift_id ( id, start_time, end_time )
       `)
       .eq('status', 'pending')
+      .eq('location_id', activeId)
       .order('created_at', { ascending: false })
       .limit(50)
-
-    if (!isMaster) q = q.in('location_id', approverLocations)
 
     const { data, error } = await q
     if (error) throw new Error(`shift_swap_requests: ${error.message}`)
@@ -57,14 +62,14 @@ export const shiftSwapsProvider = {
   },
 
   async countPending(db, user) {
-    const isMaster = userIsMaster(user)
-    const approverLocations = scheduleApproverLocationIds(user)
-    if (!isMaster && approverLocations.length === 0) return 0
-    let q = db
+    const activeId = viewerActiveLocationId(user)
+    if (!activeId) return 0
+    if (!canApproveAtActiveLocation(user, SCHEDULE_APPROVER_ROLES)) return 0
+    const q = db
       .from('shift_swap_requests')
       .select('*', { count: 'exact', head: true })
       .eq('status', 'pending')
-    if (!isMaster) q = q.in('location_id', approverLocations)
+      .eq('location_id', activeId)
     const { count, error } = await q
     if (error) throw new Error(`shift_swap_requests count: ${error.message}`)
     return count || 0
