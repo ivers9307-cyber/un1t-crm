@@ -17,12 +17,22 @@ import {
 
 const STATUS_LABEL = {
   draft: 'Draft', submitted: 'Submitted', approved: 'Approved',
+  // INVOICES-QUEUE.1 — owner has approved; bookkeeper now signs
+  // off in /invoices before the Xero forward. From the submitter's
+  // POV this is the terminal happy-path state — nothing more for
+  // them to do. Short label here; the detail panel below renders
+  // the longer explanatory copy.
+  awaiting_accountant_review: 'With accountant',
   declined: 'Declined', revoked: 'Revoked',
 }
 const STATUS_TONE = {
   draft:     'bg-un1t-gray/30 text-un1t-light',
   submitted: 'bg-amber-500/20 text-amber-300',
   approved:  'bg-emerald-500/20 text-emerald-300',
+  // Same green palette as approved — both are happy-path post-
+  // approval states. The label difference (With accountant) tells
+  // the submitter where the claim actually sits.
+  awaiting_accountant_review: 'bg-emerald-500/20 text-emerald-300',
   declined:  'bg-red-500/20 text-red-300',
   revoked:   'bg-un1t-gray/30 text-un1t-mid',
 }
@@ -256,6 +266,17 @@ function ClaimDetail({ claimId, canEdit, canSubmit, canRevoke, canApprove, onCha
       {claim.status === 'declined' && claim.decline_reason && (
         <div className="text-xs text-red-300 bg-red-950/30 border border-red-900/50 rounded p-2">
           <strong>Decline reason:</strong> {claim.decline_reason}
+        </div>
+      )}
+
+      {/* INVOICES-QUEUE.1 — explain the new accountant-handoff
+          state so the submitter doesn't wonder why their claim is
+          "approved" but not yet in Xero. Renders only on the
+          submitter's own claim (approvers viewing don't need this
+          copy — they already understand the queue handoff). */}
+      {claim.status === 'awaiting_accountant_review' && claim.viewer_role === 'self' && (
+        <div className="text-xs text-emerald-200 bg-emerald-950/30 border border-emerald-900/50 rounded p-2">
+          <strong>Approved by your manager.</strong> Awaiting accountant sign-off before forwarding to Xero — no further action needed from you.
         </div>
       )}
 

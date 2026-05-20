@@ -9,6 +9,8 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { ALL_DOCUMENT_TYPES } from '@/lib/cars'
+import { enqueueFromCarDocument } from '@/lib/invoices-queue/enqueue'
+import { logWarn } from '@/lib/log'
 
 export const runtime = 'nodejs'
 
@@ -79,5 +81,15 @@ export async function POST(request, props) {
     return NextResponse.json({ success: false, error: insertErr.message }, { status: 500 })
   }
 
-  return NextResponse.json({ success: true, data: doc }, { status: 201 })
+  // INVOICES-QUEUE.1 — car documents auto-queue on upload (no
+  // explicit approval step; same shape as supplier emails).
+  // Bookkeeper reviews in /invoices before Xero forward. Best-
+  // effort — upload succeeded, queue insert failure shouldn't
+  // un-do that; ops can retry from PR 2's queue UI.
+  const enq = await enqueueFromCarDocument(doc.id)
+  if (!enq.ok) {
+    logWarn('car-documents-upload', 'enqueue failed', { err: enq.error, documentId: doc.id })
+  }
+
+  return NextResponse.json({ success: true, data: doc, queue_warning: enq.ok ? undefined : enq.error }, { status: 201 })
 }

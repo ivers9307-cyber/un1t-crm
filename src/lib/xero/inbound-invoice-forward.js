@@ -75,7 +75,7 @@ export async function sendInboundInvoiceBillEmail(invoiceId) {
   const db = createServerClient()
 
   const { data: inv, error: loadErr } = await db
-    .from('inbound_invoices')
+    .from('invoices_queue')
     .select(`
       id, location_id, status, sender_email, subject,
       attachment_path, attachment_filename, attachment_mime_type,

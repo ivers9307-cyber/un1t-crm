@@ -54,6 +54,10 @@ export const EXPENSE_STATUSES = Object.freeze([
   'draft',
   'submitted',
   'approved',
+  // INVOICES-QUEUE.1 — terminal-from-submitter's-POV state. Owner
+  // has approved; queue has a row; bookkeeper signs off in /invoices
+  // before Xero forward.
+  'awaiting_accountant_review',
   'declined',
   'revoked',
 ])
@@ -75,7 +79,12 @@ export function canTransition(from, to) {
   const LEGAL = {
     draft:     ['submitted'],
     submitted: ['approved', 'declined', 'revoked'],
-    approved:  [],     // terminal
+    // INVOICES-QUEUE.1 — owner approval immediately flips to the
+    // accountant-review state once the queue row(s) are inserted.
+    // The 'approved' state is a transient marker used by audit but
+    // the row never settles there in the new flow.
+    approved:  ['awaiting_accountant_review'],
+    awaiting_accountant_review: [], // terminal-from-submitter's-POV
     declined:  [],     // terminal — new claim must be opened
     revoked:   [],     // terminal — new claim must be opened
   }

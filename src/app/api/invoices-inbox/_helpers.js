@@ -39,7 +39,7 @@ export async function loadInvoiceForUser(id) {
 
   const db = createServerClient()
   const { data: row, error } = await db
-    .from('inbound_invoices')
+    .from('invoices_queue')
     .select(ROW_SELECT)
     .eq('id', id)
     .maybeSingle()

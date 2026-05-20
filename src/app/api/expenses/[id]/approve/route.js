@@ -1,16 +1,22 @@
 // FTE-EXPENSES.1 — POST /api/expenses/[id]/approve
 //
-// Master/owner-only. Flips submitted → approved + triggers the
-// Xero bills-email forward. Reimbursement happens via payroll;
-// approval is the green-light for the accountant to include it
-// in the next run.
+// Master/owner-only. INVOICES-QUEUE.1 (mig 185): owner approval no
+// longer forwards directly to Xero. Instead it flips the claim to
+// 'awaiting_accountant_review' and drops one row per receipt into
+// the central invoices_queue, where the bookkeeper handles the
+// Claude Vision analysis + final Xero forward in /invoices.
+//
+// Reimbursement still happens via payroll. The bookkeeper handoff
+// is invisible to the submitter — they just see "Approved by your
+// manager · Awaiting accountant sign-off before forwarding to
+// Xero."
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { canTransition, periodLabel } from '@/lib/fte-expenses'
 import { notifyUsers } from '@/lib/notify'
-import { sendFteExpenseClaimBillEmail } from '@/lib/xero/fte-expense-claims'
+import { enqueueFromFteExpenseClaim } from '@/lib/invoices-queue/enqueue'
 import { logAuditEvent } from '@/lib/audit'
 import { logWarn } from '@/lib/log'
 
@@ -47,10 +53,17 @@ export async function POST(request, { params }) {
   }
 
   const now = new Date().toISOString()
+  // INVOICES-QUEUE.1 — single update flips submitted →
+  // awaiting_accountant_review. The 'approved' intermediate state
+  // is recorded via approved_at + reviewed_at + reviewed_by
+  // timestamps rather than as a settled status (cleaner audit
+  // trail, no churning state machine). The terminal-from-
+  // submitter state is awaiting_accountant_review; bookkeeper
+  // moves the row through the queue from here.
   const { data: updated, error: updErr } = await db
     .from('fte_expense_claims')
     .update({
-      status: 'approved',
+      status: 'awaiting_accountant_review',
       reviewed_at: now,
       reviewed_by: user.id,
       approved_at: now,
@@ -62,22 +75,18 @@ export async function POST(request, { params }) {
   if (updErr) return NextResponse.json({ success: false, error: updErr.message }, { status: 500 })
   if (!updated) return NextResponse.json({ success: false, error: 'Claim was reviewed by someone else — refresh and retry.' }, { status: 409 })
 
-  // Xero forward — best effort. The approval has already been
-  // recorded; if Postmark/Xero is briefly unreachable we return a
-  // success+warning rather than rolling back the approval.
+  // Drop one row per receipt into the central invoices_queue. The
+  // bookkeeper picks them up from /invoices for Claude Vision
+  // analysis + Xero forward. Best-effort: if enqueue fails the
+  // approval has still been recorded; we return success + warning
+  // and the operator can re-enqueue manually from a retry route
+  // (PR 2). Rolling back the approval on enqueue failure would
+  // make the submitter's UX worse for no real gain.
   const warnings = []
-  try {
-    const fwd = await sendFteExpenseClaimBillEmail(claim.id)
-    await db.from('fte_expense_claims').update({
-      xero_email_message_id: fwd.messageId,
-      xero_synced_at: now,
-    }).eq('id', claim.id)
-    if (fwd.downloadFailures?.length) {
-      warnings.push(`${fwd.downloadFailures.length} receipt download(s) failed during Xero forward — chase manually.`)
-    }
-  } catch (e) {
-    logWarn('expense-approve', 'xero forward failed', { err: e?.message, claimId: claim.id })
-    warnings.push(`Xero forward failed: ${e?.message || 'unknown error'}. Retry from the claim page or forward manually.`)
+  const enq = await enqueueFromFteExpenseClaim(claim.id)
+  if (!enq.ok) {
+    logWarn('expense-approve', 'enqueue failed', { err: enq.error, claimId: claim.id })
+    warnings.push(`Queue insert failed: ${enq.error}. The approval is recorded; retry enqueue from /invoices.`)
   }
 
   // Staff notification — push + email fallback via notifyUsers.

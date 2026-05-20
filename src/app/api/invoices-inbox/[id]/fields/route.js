@@ -42,7 +42,7 @@ export async function PATCH(request, { params }) {
   const { extracted_fields } = validation.data
 
   const { data: updated, error } = await db
-    .from('inbound_invoices')
+    .from('invoices_queue')
     .update({ extracted_fields })
     .eq('id', id)
     .eq('status', 'extracted')
