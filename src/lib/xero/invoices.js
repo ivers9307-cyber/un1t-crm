@@ -48,20 +48,75 @@ function escapeWhereString(str) {
 // Returns an array of human-readable error strings — empty array
 // means good to push. Surfaces both individually-missing fields and
 // shape errors (e.g. ex-VAT must be > 0).
+// CAR-INVOICE-VALIDATION — every field on the car detail page must
+// be filled before an invoice can be issued. Operator-requested
+// completeness gate. For numeric fields a value of 0 is accepted
+// (e.g. £0 UK VAT on a margin-scheme import, €0 NCT not yet done)
+// — only null / undefined / blank is rejected. Text fields must
+// be a non-empty trimmed string. The one exception is the IE
+// ex-VAT sale price, which must be > 0 because it's the invoice's
+// line amount and a €0 invoice is meaningless.
+//
+// Each VEHICLE / PRICES / COSTS field below maps 1:1 to a card on
+// the car detail page. IE VAT is intentionally NOT checked — it's
+// a derived display value (inc-VAT minus ex-VAT), not a stored
+// column.
+const REQUIRED_TEXT_FIELDS = [
+  ['uk_reg', 'UK reg'],
+  ['irish_reg', 'Irish reg'],
+  ['vin', 'VIN'],
+  ['make', 'Make'],
+  ['model', 'Model'],
+]
+const REQUIRED_NUMERIC_FIELDS = [
+  ['vehicle_year', 'Year'],
+  ['uk_purchase_price_ex_vat', 'UK ex-VAT price'],
+  ['uk_vat', 'UK VAT'],
+  ['irish_sale_price_inc_vat', 'Sale price'],
+  ['uk_transporter_cost', 'UK transporter cost'],
+  ['ferry_cost', 'Ferry cost'],
+  ['import_customs_cost', 'Import customs cost'],
+  ['nct_cost', 'NCT cost'],
+  ['additional_costs', 'Commission payout'],
+]
+
+function isBlank(v) {
+  return v === null || v === undefined || (typeof v === 'string' && v.trim() === '')
+}
+
 export function validateInvoiceFields(car) {
   const errors = []
   if (!car) return ['No car provided.']
   if (!car.location_id) errors.push('Car has no location assigned.')
+
+  // Buyer details — needed for the Xero Contact + invoice email.
   if (!car.buyer_name || !String(car.buyer_name).trim()) {
     errors.push('Buyer name is required.')
   }
   if (!car.buyer_email || !String(car.buyer_email).trim()) {
     errors.push('Buyer email is required (used to email the invoice).')
   }
+
+  // Vehicle text identity fields — must be a non-empty string.
+  for (const [key, label] of REQUIRED_TEXT_FIELDS) {
+    if (isBlank(car[key])) errors.push(`${label} is required.`)
+  }
+
+  // Numeric fields — must be present and a valid number. 0 is an
+  // acceptable value; only a blank / null / non-numeric fails.
+  for (const [key, label] of REQUIRED_NUMERIC_FIELDS) {
+    if (isBlank(car[key]) || !Number.isFinite(Number(car[key]))) {
+      errors.push(`${label} is required.`)
+    }
+  }
+
+  // IE ex-VAT sale price — stricter: it's the invoice line amount,
+  // so it must be a positive number, not just present.
   const exVat = Number(car.irish_sale_price_ex_vat)
-  if (!Number.isFinite(exVat) || exVat <= 0) {
+  if (isBlank(car.irish_sale_price_ex_vat) || !Number.isFinite(exVat) || exVat <= 0) {
     errors.push('IE ex-VAT sale price must be set and greater than zero.')
   }
+
   return errors
 }
 
