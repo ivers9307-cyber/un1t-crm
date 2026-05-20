@@ -21,7 +21,10 @@ import FittedText from '@/components/FittedText'
 const POLL_MS = 3000
 
 export default function TVDisplay({ token, initial }) {
-  const [data, setData] = useState(initial)
+  // `data` is the server-rendered snapshot. It never changes in
+  // place — when the poll sees a new push the page hard-reloads
+  // (see below), so the only state that moves here is the clock.
+  const [data] = useState(initial)
   const [now, setNow] = useState(new Date())
   const lastPushedAtRef = useRef(initial?.content?.pushed_at || null)
   const lastRotationRef = useRef(initial?.display?.rotation ?? 0)
@@ -30,17 +33,26 @@ export default function TVDisplay({ token, initial }) {
     let cancelled = false
     const tick = async () => {
       try {
-        const res = await fetch(`/api/public/tv/${token}/content`, { cache: 'no-store' })
+        // Cache-bust the poll: the UC Cast Pro browser (and any
+        // proxy in front of it) was serving a stale response, so a
+        // push wasn't seen until someone manually refreshed.
+        const res = await fetch(
+          `/api/public/tv/${token}/content?_=${Date.now()}`,
+          { cache: 'no-store' },
+        )
         if (!res.ok) return
         const j = await res.json()
         const newPushedAt = j?.content?.pushed_at || null
         const newRotation = j?.display?.rotation ?? 0
-        // Re-render on a new push OR an orientation change so the
-        // operator can re-aim the panel without rebooting the cast.
+        // A new push (or orientation change) → hard-reload so the
+        // cast re-renders the new content from a clean server
+        // render. In-place state updates proved unreliable on the
+        // cast's browser; a full reload is bulletproof, and the
+        // brief flash is fine for a panel that changes rarely.
         if (newPushedAt !== lastPushedAtRef.current || newRotation !== lastRotationRef.current) {
           lastPushedAtRef.current = newPushedAt
           lastRotationRef.current = newRotation
-          if (!cancelled) setData(j)
+          if (!cancelled) window.location.reload()
         }
       } catch {
         // network blip — retry next tick
