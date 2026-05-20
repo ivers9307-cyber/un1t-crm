@@ -134,6 +134,7 @@ export default function TVDisplay({ token, initial }) {
 
 function TemplateView({ content }) {
   const boxRef = useRef(null)
+  const imgRef = useRef(null)
   const [box, setBox] = useState({ w: 0, h: 0 })
   const [nat, setNat] = useState({ w: 0, h: 0 })
 
@@ -146,6 +147,19 @@ function TemplateView({ content }) {
     ro.observe(el)
     return () => ro.disconnect()
   }, [])
+
+  // The base image is server-rendered, so the browser usually
+  // finishes loading it before this component hydrates — and a
+  // load that completed before React attached its handler never
+  // fires onLoad. Read the natural size straight off the element
+  // once it's complete; without it `frame` stays null and the
+  // text overlay never renders (the TV shows a bare image).
+  useEffect(() => {
+    const img = imgRef.current
+    if (img && img.complete && img.naturalWidth > 0) {
+      setNat({ w: img.naturalWidth, h: img.naturalHeight })
+    }
+  }, [content.resolved_url])
 
   const zones = content.template?.zones || []
   const values = content.template?.values || {}
@@ -162,6 +176,7 @@ function TemplateView({ content }) {
   return (
     <div ref={boxRef} style={{ position: 'absolute', inset: 0 }}>
       <img
+        ref={imgRef}
         src={content.resolved_url}
         alt={content.label || ''}
         onLoad={e => setNat({ w: e.target.naturalWidth, h: e.target.naturalHeight })}
