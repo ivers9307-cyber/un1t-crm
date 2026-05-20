@@ -613,6 +613,36 @@ export function mapGlofoxMember(member, ctx = null) {
   }
 }
 
+/**
+ * CHURN-PREP.2 — extract the human-readable membership plan name
+ * from a Glofox member payload.
+ *
+ * Glofox exposes the member's current product on member.membership:
+ *   - membership_plan_name — the clean plan label ("3 Month
+ *     Membership", "10 Class Pack"). Only on the single-member GET.
+ *   - membership_name      — the operator's catalog label, usually
+ *     with a sort-order prefix ("3) The 3 Month Membership ...").
+ *     Present on both list and single-member payloads.
+ *
+ * Prefers membership_plan_name, falls back to membership_name, and
+ * strips the operator's "N) " sort prefix. Returns null when the
+ * member has no real membership applied (PAYG / lead — Glofox
+ * returns blank names for both).
+ *
+ * Pure function — input → output, no side effects.
+ */
+export function extractMembershipPlan(member) {
+  const m = member && typeof member === 'object' ? member.membership : null
+  if (!m || typeof m !== 'object') return null
+  const plan = typeof m.membership_plan_name === 'string' ? m.membership_plan_name.trim() : ''
+  const name = typeof m.membership_name === 'string' ? m.membership_name.trim() : ''
+  const raw = plan || name
+  if (!raw) return null
+  // Drop the operator's "N) " sort-order prefix from catalog names.
+  const cleaned = raw.replace(/^\d+\)\s*/, '').trim()
+  return cleaned || null
+}
+
 // ─────────────────────────────────────────────────────────────
 // Membership status mapping (GLOFOX2.1.5 + 2.1.6 ClassPass)
 // ─────────────────────────────────────────────────────────────

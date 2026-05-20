@@ -15,6 +15,7 @@ import {
   mapGlofoxInteraction,
   computeCreditsRemaining,
   detectTrialTransitionTags,
+  extractMembershipPlan,
 } from './glofox-sync.js'
 
 // Helper: build a Plan A ctx for tests. Real call site fetches via
@@ -820,6 +821,47 @@ describe('detectCreditMember', () => {
       memberships: [CLASS_PACK_MEMBERSHIP],
     })
     expect(detectCreditMember({ lead_status: 'MEMBER', active: true }, ctx)).toBe(true)
+  })
+})
+
+// CHURN-PREP.2 — current membership plan name extraction.
+describe('extractMembershipPlan', () => {
+  it('returns null for null / non-object / membership-less input', () => {
+    expect(extractMembershipPlan(null)).toBeNull()
+    expect(extractMembershipPlan('string')).toBeNull()
+    expect(extractMembershipPlan({})).toBeNull()
+    expect(extractMembershipPlan({ membership: null })).toBeNull()
+    expect(extractMembershipPlan({ membership: 'nope' })).toBeNull()
+  })
+
+  it('prefers membership_plan_name — the clean plan label', () => {
+    expect(extractMembershipPlan({
+      membership: { membership_plan_name: '3 Month Membership', membership_name: '3) The 3 Month Membership - €100 Discount' },
+    })).toBe('3 Month Membership')
+  })
+
+  it('uses membership_plan_name for class packs (more specific than the catalog name)', () => {
+    expect(extractMembershipPlan({
+      membership: { membership_plan_name: '10 Class Pack', membership_name: 'Class Packs' },
+    })).toBe('10 Class Pack')
+  })
+
+  it('falls back to membership_name and strips the operator "N) " sort prefix', () => {
+    expect(extractMembershipPlan({
+      membership: { membership_plan_name: '', membership_name: '2) The Monthly Membership (€99 FIRST MONTH)' },
+    })).toBe('The Monthly Membership (€99 FIRST MONTH)')
+  })
+
+  it('returns null when both names are blank (PAYG / lead)', () => {
+    expect(extractMembershipPlan({
+      membership: { type: 'payg', membership_plan_name: '', membership_name: '' },
+    })).toBeNull()
+  })
+
+  it('trims surrounding whitespace', () => {
+    expect(extractMembershipPlan({
+      membership: { membership_plan_name: '  The UN1T Trial  ' },
+    })).toBe('The UN1T Trial')
   })
 })
 

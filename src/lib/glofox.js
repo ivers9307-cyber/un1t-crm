@@ -1023,3 +1023,34 @@ export async function fetchUserBookingsResult(creds, userId, opts = {}) {
     return { ok: false, bookings: [] }
   }
 }
+
+/**
+ * Error-aware single-member fetch — GET /2.0/members/{id}.
+ *
+ * The /2.0/members LIST payload carries only a thin membership
+ * object (no membership_plan_name / status); the single-member
+ * endpoint carries the full one. Used by the attendance-refresh
+ * cron to keep contacts.glofox_membership_plan current for the
+ * whole member base.
+ *
+ *   { ok: true,  member: {...} }  — request succeeded
+ *   { ok: false, member: null }   — request failed; caller should
+ *                                   leave the member's stored data
+ *                                   untouched (don't wipe to null)
+ *
+ * @returns {Promise<{ ok: boolean, member: (object|null) }>}
+ */
+export async function fetchMemberResult(creds, memberId) {
+  if (!creds || !memberId) return { ok: false, member: null }
+  try {
+    const r = await glofoxFetch(creds, `/2.0/members/${encodeURIComponent(memberId)}`)
+    if (!r.ok) return { ok: false, member: null }
+    const body = await r.json()
+    // The single-member endpoint wraps the member under `data`;
+    // tolerate an unwrapped body too.
+    const member = body && typeof body === 'object' && body.data ? body.data : body
+    return { ok: true, member: (member && typeof member === 'object') ? member : null }
+  } catch {
+    return { ok: false, member: null }
+  }
+}
