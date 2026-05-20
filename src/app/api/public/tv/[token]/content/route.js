@@ -26,7 +26,7 @@ export async function GET(_request, props) {
   // 1. Resolve the token → display
   const { data: display, error: dErr } = await db
     .from('tv_displays')
-    .select('id, label, location_id, active')
+    .select('id, label, location_id, active, rotation')
     .eq('token', token)
     .single()
   if (dErr || !display || !display.active) {
@@ -51,7 +51,14 @@ export async function GET(_request, props) {
   }
 
   return NextResponse.json({
-    display: { id: display.id, label: display.label, location_id: display.location_id },
+    display: {
+      id: display.id,
+      label: display.label,
+      location_id: display.location_id,
+      // TV-ROTATION.1 — degrees the client counter-rotates the
+      // stage by so content fills a non-landscape-mounted panel.
+      rotation: display.rotation || 0,
+    },
     content: content
       ? {
           source_type: content.source_type,
