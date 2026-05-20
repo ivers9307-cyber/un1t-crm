@@ -17,7 +17,17 @@
 
 import { useState, useCallback } from 'react'
 import { createBrowserClient } from '@/lib/supabase'
-import { Tv, Plus, Copy, Check, Trash2, Upload, Link2, X, Image as ImageIcon, AlertCircle, RotateCcw } from 'lucide-react'
+import { Tv, Plus, Copy, Check, Trash2, Upload, Link2, X, Image as ImageIcon, AlertCircle, RotateCcw, RotateCw } from 'lucide-react'
+
+// TV-ROTATION.1 — screen-rotation options offered per display.
+// Value is clockwise degrees, matched 1:1 by the CSS rotate() the
+// /tv/cast page applies (see TVDisplay.jsx + migration 189).
+const ORIENTATION_OPTIONS = [
+  { value: 0,   label: 'Landscape' },
+  { value: 90,  label: 'Portrait — rotated right' },
+  { value: 270, label: 'Portrait — rotated left' },
+  { value: 180, label: 'Landscape — upside down' },
+]
 
 export default function TVAdmin({ initialDisplays, locationId, currentUserId }) {
   const db = createBrowserClient()
@@ -189,6 +199,7 @@ function TVCard({ display, currentUserId, onError, onChange, db }) {
         ) : (
           <span className="text-un1t-mid">Idle — UN1T mark + clock</span>
         )}
+        <OrientationControl display={display} db={db} onError={onError} onChange={onChange} />
       </div>
 
       {pushOpen && (
@@ -214,6 +225,47 @@ function TVCard({ display, currentUserId, onError, onChange, db }) {
         />
       )}
     </div>
+  )
+}
+
+// ── Orientation control ─────────────────────────────────────────
+//
+// TV-ROTATION.1 — picks how the panel is physically hung. Writes
+// tv_displays.rotation; the /tv/cast page picks the change up on
+// its next 3s poll, so the operator can re-aim a TV live without
+// touching the cast device.
+
+function OrientationControl({ display, db, onError, onChange }) {
+  const [saving, setSaving] = useState(false)
+  const rotation = display.rotation ?? 0
+
+  async function setRotation(value) {
+    if (value === rotation) return
+    onError(null)
+    setSaving(true)
+    const { error } = await db.from('tv_displays')
+      .update({ rotation: value })
+      .eq('id', display.id)
+    setSaving(false)
+    if (error) { onError(error.message); return }
+    await onChange()
+  }
+
+  return (
+    <label className="ml-auto inline-flex items-center gap-1.5 text-un1t-mid">
+      {rotation === 0 ? <RotateCw size={12} /> : <RotateCw size={12} className="text-un1t-light" />}
+      <span className="uppercase tracking-wide">Orientation</span>
+      <select
+        value={rotation}
+        disabled={saving}
+        onChange={e => setRotation(Number(e.target.value))}
+        className="bg-un1t-black border border-un1t-gray rounded px-2 py-1 text-un1t-white focus:outline-none focus:border-un1t-mid disabled:opacity-50"
+      >
+        {ORIENTATION_OPTIONS.map(o => (
+          <option key={o.value} value={o.value}>{o.label}</option>
+        ))}
+      </select>
+    </label>
   )
 }
 
