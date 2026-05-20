@@ -1,6 +1,7 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
+import { useSearchParams } from 'next/navigation'
 import { CalendarOff, Plus, Check, X, Palmtree, ThermometerSun, Ban } from 'lucide-react'
 import { MANAGER_ROLES } from '@/lib/schemas'
 
@@ -18,14 +19,28 @@ const STATUS_STYLES = {
 }
 
 export default function TimeOffManager({ user }) {
+  // BOOKKEEPER-APPROVALS-FIX — `?focus=<id>` arrives when the user
+  // drilled in from /approvals. Default to the 'team' tab (the
+  // request being approved belongs to someone else, not the
+  // viewer) and 'pending' filter (the only status that needs
+  // action). Otherwise we'd land on 'my' + 'all' and they'd see
+  // their own holidays instead of the request they clicked.
+  const searchParams = useSearchParams()
+  const focusId = searchParams?.get('focus') || null
+  const isManager = MANAGER_ROLES.includes(user.role)
+  const hasFocus = !!focusId && isManager
+
   const [requests, setRequests] = useState([])
   const [allowance, setAllowance] = useState(null)
   const [loading, setLoading] = useState(true)
   const [showForm, setShowForm] = useState(false)
-  const [filter, setFilter] = useState('all') // 'all', 'pending', 'approved'
-  const [tab, setTab] = useState('my') // 'my' or 'team' (team only for managers)
+  const [filter, setFilter] = useState(hasFocus ? 'pending' : 'all') // 'all', 'pending', 'approved'
+  const [tab, setTab] = useState(hasFocus ? 'team' : 'my') // 'my' or 'team' (team only for managers)
+  // Ref-map of request id → DOM node so we can scroll the focused
+  // row into view once it lands in the result set.
+  const rowRefs = useRef(new Map())
+  const focusScrolled = useRef(false)
 
-  const isManager = MANAGER_ROLES.includes(user.role)
   const locationId = user.activeLocation?.id
 
   const fetchData = useCallback(async () => {
@@ -46,6 +61,34 @@ export default function TimeOffManager({ user }) {
   }, [locationId, filter, tab, user.id])
 
   useEffect(() => { fetchData() }, [fetchData])
+
+  // BOOKKEEPER-APPROVALS-FIX — after data lands, two things:
+  //   1. If we expected the focused row on this tab but it isn't
+  //      there, flip the tab once and re-fetch (covers the rare
+  //      case where the user clicked their OWN pending request in
+  //      /approvals — initial guess of 'team' is wrong).
+  //   2. Once the focused row IS in the result set, scroll it
+  //      into view + highlight it. Only fires once so subsequent
+  //      re-fetches don't yank the scroll position.
+  const fallbackTried = useRef(false)
+  useEffect(() => {
+    if (!focusId || loading) return
+    const inResults = requests.some((r) => r.id === focusId)
+    if (!inResults && !fallbackTried.current) {
+      fallbackTried.current = true
+      // Initial guess (team) was wrong — try 'my'. Also broaden
+      // filter so 'pending' isn't excluding it.
+      setTab((t) => (t === 'team' ? 'my' : 'team'))
+      setFilter('all')
+      return
+    }
+    if (focusScrolled.current) return
+    const node = rowRefs.current.get(focusId)
+    if (node) {
+      node.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      focusScrolled.current = true
+    }
+  }, [focusId, loading, requests])
 
   async function handleApprove(id) {
     const res = await fetch(`/api/schedule/time-off/${id}`, {
@@ -171,10 +214,19 @@ export default function TimeOffManager({ user }) {
             const canApprove = isManager && req.status === 'pending' && !isOwn
             const canCancel = isOwn && req.status === 'pending'
 
+            const isFocused = req.id === focusId
             return (
               <div
                 key={req.id}
-                className="bg-un1t-dark border border-un1t-gray rounded-lg p-4 flex items-center gap-4"
+                ref={(node) => {
+                  if (node) rowRefs.current.set(req.id, node)
+                  else rowRefs.current.delete(req.id)
+                }}
+                className={`bg-un1t-dark border rounded-lg p-4 flex items-center gap-4 transition-colors ${
+                  isFocused
+                    ? 'border-un1t-white ring-2 ring-un1t-white/40'
+                    : 'border-un1t-gray'
+                }`}
               >
                 {/* Type icon */}
                 <div className="w-10 h-10 rounded-lg flex items-center justify-center shrink-0" style={{ backgroundColor: typeConf.bg }}>
