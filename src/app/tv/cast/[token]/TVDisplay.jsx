@@ -15,6 +15,8 @@
 // panel that's been hung portrait (or upside-down). 0 = normal.
 
 import { useEffect, useState, useRef } from 'react'
+import { resolveZone, FLEX_V, FLEX_H } from '@/lib/tv-template'
+import FittedText from '@/components/FittedText'
 
 const POLL_MS = 3000
 
@@ -172,7 +174,9 @@ function TemplateView({ content }) {
         }}
       />
       {frame && zones.map(z => {
-        const text = (values[z.id] ?? z.defaultText ?? '').toString()
+        // resolveZone merges the zone's template default with the
+        // operator's per-zone push override (TV-TEMPLATE.2).
+        const s = resolveZone(z, values[z.id])
         return (
           <div
             key={z.id}
@@ -183,30 +187,27 @@ function TemplateView({ content }) {
               width: (z.width / 100) * frame.w,
               height: (z.height / 100) * frame.h,
               display: 'flex',
-              alignItems: V_ALIGN[z.vAlign] || 'center',
-              justifyContent: H_ALIGN[z.align] || 'center',
-              textAlign: z.align || 'center',
-              color: z.color || '#FFFFFF',
-              fontWeight: z.fontWeight || 700,
-              // fontSize is stored as % of the base image height.
-              fontSize: ((z.fontSize || 6) / 100) * frame.h,
-              lineHeight: 1.12,
-              textTransform: z.uppercase ? 'uppercase' : 'none',
-              whiteSpace: 'pre-wrap',
-              wordBreak: 'break-word',
+              alignItems: FLEX_V[s.vAlign],
+              justifyContent: FLEX_H[s.align],
               overflow: 'hidden',
             }}
           >
-            <span style={{ width: '100%' }}>{text}</span>
+            {/* fontSize is a % of the base-image height; FittedText
+                treats it as the cap and shrinks to fit if needed. */}
+            <FittedText
+              text={s.text}
+              maxFontSize={(s.fontSize / 100) * frame.h}
+              color={s.color}
+              fontWeight={s.fontWeight}
+              align={s.align}
+              uppercase={s.uppercase}
+            />
           </div>
         )
       })}
     </div>
   )
 }
-
-const V_ALIGN = { top: 'flex-start', middle: 'center', bottom: 'flex-end' }
-const H_ALIGN = { left: 'flex-start', center: 'center', right: 'flex-end' }
 
 function IdleView({ now }) {
   const hh = String(now.getHours()).padStart(2, '0')
