@@ -15,12 +15,11 @@
 // service-role through /api/tv/[token]/content; this page never
 // needs to touch that public path.
 
-import { useState, useCallback, useRef, useEffect } from 'react'
+import { useState, useCallback } from 'react'
 import { createBrowserClient } from '@/lib/supabase'
 import { Tv, Plus, Copy, Check, Trash2, Upload, Link2, X, Image as ImageIcon, AlertCircle, RotateCcw, RotateCw, LayoutTemplate, Pencil, Type } from 'lucide-react'
 import TemplateEditor, { bucketPublicUrl } from './TemplateEditor'
-import { resolveZone, FLEX_V, FLEX_H } from '@/lib/tv-template'
-import FittedText from '@/components/FittedText'
+import TemplateCanvas from '@/components/TemplateCanvas'
 
 // TV-TEMPLATE.2 — weight options offered on the push screen.
 const PUSH_FONT_WEIGHTS = [
@@ -517,191 +516,163 @@ function PushModal({ onClose, onPush, locationId, templates }) {
     }
   }
 
+  const isTemplate = mode === 'template'
+  const previewContent = selectedTemplate
+    ? {
+        resolved_url: bucketPublicUrl(selectedTemplate.base_image_path),
+        label: selectedTemplate.name,
+        template: { zones: selectedTemplate.zones || [], values: zoneText },
+      }
+    : null
+
   return (
     <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-un1t-dark border border-un1t-gray rounded-lg w-full max-w-lg max-h-[92vh] overflow-auto p-5" onClick={e => e.stopPropagation()}>
-        <div className="flex items-center justify-between mb-4">
+      <div
+        className={`bg-un1t-dark border border-un1t-gray rounded-lg w-full flex flex-col ${isTemplate ? 'max-w-5xl h-[88vh]' : 'max-w-md max-h-[92vh]'}`}
+        onClick={e => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between p-4 border-b border-un1t-gray shrink-0">
           <h3 className="text-lg font-semibold">Push to TV</h3>
           <button onClick={onClose} className="text-un1t-light hover:text-un1t-white"><X size={16} /></button>
         </div>
 
-        <div className="inline-flex border border-un1t-gray rounded-md overflow-hidden mb-3">
-          {[
-            { key: 'template', Icon: LayoutTemplate, label: 'Template' },
-            { key: 'upload',   Icon: Upload,         label: 'Upload' },
-            { key: 'url',      Icon: Link2,          label: 'URL' },
-          ].map(({ key, Icon, label }) => (
-            <button
-              key={key}
-              onClick={() => setMode(key)}
-              className={`inline-flex items-center gap-1.5 text-xs px-3 py-1.5 ${mode === key ? 'bg-un1t-gray text-un1t-white' : 'text-un1t-light hover:bg-un1t-gray/30'}`}
-            >
-              <Icon size={12} /> {label}
-            </button>
-          ))}
+        {/* Tab strip */}
+        <div className="px-4 pt-3 shrink-0">
+          <div className="inline-flex border border-un1t-gray rounded-md overflow-hidden">
+            {[
+              { key: 'template', Icon: LayoutTemplate, label: 'Template' },
+              { key: 'upload',   Icon: Upload,         label: 'Upload' },
+              { key: 'url',      Icon: Link2,          label: 'URL' },
+            ].map(({ key, Icon, label }) => (
+              <button
+                key={key}
+                onClick={() => setMode(key)}
+                className={`inline-flex items-center gap-1.5 text-xs px-3 py-1.5 ${mode === key ? 'bg-un1t-gray text-un1t-white' : 'text-un1t-light hover:bg-un1t-gray/30'}`}
+              >
+                <Icon size={12} /> {label}
+              </button>
+            ))}
+          </div>
         </div>
 
-        {mode === 'template' && (
-          <div className="mb-3">
-            {(!templates || templates.length === 0) ? (
-              <p className="text-xs text-un1t-mid bg-un1t-black border border-un1t-gray rounded-md px-3 py-3">
-                No templates yet. Create one in the Templates section to push branded messages.
-              </p>
+        {/* Body */}
+        <div className="flex-1 min-h-0 flex flex-col">
+          {isTemplate && (
+            (!templates || templates.length === 0) ? (
+              <div className="p-4">
+                <p className="text-xs text-un1t-mid bg-un1t-black border border-un1t-gray rounded-md px-3 py-3">
+                  No templates yet. Create one in the Templates section to push branded messages.
+                </p>
+              </div>
             ) : (
-              <>
-                <label className="block text-xs text-un1t-light mb-1">Template</label>
-                <select
-                  value={templateId}
-                  onChange={e => pickTemplate(e.target.value)}
-                  className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
-                >
-                  <option value="">Choose a template…</option>
-                  {templates.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-                </select>
+              <div className="flex flex-col flex-1 min-h-0">
+                <div className="px-4 pt-3 shrink-0">
+                  <label className="block text-xs text-un1t-light mb-1">Template</label>
+                  <select
+                    value={templateId}
+                    onChange={e => pickTemplate(e.target.value)}
+                    className="w-full max-w-sm bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
+                  >
+                    <option value="">Choose a template…</option>
+                    {templates.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                  </select>
+                </div>
 
-                {selectedTemplate && (
-                  <>
-                    <TemplatePreview template={selectedTemplate} values={zoneText} />
-                    {(selectedTemplate.zones || []).length === 0 ? (
-                      <p className="text-[11px] text-un1t-mid mt-2">This template has no text zones — it pushes as-is.</p>
-                    ) : (
-                      <div className="mt-3 space-y-2">
-                        {(selectedTemplate.zones || []).map(z => (
-                          <ZonePushEditor
-                            key={z.id}
-                            zone={z}
-                            value={zoneText[z.id]}
-                            onChange={patch => setZoneText(v => ({
-                              ...v,
-                              [z.id]: { ...v[z.id], ...patch },
-                            }))}
-                          />
-                        ))}
-                      </div>
-                    )}
-                  </>
+                {!selectedTemplate ? (
+                  <div className="p-4 text-xs text-un1t-mid">Choose a template to preview and edit it.</div>
+                ) : (
+                  <div className="flex gap-4 flex-1 min-h-0 p-4">
+                    {/* Live preview — identical render to the TV */}
+                    <div className="flex-1 min-w-0 relative rounded-md border border-un1t-gray bg-black overflow-hidden">
+                      <TemplateCanvas content={previewContent} />
+                    </div>
+                    {/* Per-zone text editing */}
+                    <div className="w-80 shrink-0 overflow-y-auto pr-0.5">
+                      {(selectedTemplate.zones || []).length === 0 ? (
+                        <p className="text-[11px] text-un1t-mid">This template has no text zones — it pushes as-is.</p>
+                      ) : (
+                        <div className="space-y-2">
+                          {(selectedTemplate.zones || []).map(z => (
+                            <ZonePushEditor
+                              key={z.id}
+                              zone={z}
+                              value={zoneText[z.id]}
+                              onChange={patch => setZoneText(v => ({
+                                ...v,
+                                [z.id]: { ...v[z.id], ...patch },
+                              }))}
+                            />
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
                 )}
-              </>
-            )}
-          </div>
-        )}
+              </div>
+            )
+          )}
 
-        {mode === 'upload' && (
-          <div className="mb-3">
-            <input
-              type="file"
-              accept="image/*"
-              onChange={e => setFile(e.target.files?.[0] || null)}
-              className="block w-full text-xs text-un1t-light file:mr-3 file:py-2 file:px-3 file:rounded-md file:border-0 file:bg-un1t-gray file:text-un1t-white hover:file:bg-un1t-mid"
-            />
-            {file && (
-              <p className="text-[11px] text-un1t-mid mt-1.5">{file.name} · {Math.round(file.size / 1024)} KB</p>
-            )}
-          </div>
-        )}
+          {mode === 'upload' && (
+            <div className="p-4">
+              <input
+                type="file"
+                accept="image/*"
+                onChange={e => setFile(e.target.files?.[0] || null)}
+                className="block w-full text-xs text-un1t-light file:mr-3 file:py-2 file:px-3 file:rounded-md file:border-0 file:bg-un1t-gray file:text-un1t-white hover:file:bg-un1t-mid"
+              />
+              {file && (
+                <p className="text-[11px] text-un1t-mid mt-1.5">{file.name} · {Math.round(file.size / 1024)} KB</p>
+              )}
+            </div>
+          )}
 
-        {mode === 'url' && (
-          <div className="mb-3">
-            <input
-              type="url"
-              value={externalUrl}
-              onChange={e => setExternalUrl(e.target.value)}
-              placeholder="https://…image.jpg"
-              className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid"
-            />
-            <p className="text-[11px] text-un1t-mid mt-1.5">
-              The cast loads this URL directly. Make sure it&apos;s publicly accessible.
+          {mode === 'url' && (
+            <div className="p-4">
+              <input
+                type="url"
+                value={externalUrl}
+                onChange={e => setExternalUrl(e.target.value)}
+                placeholder="https://…image.jpg"
+                className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid"
+              />
+              <p className="text-[11px] text-un1t-mid mt-1.5">
+                The cast loads this URL directly. Make sure it&apos;s publicly accessible.
+              </p>
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="border-t border-un1t-gray p-4 shrink-0">
+          <div className="flex items-end gap-3 flex-wrap">
+            <label className="flex-1 min-w-[180px]">
+              <span className="block text-xs text-un1t-light mb-1">Label (optional)</span>
+              <input
+                value={label}
+                onChange={e => setLabel(e.target.value)}
+                placeholder="e.g. Welcome Sarah"
+                className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid"
+              />
+            </label>
+            <div className="flex gap-2">
+              <button onClick={onClose} className="text-sm text-un1t-light hover:text-un1t-white px-3 py-2 rounded-md">Cancel</button>
+              <button
+                onClick={submit}
+                disabled={busy}
+                className="text-sm bg-un1t-white text-un1t-black font-medium px-4 py-2 rounded-md hover:bg-un1t-accent disabled:opacity-50"
+              >
+                {busy ? 'Pushing…' : 'Push to TV'}
+              </button>
+            </div>
+          </div>
+          {error && (
+            <p className="text-xs text-red-400 mt-2 flex items-center gap-1">
+              <AlertCircle size={12} /> {error}
             </p>
-          </div>
-        )}
-
-        <label className="block text-xs text-un1t-light mb-1">Label (optional)</label>
-        <input
-          value={label}
-          onChange={e => setLabel(e.target.value)}
-          placeholder="e.g. Welcome Sarah"
-          className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid mb-3"
-        />
-
-        {error && (
-          <p className="text-xs text-red-400 mb-2 flex items-center gap-1">
-            <AlertCircle size={12} /> {error}
-          </p>
-        )}
-
-        <div className="flex justify-end gap-2 mt-3">
-          <button onClick={onClose} className="text-sm text-un1t-light hover:text-un1t-white px-3 py-1.5 rounded-md">Cancel</button>
-          <button
-            onClick={submit}
-            disabled={busy}
-            className="text-sm bg-un1t-white text-un1t-black font-medium px-4 py-1.5 rounded-md hover:bg-un1t-accent disabled:opacity-50"
-          >
-            {busy ? 'Pushing…' : 'Push to TV'}
-          </button>
+          )}
         </div>
       </div>
-    </div>
-  )
-}
-
-// ── Template preview ────────────────────────────────────────────
-//
-// Read-only render of a template with the staff-typed values, so
-// the pusher sees what the TV will show. Same %-geometry the cast
-// page uses (TVDisplay.jsx) — the base image fills the box width
-// and zones are positioned as a % of it.
-
-function TemplatePreview({ template, values }) {
-  const ref = useRef(null)
-  const [h, setH] = useState(0)
-
-  useEffect(() => {
-    const el = ref.current
-    if (!el) return
-    const measure = () => setH(el.clientHeight)
-    measure()
-    const ro = new ResizeObserver(measure)
-    ro.observe(el)
-    return () => ro.disconnect()
-  }, [])
-
-  return (
-    <div
-      ref={ref}
-      className="relative mt-2 border border-un1t-gray rounded-md overflow-hidden"
-      style={{ background: '#000' }}
-    >
-      <img
-        src={bucketPublicUrl(template.base_image_path)}
-        alt=""
-        style={{ display: 'block', width: '100%', height: 'auto' }}
-      />
-      {(template.zones || []).map(z => {
-        const s = resolveZone(z, values[z.id])
-        return (
-          <div
-            key={z.id}
-            style={{
-              position: 'absolute',
-              left: `${z.x}%`, top: `${z.y}%`,
-              width: `${z.width}%`, height: `${z.height}%`,
-              display: 'flex',
-              alignItems: FLEX_V[s.vAlign],
-              justifyContent: FLEX_H[s.align],
-              overflow: 'hidden',
-            }}
-          >
-            <FittedText
-              text={s.text}
-              maxFontSize={(s.fontSize / 100) * h}
-              color={s.color}
-              fontWeight={s.fontWeight}
-              align={s.align}
-              uppercase={s.uppercase}
-            />
-          </div>
-        )
-      })}
     </div>
   )
 }
@@ -723,9 +694,9 @@ function ZonePushEditor({ zone, value, onChange }) {
       <textarea
         value={v.text ?? ''}
         onChange={e => onChange({ text: e.target.value })}
-        rows={2}
-        placeholder={zone.defaultText || 'Text…'}
-        className={`${cls} resize-none mb-2`}
+        rows={7}
+        placeholder={zone.defaultText || 'Type the text for this zone…'}
+        className={`${cls} resize-y mb-2`}
       />
       <div className="grid grid-cols-2 gap-2">
         <label className="block">
