@@ -26,6 +26,21 @@ const FIELD_OPTIONS = [
   // operator-defined (not a fixed enum), so the value dropdown is
   // loaded dynamically from /api/contacts/membership-plans at mount.
   { value: 'glofox_membership_plan', label: 'Membership Plan',      type: 'plan-select' },
+  // GLOFOX-PROFILE (mig 196) — wider Glofox membership profile,
+  // synced nightly. Lets campaigns target billing structure and
+  // member attributes alongside plan / status.
+  { value: 'glofox_membership_type', label: 'Membership Type',      type: 'select',
+    options: ['time', 'num_classes', 'payg'] },
+  { value: 'glofox_membership_expiry', label: 'Membership Renews/Expires', type: 'date' },
+  { value: 'glofox_membership_price_cents', label: 'Membership Price (cents)', type: 'number' },
+  { value: 'glofox_billing_interval', label: 'Billing Interval',    type: 'text' },
+  { value: 'glofox_payment_method',  label: 'Payment Method',       type: 'text' },
+  { value: 'glofox_source',          label: 'Glofox Source',        type: 'text' },
+  { value: 'gender',                 label: 'Gender',               type: 'select',
+    options: ['male', 'female', 'other'] },
+  { value: 'glofox_roaming_enabled', label: 'Roaming Enabled',      type: 'boolean' },
+  { value: 'glofox_account_active',  label: 'Glofox Account Active', type: 'boolean' },
+  { value: 'emergency_contact',      label: 'Has Emergency Contact', type: 'exists' },
   { value: 'email_status',          label: 'Email Status',          type: 'select',
     options: ['active', 'bounced', 'complained', 'unsubscribed'] },
   { value: 'lead_source',           label: 'Lead Source',           type: 'select',
@@ -110,6 +125,13 @@ const OPS_BY_TYPE = {
     { value: 'not_null', label: 'exists' },
     { value: 'is_null',  label: 'does not exist' },
   ],
+  // boolean — Glofox true/false flags. eq carries a Yes/No value;
+  // is_null / not_null need none (handled by needsValue()).
+  boolean: [
+    { value: 'eq',       label: 'is' },
+    { value: 'not_null', label: 'has a value' },
+    { value: 'is_null',  label: 'has no value' },
+  ],
 }
 
 function getFieldConfig(fieldValue) {
@@ -181,7 +203,9 @@ export default function AudienceBuilder({ filter, onChange, audienceCount }) {
     const config = getFieldConfig(newField)
     const ops = OPS_BY_TYPE[config.type] || []
     const defaultOp = ops[0]?.value || 'eq'
-    const defaultValue = config.type === 'select' ? (config.options?.[0] || '') : ''
+    const defaultValue = config.type === 'select' ? (config.options?.[0] || '')
+      : config.type === 'boolean' ? 'true'
+      : ''
     updateRow(index, { field: newField, op: defaultOp, value: defaultValue })
   }
 
@@ -321,6 +345,15 @@ export default function AudienceBuilder({ filter, onChange, audienceCount }) {
                     className="bg-un1t-black border border-un1t-gray rounded-md px-2.5 py-1.5 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
                   />
                 )
+              ) : showValue && fieldConfig.type === 'boolean' ? (
+                <select
+                  value={f.value === true || f.value === 'true' ? 'true' : 'false'}
+                  onChange={e => updateRow(index, { value: e.target.value })}
+                  className="bg-un1t-black border border-un1t-gray rounded-md px-2.5 py-1.5 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid flex-1"
+                >
+                  <option value="true">Yes</option>
+                  <option value="false">No</option>
+                </select>
               ) : showValue ? (
                 <input
                   type="text"

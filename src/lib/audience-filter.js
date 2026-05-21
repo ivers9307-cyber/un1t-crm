@@ -42,6 +42,20 @@ export const AUDIENCE_FIELDS = Object.freeze({
   // plan, or "no membership plan applied" via is_null. The builder
   // populates the value dropdown from /api/contacts/membership-plans.
   glofox_membership_plan:    { type: 'select',  ops: ['eq', 'neq', 'is_null', 'is_not_null', 'not_null'] },
+  // GLOFOX-PROFILE (mig 196) — wider Glofox membership profile,
+  // synced nightly by glofox-attendance-refresh. Lets campaigns
+  // target billing structure and member attributes.
+  //   glofox_membership_type — time (subscription) / num_classes
+  //                            (class pack) / payg.
+  glofox_membership_type:    { type: 'select',  ops: ['eq', 'neq', 'is_null', 'is_not_null', 'not_null'] },
+  glofox_billing_interval:   { type: 'text',    ops: ['eq', 'neq', 'contains', 'not_contains', 'is_null', 'is_not_null', 'not_null'] },
+  glofox_payment_method:     { type: 'text',    ops: ['eq', 'neq', 'contains', 'not_contains', 'is_null', 'is_not_null', 'not_null'] },
+  glofox_source:             { type: 'text',    ops: ['eq', 'neq', 'contains', 'not_contains', 'is_null', 'is_not_null', 'not_null'] },
+  gender:                    { type: 'select',  ops: ['eq', 'neq', 'is_null', 'is_not_null', 'not_null'] },
+  // Boolean Glofox flags. The builder sends 'true' / 'false' strings;
+  // applyAudienceFilter coerces them to real booleans.
+  glofox_roaming_enabled:    { type: 'boolean', ops: ['eq', 'neq', 'is_null', 'is_not_null', 'not_null'] },
+  glofox_account_active:     { type: 'boolean', ops: ['eq', 'neq', 'is_null', 'is_not_null', 'not_null'] },
   wa_status:                 { type: 'select',  ops: ['eq', 'neq'] },
   // contacts.sms_status (mig 059) — mirrors wa_status. Used by the
   // upcoming SMS broadcasts/sequences/automations to filter out
@@ -58,6 +72,9 @@ export const AUDIENCE_FIELDS = Object.freeze({
   email:                     { type: 'text',    ops: ['eq', 'neq', 'contains', 'not_contains'] },
   phone:                     { type: 'text',    ops: ['eq', 'neq', 'contains', 'not_contains', 'is_null', 'is_not_null', 'not_null'] },
   wa_phone:                  { type: 'text',    ops: ['eq', 'neq', 'contains', 'not_contains', 'is_null', 'is_not_null', 'not_null'] },
+  // GLOFOX-PROFILE (mig 196) — emergency contact string. Mainly
+  // useful via is_null / not_null to find members missing one.
+  emergency_contact:         { type: 'text',    ops: ['eq', 'neq', 'contains', 'not_contains', 'is_null', 'is_not_null', 'not_null'] },
 
   // Numeric
   trial_credits_remaining:   { type: 'number',  ops: ['eq', 'neq', 'gt', 'lt', 'gte', 'lte', 'is_null', 'is_not_null', 'not_null'] },
@@ -76,6 +93,10 @@ export const AUDIENCE_FIELDS = Object.freeze({
   // "lifetime_value_cents > 50000" (= €500).
   lifetime_value_cents:        { type: 'number',  ops: ['eq', 'neq', 'gt', 'lt', 'gte', 'lte'] },
   lifetime_transaction_count:  { type: 'number',  ops: ['eq', 'neq', 'gt', 'lt', 'gte', 'lte'] },
+  // GLOFOX-PROFILE (mig 196) — effective membership price in cents.
+  // Powers price-band targeting (premium-tier upsell, win-back of
+  // lapsed high-value plans).
+  glofox_membership_price_cents: { type: 'number', ops: ['eq', 'neq', 'gt', 'lt', 'gte', 'lte', 'is_null', 'is_not_null', 'not_null'] },
   total_emails_opened:       { type: 'number',  ops: ['eq', 'neq', 'gt', 'lt', 'gte', 'lte'] },
   total_emails_clicked:      { type: 'number',  ops: ['eq', 'neq', 'gt', 'lt', 'gte', 'lte'] },
   total_wa_sent:             { type: 'number',  ops: ['eq', 'neq', 'gt', 'lt', 'gte', 'lte'] },
@@ -96,6 +117,10 @@ export const AUDIENCE_FIELDS = Object.freeze({
   // GLOFOX2.1.20 — payment-activity timestamps.
   last_payment_at:           { type: 'date',    ops: ['eq', 'neq', 'gt', 'lt', 'gte', 'lte', 'is_null', 'is_not_null', 'not_null', 'days_since_gt', 'days_since_lt'] },
   last_invoice_at:           { type: 'date',    ops: ['eq', 'neq', 'gt', 'lt', 'gte', 'lte', 'is_null', 'is_not_null', 'not_null', 'days_since_gt', 'days_since_lt'] },
+  // GLOFOX-PROFILE (mig 196) — membership renewal / expiry date.
+  // Powers renewal-window campaigns ("renews before <date>") and
+  // win-back of recently expired memberships.
+  glofox_membership_expiry:  { type: 'date',    ops: ['eq', 'neq', 'gt', 'lt', 'gte', 'lte', 'is_null', 'is_not_null', 'not_null', 'days_since_gt', 'days_since_lt'] },
   last_emailed_at:           { type: 'date',    ops: ['eq', 'neq', 'gt', 'lt', 'gte', 'lte', 'is_null', 'is_not_null', 'not_null', 'days_since_gt', 'days_since_lt'] },
   last_wa_message_at:        { type: 'date',    ops: ['eq', 'neq', 'gt', 'lt', 'gte', 'lte', 'is_null', 'is_not_null', 'not_null', 'days_since_gt', 'days_since_lt'] },
 
@@ -107,7 +132,13 @@ export const AUDIENCE_FIELDS = Object.freeze({
   tag:                       { type: 'tag',     ops: ['eq', 'neq'] },
 })
 
-const NUMERIC_OPS = new Set(['gt', 'lt', 'gte', 'lte', 'days_since_gt', 'days_since_lt'])
+// Ops whose value is a day-count number ("more/less than N days ago").
+// Always numeric, whatever the field type.
+const DAYS_SINCE_OPS = new Set(['days_since_gt', 'days_since_lt'])
+// Plain comparison ops. Numeric ONLY on number-typed fields — on a
+// date field these carry an ISO date string (Number('2026-07-01') is
+// NaN), so coercing by op alone wrongly rejects date before/after.
+const NUMERIC_COMPARE_OPS = new Set(['gt', 'lt', 'gte', 'lte'])
 
 export class InvalidAudienceFilterError extends Error {
   constructor(message) {
@@ -157,12 +188,22 @@ export function applyAudienceFilter(query, filter) {
 
     // Parse + validate value where required.
     let v = value
-    if (NUMERIC_OPS.has(op) || (fieldConfig.type === 'number' && (op === 'eq' || op === 'neq'))) {
+    const wantsNumber = DAYS_SINCE_OPS.has(op)
+      || (fieldConfig.type === 'number'
+          && (NUMERIC_COMPARE_OPS.has(op) || op === 'eq' || op === 'neq'))
+    if (wantsNumber) {
       const n = Number(v)
       if (!Number.isFinite(n)) {
         throw new InvalidAudienceFilterError(`Filter "${field} ${op}" requires a numeric value`)
       }
       v = n
+    }
+    // Boolean fields — the builder sends 'true' / 'false' strings.
+    // Coerce to a real boolean for eq / neq; reject anything else.
+    if (fieldConfig.type === 'boolean' && (op === 'eq' || op === 'neq')) {
+      if (v === true || v === 'true') v = true
+      else if (v === false || v === 'false') v = false
+      else throw new InvalidAudienceFilterError(`Filter "${field} ${op}" requires a boolean value`)
     }
 
     switch (op) {
