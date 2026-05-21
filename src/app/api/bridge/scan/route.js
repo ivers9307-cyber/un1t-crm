@@ -1,18 +1,20 @@
 // POST /api/bridge/scan
 //
 // Bridge → server: snapshot of straps the bridge is currently
-// connected to via BLE. Used by the coach pairing UI to render
+// seeing over ANT+ or BLE. Used by the coach pairing UI to render
 // "available straps" for assignment.
 //
 // Body:
 //   {
 //     straps: [
-//       { mac: "AA:BB:CC:DD:EE:FF", name: "Polar H10",
-//         rssi: -54, last_bpm: 122 },
+//       { device_key: "ant:12345", name: null, rssi: null, last_bpm: 122 },
+//       { device_key: "ble:AA:BB:CC:DD:EE:FF", name: "Polar H10",
+//         rssi: -54, last_bpm: 118 },
 //       ...
 //     ]
 //   }
 //
+// device_key is protocol-aware — `ant:<deviceNumber>` or `ble:<MAC>`.
 // Stored as ble_bridges.last_seen_straps jsonb (whole-column
 // overwrite — not historised). The coach UI reads it via the
 // existing "Staff can view bridges at location" RLS policy.
@@ -23,7 +25,7 @@
 import { NextResponse } from 'next/server'
 import { verifyBridgeToken } from '@/lib/bridge-auth'
 import { createServerClient } from '@/lib/supabase'
-import { canonicaliseMac } from '@/lib/bridge-samples'
+import { canonicaliseDeviceKey } from '@/lib/bridge-samples'
 import { logWarn } from '@/lib/log'
 
 export const runtime = 'nodejs'
@@ -55,10 +57,10 @@ export async function POST(request) {
   const seenAt = new Date().toISOString()
   const cleaned = []
   for (const s of raw) {
-    const mac = canonicaliseMac(s?.mac)
-    if (!mac) continue
+    const deviceKey = canonicaliseDeviceKey(s?.device_key)
+    if (!deviceKey) continue
     cleaned.push({
-      mac,
+      device_key: deviceKey,
       name: typeof s?.name === 'string' ? s.name.slice(0, 60) : null,
       rssi: Number.isFinite(s?.rssi) ? Math.max(-127, Math.min(0, Math.round(s.rssi))) : null,
       last_bpm: Number.isFinite(s?.last_bpm) && s.last_bpm >= 30 && s.last_bpm <= 240

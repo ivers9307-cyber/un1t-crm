@@ -19,16 +19,41 @@ describe('validateDeviceInput', () => {
     expect(out.error).toMatch(/identifier/)
   })
 
-  it('canonicalises chest_strap MAC', () => {
+  it('builds a ble: device_key from a chest_strap MAC (protocol defaults to ble)', () => {
     const out = validateDeviceInput({ device_type: 'chest_strap', identifier: 'aa-bb-cc-dd-ee-ff' })
     expect(out.ok).toBe(true)
-    expect(out.normalised.identifier).toBe('AA:BB:CC:DD:EE:FF')
+    expect(out.normalised.identifier).toBe('ble:AA:BB:CC:DD:EE:FF')
   })
 
-  it('rejects invalid chest_strap MAC', () => {
+  it('builds an ant: device_key from a chest_strap ANT+ device number', () => {
+    const out = validateDeviceInput({ device_type: 'chest_strap', protocol: 'ant', identifier: '12345' })
+    expect(out.ok).toBe(true)
+    expect(out.normalised.identifier).toBe('ant:12345')
+  })
+
+  it('accepts an already-qualified device_key verbatim (scan flow)', () => {
+    const fromBle = validateDeviceInput({ device_type: 'chest_strap', identifier: 'ble:aabbccddeeff' })
+    expect(fromBle.normalised.identifier).toBe('ble:AA:BB:CC:DD:EE:FF')
+    const fromAnt = validateDeviceInput({ device_type: 'chest_strap', identifier: 'ant:00777' })
+    expect(fromAnt.normalised.identifier).toBe('ant:777')
+  })
+
+  it('rejects an invalid chest_strap MAC', () => {
     const out = validateDeviceInput({ device_type: 'chest_strap', identifier: 'not-a-mac' })
     expect(out.ok).toBe(false)
     expect(out.error).toMatch(/MAC/)
+  })
+
+  it('rejects an invalid ANT+ device number', () => {
+    const out = validateDeviceInput({ device_type: 'chest_strap', protocol: 'ant', identifier: '99999' })
+    expect(out.ok).toBe(false)
+    expect(out.error).toMatch(/ANT\+/)
+  })
+
+  it('rejects an unknown protocol', () => {
+    const out = validateDeviceInput({ device_type: 'chest_strap', protocol: 'zigbee', identifier: '1' })
+    expect(out.ok).toBe(false)
+    expect(out.error).toMatch(/protocol/)
   })
 
   it('keeps watch identifier verbatim', () => {

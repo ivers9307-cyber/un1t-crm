@@ -146,6 +146,7 @@ function DeviceIcon({ type }) {
 }
 
 function AddDeviceForm({ onSubmit, onCancel }) {
+  const [protocol, setProtocol] = useState('ble')
   const [identifier, setIdentifier] = useState('')
   const [label, setLabel] = useState('')
   const [manufacturer, setManufacturer] = useState('')
@@ -159,6 +160,7 @@ function AddDeviceForm({ onSubmit, onCancel }) {
     try {
       await onSubmit({
         device_type: 'chest_strap', // v1: only straps are addable from the operator UI
+        protocol,
         identifier: identifier.trim(),
         label: label.trim() || null,
         manufacturer: manufacturer || null,
@@ -170,16 +172,39 @@ function AddDeviceForm({ onSubmit, onCancel }) {
     }
   }
 
+  const isAnt = protocol === 'ant'
+
   return (
     <form onSubmit={submit} className="mt-4 space-y-2 rounded-md border border-un1t-gray bg-un1t-dark p-3">
       <div>
-        <label className="block text-xs font-medium text-un1t-light">Strap MAC</label>
+        <label className="block text-xs font-medium text-un1t-light">Protocol</label>
+        <div className="mt-1 flex gap-2">
+          {[['ble', 'Bluetooth'], ['ant', 'ANT+']].map(([val, lbl]) => (
+            <button
+              key={val}
+              type="button"
+              onClick={() => setProtocol(val)}
+              className={`flex-1 rounded-md border px-2.5 py-1.5 text-xs font-medium ${
+                protocol === val
+                  ? 'border-indigo-500 bg-indigo-600 text-white'
+                  : 'border-un1t-gray bg-un1t-black text-un1t-light hover:text-un1t-white'
+              }`}
+            >
+              {lbl}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div>
+        <label className="block text-xs font-medium text-un1t-light">
+          {isAnt ? 'ANT+ device number' : 'Strap MAC'}
+        </label>
         <input
           type="text"
           required
           value={identifier}
           onChange={(e) => setIdentifier(e.target.value)}
-          placeholder="AA:BB:CC:DD:EE:FF"
+          placeholder={isAnt ? '12345' : 'AA:BB:CC:DD:EE:FF'}
           className="mt-1 w-full rounded-md border border-un1t-gray bg-un1t-black px-2.5 py-1.5 font-mono text-sm tracking-tight"
         />
       </div>
