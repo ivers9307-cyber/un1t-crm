@@ -12,7 +12,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import {
   Radar, AlertTriangle, Clock, TrendingDown, UserX, Phone,
-  ClipboardList, MessageCircle, BellOff, Check,
+  ClipboardList, MessageCircle, BellOff, Check, CalendarClock,
 } from 'lucide-react'
 
 const TIER_STYLE = {
@@ -25,6 +25,12 @@ const SIGNAL_ICON = {
   gone_quiet: Clock,
   disengaging: TrendingDown,
   no_show: UserX,
+  renewal_cliff: CalendarClock,
+}
+
+function formatMoney(cents) {
+  const n = Math.round((Number(cents) || 0) / 100)
+  return `€${n.toLocaleString('en-IE')}`
 }
 
 function timeAgo(iso) {
@@ -139,7 +145,7 @@ export default function ChurnRadar() {
 
   const summary = radar?.summary || {
     activeBase: 0, atRisk: 0, highRisk: 0, quarantine: 0, paused: 0, snoozed: 0,
-    bySegment: { member: {}, credit: {} },
+    revenueAtRiskCents: 0, bySegment: { member: {}, credit: {} },
   }
   const seg = summary.bySegment || { member: {}, credit: {} }
   const splitLine = (key) =>
@@ -162,9 +168,10 @@ export default function ChurnRadar() {
 
       {/* Summary cards — Active base + At risk split monthly members
           from credit-pack holders; they're different churn problems. */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-5 mb-6">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6 mb-6">
         <StatCard label="Active base" value={summary.activeBase} breakdown={splitLine('activeBase')} />
         <StatCard label="At risk" value={summary.atRisk} accent="amber" breakdown={splitLine('atRisk')} />
+        <StatCard label="Revenue at risk" value={formatMoney(summary.revenueAtRiskCents)} accent="amber" breakdown="per month, at-risk" />
         <StatCard label="High risk" value={summary.highRisk} accent="red" />
         <StatCard label="Paused" value={summary.paused} breakdown="excluded — planned freeze" />
         <StatCard label="Quarantine" value={summary.quarantine} />
@@ -269,7 +276,9 @@ function RadarRow({ m, busy, onAction }) {
           </div>
           <p className="mt-0.5 text-xs text-un1t-light">
             {m.membershipPlan || m.membershipStatus}
+            {m.monthlyValueCents > 0 && ` · ${formatMoney(m.monthlyValueCents)}/mo`}
             {m.daysSinceAttended != null && ` · last class ${m.daysSinceAttended}d ago`}
+            {m.daysToRenewal != null && ` · renews in ${m.daysToRenewal}d`}
             {m.lastContacted && ` · contacted ${timeAgo(m.lastContacted.at)}`}
           </p>
         </div>

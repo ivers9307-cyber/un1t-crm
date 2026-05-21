@@ -7,11 +7,13 @@ import {
   scoreMember,
   buildRadar,
   radarSummary,
+  monthlyValueCents,
   MEMBER_STATUSES,
 } from './churn-radar.js'
 
 const NOW = Date.parse('2026-05-21T12:00:00.000Z')
 const daysAgo = (n) => new Date(NOW - n * 86_400_000).toISOString()
+const daysAhead = (n) => new Date(NOW + n * 86_400_000).toISOString()
 
 // A healthy active member — paying, attended yesterday, regular.
 function healthy(over = {}) {
@@ -220,6 +222,83 @@ describe('segment', () => {
       last_attended_at: daysAgo(20), total_attended_7d: 0, total_attended_30d: 2,
     }), NOW)
     expect(c.segment).toBe('credit')
+  })
+})
+
+describe('monthlyValueCents', () => {
+  it('normalises a multi-month price to monthly', () => {
+    expect(monthlyValueCents({ glofox_membership_price_cents: 101300, glofox_billing_interval: '6 months' })).toBe(16883)
+  })
+  it('passes a monthly price straight through', () => {
+    expect(monthlyValueCents({ glofox_membership_price_cents: 17900, glofox_billing_interval: '1 month' })).toBe(17900)
+  })
+  it('normalises a yearly price', () => {
+    expect(monthlyValueCents({ glofox_membership_price_cents: 120000, glofox_billing_interval: '1 year' })).toBe(10000)
+  })
+  it('uses the raw figure when there is no interval (class pack)', () => {
+    expect(monthlyValueCents({ glofox_membership_price_cents: 2000, glofox_billing_interval: null })).toBe(2000)
+  })
+  it('returns 0 when there is no price', () => {
+    expect(monthlyValueCents({})).toBe(0)
+    expect(monthlyValueCents({ glofox_membership_price_cents: 0 })).toBe(0)
+  })
+})
+
+describe('Renewal-cliff signal', () => {
+  it('fires (warning) when the membership renews soon and attendance is low', () => {
+    const r = scoreMember(healthy({
+      glofox_membership_expiry: daysAhead(20), total_attended_30d: 1, total_attended_7d: 0,
+    }), NOW)
+    const s = r.signals.find((x) => x.key === 'renewal_cliff')
+    expect(s).toBeTruthy()
+    expect(s.severity).toBe('warning')
+  })
+  it('escalates to critical inside 14 days', () => {
+    const r = scoreMember(healthy({
+      glofox_membership_expiry: daysAhead(10), total_attended_30d: 1, total_attended_7d: 0,
+    }), NOW)
+    expect(r.signals.find((x) => x.key === 'renewal_cliff').severity).toBe('critical')
+  })
+  it('does not fire for a regular attender — they will renew', () => {
+    const r = scoreMember(healthy({ glofox_membership_expiry: daysAhead(10) }), NOW)
+    expect(r == null || !r.signals.some((x) => x.key === 'renewal_cliff')).toBe(true)
+  })
+  it('does not fire when renewal is far off', () => {
+    const r = scoreMember(healthy({
+      glofox_membership_expiry: daysAhead(90), total_attended_30d: 1, total_attended_7d: 0,
+    }), NOW)
+    expect(r == null || !r.signals.some((x) => x.key === 'renewal_cliff')).toBe(true)
+  })
+})
+
+describe('revenue weighting', () => {
+  it('scoreMember carries the monthly value + days to renewal', () => {
+    const r = scoreMember(healthy({
+      last_attended_at: daysAgo(20), total_attended_7d: 0, total_attended_30d: 2,
+      glofox_membership_price_cents: 101300, glofox_billing_interval: '6 months',
+      glofox_membership_expiry: daysAhead(40),
+    }), NOW)
+    expect(r.monthlyValueCents).toBe(16883)
+    expect(r.daysToRenewal).toBe(40)
+  })
+  it('radarSummary sums monthly revenue at risk', () => {
+    const contacts = [
+      healthy({ id: 'r1', last_attended_at: daysAgo(20), total_attended_7d: 0, total_attended_30d: 2,
+        glofox_membership_price_cents: 17900, glofox_billing_interval: '1 month' }),
+      healthy({ id: 'r2', last_attended_at: daysAgo(20), total_attended_7d: 0, total_attended_30d: 2,
+        glofox_membership_price_cents: 12000, glofox_billing_interval: '1 month' }),
+      healthy(),
+    ]
+    expect(radarSummary(contacts, NOW).revenueAtRiskCents).toBe(29900)
+  })
+  it('buildRadar ranks the higher-value member first within a tier', () => {
+    const contacts = [
+      healthy({ id: 'low', last_attended_at: daysAgo(20), total_attended_7d: 0, total_attended_30d: 2,
+        glofox_membership_price_cents: 5000, glofox_billing_interval: '1 month' }),
+      healthy({ id: 'high', last_attended_at: daysAgo(20), total_attended_7d: 0, total_attended_30d: 2,
+        glofox_membership_price_cents: 20000, glofox_billing_interval: '1 month' }),
+    ]
+    expect(buildRadar(contacts, NOW).map((r) => r.contactId)).toEqual(['high', 'low'])
   })
 })
 
