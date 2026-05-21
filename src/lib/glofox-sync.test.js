@@ -16,6 +16,8 @@ import {
   computeCreditsRemaining,
   detectTrialTransitionTags,
   extractMembershipPlan,
+  extractMembershipState,
+  extractMemberProfile,
 } from './glofox-sync.js'
 
 // Helper: build a Plan A ctx for tests. Real call site fetches via
@@ -862,6 +864,90 @@ describe('extractMembershipPlan', () => {
     expect(extractMembershipPlan({
       membership: { membership_plan_name: '  The UN1T Trial  ' },
     })).toBe('The UN1T Trial')
+  })
+})
+
+describe('extractMembershipState', () => {
+  it('returns null when there is no membership object', () => {
+    expect(extractMembershipState(null)).toBeNull()
+    expect(extractMembershipState({})).toBeNull()
+    expect(extractMembershipState({ membership: null })).toBeNull()
+  })
+  it('lowercases the membership status', () => {
+    expect(extractMembershipState({ membership: { status: 'PAUSED' } })).toBe('paused')
+    expect(extractMembershipState({ membership: { status: 'ACTIVE' } })).toBe('active')
+  })
+  it('returns null for a blank status', () => {
+    expect(extractMembershipState({ membership: { status: '' } })).toBeNull()
+    expect(extractMembershipState({ membership: {} })).toBeNull()
+  })
+})
+
+describe('extractMemberProfile', () => {
+  it('returns all-null fields for an empty / non-object input', () => {
+    const out = extractMemberProfile(null)
+    expect(out.glofox_membership_expiry).toBeNull()
+    expect(out.glofox_membership_price_cents).toBeNull()
+    expect(out.glofox_membership_type).toBeNull()
+    expect(out.glofox_account_active).toBeNull()
+  })
+
+  it('extracts a subscription member payload', () => {
+    const out = extractMemberProfile({
+      active: true,
+      gender: 'female',
+      image_url: 'https://img/x.jpg',
+      source: 'WEBPORTAL',
+      emergency_contact: 'Contact person: Jo, Phone number: 0871234567',
+      answers: [{ q: 'Goal', a: 'Strength' }],
+      membership: {
+        type: 'time',
+        expiry_date: 1790809199,
+        roaming_enabled: false,
+        plan_price: 913,
+        subscription: { price: 1013, interval: 'month', interval_count: 6, payment_method_type_id: 'CARD' },
+      },
+    })
+    expect(out.glofox_membership_type).toBe('time')
+    expect(out.glofox_membership_expiry).toBe(new Date(1790809199 * 1000).toISOString())
+    // Subscription price wins over catalog plan_price; stored in cents.
+    expect(out.glofox_membership_price_cents).toBe(101300)
+    expect(out.glofox_billing_interval).toBe('6 months')
+    expect(out.glofox_payment_method).toBe('CARD')
+    expect(out.gender).toBe('female')
+    expect(out.glofox_image_url).toBe('https://img/x.jpg')
+    expect(out.glofox_source).toBe('WEBPORTAL')
+    expect(out.glofox_account_active).toBe(true)
+    expect(out.glofox_roaming_enabled).toBe(false)
+    expect(out.emergency_contact).toBe('Contact person: Jo, Phone number: 0871234567')
+    expect(out.glofox_signup_answers).toEqual([{ q: 'Goal', a: 'Strength' }])
+  })
+
+  it('falls back to catalog plan_price for a class pack (no subscription)', () => {
+    const out = extractMemberProfile({ membership: { type: 'num_classes', plan_price: 20 } })
+    expect(out.glofox_membership_price_cents).toBe(2000)
+    expect(out.glofox_billing_interval).toBeNull()
+    expect(out.glofox_payment_method).toBeNull()
+    expect(out.glofox_membership_expiry).toBeNull()
+  })
+
+  it('drops the Glofox empty-placeholder emergency contact + not_specified gender', () => {
+    const out = extractMemberProfile({
+      gender: 'not_specified',
+      emergency_contact: 'Contact person: , Phone number: ',
+      answers: [],
+      membership: {},
+    })
+    expect(out.gender).toBeNull()
+    expect(out.emergency_contact).toBeNull()
+    expect(out.glofox_signup_answers).toBeNull()
+  })
+
+  it('uses singular "month" for an interval count of 1', () => {
+    const out = extractMemberProfile({
+      membership: { subscription: { price: 179, interval: 'month', interval_count: 1 } },
+    })
+    expect(out.glofox_billing_interval).toBe('1 month')
   })
 })
 
