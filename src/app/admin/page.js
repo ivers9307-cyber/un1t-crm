@@ -11,7 +11,7 @@ import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import {
   FileSignature, Tv, Download, BookOpen, ChevronRight,
-  Award, ScrollText, Plug, LayoutGrid,
+  Award, ScrollText, Plug, LayoutGrid, Radio,
 } from 'lucide-react'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
@@ -75,6 +75,7 @@ export default async function AdminHubPage() {
     { href: '/admin/achievements',  icon: Award,       title: 'Achievements',     desc: 'Data-driven achievement rule set.' },
     { href: '/admin/audit-log',     icon: ScrollText,  title: 'Audit log',        desc: 'Assignment-change audit trail. CSV export.' },
     { href: '/admin/integrations',  icon: Plug,        title: 'Integrations',     desc: 'Third-party service credentials (Strava, Garmin, Apple).' },
+    { href: '/admin/bridges',       icon: Radio,       title: 'HR Bridges',       desc: 'Register studio heart-rate bridges (Raspberry Pi) and manage tokens.' },
   ] : []
 
   return (
