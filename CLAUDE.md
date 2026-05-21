@@ -152,11 +152,13 @@ CREATE POLICY "Customers can view own sessions"
 
 Invite flow: admin clicks **Invite to App** on a contact's profile in this CRM (`POST /api/contacts/[id]/invite-app`). That calls `supabase.auth.admin.inviteUserByEmail` with `redirectTo = https://app.champfitness.ie/auth/callback`. The champ-app callback exchanges the code, looks up `contacts` by email (service-role), and links `contacts.user_id`. Idempotent: existing-user case falls back to a fresh magic link via `auth.admin.generateLink`. Tests in `src/app/api/contacts/[id]/invite-app/route.test.js`.
 
-In-class TV display + the BLE bridge service for live heart-rate aggregation will live where they best fit:
+In-class TV display + the HR bridge service for live heart-rate aggregation:
   - **TV display**: a public route in *this* CRM (matches the existing `/race/[slug]/tv` pattern) — no auth, reads aggregated session state for a single location.
-  - **BLE bridge**: separate `champ-bridge` repo (Node.js, runs on a Pi at each gym, USB BLE adapter for >7 simultaneous straps), forwards data via WebSocket to an API endpoint *also in this CRM* (because bridges authenticate against admin-issued tokens stored in `ble_bridges.api_token_hash`).
+  - **HR bridge**: separate `champ-bridge` repo (Node.js, runs on a Pi at each gym). Reads chest straps over **ANT+** (primary — connectionless, one USB stick covers a whole 15-20 person class) and **BLE** (fallback for BLE-only straps). Batches samples and POSTs them to `/api/bridge/*` in *this* CRM over HTTPS. Bridges authenticate with admin-issued bearer tokens stored sha256-hashed in `ble_bridges.api_token_hash`; register + rotate them at `/admin/bridges` (master-only).
 
-Schema for the heart-rate work (mig 110): `heart_rate_sessions`, `hr_samples`, `hr_provider_connections` (OAuth tokens), `ble_bridges`, `strap_assignments`, plus `contacts.user_id` and `contacts.max_hr_override`. RLS on all five new tables — staff at the location can read, customers can read their own, writes are service-role only (the bridge + sync workers).
+Straps are identified by a protocol-aware **`device_key`** — `ant:<deviceNumber>` or `ble:<MAC>` (mig 193). One `text` column carries it everywhere: `contact_devices.identifier`, `strap_assignments.strap_identifier`, `heart_rate_sessions.device_identifier`. Protocol is encoded in the key so it can't drift and ANT+/BLE ids can't collide. The helpers (`makeDeviceKey` / `parseDeviceKey` / `canonicaliseDeviceKey`) live in `src/lib/bridge-samples.js` and are duplicated verbatim into champ-bridge (`device-key.js`) and champ-app (`heart-rate-devices.js`).
+
+Schema for the heart-rate work (mig 110 + `contact_devices` in mig 112, made protocol-aware by mig 193): `heart_rate_sessions`, `hr_samples`, `hr_provider_connections` (OAuth tokens), `ble_bridges`, `strap_assignments`, `contact_devices`, plus `contacts.user_id` and `contacts.max_hr_override`. RLS on all new tables — staff at the location can read, customers can read their own, writes are service-role only (the bridge + sync workers).
 
 ### Tech Stack
 
