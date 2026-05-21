@@ -73,6 +73,7 @@ for (const m of MOBILE_PERMISSIONS) {
 const WEB_ONLY_OK = {
   contacts:       'Searchable contact list lives only on web for now (mobile uses pipeline drill-in).',
   events:         'Booking-link / event-type management is admin-only and rare on mobile.',
+  churn_radar:    'At-risk member radar (CHURN-RADAR.1) — retention oversight dashboard with multi-signal scoring + bulk quarantine triage; desktop-only by design.',
   // NOTIF.2 (mig 169): Bookings + Tasks now ship on mobile.
   //   - bookings  → mobile `bookings` permission (today/tomorrow op view)
   //   - activities → mobile `tasks` permission (assigned-to-me + complete)

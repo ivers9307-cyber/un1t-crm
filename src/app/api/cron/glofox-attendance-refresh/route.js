@@ -122,16 +122,28 @@ async function refreshLocation(db, location, startedAt) {
     }
 
     // Stalest glofox_synced_at first so each run advances coverage.
-    const { data: members, error } = await db
-      .from('contacts')
-      .select('id, glofox_member_id')
-      .eq('location_id', location.id)
-      .in('glofox_membership_status', MEMBER_STATUSES)
-      .not('glofox_member_id', 'is', null)
-      .order('glofox_synced_at', { ascending: true, nullsFirst: true })
-      .limit(5000)
-    if (error) throw new Error(error.message)
-    const eligibleCount = (members || []).length
+    // Supabase caps a single response at ~1000 rows regardless of
+    // .limit(), so page through with .range() — otherwise members
+    // past the first 1000 are never seen in a run (the comment above
+    // promises ALL paying members). `id` is the stable tiebreaker so
+    // pagination doesn't skip/repeat rows that share glofox_synced_at.
+    const members = []
+    const PAGE = 1000
+    for (let from = 0; ; from += PAGE) {
+      const { data: page, error } = await db
+        .from('contacts')
+        .select('id, glofox_member_id')
+        .eq('location_id', location.id)
+        .in('glofox_membership_status', MEMBER_STATUSES)
+        .not('glofox_member_id', 'is', null)
+        .order('glofox_synced_at', { ascending: true, nullsFirst: true })
+        .order('id', { ascending: true })
+        .range(from, from + PAGE - 1)
+      if (error) throw new Error(error.message)
+      members.push(...(page || []))
+      if (!page || page.length < PAGE) break
+    }
+    const eligibleCount = members.length
 
     for (const m of (members || [])) {
       if (Date.now() - startedAt > TIME_BUDGET_MS) { budgetExhausted = true; break }
