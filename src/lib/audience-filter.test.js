@@ -134,6 +134,57 @@ describe('applyAudienceFilter', () => {
     })
     expect(q.calls).toEqual([['not', 'glofox_membership_plan', 'is', null]])
   })
+
+  // GLOFOX-PROFILE (mig 196) — wider member-profile campaign filters.
+  it('coerces a boolean string to a real boolean — glofox_roaming_enabled eq', () => {
+    applyAudienceFilter(q.query, { filters: [{ field: 'glofox_roaming_enabled', op: 'eq', value: 'true' }] })
+    expect(q.calls).toEqual([['eq', 'glofox_roaming_enabled', true]])
+  })
+
+  it('coerces "false" to a real boolean — glofox_account_active eq', () => {
+    applyAudienceFilter(q.query, { filters: [{ field: 'glofox_account_active', op: 'eq', value: 'false' }] })
+    expect(q.calls).toEqual([['eq', 'glofox_account_active', false]])
+  })
+
+  it('rejects a non-boolean value on a boolean field', () => {
+    expect(() => applyAudienceFilter(q.query, { filters: [{ field: 'glofox_roaming_enabled', op: 'eq', value: 'maybe' }] }))
+      .toThrow(/requires a boolean value/)
+  })
+
+  it('applies glofox_membership_type eq for class-pack targeting', () => {
+    applyAudienceFilter(q.query, { filters: [{ field: 'glofox_membership_type', op: 'eq', value: 'num_classes' }] })
+    expect(q.calls).toEqual([['eq', 'glofox_membership_type', 'num_classes']])
+  })
+
+  it('coerces glofox_membership_price_cents gt to a number', () => {
+    applyAudienceFilter(q.query, { filters: [{ field: 'glofox_membership_price_cents', op: 'gt', value: '10000' }] })
+    expect(q.calls).toEqual([['gt', 'glofox_membership_price_cents', 10000]])
+  })
+
+  // A date field with a comparison op carries an ISO date STRING — it
+  // must pass through untouched, NOT be Number()-coerced. This is the
+  // regression that previously rejected all date before/after filters.
+  it('passes an ISO date string through for glofox_membership_expiry lt', () => {
+    applyAudienceFilter(q.query, { filters: [{ field: 'glofox_membership_expiry', op: 'lt', value: '2026-07-01' }] })
+    expect(q.calls).toEqual([['lt', 'glofox_membership_expiry', '2026-07-01']])
+  })
+
+  it('passes an ISO date string through for created_at gt (date before/after regression)', () => {
+    applyAudienceFilter(q.query, { filters: [{ field: 'created_at', op: 'gt', value: '2026-01-01' }] })
+    expect(q.calls).toEqual([['gt', 'created_at', '2026-01-01']])
+  })
+
+  it('still coerces the day-count for a date field days_since op', () => {
+    applyAudienceFilter(q.query, { filters: [{ field: 'glofox_membership_expiry', op: 'days_since_gt', value: '14' }] })
+    expect(q.calls).toHaveLength(1)
+    expect(q.calls[0][0]).toBe('lt')
+    expect(q.calls[0][1]).toBe('glofox_membership_expiry')
+  })
+
+  it('applies emergency_contact is_null to find members missing one', () => {
+    applyAudienceFilter(q.query, { filters: [{ field: 'emergency_contact', op: 'is_null' }] })
+    expect(q.calls).toEqual([['is', 'emergency_contact', null]])
+  })
 })
 
 describe('AUDIENCE_FIELDS allowlist', () => {
