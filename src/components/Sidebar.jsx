@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
-import { LayoutDashboard, Users, Columns3, CheckSquare, Calendar, MessagesSquare, CalendarClock, Settings, LogOut, Car, Flag, Receipt, DoorOpen, Activity, ExternalLink, X, FileSignature, Heart, Globe, Download, Tv, ChevronDown, ChevronRight as ChevronRightIcon, BookOpen, Inbox, ClipboardCheck } from 'lucide-react'
+import { LayoutDashboard, Users, Columns3, CheckSquare, Calendar, MessagesSquare, CalendarClock, Settings, LogOut, Car, Flag, Receipt, DoorOpen, Activity, ExternalLink, X, FileSignature, Heart, Globe, Download, Tv, ChevronDown, ChevronRight as ChevronRightIcon, BookOpen, Inbox, ClipboardCheck, Radar } from 'lucide-react'
 import { createBrowserClient } from '@/lib/supabase'
 import LocationSwitcher from './LocationSwitcher'
 import ImpersonatePicker from './ImpersonatePicker'
@@ -28,6 +28,11 @@ const allNav = [
   { href: '/pipeline',   label: 'Pipeline',    icon: Columns3,        permission: 'pipeline' },
   { href: '/contacts',   label: 'Contacts',    icon: Users,           permission: 'contacts' },
   { href: '/activities', label: 'Tasks',        icon: CheckSquare,     permission: 'activities' },
+  // CHURN-RADAR.1 — at-risk member radar. Scores the active member
+  // base on attendance signals + a quarantine triage list for
+  // zero-activity records. Owner + head_coach by default. The
+  // sidebar badge shows the high-risk count.
+  { href: '/churn-radar', label: 'Churn Radar', icon: Radar,           permission: 'churn_radar' },
   // Single "Calendly" entry replacing the old Events + Bookings.
   // The hub lands on /bookings (the high-frequency operational
   // view — "what's booked today / coming up") with a tab strip
@@ -217,11 +222,17 @@ export default function Sidebar({ user, mobileOpen = false, onMobileClose }) {
     enabled: hasPerm('approvals_inbox'),
     url: '/api/approvals/count',
   })
+  // CHURN-RADAR.1 — badge shows the high-risk at-risk count.
+  const churnRadarCount = usePolledCount({
+    enabled: hasPerm('churn_radar'),
+    url: '/api/churn-radar/count',
+  })
   // Badge map by href. Add more entries here when another nav item
   // needs a notification dot.
   const badges = {
     '/invoices': invoicesPendingCount,
     '/approvals': approvalsPendingCount,
+    '/churn-radar': churnRadarCount,
   }
 
   // Browser tab title prefix — surfaces the combined pending count
