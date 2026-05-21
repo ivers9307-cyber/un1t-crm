@@ -15,8 +15,9 @@ import {
 // Columns the scorer + UI need from contacts.
 const MEMBER_COLUMNS =
   'id, name, glofox_membership_status, glofox_membership_plan, ' +
-  'last_attended_at, last_booked_at, total_attended_30d, total_attended_7d, ' +
-  'total_noshow_30d, total_bookings_30d, joined_at, lifetime_value_cents'
+  'glofox_membership_state, last_attended_at, last_booked_at, ' +
+  'total_attended_30d, total_attended_7d, total_noshow_30d, ' +
+  'total_bookings_30d, joined_at, lifetime_value_cents'
 
 const CONTACTING_ACTIONS = ['contacted', 'task_assigned', 'winback_sent']
 

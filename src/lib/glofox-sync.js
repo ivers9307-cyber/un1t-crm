@@ -643,6 +643,26 @@ export function extractMembershipPlan(member) {
   return cleaned || null
 }
 
+/**
+ * Extract the membership's lifecycle state from
+ * member.membership.status — ACTIVE / PAUSED / CANCELLED / EXPIRED.
+ * Lowercased for consistency with glofox_membership_status. Returns
+ * null when absent (PAYG / leads carry no membership object).
+ *
+ * Distinct from glofox_membership_status, which is the Glofox Client
+ * Status (member / trial / lead). This is the membership itself: a
+ * 'member' whose membership is 'paused' is on a planned freeze, not
+ * at churn risk, so the radar excludes them.
+ *
+ * Pure function — input → output, no side effects.
+ */
+export function extractMembershipState(member) {
+  const m = member && typeof member === 'object' ? member.membership : null
+  if (!m || typeof m !== 'object') return null
+  const status = typeof m.status === 'string' ? m.status.trim().toLowerCase() : ''
+  return status || null
+}
+
 // ─────────────────────────────────────────────────────────────
 // Membership status mapping (GLOFOX2.1.5 + 2.1.6 ClassPass)
 // ─────────────────────────────────────────────────────────────

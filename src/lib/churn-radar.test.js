@@ -162,18 +162,64 @@ describe('buildRadar', () => {
 })
 
 describe('radarSummary', () => {
-  it('counts active base, at-risk, high-risk and quarantine', () => {
+  it('counts active base, at-risk, high-risk, quarantine + paused, split by segment', () => {
     const contacts = [
       healthy(),
       healthy({ id: 'c-quiet', last_attended_at: daysAgo(20), total_attended_7d: 0, total_attended_30d: 2 }),
       healthy({ id: 'c-bad', last_attended_at: daysAgo(35), total_attended_7d: 0, total_attended_30d: 1, total_noshow_30d: 4 }),
+      healthy({ id: 'c-credit', glofox_membership_status: 'credit_member' }),
       { id: 'c-quar1', glofox_membership_status: 'member', last_attended_at: null, last_booked_at: null },
       { id: 'c-quar2', glofox_membership_status: 'credit_member', last_attended_at: null, last_booked_at: null },
+      healthy({ id: 'c-paused', glofox_membership_state: 'paused', last_attended_at: daysAgo(20), total_attended_7d: 0, total_attended_30d: 2 }),
       { id: 'c-trial', glofox_membership_status: 'trial' },
     ]
-    expect(radarSummary(contacts, NOW)).toEqual({
-      activeBase: 3, atRisk: 2, highRisk: 1, quarantine: 2,
+    const s = radarSummary(contacts, NOW)
+    expect(s.activeBase).toBe(4)   // healthy, c-quiet, c-bad, c-credit
+    expect(s.atRisk).toBe(2)       // c-quiet, c-bad
+    expect(s.highRisk).toBe(1)     // c-bad
+    expect(s.quarantine).toBe(2)
+    expect(s.paused).toBe(1)       // c-paused excluded despite tripping signals
+    expect(s.bySegment.member).toEqual({ activeBase: 3, atRisk: 2, highRisk: 1 })
+    expect(s.bySegment.credit).toEqual({ activeBase: 1, atRisk: 0, highRisk: 0 })
+  })
+})
+
+describe('paused / off-radar membership states', () => {
+  it('classifies a paused / cancelled / expired membership as paused', () => {
+    expect(classifyContact(healthy({ glofox_membership_state: 'paused' }))).toBe('paused')
+    expect(classifyContact(healthy({ glofox_membership_state: 'cancelled' }))).toBe('paused')
+    expect(classifyContact(healthy({ glofox_membership_state: 'expired' }))).toBe('paused')
+  })
+  it('still scores active, unknown and missing states', () => {
+    expect(classifyContact(healthy({ glofox_membership_state: 'active' }))).toBe('active')
+    expect(classifyContact(healthy({ glofox_membership_state: null }))).toBe('active')
+    expect(classifyContact(healthy({ glofox_membership_state: 'something_else' }))).toBe('active')
+  })
+  it('scoreMember returns null for a paused member even when signals fire', () => {
+    const wouldBeAtRisk = healthy({
+      glofox_membership_state: 'paused',
+      last_attended_at: daysAgo(35), total_attended_7d: 0, total_attended_30d: 1, total_noshow_30d: 4,
     })
+    expect(scoreMember(wouldBeAtRisk, NOW)).toBe(null)
+  })
+  it('keeps paused members out of buildRadar', () => {
+    const contacts = [
+      healthy({ id: 'c-bad', last_attended_at: daysAgo(35), total_attended_7d: 0, total_attended_30d: 1, total_noshow_30d: 4 }),
+      healthy({ id: 'c-paused', glofox_membership_state: 'paused', last_attended_at: daysAgo(35), total_attended_7d: 0, total_attended_30d: 1, total_noshow_30d: 4 }),
+    ]
+    expect(buildRadar(contacts, NOW).map((r) => r.contactId)).toEqual(['c-bad'])
+  })
+})
+
+describe('segment', () => {
+  it('tags scored members member vs credit', () => {
+    const m = scoreMember(healthy({ last_attended_at: daysAgo(20), total_attended_7d: 0, total_attended_30d: 2 }), NOW)
+    expect(m.segment).toBe('member')
+    const c = scoreMember(healthy({
+      glofox_membership_status: 'credit_member',
+      last_attended_at: daysAgo(20), total_attended_7d: 0, total_attended_30d: 2,
+    }), NOW)
+    expect(c.segment).toBe('credit')
   })
 })
 
