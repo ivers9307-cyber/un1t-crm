@@ -1,11 +1,16 @@
 // Bridge sample ingestion + auto-association.
 //
-// New (mig 112) routing model: when the bridge sees BPM for MAC X
-// at location L, the server resolves X → session_id by:
+// Straps are protocol-aware (ANT+ or BLE). Each sample carries a
+// `device_key` — a self-describing identifier:
+//   ant:12345               ANT+ device number
+//   ble:AA:BB:CC:DD:EE:FF   BLE canonical MAC
+//
+// Routing model: when the bridge sees BPM for device_key X at
+// location L, the server resolves X → session_id by:
 //
 //   1. Override path: strap_assignments (per-class manual pairing
 //      for walk-ins / lent straps). If an active row exists for
-//      (bridge, mac), use its heart_rate_session_id.
+//      (bridge, device_key), use its heart_rate_session_id.
 //
 //   2. Auto path: contact_devices (persistent member registry).
 //      Look up X → contact_id (constrained to bridge's location).
@@ -17,34 +22,27 @@
 //      so the coach can manually pair).
 //
 // The resolution map is built per-batch and cached for the request
-// lifespan. For a 30-strap class that means 1 query for overrides
-// + 1 query for devices + N queries for booking lookups (at most
-// 30) — small. Future work: bulk the booking lookups.
-//
-// Concurrency note: heart_rate_sessions creation is select-then-
-// insert, so a racy two-sample-at-once could double-create. Bridge
-// connections are sequential per Pi so this only matters if the
-// same MAC arrives via two distinct bridges (unlikely — one gym
-// per bridge). If we see duplicates in production, add a partial
-// unique index on (contact_id, booking_id, source) WHERE
-// ended_at IS NULL.
+// lifespan. A dual-band strap broadcasting on both protocols arrives
+// as two distinct device_keys — only the one the member registered
+// resolves; the other drops as unpaired. No cross-protocol de-dup is
+// needed because protocol-namespaced keys can't collide.
 
 import { logWarn } from '@/lib/log'
 
-// 90 min covers an hour-long class plus 15min before + 15min after
-// so a member who comes early or stays late still has their HR
-// auto-route to the right booking.
+// 90 min covers an hour-long class plus 15min before + 15min after.
 const BOOKING_WINDOW_MS = 90 * 60 * 1000
 // How far before the booking start we already accept samples.
-// Members chest-strap up early; we want their warmup HR to count.
 const BOOKING_PRE_GRACE_MS = 30 * 60 * 1000
 
-// ── canonicalisation ─────────────────────────────────────────────
+// ── protocol-aware identifiers ──────────────────────────────────
+//
+// Shared with champ-bridge/src/device-key.js and champ-app's
+// heart-rate-devices.js — duplicated because the three projects are
+// separate. If this drifts, champ-bridge's copy is the source.
 
 /**
- * Normalise a BLE MAC. Accepts uppercase/lowercase, colon-separated
- * or no-separator. Returns canonical UPPERCASE COLON-SEPARATED
- * AA:BB:CC:DD:EE:FF or null if input doesn't look like a MAC.
+ * Normalise a BLE MAC. Accepts upper/lowercase, colon / hyphen / no
+ * separator. Returns canonical UPPER colon form or null.
  */
 export function canonicaliseMac(input) {
   if (typeof input !== 'string') return null
@@ -53,15 +51,77 @@ export function canonicaliseMac(input) {
   return hex.match(/.{2}/g).join(':')
 }
 
+/**
+ * Normalise an ANT+ device number (16-bit, 1-65535). Returns the
+ * decimal string (leading zeros stripped) or null.
+ */
+export function canonicaliseAntId(input) {
+  if (input == null) return null
+  const s = String(input).trim()
+  // Digits only; range — not length — decides validity, so a
+  // leading-zero-padded id still canonicalises.
+  if (!/^\d+$/.test(s)) return null
+  const n = Number(s)
+  if (!Number.isInteger(n) || n < 1 || n > 65535) return null
+  return String(n)
+}
+
+/**
+ * Build a device_key from a protocol + raw id. Returns null on a bad
+ * protocol or an id that fails its protocol's canonicaliser.
+ */
+export function makeDeviceKey(protocol, rawId) {
+  if (protocol === 'ble') {
+    const mac = canonicaliseMac(rawId)
+    return mac ? `ble:${mac}` : null
+  }
+  if (protocol === 'ant') {
+    const id = canonicaliseAntId(rawId)
+    return id ? `ant:${id}` : null
+  }
+  return null
+}
+
+/**
+ * Parse a device_key into { protocol, deviceId }. A BLE key carries
+ * its own colons — split on the FIRST colon only. Returns null for
+ * anything malformed.
+ */
+export function parseDeviceKey(key) {
+  if (typeof key !== 'string') return null
+  const idx = key.indexOf(':')
+  if (idx < 1) return null
+  const protocol = key.slice(0, idx)
+  const rest = key.slice(idx + 1)
+  if (protocol === 'ble') {
+    const mac = canonicaliseMac(rest)
+    return mac ? { protocol: 'ble', deviceId: mac } : null
+  }
+  if (protocol === 'ant') {
+    const id = canonicaliseAntId(rest)
+    return id ? { protocol: 'ant', deviceId: id } : null
+  }
+  return null
+}
+
+/**
+ * Round-trip a device_key into canonical form, or null if it doesn't
+ * parse.
+ */
+export function canonicaliseDeviceKey(key) {
+  const parsed = parseDeviceKey(key)
+  return parsed ? `${parsed.protocol}:${parsed.deviceId}` : null
+}
+
 // ── pure: build sample rows from a strap → session map ──────────
 
 /**
- * Take a batch of bridge-reported samples + a resolved strap_mac →
+ * Take a batch of bridge-reported samples + a resolved device_key →
  * session_id map and return rows ready to insert into hr_samples.
  * Drops invalid / unmatched / non-finite samples, records reasons
  * in stats.
  *
- * @param {Array<{ strap_mac: string, recorded_at: string|Date, bpm: number }>} samples
+ * @param {Array<{ device_key: string, recorded_at: string|Date, bpm: number }>} samples
  * @param {Map<string, { sessionId: string }>} strapMap
  */
 export function buildHrSampleRows(samples, strapMap) {
@@ -69,9 +129,9 @@ export function buildHrSampleRows(samples, strapMap) {
   const stats = { received: 0, accepted: 0, dropped_unpaired: 0, dropped_invalid: 0 }
   for (const s of samples || []) {
     stats.received++
-    const mac = canonicaliseMac(s?.strap_mac)
+    const key = canonicaliseDeviceKey(s?.device_key)
     const bpm = Number(s?.bpm)
-    if (!mac || !Number.isFinite(bpm) || bpm < 30 || bpm > 240) {
+    if (!key || !Number.isFinite(bpm) || bpm < 30 || bpm > 240) {
       stats.dropped_invalid++
       continue
     }
@@ -80,7 +140,7 @@ export function buildHrSampleRows(samples, strapMap) {
       stats.dropped_invalid++
       continue
     }
-    const target = strapMap.get(mac)
+    const target = strapMap.get(key)
     if (!target) {
       stats.dropped_unpaired++
       continue
@@ -98,30 +158,26 @@ export function buildHrSampleRows(samples, strapMap) {
 // ── strap → session resolution ──────────────────────────────────
 
 /**
- * Resolve all unique MACs in a batch to their target sessions in
- * one combined pass. Returns a Map<canonicalMac, { sessionId,
- * contactId, via: 'override'|'auto' }>.
- *
- * `via` is informational — the API route surfaces it in the
- * response so the bridge / coach UI can tell whether a sample was
- * manually paired or auto-routed.
+ * Resolve all unique device_keys in a batch to their target sessions
+ * in one combined pass. Returns a Map<canonicalDeviceKey, {
+ * sessionId, contactId, via: 'override'|'auto' }>.
  */
-export async function resolveStrapsForBatch(db, { bridgeId, locationId, macs, nowMs = Date.now() }) {
+export async function resolveStrapsForBatch(db, { bridgeId, locationId, deviceKeys, nowMs = Date.now() }) {
   const map = new Map()
-  const uniqueMacs = [...new Set((macs || []).map(canonicaliseMac).filter(Boolean))]
-  if (uniqueMacs.length === 0) return map
+  const uniqueKeys = [...new Set((deviceKeys || []).map(canonicaliseDeviceKey).filter(Boolean))]
+  if (uniqueKeys.length === 0) return map
 
   // (1) Override path: strap_assignments active for this bridge.
   const { data: overrideRows } = await db
     .from('strap_assignments')
-    .select('strap_mac, contact_id, heart_rate_session_id')
+    .select('strap_identifier, contact_id, heart_rate_session_id')
     .eq('ble_bridge_id', bridgeId)
     .is('ended_at', null)
     .not('heart_rate_session_id', 'is', null)
 
   for (const row of overrideRows || []) {
-    const canonical = canonicaliseMac(row.strap_mac)
-    if (canonical && uniqueMacs.includes(canonical) && row.heart_rate_session_id) {
+    const canonical = canonicaliseDeviceKey(row.strap_identifier)
+    if (canonical && uniqueKeys.includes(canonical) && row.heart_rate_session_id) {
       map.set(canonical, {
         sessionId: row.heart_rate_session_id,
         contactId: row.contact_id,
@@ -130,8 +186,8 @@ export async function resolveStrapsForBatch(db, { bridgeId, locationId, macs, no
     }
   }
 
-  // (2) Auto path: contact_devices for the remaining MACs.
-  const remaining = uniqueMacs.filter((m) => !map.has(m))
+  // (2) Auto path: contact_devices for the remaining device_keys.
+  const remaining = uniqueKeys.filter((k) => !map.has(k))
   if (remaining.length === 0) return map
 
   const { data: deviceRows, error: devErr } = await db
@@ -152,11 +208,11 @@ export async function resolveStrapsForBatch(db, { bridgeId, locationId, macs, no
     const sessionId = await findOrCreateAutoSession(db, {
       contactId: dev.contact_id,
       locationId,
-      strapMac: dev.identifier,
+      deviceKey: dev.identifier,
       nowMs,
     })
     if (sessionId) {
-      map.set(dev.identifier, {
+      map.set(canonicaliseDeviceKey(dev.identifier) || dev.identifier, {
         sessionId,
         contactId: dev.contact_id,
         via: 'auto',
@@ -170,10 +226,9 @@ export async function resolveStrapsForBatch(db, { bridgeId, locationId, macs, no
 /**
  * Find an existing open heart_rate_sessions row for this contact at
  * this location, or create one if the contact has an in-progress
- * booking. Returns null if no active booking — the strap is broadcasting
- * but the member isn't booked into anything right now.
+ * booking. Returns null if no active booking.
  */
-async function findOrCreateAutoSession(db, { contactId, locationId, strapMac, nowMs }) {
+async function findOrCreateAutoSession(db, { contactId, locationId, deviceKey, nowMs }) {
   // (a) any existing open session?
   const { data: existing } = await db
     .from('heart_rate_sessions')
@@ -186,12 +241,7 @@ async function findOrCreateAutoSession(db, { contactId, locationId, strapMac, no
     .maybeSingle()
   if (existing?.id) return existing.id
 
-  // (b) find an in-progress booking. We look at bookings on today
-  // (Dublin date — booking_date is naïve) whose start_time falls
-  // within [now - BOOKING_WINDOW_MS, now + BOOKING_PRE_GRACE_MS].
-  // booking_date + start_time are stored as a naïve date+time
-  // pair; compose them and treat as UTC. Around DST transitions
-  // there's a ±1h drift but the wide window absorbs it.
+  // (b) find an in-progress booking on today (Dublin date).
   const now = new Date(nowMs)
   const yesterdayIso = new Date(nowMs - 24 * 3600_000).toISOString().slice(0, 10)
   const tomorrowIso = new Date(nowMs + 24 * 3600_000).toISOString().slice(0, 10)
@@ -202,8 +252,6 @@ async function findOrCreateAutoSession(db, { contactId, locationId, strapMac, no
     .eq('contact_id', contactId)
     .eq('location_id', locationId)
     .in('status', ['confirmed', 'attended'])
-    // ±1 day filter cheaply scopes the result set; final in-window
-    // check is done below in JS for precision.
     .gte('booking_date', yesterdayIso)
     .lte('booking_date', tomorrowIso)
 
@@ -214,7 +262,6 @@ async function findOrCreateAutoSession(db, { contactId, locationId, strapMac, no
     const lo = nowMs - BOOKING_WINDOW_MS
     const hi = nowMs + BOOKING_PRE_GRACE_MS
     if (bookingMs >= lo && bookingMs <= hi) {
-      // Pick the booking whose start is closest to now.
       if (!activeBooking || Math.abs(bookingMs - nowMs) < Math.abs(activeBooking.bookingMs - nowMs)) {
         activeBooking = { ...b, bookingMs }
       }
@@ -223,10 +270,7 @@ async function findOrCreateAutoSession(db, { contactId, locationId, strapMac, no
 
   if (!activeBooking) return null
 
-  // (c) compute the contact's max HR for the session — needed for
-  // zone math at session-end. We snapshot it on the row so future
-  // edits to contacts.max_hr_override don't retroactively reshape
-  // historical sessions.
+  // (c) snapshot the contact's max HR onto the session row.
   const { data: contact } = await db
     .from('contacts')
     .select('max_hr_override, dob')
@@ -242,7 +286,7 @@ async function findOrCreateAutoSession(db, { contactId, locationId, strapMac, no
       location_id: locationId,
       booking_id: activeBooking.id,
       source: 'ble_bridge',
-      device_identifier: strapMac,
+      device_identifier: deviceKey,
       started_at: now.toISOString(),
       max_hr_used: maxHr,
     })
@@ -261,9 +305,8 @@ async function findOrCreateAutoSession(db, { contactId, locationId, strapMac, no
 }
 
 /**
- * Same logic as shared HR helper resolveMaxHr but inlined here so
- * un1t-crm doesn't depend on champ-app's shared module. Single
- * source of truth migration is on the Phase-2 follow-up list.
+ * Same logic as the shared HR helper resolveMaxHr but inlined so
+ * un1t-crm doesn't depend on champ-app's shared module.
  */
 function resolveMaxHrForBridgeInsert(contact) {
   const override = Number(contact?.max_hr_override)
@@ -290,10 +333,7 @@ function resolveMaxHrForBridgeInsert(contact) {
  * Bridge retries after a network blip don't 409.
  *
  * Also opportunistically touches heart_rate_sessions.last_sample_at
- * for each session represented in the batch — the live coach view
- * uses that column to flag stale sessions ("strap silent for >2min").
- * Best-effort: a failure here is logged but does not fail the
- * sample insert.
+ * for each session represented in the batch.
  */
 export async function insertHrSamples(db, rows) {
   if (rows.length === 0) return { inserted: 0, error: null }
@@ -305,10 +345,6 @@ export async function insertHrSamples(db, rows) {
     return { inserted: 0, error }
   }
 
-  // Touch last_sample_at on each affected session. Use the latest
-  // recorded_at per session (rather than now()) so the column
-  // reflects the actual sample timestamp the bridge sent — robust
-  // to clock skew between bridge + server.
   const latestPerSession = new Map()
   for (const r of rows) {
     const prev = latestPerSession.get(r.session_id)
@@ -330,21 +366,19 @@ export async function insertHrSamples(db, rows) {
 
 // ── back-compat shim ────────────────────────────────────────────
 //
-// Old callers used getActiveStrapMap(db, bridgeId). Now thin
-// wrapper around resolveStrapsForBatch with no MAC list (returns
-// only the override layer). Kept so the tests for v1 still pass;
-// remove once they're rewritten against resolveStrapsForBatch.
+// Old callers used getActiveStrapMap(db, bridgeId) — thin wrapper
+// around the override layer only.
 
 export async function getActiveStrapMap(db, bridgeId) {
   const { data } = await db
     .from('strap_assignments')
-    .select('strap_mac, contact_id, heart_rate_session_id')
+    .select('strap_identifier, contact_id, heart_rate_session_id')
     .eq('ble_bridge_id', bridgeId)
     .is('ended_at', null)
     .not('heart_rate_session_id', 'is', null)
   const map = new Map()
   for (const row of data || []) {
-    const canonical = canonicaliseMac(row.strap_mac)
+    const canonical = canonicaliseDeviceKey(row.strap_identifier)
     if (canonical && row.heart_rate_session_id) {
       map.set(canonical, { sessionId: row.heart_rate_session_id, contactId: row.contact_id })
     }

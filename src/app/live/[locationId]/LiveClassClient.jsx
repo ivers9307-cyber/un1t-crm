@@ -74,7 +74,7 @@ export default function LiveClassClient({ locationId, locationName, contacts }) 
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
-          strap_mac: strap.mac,
+          device_key: strap.device_key,
           contact_id: contactId,
           bridge_id: strap.bridgeId,
         }),
@@ -264,12 +264,17 @@ function AvailableStrapsPanel({ straps, onStartPair }) {
       <ul className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
         {straps.map((s) => (
           <li
-            key={s.mac}
+            key={s.device_key}
             className="flex items-center gap-3 rounded-lg border border-un1t-gray bg-un1t-dark p-3"
           >
             <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-medium">{s.name || 'Unknown strap'}</p>
-              <p className="truncate font-mono text-xs text-un1t-light">{s.mac}</p>
+              <div className="flex items-center gap-1.5">
+                <p className="truncate text-sm font-medium">{s.name || 'Heart-rate strap'}</p>
+                <span className="shrink-0 rounded-full bg-un1t-gray px-1.5 py-0.5 text-[10px] font-semibold uppercase text-un1t-light">
+                  {s.protocol === 'ant' ? 'ANT+' : 'BLE'}
+                </span>
+              </div>
+              <p className="truncate font-mono text-xs text-un1t-light">{s.device_key}</p>
             </div>
             <div className="text-right">
               {s.lastBpm != null && (
@@ -303,7 +308,7 @@ function PairModal({ strap, contacts, onCancel, onConfirm }) {
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
       <div className="w-full max-w-md rounded-2xl bg-white p-5 shadow-xl">
         <h2 className="text-lg font-semibold">Pair strap</h2>
-        <p className="mt-1 font-mono text-sm text-un1t-light">{strap.mac}</p>
+        <p className="mt-1 font-mono text-sm text-un1t-light">{strap.device_key}</p>
         <p className="mt-3 text-sm">
           Pick a member to assign this strap to for the rest of class.
           You can also register the strap permanently on their profile

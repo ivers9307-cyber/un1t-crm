@@ -5,12 +5,13 @@
 // just one. The bridge ingestion path uses lookupByIdentifier to
 // auto-route samples without per-class manual pairing.
 //
-// Identifier validation: chest_strap MACs are normalised through
-// canonicaliseMac before storage. Watch identifiers (vendor IDs)
-// are stored verbatim — vendor format varies and we don't try
-// to canonicalise across vendors.
+// Identifier validation: chest_strap identifiers are stored as a
+// protocol-aware device_key — `ble:<MAC>` or `ant:<deviceNumber>`.
+// A caller may pass either an already-qualified device_key (the
+// scan flow) or a raw id plus a `protocol` field (manual entry).
+// Watch identifiers (vendor IDs) are stored verbatim.
 
-import { canonicaliseMac } from '@/lib/bridge-samples'
+import { makeDeviceKey, canonicaliseDeviceKey } from '@/lib/bridge-samples'
 
 export const DEVICE_TYPES = ['chest_strap', 'watch']
 export const KNOWN_MANUFACTURERS = ['polar', 'wahoo', 'coospo', 'garmin', 'apple', 'whoop', 'unknown']
@@ -33,11 +34,28 @@ export function validateDeviceInput(input) {
   if (!identifier) return { ok: false, error: 'identifier is required' }
 
   if (deviceType === 'chest_strap') {
-    const canonical = canonicaliseMac(identifier)
-    if (!canonical) {
-      return { ok: false, error: 'identifier must be a valid MAC address (e.g. AA:BB:CC:DD:EE:FF)' }
+    // Accept either an already-qualified device_key (the scan flow
+    // passes one) or a raw id + `protocol` field (manual entry,
+    // protocol defaults to 'ble' for back-compat with MAC entry).
+    const asKey = canonicaliseDeviceKey(identifier)
+    if (asKey) {
+      identifier = asKey
+    } else {
+      const protocol = String(input?.protocol || 'ble').trim().toLowerCase()
+      if (protocol !== 'ble' && protocol !== 'ant') {
+        return { ok: false, error: 'protocol must be "ble" or "ant"' }
+      }
+      const key = makeDeviceKey(protocol, identifier)
+      if (!key) {
+        return {
+          ok: false,
+          error: protocol === 'ant'
+            ? 'identifier must be a valid ANT+ device number (1-65535)'
+            : 'identifier must be a valid MAC address (e.g. AA:BB:CC:DD:EE:FF)',
+        }
+      }
+      identifier = key
     }
-    identifier = canonical
   } else {
     // Watch: keep as-is, just length-bound it.
     if (identifier.length > 200) {

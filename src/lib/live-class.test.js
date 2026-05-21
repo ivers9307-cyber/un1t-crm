@@ -97,15 +97,15 @@ describe('getAvailableStraps', () => {
     expect(await getAvailableStraps(db, 'loc-1')).toEqual([])
   })
 
-  it('flattens bridges and filters out in-use straps', async () => {
+  it('flattens bridges and filters out in-use straps across protocols', async () => {
     const bridgeRows = [{
       id: 'b-1', name: 'Studio 1', status: 'online', last_seen_at: '2026-05-08T17:00:00Z',
       last_seen_straps: [
-        { mac: 'AA:BB:CC:DD:EE:FF', name: 'Polar H10', rssi: -50, last_bpm: 120, seen_at: '2026-05-08T17:00:00Z' },
-        { mac: '11:22:33:44:55:66', name: 'Wahoo TICKR', rssi: -60, last_bpm: 90, seen_at: '2026-05-08T17:00:00Z' },
+        { device_key: 'ble:AA:BB:CC:DD:EE:FF', name: 'Polar H10', rssi: -50, last_bpm: 120, seen_at: '2026-05-08T17:00:00Z' },
+        { device_key: 'ant:12345', name: null, rssi: null, last_bpm: 90, seen_at: '2026-05-08T17:00:00Z' },
       ],
     }]
-    const inUseRows = [{ device_identifier: 'AA:BB:CC:DD:EE:FF' }]
+    const inUseRows = [{ device_identifier: 'ble:AA:BB:CC:DD:EE:FF' }]
     const db = {
       from: vi.fn((table) => {
         if (table === 'ble_bridges') {
@@ -131,7 +131,8 @@ describe('getAvailableStraps', () => {
     }
     const out = await getAvailableStraps(db, 'loc-1')
     expect(out).toHaveLength(1)
-    expect(out[0].mac).toBe('11:22:33:44:55:66')
+    expect(out[0].device_key).toBe('ant:12345')
+    expect(out[0].protocol).toBe('ant')
   })
 })
 
@@ -149,9 +150,18 @@ describe('pairOverride', () => {
       })),
     }
     const out = await pairOverride(db, {
-      locationId: 'loc-1', bridgeId: 'b-1', contactId: 'c-1', strapMac: 'AA:BB:CC:DD:EE:FF',
+      locationId: 'loc-1', bridgeId: 'b-1', contactId: 'c-1', deviceKey: 'ble:AA:BB:CC:DD:EE:FF',
     })
     expect(out.ok).toBe(false)
+  })
+
+  it('rejects a missing device_key before touching the DB', async () => {
+    const db = { from: vi.fn(() => { throw new Error('should not query') }) }
+    const out = await pairOverride(db, {
+      locationId: 'loc-1', bridgeId: 'b-1', contactId: 'c-1', deviceKey: null,
+    })
+    expect(out.ok).toBe(false)
+    expect(out.error).toMatch(/device_key/)
   })
 
   it('reuses existing open session when present and inserts strap_assignments', async () => {
@@ -179,7 +189,7 @@ describe('pairOverride', () => {
                     order: vi.fn(() => ({
                       limit: vi.fn(() => ({
                         maybeSingle: vi.fn(() => Promise.resolve({
-                          data: { id: 'sess-existing', device_identifier: 'AA:BB:CC:DD:EE:FF' },
+                          data: { id: 'sess-existing', device_identifier: 'ble:AA:BB:CC:DD:EE:FF' },
                           error: null,
                         })),
                       })),
@@ -203,14 +213,14 @@ describe('pairOverride', () => {
       }),
     }
     const out = await pairOverride(db, {
-      locationId: 'loc-1', bridgeId: 'b-1', contactId: 'c-1', strapMac: 'AA:BB:CC:DD:EE:FF',
+      locationId: 'loc-1', bridgeId: 'b-1', contactId: 'c-1', deviceKey: 'ble:AA:BB:CC:DD:EE:FF',
     })
     expect(out.ok).toBe(true)
     expect(out.sessionId).toBe('sess-existing')
     expect(calls.saInsert).toMatchObject({
       ble_bridge_id: 'b-1',
       contact_id: 'c-1',
-      strap_mac: 'AA:BB:CC:DD:EE:FF',
+      strap_identifier: 'ble:AA:BB:CC:DD:EE:FF',
       heart_rate_session_id: 'sess-existing',
     })
   })

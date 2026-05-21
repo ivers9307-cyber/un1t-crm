@@ -4,15 +4,17 @@
 //
 //   {
 //     samples: [
-//       { strap_mac: "AA:BB:CC:DD:EE:FF", recorded_at: ISO, bpm: 145 },
+//       { device_key: "ant:12345", recorded_at: ISO, bpm: 145 },
+//       { device_key: "ble:AA:BB:CC:DD:EE:FF", recorded_at: ISO, bpm: 132 },
 //       ...
 //     ]
 //   }
 //
+// device_key is protocol-aware — `ant:<deviceNumber>` or `ble:<MAC>`.
 // The bridge sends every sample it sees, paired or not. The server
-// looks up the active strap_assignments for this bridge ONCE per
-// request, builds a strap_mac → session_id map, and inserts only
-// the matching samples into hr_samples.
+// resolves every device_key in the batch ONCE per request, builds a
+// device_key → session_id map, and inserts only the matching samples
+// into hr_samples.
 //
 // Unmatched samples are counted in the response stats but not
 // stored. The bridge's separate /scan call surfaces those straps
@@ -65,15 +67,16 @@ export async function POST(request) {
   }
 
   const db = createServerClient()
-  // Resolve every MAC in the batch ONCE — checking the manual-override
-  // strap_assignments path first, then falling through to the
-  // contact_devices auto-association (which auto-creates a session
-  // tied to the contact's in-progress booking when applicable).
-  const macs = (samples || []).map((s) => s?.strap_mac).filter(Boolean)
+  // Resolve every device_key in the batch ONCE — checking the
+  // manual-override strap_assignments path first, then falling
+  // through to the contact_devices auto-association (which
+  // auto-creates a session tied to the contact's in-progress
+  // booking when applicable).
+  const deviceKeys = (samples || []).map((s) => s?.device_key).filter(Boolean)
   const strapMap = await resolveStrapsForBatch(db, {
     bridgeId: bridge.bridgeId,
     locationId: bridge.locationId,
-    macs,
+    deviceKeys,
   })
   const { rows, stats } = buildHrSampleRows(samples, strapMap)
 

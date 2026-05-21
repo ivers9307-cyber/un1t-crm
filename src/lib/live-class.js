@@ -96,11 +96,13 @@ export async function getLiveSessions(db, locationId, nowMs = Date.now()) {
 
 /**
  * Read every bridge at the location and union their last_seen_straps.
- * Filters out MACs already linked to an open session (so the coach
- * only sees genuinely-available straps to pair).
+ * Filters out straps already linked to an open session (so the coach
+ * only sees genuinely-available straps to pair). Straps are
+ * identified by a protocol-aware device_key (ant:… or ble:…).
  *
- * @returns {Promise<Array<{ mac: string, name: string|null, rssi: number|null,
- *                          lastBpm: number|null, seenAt: string }>>}
+ * @returns {Promise<Array<{ device_key: string, protocol: string,
+ *   name: string|null, rssi: number|null, lastBpm: number|null,
+ *   seenAt: string, bridgeId: string, bridgeName: string }>>}
  */
 export async function getAvailableStraps(db, locationId) {
   const { data: bridges } = await db
@@ -111,8 +113,10 @@ export async function getAvailableStraps(db, locationId) {
   const all = []
   for (const b of bridges || []) {
     for (const s of b.last_seen_straps || []) {
+      if (!s.device_key) continue
       all.push({
-        mac: s.mac,
+        device_key: s.device_key,
+        protocol: s.device_key.startsWith('ant:') ? 'ant' : 'ble',
         name: s.name || null,
         rssi: s.rssi ?? null,
         lastBpm: s.last_bpm ?? null,
@@ -124,18 +128,18 @@ export async function getAvailableStraps(db, locationId) {
   }
   if (all.length === 0) return []
 
-  // Filter out MACs that are already routing to a session (auto OR
+  // Filter out straps already routing to a session (auto OR
   // override). The coach UI only wants to surface unrouted straps.
-  const macs = all.map((s) => s.mac)
+  const deviceKeys = all.map((s) => s.device_key)
   const { data: openSessions } = await db
     .from('heart_rate_sessions')
     .select('device_identifier')
     .eq('location_id', locationId)
     .is('ended_at', null)
-    .in('device_identifier', macs)
+    .in('device_identifier', deviceKeys)
 
   const inUse = new Set((openSessions || []).map((s) => s.device_identifier))
-  return all.filter((s) => !inUse.has(s.mac))
+  return all.filter((s) => !inUse.has(s.device_key))
 }
 
 /**
@@ -149,7 +153,9 @@ export async function getAvailableStraps(db, locationId) {
  * a parallel one (member swapped straps mid-class — keep their stats
  * cumulative).
  */
-export async function pairOverride(db, { locationId, bridgeId, contactId, strapMac, bookingId = null, nowMs = Date.now() }) {
+export async function pairOverride(db, { locationId, bridgeId, contactId, deviceKey, bookingId = null, nowMs = Date.now() }) {
+  if (!deviceKey) return { ok: false, error: 'A strap device_key is required' }
+
   // Snapshot max HR for the session row.
   const { data: contact } = await db
     .from('contacts')
@@ -179,7 +185,7 @@ export async function pairOverride(db, { locationId, bridgeId, contactId, strapM
         location_id: locationId,
         booking_id: bookingId,
         source: 'ble_bridge',
-        device_identifier: strapMac,
+        device_identifier: deviceKey,
         started_at: new Date(nowMs).toISOString(),
         max_hr_used: maxHr,
       })
@@ -189,12 +195,12 @@ export async function pairOverride(db, { locationId, bridgeId, contactId, strapM
       return { ok: false, error: createErr?.message || 'Session create failed' }
     }
     sessionId = created.id
-  } else if (existing.device_identifier !== strapMac) {
+  } else if (existing.device_identifier !== deviceKey) {
     // Member swapped straps mid-class — update the device_identifier
     // so future samples on this session reference the current strap.
     await db
       .from('heart_rate_sessions')
-      .update({ device_identifier: strapMac })
+      .update({ device_identifier: deviceKey })
       .eq('id', sessionId)
   }
 
@@ -204,7 +210,7 @@ export async function pairOverride(db, { locationId, bridgeId, contactId, strapM
     .insert({
       ble_bridge_id: bridgeId,
       contact_id: contactId,
-      strap_mac: strapMac,
+      strap_identifier: deviceKey,
       booking_id: bookingId,
       heart_rate_session_id: sessionId,
     })

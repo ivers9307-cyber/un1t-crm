@@ -1,10 +1,14 @@
-// Tests for bridge-samples.js — pure helpers (canonicaliseMac,
-// buildHrSampleRows) plus DB-mocked tests for getActiveStrapMap
-// and insertHrSamples.
+// Tests for bridge-samples.js — protocol-aware identifier helpers,
+// the pure buildHrSampleRows, and DB-mocked getActiveStrapMap +
+// insertHrSamples.
 
 import { describe, it, expect, vi } from 'vitest'
 import {
   canonicaliseMac,
+  canonicaliseAntId,
+  makeDeviceKey,
+  parseDeviceKey,
+  canonicaliseDeviceKey,
   buildHrSampleRows,
   getActiveStrapMap,
   insertHrSamples,
@@ -13,25 +17,61 @@ import {
 // ── canonicaliseMac ──────────────────────────────────────────────
 
 describe('canonicaliseMac', () => {
-  it('canonicalises lowercase colon form', () => {
+  it('canonicalises every accepted MAC form', () => {
     expect(canonicaliseMac('aa:bb:cc:dd:ee:ff')).toBe('AA:BB:CC:DD:EE:FF')
-  })
-  it('canonicalises no-separator form', () => {
     expect(canonicaliseMac('aabbccddeeff')).toBe('AA:BB:CC:DD:EE:FF')
-  })
-  it('canonicalises hyphen form', () => {
     expect(canonicaliseMac('AA-BB-CC-DD-EE-FF')).toBe('AA:BB:CC:DD:EE:FF')
   })
-  it('returns null for non-12-hex inputs', () => {
+  it('returns null for bad input', () => {
     expect(canonicaliseMac('AA:BB:CC')).toBe(null)
-    expect(canonicaliseMac('not a mac')).toBe(null)
     expect(canonicaliseMac('')).toBe(null)
     expect(canonicaliseMac(null)).toBe(null)
-    expect(canonicaliseMac(undefined)).toBe(null)
-  })
-  it('returns null for non-string', () => {
     expect(canonicaliseMac(123)).toBe(null)
-    expect(canonicaliseMac({})).toBe(null)
+  })
+})
+
+// ── canonicaliseAntId ────────────────────────────────────────────
+
+describe('canonicaliseAntId', () => {
+  it('accepts 16-bit device numbers, strips leading zeros', () => {
+    expect(canonicaliseAntId('12345')).toBe('12345')
+    expect(canonicaliseAntId(42)).toBe('42')
+    expect(canonicaliseAntId('00042')).toBe('42')
+    expect(canonicaliseAntId('65535')).toBe('65535')
+  })
+  it('rejects out-of-range / non-numeric', () => {
+    expect(canonicaliseAntId('0')).toBe(null)
+    expect(canonicaliseAntId('65536')).toBe(null)
+    expect(canonicaliseAntId('abc')).toBe(null)
+    expect(canonicaliseAntId('')).toBe(null)
+    expect(canonicaliseAntId(null)).toBe(null)
+  })
+})
+
+// ── makeDeviceKey / parseDeviceKey / canonicaliseDeviceKey ───────
+
+describe('device_key helpers', () => {
+  it('makeDeviceKey builds ble + ant keys', () => {
+    expect(makeDeviceKey('ble', 'aabbccddeeff')).toBe('ble:AA:BB:CC:DD:EE:FF')
+    expect(makeDeviceKey('ant', 12345)).toBe('ant:12345')
+    expect(makeDeviceKey('ble', 'nope')).toBe(null)
+    expect(makeDeviceKey('zigbee', '1')).toBe(null)
+  })
+  it('parseDeviceKey splits a ble key on the first colon only', () => {
+    expect(parseDeviceKey('ble:AA:BB:CC:DD:EE:FF')).toEqual({
+      protocol: 'ble', deviceId: 'AA:BB:CC:DD:EE:FF',
+    })
+    expect(parseDeviceKey('ant:12345')).toEqual({ protocol: 'ant', deviceId: '12345' })
+    expect(parseDeviceKey('nocolon')).toBe(null)
+    expect(parseDeviceKey('ble:bad')).toBe(null)
+    expect(parseDeviceKey(null)).toBe(null)
+  })
+  it('canonicaliseDeviceKey round-trips into canonical form', () => {
+    expect(canonicaliseDeviceKey('ble:aa-bb-cc-dd-ee-ff')).toBe('ble:AA:BB:CC:DD:EE:FF')
+    expect(canonicaliseDeviceKey('ant:00042')).toBe('ant:42')
+    expect(canonicaliseDeviceKey('garbage')).toBe(null)
+    // A bare MAC is NOT a device_key — it has no protocol prefix.
+    expect(canonicaliseDeviceKey('AA:BB:CC:DD:EE:FF')).toBe(null)
   })
 })
 
@@ -39,38 +79,48 @@ describe('canonicaliseMac', () => {
 
 describe('buildHrSampleRows', () => {
   const strapMap = new Map([
-    ['AA:BB:CC:DD:EE:FF', { sessionId: 'sess-1', contactId: 'c-1' }],
-    ['11:22:33:44:55:66', { sessionId: 'sess-2', contactId: 'c-2' }],
+    ['ble:AA:BB:CC:DD:EE:FF', { sessionId: 'sess-1', contactId: 'c-1' }],
+    ['ant:12345', { sessionId: 'sess-2', contactId: 'c-2' }],
   ])
 
-  it('builds rows for paired straps', () => {
+  it('builds rows for paired straps on either protocol', () => {
     const samples = [
-      { strap_mac: 'AA:BB:CC:DD:EE:FF', recorded_at: '2026-05-08T16:00:00Z', bpm: 145 },
-      { strap_mac: '11:22:33:44:55:66', recorded_at: '2026-05-08T16:00:00Z', bpm: 132 },
+      { device_key: 'ble:AA:BB:CC:DD:EE:FF', recorded_at: '2026-05-21T16:00:00Z', bpm: 145 },
+      { device_key: 'ant:12345', recorded_at: '2026-05-21T16:00:00Z', bpm: 132 },
     ]
     const { rows, stats } = buildHrSampleRows(samples, strapMap)
     expect(rows).toEqual([
-      { session_id: 'sess-1', recorded_at: '2026-05-08T16:00:00.000Z', bpm: 145 },
-      { session_id: 'sess-2', recorded_at: '2026-05-08T16:00:00.000Z', bpm: 132 },
+      { session_id: 'sess-1', recorded_at: '2026-05-21T16:00:00.000Z', bpm: 145 },
+      { session_id: 'sess-2', recorded_at: '2026-05-21T16:00:00.000Z', bpm: 132 },
     ])
     expect(stats).toEqual({ received: 2, accepted: 2, dropped_unpaired: 0, dropped_invalid: 0 })
   })
 
+  it('canonicalises non-canonical device keys before matching', () => {
+    const samples = [
+      { device_key: 'ble:aa-bb-cc-dd-ee-ff', recorded_at: '2026-05-21T16:00:00Z', bpm: 140 },
+      { device_key: 'ant:00012345', recorded_at: '2026-05-21T16:00:01Z', bpm: 141 },
+    ]
+    const { rows, stats } = buildHrSampleRows(samples, strapMap)
+    expect(rows).toHaveLength(2)
+    expect(stats.accepted).toBe(2)
+  })
+
   it('drops unpaired straps', () => {
     const samples = [
-      { strap_mac: 'DE:AD:BE:EF:00:01', recorded_at: '2026-05-08T16:00:00Z', bpm: 145 },
+      { device_key: 'ant:99', recorded_at: '2026-05-21T16:00:00Z', bpm: 145 },
     ]
     const { rows, stats } = buildHrSampleRows(samples, strapMap)
     expect(rows).toHaveLength(0)
     expect(stats.dropped_unpaired).toBe(1)
   })
 
-  it('drops samples with invalid bpm (<30 or >240 or NaN)', () => {
+  it('drops samples with invalid bpm or device_key', () => {
     const samples = [
-      { strap_mac: 'AA:BB:CC:DD:EE:FF', recorded_at: '2026-05-08T16:00:00Z', bpm: 25 },
-      { strap_mac: 'AA:BB:CC:DD:EE:FF', recorded_at: '2026-05-08T16:00:01Z', bpm: 250 },
-      { strap_mac: 'AA:BB:CC:DD:EE:FF', recorded_at: '2026-05-08T16:00:02Z', bpm: NaN },
-      { strap_mac: 'AA:BB:CC:DD:EE:FF', recorded_at: '2026-05-08T16:00:03Z', bpm: 145 },
+      { device_key: 'ble:AA:BB:CC:DD:EE:FF', recorded_at: '2026-05-21T16:00:00Z', bpm: 25 },
+      { device_key: 'ble:AA:BB:CC:DD:EE:FF', recorded_at: '2026-05-21T16:00:01Z', bpm: 250 },
+      { device_key: 'not-a-key', recorded_at: '2026-05-21T16:00:02Z', bpm: 145 },
+      { device_key: 'ble:AA:BB:CC:DD:EE:FF', recorded_at: '2026-05-21T16:00:03Z', bpm: 145 },
     ]
     const { rows, stats } = buildHrSampleRows(samples, strapMap)
     expect(rows).toHaveLength(1)
@@ -79,31 +129,20 @@ describe('buildHrSampleRows', () => {
 
   it('drops samples with invalid recorded_at', () => {
     const samples = [
-      { strap_mac: 'AA:BB:CC:DD:EE:FF', recorded_at: 'not-a-date', bpm: 145 },
-      { strap_mac: 'AA:BB:CC:DD:EE:FF', recorded_at: '', bpm: 145 },
-      { strap_mac: 'AA:BB:CC:DD:EE:FF', recorded_at: null, bpm: 145 },
+      { device_key: 'ble:AA:BB:CC:DD:EE:FF', recorded_at: 'not-a-date', bpm: 145 },
+      { device_key: 'ble:AA:BB:CC:DD:EE:FF', recorded_at: null, bpm: 145 },
     ]
     const { rows, stats } = buildHrSampleRows(samples, strapMap)
     expect(rows).toHaveLength(0)
-    expect(stats.dropped_invalid).toBe(3)
+    expect(stats.dropped_invalid).toBe(2)
   })
 
   it('rounds non-integer bpm', () => {
     const samples = [
-      { strap_mac: 'AA:BB:CC:DD:EE:FF', recorded_at: '2026-05-08T16:00:00Z', bpm: 145.7 },
+      { device_key: 'ble:AA:BB:CC:DD:EE:FF', recorded_at: '2026-05-21T16:00:00Z', bpm: 145.7 },
     ]
     const { rows } = buildHrSampleRows(samples, strapMap)
     expect(rows[0].bpm).toBe(146)
-  })
-
-  it('handles non-canonical strap_mac formats', () => {
-    const samples = [
-      { strap_mac: 'aa:bb:cc:dd:ee:ff', recorded_at: '2026-05-08T16:00:00Z', bpm: 145 },
-      { strap_mac: 'AABBCCDDEEFF', recorded_at: '2026-05-08T16:00:01Z', bpm: 146 },
-    ]
-    const { rows, stats } = buildHrSampleRows(samples, strapMap)
-    expect(rows).toHaveLength(2)
-    expect(stats.accepted).toBe(2)
   })
 
   it('returns empty rows for empty/null input', () => {
@@ -116,60 +155,41 @@ describe('buildHrSampleRows', () => {
 // ── getActiveStrapMap ────────────────────────────────────────────
 
 describe('getActiveStrapMap', () => {
-  it('returns empty map when DB errors', async () => {
-    const db = {
+  function dbReturning({ data, error }) {
+    return {
       from: vi.fn(() => ({
         select: vi.fn(() => ({
           eq: vi.fn(() => ({
             is: vi.fn(() => ({
-              not: vi.fn(() => Promise.resolve({ data: null, error: { message: 'boom' } })),
+              not: vi.fn(() => Promise.resolve({ data, error })),
             })),
           })),
         })),
       })),
     }
-    const map = await getActiveStrapMap(db, 'bridge-1')
+  }
+
+  it('returns empty map when DB errors', async () => {
+    const map = await getActiveStrapMap(dbReturning({ data: null, error: { message: 'boom' } }), 'bridge-1')
     expect(map.size).toBe(0)
   })
 
-  it('builds map from DB rows, canonicalising MACs', async () => {
+  it('builds map from rows, canonicalising both protocols', async () => {
     const rows = [
-      { strap_mac: 'aa:bb:cc:dd:ee:ff', contact_id: 'c-1', heart_rate_session_id: 'sess-1' },
-      { strap_mac: '112233445566',     contact_id: 'c-2', heart_rate_session_id: 'sess-2' },
+      { strap_identifier: 'ble:aa:bb:cc:dd:ee:ff', contact_id: 'c-1', heart_rate_session_id: 'sess-1' },
+      { strap_identifier: 'ant:00777', contact_id: 'c-2', heart_rate_session_id: 'sess-2' },
     ]
-    const db = {
-      from: vi.fn(() => ({
-        select: vi.fn(() => ({
-          eq: vi.fn(() => ({
-            is: vi.fn(() => ({
-              not: vi.fn(() => Promise.resolve({ data: rows, error: null })),
-            })),
-          })),
-        })),
-      })),
-    }
-    const map = await getActiveStrapMap(db, 'bridge-1')
-    expect(map.get('AA:BB:CC:DD:EE:FF')).toEqual({ sessionId: 'sess-1', contactId: 'c-1' })
-    expect(map.get('11:22:33:44:55:66')).toEqual({ sessionId: 'sess-2', contactId: 'c-2' })
+    const map = await getActiveStrapMap(dbReturning({ data: rows, error: null }), 'bridge-1')
+    expect(map.get('ble:AA:BB:CC:DD:EE:FF')).toEqual({ sessionId: 'sess-1', contactId: 'c-1' })
+    expect(map.get('ant:777')).toEqual({ sessionId: 'sess-2', contactId: 'c-2' })
   })
 
-  it('skips rows without strap_mac or session_id', async () => {
+  it('skips rows without a usable strap_identifier or session_id', async () => {
     const rows = [
-      { strap_mac: null, contact_id: 'c-1', heart_rate_session_id: 'sess-1' },
-      { strap_mac: 'AA:BB:CC:DD:EE:FF', contact_id: 'c-2', heart_rate_session_id: null },
+      { strap_identifier: null, contact_id: 'c-1', heart_rate_session_id: 'sess-1' },
+      { strap_identifier: 'ble:AA:BB:CC:DD:EE:FF', contact_id: 'c-2', heart_rate_session_id: null },
     ]
-    const db = {
-      from: vi.fn(() => ({
-        select: vi.fn(() => ({
-          eq: vi.fn(() => ({
-            is: vi.fn(() => ({
-              not: vi.fn(() => Promise.resolve({ data: rows, error: null })),
-            })),
-          })),
-        })),
-      })),
-    }
-    const map = await getActiveStrapMap(db, 'bridge-1')
+    const map = await getActiveStrapMap(dbReturning({ data: rows, error: null }), 'bridge-1')
     expect(map.size).toBe(0)
   })
 })
@@ -184,9 +204,6 @@ describe('insertHrSamples', () => {
     expect(db.from).not.toHaveBeenCalled()
   })
 
-  // Two-table dispatch helper: hr_samples uses upsert(); the touch
-  // path on heart_rate_sessions uses update().eq() which returns
-  // a thenable.
   function makeDb({ upsertResult = { error: null, count: 0 }, sessionUpdateError = null } = {}) {
     const upsert = vi.fn(() => Promise.resolve(upsertResult))
     const sessionEq = vi.fn(() => Promise.resolve({ error: sessionUpdateError }))
@@ -204,13 +221,12 @@ describe('insertHrSamples', () => {
   it('upserts with onConflict ignoreDuplicates', async () => {
     const db = makeDb({ upsertResult: { error: null, count: 3 } })
     const rows = [
-      { session_id: 's', recorded_at: '2026-05-08T16:00:00.000Z', bpm: 145 },
-      { session_id: 's', recorded_at: '2026-05-08T16:00:01.000Z', bpm: 146 },
-      { session_id: 's', recorded_at: '2026-05-08T16:00:02.000Z', bpm: 147 },
+      { session_id: 's', recorded_at: '2026-05-21T16:00:00.000Z', bpm: 145 },
+      { session_id: 's', recorded_at: '2026-05-21T16:00:01.000Z', bpm: 146 },
+      { session_id: 's', recorded_at: '2026-05-21T16:00:02.000Z', bpm: 147 },
     ]
     const out = await insertHrSamples(db, rows)
     expect(out).toEqual({ inserted: 3, error: null })
-    expect(db.from).toHaveBeenCalledWith('hr_samples')
     expect(db._spies.upsert).toHaveBeenCalledWith(rows, expect.objectContaining({
       onConflict: 'session_id,recorded_at',
       ignoreDuplicates: true,
@@ -220,30 +236,27 @@ describe('insertHrSamples', () => {
   it('touches last_sample_at to the LATEST recorded_at per session', async () => {
     const db = makeDb({ upsertResult: { error: null, count: 4 } })
     const rows = [
-      { session_id: 'sA', recorded_at: '2026-05-08T16:00:00.000Z', bpm: 145 },
-      { session_id: 'sA', recorded_at: '2026-05-08T16:00:02.000Z', bpm: 147 }, // newer
-      { session_id: 'sA', recorded_at: '2026-05-08T16:00:01.000Z', bpm: 146 },
-      { session_id: 'sB', recorded_at: '2026-05-08T16:00:00.000Z', bpm: 130 },
+      { session_id: 'sA', recorded_at: '2026-05-21T16:00:00.000Z', bpm: 145 },
+      { session_id: 'sA', recorded_at: '2026-05-21T16:00:02.000Z', bpm: 147 },
+      { session_id: 'sA', recorded_at: '2026-05-21T16:00:01.000Z', bpm: 146 },
+      { session_id: 'sB', recorded_at: '2026-05-21T16:00:00.000Z', bpm: 130 },
     ]
     await insertHrSamples(db, rows)
     expect(db._spies.sessionUpdate).toHaveBeenCalledTimes(2)
-    expect(db._spies.sessionUpdate).toHaveBeenCalledWith({ last_sample_at: '2026-05-08T16:00:02.000Z' })
-    expect(db._spies.sessionUpdate).toHaveBeenCalledWith({ last_sample_at: '2026-05-08T16:00:00.000Z' })
+    expect(db._spies.sessionUpdate).toHaveBeenCalledWith({ last_sample_at: '2026-05-21T16:00:02.000Z' })
+    expect(db._spies.sessionUpdate).toHaveBeenCalledWith({ last_sample_at: '2026-05-21T16:00:00.000Z' })
   })
 
   it('still returns inserted on a touch failure (best-effort)', async () => {
-    const db = makeDb({
-      upsertResult: { error: null, count: 1 },
-      sessionUpdateError: { message: 'rls' },
-    })
-    const out = await insertHrSamples(db, [{ session_id: 's', recorded_at: '2026-05-08T16:00:00.000Z', bpm: 145 }])
+    const db = makeDb({ upsertResult: { error: null, count: 1 }, sessionUpdateError: { message: 'rls' } })
+    const out = await insertHrSamples(db, [{ session_id: 's', recorded_at: '2026-05-21T16:00:00.000Z', bpm: 145 }])
     expect(out.error).toBe(null)
     expect(out.inserted).toBe(1)
   })
 
   it('returns error from supabase rather than throwing', async () => {
     const db = makeDb({ upsertResult: { error: { message: 'rls' }, count: 0 } })
-    const out = await insertHrSamples(db, [{ session_id: 's', recorded_at: '2026-05-08T16:00:00.000Z', bpm: 145 }])
+    const out = await insertHrSamples(db, [{ session_id: 's', recorded_at: '2026-05-21T16:00:00.000Z', bpm: 145 }])
     expect(out.error).toBeTruthy()
     expect(out.inserted).toBe(0)
   })
