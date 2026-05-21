@@ -1,103 +1,121 @@
-# Session State — May 20, 2026
+# Session State — May 21, 2026
 
 One-screen "state of the world" so a fresh chat can orient in 30 seconds.
-For depth, see [CLAUDE.md](./CLAUDE.md) — Done log entries #193–199, the new "Shipping from the sandbox" section, and the new branch + PR Lesson Learned.
+This session: the **ANT+ heart-rate bridge rebuild** — making the
+in-class HR system read straps over ANT+ as well as Bluetooth.
 
 ## Today's headline
 
-Two big features landed across the day, plus a flurry of FTE-EXPENSES polish from the morning. **Both shipping PRs are open against main**:
+The studio HR effort (the Myzone replacement) was revisited. The
+bridge was BLE-only, which can't handle a 15-20 person class — BLE
+caps at ~7 concurrent connections. Decision: **ANT+ as the primary
+protocol** (connectionless — one USB stick reads the whole room),
+**BLE kept as a fallback** for BLE-only straps.
 
-- **PR #43 — `invoices-inbox`**: INVOICES.1 (Dext-style email-in supplier invoices) + INVOICES.2 (sidebar badge) + INVOICES.3 (Claude Vision auto-categorisation). Mig 184 already applied to prod Supabase.
-- **PR #44 — `approvals-dashboard`**: APPROVALS.1 — central approvals page aggregating contractor invoices, FTE expenses, time-off, swap requests, and over-budget rosters. Sidebar badge + extensible provider registry.
+Rebuilt across all three repos around one protocol-aware identifier,
+the **`device_key`**: `ant:12345` or `ble:AA:BB:CC:DD:EE:FF`. Protocol
+is encoded in the key, so it can't drift and ANT+/BLE ids can't
+collide — which is also why the dual-protocol bridge needs no
+cross-protocol de-dup.
 
-Both branched off latest main; merge order doesn't matter.
+## ⚠️ CRITICAL — do this first on resume
 
-The FTE expenses surface (mobile + web + Claude Vision receipt OCR + auto-fill manual-trigger) shipped earlier in the session as #193–194.
+**Migration 193 is NOT applied to prod.** PR #87 (which contains
+`193_protocol_aware_strap_identifiers.sql`) is already merged and
+deployed, but the prod Supabase project (`iyvtbjjxdggiadzwwvdj`) is
+still at `192_contact_membership_plan`. The deployed code expects
+`strap_assignments.strap_identifier` and the rebuilt
+`scan_straps_for_contact()` signature; the schema still has the old
+`strap_mac` column and old function.
 
-## What's in flight, not yet merged
+Real-world impact is low *right now* (no bridge is live and the HR
+coach surface is barely used), but it is a latent break: the moment
+anyone uses `/live` pairing or a bridge connects, it errors.
 
-| PR | Branch | What's in it | Status |
+**Action:** apply `supabase/migrations/193_protocol_aware_strap_identifiers.sql`
+to project `iyvtbjjxdggiadzwwvdj`. It is safe — the strap tables are
+empty/near-empty (HR never deployed) and the backfill is idempotent.
+
+## The four PRs
+
+| Repo | PR | Branch | Status |
 |---|---|---|---|
-| **[#43](https://github.com/ivers9307-cyber/un1t-crm/pull/43)** | `invoices-inbox` | INVOICES.1/.2/.3 + mail subdomain switch | Awaiting merge. Mig 184 applied. Postmark inbound MX + webhook config still need post-merge wiring (see "Post-merge ops" below). |
-| **[#44](https://github.com/ivers9307-cyber/un1t-crm/pull/44)** | `approvals-dashboard` | APPROVALS.1 central dashboard | Awaiting merge. No migration, no env vars, no DNS. Just merge. |
+| un1t-crm | [#87](https://github.com/ivers9307-cyber/un1t-crm/pull/87) | `ant-plus-hr-ingest` | **MERGED** — protocol-aware ingest + migration 193 |
+| un1t-crm | [#88](https://github.com/ivers9307-cyber/un1t-crm/pull/88) | `ant-plus-bridge-admin` | OPEN — `/admin/bridges` registration page |
+| champ-bridge | [#1](https://github.com/ivers9307-cyber/champ-bridge/pull/1) | `ant-plus-dual-protocol` | OPEN — dual-protocol Pi service |
+| champ-app | [#1](https://github.com/ivers9307-cyber/champ-app/pull/1) | `ant-plus-device-ui` | OPEN — protocol-aware device registration |
 
-## Post-merge ops (operator action required after PR #43 lands)
+The stale `ant-plus-hr-ingest` branch on the remote has one orphaned
+commit on it (the admin page, before #87 merged) — superseded by #88,
+safe to delete.
 
-1. **DNS**: confirm `mail.un1tdublin.com` MX → Postmark inbound (priority 10). Done before merge.
-2. **Vercel env var**: `POSTMARK_INBOUND_WEBHOOK_TOKEN` set to the value generated this session (64-char hex from `openssl rand -hex 32`). Already in Vercel as of session end.
-3. **Postmark inbound stream config**: set the webhook URL to `https://crm.un1tdublin.com/api/webhooks/invoices-inbound/<TOKEN>` and the inbound domain to `mail.un1tdublin.com`. **Webhook URL is the only place the literal token appears** — don't add it to the repo.
-4. **Per-location forwarding slugs**: configure in Location Settings → Invoice Forwarding for each location that should accept inbound invoices (e.g. slug `dublin-city` → addr `dublin-city-invoices@mail.un1tdublin.com`).
+## Resume checklist (in order)
 
-## Today's shipped (chronological, oldest first)
+1. **Apply migration 193 to prod** (see CRITICAL above).
+2. **Merge the three open PRs** — un1t-crm #88, champ-bridge #1,
+   champ-app #1. Merge order doesn't strictly matter, but get them in
+   close together so the deployed pieces agree on the `device_key`
+   wire format. champ-app #1's strap scanner expects the migration-193
+   `scan_straps_for_contact` signature.
+3. **Buy the Pi parts** — ANT+ USB-m stick (Garmin ANT+ USB-m, a
+   `GarminStick3`; CYCPLUS clone is a fine fallback), ~20 dual-band
+   straps (Polar Verity Sense armband recommended, or Garmin HRM-Dual
+   / Polar H9), a USB extension cable, A2 microSD, power supply.
+4. **Deploy the bridge to a Pi** — full runbook is in
+   `champ-bridge/README.md`. Key new bits vs the old BLE-only setup:
+   `npm ci` now builds a native USB module so the Pi needs
+   `libusb-1.0-0-dev`, plus a udev rule for the ANT+ stick (vendor
+   `0fcf`). Both documented in the README.
+5. **Register the bridge** via the CRM — once #88 is deployed, this is
+   a form at **Admin → HR Bridges** (`/admin/bridges`): name +
+   location + hardware_id → one-time token → paste into the Pi's
+   `.env`. Before #88 deploys it's a raw `POST /api/admin/bridges`.
+6. **Smoke test** — champ-bridge `CLAUDE.md` has the "When hardware
+   lands" checklist. The `RealAnt`/`RealBle` adapters are lazy-imported
+   and only ever validated on real hardware — the test suites cover
+   the fake adapters + pure helpers.
 
-| # | Feature | Notes |
-|---|---|---|
-| 193 | **FTE-EXPENSES.1/.2** (already shipped pre-session) | Mig 183. Monthly FTE claims with per-item receipts. Web + mobile (CF Studio 1.1.0). Same Xero email forward as contractor invoices. |
-| 194 | **FTE-EXPENSES.3/.4 + FIX series** | Claude Vision receipt OCR. Converted from auto-fire to **manual trigger** ("Auto-fill from receipt" button) per operator feedback on cost protection. Fixed missing `expo-image-picker` dep + viewer_role ordering bug where master-FTE users couldn't add items on mobile. |
-| 195 | **MAIL-SUBDOMAIN.1** | Inbound mail moved from apex `un1tdublin.com` to dedicated `mail.un1tdublin.com` subdomain so marketing apex MX is untouched. |
-| 196 | **INVOICES.1** | Dext-style email-in inbox at `/invoices`. Mig 184. Postmark webhook with token-in-URL auth (Postmark doesn't allow header auth on inbound). Two-stage manual approval (quality → extract → data review → forward to Xero) so Claude Vision only runs after operator approves the attachment. |
-| 197 | **INVOICES.2** | Red sidebar badge + browser tab title prefix for pending invoices. 60s poll + tab-refocus refresh. |
-| 198 | **INVOICES.3** | Claude Vision auto-categorisation. 13-value enum tuned for gym operations. Category + account code surfaced in the data-review form and in the Xero forward email body as hints. |
-| 199 | **APPROVALS.1** | Central `/approvals` dashboard aggregating contractor invoices, FTE expenses, time-off, swap requests, and over-budget rosters. Sidebar badge. Extensible registry — adding a new approvable surface is one provider file + one line. |
+## What `device_key` touches (orientation for a fresh session)
 
-## Operational watches (carried over)
+- **champ-bridge** — `src/device-key.js` (the helper, duplicated into
+  the other two repos), `ant.js` (new ANT+ adapter, `ant-plus-next`
+  library), `ble.js` (refactored), `strap-source.js` (merges both).
+- **un1t-crm** — `bridge-samples.js` has the helpers + ingest;
+  `strap_assignments.strap_mac` renamed to `strap_identifier`;
+  `contact_devices.identifier` / `heart_rate_sessions.device_identifier`
+  now store device keys; `scan_straps_for_contact()` returns
+  `device_key` + `protocol`.
+- **champ-app** — `heart-rate-devices.js` (helpers + validation),
+  `DevicesManager.jsx` + `ScanForStraps.jsx` (protocol selector +
+  badges).
 
-- **TestFlight 0.1.1 (5)** — still in Apple review (was carried over from May-17). Most staff still can't receive pushes until they install the build.
-- The May-13 "15 mins?" campaign's 32% delivery ratio — still deferred to a fresh push for analysis.
-
-New watch from this session:
-
-- **Vercel deploys for both open PRs** — preview URLs should be checked before merging. Smoke-test: forward a real PDF to `<slug>-invoices@mail.un1tdublin.com` → confirm it lands in `/invoices` → walk the two stages → confirm it appears as a draft bill in Xero. Then check `/approvals` shows the right items per the logged-in user's role.
+`heart_rate_sessions.source` stays `'ble_bridge'` for any bridge
+sample regardless of protocol — that value just means "the studio
+bridge"; renaming it was deliberately out of scope.
 
 ## Live state of the world
 
 | Resource | Count |
 |---|---|
 | Active locations | 4 (Stillorgan / Hatch Street / CCF Autos / Test Studio) |
-| Active staff | 13 |
-| Open PRs | 2 (#43 invoices-inbox, #44 approvals-dashboard) |
-| Last applied migration | 184_inbound_invoices |
-| Total tests | 1938 (8 new for APPROVALS.1, 25 for INVOICES.1, plus FTE-EXPENSES) |
-| Web permissions | 26 |
-| Mobile permissions | 19 |
+| Open PRs | 3 (un1t-crm #88, champ-bridge #1, champ-app #1) |
+| Last applied prod migration | **192** — 193 is committed in merged PR #87 but NOT applied |
+| Migration 193 in repo | `supabase/migrations/193_protocol_aware_strap_identifiers.sql` |
 
-## Branch state
+## Verification done this session
 
-```
-main                              ─── HEAD: a65cede (pre-session)
-  ├── invoices-inbox       PR #43 ─── 2ce4f26, e8befcb, ...
-  └── approvals-dashboard  PR #44 ─── (commits on branch)
-  └── docs-session-2026-05-20      ─── this doc update (in progress)
-```
+- champ-bridge — 32 tests + eslint green.
+- un1t-crm — 52 tests across the HR suites + eslint clean; #88's
+  admin page eslint clean.
+- champ-app — eslint clean; vitest crashes this sandbox (a bus error,
+  environment fault, not the code), so the new module was verified by
+  running its logic directly under Node (13/13 checks) — identical
+  logic to the un1t-crm suite that passed.
 
-## Where to look next
+## Carried-over / separate threads
 
-- **If a feature regression**: PRs #43 + #44 are the new code. The /approvals page wraps existing per-feature pages so issues there could be in the provider's query shape, not the UI.
-- **If a webhook doesn't fire**: check the Postmark inbound webhook config matches `POSTMARK_INBOUND_WEBHOOK_TOKEN` exactly (constant-time compared). Wrong token returns 404 (not 403) by design — Postmark will retry.
-- **If a row gets stuck mid-pipeline**: `inbound_invoices` has six states. `quality_approved` + `data_approved` are the async intermediate stops — if OCR or Xero forward fails, the row stays in those states and the UI shows a Retry button on the detail panel. Look at `extraction_error` or `xero_error` columns for the failure reason.
-
-## Recent lessons (top 5 — full versions in CLAUDE.md)
-
-1. **Shipping = branch + commit + push + PR**. Stopping at `git push` is not shipping. New canonical loop in "Shipping from the sandbox" section of CLAUDE.md uses curl + GitHub API since the sandbox has no `gh` CLI. Codified this session because the assistant initially stopped at the push for INVOICES.1.
-2. **Postmark inbound webhooks don't allow custom headers** — only a URL. Token-in-URL auth (same pattern as the sequence webhook) is the substitute. 404 on wrong token to avoid leaking URL existence.
-3. **`supabase-js` builders are thenables, not Promises.** Use `try { await ... } catch {}`, not `.catch(() => {})`. Bit us silently for 4 days in May.
-4. **`stampHeartbeat` is UPDATE-only.** Pre-seed the `cron_heartbeats` row in the same migration that adds the cron.
-5. **Mobile permissions live on `profile_locations.permissions.mobile`**, not `profiles.permissions.mobile`. Discovered during the May audit.
-
-## Backlog status
-
-**Three open PRs + one big design doc waiting to build.**
-
-- **PR #43** `invoices-inbox` — needs merge
-- **PR #44** `approvals-dashboard` — needs merge
-- **PR #45** `docs-session-2026-05-20` — needs merge
-
-**INVOICES-QUEUE.1** (3-PR plan, designed end-of-session) — restructures the approval-to-Xero flow so owner approval drops into a centralised Invoices queue and a new `bookkeeper` permission gates the final accountant sign-off. Full design now in CLAUDE.md → Backlog → "INVOICES-QUEUE.1". **Don't start PR 1 of this until the three PRs above merge** — it touches the same tables (`inbound_invoices` → `invoices_queue` rename) and would conflict otherwise. Hard cutover, no data migration. Tasks #186–#190 are already in the Cowork list for next session.
-
-Surviving items worth attention:
-- **AUDIT-EXPAND.2** (task #129) — DB triggers for mutation logging on key tables. Deferred when AUDIT-EXPAND.1 shipped because the app-level instrumentation covered the high-value surfaces.
-- The May-13 campaign delivery rate analysis (deferred).
-
-Next-shaped concerns once both PRs merge:
-- **Invoices observability**: a row that hangs in `quality_approved` because OCR keeps failing should be surfaced somewhere — possibly a Sentinel alert when any row sits in an intermediate state >24h.
-- **Approvals notifications on mobile**: APPROVALS.1 is desktop-only by design (drills into desktop-only source pages). Mobile keeps using per-category `notify_*` flags. Worth considering an aggregate "you have N pending approvals" mobile badge if operator demand emerges.
+- **Churn-risk radar** — the original feature this HR work was a
+  prerequisite for. The `circle-back-churn-radar` reminder fired
+  2026-05-21. Still to be built (scoring lib, owners-and-head-coaches
+  permission, API, radar page, win-back actions). Independent of the
+  ANT+ work — pick up once the HR pipeline is producing data.
