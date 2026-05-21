@@ -1,121 +1,76 @@
 # Session State — May 21, 2026
 
 One-screen "state of the world" so a fresh chat can orient in 30 seconds.
-This session: the **ANT+ heart-rate bridge rebuild** — making the
-in-class HR system read straps over ANT+ as well as Bluetooth.
 
 ## Today's headline
 
-The studio HR effort (the Myzone replacement) was revisited. The
-bridge was BLE-only, which can't handle a 15-20 person class — BLE
-caps at ~7 concurrent connections. Decision: **ANT+ as the primary
-protocol** (connectionless — one USB stick reads the whole room),
-**BLE kept as a fallback** for BLE-only straps.
+Two features shipped end-to-end: the **ANT+ heart-rate bridge rebuild**
+and **Phase 1 of the churn-risk radar**. Everything below is merged to
+`main` and the database migrations are applied — nothing is in flight.
 
-Rebuilt across all three repos around one protocol-aware identifier,
-the **`device_key`**: `ant:12345` or `ble:AA:BB:CC:DD:EE:FF`. Protocol
-is encoded in the key, so it can't drift and ANT+/BLE ids can't
-collide — which is also why the dual-protocol bridge needs no
-cross-protocol de-dup.
+## Shipped + merged today
 
-## ⚠️ CRITICAL — do this first on resume
+| Area | PRs | What landed |
+|---|---|---|
+| ANT+ HR bridge | un1t-crm #87, champ-bridge #1, champ-app #1 | Studio HR bridge now reads straps over **ANT+** (primary, connectionless — one USB stick covers a whole class) as well as BLE. Protocol-aware `device_key` (`ant:…` / `ble:…`) across all three repos. |
+| HR bridge admin | un1t-crm #88/#89 | `/admin/bridges` — register a studio Pi + manage tokens from a form. |
+| Churn radar | un1t-crm #90, #91 | At-risk member radar + Quarantine triage. See below. |
 
-**Migration 193 is NOT applied to prod.** PR #87 (which contains
-`193_protocol_aware_strap_identifiers.sql`) is already merged and
-deployed, but the prod Supabase project (`iyvtbjjxdggiadzwwvdj`) is
-still at `192_contact_membership_plan`. The deployed code expects
-`strap_assignments.strap_identifier` and the rebuilt
-`scan_straps_for_contact()` signature; the schema still has the old
-`strap_mac` column and old function.
+**Migrations applied to prod** (`iyvtbjjxdggiadzwwvdj`): `193`
+(protocol-aware strap identifiers) and `194` (`churn_radar_actions`).
+DB schema matches deployed code — verified.
 
-Real-world impact is low *right now* (no bridge is live and the HR
-coach surface is barely used), but it is a latent break: the moment
-anyone uses `/live` pairing or a bridge connects, it errors.
+## Churn radar — what's live (Phase 1)
 
-**Action:** apply `supabase/migrations/193_protocol_aware_strap_identifiers.sql`
-to project `iyvtbjjxdggiadzwwvdj`. It is safe — the strap tables are
-empty/near-empty (HR never deployed) and the backfill is idempotent.
+`/churn-radar`, gated to owner + head_coach (`churn_radar` permission).
 
-## The four PRs
+- Scores the **active member base** (~226 of 1,074 "paying" members
+  have real class activity) on three data-backed signals: Gone quiet,
+  Disengaging, No-show pattern → risk score + tier.
+- Per-member actions: mark contacted, assign follow-up task, send
+  win-back WhatsApp, snooze.
+- **Quarantine tab**: the ~800 zero-activity "ghost member" records
+  (member status in Glofox, no attendance/bookings ever) — bulk
+  triage as stale (→ reclassified dormant) or keep. Kept out of the
+  daily radar deliberately.
+- Scoring logic: `src/lib/churn-radar.js` (pure, 22 unit tests).
+  Data access: `src/lib/churn-radar-data.js`. API: `/api/churn-radar/*`.
 
-| Repo | PR | Branch | Status |
-|---|---|---|---|
-| un1t-crm | [#87](https://github.com/ivers9307-cyber/un1t-crm/pull/87) | `ant-plus-hr-ingest` | **MERGED** — protocol-aware ingest + migration 193 |
-| un1t-crm | [#88](https://github.com/ivers9307-cyber/un1t-crm/pull/88) | `ant-plus-bridge-admin` | OPEN — `/admin/bridges` registration page |
-| champ-bridge | [#1](https://github.com/ivers9307-cyber/champ-bridge/pull/1) | `ant-plus-dual-protocol` | OPEN — dual-protocol Pi service |
-| champ-app | [#1](https://github.com/ivers9307-cyber/champ-app/pull/1) | `ant-plus-device-ui` | OPEN — protocol-aware device registration |
+## What's next
 
-The stale `ant-plus-hr-ingest` branch on the remote has one orphaned
-commit on it (the admin page, before #87 merged) — superseded by #88,
-safe to delete.
+1. **Deploy the bridge to a Pi** — champ-bridge code is merged but has
+   never run on hardware. Buy the parts (Garmin ANT+ USB-m stick,
+   ~20 dual-band straps, USB extension, A2 microSD), provision per
+   `champ-bridge/README.md` (note: `npm ci` builds a native USB module
+   — the Pi needs `libusb-1.0-0-dev` + an ANT+ udev rule), register the
+   bridge at `/admin/bridges`, run the smoke test in champ-bridge
+   `CLAUDE.md`. `RealAnt`/`RealBle` are only validated on real hardware.
 
-## Resume checklist (in order)
+2. **Churn radar Phase 2 — Payment-trouble signal.** The fourth signal
+   needs billing health, which Glofox sync doesn't carry today.
+   Investigate what the Glofox member object exposes, add a
+   `glofox_billing_status` column + sync it, then wire it as a signal.
 
-1. **Apply migration 193 to prod** (see CRITICAL above).
-2. **Merge the three open PRs** — un1t-crm #88, champ-bridge #1,
-   champ-app #1. Merge order doesn't strictly matter, but get them in
-   close together so the deployed pieces agree on the `device_key`
-   wire format. champ-app #1's strap scanner expects the migration-193
-   `scan_straps_for_contact` signature.
-3. **Buy the Pi parts** — ANT+ USB-m stick (Garmin ANT+ USB-m, a
-   `GarminStick3`; CYCPLUS clone is a fine fallback), ~20 dual-band
-   straps (Polar Verity Sense armband recommended, or Garmin HRM-Dual
-   / Polar H9), a USB extension cable, A2 microSD, power supply.
-4. **Deploy the bridge to a Pi** — full runbook is in
-   `champ-bridge/README.md`. Key new bits vs the old BLE-only setup:
-   `npm ci` now builds a native USB module so the Pi needs
-   `libusb-1.0-0-dev`, plus a udev rule for the ANT+ stick (vendor
-   `0fcf`). Both documented in the README.
-5. **Register the bridge** via the CRM — once #88 is deployed, this is
-   a form at **Admin → HR Bridges** (`/admin/bridges`): name +
-   location + hardware_id → one-time token → paste into the Pi's
-   `.env`. Before #88 deploys it's a raw `POST /api/admin/bridges`.
-6. **Smoke test** — champ-bridge `CLAUDE.md` has the "When hardware
-   lands" checklist. The `RealAnt`/`RealBle` adapters are lazy-imported
-   and only ever validated on real hardware — the test suites cover
-   the fake adapters + pure helpers.
+3. **Churn radar Phase 3 — the other ~7,000 contacts.** Repeat the
+   exercise for leads / trials / ClassPass / dormant. The framing
+   flips to *re-activation* scoring — its own design pass.
 
-## What `device_key` touches (orientation for a fresh session)
+## Operational notes
 
-- **champ-bridge** — `src/device-key.js` (the helper, duplicated into
-  the other two repos), `ant.js` (new ANT+ adapter, `ant-plus-next`
-  library), `ble.js` (refactored), `strap-source.js` (merges both).
-- **un1t-crm** — `bridge-samples.js` has the helpers + ingest;
-  `strap_assignments.strap_mac` renamed to `strap_identifier`;
-  `contact_devices.identifier` / `heart_rate_sessions.device_identifier`
-  now store device keys; `scan_straps_for_contact()` returns
-  `device_key` + `protocol`.
-- **champ-app** — `heart-rate-devices.js` (helpers + validation),
-  `DevicesManager.jsx` + `ScanForStraps.jsx` (protocol selector +
-  badges).
+- The radar feeds off the **`glofox-attendance-refresh` cron** (04:00
+  Dublin). That cron now paginates its member fetch with `range()` —
+  Supabase caps a response at 1,000 rows, which had been silently
+  truncating the base. Same `range()` pagination is used in the radar's
+  member fetch; the action-log fetch is bounded to a 90-day window.
+- A Supabase migration only takes effect when the SQL is **executed
+  against the database** — merging the PR / deploying to Vercel does
+  not do it. Apply the migration as part of shipping any PR that
+  contains one (via the Supabase `apply_migration` tooling).
 
-`heart_rate_sessions.source` stays `'ble_bridge'` for any bridge
-sample regardless of protocol — that value just means "the studio
-bridge"; renaming it was deliberately out of scope.
+## Identifier model (orientation)
 
-## Live state of the world
-
-| Resource | Count |
-|---|---|
-| Active locations | 4 (Stillorgan / Hatch Street / CCF Autos / Test Studio) |
-| Open PRs | 3 (un1t-crm #88, champ-bridge #1, champ-app #1) |
-| Last applied prod migration | **192** — 193 is committed in merged PR #87 but NOT applied |
-| Migration 193 in repo | `supabase/migrations/193_protocol_aware_strap_identifiers.sql` |
-
-## Verification done this session
-
-- champ-bridge — 32 tests + eslint green.
-- un1t-crm — 52 tests across the HR suites + eslint clean; #88's
-  admin page eslint clean.
-- champ-app — eslint clean; vitest crashes this sandbox (a bus error,
-  environment fault, not the code), so the new module was verified by
-  running its logic directly under Node (13/13 checks) — identical
-  logic to the un1t-crm suite that passed.
-
-## Carried-over / separate threads
-
-- **Churn-risk radar** — the original feature this HR work was a
-  prerequisite for. The `circle-back-churn-radar` reminder fired
-  2026-05-21. Still to be built (scoring lib, owners-and-head-coaches
-  permission, API, radar page, win-back actions). Independent of the
-  ANT+ work — pick up once the HR pipeline is producing data.
+Straps use one self-describing `device_key`: `ant:<deviceNumber>` or
+`ble:<MAC>`. Helpers (`makeDeviceKey` / `parseDeviceKey` /
+`canonicaliseDeviceKey`) live in `src/lib/bridge-samples.js` and are
+duplicated into champ-bridge (`device-key.js`) and champ-app
+(`heart-rate-devices.js`).
