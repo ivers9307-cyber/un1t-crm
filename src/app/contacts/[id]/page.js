@@ -106,14 +106,27 @@ export default async function ContactDetailPage(props) {
 
       {/* Header */}
       <div className="flex items-start justify-between mb-6">
-        <div>
-          <h2 className="text-2xl font-bold">{contact.name}</h2>
-          <div className="flex items-center gap-4 mt-2 text-sm text-un1t-light">
-            {contact.email && <span className="flex items-center gap-1.5"><Mail size={14} /> {contact.email}</span>}
-            {contact.phone && <span className="flex items-center gap-1.5"><Phone size={14} /> {contact.phone}</span>}
-            {contact.wa_phone && contact.wa_phone !== contact.phone && (
-              <span className="flex items-center gap-1.5"><MessageCircle size={14} /> {contact.wa_phone}</span>
-            )}
+        <div className="flex items-start gap-4">
+          {/* GLOFOX-PROFILE — member photo (mig 196 glofox_image_url).
+              Plain <img>: Glofox CDN URLs aren't whitelisted for
+              next/image and adding a remote pattern per third-party
+              host isn't worth it for one avatar. */}
+          {contact.glofox_image_url && (
+            <img
+              src={contact.glofox_image_url}
+              alt={contact.name || 'Member'}
+              className="w-16 h-16 rounded-full object-cover border border-un1t-gray shrink-0"
+            />
+          )}
+          <div>
+            <h2 className="text-2xl font-bold">{contact.name}</h2>
+            <div className="flex items-center gap-4 mt-2 text-sm text-un1t-light">
+              {contact.email && <span className="flex items-center gap-1.5"><Mail size={14} /> {contact.email}</span>}
+              {contact.phone && <span className="flex items-center gap-1.5"><Phone size={14} /> {contact.phone}</span>}
+              {contact.wa_phone && contact.wa_phone !== contact.phone && (
+                <span className="flex items-center gap-1.5"><MessageCircle size={14} /> {contact.wa_phone}</span>
+              )}
+            </div>
           </div>
         </div>
         <div className="flex items-center gap-3">
@@ -490,6 +503,40 @@ function formatMoney(cents, currency) {
   return sym + amount.toLocaleString('en-IE', { maximumFractionDigits: 0 })
 }
 
+function formatDate(iso) {
+  if (!iso) return null
+  const d = new Date(iso)
+  if (!Number.isFinite(d.getTime())) return null
+  return d.toLocaleDateString('en-IE', { day: 'numeric', month: 'short', year: 'numeric' })
+}
+
+// Glofox membership.type → human label.
+const MEMBERSHIP_TYPE_LABEL = {
+  time: 'Subscription',
+  num_classes: 'Class pack',
+  payg: 'Pay as you go',
+}
+
+// Title-case a Glofox slug-ish value ("direct_debit" → "Direct debit").
+function humanise(value) {
+  if (typeof value !== 'string' || !value.trim()) return null
+  const s = value.trim().replace(/[_-]+/g, ' ').toLowerCase()
+  return s.charAt(0).toUpperCase() + s.slice(1)
+}
+
+// Normalise one Glofox sign-up answer into { q, a }. The payload
+// shape varies between forms, so handle the common key spellings
+// defensively and drop anything we can't render as plain text.
+function normaliseAnswer(raw) {
+  if (!raw || typeof raw !== 'object') return null
+  const q = raw.question ?? raw.label ?? raw.name ?? raw.title ?? null
+  let a = raw.answer ?? raw.value ?? raw.response ?? raw.text ?? null
+  if (Array.isArray(a)) a = a.join(', ')
+  if (a != null && typeof a === 'object') return null
+  if (a == null || String(a).trim() === '') return null
+  return { q: q ? String(q) : null, a: String(a).trim() }
+}
+
 function GlofoxProfileCard({ contact }) {
   const linked = Boolean(contact.glofox_member_id)
   const statusMeta = GLOFOX_STATUS_META[contact.glofox_membership_status] || null
@@ -500,6 +547,31 @@ function GlofoxProfileCard({ contact }) {
     ? formatMoney(contact.lifetime_value_cents, contact.lifetime_currency)
     : null
   const credits = contact.trial_credits_remaining
+
+  // GLOFOX-PROFILE (mig 196) — wider profile data captured by the
+  // nightly attendance refresh: billing detail, renewal cliff,
+  // payment + sign-up attributes.
+  const price = Number.isFinite(contact.glofox_membership_price_cents) && contact.glofox_membership_price_cents > 0
+    ? formatMoney(contact.glofox_membership_price_cents, contact.lifetime_currency)
+    : null
+  const interval = contact.glofox_billing_interval || null
+  const membershipType = MEMBERSHIP_TYPE_LABEL[contact.glofox_membership_type]
+    || humanise(contact.glofox_membership_type)
+  const paymentMethod = humanise(contact.glofox_payment_method)
+  const source = humanise(contact.glofox_source)
+  const expiryDate = formatDate(contact.glofox_membership_expiry)
+  const expiryRel = relativeTime(contact.glofox_membership_expiry)
+  const expiryPast = contact.glofox_membership_expiry
+    ? new Date(contact.glofox_membership_expiry).getTime() < Date.now()
+    : false
+  // Price + cadence onto one line: "€120 / 6 months · Subscription".
+  const billingLine = [
+    price && interval ? `${price} / ${interval}` : price || (interval ? `Billed every ${interval}` : null),
+    membershipType,
+  ].filter(Boolean).join(' · ')
+  const answers = Array.isArray(contact.glofox_signup_answers)
+    ? contact.glofox_signup_answers.map(normaliseAnswer).filter(Boolean)
+    : []
 
   return (
     <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-4 space-y-3">
@@ -548,6 +620,17 @@ function GlofoxProfileCard({ contact }) {
             <p className="text-sm font-medium text-un1t-white">{contact.glofox_membership_plan}</p>
           )}
 
+          {/* Billing + renewal (GLOFOX-PROFILE) */}
+          {billingLine && (
+            <p className="text-xs text-un1t-light">{billingLine}</p>
+          )}
+          {expiryDate && (
+            <p className={`text-xs ${expiryPast ? 'text-red-400/90' : 'text-un1t-light'}`}>
+              {expiryPast ? 'Expired' : 'Renews'} {expiryDate}
+              {expiryRel && <span className="text-un1t-mid"> · {expiryRel}</span>}
+            </p>
+          )}
+
           {/* Tenure + engagement strip */}
           <div className="text-xs text-un1t-light space-y-1">
             {tenure && <p>{tenure}</p>}
@@ -570,9 +653,40 @@ function GlofoxProfileCard({ contact }) {
             <BookingsSubsection bookings={contact.recent_bookings} />
           )}
 
-          {/* Reference info — small text at the bottom */}
+          {/* Sign-up answers (GLOFOX-PROFILE) — goals, referral
+              source etc. captured on the Glofox join form. */}
+          {answers.length > 0 && (
+            <div className="pt-2 border-t border-un1t-gray">
+              <p className="text-[10px] uppercase tracking-wider text-un1t-mid mb-1.5">Sign-up answers</p>
+              <div className="space-y-1">
+                {answers.map((ans, i) => (
+                  <p key={i} className="text-xs leading-snug">
+                    {ans.q && <span className="text-un1t-mid">{ans.q}: </span>}
+                    <span className="text-un1t-light">{ans.a}</span>
+                  </p>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Reference info — profile attributes + identifiers */}
           <div className="pt-2 border-t border-un1t-gray text-[11px] text-un1t-mid space-y-0.5">
             {contact.dob && <p>DOB: {contact.dob}</p>}
+            {contact.gender && <p>Gender: {humanise(contact.gender)}</p>}
+            {contact.emergency_contact && <p>Emergency contact: {contact.emergency_contact}</p>}
+            {paymentMethod && <p>Payment method: {paymentMethod}</p>}
+            {source && <p>Source: {source}</p>}
+            {(contact.glofox_roaming_enabled === true || contact.glofox_account_active === false) && (
+              <p>
+                {contact.glofox_roaming_enabled === true && (
+                  <span className="text-teal-400/80">Roaming enabled</span>
+                )}
+                {contact.glofox_roaming_enabled === true && contact.glofox_account_active === false && ' · '}
+                {contact.glofox_account_active === false && (
+                  <span className="text-red-400/80">Account inactive</span>
+                )}
+              </p>
+            )}
             <p className="font-mono truncate">ID: {contact.glofox_member_id}</p>
           </div>
         </>
