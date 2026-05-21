@@ -47,6 +47,11 @@ const REGULAR_30D_MIN = 4
 const TIER_HIGH = 5
 const TIER_MEDIUM = 3
 
+// Renewal-cliff window — a membership renewing within this many days
+// whose owner isn't actively attending probably won't renew.
+const RENEWAL_CLIFF_DAYS = 30
+const RENEWAL_CLIFF_CRITICAL_DAYS = 14
+
 // ── helpers ──────────────────────────────────────────────────────
 
 function daysSince(value, nowMs) {
@@ -59,6 +64,31 @@ function daysSince(value, nowMs) {
 function num(v) {
   const n = Number(v)
   return Number.isFinite(n) ? n : 0
+}
+
+// Parse a Glofox billing interval ("6 months", "1 month", "1 year")
+// into a month count, for normalising price to a monthly figure.
+function intervalMonths(interval) {
+  if (typeof interval !== 'string') return null
+  const m = /(\d+)\s*(day|week|month|year)/i.exec(interval)
+  if (!m) return null
+  const n = Number(m[1])
+  if (!Number.isFinite(n) || n <= 0) return null
+  const unit = m[2].toLowerCase()
+  const factor = unit === 'year' ? 12 : unit === 'week' ? 12 / 52 : unit === 'day' ? 1 / 30 : 1
+  return n * factor
+}
+
+/**
+ * Monthly-normalised membership value in cents, so a 6-month and a
+ * monthly member compare fairly. One-off / unknown-interval prices
+ * (class packs) fall back to the raw figure. 0 when no price.
+ */
+export function monthlyValueCents(contact) {
+  const price = Number(contact?.glofox_membership_price_cents)
+  if (!Number.isFinite(price) || price <= 0) return 0
+  const months = intervalMonths(contact?.glofox_billing_interval)
+  return months ? Math.round(price / months) : Math.round(price)
 }
 
 /**
@@ -135,7 +165,27 @@ function detectNoShow(contact) {
   }
 }
 
-const DETECTORS = [detectGoneQuiet, detectDisengaging, detectNoShow]
+function detectRenewalCliff(contact, nowMs) {
+  if (!contact.glofox_membership_expiry) return null
+  const d = daysSince(contact.glofox_membership_expiry, nowMs)
+  if (d == null) return null
+  const daysToRenewal = -d  // positive = days until the membership renews
+  if (daysToRenewal < 0 || daysToRenewal > RENEWAL_CLIFF_DAYS) return null
+  // A regular attender will most likely renew — only flag an
+  // approaching renewal for someone who isn't getting value from it.
+  if (num(contact.total_attended_30d) >= REGULAR_30D_MIN) return null
+  const days = Math.ceil(daysToRenewal)
+  const critical = daysToRenewal <= RENEWAL_CLIFF_CRITICAL_DAYS
+  return {
+    key: 'renewal_cliff',
+    label: 'Renewal cliff',
+    detail: `Renews in ${days} day${days === 1 ? '' : 's'} — low recent attendance`,
+    weight: critical ? 3 : 2,
+    severity: critical ? 'critical' : 'warning',
+  }
+}
+
+const DETECTORS = [detectGoneQuiet, detectDisengaging, detectNoShow, detectRenewalCliff]
 
 // ── scoring ──────────────────────────────────────────────────────
 
@@ -172,6 +222,11 @@ export function scoreMember(contact, nowMs = Date.now()) {
     membershipStatus: contact.glofox_membership_status,
     membershipPlan: contact.glofox_membership_plan || null,
     segment: contact.glofox_membership_status === 'credit_member' ? 'credit' : 'member',
+    monthlyValueCents: monthlyValueCents(contact),
+    daysToRenewal: (() => {
+      const d = daysSince(contact.glofox_membership_expiry, nowMs)
+      return d == null ? null : Math.max(0, Math.ceil(-d))
+    })(),
   }
 }
 
@@ -189,6 +244,8 @@ export function buildRadar(contacts, nowMs = Date.now()) {
   }
   scored.sort((a, b) => {
     if (b.score !== a.score) return b.score - a.score
+    // Within a tier, highest monthly revenue at risk rises to the top.
+    if (b.monthlyValueCents !== a.monthlyValueCents) return b.monthlyValueCents - a.monthlyValueCents
     return (b.daysSinceAttended ?? 0) - (a.daysSinceAttended ?? 0)
   })
   return scored
@@ -206,6 +263,7 @@ export function radarSummary(contacts, nowMs = Date.now()) {
   const bySegment = { member: blank(), credit: blank() }
   let quarantine = 0
   let paused = 0
+  let revenueAtRiskCents = 0
   for (const c of contacts || []) {
     const cls = classifyContact(c)
     if (cls === 'quarantine') { quarantine++; continue }
@@ -217,6 +275,7 @@ export function radarSummary(contacts, nowMs = Date.now()) {
     if (r) {
       bySegment[seg].atRisk++
       if (r.tier === 'high') bySegment[seg].highRisk++
+      revenueAtRiskCents += monthlyValueCents(c)
     }
   }
   return {
@@ -225,6 +284,7 @@ export function radarSummary(contacts, nowMs = Date.now()) {
     highRisk: bySegment.member.highRisk + bySegment.credit.highRisk,
     quarantine,
     paused,
+    revenueAtRiskCents,
     bySegment,
   }
 }
