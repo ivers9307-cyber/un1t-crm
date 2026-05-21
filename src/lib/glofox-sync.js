@@ -663,6 +663,60 @@ export function extractMembershipState(member) {
   return status || null
 }
 
+/**
+ * Extract the wider member profile fields from the single-member
+ * Glofox payload — renewal/billing detail + the remaining useful
+ * profile attributes. Returns a flat object of contacts columns
+ * ready to spread into a row update. Every field degrades to null
+ * when absent (PAYG / class-pack members carry no subscription;
+ * leads carry no membership).
+ *
+ * Pure function — input → output, no side effects.
+ */
+export function extractMemberProfile(member) {
+  const m = member && typeof member === 'object' ? member : {}
+  const mem = m.membership && typeof m.membership === 'object' ? m.membership : {}
+  const sub = mem.subscription && typeof mem.subscription === 'object' ? mem.subscription : {}
+
+  // Glofox dates are unix seconds.
+  const unixToIso = (v) => {
+    const n = Number(v)
+    return Number.isFinite(n) && n > 0 ? new Date(n * 1000).toISOString() : null
+  }
+  // Effective price: the subscription's actual billed price, else
+  // the catalog plan price (class packs have no subscription).
+  const priceUnit = Number.isFinite(Number(sub.price)) ? Number(sub.price)
+    : Number.isFinite(Number(mem.plan_price)) ? Number(mem.plan_price)
+      : null
+  // Readable billing cadence — "6 months" / "1 month".
+  let interval = null
+  if (sub.interval) {
+    const count = Number(sub.interval_count) || 1
+    interval = `${count} ${sub.interval}${count > 1 ? 's' : ''}`
+  }
+  // Glofox returns this placeholder string when no contact is set.
+  const ecRaw = typeof m.emergency_contact === 'string' ? m.emergency_contact.trim() : ''
+  const emergency = ecRaw && !/^contact person:\s*,\s*phone number:\s*$/i.test(ecRaw)
+    ? ecRaw : null
+  const gender = typeof m.gender === 'string' && m.gender && m.gender !== 'not_specified'
+    ? m.gender : null
+
+  return {
+    glofox_membership_expiry: unixToIso(mem.expiry_date),
+    glofox_membership_price_cents: priceUnit != null ? Math.round(priceUnit * 100) : null,
+    glofox_billing_interval: interval,
+    glofox_payment_method: typeof sub.payment_method_type_id === 'string' ? sub.payment_method_type_id : null,
+    glofox_membership_type: typeof mem.type === 'string' ? mem.type : null,
+    glofox_image_url: typeof m.image_url === 'string' && m.image_url ? m.image_url : null,
+    gender,
+    emergency_contact: emergency,
+    glofox_signup_answers: Array.isArray(m.answers) && m.answers.length > 0 ? m.answers : null,
+    glofox_roaming_enabled: typeof mem.roaming_enabled === 'boolean' ? mem.roaming_enabled : null,
+    glofox_account_active: typeof m.active === 'boolean' ? m.active : null,
+    glofox_source: typeof m.source === 'string' && m.source ? m.source : null,
+  }
+}
+
 // ─────────────────────────────────────────────────────────────
 // Membership status mapping (GLOFOX2.1.5 + 2.1.6 ClassPass)
 // ─────────────────────────────────────────────────────────────

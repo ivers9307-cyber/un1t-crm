@@ -38,7 +38,7 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { glofoxCredentialsForLocation, fetchUserBookingsResult, fetchMemberResult } from '@/lib/glofox'
-import { computeBookingAggregates, trimRecentBookings, extractMembershipPlan, extractMembershipState } from '@/lib/glofox-sync'
+import { computeBookingAggregates, trimRecentBookings, extractMembershipPlan, extractMembershipState, extractMemberProfile } from '@/lib/glofox-sync'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -178,6 +178,8 @@ async function refreshLocation(db, location, startedAt) {
       if (memberOk) {
         update.glofox_membership_plan = extractMembershipPlan(member)
         update.glofox_membership_state = extractMembershipState(member)
+        // GLOFOX-PROFILE — renewal/billing detail + profile attributes.
+        Object.assign(update, extractMemberProfile(member))
       } else {
         summary.membership_failed++
       }
