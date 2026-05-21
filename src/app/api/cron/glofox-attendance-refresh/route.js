@@ -38,7 +38,7 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { glofoxCredentialsForLocation, fetchUserBookingsResult, fetchMemberResult } from '@/lib/glofox'
-import { computeBookingAggregates, trimRecentBookings, extractMembershipPlan } from '@/lib/glofox-sync'
+import { computeBookingAggregates, trimRecentBookings, extractMembershipPlan, extractMembershipState } from '@/lib/glofox-sync'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -169,13 +169,18 @@ async function refreshLocation(db, location, startedAt) {
         glofox_synced_at:   new Date().toISOString(),
       }
 
-      // CHURN-PREP.2 — also refresh the current membership plan from
-      // the single-member payload. On a fetch failure we simply omit
-      // glofox_membership_plan from the update (existing value kept)
-      // rather than failing the whole member — attendance still saves.
+      // CHURN-PREP.2 — also refresh the current membership plan +
+      // lifecycle state (active/paused/cancelled) from the
+      // single-member payload. On a fetch failure we omit both from
+      // the update (existing values kept) rather than failing the
+      // whole member — attendance still saves.
       const { ok: memberOk, member } = await fetchMemberResult(creds, m.glofox_member_id)
-      if (memberOk) update.glofox_membership_plan = extractMembershipPlan(member)
-      else summary.membership_failed++
+      if (memberOk) {
+        update.glofox_membership_plan = extractMembershipPlan(member)
+        update.glofox_membership_state = extractMembershipState(member)
+      } else {
+        summary.membership_failed++
+      }
 
       const { error: upErr } = await db
         .from('contacts')

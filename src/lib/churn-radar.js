@@ -25,6 +25,15 @@
 // population. Drop-in (classpass_payg), trials and leads are out.
 export const MEMBER_STATUSES = Object.freeze(['member', 'credit_member'])
 
+// Membership lifecycle states (contacts.glofox_membership_state —
+// from member.membership.status in Glofox) that take a member off the
+// radar. A paused membership is a planned freeze; a cancelled/expired
+// one has already lapsed. Neither is "at churn risk". Anything else —
+// active, or an unrecognised/missing value — is scored normally.
+const OFF_RADAR_MEMBERSHIP_STATES = Object.freeze([
+  'paused', 'cancelled', 'expired', 'frozen', 'suspended',
+])
+
 // Gone-quiet window. Below MIN they're still attending normally;
 // past MAX they've effectively churned (a re-win, not an at-risk
 // nudge) so they drop off the radar rather than dominating it.
@@ -55,7 +64,11 @@ function num(v) {
 /**
  * Classify a contact relative to the radar:
  *   'out'        — not a paying member; not in scope at all.
- *   'active'     — paying member with an activity footprint; scored.
+ *   'paused'     — paying member whose membership is paused / cancelled
+ *                  / expired — a planned freeze or already lapsed, so
+ *                  excluded from the radar (not at churn risk).
+ *   'active'     — paying member with a live membership + an activity
+ *                  footprint; scored.
  *   'quarantine' — paying member with zero attendance AND zero
  *                  booking history; routed to triage, not the radar.
  */
@@ -63,6 +76,10 @@ export function classifyContact(contact) {
   if (!contact || !MEMBER_STATUSES.includes(contact.glofox_membership_status)) {
     return 'out'
   }
+  const state = typeof contact.glofox_membership_state === 'string'
+    ? contact.glofox_membership_state.toLowerCase()
+    : null
+  if (state && OFF_RADAR_MEMBERSHIP_STATES.includes(state)) return 'paused'
   const hasFootprint = Boolean(contact.last_attended_at) || Boolean(contact.last_booked_at)
   return hasFootprint ? 'active' : 'quarantine'
 }
@@ -154,6 +171,7 @@ export function scoreMember(contact, nowMs = Date.now()) {
     })(),
     membershipStatus: contact.glofox_membership_status,
     membershipPlan: contact.glofox_membership_plan || null,
+    segment: contact.glofox_membership_status === 'credit_member' ? 'credit' : 'member',
   }
 }
 
@@ -177,24 +195,36 @@ export function buildRadar(contacts, nowMs = Date.now()) {
 }
 
 /**
- * Counts for a contact batch: the radar denominator, how many are
- * at risk (and high-tier), and the quarantine backlog size.
+ * Counts for a contact batch — the radar denominator, how many are at
+ * risk (and high-tier), the quarantine backlog and the paused count —
+ * broken down by segment: monthly members vs credit-pack holders.
+ * A churning monthly subscriber and a credit-pack holder running low
+ * are different problems, so the summary keeps them distinct.
  */
 export function radarSummary(contacts, nowMs = Date.now()) {
-  let activeBase = 0
+  const blank = () => ({ activeBase: 0, atRisk: 0, highRisk: 0 })
+  const bySegment = { member: blank(), credit: blank() }
   let quarantine = 0
-  let atRisk = 0
-  let highRisk = 0
+  let paused = 0
   for (const c of contacts || []) {
     const cls = classifyContact(c)
     if (cls === 'quarantine') { quarantine++; continue }
+    if (cls === 'paused') { paused++; continue }
     if (cls !== 'active') continue
-    activeBase++
+    const seg = c.glofox_membership_status === 'credit_member' ? 'credit' : 'member'
+    bySegment[seg].activeBase++
     const r = scoreMember(c, nowMs)
     if (r) {
-      atRisk++
-      if (r.tier === 'high') highRisk++
+      bySegment[seg].atRisk++
+      if (r.tier === 'high') bySegment[seg].highRisk++
     }
   }
-  return { activeBase, atRisk, highRisk, quarantine }
+  return {
+    activeBase: bySegment.member.activeBase + bySegment.credit.activeBase,
+    atRisk: bySegment.member.atRisk + bySegment.credit.atRisk,
+    highRisk: bySegment.member.highRisk + bySegment.credit.highRisk,
+    quarantine,
+    paused,
+    bySegment,
+  }
 }

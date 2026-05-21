@@ -137,7 +137,13 @@ export default function ChurnRadar() {
 
   if (loading) return <p className="text-sm text-un1t-light">Loading radar…</p>
 
-  const summary = radar?.summary || { activeBase: 0, atRisk: 0, highRisk: 0, quarantine: 0, snoozed: 0 }
+  const summary = radar?.summary || {
+    activeBase: 0, atRisk: 0, highRisk: 0, quarantine: 0, paused: 0, snoozed: 0,
+    bySegment: { member: {}, credit: {} },
+  }
+  const seg = summary.bySegment || { member: {}, credit: {} }
+  const splitLine = (key) =>
+    `${seg.member?.[key] || 0} members · ${seg.credit?.[key] || 0} packs`
 
   return (
     <div>
@@ -154,11 +160,13 @@ export default function ChurnRadar() {
         <p className="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">{error}</p>
       )}
 
-      {/* Summary cards */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 mb-6">
-        <StatCard label="Active base" value={summary.activeBase} />
-        <StatCard label="At risk" value={summary.atRisk} accent="amber" />
+      {/* Summary cards — Active base + At risk split monthly members
+          from credit-pack holders; they're different churn problems. */}
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-5 mb-6">
+        <StatCard label="Active base" value={summary.activeBase} breakdown={splitLine('activeBase')} />
+        <StatCard label="At risk" value={summary.atRisk} accent="amber" breakdown={splitLine('atRisk')} />
         <StatCard label="High risk" value={summary.highRisk} accent="red" />
+        <StatCard label="Paused" value={summary.paused} breakdown="excluded — planned freeze" />
         <StatCard label="Quarantine" value={summary.quarantine} />
       </div>
 
@@ -193,13 +201,14 @@ const ACTION_DONE = {
 
 // ── small pieces ─────────────────────────────────────────────────
 
-function StatCard({ label, value, accent }) {
+function StatCard({ label, value, accent, breakdown }) {
   const valueCls = accent === 'red' ? 'text-red-600'
     : accent === 'amber' ? 'text-amber-600' : 'text-un1t-white'
   return (
     <div className="rounded-xl border border-un1t-gray bg-white p-4">
       <p className="text-xs text-un1t-light">{label}</p>
       <p className={`mt-1 text-2xl font-bold tabular-nums ${valueCls}`}>{value}</p>
+      {breakdown && <p className="mt-0.5 text-[11px] text-un1t-mid">{breakdown}</p>}
     </div>
   )
 }
