@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
-import { LayoutDashboard, Users, Columns3, CheckSquare, Calendar, MessagesSquare, CalendarClock, Settings, LogOut, Car, Flag, Receipt, DoorOpen, Activity, ExternalLink, X, FileSignature, Heart, Globe, Download, Tv, ChevronDown, ChevronRight as ChevronRightIcon, BookOpen, Inbox, ClipboardCheck, Radar } from 'lucide-react'
+import { LayoutDashboard, Users, Columns3, CheckSquare, Calendar, MessagesSquare, CalendarClock, Settings, LogOut, Car, Flag, Receipt, DoorOpen, Activity, ExternalLink, X, FileSignature, Heart, Globe, Download, Tv, ChevronDown, ChevronRight as ChevronRightIcon, BookOpen, Inbox, ClipboardCheck, Radar, UserPlus } from 'lucide-react'
 import { createBrowserClient } from '@/lib/supabase'
 import LocationSwitcher from './LocationSwitcher'
 import ImpersonatePicker from './ImpersonatePicker'
@@ -33,6 +33,11 @@ const allNav = [
   // zero-activity records. Owner + head_coach by default. The
   // sidebar badge shows the high-risk count.
   { href: '/churn-radar', label: 'Churn Radar', icon: Radar,           permission: 'churn_radar' },
+  // LEAD-RADAR.1 — non-member triage radar. A funnel of leads /
+  // trials / ClassPass drop-ins worth converting + a cleanup list
+  // for dormant records. Owner + head_coach by default. The sidebar
+  // badge shows the high-tier funnel count (ClassPass converts).
+  { href: '/lead-radar', label: 'Lead Radar', icon: UserPlus,          permission: 'lead_radar' },
   // Single "Calendly" entry replacing the old Events + Bookings.
   // The hub lands on /bookings (the high-frequency operational
   // view — "what's booked today / coming up") with a tab strip
@@ -227,12 +232,18 @@ export default function Sidebar({ user, mobileOpen = false, onMobileClose }) {
     enabled: hasPerm('churn_radar'),
     url: '/api/churn-radar/count',
   })
+  // LEAD-RADAR.1 — badge shows the high-tier funnel count.
+  const leadRadarCount = usePolledCount({
+    enabled: hasPerm('lead_radar'),
+    url: '/api/lead-radar/count',
+  })
   // Badge map by href. Add more entries here when another nav item
   // needs a notification dot.
   const badges = {
     '/invoices': invoicesPendingCount,
     '/approvals': approvalsPendingCount,
     '/churn-radar': churnRadarCount,
+    '/lead-radar': leadRadarCount,
   }
 
   // Browser tab title prefix — surfaces the combined pending count
