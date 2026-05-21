@@ -43,10 +43,16 @@ async function fetchMembers(db, locationId) {
 }
 
 async function fetchActions(db, locationId) {
+  // 90-day window: snoozes are capped at 90 days and "last contacted"
+  // only needs the most recent action per contact, so nothing older
+  // can affect the radar. The bound also keeps this query well under
+  // Supabase's 1000-row response cap without needing to paginate.
+  const since = new Date(Date.now() - 90 * 86_400_000).toISOString()
   const { data } = await db
     .from('churn_radar_actions')
     .select('contact_id, action, snooze_until, created_at')
     .eq('location_id', locationId)
+    .gte('created_at', since)
     .order('created_at', { ascending: false })
   return data || []
 }
