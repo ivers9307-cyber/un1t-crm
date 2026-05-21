@@ -45,6 +45,12 @@ export const WEB_PERMISSIONS = Object.freeze([
   // for zero-activity records. Owner + head_coach by default — a
   // retention oversight tool, not a staff surface.
   { key: 'churn_radar', label: 'Churn Radar',                   hint: 'At-risk member radar — attendance-based churn signals, win-back actions, and quarantine triage. Owner + head coach by default.' },
+  // LEAD-RADAR.1 — non-member triage radar. Splits the ~7,100
+  // lead/trial/classpass base into a Funnel (live cohort worth a
+  // follow-up) and a Cleanup list (dormant records to archive).
+  // Owner + head_coach by default — an acquisition oversight tool,
+  // mirroring churn_radar's defaults.
+  { key: 'lead_radar', label: 'Lead Radar',                     hint: 'Non-member triage radar — funnel of leads / trials / ClassPass worth converting, plus cleanup of dormant records. Owner + head coach by default.' },
   // — Calendly bookings + standalone race events —
   { key: 'events',     label: 'Calendly events',                hint: 'Booking event types (recurring availability, slot picker, /events + /bookings hub).' },
   { key: 'bookings',   label: 'Bookings list',                  hint: 'Enables the /bookings sub-tab inside the Calendly hub. Operators usually want this on alongside Events.' },
@@ -128,6 +134,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     dashboard_personal: true, dashboard_studio: true, dashboard_business: true,
     pipeline: true, contacts: true, activities: true,
     churn_radar: true,
+    lead_radar: true,
     events: true, bookings: true, races: true,
     email: true, whatsapp: true, sms: true,
     schedule: true, attendance_reports: true, assistant: true, studio_management: true,
@@ -144,6 +151,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     dashboard_personal: true, dashboard_studio: false, dashboard_business: false,
     pipeline: true, contacts: true, activities: true,
     churn_radar: false,                            // retention oversight — not a staff surface
+    lead_radar: false,                             // acquisition oversight — not a staff surface
     events: true, bookings: true, races: true,    // race-day starts/finishes are a front-of-house duty
     email: false, whatsapp: false, sms: false,
     schedule: true, attendance_reports: false, assistant: false, studio_management: false,
@@ -160,6 +168,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     dashboard_personal: true, dashboard_studio: true, dashboard_business: false,
     pipeline: true, contacts: true, activities: true,
     churn_radar: true,                             // head coaches own member retention
+    lead_radar: true,                              // head coaches own lead/trial conversion
     events: true, bookings: true, races: true,
     email: true, whatsapp: true, sms: true,
     schedule: true, attendance_reports: false,    // head coaches don't see attendance — owner/manager only
@@ -177,6 +186,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     dashboard_personal: true, dashboard_studio: true, dashboard_business: false,
     pipeline: true, contacts: true, activities: true,
     churn_radar: false,                            // owner + head_coach by default; grant per-user if needed
+    lead_radar: false,                             // owner + head_coach by default; grant per-user if needed
     events: true, bookings: true, races: true,
     email: true, whatsapp: true, sms: true,
     schedule: true, attendance_reports: true, assistant: true, studio_management: true,
@@ -195,6 +205,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     dashboard_personal: true, dashboard_studio: true, dashboard_business: true,
     pipeline: true, contacts: true, activities: true,
     churn_radar: true,
+    lead_radar: true,
     events: true, bookings: true, races: true,
     email: true, whatsapp: true, sms: true,
     schedule: true, attendance_reports: true, assistant: true, studio_management: true,
