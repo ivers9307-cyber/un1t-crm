@@ -15,7 +15,7 @@ import { useEffect, useState, useCallback } from 'react'
 import {
   Radar, AlertTriangle, Clock, TrendingDown, UserX, Phone,
   ClipboardList, MessageCircle, BellOff, Check, CalendarClock, RotateCcw,
-  CreditCard,
+  CreditCard, Ticket,
 } from 'lucide-react'
 
 const TIER_STYLE = {
@@ -29,6 +29,7 @@ const SIGNAL_ICON = {
   disengaging: TrendingDown,
   no_show: UserX,
   renewal_cliff: CalendarClock,
+  pack_low: Ticket,
 }
 
 function formatMoney(cents) {
