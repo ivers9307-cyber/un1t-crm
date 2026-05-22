@@ -22,8 +22,9 @@ export default async function LeadRadarPage() {
         <h1 className="text-2xl font-semibold text-un1t-white">Lead Radar</h1>
         <p className="text-sm text-un1t-light mt-1">
           The non-member base — leads, trials and ClassPass drop-ins. The
-          Funnel is who to chase to convert; Cleanup clears the dormant
-          records out of your pipeline and campaign audiences.
+          Funnel is who to chase to convert; ClassPass is a read-only view
+          of drop-ins (who rarely convert to a membership); Cleanup clears
+          the dormant records out of your pipeline and campaign audiences.
         </p>
       </header>
       <LeadRadar />

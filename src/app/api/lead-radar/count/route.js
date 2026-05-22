@@ -1,10 +1,11 @@
 // GET /api/lead-radar/count
 //
 // LEAD-RADAR.1 — sidebar badge count: high-tier funnel contacts at
-// the active location (non-snoozed) — the ClassPass drop-ins worth
-// converting now. Follows the { success, data: { count } } envelope
-// the Sidebar's usePolledCount expects. Returns 0 for users without
-// the permission rather than erroring.
+// the active location (non-snoozed) — the attending trials worth
+// converting now (LEAD-CLASSPASS.1 moved ClassPass out of the
+// funnel). Follows the { success, data: { count } } envelope the
+// Sidebar's usePolledCount expects. Returns 0 for users without the
+// permission rather than erroring.
 
 import { NextResponse } from 'next/server'
 import { getCurrentUser } from '@/lib/auth'

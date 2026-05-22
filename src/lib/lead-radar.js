@@ -9,15 +9,20 @@
 // classpass_payg / cold / no_sale_* — alongside the ~1,074 paying
 // members the Churn Radar scores. Only ~200 of those non-members
 // have ANY class-activity footprint. The Lead Radar splits this base
-// into two intents:
+// into three intents:
 //
-//   FUNNEL  — the live cohort worth a follow-up: ClassPass drop-ins
-//             to convert, trials attending but not yet converted,
-//             freshly-joined leads with no visit yet.
-//   CLEANUP — the dormant remainder: lead/trial records that joined
-//             months-to-years ago and never booked or attended.
-//             Triaged once ("keep" / "archive candidate"), never a
-//             daily list.
+//   FUNNEL    — the live cohort worth chasing to convert: trials
+//               attending but not yet converted, and freshly-joined
+//               leads with no visit yet.
+//   CLASSPASS — ClassPass drop-ins (classpass_payg). A flexible-
+//               pricing cohort that rarely converts to a direct
+//               membership, so LEAD-CLASSPASS.1 pulled them out of
+//               the funnel: they get a read-only view, shown for
+//               awareness only, never a conversion follow-up list.
+//   CLEANUP   — the dormant remainder: lead/trial records that joined
+//               months-to-years ago and never booked or attended.
+//               Triaged once ("keep" / "archive candidate"), never a
+//               daily list.
 //
 // joined_at is the age signal. contacts.created_at is NOT usable —
 // it's the CRM-import timestamp (the base was bulk-imported), so
@@ -65,17 +70,25 @@ function lastActivity(contact) {
 /**
  * Classify a non-member contact relative to the Lead Radar:
  *   'out'       — a paying member or an unrecognised status; not in scope.
+ *   'classpass' — a ClassPass drop-in (classpass_payg). Read-only
+ *                 cohort; never funnel, never cleanup, whatever the age.
  *   'attending' — booked or attended a class within ATTENDING_DAYS.
  *   'fresh'     — joined within FRESH_DAYS, no activity yet.
  *   'cooling'   — joined FRESH_DAYS..COOLING_DAYS ago, no activity.
  *   'dormant'   — joined over COOLING_DAYS ago, no activity.
  *   'no_sale'   — explicitly marked no-sale; dead regardless of age.
  * Funnel = attending + fresh. Cleanup = cooling + dormant + no_sale.
+ * ClassPass stands alone — see buildClassPass.
  */
 export function classifyNonMember(contact, nowMs = Date.now()) {
   const status = contact?.glofox_membership_status
   if (!status || !NON_MEMBER_STATUSES.includes(status)) return 'out'
   if (NO_SALE_STATUSES.includes(status)) return 'no_sale'
+  // LEAD-CLASSPASS.1 — ClassPass drop-ins are a flexible-pricing
+  // cohort, unlikely to convert to a direct membership. They get
+  // their own read-only view, so they never enter the funnel or the
+  // cleanup list regardless of class activity or join age.
+  if (status === 'classpass_payg') return 'classpass'
 
   const act = daysSince(lastActivity(contact), nowMs)
   if (act != null && act <= ATTENDING_DAYS) return 'attending'
@@ -98,27 +111,21 @@ function tierFor(score) {
 }
 
 // The single funnel signal for a contact — what makes it worth a
-// follow-up, and how hard. ClassPass drop-ins outrank trials
-// (membership conversion = recurring revenue), trials outrank
-// re-engaged leads (a live trial has a closing window), and any
-// attender outranks a fresh no-activity signup.
+// follow-up, and how hard. An attending trial is the hottest lead
+// (a live trial has a closing window), it outranks a re-engaged
+// lead, and any attender outranks a fresh no-activity signup.
+// ClassPass drop-ins are no longer scored here — LEAD-CLASSPASS.1
+// routes classpass_payg to its own read-only view, so a ClassPass
+// contact never reaches funnelSignal.
 function funnelSignal(contact, category) {
   const status = contact.glofox_membership_status
   if (category === 'attending') {
-    if (status === 'classpass_payg') {
-      return {
-        key: 'classpass_convert',
-        label: 'Active ClassPass',
-        detail: 'Attending on ClassPass — convert to membership',
-        weight: 4,
-      }
-    }
     if (status === 'trial') {
       return {
         key: 'trial_convert',
         label: 'Trial attending',
         detail: 'Attending on trial — not yet converted',
-        weight: 3,
+        weight: 4,
       }
     }
     return {
@@ -227,24 +234,69 @@ export function buildCleanup(contacts, nowMs = Date.now()) {
   return rows
 }
 
+// ── classpass list ───────────────────────────────────────────────
+// LEAD-CLASSPASS.1 — the read-only ClassPass view. ClassPass drop-ins
+// rarely convert to a direct membership, so they sit outside the
+// funnel and the cleanup list. This surface is awareness-only: no
+// score, no triage actions. `attending` flags whoever has class
+// activity inside ATTENDING_DAYS so the UI can split active from
+// lapsed ClassPass users.
+
 /**
- * Counts for a contact batch — the Lead Radar denominators. Funnel
- * and cleanup totals, each broken down by category, so the page can
- * show "203 attending / 260 fresh" and "600 cooling / 5,900 dormant".
+ * Build the ClassPass list — every classpass_payg non-member, most
+ * recently active first (never-active records sink to the bottom).
+ */
+export function buildClassPass(contacts, nowMs = Date.now()) {
+  const rows = []
+  for (const c of contacts || []) {
+    if (classifyNonMember(c, nowMs) !== 'classpass') continue
+    const actAt = lastActivity(c)
+    const actDays = daysSince(actAt, nowMs)
+    rows.push({
+      contactId: c.id,
+      name: c.name || 'Contact',
+      status: c.glofox_membership_status,
+      attending: actDays != null && actDays <= ATTENDING_DAYS,
+      lastActivityAt: actAt,
+      daysSinceActivity: actDays == null ? null : Math.floor(actDays),
+      joinedAt: c.joined_at || null,
+      daysSinceJoined: (() => {
+        const d = daysSince(c.joined_at, nowMs)
+        return d == null ? null : Math.floor(d)
+      })(),
+    })
+  }
+  rows.sort((a, b) => new Date(b.lastActivityAt || 0) - new Date(a.lastActivityAt || 0))
+  return rows
+}
+
+/**
+ * Counts for a contact batch — the Lead Radar denominators. Funnel,
+ * classpass and cleanup totals, each broken down by category, so the
+ * page can show "203 attending / 260 fresh", "190 attending / 1,348
+ * lapsed" and "600 cooling / 5,900 dormant".
  */
 export function leadRadarSummary(contacts, nowMs = Date.now()) {
   const funnel = { attending: 0, fresh: 0 }
   const cleanup = { cooling: 0, dormant: 0, no_sale: 0 }
+  const classpass = { attending: 0, lapsed: 0 }
   for (const c of contacts || []) {
     const cls = classifyNonMember(c, nowMs)
     if (cls === 'attending' || cls === 'fresh') funnel[cls]++
     else if (cls === 'cooling' || cls === 'dormant' || cls === 'no_sale') cleanup[cls]++
+    else if (cls === 'classpass') {
+      const d = daysSince(lastActivity(c), nowMs)
+      if (d != null && d <= ATTENDING_DAYS) classpass.attending++
+      else classpass.lapsed++
+    }
   }
   return {
     funnelTotal: funnel.attending + funnel.fresh,
     funnel,
     cleanupTotal: cleanup.cooling + cleanup.dormant + cleanup.no_sale,
     cleanup,
+    classpassTotal: classpass.attending + classpass.lapsed,
+    classpass,
   }
 }
 
