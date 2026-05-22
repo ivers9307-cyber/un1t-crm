@@ -307,3 +307,42 @@ export function computeLeadConversionStats(contacts, actions, nowMs = Date.now()
     progressionRate: contacted > 0 ? progressed / contacted : 0,
   }
 }
+
+// ── trend ────────────────────────────────────────────────────────
+// LEAD-TREND.1 — week-over-week movement. computeLeadTrend diffs the
+// live summary against the most recent weekly snapshot so the summary
+// cards can show "Funnel 463, up 12 since last week".
+
+/**
+ * Week-over-week deltas: the live Lead Radar summary minus the most
+ * recent weekly snapshot. Each delta is (now − then). Returns null
+ * when there is no snapshot to compare against yet.
+ *
+ * @param {object} summary        live leadRadarSummary output
+ * @param {object|null} snapshot  a lead_radar_snapshots row, or null
+ * @returns {{ since: string|null, deltas: object }|null}
+ */
+export function computeLeadTrend(summary, snapshot) {
+  if (!summary || !snapshot) return null
+  const live = {
+    funnelTotal:  Number(summary.funnelTotal) || 0,
+    attending:    Number(summary.funnel?.attending) || 0,
+    fresh:        Number(summary.funnel?.fresh) || 0,
+    cleanupTotal: Number(summary.cleanupTotal) || 0,
+  }
+  const then = {
+    funnelTotal:  Number(snapshot.funnel_total) || 0,
+    attending:    Number(snapshot.attending) || 0,
+    fresh:        Number(snapshot.fresh) || 0,
+    cleanupTotal: Number(snapshot.cleanup_total) || 0,
+  }
+  return {
+    since: snapshot.captured_at || null,
+    deltas: {
+      funnelTotal:  live.funnelTotal - then.funnelTotal,
+      attending:    live.attending - then.attending,
+      fresh:        live.fresh - then.fresh,
+      cleanupTotal: live.cleanupTotal - then.cleanupTotal,
+    },
+  }
+}

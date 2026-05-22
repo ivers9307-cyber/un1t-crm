@@ -7,6 +7,7 @@ import {
   buildCleanup,
   leadRadarSummary,
   computeLeadConversionStats,
+  computeLeadTrend,
 } from './lead-radar.js'
 
 // Fixed clock so every age computation is deterministic.
@@ -272,5 +273,36 @@ describe('LEAD-OUTCOMES.1 — computeLeadConversionStats', () => {
   it('returns zeroes for empty / null input', () => {
     expect(computeLeadConversionStats([], [], NOW)).toEqual({ contacted: 0, progressed: 0, progressionRate: 0 })
     expect(computeLeadConversionStats(null, null, NOW)).toEqual({ contacted: 0, progressed: 0, progressionRate: 0 })
+  })
+})
+
+describe('LEAD-TREND.1 — computeLeadTrend', () => {
+  const summary = {
+    funnelTotal: 463, funnel: { attending: 203, fresh: 260 },
+    cleanupTotal: 6500,
+  }
+
+  it('diffs the live summary against the latest snapshot', () => {
+    const snapshot = {
+      captured_at: '2026-05-14T06:30:00.000Z',
+      funnel_total: 450, attending: 198, fresh: 252, cleanup_total: 6600,
+    }
+    const t = computeLeadTrend(summary, snapshot)
+    expect(t.since).toBe('2026-05-14T06:30:00.000Z')
+    expect(t.deltas.funnelTotal).toBe(13)
+    expect(t.deltas.attending).toBe(5)
+    expect(t.deltas.fresh).toBe(8)
+    expect(t.deltas.cleanupTotal).toBe(-100)
+  })
+
+  it('returns null when there is no snapshot to compare against', () => {
+    expect(computeLeadTrend(summary, null)).toBeNull()
+    expect(computeLeadTrend(null, {})).toBeNull()
+  })
+
+  it('treats missing snapshot columns as zero', () => {
+    const t = computeLeadTrend(summary, { captured_at: '2026-05-14T06:30:00.000Z' })
+    expect(t.deltas.funnelTotal).toBe(463)
+    expect(t.deltas.attending).toBe(203)
   })
 })
