@@ -45,6 +45,10 @@
       "schedule": "0 4 * * *"
     },
     {
+      "path": "/api/cron/glofox-data-quality",
+      "schedule": "0 5 * * *"
+    },
+    {
       "path": "/api/cron/pipeline-classify",
       "schedule": "30 3 * * *"
     },
