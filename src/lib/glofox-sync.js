@@ -1275,6 +1275,44 @@ export function computeBookingAggregates(bookings, now = Date.now()) {
 }
 
 /**
+ * Merge freshly-computed booking aggregates into a contact-update
+ * patch — the safe way to apply computeBookingAggregates() output.
+ *
+ * The 7-/30-day COUNTS are windowed by definition, so they always
+ * take the fresh value (an empty window legitimately means 0).
+ *
+ * The last_attended_at / last_booked_at TIMESTAMPS are advance-only:
+ * a fresh value only wins if it is newer than what's already stored.
+ * This is the fix for the bug where a short fetch window (e.g. the
+ * 30-day default) returns no recent bookings for a member who simply
+ * hasn't trained lately, computeBookingAggregates returns null, and
+ * the caller writes that null straight over a real historical date —
+ * wiping it. ISO-8601 strings compare correctly with `>`.
+ *
+ * @param {object|null} existing  the contact's current row (needs
+ *                                last_attended_at / last_booked_at)
+ * @param {object} fresh          a computeBookingAggregates() result
+ * @returns {object} a patch — counts always, timestamps only when newer
+ */
+export function mergeBookingAggregates(existing, fresh) {
+  const patch = {
+    total_bookings_30d: fresh.total_bookings_30d,
+    total_attended_30d: fresh.total_attended_30d,
+    total_attended_7d:  fresh.total_attended_7d,
+    total_noshow_30d:   fresh.total_noshow_30d,
+  }
+  if (fresh.last_attended_at &&
+      (!existing?.last_attended_at || fresh.last_attended_at > existing.last_attended_at)) {
+    patch.last_attended_at = fresh.last_attended_at
+  }
+  if (fresh.last_booked_at &&
+      (!existing?.last_booked_at || fresh.last_booked_at > existing.last_booked_at)) {
+    patch.last_booked_at = fresh.last_booked_at
+  }
+  return patch
+}
+
+/**
  * Build the Plan A context for credit_member detection. Fetches
  * the member's credit packs from /2.0/credits, then resolves each
  * unique active pack's parent Membership via /2.0/memberships/{id}

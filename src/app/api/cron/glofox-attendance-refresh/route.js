@@ -38,7 +38,7 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { glofoxCredentialsForLocation, fetchUserBookingsResult, fetchMemberResult } from '@/lib/glofox'
-import { computeBookingAggregates, trimRecentBookings, extractMembershipPlan, extractMembershipState, extractMemberProfile } from '@/lib/glofox-sync'
+import { computeBookingAggregates, mergeBookingAggregates, trimRecentBookings, extractMembershipPlan, extractMembershipState, extractMemberProfile } from '@/lib/glofox-sync'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -132,7 +132,10 @@ async function refreshLocation(db, location, startedAt) {
     for (let from = 0; ; from += PAGE) {
       const { data: page, error } = await db
         .from('contacts')
-        .select('id, glofox_member_id')
+        // last_attended_at / last_booked_at are needed so the
+        // advance-only merge below can compare against the stored
+        // value and never regress it.
+        .select('id, glofox_member_id, last_attended_at, last_booked_at')
         .eq('location_id', location.id)
         .in('glofox_membership_status', MEMBER_STATUSES)
         .not('glofox_member_id', 'is', null)
@@ -158,15 +161,21 @@ async function refreshLocation(db, location, startedAt) {
       }
 
       const aggs = computeBookingAggregates(bookings)
+      // mergeBookingAggregates: the 7-/30-day counts always refresh,
+      // but last_attended_at / last_booked_at are advance-only — so
+      // this 30-day fetch window can NEVER wipe a real historical
+      // attendance date for a member who simply hasn't trained in the
+      // last month. (Previously it overwrote those dates with null,
+      // making ~80% of the member base look like zero-activity ghosts.)
       const update = {
-        last_booked_at:     aggs.last_booked_at,
-        last_attended_at:   aggs.last_attended_at,
-        total_bookings_30d: aggs.total_bookings_30d,
-        total_attended_30d: aggs.total_attended_30d,
-        total_attended_7d:  aggs.total_attended_7d,
-        total_noshow_30d:   aggs.total_noshow_30d,
-        recent_bookings:    trimRecentBookings(bookings, 10),
-        glofox_synced_at:   new Date().toISOString(),
+        ...mergeBookingAggregates(m, aggs),
+        glofox_synced_at: new Date().toISOString(),
+      }
+      // recent_bookings drives the contact-profile history list — only
+      // refresh it when we actually fetched bookings, so an empty
+      // 30-day window doesn't blank a member's recent-bookings panel.
+      if (bookings.length > 0) {
+        update.recent_bookings = trimRecentBookings(bookings, 10)
       }
 
       // CHURN-PREP.2 — also refresh the current membership plan +
