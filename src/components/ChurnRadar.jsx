@@ -15,7 +15,7 @@ import { useEffect, useState, useCallback } from 'react'
 import {
   Radar, AlertTriangle, Clock, TrendingDown, UserX, Phone,
   ClipboardList, MessageCircle, BellOff, Check, CalendarClock, RotateCcw,
-  CreditCard, Ticket, TrendingUp,
+  CreditCard, Ticket, TrendingUp, Mail,
 } from 'lucide-react'
 
 const TIER_STYLE = {
@@ -268,6 +268,89 @@ export default function ChurnRadar() {
         <Quarantine items={quarantine} selected={selected} busy={busy}
           onToggle={toggleSelect} onSelectAll={(all) => setSelected(all ? new Set((quarantine || []).map((q) => q.contactId)) : new Set())}
           onTriage={runQuarantine} />
+      )}
+
+      <DigestSettings />
+    </div>
+  )
+}
+
+// RADAR-DIGEST.1 — recipient editor for the weekly email digest.
+// Reads / writes locations.churn_digest_recipients via the
+// digest-settings API. Empty list = digest off.
+function DigestSettings() {
+  const [text, setText] = useState(null)   // null = still loading
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
+  const [err, setErr] = useState(null)
+
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      try {
+        const r = await fetch('/api/churn-radar/digest-settings', { cache: 'no-store' })
+        const j = await r.json()
+        if (!r.ok || !j.success) throw new Error(j.error || 'Failed to load digest settings')
+        if (!cancelled) setText((j.data.recipients || []).join('\n'))
+      } catch (e) {
+        if (!cancelled) { setErr(e.message); setText('') }
+      }
+    })()
+    return () => { cancelled = true }
+  }, [])
+
+  async function save() {
+    setSaving(true); setErr(null); setSaved(false)
+    try {
+      const recipients = text.split(/[\n,]/).map((s) => s.trim()).filter(Boolean)
+      const r = await fetch('/api/churn-radar/digest-settings', {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ recipients }),
+      })
+      const j = await r.json()
+      if (!r.ok || !j.success) throw new Error(j.error || 'Save failed')
+      setText((j.data.recipients || []).join('\n'))
+      setSaved(true)
+      setTimeout(() => setSaved(false), 4000)
+    } catch (e) {
+      setErr(e.message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="mt-8 rounded-xl border border-un1t-gray bg-un1t-dark p-4">
+      <div className="flex items-center gap-2">
+        <Mail size={15} className="text-un1t-light" />
+        <h3 className="text-sm font-medium text-un1t-white">Weekly email digest</h3>
+      </div>
+      <p className="mt-1 text-xs text-un1t-light">
+        Who receives the Monday churn-radar summary — current numbers, the
+        week-over-week change, and the recent-weeks trend. One email address per
+        line. Leave blank to turn the digest off.
+      </p>
+      {text === null ? (
+        <p className="mt-3 text-sm text-un1t-light">Loading…</p>
+      ) : (
+        <>
+          <textarea
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            rows={3}
+            placeholder="owner@un1t.ie"
+            className="mt-3 w-full rounded-lg border border-un1t-gray bg-un1t-black p-2 text-sm text-un1t-white"
+          />
+          <div className="mt-2 flex items-center gap-3">
+            <button type="button" onClick={save} disabled={saving}
+              className="rounded-md bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-500 disabled:opacity-50">
+              {saving ? 'Saving…' : 'Save recipients'}
+            </button>
+            {saved && <span className="text-xs text-green-600">Saved.</span>}
+            {err && <span className="text-xs text-red-600">{err}</span>}
+          </div>
+        </>
       )}
     </div>
   )
