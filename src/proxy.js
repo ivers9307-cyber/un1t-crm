@@ -2,7 +2,7 @@ import { createServerClient } from '@supabase/ssr'
 import { NextResponse } from 'next/server'
 import { resolveBrand, isFrameworkAsset } from '@/lib/brands'
 
-// Constant-time string compare. Implemented inline because middleware runs
+// Constant-time string compare. Implemented inline because the proxy runs
 // in the Edge runtime which doesn't expose node:crypto.timingSafeEqual. The
 // length-mismatch early exit leaks key length, but CRM_API_KEY is a fixed
 // 64-char hex string by convention so that's effectively zero info.
@@ -16,7 +16,10 @@ function timingSafeEqualEdge(a, b) {
   return mismatch === 0
 }
 
-export async function middleware(request) {
+// PROXY.1 — renamed from middleware → proxy for the Next.js 16 "proxy"
+// file convention (the old "middleware" name is deprecated and the
+// Vercel build pipeline now hard-fails on it). Behaviour is unchanged.
+export async function proxy(request) {
   const hostname = request.headers.get('host') || ''
 
   // ── Multi-brand routing (MULTIBRAND.1) ───────────────────────────
