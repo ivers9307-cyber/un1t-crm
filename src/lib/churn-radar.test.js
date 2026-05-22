@@ -12,6 +12,7 @@ import {
   monthlyValueCents,
   scoreWinbackContact,
   buildWinback,
+  computeRecoveryStats,
   MEMBER_STATUSES,
 } from './churn-radar.js'
 
@@ -520,5 +521,73 @@ describe('WINBACK.1 — buildWinback', () => {
     ], NOW)
     // high tier first (warm-rich + warm), rich before cheap; then low (cold-cheap).
     expect(rows.map((r) => r.contactId)).toEqual(['warm-rich', 'warm', 'cold-cheap'])
+  })
+})
+
+describe('RADAR-OUTCOMES.1 — computeRecoveryStats', () => {
+  const action = (contactId, type, daysAgoN) => ({
+    contact_id: contactId, action: type, created_at: daysAgo(daysAgoN),
+  })
+
+  it('counts a contacted member who trained again as recovered', () => {
+    const r = computeRecoveryStats(
+      [{ id: 'm1', last_attended_at: daysAgo(10) }],
+      [action('m1', 'contacted', 30)], NOW)
+    expect(r).toEqual({ contacted: 1, recovered: 1, recoveryRate: 1 })
+  })
+
+  it('does not count a member who never trained after the intervention', () => {
+    const r = computeRecoveryStats(
+      [{ id: 'm1', last_attended_at: daysAgo(40) }],   // last class predates the contact
+      [action('m1', 'contacted', 30)], NOW)
+    expect(r).toEqual({ contacted: 1, recovered: 0, recoveryRate: 0 })
+  })
+
+  it('computes the rate across a batch', () => {
+    const contacts = [
+      { id: 'a', last_attended_at: daysAgo(5) },    // recovered
+      { id: 'b', last_attended_at: daysAgo(50) },   // attended before the contact
+      { id: 'c', last_attended_at: null },          // never came back
+      { id: 'd', last_attended_at: daysAgo(2) },    // recovered
+    ]
+    const actions = [
+      action('a', 'contacted', 30), action('b', 'winback_sent', 30),
+      action('c', 'task_assigned', 30), action('d', 'contacted', 30),
+    ]
+    const r = computeRecoveryStats(contacts, actions, NOW)
+    expect(r.contacted).toBe(4)
+    expect(r.recovered).toBe(2)
+    expect(r.recoveryRate).toBe(0.5)
+  })
+
+  it('excludes interventions too recent to judge (grace period)', () => {
+    expect(computeRecoveryStats(
+      [{ id: 'm1', last_attended_at: daysAgo(1) }],
+      [action('m1', 'contacted', 2)], NOW)).toEqual({ contacted: 0, recovered: 0, recoveryRate: 0 })
+  })
+
+  it('excludes interventions older than the 90-day window', () => {
+    expect(computeRecoveryStats(
+      [{ id: 'm1', last_attended_at: daysAgo(10) }],
+      [action('m1', 'contacted', 120)], NOW).contacted).toBe(0)
+  })
+
+  it('uses the earliest in-window intervention as the baseline', () => {
+    const r = computeRecoveryStats(
+      [{ id: 'm1', last_attended_at: daysAgo(45) }],
+      [action('m1', 'contacted', 60), action('m1', 'winback_sent', 20)], NOW)
+    expect(r.recovered).toBe(1)
+  })
+
+  it('ignores non-intervention actions (snooze, quarantine triage)', () => {
+    const r = computeRecoveryStats(
+      [{ id: 'm1', last_attended_at: daysAgo(5) }],
+      [action('m1', 'snoozed', 30), action('m1', 'quarantine_stale', 30)], NOW)
+    expect(r.contacted).toBe(0)
+  })
+
+  it('returns zeroes for empty / null input', () => {
+    expect(computeRecoveryStats([], [], NOW)).toEqual({ contacted: 0, recovered: 0, recoveryRate: 0 })
+    expect(computeRecoveryStats(null, null, NOW)).toEqual({ contacted: 0, recovered: 0, recoveryRate: 0 })
   })
 })
