@@ -67,6 +67,10 @@
     {
       "path": "/api/cron/sync-segment-memberships",
       "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/cron/churn-radar-snapshot",
+      "schedule": "0 6 * * 1"
     }
   ]
 }

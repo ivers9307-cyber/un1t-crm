@@ -11,6 +11,7 @@ import {
   buildOverdue,
   radarSummary,
   computeRecoveryStats,
+  computeTrend,
   classifyContact,
   MEMBER_STATUSES,
 } from '@/lib/churn-radar'
@@ -122,7 +123,21 @@ export async function loadRadar(db, locationId, nowMs = Date.now()) {
   // how many came back to training afterwards.
   const recovery = computeRecoveryStats(members, actions, nowMs)
 
-  return { radar, summary: { ...summary, quarantine: quarantineOpen, snoozed, recovery } }
+  const finalSummary = { ...summary, quarantine: quarantineOpen, snoozed, recovery }
+
+  // RADAR-TREND.1 — week-over-week deltas vs the most recent weekly
+  // snapshot (written by the churn-radar-snapshot cron). Null trend
+  // until the first snapshot exists.
+  const { data: snapshot } = await db
+    .from('churn_radar_snapshots')
+    .select('captured_at, active_base, at_risk, high_risk, overdue, paused, quarantine, revenue_at_risk_cents, overdue_value_cents')
+    .eq('location_id', locationId)
+    .order('captured_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  finalSummary.trend = computeTrend(finalSummary, snapshot || null)
+
+  return { radar, summary: finalSummary }
 }
 
 /**

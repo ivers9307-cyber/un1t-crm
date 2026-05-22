@@ -13,6 +13,7 @@ import {
   scoreWinbackContact,
   buildWinback,
   computeRecoveryStats,
+  computeTrend,
   MEMBER_STATUSES,
 } from './churn-radar.js'
 
@@ -589,5 +590,41 @@ describe('RADAR-OUTCOMES.1 — computeRecoveryStats', () => {
   it('returns zeroes for empty / null input', () => {
     expect(computeRecoveryStats([], [], NOW)).toEqual({ contacted: 0, recovered: 0, recoveryRate: 0 })
     expect(computeRecoveryStats(null, null, NOW)).toEqual({ contacted: 0, recovered: 0, recoveryRate: 0 })
+  })
+})
+
+describe('RADAR-TREND.1 — computeTrend', () => {
+  const summary = {
+    activeBase: 268, atRisk: 40, highRisk: 12, overdue: 11,
+    paused: 17, quarantine: 5, revenueAtRiskCents: 80000, overdueValueCents: 19000,
+  }
+
+  it('diffs the live summary against the latest snapshot', () => {
+    const snapshot = {
+      captured_at: '2026-05-15T06:00:00.000Z',
+      active_base: 272, at_risk: 38, high_risk: 10, overdue: 8,
+      paused: 17, quarantine: 9, revenue_at_risk_cents: 76000, overdue_value_cents: 14000,
+    }
+    const t = computeTrend(summary, snapshot)
+    expect(t.since).toBe('2026-05-15T06:00:00.000Z')
+    expect(t.deltas.activeBase).toBe(-4)
+    expect(t.deltas.atRisk).toBe(2)
+    expect(t.deltas.highRisk).toBe(2)
+    expect(t.deltas.overdue).toBe(3)
+    expect(t.deltas.paused).toBe(0)
+    expect(t.deltas.quarantine).toBe(-4)
+    expect(t.deltas.revenueAtRiskCents).toBe(4000)
+    expect(t.deltas.overdueValueCents).toBe(5000)
+  })
+
+  it('returns null when there is no snapshot to compare against', () => {
+    expect(computeTrend(summary, null)).toBeNull()
+    expect(computeTrend(null, {})).toBeNull()
+  })
+
+  it('treats missing snapshot columns as zero', () => {
+    const t = computeTrend(summary, { captured_at: '2026-05-15T06:00:00.000Z' })
+    expect(t.deltas.activeBase).toBe(268)   // 268 − 0
+    expect(t.deltas.overdue).toBe(11)
   })
 })
