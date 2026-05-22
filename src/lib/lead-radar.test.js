@@ -5,6 +5,7 @@ import {
   scoreFunnelContact,
   buildFunnel,
   buildCleanup,
+  buildClassPass,
   leadRadarSummary,
   computeLeadConversionStats,
   computeLeadTrend,
@@ -72,8 +73,29 @@ describe('classifyNonMember', () => {
   it('falls out of "attending" once activity is older than 90 days', () => {
     // Activity 200d ago, joined 50d ago -> not attending, joined recently -> fresh.
     expect(classifyNonMember(
-      contact({ glofox_membership_status: 'classpass_payg', last_attended_at: daysAgo(200), joined_at: daysAgo(50) }), NOW,
+      contact({ glofox_membership_status: 'trial', last_attended_at: daysAgo(200), joined_at: daysAgo(50) }), NOW,
     )).toBe('fresh')
+  })
+
+  // LEAD-CLASSPASS.1 — ClassPass drop-ins always classify as
+  // 'classpass', whatever their class activity or join age.
+  it('classifies any classpass_payg contact as "classpass"', () => {
+    // Attending recently.
+    expect(classifyNonMember(
+      contact({ glofox_membership_status: 'classpass_payg', last_attended_at: daysAgo(3) }), NOW,
+    )).toBe('classpass')
+    // Lapsed — activity well over 90 days old.
+    expect(classifyNonMember(
+      contact({ glofox_membership_status: 'classpass_payg', last_attended_at: daysAgo(300) }), NOW,
+    )).toBe('classpass')
+    // Freshly joined, no activity (would otherwise be "fresh").
+    expect(classifyNonMember(
+      contact({ glofox_membership_status: 'classpass_payg', joined_at: daysAgo(10) }), NOW,
+    )).toBe('classpass')
+    // Joined years ago, no activity (would otherwise be "dormant").
+    expect(classifyNonMember(
+      contact({ glofox_membership_status: 'classpass_payg', joined_at: daysAgo(900) }), NOW,
+    )).toBe('classpass')
   })
 
   it('classifies a months-old join with no activity as "cooling"', () => {
@@ -96,21 +118,13 @@ describe('classifyNonMember', () => {
 })
 
 describe('scoreFunnelContact', () => {
-  it('scores an attending ClassPass contact highest (convert opportunity)', () => {
-    const r = scoreFunnelContact(
-      contact({ glofox_membership_status: 'classpass_payg', last_attended_at: daysAgo(5) }), NOW)
-    expect(r.score).toBe(4)
-    expect(r.tier).toBe('high')
-    expect(r.signal.key).toBe('classpass_convert')
-    expect(r.category).toBe('attending')
-  })
-
-  it('scores an attending trial below ClassPass', () => {
+  it('scores an attending trial highest (top conversion signal)', () => {
     const r = scoreFunnelContact(
       contact({ glofox_membership_status: 'trial', last_attended_at: daysAgo(5) }), NOW)
-    expect(r.score).toBe(3)
-    expect(r.tier).toBe('medium')
+    expect(r.score).toBe(4)
+    expect(r.tier).toBe('high')
     expect(r.signal.key).toBe('trial_convert')
+    expect(r.category).toBe('attending')
   })
 
   it('scores an attending lead as re-engaged', () => {
@@ -129,7 +143,11 @@ describe('scoreFunnelContact', () => {
     expect(r.category).toBe('fresh')
   })
 
-  it('returns null for cleanup-bucket and out-of-scope contacts', () => {
+  it('returns null for ClassPass, cleanup-bucket and out-of-scope contacts', () => {
+    // LEAD-CLASSPASS.1 — ClassPass is never in the funnel, even when
+    // actively attending.
+    expect(scoreFunnelContact(
+      contact({ glofox_membership_status: 'classpass_payg', last_attended_at: daysAgo(3) }), NOW)).toBeNull()
     expect(scoreFunnelContact(contact({ joined_at: daysAgo(500) }), NOW)).toBeNull()
     expect(scoreFunnelContact(contact({ glofox_membership_status: 'no_sale_trial' }), NOW)).toBeNull()
     expect(scoreFunnelContact(contact({ glofox_membership_status: 'member' }), NOW)).toBeNull()
@@ -144,13 +162,15 @@ describe('buildFunnel', () => {
       contact({ id: 'trial', glofox_membership_status: 'trial', last_attended_at: daysAgo(3) }),
       contact({ id: 'dormant', glofox_membership_status: 'trial', joined_at: daysAgo(800) }),
     ], NOW)
-    expect(rows.map(r => r.contactId)).toEqual(['cp', 'trial', 'fresh'])
+    // 'cp' (ClassPass) + 'dormant' are excluded — only the attending
+    // trial and the fresh lead make the funnel.
+    expect(rows.map(r => r.contactId)).toEqual(['trial', 'fresh'])
   })
 
   it('breaks score ties by most-recent activity', () => {
     const rows = buildFunnel([
-      contact({ id: 'older', glofox_membership_status: 'classpass_payg', last_attended_at: daysAgo(40) }),
-      contact({ id: 'newer', glofox_membership_status: 'classpass_payg', last_attended_at: daysAgo(2) }),
+      contact({ id: 'older', glofox_membership_status: 'trial', last_attended_at: daysAgo(40) }),
+      contact({ id: 'newer', glofox_membership_status: 'trial', last_attended_at: daysAgo(2) }),
     ], NOW)
     expect(rows.map(r => r.contactId)).toEqual(['newer', 'older'])
   })
@@ -176,29 +196,64 @@ describe('buildCleanup', () => {
   })
 })
 
-describe('leadRadarSummary', () => {
-  it('counts the funnel and cleanup buckets', () => {
-    const s = leadRadarSummary([
-      contact({ glofox_membership_status: 'classpass_payg', last_attended_at: daysAgo(3) }),
-      contact({ glofox_membership_status: 'trial', last_attended_at: daysAgo(3) }),
-      contact({ glofox_membership_status: 'lead', joined_at: daysAgo(15) }),
-      contact({ glofox_membership_status: 'lead', joined_at: daysAgo(200) }),
-      contact({ glofox_membership_status: 'trial', joined_at: daysAgo(900) }),
-      contact({ glofox_membership_status: 'no_sale_tour' }),
-      contact({ glofox_membership_status: 'member' }),
+describe('LEAD-CLASSPASS.1 — buildClassPass', () => {
+  it('returns only classpass_payg contacts, most-recently-active first', () => {
+    const rows = buildClassPass([
+      contact({ id: 'trial', glofox_membership_status: 'trial', last_attended_at: daysAgo(3) }),
+      contact({ id: 'cp_old', glofox_membership_status: 'classpass_payg', last_attended_at: daysAgo(120) }),
+      contact({ id: 'cp_new', glofox_membership_status: 'classpass_payg', last_attended_at: daysAgo(2) }),
+      contact({ id: 'lead', glofox_membership_status: 'lead', joined_at: daysAgo(10) }),
     ], NOW)
-    expect(s.funnelTotal).toBe(3)
-    expect(s.funnel).toEqual({ attending: 2, fresh: 1 })
+    expect(rows.map(r => r.contactId)).toEqual(['cp_new', 'cp_old'])
+  })
+
+  it('flags recent activity as attending, stale or absent activity as not', () => {
+    const rows = buildClassPass([
+      contact({ id: 'active', glofox_membership_status: 'classpass_payg', last_attended_at: daysAgo(10) }),
+      contact({ id: 'lapsed', glofox_membership_status: 'classpass_payg', last_attended_at: daysAgo(200) }),
+      contact({ id: 'never', glofox_membership_status: 'classpass_payg', last_attended_at: null, last_booked_at: null }),
+    ], NOW)
+    expect(rows.find(r => r.contactId === 'active').attending).toBe(true)
+    expect(rows.find(r => r.contactId === 'lapsed').attending).toBe(false)
+    expect(rows.find(r => r.contactId === 'never').attending).toBe(false)
+  })
+
+  it('excludes a contact with no usable activity from the funnel and cleanup', () => {
+    // A classpass_payg row never lands in buildFunnel or buildCleanup.
+    const cp = contact({ glofox_membership_status: 'classpass_payg', joined_at: daysAgo(900) })
+    expect(buildFunnel([cp], NOW)).toEqual([])
+    expect(buildCleanup([cp], NOW)).toEqual([])
+    expect(buildClassPass([cp], NOW)).toHaveLength(1)
+  })
+})
+
+describe('leadRadarSummary', () => {
+  it('counts the funnel, classpass and cleanup buckets', () => {
+    const s = leadRadarSummary([
+      contact({ glofox_membership_status: 'classpass_payg', last_attended_at: daysAgo(3) }),  // classpass · attending
+      contact({ glofox_membership_status: 'classpass_payg', joined_at: daysAgo(400) }),        // classpass · lapsed
+      contact({ glofox_membership_status: 'trial', last_attended_at: daysAgo(3) }),            // funnel · attending
+      contact({ glofox_membership_status: 'lead', joined_at: daysAgo(15) }),                   // funnel · fresh
+      contact({ glofox_membership_status: 'lead', joined_at: daysAgo(200) }),                  // cleanup · cooling
+      contact({ glofox_membership_status: 'trial', joined_at: daysAgo(900) }),                 // cleanup · dormant
+      contact({ glofox_membership_status: 'no_sale_tour' }),                                   // cleanup · no_sale
+      contact({ glofox_membership_status: 'member' }),                                         // out of scope
+    ], NOW)
+    expect(s.funnelTotal).toBe(2)
+    expect(s.funnel).toEqual({ attending: 1, fresh: 1 })
+    expect(s.classpassTotal).toBe(2)
+    expect(s.classpass).toEqual({ attending: 1, lapsed: 1 })
     expect(s.cleanupTotal).toBe(3)
     expect(s.cleanup).toEqual({ cooling: 1, dormant: 1, no_sale: 1 })
   })
 
-  it('ignores out-of-scope (member) contacts in both totals', () => {
+  it('ignores out-of-scope (member) contacts in every total', () => {
     const s = leadRadarSummary([
       contact({ glofox_membership_status: 'member' }),
       contact({ glofox_membership_status: 'credit_member' }),
     ], NOW)
     expect(s.funnelTotal).toBe(0)
+    expect(s.classpassTotal).toBe(0)
     expect(s.cleanupTotal).toBe(0)
   })
 })

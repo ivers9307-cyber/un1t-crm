@@ -9,6 +9,7 @@
 import {
   buildFunnel,
   buildCleanup,
+  buildClassPass,
   leadRadarSummary,
   computeLeadConversionStats,
   computeLeadTrend,
@@ -145,4 +146,20 @@ export async function loadCleanup(db, locationId, nowMs = Date.now()) {
   const rows = buildCleanup(contacts, nowMs).filter((r) => !triaged.has(r.contactId))
   const summary = leadRadarSummary(contacts, nowMs)
   return { cleanup: rows, summary: { ...summary, triaged: triaged.size } }
+}
+
+/**
+ * LEAD-CLASSPASS.1 — load the ClassPass list for a location: every
+ * classpass_payg non-member, most recently active first. Read-only —
+ * no action overlay, no snooze, no triage — so unlike loadFunnel /
+ * loadCleanup it skips the action-log fetch entirely. The API route
+ * paginates the returned list.
+ *
+ * @returns {Promise<{ classpass: object[], summary: object }>}
+ */
+export async function loadClassPass(db, locationId, nowMs = Date.now()) {
+  const contacts = await fetchNonMembers(db, locationId)
+  const classpass = buildClassPass(contacts, nowMs)
+  const summary = leadRadarSummary(contacts, nowMs)
+  return { classpass, summary }
 }

@@ -2,19 +2,22 @@
 
 // LEAD-RADAR.1 — the non-member triage radar dashboard.
 //
-// Two tabs:
-//   Funnel  — the live non-member cohort worth a follow-up, scored
-//             (ClassPass converts > trials > re-engaged > fresh),
-//             with per-contact "contacted" / "snooze" actions.
-//   Cleanup — the dormant lead/trial records, bucket-filterable, for
-//             bulk archive / keep triage.
+// Three tabs:
+//   Funnel    — the live non-member cohort worth chasing to convert,
+//               scored (trial attending > re-engaged > fresh), with
+//               per-contact "contacted" / "snooze" actions.
+//   ClassPass — read-only list of ClassPass drop-ins (LEAD-CLASSPASS.1).
+//               They rarely convert to a direct membership, so they
+//               sit out of the funnel — shown for awareness only.
+//   Cleanup   — the dormant lead/trial records, bucket-filterable, for
+//               bulk archive / keep triage.
 //
 // All data comes from /api/lead-radar/*; this component is pure UI +
 // fetch orchestration.
 
 import { useEffect, useState, useCallback } from 'react'
 import {
-  Radar, UserPlus, Clock, Activity, Sparkles, Phone, BellOff,
+  Radar, CreditCard, Clock, Activity, Sparkles, Phone, BellOff,
   Check, Filter, Users, TrendingUp,
 } from 'lucide-react'
 
@@ -25,7 +28,6 @@ const TIER_STYLE = {
 }
 
 const SIGNAL_ICON = {
-  classpass_convert: UserPlus,
   trial_convert: Clock,
   reengaged: Activity,
   fresh_signup: Sparkles,
@@ -36,6 +38,13 @@ const CLEANUP_BUCKETS = [
   { key: 'cooling', label: 'Cooling' },
   { key: 'dormant', label: 'Dormant' },
   { key: 'no_sale', label: 'No-sale' },
+]
+
+// LEAD-CLASSPASS.1 — filters for the read-only ClassPass tab.
+const CLASSPASS_FILTERS = [
+  { key: 'all',       label: 'All' },
+  { key: 'attending', label: 'Attending' },
+  { key: 'lapsed',    label: 'Lapsed' },
 ]
 
 function timeAgo(iso) {
@@ -56,6 +65,8 @@ export default function LeadRadar() {
   const [funnel, setFunnel] = useState(null)
   const [cleanup, setCleanup] = useState(null)
   const [cleanupBucket, setCleanupBucket] = useState('all')
+  const [classpass, setClasspass] = useState(null)
+  const [classpassFilter, setClasspassFilter] = useState('all')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [busy, setBusy] = useState(null)
@@ -88,10 +99,25 @@ export default function LeadRadar() {
     }
   }, [])
 
+  const loadClassPassList = useCallback(async (filter) => {
+    try {
+      const qs = filter && filter !== 'all' ? `?filter=${filter}` : ''
+      const r = await fetch(`/api/lead-radar/classpass${qs}`, { cache: 'no-store' })
+      const j = await r.json()
+      if (!r.ok || !j.success) throw new Error(j.error || 'Failed to load ClassPass')
+      setClasspass(j.data)
+    } catch (e) {
+      setError(e.message)
+    }
+  }, [])
+
   useEffect(() => { loadFunnel() }, [loadFunnel])
   useEffect(() => {
     if (tab === 'cleanup') { setSelected(new Set()); loadCleanup(cleanupBucket) }
   }, [tab, cleanupBucket, loadCleanup])
+  useEffect(() => {
+    if (tab === 'classpass') loadClassPassList(classpassFilter)
+  }, [tab, classpassFilter, loadClassPassList])
 
   function showFlash(msg, ok = true) {
     setFlash({ msg, ok })
@@ -153,6 +179,7 @@ export default function LeadRadar() {
   const summary = funnel?.summary || {
     funnelTotal: 0, funnel: { attending: 0, fresh: 0 },
     cleanupTotal: 0, cleanup: { cooling: 0, dormant: 0, no_sale: 0 }, snoozed: 0,
+    classpassTotal: 0, classpass: { attending: 0, lapsed: 0 },
     conversion: { contacted: 0, progressed: 0, progressionRate: 0 },
     trend: null,
   }
@@ -176,13 +203,15 @@ export default function LeadRadar() {
       )}
 
       {/* Summary cards */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 mb-6">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-5 mb-6">
         <StatCard label="Funnel" value={summary.funnelTotal} accent="green"
           breakdown="live — worth a follow-up" delta={td?.funnelTotal} />
         <StatCard label="Attending" value={summary.funnel?.attending || 0}
           breakdown="recent class activity" delta={td?.attending} deltaGoodDir="up" />
         <StatCard label="Fresh" value={summary.funnel?.fresh || 0}
           breakdown="joined recently, no visit" delta={td?.fresh} deltaGoodDir="up" />
+        <StatCard label="ClassPass" value={summary.classpassTotal}
+          breakdown={`${summary.classpass?.attending || 0} attending recently`} />
         <StatCard label="Cleanup" value={summary.cleanupTotal} accent="amber"
           breakdown="dormant — archive candidates" delta={td?.cleanupTotal} deltaGoodDir="down" />
       </div>
@@ -204,6 +233,8 @@ export default function LeadRadar() {
       <div className="flex gap-1 border-b border-un1t-gray mb-4">
         <Tab active={tab === 'funnel'} onClick={() => setTab('funnel')}
           icon={Radar} label={`Funnel (${funnel?.funnel?.length || 0})`} />
+        <Tab active={tab === 'classpass'} onClick={() => setTab('classpass')}
+          icon={CreditCard} label={`ClassPass (${summary.classpassTotal})`} />
         <Tab active={tab === 'cleanup'} onClick={() => setTab('cleanup')}
           icon={Filter} label={`Cleanup (${summary.cleanupTotal})`} />
       </div>
@@ -211,6 +242,11 @@ export default function LeadRadar() {
       {tab === 'funnel' && (
         <FunnelList rows={funnel?.funnel || []} busy={busy} onAction={runAction}
           snoozed={summary.snoozed} />
+      )}
+
+      {tab === 'classpass' && (
+        <ClassPass data={classpass} filter={classpassFilter}
+          onFilter={setClasspassFilter} summary={summary} />
       )}
 
       {tab === 'cleanup' && (
@@ -440,6 +476,97 @@ function CleanupList({ data, selected, busy, onToggle, onSelectAll, onTriage }) 
               </p>
             </div>
             <Users size={14} className="shrink-0 text-un1t-mid" />
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
+// ── classpass (LEAD-CLASSPASS.1) ─────────────────────────────────
+// Read-only awareness tab. ClassPass drop-ins rarely convert to a
+// direct membership, so they sit out of the funnel — there are no
+// triage actions here, just a filterable list.
+
+function ClassPass({ data, filter, onFilter, summary }) {
+  const cp = summary.classpass || { attending: 0, lapsed: 0 }
+  const countFor = (key) => key === 'attending'
+    ? cp.attending
+    : key === 'lapsed'
+      ? cp.lapsed
+      : summary.classpassTotal
+
+  return (
+    <div>
+      <p className="mb-3 rounded-lg border border-un1t-gray bg-un1t-dark p-3 text-xs text-un1t-light">
+        ClassPass drop-ins pay per visit through ClassPass and rarely convert to a
+        direct membership, so they sit outside the Funnel. This list is{' '}
+        <strong>read-only</strong> — for awareness, not a follow-up queue.{' '}
+        <em>Attending</em> means a class in the last 90 days.
+      </p>
+
+      {/* Attending / lapsed filter */}
+      <div className="mb-3 flex flex-wrap gap-1.5">
+        {CLASSPASS_FILTERS.map((f) => (
+          <button
+            key={f.key}
+            type="button"
+            onClick={() => onFilter(f.key)}
+            className={`rounded-md px-2.5 py-1 text-xs font-medium ${
+              filter === f.key
+                ? 'bg-un1t-white text-un1t-black'
+                : 'border border-un1t-gray text-un1t-light hover:text-un1t-white'
+            }`}
+          >
+            {f.label} ({countFor(f.key)})
+          </button>
+        ))}
+      </div>
+
+      {data === null ? (
+        <p className="text-sm text-un1t-light">Loading ClassPass…</p>
+      ) : data.items.length === 0 ? (
+        <div className="rounded-2xl border border-dashed border-un1t-gray p-10 text-center">
+          <CreditCard size={28} className="mx-auto text-un1t-light" />
+          <p className="mt-3 font-medium text-un1t-white">No ClassPass contacts here</p>
+          <p className="mt-1 text-sm text-un1t-light">Nothing matches this filter.</p>
+        </div>
+      ) : (
+        <ClassPassList data={data} />
+      )}
+    </div>
+  )
+}
+
+function ClassPassList({ data }) {
+  const items = data.items
+  return (
+    <div>
+      {data.total > items.length && (
+        <p className="mb-2 text-xs text-un1t-mid">
+          Showing {items.length} of {data.total.toLocaleString('en-IE')} — narrow with the filter.
+        </p>
+      )}
+      <ul className="space-y-1.5">
+        {items.map((c) => (
+          <li key={c.contactId}
+            className="flex items-center gap-3 rounded-lg border border-un1t-gray bg-un1t-dark p-3">
+            <div className="min-w-0 flex-1">
+              <a href={`/contacts/${c.contactId}`} className="text-sm font-medium text-un1t-white hover:underline">
+                {c.name}
+              </a>
+              <p className="text-xs text-un1t-light">
+                {c.daysSinceActivity != null
+                  ? `last class ${c.daysSinceActivity}d ago`
+                  : 'no class activity'}
+                {' · joined '}{formatJoined(c.joinedAt)}
+              </p>
+            </div>
+            <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${
+              c.attending ? 'bg-green-100 text-green-700' : 'bg-un1t-gray text-un1t-light'
+            }`}>
+              {c.attending ? 'Attending' : 'Lapsed'}
+            </span>
           </li>
         ))}
       </ul>
