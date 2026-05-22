@@ -179,11 +179,15 @@ export default function ChurnRadar() {
     activeBase: 0, atRisk: 0, highRisk: 0, quarantine: 0, paused: 0, overdue: 0,
     snoozed: 0, revenueAtRiskCents: 0, overdueValueCents: 0,
     recovery: { contacted: 0, recovered: 0, recoveryRate: 0 },
+    trend: null,
     bySegment: { member: {}, credit: {} },
   }
   const seg = summary.bySegment || { member: {}, credit: {} }
   const splitLine = (key) =>
     `${seg.member?.[key] || 0} members · ${seg.credit?.[key] || 0} packs`
+  // RADAR-TREND.1 — week-over-week deltas, null until the first
+  // weekly snapshot exists.
+  const td = summary.trend?.deltas || null
 
   return (
     <div>
@@ -205,13 +209,20 @@ export default function ChurnRadar() {
           subscriptions vs class packs. Overdue is a chase-list of
           members whose payment has failed. */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-7 mb-6">
-        <StatCard label="Active base" value={summary.activeBase} breakdown={splitLine('activeBase')} />
-        <StatCard label="At risk" value={summary.atRisk} accent="amber" breakdown={splitLine('atRisk')} />
-        <StatCard label="Revenue at risk" value={formatMoney(summary.revenueAtRiskCents)} accent="amber" breakdown="per month, at-risk" />
-        <StatCard label="High risk" value={summary.highRisk} accent="red" />
-        <StatCard label="Overdue" value={summary.overdue} accent="red" breakdown={`${formatMoney(summary.overdueValueCents)}/mo owed`} />
-        <StatCard label="Paused" value={summary.paused} breakdown="planned freeze" />
-        <StatCard label="Quarantine" value={summary.quarantine} />
+        <StatCard label="Active base" value={summary.activeBase} breakdown={splitLine('activeBase')}
+          delta={td?.activeBase} deltaGoodDir="up" />
+        <StatCard label="At risk" value={summary.atRisk} accent="amber" breakdown={splitLine('atRisk')}
+          delta={td?.atRisk} deltaGoodDir="down" />
+        <StatCard label="Revenue at risk" value={formatMoney(summary.revenueAtRiskCents)} accent="amber" breakdown="per month, at-risk"
+          delta={td?.revenueAtRiskCents} deltaGoodDir="down" deltaIsMoney />
+        <StatCard label="High risk" value={summary.highRisk} accent="red"
+          delta={td?.highRisk} deltaGoodDir="down" />
+        <StatCard label="Overdue" value={summary.overdue} accent="red" breakdown={`${formatMoney(summary.overdueValueCents)}/mo owed`}
+          delta={td?.overdue} deltaGoodDir="down" />
+        <StatCard label="Paused" value={summary.paused} breakdown="planned freeze"
+          delta={td?.paused} />
+        <StatCard label="Quarantine" value={summary.quarantine}
+          delta={td?.quarantine} deltaGoodDir="down" />
       </div>
 
       {/* RADAR-OUTCOMES.1 — closes the loop: of everyone the operator
@@ -271,7 +282,7 @@ const ACTION_DONE = {
 
 // ── small pieces ─────────────────────────────────────────────────
 
-function StatCard({ label, value, accent, breakdown }) {
+function StatCard({ label, value, accent, breakdown, delta, deltaGoodDir, deltaIsMoney }) {
   const valueCls = accent === 'red' ? 'text-red-600'
     : accent === 'amber' ? 'text-amber-600' : 'text-un1t-white'
   return (
@@ -279,7 +290,28 @@ function StatCard({ label, value, accent, breakdown }) {
       <p className="text-xs text-un1t-light">{label}</p>
       <p className={`mt-1 text-2xl font-bold tabular-nums ${valueCls}`}>{value}</p>
       {breakdown && <p className="mt-0.5 text-[11px] text-un1t-mid">{breakdown}</p>}
+      <TrendDelta delta={delta} goodDir={deltaGoodDir} money={deltaIsMoney} />
     </div>
+  )
+}
+
+// RADAR-TREND.1 — week-over-week delta line under a stat value.
+// Coloured good / bad when a direction is given (e.g. a falling
+// at-risk count is good); muted for no-change or no-direction.
+function TrendDelta({ delta, goodDir, money }) {
+  if (!Number.isFinite(delta)) return null  // no snapshot to compare yet
+  if (delta === 0) {
+    return <p className="mt-0.5 text-[11px] text-un1t-mid">— no change vs last week</p>
+  }
+  const up = delta > 0
+  let cls = 'text-un1t-mid'
+  if (goodDir === 'up') cls = up ? 'text-green-600' : 'text-red-600'
+  else if (goodDir === 'down') cls = up ? 'text-red-600' : 'text-green-600'
+  const mag = money ? formatMoney(Math.abs(delta)) : Math.abs(delta)
+  return (
+    <p className={`mt-0.5 text-[11px] font-medium ${cls}`}>
+      {up ? '▲' : '▼'} {mag} vs last week
+    </p>
   )
 }
 

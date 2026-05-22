@@ -552,3 +552,41 @@ export function computeRecoveryStats(contacts, actions, nowMs = Date.now()) {
     recoveryRate: contacted > 0 ? recovered / contacted : 0,
   }
 }
+
+// ── trend ────────────────────────────────────────────────────────
+// RADAR-TREND.1 — week-over-week movement. computeTrend diffs the
+// live summary against the most recent weekly snapshot so the summary
+// cards can show "Active base 268, down 4 since last week" instead of
+// a bare count with no context.
+
+// Summary metric (camelCase) → churn_radar_snapshots column it
+// compares against (snake_case — the snapshot comes straight off DB).
+const TREND_METRICS = Object.freeze({
+  activeBase:         'active_base',
+  atRisk:             'at_risk',
+  highRisk:           'high_risk',
+  overdue:            'overdue',
+  paused:             'paused',
+  quarantine:         'quarantine',
+  revenueAtRiskCents: 'revenue_at_risk_cents',
+  overdueValueCents:  'overdue_value_cents',
+})
+
+/**
+ * Week-over-week deltas: the live summary minus the most recent
+ * weekly snapshot. Each delta is (now − then) — positive means the
+ * metric grew. Returns null when there is no snapshot to compare
+ * against yet (the first week, before the cron has run).
+ *
+ * @param {object} summary        live radarSummary output (camelCase)
+ * @param {object|null} snapshot  a churn_radar_snapshots row, or null
+ * @returns {{ since: string|null, deltas: object }|null}
+ */
+export function computeTrend(summary, snapshot) {
+  if (!summary || !snapshot) return null
+  const deltas = {}
+  for (const [metric, col] of Object.entries(TREND_METRICS)) {
+    deltas[metric] = (Number(summary[metric]) || 0) - (Number(snapshot[col]) || 0)
+  }
+  return { since: snapshot.captured_at || null, deltas }
+}
