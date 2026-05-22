@@ -29,6 +29,10 @@ const MEMBER_COLUMNS =
 
 const CONTACTING_ACTIONS = ['contacted', 'task_assigned', 'winback_sent']
 
+// Actions that triage a quarantine record — once a member carries one
+// they're off the quarantine backlog (kept, or marked stale).
+const QUARANTINE_TRIAGE_ACTIONS = ['quarantine_stale', 'quarantine_keep']
+
 /**
  * Fetch every paying member at a location. Paginated — the member
  * base can exceed Supabase's ~1000-row response cap.
@@ -82,11 +86,13 @@ export async function loadRadar(db, locationId, nowMs = Date.now()) {
   // Actions are newest-first — first hit per contact is the latest.
   const lastContacted = new Map()
   const snoozedUntil = new Map()
+  const triaged = new Set()
   for (const a of actions) {
     if (a.action === 'snoozed' && a.snooze_until) {
       const cur = snoozedUntil.get(a.contact_id)
       if (!cur || a.snooze_until > cur) snoozedUntil.set(a.contact_id, a.snooze_until)
     }
+    if (QUARANTINE_TRIAGE_ACTIONS.includes(a.action)) triaged.add(a.contact_id)
     if (CONTACTING_ACTIONS.includes(a.action) && !lastContacted.has(a.contact_id)) {
       lastContacted.set(a.contact_id, { action: a.action, at: a.created_at })
     }
@@ -101,8 +107,15 @@ export async function loadRadar(db, locationId, nowMs = Date.now()) {
     radar.push({ ...r, lastContacted: lastContacted.get(r.contactId) || null })
   }
 
+  // radarSummary counts every no-footprint member as quarantine; a
+  // member that's already been triaged is off the backlog, so subtract
+  // them — the badge + card then match the visible quarantine list.
   const summary = radarSummary(members, nowMs)
-  return { radar, summary: { ...summary, snoozed } }
+  let quarantineOpen = 0
+  for (const c of members) {
+    if (!triaged.has(c.id) && classifyContact(c) === 'quarantine') quarantineOpen++
+  }
+  return { radar, summary: { ...summary, quarantine: quarantineOpen, snoozed } }
 }
 
 /**
@@ -116,7 +129,7 @@ export async function loadQuarantine(db, locationId) {
   ])
   const triaged = new Set(
     actions
-      .filter((a) => a.action === 'quarantine_stale' || a.action === 'quarantine_keep')
+      .filter((a) => QUARANTINE_TRIAGE_ACTIONS.includes(a.action))
       .map((a) => a.contact_id),
   )
   return members
