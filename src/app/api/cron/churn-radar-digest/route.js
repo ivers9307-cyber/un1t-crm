@@ -1,10 +1,15 @@
-// RADAR-DIGEST.1 — weekly churn-radar email digest cron.
+// RADAR-DIGEST.1 / LEAD-DIGEST.1 — weekly radar email digest cron.
 //
-// Runs Monday 07:00 UTC — one hour after churn-radar-snapshot, so the
-// digest's trend trail includes the snapshot just written. For every
-// active location that has configured digest recipients, it computes
-// the live radar summary, pulls the recent snapshot history, composes
-// the digest email and sends it to each recipient.
+// Runs Monday 07:00 UTC — one hour after churn-radar-snapshot and
+// lead-radar-snapshot, so the digest's trend trails include the
+// snapshots just written. For every active location that has configured
+// digest recipients, it computes the live churn + lead summaries, pulls
+// the recent snapshot history for each, composes one combined digest
+// email and sends it to each recipient.
+//
+// LEAD-DIGEST.1 folded the Lead Radar funnel into this same email — the
+// lead block is best-effort, so a lead-radar failure degrades the email
+// to churn-only rather than blocking the send.
 //
 // Auth: same CRON_SECRET pattern as the other Vercel crons.
 
@@ -14,6 +19,7 @@ import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { sendEmail } from '@/lib/postmark'
 import { getAppUrl } from '@/lib/app-url'
 import { loadRadar } from '@/lib/churn-radar-data'
+import { loadFunnel } from '@/lib/lead-radar-data'
 import { buildDigestEmail } from '@/lib/churn-radar-digest'
 
 export const runtime = 'nodejs'
@@ -38,6 +44,7 @@ export async function GET(request) {
   }
 
   const radarUrl = `${getAppUrl()}/churn-radar`
+  const leadRadarUrl = `${getAppUrl()}/lead-radar`
   let emailsSent = 0
   const perLocation = []
 
@@ -60,16 +67,38 @@ export async function GET(request) {
         .limit(5)
       const ordered = (history || []).slice().reverse()
 
+      // LEAD-DIGEST.1 — lead funnel block. Best-effort: a lead-radar
+      // failure must not block the churn digest, so it is caught here
+      // and the email degrades to churn-only.
+      let lead = null
+      try {
+        const { summary: leadSummary } = await loadFunnel(db, loc.id)
+        const { data: leadHistory } = await db
+          .from('lead_radar_snapshots')
+          .select('captured_at, funnel_total, attending, fresh, cleanup_total')
+          .eq('location_id', loc.id)
+          .order('captured_at', { ascending: false })
+          .limit(5)
+        lead = {
+          summary: leadSummary,
+          history: (leadHistory || []).slice().reverse(),
+        }
+      } catch (leadErr) {
+        console.warn(`[cron][churn-radar-digest] lead block failed for ${loc.id}: ${leadErr.message}`)
+      }
+
       const { subject, html } = buildDigestEmail(summary, ordered, {
         locationName: loc.name,
         radarUrl,
+        leadRadarUrl,
+        lead,
       })
 
       for (const to of recipients) {
         await sendEmail({ to, subject, htmlBody: html, stream: 'outbound', tag: 'churn-radar-digest' })
         emailsSent++
       }
-      perLocation.push({ location_id: loc.id, location_name: loc.name, recipients: recipients.length, ok: true })
+      perLocation.push({ location_id: loc.id, location_name: loc.name, recipients: recipients.length, lead: !!lead, ok: true })
     } catch (e) {
       // One bad location can't stall the rest of the sweep.
       perLocation.push({ location_id: loc.id, location_name: loc.name, ok: false, error: e.message })
