@@ -77,6 +77,13 @@ export default function More() {
   // NOTIF.2 — Tasks lives in More (less time-sensitive than Bookings,
   // which is a bottom tab). Gate on the same key the back-end uses.
   const showTasks = profile && canMobile(profile, 'tasks', activeLocation)
+  // MOBILE-RADAR — the read-only radar glance. Visible when the user
+  // has either mobile radar permission; the screen renders only the
+  // section(s) they're entitled to.
+  const showRadar = !!profile && (
+    canMobile(profile, 'churn_radar', activeLocation) ||
+    canMobile(profile, 'lead_radar', activeLocation)
+  )
 
   // POLICIES-VIEWS.1 — outstanding policies the user hasn't opened
   // yet. Re-fetched on each focus so opening a policy in the viewer
@@ -146,6 +153,19 @@ export default function More() {
             icon="checkbox-outline"
             label="Your tasks"
             onPress={() => router.push('/tasks')}
+            isLast
+          />
+        </Section>
+      )}
+
+      {/* MOBILE-RADAR — read-only churn + lead radar glance. Oversight,
+          not personal work, so it gets its own section. */}
+      {showRadar && (
+        <Section title="Insights">
+          <Row
+            icon="pulse-outline"
+            label="Radar"
+            onPress={() => router.push('/radar')}
             isLast
           />
         </Section>

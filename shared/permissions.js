@@ -250,6 +250,16 @@ export const MOBILE_PERMISSIONS = Object.freeze([
   { key: 'bookings',           label: 'Bookings (today/tomorrow)', hint: "Operator view of today's and tomorrow's bookings",            webEquivalent: 'bookings' },
   { key: 'time_off',           label: 'Time Off Requests',        hint: 'Submit and view leave requests',                                webEquivalent: 'schedule' },
   { key: 'assistant',          label: 'AI Assistant',             hint: 'Use the in-app assistant from mobile',                          webEquivalent: 'assistant' },
+  // MOBILE-RADAR — read-only glance mirrors of the web radars. The
+  // full triage dashboards (scoring, win-back, quarantine/cleanup)
+  // stay desktop-only; mobile gets a headline-numbers + weekly-trend
+  // view reached from the More tab. Separate .mobile toggle so an
+  // operator can grant the phone glance independently of the desktop
+  // dashboard. Owner + head_coach by default, mirroring the web
+  // churn_radar / lead_radar permissions; webEquivalent links them
+  // for the parity linter.
+  { key: 'churn_radar',        label: 'Churn Radar (glance)',     hint: 'Read-only at-risk member summary — counts + weekly trend. Triage stays on web.', webEquivalent: 'churn_radar' },
+  { key: 'lead_radar',         label: 'Lead Radar (glance)',      hint: 'Read-only lead funnel summary — counts + weekly trend. Triage stays on web.',    webEquivalent: 'lead_radar' },
   // Mig 093: door_unlock was promoted to a cross-platform key
   // named `studio_management` (lives in WEB_PERMISSIONS, top-level
   // on profiles.permissions — same shape as dashboard_*). Both
@@ -291,6 +301,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     schedule: true, pipeline: true, whatsapp: true,
     tasks: true, bookings: true,
     time_off: true, assistant: true,
+    churn_radar: true, lead_radar: true,
     push_notifications: true,
     notify_time_off: true, notify_schedule: true, notify_swap: true,
     notify_lead: true, notify_whatsapp: true,
@@ -306,6 +317,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     // surfaced through the manager/head_coach defaults below.
     tasks: true, bookings: false,
     time_off: true, assistant: false,
+    churn_radar: false, lead_radar: false,  // retention/acquisition oversight — not a staff surface
     push_notifications: true,
     notify_time_off: true, notify_schedule: true, notify_swap: true,
     notify_lead: false, notify_whatsapp: false,
@@ -318,6 +330,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     schedule: true, pipeline: true, whatsapp: true,
     tasks: true, bookings: true,
     time_off: true, assistant: true,
+    churn_radar: true, lead_radar: true,    // head coaches own retention + conversion
     push_notifications: true,
     notify_time_off: true, notify_schedule: true, notify_swap: true,
     notify_lead: true, notify_whatsapp: true,
@@ -330,6 +343,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     schedule: true, pipeline: true, whatsapp: true,
     tasks: true, bookings: true,
     time_off: true, assistant: true,
+    churn_radar: false, lead_radar: false,  // owner + head_coach by default; grant per-user if needed
     push_notifications: true,
     notify_time_off: true, notify_schedule: true, notify_swap: true,
     notify_lead: true, notify_whatsapp: true,
@@ -342,6 +356,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     schedule: true, pipeline: true, whatsapp: true,
     tasks: true, bookings: true,
     time_off: true, assistant: true,
+    churn_radar: true, lead_radar: true,
     push_notifications: true,
     notify_time_off: true, notify_schedule: true, notify_swap: true,
     notify_lead: true, notify_whatsapp: true,

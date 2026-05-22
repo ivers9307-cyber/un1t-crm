@@ -27,6 +27,7 @@
 
 import {
   DEFAULT_WEB_PERMISSIONS_BY_ROLE,
+  DEFAULT_MOBILE_PERMISSIONS_BY_ROLE,
   resolvePermission,
 } from '@shared/permissions'
 
@@ -53,6 +54,37 @@ export function hasPermission(user, key) {
     location: user.activeLocation,
     permissions: user.activeAssignment?.permissions || {},
     defaults: DEFAULT_WEB_PERMISSIONS_BY_ROLE,
+    key,
+  })
+}
+
+/**
+ * Server-side mobile permission check — the `.mobile`-namespaced
+ * mirror of hasPermission(). Used by /api/mobile/* routes that gate
+ * on a mobile feature toggle (e.g. the read-only radar glance)
+ * rather than the web sidebar permission.
+ *
+ * Reads the per-user override from
+ * `user.activeAssignment.permissions.mobile` and falls back to the
+ * mobile role defaults — identical resolution to canMobile() in
+ * mobile/lib/permissions.js, so web and mobile gates can't drift.
+ *
+ * Note there is no `settings` escape hatch here — the mobile app has
+ * no feature-toggle UI, so master gets no special-case (the shared
+ * resolver still short-circuits master once the location gate passes).
+ *
+ * @param {{role: string, activeLocation?: object, activeAssignment?: {permissions?: object}|null}|null|undefined} user
+ * @param {string} key  e.g. 'churn_radar', 'lead_radar', 'pipeline'
+ * @returns {boolean}
+ */
+export function hasMobilePermission(user, key) {
+  if (!user) return false
+
+  return resolvePermission({
+    role: user.role,
+    location: user.activeLocation,
+    permissions: user.activeAssignment?.permissions?.mobile || {},
+    defaults: DEFAULT_MOBILE_PERMISSIONS_BY_ROLE,
     key,
   })
 }

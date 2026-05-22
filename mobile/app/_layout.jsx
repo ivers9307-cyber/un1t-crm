@@ -98,6 +98,7 @@ export default function RootLayout() {
             <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
             <Stack.Screen name="tasks" options={{ headerShown: false }} />
             <Stack.Screen name="bookings" options={{ headerShown: false }} />
+            <Stack.Screen name="radar" options={{ headerShown: false }} />
           </Stack>
         </AuthProvider>
       </SafeAreaProvider>
