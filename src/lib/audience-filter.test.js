@@ -156,6 +156,11 @@ describe('applyAudienceFilter', () => {
     expect(q.calls).toEqual([['eq', 'glofox_membership_type', 'num_classes']])
   })
 
+  it('applies glofox_membership_state eq for an overdue (locked) segment', () => {
+    applyAudienceFilter(q.query, { filters: [{ field: 'glofox_membership_state', op: 'eq', value: 'locked' }] })
+    expect(q.calls).toEqual([['eq', 'glofox_membership_state', 'locked']])
+  })
+
   it('coerces glofox_membership_price_cents gt to a number', () => {
     applyAudienceFilter(q.query, { filters: [{ field: 'glofox_membership_price_cents', op: 'gt', value: '10000' }] })
     expect(q.calls).toEqual([['gt', 'glofox_membership_price_cents', 10000]])
