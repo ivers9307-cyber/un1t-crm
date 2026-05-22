@@ -4,12 +4,15 @@
 // rows and the action log, calls these to score, then applies snooze
 // filtering on top.
 //
-// Scope (shaped by the data — see SESSION_STATE.md): of ~1,074
-// members tagged member/credit_member in Glofox, only ~226 have any
-// class activity. The radar scores ONLY that active base. The rest —
-// members with no attendance and no booking footprint — are routed
-// to Quarantine for a one-off "are these real?" triage, never the
-// daily radar (an 800-row list is noise, not a radar).
+// Scope (shaped by the data — see SESSION_STATE.md): glofox_membership
+// _status (member / credit_member) is a STALE lifecycle label — it
+// outlives the membership it names. Of ~1,074 contacts carrying it,
+// hundreds are spent class packs, PAYG drop-ins or lapsed subs with
+// no live membership at all. classifyContact() applies a live-
+// membership gate (see hasLiveMembership) so the active base is only
+// genuine members: live subscriptions + class packs with credits
+// left. Members with a live membership but no attendance/booking
+// footprint go to Quarantine for a one-off "are these real?" triage.
 //
 // Three data-backed signals:
 //   - Gone quiet   — attended before, but not in the last 14-45 days.
@@ -26,12 +29,13 @@
 export const MEMBER_STATUSES = Object.freeze(['member', 'credit_member'])
 
 // Membership lifecycle states (contacts.glofox_membership_state —
-// from member.membership.status in Glofox) that take a member off the
-// radar. A paused membership is a planned freeze; a cancelled/expired
-// one has already lapsed. Neither is "at churn risk". Anything else —
-// active, or an unrecognised/missing value — is scored normally.
-const OFF_RADAR_MEMBERSHIP_STATES = Object.freeze([
-  'paused', 'cancelled', 'expired', 'frozen', 'suspended',
+// from member.membership.status in Glofox) that mean the membership
+// has ENDED. For a subscription these take the contact off the active
+// base entirely — an ended membership is not a member. 'paused' and
+// 'locked' are deliberately NOT here: a paused membership is a live
+// planned freeze, and a locked one is a live membership in arrears.
+const MEMBERSHIP_ENDED_STATES = Object.freeze([
+  'cancelled', 'expired', 'frozen', 'suspended',
 ])
 
 // Gone-quiet window. Below MIN they're still attending normally;
@@ -92,24 +96,61 @@ export function monthlyValueCents(contact) {
 }
 
 /**
+ * Does this contact hold a membership that is actually live right now?
+ *
+ * glofox_membership_status (member / credit_member) is a stale
+ * lifecycle LABEL — it sticks around long after the membership it
+ * names has been used up or lapsed. The authoritative signal is the
+ * membership TYPE plus its state / remaining credits:
+ *
+ *   num_classes (class pack)      — live only while credits remain.
+ *   payg (drop-in)                — never a membership; pay-per-class.
+ *   time (subscription) / unknown — live unless the state says the
+ *                                   membership has ended. active /
+ *                                   paused / locked all count as live.
+ */
+export function hasLiveMembership(contact) {
+  if (!contact) return false
+  const type = typeof contact.glofox_membership_type === 'string'
+    ? contact.glofox_membership_type.toLowerCase()
+    : null
+  if (type === 'num_classes') {
+    return Number(contact.trial_credits_remaining) > 0
+  }
+  if (type === 'payg') return false
+  const state = typeof contact.glofox_membership_state === 'string'
+    ? contact.glofox_membership_state.toLowerCase()
+    : null
+  return !(state && MEMBERSHIP_ENDED_STATES.includes(state))
+}
+
+/**
  * Classify a contact relative to the radar:
- *   'out'        — not a paying member; not in scope at all.
- *   'paused'     — paying member whose membership is paused / cancelled
- *                  / expired — a planned freeze or already lapsed, so
- *                  excluded from the radar (not at churn risk).
- *   'active'     — paying member with a live membership + an activity
- *                  footprint; scored.
- *   'quarantine' — paying member with zero attendance AND zero
+ *   'out'        — not a paying member, or no live membership at all
+ *                  (spent class pack, PAYG drop-in, lapsed sub). Not
+ *                  in scope.
+ *   'overdue'    — live subscription whose payment has failed (state =
+ *                  locked). They still hold a membership — they owe
+ *                  money on it. Own tab, own chase-list.
+ *   'paused'     — live membership on a planned freeze (state =
+ *                  paused). Counts as a member, off the at-risk radar.
+ *   'active'     — live membership + an activity footprint; scored.
+ *   'quarantine' — live membership with zero attendance AND zero
  *                  booking history; routed to triage, not the radar.
+ *
+ * 'overdue', 'paused', 'active' and 'quarantine' are all live members —
+ * together they make up the active base.
  */
 export function classifyContact(contact) {
   if (!contact || !MEMBER_STATUSES.includes(contact.glofox_membership_status)) {
     return 'out'
   }
+  if (!hasLiveMembership(contact)) return 'out'
   const state = typeof contact.glofox_membership_state === 'string'
     ? contact.glofox_membership_state.toLowerCase()
     : null
-  if (state && OFF_RADAR_MEMBERSHIP_STATES.includes(state)) return 'paused'
+  if (state === 'locked') return 'overdue'
+  if (state === 'paused') return 'paused'
   const hasFootprint = Boolean(contact.last_attended_at) || Boolean(contact.last_booked_at)
   return hasFootprint ? 'active' : 'quarantine'
 }
@@ -221,7 +262,7 @@ export function scoreMember(contact, nowMs = Date.now()) {
     })(),
     membershipStatus: contact.glofox_membership_status,
     membershipPlan: contact.glofox_membership_plan || null,
-    segment: contact.glofox_membership_status === 'credit_member' ? 'credit' : 'member',
+    segment: contact.glofox_membership_type === 'num_classes' ? 'credit' : 'member',
     monthlyValueCents: monthlyValueCents(contact),
     daysToRenewal: (() => {
       const d = daysSince(contact.glofox_membership_expiry, nowMs)
@@ -252,25 +293,41 @@ export function buildRadar(contacts, nowMs = Date.now()) {
 }
 
 /**
- * Counts for a contact batch — the radar denominator, how many are at
- * risk (and high-tier), the quarantine backlog and the paused count —
- * broken down by segment: monthly members vs credit-pack holders.
- * A churning monthly subscriber and a credit-pack holder running low
- * are different problems, so the summary keeps them distinct.
+ * Counts for a contact batch. The active base is every contact with a
+ * LIVE membership — active, paused, overdue (in arrears) and
+ * quarantine alike — because each of those holds a real membership.
+ * On top of that: how many are at risk (and high-tier), the
+ * quarantine backlog, the paused count, and the overdue chase-list
+ * (count + monthly value owed).
+ *
+ * Broken down by segment off the membership TYPE — subscription
+ * ('time' / unknown) vs class-pack ('num_classes') — because a
+ * churning monthly subscriber and a pack holder running low are
+ * different problems.
  */
 export function radarSummary(contacts, nowMs = Date.now()) {
   const blank = () => ({ activeBase: 0, atRisk: 0, highRisk: 0 })
   const bySegment = { member: blank(), credit: blank() }
   let quarantine = 0
   let paused = 0
+  let overdue = 0
   let revenueAtRiskCents = 0
+  let overdueValueCents = 0
   for (const c of contacts || []) {
     const cls = classifyContact(c)
+    if (cls === 'out') continue
+    // Every live member — active, paused, overdue or quarantine —
+    // counts toward the active base.
+    const seg = c.glofox_membership_type === 'num_classes' ? 'credit' : 'member'
+    bySegment[seg].activeBase++
     if (cls === 'quarantine') { quarantine++; continue }
     if (cls === 'paused') { paused++; continue }
-    if (cls !== 'active') continue
-    const seg = c.glofox_membership_status === 'credit_member' ? 'credit' : 'member'
-    bySegment[seg].activeBase++
+    if (cls === 'overdue') {
+      overdue++
+      overdueValueCents += monthlyValueCents(c)
+      continue
+    }
+    // cls === 'active' — scored on the at-risk radar.
     const r = scoreMember(c, nowMs)
     if (r) {
       bySegment[seg].atRisk++
@@ -284,9 +341,48 @@ export function radarSummary(contacts, nowMs = Date.now()) {
     highRisk: bySegment.member.highRisk + bySegment.credit.highRisk,
     quarantine,
     paused,
+    overdue,
     revenueAtRiskCents,
+    overdueValueCents,
     bySegment,
   }
+}
+
+// ── overdue ──────────────────────────────────────────────────────
+// OVERDUE.1 — live members in payment arrears (membership state =
+// locked). They still hold a membership; the billing has failed. The
+// operator wants a plain chase-list: who owes, how much per month is
+// at stake, how long they've been unpaid, and whether they're still
+// turning up (an easy save) or already gone.
+
+/**
+ * Build the overdue chase-list — live members whose payment has
+ * failed. Highest monthly value first, then longest unpaid.
+ */
+export function buildOverdue(contacts, nowMs = Date.now()) {
+  const rows = []
+  for (const c of contacts || []) {
+    if (classifyContact(c) !== 'overdue') continue
+    const dPay = daysSince(c.last_payment_at, nowMs)
+    const dAtt = daysSince(c.last_attended_at, nowMs)
+    rows.push({
+      contactId: c.id,
+      name: c.name || 'Member',
+      membershipStatus: c.glofox_membership_status,
+      membershipPlan: c.glofox_membership_plan || null,
+      segment: c.glofox_membership_type === 'num_classes' ? 'credit' : 'member',
+      monthlyValueCents: monthlyValueCents(c),
+      lastPaymentAt: c.last_payment_at || null,
+      daysSincePayment: dPay == null ? null : Math.floor(dPay),
+      lastAttendedAt: c.last_attended_at || null,
+      daysSinceAttended: dAtt == null ? null : Math.floor(dAtt),
+    })
+  }
+  rows.sort((a, b) => {
+    if (b.monthlyValueCents !== a.monthlyValueCents) return b.monthlyValueCents - a.monthlyValueCents
+    return (b.daysSincePayment ?? -1) - (a.daysSincePayment ?? -1)
+  })
+  return rows
 }
 
 // ── win-back ─────────────────────────────────────────────────────

@@ -8,19 +8,24 @@
 import {
   buildRadar,
   buildWinback,
+  buildOverdue,
   radarSummary,
   classifyContact,
   MEMBER_STATUSES,
 } from '@/lib/churn-radar'
 
-// Columns the scorer + UI need from contacts.
+// Columns the scorer + UI need from contacts. glofox_membership_type
+// and trial_credits_remaining drive the live-membership gate (a class
+// pack is only live while credits remain); last_payment_at backs the
+// overdue chase-list.
 const MEMBER_COLUMNS =
   'id, name, glofox_membership_status, glofox_membership_plan, ' +
-  'glofox_membership_state, glofox_membership_expiry, ' +
-  'glofox_membership_price_cents, glofox_billing_interval, ' +
-  'last_attended_at, last_booked_at, total_attended_30d, ' +
-  'total_attended_7d, total_noshow_30d, total_bookings_30d, ' +
-  'joined_at, lifetime_value_cents'
+  'glofox_membership_type, glofox_membership_state, ' +
+  'glofox_membership_expiry, glofox_membership_price_cents, ' +
+  'glofox_billing_interval, trial_credits_remaining, ' +
+  'last_attended_at, last_booked_at, last_payment_at, ' +
+  'total_attended_30d, total_attended_7d, total_noshow_30d, ' +
+  'total_bookings_30d, joined_at, lifetime_value_cents'
 
 const CONTACTING_ACTIONS = ['contacted', 'task_assigned', 'winback_sent']
 
@@ -126,6 +131,36 @@ export async function loadQuarantine(db, locationId) {
     }))
     // Longest-tenured first — those are the most likely stale records.
     .sort((a, b) => new Date(a.joinedAt || 0) - new Date(b.joinedAt || 0))
+}
+
+/**
+ * Load the overdue chase-list — live members whose payment has failed
+ * (membership state = locked). Each row carries its most recent
+ * contacting action so the operator can see who's already been
+ * chased. No snooze filtering — a debt doesn't snooze.
+ *
+ * @returns {Promise<{ overdue: object[], summary: object }>}
+ */
+export async function loadOverdue(db, locationId, nowMs = Date.now()) {
+  const [members, actions] = await Promise.all([
+    fetchMembers(db, locationId),
+    fetchActions(db, locationId),
+  ])
+
+  // Actions are newest-first — first hit per contact is the latest.
+  const lastContacted = new Map()
+  for (const a of actions) {
+    if (CONTACTING_ACTIONS.includes(a.action) && !lastContacted.has(a.contact_id)) {
+      lastContacted.set(a.contact_id, { action: a.action, at: a.created_at })
+    }
+  }
+
+  const overdue = buildOverdue(members, nowMs).map((r) => ({
+    ...r,
+    lastContacted: lastContacted.get(r.contactId) || null,
+  }))
+  const totalValueCents = overdue.reduce((sum, r) => sum + (r.monthlyValueCents || 0), 0)
+  return { overdue, summary: { total: overdue.length, totalValueCents } }
 }
 
 // WINBACK.1 — statuses a former member can carry. ex_member is in

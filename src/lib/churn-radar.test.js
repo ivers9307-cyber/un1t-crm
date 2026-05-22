@@ -4,9 +4,11 @@
 import { describe, it, expect } from 'vitest'
 import {
   classifyContact,
+  hasLiveMembership,
   scoreMember,
   buildRadar,
   radarSummary,
+  buildOverdue,
   monthlyValueCents,
   scoreWinbackContact,
   buildWinback,
@@ -17,12 +19,15 @@ const NOW = Date.parse('2026-05-21T12:00:00.000Z')
 const daysAgo = (n) => new Date(NOW - n * 86_400_000).toISOString()
 const daysAhead = (n) => new Date(NOW + n * 86_400_000).toISOString()
 
-// A healthy active member — paying, attended yesterday, regular.
+// A healthy active member — a live subscription, paying, attended
+// yesterday, regular.
 function healthy(over = {}) {
   return {
     id: 'c-healthy',
     name: 'Healthy Member',
     glofox_membership_status: 'member',
+    glofox_membership_type: 'time',
+    glofox_membership_state: 'active',
     last_attended_at: daysAgo(1),
     last_booked_at: daysAgo(1),
     total_attended_30d: 10,
@@ -33,23 +38,92 @@ function healthy(over = {}) {
   }
 }
 
+// A live class-pack member — credits remaining, segments as 'credit'.
+function pack(over = {}) {
+  return healthy({
+    id: 'c-pack',
+    name: 'Pack Member',
+    glofox_membership_status: 'credit_member',
+    glofox_membership_type: 'num_classes',
+    glofox_membership_state: null,
+    trial_credits_remaining: 5,
+    ...over,
+  })
+}
+
 describe('classifyContact', () => {
   it('marks non-members as out of scope', () => {
     expect(classifyContact({ glofox_membership_status: 'trial' })).toBe('out')
     expect(classifyContact({ glofox_membership_status: 'lead' })).toBe('out')
     expect(classifyContact(null)).toBe('out')
   })
-  it('marks a member with an activity footprint as active', () => {
+  it('marks a live member with an activity footprint as active', () => {
     expect(classifyContact(healthy())).toBe('active')
     expect(classifyContact(healthy({ last_attended_at: null }))).toBe('active') // last_booked_at still set
+    expect(classifyContact(pack())).toBe('active')
   })
-  it('marks a member with no footprint as quarantine', () => {
+  it('marks a live member with no footprint as quarantine', () => {
+    expect(classifyContact(healthy({ last_attended_at: null, last_booked_at: null }))).toBe('quarantine')
+    expect(classifyContact(pack({ last_attended_at: null, last_booked_at: null }))).toBe('quarantine')
+  })
+  it('marks a locked (payment-failed) membership as overdue', () => {
+    expect(classifyContact(healthy({ glofox_membership_state: 'locked' }))).toBe('overdue')
+    // overdue is decided before the footprint check
+    expect(classifyContact(healthy({
+      glofox_membership_state: 'locked', last_attended_at: null, last_booked_at: null,
+    }))).toBe('overdue')
+  })
+})
+
+describe('hasLiveMembership', () => {
+  it('treats a class pack as live only while credits remain', () => {
+    expect(hasLiveMembership({ glofox_membership_type: 'num_classes', trial_credits_remaining: 3 })).toBe(true)
+    expect(hasLiveMembership({ glofox_membership_type: 'num_classes', trial_credits_remaining: 0 })).toBe(false)
+    expect(hasLiveMembership({ glofox_membership_type: 'num_classes', trial_credits_remaining: null })).toBe(false)
+    expect(hasLiveMembership({ glofox_membership_type: 'num_classes' })).toBe(false)
+  })
+  it('never treats a PAYG drop-in as a live membership', () => {
+    expect(hasLiveMembership({ glofox_membership_type: 'payg' })).toBe(false)
+    expect(hasLiveMembership({ glofox_membership_type: 'payg', glofox_membership_state: 'active' })).toBe(false)
+  })
+  it('treats a subscription as live unless its state says it ended', () => {
+    expect(hasLiveMembership({ glofox_membership_type: 'time', glofox_membership_state: 'active' })).toBe(true)
+    expect(hasLiveMembership({ glofox_membership_type: 'time', glofox_membership_state: 'paused' })).toBe(true)
+    expect(hasLiveMembership({ glofox_membership_type: 'time', glofox_membership_state: 'locked' })).toBe(true)
+    expect(hasLiveMembership({ glofox_membership_type: 'time', glofox_membership_state: 'cancelled' })).toBe(false)
+    expect(hasLiveMembership({ glofox_membership_type: 'time', glofox_membership_state: 'expired' })).toBe(false)
+  })
+  it('treats an unknown / missing membership type as a subscription', () => {
+    expect(hasLiveMembership({ glofox_membership_state: 'active' })).toBe(true)
+    expect(hasLiveMembership({ glofox_membership_state: 'cancelled' })).toBe(false)
+  })
+  it('returns false for a missing contact', () => {
+    expect(hasLiveMembership(null)).toBe(false)
+  })
+})
+
+describe('live-membership gate — classifyContact', () => {
+  it('drops a spent class pack (no credits) out of scope', () => {
     expect(classifyContact({
-      glofox_membership_status: 'member', last_attended_at: null, last_booked_at: null,
-    })).toBe('quarantine')
+      glofox_membership_status: 'credit_member',
+      glofox_membership_type: 'num_classes',
+      trial_credits_remaining: 0,
+      last_attended_at: daysAgo(2),
+    })).toBe('out')
+  })
+  it('drops a PAYG drop-in out of scope even tagged as a member', () => {
     expect(classifyContact({
-      glofox_membership_status: 'credit_member', last_attended_at: null, last_booked_at: null,
-    })).toBe('quarantine')
+      glofox_membership_status: 'member',
+      glofox_membership_type: 'payg',
+      last_attended_at: daysAgo(2),
+    })).toBe('out')
+  })
+  it('drops a cancelled / expired subscription out of scope', () => {
+    expect(classifyContact(healthy({ glofox_membership_state: 'cancelled' }))).toBe('out')
+    expect(classifyContact(healthy({ glofox_membership_state: 'expired' }))).toBe('out')
+  })
+  it('keeps a class pack with credits in scope', () => {
+    expect(classifyContact(pack({ trial_credits_remaining: 1 }))).toBe('active')
   })
 })
 
@@ -166,35 +240,38 @@ describe('buildRadar', () => {
 })
 
 describe('radarSummary', () => {
-  it('counts active base, at-risk, high-risk, quarantine + paused, split by segment', () => {
+  it('counts the live active base (active + paused + overdue + quarantine), split by membership type', () => {
     const contacts = [
       healthy(),
       healthy({ id: 'c-quiet', last_attended_at: daysAgo(20), total_attended_7d: 0, total_attended_30d: 2 }),
       healthy({ id: 'c-bad', last_attended_at: daysAgo(35), total_attended_7d: 0, total_attended_30d: 1, total_noshow_30d: 4 }),
-      healthy({ id: 'c-credit', glofox_membership_status: 'credit_member' }),
-      { id: 'c-quar1', glofox_membership_status: 'member', last_attended_at: null, last_booked_at: null },
-      { id: 'c-quar2', glofox_membership_status: 'credit_member', last_attended_at: null, last_booked_at: null },
-      healthy({ id: 'c-paused', glofox_membership_state: 'paused', last_attended_at: daysAgo(20), total_attended_7d: 0, total_attended_30d: 2 }),
+      pack({ id: 'c-pack' }),
+      healthy({ id: 'c-quar1', last_attended_at: null, last_booked_at: null }),
+      pack({ id: 'c-quar2', last_attended_at: null, last_booked_at: null }),
+      healthy({ id: 'c-paused', glofox_membership_state: 'paused' }),
+      healthy({ id: 'c-overdue', glofox_membership_state: 'locked',
+        glofox_membership_price_cents: 17900, glofox_billing_interval: '1 month' }),
       { id: 'c-trial', glofox_membership_status: 'trial' },
+      { id: 'c-payg', glofox_membership_status: 'member', glofox_membership_type: 'payg', last_attended_at: daysAgo(2) },
     ]
     const s = radarSummary(contacts, NOW)
-    expect(s.activeBase).toBe(4)   // healthy, c-quiet, c-bad, c-credit
+    expect(s.activeBase).toBe(8)   // 6 subs + 2 packs; payg + trial out of scope
     expect(s.atRisk).toBe(2)       // c-quiet, c-bad
     expect(s.highRisk).toBe(1)     // c-bad
-    expect(s.quarantine).toBe(2)
-    expect(s.paused).toBe(1)       // c-paused excluded despite tripping signals
-    expect(s.bySegment.member).toEqual({ activeBase: 3, atRisk: 2, highRisk: 1 })
-    expect(s.bySegment.credit).toEqual({ activeBase: 1, atRisk: 0, highRisk: 0 })
+    expect(s.quarantine).toBe(2)   // c-quar1, c-quar2
+    expect(s.paused).toBe(1)       // c-paused
+    expect(s.overdue).toBe(1)      // c-overdue
+    expect(s.overdueValueCents).toBe(17900)
+    expect(s.bySegment.member).toEqual({ activeBase: 6, atRisk: 2, highRisk: 1 })
+    expect(s.bySegment.credit).toEqual({ activeBase: 2, atRisk: 0, highRisk: 0 })
   })
 })
 
-describe('paused / off-radar membership states', () => {
-  it('classifies a paused / cancelled / expired membership as paused', () => {
+describe('paused / overdue membership states', () => {
+  it('classifies a paused membership as paused (still a live member)', () => {
     expect(classifyContact(healthy({ glofox_membership_state: 'paused' }))).toBe('paused')
-    expect(classifyContact(healthy({ glofox_membership_state: 'cancelled' }))).toBe('paused')
-    expect(classifyContact(healthy({ glofox_membership_state: 'expired' }))).toBe('paused')
   })
-  it('still scores active, unknown and missing states', () => {
+  it('scores active, unknown and missing states normally', () => {
     expect(classifyContact(healthy({ glofox_membership_state: 'active' }))).toBe('active')
     expect(classifyContact(healthy({ glofox_membership_state: null }))).toBe('active')
     expect(classifyContact(healthy({ glofox_membership_state: 'something_else' }))).toBe('active')
@@ -206,21 +283,28 @@ describe('paused / off-radar membership states', () => {
     })
     expect(scoreMember(wouldBeAtRisk, NOW)).toBe(null)
   })
-  it('keeps paused members out of buildRadar', () => {
+  it('scoreMember returns null for an overdue member even when signals fire', () => {
+    const wouldBeAtRisk = healthy({
+      glofox_membership_state: 'locked',
+      last_attended_at: daysAgo(35), total_attended_7d: 0, total_attended_30d: 1, total_noshow_30d: 4,
+    })
+    expect(scoreMember(wouldBeAtRisk, NOW)).toBe(null)
+  })
+  it('keeps paused + overdue members out of buildRadar', () => {
     const contacts = [
       healthy({ id: 'c-bad', last_attended_at: daysAgo(35), total_attended_7d: 0, total_attended_30d: 1, total_noshow_30d: 4 }),
       healthy({ id: 'c-paused', glofox_membership_state: 'paused', last_attended_at: daysAgo(35), total_attended_7d: 0, total_attended_30d: 1, total_noshow_30d: 4 }),
+      healthy({ id: 'c-overdue', glofox_membership_state: 'locked', last_attended_at: daysAgo(35), total_attended_7d: 0, total_attended_30d: 1, total_noshow_30d: 4 }),
     ]
     expect(buildRadar(contacts, NOW).map((r) => r.contactId)).toEqual(['c-bad'])
   })
 })
 
 describe('segment', () => {
-  it('tags scored members member vs credit', () => {
+  it('tags scored members member vs credit off the membership type', () => {
     const m = scoreMember(healthy({ last_attended_at: daysAgo(20), total_attended_7d: 0, total_attended_30d: 2 }), NOW)
     expect(m.segment).toBe('member')
-    const c = scoreMember(healthy({
-      glofox_membership_status: 'credit_member',
+    const c = scoreMember(pack({
       last_attended_at: daysAgo(20), total_attended_7d: 0, total_attended_30d: 2,
     }), NOW)
     expect(c.segment).toBe('credit')
@@ -307,6 +391,37 @@ describe('revenue weighting', () => {
 describe('MEMBER_STATUSES', () => {
   it('is the paying-member set', () => {
     expect(MEMBER_STATUSES).toEqual(['member', 'credit_member'])
+  })
+})
+
+describe('OVERDUE.1 — buildOverdue', () => {
+  it('lists only locked (payment-failed) members, highest value first', () => {
+    const rows = buildOverdue([
+      healthy({ id: 'ok' }),
+      healthy({ id: 'paused', glofox_membership_state: 'paused' }),
+      healthy({ id: 'low', glofox_membership_state: 'locked',
+        glofox_membership_price_cents: 8000, glofox_billing_interval: '1 month',
+        last_payment_at: daysAgo(40) }),
+      healthy({ id: 'high', glofox_membership_state: 'locked',
+        glofox_membership_price_cents: 20000, glofox_billing_interval: '1 month',
+        last_payment_at: daysAgo(20) }),
+    ], NOW)
+    expect(rows.map((r) => r.contactId)).toEqual(['high', 'low'])
+    expect(rows[0].monthlyValueCents).toBe(20000)
+    expect(rows[0].daysSincePayment).toBe(20)
+  })
+  it('carries payment + attendance recency and the segment', () => {
+    const rows = buildOverdue([
+      healthy({ id: 'sub', glofox_membership_state: 'locked',
+        last_payment_at: daysAgo(35), last_attended_at: daysAgo(3) }),
+    ], NOW)
+    expect(rows[0].segment).toBe('member')
+    expect(rows[0].daysSincePayment).toBe(35)
+    expect(rows[0].daysSinceAttended).toBe(3)
+  })
+  it('returns [] for empty / null input', () => {
+    expect(buildOverdue([], NOW)).toEqual([])
+    expect(buildOverdue(null, NOW)).toEqual([])
   })
 })
 
