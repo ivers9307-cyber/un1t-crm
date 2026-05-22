@@ -288,3 +288,82 @@ export function radarSummary(contacts, nowMs = Date.now()) {
     bySegment,
   }
 }
+
+// ── win-back ─────────────────────────────────────────────────────
+// WINBACK.1 — former members worth re-winning. Distinct from the
+// at-risk radar: a member who's been quiet past QUIET_MAX_DAYS has
+// effectively churned, so they drop OFF the at-risk list — but if
+// they were a genuine member (a real attendance footprint) and
+// haven't been gone too long, they're a re-win opportunity, not a
+// lost cause. This is the bridge between "at risk" and "gone".
+
+// Win-back window — last trained between these bounds. The floor is
+// QUIET_MAX_DAYS so the handoff from the at-risk list is seamless;
+// past the ceiling they've been gone too long to be realistic.
+const WINBACK_MIN_DAYS = QUIET_MAX_DAYS
+const WINBACK_MAX_DAYS = 365
+
+// Statuses that can be a former member. ex_member is included even
+// though it's outside MEMBER_STATUSES — a lapsed member whose Glofox
+// status has flipped to ex_member is the clearest win-back case.
+const WINBACK_STATUSES = Object.freeze(['member', 'credit_member', 'ex_member'])
+
+// Membership states that mean a planned freeze — they intend to
+// return, so they're not a win-back (nor a churn) case.
+const WINBACK_EXCLUDE_STATES = Object.freeze(['paused', 'frozen', 'suspended'])
+
+function winbackTier(days) {
+  if (days <= 90) return 'high'    // just lapsed — warmest, best odds
+  if (days <= 180) return 'medium'
+  return 'low'
+}
+
+/**
+ * Score one win-back candidate — a former member who actually
+ * trained (real last_attended_at) and last did so WINBACK_MIN..MAX
+ * days ago. Returns null for anyone who isn't a win-back case.
+ */
+export function scoreWinbackContact(contact, nowMs = Date.now()) {
+  const status = contact?.glofox_membership_status
+  if (!status || !WINBACK_STATUSES.includes(status)) return null
+  const state = typeof contact?.glofox_membership_state === 'string'
+    ? contact.glofox_membership_state.toLowerCase()
+    : null
+  // A planned freeze isn't a win-back — they're coming back already.
+  if (state && WINBACK_EXCLUDE_STATES.includes(state)) return null
+  // Must have a real attendance footprint — a member who genuinely
+  // trained, not a never-started ghost record (those go to Quarantine).
+  const d = daysSince(contact.last_attended_at, nowMs)
+  if (d == null || d <= WINBACK_MIN_DAYS || d > WINBACK_MAX_DAYS) return null
+  const days = Math.floor(d)
+  return {
+    contactId: contact.id,
+    name: contact.name || 'Member',
+    status,
+    tier: winbackTier(days),
+    daysSinceAttended: days,
+    membershipPlan: contact.glofox_membership_plan || null,
+    monthlyValueCents: monthlyValueCents(contact),
+    lifetimeValueCents: Number.isFinite(contact.lifetime_value_cents)
+      ? contact.lifetime_value_cents : 0,
+  }
+}
+
+/**
+ * Build the win-back list — former members worth re-winning, warmest
+ * (most recently lapsed) and highest-value first.
+ */
+export function buildWinback(contacts, nowMs = Date.now()) {
+  const TIER_RANK = { high: 3, medium: 2, low: 1 }
+  const rows = []
+  for (const c of contacts || []) {
+    const r = scoreWinbackContact(c, nowMs)
+    if (r) rows.push(r)
+  }
+  rows.sort((a, b) => {
+    if (TIER_RANK[b.tier] !== TIER_RANK[a.tier]) return TIER_RANK[b.tier] - TIER_RANK[a.tier]
+    if (b.monthlyValueCents !== a.monthlyValueCents) return b.monthlyValueCents - a.monthlyValueCents
+    return a.daysSinceAttended - b.daysSinceAttended  // most recently lapsed first
+  })
+  return rows
+}

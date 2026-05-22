@@ -2,8 +2,9 @@
 
 // CHURN-RADAR.1 — the at-risk member radar dashboard.
 //
-// Two tabs:
+// Three tabs:
 //   At Risk    — scored active members + per-member win-back actions.
+//   Win-back   — former members (lapsed 45–365 days) worth re-winning.
 //   Quarantine — zero-activity "ghost member" records for bulk triage.
 //
 // All data comes from /api/churn-radar/*; this component is pure UI +
@@ -12,7 +13,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import {
   Radar, AlertTriangle, Clock, TrendingDown, UserX, Phone,
-  ClipboardList, MessageCircle, BellOff, Check, CalendarClock,
+  ClipboardList, MessageCircle, BellOff, Check, CalendarClock, RotateCcw,
 } from 'lucide-react'
 
 const TIER_STYLE = {
@@ -50,6 +51,7 @@ export default function ChurnRadar() {
   const [tab, setTab] = useState('radar')
   const [radar, setRadar] = useState(null)
   const [quarantine, setQuarantine] = useState(null)
+  const [winback, setWinback] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [busy, setBusy] = useState(null)        // contactId mid-action
@@ -81,10 +83,22 @@ export default function ChurnRadar() {
     }
   }, [])
 
+  const loadWinback = useCallback(async () => {
+    try {
+      const r = await fetch('/api/churn-radar/winback', { cache: 'no-store' })
+      const j = await r.json()
+      if (!r.ok || !j.success) throw new Error(j.error || 'Failed to load win-back')
+      setWinback(j.data)
+    } catch (e) {
+      setError(e.message)
+    }
+  }, [])
+
   useEffect(() => { loadRadar() }, [loadRadar])
   useEffect(() => {
     if (tab === 'quarantine' && quarantine === null) loadQuarantine()
-  }, [tab, quarantine, loadQuarantine])
+    if (tab === 'winback' && winback === null) loadWinback()
+  }, [tab, quarantine, winback, loadQuarantine, loadWinback])
 
   function showFlash(msg, ok = true) {
     setFlash({ msg, ok })
@@ -103,6 +117,7 @@ export default function ChurnRadar() {
       if (!r.ok || !j.success) throw new Error(j.error || 'Action failed')
       showFlash(ACTION_DONE[action] || 'Done')
       await loadRadar()
+      if (winback !== null) await loadWinback()
     } catch (e) {
       showFlash(e.message, false)
     } finally {
@@ -181,6 +196,8 @@ export default function ChurnRadar() {
       <div className="flex gap-1 border-b border-un1t-gray mb-4">
         <Tab active={tab === 'radar'} onClick={() => setTab('radar')}
           icon={Radar} label={`At Risk (${radar?.radar?.length || 0})`} />
+        <Tab active={tab === 'winback'} onClick={() => setTab('winback')}
+          icon={RotateCcw} label={`Win-back${winback ? ` (${winback.winback.length})` : ''}`} />
         <Tab active={tab === 'quarantine'} onClick={() => setTab('quarantine')}
           icon={AlertTriangle} label={`Quarantine (${summary.quarantine})`} />
       </div>
@@ -188,6 +205,10 @@ export default function ChurnRadar() {
       {tab === 'radar' && (
         <RadarList radar={radar?.radar || []} busy={busy} onAction={runAction}
           snoozed={summary.snoozed} />
+      )}
+
+      {tab === 'winback' && (
+        <WinbackList data={winback} busy={busy} onAction={runAction} />
       )}
 
       {tab === 'quarantine' && (
@@ -387,6 +408,70 @@ function Quarantine({ items, selected, busy, onToggle, onSelectAll, onTriage }) 
           </li>
         ))}
       </ul>
+    </div>
+  )
+}
+
+// ── win-back ─────────────────────────────────────────────────────
+
+function WinbackList({ data, busy, onAction }) {
+  if (data === null) return <p className="text-sm text-un1t-light">Loading win-back…</p>
+  const rows = data.winback || []
+  if (rows.length === 0) {
+    return (
+      <div className="rounded-2xl border border-dashed border-un1t-gray p-10 text-center">
+        <RotateCcw size={28} className="mx-auto text-un1t-light" />
+        <p className="mt-3 font-medium text-un1t-white">No win-back candidates</p>
+        <p className="mt-1 text-sm text-un1t-light">
+          No former members in the 45–365 day window. Members appear here once
+          they lapse past the at-risk stage.
+        </p>
+      </div>
+    )
+  }
+  return (
+    <div className="space-y-2">
+      <p className="mb-1 rounded-lg border border-indigo-200 bg-indigo-50 p-3 text-xs text-indigo-800">
+        Former members who trained but have now lapsed — last class 45–365 days
+        ago. Warmest (most recently lapsed, highest value) first.
+      </p>
+      {data.summary?.snoozed > 0 && (
+        <p className="text-xs text-un1t-mid">{data.summary.snoozed} snoozed and hidden.</p>
+      )}
+      {rows.map((m) => <WinbackRow key={m.contactId} m={m} busy={busy} onAction={onAction} />)}
+    </div>
+  )
+}
+
+function WinbackRow({ m, busy, onAction }) {
+  const tier = TIER_STYLE[m.tier] || TIER_STYLE.low
+  const isBusy = busy === m.contactId
+  return (
+    <div className="rounded-lg border border-un1t-gray bg-un1t-dark p-4">
+      <div className="flex items-center gap-2">
+        <a href={`/contacts/${m.contactId}`} className="font-medium text-un1t-white hover:underline">
+          {m.name}
+        </a>
+        <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${tier.cls}`}>
+          {tier.label}
+        </span>
+      </div>
+      <p className="mt-0.5 text-xs text-un1t-light">
+        {m.membershipPlan || m.status?.replace(/_/g, ' ')}
+        {` · last class ${m.daysSinceAttended}d ago`}
+        {m.monthlyValueCents > 0 && ` · ${formatMoney(m.monthlyValueCents)}/mo`}
+        {m.lifetimeValueCents > 0 && ` · ${formatMoney(m.lifetimeValueCents)} LTV`}
+        {m.lastContacted && ` · contacted ${timeAgo(m.lastContacted.at)}`}
+      </p>
+
+      <div className="mt-3 flex flex-wrap gap-2">
+        <ActionBtn icon={Phone} label="Mark contacted" disabled={isBusy}
+          onClick={() => onAction(m.contactId, 'contacted')} />
+        <ActionBtn icon={MessageCircle} label="Win-back" disabled={isBusy} primary
+          onClick={() => onAction(m.contactId, 'winback_sent')} />
+        <ActionBtn icon={BellOff} label="Snooze" disabled={isBusy}
+          onClick={() => onAction(m.contactId, 'snoozed')} />
+      </div>
     </div>
   )
 }

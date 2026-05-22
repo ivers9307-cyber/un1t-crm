@@ -8,6 +8,8 @@ import {
   buildRadar,
   radarSummary,
   monthlyValueCents,
+  scoreWinbackContact,
+  buildWinback,
   MEMBER_STATUSES,
 } from './churn-radar.js'
 
@@ -305,5 +307,70 @@ describe('revenue weighting', () => {
 describe('MEMBER_STATUSES', () => {
   it('is the paying-member set', () => {
     expect(MEMBER_STATUSES).toEqual(['member', 'credit_member'])
+  })
+})
+
+describe('WINBACK.1 — scoreWinbackContact', () => {
+  it('scores a member who last trained inside the win-back window', () => {
+    const r = scoreWinbackContact(
+      { id: 'w1', name: 'Jess', glofox_membership_status: 'member', last_attended_at: daysAgo(81) }, NOW)
+    expect(r).not.toBeNull()
+    expect(r.daysSinceAttended).toBe(81)
+    expect(r.tier).toBe('high')   // <= 90 days
+  })
+
+  it('includes ex_member contacts with a real footprint', () => {
+    const r = scoreWinbackContact(
+      { id: 'w2', glofox_membership_status: 'ex_member', last_attended_at: daysAgo(150) }, NOW)
+    expect(r).not.toBeNull()
+    expect(r.tier).toBe('medium') // <= 180 days
+  })
+
+  it('returns null inside the at-risk window (<= 45 days quiet)', () => {
+    expect(scoreWinbackContact(
+      { id: 'w3', glofox_membership_status: 'member', last_attended_at: daysAgo(30) }, NOW)).toBeNull()
+  })
+
+  it('returns null past the win-back ceiling (gone over a year)', () => {
+    expect(scoreWinbackContact(
+      { id: 'w4', glofox_membership_status: 'member', last_attended_at: daysAgo(400) }, NOW)).toBeNull()
+  })
+
+  it('returns null for a member with no attendance footprint (a ghost, not a win-back)', () => {
+    expect(scoreWinbackContact(
+      { id: 'w5', glofox_membership_status: 'member', last_attended_at: null }, NOW)).toBeNull()
+  })
+
+  it('excludes a planned freeze (paused / frozen) — they intend to return', () => {
+    expect(scoreWinbackContact(
+      { id: 'w6', glofox_membership_status: 'member', glofox_membership_state: 'paused', last_attended_at: daysAgo(81) }, NOW)).toBeNull()
+  })
+
+  it('returns null for a non-member status (trial / lead)', () => {
+    expect(scoreWinbackContact(
+      { id: 'w7', glofox_membership_status: 'trial', last_attended_at: daysAgo(81) }, NOW)).toBeNull()
+  })
+
+  it('tiers by recency — 90<d<=180 medium, >180 low', () => {
+    const mk = (d) => scoreWinbackContact(
+      { id: 'x', glofox_membership_status: 'member', last_attended_at: daysAgo(d) }, NOW).tier
+    expect(mk(60)).toBe('high')
+    expect(mk(120)).toBe('medium')
+    expect(mk(300)).toBe('low')
+  })
+})
+
+describe('WINBACK.1 — buildWinback', () => {
+  it('returns only win-back candidates, warmest + highest-value first', () => {
+    const rows = buildWinback([
+      { id: 'active', glofox_membership_status: 'member', last_attended_at: daysAgo(10) },
+      { id: 'gone', glofox_membership_status: 'member', last_attended_at: daysAgo(500) },
+      { id: 'cold-cheap', glofox_membership_status: 'member', last_attended_at: daysAgo(200) },
+      { id: 'warm', glofox_membership_status: 'member', last_attended_at: daysAgo(60) },
+      { id: 'warm-rich', glofox_membership_status: 'member', last_attended_at: daysAgo(70),
+        glofox_membership_price_cents: 20000, glofox_billing_interval: '1 month' },
+    ], NOW)
+    // high tier first (warm-rich + warm), rich before cheap; then low (cold-cheap).
+    expect(rows.map((r) => r.contactId)).toEqual(['warm-rich', 'warm', 'cold-cheap'])
   })
 })
