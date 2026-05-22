@@ -2,9 +2,10 @@
 
 // CHURN-RADAR.1 — the at-risk member radar dashboard.
 //
-// Three tabs:
+// Four tabs:
 //   At Risk    — scored active members + per-member win-back actions.
 //   Win-back   — former members (lapsed 45–365 days) worth re-winning.
+//   Overdue    — live members whose payment has failed; a chase-list.
 //   Quarantine — zero-activity "ghost member" records for bulk triage.
 //
 // All data comes from /api/churn-radar/*; this component is pure UI +
@@ -14,6 +15,7 @@ import { useEffect, useState, useCallback } from 'react'
 import {
   Radar, AlertTriangle, Clock, TrendingDown, UserX, Phone,
   ClipboardList, MessageCircle, BellOff, Check, CalendarClock, RotateCcw,
+  CreditCard,
 } from 'lucide-react'
 
 const TIER_STYLE = {
@@ -52,6 +54,7 @@ export default function ChurnRadar() {
   const [radar, setRadar] = useState(null)
   const [quarantine, setQuarantine] = useState(null)
   const [winback, setWinback] = useState(null)
+  const [overdue, setOverdue] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [busy, setBusy] = useState(null)        // contactId mid-action
@@ -94,11 +97,23 @@ export default function ChurnRadar() {
     }
   }, [])
 
+  const loadOverdue = useCallback(async () => {
+    try {
+      const r = await fetch('/api/churn-radar/overdue', { cache: 'no-store' })
+      const j = await r.json()
+      if (!r.ok || !j.success) throw new Error(j.error || 'Failed to load overdue')
+      setOverdue(j.data)
+    } catch (e) {
+      setError(e.message)
+    }
+  }, [])
+
   useEffect(() => { loadRadar() }, [loadRadar])
   useEffect(() => {
     if (tab === 'quarantine' && quarantine === null) loadQuarantine()
     if (tab === 'winback' && winback === null) loadWinback()
-  }, [tab, quarantine, winback, loadQuarantine, loadWinback])
+    if (tab === 'overdue' && overdue === null) loadOverdue()
+  }, [tab, quarantine, winback, overdue, loadQuarantine, loadWinback, loadOverdue])
 
   function showFlash(msg, ok = true) {
     setFlash({ msg, ok })
@@ -118,6 +133,7 @@ export default function ChurnRadar() {
       showFlash(ACTION_DONE[action] || 'Done')
       await loadRadar()
       if (winback !== null) await loadWinback()
+      if (overdue !== null) await loadOverdue()
     } catch (e) {
       showFlash(e.message, false)
     } finally {
@@ -159,8 +175,9 @@ export default function ChurnRadar() {
   if (loading) return <p className="text-sm text-un1t-light">Loading radar…</p>
 
   const summary = radar?.summary || {
-    activeBase: 0, atRisk: 0, highRisk: 0, quarantine: 0, paused: 0, snoozed: 0,
-    revenueAtRiskCents: 0, bySegment: { member: {}, credit: {} },
+    activeBase: 0, atRisk: 0, highRisk: 0, quarantine: 0, paused: 0, overdue: 0,
+    snoozed: 0, revenueAtRiskCents: 0, overdueValueCents: 0,
+    bySegment: { member: {}, credit: {} },
   }
   const seg = summary.bySegment || { member: {}, credit: {} }
   const splitLine = (key) =>
@@ -181,14 +198,17 @@ export default function ChurnRadar() {
         <p className="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">{error}</p>
       )}
 
-      {/* Summary cards — Active base + At risk split monthly members
-          from credit-pack holders; they're different churn problems. */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6 mb-6">
+      {/* Summary cards — the Active base is every live membership
+          (active, paused, overdue and quarantine alike), split into
+          subscriptions vs class packs. Overdue is a chase-list of
+          members whose payment has failed. */}
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-7 mb-6">
         <StatCard label="Active base" value={summary.activeBase} breakdown={splitLine('activeBase')} />
         <StatCard label="At risk" value={summary.atRisk} accent="amber" breakdown={splitLine('atRisk')} />
         <StatCard label="Revenue at risk" value={formatMoney(summary.revenueAtRiskCents)} accent="amber" breakdown="per month, at-risk" />
         <StatCard label="High risk" value={summary.highRisk} accent="red" />
-        <StatCard label="Paused" value={summary.paused} breakdown="excluded — planned freeze" />
+        <StatCard label="Overdue" value={summary.overdue} accent="red" breakdown={`${formatMoney(summary.overdueValueCents)}/mo owed`} />
+        <StatCard label="Paused" value={summary.paused} breakdown="planned freeze" />
         <StatCard label="Quarantine" value={summary.quarantine} />
       </div>
 
@@ -198,6 +218,8 @@ export default function ChurnRadar() {
           icon={Radar} label={`At Risk (${radar?.radar?.length || 0})`} />
         <Tab active={tab === 'winback'} onClick={() => setTab('winback')}
           icon={RotateCcw} label={`Win-back${winback ? ` (${winback.winback.length})` : ''}`} />
+        <Tab active={tab === 'overdue'} onClick={() => setTab('overdue')}
+          icon={CreditCard} label={`Overdue (${summary.overdue})`} />
         <Tab active={tab === 'quarantine'} onClick={() => setTab('quarantine')}
           icon={AlertTriangle} label={`Quarantine (${summary.quarantine})`} />
       </div>
@@ -209,6 +231,10 @@ export default function ChurnRadar() {
 
       {tab === 'winback' && (
         <WinbackList data={winback} busy={busy} onAction={runAction} />
+      )}
+
+      {tab === 'overdue' && (
+        <OverdueList data={overdue} busy={busy} onAction={runAction} />
       )}
 
       {tab === 'quarantine' && (
@@ -471,6 +497,79 @@ function WinbackRow({ m, busy, onAction }) {
           onClick={() => onAction(m.contactId, 'winback_sent')} />
         <ActionBtn icon={BellOff} label="Snooze" disabled={isBusy}
           onClick={() => onAction(m.contactId, 'snoozed')} />
+      </div>
+    </div>
+  )
+}
+
+// ── overdue ──────────────────────────────────────────────────────
+
+function OverdueList({ data, busy, onAction }) {
+  if (data === null) return <p className="text-sm text-un1t-light">Loading overdue…</p>
+  const rows = data.overdue || []
+  if (rows.length === 0) {
+    return (
+      <div className="rounded-2xl border border-dashed border-un1t-gray p-10 text-center">
+        <Check size={28} className="mx-auto text-green-500" />
+        <p className="mt-3 font-medium text-un1t-white">Nobody overdue</p>
+        <p className="mt-1 text-sm text-un1t-light">
+          Every live membership is paid up. Members appear here when a Glofox
+          payment fails.
+        </p>
+      </div>
+    )
+  }
+  return (
+    <div className="space-y-2">
+      <p className="mb-1 rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-800">
+        Live members whose Glofox payment has <strong>failed</strong> — they still
+        hold a membership but owe money on it. Highest monthly value first; open a
+        profile for their contact details.
+      </p>
+      {rows.map((m) => <OverdueRow key={m.contactId} m={m} busy={busy} onAction={onAction} />)}
+    </div>
+  )
+}
+
+function OverdueRow({ m, busy, onAction }) {
+  const isBusy = busy === m.contactId
+  const attendLine = m.daysSinceAttended == null
+    ? 'no class history'
+    : m.daysSinceAttended <= 30
+      ? `still training — last class ${m.daysSinceAttended}d ago`
+      : `last class ${m.daysSinceAttended}d ago`
+  return (
+    <div className="rounded-lg border border-un1t-gray bg-un1t-dark p-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <a href={`/contacts/${m.contactId}`} className="font-medium text-un1t-white hover:underline">
+              {m.name}
+            </a>
+            <span className="rounded-full bg-un1t-gray px-2 py-0.5 text-[10px] font-semibold uppercase text-un1t-light">
+              {m.segment === 'credit' ? 'Pack' : 'Member'}
+            </span>
+          </div>
+          <p className="mt-0.5 text-xs text-un1t-light">
+            {m.membershipPlan || m.membershipStatus}
+            {m.monthlyValueCents > 0 && ` · ${formatMoney(m.monthlyValueCents)}/mo`}
+            {` · ${attendLine}`}
+            {m.lastContacted && ` · contacted ${timeAgo(m.lastContacted.at)}`}
+          </p>
+        </div>
+        <span className="inline-flex items-center gap-1 rounded-md border border-red-200 bg-red-50 px-2 py-0.5 text-[11px] font-medium text-red-700">
+          <CreditCard size={12} />
+          {m.daysSincePayment == null
+            ? 'No payment on record'
+            : `Unpaid ${m.daysSincePayment}d`}
+        </span>
+      </div>
+
+      <div className="mt-3 flex flex-wrap gap-2">
+        <ActionBtn icon={Phone} label="Mark contacted" disabled={isBusy}
+          onClick={() => onAction(m.contactId, 'contacted')} />
+        <ActionBtn icon={ClipboardList} label="Assign task" disabled={isBusy}
+          onClick={() => onAction(m.contactId, 'task_assigned')} />
       </div>
     </div>
   )
