@@ -12,6 +12,7 @@ import {
   isClassPackMembership,
   detectCreditMember,
   computeBookingAggregates,
+  mergeBookingAggregates,
   mapGlofoxInteraction,
   computeCreditsRemaining,
   detectTrialTransitionTags,
@@ -1760,5 +1761,74 @@ describe('pipelineStageSlugForStatus (GLOFOX2.1.5 canonical map)', () => {
     expect(pipelineStageSlugForStatus(null)).toBe('new_lead')
     expect(pipelineStageSlugForStatus(undefined)).toBe('new_lead')
     expect(pipelineStageSlugForStatus('')).toBe('new_lead')
+  })
+})
+
+describe('mergeBookingAggregates', () => {
+  const counts = {
+    total_bookings_30d: 3, total_attended_30d: 2,
+    total_attended_7d: 1, total_noshow_30d: 0,
+  }
+
+  it('always takes the fresh windowed counts', () => {
+    const patch = mergeBookingAggregates(
+      { last_attended_at: '2026-01-01T00:00:00.000Z' },
+      { ...counts, last_attended_at: null, last_booked_at: null },
+    )
+    expect(patch.total_bookings_30d).toBe(3)
+    expect(patch.total_attended_30d).toBe(2)
+    expect(patch.total_attended_7d).toBe(1)
+    expect(patch.total_noshow_30d).toBe(0)
+  })
+
+  // The core bug fix: a 30-day fetch that returns nothing must NOT
+  // overwrite a real historical attendance date with null.
+  it('does not wipe last_attended_at when the fresh value is null', () => {
+    const patch = mergeBookingAggregates(
+      { last_attended_at: '2026-03-01T10:00:00.000Z', last_booked_at: '2026-03-01T09:00:00.000Z' },
+      { ...counts, last_attended_at: null, last_booked_at: null },
+    )
+    expect(patch).not.toHaveProperty('last_attended_at')
+    expect(patch).not.toHaveProperty('last_booked_at')
+  })
+
+  it('advances last_attended_at when the fresh value is newer', () => {
+    const patch = mergeBookingAggregates(
+      { last_attended_at: '2026-03-01T10:00:00.000Z' },
+      { ...counts, last_attended_at: '2026-05-20T18:00:00.000Z', last_booked_at: null },
+    )
+    expect(patch.last_attended_at).toBe('2026-05-20T18:00:00.000Z')
+  })
+
+  it('does not regress last_attended_at when the fresh value is older', () => {
+    const patch = mergeBookingAggregates(
+      { last_attended_at: '2026-05-20T18:00:00.000Z' },
+      { ...counts, last_attended_at: '2026-03-01T10:00:00.000Z', last_booked_at: null },
+    )
+    expect(patch).not.toHaveProperty('last_attended_at')
+  })
+
+  it('sets last_attended_at when there is no stored value yet', () => {
+    const patch = mergeBookingAggregates(
+      { last_attended_at: null },
+      { ...counts, last_attended_at: '2026-05-20T18:00:00.000Z', last_booked_at: null },
+    )
+    expect(patch.last_attended_at).toBe('2026-05-20T18:00:00.000Z')
+  })
+
+  it('tolerates a null / missing existing row', () => {
+    const patch = mergeBookingAggregates(null, {
+      ...counts, last_attended_at: '2026-05-20T18:00:00.000Z', last_booked_at: '2026-05-21T08:00:00.000Z',
+    })
+    expect(patch.last_attended_at).toBe('2026-05-20T18:00:00.000Z')
+    expect(patch.last_booked_at).toBe('2026-05-21T08:00:00.000Z')
+  })
+
+  it('applies the advance-only rule to last_booked_at independently', () => {
+    const patch = mergeBookingAggregates(
+      { last_attended_at: null, last_booked_at: '2026-05-25T00:00:00.000Z' },
+      { ...counts, last_attended_at: null, last_booked_at: '2026-04-01T00:00:00.000Z' },
+    )
+    expect(patch).not.toHaveProperty('last_booked_at')
   })
 })
