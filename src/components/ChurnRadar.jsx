@@ -221,7 +221,8 @@ export default function ChurnRadar() {
         <Tab active={tab === 'overdue'} onClick={() => setTab('overdue')}
           icon={CreditCard} label={`Overdue (${summary.overdue})`} />
         <Tab active={tab === 'quarantine'} onClick={() => setTab('quarantine')}
-          icon={AlertTriangle} label={`Quarantine (${summary.quarantine})`} />
+          icon={AlertTriangle}
+          label={`Quarantine (${quarantine ? quarantine.length : summary.quarantine})`} />
       </div>
 
       {tab === 'radar' && (
