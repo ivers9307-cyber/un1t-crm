@@ -15,7 +15,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import {
   Radar, UserPlus, Clock, Activity, Sparkles, Phone, BellOff,
-  Check, Filter, Users,
+  Check, Filter, Users, TrendingUp,
 } from 'lucide-react'
 
 const TIER_STYLE = {
@@ -153,6 +153,7 @@ export default function LeadRadar() {
   const summary = funnel?.summary || {
     funnelTotal: 0, funnel: { attending: 0, fresh: 0 },
     cleanupTotal: 0, cleanup: { cooling: 0, dormant: 0, no_sale: 0 }, snoozed: 0,
+    conversion: { contacted: 0, progressed: 0, progressionRate: 0 },
   }
 
   return (
@@ -181,6 +182,19 @@ export default function LeadRadar() {
         <StatCard label="Cleanup" value={summary.cleanupTotal} accent="amber"
           breakdown="dormant — archive candidates" />
       </div>
+
+      {/* LEAD-OUTCOMES.1 — closes the loop: of the leads contacted,
+          how many booked or attended a class afterwards. */}
+      {summary.conversion?.contacted > 0 && (
+        <div className="mb-6 flex items-center gap-2 rounded-xl border border-green-200 bg-green-50 px-4 py-2.5 text-sm text-green-800">
+          <TrendingUp size={16} className="shrink-0" />
+          <span>
+            <strong>{summary.conversion.progressed} of {summary.conversion.contacted}</strong>
+            {' '}leads contacted in the last 90 days booked or attended a class after
+            {' '}<strong>({Math.round(summary.conversion.progressionRate * 100)}%)</strong>.
+          </span>
+        </div>
+      )}
 
       {/* Tabs */}
       <div className="flex gap-1 border-b border-un1t-gray mb-4">

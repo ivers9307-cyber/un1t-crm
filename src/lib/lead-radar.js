@@ -247,3 +247,63 @@ export function leadRadarSummary(contacts, nowMs = Date.now()) {
     cleanup,
   }
 }
+
+// ── outcomes / conversion ────────────────────────────────────────
+// LEAD-OUTCOMES.1 — close the loop. The funnel logs every time the
+// operator contacts a lead, but nothing measured whether it worked.
+// computeLeadConversionStats correlates those contacts against class
+// activity: of the leads reached out to, how many booked or attended
+// a class afterwards — the funnel's equivalent of "did the outreach
+// land".
+
+// Funnel actions that count as "the operator reached out to a lead".
+const LEAD_INTERVENTION_ACTIONS = Object.freeze(['contacted'])
+
+// A contact newer than this is too recent to judge — left out of the
+// rate rather than dragging it down before the lead has had a fair
+// chance to come in.
+const CONVERSION_GRACE_DAYS = 4
+
+// Only contacts within this window count — matches the radar's
+// 90-day action-log horizon.
+const CONVERSION_WINDOW_DAYS = 90
+
+/**
+ * Conversion stats for a contact batch + the lead action log. A lead
+ * counts as "contacted" once it has a 'contacted' action between
+ * CONVERSION_GRACE_DAYS and CONVERSION_WINDOW_DAYS old; it counts as
+ * "progressed" if it booked or attended a class AFTER that first
+ * contact.
+ *
+ * @returns {{ contacted: number, progressed: number, progressionRate: number }}
+ *   progressionRate is a 0-1 fraction (0 when nobody's been contacted).
+ */
+export function computeLeadConversionStats(contacts, actions, nowMs = Date.now()) {
+  // Earliest in-window contact per lead.
+  const firstContact = new Map()
+  for (const a of actions || []) {
+    if (!a || !LEAD_INTERVENTION_ACTIONS.includes(a.action)) continue
+    const t = new Date(a.created_at).getTime()
+    if (!Number.isFinite(t)) continue
+    const ageDays = (nowMs - t) / 86_400_000
+    if (ageDays < CONVERSION_GRACE_DAYS || ageDays > CONVERSION_WINDOW_DAYS) continue
+    const cur = firstContact.get(a.contact_id)
+    if (cur == null || t < cur) firstContact.set(a.contact_id, t)
+  }
+  let contacted = 0
+  let progressed = 0
+  for (const c of contacts || []) {
+    if (!c) continue
+    const contactAt = firstContact.get(c.id)
+    if (contactAt == null) continue
+    contacted++
+    const act = lastActivity(c)
+    const actMs = act ? new Date(act).getTime() : null
+    if (actMs != null && Number.isFinite(actMs) && actMs > contactAt) progressed++
+  }
+  return {
+    contacted,
+    progressed,
+    progressionRate: contacted > 0 ? progressed / contacted : 0,
+  }
+}
