@@ -6,6 +6,7 @@ import {
   buildFunnel,
   buildCleanup,
   leadRadarSummary,
+  computeLeadConversionStats,
 } from './lead-radar.js'
 
 // Fixed clock so every age computation is deterministic.
@@ -206,5 +207,70 @@ describe('NON_MEMBER_STATUSES', () => {
     expect(Object.isFrozen(NON_MEMBER_STATUSES)).toBe(true)
     expect(NON_MEMBER_STATUSES).not.toContain('member')
     expect(NON_MEMBER_STATUSES).not.toContain('credit_member')
+  })
+})
+
+describe('LEAD-OUTCOMES.1 — computeLeadConversionStats', () => {
+  const action = (contactId, type, daysAgoN) => ({
+    contact_id: contactId, action: type, created_at: daysAgo(daysAgoN),
+  })
+
+  it('counts a contacted lead who attended afterwards as progressed', () => {
+    const r = computeLeadConversionStats(
+      [contact({ id: 'L1', last_attended_at: daysAgo(10) })],
+      [action('L1', 'contacted', 30)], NOW)
+    expect(r).toEqual({ contacted: 1, progressed: 1, progressionRate: 1 })
+  })
+
+  it('counts a booking (not just attendance) after the contact as progressed', () => {
+    const r = computeLeadConversionStats(
+      [contact({ id: 'L1', last_booked_at: daysAgo(8) })],
+      [action('L1', 'contacted', 30)], NOW)
+    expect(r.progressed).toBe(1)
+  })
+
+  it('does not count a lead with no activity after the contact', () => {
+    const r = computeLeadConversionStats(
+      [contact({ id: 'L1', last_attended_at: daysAgo(45), last_booked_at: null })],
+      [action('L1', 'contacted', 30)], NOW)
+    expect(r).toEqual({ contacted: 1, progressed: 0, progressionRate: 0 })
+  })
+
+  it('computes the rate across a batch', () => {
+    const contacts = [
+      contact({ id: 'a', last_booked_at: daysAgo(5) }),    // progressed
+      contact({ id: 'b', last_attended_at: daysAgo(50) }), // activity predates contact
+      contact({ id: 'c' }),                                 // no activity at all
+      contact({ id: 'd', last_attended_at: daysAgo(2) }),  // progressed
+    ]
+    const actions = ['a', 'b', 'c', 'd'].map((id) => action(id, 'contacted', 30))
+    const r = computeLeadConversionStats(contacts, actions, NOW)
+    expect(r.contacted).toBe(4)
+    expect(r.progressed).toBe(2)
+    expect(r.progressionRate).toBe(0.5)
+  })
+
+  it('excludes contacts too recent to judge (grace period)', () => {
+    expect(computeLeadConversionStats(
+      [contact({ id: 'L1', last_attended_at: daysAgo(1) })],
+      [action('L1', 'contacted', 2)], NOW)).toEqual({ contacted: 0, progressed: 0, progressionRate: 0 })
+  })
+
+  it('excludes contacts older than the 90-day window', () => {
+    expect(computeLeadConversionStats(
+      [contact({ id: 'L1', last_attended_at: daysAgo(10) })],
+      [action('L1', 'contacted', 120)], NOW).contacted).toBe(0)
+  })
+
+  it('ignores non-contact actions (snooze, cleanup triage)', () => {
+    const r = computeLeadConversionStats(
+      [contact({ id: 'L1', last_attended_at: daysAgo(5) })],
+      [action('L1', 'snoozed', 30), action('L1', 'cleanup_archive', 30)], NOW)
+    expect(r.contacted).toBe(0)
+  })
+
+  it('returns zeroes for empty / null input', () => {
+    expect(computeLeadConversionStats([], [], NOW)).toEqual({ contacted: 0, progressed: 0, progressionRate: 0 })
+    expect(computeLeadConversionStats(null, null, NOW)).toEqual({ contacted: 0, progressed: 0, progressionRate: 0 })
   })
 })

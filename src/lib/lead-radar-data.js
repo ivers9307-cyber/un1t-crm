@@ -10,6 +10,7 @@ import {
   buildFunnel,
   buildCleanup,
   leadRadarSummary,
+  computeLeadConversionStats,
   NON_MEMBER_STATUSES,
 } from '@/lib/lead-radar'
 
@@ -104,8 +105,12 @@ export async function loadFunnel(db, locationId, nowMs = Date.now()) {
     funnel.push({ ...r, lastContacted: lastContacted.get(r.contactId) || null })
   }
 
+  // LEAD-OUTCOMES.1 — did the outreach land? Of the leads contacted
+  // in the last 90 days, how many booked or attended afterwards.
+  const conversion = computeLeadConversionStats(contacts, actions, nowMs)
+
   const summary = leadRadarSummary(contacts, nowMs)
-  return { funnel, summary: { ...summary, snoozed } }
+  return { funnel, summary: { ...summary, snoozed, conversion } }
 }
 
 /**
