@@ -8,9 +8,9 @@
 //
 // Adding a third tenant brand (another gym, another car business,
 // a partner studio's storefront, etc.) historically meant editing
-// src/middleware.js to hand-code a third hostname branch. This
+// src/proxy.js to hand-code a third hostname branch. This
 // registry moves that decision into data — adding a brand is one
-// entry below; the middleware iterates and matches.
+// entry below; the proxy iterates and matches.
 //
 // Two response modes per brand:
 //
