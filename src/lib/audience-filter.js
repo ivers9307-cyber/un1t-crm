@@ -48,6 +48,11 @@ export const AUDIENCE_FIELDS = Object.freeze({
   //   glofox_membership_type — time (subscription) / num_classes
   //                            (class pack) / payg.
   glofox_membership_type:    { type: 'select',  ops: ['eq', 'neq', 'is_null', 'is_not_null', 'not_null'] },
+  //   glofox_membership_state — active / paused / locked. 'locked' is a
+  //   membership in payment arrears (the churn radar's Overdue tab).
+  //   Exposed so operators can build an "overdue" segment that drives a
+  //   dunning sequence via the segment_added trigger (RADAR-DUNNING.1).
+  glofox_membership_state:   { type: 'select',  ops: ['eq', 'neq', 'is_null', 'is_not_null', 'not_null'] },
   glofox_billing_interval:   { type: 'text',    ops: ['eq', 'neq', 'contains', 'not_contains', 'is_null', 'is_not_null', 'not_null'] },
   glofox_payment_method:     { type: 'text',    ops: ['eq', 'neq', 'contains', 'not_contains', 'is_null', 'is_not_null', 'not_null'] },
   glofox_source:             { type: 'text',    ops: ['eq', 'neq', 'contains', 'not_contains', 'is_null', 'is_not_null', 'not_null'] },

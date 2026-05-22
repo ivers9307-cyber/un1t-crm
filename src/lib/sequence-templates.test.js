@@ -135,3 +135,32 @@ describe('GLOFOX3.5 welcome template', () => {
     expect(tpl.re_enrolment_cooldown_days).toBeGreaterThanOrEqual(180)
   })
 })
+
+// RADAR-DUNNING.1 — the overdue-payment dunning template. Locks down
+// the segment_added trigger + multi-channel shape so a refactor can't
+// silently break the automated arrears chase.
+describe('RADAR-DUNNING.1 overdue dunning template', () => {
+  const tpl = getTemplate('overdue_payment_dunning')
+
+  it('exists in the Recovery category', () => {
+    expect(tpl).not.toBeNull()
+    expect(tpl.category).toBe('Recovery')
+  })
+
+  it('fires on a segment_added trigger with an operator-configured segment', () => {
+    // Config ships empty — the operator points it at their
+    // "Membership State = locked" segment after cloning.
+    expect(tpl.trigger_type).toBe('segment_added')
+    expect(tpl.trigger_config).toEqual({})
+  })
+
+  it('is a multi-touch drip across email and SMS', () => {
+    expect(tpl.steps.length).toBeGreaterThanOrEqual(3)
+    expect(tpl.steps.some((s) => s.step_type === 'email')).toBe(true)
+    expect(tpl.steps.some((s) => s.step_type === 'sms')).toBe(true)
+  })
+
+  it('has a re-enrolment cooldown so a member is not re-chased every cron tick', () => {
+    expect(tpl.re_enrolment_cooldown_days).toBeGreaterThan(0)
+  })
+})

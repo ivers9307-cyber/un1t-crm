@@ -31,6 +31,10 @@ const FIELD_OPTIONS = [
   // member attributes alongside plan / status.
   { value: 'glofox_membership_type', label: 'Membership Type',      type: 'select',
     options: ['time', 'num_classes', 'payg'] },
+  // 'locked' = a membership in payment arrears (the radar's Overdue
+  // tab). Pick it to build an overdue segment for a dunning sequence.
+  { value: 'glofox_membership_state', label: 'Membership State (locked = overdue)', type: 'select',
+    options: ['active', 'paused', 'locked'] },
   { value: 'glofox_membership_expiry', label: 'Membership Renews/Expires', type: 'date' },
   { value: 'glofox_membership_price_cents', label: 'Membership Price (cents)', type: 'number' },
   { value: 'glofox_billing_interval', label: 'Billing Interval',    type: 'text' },
