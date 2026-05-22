@@ -10,6 +10,7 @@ import {
   buildWinback,
   buildOverdue,
   radarSummary,
+  computeRecoveryStats,
   classifyContact,
   MEMBER_STATUSES,
 } from '@/lib/churn-radar'
@@ -115,7 +116,13 @@ export async function loadRadar(db, locationId, nowMs = Date.now()) {
   for (const c of members) {
     if (!triaged.has(c.id) && classifyContact(c) === 'quarantine') quarantineOpen++
   }
-  return { radar, summary: { ...summary, quarantine: quarantineOpen, snoozed } }
+
+  // RADAR-OUTCOMES.1 — did the outreach work? Correlate the action log
+  // against attendance: of the members contacted in the last 90 days,
+  // how many came back to training afterwards.
+  const recovery = computeRecoveryStats(members, actions, nowMs)
+
+  return { radar, summary: { ...summary, quarantine: quarantineOpen, snoozed, recovery } }
 }
 
 /**

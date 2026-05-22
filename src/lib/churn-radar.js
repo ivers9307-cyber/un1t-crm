@@ -494,3 +494,61 @@ export function buildWinback(contacts, nowMs = Date.now()) {
   })
   return rows
 }
+
+// ── recovery / outcomes ──────────────────────────────────────────
+// RADAR-OUTCOMES.1 — close the loop. The radar logs every time the
+// operator reaches out (contacted / task / win-back), but nothing
+// measured whether it worked. computeRecoveryStats correlates those
+// interventions against last_attended_at: of the members reached out
+// to, how many came back to training afterwards. It turns the radar
+// from a to-do list into something that proves its own worth.
+
+// Actions that count as "the operator reached out to this member".
+const INTERVENTION_ACTIONS = Object.freeze(['contacted', 'task_assigned', 'winback_sent'])
+
+// An intervention newer than this is too recent to judge — the member
+// hasn't had a fair chance to come back yet, so it's left out of the
+// rate rather than dragging it down.
+const RECOVERY_GRACE_DAYS = 4
+
+// Only interventions within this window count — matches the radar's
+// 90-day action-log horizon.
+const RECOVERY_WINDOW_DAYS = 90
+
+/**
+ * Recovery stats for a contact batch + action log. A member counts as
+ * "contacted" once they have an intervention action between
+ * RECOVERY_GRACE_DAYS and RECOVERY_WINDOW_DAYS old; they count as
+ * "recovered" if they attended a class AFTER that first intervention.
+ *
+ * @returns {{ contacted: number, recovered: number, recoveryRate: number }}
+ *          recoveryRate is a 0-1 fraction (0 when nobody's been contacted).
+ */
+export function computeRecoveryStats(contacts, actions, nowMs = Date.now()) {
+  // Earliest in-window intervention timestamp per contact.
+  const firstIntervention = new Map()
+  for (const a of actions || []) {
+    if (!a || !INTERVENTION_ACTIONS.includes(a.action)) continue
+    const t = new Date(a.created_at).getTime()
+    if (!Number.isFinite(t)) continue
+    const ageDays = (nowMs - t) / 86_400_000
+    if (ageDays < RECOVERY_GRACE_DAYS || ageDays > RECOVERY_WINDOW_DAYS) continue
+    const cur = firstIntervention.get(a.contact_id)
+    if (cur == null || t < cur) firstIntervention.set(a.contact_id, t)
+  }
+  let contacted = 0
+  let recovered = 0
+  for (const c of contacts || []) {
+    if (!c) continue
+    const interventionAt = firstIntervention.get(c.id)
+    if (interventionAt == null) continue
+    contacted++
+    const att = c.last_attended_at ? new Date(c.last_attended_at).getTime() : null
+    if (att != null && Number.isFinite(att) && att > interventionAt) recovered++
+  }
+  return {
+    contacted,
+    recovered,
+    recoveryRate: contacted > 0 ? recovered / contacted : 0,
+  }
+}

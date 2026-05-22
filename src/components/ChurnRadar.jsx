@@ -15,7 +15,7 @@ import { useEffect, useState, useCallback } from 'react'
 import {
   Radar, AlertTriangle, Clock, TrendingDown, UserX, Phone,
   ClipboardList, MessageCircle, BellOff, Check, CalendarClock, RotateCcw,
-  CreditCard, Ticket,
+  CreditCard, Ticket, TrendingUp,
 } from 'lucide-react'
 
 const TIER_STYLE = {
@@ -178,6 +178,7 @@ export default function ChurnRadar() {
   const summary = radar?.summary || {
     activeBase: 0, atRisk: 0, highRisk: 0, quarantine: 0, paused: 0, overdue: 0,
     snoozed: 0, revenueAtRiskCents: 0, overdueValueCents: 0,
+    recovery: { contacted: 0, recovered: 0, recoveryRate: 0 },
     bySegment: { member: {}, credit: {} },
   }
   const seg = summary.bySegment || { member: {}, credit: {} }
@@ -212,6 +213,19 @@ export default function ChurnRadar() {
         <StatCard label="Paused" value={summary.paused} breakdown="planned freeze" />
         <StatCard label="Quarantine" value={summary.quarantine} />
       </div>
+
+      {/* RADAR-OUTCOMES.1 — closes the loop: of everyone the operator
+          reached out to, how many actually came back to training. */}
+      {summary.recovery?.contacted > 0 && (
+        <div className="mb-6 flex items-center gap-2 rounded-xl border border-green-200 bg-green-50 px-4 py-2.5 text-sm text-green-800">
+          <TrendingUp size={16} className="shrink-0" />
+          <span>
+            <strong>{summary.recovery.recovered} of {summary.recovery.contacted}</strong>
+            {' '}members contacted in the last 90 days came back training
+            {' '}<strong>({Math.round(summary.recovery.recoveryRate * 100)}%)</strong>.
+          </span>
+        </div>
+      )}
 
       {/* Tabs */}
       <div className="flex gap-1 border-b border-un1t-gray mb-4">
