@@ -7,6 +7,7 @@
 
 import {
   buildRadar,
+  buildWinback,
   radarSummary,
   classifyContact,
   MEMBER_STATUSES,
@@ -125,4 +126,68 @@ export async function loadQuarantine(db, locationId) {
     }))
     // Longest-tenured first — those are the most likely stale records.
     .sort((a, b) => new Date(a.joinedAt || 0) - new Date(b.joinedAt || 0))
+}
+
+// WINBACK.1 — statuses a former member can carry. ex_member is in
+// here even though it's outside MEMBER_STATUSES; a lapsed member
+// whose Glofox status flipped to ex_member is a clear win-back case.
+const WINBACK_CONTACT_STATUSES = ['member', 'credit_member', 'ex_member']
+
+/**
+ * Fetch every contact that could be a former member. Paginated, like
+ * fetchMembers, but widened to include ex_member.
+ */
+async function fetchWinbackContacts(db, locationId) {
+  const rows = []
+  const PAGE = 1000
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await db
+      .from('contacts')
+      .select(MEMBER_COLUMNS)
+      .eq('location_id', locationId)
+      .in('glofox_membership_status', WINBACK_CONTACT_STATUSES)
+      .order('id', { ascending: true })
+      .range(from, from + PAGE - 1)
+    if (error) throw new Error(error.message)
+    rows.push(...(data || []))
+    if (!data || data.length < PAGE) break
+  }
+  return rows
+}
+
+/**
+ * Load the win-back list — former members worth re-winning. Snoozed
+ * contacts are counted but excluded; each row carries its most recent
+ * contacting action.
+ *
+ * @returns {Promise<{ winback: object[], summary: object }>}
+ */
+export async function loadWinback(db, locationId, nowMs = Date.now()) {
+  const [contacts, actions] = await Promise.all([
+    fetchWinbackContacts(db, locationId),
+    fetchActions(db, locationId),
+  ])
+
+  // Actions are newest-first — first hit per contact is the latest.
+  const lastContacted = new Map()
+  const snoozedUntil = new Map()
+  for (const a of actions) {
+    if (a.action === 'snoozed' && a.snooze_until) {
+      const cur = snoozedUntil.get(a.contact_id)
+      if (!cur || a.snooze_until > cur) snoozedUntil.set(a.contact_id, a.snooze_until)
+    }
+    if (CONTACTING_ACTIONS.includes(a.action) && !lastContacted.has(a.contact_id)) {
+      lastContacted.set(a.contact_id, { action: a.action, at: a.created_at })
+    }
+  }
+
+  const scored = buildWinback(contacts, nowMs)
+  const winback = []
+  let snoozed = 0
+  for (const r of scored) {
+    const snz = snoozedUntil.get(r.contactId)
+    if (snz && new Date(snz).getTime() > nowMs) { snoozed++; continue }
+    winback.push({ ...r, lastContacted: lastContacted.get(r.contactId) || null })
+  }
+  return { winback, summary: { total: winback.length, snoozed } }
 }
