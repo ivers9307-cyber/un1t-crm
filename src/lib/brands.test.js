@@ -1,5 +1,5 @@
 // Brand registry contract tests. Locks in the resolver semantics +
-// the framework-asset detection used by src/middleware.js. Both are
+// the framework-asset detection used by src/proxy.js. Both are
 // pure JS — no React, no Next runtime — runnable under vitest.
 //
 // Why test this hard: the registry is the only thing standing

@@ -16,7 +16,7 @@ import { Analytics } from '@vercel/analytics/next'
 
 // Routes that should NOT show the CRM sidebar (i.e. anything a
 // non-CRM user might land on — public booking, unsubscribe, deposit
-// payment, etc.). Mirrors the auth allowlist in middleware.js.
+// payment, etc.). Mirrors the auth allowlist in proxy.js.
 const publicPaths = ['/login', '/book/', '/event/', '/unsubscribe/', '/preferences/', '/deposit/', '/welcome']
 
 export default function AppShell({ children, user }) {
