@@ -154,7 +154,11 @@ export default function LeadRadar() {
     funnelTotal: 0, funnel: { attending: 0, fresh: 0 },
     cleanupTotal: 0, cleanup: { cooling: 0, dormant: 0, no_sale: 0 }, snoozed: 0,
     conversion: { contacted: 0, progressed: 0, progressionRate: 0 },
+    trend: null,
   }
+  // LEAD-TREND.1 — week-over-week deltas, null until the first
+  // weekly snapshot exists.
+  const td = summary.trend?.deltas || null
 
   return (
     <div>
@@ -174,13 +178,13 @@ export default function LeadRadar() {
       {/* Summary cards */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 mb-6">
         <StatCard label="Funnel" value={summary.funnelTotal} accent="green"
-          breakdown="live — worth a follow-up" />
+          breakdown="live — worth a follow-up" delta={td?.funnelTotal} />
         <StatCard label="Attending" value={summary.funnel?.attending || 0}
-          breakdown="recent class activity" />
+          breakdown="recent class activity" delta={td?.attending} deltaGoodDir="up" />
         <StatCard label="Fresh" value={summary.funnel?.fresh || 0}
-          breakdown="joined recently, no visit" />
+          breakdown="joined recently, no visit" delta={td?.fresh} deltaGoodDir="up" />
         <StatCard label="Cleanup" value={summary.cleanupTotal} accent="amber"
-          breakdown="dormant — archive candidates" />
+          breakdown="dormant — archive candidates" delta={td?.cleanupTotal} deltaGoodDir="down" />
       </div>
 
       {/* LEAD-OUTCOMES.1 — closes the loop: of the leads contacted,
@@ -221,7 +225,7 @@ export default function LeadRadar() {
 
 // ── small pieces ─────────────────────────────────────────────────
 
-function StatCard({ label, value, accent, breakdown }) {
+function StatCard({ label, value, accent, breakdown, delta, deltaGoodDir }) {
   const valueCls = accent === 'green' ? 'text-green-600'
     : accent === 'amber' ? 'text-amber-600' : 'text-un1t-white'
   return (
@@ -229,7 +233,27 @@ function StatCard({ label, value, accent, breakdown }) {
       <p className="text-xs text-un1t-light">{label}</p>
       <p className={`mt-1 text-2xl font-bold tabular-nums ${valueCls}`}>{value}</p>
       {breakdown && <p className="mt-0.5 text-[11px] text-un1t-mid">{breakdown}</p>}
+      <TrendDelta delta={delta} goodDir={deltaGoodDir} />
     </div>
+  )
+}
+
+// LEAD-TREND.1 — week-over-week delta line under a stat value.
+// Coloured good / bad when a direction is given (a growing cleanup
+// backlog is bad); muted for no-change or no-direction.
+function TrendDelta({ delta, goodDir }) {
+  if (!Number.isFinite(delta)) return null  // no snapshot to compare yet
+  if (delta === 0) {
+    return <p className="mt-0.5 text-[11px] text-un1t-mid">— no change vs last week</p>
+  }
+  const up = delta > 0
+  let cls = 'text-un1t-mid'
+  if (goodDir === 'up') cls = up ? 'text-green-600' : 'text-red-600'
+  else if (goodDir === 'down') cls = up ? 'text-red-600' : 'text-green-600'
+  return (
+    <p className={`mt-0.5 text-[11px] font-medium ${cls}`}>
+      {up ? '▲' : '▼'} {Math.abs(delta)} vs last week
+    </p>
   )
 }
 

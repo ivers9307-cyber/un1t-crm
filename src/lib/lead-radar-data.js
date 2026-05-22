@@ -11,6 +11,7 @@ import {
   buildCleanup,
   leadRadarSummary,
   computeLeadConversionStats,
+  computeLeadTrend,
   NON_MEMBER_STATUSES,
 } from '@/lib/lead-radar'
 
@@ -110,7 +111,21 @@ export async function loadFunnel(db, locationId, nowMs = Date.now()) {
   const conversion = computeLeadConversionStats(contacts, actions, nowMs)
 
   const summary = leadRadarSummary(contacts, nowMs)
-  return { funnel, summary: { ...summary, snoozed, conversion } }
+  const finalSummary = { ...summary, snoozed, conversion }
+
+  // LEAD-TREND.1 — week-over-week deltas vs the most recent weekly
+  // snapshot (written by the lead-radar-snapshot cron). Null until
+  // the first snapshot exists.
+  const { data: snapshot } = await db
+    .from('lead_radar_snapshots')
+    .select('captured_at, funnel_total, attending, fresh, cleanup_total')
+    .eq('location_id', locationId)
+    .order('captured_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  finalSummary.trend = computeLeadTrend(finalSummary, snapshot || null)
+
+  return { funnel, summary: finalSummary }
 }
 
 /**
