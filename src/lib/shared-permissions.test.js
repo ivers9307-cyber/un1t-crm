@@ -25,7 +25,7 @@ import {
   LANDING_PREFERENCE_TARGETS,
   resolveLandingPreference,
 } from '@shared/permissions'
-import { hasPermission } from './permissions.js'
+import { hasPermission, hasMobilePermission } from './permissions.js'
 
 const ROLES = ['owner', 'manager', 'head_coach', 'staff']
 
@@ -349,6 +349,86 @@ describe('hasPermission three-tier resolution (mig 058: per-location override)',
     // a notify_* key showed up in the web check, the location wouldn't
     // gate it.
     expect(() => hasPermission(user, 'notify_swap')).not.toThrow()
+  })
+})
+
+describe('MOBILE-RADAR — radar mobile permissions', () => {
+  it('churn_radar + lead_radar are registered mobile permission keys', () => {
+    expect(MOBILE_PERMISSION_KEYS).toContain('churn_radar')
+    expect(MOBILE_PERMISSION_KEYS).toContain('lead_radar')
+  })
+
+  it('mobile radar entries map to the matching web permission', () => {
+    for (const key of ['churn_radar', 'lead_radar']) {
+      const entry = MOBILE_PERMISSIONS.find(m => m.key === key)
+      expect(entry, `${key} mobile entry`).toBeDefined()
+      expect(entry.webEquivalent).toBe(key)
+    }
+  })
+
+  it('role defaults: owner/head_coach on, manager/staff off', () => {
+    for (const key of ['churn_radar', 'lead_radar']) {
+      expect(DEFAULT_MOBILE_PERMISSIONS_BY_ROLE.owner[key]).toBe(true)
+      expect(DEFAULT_MOBILE_PERMISSIONS_BY_ROLE.head_coach[key]).toBe(true)
+      expect(DEFAULT_MOBILE_PERMISSIONS_BY_ROLE.manager[key]).toBe(false)
+      expect(DEFAULT_MOBILE_PERMISSIONS_BY_ROLE.staff[key]).toBe(false)
+    }
+  })
+})
+
+describe('hasMobilePermission — server-side .mobile gate', () => {
+  const u = (overrides = {}) => ({
+    role: 'head_coach',
+    activeLocation: { id: 'loc1', features: {} },
+    activeAssignment: { permissions: { mobile: {} } },
+    ...overrides,
+  })
+
+  it('returns false for a null user', () => {
+    expect(hasMobilePermission(null, 'churn_radar')).toBe(false)
+  })
+
+  it('falls back to the mobile role default when there is no override', () => {
+    expect(hasMobilePermission(u({ role: 'head_coach' }), 'churn_radar')).toBe(true)
+    expect(hasMobilePermission(u({ role: 'staff' }), 'churn_radar')).toBe(false)
+    expect(hasMobilePermission(u({ role: 'owner' }), 'lead_radar')).toBe(true)
+    expect(hasMobilePermission(u({ role: 'manager' }), 'lead_radar')).toBe(false)
+  })
+
+  it('reads the per-user override from the .mobile namespace', () => {
+    // Explicit true grants even for a role whose default is false.
+    expect(hasMobilePermission(
+      u({ role: 'staff', activeAssignment: { permissions: { mobile: { churn_radar: true } } } }),
+      'churn_radar',
+    )).toBe(true)
+    // Explicit false denies even for a role whose default is true.
+    expect(hasMobilePermission(
+      u({ role: 'owner', activeAssignment: { permissions: { mobile: { lead_radar: false } } } }),
+      'lead_radar',
+    )).toBe(false)
+  })
+
+  it('ignores a top-level (non-.mobile) override — mobile keys are namespaced', () => {
+    // A churn_radar key at the top level of the bag is the WEB
+    // permission; it must not leak into the mobile resolution.
+    expect(hasMobilePermission(
+      u({ role: 'staff', activeAssignment: { permissions: { churn_radar: true } } }),
+      'churn_radar',
+    )).toBe(false)
+  })
+
+  it('honours the location feature gate (tier 1)', () => {
+    expect(hasMobilePermission(
+      u({ role: 'owner', activeLocation: { id: 'loc1', features: { churn_radar: false } } }),
+      'churn_radar',
+    )).toBe(false)
+  })
+
+  it('master bypasses the per-user tiers once the location gate passes', () => {
+    expect(hasMobilePermission(
+      u({ role: 'master', activeAssignment: { permissions: { mobile: {} } } }),
+      'churn_radar',
+    )).toBe(true)
   })
 })
 
