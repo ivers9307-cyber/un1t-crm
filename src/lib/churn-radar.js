@@ -14,15 +14,17 @@
 // left. Members with a live membership but no attendance/booking
 // footprint go to Quarantine for a one-off "are these real?" triage.
 //
-// Three data-backed signals:
-//   - Gone quiet   — attended before, but not in the last 14-45 days.
-//   - Disengaging  — was a regular (4+/30d) but zero in the last 7d.
-//   - No-show      — booking classes then not turning up.
+// Signals (each detector returns a weighted signal or null):
+//   - Gone quiet    — attended before, but not in the last 14-45 days.
+//   - Disengaging   — was a regular (4+/30d) but zero in the last 7d.
+//   - No-show       — booking classes then not turning up.
+//   - Renewal cliff — a membership renewing soon with low attendance.
+//   - Pack low      — a class-pack member down to their last 1-2
+//                     classes; a rebuy nudge before the pack empties.
 // A member can trip several; weights sum into a risk score + tier.
 //
-// A fourth signal (Payment trouble) is deliberately absent — Glofox
-// sync carries lifecycle status, not billing health. It lands in
-// Phase 2 once a billing-status field is synced.
+// Billing health is handled separately — members whose payment has
+// failed land in the Overdue tab (see classifyContact), not here.
 
 // Membership tiers that count as paying members — the radar's
 // population. Drop-in (classpass_payg), trials and leads are out.
@@ -55,6 +57,13 @@ const TIER_MEDIUM = 3
 // whose owner isn't actively attending probably won't renew.
 const RENEWAL_CLIFF_DAYS = 30
 const RENEWAL_CLIFF_CRITICAL_DAYS = 14
+
+// Pack running-low — a class-pack member down to their last classes.
+// A pack that empties without a rebuy is silent churn, so the 1-2
+// credits window is flagged as a renewal nudge. ≤1 is critical: the
+// next class empties the pack.
+const PACK_LOW_CREDITS = 2
+const PACK_CRITICAL_CREDITS = 1
 
 // ── helpers ──────────────────────────────────────────────────────
 
@@ -226,7 +235,29 @@ function detectRenewalCliff(contact, nowMs) {
   }
 }
 
-const DETECTORS = [detectGoneQuiet, detectDisengaging, detectNoShow, detectRenewalCliff]
+// RADAR-LOW.1 — class-pack member down to their last 1-2 classes. A
+// pack emptying without a rebuy is silent churn, and unlike the
+// attendance signals it fires precisely BECAUSE they've been training
+// (that's how the pack ran down) — the exact moment to sell a top-up.
+function detectPackRunningLow(contact) {
+  if (contact.glofox_membership_type !== 'num_classes') return null
+  const credits = Number(contact.trial_credits_remaining)
+  if (!Number.isFinite(credits) || credits <= 0) return null
+  if (credits > PACK_LOW_CREDITS) return null
+  const critical = credits <= PACK_CRITICAL_CREDITS
+  return {
+    key: 'pack_low',
+    label: 'Pack running low',
+    detail: `${credits} class${credits === 1 ? '' : 'es'} left — nudge a rebuy`,
+    weight: critical ? 3 : 2,
+    severity: critical ? 'critical' : 'warning',
+  }
+}
+
+const DETECTORS = [
+  detectGoneQuiet, detectDisengaging, detectNoShow, detectRenewalCliff,
+  detectPackRunningLow,
+]
 
 // ── scoring ──────────────────────────────────────────────────────
 

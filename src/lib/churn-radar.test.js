@@ -357,6 +357,39 @@ describe('Renewal-cliff signal', () => {
   })
 })
 
+describe('RADAR-LOW.1 — Pack running-low signal', () => {
+  it('fires (critical) for a pack down to its last class', () => {
+    const r = scoreMember(pack({ trial_credits_remaining: 1 }), NOW)
+    const s = r.signals.find((x) => x.key === 'pack_low')
+    expect(s).toBeTruthy()
+    expect(s.severity).toBe('critical')
+    expect(s.weight).toBe(3)
+  })
+  it('fires (warning) at 2 classes left', () => {
+    const r = scoreMember(pack({ trial_credits_remaining: 2 }), NOW)
+    const s = r.signals.find((x) => x.key === 'pack_low')
+    expect(s.severity).toBe('warning')
+    expect(s.weight).toBe(2)
+  })
+  it('does not fire for a pack with classes to spare', () => {
+    const r = scoreMember(pack({ trial_credits_remaining: 5 }), NOW)
+    expect(r == null || !r.signals.some((x) => x.key === 'pack_low')).toBe(true)
+  })
+  it('does not fire for a subscription member with a stray credits value', () => {
+    const r = scoreMember(healthy({ trial_credits_remaining: 1 }), NOW)
+    expect(r == null || !r.signals.some((x) => x.key === 'pack_low')).toBe(true)
+  })
+  it('stacks with gone-quiet for a lapsing low pack', () => {
+    const r = scoreMember(pack({
+      trial_credits_remaining: 1,
+      last_attended_at: daysAgo(20), total_attended_7d: 0, total_attended_30d: 2,
+    }), NOW)
+    expect(r.signals.map((s) => s.key).sort()).toEqual(['gone_quiet', 'pack_low'])
+    expect(r.score).toBe(5)        // pack_low 3 + gone_quiet 2
+    expect(r.tier).toBe('high')
+  })
+})
+
 describe('revenue weighting', () => {
   it('scoreMember carries the monthly value + days to renewal', () => {
     const r = scoreMember(healthy({
