@@ -11,6 +11,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { loadFunnel } from '@/lib/lead-radar-data'
+import { radarCache } from '@/lib/radar-cache'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -30,7 +31,7 @@ export async function GET() {
 
   const db = createServerClient()
   try {
-    const data = await loadFunnel(db, locationId)
+    const data = await radarCache('lead', locationId, 'funnel', () => loadFunnel(db, locationId))
     return NextResponse.json({ success: true, data })
   } catch (e) {
     return NextResponse.json({ success: false, error: e.message || 'fetch_failed' }, { status: 500 })

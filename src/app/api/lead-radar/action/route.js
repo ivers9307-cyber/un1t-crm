@@ -16,6 +16,7 @@ import { NextResponse } from 'next/server'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
+import { invalidateRadar } from '@/lib/radar-cache'
 import { logWarn, logInfo } from '@/lib/log'
 
 export const runtime = 'nodejs'
@@ -75,6 +76,10 @@ export async function POST(request) {
     logWarn('lead-radar', 'action log insert failed', { err: logErr, contactId, action })
     return NextResponse.json({ success: false, error: logErr.message }, { status: 500 })
   }
+
+  // The action (contacted / snoozed) changes the funnel — drop the
+  // cached radar surfaces so the next read + badge poll reflect it.
+  invalidateRadar('lead', locationId)
 
   logInfo('lead-radar', 'radar action', { contactId, action, actor: user.id })
   return NextResponse.json({ success: true, data: { action } })

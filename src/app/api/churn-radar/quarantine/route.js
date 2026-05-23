@@ -16,6 +16,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { loadQuarantine } from '@/lib/churn-radar-data'
+import { radarCache, invalidateRadar } from '@/lib/radar-cache'
 import { logWarn } from '@/lib/log'
 
 export const runtime = 'nodejs'
@@ -41,7 +42,10 @@ export async function GET() {
   if (access.error) return access.error
   const db = createServerClient()
   try {
-    const items = await loadQuarantine(db, access.locationId)
+    const items = await radarCache(
+      'churn', access.locationId, 'quarantine',
+      () => loadQuarantine(db, access.locationId),
+    )
     return NextResponse.json({ success: true, data: { items } })
   } catch (e) {
     return NextResponse.json({ success: false, error: e.message || 'fetch_failed' }, { status: 500 })
@@ -107,6 +111,10 @@ export async function POST(request) {
     logWarn('churn-radar', 'quarantine log insert failed', { err: logErr })
     return NextResponse.json({ success: false, error: logErr.message }, { status: 500 })
   }
+
+  // Triage changes what the radar shows — drop the cached surfaces so
+  // the next read (and the sidebar badge poll) reflects it immediately.
+  invalidateRadar('churn', locationId)
 
   return NextResponse.json({ success: true, data: { triaged: ids.length, decision } })
 }

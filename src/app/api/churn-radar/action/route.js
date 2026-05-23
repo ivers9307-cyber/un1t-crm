@@ -25,6 +25,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { sendTextMessage } from '@/lib/whatsapp'
+import { invalidateRadar } from '@/lib/radar-cache'
 import { logWarn, logInfo } from '@/lib/log'
 
 export const runtime = 'nodejs'
@@ -129,6 +130,11 @@ export async function POST(request) {
     logWarn('churn-radar', 'action log insert failed', { err: logErr, contactId, action })
     return NextResponse.json({ success: false, error: logErr.message }, { status: 500 })
   }
+
+  // The action (contacted / task / winback / snooze) changes the
+  // radar — drop the cached surfaces so the next read + badge poll
+  // reflect it immediately rather than after the TTL.
+  invalidateRadar('churn', locationId)
 
   logInfo('churn-radar', 'radar action', { contactId, action, actor: user.id })
   return NextResponse.json({ success: true, data: { action } })
