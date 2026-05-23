@@ -24,7 +24,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { hasPermission, hasMobilePermission } from '@/lib/permissions'
 import { validateBody } from '@/lib/validate'
 import { sendTextMessage, sendTemplateMessage, isWindowOpen } from '@/lib/whatsapp'
 import {
@@ -55,7 +55,9 @@ export async function POST(request, props) {
   if (!user) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
   }
-  if (!hasPermission(user, 'whatsapp')) {
+  // Web sidebar `whatsapp` OR the `.mobile.whatsapp` toggle — the
+  // composer ships on both the web contact profile and the iOS app.
+  if (!hasPermission(user, 'whatsapp') && !hasMobilePermission(user, 'whatsapp')) {
     return NextResponse.json({ success: false, error: 'Forbidden — WhatsApp not enabled at this location for your role' }, { status: 403 })
   }
 
