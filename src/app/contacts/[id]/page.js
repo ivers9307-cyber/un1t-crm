@@ -6,6 +6,8 @@ import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import ContactActions from '@/components/ContactActions'
+import ContactComposer from '@/components/ContactComposer'
+import { extractTemplateBody, isSendableUtilityTemplate } from '@/lib/radar-outreach'
 import StartWhatsAppButton from '@/components/StartWhatsAppButton'
 import ContactRaceHistory from '@/components/ContactRaceHistory'
 import ContactEditDeleteActions from '@/components/ContactEditDeleteActions'
@@ -55,7 +57,7 @@ export default async function ContactDetailPage(props) {
     db.from('notes').select('*').eq('contact_id', id).order('created_at', { ascending: false }),
     db.from('activities').select('*').eq('contact_id', id).order('created_at', { ascending: false }),
     db.from('bookings').select('*, event_types(name, color)').eq('contact_id', id).order('booking_date', { ascending: true }),
-    db.from('whatsapp_conversations').select('id, wa_phone, last_message_at, last_message_preview, last_message_direction, unread_count, status').eq('contact_id', id).order('last_message_at', { ascending: false }),
+    db.from('whatsapp_conversations').select('id, wa_phone, last_message_at, last_message_preview, last_message_direction, unread_count, status, window_expires_at').eq('contact_id', id).order('last_message_at', { ascending: false }),
   ])
 
   if (!contactRes.data) notFound()
@@ -66,6 +68,34 @@ export default async function ContactDetailPage(props) {
   const activities = activitiesRes.data || []
   const bookings = bookingsRes.data || []
   const waConversations = waConvRes.data || []
+
+  // CONTACT-COMPOSER.1 — messaging context for the unified composer.
+  const canWhatsApp = hasPermission(user, 'whatsapp')
+  const canSms = hasPermission(user, 'sms')
+  const latestWaConversation = waConversations[0] || null
+  const whatsappWindowOpen = latestWaConversation?.window_expires_at
+    ? new Date(latestWaConversation.window_expires_at) > new Date()
+    : false
+  // Approved WhatsApp UTILITY templates the composer offers once the
+  // 24h window has closed. Loaded only when the caller can WhatsApp.
+  let composerTemplates = []
+  if (canWhatsApp) {
+    const { data: rawTemplates } = await db
+      .from('whatsapp_templates')
+      .select('name, language, components, status, category')
+      .eq('location_id', contact.location_id)
+      .eq('category', 'UTILITY')
+      .eq('status', 'APPROVED')
+      .order('name', { ascending: true })
+    composerTemplates = (rawTemplates || [])
+      .filter(isSendableUtilityTemplate)
+      .map((t) => ({
+        name: t.name,
+        language: t.language || 'en',
+        bodyText: extractTemplateBody(t.components).bodyText,
+        sendable: true,
+      }))
+  }
 
   const today = new Date().toISOString().split('T')[0]
   const upcomingBookings = bookings.filter(b => b.booking_date >= today && b.status === 'confirmed')
@@ -355,17 +385,26 @@ export default async function ContactDetailPage(props) {
           </div>
         </div>
 
-        {/* Right: Timeline */}
+        {/* Right: Composer + Timeline */}
         <div className="col-span-2">
+          <ContactComposer
+            contactId={contact.id}
+            contactName={contact.first_name || contact.name}
+            canWhatsApp={canWhatsApp}
+            canSms={canSms}
+            hasWaPhone={!!(contact.wa_phone || contact.phone)}
+            hasPhone={!!contact.phone}
+            smsBlocked={!!(contact.sms_status && contact.sms_status !== 'active')}
+            whatsappWindowOpen={whatsappWindowOpen}
+            whatsappWindowExpiresAt={latestWaConversation?.window_expires_at || null}
+            templates={composerTemplates}
+          />
           <div className="bg-un1t-dark border border-un1t-gray rounded-lg">
             <div className="flex items-center justify-between p-4 border-b border-un1t-gray">
               <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light">Timeline</h3>
               <ContactActions
                 contactId={contact.id}
                 locationId={contact.location_id}
-                canSms={hasPermission(user, 'sms')}
-                hasPhone={!!contact.phone}
-                smsBlocked={contact.sms_status && contact.sms_status !== 'active'}
               />
             </div>
             <div className="divide-y divide-un1t-gray">

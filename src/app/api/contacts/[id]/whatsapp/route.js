@@ -1,0 +1,215 @@
+// POST /api/contacts/[id]/whatsapp — contact-scoped WhatsApp send.
+//
+// CONTACT-COMPOSER.1 — backs the unified "Message this customer"
+// composer on the contact profile. One call: get-or-create the
+// contact's whatsapp_conversation, send, and log.
+//
+// Body is exactly one of:
+//   { text }          — free text. Only delivers inside the open 24h
+//                       customer-service window; 409 (window_expired)
+//                       if the window has closed.
+//   { template_name } — an approved WhatsApp UTILITY template, which
+//                       delivers regardless of the window. A single
+//                       body variable (if any) is filled with the
+//                       contact's first name.
+//
+// Authorization: the 'whatsapp' permission + the contact's location
+// (assertLocationAccess — same IDOR guard the SMS surface uses).
+//
+// Side effects on success: a whatsapp_messages row, the conversation's
+// last-message fields refreshed, and a 'whatsapp_sent' activity on the
+// contact timeline (mirrors the ad-hoc SMS surface).
+
+import { NextResponse } from 'next/server'
+import { z } from 'zod'
+import { createServerClient } from '@/lib/supabase'
+import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { hasPermission } from '@/lib/permissions'
+import { validateBody } from '@/lib/validate'
+import { sendTextMessage, sendTemplateMessage, isWindowOpen } from '@/lib/whatsapp'
+import {
+  extractTemplateBody,
+  isSendableUtilityTemplate,
+  buildBodyComponents,
+} from '@/lib/radar-outreach'
+
+export const runtime = 'nodejs'
+
+const SendSchema = z.object({
+  text: z.string().min(1).max(4096).optional(),
+  template_name: z.string().min(1).max(200).optional(),
+}).refine((d) => Boolean(d.text) !== Boolean(d.template_name), {
+  message: 'Provide exactly one of text or template_name',
+})
+
+function firstNameOf(contact) {
+  if (contact?.first_name && String(contact.first_name).trim()) {
+    return String(contact.first_name).trim()
+  }
+  return String(contact?.name || '').trim().split(/\s+/)[0] || 'there'
+}
+
+export async function POST(request, props) {
+  const params = await props.params
+  const user = await getCurrentUser()
+  if (!user) {
+    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+  }
+  if (!hasPermission(user, 'whatsapp')) {
+    return NextResponse.json({ success: false, error: 'Forbidden — WhatsApp not enabled at this location for your role' }, { status: 403 })
+  }
+
+  const validation = await validateBody(request, SendSchema)
+  if (!validation.ok) return validation.response
+  const { text, template_name } = validation.data
+
+  const { id: contactId } = params
+  const db = createServerClient()
+
+  const { data: contact, error: contactErr } = await db
+    .from('contacts')
+    .select('id, name, first_name, phone, wa_phone, location_id')
+    .eq('id', contactId)
+    .single()
+  if (contactErr || !contact) {
+    return NextResponse.json({ success: false, error: 'Contact not found' }, { status: 404 })
+  }
+
+  // IDOR guard — caller must be assigned to the contact's location.
+  const guard = assertLocationAccess(user, contact.location_id)
+  if (guard) return guard
+
+  const phone = contact.wa_phone || contact.phone
+  if (!phone) {
+    return NextResponse.json({ success: false, error: 'Contact has no phone number on file' }, { status: 400 })
+  }
+  // Meta wants the number without a leading '+'.
+  const waPhone = phone.startsWith('+') ? phone.slice(1) : phone
+
+  // ── Get-or-create the conversation ──────────────────────────────
+  let conversation = null
+  const { data: existing } = await db
+    .from('whatsapp_conversations')
+    .select('id, window_expires_at, location_id')
+    .eq('contact_id', contactId)
+    .order('last_message_at', { ascending: false, nullsFirst: false })
+    .limit(1)
+  conversation = existing?.[0] || null
+
+  if (!conversation) {
+    const { data: created, error: convErr } = await db
+      .from('whatsapp_conversations')
+      .insert({
+        location_id: contact.location_id,
+        contact_id: contactId,
+        wa_phone: waPhone,
+        status: 'active',
+      })
+      .select('id, window_expires_at, location_id')
+      .single()
+    if (created) {
+      conversation = created
+    } else {
+      // Unique-constraint race on wa_phone — adopt the existing row.
+      const { data: byPhone } = await db
+        .from('whatsapp_conversations')
+        .select('id, window_expires_at, location_id')
+        .eq('wa_phone', waPhone)
+        .eq('location_id', contact.location_id)
+        .limit(1)
+      conversation = byPhone?.[0] || null
+      if (conversation) {
+        await db.from('whatsapp_conversations').update({ contact_id: contactId }).eq('id', conversation.id)
+      }
+    }
+    if (!conversation) {
+      return NextResponse.json({ success: false, error: convErr?.message || 'Could not open a conversation' }, { status: 500 })
+    }
+  }
+
+  // ── Send ────────────────────────────────────────────────────────
+  let result
+  let messageType
+  let messageBody
+  let sentTemplateName = null
+  try {
+    if (text) {
+      // Free text only delivers inside the open 24h window.
+      if (!isWindowOpen(conversation)) {
+        return NextResponse.json({
+          success: false,
+          error: 'The 24-hour messaging window has closed. Send an approved template to reopen the conversation, or use SMS.',
+          window_expired: true,
+        }, { status: 409 })
+      }
+      result = await sendTextMessage(waPhone, text, { locationId: contact.location_id })
+      messageType = 'text'
+      messageBody = text
+    } else {
+      // Template — re-verify server-side that it's a sendable utility
+      // template; never trust the client's pick.
+      const { data: rows } = await db
+        .from('whatsapp_templates')
+        .select('name, language, category, status, components')
+        .eq('location_id', contact.location_id)
+        .eq('name', template_name)
+        .order('created_at', { ascending: false })
+        .limit(1)
+      const template = rows?.[0]
+      if (!template) {
+        return NextResponse.json({ success: false, error: 'That template was not found for this location.' }, { status: 404 })
+      }
+      if (!isSendableUtilityTemplate(template)) {
+        return NextResponse.json({ success: false, error: 'That template is not an approved utility template that can be sent.' }, { status: 400 })
+      }
+      const { varCount } = extractTemplateBody(template.components)
+      const components = buildBodyComponents(varCount, firstNameOf(contact))
+      result = await sendTemplateMessage(
+        waPhone, template.name, template.language || 'en', components,
+        { locationId: contact.location_id },
+      )
+      messageType = 'template'
+      messageBody = `[Template: ${template.name}]`
+      sentTemplateName = template.name
+    }
+  } catch (e) {
+    return NextResponse.json({ success: false, error: e?.message || 'Failed to send WhatsApp message' }, { status: 502 })
+  }
+
+  // ── Log ─────────────────────────────────────────────────────────
+  const nowIso = new Date().toISOString()
+  await db.from('whatsapp_messages').insert({
+    conversation_id: conversation.id,
+    contact_id: contactId,
+    location_id: contact.location_id,
+    wa_message_id: result.messageId,
+    direction: 'outbound',
+    message_type: messageType,
+    body: messageBody,
+    template_name: sentTemplateName,
+    status: 'sent',
+    sent_by: user.full_name || null,
+    sent_at: nowIso,
+  })
+  await db.from('whatsapp_conversations').update({
+    last_message_at: nowIso,
+    last_message_direction: 'outbound',
+    last_message_preview: messageBody?.substring(0, 100),
+  }).eq('id', conversation.id)
+  // Timeline activity — mirrors the ad-hoc SMS surface so the
+  // contact's timeline shows the send. Best-effort: the message is
+  // already delivered, so a log failure must not fail the response.
+  await db.from('activities').insert({
+    contact_id: contactId,
+    location_id: contact.location_id,
+    type: 'whatsapp_sent',
+    subject: 'WhatsApp sent',
+    note: messageBody,
+    created_by: user.id,
+  })
+
+  return NextResponse.json({
+    success: true,
+    data: { messageId: result.messageId, conversationId: conversation.id },
+  })
+}
