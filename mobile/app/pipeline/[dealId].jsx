@@ -39,6 +39,8 @@ import {
   listActivitiesForContact, listNotesForContact,
   logActivity, createNote,
 } from '../../lib/pipeline-api'
+import { canMobile } from '../../lib/permissions'
+import ContactComposer from '../../components/ContactComposer'
 
 function ContactActions({ contact }) {
   const items = []
@@ -78,7 +80,7 @@ function Section({ title, children, action }) {
 
 export default function DealDetail() {
   const { dealId } = useLocalSearchParams()
-  const { activeLocation } = useAuth()
+  const { activeLocation, profile } = useAuth()
   const router = useRouter()
   const [deal, setDeal] = useState(null)
   const [stages, setStages] = useState([])
@@ -243,6 +245,18 @@ export default function DealDetail() {
             <ContactActions contact={contact} />
           </View>
         </Section>
+
+        {/* CONTACT-COMPOSER.1 — in-CRM WhatsApp composer (free text
+            while the 24h window is open, utility template once it's
+            closed). Gated on the mobile whatsapp permission + the
+            contact actually having a number to send to. */}
+        {canMobile(profile, 'whatsapp', activeLocation) && (contact?.wa_phone || contact?.phone) && (
+          <ContactComposer
+            contactId={deal.contact_id}
+            contactName={contact?.first_name || name}
+            onSent={refresh}
+          />
+        )}
 
         {/* Stage selector */}
         <Section title="Stage">
