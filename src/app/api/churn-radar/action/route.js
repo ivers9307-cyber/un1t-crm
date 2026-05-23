@@ -3,20 +3,25 @@
 // CHURN-RADAR.1 — per-member radar actions. Body:
 //   { contact_id, action, note?, message?, snooze_days? }
 //
-// action ∈ contacted | task_assigned | winback_sent | snoozed
+// action ∈ contacted | task_assigned | winback_sent | outreach_sent | snoozed
 //   contacted     — log only ("I've reached out").
 //   task_assigned — create a follow-up Task (activities, kind='task')
 //                   assigned to the caller, due in 2 days.
-//   winback_sent  — send a WhatsApp to the member, then log it.
+//   winback_sent  — send a free-text WhatsApp to the member, then log it.
+//   outreach_sent — RADAR-OUTREACH.1: send an operator-selected
+//                   WhatsApp UTILITY template, then log it (with the
+//                   template name). Unlike winback_sent's free text, a
+//                   template delivers outside the 24h window — which is
+//                   the whole point, since the radar's population has
+//                   gone quiet.
 //   snoozed       — hide the member from the radar for snooze_days
 //                   (default 14).
 //
 // Every action also writes a churn_radar_actions audit row.
 //
-// Win-back caveat: WhatsApp free-text only delivers inside an open
-// 24h customer-service window. Members who haven't messaged recently
-// won't have one — the call fails and the UI tells the coach to
-// reach out manually. A pre-approved win-back template is Phase 2.
+// Win-back caveat: WhatsApp free-text (winback_sent) only delivers
+// inside an open 24h customer-service window. Members who haven't
+// messaged recently won't have one — prefer outreach_sent (template).
 //
 // Access: churn_radar permission (owner + head_coach by default).
 
@@ -25,13 +30,14 @@ import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { sendTextMessage } from '@/lib/whatsapp'
+import { sendRadarOutreach } from '@/lib/radar-outreach'
 import { invalidateRadar } from '@/lib/radar-cache'
 import { logWarn, logInfo } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-const RADAR_ACTIONS = ['contacted', 'task_assigned', 'winback_sent', 'snoozed']
+const RADAR_ACTIONS = ['contacted', 'task_assigned', 'winback_sent', 'outreach_sent', 'snoozed']
 const SNOOZE_DEFAULT_DAYS = 14
 const TASK_DUE_DAYS = 2
 
@@ -115,6 +121,24 @@ export async function POST(request) {
         error: 'Couldn\'t send the WhatsApp — the member has no open message window. Reach out manually.',
       }, { status: 502 })
     }
+  }
+
+  // ── outreach_sent — send a selected WhatsApp utility template ───
+  if (action === 'outreach_sent') {
+    const templateName = body?.template_name ? String(body.template_name).trim() : ''
+    if (!templateName) {
+      return NextResponse.json({ success: false, error: 'Pick a template to send.' }, { status: 400 })
+    }
+    try {
+      await sendRadarOutreach({ db, contact, templateName, locationId })
+    } catch (e) {
+      logWarn('churn-radar', 'outreach send failed', { err: e, contactId })
+      return NextResponse.json({
+        success: false,
+        error: e.message || 'Could not send the WhatsApp template.',
+      }, { status: 502 })
+    }
+    logRow.template_name = templateName
   }
 
   // ── snoozed — record the until-date ─────────────────────────────

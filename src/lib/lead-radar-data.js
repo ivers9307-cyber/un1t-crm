@@ -22,7 +22,7 @@ const CONTACT_COLUMNS =
   'id, name, email, phone, glofox_membership_status, ' +
   'last_attended_at, last_booked_at, joined_at, lead_source'
 
-const CONTACTING_ACTIONS = ['contacted']
+const CONTACTING_ACTIONS = ['contacted', 'outreach_sent']
 
 /**
  * Fetch every non-member contact at a location. Paginated — the

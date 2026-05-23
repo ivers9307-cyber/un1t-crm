@@ -325,6 +325,13 @@ describe('LEAD-OUTCOMES.1 — computeLeadConversionStats', () => {
     expect(r.contacted).toBe(0)
   })
 
+  it('counts an outreach_sent action as a contact (RADAR-OUTREACH.1)', () => {
+    const r = computeLeadConversionStats(
+      [contact({ id: 'L1', last_attended_at: daysAgo(5) })],
+      [action('L1', 'outreach_sent', 30)], NOW)
+    expect(r).toEqual({ contacted: 1, progressed: 1, progressionRate: 1 })
+  })
+
   it('returns zeroes for empty / null input', () => {
     expect(computeLeadConversionStats([], [], NOW)).toEqual({ contacted: 0, progressed: 0, progressionRate: 0 })
     expect(computeLeadConversionStats(null, null, NOW)).toEqual({ contacted: 0, progressed: 0, progressionRate: 0 })

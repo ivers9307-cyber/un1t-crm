@@ -3,10 +3,15 @@
 // LEAD-RADAR.1 — per-contact funnel actions. Body:
 //   { contact_id, action, note?, snooze_days? }
 //
-// action ∈ contacted | snoozed
-//   contacted — log only ("I've reached out").
-//   snoozed   — hide the contact from the funnel for snooze_days
-//               (default 30).
+// action ∈ contacted | outreach_sent | snoozed
+//   contacted     — log only ("I've reached out").
+//   outreach_sent — RADAR-OUTREACH.1: send an operator-selected
+//                   WhatsApp UTILITY template to the lead, then log it
+//                   (with the template name). A template delivers
+//                   outside the 24h window, so it reaches leads who've
+//                   never messaged the gym.
+//   snoozed       — hide the contact from the funnel for snooze_days
+//                   (default 30).
 //
 // Every action writes a lead_radar_actions audit row.
 //
@@ -16,13 +21,14 @@ import { NextResponse } from 'next/server'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
+import { sendRadarOutreach } from '@/lib/radar-outreach'
 import { invalidateRadar } from '@/lib/radar-cache'
 import { logWarn, logInfo } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-const RADAR_ACTIONS = ['contacted', 'snoozed']
+const RADAR_ACTIONS = ['contacted', 'outreach_sent', 'snoozed']
 const SNOOZE_DEFAULT_DAYS = 30
 
 export async function POST(request) {
@@ -52,10 +58,11 @@ export async function POST(request) {
 
   const db = createServerClient()
 
-  // Scope the contact to the caller's active location.
+  // Scope the contact to the caller's active location. The name /
+  // phone columns are needed when action === 'outreach_sent'.
   const { data: contact } = await db
     .from('contacts')
-    .select('id, location_id')
+    .select('id, location_id, name, first_name, wa_phone, phone')
     .eq('id', contactId)
     .maybeSingle()
   if (!contact || contact.location_id !== locationId) {
@@ -63,6 +70,24 @@ export async function POST(request) {
   }
 
   const logRow = { contact_id: contactId, location_id: locationId, action, note, actor_id: user.id }
+
+  // ── outreach_sent — send a selected WhatsApp utility template ───
+  if (action === 'outreach_sent') {
+    const templateName = body?.template_name ? String(body.template_name).trim() : ''
+    if (!templateName) {
+      return NextResponse.json({ success: false, error: 'Pick a template to send.' }, { status: 400 })
+    }
+    try {
+      await sendRadarOutreach({ db, contact, templateName, locationId })
+    } catch (e) {
+      logWarn('lead-radar', 'outreach send failed', { err: e, contactId })
+      return NextResponse.json({
+        success: false,
+        error: e.message || 'Could not send the WhatsApp template.',
+      }, { status: 502 })
+    }
+    logRow.template_name = templateName
+  }
 
   if (action === 'snoozed') {
     const days = Number.isFinite(Number(body?.snooze_days)) && Number(body.snooze_days) > 0

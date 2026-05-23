@@ -14,9 +14,10 @@
 import { useEffect, useState, useCallback } from 'react'
 import {
   Radar, AlertTriangle, Clock, TrendingDown, UserX, Phone,
-  ClipboardList, MessageCircle, BellOff, Check, CalendarClock, RotateCcw,
+  ClipboardList, BellOff, Check, CalendarClock, RotateCcw,
   CreditCard, Ticket, TrendingUp, Mail,
 } from 'lucide-react'
+import RadarOutreachButton from '@/components/RadarOutreachButton'
 
 const TIER_STYLE = {
   high:   { label: 'High',   cls: 'bg-red-100 text-red-700' },
@@ -360,6 +361,7 @@ const ACTION_DONE = {
   contacted: 'Logged as contacted',
   task_assigned: 'Follow-up task created',
   winback_sent: 'Win-back message sent',
+  outreach_sent: 'WhatsApp template sent',
   snoozed: 'Snoozed for 14 days',
 }
 
@@ -485,8 +487,8 @@ function RadarRow({ m, busy, onAction }) {
           onClick={() => onAction(m.contactId, 'contacted')} />
         <ActionBtn icon={ClipboardList} label="Assign task" disabled={isBusy}
           onClick={() => onAction(m.contactId, 'task_assigned')} />
-        <ActionBtn icon={MessageCircle} label="Win-back" disabled={isBusy} primary
-          onClick={() => onAction(m.contactId, 'winback_sent')} />
+        <RadarOutreachButton contactName={m.name} disabled={isBusy} busy={isBusy}
+          onSelect={(tpl) => onAction(m.contactId, 'outreach_sent', { template_name: tpl })} />
         <ActionBtn icon={BellOff} label="Snooze" disabled={isBusy}
           onClick={() => onAction(m.contactId, 'snoozed')} />
       </div>
@@ -624,8 +626,8 @@ function WinbackRow({ m, busy, onAction }) {
       <div className="mt-3 flex flex-wrap gap-2">
         <ActionBtn icon={Phone} label="Mark contacted" disabled={isBusy}
           onClick={() => onAction(m.contactId, 'contacted')} />
-        <ActionBtn icon={MessageCircle} label="Win-back" disabled={isBusy} primary
-          onClick={() => onAction(m.contactId, 'winback_sent')} />
+        <RadarOutreachButton contactName={m.name} disabled={isBusy} busy={isBusy}
+          onSelect={(tpl) => onAction(m.contactId, 'outreach_sent', { template_name: tpl })} />
         <ActionBtn icon={BellOff} label="Snooze" disabled={isBusy}
           onClick={() => onAction(m.contactId, 'snoozed')} />
       </div>
@@ -701,6 +703,8 @@ function OverdueRow({ m, busy, onAction }) {
           onClick={() => onAction(m.contactId, 'contacted')} />
         <ActionBtn icon={ClipboardList} label="Assign task" disabled={isBusy}
           onClick={() => onAction(m.contactId, 'task_assigned')} />
+        <RadarOutreachButton contactName={m.name} disabled={isBusy} busy={isBusy}
+          onSelect={(tpl) => onAction(m.contactId, 'outreach_sent', { template_name: tpl })} />
       </div>
     </div>
   )

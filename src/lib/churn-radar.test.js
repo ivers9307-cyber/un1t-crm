@@ -544,6 +544,13 @@ describe('RADAR-OUTCOMES.1 — computeRecoveryStats', () => {
     expect(r).toEqual({ contacted: 1, recovered: 0, recoveryRate: 0 })
   })
 
+  it('counts an outreach_sent action as an intervention (RADAR-OUTREACH.1)', () => {
+    const r = computeRecoveryStats(
+      [{ id: 'm1', last_attended_at: daysAgo(10) }],
+      [action('m1', 'outreach_sent', 30)], NOW)
+    expect(r).toEqual({ contacted: 1, recovered: 1, recoveryRate: 1 })
+  })
+
   it('computes the rate across a batch', () => {
     const contacts = [
       { id: 'a', last_attended_at: daysAgo(5) },    // recovered
