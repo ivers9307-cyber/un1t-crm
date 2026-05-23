@@ -20,6 +20,7 @@ import {
   Radar, CreditCard, Clock, Activity, Sparkles, Phone, BellOff,
   Check, Filter, Users, TrendingUp,
 } from 'lucide-react'
+import RadarOutreachButton from '@/components/RadarOutreachButton'
 
 const TIER_STYLE = {
   high:   { label: 'High',   cls: 'bg-red-100 text-red-700' },
@@ -124,17 +125,21 @@ export default function LeadRadar() {
     setTimeout(() => setFlash(null), 5000)
   }
 
-  async function runAction(contactId, action) {
+  async function runAction(contactId, action, extra = {}) {
     setBusy(contactId)
     try {
       const r = await fetch('/api/lead-radar/action', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ contact_id: contactId, action }),
+        body: JSON.stringify({ contact_id: contactId, action, ...extra }),
       })
       const j = await r.json()
       if (!r.ok || !j.success) throw new Error(j.error || 'Action failed')
-      showFlash(action === 'snoozed' ? 'Snoozed for 30 days' : 'Logged as contacted')
+      showFlash(
+        action === 'snoozed' ? 'Snoozed for 30 days'
+          : action === 'outreach_sent' ? 'WhatsApp template sent'
+            : 'Logged as contacted',
+      )
       await loadFunnel()
     } catch (e) {
       showFlash(e.message, false)
@@ -366,6 +371,8 @@ function FunnelRow({ r, busy, onAction }) {
       <div className="mt-3 flex flex-wrap gap-2">
         <ActionBtn icon={Phone} label="Mark contacted" disabled={isBusy}
           onClick={() => onAction(r.contactId, 'contacted')} />
+        <RadarOutreachButton contactName={r.name} disabled={isBusy} busy={isBusy}
+          onSelect={(tpl) => onAction(r.contactId, 'outreach_sent', { template_name: tpl })} />
         <ActionBtn icon={BellOff} label="Snooze" disabled={isBusy}
           onClick={() => onAction(r.contactId, 'snoozed')} />
       </div>

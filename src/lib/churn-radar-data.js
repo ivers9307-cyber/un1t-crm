@@ -29,7 +29,7 @@ const MEMBER_COLUMNS =
   'total_attended_30d, total_attended_7d, total_noshow_30d, ' +
   'total_bookings_30d, joined_at, lifetime_value_cents'
 
-const CONTACTING_ACTIONS = ['contacted', 'task_assigned', 'winback_sent']
+const CONTACTING_ACTIONS = ['contacted', 'task_assigned', 'winback_sent', 'outreach_sent']
 
 // Actions that triage a quarantine record — once a member carries one
 // they're off the quarantine backlog (kept, or marked stale).

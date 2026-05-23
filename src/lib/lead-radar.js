@@ -309,7 +309,7 @@ export function leadRadarSummary(contacts, nowMs = Date.now()) {
 // land".
 
 // Funnel actions that count as "the operator reached out to a lead".
-const LEAD_INTERVENTION_ACTIONS = Object.freeze(['contacted'])
+const LEAD_INTERVENTION_ACTIONS = Object.freeze(['contacted', 'outreach_sent'])
 
 // A contact newer than this is too recent to judge — left out of the
 // rate rather than dragging it down before the lead has had a fair

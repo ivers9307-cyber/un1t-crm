@@ -504,7 +504,7 @@ export function buildWinback(contacts, nowMs = Date.now()) {
 // from a to-do list into something that proves its own worth.
 
 // Actions that count as "the operator reached out to this member".
-const INTERVENTION_ACTIONS = Object.freeze(['contacted', 'task_assigned', 'winback_sent'])
+const INTERVENTION_ACTIONS = Object.freeze(['contacted', 'task_assigned', 'winback_sent', 'outreach_sent'])
 
 // An intervention newer than this is too recent to judge — the member
 // hasn't had a fair chance to come back yet, so it's left out of the
