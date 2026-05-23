@@ -20,6 +20,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { loadCleanup } from '@/lib/lead-radar-data'
+import { radarCache, invalidateRadar } from '@/lib/radar-cache'
 import { logWarn } from '@/lib/log'
 
 export const runtime = 'nodejs'
@@ -51,7 +52,10 @@ export async function GET(request) {
   const bucket = new URL(request.url).searchParams.get('bucket')
   const db = createServerClient()
   try {
-    const { cleanup, summary } = await loadCleanup(db, access.locationId)
+    const { cleanup, summary } = await radarCache(
+      'lead', access.locationId, 'cleanup',
+      () => loadCleanup(db, access.locationId),
+    )
     const filtered = BUCKETS.includes(bucket)
       ? cleanup.filter((r) => r.bucket === bucket)
       : cleanup
@@ -125,6 +129,10 @@ export async function POST(request) {
     logWarn('lead-radar', 'cleanup log insert failed', { err: logErr })
     return NextResponse.json({ success: false, error: logErr.message }, { status: 500 })
   }
+
+  // Triage changes what the radar shows — drop the cached surfaces so
+  // the next read (and the sidebar badge poll) reflects it immediately.
+  invalidateRadar('lead', locationId)
 
   return NextResponse.json({ success: true, data: { triaged: ids.length, decision } })
 }

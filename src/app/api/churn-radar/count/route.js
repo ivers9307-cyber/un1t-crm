@@ -11,6 +11,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { loadRadar } from '@/lib/churn-radar-data'
+import { radarCache } from '@/lib/radar-cache'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -27,7 +28,7 @@ export async function GET() {
 
   const db = createServerClient()
   try {
-    const { radar } = await loadRadar(db, locationId)
+    const { radar } = await radarCache('churn', locationId, 'radar', () => loadRadar(db, locationId))
     const count = radar.filter((r) => r.tier === 'high').length
     return NextResponse.json({ success: true, data: { count } })
   } catch {

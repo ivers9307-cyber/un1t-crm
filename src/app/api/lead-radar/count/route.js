@@ -12,6 +12,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { loadFunnel } from '@/lib/lead-radar-data'
+import { radarCache } from '@/lib/radar-cache'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -28,7 +29,7 @@ export async function GET() {
 
   const db = createServerClient()
   try {
-    const { funnel } = await loadFunnel(db, locationId)
+    const { funnel } = await radarCache('lead', locationId, 'funnel', () => loadFunnel(db, locationId))
     const count = funnel.filter((r) => r.tier === 'high').length
     return NextResponse.json({ success: true, data: { count } })
   } catch {

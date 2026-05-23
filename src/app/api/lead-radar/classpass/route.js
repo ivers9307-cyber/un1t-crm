@@ -19,6 +19,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { loadClassPass } from '@/lib/lead-radar-data'
+import { radarCache } from '@/lib/radar-cache'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -43,7 +44,10 @@ export async function GET(request) {
   const filter = new URL(request.url).searchParams.get('filter')
   const db = createServerClient()
   try {
-    const { classpass, summary } = await loadClassPass(db, locationId)
+    const { classpass, summary } = await radarCache(
+      'lead', locationId, 'classpass',
+      () => loadClassPass(db, locationId),
+    )
     const filtered =
       filter === 'attending' ? classpass.filter((r) => r.attending)
       : filter === 'lapsed'  ? classpass.filter((r) => !r.attending)
