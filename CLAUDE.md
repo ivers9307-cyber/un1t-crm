@@ -1853,6 +1853,9 @@ These are not commitments, just durable notes so we don't re-derive them every s
 - ~~Factor the multi-domain middleware so adding a third brand (e.g. another car business or a partner gym) is a config row, not new code.~~ — **shipped** (#177). New `src/lib/brands.js` registry; middleware iterates. Adding a brand = one entry. 15 contract tests.
 - Brand-aware AppShell — pull header logo + favicon + theme tokens off the active location so CCF Autos visitors at `crm.un1tdublin.com` see car-brand chrome, not gym chrome, without separate deployments.
 
+**Platform roadmap (whole-platform review, 2026-05-23)**
+- A balanced whole-platform review — 19 opportunities across acquisition, retention, member experience, analytics, revenue, ops and platform — lives in `docs/PLATFORM_ROADMAP.md` (also a Cowork artifact, id `un1t-platform-roadmap`). It's a strategic shortlist, not committed work; pull individual items into numbered tasks when picked up. Headline: the platform surfaces who to act on (radars) but doesn't act — wiring one-click templated outreach into the radar "contacted" buttons (#1 in the doc) is the suggested first move. Whole-category gaps confirmed by code search: referral program, member NPS/feedback, reviews/reputation, marketing attribution, an analytics/BI layer.
+
 ### INVOICES-QUEUE.1 — restructure approval-to-Xero flow (3 PRs, designed May 20, build in next session)
 
 **The architectural shift the operator wants** (codified before merging the three open PRs so the next chat picks up with the full plan):
