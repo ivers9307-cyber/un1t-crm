@@ -3,8 +3,9 @@
 // the 24-hour customer-service window is open; a utility-template
 // picker once it's closed.
 //
-// SMS sending on mobile lands with the two-way SMS work; this v1 is
-// WhatsApp only (the .mobile.whatsapp permission already exists).
+// WhatsApp only by design — ad-hoc SMS sends stay on the web contact
+// profile (the `sms` feature is registered web-only in the mobile
+// parity linter). This composer uses the .mobile.whatsapp permission.
 
 import { useState, useEffect, useCallback } from 'react'
 import { View, Text, TextInput, Pressable, ActivityIndicator } from 'react-native'
