@@ -158,6 +158,43 @@ async function findContact(xfetch, { email, name }) {
   return null
 }
 
+// Parse the car's free-text buyer_address into a structured Xero
+// Address. The field is a single textarea — entered manually (newline-
+// separated) or pre-filled from a Xero contact search (comma-joined;
+// see cars/[id]/xero-contact-search/route.js). Split on either, then
+// map positionally — the exact reverse of how the search route
+// flattens an address:
+//
+//   part 1 → AddressLine1
+//   part 2 → AddressLine2
+//   part 3 → City
+//   part 4 → PostalCode
+//   part 5 → Country
+//
+// AddressType is POBOX: Xero treats the POBOX address as the
+// contact's billing address — the one rendered on the invoice —
+// whereas STREET is the delivery address. Any parts past the fifth
+// fold into AddressLine2 so nothing is silently dropped.
+export function parseAddressForXero(raw) {
+  if (!raw || !String(raw).trim()) return null
+  const parts = String(raw)
+    .split(/[\n,]+/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+  if (parts.length === 0) return null
+
+  const [line1, line2, city, postalCode, country, ...overflow] = parts
+  const addressLine2 = [line2, ...overflow].filter(Boolean).join(', ')
+
+  const address = { AddressType: 'POBOX' }
+  if (line1) address.AddressLine1 = line1
+  if (addressLine2) address.AddressLine2 = addressLine2
+  if (city) address.City = city
+  if (postalCode) address.PostalCode = postalCode
+  if (country) address.Country = country
+  return address
+}
+
 async function upsertContact(xfetch, { name, email, phone, address }) {
   if (!name) throw new XeroError('Buyer name is required to create a Xero invoice.')
   const existing = await findContact(xfetch, { email, name })
@@ -178,13 +215,15 @@ async function upsertContact(xfetch, { name, email, phone, address }) {
     return existing
   }
 
-  // Create
+  // Create. The buyer address is split into a structured Xero
+  // Address (billing / POBOX) rather than dumped into a single line.
+  const xeroAddress = parseAddressForXero(address)
   const payload = {
     Contacts: [{
       Name: name,
       ...(email ? { EmailAddress: email } : {}),
       ...(phone ? { Phones: [{ PhoneType: 'DEFAULT', PhoneNumber: phone }] } : {}),
-      ...(address ? { Addresses: [{ AddressType: 'STREET', AddressLine1: address }] } : {}),
+      ...(xeroAddress ? { Addresses: [xeroAddress] } : {}),
     }],
   }
   const json = await xfetch('/Contacts', { method: 'POST', body: payload })
@@ -192,14 +231,18 @@ async function upsertContact(xfetch, { name, email, phone, address }) {
 }
 
 // ── Invoice payload ─────────────────────────────────────────────
-function buildInvoicePayload(car, contactId, brandingThemeId, accountCode, taxType) {
+export function buildInvoicePayload(car, contactId, brandingThemeId, accountCode, taxType) {
   const exVat = Number(car.irish_sale_price_ex_vat || 0)
+  // The UK reg is deliberately omitted from the customer-facing line
+  // description — it's an internal import detail, not something the
+  // Irish buyer's invoice should carry. (It still gates issue via
+  // validateInvoiceFields, and remains available as a Reference
+  // fallback below.)
   const description = [
     'Tesla',
     car.make || '',
     car.model || '',
     car.vehicle_year ? `(${car.vehicle_year})` : '',
-    car.uk_reg ? `· UK reg ${car.uk_reg}` : '',
     car.irish_reg ? `· IE reg ${car.irish_reg}` : '',
     car.vin ? `· VIN ${car.vin}` : '',
   ].filter(Boolean).join(' ').trim()

@@ -6,7 +6,11 @@
 // is the strict exception — must be > 0.
 
 import { describe, it, expect } from 'vitest'
-import { validateInvoiceFields } from './invoices'
+import {
+  validateInvoiceFields,
+  parseAddressForXero,
+  buildInvoicePayload,
+} from './invoices'
 
 // A fully-populated car that should pass with zero errors. Every
 // test below starts from this and removes / blanks one field.
@@ -99,5 +103,95 @@ describe('validateInvoiceFields', () => {
 
   it('handles a null car defensively', () => {
     expect(validateInvoiceFields(null)).toEqual(['No car provided.'])
+  })
+})
+
+// CCF-INVOICE-FIX — the buyer address must reach Xero as a structured
+// billing (POBOX) address, not a single dumped string.
+describe('parseAddressForXero', () => {
+  it('returns null for blank input', () => {
+    expect(parseAddressForXero(null)).toBeNull()
+    expect(parseAddressForXero(undefined)).toBeNull()
+    expect(parseAddressForXero('')).toBeNull()
+    expect(parseAddressForXero('   \n  ')).toBeNull()
+  })
+
+  it('maps a five-line address positionally and flags it as billing (POBOX)', () => {
+    const addr = parseAddressForXero('12 Main Street\nRathmines\nDublin\nD06 XY12\nIreland')
+    expect(addr).toEqual({
+      AddressType: 'POBOX',
+      AddressLine1: '12 Main Street',
+      AddressLine2: 'Rathmines',
+      City: 'Dublin',
+      PostalCode: 'D06 XY12',
+      Country: 'Ireland',
+    })
+  })
+
+  it('splits a comma-joined address the same way (Xero contact-search prefill shape)', () => {
+    const addr = parseAddressForXero('12 Main Street, Rathmines, Dublin, D06 XY12, Ireland')
+    expect(addr).toEqual({
+      AddressType: 'POBOX',
+      AddressLine1: '12 Main Street',
+      AddressLine2: 'Rathmines',
+      City: 'Dublin',
+      PostalCode: 'D06 XY12',
+      Country: 'Ireland',
+    })
+  })
+
+  it('leaves trailing fields unset when there are fewer than five parts', () => {
+    const addr = parseAddressForXero('12 Main Street\nRathmines\nDublin')
+    expect(addr).toEqual({
+      AddressType: 'POBOX',
+      AddressLine1: '12 Main Street',
+      AddressLine2: 'Rathmines',
+      City: 'Dublin',
+    })
+    expect(addr).not.toHaveProperty('PostalCode')
+    expect(addr).not.toHaveProperty('Country')
+  })
+
+  it('handles a single-line address', () => {
+    expect(parseAddressForXero('12 Main Street')).toEqual({
+      AddressType: 'POBOX',
+      AddressLine1: '12 Main Street',
+    })
+  })
+
+  it('folds parts past the fifth into AddressLine2 so nothing is dropped', () => {
+    const addr = parseAddressForXero('Apt 4\nBlock B\nThe Mews\nDublin\nD02 AB12\nIreland')
+    expect(addr.AddressLine1).toBe('Apt 4')
+    expect(addr.AddressLine2).toBe('Block B, Ireland')
+    expect(addr.City).toBe('The Mews')
+    expect(addr.PostalCode).toBe('Dublin')
+    expect(addr.Country).toBe('D02 AB12')
+  })
+
+  it('trims whitespace and drops empty segments', () => {
+    const addr = parseAddressForXero('  12 Main Street  ,, \n  Dublin  \n')
+    expect(addr).toEqual({
+      AddressType: 'POBOX',
+      AddressLine1: '12 Main Street',
+      AddressLine2: 'Dublin',
+    })
+  })
+})
+
+describe('buildInvoicePayload — line description', () => {
+  it('omits the UK reg from the customer-facing description', () => {
+    const payload = buildInvoicePayload(completeCar(), 'CID', null, '200', 'OUTPUT2')
+    const desc = payload.Invoices[0].LineItems[0].Description
+    expect(desc).not.toMatch(/UK reg/i)
+    expect(desc).not.toContain('NL22 MWM')   // the completeCar uk_reg value
+  })
+
+  it('still carries the make, model, year, Irish reg and VIN', () => {
+    const payload = buildInvoicePayload(completeCar(), 'CID', null, '200', 'OUTPUT2')
+    const desc = payload.Invoices[0].LineItems[0].Description
+    expect(desc).toContain('Model 3')
+    expect(desc).toContain('(2022)')
+    expect(desc).toContain('IE reg 221D37742')
+    expect(desc).toContain('VIN LRW3F7FS5NC505371')
   })
 })
