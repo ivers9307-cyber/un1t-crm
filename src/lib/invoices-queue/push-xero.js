@@ -24,6 +24,7 @@
 
 import { createServerClient } from '@/lib/supabase'
 import { withFreshToken, XeroError } from '@/lib/xero/client'
+import { attachInvoiceFile } from '@/lib/xero/attachments'
 
 // ---------------------------------------------------------------
 // Contact resolution
@@ -192,6 +193,7 @@ export async function pushQueueRowToXero(queueId) {
     .from('invoices_queue')
     .select(`
       id, location_id, status, source_type, extracted_fields,
+      attachment_bucket, attachment_path, attachment_filename, attachment_mime_type,
       location:location_id ( id, name )
     `)
     .eq('id', queueId)
@@ -231,6 +233,28 @@ export async function pushQueueRowToXero(queueId) {
   const inv = created?.Invoices?.[0]
   if (!inv?.InvoiceID) {
     throw new XeroError('Xero returned no InvoiceID for the created draft bill.', { body: created })
+  }
+
+  // XERO-ATTACH.1 — attach the original supplier document to the
+  // draft bill, so the bookkeeper sees the source PDF alongside the
+  // figures in Xero (the Dext-style "source attached" behaviour).
+  // Best-effort: the bill is already created, so an attachment
+  // failure must not fail the push — it's logged and swallowed.
+  if (row.attachment_bucket && row.attachment_path) {
+    try {
+      const { data: blob, error: dlErr } = await db.storage
+        .from(row.attachment_bucket)
+        .download(row.attachment_path)
+      if (dlErr || !blob) throw new Error(dlErr?.message || 'storage download returned no file')
+      const bytes = Buffer.from(await blob.arrayBuffer())
+      await attachInvoiceFile(xfetch, inv.InvoiceID, {
+        filename: row.attachment_filename || `invoice-${fields.invoice_number || inv.InvoiceID}.pdf`,
+        mimeType: row.attachment_mime_type,
+        bytes,
+      })
+    } catch (e) {
+      console.warn(`[push-xero ${queueId}] attachment upload failed (bill ${inv.InvoiceID} still created): ${e?.message || e}`)
+    }
   }
 
   // Deep link — Xero's stable Bills-to-pay URL pattern. This
