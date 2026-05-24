@@ -24,6 +24,7 @@ import { NextResponse } from 'next/server'
 import { loadInvoiceForUser } from '../../_helpers'
 import { extractInvoiceFieldsFromBytes } from '@/lib/invoice-extraction'
 import { canTransitionInboundInvoice } from '@/lib/inbound-invoices'
+import { resolveExtractionDefaults } from '@/lib/invoices-queue/supplier-defaults'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -81,12 +82,29 @@ export async function POST(_request, { params }) {
     return NextResponse.json({ success: false, error: result.error }, { status: 422 })
   }
 
+  // SUPPLIER-MEMORY.1 — enrich the extracted fields from supplier
+  // memory. If the extracted supplier name resolves to a known Xero
+  // contact, attach it (so the review screen opens with the supplier
+  // already picked); if that supplier has a remembered account +
+  // category, apply them too. The remembered coding wins over
+  // Claude's per-invoice guess — it's a human's past decision.
+  // Best-effort: a memory miss must never block the extraction.
+  let fields = result.fields
+  try {
+    const patch = await resolveExtractionDefaults(db, row.location_id, fields.supplier_name)
+    if (patch && Object.keys(patch).length > 0) {
+      fields = { ...fields, ...patch }
+    }
+  } catch (e) {
+    console.warn(`[extract ${id}] supplier-memory resolve failed: ${e?.message || e}`)
+  }
+
   // Confidence — coarse heuristic. The Claude prompt asks for
   // canonical fields; if everything required is present we call it
   // high. If subtotal+tax doesn't reconcile to total within €0.01
   // OR a required field is missing we call it medium. Operator
   // always reviews regardless, so this is just a UI hint.
-  const f = result.fields
+  const f = fields
   const reconciles = Math.abs((Number(f.subtotal) + Number(f.tax_amount)) - Number(f.total)) <= 0.01
   const allRequired = f.supplier_name && f.invoice_number && f.invoice_date && Number.isFinite(Number(f.total))
   const confidence = allRequired && reconciles ? 'high' : 'medium'
@@ -96,7 +114,7 @@ export async function POST(_request, { params }) {
     .update({
       status: 'extracted',
       extracted_at: new Date().toISOString(),
-      extracted_fields: result.fields,
+      extracted_fields: fields,
       extraction_confidence: confidence,
       extraction_error: null,
     })
