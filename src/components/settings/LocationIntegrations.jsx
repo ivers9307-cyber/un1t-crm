@@ -43,7 +43,15 @@ export default function LocationIntegrations({ location, xeroConnection, user, s
   const isOwnerOrMaster = user.role === 'master' || user.role === 'owner'
 
   const tabs = []
-  if (isFeatureEnabledAtLocation(location, 'car_processing')) {
+  // Xero is a platform-wide finance integration, not a car-processing
+  // add-on. The invoice-ingest queue (INVOICES-QUEUE.1) pushes every
+  // location's supplier invoices to that location's connected Xero org,
+  // and car_processing locations additionally push car invoices. Show
+  // it to owner/master at every location — this page is already
+  // owner/master-only. Previously gated on `car_processing`, which hid
+  // it (and the chart-of-accounts / contacts sync) from non-CCF
+  // locations like Stillorgan that still need a Xero connection.
+  if (isOwnerOrMaster) {
     tabs.push({
       key: 'xero',
       label: 'Xero',
