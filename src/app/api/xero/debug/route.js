@@ -5,7 +5,6 @@
 
 import { NextResponse } from 'next/server'
 import { getCurrentUser } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
 import { buildAuthorizeUrl, XERO_SCOPES } from '@/lib/xero/client'
 
 export const runtime = 'nodejs'
@@ -14,7 +13,7 @@ export const dynamic = 'force-dynamic'
 export async function GET(req) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  if (!hasPermission(user, 'car_processing')) {
+  if (user.role !== 'owner' && user.role !== 'master') {
     return NextResponse.json({ success: false, error: 'Not permitted' }, { status: 403 })
   }
 

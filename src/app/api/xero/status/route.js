@@ -4,7 +4,6 @@
 
 import { NextResponse } from 'next/server'
 import { getCurrentUser } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 
 export const runtime = 'nodejs'
@@ -13,12 +12,17 @@ export const dynamic = 'force-dynamic'
 export async function GET(req) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  if (!hasPermission(user, 'car_processing')) {
+  if (user.role !== 'owner' && user.role !== 'master') {
     return NextResponse.json({ success: false, error: 'Not permitted' }, { status: 403 })
   }
   const url = new URL(req.url)
   const locationId = url.searchParams.get('location_id') || user.activeLocation?.id
   if (!locationId) return NextResponse.json({ success: false, error: 'location_id required' }, { status: 400 })
+  const isMaster = user.role === 'master'
+  const userLocationIds = (user.locations || []).map((l) => l.id)
+  if (!isMaster && !userLocationIds.includes(locationId)) {
+    return NextResponse.json({ success: false, error: 'Not a member of that location' }, { status: 403 })
+  }
 
   const db = createServerClient()
   const { data: conn } = await db
