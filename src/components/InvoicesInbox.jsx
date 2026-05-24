@@ -819,6 +819,33 @@ function StageTwoBlock({ row, busy, onSaveFields, onApprove, onReject }) {
 
   function setField(k, v) { setFields((f) => ({ ...f, [k]: v })) }
 
+  // SUPPLIER-MEMORY.1 — when a supplier is picked by hand, pull that
+  // supplier's remembered coding and pre-fill any account / category
+  // fields the operator hasn't already set. Extraction does this
+  // server-side for an auto-matched supplier; this covers manual
+  // picks (where the invoice spelled the name differently). Never
+  // clobbers a value the operator already chose.
+  async function applySupplierDefault(xeroContactId) {
+    try {
+      const res = await fetch(
+        `/api/locations/${row.location_id}/xero/supplier-default?xero_contact_id=${encodeURIComponent(xeroContactId)}`
+      )
+      const j = await res.json()
+      if (!j.success || !j.default) return
+      setFields((f) => {
+        const next = { ...f }
+        if (j.default.xero_account_id && !f.xero_account_id) {
+          next.xero_account_id = j.default.xero_account_id
+          next.account_code = j.default.account_code || f.account_code || null
+        }
+        if (j.default.category && !f.category) next.category = j.default.category
+        return next
+      })
+    } catch {
+      /* best-effort — a memory miss must not disrupt the review */
+    }
+  }
+
   function numField(k) {
     const v = fields[k]
     return v == null ? '' : String(v)
@@ -883,7 +910,13 @@ function StageTwoBlock({ row, busy, onSaveFields, onApprove, onReject }) {
           locationId={row.location_id}
           initialName={strField('supplier_name')}
           value={fields.xero_contact_ref || null}
-          onChange={(ref) => setField('xero_contact_ref', ref)}
+          onChange={(ref) => {
+            setField('xero_contact_ref', ref)
+            // Pull this supplier's remembered account / category.
+            if (ref?.kind === 'existing' && ref.xero_contact_id) {
+              applySupplierDefault(ref.xero_contact_id)
+            }
+          }}
         />
       </div>
 

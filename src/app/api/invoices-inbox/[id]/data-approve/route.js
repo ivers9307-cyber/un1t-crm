@@ -16,6 +16,7 @@ import { NextResponse } from 'next/server'
 import { loadInvoiceForUser } from '../../_helpers'
 import { canTransitionInboundInvoice } from '@/lib/inbound-invoices'
 import { pushQueueRowToXero } from '@/lib/invoices-queue/push-xero'
+import { recordSupplierDefault } from '@/lib/invoices-queue/supplier-defaults'
 import { XeroError } from '@/lib/xero/client'
 
 export const runtime = 'nodejs'
@@ -66,6 +67,26 @@ export async function POST(_request, { params }) {
         success: false,
         error: 'Row was modified concurrently — refresh and retry.',
       }, { status: 409 })
+    }
+
+    // SUPPLIER-MEMORY.1 — remember this supplier's coding so the next
+    // invoice from them pre-fills. Best-effort: a write failure must
+    // never block the approval. Recorded once, on the first approval.
+    try {
+      const ef = row.extracted_fields || {}
+      const ref = ef.xero_contact_ref
+      if (ref?.kind === 'existing' && ref.xero_contact_id && ef.xero_account_id) {
+        await recordSupplierDefault(db, {
+          locationId: row.location_id,
+          xeroContactId: ref.xero_contact_id,
+          supplierName: ref.name || ef.supplier_name || null,
+          accountCode: ef.account_code || null,
+          xeroAccountId: ef.xero_account_id,
+          category: ef.category || null,
+        })
+      }
+    } catch (e) {
+      console.warn(`[data-approve ${id}] recordSupplierDefault failed: ${e?.message || e}`)
     }
   }
 
