@@ -7,7 +7,6 @@
 import { NextResponse } from 'next/server'
 import { randomBytes } from 'node:crypto'
 import { getCurrentUser } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
 import { buildAuthorizeUrl } from '@/lib/xero/client'
 
 export const runtime = 'nodejs'
@@ -18,7 +17,10 @@ export async function GET(req) {
   if (!user) {
     return NextResponse.redirect(new URL('/login', req.url))
   }
-  if (!hasPermission(user, 'car_processing')) {
+  // Connecting a Xero org is an owner/master finance-admin action.
+  // (Previously gated on the car_processing permission — a holdover
+  // from when Xero existed only for the CCF Autos car-invoice push.)
+  if (user.role !== 'owner' && user.role !== 'master') {
     return NextResponse.json({ success: false, error: 'Not permitted' }, { status: 403 })
   }
 
@@ -26,6 +28,13 @@ export async function GET(req) {
   const locationId = url.searchParams.get('location_id') || user.activeLocation?.id
   if (!locationId) {
     return NextResponse.json({ success: false, error: 'location_id is required' }, { status: 400 })
+  }
+  // IDOR guard — only start the OAuth flow for a location the caller
+  // belongs to (master sees every location).
+  const isMaster = user.role === 'master'
+  const userLocationIds = (user.locations || []).map((l) => l.id)
+  if (!isMaster && !userLocationIds.includes(locationId)) {
+    return NextResponse.json({ success: false, error: 'Not a member of that location' }, { status: 403 })
   }
 
   // CSRF: the cookie value is what we trust on callback. Encode the

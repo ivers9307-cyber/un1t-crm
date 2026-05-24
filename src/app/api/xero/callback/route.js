@@ -10,7 +10,6 @@
 
 import { NextResponse } from 'next/server'
 import { getCurrentUser } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { exchangeAuthorizationCode, listConnectedTenants, XeroError } from '@/lib/xero/client'
 
@@ -26,7 +25,7 @@ function settingsUrl(req, params = {}) {
 export async function GET(req) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.redirect(new URL('/login', req.url))
-  if (!hasPermission(user, 'car_processing')) {
+  if (user.role !== 'owner' && user.role !== 'master') {
     return NextResponse.redirect(settingsUrl(req, { error: 'Not permitted' }))
   }
 

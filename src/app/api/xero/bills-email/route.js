@@ -7,7 +7,6 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { getCurrentUser } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 
 export const runtime = 'nodejs'
@@ -20,7 +19,7 @@ const Body = z.object({
 export async function POST(request) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  if (!hasPermission(user, 'car_processing')) {
+  if (user.role !== 'owner' && user.role !== 'master') {
     return NextResponse.json({ success: false, error: 'Not permitted' }, { status: 403 })
   }
 
