@@ -29,6 +29,11 @@ import { Search, X, UserPlus, AlertTriangle } from 'lucide-react'
 
 const MIN_QUERY = 2
 const DEBOUNCE_MS = 200
+// Abort a search that hasn't come back in time. Without this, a fetch
+// that never settles (cold serverless start, dropped connection, a
+// hung function) strands the picker on "Searching…" forever — the
+// only `finally` that clears `loading` lives inside that fetch.
+const REQUEST_TIMEOUT_MS = 12000
 
 export default function XeroContactPicker({ locationId, value, onChange, label = 'Xero supplier', initialName }) {
   const [open, setOpen] = useState(false)
@@ -60,7 +65,13 @@ export default function XeroContactPicker({ locationId, value, onChange, label =
 
   // Debounced search.
   useEffect(() => {
-    if (!locationId) return
+    if (!locationId) {
+      // No location to search against — clear loading so the box
+      // shows its idle state instead of a stranded "Searching…".
+      setResults([])
+      setLoading(false)
+      return
+    }
     if (debounceRef.current) clearTimeout(debounceRef.current)
     const q = query.trim()
     if (q.length < MIN_QUERY) {
@@ -71,9 +82,12 @@ export default function XeroContactPicker({ locationId, value, onChange, label =
     }
     setLoading(true)
     debounceRef.current = setTimeout(async () => {
+      const controller = new AbortController()
+      const abortTimer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
       try {
         const res = await fetch(
-          `/api/locations/${locationId}/xero/contacts?suppliers=1&q=${encodeURIComponent(q)}&limit=25`
+          `/api/locations/${locationId}/xero/contacts?suppliers=1&q=${encodeURIComponent(q)}&limit=25`,
+          { signal: controller.signal }
         )
         const j = await res.json()
         if (!j.success) {
@@ -85,8 +99,14 @@ export default function XeroContactPicker({ locationId, value, onChange, label =
           setStale(!!j.stale)
         }
       } catch (e) {
-        setError(e.message || 'Network error')
+        setError(
+          e?.name === 'AbortError'
+            ? 'Search timed out — check your connection and try again.'
+            : (e?.message || 'Network error')
+        )
+        setResults([])
       } finally {
+        clearTimeout(abortTimer)
         setLoading(false)
       }
     }, DEBOUNCE_MS)

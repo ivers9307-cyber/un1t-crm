@@ -18,6 +18,10 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
 import { ChevronDown, Search, AlertTriangle } from 'lucide-react'
 
+// Abort the cache fetch if it hangs — a never-settling request would
+// otherwise strand the picker on "Loading…" with no way to recover.
+const REQUEST_TIMEOUT_MS = 12000
+
 export default function XeroAccountPicker({ locationId, value, onChange, label = 'Xero account' }) {
   const [accounts, setAccounts] = useState([])
   const [loading, setLoading] = useState(true)
@@ -29,11 +33,13 @@ export default function XeroAccountPicker({ locationId, value, onChange, label =
 
   // Fetch once per location_id mount.
   useEffect(() => {
-    if (!locationId) return
+    if (!locationId) { setLoading(false); return }
     let cancelled = false
+    const controller = new AbortController()
+    const abortTimer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
     setLoading(true)
     setError(null)
-    fetch(`/api/locations/${locationId}/xero/accounts?type=EXPENSE`)
+    fetch(`/api/locations/${locationId}/xero/accounts?type=EXPENSE`, { signal: controller.signal })
       .then((r) => r.json())
       .then((j) => {
         if (cancelled) return
@@ -45,9 +51,14 @@ export default function XeroAccountPicker({ locationId, value, onChange, label =
           setStale(!!j.stale)
         }
       })
-      .catch((e) => !cancelled && setError(e.message || 'Network error'))
-      .finally(() => !cancelled && setLoading(false))
-    return () => { cancelled = true }
+      .catch((e) => {
+        if (cancelled) return
+        setError(e?.name === 'AbortError'
+          ? 'Loading accounts timed out — reopen this invoice to retry.'
+          : (e?.message || 'Network error'))
+      })
+      .finally(() => { clearTimeout(abortTimer); if (!cancelled) setLoading(false) })
+    return () => { cancelled = true; clearTimeout(abortTimer); controller.abort() }
   }, [locationId])
 
   // Close when clicking outside the popover.
