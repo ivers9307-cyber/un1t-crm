@@ -19,7 +19,7 @@
 // those writes back into shift_blocks/shift_assignments.
 
 import { useState, useEffect, useCallback } from 'react'
-import { ChevronLeft, ChevronRight, Copy, Send, Plus, Users, User, Clock, X, ArrowLeftRight, CalendarOff, Palmtree, ThermometerSun, Ban, AlertTriangle, AlertCircle, CalendarDays, CalendarRange, Pencil, Check } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Copy, Send, Plus, Users, User, Clock, X, ArrowLeftRight, CalendarOff, Palmtree, ThermometerSun, Ban, AlertTriangle, AlertCircle, CalendarDays, CalendarRange, Pencil, Check, Settings } from 'lucide-react'
 import Link from 'next/link'
 import { useRouter, usePathname, useSearchParams } from 'next/navigation'
 import { computeWeeklyCost } from '@/lib/payroll'
@@ -712,6 +712,21 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
               >
                 <Copy size={14} /> {copying ? 'Copying...' : 'Copy Last Month'}
               </button>
+              {/* SCHEDULE-TEMPLATES-SHORTCUT.1 — direct path to the
+                  shift-template editor. /settings/shifts has always
+                  been MANAGER_ROLES-gated (head_coach included), but
+                  the only link to it lived inside /settings/locations/
+                  [id], which is master/owner-only — so head_coach
+                  could never reach it. Surfacing the link here gives
+                  every manager-class role a one-click entry point
+                  from the view where they think about templates. */}
+              <Link
+                href="/settings/shifts"
+                className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg border border-un1t-gray text-un1t-light hover:text-un1t-white hover:border-un1t-white/30 transition-colors"
+                title="Add, edit, or retire the shift templates that build this roster"
+              >
+                <Settings size={14} /> Manage templates
+              </Link>
               {viewType === 'week' && (
                 <button
                   onClick={handlePublishClick}
