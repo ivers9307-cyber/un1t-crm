@@ -532,9 +532,16 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
   }
 
   async function handleCopyMonth() {
-    const prevMonthStart = addMonths(monthStart, -1)
+    // Both buttons are shown in week view too, so derive the
+    // effective month from whichever primary state the operator is
+    // working in. Without this, clicking "Copy Last Month" from
+    // week view would target whatever monthStart was set to last
+    // (possibly stale from an earlier month-view session).
+    const effectiveMonthStart = viewType === 'month' ? monthStart : getMonthStart(weekStart)
+    const targetLabel = effectiveMonthStart.toLocaleDateString('en-IE', { month: 'long', year: 'numeric' })
+    const prevMonthStart = addMonths(effectiveMonthStart, -1)
     const sourceLabel = prevMonthStart.toLocaleDateString('en-IE', { month: 'long', year: 'numeric' })
-    if (!confirm(`Copy last month's roster (${sourceLabel}) to ${monthLabel}?`)) return
+    if (!confirm(`Copy last month's roster (${sourceLabel}) to ${targetLabel}?`)) return
     setCopying(true)
     const res = await fetch('/api/schedule/shifts/copy-month', {
       method: 'POST',
@@ -542,7 +549,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
       body: JSON.stringify({
         location_id: locationId,
         source_month_start: formatDate(prevMonthStart),
-        target_month_start: formatDate(monthStart),
+        target_month_start: formatDate(effectiveMonthStart),
       }),
     })
     const data = await res.json()
@@ -648,12 +655,27 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
               >
                 <Check size={14} /> {selectMode ? `Selecting (${selectedBlockIds.size})` : 'Select multiple'}
               </button>
+              {/* SCHEDULE-COPY-VISIBILITY.1 — both copy actions are
+                  surfaced regardless of view. The copy-month endpoint
+                  has always existed but was only visible in month
+                  view, so operators working in week view never
+                  discovered it. handleCopyMonth derives the target
+                  month from the effective view state. */}
               <button
-                onClick={viewType === 'month' ? handleCopyMonth : handleCopyWeek}
+                onClick={handleCopyWeek}
                 disabled={copying}
                 className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg border border-un1t-gray text-un1t-light hover:text-un1t-white hover:border-un1t-white/30 transition-colors disabled:opacity-50"
+                title="Duplicate last week's shifts into this week"
               >
-                <Copy size={14} /> {copying ? 'Copying...' : viewType === 'month' ? 'Copy Last Month' : 'Copy Last Week'}
+                <Copy size={14} /> {copying ? 'Copying...' : 'Copy Last Week'}
+              </button>
+              <button
+                onClick={handleCopyMonth}
+                disabled={copying}
+                className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg border border-un1t-gray text-un1t-light hover:text-un1t-white hover:border-un1t-white/30 transition-colors disabled:opacity-50"
+                title="Duplicate last month's shifts into this month"
+              >
+                <Copy size={14} /> {copying ? 'Copying...' : 'Copy Last Month'}
               </button>
               {viewType === 'week' && (
                 <button
