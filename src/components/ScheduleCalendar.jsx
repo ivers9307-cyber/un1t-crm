@@ -24,7 +24,7 @@ import Link from 'next/link'
 import { useRouter, usePathname, useSearchParams } from 'next/navigation'
 import { computeWeeklyCost } from '@/lib/payroll'
 import { indexByDate } from '@/lib/bank-holidays'
-import { MANAGER_ROLES } from '@/lib/schemas'
+import { MANAGER_ROLES, ADMIN_ROLES } from '@/lib/schemas'
 import RosterSummaryPanel from './RosterSummaryPanel'
 
 const TIME_OFF_CONFIG = {
@@ -226,6 +226,11 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
   const [bulkAssignBusy, setBulkAssignBusy] = useState(false)
   const [bulkAssignProfile, setBulkAssignProfile] = useState('')
   const [bulkToast, setBulkToast] = useState(null) // { kind, message }
+  // SCHEDULE-SPEND-AGG.1 — contractor spend totals for the focused
+  // month, fetched server-side so head_coach (who can't see
+  // hourly_rate client-side) still sees real numbers + over-budget
+  // signals on the summary panel.
+  const [contractorSpend, setContractorSpend] = useState(null)
 
   function toggleBlockSelection(blockId) {
     setSelectedBlockIds((prev) => {
@@ -286,6 +291,12 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
 
   const locationId = user.activeLocation?.id
   const isManager = canManage(user.role)
+  // SCHEDULE-SPEND-AGG.1 — admin roles see HR-sensitive pay data
+  // client-side; head_coach + manager-but-not-admin do not (the
+  // /api/staff slim payload). Drives the "pay data missing"
+  // warning in RosterSummaryPanel — silenced for non-admins where
+  // the warning would fire on every coach (uselessly).
+  const canSeePay = ADMIN_ROLES.includes(user.role)
   const todayStr = formatDate(new Date())
 
   const weekEnd = addDays(weekStart, 6)
@@ -302,12 +313,18 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
     const start = formatDate(innerStart)
     const end = formatDate(innerEnd)
 
-    const [blocksRes, templatesRes, staffRes, timeOffRes, holidaysRes] = await Promise.all([
+    // SCHEDULE-SPEND-AGG.1 — refetch the month's contractor-spend
+    // aggregate alongside the other data. Scoped to monthStart so
+    // "Contractor spend — May 2026" tracks whichever month was last
+    // focused (same convention RosterSummaryPanel has always used).
+    const spendRefDate = formatDate(monthStart)
+    const [blocksRes, templatesRes, staffRes, timeOffRes, holidaysRes, spendRes] = await Promise.all([
       fetch(`/api/schedule/blocks?location_id=${locationId}&start_date=${start}&end_date=${end}`).then(r => r.json()),
       fetch(`/api/schedule/templates?location_id=${locationId}`).then(r => r.json()),
       fetch('/api/staff').then(r => r.json()),
       fetch(`/api/schedule/time-off?location_id=${locationId}&start_date=${start}&end_date=${end}&status=approved`).then(r => r.json()),
       fetch(`/api/locations/${locationId}/holidays?start=${start}&end=${end}`).then(r => r.json()),
+      fetch(`/api/schedule/contractor-spend?location_id=${locationId}&reference_date=${spendRefDate}`).then(r => r.json()),
     ])
 
     setBlocks(blocksRes.data || [])
@@ -315,6 +332,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
     setStaff(staffRes.data || [])
     setTimeOff(timeOffRes.data || [])
     setHolidays(holidaysRes.data || [])
+    setContractorSpend(spendRes?.success ? spendRes.data : null)
     setLoading(false)
   }, [locationId, viewType, weekStart, monthStart])
 
@@ -1092,6 +1110,9 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
 
       {/* Roster v2 phase 4 — week + month summary. Manager-only. */}
       {/* Phase 6: passes `timeOff` so FTE utilisation is leave-aware. */}
+      {/* SCHEDULE-SPEND-AGG.1: contractorSpend comes from a server-
+          computed aggregate so head_coach sees real totals + over-
+          budget signals without being granted hourly_rate visibility. */}
       {!loading && isManager && (
         <RosterSummaryPanel
           blocks={blocks}
@@ -1100,6 +1121,8 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
           monthStart={monthStart}
           location={user.activeLocation}
           timeOff={timeOff}
+          contractorSpend={contractorSpend}
+          canSeePay={canSeePay}
         />
       )}
 
