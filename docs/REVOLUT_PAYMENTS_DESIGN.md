@@ -7,6 +7,42 @@ push (`XERO-API.*`), the Xero paid-status webhook (`XERO-WEBHOOK.1`).
 
 ---
 
+## Status & resume notes
+
+> Keep this section live — update it as the doc gets reviewed and as decisions
+> land. It's the "where are we" snapshot for whoever picks this back up.
+
+**Current state:** under review by Richard. No code, no schema, no credentials
+yet. The doc captures the intended shape; nothing has been done.
+
+**Decision already made:**
+- Use the **payment-draft model** (§4), not direct `POST /pay`. The CRM
+  assembles the payment; a human approves the money movement in the Revolut
+  Business app.
+
+**Open decisions blocking build (from §10):**
+- [ ] Connection scope — one Revolut Business connection per **location**, or
+      per **org**? (UN1T locations currently share a Xero org under "Champ
+      Fitness Ltd"; Revolut may follow the same pattern.)
+- [ ] Approval workflow in Revolut — who approves, and is dual control
+      required (CRM initiator ≠ Revolut approver)?
+- [ ] Counterparty creation policy — let operators add payees from inside the
+      CRM, or only **select** counterparties pre-created in Revolut?
+      Recommendation in §10: select-only for v1 (safer).
+- [ ] Re-consent cadence — confirm with Revolut, then design the reminder.
+
+**Suggested next step when work resumes:**
+1. Settle the four open decisions above.
+2. Generate the X.509 cert + upload the public key in Revolut Business
+   (sandbox first).
+3. Start phase 1 (§9): auth + `revolut_business_connections` + Settings
+   "Revolut" tab. Largest of the four PRs.
+
+**Reviewer notes (free-form):**
+- _Add observations / questions / counter-proposals here as you read._
+
+---
+
 ## 1. Goal
 
 Let an operator pay a supplier invoice from inside the CRM: pick the
