@@ -18,7 +18,7 @@
 // end result. Drops one explicit boundary directive.
 
 import { TrendingUp, TrendingDown, AlertTriangle, Wallet } from 'lucide-react'
-import { summarizeWeek, summarizeMonth } from '@/lib/roster-summary'
+import { summarizeWeek } from '@/lib/roster-summary'
 
 // Text colours use the -700 ramp so they read clearly against
 // the light card background (un1t-dark = #F7F8FA). The -300
@@ -48,19 +48,31 @@ function monthLabel(iso) {
   return new Date(y, m - 1, 1).toLocaleDateString('en-IE', { month: 'long', year: 'numeric' })
 }
 
-export default function RosterSummaryPanel({ blocks, staff, weekStart, monthStart, location, timeOff }) {
+export default function RosterSummaryPanel({
+  blocks, staff, weekStart, timeOff,
+  // SCHEDULE-SPEND-AGG.1 — the month half (contractor spend vs
+  // budget) is now sourced from a server-computed aggregate via the
+  // `contractorSpend` prop. It's null while the parent is fetching.
+  // monthStart + location were the inputs the old client-side
+  // summarizeMonth needed; the parent still passes them but we don't
+  // read them here.
+  // eslint-disable-next-line no-unused-vars
+  monthStart, location,
+  contractorSpend,
+  // Head_coach + manager-but-not-admin can't see hourly_rate
+  // client-side, so the per-coach "pay data missing" warning would
+  // fire on every coach uselessly. Caller passes `canSeePay=false`
+  // to suppress it for those roles. Defaults true for backwards
+  // compat.
+  canSeePay = true,
+}) {
   const week = summarizeWeek({
     blocks,
     staff,
     weekStart,
     timeOff,
   })
-  const month = summarizeMonth({
-    blocks,
-    staff,
-    referenceDate: monthStart || weekStart,
-    monthlyBudgetEur: location?.monthly_contractor_budget_eur ?? null,
-  })
+  const month = contractorSpend
 
   return (
     <div className="mt-4 grid grid-cols-1 lg:grid-cols-2 gap-3">
@@ -130,7 +142,7 @@ export default function RosterSummaryPanel({ blocks, staff, weekStart, monthStar
           </div>
         )}
 
-        {week.incompleteProfileNames.length > 0 && (
+        {canSeePay && week.incompleteProfileNames.length > 0 && (
           <div className="mt-3 pt-3 border-t border-un1t-gray flex items-start gap-2 text-[11px] text-amber-700">
             <AlertTriangle size={12} className="mt-0.5 flex-shrink-0 text-amber-600" />
             <span>
@@ -142,58 +154,72 @@ export default function RosterSummaryPanel({ blocks, staff, weekStart, monthStar
         )}
       </div>
 
-      {/* Contractor budget */}
+      {/* Contractor budget — server-computed via SCHEDULE-SPEND-AGG.1
+          so head_coach sees the totals without being granted
+          hourly_rate visibility. While the parent is fetching the
+          aggregate, month is null and we show a calculating state. */}
       <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-3">
-        <div className="flex items-center justify-between mb-3">
-          <h3 className="text-sm font-semibold flex items-center gap-2">
-            <Wallet size={14} className="text-emerald-400" />
-            Contractor spend — {monthLabel(month.monthStartIso)}
-          </h3>
-          {month.utilisationPct != null && (
-            <span className={`text-[11px] font-medium ${month.overBudget ? 'text-red-700' : 'text-un1t-light'}`}>
-              {month.utilisationPct}% of budget
-            </span>
-          )}
-        </div>
-
-        <div className="grid grid-cols-2 gap-3 mb-3">
-          <div>
-            <div className="text-[10px] uppercase tracking-wider text-un1t-light">Spent</div>
-            <div className={`text-xl font-semibold ${month.overBudget ? 'text-red-700' : 'text-un1t-white'}`}>
-              {formatEur(month.contractorCostEur)}
-            </div>
+        {month == null ? (
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-semibold flex items-center gap-2">
+              <Wallet size={14} className="text-emerald-400" /> Contractor spend
+            </h3>
+            <span className="text-[11px] text-un1t-light">Calculating…</span>
           </div>
-          <div>
-            <div className="text-[10px] uppercase tracking-wider text-un1t-light">Budget</div>
-            <div className="text-xl font-semibold text-un1t-white">
-              {month.monthlyBudgetEur != null ? formatEur(month.monthlyBudgetEur) : <span className="text-un1t-light">Not set</span>}
-            </div>
-          </div>
-        </div>
-
-        {month.monthlyBudgetEur != null && (
+        ) : (
           <>
-            <div className="h-1.5 bg-un1t-gray/40 rounded overflow-hidden">
-              <div
-                className={`h-full ${month.overBudget ? 'bg-red-500' : month.utilisationPct >= 90 ? 'bg-amber-500' : 'bg-emerald-500'}`}
-                style={{ width: `${Math.min(month.utilisationPct ?? 0, 100)}%` }}
-              />
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-sm font-semibold flex items-center gap-2">
+                <Wallet size={14} className="text-emerald-400" />
+                Contractor spend — {monthLabel(month.monthStartIso)}
+              </h3>
+              {month.utilisationPct != null && (
+                <span className={`text-[11px] font-medium ${month.overBudget ? 'text-red-700' : 'text-un1t-light'}`}>
+                  {month.utilisationPct}% of budget
+                </span>
+              )}
             </div>
-            <div className="mt-2 flex items-center justify-between text-[11px]">
-              <span className={month.overBudget ? 'text-red-700 font-medium' : 'text-un1t-light'}>
-                {month.overBudget
-                  ? <><TrendingDown size={11} className="inline mr-1" /> {formatEur(Math.abs(month.remainingEur))} over</>
-                  : `${formatEur(month.remainingEur)} remaining`}
-              </span>
-              <span className="text-un1t-mid">FTE labour (sunk cost): {formatEur(month.fteImplicitCostEur)}</span>
-            </div>
-          </>
-        )}
 
-        {month.monthlyBudgetEur == null && (
-          <p className="text-[11px] text-un1t-light mt-1">
-            Set a monthly contractor budget in <span className="font-medium">Settings → Locations</span> to track spend against a ceiling.
-          </p>
+            <div className="grid grid-cols-2 gap-3 mb-3">
+              <div>
+                <div className="text-[10px] uppercase tracking-wider text-un1t-light">Spent</div>
+                <div className={`text-xl font-semibold ${month.overBudget ? 'text-red-700' : 'text-un1t-white'}`}>
+                  {formatEur(month.contractorCostEur)}
+                </div>
+              </div>
+              <div>
+                <div className="text-[10px] uppercase tracking-wider text-un1t-light">Budget</div>
+                <div className="text-xl font-semibold text-un1t-white">
+                  {month.monthlyBudgetEur != null ? formatEur(month.monthlyBudgetEur) : <span className="text-un1t-light">Not set</span>}
+                </div>
+              </div>
+            </div>
+
+            {month.monthlyBudgetEur != null && (
+              <>
+                <div className="h-1.5 bg-un1t-gray/40 rounded overflow-hidden">
+                  <div
+                    className={`h-full ${month.overBudget ? 'bg-red-500' : month.utilisationPct >= 90 ? 'bg-amber-500' : 'bg-emerald-500'}`}
+                    style={{ width: `${Math.min(month.utilisationPct ?? 0, 100)}%` }}
+                  />
+                </div>
+                <div className="mt-2 flex items-center justify-between text-[11px]">
+                  <span className={month.overBudget ? 'text-red-700 font-medium' : 'text-un1t-light'}>
+                    {month.overBudget
+                      ? <><TrendingDown size={11} className="inline mr-1" /> {formatEur(Math.abs(month.remainingEur))} over</>
+                      : `${formatEur(month.remainingEur)} remaining`}
+                  </span>
+                  <span className="text-un1t-mid">FTE labour (sunk cost): {formatEur(month.fteImplicitCostEur)}</span>
+                </div>
+              </>
+            )}
+
+            {month.monthlyBudgetEur == null && (
+              <p className="text-[11px] text-un1t-light mt-1">
+                Set a monthly contractor budget in <span className="font-medium">Settings → Locations</span> to track spend against a ceiling.
+              </p>
+            )}
+          </>
         )}
       </div>
     </div>
