@@ -364,22 +364,39 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
     return inWeek && isBlockUnstaffedFuture(b, todayStr)
   }).length
 
-  async function handleAssignCoach(blockId, profileId) {
+  // SCHEDULE-MULTI-COACH.1 — assign N coaches in one round-trip. The
+  // server returns per-coach outcomes; surface skipped reasons + any
+  // time-off warnings in a single alert rather than burying them.
+  async function handleAssignCoaches(blockId, profileIds) {
     const res = await fetch(`/api/schedule/blocks/${blockId}/assignments`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ profile_id: profileId }),
+      body: JSON.stringify({ profile_ids: profileIds }),
     })
     const data = await res.json()
-    if (data.success) {
-      if (data.warnings?.length > 0) {
-        alert('Assigned with warning:\n\n' + data.warnings.join('\n'))
-      }
-      setAssignTarget(null)
-      refreshAfterMutation()
-    } else {
-      alert(data.error || 'Failed to assign coach')
+    if (!data.success) {
+      alert(data.error || 'Failed to assign coaches')
+      return
     }
+    const lines = []
+    if (data.warnings?.length > 0) lines.push(...data.warnings)
+    if (data.skipped?.length > 0) {
+      const REASONS = {
+        already_assigned: 'already on this block',
+        at_capacity: 'block is at capacity',
+      }
+      for (const s of data.skipped) {
+        const coach = staff.find((c) => c.id === s.profile_id)
+        const name = coach?.full_name || s.profile_id
+        lines.push(`${name}: skipped (${REASONS[s.reason] || s.reason})`)
+      }
+    }
+    if (lines.length > 0) {
+      const n = data.assigned?.length ?? 0
+      alert(`Assigned ${n} coach${n === 1 ? '' : 'es'}.\n\n${lines.join('\n')}`)
+    }
+    setAssignTarget(null)
+    refreshAfterMutation()
   }
 
   // (handleUnassign was dead code — assignment-removal logic now lives
@@ -1069,7 +1086,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
         <AssignCoachModal
           block={assignTarget.block}
           staff={locationStaff}
-          onAssign={(profileId) => handleAssignCoach(assignTarget.block.id, profileId)}
+          onAssign={(profileIds) => handleAssignCoaches(assignTarget.block.id, profileIds)}
           onClose={() => setAssignTarget(null)}
         />
       )}
@@ -1223,52 +1240,95 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
   )
 }
 
+// SCHEDULE-MULTI-COACH.1 — the operator picks any number of coaches
+// in one shot (checkbox list) rather than re-opening the modal once
+// per coach. The handler bundles every pick into a single
+// /assignments POST whose response shape lists per-coach outcomes
+// so 'one of these is already assigned' becomes a footnote in the
+// confirmation rather than an interruption.
 function AssignCoachModal({ block, staff, onAssign, onClose }) {
-  const [profileId, setProfileId] = useState('')
+  const [selectedIds, setSelectedIds] = useState(() => new Set())
   const [saving, setSaving] = useState(false)
   const tmpl = block.shift_templates || {}
-  const assignedIds = new Set((block.shift_assignments || []).map(a => a.profile_id))
-  const available = staff.filter(s => !assignedIds.has(s.id))
+  const assignedIds = new Set((block.shift_assignments || []).map((a) => a.profile_id))
+  const available = staff.filter((s) => !assignedIds.has(s.id))
   const dayLabel = new Date(block.block_date + 'T00:00:00').toLocaleDateString('en-IE', { weekday: 'long', day: 'numeric', month: 'long' })
+  const currentCount = block.shift_assignments?.length || 0
+  const slotsLeft = Math.max(0, (block.max_coaches || 0) - currentCount)
+
+  function toggle(id) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
 
   async function handleClick() {
-    if (!profileId) return
+    if (selectedIds.size === 0) return
     setSaving(true)
-    await onAssign(profileId)
+    await onAssign(Array.from(selectedIds))
     setSaving(false)
   }
 
+  const overCapacity = selectedIds.size > slotsLeft
+  const submitLabel = saving
+    ? 'Assigning…'
+    : selectedIds.size === 0
+      ? 'Assign coaches'
+      : `Assign ${selectedIds.size} coach${selectedIds.size === 1 ? '' : 'es'}`
+
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={onClose}>
-      <div className="bg-un1t-dark border border-un1t-gray rounded-xl p-6 w-full max-w-md" onClick={e => e.stopPropagation()}>
+      <div className="bg-un1t-dark border border-un1t-gray rounded-xl p-6 w-full max-w-md" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-4">
-          <h3 className="font-semibold">Assign Coach</h3>
+          <h3 className="font-semibold">Assign coaches</h3>
           <button onClick={onClose} className="text-un1t-light hover:text-un1t-white"><X size={18} /></button>
         </div>
         <div className="bg-black/30 rounded-lg p-3 mb-4 text-sm">
           <div className="font-medium">{tmpl.name || 'Shift'} — {dayLabel}</div>
           <div className="text-un1t-light text-xs mt-1">
-            {formatTime(block.start_time)}–{formatTime(block.end_time)} · {(block.shift_assignments?.length || 0)}/{block.max_coaches} assigned
+            {formatTime(block.start_time)}–{formatTime(block.end_time)} · {currentCount}/{block.max_coaches} assigned · {slotsLeft} slot{slotsLeft === 1 ? '' : 's'} open
           </div>
         </div>
         <div>
-          <label className="block text-xs text-un1t-light mb-1">Coach *</label>
-          <select value={profileId} onChange={e => setProfileId(e.target.value)} className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white">
-            <option value="">Select coach...</option>
-            {available.map(s => (
-              <option key={s.id} value={s.id}>{s.full_name} ({s.role})</option>
-            ))}
-          </select>
-          {available.length === 0 && (
-            <p className="text-[11px] text-un1t-light mt-1.5">All staff already assigned to this slot.</p>
+          <label className="block text-xs text-un1t-light mb-2">Pick one or more coaches</label>
+          {available.length === 0 ? (
+            <p className="text-[11px] text-un1t-light">All staff already assigned to this slot.</p>
+          ) : (
+            <ul className="max-h-72 overflow-y-auto border border-un1t-gray rounded-md divide-y divide-un1t-gray/50">
+              {available.map((s) => {
+                const checked = selectedIds.has(s.id)
+                return (
+                  <li key={s.id}>
+                    <label className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-un1t-gray/30">
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => toggle(s.id)}
+                        className="accent-un1t-white"
+                      />
+                      <span className="text-sm text-un1t-white flex-1">{s.full_name}</span>
+                      <span className="text-[10px] text-un1t-light">{s.role}</span>
+                    </label>
+                  </li>
+                )
+              })}
+            </ul>
           )}
         </div>
+        {overCapacity && (
+          <p className="mt-2 text-[11px] text-amber-400">
+            {selectedIds.size} selected but only {slotsLeft} slot{slotsLeft === 1 ? '' : 's'} left — the extras will be skipped.
+          </p>
+        )}
         <button
           onClick={handleClick}
-          disabled={!profileId || saving}
+          disabled={selectedIds.size === 0 || saving || available.length === 0}
           className="w-full mt-4 bg-un1t-white text-un1t-black font-medium text-sm py-2.5 rounded-md hover:bg-un1t-accent transition-colors disabled:opacity-50"
         >
-          {saving ? 'Assigning...' : 'Assign Coach'}
+          {submitLabel}
         </button>
       </div>
     </div>
