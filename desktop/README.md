@@ -105,9 +105,12 @@ The shell uses three Tauri plugins:
 
 The Mac shell uses the same Supabase auth + cookie session as the
 web CRM. WKWebView persists cookies across launches in its own data
-directory under `~/Library/WebKit/CF Studio/`. Reception staff log
-in once and stay logged in — combined with the studio-device
-PIN-auth foundation from Phase 0 ([STUDIO-PIN.1/2/3](../docs/STUDIO_DEVICES_DESIGN.md#phase-0)),
+directory under `~/Library/WebKit/CF Studio/`. The shell's
+configured boot URL is `https://crm.un1tdublin.com/studio-login`
+(set in `src-tauri/tauri.conf.json` →
+`app.windows[0].url`), so paired Macs always land at the PIN entry
+pad. Combined with the studio-device PIN-auth foundation from
+Phase 0 ([STUDIO-PIN.1/2/3](../docs/STUDIO_DEVICES_DESIGN.md#phase-0)),
 the typical flow is:
 
 1. Master pairs the Mac at `/admin/studio-devices` (one-time).
