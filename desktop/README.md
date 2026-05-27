@@ -26,31 +26,64 @@ Why Tauri instead of Electron:
 - The Rust core is rock-solid for the small native surface
   (window management, auto-update, deep-link, autostart).
 
-## Local development
+## How to get a DMG (CI — the supported path)
 
-You need Rust + Node installed. Then:
+You don't need Rust, Tauri, or Xcode on your laptop. The
+**Desktop build** GitHub Actions workflow compiles the shell on
+macos-latest and uploads the DMG as a downloadable artefact.
+
+To trigger a build:
+
+- **Automatic** — any push to `main` that touches `desktop/**`.
+- **On demand** — go to the Actions tab on GitHub →
+  *Desktop build* → *Run workflow*.
+
+When the run finishes (~5–8 min cold, ~2–3 min cached), open the
+run page, scroll to *Artifacts*, and download `cf-studio-mac-<run#>`.
+That zip contains the universal DMG (works on both Apple Silicon
+and Intel Macs).
+
+The DMG is **unsigned** today. macOS Gatekeeper will refuse to open
+it on first launch — you'll need to right-click the app in
+`/Applications` → *Open* → confirm. After that one-time approval
+macOS remembers and launches normally. Code-signing + notarisation
+is a follow-on PR that needs the Apple Developer ID certificate
+configured as a CI secret.
+
+## Local development (optional — if you already have Rust)
+
+If you do have Rust on your machine and want hot-reload while
+editing the shell:
 
 ```bash
 cd desktop
 npm install
-npm run tauri dev
+npm run dev
 ```
 
-This boots the shell pointing at the production URL
-(`https://crm.un1tdublin.com`). For local development against a
-local Next.js dev server, edit `src-tauri/tauri.conf.json`'s
-`app.windows[0].url` to `http://localhost:3000`.
-
-## Production build
+If `cargo` isn't installed, install it once with rustup:
 
 ```bash
-npm run tauri build
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
+
+The first run takes 3–8 minutes (Tauri pulls + compiles all Rust
+deps). Subsequent runs are seconds.
+
+For local development against a local Next.js dev server, edit
+`src-tauri/tauri.conf.json`'s `app.windows[0].url` to
+`http://localhost:3000`.
+
+## Production build (locally, if you want)
+
+```bash
+npm run build
 ```
 
 Produces `src-tauri/target/release/bundle/dmg/CF Studio_*.dmg`.
-**Unsigned** — the signing + notarisation flow is set up separately
-via CI (`tauri-action` in a follow-on PR). Don't ship an unsigned DMG
-to the studio Macs; macOS Gatekeeper will block it.
+Same unsigned status as the CI build. Don't ship an unsigned DMG to
+the studio Macs once we're past initial testing; let the CI workflow
+build it once signing is wired up.
 
 ## Plugins
 
