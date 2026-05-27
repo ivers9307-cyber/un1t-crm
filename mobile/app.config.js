@@ -28,10 +28,25 @@ export default ({ config }) => ({
   // and the reduced-motion accessibility wiring. Minor bump
   // because it adds new user-visible surfaces; buildNumber is
   // managed by EAS (autoIncrement: true on the production profile).
+  //
+  // 1.2.0 (STUDIO-IPAD.1) — universal binary. supportsTablet flips
+  // to true so iPad gets the same App Store record; orientation
+  // unlocks ('default') so iPad can rotate; the iPhone still
+  // reads as portrait-only because the orientation lock is
+  // applied per-screen by useScreenOptions, not at the app level.
+  // This bundles the studio-device PIN auth foundation
+  // (STUDIO-PIN.1/2/3) from a mobile perspective: a paired iPad
+  // can now PIN-login from the web shell at /studio-login.
   name: 'CF Studio',
   slug: 'un1t-crm-mobile',
-  version: '1.1.0',
-  orientation: 'portrait',
+  version: '1.2.0',
+  // STUDIO-IPAD.1 — 'default' lets the OS decide based on the
+  // device. iPhone is still pinned to portrait by per-screen
+  // useScreenOptions calls (where they exist); iPad can rotate
+  // freely so the larger screens that benefit from landscape
+  // (Schedule week view, master-detail Contacts) actually use the
+  // canvas.
+  orientation: 'default',
   icon: './assets/icon.png',
   // Deep-link scheme — `cfstudio://...`. Renamed from un1tcrm. Safe to
   // change today because no existing code/email/push payload references
@@ -45,13 +60,27 @@ export default ({ config }) => ({
   },
   assetBundlePatterns: ['**/*'],
   ios: {
-    // iPhone-only. Setting this to false keeps the binary's UIDeviceFamily
-    // restricted to iPhone (1) — App Store Connect then doesn't require
-    // iPad screenshots, and the Custom App in ABM only offers itself to
-    // iPhones. The CRM's mobile UI is laid out for narrow viewports;
-    // iPad would show stretched single-column layouts which isn't a
-    // good user experience anyway.
-    supportsTablet: false,
+    // STUDIO-IPAD.1 — universal binary. Flipped to true so the same
+    // App Store / TestFlight build serves both iPhone and iPad
+    // (UIDeviceFamily 1, 2). Per-screen layouts adapt to the larger
+    // canvas via the useIsTablet() hook in mobile/lib/use-is-tablet.js
+    // — screens that benefit from a multi-column layout (Schedule
+    // week view, Contacts list+detail, Approvals) check the hook and
+    // render adaptively. Screens that don't (single-column forms,
+    // simple lists) just look more spacious on iPad without code
+    // changes.
+    //
+    // Apple-side: App Store Connect will now expect iPad screenshots
+    // at 2048×2732 (12.9") and/or 2064×2752 (13" iPad Pro M4). Until
+    // those are uploaded, new submissions can defer iPad-specific
+    // metadata via the "use iPhone screenshots" toggle.
+    supportsTablet: true,
+    // requireFullScreen: false (the Expo default) lets the iPad run
+    // the app in Split View / Stage Manager. Verified the existing
+    // screens handle a non-fullscreen narrow viewport gracefully
+    // (they're already laid out for iPhone widths down to 320pt) so
+    // there's no fullscreen-only requirement to assert here.
+    requireFullScreen: false,
     // BUNDLE-ID-RESET — the previous bundle ID
     // (com.un1tdublin.crmmobileios) was submitted for App Store review
     // and then deleted from App Store Connect. Apple permanently
