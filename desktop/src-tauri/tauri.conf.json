@@ -6,7 +6,7 @@
 
   "build": {
     "frontendDist": "../src",
-    "devUrl": "https://crm.un1tdublin.com",
+    "devUrl": "https://crm.un1tdublin.com/studio-login",
     "beforeDevCommand": "",
     "beforeBuildCommand": ""
   },
@@ -17,7 +17,7 @@
       {
         "label": "main",
         "title": "CF Studio",
-        "url": "https://crm.un1tdublin.com",
+        "url": "https://crm.un1tdublin.com/studio-login",
         "width": 1400,
         "height": 900,
         "minWidth": 1024,
@@ -28,7 +28,8 @@
         "transparent": false,
         "alwaysOnTop": false,
         "skipTaskbar": false,
-        "titleBarStyle": "Visible"
+        "titleBarStyle": "Visible",
+        "backgroundColor": "#000000"
       }
     ],
     "security": {
