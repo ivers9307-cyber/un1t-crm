@@ -31,32 +31,12 @@ the work back up.
 
 **Open decisions still to make:**
 
-- [ ] PIN length: 4 digits (easy to remember, easier to brute force)
-      vs 6 digits (industry default for phone PINs)?
-- [ ] PIN uniqueness: globally unique so PIN alone identifies a
-      staffer, or per-staff with a "who are you?" picker before the
-      PIN entry?
-- [ ] Lockout policy after N failed PIN attempts (recommend 5
-      attempts then 15-minute lockout per device).
-- [ ] How studio public IPs get registered — admin UI vs config
-      file vs DNS lookup? And what's the recovery process when
-      the studio's ISP changes the IP?
-- [ ] Device pairing: do studio devices need to be explicitly
-      "paired" (registered as trusted) by an admin, or is a network
-      gate sufficient?
-- [ ] Mac auto-launch policy: launch on boot vs launch on login vs
-      manual launch?
-- [ ] Per-Mac default URL: should the office Mac open to `/dashboard`
-      and the reception Mac open to `/schedule`? Or one URL fits all?
-- [ ] Coach in-class mode: offline attendance support in v1 or v2?
-      Affects effort meaningfully.
-- [ ] Update cadence for the Mac DMG: every main merge, every
-      tagged release, or on-demand?
 - [ ] Kiosk: how do members check in **today**? Wristband scan, phone
       number, Glofox app, manual at the desk? Drives the kiosk's
-      primary action when we scope it.
-- [ ] Hardware: existing iPads/Macs in the studio or new buy? Affects
-      iOS version floor + Apple Silicon assumption.
+      primary action when we scope it. (Phase 4 prerequisite.)
+- [ ] Confirm iOS version on the existing iPads. Drives the
+      `expo.ios.deploymentTarget` floor. If the iPads are stuck on
+      iOS 15 or earlier we'll need to bump them; iOS 16+ is fine.
 
 **Locked decisions:**
 
@@ -68,6 +48,48 @@ the work back up.
 - ✅ Studio devices auth via PIN, 5-minute idle timeout, network-gated
       to the studio wifi only. Personal devices (phones) keep the
       existing email/password flow unchanged.
+- ✅ **PIN length: 4 digits.** Combined with the lockout policy,
+      device pairing, and IP gate, 10,000-combo brute force is
+      impractical from inside the studio. Math in the threat model.
+- ✅ **PIN identifies the staffer.** Globally unique across the whole
+      platform — no "who are you?" picker. Set-PIN UI enforces
+      uniqueness ("that PIN is taken, pick another"). Implication:
+      with 4-digit PINs and growing headcount the practical space
+      thins out; revisit if we ever pass ~500 active staff.
+- ✅ **Lockout policy: 5 failed attempts → 15-minute lockout.** Two
+      layers — per-device AND per-staffer. With global PIN
+      uniqueness, every wrong guess targets a specific staffer, so
+      the per-profile lock is what bounds the attacker. After 5
+      failures the staffer's PIN is frozen for 15 min; the device
+      is also frozen so an attacker can't switch devices to keep
+      guessing.
+- ✅ **Device pairing required.** Every studio device gets an
+      admin-issued `device_token` stored in secure storage. No
+      token, no PIN flow — fall back to email + password login.
+- ✅ **Trusted-IP management UX: admin UI, master-only.** Lives at
+      `/admin/studio-devices` alongside the device-pairing UI.
+      Master can add / edit / remove `location_trusted_ips` rows.
+- ✅ **Mac auto-launch: launch on boot.** Tauri's auto-launch plugin
+      registers the shell as a login item that starts when the Mac
+      starts (not just on user login). Suits an always-on reception
+      Mac.
+- ✅ **Default landing URL: per-user setting, default `/dashboard`.**
+      New `profiles.home_screen_path` column; editable on `/account`.
+      Mac shell and iPad both load this URL after PIN unlock. Means
+      reception staffers can set their landing to `/schedule`, admin
+      staffers leave it on `/dashboard`, and the choice follows them
+      across devices when they PIN in.
+- ✅ **Coach in-class: v2 offline-first.** Tap state writes to local
+      storage immediately, sync engine replays writes to the server
+      when online. UI shows "N pending" while syncing. Adds ~2–3
+      days to Phase 3 effort. Required because in-class wifi can dip
+      and a missed mark is unacceptable.
+- ✅ **Mac DMG update cadence: every main merge.** CI builds, signs,
+      notarises, and uploads on every push to `main`. Auto-update
+      prompts the user to install on the next launch.
+- ✅ **Hardware: existing iPads + Mac.** No new buy. Action item:
+      confirm the iPads' current iOS version (likely iOS 16+).
+      Mac is almost certainly recent enough for Tauri.
 
 ## Goal
 
@@ -202,44 +224,99 @@ PIN is only honoured inside the studio.
 
 ### Threat model + design choices
 
-- **Brute force a 4-digit PIN** — only 10,000 combinations. Mitigated
-  with strict rate limiting (5 attempts then 15-minute lockout per
-  device-user pair) **and** the network gate (attacker would need
-  to be physically on studio wifi to even try). Recommend **6-digit
-  PIN** as the default; 4 is a fallback if 6 is too many for staff
-  to remember.
-- **Shoulder-surfing the PIN** — non-trivial but real. The PIN entry
-  UI uses masked keypad input (numbers obscured as you type, like
-  iPhone unlock).
+**Brute force math (4-digit PIN + global uniqueness)**
+
+The combo "4 digits + PIN-alone-identifies-staffer" needs care. The
+attacker doesn't know which staffer they're trying to impersonate —
+any successful PIN match logs them in as whoever owns that PIN.
+
+- PIN space: 10,000 combinations (`0000`–`9999`).
+- Staff PINs in active use: say 20 (current headcount). Any
+  given guess hits a valid PIN with probability `20 / 10,000 = 0.2%`.
+- Expected guesses to hit *some* staffer: 5,000.
+- Per-device lockout: 5 attempts → 15-min cooldown. So a device
+  can produce 5 attempts every 15 min → 480/day → ~10.5 days of
+  uninterrupted guessing to expect a single hit.
+- The attacker also needs to be physically on the studio wifi and
+  holding a paired device the whole time. Both gates have to
+  remain breached for 10+ days for a single random hit.
+
+That's not airtight — a determined insider on a paired device could
+eventually break in — but it's well above the "internal-tool
+acceptable" bar, especially given that any successful brute force
+would be visible in the audit log (10+ days of 5-attempts-every-15-min
+patterns).
+
+If we ever want to harden this further: longer cooldowns after each
+hit (5 attempts → 15min, then 30min, then 60min), or progressive
+delays inside a single window (each attempt waits longer than the
+last). YAGNI for v1.
+
+**Lockout model under PIN-alone-identifies-staffer**
+
+The lockout is **per-device**, not per-staffer. With the
+who-are-you-less PIN flow, a wrong PIN doesn't identify any
+specific staffer to penalise — it just incremented the device's
+failure counter. The per-profile lockout (`pin_failed_count` on the
+profile) only fires in a separate flow: when a staffer's PIN is
+*correctly entered N times in a row but session creation fails for
+another reason*, which in practice doesn't happen with this design.
+
+We'll keep the profile-level `pin_failed_count` column for future
+use (e.g. if we add a "wrong device" signal) but it stays at zero
+under the current rules. Per-device lockout (`studio_devices.failed_count`
++ `studio_devices.locked_until`) is the active gate.
+
+**Other threats**
+
+- **Shoulder-surfing the PIN** — non-trivial but real. PIN entry UI
+  uses masked keypad input (numbers obscured as you type, like
+  iPhone unlock). Anti-tailgating: after PIN unlock the original
+  staffer's identity is shown briefly so a watcher sees who's
+  logged in (helps reception spot a switched account).
 - **Stolen device leaving the studio** — network gate fails; PIN
   login no longer works. Last cached session expires within 5 min
   (the auto-lock timeout). After that, the device is dead weight
-  to anyone who finds it — no further session can be created without
-  the email + password flow that requires the staffer's full creds.
+  to anyone who finds it — no further session can be created
+  without the email + password flow that requires full creds.
 - **Studio IP changes** (ISP renumber) — PIN login breaks until
-  admin updates the trusted IP. Documented recovery path: admin
+  master updates the trusted IP. Documented recovery path: master
   logs into web CRM from off-site with normal email + password,
-  edits the location's trusted IP, devices work again.
+  edits the location's trusted IP at `/admin/studio-devices`,
+  devices work again.
 - **VPN / mobile hotspot bypass** — a staffer could in theory put
-  their phone in hotspot mode to mimic the studio IP. The IP gate
-  isn't watertight against insiders; combined with device pairing
-  (next section), it's good enough for our threat profile.
+  their phone in hotspot mode and try to mimic the studio IP. The
+  IP gate isn't watertight against an insider with intent;
+  combined with device pairing it's good enough for our threat
+  profile.
+- **PIN collision on set / change** — set-PIN UI enforces global
+  uniqueness, with a clear error message. Race condition between
+  two staffers setting the same PIN simultaneously is closed by a
+  unique constraint on the hash (cheap server-side replay loop
+  if the constraint violates).
 
 ### Data model
 
-Three additions to the schema:
+Four additions to the schema:
 
 ```sql
--- 1. PIN on each staff profile.
+-- 1. PIN + landing-screen preference on each staff profile.
 ALTER TABLE profiles
-  ADD COLUMN pin_hash text,
+  ADD COLUMN pin_hash text UNIQUE,            -- globally unique
   ADD COLUMN pin_set_at timestamptz,
-  ADD COLUMN pin_failed_count int NOT NULL DEFAULT 0,
-  ADD COLUMN pin_locked_until timestamptz;
+  ADD COLUMN pin_failed_count int NOT NULL DEFAULT 0,  -- reserved
+  ADD COLUMN pin_locked_until timestamptz,             -- reserved
+  ADD COLUMN home_screen_path text NOT NULL DEFAULT '/dashboard';
 
--- pin_hash uses bcrypt or argon2id. NULL means "no PIN set" —
--- staff member can't use studio devices until they set one.
--- pin_failed_count + pin_locked_until enforce the 5-strike rule.
+-- pin_hash uses bcrypt or argon2id. UNIQUE enforces global PIN
+-- uniqueness (PIN-alone-identifies-staffer).
+-- NULL pin_hash = staffer can't use studio devices until they set one.
+-- pin_failed_count + pin_locked_until are reserved for future use
+-- (see lockout-model note in the threat-model section). Per-device
+-- lockout is the active gate.
+-- home_screen_path is the URL the Mac shell / iPad loads after PIN
+-- unlock. Editable on /account. Validated server-side to be a path,
+-- not an arbitrary URL.
 
 -- 2. Trusted IPs per location.
 CREATE TABLE location_trusted_ips (
@@ -257,20 +334,45 @@ CREATE INDEX ON location_trusted_ips USING gist (ip_cidr inet_ops);
 CREATE TABLE studio_devices (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   location_id uuid NOT NULL REFERENCES locations(id),
-  device_token text NOT NULL UNIQUE,   -- random secret stored on the device
-  device_kind text NOT NULL,           -- 'mac' | 'ipad'
-  label text,                          -- "Reception Mac", "Coach iPad 1"
+  device_token_hash text NOT NULL UNIQUE,  -- bcrypt of the device secret
+  device_kind text NOT NULL,               -- 'mac' | 'ipad'
+  label text,                              -- "Reception Mac", "Coach iPad 1"
   paired_at timestamptz NOT NULL DEFAULT now(),
   paired_by uuid REFERENCES profiles(id),
   last_seen_at timestamptz,
-  revoked_at timestamptz
+  revoked_at timestamptz,
+  failed_count int NOT NULL DEFAULT 0,     -- 5-strike per-device gate
+  locked_until timestamptz                  -- 15-min cooldown
 );
+
+-- 4. PIN-login audit table (separate from generic audit_events so
+-- analytics queries on PIN attempts are cheap).
+CREATE TABLE pin_login_attempts (
+  id bigserial PRIMARY KEY,
+  device_id uuid REFERENCES studio_devices(id) ON DELETE SET NULL,
+  attempted_at timestamptz NOT NULL DEFAULT now(),
+  source_ip inet NOT NULL,
+  outcome text NOT NULL,    -- 'success' | 'wrong_pin' | 'device_locked' | 'untrusted_ip' | 'no_token' | 'revoked_token'
+  matched_profile uuid REFERENCES profiles(id),
+  user_agent text
+);
+
+CREATE INDEX ON pin_login_attempts (device_id, attempted_at DESC);
+CREATE INDEX ON pin_login_attempts (matched_profile, attempted_at DESC) WHERE matched_profile IS NOT NULL;
 ```
 
-`device_token` is generated server-side at pairing and stored once on
-the device (Keychain on Mac, SecureStore on iPad). Every PIN-login
-request sends the token; revoking a device in admin sets
-`revoked_at` and the token is rejected from then on.
+`device_token` is generated server-side at pairing — the shell
+stores the cleartext token in Keychain (Mac) / SecureStore (iPad)
+and the server stores only the bcrypt hash. Every PIN-login request
+sends the token; the server bcrypt-compares against
+`device_token_hash`. Revoking a device sets `revoked_at` and the
+token is rejected from then on.
+
+`pin_login_attempts` is the source of truth for the per-device
+lockout counter: count rows in the last 15 minutes for a device with
+`outcome IN ('wrong_pin')` and trigger lockout at ≥ 5. This is more
+flexible than maintaining a counter on `studio_devices` and gives us
+free analytics ("how often does reception fat-finger their PIN?").
 
 ### Auth flow
 
@@ -278,38 +380,45 @@ request sends the token; revoking a device in admin sets
 
 1. Staffer logs into web CRM normally (email + password).
 2. Goes to `/account` → "Set studio PIN".
-3. Enters a 6-digit PIN, confirms it. Hashed, written to
-   `profiles.pin_hash`.
+3. Enters a 4-digit PIN, confirms it. Server checks global
+   uniqueness — if taken, returns "that PIN is already in use,
+   pick another." On success, hashed and written to
+   `profiles.pin_hash` (UNIQUE constraint backstops a race).
 
-**Pairing a studio device (one-time, by admin):**
+**Pairing a studio device (one-time, by master):**
 
-1. Admin opens the Mac shell / iPad app for the first time. App
+1. Master opens the Mac shell / iPad app for the first time. App
    detects no `device_token` in local secure storage.
 2. App shows a "Pair this device" screen with a one-time code
-   generated locally.
-3. Admin opens web CRM → Admin → Studio Devices → "Pair new device",
-   enters the code + a label + assigns to a location.
-4. Server creates a `studio_devices` row, returns the
-   `device_token`, which the app stores in secure storage.
-5. Device is now paired. PIN login enabled.
+   generated locally + the device's current public IP.
+3. Master opens web CRM → `/admin/studio-devices` → "Pair new
+   device", enters the code + a label + assigns to a location.
+   The server checks the public IP shown matches the location's
+   trusted IPs before pairing succeeds.
+4. Server creates a `studio_devices` row with the bcrypt-hashed
+   token, returns the cleartext token once, app stores it in
+   secure storage.
+5. Device is paired. PIN login enabled.
 
 **PIN login (every shift / unlock):**
 
-1. App POSTs to `/api/auth/pin-login` with: device_token, PIN.
+1. App POSTs to `/api/auth/pin-login` with: `device_token`, `pin`.
 2. Server:
-   - Looks up the device, ensures `revoked_at IS NULL`.
+   - Looks up the device by bcrypt-matching the token, ensures
+     `revoked_at IS NULL` and `locked_until IS NULL OR locked_until < now()`.
    - Checks the request IP against `location_trusted_ips` for the
-     device's location. Reject if no match.
-   - Looks up profiles with PIN-matching for that location (we
-     don't ask "who are you?" — the PIN itself identifies the
-     staffer within a location).
-   - Verifies the PIN against `pin_hash`. On match, issues a
-     standard Supabase session with the `auth_pin_session` flag.
-   - On mismatch, increments `pin_failed_count`. At 5, sets
-     `pin_locked_until = now() + interval '15 minutes'`.
-3. Device receives the session, persists it locally, behaves
-   like a normal logged-in session — but with a 5-minute idle
-   timer running.
+     device's location. Reject if no match (logged as
+     `outcome='untrusted_ip'` in `pin_login_attempts`).
+   - PIN-matches across all active profiles globally (PIN
+     uniqueness means at most one will match). Match → issue a
+     standard Supabase session for that profile with a
+     `pin_session: true` claim and `last_pin_activity_at: now()`.
+   - No match → log `outcome='wrong_pin'`. Count attempts in the
+     last 15 min; at ≥ 5 set `studio_devices.locked_until = now() + interval '15 minutes'`.
+3. Device receives the session, persists it locally, behaves like
+   a normal logged-in session — but with the 5-minute idle timer
+   running. The returned session includes `home_screen_path` so
+   the client knows where to navigate.
 
 **Auto-lock (after 5 min idle):**
 
@@ -398,14 +507,11 @@ app on a paired iPad does.
 The client-side idle timer + PIN overlay is small. Pairing flow
 is fiddly (one-time code, secure storage) — half a day.
 
-### Open questions (also tracked in resume notes)
+### Open questions
 
-- 4-digit vs 6-digit PIN default.
-- PIN uniqueness scope (globally unique vs per-location).
-- Lockout policy after N failed attempts.
-- Trusted-IP management UX (manual entry vs auto-detect).
-- Device pairing required, or is the network gate alone enough?
-  Recommend pairing required — defence in depth.
+All Phase 0 decisions locked — see "Status & resume notes" at the
+top. Remaining open items are scoped to Phases 1/2/3 and the
+parked Phase 4.
 
 ## Phase 1 — CF Studio universal binary + iPad layouts (PR A)
 
@@ -529,31 +635,41 @@ Single-instance: opening the app twice focuses the existing window
 rather than launching a second one. Tauri has a built-in plugin for
 this (`tauri-plugin-single-instance`).
 
-### Per-Mac launch routing (deferred)
+### Auto-launch on boot
 
-Open question — should the reception Mac launch into `/schedule`
-while the office Mac launches into `/dashboard`? Two ways to handle
-this:
+Tauri's `tauri-plugin-autostart` registers the Mac shell as a
+launch daemon so it starts when the Mac boots, not just when the
+user logs in. Reception staff arrive in the morning to a Mac that's
+already showing the locked PIN screen — they don't have to click
+anything before they can start working.
 
-- **Static config baked at build time** — one DMG per role. Adds
-  build complexity, but very predictable.
-- **Runtime config in a local file** — same DMG everywhere, each
-  Mac has a `~/.cfstudio/config.json` that the shell reads on
-  launch to decide which URL to load.
+Implementation: `app.set_autostart(true)` on first launch after
+pairing. The shell is its own thin process; if it crashes, macOS
+relaunches it.
 
-Recommend the runtime approach — one binary, configurable per
-device. Defer the actual implementation to Phase 2 follow-up if
-nobody asks for it; default to the dashboard.
+### Per-user landing URL
 
-### Auth
+The Mac shell loads `profiles.home_screen_path` after PIN unlock —
+the per-user setting from Phase 0. Default is `/dashboard`;
+reception staff can edit it to `/schedule` from `/account` in the
+web CRM. Different staffers on the same Mac see different landing
+screens when they PIN in, which is the right behaviour for a
+shared device.
 
-No new auth code. The web CRM's existing Supabase auth + cookie
-session is the auth. The Mac shell is a window pointed at the same
-URL.
+No per-Mac config file or build variants needed — preference
+follows the staffer, not the box.
 
-If session expires, the user sees the same login screen they'd see
-in Safari. No keychain integration, no system credentials —
-intentionally simple.
+### Auth (PIN gate provided by Phase 0)
+
+Beneath the PIN gate, the Mac shell uses the same Supabase auth +
+cookie session as the web CRM. The Tauri WKWebView persists cookies
+across launches in its own data directory. PIN unlock either
+creates the session (first use of the day) or just dismisses the
+idle-lock overlay (mid-shift).
+
+If a session expires and PIN re-auth also fails (e.g. studio
+offline), the user sees the same email + password screen they'd see
+in Safari. No separate Keychain integration for credentials.
 
 ### Distribution + auto-update
 
@@ -624,26 +740,45 @@ What's new:
 - The "End class" finalisation hook (probably a small new endpoint:
   `POST /api/schedule/blocks/[id]/finalise`).
 
-### Offline support (open question)
+### Offline support (locked: v2 offline-first)
 
-In-class wifi is generally good but not perfect. The decision is
-whether attendance marks are:
+In-class wifi is generally good but not always perfect, and a
+missed attendance mark is unacceptable. v2 is the locked target.
 
-- **v1 (simple)**: every tap is a network call. If wifi drops, the
-  tap is queued in-memory and retried on reconnect. Tap state is
-  lost if the app is killed mid-class.
-- **v2 (proper offline-first)**: tap state is written to local
-  storage immediately, synced to the server when online. Survives
-  app kills. More complexity (conflict resolution, sync state UI).
+**Implementation:**
 
-Recommend **v1** for the first release — measure how often coaches
-actually lose connectivity. If it's a real problem, add v2 in a
-follow-up.
+- Every attendance tap writes to local SQLite (expo-sqlite) with
+  a pending-sync flag set immediately. The roster UI reads from
+  local state, so the user never waits on the network.
+- A background sync engine drains the pending queue to the server
+  whenever the device is online — POSTs each tap, marks the local
+  row as synced on 200, leaves it pending on network error.
+- The class-detail screen shows a "X marks pending" indicator
+  while the queue is non-empty. Tapping it shows the per-mark
+  state.
+- On `End class`, if any marks are still pending, the finalise
+  call is blocked until they sync. UX: "X marks still syncing,
+  hold on" rather than a hard error.
+- Conflict resolution: in practice this is one coach editing one
+  class, so the conflict surface is tiny. If a conflict ever does
+  occur (e.g. another staffer edits attendance for the same class
+  from web while the iPad is offline), last-write-wins keyed by
+  `marked_at` timestamp — the canonical row stores `marked_at`,
+  `marked_by`, and the most recent wins. Rare enough that we
+  don't surface a UI for it; audit log captures the changes.
+
+**Sync state UI:**
+
+- Header strip on the class screen: "Online" (green) / "Syncing X
+  marks" (amber) / "Offline — X marks pending" (red).
+- Auto-retry on reconnect with exponential backoff (1s, 2s, 5s,
+  15s, 60s).
 
 ### Effort estimate
 
-4–5 days for v1 (online-only). +2–3 days for v2 (offline-first)
-if we decide to fold that in.
+6–8 days for v2 offline-first. The simple "online-only" v1 path
+would be 4–5 days but isn't on the table — v2 is the locked
+target.
 
 ## Phase 4 (parked) — Self-service kiosk
 
@@ -690,11 +825,11 @@ App Store Connect records.
 - **Phase 0 (PIN auth foundation):** 5–7 days
 - **Phase 1 (iPad universal):** 3–5 days
 - **Phase 2 (Mac shell):** 2–3 days MVP + 1–2 days auto-update = 3–5 days
-- **Phase 3 (Coach in-class):** 4–5 days v1 (+ 2–3 days for offline if added)
+- **Phase 3 (Coach in-class v2 offline-first):** 6–8 days
 - **Phase 4 (Kiosk):** scope separately, ~5–10 days depending on path
 
-Total for Phases 0–3 with v1 in-class: **15–22 days** of focused work,
-or four to six PRs over the course of three to four weeks.
+Total for Phases 0–3 (v2 in-class locked): **17–25 days** of focused
+work, or four to six PRs over the course of three to four weeks.
 
 ## Risks
 
@@ -718,12 +853,12 @@ or four to six PRs over the course of three to four weeks.
   the updater manifest leaks, an attacker could ship a malicious
   update to every Mac. Mitigation: key lives only in CI secrets,
   rotate annually.
-- **PIN brute force from inside the studio** — anyone on studio wifi
-  with a paired device can guess PINs at the rate-limit cap (5 per
-  device-user pair per 15 min). Across 20 staff with 6-digit PINs,
-  expected break time is in the millions of minutes — not a
-  practical attack but worth re-evaluating if we ever drop to
-  4-digit PINs.
+- **PIN brute force from inside the studio** — anyone on studio
+  wifi with a paired device can guess PINs at the rate-limit cap
+  (5 attempts → 15-min cooldown per device). With 4-digit PINs
+  and global uniqueness, expected break time against *any* staffer
+  is ~10 days continuous (math in Phase 0 threat model). Acceptable
+  given the network + pairing gates; revisit if it ever matters.
 - **PIN hash leakage** — if `profiles.pin_hash` ever shows up in a
   public payload, the network gate is the only thing standing
   between an attacker and offline PIN cracking. Mitigation: explicit
