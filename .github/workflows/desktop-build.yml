@@ -1,0 +1,104 @@
+# STUDIO-MAC.2 — CI build for the CF Studio Mac shell.
+#
+# Compiles desktop/ (Tauri 2 + Rust) on macos-latest, produces a
+# universal (Intel + Apple Silicon) DMG, and uploads it as a
+# workflow artefact. The workflow run page has a "Download" link
+# under Artifacts that gives you the DMG without needing Rust /
+# Tauri / Xcode on your laptop.
+#
+# Two triggers:
+#   - push to main when anything under desktop/** changes
+#   - workflow_dispatch — fire on demand from the Actions tab
+#
+# The DMG is currently UNSIGNED — macOS Gatekeeper will block it on
+# first open unless you right-click → Open and confirm. Signing +
+# notarisation is a follow-on PR (needs an Apple Developer ID
+# certificate + the signing secrets configured in repo settings).
+
+name: Desktop build
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [main]
+    paths:
+      - 'desktop/**'
+      - '.github/workflows/desktop-build.yml'
+
+concurrency:
+  group: desktop-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build universal DMG
+    # macos-latest is Apple Silicon as of 2025. The default Rust
+    # target on this runner is aarch64-apple-darwin; we add the
+    # x86_64 target below so a universal binary works.
+    runs-on: macos-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # Stable Rust + both macOS targets so we can produce a
+      # universal binary (Apple Silicon + Intel in one .app).
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin,aarch64-apple-darwin
+
+      # Cache Cargo registry + the desktop/src-tauri/target dir.
+      # Cuts cold-build time from ~8 min to ~2 min on cache hit.
+      # Cache key is invalidated when Cargo.toml changes — any
+      # dependency bump invalidates and we rebuild from scratch.
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            desktop/src-tauri/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('desktop/src-tauri/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Install desktop npm deps
+        working-directory: desktop
+        run: npm install --no-audit --no-fund
+
+      # Build the universal-apple-darwin bundle via tauri-action.
+      # This is just a thin wrapper over `tauri build` that knows
+      # about the platform conventions for artefact paths.
+      - name: Tauri build (universal)
+        uses: tauri-apps/tauri-action@v0
+        with:
+          projectPath: desktop
+          args: --target universal-apple-darwin
+
+      # Upload the DMG (the only artefact a reviewer or installer
+      # actually needs). Retention is 30 days; the Actions UI gives
+      # the user a "Download" button on the run page.
+      - name: Upload DMG artefact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cf-studio-mac-${{ github.run_number }}
+          path: desktop/src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
+          if-no-files-found: error
+          retention-days: 30
+
+      # Bonus: the .app folder, in case someone wants to drop it
+      # straight into /Applications without unpacking a DMG.
+      - name: Upload .app artefact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cf-studio-mac-app-${{ github.run_number }}
+          path: desktop/src-tauri/target/universal-apple-darwin/release/bundle/macos/*.app
+          if-no-files-found: warn
+          retention-days: 30
