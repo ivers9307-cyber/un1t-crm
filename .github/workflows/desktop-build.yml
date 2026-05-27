@@ -76,8 +76,37 @@ jobs:
       # Build the universal-apple-darwin bundle via tauri-action.
       # This is just a thin wrapper over `tauri build` that knows
       # about the platform conventions for artefact paths.
+      #
+      # STUDIO-MAC.4 — when the six APPLE_* secrets are present in
+      # the repo settings, tauri-action automatically signs the .app
+      # with the Developer ID certificate AND submits it to Apple's
+      # notarytool for notarisation. When the secrets are ABSENT
+      # (because they haven't been added yet), tauri-action falls
+      # back to producing an unsigned bundle — no error, just a less
+      # friendly Gatekeeper experience on the resulting DMG.
+      #
+      # Setup guide for the secrets: desktop/SIGNING_SETUP.md
       - name: Tauri build (universal)
         uses: tauri-apps/tauri-action@v0
+        env:
+          # Code-signing — base64-encoded .p12 export of the
+          # Developer ID Application certificate + the export
+          # password.
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          # The exact "Developer ID Application: <Name> (<TEAMID>)"
+          # string from the certificate's Common Name. Used to pick
+          # the right identity inside the temporary keychain
+          # tauri-action sets up for the build.
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          # Notarisation — submitted post-signing via Apple's
+          # notarytool. APPLE_PASSWORD is an APP-SPECIFIC password
+          # (NOT the regular Apple ID password) generated at
+          # appleid.apple.com → Sign-In and Security → App-Specific
+          # Passwords.
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
           projectPath: desktop
           args: --target universal-apple-darwin

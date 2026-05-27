@@ -43,12 +43,13 @@ run page, scroll to *Artifacts*, and download `cf-studio-mac-<run#>`.
 That zip contains the universal DMG (works on both Apple Silicon
 and Intel Macs).
 
-The DMG is **unsigned** today. macOS Gatekeeper will refuse to open
-it on first launch — you'll need to right-click the app in
-`/Applications` → *Open* → confirm. After that one-time approval
-macOS remembers and launches normally. Code-signing + notarisation
-is a follow-on PR that needs the Apple Developer ID certificate
-configured as a CI secret.
+The DMG is **signed + notarised** once the six `APPLE_*` secrets
+are configured on the repo (see
+[`SIGNING_SETUP.md`](./SIGNING_SETUP.md) for the one-time setup —
+step-by-step Apple Developer portal + Keychain + GitHub secrets
+walkthrough). Until those secrets are added, the workflow falls
+back to producing an unsigned DMG which requires the right-click →
+*Open* dance to bypass Gatekeeper on first launch.
 
 ## Local development (optional — if you already have Rust)
 
