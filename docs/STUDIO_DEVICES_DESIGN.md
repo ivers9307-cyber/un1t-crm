@@ -33,10 +33,8 @@ the work back up.
 
 - [ ] Kiosk: how do members check in **today**? Wristband scan, phone
       number, Glofox app, manual at the desk? Drives the kiosk's
-      primary action when we scope it. (Phase 4 prerequisite.)
-- [ ] Confirm iOS version on the existing iPads. Drives the
-      `expo.ios.deploymentTarget` floor. If the iPads are stuck on
-      iOS 15 or earlier we'll need to bump them; iOS 16+ is fine.
+      primary action when we scope it. (Phase 4 prerequisite only —
+      not blocking Phases 0–3.)
 
 **Locked decisions:**
 
@@ -87,9 +85,11 @@ the work back up.
 - ✅ **Mac DMG update cadence: every main merge.** CI builds, signs,
       notarises, and uploads on every push to `main`. Auto-update
       prompts the user to install on the next launch.
-- ✅ **Hardware: existing iPads + Mac.** No new buy. Action item:
-      confirm the iPads' current iOS version (likely iOS 16+).
-      Mac is almost certainly recent enough for Tauri.
+- ✅ **Hardware: existing iPads + Mac. iOS 26 confirmed.** No new
+      buy needed. `expo.ios.deploymentTarget` can be set generously
+      high (iOS 17 or even iOS 18) without compatibility concerns,
+      which lets us use the latest Expo + iOS APIs without
+      back-compat ceremony. Mac is recent enough for Tauri.
 
 ## Goal
 
