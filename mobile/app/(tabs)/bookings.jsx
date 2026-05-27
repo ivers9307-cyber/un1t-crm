@@ -20,6 +20,7 @@ import { useAuth } from '../../lib/auth-context'
 import {
   listUpcomingBookings, groupByDate, formatBookingTime,
 } from '../../lib/bookings-api'
+import TabletConstrained from '../../components/TabletConstrained'
 
 function todayIso() {
   // Device-local day. Acceptable proxy for "location's day" because
@@ -150,7 +151,7 @@ export default function Bookings() {
   const tomorrows = byDate[tomorrow] || []
 
   return (
-    <View className="flex-1 bg-un1t-black">
+    <TabletConstrained className="flex-1 bg-un1t-black">
       <ScrollView
         contentContainerClassName="px-4 pt-2 pb-10"
         refreshControl={
@@ -207,6 +208,6 @@ export default function Bookings() {
           </>
         )}
       </ScrollView>
-    </View>
+    </TabletConstrained>
   )
 }

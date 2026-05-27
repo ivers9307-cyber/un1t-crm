@@ -13,6 +13,7 @@ import { useRouter, useFocusEffect } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { useAuth } from '../../lib/auth-context'
 import { listInvoices, periodLabel } from '../../lib/invoices-api'
+import TabletConstrained from '../../components/TabletConstrained'
 
 const STATUS_STYLE = {
   submitted: { label: 'Awaiting review', color: '#D97706', bg: 'bg-amber-500/20', text: 'text-amber-700', icon: 'time-outline' },
@@ -57,6 +58,11 @@ export default function InvoicesScreen() {
 
   return (
     <View className="flex-1 bg-un1t-black">
+      {/* STUDIO-IPAD.3 — constrain the list to a readable max-width on
+          iPad. Floating action button stays anchored to the device
+          edge (outside the constrained block) which is the right
+          behaviour for "always reachable thumb target." */}
+      <TabletConstrained className="flex-1">
       <ScrollView
         contentContainerStyle={{ padding: 16, paddingBottom: 96 }}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#94A3B8" />}
@@ -121,6 +127,7 @@ export default function InvoicesScreen() {
           ))
         )}
       </ScrollView>
+      </TabletConstrained>
 
       {/* Floating "new invoice" button */}
       <Pressable

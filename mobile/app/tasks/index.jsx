@@ -16,6 +16,7 @@ import { Ionicons } from '@expo/vector-icons'
 import { useAuth } from '../../lib/auth-context'
 import { listMyTasks, statusLabel } from '../../lib/tasks-api'
 import BackHeaderLeft from '../../components/BackHeaderLeft'
+import TabletConstrained from '../../components/TabletConstrained'
 
 const PRIORITY_COLOR = {
   urgent: '#DC2626',
@@ -125,7 +126,7 @@ export default function TasksIndex() {
   )
 
   return (
-    <View className="flex-1 bg-un1t-black">
+    <TabletConstrained className="flex-1 bg-un1t-black">
       {/* tasks/ is a single-screen sub-stack pushed from /more,
           so iOS won't auto-render a back chevron — opt in. */}
       <Stack.Screen
@@ -197,6 +198,6 @@ export default function TasksIndex() {
           ))
         )}
       </ScrollView>
-    </View>
+    </TabletConstrained>
   )
 }

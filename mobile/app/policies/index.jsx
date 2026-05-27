@@ -9,6 +9,7 @@ import { Ionicons } from '@expo/vector-icons'
 import { useRouter, useFocusEffect, Stack } from 'expo-router'
 import { listPolicies } from '../../lib/policies-api'
 import BackHeaderLeft from '../../components/BackHeaderLeft'
+import TabletConstrained from '../../components/TabletConstrained'
 
 function fmtDate(iso) {
   if (!iso) return ''
@@ -92,8 +93,9 @@ export default function PoliciesList() {
   return (
     <>
       <Stack.Screen options={{ ...headerOptions, title: 'Policies' }} />
+      <TabletConstrained className="flex-1 bg-un1t-black">
       <FlatList
-        className="flex-1 bg-un1t-black"
+        className="flex-1"
         contentContainerClassName="p-4"
         data={rows}
         keyExtractor={(p) => p.id}
@@ -159,6 +161,7 @@ export default function PoliciesList() {
           )
         }}
       />
+      </TabletConstrained>
     </>
   )
 }
