@@ -1,5 +1,6 @@
 import './globals.css'
 import AppShellServer from '@/components/AppShellServer'
+import StudioLockOverlay from '@/components/StudioLockOverlay'
 
 // PERF.3 — Vercel SpeedInsights + Analytics are now mounted inside
 // AppShell's authenticated branch (not at the root layout). Pre-auth
@@ -65,6 +66,11 @@ export default function RootLayout({ children }) {
     <html lang="en">
       <body>
         <AppShellServer>{children}</AppShellServer>
+        {/* STUDIO-PIN.3 — idle-lock overlay. Self-disables when the
+            device isn't a paired studio device (no
+            studio_device_token in localStorage). Safe to mount at
+            the root; regular browser users see nothing. */}
+        <StudioLockOverlay />
       </body>
     </html>
   )

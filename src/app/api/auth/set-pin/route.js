@@ -27,6 +27,16 @@ const Body = z.object({
   pin: z.string().refine(isValidPinFormat, 'PIN must be exactly 4 digits'),
 })
 
+// STUDIO-PIN.3 — separate body schema for the home_screen_path PATCH.
+// Same /account form, different intent; keep them on dedicated HTTP
+// verbs so the validation surface stays narrow.
+const PathBody = z.object({
+  home_screen_path: z.string()
+    .min(1)
+    .max(120)
+    .regex(/^\/[A-Za-z0-9/_\-]*$/, 'Must be a relative path starting with /'),
+})
+
 /**
  * Check whether the PIN is already taken by some OTHER profile.
  *
@@ -102,6 +112,32 @@ export async function DELETE() {
   const { error } = await db
     .from('profiles')
     .update({ pin_hash: null, pin_set_at: null, pin_failed_count: 0, pin_locked_until: null })
+    .eq('id', user.id)
+  if (error) {
+    return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+  }
+  return NextResponse.json({ success: true })
+}
+
+// STUDIO-PIN.3 — PATCH /api/auth/set-pin
+//
+// Set the staffer's home_screen_path — the URL the Mac shell / iPad
+// loads after PIN unlock. Lives on the same route because it's
+// adjacent in /account UX (both manage what happens at studio
+// login). Separate verb keeps the validation surface narrow.
+export async function PATCH(request) {
+  const user = await getCurrentUser()
+  if (!user) {
+    return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
+  }
+
+  const validation = await validateBody(request, PathBody)
+  if (!validation.ok) return validation.response
+
+  const db = createServerClient()
+  const { error } = await db
+    .from('profiles')
+    .update({ home_screen_path: validation.data.home_screen_path })
     .eq('id', user.id)
   if (error) {
     return NextResponse.json({ success: false, error: error.message }, { status: 500 })

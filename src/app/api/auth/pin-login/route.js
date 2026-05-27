@@ -34,6 +34,11 @@ import {
   extractClientIp,
   isTrustedIpForLocation,
 } from '@/lib/trusted-ips'
+import {
+  mintStudioSession,
+  cookieAttributes,
+  COOKIE_NAME as STUDIO_COOKIE_NAME,
+} from '@/lib/studio-session'
 import { logWarn } from '@/lib/log'
 
 export const runtime = 'nodejs'
@@ -202,17 +207,25 @@ export async function POST(request) {
     matchedProfile: matched.id, userAgent,
   })
 
-  return NextResponse.json({
+  // STUDIO-PIN.3 — mint the studio_session cookie. Carries the
+  // profile id + device id + location id, signed with
+  // STUDIO_SESSION_SECRET (or the service-role key as fallback). The
+  // cookie is HttpOnly so the client can't read it; it's sent back to
+  // the server on every subsequent request and validated by
+  // auth.js's getCurrentUser pipeline.
+  const cookie = mintStudioSession({
+    profileId: matched.id,
+    deviceId: device.id,
+    locationId: device.location_id,
+  })
+
+  const response = NextResponse.json({
     success: true,
     profile: {
       id: matched.id,
       full_name: matched.full_name,
       home_screen_path: profile?.home_screen_path || '/dashboard',
     },
-    // Session minting is deferred to PR 0.3. For now the client
-    // receives confirmation that the gate-keeping passed; PR 0.3
-    // will extend this response to include the session token /
-    // cookie material once the session-cookie mechanism is decided.
     device: {
       id: device.id,
       kind: device.device_kind,
@@ -220,4 +233,9 @@ export async function POST(request) {
       location_id: device.location_id,
     },
   })
+  response.headers.append(
+    'Set-Cookie',
+    `${STUDIO_COOKIE_NAME}=${cookie}; ${cookieAttributes()}`,
+  )
+  return response
 }

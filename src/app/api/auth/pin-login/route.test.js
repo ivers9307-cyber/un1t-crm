@@ -6,7 +6,14 @@
 // matching outcome value. The actual PIN/device/CIDR primitives have
 // their own unit tests; here we lock the orchestration.
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from 'vitest'
+
+// STUDIO-PIN.3 — the pin-login route now mints a studio_session
+// cookie via studio-session.js, which reads an HMAC secret from env.
+// Pin it for the test suite so the mint doesn't throw.
+const originalSecret = process.env.STUDIO_SESSION_SECRET
+beforeAll(() => { process.env.STUDIO_SESSION_SECRET = 'test-secret' })
+afterAll(() => { process.env.STUDIO_SESSION_SECRET = originalSecret })
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 vi.mock('@/lib/studio-pin', async (orig) => {
@@ -214,6 +221,13 @@ describe('pin-login — success', () => {
     expect(attemptInserts).toHaveLength(1)
     expect(attemptInserts[0].outcome).toBe('success')
     expect(attemptInserts[0].matched_profile).toBe(PROFILE.id)
+    // STUDIO-PIN.3 — Set-Cookie header carries the signed studio_session
+    // cookie. Don't pin the exact value (depends on time + HMAC); just
+    // assert shape.
+    const setCookie = res.headers.get('set-cookie') || ''
+    expect(setCookie).toMatch(/^studio_session=[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+;/)
+    expect(setCookie).toMatch(/HttpOnly/)
+    expect(setCookie).toMatch(/SameSite=Lax/)
   })
 })
 
