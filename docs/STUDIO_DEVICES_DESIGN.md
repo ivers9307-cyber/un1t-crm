@@ -17,13 +17,19 @@ sketch only.
 Use this section to track decisions and where we left off when picking
 the work back up.
 
-- [ ] **Phase 0 — Studio-device PIN auth.** Not started. Cross-cutting
-      foundation for Phases 1, 2, and 3. Detailed in its own section
-      below.
-- [ ] **Phase 1 — CF Studio universal binary + iPad layouts.** Not
-      started. Prereq for Phase 3.
-- [ ] **Phase 2 — Mac shell (Tauri) wrapping un1t-crm.** Not started.
-      Independent of Phase 1.
+- [x] **Phase 0 — Studio-device PIN auth.** ✅ Shipped (#138 #139 #140).
+      Schema + helpers, APIs + admin pairing UI, user surface +
+      session cookie + idle lock. Cross-cutting foundation for
+      Phases 1, 2, and 3.
+- [x] **Phase 1 — CF Studio universal binary + iPad layouts.**
+      ✅ In a shippable state (#141 #142 #143). Universal binary
+      foundation, Schedule 7-column week grid, TabletConstrained
+      wrapper applied to six list screens. Further per-screen
+      polish is discretionary follow-on. Prereq for Phase 3.
+- [ ] **Phase 2 — Mac shell (Tauri) wrapping un1t-crm.** In progress.
+      Scaffolding lives in `desktop/` (this PR). CI + signing +
+      auto-update key generation are follow-on PRs. Independent of
+      Phase 1.
 - [ ] **Phase 3 — Coach In-Class mode.** Not started. Blocked on
       Phase 1.
 - [ ] **Phase 4 — Self-service kiosk.** Scoping deferred. Trigger this

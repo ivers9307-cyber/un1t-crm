@@ -1,0 +1,14 @@
+{
+  "name": "cf-studio-desktop",
+  "version": "1.0.0",
+  "private": true,
+  "description": "CF Studio Mac shell — Tauri wrapper for crm.un1tdublin.com",
+  "scripts": {
+    "tauri": "tauri",
+    "dev": "tauri dev",
+    "build": "tauri build"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.1.0"
+  }
+}

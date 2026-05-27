@@ -1,0 +1,74 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "CF Studio",
+  "version": "1.0.0",
+  "identifier": "com.un1tdublin.crm.desktop",
+
+  "build": {
+    "frontendDist": "../src",
+    "devUrl": "https://crm.un1tdublin.com",
+    "beforeDevCommand": "",
+    "beforeBuildCommand": ""
+  },
+
+  "app": {
+    "macOSPrivateApi": true,
+    "windows": [
+      {
+        "label": "main",
+        "title": "CF Studio",
+        "url": "https://crm.un1tdublin.com",
+        "width": 1400,
+        "height": 900,
+        "minWidth": 1024,
+        "minHeight": 700,
+        "fullscreen": false,
+        "resizable": true,
+        "decorations": true,
+        "transparent": false,
+        "alwaysOnTop": false,
+        "skipTaskbar": false,
+        "titleBarStyle": "Visible"
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+
+  "plugins": {
+    "updater": {
+      "active": true,
+      "endpoints": [
+        "https://crm.un1tdublin.com/desktop/updater-darwin-x86_64.json",
+        "https://crm.un1tdublin.com/desktop/updater-darwin-aarch64.json"
+      ],
+      "pubkey": "REPLACE_WITH_GENERATED_PUBKEY",
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  },
+
+  "bundle": {
+    "active": true,
+    "targets": ["dmg", "app"],
+    "category": "Productivity",
+    "shortDescription": "CF Studio — UN1T Dublin / CCF Autos CRM",
+    "longDescription": "Native Mac shell for the CF Studio CRM. Wraps the web app in a dock-resident window with persistent session, auto-launch, and silent updates.",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns"
+    ],
+    "macOS": {
+      "frameworks": [],
+      "minimumSystemVersion": "11.0",
+      "exceptionDomain": "",
+      "signingIdentity": null,
+      "entitlements": null,
+      "providerShortName": null
+    }
+  }
+}
