@@ -16,6 +16,7 @@ import { useRouter } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { useAuth } from '../../lib/auth-context'
 import { listStages, listDealsByStage } from '../../lib/pipeline-api'
+import TabletConstrained from '../../components/TabletConstrained'
 
 function StagePill({ stage, count, selected, onPress }) {
   const tint = stage.color || '#94A3B8'
@@ -132,7 +133,7 @@ export default function Pipeline() {
   }
 
   return (
-    <View className="flex-1 bg-un1t-black">
+    <TabletConstrained className="flex-1 bg-un1t-black">
       <ScrollView
         contentContainerClassName="px-4 pt-3 pb-32"
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#111827" />}
@@ -177,6 +178,6 @@ export default function Pipeline() {
           ))
         )}
       </ScrollView>
-    </View>
+    </TabletConstrained>
   )
 }

@@ -19,6 +19,7 @@ import {
 import { useRouter, useFocusEffect } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { listExpenseClaims, periodLabel } from '../../lib/expenses-api'
+import TabletConstrained from '../../components/TabletConstrained'
 
 const STATUS_STYLE = {
   draft:     { label: 'Draft',           color: '#64748B', bg: 'bg-slate-500/20', text: 'text-slate-700', icon: 'create-outline' },
@@ -63,6 +64,9 @@ export default function ExpensesScreen() {
 
   return (
     <View className="flex-1 bg-un1t-black">
+      {/* STUDIO-IPAD.3 — constrain content on tablet; floating + button
+          stays anchored to the device edge. */}
+      <TabletConstrained className="flex-1">
       <ScrollView
         contentContainerStyle={{ padding: 16, paddingBottom: 96 }}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#94A3B8" />}
@@ -125,6 +129,7 @@ export default function ExpensesScreen() {
           ))
         )}
       </ScrollView>
+      </TabletConstrained>
 
       <Pressable
         onPress={() => router.push('/expenses/new')}
