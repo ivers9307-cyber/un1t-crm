@@ -1026,6 +1026,17 @@ function SelectRow({ label, value, onChange, options }) {
   )
 }
 
+// XERO-WEBHOOK.1 — Xero invoice Status → friendly label for the
+// payment line shown on a forwarded bill.
+const XERO_STATUS_LABEL = {
+  DRAFT: 'Draft in Xero',
+  SUBMITTED: 'Submitted for approval',
+  AUTHORISED: 'Awaiting payment',
+  PAID: 'Paid',
+  VOIDED: 'Voided',
+  DELETED: 'Deleted',
+}
+
 function ForwardedSummary({ row }) {
   const f = row.extracted_fields || {}
   // XERO-API.3 — new rows have xero_bill_id + xero_deep_link_url.
@@ -1058,6 +1069,29 @@ function ForwardedSummary({ row }) {
           </div>
         )}
       </div>
+
+      {/* XERO-WEBHOOK.1 — payment status synced back from Xero. The
+          Invoices webhook flips this to PAID when the bookkeeper
+          reconciles the bill; blank until the first webhook event. */}
+      {row.xero_bill_status === 'PAID' ? (
+        <div className="border border-emerald-500/40 bg-emerald-500/10 text-emerald-200 rounded-lg p-3 text-sm">
+          Paid in Xero
+          {row.xero_bill_paid_at
+            && ` · ${new Date(row.xero_bill_paid_at).toLocaleDateString('en-IE')}`}
+          {row.xero_bill_amount_paid != null
+            && ` · ${f.currency || 'EUR'} ${Number(row.xero_bill_amount_paid).toFixed(2)}`}
+        </div>
+      ) : row.xero_bill_status ? (
+        <div className="text-xs text-un1t-light px-1">
+          Xero status:{' '}
+          <span className="text-un1t-white">
+            {XERO_STATUS_LABEL[row.xero_bill_status] || row.xero_bill_status}
+          </span>
+          {row.xero_bill_amount_due != null && Number(row.xero_bill_amount_due) > 0
+            && ` · ${f.currency || 'EUR'} ${Number(row.xero_bill_amount_due).toFixed(2)} due`}
+        </div>
+      ) : null}
+
       <ReadOnlyFieldsSummary fields={f} />
     </div>
   )
