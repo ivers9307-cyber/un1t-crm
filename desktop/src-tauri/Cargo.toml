@@ -1,0 +1,34 @@
+[package]
+name = "cf-studio"
+version = "1.0.0"
+description = "CF Studio Mac shell — Tauri wrapper for crm.un1tdublin.com"
+authors = ["UN1T Dublin"]
+edition = "2021"
+rust-version = "1.77"
+
+# STUDIO-MAC.1 — Tauri 2 shell. The whole crate is roughly 50 lines of
+# Rust glue around the WebView + a few plugins. The "app" is the web
+# CRM; this binary just provides the native window + dock + autostart
+# + updater scaffolding.
+
+[lib]
+name = "cf_studio_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["macos-private-api"] }
+tauri-plugin-single-instance = "2"
+tauri-plugin-autostart = "2"
+tauri-plugin-updater = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true
