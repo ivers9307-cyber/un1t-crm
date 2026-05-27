@@ -36,7 +36,14 @@ jobs:
     # target on this runner is aarch64-apple-darwin; we add the
     # x86_64 target below so a universal binary works.
     runs-on: macos-latest
-    timeout-minutes: 30
+    # STUDIO-MAC.6 — 90 min ceiling. Build + sign is ~5–8 min on a
+    # cold cache; the rest is Apple's notarisation wait. First-time
+    # submissions on a new Developer ID can sit in Apple's queue for
+    # 30–60 min before approval lands, especially around busy
+    # release cycles. Once a few builds have been notarised on this
+    # account the typical wait drops to 1–5 min and we'll never get
+    # close to this ceiling.
+    timeout-minutes: 90
 
     steps:
       - name: Check out repo
