@@ -10,10 +10,14 @@ rust-version = "1.77"
 # Rust glue around the WebView + a few plugins. The "app" is the web
 # CRM; this binary just provides the native window + dock + autostart
 # + updater scaffolding.
-
-[lib]
-name = "cf_studio_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
+#
+# STUDIO-MAC.5 — no [lib] block. The Tauri 2 init template scaffolds
+# one (so the project can also target iOS/Android where the entry
+# point differs), but for a Mac-only desktop we just need src/main.rs
+# and the implicit binary target Cargo derives from it. Declaring
+# `[lib] name = "cf_studio_lib"` without a matching `src/lib.rs`
+# breaks `cargo metadata` before any code compiles — which was why
+# every desktop-build CI run silently failed in 16 seconds.
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
