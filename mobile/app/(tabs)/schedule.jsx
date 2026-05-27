@@ -28,6 +28,7 @@ import {
   getMyShifts, getMyTimeOff, createSwapRequest, adjustShiftAssignment,
 } from '../../lib/schedule-api'
 import { MANAGER_ROLES } from '../../../shared/permissions'
+import { useIsTablet } from '../../lib/use-is-tablet'
 
 const isManagerRole = (role) => MANAGER_ROLES.includes(role)
 
@@ -55,6 +56,108 @@ function WeekStrip({ anchor, selected, onSelect, byDate }) {
               <View className={`mt-0.5 w-1.5 h-1.5 rounded-full ${isSel ? 'bg-un1t-black' : 'bg-un1t-white'}`} />
             )}
           </Pressable>
+        )
+      })}
+    </View>
+  )
+}
+
+// STUDIO-IPAD.2 — compact shift card used by the iPad WeekGridView.
+// Same shift, same actions, just squeezed into a column-width card
+// instead of a full-width row. The iPhone ShiftRow below stays
+// untouched so phone users see no change.
+function ShiftCard({ shift, onPress, onLongPress }) {
+  const tpl = shift.shift_templates
+  const effStart = shift.start_time_override || shift.start_time
+  const effEnd = shift.end_time_override || shift.end_time
+  const adjusted = !!(shift.start_time_override || shift.end_time_override)
+  return (
+    <Pressable
+      onPress={onPress}
+      onLongPress={onLongPress}
+      delayLongPress={400}
+      className="bg-un1t-dark border border-un1t-gray rounded-xl p-2.5 mb-2 active:opacity-70"
+    >
+      <Text className="text-sm font-semibold text-un1t-white" numberOfLines={1}>
+        {tpl?.name || 'Shift'}
+      </Text>
+      <Text className="text-[11px] text-un1t-light mt-0.5">
+        {timeRange(effStart, effEnd)}
+      </Text>
+      <View className="flex-row gap-1 mt-1.5">
+        {adjusted && (
+          <View className="px-1.5 py-0.5 rounded-full bg-amber-400">
+            <Text className="text-[9px] uppercase text-amber-950 font-bold">Adj</Text>
+          </View>
+        )}
+        {shift.published === false && (
+          <View className="px-1.5 py-0.5 rounded-full bg-amber-500/20">
+            <Text className="text-[9px] uppercase text-amber-700 font-medium">Draft</Text>
+          </View>
+        )}
+        {shift.status === 'swapped' && (
+          <View className="px-1.5 py-0.5 rounded-full bg-blue-500/20">
+            <Text className="text-[9px] uppercase text-blue-700 font-medium">Swap</Text>
+          </View>
+        )}
+      </View>
+    </Pressable>
+  )
+}
+
+// STUDIO-IPAD.2 — 7-column week grid for iPad. Replaces the phone's
+// WeekStrip + single-day list with a glanceable whole-week view so
+// the coach doesn't have to tap through each day. Each column owns
+// its own day's shifts + any active leave marker; today's column is
+// highlighted.
+//
+// Per-column shift cards reuse the same onPress / onLongPress
+// handlers as the phone's ShiftRow, so adjust + swap flows work
+// identically.
+function WeekGridView({ anchor, shiftsByDate, timeOff, todayIso, canAdjust, openAdjust, requestSwap }) {
+  const days = daysOfWeek(anchor)
+  return (
+    <View className="flex-row gap-2">
+      {days.map((d, i) => {
+        const iso = isoDate(d)
+        const dayShifts = (shiftsByDate[iso] || []).slice().sort((a, b) =>
+          (a.start_time || '').localeCompare(b.start_time || ''))
+        const dayLeave = timeOff.filter(t =>
+          t.start_date <= iso && t.end_date >= iso &&
+          (t.status === 'approved' || t.status === 'pending'))
+        const isToday = iso === todayIso
+        return (
+          <View key={iso} className="flex-1 min-w-0">
+            <View className={`items-center py-2 mb-2 rounded-xl ${isToday ? 'bg-un1t-white' : 'bg-un1t-dark border border-un1t-gray'}`}>
+              <Text className={`text-[10px] uppercase font-medium ${isToday ? 'text-un1t-black' : 'text-un1t-light'}`}>
+                {DAY_LABELS[i]}
+              </Text>
+              <Text className={`text-lg font-semibold ${isToday ? 'text-un1t-black' : 'text-un1t-white'}`}>
+                {d.getDate()}
+              </Text>
+            </View>
+            {dayLeave.map(t => (
+              <View key={t.id} className="bg-amber-500/10 border border-amber-500/40 rounded-xl p-2 mb-2">
+                <Text className="text-[11px] font-semibold text-amber-700" numberOfLines={1}>
+                  {t.type === 'holiday' ? 'Holiday' : t.type === 'sick' ? 'Sick' : 'Time off'}
+                </Text>
+                {t.status === 'pending' && (
+                  <Text className="text-[10px] text-amber-700/80 mt-0.5">Pending</Text>
+                )}
+              </View>
+            ))}
+            {dayShifts.length === 0 && dayLeave.length === 0 ? (
+              <Text className="text-[11px] text-un1t-mid italic text-center py-3">—</Text>
+            ) : null}
+            {dayShifts.map(s => (
+              <ShiftCard
+                key={s.id}
+                shift={s}
+                onPress={canAdjust(s) ? () => openAdjust(s) : undefined}
+                onLongPress={() => requestSwap(s)}
+              />
+            ))}
+          </View>
         )
       })}
     </View>
@@ -121,6 +224,7 @@ function ShiftRow({ shift, onPress, onLongPress }) {
 export default function Schedule() {
   const { activeLocation, profile } = useAuth()
   const router = useRouter()
+  const isTablet = useIsTablet()
   const [anchor, setAnchor] = useState(() => weekStart(new Date()))
   const [selected, setSelected] = useState(() => new Date())
   const [shifts, setShifts] = useState([])
@@ -249,11 +353,19 @@ export default function Schedule() {
           </Pressable>
         </View>
 
-        <WeekStrip anchor={anchor} selected={selected} onSelect={setSelected} byDate={shiftsByDate} />
+        {/* STUDIO-IPAD.2 — iPad shows the whole week as a 7-column grid
+            so the coach doesn't have to tap through each day. iPhone
+            keeps the WeekStrip + single-day list (it'd be unreadably
+            cramped at 7 narrow columns on a 390pt iPhone screen). */}
+        {!isTablet && (
+          <WeekStrip anchor={anchor} selected={selected} onSelect={setSelected} byDate={shiftsByDate} />
+        )}
 
-        <Text className="text-xs uppercase tracking-wider text-un1t-light mt-6 mb-2 px-1">
-          {selected.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })}
-        </Text>
+        {!isTablet && (
+          <Text className="text-xs uppercase tracking-wider text-un1t-light mt-6 mb-2 px-1">
+            {selected.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })}
+          </Text>
+        )}
 
         {error ? (
           <View className="bg-red-500/10 border border-red-500/30 rounded-xl p-3 mb-3">
@@ -264,6 +376,18 @@ export default function Schedule() {
         {loading ? (
           <View className="py-12 items-center">
             <ActivityIndicator />
+          </View>
+        ) : isTablet ? (
+          <View className="mt-2">
+            <WeekGridView
+              anchor={anchor}
+              shiftsByDate={shiftsByDate}
+              timeOff={timeOff}
+              todayIso={isoDate(new Date())}
+              canAdjust={canAdjust}
+              openAdjust={setAdjustingShift}
+              requestSwap={requestSwapForShift}
+            />
           </View>
         ) : (
           <>
