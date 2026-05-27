@@ -14,8 +14,10 @@ import { ChevronRight, History, FileSignature } from 'lucide-react'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { resolveLandingPreference } from '@shared/permissions'
+import { createServerClient } from '@/lib/supabase'
 import AccountForm from '@/components/AccountForm'
 import PasswordChangeForm from '@/components/PasswordChangeForm'
+import StudioPinSettings from '@/components/StudioPinSettings'
 
 export const dynamic = 'force-dynamic'
 
@@ -36,6 +38,16 @@ export default async function AccountPage() {
 
   const currentPreference = resolveLandingPreference(user)
 
+  // STUDIO-PIN.3 — pull PIN state + home_screen_path for the studio-
+  // device settings card. Single targeted read; the rest of the user
+  // object is already loaded by getCurrentUser.
+  const db = createServerClient()
+  const { data: pinInfo } = await db
+    .from('profiles')
+    .select('pin_hash, pin_set_at, home_screen_path')
+    .eq('id', user.id)
+    .single()
+
   return (
     <div className="p-8 max-w-3xl">
       <div className="mb-6">
@@ -52,6 +64,14 @@ export default async function AccountPage() {
 
       <div className="mt-8 pt-6 border-t border-un1t-gray">
         <PasswordChangeForm email={user.email} />
+      </div>
+
+      <div className="mt-8">
+        <StudioPinSettings
+          hasPinSet={Boolean(pinInfo?.pin_hash)}
+          pinSetAt={pinInfo?.pin_set_at || null}
+          homeScreenPath={pinInfo?.home_screen_path || '/dashboard'}
+        />
       </div>
 
       <div className="mt-8 pt-6 border-t border-un1t-gray">

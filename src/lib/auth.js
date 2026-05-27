@@ -123,13 +123,51 @@ async function getUserFromBearer() {
   }
 }
 
+// STUDIO-PIN.3 — third auth source: the studio_session signed cookie.
+// PIN-login on a paired studio device mints this cookie; the
+// staffer's profile id is carried directly in the payload, so we don't
+// need to call Supabase Auth at all for this code path.
+//
+// Returns a minimal `{ id, email }` user object on success so the rest
+// of getCurrentUser() can run unchanged. Returns null on any failure
+// (missing, malformed, signed with a different secret, idle-locked,
+// or expired). The idle-locked vs hard-expired distinction is captured
+// in the cookie itself via inspectStudioSession; either way auth.js
+// treats the request as unauthenticated.
+async function getUserFromStudioSession(db) {
+  let cookieStore
+  try {
+    cookieStore = await cookies()
+  } catch {
+    return null
+  }
+  const raw = cookieStore.get('studio_session')?.value
+  if (!raw) return null
+
+  const { readStudioSession } = await import('./studio-session.js')
+  const payload = readStudioSession(raw)
+  if (!payload?.sub) return null
+
+  // Load the bare auth-shape user object we'd otherwise get from
+  // Supabase. profiles.id IS the Supabase auth user.id (FK to
+  // auth.users) — no separate Supabase Auth call needed.
+  const { data: profile } = await db
+    .from('profiles')
+    .select('id, email')
+    .eq('id', payload.sub)
+    .single()
+  if (!profile) return null
+  return { id: profile.id, email: profile.email }
+}
+
 // Get current user profile with permissions and location.
 //
 // Auth source priority:
 //   1. Authorization: Bearer <supabase_jwt>  (iOS mobile app)
 //   2. SSR session cookies                   (web browser)
+//   3. studio_session signed cookie          (Mac shell / paired iPad)
 //
-// In either case, the rest of the function is identical — load the
+// In every case, the rest of the function is identical — load the
 // profile, location assignments, and resolve activeLocation. The mobile
 // app sends an `x-active-location` header to override the cookie-based
 // active-location resolution; the cookie path remains untouched.
@@ -140,19 +178,43 @@ async function getUserFromBearer() {
 // roundtrip; now it's once per request.
 export const getCurrentUser = cache(async function getCurrentUser() {
   // Try Bearer JWT first (mobile). If absent or invalid, fall back to
-  // the cookie-based session (web).
+  // the cookie-based session (web). If that's also absent, try the
+  // studio_session cookie (Mac shell / paired iPad).
+  //
+  // The service-role client is built lazily on demand so unauthenticated
+  // requests (e.g. Next prerendering /_not-found at build time, when
+  // env vars may not be present) don't try to construct one.
   let user = await getUserFromBearer()
   if (!user) {
     const supabase = await createAuthClient()
     const result = await supabase.auth.getUser()
     user = result.data.user
   }
+  let db = null
+  if (!user) {
+    // Building db here so the studio-session path can use it. If THIS
+    // path also yields no user, getCurrentUser returns null below and
+    // the client was built for nothing — but that's still cheap (just
+    // a couple of object allocations) versus the prerender-time crash
+    // we'd hit if we constructed it unconditionally up top.
+    if (process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY) {
+      db = createClient(
+        process.env.NEXT_PUBLIC_SUPABASE_URL,
+        process.env.SUPABASE_SERVICE_ROLE_KEY
+      )
+      user = await getUserFromStudioSession(db)
+    }
+  }
   if (!user) return null
 
-  const db = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL,
-    process.env.SUPABASE_SERVICE_ROLE_KEY
-  )
+  // Reuse the db we may have built for the studio-session lookup;
+  // construct it now if it doesn't exist yet.
+  if (!db) {
+    db = createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL,
+      process.env.SUPABASE_SERVICE_ROLE_KEY
+    )
+  }
 
   // Profile fetch + lazy impersonation cookie import in parallel.
   // We can't fetch the impersonation TARGET in parallel because we
