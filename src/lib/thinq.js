@@ -109,6 +109,12 @@ async function thinqFetch(path, {
   method = 'GET',
   body,
   query = {},
+  // Additional headers merged on top of the standard set. Used by
+  // setDeviceState to add `x-conditional-control: true` — without
+  // that header LG rejects every composite control payload
+  // (anything that sets more than one resource in a single body)
+  // with code 2207 'Invalid command error'.
+  extraHeaders = null,
 } = {}) {
   requirePat(pat)
   requireClientId(clientId)
@@ -132,6 +138,7 @@ async function thinqFetch(path, {
     'x-api-key':        THINQ_API_KEY,
     'x-service-phase':  'OP',
     Accept:             'application/json',
+    ...(extraHeaders || {}),
   }
   const init = {
     method,
@@ -274,9 +281,22 @@ export async function setDeviceState(deviceId, command, { pat, clientId, country
   if (!command || typeof command !== 'object') {
     throw new ThinqError('command body is required.')
   }
+  // `x-conditional-control: true` is required for composite control
+  // payloads — anything that sets more than one resource in a single
+  // body (e.g. buildTurnOnState sets operation + airConJobMode +
+  // temperature + airFlow at once). Without this header LG returns
+  // code 2207 'Invalid command error'. The official Python SDK sends
+  // this header on every /control POST; we mirror that.
   const json = await thinqFetch(
     `/devices/${encodeURIComponent(deviceId)}/control`,
-    { pat, clientId, countryCode, method: 'POST', body: command }
+    {
+      pat,
+      clientId,
+      countryCode,
+      method: 'POST',
+      body: command,
+      extraHeaders: { 'x-conditional-control': 'true' },
+    }
   )
   // LG's control response sometimes echoes the new state, sometimes
   // returns an empty success envelope. Callers that need the new
