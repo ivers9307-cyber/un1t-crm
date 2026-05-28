@@ -193,6 +193,26 @@ export default function More() {
         </Section>
       )}
 
+      {/* REPORT-ISSUE.1 — staff-submitted issue reports. Always
+          shown: any staff member at any location can flag something
+          broken / dirty / unsafe in the studio with a photo, and
+          the owners at that studio get the task. The list screen
+          shows their own submission history (open / in progress /
+          resolved). No permission gate by design — universal CTA. */}
+      <Section title="Report">
+        <Row
+          icon="alert-circle-outline"
+          label="Report a problem"
+          onPress={() => router.push('/issues/new')}
+        />
+        <Row
+          icon="list-outline"
+          label="My reports"
+          onPress={() => router.push('/issues')}
+          isLast
+        />
+      </Section>
+
       {/* Documents — contracts and HR policies. Always shown (every
           staff member is potentially a recipient of either); the
           screens show empty-states if none are applicable.
