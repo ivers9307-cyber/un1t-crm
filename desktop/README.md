@@ -28,28 +28,59 @@ Why Tauri instead of Electron:
 
 ## How to get a DMG (CI — the supported path)
 
-You don't need Rust, Tauri, or Xcode on your laptop. The
-**Desktop build** GitHub Actions workflow compiles the shell on
-macos-latest and uploads the DMG as a downloadable artefact.
+You don't need Rust, Tauri, or Xcode on your laptop. There are
+**two** GitHub Actions workflows; together they produce a signed
++ notarised DMG you can install on any Mac without the right-click
+→ *Open* dance.
+
+### Workflow 1: Desktop build
+
+Compiles the shell, code-signs the `.app`, and submits it to
+Apple's notarisation queue with `--no-wait`. Exits in 5–10 min
+regardless of how busy Apple's queue is.
 
 To trigger a build:
 
 - **Automatic** — any push to `main` that touches `desktop/**`.
-- **On demand** — go to the Actions tab on GitHub →
-  *Desktop build* → *Run workflow*.
+- **On demand** — Actions tab on GitHub → *Desktop build* →
+  *Run workflow*.
 
-When the run finishes (~5–8 min cold, ~2–3 min cached), open the
-run page, scroll to *Artifacts*, and download `cf-studio-mac-<run#>`.
-That zip contains the universal DMG (works on both Apple Silicon
-and Intel Macs).
+When the run finishes, open its summary panel. You'll see the
+notarisation submission UUID and a copy-pasteable build run id.
 
-The DMG is **signed + notarised** once the six `APPLE_*` secrets
-are configured on the repo (see
-[`SIGNING_SETUP.md`](./SIGNING_SETUP.md) for the one-time setup —
-step-by-step Apple Developer portal + Keychain + GitHub secrets
-walkthrough). Until those secrets are added, the workflow falls
-back to producing an unsigned DMG which requires the right-click →
-*Open* dance to bypass Gatekeeper on first launch.
+### Workflow 2: Desktop finalize
+
+Picks up where Desktop build left off: waits for Apple to accept
+the submission, staples the ticket, packages a fresh DMG, signs
+it, runs the DMG through its own notarisation pass, and uploads
+the final artefacts.
+
+To trigger:
+
+- Actions tab → *Desktop finalize* → *Run workflow*. Paste the
+  build run id into `build_run_id` and hit *Run workflow*.
+
+The signed + notarised DMG appears under *Artifacts* on the
+finalize run page as `cf-studio-mac-<run#>-dmg`. Universal binary;
+works on both Apple Silicon and Intel Macs.
+
+### Why split the pipeline?
+
+First-time submissions on a fresh Developer ID can sit in Apple's
+notarisation queue for 30–60+ min, sometimes longer. Holding a
+`macos-latest` minute for that whole window is expensive and
+brittle — any GitHub flake during the wait means rebuilding from
+scratch. Splitting means build returns fast and finalisation is
+cheap to retry until Apple responds.
+
+### Signing prerequisites
+
+Both workflows depend on the six `APPLE_*` GitHub secrets being
+present. See [`SIGNING_SETUP.md`](./SIGNING_SETUP.md) for the
+one-time setup — step-by-step Apple Developer portal + Keychain
++ GitHub secrets walkthrough. Until those secrets are added,
+Desktop build falls back to producing an unsigned `.app` (which
+isn't useful) and finalize will fail.
 
 ## Local development (optional — if you already have Rust)
 
