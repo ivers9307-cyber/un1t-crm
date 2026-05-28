@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  STUDIO-MAC.8 — App Sandbox entitlements for Mac App Store distribution.
+
+  App Sandbox is mandatory for the App Store. Every entitlement here is
+  the minimum required for the shell to do its one job (wrap the web
+  CRM in a WKWebView window). If a capability isn't listed, the
+  sandbox blocks it — which is the security model working as intended.
+
+  Capabilities NOT requested (and the reason why):
+    - files.user-selected: shell has no file pickers
+    - files.downloads: shell does not download files itself
+    - device.camera / microphone: no native A/V usage
+    - network.server: shell does not accept inbound connections
+    - personal-information.*: shell has no contact/calendar/location reads
+    - device.usb / bluetooth: no peripheral access
+    - cs.allow-jit / cs.disable-library-validation: WKWebView runs in
+      its own process with its own entitlements; the parent app does
+      not need to relax code-signing for JIT.
+
+  If the embedded web CRM ever needs new browser capabilities that
+  require host entitlements (printing to specific drivers, camera for
+  photo upload, etc.), add the matching key here and resubmit the
+  binary for review.
+-->
+<plist version="1.0">
+<dict>
+  <!-- Sandbox the binary. App Store rejects unsandboxed submissions. -->
+  <key>com.apple.security.app-sandbox</key>
+  <true/>
+
+  <!-- Outbound network: WKWebView fetches crm.un1tdublin.com and
+       the resources that page references (Supabase API, CDN assets,
+       Postmark click trackers, etc.). -->
+  <key>com.apple.security.network.client</key>
+  <true/>
+
+  <!-- Print: the web CRM occasionally prints invoices and schedules
+       via the browser's window.print(). Without this entitlement the
+       system print dialog appears but the actual job is silently
+       dropped inside the sandbox. -->
+  <key>com.apple.security.print</key>
+  <true/>
+</dict>
+</plist>

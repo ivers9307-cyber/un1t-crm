@@ -1,0 +1,265 @@
+# STUDIO-MAC.8 — Mac App Store build + upload workflow.
+#
+# Compiles desktop/ (Tauri 2 + Rust) on macos-latest, signs with the
+# Mac App Store certs, wraps in a productbuild .pkg, and uploads
+# directly to App Store Connect for review.
+#
+# This pipeline is INTENTIONALLY DIFFERENT from the desktop-build /
+# desktop-finalize pair, which targets outside-the-App-Store
+# distribution via Developer ID + notarisation. Mac App Store has
+# its own certs, requires sandboxing, doesn't use notarytool, and
+# delivers via altool upload (not DMG download).
+#
+# Trigger: workflow_dispatch only. App Store builds should be
+# deliberate (each one creates a build that counts towards Apple's
+# review queue), not auto-fire on every desktop/** change.
+#
+# Apple side requirements (one-time setup — see APPSTORE_SETUP.md):
+#   - Mac App Distribution cert (.p12)
+#   - Mac Installer Distribution cert (.p12)
+#   - Universal Purchase enabled on com.un1tdublin.crm in ASC
+#   - App-specific password for the Apple ID used for upload
+
+name: Desktop App Store
+
+on:
+  workflow_dispatch: {}
+
+concurrency:
+  group: desktop-appstore-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-upload:
+    name: Build + sign + upload to App Store Connect
+    runs-on: macos-latest
+    # 45 min ceiling. Build + sign + productbuild + altool upload
+    # is typically 8-12 min cold, 4-6 min cached. The upload itself
+    # is sometimes slow (multi-hundred-MB .pkg) which is why the
+    # buffer.
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin,aarch64-apple-darwin
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            desktop/src-tauri/target
+          key: ${{ runner.os }}-cargo-appstore-${{ hashFiles('desktop/src-tauri/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-appstore-
+            ${{ runner.os }}-cargo-
+
+      - name: Install desktop npm deps
+        working-directory: desktop
+        run: npm install --no-audit --no-fund
+
+      # Set up an ephemeral keychain holding BOTH App Store certs:
+      #   - "3rd Party Mac Developer Application" — used by codesign
+      #     to sign the .app binary itself
+      #   - "3rd Party Mac Developer Installer" — used by productbuild
+      #     to sign the .pkg installer wrapper
+      # Apple requires both for App Store submission; one signs the
+      # contents, the other signs the container.
+      - name: Set up signing keychain
+        env:
+          APPLE_MAS_APP_CERTIFICATE: ${{ secrets.APPLE_MAS_APP_CERTIFICATE }}
+          APPLE_MAS_APP_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_MAS_APP_CERTIFICATE_PASSWORD }}
+          APPLE_MAS_INSTALLER_CERTIFICATE: ${{ secrets.APPLE_MAS_INSTALLER_CERTIFICATE }}
+          APPLE_MAS_INSTALLER_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_MAS_INSTALLER_CERTIFICATE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          KEYCHAIN="$RUNNER_TEMP/build.keychain"
+          KEYCHAIN_PWD=$(openssl rand -hex 32)
+
+          security create-keychain -p "$KEYCHAIN_PWD" "$KEYCHAIN"
+          security set-keychain-settings -t 3600 -lut 3600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PWD" "$KEYCHAIN"
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+          security default-keychain -s "$KEYCHAIN"
+
+          APP_CERT="$RUNNER_TEMP/mas-app.p12"
+          INSTALLER_CERT="$RUNNER_TEMP/mas-installer.p12"
+          echo "$APPLE_MAS_APP_CERTIFICATE" | base64 --decode > "$APP_CERT"
+          echo "$APPLE_MAS_INSTALLER_CERTIFICATE" | base64 --decode > "$INSTALLER_CERT"
+
+          # productbuild needs the installer cert in the keychain too.
+          # -T allows both codesign and productbuild to use the private
+          # keys without an interactive prompt.
+          security import "$APP_CERT" \
+            -k "$KEYCHAIN" \
+            -P "$APPLE_MAS_APP_CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign
+          security import "$INSTALLER_CERT" \
+            -k "$KEYCHAIN" \
+            -P "$APPLE_MAS_INSTALLER_CERTIFICATE_PASSWORD" \
+            -T /usr/bin/productbuild
+
+          security set-key-partition-list -S apple-tool:,apple:,codesign:,productbuild: \
+            -s -k "$KEYCHAIN_PWD" "$KEYCHAIN" > /dev/null
+
+          rm -f "$APP_CERT" "$INSTALLER_CERT"
+
+          # List installed identities so the workflow log shows what
+          # got installed — useful when a signing-identity mismatch
+          # turns up at codesign time and you need to confirm the
+          # cert Common Names.
+          security find-identity -v -p codesigning "$KEYCHAIN"
+
+      # Build the universal .app — no signing in this step. Tauri's
+      # signingIdentity is null in tauri.conf.json, so this produces
+      # an unsigned bundle. We sign it ourselves in the next step
+      # with the App Store cert + entitlements file, which gives us
+      # exact control over what entitlements end up embedded.
+      - name: Tauri build (universal, unsigned)
+        uses: tauri-apps/tauri-action@v0
+        with:
+          projectPath: desktop
+          # bundles=app skips DMG creation (App Store doesn't ship
+          # DMGs); we build the .pkg ourselves with productbuild
+          # below.
+          args: --target universal-apple-darwin --bundles app
+
+      # Sign the .app with the App Store cert + sandbox entitlements.
+      # --options runtime enables the hardened runtime, which App
+      # Store now requires. --deep recursively signs nested binaries
+      # (Tauri's embedded helpers, dylibs). The entitlements file is
+      # the same one referenced from tauri.conf.json — we pass it
+      # explicitly to codesign because Tauri's build didn't sign.
+      - name: Sign .app with Mac App Store certificate
+        id: sign-app
+        env:
+          APPLE_MAS_APP_SIGNING_IDENTITY: ${{ secrets.APPLE_MAS_APP_SIGNING_IDENTITY }}
+        run: |
+          set -euo pipefail
+          APP_DIR="desktop/src-tauri/target/universal-apple-darwin/release/bundle/macos"
+          APP_PATH=$(ls -d "$APP_DIR"/*.app | head -n1)
+          if [ -z "$APP_PATH" ]; then
+            echo "::error::No .app bundle found under $APP_DIR"
+            exit 1
+          fi
+          echo "Signing: $APP_PATH"
+
+          codesign \
+            --force \
+            --deep \
+            --options runtime \
+            --sign "$APPLE_MAS_APP_SIGNING_IDENTITY" \
+            --entitlements desktop/src-tauri/entitlements.plist \
+            --timestamp \
+            "$APP_PATH"
+
+          # Verify the signature + that sandbox is actually enabled.
+          # codesign --display will show the embedded entitlements; if
+          # com.apple.security.app-sandbox is missing or false, App
+          # Store will reject the submission later.
+          codesign --verify --verbose=2 "$APP_PATH"
+          echo "--- Embedded entitlements ---"
+          codesign --display --entitlements - --xml "$APP_PATH" | plutil -p -
+
+          echo "app_path=$APP_PATH" >> "$GITHUB_OUTPUT"
+
+      # Wrap the signed .app in a .pkg installer signed with the
+      # Installer cert. App Store accepts .pkg, not .app and not DMG.
+      # --component places the .app at /Applications when installed.
+      - name: Build .pkg installer
+        id: pkg
+        env:
+          APPLE_MAS_INSTALLER_SIGNING_IDENTITY: ${{ secrets.APPLE_MAS_INSTALLER_SIGNING_IDENTITY }}
+          APP_PATH: ${{ steps.sign-app.outputs.app_path }}
+        run: |
+          set -euo pipefail
+          PKG_OUT="$RUNNER_TEMP/CF-Studio-${{ github.run_number }}.pkg"
+
+          productbuild \
+            --component "$APP_PATH" /Applications \
+            --sign "$APPLE_MAS_INSTALLER_SIGNING_IDENTITY" \
+            "$PKG_OUT"
+
+          # pkgutil --check-signature confirms the installer is
+          # signed with the right identity. If this fails the
+          # subsequent altool upload will reject the package.
+          pkgutil --check-signature "$PKG_OUT"
+
+          ls -lh "$PKG_OUT"
+          echo "pkg_path=$PKG_OUT" >> "$GITHUB_OUTPUT"
+
+      # Validate the package against App Store rules BEFORE uploading.
+      # altool --validate-app catches most rejection reasons
+      # (missing entitlements, wrong bundle ID, version conflicts)
+      # locally so you don't burn a real submission on a fixable
+      # problem. Cheap to run; saves time vs. waiting for review.
+      - name: Validate .pkg against App Store rules
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          PKG_PATH: ${{ steps.pkg.outputs.pkg_path }}
+        run: |
+          set -euo pipefail
+          xcrun altool --validate-app \
+            --file "$PKG_PATH" \
+            --type macos \
+            --username "$APPLE_ID" \
+            --password "$APPLE_PASSWORD"
+
+      # Upload to App Store Connect. Once this returns success,
+      # the build appears under the macOS platform of the
+      # com.un1tdublin.crm app record in ASC within a few minutes.
+      # From there: select the build for the unlisted release,
+      # submit for review.
+      - name: Upload to App Store Connect
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          PKG_PATH: ${{ steps.pkg.outputs.pkg_path }}
+        run: |
+          set -euo pipefail
+          xcrun altool --upload-app \
+            --file "$PKG_PATH" \
+            --type macos \
+            --username "$APPLE_ID" \
+            --password "$APPLE_PASSWORD"
+
+      # Surface the .pkg as a workflow artefact so a human can grab
+      # it for local debugging if a downstream review issue needs
+      # reproducing — even though the primary delivery path is the
+      # altool upload above.
+      - name: Upload .pkg artefact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cf-studio-mac-${{ github.run_number }}-appstore-pkg
+          path: ${{ steps.pkg.outputs.pkg_path }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Summary
+        env:
+          PKG_PATH: ${{ steps.pkg.outputs.pkg_path }}
+        run: |
+          {
+            echo "## App Store upload complete"
+            echo ""
+            echo "**Package:** \`$(basename "$PKG_PATH")\`"
+            echo ""
+            echo "Next steps:"
+            echo ""
+            echo "1. Visit [App Store Connect → CF Studio](https://appstoreconnect.apple.com/) and switch to the macOS platform."
+            echo "2. Wait 5-15 min for Apple's automated processing to complete."
+            echo "3. Select this build for the version you want to ship."
+            echo "4. Submit for review (unlisted distribution stays unlisted automatically)."
+          } >> "$GITHUB_STEP_SUMMARY"

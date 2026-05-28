@@ -7,9 +7,8 @@ edition = "2021"
 rust-version = "1.77"
 
 # STUDIO-MAC.1 — Tauri 2 shell. The whole crate is roughly 50 lines of
-# Rust glue around the WebView + a few plugins. The "app" is the web
-# CRM; this binary just provides the native window + dock + autostart
-# + updater scaffolding.
+# Rust glue around the WebView + a single plugin. The "app" is the
+# web CRM; this binary just provides the native window + dock.
 #
 # STUDIO-MAC.5 — no [lib] block. The Tauri 2 init template scaffolds
 # one (so the project can also target iOS/Android where the entry
@@ -18,6 +17,13 @@ rust-version = "1.77"
 # `[lib] name = "cf_studio_lib"` without a matching `src/lib.rs`
 # breaks `cargo metadata` before any code compiles — which was why
 # every desktop-build CI run silently failed in 16 seconds.
+#
+# STUDIO-MAC.8 — autostart + updater plugins removed for Mac App
+# Store distribution. App Store sandbox forbids launch-agent
+# registration (autostart) and App Store policy forbids
+# self-updating apps (the App Store handles updates itself). If
+# non-App-Store distribution ever comes back as a fallback, the
+# plugins return; until then git history is the reference.
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -25,8 +31,6 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = ["macos-private-api"] }
 tauri-plugin-single-instance = "2"
-tauri-plugin-autostart = "2"
-tauri-plugin-updater = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
