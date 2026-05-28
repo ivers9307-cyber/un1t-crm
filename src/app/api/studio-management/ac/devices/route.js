@@ -1,0 +1,157 @@
+// /api/studio-management/ac/devices
+//
+//   GET  → list AC devices visible to the caller at the active
+//          location, filtered by the per-staff allowlist. Master
+//          sees every device at the location; manager/owner with
+//          NULL allowlist sees every device; everyone else sees
+//          only the devices ticked in profile_locations.ac_device_ids.
+//          Live state is NOT fetched here — that's the per-device
+//          /state route. The list returns the row + label + provider
+//          so the panel can render one card per visible device and
+//          poll each card independently.
+//
+//   POST → master-only: create a new ac_devices row. Body:
+//          { provider, provider_device_id, label, default_mode?,
+//            default_temp_c?, default_fan?, session_minutes? }.
+//          The provider's credentials must already be set on the
+//          location row (sensibo_api_key for sensibo, thinq_pat +
+//          thinq_client_id for thinq) — the POST returns 412
+//          otherwise. The provider_device_id usually comes from
+//          a discovery call (/sensibo-pods or /lg-devices).
+//
+// Auth: studio_management permission. Master role required for
+// POST (handled inline because withAuth doesn't compose
+// permission + role in one shot).
+
+import { NextResponse } from 'next/server'
+import { withAuth } from '@/lib/with-auth'
+
+export const runtime = 'nodejs'
+export const dynamic = 'force-dynamic'
+
+// ---- GET ----
+
+export const GET = withAuth(
+  { permission: 'studio_management' },
+  async ({ user, db, locationId }) => {
+    const { data: devices, error: devErr } = await db
+      .from('ac_devices')
+      .select('id, location_id, label, provider, default_mode, default_temp_c, default_fan, session_minutes, enabled, created_at, updated_at')
+      .eq('location_id', locationId)
+      .eq('enabled', true)
+      .order('label', { ascending: true })
+    if (devErr) {
+      return NextResponse.json({ success: false, error: devErr.message }, { status: 500 })
+    }
+
+    // Filter by the caller's allowlist unless they're master or
+    // a manager/owner with the legacy NULL value.
+    let visible = devices || []
+    if (user.role !== 'master') {
+      const { data: pl } = await db
+        .from('profile_locations')
+        .select('role, ac_device_ids')
+        .eq('profile_id', user.id)
+        .eq('location_id', locationId)
+        .maybeSingle()
+      const role = pl?.role || user.profileRole || user.role
+      const allowlist = pl?.ac_device_ids
+      const legacyUnrestricted =
+        (allowlist === null || allowlist === undefined) &&
+        (role === 'manager' || role === 'owner')
+      if (!legacyUnrestricted) {
+        const allowed = new Set(Array.isArray(allowlist) ? allowlist : [])
+        visible = visible.filter((d) => allowed.has(d.id))
+      }
+    }
+
+    return NextResponse.json({ success: true, data: visible })
+  }
+)
+
+// ---- POST ----
+
+export const POST = withAuth(
+  { permission: 'studio_management' },
+  async ({ user, db, locationId, request }) => {
+    if (user.role !== 'master') {
+      return NextResponse.json(
+        { success: false, error: 'Only master can add AC devices.' },
+        { status: 403 }
+      )
+    }
+
+    let body
+    try { body = await request.json() }
+    catch { return NextResponse.json({ success: false, error: 'Invalid JSON body.' }, { status: 400 }) }
+
+    const provider = String(body?.provider || '').toLowerCase()
+    const providerDeviceId = String(body?.provider_device_id || '').trim()
+    const label = String(body?.label || '').trim()
+    if (provider !== 'sensibo' && provider !== 'thinq') {
+      return NextResponse.json({ success: false, error: 'provider must be "sensibo" or "thinq".' }, { status: 400 })
+    }
+    if (!providerDeviceId) {
+      return NextResponse.json({ success: false, error: 'provider_device_id is required.' }, { status: 400 })
+    }
+    if (!label) {
+      return NextResponse.json({ success: false, error: 'label is required.' }, { status: 400 })
+    }
+
+    // Confirm the relevant vendor credentials exist on the location.
+    // A device row with no path to the vendor is useless.
+    const { data: loc } = await db
+      .from('locations')
+      .select('sensibo_api_key, thinq_pat, thinq_client_id')
+      .eq('id', locationId)
+      .single()
+    if (provider === 'sensibo' && !loc?.sensibo_api_key) {
+      return NextResponse.json({
+        success: false,
+        error: 'Set the Sensibo API key on this location before adding a Sensibo device.',
+        code: 'sensibo_not_configured',
+      }, { status: 412 })
+    }
+    if (provider === 'thinq' && (!loc?.thinq_pat || !loc?.thinq_client_id)) {
+      return NextResponse.json({
+        success: false,
+        error: 'Set the LG ThinQ PAT + client id on this location before adding a ThinQ device.',
+        code: 'thinq_not_configured',
+      }, { status: 412 })
+    }
+
+    const insert = {
+      location_id: locationId,
+      label,
+      provider,
+      provider_device_id: providerDeviceId,
+      // Defaults: only apply if explicitly provided; otherwise the
+      // table defaults kick in (cool / 22 / auto / 30 min).
+      ...(body?.default_mode    ? { default_mode:    body.default_mode } : {}),
+      ...(body?.default_temp_c  ? { default_temp_c:  Number(body.default_temp_c) } : {}),
+      ...(body?.default_fan     ? { default_fan:     body.default_fan } : {}),
+      ...(body?.session_minutes ? { session_minutes: Number(body.session_minutes) } : {}),
+    }
+
+    const { data: row, error: insErr } = await db
+      .from('ac_devices')
+      .insert(insert)
+      .select()
+      .single()
+    if (insErr) {
+      // Unique constraint on (location_id, provider, provider_device_id):
+      // surface a friendlier 409 than the raw Postgres error.
+      const msg = insErr.message || ''
+      if (msg.includes('ac_devices_location_id_provider_provider_device_id_key')) {
+        return NextResponse.json({
+          success: false,
+          error: 'This device is already added to this location.',
+          code: 'duplicate_device',
+        }, { status: 409 })
+      }
+      return NextResponse.json({ success: false, error: insErr.message }, { status: 500 })
+    }
+
+    return NextResponse.json({ success: true, data: row }, { status: 201 })
+  }
+)
