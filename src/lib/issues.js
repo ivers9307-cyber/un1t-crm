@@ -241,3 +241,196 @@ export async function getMyIssue(db, { issueId, profileId }) {
     .maybeSingle()
   return data || null
 }
+
+// ────────────────────────────────────────────────────────────────
+// REPORT-ISSUE.2 — handler side (owner + master inbox)
+// ────────────────────────────────────────────────────────────────
+
+// Statuses that count as "open work" for the inbox + sidebar badge.
+export const ISSUE_INBOX_OPEN_STATUSES = Object.freeze([
+  ISSUE_STATUS.OPEN, ISSUE_STATUS.IN_PROGRESS,
+])
+
+const HANDLER_SELECT_COLUMNS = `
+  id, location_id, submitter_id, description, status,
+  created_at, claimed_at, resolved_at, closed_at,
+  claimed_by, resolved_by, resolution_notes,
+  locations:location_id ( id, name ),
+  submitter:submitter_id ( id, full_name ),
+  claimant:claimed_by ( id, full_name ),
+  resolver:resolved_by ( id, full_name ),
+  issue_attachments ( id, storage_path, bucket, mime_type, position )
+`
+
+/**
+ * List issues at a location for the handler inbox. Status filter
+ * defaults to the "open work" set so the inbox shows what needs
+ * attention; callers pass an explicit array for "resolved" /
+ * "closed" tabs.
+ */
+export async function listInboxIssues(db, locationId, {
+  statuses = ISSUE_INBOX_OPEN_STATUSES,
+  limit = 100,
+} = {}) {
+  if (!locationId) return []
+  const { data, error } = await db
+    .from('issues')
+    .select(HANDLER_SELECT_COLUMNS)
+    .eq('location_id', locationId)
+    .in('status', statuses)
+    .order('created_at', { ascending: false })
+    .limit(limit)
+  if (error) {
+    logWarn('issues', 'listInboxIssues failed', { locationId, error: error.message })
+    return []
+  }
+  return data || []
+}
+
+/**
+ * Count-only variant for the sidebar badge. Counts open +
+ * in_progress at the location.
+ */
+export async function countInboxIssues(db, locationId) {
+  if (!locationId) return 0
+  const { count, error } = await db
+    .from('issues')
+    .select('id', { count: 'exact', head: true })
+    .eq('location_id', locationId)
+    .in('status', ISSUE_INBOX_OPEN_STATUSES)
+  if (error) {
+    logWarn('issues', 'countInboxIssues failed', { locationId, error: error.message })
+    return 0
+  }
+  return count || 0
+}
+
+/**
+ * Fetch a single issue for the handler. Unlike getMyIssue this
+ * doesn't gate on submitter_id — the route layer checks the
+ * caller's role at the issue's location instead.
+ */
+export async function getInboxIssue(db, issueId) {
+  if (!issueId) return null
+  const { data } = await db
+    .from('issues')
+    .select(HANDLER_SELECT_COLUMNS)
+    .eq('id', issueId)
+    .maybeSingle()
+  return data || null
+}
+
+/**
+ * Claim an open issue. Sets claimed_by + claimed_at and transitions
+ * status open → in_progress. Concurrency-safe via the status='open'
+ * predicate — if two handlers race, the second one's UPDATE returns
+ * no row and the caller is told to refresh.
+ *
+ * Returns { ok, data } or { ok:false, status, code, error }.
+ */
+export async function claimIssue(db, { issueId, profileId }) {
+  if (!issueId || !profileId) {
+    return { ok: false, status: 400, code: 'bad_args', error: 'issueId + profileId required.' }
+  }
+  const { data, error } = await db
+    .from('issues')
+    .update({
+      claimed_by: profileId,
+      claimed_at: new Date().toISOString(),
+      status:     ISSUE_STATUS.IN_PROGRESS,
+    })
+    .eq('id', issueId)
+    .eq('status', ISSUE_STATUS.OPEN)
+    .select('id, status, claimed_by, claimed_at')
+    .single()
+  if (error) {
+    // PGRST116 = "0 rows" from .single() — means the row wasn't in
+    // 'open' state when we tried to claim it.
+    if (error.code === 'PGRST116') {
+      return {
+        ok: false, status: 409, code: 'not_open',
+        error: 'This issue is no longer open. Refresh to see the latest state.',
+      }
+    }
+    logWarn('issues', 'claim failed', { issueId, error: error.message })
+    return { ok: false, status: 500, code: 'claim_failed', error: error.message }
+  }
+  return { ok: true, data }
+}
+
+/**
+ * Mark an issue resolved. Notes are required so the submitter
+ * notification has something useful in it. Transitions any
+ * non-terminal status → resolved (so a handler can resolve
+ * directly from 'open' without claiming first).
+ */
+export async function resolveIssue(db, { issueId, profileId, notes }) {
+  if (!issueId || !profileId) {
+    return { ok: false, status: 400, code: 'bad_args', error: 'issueId + profileId required.' }
+  }
+  const cleaned = typeof notes === 'string' ? notes.trim() : ''
+  if (cleaned.length === 0) {
+    return { ok: false, status: 400, code: 'notes_required', error: 'A resolution note is required.' }
+  }
+  if (cleaned.length > 2000) {
+    return { ok: false, status: 400, code: 'notes_too_long', error: 'Resolution notes must be 2000 characters or fewer.' }
+  }
+  const { data, error } = await db
+    .from('issues')
+    .update({
+      resolved_by:      profileId,
+      resolved_at:      new Date().toISOString(),
+      resolution_notes: cleaned,
+      status:           ISSUE_STATUS.RESOLVED,
+    })
+    .eq('id', issueId)
+    // Allow resolution from any non-terminal state (defensive
+    // double-check; the route should already prevent re-resolving
+    // a closed issue).
+    .in('status', [ISSUE_STATUS.OPEN, ISSUE_STATUS.IN_PROGRESS])
+    .select(HANDLER_SELECT_COLUMNS)
+    .single()
+  if (error) {
+    if (error.code === 'PGRST116') {
+      return {
+        ok: false, status: 409, code: 'already_terminal',
+        error: 'This issue has already been resolved or closed.',
+      }
+    }
+    logWarn('issues', 'resolve failed', { issueId, error: error.message })
+    return { ok: false, status: 500, code: 'resolve_failed', error: error.message }
+  }
+  return { ok: true, data }
+}
+
+/**
+ * Close an issue. Owner / master can close a 'resolved' issue,
+ * making it terminal. The submitter-side ack flow may also call
+ * this in a future PR.
+ */
+export async function closeIssue(db, { issueId }) {
+  if (!issueId) {
+    return { ok: false, status: 400, code: 'bad_args', error: 'issueId required.' }
+  }
+  const { data, error } = await db
+    .from('issues')
+    .update({
+      closed_at: new Date().toISOString(),
+      status:    ISSUE_STATUS.CLOSED,
+    })
+    .eq('id', issueId)
+    .eq('status', ISSUE_STATUS.RESOLVED)
+    .select(HANDLER_SELECT_COLUMNS)
+    .single()
+  if (error) {
+    if (error.code === 'PGRST116') {
+      return {
+        ok: false, status: 409, code: 'not_resolved',
+        error: 'Only a resolved issue can be closed.',
+      }
+    }
+    logWarn('issues', 'close failed', { issueId, error: error.message })
+    return { ok: false, status: 500, code: 'close_failed', error: error.message }
+  }
+  return { ok: true, data }
+}

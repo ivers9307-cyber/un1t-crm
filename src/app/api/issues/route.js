@@ -25,6 +25,9 @@ import {
   validateSubmission,
 } from '@/lib/issues'
 import { logAuditEvent } from '@/lib/audit'
+// REPORT-ISSUE.2 — handler notification on submit. Best-effort.
+import { sendPushToRolesAtLocation } from '@/lib/push'
+import { logWarn } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -165,6 +168,22 @@ export const POST = withAuth(
       },
       request,
     })
+
+    // REPORT-ISSUE.2 — fan out a push to handlers at the location
+    // (owner + master). push.js honours per-user
+    // notify_issue_submitted opt-out automatically. Fire-and-
+    // forget; push delivery failure must never block the submitter.
+    const preview = (v.normalised.description || '').slice(0, 180)
+    sendPushToRolesAtLocation(
+      locationId,
+      ['owner', 'master'],
+      {
+        title: 'Issue reported',
+        body: `${user.full_name || 'Someone'}: ${preview}`,
+        category: 'issue_submitted',
+        data: { type: 'issue_submitted', issue_id: out.issue.id, location_id: locationId },
+      }
+    ).catch((e) => logWarn('issues-submit', 'push failed', { err: e?.message }))
 
     return NextResponse.json(
       { success: true, data: { ...out.issue, issue_attachments: out.attachments } },

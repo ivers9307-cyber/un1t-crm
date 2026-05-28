@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
-import { LayoutDashboard, Users, Columns3, CheckSquare, Calendar, MessagesSquare, CalendarClock, Settings, LogOut, Car, Flag, Receipt, DoorOpen, Activity, ExternalLink, X, FileSignature, Heart, Globe, Download, Tv, ChevronDown, ChevronRight as ChevronRightIcon, BookOpen, Inbox, ClipboardCheck, Radar, UserPlus } from 'lucide-react'
+import { LayoutDashboard, Users, Columns3, CheckSquare, Calendar, MessagesSquare, CalendarClock, Settings, LogOut, Car, Flag, Receipt, DoorOpen, Activity, ExternalLink, X, FileSignature, Heart, Globe, Download, Tv, ChevronDown, ChevronRight as ChevronRightIcon, BookOpen, Inbox, ClipboardCheck, Radar, UserPlus, AlertCircle } from 'lucide-react'
 import { createBrowserClient } from '@/lib/supabase'
 import LocationSwitcher from './LocationSwitcher'
 import ImpersonatePicker from './ImpersonatePicker'
@@ -96,6 +96,11 @@ const allNav = [
   // the user can approve. Default-on for master + owner + manager —
   // head_coach + staff see nothing approvable so it's off for them.
   { href: '/approvals',  label: 'Approvals',    icon: ClipboardCheck,  permission: 'approvals_inbox' },
+  // REPORT-ISSUE.2 — handler inbox for staff-reported issues at the
+  // active location. Owner + master by default; the submit + own-
+  // history surface (REPORT-ISSUE.1) is open to all staff via the
+  // mobile More tab and doesn't appear on the web sidebar.
+  { href: '/issues',     label: 'Issues',       icon: AlertCircle,     permission: 'issues_inbox' },
   // Studio Management — expandable section. Parent route
   // /studio-management renders the door-unlock panel (mig 093 cross-
   // platform key). The six children below used to be top-level

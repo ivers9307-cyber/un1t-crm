@@ -51,6 +51,7 @@ import { timeOffProvider } from './providers/time-off'
 import { shiftSwapsProvider } from './providers/shift-swaps'
 import { rostersProvider } from './providers/rosters'
 import { invoicesQueueProvider } from './providers/invoices-queue'
+import { issuesProvider } from './providers/issues'
 
 export const APPROVALS_PROVIDERS = Object.freeze([
   // BOOKKEEPER-APPROVALS.1 — invoices_queue tab first so bookkeepers
@@ -60,6 +61,10 @@ export const APPROVALS_PROVIDERS = Object.freeze([
   invoicesQueueProvider,
   contractorInvoicesProvider,
   fteExpensesProvider,
+  // REPORT-ISSUE.2 — staff-submitted issue reports. Sits next to
+  // expenses (operational items needing handler action) ahead of
+  // schedule-side items.
+  issuesProvider,
   timeOffProvider,
   shiftSwapsProvider,
   rostersProvider,
