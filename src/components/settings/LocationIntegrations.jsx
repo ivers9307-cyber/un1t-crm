@@ -26,7 +26,7 @@ import { isFeatureEnabledAtLocation } from '@shared/permissions'
 import XeroIntegrationTab from './integrations/XeroIntegrationTab'
 import GlofoxIntegrationTab from './integrations/GlofoxIntegrationTab'
 import UnifiIntegrationTab from './integrations/UnifiIntegrationTab'
-import SensiboIntegrationTab from './integrations/SensiboIntegrationTab'
+import AcDevicesIntegrationTab from './integrations/AcDevicesIntegrationTab'
 import BcaIntegrationTab from './integrations/BcaIntegrationTab'
 import TwilioIntegrationTab from './integrations/TwilioIntegrationTab'
 import WhatsAppIntegrationTab from './integrations/WhatsAppIntegrationTab'
@@ -98,15 +98,16 @@ export default function LocationIntegrations({ location, xeroConnection, user, s
       status: location.settings?.unifi?.api_token ? 'connected' : 'not-configured',
     })
   }
-  // Sensibo / AC — master + owner. Always visible when at least one
-  // of the two is set (otherwise show only to master so they can
-  // turn it on for a location for the first time).
+  // AC Devices — unified Sensibo + LG ThinQ. Owner + master can view;
+  // master edits credentials and adds devices. Connected status fires
+  // when at least one vendor has credentials saved on the location.
   if (isOwnerOrMaster) {
+    const acConfigured = !!(location.sensibo_api_key || location.thinq_pat)
     tabs.push({
-      key: 'sensibo',
-      label: 'Sensibo / AC',
+      key: 'ac-devices',
+      label: 'AC Devices',
       Icon: Snowflake,
-      status: location.sensibo_api_key ? 'connected' : 'not-configured',
+      status: acConfigured ? 'connected' : 'not-configured',
     })
   }
   if (features.bca_submit === true && isOwnerOrMaster) {
@@ -175,8 +176,8 @@ export default function LocationIntegrations({ location, xeroConnection, user, s
           {activeKey === 'unifi' && (
             <UnifiIntegrationTab location={location} canEdit={isMaster} />
           )}
-          {activeKey === 'sensibo' && (
-            <SensiboIntegrationTab location={location} canEdit={isOwnerOrMaster} />
+          {activeKey === 'ac-devices' && (
+            <AcDevicesIntegrationTab location={location} canEdit={isOwnerOrMaster} />
           )}
           {activeKey === 'bca' && (
             <BcaIntegrationTab location={location} canEdit={isMaster} sampleCar={sampleBcaCar} />

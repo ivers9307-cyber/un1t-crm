@@ -1,49 +1,36 @@
 // POST /api/studio-management/ac/turn-off
 //
-// Manual override — operator wants the AC off NOW. Calls Sensibo,
-// stamps any active session row at this location as 'manual_off'.
-// Idempotent: if no active session, we still try Sensibo (cleans
-// up state if our DB lost track) and return success.
+// LEGACY ROUTE — kept alive for the mobile staff app which hasn't
+// migrated to the device-scoped /devices/[id]/turn-off shape yet.
+// Dispatches through src/lib/ac-devices.js using the location's
+// first enabled device, so vendor dispatch + audit log work
+// consistently across legacy + new callers.
 
 import { NextResponse } from 'next/server'
 import { withAuth } from '@/lib/with-auth'
-import { turnPodOff, SensiboError } from '@/lib/sensibo'
-import { AC_SESSION_STATUS, AC_SESSION_ACTIVE_STATUSES } from '@/lib/enums'
+import { turnOff, findDefaultDeviceForLocation } from '@/lib/ac-devices'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 export const POST = withAuth(
   { permission: 'studio_management' },
-  async ({ user, db, locationId }) => {
-    const { data: loc } = await db
-      .from('locations')
-      .select('id, sensibo_api_key, sensibo_pod_id')
-      .eq('id', locationId)
-      .single()
-    if (!loc?.sensibo_api_key || !loc?.sensibo_pod_id) {
+  async ({ user, db, locationId, request }) => {
+    const device = await findDefaultDeviceForLocation(locationId, db)
+    if (!device) {
       return NextResponse.json({
-        success: false, error: 'AC is not configured for this location.', code: 'sensibo_not_configured',
+        success: false,
+        error: 'AC is not configured for this location.',
+        code: 'sensibo_not_configured',
       }, { status: 412 })
     }
-
-    try {
-      await turnPodOff(loc.sensibo_api_key, loc.sensibo_pod_id)
-    } catch (e) {
-      const msg = e instanceof SensiboError ? e.message : (e?.message || String(e))
-      return NextResponse.json({
-        success: false, error: `Sensibo refused the request: ${msg}`, code: 'sensibo_error',
-      }, { status: 502 })
+    const out = await turnOff(device.id, { user, db, request })
+    if (!out.ok) {
+      return NextResponse.json(
+        { success: false, error: out.error, code: out.code },
+        { status: out.status || 500 }
+      )
     }
-
-    // Close any active sessions for this pod at this location.
-    const now = new Date().toISOString()
-    await db
-      .from('ac_sessions')
-      .update({ status: AC_SESSION_STATUS.MANUAL_OFF, ended_at: now, ended_by: user.id })
-      .eq('location_id', locationId)
-      .in('status', AC_SESSION_ACTIVE_STATUSES)
-
     return NextResponse.json({ success: true })
   }
 )

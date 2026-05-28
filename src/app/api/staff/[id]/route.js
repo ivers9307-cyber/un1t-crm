@@ -407,6 +407,14 @@ export async function PUT(request, props) {
         ...(Object.prototype.hasOwnProperty.call(a, 'unifi_door_ids')
           ? { unifi_door_ids: a.unifi_door_ids === null ? null : (a.unifi_door_ids || []) }
           : {}),
+        // STUDIO-AC-DEVICES.1 (mig 210) — per-location AC device
+        // allowlist. Same null/empty/omit semantics as the doors
+        // allowlist: NULL clears; empty array = no devices visible;
+        // populated array = exactly those devices; omitting the key
+        // leaves the DB value alone.
+        ...(Object.prototype.hasOwnProperty.call(a, 'ac_device_ids')
+          ? { ac_device_ids: a.ac_device_ids === null ? null : (a.ac_device_ids || []) }
+          : {}),
       }
 
       if (existing) {
