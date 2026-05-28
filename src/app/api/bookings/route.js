@@ -1,11 +1,11 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
-import { requireApiKey } from '@/lib/api-auth'
+import { authenticateApiKey, orgLocationIds } from '@/lib/api-auth'
 
 // GET /api/bookings — List bookings (filterable)
 export async function GET(request) {
-  const authError = requireApiKey(request)
-  if (authError) return authError
+  const auth = await authenticateApiKey(request)
+  if (!auth.ok) return auth.response
 
   const db = createServerClient()
   const { searchParams } = new URL(request.url)
@@ -14,6 +14,13 @@ export async function GET(request) {
     .select('*, event_types(name, color, slug), contacts(name, email)')
     .order('booking_date', { ascending: true })
     .order('start_time', { ascending: true })
+
+  // APIKEYS.3 — per-org key: restrict to the org's locations. Legacy
+  // shared key (orgId null) stays unscoped — unchanged.
+  if (auth.orgId) {
+    const locIds = await orgLocationIds(db, auth.orgId)
+    query = query.in('location_id', locIds.length ? locIds : ['00000000-0000-0000-0000-000000000000'])
+  }
 
   const eventId = searchParams.get('event_type_id')
   const status = searchParams.get('status')

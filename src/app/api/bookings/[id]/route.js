@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { requireApiKey } from '@/lib/api-auth'
+import { authenticateApiKey, orgLocationIds } from '@/lib/api-auth'
 import { validateBody } from '@/lib/validate'
 import { isoDate, timeOfDay } from '@/lib/schemas'
 
@@ -16,13 +16,23 @@ const BookingUpdateSchema = z.object({
 // PUT /api/bookings/:id — Update booking (status changes, notes)
 export async function PUT(request, props) {
   const params = await props.params;
-  const authError = requireApiKey(request)
-  if (authError) return authError
+  const auth = await authenticateApiKey(request)
+  if (!auth.ok) return auth.response
 
   const validation = await validateBody(request, BookingUpdateSchema)
   if (!validation.ok) return validation.response
   const body = validation.data
   const db = createServerClient()
+
+  // APIKEYS.3 — per-org key may only update a booking whose location is
+  // in its org. 404 to avoid confirming the id. Legacy/cookie unchanged.
+  if (auth.orgId) {
+    const locIds = await orgLocationIds(db, auth.orgId)
+    const { data: existing } = await db.from('bookings').select('location_id').eq('id', params.id).maybeSingle()
+    if (!existing || !locIds.includes(existing.location_id)) {
+      return NextResponse.json({ success: false, error: 'not_found' }, { status: 404 })
+    }
+  }
 
   const updates = { ...body }
 
