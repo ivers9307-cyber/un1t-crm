@@ -106,6 +106,12 @@ export const WEB_PERMISSIONS = Object.freeze([
   // approval surfaces. Master + owner + manager by default; head
   // coach + staff don't approve anything so it's off for them.
   { key: 'approvals_inbox', label: 'Approvals',                 hint: 'Central inbox aggregating contractor invoices, FTE expenses, time-off and swap requests awaiting your review. Master + owner + manager by default.' },
+  // REPORT-ISSUE.2 — owner / master inbox for staff-reported
+  // issues at the location. The submit + own-history surface
+  // (REPORT-ISSUE.1) is open to all staff; THIS key gates the
+  // handler inbox + claim/resolve actions. Master + owner only by
+  // default per the "All owners at the studio" routing decision.
+  { key: 'issues_inbox', label: 'Issues',                       hint: 'Handler inbox for staff-reported issues at the studio (broken kit, cleaning, safety). Master + owner only by default; the submitter surface is open to all staff.' },
   // INVOICES-QUEUE.1 (mig 185) — bookkeeper flag. Gates the
   // analyse + send-to-Xero actions inside /invoices and unlocks a
   // dedicated Bookkeeper queue tab in /approvals. Owners can still
@@ -143,6 +149,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     orders: true, car_processing: true,
     invoices_inbox: true,
     approvals_inbox: true,
+    issues_inbox: true,
     bookkeeper: true,
     settings: true,
     landing_page: true,
@@ -160,6 +167,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     orders: false, car_processing: false,         // financial views off by default
     invoices_inbox: false,                         // supplier-invoice approval is finance, not staff
     approvals_inbox: false,                        // staff don't approve anything
+    issues_inbox: false,                            // staff submit; owner + master handle
     bookkeeper: false,                              // accountant sign-off — never the default
     settings: false,
     landing_page: false,                          // marketing copy isn't a staff concern
@@ -178,6 +186,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     orders: false, car_processing: false,         // head coach doesn't need orders by default
     invoices_inbox: false,
     approvals_inbox: false,                        // head coach isn't an approver by default
+    issues_inbox: false,                            // owner + master only by default
     bookkeeper: false,
     settings: false,
     landing_page: false,
@@ -197,6 +206,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     orders: true, car_processing: false,          // managers run revenue ops; CCF Autos is per-user opt-in
     invoices_inbox: false,                         // manager isn't an approver — owner/master only
     approvals_inbox: true,                         // managers approve schedule items (time-off, swaps)
+    issues_inbox: false,                            // owner + master only by default
     bookkeeper: false,                              // grant temporarily for month-end cover if needed
     settings: true,
     landing_page: false,                          // owner/master decision; per-user override available
@@ -216,6 +226,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     orders: true, car_processing: false,          // OFF for owner too — explicit opt-in per profile
     invoices_inbox: true,                          // owner approves their location's supplier invoices
     approvals_inbox: true,                         // owner approves invoices, expenses, schedule items
+    issues_inbox: true,                             // owner IS the handler per the routing design
     bookkeeper: false,                              // owner approves at the source; accountant sign-off is master/dedicated only
     settings: true,
     landing_page: true,
@@ -301,6 +312,14 @@ export const MOBILE_PERMISSIONS = Object.freeze([
   //   missed items. Default on for those roles only.
   { key: 'notify_checklist_overdue',    label: '… Checklist overdue',       hint: 'Heads-up at end of shift when your checklist has unticked items',                                                       mobileOnly: true, isNotify: true },
   { key: 'notify_checklist_compliance', label: '… Checklist compliance',    hint: 'Notify when a coach at your studio ends a shift with missed checklist items (head coach + owner only by default)',     mobileOnly: true, isNotify: true },
+  // REPORT-ISSUE.2 — staff-submitted issue reports.
+  // - submitted: handlers (owner + master at the location) get pinged
+  //   when a new issue is reported. Default on for owner + master.
+  // - resolved: the original submitter gets pinged when their report
+  //   has been resolved. Default on for everyone (it's their own
+  //   report; they want closure).
+  { key: 'notify_issue_submitted',      label: '… Issue submitted',         hint: 'Notify when a staff member at your studio reports a problem (owner + master by default)',                              mobileOnly: true, isNotify: true },
+  { key: 'notify_issue_resolved',       label: '… Issue resolved',          hint: 'Notify when an issue you reported has been resolved',                                                                   mobileOnly: true, isNotify: true },
 ])
 
 export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
@@ -319,6 +338,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     notify_contract_issued: true,
     notify_tasks: true, notify_bookings: true,
     notify_checklist_overdue: true, notify_checklist_compliance: true,
+    notify_issue_submitted: true, notify_issue_resolved: true,
   },
   staff: {
     schedule: true, pipeline: false, whatsapp: false,
@@ -338,6 +358,9 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     // Staff get the 'you missed items' push but NOT the compliance
     // roll-up (which is operator-oversight, not personal).
     notify_checklist_overdue: true, notify_checklist_compliance: false,
+    // Staff don't handle issue reports — only get resolved on their
+    // own reports.
+    notify_issue_submitted: false, notify_issue_resolved: true,
   },
   head_coach: {
     schedule: true, pipeline: true, whatsapp: true,
@@ -354,6 +377,9 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     // Head coach owns the floor — gets both the personal heads-up
     // (they're often on shift themselves) and the compliance summary.
     notify_checklist_overdue: true, notify_checklist_compliance: true,
+    // Head coach isn't the issue handler by default (owner + master
+    // routing) but can be granted via per-user opt-in.
+    notify_issue_submitted: false, notify_issue_resolved: true,
   },
   manager: {
     schedule: true, pipeline: true, whatsapp: true,
@@ -372,6 +398,9 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     // Also required by the parity invariant (manager must be a
     // superset of staff; staff has notify_checklist_overdue on).
     notify_checklist_overdue: true, notify_checklist_compliance: true,
+    // Manager isn't the issue handler by default (owner + master
+    // routing) but resolved stays on (parity-superset of staff).
+    notify_issue_submitted: false, notify_issue_resolved: true,
   },
   owner: {
     schedule: true, pipeline: true, whatsapp: true,
@@ -390,6 +419,9 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     // cover a shift. Can be opted out per-user. (Also avoids any
     // future owner-vs-manager superset invariant.)
     notify_checklist_overdue: true, notify_checklist_compliance: true,
+    // Owner IS the issue handler by default (per the "all owners at
+    // the studio" routing decision in REPORT-ISSUE.1).
+    notify_issue_submitted: true, notify_issue_resolved: true,
   },
 })
 

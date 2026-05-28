@@ -1,9 +1,11 @@
-// REPORT-ISSUE.1 — unit tests for the pure helpers + the
-// insert/list helpers via a mocked Supabase chainable.
+// REPORT-ISSUE.1 + .2 — unit tests for the pure helpers + the
+// insert/list helpers + the handler-side state transitions via a
+// mocked Supabase chainable.
 
 import { describe, it, expect, vi } from 'vitest'
 import {
   ISSUE_STATUS,
+  ISSUE_INBOX_OPEN_STATUSES,
   MAX_PHOTOS_PER_ISSUE,
   MAX_PHOTO_BYTES,
   slugifyFilename,
@@ -12,6 +14,12 @@ import {
   insertIssueWithAttachments,
   listMyIssues,
   getMyIssue,
+  listInboxIssues,
+  countInboxIssues,
+  getInboxIssue,
+  claimIssue,
+  resolveIssue,
+  closeIssue,
 } from './issues.js'
 
 // ----------------------------------------------------------------
@@ -281,5 +289,214 @@ describe('getMyIssue', () => {
   it('returns null when no row matches', async () => {
     const { db } = makeDb({ selectSingleResult: { data: null, error: null } })
     expect(await getMyIssue(db, { issueId: 'iss', profileId: 'p-1' })).toBeNull()
+  })
+})
+
+// ----------------------------------------------------------------
+// REPORT-ISSUE.2 — handler-side helpers
+// ----------------------------------------------------------------
+
+// Slightly richer chainable for the handler suite: separate
+// single-result vs single-error paths for the .update().eq().eq().select().single()
+// chain that claim/resolve/close use.
+function makeHandlerDb({
+  selectListResult = { data: [], error: null },
+  selectSingleResult = { data: null, error: null },
+  countResult = { count: 0, error: null },
+  updateSingleResult = { data: null, error: null },
+} = {}) {
+  const trackers = { updates: [], inSets: [], eqs: [] }
+  const db = {}
+  db.from = vi.fn(() => {
+    const chain = {}
+    chain.select = vi.fn(() => chain)
+    chain.eq = vi.fn((col, val) => { trackers.eqs.push([col, val]); return chain })
+    chain.in = vi.fn((col, vals) => { trackers.inSets.push([col, vals]); return chain })
+    chain.order = vi.fn(() => chain)
+    chain.limit = vi.fn(() => Promise.resolve(selectListResult))
+    chain.maybeSingle = vi.fn(() => Promise.resolve(selectSingleResult))
+    // Count chain — head: true short-circuits via .select() returning a
+    // thenable that resolves to { count }.
+    chain.update = vi.fn((row) => {
+      trackers.updates.push(row)
+      const upd = {
+        eq: vi.fn((col, val) => {
+          trackers.eqs.push([col, val])
+          return {
+            eq: vi.fn((c2, v2) => {
+              trackers.eqs.push([c2, v2])
+              return {
+                select: vi.fn(() => ({
+                  single: vi.fn(() => Promise.resolve(updateSingleResult)),
+                })),
+              }
+            }),
+            in: vi.fn((c2, v2) => {
+              trackers.inSets.push([c2, v2])
+              return {
+                select: vi.fn(() => ({
+                  single: vi.fn(() => Promise.resolve(updateSingleResult)),
+                })),
+              }
+            }),
+            select: vi.fn(() => ({
+              single: vi.fn(() => Promise.resolve(updateSingleResult)),
+            })),
+          }
+        }),
+      }
+      return upd
+    })
+    // .select('id', { count, head }).eq().in() terminal resolves to count.
+    chain.headCountThen = (resolve) => resolve(countResult)
+    return chain
+  })
+  return { db, trackers }
+}
+
+describe('ISSUE_INBOX_OPEN_STATUSES', () => {
+  it("includes 'open' + 'in_progress' but not the terminal ones", () => {
+    expect(ISSUE_INBOX_OPEN_STATUSES).toEqual(['open', 'in_progress'])
+  })
+})
+
+describe('listInboxIssues', () => {
+  it('returns [] when no locationId is given', async () => {
+    const { db } = makeHandlerDb()
+    expect(await listInboxIssues(db, null)).toEqual([])
+  })
+
+  it('returns rows from the chainable', async () => {
+    const rows = [{ id: 'i1' }, { id: 'i2' }]
+    const { db } = makeHandlerDb({ selectListResult: { data: rows, error: null } })
+    expect(await listInboxIssues(db, 'loc-1')).toEqual(rows)
+  })
+
+  it('defaults to the open-work status set', async () => {
+    const { db, trackers } = makeHandlerDb()
+    await listInboxIssues(db, 'loc-1')
+    expect(trackers.inSets).toContainEqual(['status', ISSUE_INBOX_OPEN_STATUSES])
+  })
+
+  it('respects a caller-supplied statuses array', async () => {
+    const { db, trackers } = makeHandlerDb()
+    await listInboxIssues(db, 'loc-1', { statuses: ['resolved'] })
+    expect(trackers.inSets).toContainEqual(['status', ['resolved']])
+  })
+})
+
+describe('countInboxIssues', () => {
+  it('returns 0 when no locationId', async () => {
+    const { db } = makeHandlerDb()
+    expect(await countInboxIssues(db, null)).toBe(0)
+  })
+})
+
+describe('getInboxIssue', () => {
+  it('returns null on missing id', async () => {
+    const { db } = makeHandlerDb()
+    expect(await getInboxIssue(db, null)).toBeNull()
+  })
+  it('returns the row when present', async () => {
+    const row = { id: 'iss' }
+    const { db } = makeHandlerDb({ selectSingleResult: { data: row, error: null } })
+    expect(await getInboxIssue(db, 'iss')).toEqual(row)
+  })
+})
+
+describe('claimIssue', () => {
+  it('rejects when ids are missing', async () => {
+    const { db } = makeHandlerDb()
+    expect((await claimIssue(db, { issueId: '', profileId: 'p' })).code).toBe('bad_args')
+  })
+
+  it('flips status to in_progress + stamps claimed_by/at when row was open', async () => {
+    const { db, trackers } = makeHandlerDb({
+      updateSingleResult: { data: { id: 'i1', status: 'in_progress', claimed_by: 'p-1', claimed_at: 't' }, error: null },
+    })
+    const out = await claimIssue(db, { issueId: 'i1', profileId: 'p-1' })
+    expect(out.ok).toBe(true)
+    expect(trackers.updates[0].status).toBe(ISSUE_STATUS.IN_PROGRESS)
+    expect(trackers.updates[0].claimed_by).toBe('p-1')
+    // Concurrency-safe predicate.
+    expect(trackers.eqs).toContainEqual(['status', ISSUE_STATUS.OPEN])
+  })
+
+  it("returns 409 not_open when the row wasn't pending (PGRST116 = 0 rows)", async () => {
+    const { db } = makeHandlerDb({
+      updateSingleResult: { data: null, error: { code: 'PGRST116', message: 'no rows' } },
+    })
+    const out = await claimIssue(db, { issueId: 'i1', profileId: 'p-1' })
+    expect(out.ok).toBe(false)
+    expect(out.status).toBe(409)
+    expect(out.code).toBe('not_open')
+  })
+})
+
+describe('resolveIssue', () => {
+  it('rejects empty notes', async () => {
+    const { db } = makeHandlerDb()
+    const out = await resolveIssue(db, { issueId: 'i', profileId: 'p', notes: '   ' })
+    expect(out.code).toBe('notes_required')
+  })
+
+  it('rejects notes over 2000 chars', async () => {
+    const { db } = makeHandlerDb()
+    const out = await resolveIssue(db, { issueId: 'i', profileId: 'p', notes: 'x'.repeat(2001) })
+    expect(out.code).toBe('notes_too_long')
+  })
+
+  it('writes resolution_notes + resolved_by/at + status=resolved', async () => {
+    const { db, trackers } = makeHandlerDb({
+      updateSingleResult: { data: { id: 'i', status: 'resolved' }, error: null },
+    })
+    await resolveIssue(db, { issueId: 'i', profileId: 'p', notes: 'fixed the door handle' })
+    expect(trackers.updates[0].status).toBe(ISSUE_STATUS.RESOLVED)
+    expect(trackers.updates[0].resolved_by).toBe('p')
+    expect(trackers.updates[0].resolution_notes).toBe('fixed the door handle')
+  })
+
+  it("returns 409 already_terminal when row isn't open/in_progress", async () => {
+    const { db } = makeHandlerDb({
+      updateSingleResult: { data: null, error: { code: 'PGRST116', message: 'no rows' } },
+    })
+    const out = await resolveIssue(db, { issueId: 'i', profileId: 'p', notes: 'note' })
+    expect(out.status).toBe(409)
+    expect(out.code).toBe('already_terminal')
+  })
+
+  it('allows resolution from open WITHOUT a prior claim', async () => {
+    // We just verify the IN-clause includes both open and in_progress
+    // so the route layer doesn't force a Claim step.
+    const { db, trackers } = makeHandlerDb({
+      updateSingleResult: { data: { id: 'i', status: 'resolved' }, error: null },
+    })
+    await resolveIssue(db, { issueId: 'i', profileId: 'p', notes: 'done' })
+    expect(trackers.inSets).toContainEqual(['status', ['open', 'in_progress']])
+  })
+})
+
+describe('closeIssue', () => {
+  it('rejects on missing id', async () => {
+    const { db } = makeHandlerDb()
+    expect((await closeIssue(db, { issueId: '' })).code).toBe('bad_args')
+  })
+
+  it('only flips a resolved row → closed', async () => {
+    const { db, trackers } = makeHandlerDb({
+      updateSingleResult: { data: { id: 'i', status: 'closed' }, error: null },
+    })
+    await closeIssue(db, { issueId: 'i' })
+    expect(trackers.updates[0].status).toBe(ISSUE_STATUS.CLOSED)
+    expect(trackers.eqs).toContainEqual(['status', ISSUE_STATUS.RESOLVED])
+  })
+
+  it("returns 409 not_resolved when row wasn't in resolved state", async () => {
+    const { db } = makeHandlerDb({
+      updateSingleResult: { data: null, error: { code: 'PGRST116', message: 'no rows' } },
+    })
+    const out = await closeIssue(db, { issueId: 'i' })
+    expect(out.status).toBe(409)
+    expect(out.code).toBe('not_resolved')
   })
 })
