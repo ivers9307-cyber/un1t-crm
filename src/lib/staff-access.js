@@ -95,6 +95,44 @@ export function canEditStaffMember(caller, target) {
 }
 
 /**
+ * AUTH.1 hardening — who may reset a STAFF member's password via
+ * /api/admin/password-override.
+ *
+ * Pre-fix the route gated on role alone (`master` or `owner`) and never
+ * checked the relationship between caller and target, so any owner at
+ * any location could reset ANY staff/owner/master account by id — a
+ * cross-org account-takeover path. This tightens it to:
+ *
+ *   - Master:  may reset anyone.
+ *   - Owner:   may reset a manager / head_coach / staff member who
+ *              shares at least one of the owner's locations. May NOT
+ *              reset themselves, another owner (peer), or a master.
+ *   - Anyone else: denied (the route's role gate already blocks them;
+ *              this returns false for completeness).
+ *
+ * Pure helper — `target.role` is the target's EFFECTIVE role
+ * ('master' | 'owner' | 'manager' | 'head_coach' | 'staff'), and
+ * `target.locationIds` is every location the target is assigned to.
+ *
+ * @param {{ id, role, isMaster, locations?: Array<{id:string}> }} caller
+ * @param {{ id, role, locationIds?: string[] }} target
+ * @returns {boolean}
+ */
+export function canOverrideStaffPassword(caller, target) {
+  if (!caller || !target) return false
+  if (caller.isMaster || caller.role === 'master') return true
+  if (caller.role !== 'owner') return false
+  // Only a master may reset another master's password.
+  if (target.role === 'master') return false
+  // Reuse the staff-editor rule — blocks owner→self and owner→peer-owner.
+  if (!canEditStaffMember(caller, { id: target.id, role: target.role })) return false
+  // Owner may only reset staff who share one of the owner's locations.
+  const callerLocs = (caller.locations || []).map((l) => l.id)
+  const targetLocs = target.locationIds || []
+  return targetLocs.some((id) => callerLocs.includes(id))
+}
+
+/**
  * @param {{ role, isMaster }} caller
  * @returns {boolean}
  */

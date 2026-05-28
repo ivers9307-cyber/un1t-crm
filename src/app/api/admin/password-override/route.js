@@ -6,9 +6,18 @@
 // caller ONCE so the admin can pass it to the user via whatever
 // channel (in-person, WhatsApp, etc.) — never stored.
 //
-// Auth: master/owner only. (Could relax to manager-for-members
-// later if needed; conservative default since this is a security-
-// sensitive operation.)
+// Authorization (AUTH.1 hardening, 2026-05):
+//   The original route gated on role alone (master/owner) and never
+//   checked the caller↔target relationship, so any owner at any
+//   location could reset ANY staff/owner/master account by id — a
+//   cross-org account-takeover path. Now scoped:
+//     - master: may reset anyone.
+//     - owner:  staff target → may reset a manager/head_coach/staff
+//               member sharing one of their locations; NOT another
+//               owner, a master, or themselves (canOverrideStaffPassword).
+//               member target → contact must belong to one of the
+//               owner's locations (assertLocationAccess).
+//   Plus a per-admin rate limit to blunt a compromised-owner spree.
 //
 // Audit: every override writes a row to password_overrides_audit
 // (mig 161) with who/when/why. Master/owner can read that log.
@@ -28,7 +37,9 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { canOverrideStaffPassword } from '@/lib/staff-access'
+import { checkRateLimit, rateLimitResponse } from '@/lib/rate-limit'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -62,6 +73,16 @@ export async function POST(request) {
     return NextResponse.json({ success: false, error: 'forbidden' }, { status: 403 })
   }
 
+  const db = createServerClient()
+
+  // Rate limit per admin (not per IP — the action is identity-bound).
+  // A legitimate admin resets a handful of passwords; 20 / 15 min is
+  // generous while capping a compromised-owner credential-spray. Fail-
+  // open inside checkRateLimit, so a limiter outage never blocks a real
+  // lockout-recovery.
+  const rl = await checkRateLimit(db, `pw-override:${user.id}`, { max: 20, windowMs: 15 * 60_000 })
+  if (!rl.allowed) return rateLimitResponse(rl)
+
   let body
   try { body = await request.json() } catch {
     return NextResponse.json({ success: false, error: 'invalid_json' }, { status: 400 })
@@ -93,10 +114,9 @@ export async function POST(request) {
     finalPassword = newPassword
   }
 
-  const db = createServerClient()
-
   // Resolve targetUserId (auth.users.id) + the relevant FK columns
-  // for the audit row.
+  // for the audit row, AND authorize the caller against the specific
+  // target (AUTH.1).
   let targetUserId = null
   let targetProfileId = null
   let targetContactId = null
@@ -106,12 +126,31 @@ export async function POST(request) {
     // profiles.id IS auth.users.id (1:1) in this codebase — 13/13 confirmed at apply time.
     const { data, error } = await db
       .from('profiles')
-      .select('id, full_name')
+      .select('id, full_name, role')
       .eq('id', targetId)
       .maybeSingle()
     if (error || !data) {
       return NextResponse.json({ success: false, error: 'target_not_found' }, { status: 404 })
     }
+
+    // Effective role + the target's location memberships drive the
+    // authorization check. profiles.role carries 'master'; per-location
+    // 'owner' lives in profile_locations, so we treat the target as an
+    // owner if they hold owner at ANY location.
+    const { data: targetLocs } = await db
+      .from('profile_locations')
+      .select('location_id, role')
+      .eq('profile_id', data.id)
+    const targetLocationIds = (targetLocs || []).map((r) => r.location_id)
+    const isTargetOwner = (targetLocs || []).some((r) => r.role === 'owner')
+    const effectiveRole = data.role === 'master'
+      ? 'master'
+      : (isTargetOwner ? 'owner' : (data.role || 'staff'))
+
+    if (!canOverrideStaffPassword(user, { id: data.id, role: effectiveRole, locationIds: targetLocationIds })) {
+      return NextResponse.json({ success: false, error: 'forbidden' }, { status: 403 })
+    }
+
     targetUserId = data.id
     targetProfileId = data.id
   } else {
@@ -123,6 +162,17 @@ export async function POST(request) {
     if (error || !data) {
       return NextResponse.json({ success: false, error: 'target_not_found' }, { status: 404 })
     }
+
+    // Location scoping for members. Master sees every active location
+    // (getCurrentUser populates them), so assertLocationAccess passes
+    // for master and restricts owners to their own locations. A contact
+    // with no location can only be reset by a master.
+    if (!user.isMaster && !data.location_id) {
+      return NextResponse.json({ success: false, error: 'forbidden' }, { status: 403 })
+    }
+    const locationGuard = assertLocationAccess(user, data.location_id)
+    if (locationGuard) return locationGuard
+
     if (!data.user_id) {
       return NextResponse.json({
         success: false,
