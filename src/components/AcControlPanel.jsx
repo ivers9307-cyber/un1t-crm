@@ -173,12 +173,14 @@ function DeviceCard({ device }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [device.id])
 
-  // Local 1s ticker for the visible countdown.
+  // Local 1s ticker for the visible countdown. Either source —
+  // app-session auto_off_at or the cron-set expected_off_at on the
+  // external_start row — drives the same minute display.
   useEffect(() => {
-    if (!state?.active_session?.auto_off_at) return
+    if (!state?.active_session?.auto_off_at && !state?.external_start?.expected_off_at) return
     const i = setInterval(() => setTick((t) => t + 1), 1000)
     return () => clearInterval(i)
-  }, [state?.active_session?.auto_off_at])
+  }, [state?.active_session?.auto_off_at, state?.external_start?.expected_off_at])
 
   async function call(path, action) {
     setBusy(action); setActionError(null); setActionInfo(null)
@@ -203,16 +205,23 @@ function DeviceCard({ device }) {
   // session row. If the AC is physically on (via wall panel or a
   // Sensibo / LG schedule) but there's no app-created session, we
   // treat that as control_source='external' and render a running
-  // card without a countdown. Turn-off still works in that case —
-  // the vendor accepts the power-off regardless of how the unit
-  // was started.
+  // card. Turn-off still works in that case — the vendor accepts
+  // the power-off regardless of how the unit was started.
+  //
+  // STUDIO-AC-EXTERNAL-RULE.1 — when an external_start row is
+  // present, we have an expected_off_at from the cron and can
+  // render the same countdown UI used for app-started sessions.
   const session = state?.active_session
   const vendorOn = state?.state?.on === true
+  const externalStart = state?.external_start
   const controlSource = session ? 'app' : (vendorOn ? 'external' : null)
   const isOn = !!controlSource
   let minsLeft = null
   if (session?.auto_off_at) {
     const ms = new Date(session.auto_off_at).getTime() - Date.now()
+    minsLeft = Math.max(0, Math.ceil(ms / 60_000))
+  } else if (externalStart?.expected_off_at && controlSource === 'external') {
+    const ms = new Date(externalStart.expected_off_at).getTime() - Date.now()
     minsLeft = Math.max(0, Math.ceil(ms / 60_000))
   }
   void tick
@@ -241,9 +250,20 @@ function DeviceCard({ device }) {
             <div className="text-[10px] text-un1t-light">until auto-off</div>
           </div>
         )}
-        {/* No countdown for externally-controlled sessions —
-            we don't know when the unit was turned on. */}
-        {isOn && controlSource === 'external' && (
+        {/* STUDIO-AC-EXTERNAL-RULE.1 — when an external auto-off
+            rule is active for this device, surface the countdown
+            the same way we do for app-started sessions. Falls back
+            to the no-timer "Running" state if the rule is disabled
+            or the cron hasn't observed the unit yet. */}
+        {isOn && controlSource === 'external' && minsLeft != null && (
+          <div className="text-right shrink-0">
+            <div className="text-xl font-bold text-blue-200 inline-flex items-center gap-1.5">
+              <Clock size={14} /> {minsLeft} min
+            </div>
+            <div className="text-[10px] text-un1t-light">until auto-off · external</div>
+          </div>
+        )}
+        {isOn && controlSource === 'external' && minsLeft == null && (
           <div className="text-right shrink-0">
             <div className="text-[11px] uppercase tracking-wider text-blue-200">Running</div>
             <div className="text-[10px] text-un1t-light">started externally</div>

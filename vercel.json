@@ -29,6 +29,10 @@
       "schedule": "*/5 * * * *"
     },
     {
+      "path": "/api/cron/ac-external-rule",
+      "schedule": "*/5 * * * *"
+    },
+    {
       "path": "/api/cron/auto-end-stale-hr-sessions",
       "schedule": "*/5 * * * *"
     },
