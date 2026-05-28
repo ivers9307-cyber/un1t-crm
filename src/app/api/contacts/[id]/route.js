@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { requireApiKey, requireApiKeyOrManager } from '@/lib/api-auth'
+import { authenticateApiKey, requireApiKeyOrManager, assertRowInOrg } from '@/lib/api-auth'
 import { validateBody } from '@/lib/validate'
 import { email, phone, leadSourceSchema, MANAGER_ROLES } from '@/lib/schemas'
 import { triggerSequencesForTagsAdded } from '@/lib/sequences'
@@ -41,6 +41,10 @@ export async function PUT(request, props) {
   if (!validation.ok) return validation.response
   const body = validation.data
   const db = createServerClient()
+
+  // APIKEYS.3 — per-org key may only update a contact in its org.
+  const scopeErr = await assertRowInOrg({ db, orgId: auth.orgId, table: 'contacts', id })
+  if (scopeErr) return scopeErr
 
   // Read the old row first so we can detect tag additions for the
   // sequence trigger below. One extra round trip on every contact
@@ -104,11 +108,13 @@ export async function PUT(request, props) {
 // GET /api/contacts/:id
 export async function GET(request, props) {
   const params = await props.params;
-  const authError = requireApiKey(request)
-  if (authError) return authError
+  const auth = await authenticateApiKey(request)
+  if (!auth.ok) return auth.response
 
   const { id } = params
   const db = createServerClient()
+  const scopeErr = await assertRowInOrg({ db, orgId: auth.orgId, table: 'contacts', id })
+  if (scopeErr) return scopeErr
   const { data, error } = await db.from('contacts').select('*').eq('id', id).single()
 
   if (error) {

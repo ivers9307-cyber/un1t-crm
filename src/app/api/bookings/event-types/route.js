@@ -6,7 +6,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { requireApiKey } from '@/lib/api-auth'
+import { authenticateApiKey, scopeQueryToOrg, assertCreateInOrg } from '@/lib/api-auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike, hexColor, url, DEFAULT_COLOR } from '@/lib/schemas'
 
@@ -38,8 +38,8 @@ const EventCreateSchema = z.object({
 
 // GET /api/bookings/event-types — List all event types
 export async function GET(request) {
-  const authError = requireApiKey(request)
-  if (authError) return authError
+  const auth = await authenticateApiKey(request)
+  if (!auth.ok) return auth.response
 
   const db = createServerClient()
   const { searchParams } = new URL(request.url)
@@ -49,6 +49,8 @@ export async function GET(request) {
   const locationId = searchParams.get('location_id')
   if (locationId) query = query.eq('location_id', locationId)
   if (activeOnly) query = query.eq('active', true)
+  // APIKEYS.3 — per-org key: restrict to the org's locations.
+  query = await scopeQueryToOrg(query, db, auth.orgId)
 
   const { data, error } = await query
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
@@ -58,13 +60,17 @@ export async function GET(request) {
 
 // POST /api/bookings/event-types — Create a new event type
 export async function POST(request) {
-  const authError = requireApiKey(request)
-  if (authError) return authError
+  const auth = await authenticateApiKey(request)
+  if (!auth.ok) return auth.response
 
   const validation = await validateBody(request, EventCreateSchema)
   if (!validation.ok) return validation.response
   const body = validation.data
   const db = createServerClient()
+
+  // APIKEYS.3 — per-org key may only create an event type at a location in its org.
+  const scopeErr = await assertCreateInOrg({ db, orgId: auth.orgId, locationId: body.location_id })
+  if (scopeErr) return scopeErr
 
   // Auto-generate slug from name if not provided
   const slug = body.slug || body.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '')

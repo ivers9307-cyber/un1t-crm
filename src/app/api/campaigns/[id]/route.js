@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { requireApiKey } from '@/lib/api-auth'
+import { authenticateApiKey, assertRowInOrg } from '@/lib/api-auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike, email, audienceFilterSchema } from '@/lib/schemas'
 
@@ -23,10 +23,12 @@ const CampaignUpdateSchema = z.object({
 // GET /api/campaigns/[id] — Get campaign with metrics
 export async function GET(request, props) {
   const params = await props.params;
-  const authError = requireApiKey(request)
-  if (authError) return authError
+  const auth = await authenticateApiKey(request)
+  if (!auth.ok) return auth.response
 
   const db = createServerClient()
+  const scopeErr = await assertRowInOrg({ db, orgId: auth.orgId, table: 'campaigns', id: params.id })
+  if (scopeErr) return scopeErr
   const { data, error } = await db.from('campaigns')
     .select('*')
     .eq('id', params.id)
@@ -42,13 +44,15 @@ export async function GET(request, props) {
 // PUT /api/campaigns/[id] — Update campaign (only drafts)
 export async function PUT(request, props) {
   const params = await props.params;
-  const authError = requireApiKey(request)
-  if (authError) return authError
+  const auth = await authenticateApiKey(request)
+  if (!auth.ok) return auth.response
 
   const validation = await validateBody(request, CampaignUpdateSchema)
   if (!validation.ok) return validation.response
   const updates = { ...validation.data }
   const db = createServerClient()
+  const scopeErr = await assertRowInOrg({ db, orgId: auth.orgId, table: 'campaigns', id: params.id })
+  if (scopeErr) return scopeErr
 
   const { data, error } = await db.from('campaigns')
     .update(updates)
@@ -64,10 +68,12 @@ export async function PUT(request, props) {
 // DELETE /api/campaigns/[id]
 export async function DELETE(request, props) {
   const params = await props.params;
-  const authError = requireApiKey(request)
-  if (authError) return authError
+  const auth = await authenticateApiKey(request)
+  if (!auth.ok) return auth.response
 
   const db = createServerClient()
+  const scopeErr = await assertRowInOrg({ db, orgId: auth.orgId, table: 'campaigns', id: params.id })
+  if (scopeErr) return scopeErr
   const { error } = await db.from('campaigns').delete().eq('id', params.id)
 
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })

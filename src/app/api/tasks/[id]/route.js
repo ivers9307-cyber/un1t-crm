@@ -8,7 +8,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { requireApiKey } from '@/lib/api-auth'
+import { authenticateApiKey, assertRowInOrg } from '@/lib/api-auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 
@@ -26,10 +26,12 @@ const UpdateTaskSchema = z.object({
 
 export async function GET(request, props) {
   const params = await props.params;
-  const authError = requireApiKey(request)
-  if (authError) return authError
+  const auth = await authenticateApiKey(request)
+  if (!auth.ok) return auth.response
 
   const db = createServerClient()
+  const scopeErr = await assertRowInOrg({ db, orgId: auth.orgId, table: 'activities', id: params.id })
+  if (scopeErr) return scopeErr
   const { data, error } = await db.from('activities')
     .select('*')
     .eq('id', params.id)
@@ -43,13 +45,15 @@ export async function GET(request, props) {
 
 export async function PATCH(request, props) {
   const params = await props.params;
-  const authError = requireApiKey(request)
-  if (authError) return authError
+  const auth = await authenticateApiKey(request)
+  if (!auth.ok) return auth.response
 
   const validation = await validateBody(request, UpdateTaskSchema)
   if (!validation.ok) return validation.response
 
   const db = createServerClient()
+  const scopeErr = await assertRowInOrg({ db, orgId: auth.orgId, table: 'activities', id: params.id })
+  if (scopeErr) return scopeErr
   const { data, error } = await db.from('activities')
     .update(validation.data)
     .eq('id', params.id)
@@ -64,10 +68,12 @@ export async function PATCH(request, props) {
 
 export async function DELETE(request, props) {
   const params = await props.params;
-  const authError = requireApiKey(request)
-  if (authError) return authError
+  const auth = await authenticateApiKey(request)
+  if (!auth.ok) return auth.response
 
   const db = createServerClient()
+  const scopeErr = await assertRowInOrg({ db, orgId: auth.orgId, table: 'activities', id: params.id })
+  if (scopeErr) return scopeErr
   const { error } = await db.from('activities')
     .delete()
     .eq('id', params.id)

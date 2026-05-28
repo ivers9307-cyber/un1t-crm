@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { requireApiKey } from '@/lib/api-auth'
+import { authenticateApiKey, scopeQueryToOrg } from '@/lib/api-auth'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { applyAudienceFilterAsync, InvalidAudienceFilterError } from '@/lib/audience-filter'
 import { audienceFilterSchema } from '@/lib/schemas'
@@ -20,8 +20,8 @@ function escapePostgrestOr(s) {
 // GET /api/contacts/search?term=email@example.com&fields=email
 // Replaces Pipedrive GET /v1/persons/search
 export async function GET(request) {
-  const authError = requireApiKey(request)
-  if (authError) return authError
+  const auth = await authenticateApiKey(request)
+  if (!auth.ok) return auth.response
 
   const { searchParams } = new URL(request.url)
   const term = searchParams.get('term') || ''
@@ -33,6 +33,8 @@ export async function GET(request) {
 
   const locationId = searchParams.get('location_id')
   if (locationId) query = query.eq('location_id', locationId)
+  // APIKEYS.3 — per-org key: restrict to the org's locations.
+  query = await scopeQueryToOrg(query, db, auth.orgId)
 
   if (fields === 'email') {
     query = query.ilike('email', `%${term}%`)

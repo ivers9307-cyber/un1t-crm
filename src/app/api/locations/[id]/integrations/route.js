@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { requireApiKey } from '@/lib/api-auth'
+import { authenticateApiKey } from '@/lib/api-auth'
 import { validateBody } from '@/lib/validate'
 
 const IntegrationsUpdateSchema = z.object({
@@ -13,17 +13,21 @@ const IntegrationsUpdateSchema = z.object({
 // Used by n8n to fetch Glofox API keys, webhook URLs, etc. per location
 export async function GET(request, props) {
   const params = await props.params;
-  const authError = requireApiKey(request)
-  if (authError) return authError
+  const auth = await authenticateApiKey(request)
+  if (!auth.ok) return auth.response
 
   const db = createServerClient()
   const { data, error } = await db
     .from('locations')
-    .select('id, name, slug, settings')
+    .select('id, name, slug, settings, organization_id')
     .eq('id', params.id)
     .single()
 
   if (error || !data) {
+    return NextResponse.json({ success: false, error: 'Location not found' }, { status: 404 })
+  }
+  // APIKEYS.3 — per-org key may only read its own org's location.
+  if (auth.orgId && data.organization_id !== auth.orgId) {
     return NextResponse.json({ success: false, error: 'Location not found' }, { status: 404 })
   }
 
@@ -43,8 +47,8 @@ export async function GET(request, props) {
 // PUT /api/locations/[id]/integrations — Update integration credentials
 export async function PUT(request, props) {
   const params = await props.params;
-  const authError = requireApiKey(request)
-  if (authError) return authError
+  const auth = await authenticateApiKey(request)
+  if (!auth.ok) return auth.response
 
   const validation = await validateBody(request, IntegrationsUpdateSchema)
   if (!validation.ok) return validation.response
@@ -54,11 +58,15 @@ export async function PUT(request, props) {
   // Get current settings
   const { data: location } = await db
     .from('locations')
-    .select('settings')
+    .select('settings, organization_id')
     .eq('id', params.id)
     .single()
 
   if (!location) {
+    return NextResponse.json({ success: false, error: 'Location not found' }, { status: 404 })
+  }
+  // APIKEYS.3 — per-org key may only update its own org's location.
+  if (auth.orgId && location.organization_id !== auth.orgId) {
     return NextResponse.json({ success: false, error: 'Location not found' }, { status: 404 })
   }
 
