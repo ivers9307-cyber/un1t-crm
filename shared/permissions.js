@@ -292,6 +292,15 @@ export const MOBILE_PERMISSIONS = Object.freeze([
   // permissions.mobile.notify_<category>.
   { key: 'notify_tasks',            label: '… Task reminders',     hint: 'Notify 24h and 1h before a task is due',                        mobileOnly: true, isNotify: true },
   { key: 'notify_bookings',         label: '… Booking reminders',  hint: 'Notify 24h and 1h before bookings at your location',            mobileOnly: true, isNotify: true },
+  // CHECKLIST.3 — closer/opener accountability. Two flavours:
+  // - notify_checklist_overdue: the coach themselves gets a heads-up
+  //   when their shift ends with items still unticked. Default on
+  //   for everyone — the rule's whole point is gentle accountability.
+  // - notify_checklist_compliance: head coach + owner + master get a
+  //   summary push when a coach at their location ends a shift with
+  //   missed items. Default on for those roles only.
+  { key: 'notify_checklist_overdue',    label: '… Checklist overdue',       hint: 'Heads-up at end of shift when your checklist has unticked items',                                                       mobileOnly: true, isNotify: true },
+  { key: 'notify_checklist_compliance', label: '… Checklist compliance',    hint: 'Notify when a coach at your studio ends a shift with missed checklist items (head coach + owner only by default)',     mobileOnly: true, isNotify: true },
 ])
 
 export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
@@ -309,6 +318,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     notify_shift_adjusted: true,
     notify_contract_issued: true,
     notify_tasks: true, notify_bookings: true,
+    notify_checklist_overdue: true, notify_checklist_compliance: true,
   },
   staff: {
     schedule: true, pipeline: false, whatsapp: false,
@@ -325,6 +335,9 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     notify_shift_adjusted: true,
     notify_contract_issued: true,
     notify_tasks: true, notify_bookings: false,
+    // Staff get the 'you missed items' push but NOT the compliance
+    // roll-up (which is operator-oversight, not personal).
+    notify_checklist_overdue: true, notify_checklist_compliance: false,
   },
   head_coach: {
     schedule: true, pipeline: true, whatsapp: true,
@@ -338,6 +351,9 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     notify_shift_adjusted: true,
     notify_contract_issued: true,
     notify_tasks: true, notify_bookings: true,
+    // Head coach owns the floor — gets both the personal heads-up
+    // (they're often on shift themselves) and the compliance summary.
+    notify_checklist_overdue: true, notify_checklist_compliance: true,
   },
   manager: {
     schedule: true, pipeline: true, whatsapp: true,
@@ -351,6 +367,10 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     notify_shift_adjusted: true,
     notify_contract_issued: true,
     notify_tasks: true, notify_bookings: true,
+    // Managers oversee front-of-house — they get the compliance
+    // summary by default but not the personal heads-up (they rarely
+    // work a roster shift themselves).
+    notify_checklist_overdue: false, notify_checklist_compliance: true,
   },
   owner: {
     schedule: true, pipeline: true, whatsapp: true,
@@ -364,6 +384,9 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     notify_shift_adjusted: true,
     notify_contract_issued: true,
     notify_tasks: true, notify_bookings: true,
+    // Owners get the compliance summary; personal heads-up off
+    // (they don't work shifts).
+    notify_checklist_overdue: false, notify_checklist_compliance: true,
   },
 })
 
