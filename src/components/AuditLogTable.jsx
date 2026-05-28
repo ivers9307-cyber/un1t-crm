@@ -191,7 +191,7 @@ export default function AuditLogTable({ staff, locations }) {
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
 
   return (
-    <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5">
+    <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5">
       {/* Filters */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
         <FilterSelect
@@ -239,7 +239,7 @@ export default function AuditLogTable({ staff, locations }) {
             type="button"
             onClick={applyFilters}
             disabled={loading}
-            className="text-xs bg-un1t-white text-un1t-black px-3 py-1.5 rounded-md hover:bg-un1t-accent font-medium disabled:opacity-40"
+            className="text-xs bg-un1t-text text-un1t-bg px-3 py-1.5 rounded-md hover:bg-un1t-accent font-medium disabled:opacity-40"
           >
             Apply
           </button>
@@ -247,7 +247,7 @@ export default function AuditLogTable({ staff, locations }) {
             type="button"
             onClick={resetFilters}
             disabled={loading}
-            className="text-xs text-un1t-light hover:text-un1t-white disabled:opacity-40"
+            className="text-xs text-un1t-subtle hover:text-un1t-text disabled:opacity-40"
           >
             Reset
           </button>
@@ -256,7 +256,7 @@ export default function AuditLogTable({ staff, locations }) {
             type="button"
             onClick={handleExportCsv}
             disabled={loading || total === 0}
-            className="text-xs text-un1t-light hover:text-un1t-white inline-flex items-center gap-1 disabled:opacity-40"
+            className="text-xs text-un1t-subtle hover:text-un1t-text inline-flex items-center gap-1 disabled:opacity-40"
             title="Download the current filtered set as CSV"
           >
             <Download size={12} /> Export CSV
@@ -265,7 +265,7 @@ export default function AuditLogTable({ staff, locations }) {
       </div>
 
       {/* Status bar */}
-      <div className="flex items-center justify-between mb-3 text-xs text-un1t-light">
+      <div className="flex items-center justify-between mb-3 text-xs text-un1t-subtle">
         <div>
           {loading ? (
             <span className="inline-flex items-center gap-1"><Loader2 size={11} className="animate-spin" /> Loading…</span>
@@ -277,7 +277,7 @@ export default function AuditLogTable({ staff, locations }) {
           type="button"
           onClick={fetchRows}
           disabled={loading}
-          className="text-xs text-un1t-light hover:text-un1t-white inline-flex items-center gap-1 disabled:opacity-40"
+          className="text-xs text-un1t-subtle hover:text-un1t-text inline-flex items-center gap-1 disabled:opacity-40"
           title="Reload"
         >
           <RefreshCw size={11} /> Reload
@@ -294,7 +294,7 @@ export default function AuditLogTable({ staff, locations }) {
       <div className="overflow-x-auto">
         <table className="w-full text-xs border-collapse">
           <thead>
-            <tr className="text-un1t-light text-[11px] uppercase tracking-wider">
+            <tr className="text-un1t-subtle text-[11px] uppercase tracking-wider">
               <th className="text-left p-2 w-6"></th>
               <th className="text-left p-2 whitespace-nowrap">When</th>
               <th className="text-left p-2 whitespace-nowrap">Category</th>
@@ -304,10 +304,10 @@ export default function AuditLogTable({ staff, locations }) {
               <th className="text-left p-2 whitespace-nowrap">Location</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-un1t-gray/40">
+          <tbody className="divide-y divide-un1t-border/40">
             {rows.length === 0 && !loading && (
               <tr>
-                <td colSpan={7} className="p-6 text-center text-un1t-light text-sm">
+                <td colSpan={7} className="p-6 text-center text-un1t-subtle text-sm">
                   No audit entries match the current filters.
                 </td>
               </tr>
@@ -329,14 +329,14 @@ export default function AuditLogTable({ staff, locations }) {
 
       {/* Pagination */}
       {total > PAGE_SIZE && (
-        <div className="flex items-center justify-between mt-4 text-xs text-un1t-light">
+        <div className="flex items-center justify-between mt-4 text-xs text-un1t-subtle">
           <div>Page {page} of {totalPages}</div>
           <div className="flex items-center gap-2">
             <button
               type="button"
               onClick={() => setPage((p) => Math.max(1, p - 1))}
               disabled={loading || page === 1}
-              className="text-xs px-2 py-1 rounded bg-un1t-black border border-un1t-gray hover:border-un1t-mid disabled:opacity-40"
+              className="text-xs px-2 py-1 rounded bg-un1t-bg border border-un1t-border hover:border-un1t-muted disabled:opacity-40"
             >
               ← Prev
             </button>
@@ -344,7 +344,7 @@ export default function AuditLogTable({ staff, locations }) {
               type="button"
               onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
               disabled={loading || page === totalPages}
-              className="text-xs px-2 py-1 rounded bg-un1t-black border border-un1t-gray hover:border-un1t-mid disabled:opacity-40"
+              className="text-xs px-2 py-1 rounded bg-un1t-bg border border-un1t-border hover:border-un1t-muted disabled:opacity-40"
             >
               Next →
             </button>
@@ -365,8 +365,8 @@ function Row({ row, isOpen, onToggle }) {
     || Object.prototype.hasOwnProperty.call(details, 'after'))
   return (
     <>
-      <tr className="hover:bg-un1t-gray/10 cursor-pointer" onClick={onToggle}>
-        <td className="p-2 text-un1t-light">
+      <tr className="hover:bg-un1t-border/10 cursor-pointer" onClick={onToggle}>
+        <td className="p-2 text-un1t-subtle">
           {isOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
         </td>
         <td className="p-2 whitespace-nowrap font-mono text-[11px]">{fmtDt(row.occurred_at)}</td>
@@ -377,26 +377,26 @@ function Row({ row, isOpen, onToggle }) {
           {actorName ? (
             <span title={row.actor?.email || row.actor_label || ''}>{actorName}</span>
           ) : (
-            <span className="text-un1t-mid italic">system</span>
+            <span className="text-un1t-muted italic">system</span>
           )}
         </td>
         <td className="p-2 whitespace-nowrap">
-          <span className="text-[11px] text-un1t-white">{ACTION_LABELS[row.action] || row.action}</span>
+          <span className="text-[11px] text-un1t-text">{ACTION_LABELS[row.action] || row.action}</span>
         </td>
         <td className="p-2 whitespace-nowrap">
           {targetName ? (
             <span title={row.target?.email || ''}>{targetName}</span>
           ) : (
-            <span className="text-un1t-mid">—</span>
+            <span className="text-un1t-muted">—</span>
           )}
         </td>
         <td className="p-2 whitespace-nowrap">
-          {row.location ? row.location.name : <span className="text-un1t-mid">—</span>}
+          {row.location ? row.location.name : <span className="text-un1t-muted">—</span>}
         </td>
       </tr>
       {isOpen && (
         <tr>
-          <td colSpan={7} className="p-3 bg-un1t-black/40">
+          <td colSpan={7} className="p-3 bg-un1t-bg/40">
             {hasBeforeAfter ? (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-[11px]">
                 <DiffPanel title="Before" data={details.before} />
@@ -419,7 +419,7 @@ function CategoryPill({ category }) {
     mutation: 'bg-orange-500/10 text-orange-300 border-orange-500/30',
     assignment: 'bg-purple-500/10 text-purple-300 border-purple-500/30',
   }
-  const cls = styles[category] || 'bg-un1t-gray/20 text-un1t-light border-un1t-gray'
+  const cls = styles[category] || 'bg-un1t-border/20 text-un1t-subtle border-un1t-border'
   return (
     <span className={`text-[10px] uppercase tracking-wider border rounded px-1.5 py-0.5 ${cls}`}>
       {category || '—'}
@@ -431,22 +431,22 @@ function DetailsPanel({ row }) {
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-[11px]">
       <div>
-        <div className="text-[10px] uppercase tracking-wider text-un1t-light mb-1">Details</div>
-        <pre className="bg-un1t-black border border-un1t-gray rounded p-2 text-[10px] text-un1t-white whitespace-pre-wrap break-words font-mono leading-relaxed">
+        <div className="text-[10px] uppercase tracking-wider text-un1t-subtle mb-1">Details</div>
+        <pre className="bg-un1t-bg border border-un1t-border rounded p-2 text-[10px] text-un1t-text whitespace-pre-wrap break-words font-mono leading-relaxed">
           {row.details
             ? JSON.stringify(row.details, null, 2)
-            : <span className="text-un1t-mid italic">(none)</span>}
+            : <span className="text-un1t-muted italic">(none)</span>}
         </pre>
       </div>
       <div>
-        <div className="text-[10px] uppercase tracking-wider text-un1t-light mb-1">Context</div>
-        <dl className="bg-un1t-black border border-un1t-gray rounded p-2 text-[11px] grid grid-cols-[auto_1fr] gap-x-2 gap-y-1">
-          <dt className="text-un1t-light">Resource</dt>
-          <dd className="text-un1t-white font-mono break-all">{row.target_resource || '—'}</dd>
-          <dt className="text-un1t-light">IP</dt>
-          <dd className="text-un1t-white font-mono">{row.ip_address || '—'}</dd>
-          <dt className="text-un1t-light">User agent</dt>
-          <dd className="text-un1t-white break-words">{row.user_agent || '—'}</dd>
+        <div className="text-[10px] uppercase tracking-wider text-un1t-subtle mb-1">Context</div>
+        <dl className="bg-un1t-bg border border-un1t-border rounded p-2 text-[11px] grid grid-cols-[auto_1fr] gap-x-2 gap-y-1">
+          <dt className="text-un1t-subtle">Resource</dt>
+          <dd className="text-un1t-text font-mono break-all">{row.target_resource || '—'}</dd>
+          <dt className="text-un1t-subtle">IP</dt>
+          <dd className="text-un1t-text font-mono">{row.ip_address || '—'}</dd>
+          <dt className="text-un1t-subtle">User agent</dt>
+          <dd className="text-un1t-text break-words">{row.user_agent || '—'}</dd>
         </dl>
       </div>
     </div>
@@ -456,9 +456,9 @@ function DetailsPanel({ row }) {
 function DiffPanel({ title, data }) {
   return (
     <div>
-      <div className="text-[10px] uppercase tracking-wider text-un1t-light mb-1">{title}</div>
-      <pre className="bg-un1t-black border border-un1t-gray rounded p-2 text-[10px] text-un1t-white whitespace-pre-wrap break-words font-mono leading-relaxed">
-        {data ? JSON.stringify(data, null, 2) : <span className="text-un1t-mid italic">(none)</span>}
+      <div className="text-[10px] uppercase tracking-wider text-un1t-subtle mb-1">{title}</div>
+      <pre className="bg-un1t-bg border border-un1t-border rounded p-2 text-[10px] text-un1t-text whitespace-pre-wrap break-words font-mono leading-relaxed">
+        {data ? JSON.stringify(data, null, 2) : <span className="text-un1t-muted italic">(none)</span>}
       </pre>
     </div>
   )
@@ -467,11 +467,11 @@ function DiffPanel({ title, data }) {
 function FilterSelect({ label, value, onChange, options }) {
   return (
     <label className="block">
-      <div className="text-[11px] text-un1t-light mb-1">{label}</div>
+      <div className="text-[11px] text-un1t-subtle mb-1">{label}</div>
       <select
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="w-full text-xs bg-un1t-black border border-un1t-gray rounded px-2 py-1.5 text-un1t-white"
+        className="w-full text-xs bg-un1t-bg border border-un1t-border rounded px-2 py-1.5 text-un1t-text"
       >
         {options.map((o) => (
           <option key={o.value} value={o.value}>{o.label}</option>
@@ -496,12 +496,12 @@ function FilterSelect({ label, value, onChange, options }) {
 function FilterDate({ label, value, onChange }) {
   return (
     <label className="block">
-      <div className="text-[11px] text-un1t-light mb-1">{label}</div>
+      <div className="text-[11px] text-un1t-subtle mb-1">{label}</div>
       <input
         type="datetime-local"
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="w-full text-xs bg-un1t-black border border-un1t-gray rounded px-2 py-1.5 text-un1t-white"
+        className="w-full text-xs bg-un1t-bg border border-un1t-border rounded px-2 py-1.5 text-un1t-text"
       />
     </label>
   )

@@ -64,14 +64,14 @@ export default async function AdminMatrixPage() {
         <h2 className="text-2xl font-bold">Platform admin</h2>
         <AddOrganizationButton />
       </div>
-      <p className="text-sm text-un1t-light mb-8">
+      <p className="text-sm text-un1t-subtle mb-8">
         Master-only view across every organization, location, and user. Feature toggles edit
         inline; user assignments are managed via the access matrix.
       </p>
 
       <section className="mb-12">
         <h3 className="text-lg font-semibold mb-1">Feature matrix</h3>
-        <p className="text-xs text-un1t-light mb-4">
+        <p className="text-xs text-un1t-subtle mb-4">
           Each cell is the per-location feature gate. Toggle off and that feature disappears
           from the sidebar (and mobile tab bar) for every user at that location, regardless of
           role default. Notification preferences (notify_*) stay personal and aren&apos;t shown.
@@ -84,7 +84,7 @@ export default async function AdminMatrixPage() {
 
       <section>
         <h3 className="text-lg font-semibold mb-1">Access matrix</h3>
-        <p className="text-xs text-un1t-light mb-4">
+        <p className="text-xs text-un1t-subtle mb-4">
           Who has access to what, across every location. Cells show the per-location role; click
           a row to edit assignments via the existing staff editor. Master users (platform admins)
           are flagged with the badge on the right — they see everything regardless of per-location

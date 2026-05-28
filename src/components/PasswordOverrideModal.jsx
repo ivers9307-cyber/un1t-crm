@@ -108,7 +108,7 @@ export default function PasswordOverrideModal({
       onClick={newPassword ? undefined : onClose}
     >
       <div
-        className="bg-un1t-dark border border-un1t-gray rounded-lg w-full max-w-md p-5"
+        className="bg-un1t-surface border border-un1t-border rounded-lg w-full max-w-md p-5"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between mb-3">
@@ -119,21 +119,21 @@ export default function PasswordOverrideModal({
             <button
               type="button"
               onClick={onClose}
-              className="text-un1t-light hover:text-un1t-white"
+              className="text-un1t-subtle hover:text-un1t-text"
             >
               <X size={16} />
             </button>
           )}
         </div>
 
-        <p className="text-xs text-un1t-light mb-4">
-          Setting a new password for <strong className="text-un1t-white">{targetLabel}</strong>.
+        <p className="text-xs text-un1t-subtle mb-4">
+          Setting a new password for <strong className="text-un1t-text">{targetLabel}</strong>.
           All their existing sessions will be signed out immediately.
         </p>
 
         {!newPassword ? (
           <>
-            <div className="inline-flex border border-un1t-gray rounded-md overflow-hidden mb-3">
+            <div className="inline-flex border border-un1t-border rounded-md overflow-hidden mb-3">
               {[
                 { key: 'random', label: 'Generate random', Icon: RefreshCw },
                 { key: 'manual', label: 'Type a password', Icon: KeyRound },
@@ -143,7 +143,7 @@ export default function PasswordOverrideModal({
                   type="button"
                   onClick={() => setMode(key)}
                   className={`inline-flex items-center gap-1.5 text-xs px-3 py-1.5 ${
-                    mode === key ? 'bg-un1t-gray text-un1t-white' : 'text-un1t-light hover:bg-un1t-gray/30'
+                    mode === key ? 'bg-un1t-border text-un1t-text' : 'text-un1t-subtle hover:bg-un1t-border/30'
                   }`}
                 >
                   <Icon size={12} /> {label}
@@ -153,17 +153,17 @@ export default function PasswordOverrideModal({
 
             {mode === 'manual' && (
               <div className="mb-3">
-                <label className="block text-xs text-un1t-light mb-1">New password</label>
+                <label className="block text-xs text-un1t-subtle mb-1">New password</label>
                 <input
                   type="text"
                   autoFocus
                   value={manualPassword}
                   onChange={(e) => setManualPassword(e.target.value)}
                   placeholder="Type or paste the new password"
-                  className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm font-mono text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid"
+                  className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm font-mono text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted"
                 />
                 <div className="flex items-center justify-between mt-1">
-                  <p className="text-[10px] text-un1t-mid">
+                  <p className="text-[10px] text-un1t-muted">
                     Text input (not password-masked) so you can verify what you&apos;re sending.
                   </p>
                   {/* Live character count — colour-coded so the operator
@@ -181,15 +181,15 @@ export default function PasswordOverrideModal({
               </div>
             )}
 
-            <label className="block text-xs text-un1t-light mb-1">Reason (optional)</label>
+            <label className="block text-xs text-un1t-subtle mb-1">Reason (optional)</label>
             <input
               type="text"
               value={reason}
               onChange={(e) => setReason(e.target.value)}
               placeholder="e.g. forgot password, locked out, member at front desk"
-              className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid mb-3"
+              className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted mb-3"
             />
-            <p className="text-[10px] text-un1t-mid mb-3">
+            <p className="text-[10px] text-un1t-muted mb-3">
               Saved to the audit log alongside who you are and when. Helps explain later if anyone asks why this account&apos;s password changed.
             </p>
 
@@ -203,7 +203,7 @@ export default function PasswordOverrideModal({
               <button
                 type="button"
                 onClick={onClose}
-                className="text-sm text-un1t-light hover:text-un1t-white px-3 py-1.5 rounded-md"
+                className="text-sm text-un1t-subtle hover:text-un1t-text px-3 py-1.5 rounded-md"
               >
                 Cancel
               </button>
@@ -218,7 +218,7 @@ export default function PasswordOverrideModal({
                       ? `Password must be at least 12 characters (currently ${manualPassword.length}). Or switch to 'Generate random'.`
                       : undefined
                 }
-                className="text-sm bg-un1t-white text-un1t-black font-medium px-4 py-1.5 rounded-md hover:bg-un1t-accent disabled:opacity-50 disabled:cursor-not-allowed"
+                className="text-sm bg-un1t-text text-un1t-bg font-medium px-4 py-1.5 rounded-md hover:bg-un1t-accent disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {busy ? 'Overriding…' : 'Override password'}
               </button>
@@ -235,25 +235,25 @@ export default function PasswordOverrideModal({
               </p>
             </div>
 
-            <div className="bg-un1t-black border border-un1t-gray rounded-md p-3 mb-4 flex items-center gap-2">
-              <code className="text-base font-mono text-un1t-white flex-1 break-all select-all">
+            <div className="bg-un1t-bg border border-un1t-border rounded-md p-3 mb-4 flex items-center gap-2">
+              <code className="text-base font-mono text-un1t-text flex-1 break-all select-all">
                 {newPassword}
               </code>
               <button
                 type="button"
                 onClick={copyPassword}
-                className="shrink-0 inline-flex items-center gap-1 text-xs text-un1t-light hover:text-un1t-white px-2 py-1 rounded border border-un1t-gray"
+                className="shrink-0 inline-flex items-center gap-1 text-xs text-un1t-subtle hover:text-un1t-text px-2 py-1 rounded border border-un1t-border"
               >
                 {copied ? <Check size={12} className="text-emerald-400" /> : <Copy size={12} />}
                 {copied ? 'Copied' : 'Copy'}
               </button>
             </div>
 
-            <p className="text-xs text-un1t-light mb-1">
-              <strong className="text-un1t-white">{targetLabel}&apos;s</strong> existing sessions have been signed out.
+            <p className="text-xs text-un1t-subtle mb-1">
+              <strong className="text-un1t-text">{targetLabel}&apos;s</strong> existing sessions have been signed out.
               They&apos;ll need to log in with the new password.
             </p>
-            <p className="text-[11px] text-un1t-mid mb-4">
+            <p className="text-[11px] text-un1t-muted mb-4">
               Tell them to change it themselves after their first login (Account → Change password).
             </p>
 
@@ -261,7 +261,7 @@ export default function PasswordOverrideModal({
               <button
                 type="button"
                 onClick={onClose}
-                className="text-sm bg-un1t-white text-un1t-black font-medium px-4 py-1.5 rounded-md hover:bg-un1t-accent"
+                className="text-sm bg-un1t-text text-un1t-bg font-medium px-4 py-1.5 rounded-md hover:bg-un1t-accent"
               >
                 I&apos;ve copied it — close
               </button>

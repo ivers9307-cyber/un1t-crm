@@ -148,7 +148,7 @@ export default function RaceControlPanel({ raceId }) {
   }
   if (!board) {
     return (
-      <div className="text-sm text-un1t-light inline-flex items-center gap-2">
+      <div className="text-sm text-un1t-subtle inline-flex items-center gap-2">
         <Loader2 size={14} className="animate-spin" /> Loading race board…
       </div>
     )
@@ -163,8 +163,8 @@ export default function RaceControlPanel({ raceId }) {
       )}
 
       <div className="flex items-center gap-2 flex-wrap">
-        <Filter size={13} className="text-un1t-light" />
-        <span className="text-[11px] uppercase tracking-wider text-un1t-light mr-1">Composition</span>
+        <Filter size={13} className="text-un1t-subtle" />
+        <span className="text-[11px] uppercase tracking-wider text-un1t-subtle mr-1">Composition</span>
         {COMPOSITION_FILTERS.map((f) => {
           const on = compositionFilter === f.id
           return (
@@ -174,8 +174,8 @@ export default function RaceControlPanel({ raceId }) {
               onClick={() => setCompositionFilter(f.id)}
               className={`text-xs px-2.5 py-1 rounded-full border ${
                 on
-                  ? 'bg-un1t-white text-un1t-black border-un1t-white'
-                  : 'border-un1t-gray text-un1t-light hover:border-un1t-mid'
+                  ? 'bg-un1t-text text-un1t-bg border-un1t-text'
+                  : 'border-un1t-border text-un1t-subtle hover:border-un1t-muted'
               }`}
             >
               {f.label}
@@ -223,13 +223,13 @@ function Section({ title, icon: Icon, count, emptyText, children }) {
   return (
     <section>
       <div className="flex items-center gap-2 mb-2">
-        <Icon size={16} className="text-un1t-light" />
+        <Icon size={16} className="text-un1t-subtle" />
         <h3 className="text-base font-semibold">{title}</h3>
-        <span className="text-xs bg-un1t-gray/40 text-un1t-light px-2 py-0.5 rounded-full">{count}</span>
+        <span className="text-xs bg-un1t-border/40 text-un1t-subtle px-2 py-0.5 rounded-full">{count}</span>
       </div>
       <div className="space-y-2">
         {items.length === 0 ? (
-          <div className="text-xs text-un1t-light italic px-2 py-3">{emptyText}</div>
+          <div className="text-xs text-un1t-subtle italic px-2 py-3">{emptyText}</div>
         ) : items}
       </div>
     </section>
@@ -246,7 +246,7 @@ function TeamHeader({ registration, wave, accent = 'default' }) {
     ? 'border-amber-500/50 bg-amber-500/5'
     : accent === 'completed'
       ? 'border-emerald-500/30 bg-emerald-500/5'
-      : 'border-un1t-gray bg-un1t-dark'
+      : 'border-un1t-border bg-un1t-surface'
   // Wave badge label: prefer "Label (HH:MM)", fall back to just HH:MM,
   // fall back to "(no wave)" only when the registration is unlinked.
   const waveTime = wave?.start_time ? wave.start_time.slice(0, 5) : null
@@ -256,9 +256,9 @@ function TeamHeader({ registration, wave, accent = 'default' }) {
   return (
     <div className={`flex-1 min-w-0 border rounded-md p-3 ${accentClass}`}>
       <div className="flex items-center gap-2 flex-wrap">
-        <span className="text-base font-semibold text-un1t-white">{teamName}</span>
+        <span className="text-base font-semibold text-un1t-text">{teamName}</span>
         {size && (
-          <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded-full bg-un1t-gray/40 text-un1t-light inline-flex items-center gap-1">
+          <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded-full bg-un1t-border/40 text-un1t-subtle inline-flex items-center gap-1">
             <Users size={10} /> {size}-person
           </span>
         )}
@@ -279,11 +279,11 @@ function TeamHeader({ registration, wave, accent = 'default' }) {
         )}
       </div>
       {members.length > 0 && (
-        <div className="text-[11px] text-un1t-light mt-1">
+        <div className="text-[11px] text-un1t-subtle mt-1">
           {members.map((m, i) => (
             <span key={m.id || i}>
               {i > 0 && ', '}
-              <span className={m.role === 'captain' ? 'text-un1t-white font-medium' : ''}>
+              <span className={m.role === 'captain' ? 'text-un1t-text font-medium' : ''}>
                 {m.name}
                 {m.role === 'captain' && <span className="text-amber-700 ml-0.5">★</span>}
                 {m.is_member && (
@@ -323,7 +323,7 @@ function AdjustButton({ onAdjust }) {
     <button
       type="button"
       onClick={onAdjust}
-      className="text-[11px] text-un1t-light hover:text-un1t-white inline-flex items-center gap-1"
+      className="text-[11px] text-un1t-subtle hover:text-un1t-text inline-flex items-center gap-1"
       title="Adjust times + manage penalties"
     >
       <SlidersHorizontal size={11} />
@@ -373,7 +373,7 @@ function OnCourseRow({ registration, wave, busy, onFinish, onAdjust }) {
           type="button"
           onClick={onFinish}
           disabled={busy}
-          className="bg-un1t-white hover:bg-un1t-accent text-un1t-black font-semibold px-4 py-3 rounded-md inline-flex items-center gap-1.5 disabled:opacity-40 text-sm"
+          className="bg-un1t-text hover:bg-un1t-accent text-un1t-bg font-semibold px-4 py-3 rounded-md inline-flex items-center gap-1.5 disabled:opacity-40 text-sm"
         >
           {busy ? <Loader2 size={14} className="animate-spin" /> : <Square size={14} />}
           {busy ? 'Finishing…' : 'Finish'}
@@ -390,7 +390,7 @@ function CompletedRow({ registration, wave, rank, busy, onReset, onAdjust }) {
   const elapsed = elapsedWithPenalties(registration.race_started_at, registration.race_finished_at, registration.penalties)
   return (
     <div className="flex items-stretch gap-2">
-      <div className="flex items-center justify-center min-w-[40px] text-base font-semibold text-un1t-light">
+      <div className="flex items-center justify-center min-w-[40px] text-base font-semibold text-un1t-subtle">
         #{rank}
       </div>
       <TeamHeader registration={registration} wave={wave} accent="completed" />
@@ -405,7 +405,7 @@ function CompletedRow({ registration, wave, rank, busy, onReset, onAdjust }) {
             type="button"
             onClick={onReset}
             disabled={busy}
-            className="text-[11px] text-un1t-light hover:text-un1t-white inline-flex items-center gap-1 disabled:opacity-40"
+            className="text-[11px] text-un1t-subtle hover:text-un1t-text inline-flex items-center gap-1 disabled:opacity-40"
             title="Clear this team's race timing (operator mistake undo)"
           >
             {busy ? <Loader2 size={11} className="animate-spin" /> : <RotateCcw size={11} />}

@@ -25,10 +25,10 @@ function formatTime(dateStr) {
 function StatusIcon({ status }) {
   switch (status) {
     case 'read': return <CheckCheck size={12} className="text-blue-400" />
-    case 'delivered': return <CheckCheck size={12} className="text-un1t-light" />
-    case 'sent': return <Check size={12} className="text-un1t-light" />
+    case 'delivered': return <CheckCheck size={12} className="text-un1t-subtle" />
+    case 'sent': return <Check size={12} className="text-un1t-subtle" />
     case 'failed': return <AlertCircle size={12} className="text-red-400" />
-    default: return <Clock size={12} className="text-un1t-mid" />
+    default: return <Clock size={12} className="text-un1t-muted" />
   }
 }
 
@@ -313,29 +313,29 @@ export default function WAInbox({ locationId, userId, initialConversationId }) {
   return (
     <div className="flex h-screen">
       {/* Conversation list */}
-      <div className="w-80 border-r border-un1t-gray flex flex-col shrink-0 bg-un1t-dark">
-        <div className="p-4 border-b border-un1t-gray flex items-center justify-between">
+      <div className="w-80 border-r border-un1t-border flex flex-col shrink-0 bg-un1t-surface">
+        <div className="p-4 border-b border-un1t-border flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <Link href="/whatsapp" className="text-un1t-light hover:text-un1t-white transition-colors">
+            <Link href="/whatsapp" className="text-un1t-subtle hover:text-un1t-text transition-colors">
               <ArrowLeft size={18} />
             </Link>
             <h3 className="font-semibold">Inbox</h3>
           </div>
-          <button onClick={fetchConversations} className="p-1.5 text-un1t-light hover:text-un1t-white transition-colors">
+          <button onClick={fetchConversations} className="p-1.5 text-un1t-subtle hover:text-un1t-text transition-colors">
             <RefreshCw size={14} />
           </button>
         </div>
 
         <div className="flex-1 overflow-auto">
           {loading && (
-            <p className="text-sm text-un1t-light p-4 text-center">Loading...</p>
+            <p className="text-sm text-un1t-subtle p-4 text-center">Loading...</p>
           )}
 
           {!loading && conversations.length === 0 && (
             <div className="p-6 text-center">
-              <MessageCircle size={28} className="mx-auto mb-2 text-un1t-mid" />
-              <p className="text-sm text-un1t-light">No conversations yet</p>
-              <p className="text-xs text-un1t-mid mt-1">Messages will appear when contacts message you on WhatsApp</p>
+              <MessageCircle size={28} className="mx-auto mb-2 text-un1t-muted" />
+              <p className="text-sm text-un1t-subtle">No conversations yet</p>
+              <p className="text-xs text-un1t-muted mt-1">Messages will appear when contacts message you on WhatsApp</p>
             </div>
           )}
 
@@ -348,8 +348,8 @@ export default function WAInbox({ locationId, userId, initialConversationId }) {
               <button
                 key={conv.id}
                 onClick={() => setSelectedId(conv.id)}
-                className={`w-full text-left px-4 py-3 border-b border-un1t-gray transition-colors ${
-                  isSelected ? 'bg-un1t-gray/50' : 'hover:bg-un1t-gray/20'
+                className={`w-full text-left px-4 py-3 border-b border-un1t-border transition-colors ${
+                  isSelected ? 'bg-un1t-border/50' : 'hover:bg-un1t-border/20'
                 }`}
               >
                 <div className="flex items-start justify-between">
@@ -369,12 +369,12 @@ export default function WAInbox({ locationId, userId, initialConversationId }) {
                         </span>
                       )}
                     </div>
-                    <p className="text-xs text-un1t-mid truncate mt-0.5">
-                      {conv.last_message_direction === 'outbound' && <span className="text-un1t-light">You: </span>}
+                    <p className="text-xs text-un1t-muted truncate mt-0.5">
+                      {conv.last_message_direction === 'outbound' && <span className="text-un1t-subtle">You: </span>}
                       {conv.last_message_preview || 'No messages'}
                     </p>
                   </div>
-                  <span className="text-[10px] text-un1t-mid shrink-0 ml-2">
+                  <span className="text-[10px] text-un1t-muted shrink-0 ml-2">
                     {formatTime(conv.last_message_at)}
                   </span>
                 </div>
@@ -389,14 +389,14 @@ export default function WAInbox({ locationId, userId, initialConversationId }) {
         {!selectedId ? (
           <div className="flex-1 flex items-center justify-center">
             <div className="text-center">
-              <MessageCircle size={48} className="mx-auto mb-3 text-un1t-mid" />
-              <p className="text-un1t-light">Select a conversation to start messaging</p>
+              <MessageCircle size={48} className="mx-auto mb-3 text-un1t-muted" />
+              <p className="text-un1t-subtle">Select a conversation to start messaging</p>
             </div>
           </div>
         ) : (
           <>
             {/* Chat header */}
-            <div className="px-5 py-3 border-b border-un1t-gray bg-un1t-dark flex items-center justify-between shrink-0">
+            <div className="px-5 py-3 border-b border-un1t-border bg-un1t-surface flex items-center justify-between shrink-0">
               <div>
                 <div className="flex items-center gap-2">
                   <p className="font-semibold text-sm">
@@ -408,7 +408,7 @@ export default function WAInbox({ locationId, userId, initialConversationId }) {
                     </span>
                   )}
                 </div>
-                <p className="text-xs text-un1t-mid">
+                <p className="text-xs text-un1t-muted">
                   {conversation?.wa_phone}
                   {conversation?.contacts?.pipeline_stage_slug && (
                     <span> · {conversation.contacts.pipeline_stage_slug.replace(/_/g, ' ')}</span>
@@ -438,7 +438,7 @@ export default function WAInbox({ locationId, userId, initialConversationId }) {
                 ) : conversation?.contacts?.id && (
                   <Link
                     href={`/contacts/${conversation.contacts.id}`}
-                    className="flex items-center gap-1.5 text-xs text-un1t-light hover:text-un1t-white transition-colors"
+                    className="flex items-center gap-1.5 text-xs text-un1t-subtle hover:text-un1t-text transition-colors"
                   >
                     <UserCheck size={12} />
                     View contact
@@ -449,44 +449,44 @@ export default function WAInbox({ locationId, userId, initialConversationId }) {
 
             {/* Add to Contacts form — slides in below header */}
             {showAddContact && isUnknown && (
-              <div className="border-b border-un1t-gray bg-un1t-dark/80 px-5 py-4 shrink-0">
+              <div className="border-b border-un1t-border bg-un1t-surface/80 px-5 py-4 shrink-0">
                 <div className="flex items-center justify-between mb-3">
                   <h4 className="text-sm font-semibold flex items-center gap-2">
                     <UserPlus size={14} />
                     Add to Contacts
                   </h4>
-                  <button onClick={() => setShowAddContact(false)} className="text-un1t-light hover:text-un1t-white">
+                  <button onClick={() => setShowAddContact(false)} className="text-un1t-subtle hover:text-un1t-text">
                     <X size={14} />
                   </button>
                 </div>
 
                 <div className="grid grid-cols-2 gap-3 max-w-2xl">
                   <div>
-                    <label className="block text-xs text-un1t-light mb-1">Full Name *</label>
+                    <label className="block text-xs text-un1t-subtle mb-1">Full Name *</label>
                     <input
                       type="text"
                       value={addContactForm.name}
                       onChange={e => setAddContactForm({ ...addContactForm, name: e.target.value, first_name: e.target.value.split(' ')[0] })}
                       placeholder="John Smith"
-                      className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-1.5 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid"
+                      className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-1.5 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted"
                     />
                   </div>
                   <div>
-                    <label className="block text-xs text-un1t-light mb-1">Email (optional)</label>
+                    <label className="block text-xs text-un1t-subtle mb-1">Email (optional)</label>
                     <input
                       type="email"
                       value={addContactForm.email}
                       onChange={e => setAddContactForm({ ...addContactForm, email: e.target.value })}
                       placeholder="john@example.com"
-                      className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-1.5 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid"
+                      className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-1.5 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted"
                     />
                   </div>
                   <div>
-                    <label className="block text-xs text-un1t-light mb-1">Pipeline Stage</label>
+                    <label className="block text-xs text-un1t-subtle mb-1">Pipeline Stage</label>
                     <select
                       value={addContactForm.pipeline_stage}
                       onChange={e => setAddContactForm({ ...addContactForm, pipeline_stage: e.target.value })}
-                      className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-1.5 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
+                      className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-1.5 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted"
                     >
                       <option value="new">New</option>
                       <option value="contacted">Contacted</option>
@@ -499,19 +499,19 @@ export default function WAInbox({ locationId, userId, initialConversationId }) {
                 </div>
 
                 <div className="flex items-center gap-4 mt-3">
-                  <label className="flex items-center gap-2 text-xs text-un1t-light cursor-pointer">
+                  <label className="flex items-center gap-2 text-xs text-un1t-subtle cursor-pointer">
                     <input
                       type="checkbox"
                       checked={addContactForm.add_to_pipeline}
                       onChange={e => setAddContactForm({ ...addContactForm, add_to_pipeline: e.target.checked })}
-                      className="rounded border-un1t-gray"
+                      className="rounded border-un1t-border"
                     />
                     Add to pipeline
                   </label>
                   <div className="flex-1" />
                   <button
                     onClick={() => setShowAddContact(false)}
-                    className="text-xs text-un1t-light hover:text-un1t-white px-3 py-1.5 transition-colors"
+                    className="text-xs text-un1t-subtle hover:text-un1t-text px-3 py-1.5 transition-colors"
                   >
                     Cancel
                   </button>
@@ -536,8 +536,8 @@ export default function WAInbox({ locationId, userId, initialConversationId }) {
                 >
                   <div className={`max-w-[65%] rounded-lg px-3 py-2 ${
                     msg.direction === 'outbound'
-                      ? 'bg-[#005c4b] text-un1t-white'
-                      : 'bg-un1t-dark text-un1t-white'
+                      ? 'bg-[#005c4b] text-un1t-text'
+                      : 'bg-un1t-surface text-un1t-text'
                   }`}>
                     {msg.message_type === 'template' && (
                       <p className="text-[10px] text-green-300 mb-1">Template: {msg.template_name}</p>
@@ -545,7 +545,7 @@ export default function WAInbox({ locationId, userId, initialConversationId }) {
                     <MessageTypeIcon type={msg.message_type} />
                     <p className="text-sm whitespace-pre-wrap">{msg.body || `[${msg.message_type}]`}</p>
                     <div className="flex items-center justify-end gap-1 mt-0.5">
-                      <span className="text-[10px] text-un1t-white/50">
+                      <span className="text-[10px] text-un1t-text/50">
                         {new Date(msg.sent_at || msg.created_at).toLocaleTimeString('en-IE', { hour: '2-digit', minute: '2-digit' })}
                       </span>
                       {msg.direction === 'outbound' && <StatusIcon status={msg.status} />}
@@ -557,7 +557,7 @@ export default function WAInbox({ locationId, userId, initialConversationId }) {
             </div>
 
             {/* Message input / Template picker */}
-            <div className="border-t border-un1t-gray bg-un1t-dark shrink-0">
+            <div className="border-t border-un1t-border bg-un1t-surface shrink-0">
               {windowOpen ? (
                 /* Normal text input when window is open */
                 <div className="px-4 py-3">
@@ -568,14 +568,14 @@ export default function WAInbox({ locationId, userId, initialConversationId }) {
                       onChange={e => setNewMessage(e.target.value)}
                       onKeyDown={e => e.key === 'Enter' && !e.shiftKey && handleSend()}
                       placeholder="Type a message..."
-                      className="flex-1 bg-un1t-black border border-un1t-gray rounded-full px-4 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid"
+                      className="flex-1 bg-un1t-bg border border-un1t-border rounded-full px-4 py-2 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted"
                     />
                     <button
                       onClick={handleSend}
                       disabled={sending || !newMessage.trim()}
                       className="w-10 h-10 bg-green-600 rounded-full flex items-center justify-center hover:bg-green-700 transition-colors disabled:opacity-50"
                     >
-                      <Send size={16} className="text-un1t-white ml-0.5" />
+                      <Send size={16} className="text-un1t-text ml-0.5" />
                     </button>
                   </div>
                 </div>
@@ -600,13 +600,13 @@ export default function WAInbox({ locationId, userId, initialConversationId }) {
                   {showTemplatePicker && !selectedTemplate && (
                     <div>
                       <div className="flex items-center justify-between mb-2">
-                        <p className="text-xs text-un1t-light font-semibold uppercase tracking-wider">Select a template</p>
-                        <button onClick={() => setShowTemplatePicker(false)} className="text-un1t-light hover:text-un1t-white">
+                        <p className="text-xs text-un1t-subtle font-semibold uppercase tracking-wider">Select a template</p>
+                        <button onClick={() => setShowTemplatePicker(false)} className="text-un1t-subtle hover:text-un1t-text">
                           <X size={14} />
                         </button>
                       </div>
                       {templates.length === 0 ? (
-                        <p className="text-xs text-un1t-mid py-2">No approved templates available. Create one in WhatsApp → Templates.</p>
+                        <p className="text-xs text-un1t-muted py-2">No approved templates available. Create one in WhatsApp → Templates.</p>
                       ) : (
                         <div className="space-y-1 max-h-48 overflow-auto">
                           {templates.map(t => {
@@ -615,10 +615,10 @@ export default function WAInbox({ locationId, userId, initialConversationId }) {
                               <button
                                 key={t.id}
                                 onClick={() => selectTemplate(t)}
-                                className="w-full text-left px-3 py-2 rounded-md hover:bg-un1t-gray/30 transition-colors"
+                                className="w-full text-left px-3 py-2 rounded-md hover:bg-un1t-border/30 transition-colors"
                               >
                                 <p className="text-sm font-medium">{t.name}</p>
-                                <p className="text-xs text-un1t-mid truncate mt-0.5">
+                                <p className="text-xs text-un1t-muted truncate mt-0.5">
                                   {bodyComp?.text || 'No body text'}
                                 </p>
                               </button>
@@ -632,12 +632,12 @@ export default function WAInbox({ locationId, userId, initialConversationId }) {
                   {selectedTemplate && (
                     <div>
                       <div className="flex items-center justify-between mb-2">
-                        <p className="text-xs text-un1t-light font-semibold uppercase tracking-wider">
+                        <p className="text-xs text-un1t-subtle font-semibold uppercase tracking-wider">
                           Template: {selectedTemplate.name}
                         </p>
                         <button
                           onClick={() => { setSelectedTemplate(null); setShowTemplatePicker(true) }}
-                          className="text-xs text-un1t-light hover:text-un1t-white"
+                          className="text-xs text-un1t-subtle hover:text-un1t-text"
                         >
                           Change
                         </button>
@@ -645,7 +645,7 @@ export default function WAInbox({ locationId, userId, initialConversationId }) {
 
                       {/* Template preview */}
                       <div className="bg-[#005c4b] rounded-lg px-3 py-2 mb-3 max-w-[80%]">
-                        <p className="text-sm text-un1t-white whitespace-pre-wrap">
+                        <p className="text-sm text-un1t-text whitespace-pre-wrap">
                           {(() => {
                             const bodyComp = selectedTemplate.components?.find(c => c.type === 'BODY')
                             let text = bodyComp?.text || ''
@@ -670,13 +670,13 @@ export default function WAInbox({ locationId, userId, initialConversationId }) {
                               const num = String(i + 1)
                               return (
                                 <div key={num} className="flex items-center gap-2">
-                                  <span className="text-xs text-un1t-mid w-10">{`{{${num}}}`}</span>
+                                  <span className="text-xs text-un1t-muted w-10">{`{{${num}}}`}</span>
                                   <input
                                     type="text"
                                     value={templateVars[num] || ''}
                                     onChange={e => setTemplateVars({ ...templateVars, [num]: e.target.value })}
                                     placeholder={num === '1' ? 'e.g. first name' : `Variable ${num}`}
-                                    className="flex-1 bg-un1t-black border border-un1t-gray rounded-md px-3 py-1.5 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid"
+                                    className="flex-1 bg-un1t-bg border border-un1t-border rounded-md px-3 py-1.5 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted"
                                   />
                                 </div>
                               )

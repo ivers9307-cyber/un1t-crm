@@ -20,7 +20,7 @@ export default function BcaIntegrationTab({ location, canEdit, sampleCar }) {
 
   if (!canEdit) {
     return (
-      <div className="text-xs text-un1t-light">
+      <div className="text-xs text-un1t-subtle">
         Only a master account can edit BCA Submit configuration. View-only mode is not implemented yet.
       </div>
     )

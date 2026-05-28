@@ -93,40 +93,40 @@ export default function XeroAccountPicker({ locationId, value, onChange, label =
 
   return (
     <div className="block" ref={wrapRef}>
-      <span className="text-xs uppercase tracking-wide text-un1t-light">{label}</span>
+      <span className="text-xs uppercase tracking-wide text-un1t-subtle">{label}</span>
       <div className="relative mt-1">
         <button
           type="button"
           onClick={() => setOpen((v) => !v)}
-          className="w-full bg-un1t-black border border-un1t-grey rounded-md px-2 py-1.5 text-sm text-un1t-white text-left inline-flex items-center justify-between gap-2"
+          className="w-full bg-un1t-bg border border-un1t-grey rounded-md px-2 py-1.5 text-sm text-un1t-text text-left inline-flex items-center justify-between gap-2"
         >
-          <span className={selected ? '' : 'text-un1t-light'}>{buttonLabel}</span>
-          <ChevronDown size={14} className="shrink-0 text-un1t-light" />
+          <span className={selected ? '' : 'text-un1t-subtle'}>{buttonLabel}</span>
+          <ChevronDown size={14} className="shrink-0 text-un1t-subtle" />
         </button>
 
         {open && (
-          <div className="absolute z-20 mt-1 w-full bg-un1t-black border border-un1t-grey rounded-md shadow-xl max-h-72 overflow-hidden flex flex-col">
+          <div className="absolute z-20 mt-1 w-full bg-un1t-bg border border-un1t-grey rounded-md shadow-xl max-h-72 overflow-hidden flex flex-col">
             <div className="flex items-center gap-1 px-2 py-1.5 border-b border-un1t-grey/50">
-              <Search size={12} className="text-un1t-light" />
+              <Search size={12} className="text-un1t-subtle" />
               <input
                 autoFocus
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 placeholder="Search code or name…"
-                className="flex-1 bg-transparent text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none"
+                className="flex-1 bg-transparent text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none"
               />
             </div>
             {error && (
               <div className="p-2 text-xs text-red-400">{error}</div>
             )}
             {!error && accounts.length === 0 && !loading && (
-              <div className="p-2 text-xs text-un1t-light">
+              <div className="p-2 text-xs text-un1t-subtle">
                 No accounts cached. Press <strong>Refresh</strong> on the Xero card in
                 {' '}<a className="underline" href={`/settings/locations/${locationId}`} target="_blank" rel="noreferrer">Settings</a>.
               </div>
             )}
             {!error && filtered.length === 0 && query && (
-              <div className="p-2 text-xs text-un1t-light">No matches for &ldquo;{query}&rdquo;.</div>
+              <div className="p-2 text-xs text-un1t-subtle">No matches for &ldquo;{query}&rdquo;.</div>
             )}
             <ul className="overflow-y-auto">
               {filtered.map((a) => (
@@ -140,12 +140,12 @@ export default function XeroAccountPicker({ locationId, value, onChange, label =
                     }}
                     className={`w-full text-left px-2 py-1.5 text-sm hover:bg-un1t-grey/30 ${selected?.xero_account_id === a.xero_account_id ? 'bg-un1t-grey/40' : ''}`}
                   >
-                    <div className="text-un1t-white">
-                      {a.code && <span className="text-un1t-light mr-1">{a.code}</span>}
+                    <div className="text-un1t-text">
+                      {a.code && <span className="text-un1t-subtle mr-1">{a.code}</span>}
                       {a.name}
                     </div>
                     {a.tax_type && (
-                      <div className="text-[10px] text-un1t-light">Tax: {a.tax_type}</div>
+                      <div className="text-[10px] text-un1t-subtle">Tax: {a.tax_type}</div>
                     )}
                   </button>
                 </li>

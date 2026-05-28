@@ -20,7 +20,7 @@ export default async function StudioManagementPage() {
     <div className="p-6 max-w-3xl">
       <div className="mb-6">
         <h2 className="text-2xl font-bold">Studio management</h2>
-        <p className="text-sm text-un1t-light mt-1">
+        <p className="text-sm text-un1t-subtle mt-1">
           On-site actions for {user.activeLocation?.name || 'your active location'}.
         </p>
       </div>

@@ -77,7 +77,7 @@ export default function NotificationConfigCard({ locationId, callerRole }) {
 
   if (loading) {
     return (
-      <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-4 text-sm text-un1t-light inline-flex items-center gap-2">
+      <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4 text-sm text-un1t-subtle inline-flex items-center gap-2">
         <Loader2 size={14} className="animate-spin" /> Loading notification config…
       </div>
     )
@@ -120,7 +120,7 @@ export default function NotificationConfigCard({ locationId, callerRole }) {
         />
       ))}
       {!editable && (
-        <p className="text-[11px] text-un1t-mid">
+        <p className="text-[11px] text-un1t-muted">
           Read-only — only owners and masters can edit notification config.
         </p>
       )}
@@ -182,14 +182,14 @@ function CategoryEditor({ meta, slice, savedSlice, editable, locationId, onChang
   }
 
   return (
-    <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-4">
+    <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
       <div className="flex items-start justify-between mb-2">
         <div>
           <div className="flex items-center gap-2">
-            <Bell size={14} className="text-un1t-light" />
-            <h4 className="text-sm font-semibold text-un1t-white">{meta.label}</h4>
+            <Bell size={14} className="text-un1t-subtle" />
+            <h4 className="text-sm font-semibold text-un1t-text">{meta.label}</h4>
           </div>
-          <p className="text-xs text-un1t-light mt-0.5">{meta.description}</p>
+          <p className="text-xs text-un1t-subtle mt-0.5">{meta.description}</p>
         </div>
         {savedAt && (
           <span className="text-[11px] text-emerald-400 inline-flex items-center gap-1">
@@ -200,7 +200,7 @@ function CategoryEditor({ meta, slice, savedSlice, editable, locationId, onChang
 
       {meta.configurable.leadTimes && (
         <div className="mt-3">
-          <label className="block text-[11px] uppercase tracking-wider text-un1t-light mb-1.5">
+          <label className="block text-[11px] uppercase tracking-wider text-un1t-subtle mb-1.5">
             Lead times
           </label>
           <LeadTimeEditor
@@ -213,7 +213,7 @@ function CategoryEditor({ meta, slice, savedSlice, editable, locationId, onChang
 
       {meta.configurable.roles && (
         <div className="mt-3">
-          <label className="block text-[11px] uppercase tracking-wider text-un1t-light mb-1.5">
+          <label className="block text-[11px] uppercase tracking-wider text-un1t-subtle mb-1.5">
             Notify these roles
           </label>
           <RoleEditor
@@ -242,7 +242,7 @@ function CategoryEditor({ meta, slice, savedSlice, editable, locationId, onChang
             type="button"
             onClick={save}
             disabled={saving || sliceErrors.length > 0}
-            className="text-xs bg-un1t-white text-un1t-black font-medium px-3 py-1.5 rounded hover:bg-un1t-accent disabled:opacity-50"
+            className="text-xs bg-un1t-text text-un1t-bg font-medium px-3 py-1.5 rounded hover:bg-un1t-accent disabled:opacity-50"
           >
             {saving ? 'Saving…' : 'Save'}
           </button>
@@ -250,7 +250,7 @@ function CategoryEditor({ meta, slice, savedSlice, editable, locationId, onChang
             type="button"
             onClick={cancel}
             disabled={saving}
-            className="text-xs text-un1t-light hover:text-un1t-white px-3 py-1.5 rounded"
+            className="text-xs text-un1t-subtle hover:text-un1t-text px-3 py-1.5 rounded"
           >
             Cancel
           </button>
@@ -281,19 +281,19 @@ function LeadTimeEditor({ values, editable, onChange }) {
     <div>
       <div className="flex flex-wrap gap-1.5">
         {values.length === 0 && (
-          <span className="text-xs text-un1t-mid italic">No reminders configured.</span>
+          <span className="text-xs text-un1t-muted italic">No reminders configured.</span>
         )}
         {values.map((v, i) => (
           <span
             key={`${v}-${i}`}
-            className="inline-flex items-center gap-1 bg-un1t-gray/40 border border-un1t-gray rounded-full px-2 py-0.5 text-xs text-un1t-white"
+            className="inline-flex items-center gap-1 bg-un1t-border/40 border border-un1t-border rounded-full px-2 py-0.5 text-xs text-un1t-text"
           >
             {formatLeadTime(v)}
             {editable && (
               <button
                 type="button"
                 onClick={() => remove(i)}
-                className="text-un1t-light hover:text-un1t-white"
+                className="text-un1t-subtle hover:text-un1t-text"
                 aria-label={`Remove ${formatLeadTime(v)}`}
               >
                 <X size={10} />
@@ -309,12 +309,12 @@ function LeadTimeEditor({ values, editable, onChange }) {
               key={p}
               type="button"
               onClick={() => add(p)}
-              className="text-[11px] text-un1t-light hover:text-un1t-white border border-un1t-gray rounded px-2 py-0.5 inline-flex items-center gap-1"
+              className="text-[11px] text-un1t-subtle hover:text-un1t-text border border-un1t-border rounded px-2 py-0.5 inline-flex items-center gap-1"
             >
               <Plus size={10} /> {formatLeadTime(p)}
             </button>
           ))}
-          <span className="text-[11px] text-un1t-mid">or custom min:</span>
+          <span className="text-[11px] text-un1t-muted">or custom min:</span>
           <input
             type="number"
             min={LEAD_TIME_MIN_MINUTES}
@@ -322,13 +322,13 @@ function LeadTimeEditor({ values, editable, onChange }) {
             value={customMin}
             onChange={(e) => setCustomMin(e.target.value)}
             placeholder="e.g. 45"
-            className="w-20 bg-un1t-black border border-un1t-gray rounded px-2 py-0.5 text-[11px] text-un1t-white"
+            className="w-20 bg-un1t-bg border border-un1t-border rounded px-2 py-0.5 text-[11px] text-un1t-text"
           />
           <button
             type="button"
             onClick={addCustom}
             disabled={!customMin}
-            className="text-[11px] text-un1t-light hover:text-un1t-white border border-un1t-gray rounded px-2 py-0.5 disabled:opacity-40"
+            className="text-[11px] text-un1t-subtle hover:text-un1t-text border border-un1t-border rounded px-2 py-0.5 disabled:opacity-40"
           >
             Add
           </button>
@@ -345,13 +345,13 @@ function RoleEditor({ values, editable, onChange }) {
   return (
     <div className="flex flex-wrap gap-3">
       {VALID_NOTIFY_ROLES.map(role => (
-        <label key={role} className="inline-flex items-center gap-1.5 text-xs text-un1t-white cursor-pointer">
+        <label key={role} className="inline-flex items-center gap-1.5 text-xs text-un1t-text cursor-pointer">
           <input
             type="checkbox"
             checked={values.includes(role)}
             onChange={() => toggle(role)}
             disabled={!editable}
-            className="accent-un1t-white"
+            className="accent-un1t-text"
           />
           {ROLE_LABELS[role] || role}
         </label>

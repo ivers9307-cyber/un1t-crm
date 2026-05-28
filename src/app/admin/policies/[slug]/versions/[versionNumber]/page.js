@@ -69,7 +69,7 @@ export default async function AdminPolicyVersionPage({ params }) {
 
   return (
     <div className="p-6 md:p-8 max-w-5xl">
-      <Link href={`/admin/policies/${slug}`} className="inline-flex items-center gap-1 text-xs text-un1t-light hover:text-un1t-white mb-4">
+      <Link href={`/admin/policies/${slug}`} className="inline-flex items-center gap-1 text-xs text-un1t-subtle hover:text-un1t-text mb-4">
         <ChevronLeft size={12} /> {policy.title} — version history
       </Link>
 
@@ -81,13 +81,13 @@ export default async function AdminPolicyVersionPage({ params }) {
           </span>
         )}
       </div>
-      <div className="text-xs text-un1t-light mb-4">
+      <div className="text-xs text-un1t-subtle mb-4">
         Effective {version.effective_date} · published {fmtDateTime(version.published_at)}
         {version.change_summary && <> · {version.change_summary}</>}
       </div>
 
-      <details className="border border-un1t-gray rounded-lg mb-6">
-        <summary className="px-4 py-3 text-sm cursor-pointer hover:bg-un1t-gray/30">
+      <details className="border border-un1t-border rounded-lg mb-6">
+        <summary className="px-4 py-3 text-sm cursor-pointer hover:bg-un1t-border/30">
           View body ({version.body_markdown.length.toLocaleString()} characters)
         </summary>
         <article className="bg-white text-gray-900 p-6">
@@ -102,19 +102,19 @@ export default async function AdminPolicyVersionPage({ params }) {
           accrues. */}
       {hotSections.length > 0 && (
         <section className="mb-6">
-          <h3 className="text-xs uppercase tracking-wider text-un1t-light font-semibold mb-3 inline-flex items-center gap-2">
+          <h3 className="text-xs uppercase tracking-wider text-un1t-subtle font-semibold mb-3 inline-flex items-center gap-2">
             <Flame size={12} className="text-amber-700" /> Hot sections
           </h3>
-          <div className="border border-un1t-gray rounded-lg overflow-hidden">
+          <div className="border border-un1t-border rounded-lg overflow-hidden">
             {hotSections.slice(0, 10).map((s, i) => (
               <div
                 key={s.section}
                 className={`px-4 py-2 text-xs flex items-center justify-between gap-3 ${
-                  i < hotSections.length - 1 ? 'border-b border-un1t-gray' : ''
+                  i < hotSections.length - 1 ? 'border-b border-un1t-border' : ''
                 }`}
               >
-                <span className="text-un1t-white truncate flex-1">{s.section}</span>
-                <span className="text-un1t-light tabular-nums whitespace-nowrap">
+                <span className="text-un1t-text truncate flex-1">{s.section}</span>
+                <span className="text-un1t-subtle tabular-nums whitespace-nowrap">
                   {fmtDuration(s.total_seconds)} total · avg {fmtDuration(s.avg_seconds)} across {s.sessions} sessions
                 </span>
               </div>
@@ -125,22 +125,22 @@ export default async function AdminPolicyVersionPage({ params }) {
 
       <section className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <div>
-          <h3 className="text-xs uppercase tracking-wider text-un1t-light font-semibold mb-3 inline-flex items-center gap-2">
+          <h3 className="text-xs uppercase tracking-wider text-un1t-subtle font-semibold mb-3 inline-flex items-center gap-2">
             <Eye size={12} className="text-emerald-700" /> Opened ({viewers.length})
           </h3>
-          <div className="border border-un1t-gray rounded-lg overflow-hidden">
+          <div className="border border-un1t-border rounded-lg overflow-hidden">
             {viewers.length === 0 && (
-              <div className="px-4 py-6 text-center text-sm text-un1t-mid">No one has opened this version yet.</div>
+              <div className="px-4 py-6 text-center text-sm text-un1t-muted">No one has opened this version yet.</div>
             )}
             {viewers.map((v, i) => (
-              <div key={v.profile_id} className={`px-4 py-2 text-xs ${i < viewers.length - 1 ? 'border-b border-un1t-gray' : ''}`}>
+              <div key={v.profile_id} className={`px-4 py-2 text-xs ${i < viewers.length - 1 ? 'border-b border-un1t-border' : ''}`}>
                 <div className="flex items-center justify-between gap-2">
-                  <span className="text-un1t-white truncate">{v.full_name || '—'}</span>
-                  <span className="text-un1t-light tabular-nums whitespace-nowrap">
+                  <span className="text-un1t-text truncate">{v.full_name || '—'}</span>
+                  <span className="text-un1t-subtle tabular-nums whitespace-nowrap">
                     {v.session_count} {v.session_count === 1 ? 'session' : 'sessions'} · {fmtDuration(v.total_seconds)}
                   </span>
                 </div>
-                <div className="text-un1t-mid">
+                <div className="text-un1t-muted">
                   {v.email} · last {fmtDateTime(v.latest_at)} · {v.latest_via}
                 </div>
               </div>
@@ -149,17 +149,17 @@ export default async function AdminPolicyVersionPage({ params }) {
         </div>
 
         <div>
-          <h3 className="text-xs uppercase tracking-wider text-un1t-light font-semibold mb-3 inline-flex items-center gap-2">
+          <h3 className="text-xs uppercase tracking-wider text-un1t-subtle font-semibold mb-3 inline-flex items-center gap-2">
             <AlertCircle size={12} className="text-amber-700" /> Haven't opened ({outstanding.length})
           </h3>
-          <div className="border border-un1t-gray rounded-lg overflow-hidden">
+          <div className="border border-un1t-border rounded-lg overflow-hidden">
             {outstanding.length === 0 && (
-              <div className="px-4 py-6 text-center text-sm text-un1t-mid">Everyone has opened this version.</div>
+              <div className="px-4 py-6 text-center text-sm text-un1t-muted">Everyone has opened this version.</div>
             )}
             {outstanding.map((s, i) => (
-              <div key={s.id} className={`px-4 py-2 text-xs ${i < outstanding.length - 1 ? 'border-b border-un1t-gray' : ''}`}>
-                <div className="text-un1t-white">{s.full_name || '—'}</div>
-                <div className="text-un1t-mid">{s.email}</div>
+              <div key={s.id} className={`px-4 py-2 text-xs ${i < outstanding.length - 1 ? 'border-b border-un1t-border' : ''}`}>
+                <div className="text-un1t-text">{s.full_name || '—'}</div>
+                <div className="text-un1t-muted">{s.email}</div>
               </div>
             ))}
           </div>

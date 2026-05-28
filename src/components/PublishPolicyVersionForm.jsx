@@ -66,38 +66,38 @@ export default function PublishPolicyVersionForm({ slug, nextVersionNumber }) {
   }
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-3 border border-un1t-gray rounded-lg p-4">
-      <div className="text-xs text-un1t-light">
+    <form onSubmit={handleSubmit} className="space-y-3 border border-un1t-border rounded-lg p-4">
+      <div className="text-xs text-un1t-subtle">
         Publishing as <strong>v{nextVersionNumber}</strong>. Once published, the previous version
         becomes archived and every active employee will be prompted to read and
         re-acknowledge the new version.
       </div>
 
       <div>
-        <label className="block text-xs uppercase tracking-wider text-un1t-light mb-1">Body</label>
+        <label className="block text-xs uppercase tracking-wider text-un1t-subtle mb-1">Body</label>
         <textarea
           rows={16}
           value={bodyMarkdown}
           onChange={(e) => setBodyMarkdown(e.target.value)}
           placeholder="Paste the policy text here. Plain text with ALL-CAPS headings and numbered sections renders best."
-          className="w-full bg-un1t-dark border border-un1t-gray rounded-md p-3 text-sm font-mono text-un1t-white"
+          className="w-full bg-un1t-surface border border-un1t-border rounded-md p-3 text-sm font-mono text-un1t-text"
         />
-        <div className="text-[10px] text-un1t-mid mt-1">{bodyMarkdown.length.toLocaleString()} / 200,000 characters</div>
+        <div className="text-[10px] text-un1t-muted mt-1">{bodyMarkdown.length.toLocaleString()} / 200,000 characters</div>
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <div>
-          <label className="block text-xs uppercase tracking-wider text-un1t-light mb-1">Effective date</label>
+          <label className="block text-xs uppercase tracking-wider text-un1t-subtle mb-1">Effective date</label>
           <input
             type="date"
             value={effectiveDate}
             onChange={(e) => setEffectiveDate(e.target.value)}
-            className="w-full bg-un1t-dark border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
+            className="w-full bg-un1t-surface border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
           />
         </div>
         <div>
-          <label className="block text-xs uppercase tracking-wider text-un1t-light mb-1">
-            Change summary <span className="text-un1t-mid normal-case tracking-normal">(optional, shown to staff)</span>
+          <label className="block text-xs uppercase tracking-wider text-un1t-subtle mb-1">
+            Change summary <span className="text-un1t-muted normal-case tracking-normal">(optional, shown to staff)</span>
           </label>
           <input
             type="text"
@@ -105,7 +105,7 @@ export default function PublishPolicyVersionForm({ slug, nextVersionNumber }) {
             onChange={(e) => setChangeSummary(e.target.value)}
             placeholder="e.g. Updated sick-pay procedure to match Sick Leave Act 2022."
             maxLength={2000}
-            className="w-full bg-un1t-dark border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
+            className="w-full bg-un1t-surface border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
           />
         </div>
       </div>
@@ -120,7 +120,7 @@ export default function PublishPolicyVersionForm({ slug, nextVersionNumber }) {
         <button
           type="submit"
           disabled={busy}
-          className="inline-flex items-center gap-2 bg-un1t-white text-un1t-black px-4 py-2 rounded-md text-sm font-medium hover:bg-un1t-accent disabled:opacity-50"
+          className="inline-flex items-center gap-2 bg-un1t-text text-un1t-bg px-4 py-2 rounded-md text-sm font-medium hover:bg-un1t-accent disabled:opacity-50"
         >
           {busy ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
           {busy ? 'Publishing…' : `Publish v${nextVersionNumber}`}

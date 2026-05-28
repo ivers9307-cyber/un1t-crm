@@ -95,21 +95,21 @@ export default function AssistantBubble({ user }) {
     <>
       {/* Chat Panel */}
       {isOpen && (
-        <div className="fixed bottom-20 right-6 w-96 h-[520px] bg-un1t-dark border border-un1t-gray rounded-2xl shadow-2xl flex flex-col z-50 overflow-hidden">
+        <div className="fixed bottom-20 right-6 w-96 h-[520px] bg-un1t-surface border border-un1t-border rounded-2xl shadow-2xl flex flex-col z-50 overflow-hidden">
           {/* Header */}
-          <div className="flex items-center justify-between px-4 py-3 border-b border-un1t-gray bg-un1t-dark">
+          <div className="flex items-center justify-between px-4 py-3 border-b border-un1t-border bg-un1t-surface">
             <div className="flex items-center gap-2">
               <div className="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center">
                 <Sparkles size={16} className="text-white" />
               </div>
               <div>
                 <span className="text-sm font-semibold">UN1T Assistant</span>
-                <p className="text-[10px] text-un1t-light">Powered by Claude</p>
+                <p className="text-[10px] text-un1t-subtle">Powered by Claude</p>
               </div>
             </div>
             <button
               onClick={() => setIsOpen(false)}
-              className="p-1.5 rounded-lg hover:bg-un1t-gray/50 text-un1t-light hover:text-un1t-white transition-colors"
+              className="p-1.5 rounded-lg hover:bg-un1t-border/50 text-un1t-subtle hover:text-un1t-text transition-colors"
             >
               <X size={18} />
             </button>
@@ -124,7 +124,7 @@ export default function AssistantBubble({ user }) {
                   <div className="w-7 h-7 rounded-full bg-blue-600 flex items-center justify-center shrink-0 mt-0.5">
                     <Bot size={14} className="text-white" />
                   </div>
-                  <div className="bg-un1t-gray/30 rounded-xl rounded-tl-sm px-3 py-2.5 text-sm max-w-[280px]">
+                  <div className="bg-un1t-border/30 rounded-xl rounded-tl-sm px-3 py-2.5 text-sm max-w-[280px]">
                     Hi {user?.full_name?.split(' ')[0] || 'there'}! I'm your UN1T assistant. I can help you navigate the CRM, answer questions, or take actions for you. What can I help with?
                   </div>
                 </div>
@@ -135,7 +135,7 @@ export default function AssistantBubble({ user }) {
                     <button
                       key={i}
                       onClick={() => sendMessage(s)}
-                      className="text-xs px-3 py-1.5 rounded-full border border-un1t-gray text-un1t-light hover:text-un1t-white hover:border-un1t-white/30 transition-colors"
+                      className="text-xs px-3 py-1.5 rounded-full border border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-text/30 transition-colors"
                     >
                       {s}
                     </button>
@@ -155,14 +155,14 @@ export default function AssistantBubble({ user }) {
                   className={`rounded-xl px-3 py-2.5 text-sm max-w-[280px] whitespace-pre-wrap ${
                     msg.role === 'user'
                       ? 'bg-blue-600 text-white rounded-tr-sm'
-                      : 'bg-un1t-gray/30 rounded-tl-sm'
+                      : 'bg-un1t-border/30 rounded-tl-sm'
                   }`}
                 >
                   {msg.content}
                 </div>
                 {msg.role === 'user' && (
-                  <div className="w-7 h-7 rounded-full bg-un1t-gray flex items-center justify-center shrink-0 mt-0.5">
-                    <User size={14} className="text-un1t-white" />
+                  <div className="w-7 h-7 rounded-full bg-un1t-border flex items-center justify-center shrink-0 mt-0.5">
+                    <User size={14} className="text-un1t-text" />
                   </div>
                 )}
               </div>
@@ -173,8 +173,8 @@ export default function AssistantBubble({ user }) {
                 <div className="w-7 h-7 rounded-full bg-blue-600 flex items-center justify-center shrink-0">
                   <Bot size={14} className="text-white" />
                 </div>
-                <div className="bg-un1t-gray/30 rounded-xl rounded-tl-sm px-4 py-3">
-                  <Loader2 size={16} className="animate-spin text-un1t-light" />
+                <div className="bg-un1t-border/30 rounded-xl rounded-tl-sm px-4 py-3">
+                  <Loader2 size={16} className="animate-spin text-un1t-subtle" />
                 </div>
               </div>
             )}
@@ -183,7 +183,7 @@ export default function AssistantBubble({ user }) {
           </div>
 
           {/* Input */}
-          <div className="border-t border-un1t-gray p-3">
+          <div className="border-t border-un1t-border p-3">
             <div className="flex items-center gap-2">
               <input
                 ref={inputRef}
@@ -192,7 +192,7 @@ export default function AssistantBubble({ user }) {
                 onChange={e => setInput(e.target.value)}
                 onKeyDown={handleKeyDown}
                 placeholder="Ask me anything..."
-                className="flex-1 bg-un1t-black border border-un1t-gray rounded-lg px-3 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid"
+                className="flex-1 bg-un1t-bg border border-un1t-border rounded-lg px-3 py-2 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted"
                 disabled={loading}
               />
               <button
@@ -203,7 +203,7 @@ export default function AssistantBubble({ user }) {
                 <Send size={16} />
               </button>
             </div>
-            <p className="text-[10px] text-un1t-mid mt-1.5 text-center">
+            <p className="text-[10px] text-un1t-muted mt-1.5 text-center">
               Currently on: {pathname}
             </p>
           </div>
@@ -215,12 +215,12 @@ export default function AssistantBubble({ user }) {
         onClick={() => setIsOpen(!isOpen)}
         className={`fixed bottom-6 right-6 w-14 h-14 rounded-full shadow-lg flex items-center justify-center transition-all z-50 ${
           isOpen
-            ? 'bg-un1t-gray hover:bg-un1t-gray/80'
+            ? 'bg-un1t-border hover:bg-un1t-border/80'
             : 'bg-blue-600 hover:bg-blue-500 hover:scale-105'
         }`}
       >
         {isOpen ? (
-          <X size={22} className="text-un1t-white" />
+          <X size={22} className="text-un1t-text" />
         ) : (
           <MessageCircle size={22} className="text-white" />
         )}

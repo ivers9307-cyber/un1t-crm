@@ -30,7 +30,7 @@ export default async function PoliciesPage() {
   return (
     <div className="p-6 md:p-8 max-w-3xl">
       <h2 className="text-2xl font-bold mb-1">Policies</h2>
-      <p className="text-sm text-un1t-light mb-6">
+      <p className="text-sm text-un1t-subtle mb-6">
         The policies that apply to you. We track when each one is opened
         so we know what's been read; you don't need to actively
         acknowledge anything — just have a look.
@@ -43,9 +43,9 @@ export default async function PoliciesPage() {
         </div>
       )}
 
-      <div className="border border-un1t-gray rounded-lg overflow-hidden">
+      <div className="border border-un1t-border rounded-lg overflow-hidden">
         {policies.length === 0 && (
-          <div className="px-4 py-8 text-center text-sm text-un1t-mid">
+          <div className="px-4 py-8 text-center text-sm text-un1t-muted">
             No policies published yet.
           </div>
         )}
@@ -56,25 +56,25 @@ export default async function PoliciesPage() {
             <Link
               key={p.id}
               href={`/policies/${p.slug}`}
-              className={`flex items-center gap-4 px-4 py-3 hover:bg-un1t-gray/30 transition-colors ${
-                i < policies.length - 1 ? 'border-b border-un1t-gray' : ''
+              className={`flex items-center gap-4 px-4 py-3 hover:bg-un1t-border/30 transition-colors ${
+                i < policies.length - 1 ? 'border-b border-un1t-border' : ''
               }`}
             >
-              <FileText size={18} className="text-un1t-light shrink-0" />
+              <FileText size={18} className="text-un1t-subtle shrink-0" />
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
-                  <span className="text-sm text-un1t-white font-medium truncate">{p.title}</span>
+                  <span className="text-sm text-un1t-text font-medium truncate">{p.title}</span>
                   {ver && (
-                    <span className="text-[10px] uppercase tracking-wider text-un1t-mid">
+                    <span className="text-[10px] uppercase tracking-wider text-un1t-muted">
                       v{ver.version_number}
                     </span>
                   )}
                 </div>
                 {p.description && (
-                  <div className="text-xs text-un1t-light truncate">{p.description}</div>
+                  <div className="text-xs text-un1t-subtle truncate">{p.description}</div>
                 )}
                 {ver && (
-                  <div className="text-[10px] text-un1t-mid mt-0.5">
+                  <div className="text-[10px] text-un1t-muted mt-0.5">
                     Effective {fmtDate(ver.effective_date)}
                   </div>
                 )}
@@ -88,7 +88,7 @@ export default async function PoliciesPage() {
                   <AlertCircle size={12} /> Not opened
                 </span>
               )}
-              <ChevronRight size={14} className="text-un1t-mid shrink-0" />
+              <ChevronRight size={14} className="text-un1t-muted shrink-0" />
             </Link>
           )
         })}

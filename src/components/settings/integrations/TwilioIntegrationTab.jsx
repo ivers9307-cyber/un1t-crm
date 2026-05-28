@@ -46,7 +46,7 @@ export default function TwilioIntegrationTab({ location, canEdit }) {
 
   if (!canEdit) {
     return (
-      <div className="text-xs text-un1t-light">
+      <div className="text-xs text-un1t-subtle">
         Only owners + masters can edit the Twilio sender ID.
       </div>
     )
@@ -54,12 +54,12 @@ export default function TwilioIntegrationTab({ location, canEdit }) {
 
   return (
     <div className="space-y-4">
-      <p className="text-xs text-un1t-light">
+      <p className="text-xs text-un1t-subtle">
         Twilio account credentials (Account SID + Auth Token) are global env vars
         managed in Vercel. Only the per-location <strong>alpha sender ID</strong> is
         configured here — that's the branded name (max 11 alphanumeric chars) shown on
         recipients' phones for SMS sent from this location. Leave blank to use the
-        global <code className="text-[10px] mx-1 px-1 bg-un1t-black/40 rounded">TWILIO_FROM</code> fallback.
+        global <code className="text-[10px] mx-1 px-1 bg-un1t-bg/40 rounded">TWILIO_FROM</code> fallback.
       </p>
 
       {error && (
@@ -74,7 +74,7 @@ export default function TwilioIntegrationTab({ location, canEdit }) {
       )}
 
       <div>
-        <label className="block text-xs text-un1t-light mb-1">Alpha Sender ID</label>
+        <label className="block text-xs text-un1t-subtle mb-1">Alpha Sender ID</label>
         <input
           type="text"
           value={senderId}
@@ -82,21 +82,21 @@ export default function TwilioIntegrationTab({ location, canEdit }) {
           placeholder="e.g. UN1T or UN1THATCH"
           maxLength={11}
           pattern="[A-Za-z0-9]*"
-          className="w-full max-w-xs bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm font-mono text-un1t-white"
+          className="w-full max-w-xs bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm font-mono text-un1t-text"
         />
-        <p className="text-[11px] text-un1t-mid mt-1">
+        <p className="text-[11px] text-un1t-muted mt-1">
           Max 11 chars, alphanumeric only (no spaces or punctuation). Some carriers
           require pre-registration of branded sender IDs — check Twilio's regional
           guidelines for IE/UK before going live.
         </p>
       </div>
 
-      <div className="flex justify-end pt-2 border-t border-un1t-gray/40">
+      <div className="flex justify-end pt-2 border-t border-un1t-border/40">
         <button
           type="button"
           onClick={save}
           disabled={saving}
-          className="inline-flex items-center gap-1.5 px-4 py-2 rounded-md bg-un1t-white text-un1t-black text-sm font-semibold hover:bg-un1t-accent disabled:opacity-50"
+          className="inline-flex items-center gap-1.5 px-4 py-2 rounded-md bg-un1t-text text-un1t-bg text-sm font-semibold hover:bg-un1t-accent disabled:opacity-50"
         >
           {saving
             ? <><Loader2 size={12} className="animate-spin" /> Saving…</>

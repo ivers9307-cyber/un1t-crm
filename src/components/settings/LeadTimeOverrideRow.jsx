@@ -62,12 +62,12 @@ export default function LeadTimeOverrideRow({ overrides, onChange, category = 't
 
   if (!expanded) {
     return (
-      <div className="bg-un1t-black/40 border border-un1t-gray rounded-md p-3 mb-3 flex items-center justify-between">
+      <div className="bg-un1t-bg/40 border border-un1t-border rounded-md p-3 mb-3 flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <Bell size={14} className="text-un1t-light" />
+          <Bell size={14} className="text-un1t-subtle" />
           <div>
-            <div className="text-xs font-semibold text-un1t-white">{labels.title}</div>
-            <div className="text-[11px] text-un1t-light">
+            <div className="text-xs font-semibold text-un1t-text">{labels.title}</div>
+            <div className="text-[11px] text-un1t-subtle">
               Using location default (1h + 24h before due).
             </div>
           </div>
@@ -86,15 +86,15 @@ export default function LeadTimeOverrideRow({ overrides, onChange, category = 't
   const presets = LEAD_PRESETS_MIN.filter(p => !(currentValues || []).includes(p))
 
   return (
-    <div className="bg-un1t-black/40 border border-un1t-gray rounded-md p-3 mb-3">
+    <div className="bg-un1t-bg/40 border border-un1t-border rounded-md p-3 mb-3">
       <div className="flex items-start justify-between mb-2">
         <div className="flex items-center gap-2">
-          <Bell size={14} className="text-un1t-light" />
+          <Bell size={14} className="text-un1t-subtle" />
           <div>
-            <div className="text-xs font-semibold text-un1t-white">
+            <div className="text-xs font-semibold text-un1t-text">
               {labels.title} — user override
             </div>
-            <div className="text-[11px] text-un1t-light">
+            <div className="text-[11px] text-un1t-subtle">
               {labels.subtitle}
             </div>
           </div>
@@ -103,7 +103,7 @@ export default function LeadTimeOverrideRow({ overrides, onChange, category = 't
           <button
             type="button"
             onClick={() => { clearOverride(); setExpanded(false) }}
-            className="text-[11px] text-un1t-light hover:text-un1t-white"
+            className="text-[11px] text-un1t-subtle hover:text-un1t-text"
           >
             Reset to default
           </button>
@@ -112,20 +112,20 @@ export default function LeadTimeOverrideRow({ overrides, onChange, category = 't
 
       <div className="flex flex-wrap gap-1.5 mb-2 min-h-6">
         {!isOverridden && (
-          <span className="text-[11px] text-un1t-mid italic">
+          <span className="text-[11px] text-un1t-muted italic">
             No override set — using location default (1h + 24h).
           </span>
         )}
         {(currentValues || []).map((v, i) => (
           <span
             key={`${v}-${i}`}
-            className="inline-flex items-center gap-1 bg-un1t-gray/40 border border-un1t-gray rounded-full px-2 py-0.5 text-xs text-un1t-white"
+            className="inline-flex items-center gap-1 bg-un1t-border/40 border border-un1t-border rounded-full px-2 py-0.5 text-xs text-un1t-text"
           >
             {formatLeadTime(v)}
             <button
               type="button"
               onClick={() => remove(i)}
-              className="text-un1t-light hover:text-un1t-white"
+              className="text-un1t-subtle hover:text-un1t-text"
               aria-label={`Remove ${formatLeadTime(v)}`}
             >
               <X size={10} />
@@ -140,12 +140,12 @@ export default function LeadTimeOverrideRow({ overrides, onChange, category = 't
             key={p}
             type="button"
             onClick={() => add(p)}
-            className="text-[11px] text-un1t-light hover:text-un1t-white border border-un1t-gray rounded px-2 py-0.5 inline-flex items-center gap-1"
+            className="text-[11px] text-un1t-subtle hover:text-un1t-text border border-un1t-border rounded px-2 py-0.5 inline-flex items-center gap-1"
           >
             <Plus size={10} /> {formatLeadTime(p)}
           </button>
         ))}
-        <span className="text-[11px] text-un1t-mid">or custom min:</span>
+        <span className="text-[11px] text-un1t-muted">or custom min:</span>
         <input
           type="number"
           min={LEAD_TIME_MIN_MINUTES}
@@ -153,13 +153,13 @@ export default function LeadTimeOverrideRow({ overrides, onChange, category = 't
           value={customMin}
           onChange={(e) => setCustomMin(e.target.value)}
           placeholder="45"
-          className="w-16 bg-un1t-black border border-un1t-gray rounded px-2 py-0.5 text-[11px] text-un1t-white"
+          className="w-16 bg-un1t-bg border border-un1t-border rounded px-2 py-0.5 text-[11px] text-un1t-text"
         />
         <button
           type="button"
           onClick={addCustom}
           disabled={!customMin}
-          className="text-[11px] text-un1t-light hover:text-un1t-white border border-un1t-gray rounded px-2 py-0.5 disabled:opacity-40"
+          className="text-[11px] text-un1t-subtle hover:text-un1t-text border border-un1t-border rounded px-2 py-0.5 disabled:opacity-40"
         >
           Add
         </button>

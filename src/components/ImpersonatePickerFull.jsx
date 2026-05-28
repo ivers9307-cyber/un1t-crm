@@ -69,39 +69,39 @@ export default function ImpersonatePickerFull({ users }) {
 
   return (
     <div>
-      <div className="bg-un1t-dark border border-un1t-gray rounded-2xl p-4 mb-4 space-y-3">
-        <div className="flex items-center gap-2 bg-un1t-black border border-un1t-gray rounded-md px-3 py-2">
-          <Search size={14} className="text-un1t-light" />
+      <div className="bg-un1t-surface border border-un1t-border rounded-2xl p-4 mb-4 space-y-3">
+        <div className="flex items-center gap-2 bg-un1t-bg border border-un1t-border rounded-md px-3 py-2">
+          <Search size={14} className="text-un1t-subtle" />
           <input
             value={filter}
             onChange={e => setFilter(e.target.value)}
             placeholder="Search name / email / location…"
-            className="flex-1 bg-transparent text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none"
+            className="flex-1 bg-transparent text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none"
           />
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <span className="text-xs text-un1t-light mr-1">Role:</span>
+          <span className="text-xs text-un1t-subtle mr-1">Role:</span>
           {ROLE_FILTERS.map(r => (
             <button
               key={r.key}
               onClick={() => setRoleFilter(r.key)}
-              className={`text-xs px-2 py-1 rounded-md ${roleFilter === r.key ? 'bg-un1t-white text-un1t-black' : 'bg-un1t-gray/40 text-un1t-light hover:bg-un1t-gray'}`}
+              className={`text-xs px-2 py-1 rounded-md ${roleFilter === r.key ? 'bg-un1t-text text-un1t-bg' : 'bg-un1t-border/40 text-un1t-subtle hover:bg-un1t-border'}`}
             >
               {r.label}
             </button>
           ))}
-          <label className="ml-auto inline-flex items-center gap-2 text-xs text-un1t-light cursor-pointer">
+          <label className="ml-auto inline-flex items-center gap-2 text-xs text-un1t-subtle cursor-pointer">
             <input type="checkbox" checked={showInactive} onChange={e => setShowInactive(e.target.checked)} />
             Show inactive
           </label>
         </div>
         <div>
-          <label className="block text-xs text-un1t-light mb-1">Reason (optional, saved to audit log)</label>
+          <label className="block text-xs text-un1t-subtle mb-1">Reason (optional, saved to audit log)</label>
           <input
             value={reason}
             onChange={e => setReason(e.target.value)}
             placeholder="e.g. Investigating Sarah&rsquo;s schedule access bug"
-            className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-light"
+            className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-subtle"
           />
         </div>
         {error && (
@@ -110,24 +110,24 @@ export default function ImpersonatePickerFull({ users }) {
       </div>
 
       {filtered.length === 0 ? (
-        <p className="text-sm text-un1t-light">No users match.</p>
+        <p className="text-sm text-un1t-subtle">No users match.</p>
       ) : (
-        <div className="bg-un1t-dark border border-un1t-gray rounded-2xl overflow-hidden divide-y divide-un1t-gray">
+        <div className="bg-un1t-surface border border-un1t-border rounded-2xl overflow-hidden divide-y divide-un1t-border">
           {filtered.map(u => {
             const badge = ROLE_BADGES[u.role] || { label: u.role, cls: 'bg-gray-500/20 text-gray-300' }
             const BadgeIcon = badge.icon
             return (
-              <div key={u.id} className="flex items-center gap-3 p-3 hover:bg-un1t-gray/20">
+              <div key={u.id} className="flex items-center gap-3 p-3 hover:bg-un1t-border/20">
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
-                    <span className="text-sm font-medium text-un1t-white truncate">{u.full_name}</span>
+                    <span className="text-sm font-medium text-un1t-text truncate">{u.full_name}</span>
                     <span className={`text-[10px] px-1.5 py-0.5 rounded ${badge.cls} inline-flex items-center gap-1`}>
                       {BadgeIcon && <BadgeIcon size={9} />}
                       {badge.label}
                     </span>
-                    {!u.active && <span className="text-[10px] text-un1t-mid">inactive</span>}
+                    {!u.active && <span className="text-[10px] text-un1t-muted">inactive</span>}
                   </div>
-                  <div className="text-xs text-un1t-light truncate">
+                  <div className="text-xs text-un1t-subtle truncate">
                     {u.email}
                     {u.locations?.length > 0 && <> · {u.locations.join(', ')}</>}
                   </div>
@@ -135,7 +135,7 @@ export default function ImpersonatePickerFull({ users }) {
                 <button
                   onClick={() => impersonate(u.id)}
                   disabled={busyId === u.id}
-                  className="text-xs font-semibold bg-amber-500 text-un1t-black px-3 py-1.5 rounded-md hover:bg-amber-400 disabled:opacity-50"
+                  className="text-xs font-semibold bg-amber-500 text-un1t-bg px-3 py-1.5 rounded-md hover:bg-amber-400 disabled:opacity-50"
                 >
                   {busyId === u.id ? 'Switching…' : 'View as'}
                 </button>

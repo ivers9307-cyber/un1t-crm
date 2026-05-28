@@ -10,14 +10,14 @@ export function KpiCard({ label, value, sublabel, accent, href }) {
   return (
     <Wrap
       {...wrapProps}
-      className="block flex-1 bg-un1t-dark border border-un1t-gray rounded-2xl p-4 hover:border-un1t-mid/50 transition-colors"
+      className="block flex-1 bg-un1t-surface border border-un1t-border rounded-2xl p-4 hover:border-un1t-muted/50 transition-colors"
     >
-      <div className="text-xs uppercase tracking-wider text-un1t-light">{label}</div>
-      <div className={`text-3xl font-bold mt-1 ${accent || 'text-un1t-white'}`}>
+      <div className="text-xs uppercase tracking-wider text-un1t-subtle">{label}</div>
+      <div className={`text-3xl font-bold mt-1 ${accent || 'text-un1t-text'}`}>
         {value ?? '—'}
       </div>
       {sublabel ? (
-        <div className="text-xs text-un1t-light mt-0.5">{sublabel}</div>
+        <div className="text-xs text-un1t-subtle mt-0.5">{sublabel}</div>
       ) : null}
     </Wrap>
   )
@@ -34,9 +34,9 @@ export function SectionHeader({ title, count, action }) {
   return (
     <div className="flex items-center justify-between mt-6 mb-2 px-1">
       <div className="flex items-center">
-        <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light">{title}</h3>
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle">{title}</h3>
         {count != null && count > 0 ? (
-          <span className="ml-2 min-w-[20px] h-5 px-1.5 rounded-full bg-un1t-white text-un1t-black text-[11px] font-semibold flex items-center justify-center">
+          <span className="ml-2 min-w-[20px] h-5 px-1.5 rounded-full bg-un1t-text text-un1t-bg text-[11px] font-semibold flex items-center justify-center">
             {count}
           </span>
         ) : null}
@@ -49,13 +49,13 @@ export function SectionHeader({ title, count, action }) {
 export function ListCard({ children, empty, emptyText }) {
   if (empty) {
     return (
-      <div className="bg-un1t-dark border border-un1t-gray rounded-2xl p-4 text-center">
-        <p className="text-sm text-un1t-light">{emptyText || 'Nothing pending.'}</p>
+      <div className="bg-un1t-surface border border-un1t-border rounded-2xl p-4 text-center">
+        <p className="text-sm text-un1t-subtle">{emptyText || 'Nothing pending.'}</p>
       </div>
     )
   }
   return (
-    <div className="bg-un1t-dark border border-un1t-gray rounded-2xl overflow-hidden">
+    <div className="bg-un1t-surface border border-un1t-border rounded-2xl overflow-hidden">
       {children}
     </div>
   )
@@ -68,17 +68,17 @@ export function PendingRow({ icon, title, subtitle, time, href, isLast }) {
     <Wrap
       {...wrapProps}
       className={`flex items-center px-4 py-3 ${
-        !isLast ? 'border-b border-un1t-gray' : ''
-      } ${href ? 'hover:bg-un1t-gray/30' : ''}`}
+        !isLast ? 'border-b border-un1t-border' : ''
+      } ${href ? 'hover:bg-un1t-border/30' : ''}`}
     >
-      {icon ? <span className="mr-3 text-un1t-light">{icon}</span> : null}
+      {icon ? <span className="mr-3 text-un1t-subtle">{icon}</span> : null}
       <div className="flex-1 min-w-0">
-        <div className="text-sm font-medium text-un1t-white truncate">{title}</div>
+        <div className="text-sm font-medium text-un1t-text truncate">{title}</div>
         {subtitle ? (
-          <div className="text-xs text-un1t-light truncate">{subtitle}</div>
+          <div className="text-xs text-un1t-subtle truncate">{subtitle}</div>
         ) : null}
       </div>
-      {time ? <div className="text-xs text-un1t-light ml-2">{time}</div> : null}
+      {time ? <div className="text-xs text-un1t-subtle ml-2">{time}</div> : null}
     </Wrap>
   )
 }

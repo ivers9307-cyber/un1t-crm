@@ -47,7 +47,7 @@ export default function GlofoxAdminTabs(props) {
 
   return (
     <div className="space-y-4">
-      <div className="border-b border-un1t-gray flex items-center gap-1">
+      <div className="border-b border-un1t-border flex items-center gap-1">
         {TABS.map(({ id, label, Icon }) => {
           const on = active === id
           const showBadge = id === 'review' && reviewCount > 0
@@ -58,8 +58,8 @@ export default function GlofoxAdminTabs(props) {
               onClick={() => setActive(id)}
               className={`relative px-4 py-2 text-sm font-medium border-b-2 -mb-px inline-flex items-center gap-1.5 transition-colors ${
                 on
-                  ? 'border-emerald-500 text-un1t-white'
-                  : 'border-transparent text-un1t-light hover:text-un1t-white'
+                  ? 'border-emerald-500 text-un1t-text'
+                  : 'border-transparent text-un1t-subtle hover:text-un1t-text'
               }`}
             >
               <Icon size={14} />

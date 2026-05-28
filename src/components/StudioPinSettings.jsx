@@ -20,8 +20,8 @@ export default function StudioPinSettings({
 }) {
   return (
     <div className="space-y-6">
-      <div className="border-t border-un1t-gray pt-6">
-        <h2 className="text-sm font-semibold uppercase tracking-wider text-un1t-light mb-3">
+      <div className="border-t border-un1t-border pt-6">
+        <h2 className="text-sm font-semibold uppercase tracking-wider text-un1t-subtle mb-3">
           Studio devices
         </h2>
         <PinPanel hasPinSet={hasPinSet} pinSetAt={pinSetAt} />
@@ -97,14 +97,14 @@ function PinPanel({ hasPinSet, pinSetAt }) {
   }
 
   return (
-    <div className="rounded-xl bg-un1t-dark border border-un1t-gray p-4 mb-4">
+    <div className="rounded-xl bg-un1t-surface border border-un1t-border p-4 mb-4">
       <div className="flex items-start gap-3 mb-3">
-        <div className="w-9 h-9 rounded-md bg-un1t-gray/40 flex items-center justify-center shrink-0">
-          <Lock size={16} className="text-un1t-light" />
+        <div className="w-9 h-9 rounded-md bg-un1t-border/40 flex items-center justify-center shrink-0">
+          <Lock size={16} className="text-un1t-subtle" />
         </div>
         <div className="flex-1 min-w-0">
-          <div className="text-sm font-medium text-un1t-white">Studio PIN</div>
-          <div className="text-xs text-un1t-light mt-0.5">
+          <div className="text-sm font-medium text-un1t-text">Studio PIN</div>
+          <div className="text-xs text-un1t-subtle mt-0.5">
             {isSet
               ? <>Set {setAt ? `on ${new Date(setAt).toLocaleDateString('en-IE')}` : ''}. Use this 4-digit PIN to sign in on a paired studio Mac or iPad.</>
               : <>You don’t have a PIN yet. Set one to sign in on paired studio Macs and iPads.</>}
@@ -126,7 +126,7 @@ function PinPanel({ hasPinSet, pinSetAt }) {
       {showForm ? (
         <form onSubmit={save} className="grid grid-cols-1 md:grid-cols-3 gap-2 items-end">
           <label className="flex flex-col gap-1">
-            <span className="text-[11px] text-un1t-light">New PIN (4 digits)</span>
+            <span className="text-[11px] text-un1t-subtle">New PIN (4 digits)</span>
             <input
               type="password"
               inputMode="numeric"
@@ -136,11 +136,11 @@ function PinPanel({ hasPinSet, pinSetAt }) {
               required
               value={pin}
               onChange={(e) => setPin(e.target.value.replace(/\D/g, ''))}
-              className="bg-un1t-black border border-un1t-gray rounded-md px-2 py-1.5 text-un1t-white font-mono text-center tracking-widest"
+              className="bg-un1t-bg border border-un1t-border rounded-md px-2 py-1.5 text-un1t-text font-mono text-center tracking-widest"
             />
           </label>
           <label className="flex flex-col gap-1">
-            <span className="text-[11px] text-un1t-light">Confirm</span>
+            <span className="text-[11px] text-un1t-subtle">Confirm</span>
             <input
               type="password"
               inputMode="numeric"
@@ -150,7 +150,7 @@ function PinPanel({ hasPinSet, pinSetAt }) {
               required
               value={confirmPin}
               onChange={(e) => setConfirmPin(e.target.value.replace(/\D/g, ''))}
-              className="bg-un1t-black border border-un1t-gray rounded-md px-2 py-1.5 text-un1t-white font-mono text-center tracking-widest"
+              className="bg-un1t-bg border border-un1t-border rounded-md px-2 py-1.5 text-un1t-text font-mono text-center tracking-widest"
             />
           </label>
           <div className="flex gap-2">
@@ -164,7 +164,7 @@ function PinPanel({ hasPinSet, pinSetAt }) {
             <button
               type="button"
               onClick={() => { setShowForm(false); setPin(''); setConfirmPin(''); setError(null) }}
-              className="text-xs px-3 py-1.5 rounded-md border border-un1t-gray text-un1t-light hover:text-un1t-white"
+              className="text-xs px-3 py-1.5 rounded-md border border-un1t-border text-un1t-subtle hover:text-un1t-text"
             >
               Cancel
             </button>
@@ -174,7 +174,7 @@ function PinPanel({ hasPinSet, pinSetAt }) {
         <div className="flex gap-2">
           <button
             onClick={() => setShowForm(true)}
-            className="text-xs px-3 py-1.5 rounded-md bg-un1t-white text-un1t-black hover:bg-un1t-light/90"
+            className="text-xs px-3 py-1.5 rounded-md bg-un1t-text text-un1t-bg hover:bg-un1t-subtle/90"
           >
             {isSet ? 'Change PIN' : 'Set PIN'}
           </button>
@@ -182,7 +182,7 @@ function PinPanel({ hasPinSet, pinSetAt }) {
             <button
               onClick={clear}
               disabled={submitting}
-              className="text-xs px-3 py-1.5 rounded-md border border-un1t-gray text-un1t-light hover:text-un1t-white disabled:opacity-50"
+              className="text-xs px-3 py-1.5 rounded-md border border-un1t-border text-un1t-subtle hover:text-un1t-text disabled:opacity-50"
             >
               Clear PIN
             </button>
@@ -236,14 +236,14 @@ function HomeScreenPanel({ initial }) {
   const dirty = value !== saved
 
   return (
-    <div className="rounded-xl bg-un1t-dark border border-un1t-gray p-4">
+    <div className="rounded-xl bg-un1t-surface border border-un1t-border p-4">
       <div className="flex items-start gap-3 mb-3">
-        <div className="w-9 h-9 rounded-md bg-un1t-gray/40 flex items-center justify-center shrink-0">
-          <MapPin size={16} className="text-un1t-light" />
+        <div className="w-9 h-9 rounded-md bg-un1t-border/40 flex items-center justify-center shrink-0">
+          <MapPin size={16} className="text-un1t-subtle" />
         </div>
         <div className="flex-1 min-w-0">
-          <div className="text-sm font-medium text-un1t-white">Home screen on studio devices</div>
-          <div className="text-xs text-un1t-light mt-0.5">
+          <div className="text-sm font-medium text-un1t-text">Home screen on studio devices</div>
+          <div className="text-xs text-un1t-subtle mt-0.5">
             After PIN unlock, the Mac or iPad lands here. Defaults to your dashboard; reception staff often pick the Schedule.
           </div>
         </div>
@@ -267,8 +267,8 @@ function HomeScreenPanel({ initial }) {
             onClick={() => setValue(p.path)}
             className={`text-xs px-3 py-1.5 rounded-md border transition-colors ${
               value === p.path
-                ? 'bg-un1t-white text-un1t-black border-un1t-white'
-                : 'border-un1t-gray text-un1t-light hover:text-un1t-white'
+                ? 'bg-un1t-text text-un1t-bg border-un1t-text'
+                : 'border-un1t-border text-un1t-subtle hover:text-un1t-text'
             }`}
           >
             {p.label}
@@ -282,7 +282,7 @@ function HomeScreenPanel({ initial }) {
           value={value}
           onChange={(e) => setValue(e.target.value)}
           placeholder="/dashboard"
-          className="flex-1 bg-un1t-black border border-un1t-gray rounded-md px-2 py-1.5 text-un1t-white text-sm font-mono"
+          className="flex-1 bg-un1t-bg border border-un1t-border rounded-md px-2 py-1.5 text-un1t-text text-sm font-mono"
         />
         <button
           onClick={save}

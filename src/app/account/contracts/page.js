@@ -47,25 +47,25 @@ export default async function MyContractsPage() {
 
   return (
     <div className="p-6 md:p-8 max-w-3xl">
-      <Link href="/account" className="text-xs text-un1t-light hover:text-un1t-white">
+      <Link href="/account" className="text-xs text-un1t-subtle hover:text-un1t-text">
         ← Account
       </Link>
       <h2 className="text-2xl font-bold mt-1 mb-2">Your contracts</h2>
-      <p className="text-sm text-un1t-light mb-6">
+      <p className="text-sm text-un1t-subtle mb-6">
         Documents UN1T Dublin has issued to you. Sign pending contracts to confirm receipt;
         signed copies stay here for your records.
       </p>
 
       {rows.length === 0 ? (
-        <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-8 text-center">
-          <FileText size={28} className="mx-auto text-un1t-light mb-3" />
-          <p className="text-sm text-un1t-light">No contracts on file yet.</p>
+        <div className="bg-un1t-surface border border-un1t-border rounded-lg p-8 text-center">
+          <FileText size={28} className="mx-auto text-un1t-subtle mb-3" />
+          <p className="text-sm text-un1t-subtle">No contracts on file yet.</p>
         </div>
       ) : (
         <>
           {pending.length > 0 && (
             <section className="mb-8">
-              <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light mb-2">
+              <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle mb-2">
                 Action required ({pending.length})
               </h3>
               <ContractList rows={pending} />
@@ -73,7 +73,7 @@ export default async function MyContractsPage() {
           )}
           {archive.length > 0 && (
             <section>
-              <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light mb-2">
+              <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle mb-2">
                 Archive
               </h3>
               <ContractList rows={archive} />
@@ -89,17 +89,17 @@ function ContractList({ rows }) {
   return (
     <div className="space-y-2">
       {rows.map(r => {
-        const badge = STATUS_BADGE[r.status] || { label: r.status, class: 'bg-un1t-gray text-un1t-light' }
+        const badge = STATUS_BADGE[r.status] || { label: r.status, class: 'bg-un1t-border text-un1t-subtle' }
         return (
           <Link
             key={r.id}
             href={`/account/contracts/${r.id}`}
-            className="block bg-un1t-dark border border-un1t-gray rounded-lg p-4 hover:border-un1t-mid/60"
+            className="block bg-un1t-surface border border-un1t-border rounded-lg p-4 hover:border-un1t-muted/60"
           >
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0 flex-1">
-                <div className="font-medium text-un1t-white">{r.template?.name || 'Contract'}</div>
-                <div className="text-[11px] text-un1t-light mt-0.5">
+                <div className="font-medium text-un1t-text">{r.template?.name || 'Contract'}</div>
+                <div className="text-[11px] text-un1t-subtle mt-0.5">
                   Issued {fmtDate(r.issued_at)}
                   {r.signed_at && ` · Signed ${fmtDate(r.signed_at)}`}
                 </div>
@@ -108,7 +108,7 @@ function ContractList({ rows }) {
                 <span className={`text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded-full ${badge.class}`}>
                   {badge.label}
                 </span>
-                <ChevronRight size={16} className="text-un1t-mid" />
+                <ChevronRight size={16} className="text-un1t-muted" />
               </div>
             </div>
           </Link>

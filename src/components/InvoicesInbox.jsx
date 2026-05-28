@@ -234,7 +234,7 @@ export default function InvoicesInbox({ locations, isMaster, isBookkeeper = fals
 
       {/* Source-type tabs — primary navigation */}
       <div className="flex items-center justify-between flex-wrap gap-3">
-        <div className="flex items-center gap-1 border border-un1t-grey rounded-lg p-1 bg-un1t-black/40 flex-wrap">
+        <div className="flex items-center gap-1 border border-un1t-grey rounded-lg p-1 bg-un1t-bg/40 flex-wrap">
           {SOURCE_TABS.map((t) => {
             const count = sourceCounts[t.key === 'all' ? 'all' : t.sourceTypes[0]] || 0
             const isActive = sourceTab === t.key
@@ -245,14 +245,14 @@ export default function InvoicesInbox({ locations, isMaster, isBookkeeper = fals
                 onClick={() => setSourceTab(t.key)}
                 className={`px-3 py-1.5 text-sm rounded-md transition-colors flex items-center gap-2 ${
                   isActive
-                    ? 'bg-un1t-white text-un1t-black font-medium'
-                    : 'text-un1t-light hover:text-un1t-white'
+                    ? 'bg-un1t-text text-un1t-bg font-medium'
+                    : 'text-un1t-subtle hover:text-un1t-text'
                 }`}
               >
                 {t.label}
                 {count > 0 && (
                   <span className={`inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 text-[10px] font-semibold rounded-full ${
-                    isActive ? 'bg-un1t-black text-un1t-white' : 'bg-un1t-grey/40 text-un1t-light'
+                    isActive ? 'bg-un1t-bg text-un1t-text' : 'bg-un1t-grey/40 text-un1t-subtle'
                   }`}>{count}</span>
                 )}
               </button>
@@ -264,7 +264,7 @@ export default function InvoicesInbox({ locations, isMaster, isBookkeeper = fals
           <select
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value)}
-            className="bg-un1t-black border border-un1t-grey rounded-md px-3 py-1.5 text-sm text-un1t-white"
+            className="bg-un1t-bg border border-un1t-grey rounded-md px-3 py-1.5 text-sm text-un1t-text"
           >
             {STATUS_FILTERS.map((s) => (
               <option key={s.key} value={s.key}>{s.label}</option>
@@ -274,7 +274,7 @@ export default function InvoicesInbox({ locations, isMaster, isBookkeeper = fals
             <select
               value={locationFilter}
               onChange={(e) => setLocationFilter(e.target.value)}
-              className="bg-un1t-black border border-un1t-grey rounded-md px-3 py-1.5 text-sm text-un1t-white"
+              className="bg-un1t-bg border border-un1t-grey rounded-md px-3 py-1.5 text-sm text-un1t-text"
             >
               <option value="all">All locations</option>
               {locations.map((l) => (
@@ -334,16 +334,16 @@ export default function InvoicesInbox({ locations, isMaster, isBookkeeper = fals
 function ForwardingAddresses({ locations }) {
   if (!locations.length) return null
   return (
-    <div className="border border-un1t-grey rounded-lg p-4 bg-un1t-black/40">
-      <p className="text-xs uppercase tracking-wide text-un1t-light mb-2">Forwarding addresses</p>
+    <div className="border border-un1t-grey rounded-lg p-4 bg-un1t-bg/40">
+      <p className="text-xs uppercase tracking-wide text-un1t-subtle mb-2">Forwarding addresses</p>
       <ul className="space-y-1 text-sm">
         {locations.map((l) => (
           <li key={l.id} className="flex justify-between gap-3">
-            <span className="text-un1t-white">{l.name}</span>
+            <span className="text-un1t-text">{l.name}</span>
             {l.invoices_inbound_slug ? (
-              <code className="text-un1t-light">{l.invoices_inbound_slug}-invoices@mail.un1tdublin.com</code>
+              <code className="text-un1t-subtle">{l.invoices_inbound_slug}-invoices@mail.un1tdublin.com</code>
             ) : (
-              <Link href={`/settings/locations/${l.id}`} className="text-un1t-light underline">
+              <Link href={`/settings/locations/${l.id}`} className="text-un1t-subtle underline">
                 Configure forwarding slug
               </Link>
             )}
@@ -362,14 +362,14 @@ function InboxList({
   return (
     <aside className="border border-un1t-grey rounded-lg overflow-hidden">
       <header className="px-3 py-2 border-b border-un1t-grey flex items-center justify-between gap-2">
-        <span className="text-xs uppercase tracking-wide text-un1t-light">
+        <span className="text-xs uppercase tracking-wide text-un1t-subtle">
           {loading ? 'Loading…' : `${rows.length} ${rows.length === 1 ? 'item' : 'items'}`}
         </span>
         {isBookkeeper && rows.length > 0 && (
           <button
             type="button"
             onClick={allVisibleSelected ? onClearSelection : onSelectAll}
-            className="text-xs text-un1t-light hover:text-un1t-white underline underline-offset-2"
+            className="text-xs text-un1t-subtle hover:text-un1t-text underline underline-offset-2"
           >
             {allVisibleSelected ? 'Clear selection' : 'Select all'}
           </button>
@@ -377,13 +377,13 @@ function InboxList({
       </header>
       <ul className="divide-y divide-un1t-grey/50 max-h-[70vh] overflow-y-auto">
         {rows.length === 0 && !loading && (
-          <li className="p-4 text-sm text-un1t-light">Nothing here.</li>
+          <li className="p-4 text-sm text-un1t-subtle">Nothing here.</li>
         )}
         {rows.map((r) => {
           const active = r.id === selectedId
           const checked = bulkSelection.has(r.id)
           return (
-            <li key={r.id} className={checked ? 'bg-un1t-white/10' : ''}>
+            <li key={r.id} className={checked ? 'bg-un1t-text/10' : ''}>
               <div className="flex items-stretch">
                 {isBookkeeper && (
                   <label className="flex items-center pl-3 cursor-pointer">
@@ -394,7 +394,7 @@ function InboxList({
                       // Stop the row click handler from firing when
                       // the operator clicks the checkbox itself.
                       onClick={(e) => e.stopPropagation()}
-                      className="h-4 w-4 accent-un1t-white"
+                      className="h-4 w-4 accent-un1t-text"
                     />
                   </label>
                 )}
@@ -402,19 +402,19 @@ function InboxList({
                   type="button"
                   onClick={() => onSelect(r.id)}
                   className={`flex-1 text-left p-3 transition-colors ${
-                    active ? 'bg-un1t-white/10' : 'hover:bg-un1t-white/5'
+                    active ? 'bg-un1t-text/10' : 'hover:bg-un1t-text/5'
                   }`}
                 >
                   <div className="flex justify-between items-start gap-2">
-                    <div className="text-sm font-medium text-un1t-white truncate">
+                    <div className="text-sm font-medium text-un1t-text truncate">
                       {r.extracted_fields?.supplier_name || r.sender_email || '(no sender)'}
                     </div>
                     <StatusPill status={r.status} stage={r.rejected_stage} />
                   </div>
-                  <div className="text-xs text-un1t-light truncate mt-1">
+                  <div className="text-xs text-un1t-subtle truncate mt-1">
                     {r.subject || r.attachment_filename || '(no subject)'}
                   </div>
-                  <div className="text-xs text-un1t-light mt-1 flex justify-between items-center gap-2">
+                  <div className="text-xs text-un1t-subtle mt-1 flex justify-between items-center gap-2">
                     <span className="flex items-center gap-1.5 min-w-0">
                       <SourceTypePill source={r.source_type} />
                       <span className="truncate">{formatDateTime(r.received_at)}</span>
@@ -433,7 +433,7 @@ function InboxList({
 
 function SourceTypePill({ source }) {
   const label = SOURCE_TYPE_LABEL[source] || source
-  const tone = SOURCE_TYPE_TONE[source] || 'bg-un1t-grey/30 text-un1t-light border-un1t-grey'
+  const tone = SOURCE_TYPE_TONE[source] || 'bg-un1t-grey/30 text-un1t-subtle border-un1t-grey'
   return (
     <span className={`text-[9px] uppercase tracking-wide border rounded px-1 py-0.5 whitespace-nowrap ${tone}`}>
       {label}
@@ -459,9 +459,9 @@ function BulkActionBar({
     ['received', 'quality_approved', 'extracted', 'data_approved'].includes(r.status)).length
 
   return (
-    <div className="fixed inset-x-0 bottom-0 z-40 border-t border-un1t-grey bg-un1t-black/95 backdrop-blur p-4">
+    <div className="fixed inset-x-0 bottom-0 z-40 border-t border-un1t-grey bg-un1t-bg/95 backdrop-blur p-4">
       <div className="max-w-7xl mx-auto flex items-center gap-3 flex-wrap">
-        <span className="text-sm text-un1t-white font-medium">
+        <span className="text-sm text-un1t-text font-medium">
           {selectedCount} selected
         </span>
 
@@ -470,7 +470,7 @@ function BulkActionBar({
             type="button"
             disabled={analysableCount === 0 || !!busy}
             onClick={onAnalyse}
-            className="px-3 py-1.5 text-sm rounded-md border border-un1t-grey text-un1t-white disabled:opacity-40"
+            className="px-3 py-1.5 text-sm rounded-md border border-un1t-grey text-un1t-text disabled:opacity-40"
             title={analysableCount === 0 ? 'No selected rows are eligible for analysis' : ''}
           >
             {busy === 'analyse' ? 'Analysing…' : `Analyse (${analysableCount})`}
@@ -479,7 +479,7 @@ function BulkActionBar({
             type="button"
             disabled={sendableCount === 0 || !!busy}
             onClick={onSend}
-            className="px-3 py-1.5 text-sm rounded-md bg-un1t-white text-un1t-black font-medium disabled:opacity-40"
+            className="px-3 py-1.5 text-sm rounded-md bg-un1t-text text-un1t-bg font-medium disabled:opacity-40"
             title={sendableCount === 0 ? 'No selected rows have extracted fields ready to send' : ''}
           >
             {busy === 'send' ? 'Sending…' : `Send to Xero (${sendableCount})`}
@@ -488,14 +488,14 @@ function BulkActionBar({
             type="button"
             disabled={rejectableCount === 0 || !!busy}
             onClick={() => setShowRejectForm((v) => !v)}
-            className="px-3 py-1.5 text-sm rounded-md border border-un1t-grey text-un1t-light disabled:opacity-40"
+            className="px-3 py-1.5 text-sm rounded-md border border-un1t-grey text-un1t-subtle disabled:opacity-40"
           >
             Reject ({rejectableCount})…
           </button>
           <button
             type="button"
             onClick={onClear}
-            className="px-3 py-1.5 text-sm rounded-md text-un1t-light hover:text-un1t-white"
+            className="px-3 py-1.5 text-sm rounded-md text-un1t-subtle hover:text-un1t-text"
           >
             Clear
           </button>
@@ -504,12 +504,12 @@ function BulkActionBar({
 
       {showRejectForm && (
         <div className="max-w-7xl mx-auto mt-3 space-y-2 border border-un1t-grey rounded-md p-3">
-          <label className="text-xs uppercase tracking-wide text-un1t-light">Reject reason (applied to all selected)</label>
+          <label className="text-xs uppercase tracking-wide text-un1t-subtle">Reject reason (applied to all selected)</label>
           <textarea
             value={rejectReason}
             onChange={(e) => setRejectReason(e.target.value)}
             rows={2}
-            className="w-full bg-un1t-black border border-un1t-grey rounded-md p-2 text-sm text-un1t-white"
+            className="w-full bg-un1t-bg border border-un1t-grey rounded-md p-2 text-sm text-un1t-text"
             placeholder="e.g. Wrong attachment uploaded; duplicate of #1234; not an invoice"
           />
           <button
@@ -529,10 +529,10 @@ function BulkActionBar({
         </div>
       )}
       {summary && (
-        <div className="max-w-7xl mx-auto mt-3 border border-un1t-grey rounded-lg p-2 text-xs text-un1t-light flex flex-wrap gap-3">
-          <strong className="text-un1t-white">{summary.action} result:</strong>
+        <div className="max-w-7xl mx-auto mt-3 border border-un1t-grey rounded-lg p-2 text-xs text-un1t-subtle flex flex-wrap gap-3">
+          <strong className="text-un1t-text">{summary.action} result:</strong>
           {Object.entries(summary.counts || {}).map(([k, v]) => (
-            <span key={k}>{k}: <strong className="text-un1t-white">{v}</strong></span>
+            <span key={k}>{k}: <strong className="text-un1t-text">{v}</strong></span>
           ))}
         </div>
       )}
@@ -549,7 +549,7 @@ function StatusPill({ status, stage }) {
     forwarded:        { label: 'Sent to Xero',     cls: 'bg-green-500/20 text-green-300 border-green-500/40' },
     rejected:         { label: `Rejected (${stage || 'quality'})`, cls: 'bg-red-500/20 text-red-300 border-red-500/40' },
   }
-  const it = map[status] || { label: status, cls: 'bg-un1t-grey/30 text-un1t-light border-un1t-grey' }
+  const it = map[status] || { label: status, cls: 'bg-un1t-grey/30 text-un1t-subtle border-un1t-grey' }
   return (
     <span className={`text-[10px] uppercase tracking-wide border rounded px-1.5 py-0.5 whitespace-nowrap ${it.cls}`}>
       {it.label}
@@ -577,7 +577,7 @@ function InboxDetail({ row, onChanged }) {
 
   if (!row) {
     return (
-      <section className="border border-un1t-grey rounded-lg p-6 text-sm text-un1t-light min-h-[200px] flex items-center justify-center">
+      <section className="border border-un1t-grey rounded-lg p-6 text-sm text-un1t-subtle min-h-[200px] flex items-center justify-center">
         Select an invoice from the list to review.
       </section>
     )
@@ -690,13 +690,13 @@ function DetailHeader({ row }) {
   return (
     <header className="space-y-1">
       <div className="flex items-center justify-between gap-3 flex-wrap">
-        <h2 className="text-lg font-semibold text-un1t-white">
+        <h2 className="text-lg font-semibold text-un1t-text">
           {row.extracted_fields?.supplier_name || row.sender_email || '(no sender)'}
         </h2>
         <StatusPill status={row.status} stage={row.rejected_stage} />
       </div>
-      <p className="text-sm text-un1t-light">{row.subject || '(no subject)'}</p>
-      <p className="text-xs text-un1t-light">
+      <p className="text-sm text-un1t-subtle">{row.subject || '(no subject)'}</p>
+      <p className="text-xs text-un1t-subtle">
         Received {formatDateTime(row.received_at)} · {row.location?.name || 'unknown location'} · {formatBytes(row.attachment_size_bytes)}
       </p>
     </header>
@@ -705,17 +705,17 @@ function DetailHeader({ row }) {
 
 function AttachmentPreview({ attachment, loading, mime }) {
   if (loading) {
-    return <div className="border border-un1t-grey rounded-lg p-4 text-sm text-un1t-light">Loading attachment…</div>
+    return <div className="border border-un1t-grey rounded-lg p-4 text-sm text-un1t-subtle">Loading attachment…</div>
   }
   if (!attachment) {
-    return <div className="border border-un1t-grey rounded-lg p-4 text-sm text-un1t-light">No attachment available.</div>
+    return <div className="border border-un1t-grey rounded-lg p-4 text-sm text-un1t-subtle">No attachment available.</div>
   }
   const isPdf = mime === 'application/pdf'
   return (
     <div className="border border-un1t-grey rounded-lg overflow-hidden">
       <div className="px-3 py-2 border-b border-un1t-grey flex justify-between items-center text-xs">
-        <span className="text-un1t-light truncate">{attachment.filename}</span>
-        <a href={attachment.url} target="_blank" rel="noreferrer" className="text-un1t-white underline">
+        <span className="text-un1t-subtle truncate">{attachment.filename}</span>
+        <a href={attachment.url} target="_blank" rel="noreferrer" className="text-un1t-text underline">
           Open in new tab
         </a>
       </div>
@@ -723,11 +723,11 @@ function AttachmentPreview({ attachment, loading, mime }) {
         <iframe
           title="Invoice attachment"
           src={attachment.url}
-          className="w-full bg-un1t-black"
+          className="w-full bg-un1t-bg"
           style={{ height: '60vh' }}
         />
       ) : (
-        <img src={attachment.url} alt="Invoice attachment" className="w-full max-h-[60vh] object-contain bg-un1t-black" />
+        <img src={attachment.url} alt="Invoice attachment" className="w-full max-h-[60vh] object-contain bg-un1t-bg" />
       )}
     </div>
   )
@@ -738,7 +738,7 @@ function StageOneActions({ busy, onApprove, onReject }) {
   const [reason, setReason] = useState('')
   return (
     <div className="space-y-3">
-      <p className="text-sm text-un1t-light">
+      <p className="text-sm text-un1t-subtle">
         Quality review — is this attachment legible and a real invoice for this location?
         Approving runs Claude Vision next (which costs API tokens), so reject anything that isn't an invoice or isn't readable.
       </p>
@@ -747,7 +747,7 @@ function StageOneActions({ busy, onApprove, onReject }) {
           type="button"
           disabled={!!busy}
           onClick={onApprove}
-          className="px-4 py-2 rounded-md bg-un1t-white text-un1t-black font-medium disabled:opacity-50"
+          className="px-4 py-2 rounded-md bg-un1t-text text-un1t-bg font-medium disabled:opacity-50"
         >
           {busy === 'quality-approve' ? 'Approving…' : 'Approve quality'}
         </button>
@@ -755,19 +755,19 @@ function StageOneActions({ busy, onApprove, onReject }) {
           type="button"
           disabled={!!busy}
           onClick={() => setShowRejectForm((v) => !v)}
-          className="px-4 py-2 rounded-md border border-un1t-grey text-un1t-white disabled:opacity-50"
+          className="px-4 py-2 rounded-md border border-un1t-grey text-un1t-text disabled:opacity-50"
         >
           Reject…
         </button>
       </div>
       {showRejectForm && (
         <div className="space-y-2 border border-un1t-grey rounded-md p-3">
-          <label className="text-xs uppercase tracking-wide text-un1t-light">Reason</label>
+          <label className="text-xs uppercase tracking-wide text-un1t-subtle">Reason</label>
           <textarea
             value={reason}
             onChange={(e) => setReason(e.target.value)}
             rows={2}
-            className="w-full bg-un1t-black border border-un1t-grey rounded-md p-2 text-sm text-un1t-white"
+            className="w-full bg-un1t-bg border border-un1t-grey rounded-md p-2 text-sm text-un1t-text"
             placeholder="e.g. Not a real invoice / unreadable / wrong location"
           />
           <button
@@ -787,7 +787,7 @@ function StageOneActions({ busy, onApprove, onReject }) {
 function ExtractAction({ busy, extractionError, onExtract }) {
   return (
     <div className="space-y-3">
-      <p className="text-sm text-un1t-light">
+      <p className="text-sm text-un1t-subtle">
         Quality approved. Run Claude Vision to extract supplier, amount, and line items.
         {extractionError && ' Previous run failed — see the error below.'}
       </p>
@@ -800,7 +800,7 @@ function ExtractAction({ busy, extractionError, onExtract }) {
         type="button"
         disabled={!!busy}
         onClick={onExtract}
-        className="px-4 py-2 rounded-md bg-un1t-white text-un1t-black font-medium disabled:opacity-50"
+        className="px-4 py-2 rounded-md bg-un1t-text text-un1t-bg font-medium disabled:opacity-50"
       >
         {busy === 'extract' ? 'Extracting…' : 'Extract with Claude Vision'}
       </button>
@@ -859,7 +859,7 @@ function StageTwoBlock({ row, busy, onSaveFields, onApprove, onReject }) {
 
   return (
     <div className="space-y-4">
-      <p className="text-sm text-un1t-light">
+      <p className="text-sm text-un1t-subtle">
         Data review — confirm the extracted fields. Edit anything that's wrong. Approving sends the original attachment to Xero's bills email; Xero creates a draft bill from it.
       </p>
 
@@ -925,7 +925,7 @@ function StageTwoBlock({ row, busy, onSaveFields, onApprove, onReject }) {
           type="button"
           disabled={!dirty || !!busy || isApproved}
           onClick={() => onSaveFields(fields)}
-          className="px-4 py-2 rounded-md border border-un1t-grey text-un1t-white disabled:opacity-50"
+          className="px-4 py-2 rounded-md border border-un1t-grey text-un1t-text disabled:opacity-50"
         >
           {busy === 'fields' ? 'Saving…' : 'Save edits'}
         </button>
@@ -949,7 +949,7 @@ function StageTwoBlock({ row, busy, onSaveFields, onApprove, onReject }) {
               type="button"
               disabled={dirty || !!busy || gate}
               onClick={onApprove}
-              className="px-4 py-2 rounded-md bg-un1t-white text-un1t-black font-medium disabled:opacity-50"
+              className="px-4 py-2 rounded-md bg-un1t-text text-un1t-bg font-medium disabled:opacity-50"
               title={title}
             >
               {busy === 'data-approve' ? (isApproved ? 'Retrying send…' : 'Approving + sending…') : (isApproved ? 'Retry send to Xero' : 'Approve + send to Xero')}
@@ -960,19 +960,19 @@ function StageTwoBlock({ row, busy, onSaveFields, onApprove, onReject }) {
           type="button"
           disabled={!!busy}
           onClick={() => setShowRejectForm((v) => !v)}
-          className="px-4 py-2 rounded-md border border-un1t-grey text-un1t-white disabled:opacity-50"
+          className="px-4 py-2 rounded-md border border-un1t-grey text-un1t-text disabled:opacity-50"
         >
           Reject…
         </button>
       </div>
       {showRejectForm && (
         <div className="space-y-2 border border-un1t-grey rounded-md p-3">
-          <label className="text-xs uppercase tracking-wide text-un1t-light">Reason</label>
+          <label className="text-xs uppercase tracking-wide text-un1t-subtle">Reason</label>
           <textarea
             value={reason}
             onChange={(e) => setReason(e.target.value)}
             rows={2}
-            className="w-full bg-un1t-black border border-un1t-grey rounded-md p-2 text-sm text-un1t-white"
+            className="w-full bg-un1t-bg border border-un1t-grey rounded-md p-2 text-sm text-un1t-text"
             placeholder="e.g. Duplicate, wrong amount, not a real invoice"
           />
           <button
@@ -992,13 +992,13 @@ function StageTwoBlock({ row, busy, onSaveFields, onApprove, onReject }) {
 function FieldRow({ label, value, onChange, type = 'text', placeholder }) {
   return (
     <label className="block">
-      <span className="text-xs uppercase tracking-wide text-un1t-light">{label}</span>
+      <span className="text-xs uppercase tracking-wide text-un1t-subtle">{label}</span>
       <input
         type={type}
         value={value}
         placeholder={placeholder}
         onChange={(e) => onChange(e.target.value)}
-        className="mt-1 w-full bg-un1t-black border border-un1t-grey rounded-md px-2 py-1.5 text-sm text-un1t-white"
+        className="mt-1 w-full bg-un1t-bg border border-un1t-grey rounded-md px-2 py-1.5 text-sm text-un1t-text"
         step={type === 'number' ? '0.01' : undefined}
       />
     </label>
@@ -1011,11 +1011,11 @@ function FieldRow({ label, value, onChange, type = 'text', placeholder }) {
 function SelectRow({ label, value, onChange, options }) {
   return (
     <label className="block">
-      <span className="text-xs uppercase tracking-wide text-un1t-light">{label}</span>
+      <span className="text-xs uppercase tracking-wide text-un1t-subtle">{label}</span>
       <select
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="mt-1 w-full bg-un1t-black border border-un1t-grey rounded-md px-2 py-1.5 text-sm text-un1t-white"
+        className="mt-1 w-full bg-un1t-bg border border-un1t-grey rounded-md px-2 py-1.5 text-sm text-un1t-text"
       >
         <option value="">—</option>
         {options.map((o) => (
@@ -1056,7 +1056,7 @@ function ForwardedSummary({ row }) {
                 href={row.xero_deep_link_url}
                 target="_blank"
                 rel="noreferrer"
-                className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-un1t-white text-un1t-black text-xs font-medium hover:bg-un1t-accent"
+                className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-un1t-text text-un1t-bg text-xs font-medium hover:bg-un1t-accent"
               >
                 Open in Xero ↗
               </a>
@@ -1082,9 +1082,9 @@ function ForwardedSummary({ row }) {
             && ` · ${f.currency || 'EUR'} ${Number(row.xero_bill_amount_paid).toFixed(2)}`}
         </div>
       ) : row.xero_bill_status ? (
-        <div className="text-xs text-un1t-light px-1">
+        <div className="text-xs text-un1t-subtle px-1">
           Xero status:{' '}
-          <span className="text-un1t-white">
+          <span className="text-un1t-text">
             {XERO_STATUS_LABEL[row.xero_bill_status] || row.xero_bill_status}
           </span>
           {row.xero_bill_amount_due != null && Number(row.xero_bill_amount_due) > 0
@@ -1107,7 +1107,7 @@ function RejectedSummary({ row, busy, onDelete }) {
         type="button"
         disabled={!!busy}
         onClick={onDelete}
-        className="px-3 py-1.5 text-sm rounded-md border border-un1t-grey text-un1t-light disabled:opacity-50"
+        className="px-3 py-1.5 text-sm rounded-md border border-un1t-grey text-un1t-subtle disabled:opacity-50"
       >
         {busy === 'delete' ? 'Deleting…' : 'Delete permanently'}
       </button>
@@ -1133,8 +1133,8 @@ function ReadOnlyFieldsSummary({ fields }) {
     <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
       {rows.map(([k, v]) => (
         <div key={k} className="contents">
-          <dt className="text-un1t-light">{k}</dt>
-          <dd className="text-un1t-white text-right">{String(v)}</dd>
+          <dt className="text-un1t-subtle">{k}</dt>
+          <dd className="text-un1t-text text-right">{String(v)}</dd>
         </div>
       ))}
     </dl>

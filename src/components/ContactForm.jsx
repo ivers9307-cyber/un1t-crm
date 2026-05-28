@@ -114,7 +114,7 @@ export default function ContactForm({ contact = null, onCancelHref = '/contacts'
 
   return (
     <form onSubmit={handleSubmit} className="space-y-6">
-      <Link href={onCancelHref} className="inline-flex items-center gap-1.5 text-sm text-un1t-light hover:text-un1t-white">
+      <Link href={onCancelHref} className="inline-flex items-center gap-1.5 text-sm text-un1t-subtle hover:text-un1t-text">
         <ArrowLeft size={16} /> {isEditing ? 'Back to contact' : 'Back to contacts'}
       </Link>
 
@@ -124,106 +124,106 @@ export default function ContactForm({ contact = null, onCancelHref = '/contacts'
         </div>
       )}
 
-      <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5 space-y-4">
-        <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light">Identity</h3>
+      <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5 space-y-4">
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle">Identity</h3>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div>
-            <label className="block text-sm text-un1t-light mb-1">First name</label>
+            <label className="block text-sm text-un1t-subtle mb-1">First name</label>
             <input
               type="text"
               value={firstName}
               onChange={e => setFirstName(e.target.value)}
               maxLength={100}
-              className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
+              className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
             />
           </div>
           <div>
-            <label className="block text-sm text-un1t-light mb-1">Last name</label>
+            <label className="block text-sm text-un1t-subtle mb-1">Last name</label>
             <input
               type="text"
               value={lastName}
               onChange={e => setLastName(e.target.value)}
               maxLength={100}
-              className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
+              className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
             />
           </div>
         </div>
         <div>
-          <label className="block text-sm text-un1t-light mb-1">Email *</label>
+          <label className="block text-sm text-un1t-subtle mb-1">Email *</label>
           <input
             type="email"
             value={email}
             onChange={e => setEmail(e.target.value)}
             required
-            className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
+            className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
           />
         </div>
         <div>
-          <label className="block text-sm text-un1t-light mb-1">Phone</label>
+          <label className="block text-sm text-un1t-subtle mb-1">Phone</label>
           <input
             type="tel"
             value={phone}
             onChange={e => setPhone(e.target.value)}
             placeholder="+353 87 123 4567"
-            className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
+            className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
           />
         </div>
       </div>
 
-      <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5 space-y-4">
-        <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light">Pipeline</h3>
+      <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5 space-y-4">
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle">Pipeline</h3>
         <div>
-          <label className="block text-sm text-un1t-light mb-1">Lead source</label>
+          <label className="block text-sm text-un1t-subtle mb-1">Lead source</label>
           <select
             value={leadSource}
             onChange={e => setLeadSource(e.target.value)}
-            className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
+            className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
           >
             {LEAD_SOURCES.map(s => (
               <option key={s.value} value={s.value}>{s.label}</option>
             ))}
           </select>
-          <p className="text-[11px] text-un1t-mid mt-2">
+          <p className="text-[11px] text-un1t-muted mt-2">
             Pipeline stage is set automatically when you move the contact&apos;s deal on the kanban board.
           </p>
         </div>
       </div>
 
-      <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5 space-y-4">
-        <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light">Misc</h3>
+      <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5 space-y-4">
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle">Misc</h3>
         <div>
-          <label className="block text-sm text-un1t-light mb-1">Label</label>
+          <label className="block text-sm text-un1t-subtle mb-1">Label</label>
           <input
             type="text"
             value={label}
             onChange={e => setLabel(e.target.value)}
             maxLength={100}
             placeholder="Free-form bucket — e.g. VIP, deposit-paid"
-            className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
+            className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
           />
         </div>
         <div>
-          <label className="block text-sm text-un1t-light mb-1">Glofox member ID</label>
+          <label className="block text-sm text-un1t-subtle mb-1">Glofox member ID</label>
           <input
             type="text"
             value={glofoxId}
             onChange={e => setGlofoxId(e.target.value)}
             maxLength={100}
             placeholder="GFX-…"
-            className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
+            className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
           />
         </div>
         {isEditing && (
           <div>
-            <label className="block text-sm text-un1t-light mb-1">Tags <span className="text-[11px] text-un1t-mid">(comma-separated)</span></label>
+            <label className="block text-sm text-un1t-subtle mb-1">Tags <span className="text-[11px] text-un1t-muted">(comma-separated)</span></label>
             <input
               type="text"
               value={tagsCsv}
               onChange={e => setTagsCsv(e.target.value)}
               placeholder="vip, race_completed"
-              className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
+              className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
             />
-            <p className="text-[11px] text-un1t-mid mt-1">
+            <p className="text-[11px] text-un1t-muted mt-1">
               Adding a tag here also fires any sequence with trigger=&quot;Tag Added&quot;.
             </p>
           </div>
@@ -233,7 +233,7 @@ export default function ContactForm({ contact = null, onCancelHref = '/contacts'
       <button
         type="submit"
         disabled={saving}
-        className="w-full inline-flex items-center justify-center gap-2 bg-un1t-white text-un1t-black font-medium text-sm py-2.5 rounded-md hover:bg-un1t-accent disabled:opacity-50"
+        className="w-full inline-flex items-center justify-center gap-2 bg-un1t-text text-un1t-bg font-medium text-sm py-2.5 rounded-md hover:bg-un1t-accent disabled:opacity-50"
       >
         {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
         {saving ? 'Saving…' : isEditing ? 'Save changes' : 'Create contact'}

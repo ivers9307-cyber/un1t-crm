@@ -58,7 +58,7 @@ export default function UnifiIntegrationTab({ location, canEdit }) {
 
   if (!canEdit) {
     return (
-      <div className="text-xs text-un1t-light">
+      <div className="text-xs text-un1t-subtle">
         UniFi controller settings are master-only. The DB-side trigger (mig 034) also
         rejects writes from non-master roles.
       </div>
@@ -67,11 +67,11 @@ export default function UnifiIntegrationTab({ location, canEdit }) {
 
   return (
     <div className="space-y-4">
-      <p className="text-xs text-un1t-light">
+      <p className="text-xs text-un1t-subtle">
         Controller host should be reachable from Vercel (Cloudflare Tunnel works well —
-        port-forwarding the LAN does not). API token needs scopes <code className="text-[10px] mx-1 px-1 bg-un1t-black/40 rounded">view:user</code>,
-        <code className="text-[10px] mx-1 px-1 bg-un1t-black/40 rounded">edit:user</code>,
-        <code className="text-[10px] mx-1 px-1 bg-un1t-black/40 rounded">view:policy</code>.
+        port-forwarding the LAN does not). API token needs scopes <code className="text-[10px] mx-1 px-1 bg-un1t-bg/40 rounded">view:user</code>,
+        <code className="text-[10px] mx-1 px-1 bg-un1t-bg/40 rounded">edit:user</code>,
+        <code className="text-[10px] mx-1 px-1 bg-un1t-bg/40 rounded">view:policy</code>.
         The two policy IDs must be pre-created in UniFi Access — staff = main door + physio, manager = all staff doors.
       </p>
 
@@ -89,43 +89,43 @@ export default function UnifiIntegrationTab({ location, canEdit }) {
       <Field label="Host" hint="Public-facing URL, include port (default 12445), e.g. https://unifi.example.com:12445">
         <input type="text" value={host} onChange={e => setHost(e.target.value)}
           placeholder="https://unifi.example.com:12445"
-          className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm font-mono text-un1t-white" />
+          className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm font-mono text-un1t-text" />
       </Field>
       <Field label="API Token">
         <input type="text" value={apiToken} onChange={e => setApiToken(e.target.value)}
-          className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm font-mono text-un1t-white" />
+          className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm font-mono text-un1t-text" />
       </Field>
       <div className="grid grid-cols-2 gap-3">
         <Field label="Staff policy ID">
           <input type="text" value={staffPolicyId} onChange={e => setStaffPolicyId(e.target.value)}
-            className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm font-mono text-un1t-white" />
+            className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm font-mono text-un1t-text" />
         </Field>
         <Field label="Manager policy ID">
           <input type="text" value={managerPolicyId} onChange={e => setManagerPolicyId(e.target.value)}
-            className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm font-mono text-un1t-white" />
+            className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm font-mono text-un1t-text" />
         </Field>
       </div>
 
-      <div className="flex items-center justify-between border border-un1t-gray rounded-md px-3 py-2">
+      <div className="flex items-center justify-between border border-un1t-border rounded-md px-3 py-2">
         <div>
-          <div className="text-sm text-un1t-white">Allow self-signed certs</div>
-          <div className="text-[11px] text-un1t-mid">Only flip on for dev / LAN. Production should use a trusted cert.</div>
+          <div className="text-sm text-un1t-text">Allow self-signed certs</div>
+          <div className="text-[11px] text-un1t-muted">Only flip on for dev / LAN. Production should use a trusted cert.</div>
         </div>
         <button
           type="button"
           onClick={() => setAllowSelfSigned(v => !v)}
-          className={`w-10 h-5 rounded-full transition-colors ${allowSelfSigned ? 'bg-green-500' : 'bg-un1t-gray'}`}
+          className={`w-10 h-5 rounded-full transition-colors ${allowSelfSigned ? 'bg-green-500' : 'bg-un1t-border'}`}
         >
           <div className={`w-4 h-4 rounded-full bg-white transition-transform ${allowSelfSigned ? 'translate-x-5' : 'translate-x-0.5'}`} />
         </button>
       </div>
 
-      <div className="flex justify-end pt-2 border-t border-un1t-gray/40">
+      <div className="flex justify-end pt-2 border-t border-un1t-border/40">
         <button
           type="button"
           onClick={save}
           disabled={saving}
-          className="inline-flex items-center gap-1.5 px-4 py-2 rounded-md bg-un1t-white text-un1t-black text-sm font-semibold hover:bg-un1t-accent disabled:opacity-50"
+          className="inline-flex items-center gap-1.5 px-4 py-2 rounded-md bg-un1t-text text-un1t-bg text-sm font-semibold hover:bg-un1t-accent disabled:opacity-50"
         >
           {saving
             ? <><Loader2 size={12} className="animate-spin" /> Saving…</>
@@ -140,9 +140,9 @@ export default function UnifiIntegrationTab({ location, canEdit }) {
 function Field({ label, hint, children }) {
   return (
     <div>
-      <label className="block text-xs text-un1t-light mb-1">{label}</label>
+      <label className="block text-xs text-un1t-subtle mb-1">{label}</label>
       {children}
-      {hint && <p className="text-[11px] text-un1t-mid mt-1">{hint}</p>}
+      {hint && <p className="text-[11px] text-un1t-muted mt-1">{hint}</p>}
     </div>
   )
 }

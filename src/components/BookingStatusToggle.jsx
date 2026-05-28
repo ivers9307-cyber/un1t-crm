@@ -59,13 +59,13 @@ export default function BookingStatusToggle({ bookingId, currentStatus }) {
         {status.replace('_', ' ')}
       </button>
       {open && (
-        <div className="absolute right-0 top-full mt-1 bg-un1t-dark border border-un1t-gray rounded-lg shadow-lg z-10 py-1 min-w-[120px]">
+        <div className="absolute right-0 top-full mt-1 bg-un1t-surface border border-un1t-border rounded-lg shadow-lg z-10 py-1 min-w-[120px]">
           {statusOptions.map(opt => (
             <button
               key={opt}
               onClick={() => handlePick(opt)}
-              className={`w-full text-left text-xs px-3 py-1.5 hover:bg-un1t-gray/50 transition-colors ${
-                opt === status ? 'text-un1t-white' : 'text-un1t-light'
+              className={`w-full text-left text-xs px-3 py-1.5 hover:bg-un1t-border/50 transition-colors ${
+                opt === status ? 'text-un1t-text' : 'text-un1t-subtle'
               }`}
             >
               {opt.replace('_', ' ')}
@@ -119,9 +119,9 @@ function CancelBookingModal({ bookingId, onClose, onCancelled }) {
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={onClose}>
-      <div className="bg-un1t-dark border border-un1t-gray rounded-xl p-6 w-full max-w-md" onClick={e => e.stopPropagation()}>
+      <div className="bg-un1t-surface border border-un1t-border rounded-xl p-6 w-full max-w-md" onClick={e => e.stopPropagation()}>
         <h3 className="font-semibold mb-1">Cancel this booking?</h3>
-        <p className="text-xs text-un1t-light mb-4">
+        <p className="text-xs text-un1t-subtle mb-4">
           The customer&apos;s slot will be released. This is one-way — re-booking requires a new reservation.
         </p>
 
@@ -134,7 +134,7 @@ function CancelBookingModal({ bookingId, onClose, onCancelled }) {
           />
           <span>
             Email the customer that their booking has been cancelled.
-            <span className="block text-[11px] text-un1t-light mt-0.5">
+            <span className="block text-[11px] text-un1t-subtle mt-0.5">
               Skipped automatically if they&apos;ve opted out of administrative emails.
             </span>
           </span>
@@ -142,13 +142,13 @@ function CancelBookingModal({ bookingId, onClose, onCancelled }) {
 
         {notify && (
           <div className="mb-4">
-            <label className="block text-xs text-un1t-light mb-1">Reason (optional, included in the email)</label>
+            <label className="block text-xs text-un1t-subtle mb-1">Reason (optional, included in the email)</label>
             <textarea
               value={reason}
               onChange={e => setReason(e.target.value)}
               rows={2}
               placeholder="e.g. Class is full / Coach unavailable"
-              className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white resize-none"
+              className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text resize-none"
             />
           </div>
         )}
@@ -163,7 +163,7 @@ function CancelBookingModal({ bookingId, onClose, onCancelled }) {
           <button
             onClick={onClose}
             disabled={busy}
-            className="px-3 py-2 rounded-md text-sm border border-un1t-gray text-un1t-light hover:text-un1t-white hover:border-un1t-white/30"
+            className="px-3 py-2 rounded-md text-sm border border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-text/30"
           >
             Keep booking
           </button>

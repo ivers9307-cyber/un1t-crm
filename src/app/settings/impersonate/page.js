@@ -60,11 +60,11 @@ export default async function ImpersonatePage() {
 
   return (
     <div className="p-8 max-w-4xl">
-      <Link href="/settings" className="inline-flex items-center gap-1 text-xs text-un1t-light hover:text-un1t-white mb-3">
+      <Link href="/settings" className="inline-flex items-center gap-1 text-xs text-un1t-subtle hover:text-un1t-text mb-3">
         <ChevronLeft size={14} /> Settings
       </Link>
       <h2 className="text-2xl font-bold mb-1">View as user</h2>
-      <p className="text-sm text-un1t-light mb-6">
+      <p className="text-sm text-un1t-subtle mb-6">
         Master-only. Sign in as another user to debug their experience. Every session is logged below — both you and the impersonated user can review their own row in the audit trail.
       </p>
 
@@ -75,42 +75,42 @@ export default async function ImpersonatePage() {
       )}
 
       <div className="flex items-center gap-2 mb-3">
-        <UserCog size={16} className="text-un1t-light" />
+        <UserCog size={16} className="text-un1t-subtle" />
         <h3 className="text-lg font-semibold">Pick a user</h3>
       </div>
       <ImpersonatePickerFull users={users} />
 
       <div className="flex items-center gap-2 mt-10 mb-3">
-        <History size={16} className="text-un1t-light" />
+        <History size={16} className="text-un1t-subtle" />
         <h3 className="text-lg font-semibold">Recent sessions</h3>
       </div>
       {log.length === 0 ? (
-        <p className="text-sm text-un1t-light">No impersonation sessions yet.</p>
+        <p className="text-sm text-un1t-subtle">No impersonation sessions yet.</p>
       ) : (
-        <div className="bg-un1t-dark border border-un1t-gray rounded-lg overflow-x-auto">
+        <div className="bg-un1t-surface border border-un1t-border rounded-lg overflow-x-auto">
           <table className="w-full text-sm min-w-[600px]">
             <thead>
-              <tr className="border-b border-un1t-gray text-un1t-light text-xs uppercase tracking-wider">
+              <tr className="border-b border-un1t-border text-un1t-subtle text-xs uppercase tracking-wider">
                 <th className="text-left p-3">User</th>
                 <th className="text-left p-3">Started</th>
                 <th className="text-left p-3">Ended</th>
                 <th className="text-left p-3">Reason</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-un1t-gray">
+            <tbody className="divide-y divide-un1t-border">
               {log.map(row => (
                 <tr key={row.id}>
                   <td className="p-3">
-                    <div className="text-sm text-un1t-white">{row.target_name}</div>
-                    <div className="text-xs text-un1t-light">{row.target_email} · {row.target_role}</div>
+                    <div className="text-sm text-un1t-text">{row.target_name}</div>
+                    <div className="text-xs text-un1t-subtle">{row.target_email} · {row.target_role}</div>
                   </td>
-                  <td className="p-3 text-xs text-un1t-light">{new Date(row.started_at).toLocaleString()}</td>
-                  <td className="p-3 text-xs text-un1t-light">
+                  <td className="p-3 text-xs text-un1t-subtle">{new Date(row.started_at).toLocaleString()}</td>
+                  <td className="p-3 text-xs text-un1t-subtle">
                     {row.ended_at
                       ? new Date(row.ended_at).toLocaleString()
                       : <span className="text-amber-400">Active</span>}
                   </td>
-                  <td className="p-3 text-xs text-un1t-light truncate max-w-[200px]">{row.reason || '—'}</td>
+                  <td className="p-3 text-xs text-un1t-subtle truncate max-w-[200px]">{row.reason || '—'}</td>
                 </tr>
               ))}
             </tbody>

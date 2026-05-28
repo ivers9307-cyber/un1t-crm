@@ -146,7 +146,7 @@ export default function AchievementsAdminTable({ initialRules, eventTypes, locat
       <TestPanel />
 
       <div className="mt-6 mb-3 flex items-center justify-between">
-        <p className="text-sm text-un1t-light">{rules.length} rules ({rules.filter((r) => r.is_active).length} active)</p>
+        <p className="text-sm text-un1t-subtle">{rules.length} rules ({rules.filter((r) => r.is_active).length} active)</p>
         {!adding && (
           <button
             type="button"
@@ -172,7 +172,7 @@ export default function AchievementsAdminTable({ initialRules, eventTypes, locat
 
       <div className="overflow-hidden rounded-xl border border-neutral-200 bg-white">
         <table className="w-full text-sm">
-          <thead className="bg-neutral-50 text-left text-xs uppercase text-un1t-light">
+          <thead className="bg-neutral-50 text-left text-xs uppercase text-un1t-subtle">
             <tr>
               <th className="w-10 px-3 py-2"></th>
               <th className="px-3 py-2">Name</th>
@@ -241,7 +241,7 @@ function RuleRow({
           </div>
         </td>
         <td className="px-3 py-2 font-medium">{rule.name}</td>
-        <td className="px-3 py-2 font-mono text-xs text-un1t-light">{rule.slug}</td>
+        <td className="px-3 py-2 font-mono text-xs text-un1t-subtle">{rule.slug}</td>
         <td className="px-3 py-2 text-xs">{rule.category}</td>
         <td className="px-3 py-2 text-xs">{rule.rule_type}</td>
         <td className="px-3 py-2 text-xs">T{rule.tier}</td>
@@ -445,7 +445,7 @@ function RuleEditor({ rule, isCreate, eventTypes, locations, onCancel, onSubmit 
         <button
           type="button"
           onClick={onCancel}
-          className="inline-flex items-center gap-1 text-sm font-medium text-un1t-light hover:text-neutral-900"
+          className="inline-flex items-center gap-1 text-sm font-medium text-un1t-subtle hover:text-neutral-900"
         >
           <X size={14} /> Cancel
         </button>
@@ -622,7 +622,7 @@ function TestPanel() {
       </button>
       {open && (
         <div className="border-t border-neutral-200 px-4 py-3">
-          <p className="mb-3 text-xs text-un1t-light">
+          <p className="mb-3 text-xs text-un1t-subtle">
             Paste a contact ID. We&apos;ll run every active rule against
             their session history and show what would unlock — without
             writing anything.
@@ -651,13 +651,13 @@ function TestPanel() {
             <p className="mt-3 text-sm text-red-600">{result.error}</p>
           )}
           {result?.ok && result.fired.length === 0 && (
-            <p className="mt-3 text-sm text-un1t-light">
+            <p className="mt-3 text-sm text-un1t-subtle">
               No rules would fire for this contact ({result.sessions_in_window} sessions in window).
             </p>
           )}
           {result?.ok && result.fired.length > 0 && (
             <div className="mt-3">
-              <p className="mb-2 text-xs text-un1t-light">
+              <p className="mb-2 text-xs text-un1t-subtle">
                 {result.fired.length} rule{result.fired.length === 1 ? '' : 's'} would fire (across {result.sessions_in_window} sessions):
               </p>
               <ul className="space-y-1">
@@ -666,10 +666,10 @@ function TestPanel() {
                     <span className="inline-flex items-center gap-2">
                       <CheckCircle2 size={14} className={f.already_earned_at ? 'text-neutral-400' : 'text-emerald-600'} />
                       <span className="font-medium">{f.name}</span>
-                      <span className="font-mono text-xs text-un1t-light">{f.slug}</span>
+                      <span className="font-mono text-xs text-un1t-subtle">{f.slug}</span>
                     </span>
                     {f.already_earned_at && (
-                      <span className="text-xs text-un1t-light">already earned {new Date(f.already_earned_at).toLocaleDateString()}</span>
+                      <span className="text-xs text-un1t-subtle">already earned {new Date(f.already_earned_at).toLocaleDateString()}</span>
                     )}
                   </li>
                 ))}
@@ -696,7 +696,7 @@ function Field({ label, hint, required, children }) {
     <label className="block">
       <span className="mb-0.5 block text-xs font-medium text-neutral-700">
         {label}{required && <span className="text-red-600"> *</span>}
-        {hint && <span className="ml-2 font-normal text-un1t-light">{hint}</span>}
+        {hint && <span className="ml-2 font-normal text-un1t-subtle">{hint}</span>}
       </span>
       {children}
     </label>

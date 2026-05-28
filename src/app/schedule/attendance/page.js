@@ -20,7 +20,7 @@ export default async function AttendanceReportPage() {
   return (
     <div className="p-8 max-w-7xl">
       <h2 className="text-2xl font-bold mb-1">Attendance</h2>
-      <p className="text-sm text-un1t-light mb-8 max-w-3xl">
+      <p className="text-sm text-un1t-subtle mb-8 max-w-3xl">
         Auto-stamped from UniFi Access door unlocks. On-time means the
         first card-tap was within 60 seconds of the scheduled start;
         anything later is late. Pending means the shift is still in

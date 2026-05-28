@@ -137,14 +137,14 @@ export default function BcaSubmitSettings({ location, initialConfig, sampleCar }
         </div>
       )}
 
-      <section className="bg-un1t-dark border border-un1t-gray rounded-lg p-5">
-        <h3 className="text-sm font-semibold text-un1t-white mb-1 inline-flex items-center gap-1.5">
+      <section className="bg-un1t-surface border border-un1t-border rounded-lg p-5">
+        <h3 className="text-sm font-semibold text-un1t-text mb-1 inline-flex items-center gap-1.5">
           <Mail size={14} /> Email
         </h3>
-        <p className="text-xs text-un1t-light mb-4">
+        <p className="text-xs text-un1t-subtle mb-4">
           The send-from address must be a Postmark-approved sender on this account.
           Add it under{' '}
-          <a href="https://account.postmarkapp.com/signature_domains" target="_blank" rel="noopener noreferrer" className="underline hover:text-un1t-white">
+          <a href="https://account.postmarkapp.com/signature_domains" target="_blank" rel="noopener noreferrer" className="underline hover:text-un1t-text">
             Postmark → Sender Signatures
           </a>{' '}
           first, otherwise the submit endpoint will refuse with a 422.
@@ -159,7 +159,7 @@ export default function BcaSubmitSettings({ location, initialConfig, sampleCar }
             type="email"
             value={config.send_from}
             onChange={e => update({ send_from: e.target.value })}
-            className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid"
+            className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted"
             placeholder="vat-claims@ccfautos.com"
           />
         </Field>
@@ -173,7 +173,7 @@ export default function BcaSubmitSettings({ location, initialConfig, sampleCar }
             type="email"
             value={config.send_to}
             onChange={e => update({ send_to: e.target.value })}
-            className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid"
+            className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted"
             placeholder="vatclaims@bca.example"
           />
         </Field>
@@ -187,21 +187,21 @@ export default function BcaSubmitSettings({ location, initialConfig, sampleCar }
             type="email"
             value={config.cc || ''}
             onChange={e => update({ cc: e.target.value })}
-            className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid"
+            className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted"
             placeholder="ops@ccfautos.com"
           />
         </Field>
 
         <Field
           label="Subject template"
-          hint={<>Supports merge vars: {BCA_MERGE_TAGS.map(t => <code key={t} className="text-[10px] mx-0.5 px-1 py-0.5 bg-un1t-gray/40 rounded">{'{{'}{t}{'}}'}</code>)}</>}
+          hint={<>Supports merge vars: {BCA_MERGE_TAGS.map(t => <code key={t} className="text-[10px] mx-0.5 px-1 py-0.5 bg-un1t-border/40 rounded">{'{{'}{t}{'}}'}</code>)}</>}
           error={fieldErrors.subject_template}
         >
           <input
             type="text"
             value={config.subject_template}
             onChange={e => update({ subject_template: e.target.value })}
-            className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid font-mono"
+            className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted font-mono"
             placeholder={DEFAULT_BCA_CONFIG.subject_template}
           />
         </Field>
@@ -215,7 +215,7 @@ export default function BcaSubmitSettings({ location, initialConfig, sampleCar }
             value={config.body_template}
             onChange={e => update({ body_template: e.target.value })}
             rows={8}
-            className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid font-mono"
+            className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted font-mono"
             placeholder={DEFAULT_BCA_CONFIG.body_template}
           />
         </Field>
@@ -223,27 +223,27 @@ export default function BcaSubmitSettings({ location, initialConfig, sampleCar }
         <button
           type="button"
           onClick={() => setShowPreview(p => !p)}
-          className="mt-2 inline-flex items-center gap-1 text-xs text-un1t-light hover:text-un1t-white"
+          className="mt-2 inline-flex items-center gap-1 text-xs text-un1t-subtle hover:text-un1t-text"
         >
           <ChevronDown size={12} className={`transition-transform ${showPreview ? '' : '-rotate-90'}`} />
           {showPreview ? 'Hide' : 'Show'} preview with sample car
         </button>
         {showPreview && (
-          <div className="mt-3 bg-un1t-black border border-un1t-gray rounded-md p-3 text-xs">
-            <div className="text-un1t-mid mb-1">Subject</div>
-            <div className="text-un1t-white font-mono mb-3">{renderedSubject}</div>
-            <div className="text-un1t-mid mb-1">Body</div>
-            <pre className="text-un1t-white whitespace-pre-wrap font-mono text-[11px]">{renderedBody}</pre>
-            <p className="text-[10px] text-un1t-mid mt-3">
+          <div className="mt-3 bg-un1t-bg border border-un1t-border rounded-md p-3 text-xs">
+            <div className="text-un1t-muted mb-1">Subject</div>
+            <div className="text-un1t-text font-mono mb-3">{renderedSubject}</div>
+            <div className="text-un1t-muted mb-1">Body</div>
+            <pre className="text-un1t-text whitespace-pre-wrap font-mono text-[11px]">{renderedBody}</pre>
+            <p className="text-[10px] text-un1t-muted mt-3">
               Preview uses {sampleCar ? 'the most recent pending car at this location' : 'synthetic sample values'}.
             </p>
           </div>
         )}
       </section>
 
-      <section className="bg-un1t-dark border border-un1t-gray rounded-lg p-5">
-        <h3 className="text-sm font-semibold text-un1t-white mb-1">Document slots</h3>
-        <p className="text-xs text-un1t-light mb-4">
+      <section className="bg-un1t-surface border border-un1t-border rounded-lg p-5">
+        <h3 className="text-sm font-semibold text-un1t-text mb-1">Document slots</h3>
+        <p className="text-xs text-un1t-subtle mb-4">
           The documents BCA requires for the UK VAT claim. Edit labels to match BCA's checklist;
           add or remove slots if their requirements change. Slot keys (DOC_01…) are managed by
           the system and stable across renames — a removed slot re-added later keeps the same key.
@@ -258,20 +258,20 @@ export default function BcaSubmitSettings({ location, initialConfig, sampleCar }
         <div className="space-y-2">
           {config.documents.map((d, i) => (
             <div key={d.slug} className="flex items-center gap-2">
-              <span className="text-[10px] font-mono text-un1t-mid w-14 shrink-0">{d.slug.toUpperCase()}</span>
+              <span className="text-[10px] font-mono text-un1t-muted w-14 shrink-0">{d.slug.toUpperCase()}</span>
               <input
                 type="text"
                 value={d.label}
                 onChange={e => updateDoc(i, { label: e.target.value })}
                 maxLength={80}
-                className="flex-1 bg-un1t-black border border-un1t-gray rounded-md px-2.5 py-1.5 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
+                className="flex-1 bg-un1t-bg border border-un1t-border rounded-md px-2.5 py-1.5 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted"
                 placeholder={DEFAULT_BCA_DOCUMENTS[i]?.label || `Document ${i + 1} (placeholder)`}
               />
               <button
                 type="button"
                 onClick={() => resetDoc(i)}
                 title="Reset to placeholder label"
-                className="text-un1t-light hover:text-un1t-white p-1"
+                className="text-un1t-subtle hover:text-un1t-text p-1"
               >
                 <RotateCcw size={12} />
               </button>
@@ -282,7 +282,7 @@ export default function BcaSubmitSettings({ location, initialConfig, sampleCar }
                 title={config.documents.length <= MIN_BCA_DOCUMENTS
                   ? `Can't remove — at least ${MIN_BCA_DOCUMENTS} slot required.`
                   : 'Remove this slot'}
-                className="text-un1t-light hover:text-red-400 p-1 disabled:opacity-30 disabled:hover:text-un1t-light disabled:cursor-not-allowed"
+                className="text-un1t-subtle hover:text-red-400 p-1 disabled:opacity-30 disabled:hover:text-un1t-subtle disabled:cursor-not-allowed"
               >
                 <X size={12} />
               </button>
@@ -290,17 +290,17 @@ export default function BcaSubmitSettings({ location, initialConfig, sampleCar }
           ))}
         </div>
 
-        <div className="mt-3 pt-3 border-t border-un1t-gray/40 flex items-center justify-between">
+        <div className="mt-3 pt-3 border-t border-un1t-border/40 flex items-center justify-between">
           <button
             type="button"
             onClick={addDoc}
             disabled={config.documents.length >= MAX_BCA_DOCUMENTS}
-            className="inline-flex items-center gap-1 text-xs text-un1t-light hover:text-un1t-white px-2 py-1 rounded border border-un1t-gray hover:border-un1t-light disabled:opacity-40 disabled:hover:text-un1t-light disabled:cursor-not-allowed"
+            className="inline-flex items-center gap-1 text-xs text-un1t-subtle hover:text-un1t-text px-2 py-1 rounded border border-un1t-border hover:border-un1t-subtle disabled:opacity-40 disabled:hover:text-un1t-subtle disabled:cursor-not-allowed"
           >
             <Plus size={11} /> Add document slot
           </button>
           {config.documents.length >= MAX_BCA_DOCUMENTS && (
-            <span className="text-[11px] text-un1t-mid">Maximum {MAX_BCA_DOCUMENTS} reached.</span>
+            <span className="text-[11px] text-un1t-muted">Maximum {MAX_BCA_DOCUMENTS} reached.</span>
           )}
         </div>
       </section>
@@ -310,7 +310,7 @@ export default function BcaSubmitSettings({ location, initialConfig, sampleCar }
           type="button"
           onClick={save}
           disabled={busy}
-          className="inline-flex items-center gap-1.5 px-4 py-2 rounded-md bg-un1t-white text-un1t-black text-sm font-semibold hover:bg-un1t-accent disabled:opacity-50"
+          className="inline-flex items-center gap-1.5 px-4 py-2 rounded-md bg-un1t-text text-un1t-bg text-sm font-semibold hover:bg-un1t-accent disabled:opacity-50"
         >
           {busy ? 'Saving…' : 'Save'}
         </button>
@@ -323,9 +323,9 @@ export default function BcaSubmitSettings({ location, initialConfig, sampleCar }
 function Field({ label, hint, error, children }) {
   return (
     <div className="mb-3">
-      <label className="block text-xs text-un1t-light mb-1">{label}</label>
+      <label className="block text-xs text-un1t-subtle mb-1">{label}</label>
       {children}
-      {hint && <p className="text-[11px] text-un1t-mid mt-1">{hint}</p>}
+      {hint && <p className="text-[11px] text-un1t-muted mt-1">{hint}</p>}
       {error && (
         <p className="text-[11px] text-red-400 mt-1 inline-flex items-center gap-1">
           <AlertCircle size={10} /> {error}

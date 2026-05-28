@@ -87,14 +87,14 @@ export default function GlofoxInvoiceBackfillTab() {
 
   return (
     <div className="space-y-4">
-      <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-4 space-y-3">
+      <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4 space-y-3">
         <div className="flex items-start gap-3">
           <div className="w-10 h-10 rounded-lg bg-emerald-500/15 border border-emerald-500/40 flex items-center justify-center shrink-0">
             <Receipt size={18} className="text-emerald-400" />
           </div>
           <div>
-            <h3 className="font-semibold text-un1t-white">Backfill historical invoices</h3>
-            <p className="text-xs text-un1t-light mt-1 max-w-3xl">
+            <h3 className="font-semibold text-un1t-text">Backfill historical invoices</h3>
+            <p className="text-xs text-un1t-subtle mt-1 max-w-3xl">
               Pulls Glofox payment transactions from the chosen cutoff to now,
               upserts them into <code>glofox_invoices</code>, and recomputes
               every affected contact&apos;s <code>last_payment_at</code> +
@@ -111,12 +111,12 @@ export default function GlofoxInvoiceBackfillTab() {
 
         <div className="flex items-end gap-3">
           <div className="flex-1">
-            <label className="block text-xs text-un1t-light mb-1">Since (ISO timestamp)</label>
+            <label className="block text-xs text-un1t-subtle mb-1">Since (ISO timestamp)</label>
             <input
               type="text"
               value={sinceIso}
               onChange={(e) => setSinceIso(e.target.value)}
-              className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm font-mono text-un1t-white"
+              className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm font-mono text-un1t-text"
             />
           </div>
           <button
@@ -138,7 +138,7 @@ export default function GlofoxInvoiceBackfillTab() {
             <div className="font-medium">{error}</div>
             {result?.hint && <div className="text-[12px] mt-1">{result.hint}</div>}
             {result?.glofox_status && (
-              <div className="text-[11px] mt-1 text-un1t-mid">
+              <div className="text-[11px] mt-1 text-un1t-muted">
                 Glofox responded {result.glofox_status}. Full body:{' '}
                 <code className="text-[10px]">{JSON.stringify(result.glofox_body).slice(0, 200)}</code>
               </div>
@@ -154,55 +154,55 @@ export default function GlofoxInvoiceBackfillTab() {
           </div>
           <div className="grid grid-cols-4 gap-3 text-center pt-2">
             <div>
-              <div className="text-2xl font-semibold tabular-nums text-un1t-white">{result.fetched}</div>
-              <div className="text-[11px] text-un1t-light uppercase tracking-wider">Fetched</div>
+              <div className="text-2xl font-semibold tabular-nums text-un1t-text">{result.fetched}</div>
+              <div className="text-[11px] text-un1t-subtle uppercase tracking-wider">Fetched</div>
             </div>
             <div>
               <div className="text-2xl font-semibold tabular-nums text-emerald-400">{result.upserted}</div>
-              <div className="text-[11px] text-un1t-light uppercase tracking-wider">Upserted</div>
+              <div className="text-[11px] text-un1t-subtle uppercase tracking-wider">Upserted</div>
             </div>
             <div>
               <div className="text-2xl font-semibold tabular-nums text-blue-400">{result.contacts_updated}</div>
-              <div className="text-[11px] text-un1t-light uppercase tracking-wider">Contacts updated</div>
+              <div className="text-[11px] text-un1t-subtle uppercase tracking-wider">Contacts updated</div>
             </div>
             <div>
               <div className="text-2xl font-semibold tabular-nums text-amber-400">{result.skipped}</div>
-              <div className="text-[11px] text-un1t-light uppercase tracking-wider">Skipped</div>
+              <div className="text-[11px] text-un1t-subtle uppercase tracking-wider">Skipped</div>
             </div>
           </div>
           {result.message && (
-            <p className="text-[12px] text-un1t-light pt-2 border-t border-un1t-gray/50">{result.message}</p>
+            <p className="text-[12px] text-un1t-subtle pt-2 border-t border-un1t-border/50">{result.message}</p>
           )}
           {result.skipped_reasons && Object.keys(result.skipped_reasons).length > 0 && (
-            <div className="pt-2 border-t border-un1t-gray/50">
-              <div className="text-[11px] text-un1t-light">
+            <div className="pt-2 border-t border-un1t-border/50">
+              <div className="text-[11px] text-un1t-subtle">
                 Skipped breakdown:{' '}
                 {Object.entries(result.skipped_reasons).map(([reason, count], i) => (
                   <span key={reason}>
                     {i > 0 && ' · '}
-                    <code>{reason}</code>: <span className="text-un1t-white">{count}</span>
+                    <code>{reason}</code>: <span className="text-un1t-text">{count}</span>
                   </span>
                 ))}
                 {result.distinct_missed_user_ids != null && (
                   <span className="ml-2">
-                    · <span className="text-un1t-white">{result.distinct_missed_user_ids}</span> distinct missed user_ids
+                    · <span className="text-un1t-text">{result.distinct_missed_user_ids}</span> distinct missed user_ids
                   </span>
                 )}
               </div>
             </div>
           )}
           {result.missed_user_id_sample && result.missed_user_id_sample.length > 0 && (
-            <details className="text-[11px] text-un1t-light pt-2 border-t border-un1t-gray/50">
+            <details className="text-[11px] text-un1t-subtle pt-2 border-t border-un1t-border/50">
               <summary className="cursor-pointer">Missed user_ids sample ({result.missed_user_id_sample.length})</summary>
-              <pre className="mt-2 bg-un1t-black border border-un1t-gray rounded p-2 overflow-auto max-h-40 text-[10px]">
+              <pre className="mt-2 bg-un1t-bg border border-un1t-border rounded p-2 overflow-auto max-h-40 text-[10px]">
                 {result.missed_user_id_sample.join('\n')}
               </pre>
             </details>
           )}
           {result.failed_sample && result.failed_sample.length > 0 && (
-            <details className="text-[11px] text-un1t-light pt-2 border-t border-un1t-gray/50">
+            <details className="text-[11px] text-un1t-subtle pt-2 border-t border-un1t-border/50">
               <summary className="cursor-pointer">Failed sample ({result.failed_sample.length})</summary>
-              <pre className="mt-2 bg-un1t-black border border-un1t-gray rounded p-2 overflow-auto max-h-40 text-[10px]">
+              <pre className="mt-2 bg-un1t-bg border border-un1t-border rounded p-2 overflow-auto max-h-40 text-[10px]">
                 {JSON.stringify(result.failed_sample, null, 2)}
               </pre>
             </details>
@@ -211,14 +211,14 @@ export default function GlofoxInvoiceBackfillTab() {
               Glofox. Surfaced when fetched > 0 so we can see fields
               that AREN'T in the documented spec. */}
           {result.first_transaction_keys && result.first_transaction_keys.length > 0 && (
-            <details className="text-[11px] text-un1t-light pt-2 border-t border-un1t-gray/50" open>
+            <details className="text-[11px] text-un1t-subtle pt-2 border-t border-un1t-border/50" open>
               <summary className="cursor-pointer">First transaction shape ({result.first_transaction_keys.length} keys)</summary>
               <div className="mt-2 space-y-2">
                 <div className="text-[10px]">
                   Keys: <code>{result.first_transaction_keys.join(', ')}</code>
                 </div>
                 {result.first_transaction_sample && (
-                  <pre className="bg-un1t-black border border-un1t-gray rounded p-2 overflow-auto max-h-64 text-[10px]">
+                  <pre className="bg-un1t-bg border border-un1t-border rounded p-2 overflow-auto max-h-64 text-[10px]">
                     {result.first_transaction_sample}
                   </pre>
                 )}
@@ -229,23 +229,23 @@ export default function GlofoxInvoiceBackfillTab() {
               request + response so the operator can validate the call
               shape and have evidence to share with Glofox support. */}
           {result.fetched === 0 && (result.glofox_response_raw || result.glofox_request_body) && (
-            <div className="pt-2 border-t border-un1t-gray/50 space-y-2">
-              <div className="text-[11px] text-un1t-light">
+            <div className="pt-2 border-t border-un1t-border/50 space-y-2">
+              <div className="text-[11px] text-un1t-subtle">
                 Glofox returned HTTP {result.glofox_status}. Body keys:{' '}
                 <code>{JSON.stringify(result.glofox_body_keys)}</code>
               </div>
               {result.glofox_request_body && (
-                <details className="text-[11px] text-un1t-light">
+                <details className="text-[11px] text-un1t-subtle">
                   <summary className="cursor-pointer">Sent payload</summary>
-                  <pre className="mt-2 bg-un1t-black border border-un1t-gray rounded p-2 overflow-auto max-h-48 text-[10px]">
+                  <pre className="mt-2 bg-un1t-bg border border-un1t-border rounded p-2 overflow-auto max-h-48 text-[10px]">
                     {JSON.stringify(result.glofox_request_body, null, 2)}
                   </pre>
                 </details>
               )}
               {result.glofox_response_raw && (
-                <details className="text-[11px] text-un1t-light">
+                <details className="text-[11px] text-un1t-subtle">
                   <summary className="cursor-pointer">Raw response (truncated 2KB)</summary>
-                  <pre className="mt-2 bg-un1t-black border border-un1t-gray rounded p-2 overflow-auto max-h-48 text-[10px]">
+                  <pre className="mt-2 bg-un1t-bg border border-un1t-border rounded p-2 overflow-auto max-h-48 text-[10px]">
                     {result.glofox_response_raw}
                   </pre>
                 </details>
@@ -258,14 +258,14 @@ export default function GlofoxInvoiceBackfillTab() {
       {/* CSV fallback — when /Analytics/report returns 0 (the actual
           prod outcome). Operator exports invoices from the Glofox UI
           and uploads here. PIPELINE5.5b. */}
-      <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-4 space-y-3">
+      <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4 space-y-3">
         <div className="flex items-start gap-3">
           <div className="w-10 h-10 rounded-lg bg-blue-500/15 border border-blue-500/40 flex items-center justify-center shrink-0">
             <FileText size={18} className="text-blue-400" />
           </div>
           <div className="flex-1">
-            <h3 className="font-semibold text-un1t-white">Upload Glofox CSV (fallback)</h3>
-            <p className="text-xs text-un1t-light mt-1 max-w-3xl">
+            <h3 className="font-semibold text-un1t-text">Upload Glofox CSV (fallback)</h3>
+            <p className="text-xs text-un1t-subtle mt-1 max-w-3xl">
               If the API path above returned 0 (Glofox <code>/Analytics/report</code>{' '}
               scope likely locked), export invoices from the Glofox UI as CSV and upload here.
               Tolerant column matching: handles common header names (Member Email / email,
@@ -280,12 +280,12 @@ export default function GlofoxInvoiceBackfillTab() {
 
         <form onSubmit={runCsv} className="flex items-end gap-3">
           <div className="flex-1">
-            <label className="block text-xs text-un1t-light mb-1">CSV file</label>
+            <label className="block text-xs text-un1t-subtle mb-1">CSV file</label>
             <input
               type="file"
               accept=".csv,text/csv"
               onChange={(e) => setCsvFile(e.target.files?.[0] || null)}
-              className="w-full text-sm text-un1t-light file:mr-3 file:py-2 file:px-3 file:rounded-md file:border-0 file:bg-un1t-gray/40 file:text-un1t-white file:cursor-pointer hover:file:bg-un1t-gray/60"
+              className="w-full text-sm text-un1t-subtle file:mr-3 file:py-2 file:px-3 file:rounded-md file:border-0 file:bg-un1t-border/40 file:text-un1t-text file:cursor-pointer hover:file:bg-un1t-border/60"
             />
           </div>
           <button
@@ -305,7 +305,7 @@ export default function GlofoxInvoiceBackfillTab() {
           <div>
             <div className="font-medium">{csvError}</div>
             {csvResult?.headers && (
-              <div className="text-[11px] mt-1 text-un1t-mid">
+              <div className="text-[11px] mt-1 text-un1t-muted">
                 Headers seen: <code className="text-[10px]">{csvResult.headers.join(', ')}</code>
               </div>
             )}
@@ -320,30 +320,30 @@ export default function GlofoxInvoiceBackfillTab() {
           </div>
           <div className="grid grid-cols-4 gap-3 text-center pt-2">
             <div>
-              <div className="text-2xl font-semibold tabular-nums text-un1t-white">{csvResult.fetched}</div>
-              <div className="text-[11px] text-un1t-light uppercase tracking-wider">Rows in CSV</div>
+              <div className="text-2xl font-semibold tabular-nums text-un1t-text">{csvResult.fetched}</div>
+              <div className="text-[11px] text-un1t-subtle uppercase tracking-wider">Rows in CSV</div>
             </div>
             <div>
               <div className="text-2xl font-semibold tabular-nums text-emerald-400">{csvResult.upserted}</div>
-              <div className="text-[11px] text-un1t-light uppercase tracking-wider">Upserted</div>
+              <div className="text-[11px] text-un1t-subtle uppercase tracking-wider">Upserted</div>
             </div>
             <div>
               <div className="text-2xl font-semibold tabular-nums text-blue-400">{csvResult.contacts_updated}</div>
-              <div className="text-[11px] text-un1t-light uppercase tracking-wider">Contacts updated</div>
+              <div className="text-[11px] text-un1t-subtle uppercase tracking-wider">Contacts updated</div>
             </div>
             <div>
               <div className="text-2xl font-semibold tabular-nums text-amber-400">{csvResult.skipped}</div>
-              <div className="text-[11px] text-un1t-light uppercase tracking-wider">Skipped</div>
+              <div className="text-[11px] text-un1t-subtle uppercase tracking-wider">Skipped</div>
             </div>
           </div>
           {csvResult.detected_columns && (
-            <details className="text-[11px] text-un1t-light pt-2 border-t border-un1t-gray/50">
+            <details className="text-[11px] text-un1t-subtle pt-2 border-t border-un1t-border/50">
               <summary className="cursor-pointer">Column mapping (sanity check)</summary>
               <table className="mt-2 w-full text-[11px]">
                 <tbody>
                   {Object.entries(csvResult.detected_columns).map(([canonical, header]) => (
-                    <tr key={canonical} className="border-b border-un1t-gray/30 last:border-b-0">
-                      <td className="py-1 text-un1t-mid font-mono">{canonical}</td>
+                    <tr key={canonical} className="border-b border-un1t-border/30 last:border-b-0">
+                      <td className="py-1 text-un1t-muted font-mono">{canonical}</td>
                       <td className="py-1 text-right">{header || <span className="text-amber-700">— not found</span>}</td>
                     </tr>
                   ))}
@@ -352,9 +352,9 @@ export default function GlofoxInvoiceBackfillTab() {
             </details>
           )}
           {csvResult.failed_sample && csvResult.failed_sample.length > 0 && (
-            <details className="text-[11px] text-un1t-light pt-2 border-t border-un1t-gray/50">
+            <details className="text-[11px] text-un1t-subtle pt-2 border-t border-un1t-border/50">
               <summary className="cursor-pointer">Failed sample ({csvResult.failed_sample.length})</summary>
-              <pre className="mt-2 bg-un1t-black border border-un1t-gray rounded p-2 overflow-auto max-h-40 text-[10px]">
+              <pre className="mt-2 bg-un1t-bg border border-un1t-border rounded p-2 overflow-auto max-h-40 text-[10px]">
                 {JSON.stringify(csvResult.failed_sample, null, 2)}
               </pre>
             </details>

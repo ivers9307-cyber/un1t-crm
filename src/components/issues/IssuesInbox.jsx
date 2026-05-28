@@ -21,7 +21,7 @@ const STATUS_TONE = {
   open:        { fg: 'text-amber-200', bg: 'bg-amber-500/10', border: 'border-amber-500/30', label: 'Open' },
   in_progress: { fg: 'text-blue-200',  bg: 'bg-blue-500/10',  border: 'border-blue-500/30',  label: 'In progress' },
   resolved:    { fg: 'text-green-200', bg: 'bg-green-500/10', border: 'border-green-500/30', label: 'Resolved' },
-  closed:      { fg: 'text-un1t-light', bg: 'bg-un1t-gray/30', border: 'border-un1t-gray', label: 'Closed' },
+  closed:      { fg: 'text-un1t-subtle', bg: 'bg-un1t-border/30', border: 'border-un1t-border', label: 'Closed' },
 }
 
 function timeAgo(iso) {
@@ -73,7 +73,7 @@ export default function IssuesInbox() {
 
   return (
     <>
-      <div className="flex items-center gap-1 mb-4 border-b border-un1t-gray">
+      <div className="flex items-center gap-1 mb-4 border-b border-un1t-border">
         {TABS.map((t) => (
           <button
             key={t.key}
@@ -81,8 +81,8 @@ export default function IssuesInbox() {
             onClick={() => setTab(t.key)}
             className={`px-4 py-2 text-sm border-b-2 -mb-px ${
               tab === t.key
-                ? 'border-un1t-white text-un1t-white font-semibold'
-                : 'border-transparent text-un1t-light hover:text-un1t-white'
+                ? 'border-un1t-text text-un1t-text font-semibold'
+                : 'border-transparent text-un1t-subtle hover:text-un1t-text'
             }`}
           >
             {t.label}
@@ -91,14 +91,14 @@ export default function IssuesInbox() {
       </div>
 
       {rows === null ? (
-        <div className="text-sm text-un1t-light inline-flex items-center gap-2">
+        <div className="text-sm text-un1t-subtle inline-flex items-center gap-2">
           <Loader2 size={14} className="animate-spin" /> Loading…
         </div>
       ) : rows.length === 0 ? (
-        <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-8 text-center">
-          <CheckCircle2 size={28} className="text-un1t-mid mx-auto mb-2" />
-          <div className="text-sm font-semibold text-un1t-white">All clear</div>
-          <div className="text-[12px] text-un1t-light mt-1">
+        <div className="bg-un1t-surface border border-un1t-border rounded-lg p-8 text-center">
+          <CheckCircle2 size={28} className="text-un1t-muted mx-auto mb-2" />
+          <div className="text-sm font-semibold text-un1t-text">All clear</div>
+          <div className="text-[12px] text-un1t-subtle mt-1">
             {tab === 'open' ? 'No open issues at this studio.' : `No ${tab} issues to show.`}
           </div>
         </div>
@@ -111,7 +111,7 @@ export default function IssuesInbox() {
                 key={r.id}
                 type="button"
                 onClick={() => setSelectedId(r.id)}
-                className="text-left bg-un1t-dark border border-un1t-gray hover:bg-un1t-gray/30 rounded-lg p-4"
+                className="text-left bg-un1t-surface border border-un1t-border hover:bg-un1t-border/30 rounded-lg p-4"
               >
                 <div className="flex items-start justify-between gap-3 mb-1">
                   <div className="flex items-center gap-2">
@@ -119,15 +119,15 @@ export default function IssuesInbox() {
                       {tone.label}
                     </span>
                     {Array.isArray(r.issue_attachments) && r.issue_attachments.length > 0 && (
-                      <span className="text-[11px] text-un1t-light inline-flex items-center gap-1">
+                      <span className="text-[11px] text-un1t-subtle inline-flex items-center gap-1">
                         <ImageIcon size={11} /> {r.issue_attachments.length}
                       </span>
                     )}
                   </div>
-                  <span className="text-[11px] text-un1t-light">{timeAgo(r.created_at)}</span>
+                  <span className="text-[11px] text-un1t-subtle">{timeAgo(r.created_at)}</span>
                 </div>
-                <div className="text-sm text-un1t-white truncate-2">{r.description}</div>
-                <div className="text-[11px] text-un1t-light mt-1">
+                <div className="text-sm text-un1t-text truncate-2">{r.description}</div>
+                <div className="text-[11px] text-un1t-subtle mt-1">
                   {r.submitter?.full_name || 'Staff'}{r.claimant?.full_name ? ` · claimed by ${r.claimant.full_name}` : ''}
                 </div>
               </button>
@@ -208,39 +208,39 @@ function IssueDrawer({ id, onClose, onChanged }) {
   return (
     <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4" onClick={onClose}>
       <div
-        className="bg-un1t-dark border border-un1t-gray rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto"
+        className="bg-un1t-surface border border-un1t-border rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="p-5 border-b border-un1t-gray flex items-center justify-between">
+        <div className="p-5 border-b border-un1t-border flex items-center justify-between">
           <div className="flex items-center gap-2">
             <span className={`${tone.bg} ${tone.border} ${tone.fg} text-[10px] uppercase tracking-wider font-semibold border rounded-full px-2 py-0.5`}>
               {tone.label}
             </span>
-            <span className="text-[11px] text-un1t-light">{issue ? timeAgo(issue.created_at) : ''}</span>
+            <span className="text-[11px] text-un1t-subtle">{issue ? timeAgo(issue.created_at) : ''}</span>
           </div>
-          <button onClick={onClose} className="text-un1t-light hover:text-un1t-white p-1">
+          <button onClick={onClose} className="text-un1t-subtle hover:text-un1t-text p-1">
             <X size={18} />
           </button>
         </div>
 
         <div className="p-5 space-y-4">
           {!issue ? (
-            <div className="text-sm text-un1t-light inline-flex items-center gap-2">
+            <div className="text-sm text-un1t-subtle inline-flex items-center gap-2">
               <Loader2 size={14} className="animate-spin" /> Loading…
             </div>
           ) : (
             <>
               <div>
-                <div className="text-xs uppercase tracking-wider text-un1t-light mb-1">Reported by</div>
-                <div className="text-sm text-un1t-white">{issue.submitter?.full_name || 'Staff'}</div>
+                <div className="text-xs uppercase tracking-wider text-un1t-subtle mb-1">Reported by</div>
+                <div className="text-sm text-un1t-text">{issue.submitter?.full_name || 'Staff'}</div>
                 {issue.locations?.name && (
-                  <div className="text-[11px] text-un1t-light mt-0.5">{issue.locations.name}</div>
+                  <div className="text-[11px] text-un1t-subtle mt-0.5">{issue.locations.name}</div>
                 )}
               </div>
 
               <div>
-                <div className="text-xs uppercase tracking-wider text-un1t-light mb-1">Description</div>
-                <div className="text-sm text-un1t-white whitespace-pre-wrap">{issue.description}</div>
+                <div className="text-xs uppercase tracking-wider text-un1t-subtle mb-1">Description</div>
+                <div className="text-sm text-un1t-text whitespace-pre-wrap">{issue.description}</div>
               </div>
 
               {Array.isArray(issue.issue_attachments) && issue.issue_attachments.length > 0 && (
@@ -258,7 +258,7 @@ function IssueDrawer({ id, onClose, onChanged }) {
                   <div className="text-xs uppercase tracking-wider text-green-200 font-semibold mb-1">
                     Resolved{issue.resolver?.full_name ? ` by ${issue.resolver.full_name}` : ''}
                   </div>
-                  <div className="text-sm text-un1t-white whitespace-pre-wrap">
+                  <div className="text-sm text-un1t-text whitespace-pre-wrap">
                     {issue.resolution_notes || '—'}
                   </div>
                 </div>
@@ -274,20 +274,20 @@ function IssueDrawer({ id, onClose, onChanged }) {
         </div>
 
         {issue && (
-          <div className="p-5 border-t border-un1t-gray space-y-3">
+          <div className="p-5 border-t border-un1t-border space-y-3">
             {resolving ? (
               <>
-                <label className="block text-xs text-un1t-light mb-1.5">Resolution notes (sent to the reporter)</label>
+                <label className="block text-xs text-un1t-subtle mb-1.5">Resolution notes (sent to the reporter)</label>
                 <textarea
                   value={notes}
                   onChange={(e) => setNotes(e.target.value)}
                   placeholder="What was fixed / replaced / cleaned?"
                   maxLength={2000}
                   rows={4}
-                  className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
+                  className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
                 />
                 <div className="flex items-center justify-end gap-2">
-                  <button type="button" onClick={() => { setResolving(false); setNotes('') }} className="text-un1t-light hover:text-un1t-white text-sm px-3 py-1.5">
+                  <button type="button" onClick={() => { setResolving(false); setNotes('') }} className="text-un1t-subtle hover:text-un1t-text text-sm px-3 py-1.5">
                     Cancel
                   </button>
                   <button
@@ -308,7 +308,7 @@ function IssueDrawer({ id, onClose, onChanged }) {
                     type="button"
                     onClick={() => act('claim', 'claim')}
                     disabled={busy === 'claim'}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-un1t-gray/40 text-un1t-white text-sm font-semibold hover:bg-un1t-gray/60 disabled:opacity-50"
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-un1t-border/40 text-un1t-text text-sm font-semibold hover:bg-un1t-border/60 disabled:opacity-50"
                   >
                     {busy === 'claim' ? <Loader2 size={12} className="animate-spin" /> : <Lock size={12} />}
                     Claim
@@ -328,7 +328,7 @@ function IssueDrawer({ id, onClose, onChanged }) {
                     type="button"
                     onClick={() => act('close', 'close')}
                     disabled={busy === 'close'}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-un1t-gray/40 text-un1t-white text-sm font-semibold hover:bg-un1t-gray/60 disabled:opacity-50"
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-un1t-border/40 text-un1t-text text-sm font-semibold hover:bg-un1t-border/60 disabled:opacity-50"
                   >
                     {busy === 'close' ? <Loader2 size={12} className="animate-spin" /> : <X size={12} />}
                     Close
@@ -350,7 +350,7 @@ function IssueDrawer({ id, onClose, onChanged }) {
 function PhotoStrip({ issueId, attachments }) {
   return (
     <div>
-      <div className="text-xs uppercase tracking-wider text-un1t-light mb-2">Photos</div>
+      <div className="text-xs uppercase tracking-wider text-un1t-subtle mb-2">Photos</div>
       <div className="grid grid-cols-3 gap-2">
         {attachments
           .slice()
@@ -386,21 +386,21 @@ function Photo({ issueId, attachment }) {
 
   if (err) {
     return (
-      <div className="aspect-square bg-un1t-black/40 border border-un1t-gray rounded-md flex items-center justify-center">
+      <div className="aspect-square bg-un1t-bg/40 border border-un1t-border rounded-md flex items-center justify-center">
         <AlertCircle size={14} className="text-amber-400" />
       </div>
     )
   }
   if (!url) {
     return (
-      <div className="aspect-square bg-un1t-black/40 border border-un1t-gray rounded-md flex items-center justify-center">
-        <Loader2 size={14} className="text-un1t-light animate-spin" />
+      <div className="aspect-square bg-un1t-bg/40 border border-un1t-border rounded-md flex items-center justify-center">
+        <Loader2 size={14} className="text-un1t-subtle animate-spin" />
       </div>
     )
   }
   return (
     <a href={url} target="_blank" rel="noreferrer">
-      <img src={url} alt="" className="w-full aspect-square object-cover rounded-md border border-un1t-gray" />
+      <img src={url} alt="" className="w-full aspect-square object-cover rounded-md border border-un1t-border" />
     </a>
   )
 }

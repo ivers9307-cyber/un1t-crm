@@ -9,12 +9,16 @@ module.exports = {
     extend: {
       colors: {
         un1t: {
-          black: '#FFFFFF',
-          dark: '#F7F8FA',
-          gray: '#E2E5E9',
-          mid: '#94A3B8',
-          light: '#64748B',
-          white: '#111827',
+          // Intent-based tokens (UI-FOUND.1). Names previously meant
+          // their opposite (e.g. `black` held #FFFFFF) after a
+          // dark→light retrofit; renamed so a class never lies about
+          // its colour. Hex values unchanged — pure rename.
+          bg: '#FFFFFF',       // was `black`  — page background
+          surface: '#F7F8FA',  // was `dark`   — cards / raised
+          border: '#E2E5E9',   // was `gray`   — hairlines
+          muted: '#94A3B8',    // was `mid`    — secondary text
+          subtle: '#64748B',   // was `light`  — tertiary text
+          text: '#111827',     // was `white`  — primary text
           accent: '#1E293B',
         },
         stage: {

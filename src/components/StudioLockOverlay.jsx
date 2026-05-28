@@ -140,12 +140,12 @@ export default function StudioLockOverlay() {
   if (!enabled || !locked) return null
 
   return (
-    <div className="fixed inset-0 z-[9999] bg-un1t-black/95 backdrop-blur-md flex items-center justify-center p-6">
+    <div className="fixed inset-0 z-[9999] bg-un1t-bg/95 backdrop-blur-md flex items-center justify-center p-6">
       <div className="w-full max-w-xs">
         <div className="text-center mb-8">
-          <Lock size={28} className="mx-auto text-un1t-light mb-3" />
-          <div className="text-xs uppercase tracking-widest text-un1t-light mb-2">Locked</div>
-          <div className="text-2xl font-bold text-un1t-white">Enter your PIN</div>
+          <Lock size={28} className="mx-auto text-un1t-subtle mb-3" />
+          <div className="text-xs uppercase tracking-widest text-un1t-subtle mb-2">Locked</div>
+          <div className="text-2xl font-bold text-un1t-text">Enter your PIN</div>
         </div>
 
         <div className="flex items-center justify-center gap-3">
@@ -156,8 +156,8 @@ export default function StudioLockOverlay() {
                 error
                   ? 'bg-red-500/30 border-red-500/70'
                   : pin.length > i
-                    ? 'bg-un1t-white border-un1t-white'
-                    : 'bg-transparent border-un1t-gray'
+                    ? 'bg-un1t-text border-un1t-text'
+                    : 'bg-transparent border-un1t-border'
               }`}
             />
           ))}
@@ -173,7 +173,7 @@ export default function StudioLockOverlay() {
               key={d}
               onClick={() => appendDigit(d)}
               disabled={submitting}
-              className="aspect-square rounded-2xl bg-un1t-dark border border-un1t-gray text-un1t-white text-2xl font-semibold hover:bg-un1t-gray/40 disabled:opacity-40 active:scale-95 transition-transform"
+              className="aspect-square rounded-2xl bg-un1t-surface border border-un1t-border text-un1t-text text-2xl font-semibold hover:bg-un1t-border/40 disabled:opacity-40 active:scale-95 transition-transform"
             >
               {d}
             </button>
@@ -182,14 +182,14 @@ export default function StudioLockOverlay() {
           <button
             onClick={() => appendDigit('0')}
             disabled={submitting}
-            className="aspect-square rounded-2xl bg-un1t-dark border border-un1t-gray text-un1t-white text-2xl font-semibold hover:bg-un1t-gray/40 disabled:opacity-40 active:scale-95 transition-transform"
+            className="aspect-square rounded-2xl bg-un1t-surface border border-un1t-border text-un1t-text text-2xl font-semibold hover:bg-un1t-border/40 disabled:opacity-40 active:scale-95 transition-transform"
           >
             0
           </button>
           <button
             onClick={backspace}
             disabled={submitting || pin.length === 0}
-            className="aspect-square rounded-2xl bg-un1t-dark border border-un1t-gray text-un1t-light hover:bg-un1t-gray/40 disabled:opacity-40 flex items-center justify-center"
+            className="aspect-square rounded-2xl bg-un1t-surface border border-un1t-border text-un1t-subtle hover:bg-un1t-border/40 disabled:opacity-40 flex items-center justify-center"
           >
             <Delete size={22} />
           </button>

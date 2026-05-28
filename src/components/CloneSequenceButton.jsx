@@ -45,7 +45,7 @@ export default function CloneSequenceButton({ sequenceId, sequenceName }) {
       className={`p-1.5 rounded transition-colors ${
         error
           ? 'text-red-400 hover:bg-red-500/10'
-          : 'text-un1t-light hover:text-un1t-white hover:bg-un1t-gray/40'
+          : 'text-un1t-subtle hover:text-un1t-text hover:bg-un1t-border/40'
       } disabled:opacity-50`}
     >
       {busy ? <Loader2 size={14} className="animate-spin" /> : <Copy size={14} />}

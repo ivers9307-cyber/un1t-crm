@@ -52,22 +52,22 @@ export default function ImportRollbackButton({ importId }) {
       {open && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => !busy && close()}>
           <div
-            className="bg-un1t-dark border border-un1t-gray rounded-xl max-w-lg w-full p-6"
+            className="bg-un1t-surface border border-un1t-border rounded-xl max-w-lg w-full p-6"
             onClick={(e) => e.stopPropagation()}
           >
             <header className="flex items-start gap-3 mb-4">
               <AlertTriangle size={20} className="text-amber-600 mt-0.5 shrink-0" />
               <div className="flex-1">
-                <h3 className="text-base font-semibold text-un1t-white">
+                <h3 className="text-base font-semibold text-un1t-text">
                   {result ? 'Rollback complete' : 'Roll back this import?'}
                 </h3>
                 {!result && (
-                  <p className="text-xs text-un1t-light mt-1">
+                  <p className="text-xs text-un1t-subtle mt-1">
                     Created contacts will be hard-deleted (with WhatsApp PII redacted). Updated contacts will be restored to their pre-import values where possible.
                   </p>
                 )}
               </div>
-              <button type="button" onClick={() => !busy && close()} disabled={busy} className="text-un1t-light hover:text-un1t-white">
+              <button type="button" onClick={() => !busy && close()} disabled={busy} className="text-un1t-subtle hover:text-un1t-text">
                 <X size={16} />
               </button>
             </header>
@@ -81,15 +81,15 @@ export default function ImportRollbackButton({ importId }) {
             {!result && (
               <div className="space-y-3">
                 <div>
-                  <label className="block text-xs text-un1t-light mb-1">
-                    Type <strong className="text-un1t-white">ROLLBACK</strong> to confirm:
+                  <label className="block text-xs text-un1t-subtle mb-1">
+                    Type <strong className="text-un1t-text">ROLLBACK</strong> to confirm:
                   </label>
                   <input
                     type="text"
                     value={confirm}
                     onChange={(e) => setConfirm(e.target.value)}
                     disabled={busy}
-                    className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
+                    className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
                   />
                 </div>
                 <button
@@ -106,9 +106,9 @@ export default function ImportRollbackButton({ importId }) {
 
             {result && (
               <div className="space-y-3">
-                <ul className="text-sm text-un1t-light space-y-1">
-                  <li><strong className="text-un1t-white">{result.deleted}</strong> created contact{result.deleted === 1 ? '' : 's'} deleted</li>
-                  <li><strong className="text-un1t-white">{result.restored}</strong> updated contact{result.restored === 1 ? '' : 's'} restored to pre-import values</li>
+                <ul className="text-sm text-un1t-subtle space-y-1">
+                  <li><strong className="text-un1t-text">{result.deleted}</strong> created contact{result.deleted === 1 ? '' : 's'} deleted</li>
+                  <li><strong className="text-un1t-text">{result.restored}</strong> updated contact{result.restored === 1 ? '' : 's'} restored to pre-import values</li>
                   {result.failed > 0 && (
                     <li className="text-amber-700">{result.failed} row{result.failed === 1 ? '' : 's'} could not be reversed (already deleted or modified by hand — see server logs)</li>
                   )}
@@ -116,7 +116,7 @@ export default function ImportRollbackButton({ importId }) {
                 <button
                   type="button"
                   onClick={close}
-                  className="w-full inline-flex items-center justify-center text-sm bg-un1t-white text-un1t-black font-medium py-2 rounded-md hover:bg-un1t-accent"
+                  className="w-full inline-flex items-center justify-center text-sm bg-un1t-text text-un1t-bg font-medium py-2 rounded-md hover:bg-un1t-accent"
                 >
                   Done
                 </button>

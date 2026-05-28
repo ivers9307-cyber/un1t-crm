@@ -148,17 +148,17 @@ export default function ContractIssueWizard({ issuerName }) {
   }
 
   return (
-    <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5">
+    <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5">
       <StepHeader step={step} />
 
       {step === 1 && (
         <div className="space-y-4 mt-5">
           <div>
-            <label className="block text-sm text-un1t-light mb-1">Recipient</label>
+            <label className="block text-sm text-un1t-subtle mb-1">Recipient</label>
             <select
               value={profileId}
               onChange={e => { setProfileId(e.target.value); setTemplateId('') }}
-              className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm"
+              className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm"
             >
               <option value="">Pick a staff member…</option>
               {staff.map(s => (
@@ -169,12 +169,12 @@ export default function ContractIssueWizard({ issuerName }) {
             </select>
           </div>
           <div>
-            <label className="block text-sm text-un1t-light mb-1">Template</label>
+            <label className="block text-sm text-un1t-subtle mb-1">Template</label>
             <select
               value={templateId}
               onChange={e => setTemplateId(e.target.value)}
               disabled={!profileId}
-              className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm disabled:opacity-50"
+              className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm disabled:opacity-50"
             >
               <option value="">{profileId ? 'Pick a template…' : 'Pick a recipient first'}</option>
               {eligibleTemplates.map(t => (
@@ -195,7 +195,7 @@ export default function ContractIssueWizard({ issuerName }) {
               type="button"
               disabled={!canAdvanceStep1()}
               onClick={() => setStep(2)}
-              className="text-xs bg-un1t-white text-un1t-black px-3 py-1.5 rounded-md font-medium hover:bg-un1t-accent disabled:opacity-50 inline-flex items-center gap-1"
+              className="text-xs bg-un1t-text text-un1t-bg px-3 py-1.5 rounded-md font-medium hover:bg-un1t-accent disabled:opacity-50 inline-flex items-center gap-1"
             >Next <ChevronRight size={11} /></button>
           </div>
         </div>
@@ -203,13 +203,13 @@ export default function ContractIssueWizard({ issuerName }) {
 
       {step === 2 && (
         <div className="space-y-4 mt-5">
-          <p className="text-xs text-un1t-light">
+          <p className="text-xs text-un1t-subtle">
             Profile fields ({recipient?.full_name}, {recipient?.email}, role, salary etc.) are
             auto-filled from the recipient&apos;s record. Just supply any custom variables this
             template needs.
           </p>
           {customVarDefs.length === 0 && unmappedKeys.length === 0 ? (
-            <p className="text-xs text-un1t-mid italic">
+            <p className="text-xs text-un1t-muted italic">
               This template has no custom variables. Click Next to preview &amp; issue.
             </p>
           ) : (
@@ -218,17 +218,17 @@ export default function ContractIssueWizard({ issuerName }) {
                 <div className="space-y-3">
                   {customVarDefs.map(v => (
                     <div key={v.key}>
-                      <label className="block text-sm text-un1t-light mb-1">
+                      <label className="block text-sm text-un1t-subtle mb-1">
                         {v.label}
                         {v.required && <span className="text-red-700"> *</span>}
-                        <code className="ml-2 text-[10px] text-un1t-mid">{`{{${v.key}}}`}</code>
+                        <code className="ml-2 text-[10px] text-un1t-muted">{`{{${v.key}}}`}</code>
                       </label>
                       <input
                         type={v.type === 'number' ? 'number' : v.type === 'date' ? 'date' : 'text'}
                         required={v.required}
                         value={vars[v.key] ?? ''}
                         onChange={e => setVar(v.key, e.target.value)}
-                        className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm"
+                        className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm"
                       />
                     </div>
                   ))}
@@ -262,17 +262,17 @@ export default function ContractIssueWizard({ issuerName }) {
                   <div className="space-y-3 mt-3">
                     {unmappedKeys.map((k) => (
                       <div key={k}>
-                        <label className="block text-sm text-un1t-light mb-1">
+                        <label className="block text-sm text-un1t-subtle mb-1">
                           {k.replace(/_/g, ' ')}
                           <span className="text-red-700"> *</span>
-                          <code className="ml-2 text-[10px] text-un1t-mid">{`{{${k}}}`}</code>
+                          <code className="ml-2 text-[10px] text-un1t-muted">{`{{${k}}}`}</code>
                         </label>
                         <input
                           type="text"
                           required
                           value={vars[k] ?? ''}
                           onChange={(e) => setVar(k, e.target.value)}
-                          className="w-full bg-un1t-black border border-amber-500/40 rounded-md px-3 py-2 text-sm"
+                          className="w-full bg-un1t-bg border border-amber-500/40 rounded-md px-3 py-2 text-sm"
                           placeholder={`Value for ${k}`}
                         />
                       </div>
@@ -286,13 +286,13 @@ export default function ContractIssueWizard({ issuerName }) {
             <button
               type="button"
               onClick={() => setStep(1)}
-              className="text-xs px-3 py-1.5 rounded-md border border-un1t-gray text-un1t-light hover:text-un1t-white"
+              className="text-xs px-3 py-1.5 rounded-md border border-un1t-border text-un1t-subtle hover:text-un1t-text"
             >← Back</button>
             <button
               type="button"
               disabled={!canAdvanceStep2()}
               onClick={() => setStep(3)}
-              className="text-xs bg-un1t-white text-un1t-black px-3 py-1.5 rounded-md font-medium hover:bg-un1t-accent disabled:opacity-50 inline-flex items-center gap-1"
+              className="text-xs bg-un1t-text text-un1t-bg px-3 py-1.5 rounded-md font-medium hover:bg-un1t-accent disabled:opacity-50 inline-flex items-center gap-1"
             >Next <ChevronRight size={11} /></button>
           </div>
         </div>
@@ -320,8 +320,8 @@ export default function ContractIssueWizard({ issuerName }) {
             </div>
           )}
           <div>
-            <label className="block text-sm text-un1t-light mb-1">Preview</label>
-            <div className="bg-white text-gray-900 border border-un1t-gray rounded-md p-4 max-h-[400px] overflow-auto whitespace-pre-wrap text-sm leading-relaxed">
+            <label className="block text-sm text-un1t-subtle mb-1">Preview</label>
+            <div className="bg-white text-gray-900 border border-un1t-border rounded-md p-4 max-h-[400px] overflow-auto whitespace-pre-wrap text-sm leading-relaxed">
               {/* Highlight any {{placeholder}} that's still literal,
                   so the issuer can see exactly where they'll appear
                   in the final document. */}
@@ -329,7 +329,7 @@ export default function ContractIssueWizard({ issuerName }) {
             </div>
           </div>
           <div>
-            <label className="block text-sm text-un1t-light mb-1">
+            <label className="block text-sm text-un1t-subtle mb-1">
               Your countersignature <span className="text-red-700">*</span>
             </label>
             <input
@@ -338,9 +338,9 @@ export default function ContractIssueWizard({ issuerName }) {
               value={issuerSig}
               onChange={e => setIssuerSig(e.target.value)}
               placeholder="Type your full name to countersign"
-              className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm font-serif text-base"
+              className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm font-serif text-base"
             />
-            <p className="text-[11px] text-un1t-mid mt-1">
+            <p className="text-[11px] text-un1t-muted mt-1">
               The recipient will see this name on their contract as the employer signature, alongside their own when they sign.
             </p>
           </div>
@@ -349,7 +349,7 @@ export default function ContractIssueWizard({ issuerName }) {
             <button
               type="button"
               onClick={() => setStep(2)}
-              className="text-xs px-3 py-1.5 rounded-md border border-un1t-gray text-un1t-light hover:text-un1t-white"
+              className="text-xs px-3 py-1.5 rounded-md border border-un1t-border text-un1t-subtle hover:text-un1t-text"
             >← Back</button>
             <button
               type="button"
@@ -360,7 +360,7 @@ export default function ContractIssueWizard({ issuerName }) {
                   ? `Fill ${stillUnfilled.length} remaining placeholder${stillUnfilled.length === 1 ? '' : 's'} before issuing.`
                   : undefined
               }
-              className="text-xs bg-un1t-white text-un1t-black px-4 py-1.5 rounded-md font-medium hover:bg-un1t-accent disabled:opacity-50 inline-flex items-center gap-1"
+              className="text-xs bg-un1t-text text-un1t-bg px-4 py-1.5 rounded-md font-medium hover:bg-un1t-accent disabled:opacity-50 inline-flex items-center gap-1"
             >
               <FileText size={11} /> {busy ? 'Issuing…' : 'Issue contract'}
             </button>
@@ -404,12 +404,12 @@ function StepHeader({ step }) {
       {steps.map((s, i) => (
         <li key={s.n} className="flex items-center gap-2">
           <span className={`w-6 h-6 rounded-full flex items-center justify-center font-semibold ${
-            step === s.n ? 'bg-un1t-white text-un1t-black'
+            step === s.n ? 'bg-un1t-text text-un1t-bg'
               : step > s.n ? 'bg-emerald-500/20 text-emerald-700'
-              : 'bg-un1t-gray text-un1t-light'
+              : 'bg-un1t-border text-un1t-subtle'
           }`}>{s.n}</span>
-          <span className={step === s.n ? 'text-un1t-white font-medium' : 'text-un1t-light'}>{s.label}</span>
-          {i < steps.length - 1 && <span className="text-un1t-mid">→</span>}
+          <span className={step === s.n ? 'text-un1t-text font-medium' : 'text-un1t-subtle'}>{s.label}</span>
+          {i < steps.length - 1 && <span className="text-un1t-muted">→</span>}
         </li>
       ))}
     </ol>

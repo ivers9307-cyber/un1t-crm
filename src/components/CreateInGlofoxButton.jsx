@@ -67,7 +67,7 @@ export default function CreateInGlofoxButton({ contact }) {
       ? `Created in Glofox. Passcode: ${result.passcode} (will be emailed via the welcome sequence).`
       : 'Created in Glofox.' },
     needs_review:  { Icon: AlertTriangle, cls: 'text-amber-400', text: `Partial success — operator review required. ${result.error || ''}`.trim() },
-    skipped:       { Icon: AlertTriangle, cls: 'text-un1t-light', text: 'Skipped (no matching Glofox account and create-if-missing was off).' },
+    skipped:       { Icon: AlertTriangle, cls: 'text-un1t-subtle', text: 'Skipped (no matching Glofox account and create-if-missing was off).' },
     failed:        { Icon: AlertTriangle, cls: 'text-red-400', text: `Failed: ${result.error || 'unknown error'}` },
   }[result.status]
 
@@ -80,7 +80,7 @@ export default function CreateInGlofoxButton({ contact }) {
         title={tooltip}
         className={`w-full inline-flex items-center justify-center gap-2 text-xs font-medium py-2 rounded-md transition-colors ${
           disabled
-            ? 'bg-un1t-gray/30 text-un1t-mid cursor-not-allowed border border-un1t-gray/40'
+            ? 'bg-un1t-border/30 text-un1t-muted cursor-not-allowed border border-un1t-border/40'
             : 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/40 hover:bg-emerald-500/25'
         }`}
       >

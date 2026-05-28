@@ -47,13 +47,13 @@ function MetricCard({ label, value, hint, accent }) {
     accent === 'amber' ? 'text-amber-400'
     : accent === 'green' ? 'text-green-500'
     : accent === 'red'   ? 'text-red-500'
-    : 'text-un1t-white'
+    : 'text-un1t-text'
 
   return (
-    <div className="bg-un1t-dark border border-un1t-gray rounded-2xl p-5">
-      <div className="text-xs uppercase tracking-wider text-un1t-light font-semibold mb-2">{label}</div>
+    <div className="bg-un1t-surface border border-un1t-border rounded-2xl p-5">
+      <div className="text-xs uppercase tracking-wider text-un1t-subtle font-semibold mb-2">{label}</div>
       <div className={`text-2xl font-bold ${valueClass}`}>{value}</div>
-      {hint && <div className="text-xs text-un1t-light mt-1">{hint}</div>}
+      {hint && <div className="text-xs text-un1t-subtle mt-1">{hint}</div>}
     </div>
   )
 }
@@ -62,7 +62,7 @@ function Section({ icon: Icon, title, children, action }) {
   return (
     <section className="mb-8">
       <div className="flex items-center justify-between mb-3">
-        <h2 className="flex items-center gap-2 text-sm uppercase tracking-wider font-semibold text-un1t-light">
+        <h2 className="flex items-center gap-2 text-sm uppercase tracking-wider font-semibold text-un1t-subtle">
           {Icon && <Icon size={14} />}
           {title}
         </h2>
@@ -79,7 +79,7 @@ function Section({ icon: Icon, title, children, action }) {
 function MonthlyBarChart({ months, valueKey, formatter }) {
   const max = months.reduce((m, x) => Math.max(m, Math.abs(x[valueKey] || 0)), 0)
   return (
-    <div className="bg-un1t-dark border border-un1t-gray rounded-2xl p-5">
+    <div className="bg-un1t-surface border border-un1t-border rounded-2xl p-5">
       <div className="grid grid-cols-12 gap-1.5 items-end h-40 mb-2">
         {months.map(m => {
           const v = m[valueKey] || 0
@@ -88,7 +88,7 @@ function MonthlyBarChart({ months, valueKey, formatter }) {
           return (
             <div key={m.key} className="relative flex flex-col items-center justify-end h-full" title={`${m.label}: ${formatter(v)}`}>
               <div
-                className={`w-full rounded-t ${v === 0 ? 'bg-un1t-gray/30' : isNegative ? 'bg-red-500/60' : 'bg-green-500/60'}`}
+                className={`w-full rounded-t ${v === 0 ? 'bg-un1t-border/30' : isNegative ? 'bg-red-500/60' : 'bg-green-500/60'}`}
                 style={{ height: `${h}%` }}
               />
             </div>
@@ -97,7 +97,7 @@ function MonthlyBarChart({ months, valueKey, formatter }) {
       </div>
       <div className="grid grid-cols-12 gap-1.5">
         {months.map(m => (
-          <div key={m.key} className="text-[10px] text-un1t-light text-center truncate">{m.label}</div>
+          <div key={m.key} className="text-[10px] text-un1t-subtle text-center truncate">{m.label}</div>
         ))}
       </div>
     </div>
@@ -118,8 +118,8 @@ export default function CarsReports({ metrics, error, fx }) {
       )}
 
       {!hasData ? (
-        <div className="bg-un1t-dark border border-un1t-gray rounded-2xl p-8 text-center">
-          <p className="text-sm text-un1t-light">No cars yet — add one from the Active tab to start populating reports.</p>
+        <div className="bg-un1t-surface border border-un1t-border rounded-2xl p-8 text-center">
+          <p className="text-sm text-un1t-subtle">No cars yet — add one from the Active tab to start populating reports.</p>
         </div>
       ) : (
         <>
@@ -157,7 +157,7 @@ export default function CarsReports({ metrics, error, fx }) {
             action={
               <Link
                 href="/api/cars/reports/export?type=completed-ytd"
-                className="text-xs inline-flex items-center gap-1 text-un1t-light hover:text-un1t-white"
+                className="text-xs inline-flex items-center gap-1 text-un1t-subtle hover:text-un1t-text"
               >
                 <Download size={12} /> CSV
               </Link>
@@ -191,10 +191,10 @@ export default function CarsReports({ metrics, error, fx }) {
           {/* ── 2b. Rolling 12 months ──────────────────────────────── */}
           <Section icon={BarChart3} title="Last 12 months — profit by month">
             <MonthlyBarChart months={m.monthlyPerformance || []} valueKey="profit" formatter={fmtEur} />
-            <div className="bg-un1t-dark border border-un1t-gray rounded-2xl mt-3 overflow-hidden">
+            <div className="bg-un1t-surface border border-un1t-border rounded-2xl mt-3 overflow-hidden">
               <table className="w-full text-sm">
                 <thead>
-                  <tr className="border-b border-un1t-gray text-un1t-light text-[11px] uppercase tracking-wider">
+                  <tr className="border-b border-un1t-border text-un1t-subtle text-[11px] uppercase tracking-wider">
                     <th className="text-left p-2.5">Month</th>
                     <th className="text-right p-2.5">Cars completed</th>
                     <th className="text-right p-2.5">Revenue</th>
@@ -202,14 +202,14 @@ export default function CarsReports({ metrics, error, fx }) {
                     <th className="text-right p-2.5">UK VAT refunded</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-un1t-gray">
+                <tbody className="divide-y divide-un1t-border">
                   {(m.monthlyPerformance || []).slice().reverse().map(row => (
                     <tr key={row.key}>
-                      <td className="p-2.5 text-un1t-white">{row.label}</td>
+                      <td className="p-2.5 text-un1t-text">{row.label}</td>
                       <td className="p-2.5 text-right">{row.completedCount}</td>
-                      <td className="p-2.5 text-right font-mono text-un1t-white">{fmtEur(row.revenue)}</td>
+                      <td className="p-2.5 text-right font-mono text-un1t-text">{fmtEur(row.revenue)}</td>
                       <td className={`p-2.5 text-right font-mono ${row.profit >= 0 ? 'text-green-500' : 'text-red-500'}`}>{fmtEur(row.profit)}</td>
-                      <td className="p-2.5 text-right font-mono text-un1t-light">{row.ukVatRefunded > 0 ? fmtGbp(row.ukVatRefunded) : '—'}</td>
+                      <td className="p-2.5 text-right font-mono text-un1t-subtle">{row.ukVatRefunded > 0 ? fmtGbp(row.ukVatRefunded) : '—'}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -225,7 +225,7 @@ export default function CarsReports({ metrics, error, fx }) {
               action={
                 <Link
                   href="/api/cars/reports/export?type=outstanding-vat"
-                  className="text-xs inline-flex items-center gap-1 text-un1t-light hover:text-un1t-white"
+                  className="text-xs inline-flex items-center gap-1 text-un1t-subtle hover:text-un1t-text"
                 >
                   <Download size={12} /> CSV
                 </Link>
@@ -248,27 +248,27 @@ export default function CarsReports({ metrics, error, fx }) {
                   </div>
                 </div>
               </div>
-              <div className="bg-un1t-dark border border-un1t-gray rounded-2xl overflow-hidden">
+              <div className="bg-un1t-surface border border-un1t-border rounded-2xl overflow-hidden">
                 <table className="w-full text-sm">
                   <thead>
-                    <tr className="border-b border-un1t-gray text-un1t-light text-[11px] uppercase tracking-wider">
+                    <tr className="border-b border-un1t-border text-un1t-subtle text-[11px] uppercase tracking-wider">
                       <th className="text-left p-2.5">Car</th>
                       <th className="text-left p-2.5">Reg / VIN</th>
                       <th className="text-right p-2.5">UK VAT</th>
                       <th className="text-right p-2.5">Days outstanding</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-un1t-gray">
+                  <tbody className="divide-y divide-un1t-border">
                     {(m.outstandingVatList || []).map(row => (
                       <tr key={row.car_id}>
                         <td className="p-2.5">
-                          <Link href={`/cars/${row.car_id}`} className="text-un1t-white hover:underline">
+                          <Link href={`/cars/${row.car_id}`} className="text-un1t-text hover:underline">
                             {[row.make, row.model].filter(Boolean).join(' ') || 'Car'}
                           </Link>
                         </td>
-                        <td className="p-2.5 text-un1t-light">{row.uk_reg || row.vin || '—'}</td>
+                        <td className="p-2.5 text-un1t-subtle">{row.uk_reg || row.vin || '—'}</td>
                         <td className="p-2.5 text-right font-mono text-amber-400">{fmtGbp(row.uk_vat)}</td>
-                        <td className={`p-2.5 text-right ${row.ageDays > 90 ? 'text-amber-400 font-semibold' : 'text-un1t-light'}`}>{row.ageDays}</td>
+                        <td className={`p-2.5 text-right ${row.ageDays > 90 ? 'text-amber-400 font-semibold' : 'text-un1t-subtle'}`}>{row.ageDays}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -297,18 +297,18 @@ export default function CarsReports({ metrics, error, fx }) {
               />
             </div>
 
-            <div className="bg-un1t-dark border border-un1t-gray rounded-2xl p-5">
-              <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light mb-3">
+            <div className="bg-un1t-surface border border-un1t-border rounded-2xl p-5">
+              <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle mb-3">
                 Cost breakdown YTD
               </h3>
               <div className="space-y-2">
                 {m.costBreakdownYtd.map(c => (
                   <div key={c.key} className="flex items-center justify-between text-sm">
-                    <span className="text-un1t-white">
+                    <span className="text-un1t-text">
                       {c.label}
-                      <span className="text-un1t-light text-xs ml-2">({c.currency})</span>
+                      <span className="text-un1t-subtle text-xs ml-2">({c.currency})</span>
                     </span>
-                    <span className="font-mono text-un1t-white">{fmtEur(c.totalEur)}</span>
+                    <span className="font-mono text-un1t-text">{fmtEur(c.totalEur)}</span>
                   </div>
                 ))}
               </div>
@@ -317,7 +317,7 @@ export default function CarsReports({ metrics, error, fx }) {
         </>
       )}
 
-      <div className="text-[11px] text-un1t-mid text-right">
+      <div className="text-[11px] text-un1t-muted text-right">
         FX £→€ {fx?.rate ? fx.rate.toFixed(4) : '—'}
         {fx?.fetched_at && (
           <> · refreshed {new Date(fx.fetched_at).toLocaleString()}</>

@@ -101,24 +101,24 @@ export default function ImpersonatePicker() {
         // the viewport. bottom-full + mb-1 puts it directly above
         // the button; max-h-[60vh] + overflow-auto on the inner
         // list keeps it scrollable when the user list is long.
-        <div className="absolute left-2 right-2 bottom-full mb-1 bg-un1t-dark border border-un1t-gray rounded-lg shadow-xl z-50 max-h-[60vh] flex flex-col">
-          <div className="p-2 border-b border-un1t-gray">
-            <div className="flex items-center gap-2 bg-un1t-black border border-un1t-gray rounded-md px-2 py-1">
-              <Search size={12} className="text-un1t-light" />
+        <div className="absolute left-2 right-2 bottom-full mb-1 bg-un1t-surface border border-un1t-border rounded-lg shadow-xl z-50 max-h-[60vh] flex flex-col">
+          <div className="p-2 border-b border-un1t-border">
+            <div className="flex items-center gap-2 bg-un1t-bg border border-un1t-border rounded-md px-2 py-1">
+              <Search size={12} className="text-un1t-subtle" />
               <input
                 autoFocus
                 value={filter}
                 onChange={e => setFilter(e.target.value)}
                 placeholder="Search name / email / role…"
-                className="flex-1 bg-transparent text-xs text-un1t-white placeholder:text-un1t-mid focus:outline-none"
+                className="flex-1 bg-transparent text-xs text-un1t-text placeholder:text-un1t-muted focus:outline-none"
               />
             </div>
           </div>
           <div className="flex-1 overflow-auto">
-            {loading && <p className="p-3 text-xs text-un1t-light">Loading…</p>}
+            {loading && <p className="p-3 text-xs text-un1t-subtle">Loading…</p>}
             {error && <p className="p-3 text-xs text-red-400">{error}</p>}
             {!loading && !error && filtered.length === 0 && (
-              <p className="p-3 text-xs text-un1t-light">No users match.</p>
+              <p className="p-3 text-xs text-un1t-subtle">No users match.</p>
             )}
             {filtered.map(u => {
               const badge = ROLE_BADGES[u.role] || { label: u.role, cls: 'bg-gray-500/20 text-gray-300' }
@@ -128,19 +128,19 @@ export default function ImpersonatePicker() {
                   key={u.id}
                   onClick={() => impersonate(u.id)}
                   disabled={busyId === u.id}
-                  className="w-full text-left px-3 py-2 hover:bg-un1t-gray/40 disabled:opacity-50 border-b border-un1t-gray/40 last:border-0"
+                  className="w-full text-left px-3 py-2 hover:bg-un1t-border/40 disabled:opacity-50 border-b border-un1t-border/40 last:border-0"
                 >
                   <div className="flex items-center justify-between gap-2">
-                    <span className="text-sm text-un1t-white truncate">
+                    <span className="text-sm text-un1t-text truncate">
                       {u.full_name}
-                      {!u.active && <span className="ml-2 text-[10px] text-un1t-mid">(inactive)</span>}
+                      {!u.active && <span className="ml-2 text-[10px] text-un1t-muted">(inactive)</span>}
                     </span>
                     <span className={`text-[10px] px-1.5 py-0.5 rounded ${badge.cls} inline-flex items-center gap-1`}>
                       {BadgeIcon && <BadgeIcon size={9} />}
                       {badge.label}
                     </span>
                   </div>
-                  <div className="text-[11px] text-un1t-light truncate">
+                  <div className="text-[11px] text-un1t-subtle truncate">
                     {u.email}
                     {u.locations?.length > 0 && <> · {u.locations.join(', ')}</>}
                   </div>
@@ -148,8 +148,8 @@ export default function ImpersonatePicker() {
               )
             })}
           </div>
-          <div className="p-2 border-t border-un1t-gray text-[11px] text-un1t-mid text-center">
-            <a href="/settings/impersonate" className="hover:text-un1t-white">Open full picker →</a>
+          <div className="p-2 border-t border-un1t-border text-[11px] text-un1t-muted text-center">
+            <a href="/settings/impersonate" className="hover:text-un1t-text">Open full picker →</a>
           </div>
         </div>
       )}

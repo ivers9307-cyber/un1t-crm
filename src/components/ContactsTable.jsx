@@ -82,17 +82,17 @@ export default function ContactsTable({ contacts, locationId, canMerge = false, 
     <>
       {/* Sticky action bar — only renders when ≥1 row is selected. */}
       {selectedCount > 0 && (
-        <div className="sticky top-0 z-10 mb-3 -mx-6 px-6 py-2 bg-un1t-dark border-y border-un1t-gray flex items-center gap-3">
-          <button onClick={clearSelection} className="text-un1t-light hover:text-un1t-white" title="Clear selection">
+        <div className="sticky top-0 z-10 mb-3 -mx-6 px-6 py-2 bg-un1t-surface border-y border-un1t-border flex items-center gap-3">
+          <button onClick={clearSelection} className="text-un1t-subtle hover:text-un1t-text" title="Clear selection">
             <X size={14} />
           </button>
-          <span className="text-sm text-un1t-white">
+          <span className="text-sm text-un1t-text">
             {selectedCount} selected
           </span>
           <div className="flex-1" />
           <button
             onClick={() => setPickerOpen(true)}
-            className="text-xs px-3 py-1.5 rounded-md bg-un1t-white text-un1t-black font-semibold hover:bg-un1t-accent flex items-center gap-1.5"
+            className="text-xs px-3 py-1.5 rounded-md bg-un1t-text text-un1t-bg font-semibold hover:bg-un1t-accent flex items-center gap-1.5"
           >
             <Mail size={12} /> Add to sequence
           </button>
@@ -101,7 +101,7 @@ export default function ContactsTable({ contacts, locationId, canMerge = false, 
           {canMerge && selectedCount === 2 && (
             <button
               onClick={() => setMergeOpen(true)}
-              className="text-xs px-3 py-1.5 rounded-md border border-un1t-gray text-un1t-light hover:text-un1t-white hover:border-un1t-mid flex items-center gap-1.5"
+              className="text-xs px-3 py-1.5 rounded-md border border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-muted flex items-center gap-1.5"
               title="Merge two contacts into one"
             >
               <GitMerge size={12} /> Merge
@@ -141,10 +141,10 @@ export default function ContactsTable({ contacts, locationId, canMerge = false, 
 
       {/* Desktop / tablet: original wide table. Hidden below md so
           phones don't horizontal-scroll a 7-column grid. */}
-      <div className="hidden md:block bg-un1t-dark border border-un1t-gray rounded-lg overflow-hidden">
+      <div className="hidden md:block bg-un1t-surface border border-un1t-border rounded-lg overflow-hidden">
         <table className="w-full text-sm">
           <thead>
-            <tr className="border-b border-un1t-gray text-un1t-light text-xs uppercase tracking-wider">
+            <tr className="border-b border-un1t-border text-un1t-subtle text-xs uppercase tracking-wider">
               <th className="w-10 p-3">
                 <input
                   type="checkbox"
@@ -164,13 +164,13 @@ export default function ContactsTable({ contacts, locationId, canMerge = false, 
               <th className="w-8"></th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-un1t-gray">
+          <tbody className="divide-y divide-un1t-border">
             {contacts.map(c => {
               const isSelected = selectedIds.has(c.id)
               return (
                 <tr
                   key={c.id}
-                  className={`transition-colors ${isSelected ? 'bg-un1t-gray/30' : 'hover:bg-un1t-gray/20'}`}
+                  className={`transition-colors ${isSelected ? 'bg-un1t-border/30' : 'hover:bg-un1t-border/20'}`}
                 >
                   <td className="p-3">
                     <input
@@ -184,20 +184,20 @@ export default function ContactsTable({ contacts, locationId, canMerge = false, 
                   <td className="p-3">
                     <Link href={`/contacts/${c.id}`} className="font-medium hover:underline">{c.name}</Link>
                   </td>
-                  <td className="p-3 text-un1t-light">{c.email}</td>
-                  <td className="p-3 text-un1t-light">{c.phone}</td>
+                  <td className="p-3 text-un1t-subtle">{c.email}</td>
+                  <td className="p-3 text-un1t-subtle">{c.phone}</td>
                   <td className="p-3">
-                    <span className="text-xs px-1.5 py-0.5 bg-un1t-gray rounded">{c.lead_source || '—'}</span>
+                    <span className="text-xs px-1.5 py-0.5 bg-un1t-border rounded">{c.lead_source || '—'}</span>
                   </td>
                   <td className="p-3">
-                    <span className={`text-xs px-2 py-0.5 rounded-full ${statusBadge[c.pipeline_stage_slug] || 'bg-un1t-gray text-un1t-light'}`}>
+                    <span className={`text-xs px-2 py-0.5 rounded-full ${statusBadge[c.pipeline_stage_slug] || 'bg-un1t-border text-un1t-subtle'}`}>
                       {formatStage(c.pipeline_stage_slug)}
                     </span>
                   </td>
-                  <td className="p-3 text-un1t-light">{c.trial_credits_remaining ?? '—'}</td>
+                  <td className="p-3 text-un1t-subtle">{c.trial_credits_remaining ?? '—'}</td>
                   <td className="p-3">
                     <Link href={`/contacts/${c.id}`}>
-                      <ChevronRight size={16} className="text-un1t-mid" />
+                      <ChevronRight size={16} className="text-un1t-muted" />
                     </Link>
                   </td>
                 </tr>
@@ -206,7 +206,7 @@ export default function ContactsTable({ contacts, locationId, canMerge = false, 
           </tbody>
         </table>
         {contacts.length === 0 && (
-          <p className="text-center text-un1t-light text-sm py-12">No contacts found.</p>
+          <p className="text-center text-un1t-subtle text-sm py-12">No contacts found.</p>
         )}
       </div>
 
@@ -215,8 +215,8 @@ export default function ContactsTable({ contacts, locationId, canMerge = false, 
           disappears once the table fits horizontally. */}
       <div className="md:hidden space-y-2">
         {contacts.length === 0 ? (
-          <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-8 text-center">
-            <p className="text-sm text-un1t-light">No contacts found.</p>
+          <div className="bg-un1t-surface border border-un1t-border rounded-lg p-8 text-center">
+            <p className="text-sm text-un1t-subtle">No contacts found.</p>
           </div>
         ) : (
           contacts.map(c => {
@@ -224,8 +224,8 @@ export default function ContactsTable({ contacts, locationId, canMerge = false, 
             return (
               <div
                 key={c.id}
-                className={`bg-un1t-dark border rounded-lg overflow-hidden transition-colors ${
-                  isSelected ? 'border-un1t-mid bg-un1t-gray/30' : 'border-un1t-gray'
+                className={`bg-un1t-surface border rounded-lg overflow-hidden transition-colors ${
+                  isSelected ? 'border-un1t-muted bg-un1t-border/30' : 'border-un1t-border'
                 }`}
               >
                 <div className="flex items-stretch">
@@ -248,25 +248,25 @@ export default function ContactsTable({ contacts, locationId, canMerge = false, 
                   >
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
-                        <span className="font-medium text-un1t-white truncate">
+                        <span className="font-medium text-un1t-text truncate">
                           {c.name}
                         </span>
                         <span className={`text-[10px] px-1.5 py-0.5 rounded-full uppercase tracking-wider ${
-                          statusBadge[c.pipeline_stage_slug] || 'bg-un1t-gray text-un1t-light'
+                          statusBadge[c.pipeline_stage_slug] || 'bg-un1t-border text-un1t-subtle'
                         }`}>
                           {formatStage(c.pipeline_stage_slug)}
                         </span>
                       </div>
                       {(c.email || c.phone) && (
-                        <div className="text-xs text-un1t-light truncate mt-0.5">
+                        <div className="text-xs text-un1t-subtle truncate mt-0.5">
                           {c.email}
                           {c.email && c.phone ? ' · ' : ''}
                           {c.phone}
                         </div>
                       )}
-                      <div className="flex items-center gap-2 mt-1 text-[11px] text-un1t-mid">
+                      <div className="flex items-center gap-2 mt-1 text-[11px] text-un1t-muted">
                         {c.lead_source && (
-                          <span className="px-1.5 py-0.5 bg-un1t-gray rounded">
+                          <span className="px-1.5 py-0.5 bg-un1t-border rounded">
                             {c.lead_source}
                           </span>
                         )}
@@ -275,7 +275,7 @@ export default function ContactsTable({ contacts, locationId, canMerge = false, 
                         )}
                       </div>
                     </div>
-                    <ChevronRight size={16} className="text-un1t-mid shrink-0" />
+                    <ChevronRight size={16} className="text-un1t-muted shrink-0" />
                   </Link>
                 </div>
               </div>

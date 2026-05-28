@@ -34,14 +34,14 @@ export default function ContactRaceHistory({ contactId }) {
   }
   if (!data) {
     return (
-      <div className="text-sm text-un1t-light inline-flex items-center gap-2 px-3 py-2">
+      <div className="text-sm text-un1t-subtle inline-flex items-center gap-2 px-3 py-2">
         <Loader2 size={14} className="animate-spin" /> Loading races…
       </div>
     )
   }
   if (data.length === 0) {
     return (
-      <div className="text-sm text-un1t-light italic px-3 py-3">
+      <div className="text-sm text-un1t-subtle italic px-3 py-3">
         No race history yet.
       </div>
     )
@@ -62,14 +62,14 @@ export default function ContactRaceHistory({ contactId }) {
         return (
           <div
             key={r.registration_id}
-            className="bg-un1t-dark border border-un1t-gray rounded-md p-3 flex items-start justify-between gap-3"
+            className="bg-un1t-surface border border-un1t-border rounded-md p-3 flex items-start justify-between gap-3"
           >
             <div className="min-w-0">
               <div className="flex items-center gap-2 flex-wrap">
-                <Flag size={12} className="text-un1t-light" />
+                <Flag size={12} className="text-un1t-subtle" />
                 <Link
                   href={`/events/${r.race?.id}/teams`}
-                  className="text-sm font-medium text-un1t-white hover:text-un1t-accent truncate"
+                  className="text-sm font-medium text-un1t-text hover:text-un1t-accent truncate"
                 >
                   {r.race?.name || '(unknown race)'}
                 </Link>
@@ -85,7 +85,7 @@ export default function ContactRaceHistory({ contactId }) {
                   </span>
                 )}
               </div>
-              <div className="text-[11px] text-un1t-light mt-1">
+              <div className="text-[11px] text-un1t-subtle mt-1">
                 {dateLabel}
                 {r.team?.name && <> · Team {r.team.name} ({r.team.size}-person)</>}
                 {waveLabel && (
@@ -99,7 +99,7 @@ export default function ContactRaceHistory({ contactId }) {
               ) : r.race_started_at ? (
                 <div className="text-[11px] text-amber-700">On course</div>
               ) : (
-                <div className="text-[11px] text-un1t-mid">Not started</div>
+                <div className="text-[11px] text-un1t-muted">Not started</div>
               )}
             </div>
           </div>
@@ -117,7 +117,7 @@ function StatusPill({ status }) {
     no_show: 'bg-red-500/15 text-red-700',
   }
   return (
-    <span className={`text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded-full ${map[status] || 'bg-un1t-gray/30 text-un1t-light'}`}>
+    <span className={`text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded-full ${map[status] || 'bg-un1t-border/30 text-un1t-subtle'}`}>
       {status?.replaceAll('_', ' ')}
     </span>
   )

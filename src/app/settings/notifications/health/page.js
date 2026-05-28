@@ -129,15 +129,15 @@ export default async function PushHealthPage() {
     <div className="p-8 max-w-5xl">
       <Link
         href="/settings/notifications"
-        className="inline-flex items-center gap-1.5 text-xs text-un1t-light hover:text-un1t-white mb-4"
+        className="inline-flex items-center gap-1.5 text-xs text-un1t-subtle hover:text-un1t-text mb-4"
       >
         <ArrowLeft size={12} /> Notification registry
       </Link>
       <div className="flex items-center gap-2 mb-1">
-        <ShieldCheck size={20} className="text-un1t-light" />
+        <ShieldCheck size={20} className="text-un1t-subtle" />
         <h2 className="text-2xl font-bold">Push delivery health</h2>
       </div>
-      <p className="text-sm text-un1t-light mb-6">
+      <p className="text-sm text-un1t-subtle mb-6">
         Per-staff device-token status. A push will only reach a phone if the staff member has the app installed, granted push permission, and opened it recently enough that their token is still valid.
       </p>
 
@@ -157,19 +157,19 @@ export default async function PushHealthPage() {
       )}
 
       {groups.map(({ location, profiles }) => (
-        <div key={location.id} className="mb-6 bg-un1t-dark border border-un1t-gray rounded-lg overflow-hidden">
-          <div className="bg-un1t-gray/30 px-4 py-2.5 border-b border-un1t-gray flex items-center justify-between">
-            <div className="text-sm font-semibold text-un1t-white">{location.name}</div>
-            <div className="text-[11px] text-un1t-light">
+        <div key={location.id} className="mb-6 bg-un1t-surface border border-un1t-border rounded-lg overflow-hidden">
+          <div className="bg-un1t-border/30 px-4 py-2.5 border-b border-un1t-border flex items-center justify-between">
+            <div className="text-sm font-semibold text-un1t-text">{location.name}</div>
+            <div className="text-[11px] text-un1t-subtle">
               {profiles.length} staff
             </div>
           </div>
           {profiles.length === 0 ? (
-            <div className="px-4 py-3 text-xs text-un1t-mid">No active staff at this location.</div>
+            <div className="px-4 py-3 text-xs text-un1t-muted">No active staff at this location.</div>
           ) : (
             <table className="w-full text-sm">
-              <thead className="text-[10px] uppercase tracking-wider text-un1t-light">
-                <tr className="border-b border-un1t-gray">
+              <thead className="text-[10px] uppercase tracking-wider text-un1t-subtle">
+                <tr className="border-b border-un1t-border">
                   <th className="text-left px-4 py-2 font-medium">Name</th>
                   <th className="text-left px-4 py-2 font-medium">Role</th>
                   <th className="text-left px-4 py-2 font-medium">Status</th>
@@ -185,34 +185,34 @@ export default async function PushHealthPage() {
                   const newestSeen = p.tokens.reduce((max, t) =>
                     !max || (t.last_seen_at && t.last_seen_at > max) ? t.last_seen_at : max, null)
                   return (
-                    <tr key={p.id} className="border-b border-un1t-gray/30 last:border-b-0">
+                    <tr key={p.id} className="border-b border-un1t-border/30 last:border-b-0">
                       <td className="px-4 py-2.5">
-                        <div className="text-un1t-white">{p.full_name}</div>
-                        <div className="text-[11px] text-un1t-mid">{p.email}</div>
+                        <div className="text-un1t-text">{p.full_name}</div>
+                        <div className="text-[11px] text-un1t-muted">{p.email}</div>
                       </td>
-                      <td className="px-4 py-2.5 text-xs text-un1t-light capitalize">{p.role.replace('_', ' ')}</td>
+                      <td className="px-4 py-2.5 text-xs text-un1t-subtle capitalize">{p.role.replace('_', ' ')}</td>
                       <td className="px-4 py-2.5"><StatusPill status={s} /></td>
-                      <td className="px-4 py-2.5 text-xs text-un1t-light">
+                      <td className="px-4 py-2.5 text-xs text-un1t-subtle">
                         {p.tokens.length === 0 ? (
-                          <span className="text-un1t-mid">—</span>
+                          <span className="text-un1t-muted">—</span>
                         ) : (
                           <span className="inline-flex items-center gap-1">
                             <Smartphone size={12} /> {p.tokens.length}
-                            <span className="text-un1t-mid">
+                            <span className="text-un1t-muted">
                               ({[...new Set(p.tokens.map(t => t.platform))].join(', ')})
                             </span>
                           </span>
                         )}
                       </td>
-                      <td className="px-4 py-2.5 text-xs text-un1t-light">{fmtRelative(newestSeen)}</td>
-                      <td className="px-4 py-2.5 text-xs text-un1t-light">{p.pushesLast30d}</td>
+                      <td className="px-4 py-2.5 text-xs text-un1t-subtle">{fmtRelative(newestSeen)}</td>
+                      <td className="px-4 py-2.5 text-xs text-un1t-subtle">{p.pushesLast30d}</td>
                       <td className="px-4 py-2.5 text-right">
                         {p.tokens.length > 0 ? (
                           <TestPushButton recipientId={p.id} recipientName={p.full_name} />
                         ) : (
                           <a
                             href={`mailto:${p.email}?subject=${encodeURIComponent('Install the UN1T CRM mobile app')}&body=${encodeURIComponent('Hi ' + (p.full_name?.split(' ')[0] || '') + ',\n\nPlease install the UN1T CRM mobile app from TestFlight and grant push notification permission so you can receive task and booking reminders.\n\nThanks')}`}
-                            className="inline-flex items-center gap-1 text-[11px] text-un1t-light hover:text-un1t-white border border-un1t-gray rounded px-2 py-1"
+                            className="inline-flex items-center gap-1 text-[11px] text-un1t-subtle hover:text-un1t-text border border-un1t-border rounded px-2 py-1"
                           >
                             <Mail size={11} /> Nudge
                           </a>
@@ -227,7 +227,7 @@ export default async function PushHealthPage() {
         </div>
       ))}
 
-      <p className="text-xs text-un1t-mid mt-2">
+      <p className="text-xs text-un1t-muted mt-2">
         Stale = the device hasn&apos;t opened the app in {HEALTHY_DAYS}+ days. Token may still be valid; a test push tells you for sure.
         Tokens that come back DeviceNotRegistered from Expo are auto-pruned by src/lib/push.js.
       </p>
@@ -237,15 +237,15 @@ export default async function PushHealthPage() {
 
 function SummaryCard({ label, value, kind }) {
   const colors = {
-    neutral: 'border-un1t-gray text-un1t-white',
+    neutral: 'border-un1t-border text-un1t-text',
     green:   'border-emerald-500/40 text-emerald-300',
     amber:   'border-amber-500/40 text-amber-200',
     red:     'border-red-500/40 text-red-300',
   }
   return (
-    <div className={`bg-un1t-dark border ${colors[kind]} rounded-lg p-3`}>
+    <div className={`bg-un1t-surface border ${colors[kind]} rounded-lg p-3`}>
       <div className="text-2xl font-bold">{value}</div>
-      <div className="text-[11px] uppercase tracking-wider text-un1t-light">{label}</div>
+      <div className="text-[11px] uppercase tracking-wider text-un1t-subtle">{label}</div>
     </div>
   )
 }

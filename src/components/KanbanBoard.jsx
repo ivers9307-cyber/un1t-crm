@@ -82,18 +82,18 @@ export default function KanbanBoard({ initialStages, initialDeals, locationId })
         return (
           <div
             key={stage.id}
-            className={`shrink-0 w-64 bg-un1t-dark rounded-lg border transition-colors ${
-              isOver ? 'border-un1t-white/40' : 'border-un1t-gray'
+            className={`shrink-0 w-64 bg-un1t-surface rounded-lg border transition-colors ${
+              isOver ? 'border-un1t-text/40' : 'border-un1t-border'
             }`}
             onDragOver={e => { e.preventDefault(); setDragOverStage(stage.id) }}
             onDragLeave={() => setDragOverStage(null)}
             onDrop={() => handleDrop(stage.id)}
           >
             {/* Stage Header */}
-            <div className="flex items-center gap-2 p-3 border-b border-un1t-gray">
+            <div className="flex items-center gap-2 p-3 border-b border-un1t-border">
               <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: color }} />
               <h3 className="text-xs font-semibold uppercase tracking-wider truncate">{stage.name}</h3>
-              <span className="ml-auto text-xs text-un1t-light bg-un1t-gray px-1.5 rounded">
+              <span className="ml-auto text-xs text-un1t-subtle bg-un1t-border px-1.5 rounded">
                 {stageDeals.length}
               </span>
             </div>
@@ -118,7 +118,7 @@ export default function KanbanBoard({ initialStages, initialDeals, locationId })
                 <button
                   type="button"
                   onClick={() => setExpandedColumns((p) => ({ ...p, [stage.id]: true }))}
-                  className="w-full mt-1 py-1.5 text-[11px] text-un1t-light hover:text-un1t-white border border-dashed border-un1t-gray rounded-md hover:border-un1t-light transition-colors"
+                  className="w-full mt-1 py-1.5 text-[11px] text-un1t-subtle hover:text-un1t-text border border-dashed border-un1t-border rounded-md hover:border-un1t-subtle transition-colors"
                 >
                   Show all {stageDeals.length} (+{stageDeals.length - PER_COLUMN_CAP} hidden)
                 </button>

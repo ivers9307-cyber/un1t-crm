@@ -28,7 +28,7 @@ export default function ImpersonationBanner({ user }) {
   }
 
   return (
-    <div className="bg-amber-500 text-un1t-black text-sm flex items-center justify-between gap-3 px-4 py-2 shrink-0 border-b border-amber-600">
+    <div className="bg-amber-500 text-un1t-bg text-sm flex items-center justify-between gap-3 px-4 py-2 shrink-0 border-b border-amber-600">
       <div className="flex items-center gap-2 min-w-0">
         <UserCog size={16} className="shrink-0" />
         <span className="truncate">
@@ -40,7 +40,7 @@ export default function ImpersonationBanner({ user }) {
       <button
         onClick={stop}
         disabled={stopping}
-        className="flex items-center gap-1 text-xs font-semibold bg-un1t-black text-amber-400 px-3 py-1 rounded-md hover:bg-un1t-black/80 disabled:opacity-50"
+        className="flex items-center gap-1 text-xs font-semibold bg-un1t-bg text-amber-400 px-3 py-1 rounded-md hover:bg-un1t-bg/80 disabled:opacity-50"
       >
         <X size={12} /> {stopping ? 'Stopping…' : 'Stop impersonating'}
       </button>

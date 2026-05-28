@@ -254,8 +254,8 @@ export default function ContactsView({
             onClick={() => setStatus(s)}
             className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
               status === s
-                ? 'border-un1t-white text-un1t-white bg-un1t-gray'
-                : 'border-un1t-gray text-un1t-light hover:text-un1t-white hover:border-un1t-mid'
+                ? 'border-un1t-text text-un1t-text bg-un1t-border'
+                : 'border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-muted'
             }`}
           >
             {s ? s.replace('_', ' ') : 'All'}
@@ -268,15 +268,15 @@ export default function ContactsView({
           onClick={() => setShowAdvanced(o => !o)}
           className={`text-xs px-3 py-1.5 rounded-md border flex items-center gap-1.5 transition-colors ${
             filterRowCount > 0
-              ? 'bg-un1t-white text-un1t-black border-un1t-white'
-              : 'border-un1t-gray text-un1t-light hover:text-un1t-white hover:border-un1t-mid'
+              ? 'bg-un1t-text text-un1t-bg border-un1t-text'
+              : 'border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-muted'
           }`}
           title="Filter by any contact field"
         >
           <Filter size={12} />
           Advanced filter
           {filterRowCount > 0 && (
-            <span className="ml-1 bg-un1t-black/10 px-1.5 py-0.5 rounded-full text-[10px]">
+            <span className="ml-1 bg-un1t-bg/10 px-1.5 py-0.5 rounded-full text-[10px]">
               {filterRowCount}
             </span>
           )}
@@ -285,7 +285,7 @@ export default function ContactsView({
         {filterRowCount > 0 && (
           <button
             onClick={clearAdvanced}
-            className="text-xs text-un1t-light hover:text-red-400 flex items-center gap-1"
+            className="text-xs text-un1t-subtle hover:text-red-400 flex items-center gap-1"
             title="Clear advanced filter"
           >
             <X size={12} /> Clear
@@ -301,7 +301,7 @@ export default function ContactsView({
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder="Search by name or email..."
-          className="w-full max-w-md bg-un1t-dark border border-un1t-gray rounded-md px-4 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid"
+          className="w-full max-w-md bg-un1t-surface border border-un1t-border rounded-md px-4 py-2 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted"
         />
       </form>
 
@@ -311,7 +311,7 @@ export default function ContactsView({
       {(segments.length > 0 || showAdvanced) && (
         <div className="mb-3 flex gap-2 flex-wrap items-center">
           {segments.length > 0 && (
-            <span className="text-[11px] uppercase tracking-wider text-un1t-mid font-semibold flex items-center gap-1">
+            <span className="text-[11px] uppercase tracking-wider text-un1t-muted font-semibold flex items-center gap-1">
               <Bookmark size={11} /> Saved
             </span>
           )}
@@ -322,8 +322,8 @@ export default function ContactsView({
                 key={s.id}
                 className={`group inline-flex items-center gap-1 rounded-full border text-xs transition-colors ${
                   isActive
-                    ? 'border-un1t-white bg-un1t-gray text-un1t-white'
-                    : 'border-un1t-gray text-un1t-light hover:text-un1t-white hover:border-un1t-mid'
+                    ? 'border-un1t-text bg-un1t-border text-un1t-text'
+                    : 'border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-muted'
                 }`}
               >
                 <button
@@ -335,7 +335,7 @@ export default function ContactsView({
                 </button>
                 <button
                   onClick={() => deleteSegment(s.id)}
-                  className="pr-2 text-un1t-mid hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity"
+                  className="pr-2 text-un1t-muted hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity"
                   title="Delete segment"
                 >
                   <Trash2 size={11} />
@@ -348,7 +348,7 @@ export default function ContactsView({
 
       {/* Advanced filter panel — only renders when toggled open. */}
       {showAdvanced && (
-        <div className="mb-5 bg-un1t-dark border border-un1t-gray rounded-lg p-4 space-y-3">
+        <div className="mb-5 bg-un1t-surface border border-un1t-border rounded-lg p-4 space-y-3">
           <AudienceBuilder
             filter={filter}
             onChange={handleFilterChange}
@@ -358,7 +358,7 @@ export default function ContactsView({
           {/* Save-as-segment row. Only visible when there's at least
               one filter row to save. */}
           {filterRowCount > 0 && (
-            <div className="pt-3 border-t border-un1t-gray flex items-center gap-2">
+            <div className="pt-3 border-t border-un1t-border flex items-center gap-2">
               {showSaveForm ? (
                 <>
                   <input
@@ -367,19 +367,19 @@ export default function ContactsView({
                     value={segmentName}
                     onChange={(e) => setSegmentName(e.target.value)}
                     placeholder="Segment name (e.g. Cold leads with low credits)"
-                    className="flex-1 bg-un1t-black border border-un1t-gray rounded-md px-3 py-1.5 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid"
+                    className="flex-1 bg-un1t-bg border border-un1t-border rounded-md px-3 py-1.5 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted"
                     onKeyDown={(e) => { if (e.key === 'Enter') saveCurrent() }}
                   />
                   <button
                     onClick={saveCurrent}
                     disabled={savingSegment}
-                    className="text-xs px-3 py-1.5 rounded-md bg-un1t-white text-un1t-black font-semibold hover:bg-un1t-accent disabled:opacity-50"
+                    className="text-xs px-3 py-1.5 rounded-md bg-un1t-text text-un1t-bg font-semibold hover:bg-un1t-accent disabled:opacity-50"
                   >
                     {savingSegment ? 'Saving…' : 'Save'}
                   </button>
                   <button
                     onClick={() => { setShowSaveForm(false); setSegmentName(''); setSegmentError(null) }}
-                    className="text-xs text-un1t-light hover:text-un1t-white"
+                    className="text-xs text-un1t-subtle hover:text-un1t-text"
                   >
                     Cancel
                   </button>
@@ -387,7 +387,7 @@ export default function ContactsView({
               ) : (
                 <button
                   onClick={() => setShowSaveForm(true)}
-                  className="text-xs flex items-center gap-1.5 text-un1t-light hover:text-un1t-white"
+                  className="text-xs flex items-center gap-1.5 text-un1t-subtle hover:text-un1t-text"
                 >
                   <Save size={12} /> Save as segment
                 </button>
@@ -408,7 +408,7 @@ export default function ContactsView({
       )}
 
       {loading && (
-        <div className="mb-3 text-xs text-un1t-light">Loading…</div>
+        <div className="mb-3 text-xs text-un1t-subtle">Loading…</div>
       )}
 
       <ContactsTable contacts={visibleContacts} locationId={locationId} canMerge={canMerge} canDelete={canDelete} />

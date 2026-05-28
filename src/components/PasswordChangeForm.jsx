@@ -102,13 +102,13 @@ export default function PasswordChangeForm({ email }) {
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
       <div className="flex items-center gap-2">
-        <KeyRound size={16} className="text-un1t-light" />
-        <h2 className="text-sm font-semibold uppercase tracking-wider text-un1t-light">
+        <KeyRound size={16} className="text-un1t-subtle" />
+        <h2 className="text-sm font-semibold uppercase tracking-wider text-un1t-subtle">
           Password
         </h2>
       </div>
 
-      <div className="bg-un1t-dark border border-un1t-gray rounded-xl p-4 space-y-3">
+      <div className="bg-un1t-surface border border-un1t-border rounded-xl p-4 space-y-3">
         <FieldRow
           label="Current password"
           value={currentPassword}
@@ -131,7 +131,7 @@ export default function PasswordChangeForm({ email }) {
         {newPassword.length > 0 && (
           <ul className="space-y-1 pl-1">
             {reqState.map((r) => (
-              <li key={r.id} className={`text-xs inline-flex items-center gap-1.5 mr-3 ${r.ok ? 'text-emerald-700' : 'text-un1t-mid'}`}>
+              <li key={r.id} className={`text-xs inline-flex items-center gap-1.5 mr-3 ${r.ok ? 'text-emerald-700' : 'text-un1t-muted'}`}>
                 {r.ok ? <Check size={11} /> : <X size={11} />}
                 {r.label}
               </li>
@@ -154,7 +154,7 @@ export default function PasswordChangeForm({ email }) {
           <button
             type="button"
             onClick={() => setShow((v) => !v)}
-            className="text-xs text-un1t-light hover:text-un1t-white inline-flex items-center gap-1"
+            className="text-xs text-un1t-subtle hover:text-un1t-text inline-flex items-center gap-1"
             title={show ? 'Hide passwords' : 'Show passwords'}
           >
             {show ? <EyeOff size={12} /> : <Eye size={12} />}
@@ -164,7 +164,7 @@ export default function PasswordChangeForm({ email }) {
           <button
             type="submit"
             disabled={!canSubmit}
-            className="inline-flex items-center gap-2 bg-un1t-white text-un1t-black px-4 py-2 rounded-md text-sm font-medium hover:bg-un1t-accent disabled:opacity-50"
+            className="inline-flex items-center gap-2 bg-un1t-text text-un1t-bg px-4 py-2 rounded-md text-sm font-medium hover:bg-un1t-accent disabled:opacity-50"
           >
             {busy ? <Loader2 size={14} className="animate-spin" /> : <Lock size={14} />}
             {busy ? 'Updating…' : 'Change password'}
@@ -183,7 +183,7 @@ export default function PasswordChangeForm({ email }) {
           </div>
         )}
 
-        <p className="text-[11px] text-un1t-mid pt-1">
+        <p className="text-[11px] text-un1t-muted pt-1">
           Forgot your current password? Sign out and use the &quot;Forgot password?&quot;
           link on the sign-in page to receive a reset email.
         </p>
@@ -195,13 +195,13 @@ export default function PasswordChangeForm({ email }) {
 function FieldRow({ label, value, onChange, show, autoComplete }) {
   return (
     <div>
-      <label className="block text-xs text-un1t-light mb-1">{label}</label>
+      <label className="block text-xs text-un1t-subtle mb-1">{label}</label>
       <input
         type={show ? 'text' : 'password'}
         value={value}
         onChange={(e) => onChange(e.target.value)}
         autoComplete={autoComplete}
-        className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
+        className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
       />
     </div>
   )

@@ -76,7 +76,7 @@ export default function ContractSignForm({ contract, recipientName }) {
     return (
       <div className="bg-red-500/5 border border-red-500/30 rounded-lg p-4 print:hidden">
         <h3 className="text-sm font-semibold text-red-700 mb-2">Decline this contract</h3>
-        <p className="text-xs text-un1t-light mb-3">
+        <p className="text-xs text-un1t-subtle mb-3">
           Let UN1T Dublin know why you&apos;re declining. They&apos;ll be notified by email.
         </p>
         <textarea
@@ -84,14 +84,14 @@ export default function ContractSignForm({ contract, recipientName }) {
           value={declineReason}
           onChange={e => setDeclineReason(e.target.value)}
           placeholder="Reason (required)…"
-          className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm"
+          className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm"
         />
         {error && <p className="text-xs text-red-700 mt-2">{error}</p>}
         <div className="flex justify-end gap-2 mt-3">
           <button
             type="button"
             onClick={() => { setShowDecline(false); setError(null) }}
-            className="text-xs px-3 py-1.5 rounded-md border border-un1t-gray text-un1t-light"
+            className="text-xs px-3 py-1.5 rounded-md border border-un1t-border text-un1t-subtle"
           >Cancel</button>
           <button
             type="button"
@@ -105,9 +105,9 @@ export default function ContractSignForm({ contract, recipientName }) {
   }
 
   return (
-    <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-4 md:p-5 print:hidden">
+    <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4 md:p-5 print:hidden">
       <h3 className="text-sm font-semibold mb-2">Your signature</h3>
-      <p className="text-xs text-un1t-light mb-3">
+      <p className="text-xs text-un1t-subtle mb-3">
         Type your full name as it appears on the contract. By signing, you agree to the terms above.
       </p>
       <input
@@ -115,11 +115,11 @@ export default function ContractSignForm({ contract, recipientName }) {
         value={signature}
         onChange={e => setSignature(e.target.value)}
         placeholder="Your full name"
-        className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-3 text-base font-serif italic"
+        className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-3 text-base font-serif italic"
         style={{ fontFamily: 'Georgia, serif' }}
       />
       {error && <p className="text-xs text-red-700 mt-2">{error}</p>}
-      <p className="text-[10px] text-un1t-mid mt-2">
+      <p className="text-[10px] text-un1t-muted mt-2">
         We record the time, your IP address, and browser to verify the signature for legal purposes (eIDAS Article 25).
       </p>
       <div className="flex flex-wrap items-center justify-end gap-2 mt-4">
@@ -134,7 +134,7 @@ export default function ContractSignForm({ contract, recipientName }) {
           type="button"
           onClick={handleSign}
           disabled={busy || !signature.trim()}
-          className="text-xs bg-un1t-white text-un1t-black px-4 py-1.5 rounded-md font-medium hover:bg-un1t-accent disabled:opacity-50 inline-flex items-center gap-1.5"
+          className="text-xs bg-un1t-text text-un1t-bg px-4 py-1.5 rounded-md font-medium hover:bg-un1t-accent disabled:opacity-50 inline-flex items-center gap-1.5"
         >
           <Check size={12} /> {busy ? 'Signing…' : 'Sign contract'}
         </button>

@@ -38,13 +38,13 @@ export default async function RaceTeamsPage(props) {
 
   return (
     <div className="p-6 max-w-5xl mx-auto">
-      <Link href="/events" className="inline-flex items-center gap-1.5 text-sm text-un1t-light hover:text-un1t-white mb-3">
+      <Link href="/events" className="inline-flex items-center gap-1.5 text-sm text-un1t-subtle hover:text-un1t-text mb-3">
         <ArrowLeft size={14} /> Back to Races
       </Link>
       <header className="mb-5">
-        <div className="text-[11px] uppercase tracking-wider text-un1t-light">Teams</div>
-        <h1 className="text-2xl font-semibold text-un1t-white">{race.name}</h1>
-        <p className="text-xs text-un1t-light mt-1">
+        <div className="text-[11px] uppercase tracking-wider text-un1t-subtle">Teams</div>
+        <h1 className="text-2xl font-semibold text-un1t-text">{race.name}</h1>
+        <p className="text-xs text-un1t-subtle mt-1">
           {new Date(race.race_date).toLocaleDateString('en-IE', {
             weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
           })}

@@ -158,24 +158,24 @@ export default function LocationForm({ location, callerRole = 'owner', organizat
       )}
 
       {/* Basic Info */}
-      <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5 space-y-4">
-        <h3 className="font-semibold text-sm text-un1t-light uppercase tracking-wider">Location Details</h3>
+      <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5 space-y-4">
+        <h3 className="font-semibold text-sm text-un1t-subtle uppercase tracking-wider">Location Details</h3>
 
         {/* Organization picker (mig 079). Required when creating; read-only when editing. */}
         {organizations.length > 0 && (
           <div>
             <label className="block text-sm mb-1.5">Organization *</label>
             {isEditing ? (
-              <div className="w-full bg-un1t-black/60 border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-light">
+              <div className="w-full bg-un1t-bg/60 border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-subtle">
                 {organizations.find(o => o.id === location?.organization_id)?.name || '—'}
-                <span className="ml-2 text-[11px] text-un1t-mid">(read-only — moving locations between orgs is rare; do via SQL with intent)</span>
+                <span className="ml-2 text-[11px] text-un1t-muted">(read-only — moving locations between orgs is rare; do via SQL with intent)</span>
               </div>
             ) : (
               <select
                 required
                 value={organizationId}
                 onChange={e => setOrganizationId(e.target.value)}
-                className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
+                className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted"
               >
                 <option value="">Pick an organization…</option>
                 {organizations.map(o => (
@@ -194,7 +194,7 @@ export default function LocationForm({ location, callerRole = 'owner', organizat
             value={name}
             onChange={e => setName(e.target.value)}
             placeholder="UN1T Dublin City"
-            className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid"
+            className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted"
           />
         </div>
 
@@ -205,7 +205,7 @@ export default function LocationForm({ location, callerRole = 'owner', organizat
             value={address}
             onChange={e => setAddress(e.target.value)}
             placeholder="123 Example St, Dublin 2"
-            className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid"
+            className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted"
           />
         </div>
 
@@ -217,7 +217,7 @@ export default function LocationForm({ location, callerRole = 'owner', organizat
               value={phone}
               onChange={e => setPhone(e.target.value)}
               placeholder="+353 1 234 5678"
-              className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid"
+              className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted"
             />
           </div>
           <div>
@@ -227,7 +227,7 @@ export default function LocationForm({ location, callerRole = 'owner', organizat
               value={email}
               onChange={e => setEmail(e.target.value)}
               placeholder="info@un1t.ie"
-              className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid"
+              className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted"
             />
           </div>
         </div>
@@ -238,7 +238,7 @@ export default function LocationForm({ location, callerRole = 'owner', organizat
             <select
               value={country}
               onChange={e => setCountry(e.target.value)}
-              className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
+              className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted"
             >
               <option value="IE">Ireland (IE)</option>
               <option value="GB">United Kingdom (GB)</option>
@@ -249,14 +249,14 @@ export default function LocationForm({ location, callerRole = 'owner', organizat
               <option value="EG">Egypt (EG)</option>
               <option value="CY">Cyprus (CY)</option>
             </select>
-            <p className="text-xs text-un1t-mid mt-1">Drives the public-holiday list on the schedule. All listed countries have built-in holidays through 2030.</p>
+            <p className="text-xs text-un1t-muted mt-1">Drives the public-holiday list on the schedule. All listed countries have built-in holidays through 2030.</p>
           </div>
           <div>
             <label className="block text-sm mb-1.5">Timezone</label>
             <select
               value={timezone}
               onChange={e => setTimezone(e.target.value)}
-              className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
+              className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted"
             >
               <option value="Europe/Dublin">Europe/Dublin</option>
               <option value="Europe/London">Europe/London</option>
@@ -297,9 +297,9 @@ export default function LocationForm({ location, callerRole = 'owner', organizat
       {/* Roster v2 phase 4 — Monthly contractor labour budget (mig 071).
           FTE labour is sunk cost and doesn't count; this ceiling
           tracks contractor hours × hourly_rate for the month. */}
-      <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5 space-y-4">
-        <h3 className="font-semibold text-sm text-un1t-light uppercase tracking-wider">Coaching Budget</h3>
-        <p className="text-xs text-un1t-mid">
+      <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5 space-y-4">
+        <h3 className="font-semibold text-sm text-un1t-subtle uppercase tracking-wider">Coaching Budget</h3>
+        <p className="text-xs text-un1t-muted">
           Monthly euro ceiling for <strong>contractor</strong> labour at this location. FTE coaches are sunk cost and don&apos;t count against this. Leave blank if you don&apos;t want to track a budget — the schedule summary will still show the spend total.
         </p>
 
@@ -312,9 +312,9 @@ export default function LocationForm({ location, callerRole = 'owner', organizat
             value={contractorBudget}
             onChange={e => setContractorBudget(e.target.value)}
             placeholder="e.g. 2500"
-            className="w-48 bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid"
+            className="w-48 bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted"
           />
-          <p className="text-[11px] text-un1t-mid mt-1">
+          <p className="text-[11px] text-un1t-muted mt-1">
             Phase 5 will add an owner-approval gate when a published roster exceeds this budget. Right now the summary panel below the schedule is read-only / advisory.
           </p>
         </div>
@@ -326,10 +326,10 @@ export default function LocationForm({ location, callerRole = 'owner', organizat
           mig 184). Leave blank to disable inbound ingest for this
           studio — the /invoices inbox still works for direct
           uploads but no forwarded email will route here. */}
-      <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5 space-y-4">
-        <h3 className="font-semibold text-sm text-un1t-light uppercase tracking-wider">Invoice Forwarding</h3>
-        <p className="text-xs text-un1t-mid">
-          Forward supplier invoices to <code className="text-un1t-light">{(invoicesInboundSlug || '<slug>')}-invoices@mail.un1tdublin.com</code> and they&apos;ll land in <a href="/invoices" className="underline text-un1t-light">Invoices</a> awaiting quality review. Lowercase letters, digits, hyphens only. Must be unique across locations. Leave blank to disable.
+      <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5 space-y-4">
+        <h3 className="font-semibold text-sm text-un1t-subtle uppercase tracking-wider">Invoice Forwarding</h3>
+        <p className="text-xs text-un1t-muted">
+          Forward supplier invoices to <code className="text-un1t-subtle">{(invoicesInboundSlug || '<slug>')}-invoices@mail.un1tdublin.com</code> and they&apos;ll land in <a href="/invoices" className="underline text-un1t-subtle">Invoices</a> awaiting quality review. Lowercase letters, digits, hyphens only. Must be unique across locations. Leave blank to disable.
         </p>
 
         <div>
@@ -339,8 +339,8 @@ export default function LocationForm({ location, callerRole = 'owner', organizat
             value={invoicesInboundSlug}
             onChange={e => setInvoicesInboundSlug(e.target.value.toLowerCase())}
             placeholder="e.g. dublin-city"
-            className={`w-64 bg-un1t-black border rounded-md px-3 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid ${
-              invoiceSlugInvalid ? 'border-red-500' : 'border-un1t-gray'
+            className={`w-64 bg-un1t-bg border rounded-md px-3 py-2 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted ${
+              invoiceSlugInvalid ? 'border-red-500' : 'border-un1t-border'
             }`}
           />
           {invoiceSlugInvalid && (
@@ -357,14 +357,14 @@ export default function LocationForm({ location, callerRole = 'owner', organizat
         <button
           type="submit"
           disabled={saving}
-          className="bg-un1t-white text-un1t-black text-sm font-medium px-5 py-2.5 rounded-md hover:bg-un1t-accent transition-colors disabled:opacity-50"
+          className="bg-un1t-text text-un1t-bg text-sm font-medium px-5 py-2.5 rounded-md hover:bg-un1t-accent transition-colors disabled:opacity-50"
         >
           {saving ? 'Saving...' : isEditing ? 'Update Location' : 'Create Location'}
         </button>
         <button
           type="button"
           onClick={() => router.push('/settings')}
-          className="text-sm text-un1t-light hover:text-un1t-white transition-colors px-4 py-2.5"
+          className="text-sm text-un1t-subtle hover:text-un1t-text transition-colors px-4 py-2.5"
         >
           Cancel
         </button>

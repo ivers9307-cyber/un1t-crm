@@ -130,7 +130,7 @@ export default async function ContactDetailPage(props) {
   return (
     <div className="p-6 max-w-5xl">
       {/* Back link */}
-      <Link href="/contacts" className="inline-flex items-center gap-1.5 text-sm text-un1t-light hover:text-un1t-white mb-5">
+      <Link href="/contacts" className="inline-flex items-center gap-1.5 text-sm text-un1t-subtle hover:text-un1t-text mb-5">
         <ArrowLeft size={16} /> Contacts
       </Link>
 
@@ -145,12 +145,12 @@ export default async function ContactDetailPage(props) {
             <img
               src={contact.glofox_image_url}
               alt={contact.name || 'Member'}
-              className="w-16 h-16 rounded-full object-cover border border-un1t-gray shrink-0"
+              className="w-16 h-16 rounded-full object-cover border border-un1t-border shrink-0"
             />
           )}
           <div>
             <h2 className="text-2xl font-bold">{contact.name}</h2>
-            <div className="flex items-center gap-4 mt-2 text-sm text-un1t-light">
+            <div className="flex items-center gap-4 mt-2 text-sm text-un1t-subtle">
               {contact.email && <span className="flex items-center gap-1.5"><Mail size={14} /> {contact.email}</span>}
               {contact.phone && <span className="flex items-center gap-1.5"><Phone size={14} /> {contact.phone}</span>}
               {contact.wa_phone && contact.wa_phone !== contact.phone && (
@@ -194,7 +194,7 @@ export default async function ContactDetailPage(props) {
               hasUserAccount={Boolean(contact.user_id)}
             />
           )}
-          <span className={`px-3 py-1 rounded-full text-sm border ${statusColors[contact.pipeline_stage_slug] || 'bg-un1t-gray text-un1t-light border-un1t-gray'}`}>
+          <span className={`px-3 py-1 rounded-full text-sm border ${statusColors[contact.pipeline_stage_slug] || 'bg-un1t-border text-un1t-subtle border-un1t-border'}`}>
             {contact.pipeline_stage_slug?.replaceAll('_', ' ')}
           </span>
         </div>
@@ -207,8 +207,8 @@ export default async function ContactDetailPage(props) {
               glofox_member_id) moved to the dedicated Glofox Profile
               card below. This card now only carries CRM-native
               identifiers. */}
-          <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-4 space-y-3">
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light mb-2">Details</h3>
+          <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4 space-y-3">
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle mb-2">Details</h3>
             <InfoRow label="Source" value={contact.lead_source || contact.source} />
             <InfoRow label="Label" value={contact.label || '—'} />
             <InfoRow label="Created" value={new Date(contact.created_at).toLocaleDateString('en-IE')} />
@@ -243,11 +243,11 @@ export default async function ContactDetailPage(props) {
           />
 
           {/* Deals */}
-          <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-4">
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light mb-3">Deals</h3>
-            {deals.length === 0 && <p className="text-sm text-un1t-mid">No deals</p>}
+          <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle mb-3">Deals</h3>
+            {deals.length === 0 && <p className="text-sm text-un1t-muted">No deals</p>}
             {deals.map(deal => (
-              <div key={deal.id} className="flex items-center justify-between py-2 border-b border-un1t-gray last:border-0">
+              <div key={deal.id} className="flex items-center justify-between py-2 border-b border-un1t-border last:border-0">
                 <span className="text-sm">{deal.title}</span>
                 <span className="text-xs px-2 py-0.5 rounded" style={{ backgroundColor: deal.pipeline_stages?.color + '30', color: deal.pipeline_stages?.color }}>
                   {deal.pipeline_stages?.name}
@@ -262,23 +262,23 @@ export default async function ContactDetailPage(props) {
 
           {/* WhatsApp Conversations */}
           {(waConversations.length > 0 || contact.wa_phone) && (
-            <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-4">
-              <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light mb-3 flex items-center gap-1.5">
+            <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
+              <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle mb-3 flex items-center gap-1.5">
                 <MessageCircle size={12} /> WhatsApp
               </h3>
               {contact.wa_phone && (
-                <p className="text-xs text-un1t-mid mb-2">{contact.wa_phone}</p>
+                <p className="text-xs text-un1t-muted mb-2">{contact.wa_phone}</p>
               )}
-              {waConversations.length === 0 && <p className="text-sm text-un1t-mid">No conversations</p>}
+              {waConversations.length === 0 && <p className="text-sm text-un1t-muted">No conversations</p>}
               {waConversations.map(conv => (
                 <Link
                   key={conv.id}
                   href="/whatsapp/inbox"
-                  className="block py-2 border-b border-un1t-gray last:border-0 hover:bg-un1t-gray/20 -mx-1 px-1 rounded transition-colors"
+                  className="block py-2 border-b border-un1t-border last:border-0 hover:bg-un1t-border/20 -mx-1 px-1 rounded transition-colors"
                 >
                   <div className="flex items-center justify-between">
                     <p className="text-sm truncate flex-1">
-                      {conv.last_message_direction === 'outbound' && <span className="text-un1t-light">You: </span>}
+                      {conv.last_message_direction === 'outbound' && <span className="text-un1t-subtle">You: </span>}
                       {conv.last_message_preview || 'No messages'}
                     </p>
                     {conv.unread_count > 0 && (
@@ -287,7 +287,7 @@ export default async function ContactDetailPage(props) {
                       </span>
                     )}
                   </div>
-                  <p className="text-xs text-un1t-mid mt-0.5">
+                  <p className="text-xs text-un1t-muted mt-0.5">
                     {conv.last_message_at ? new Date(conv.last_message_at).toLocaleString('en-IE', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : ''}
                   </p>
                 </Link>
@@ -302,18 +302,18 @@ export default async function ContactDetailPage(props) {
               when the contact has any registrations history (avoids
               empty-state clutter for trial members). */}
           {(upcomingBookings.length > 0 || pastBookings.length > 0) && (
-          <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-4">
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light mb-3">Upcoming event registrations</h3>
-            {upcomingBookings.length === 0 && <p className="text-sm text-un1t-mid">None</p>}
+          <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle mb-3">Upcoming event registrations</h3>
+            {upcomingBookings.length === 0 && <p className="text-sm text-un1t-muted">None</p>}
             {upcomingBookings.map(b => (
-              <div key={b.id} className="flex items-start gap-3 py-2 border-b border-un1t-gray last:border-0">
+              <div key={b.id} className="flex items-start gap-3 py-2 border-b border-un1t-border last:border-0">
                 <div
                   className="w-1 h-8 rounded-full mt-0.5 shrink-0"
                   style={{ backgroundColor: b.event_types?.color || '#6B7280' }}
                 />
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-medium">{b.event_types?.name || 'Event'}</p>
-                  <p className="text-xs text-un1t-light mt-0.5">
+                  <p className="text-xs text-un1t-subtle mt-0.5">
                     {new Date(b.booking_date + 'T00:00:00').toLocaleDateString('en-IE', { weekday: 'short', day: 'numeric', month: 'short' })}
                     {' · '}
                     {formatTime(b.start_time)} — {formatTime(b.end_time)}
@@ -331,24 +331,24 @@ export default async function ContactDetailPage(props) {
               has competed in — captain or member — with team, wave,
               and finish time. Always rendered; the component shows
               a "no races yet" message when empty. */}
-          <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-4">
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light mb-3">Races</h3>
+          <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle mb-3">Races</h3>
             <ContactRaceHistory contactId={contact.id} />
           </div>
 
           {/* Past event registrations (CRM-native). */}
           {pastBookings.length > 0 && (
-            <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-4">
-              <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light mb-3">Past event registrations</h3>
+            <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
+              <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle mb-3">Past event registrations</h3>
               {pastBookings.map(b => (
-                <div key={b.id} className="flex items-start gap-3 py-2 border-b border-un1t-gray last:border-0 opacity-60">
+                <div key={b.id} className="flex items-start gap-3 py-2 border-b border-un1t-border last:border-0 opacity-60">
                   <div
                     className="w-1 h-8 rounded-full mt-0.5 shrink-0"
                     style={{ backgroundColor: b.event_types?.color || '#6B7280' }}
                   />
                   <div className="flex-1 min-w-0">
                     <p className="text-sm">{b.event_types?.name || 'Event'}</p>
-                    <p className="text-xs text-un1t-light mt-0.5">
+                    <p className="text-xs text-un1t-subtle mt-0.5">
                       {new Date(b.booking_date + 'T00:00:00').toLocaleDateString('en-IE', { day: 'numeric', month: 'short' })}
                       {' · '}
                       {formatTime(b.start_time)}
@@ -364,18 +364,18 @@ export default async function ContactDetailPage(props) {
 
           {/* Open tasks — manual to-dos only (mig 073).
               Auto-logged events live on the timeline on the right. */}
-          <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-4">
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light mb-3">Open tasks</h3>
+          <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle mb-3">Open tasks</h3>
             {activities.filter(a => a.kind === 'task' && !a.done).length === 0 && (
-              <p className="text-sm text-un1t-mid">No open tasks</p>
+              <p className="text-sm text-un1t-muted">No open tasks</p>
             )}
             {activities.filter(a => a.kind === 'task' && !a.done).map(a => (
-              <div key={a.id} className="flex items-start gap-2 py-2 border-b border-un1t-gray last:border-0">
-                <CheckSquare size={14} className="text-un1t-mid mt-0.5 shrink-0" />
+              <div key={a.id} className="flex items-start gap-2 py-2 border-b border-un1t-border last:border-0">
+                <CheckSquare size={14} className="text-un1t-muted mt-0.5 shrink-0" />
                 <div>
                   <p className="text-sm">{a.subject}</p>
                   {a.due_date && (
-                    <p className="text-xs text-un1t-light flex items-center gap-1 mt-0.5">
+                    <p className="text-xs text-un1t-subtle flex items-center gap-1 mt-0.5">
                       <Clock size={10} /> {a.due_date} {a.due_time ? formatTime(a.due_time) : ''}
                     </p>
                   )}
@@ -399,17 +399,17 @@ export default async function ContactDetailPage(props) {
             whatsappWindowExpiresAt={latestWaConversation?.window_expires_at || null}
             templates={composerTemplates}
           />
-          <div className="bg-un1t-dark border border-un1t-gray rounded-lg">
-            <div className="flex items-center justify-between p-4 border-b border-un1t-gray">
-              <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light">Timeline</h3>
+          <div className="bg-un1t-surface border border-un1t-border rounded-lg">
+            <div className="flex items-center justify-between p-4 border-b border-un1t-border">
+              <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle">Timeline</h3>
               <ContactActions
                 contactId={contact.id}
                 locationId={contact.location_id}
               />
             </div>
-            <div className="divide-y divide-un1t-gray">
+            <div className="divide-y divide-un1t-border">
               {timeline.length === 0 && (
-                <p className="text-sm text-un1t-mid text-center py-12">No activity yet</p>
+                <p className="text-sm text-un1t-muted text-center py-12">No activity yet</p>
               )}
               {timeline.map((item, i) => {
                 const iconConfig = activityIcons[item.activityType] || activityIcons.task
@@ -429,18 +429,18 @@ export default async function ContactDetailPage(props) {
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-2">
-                          <span className="text-xs font-medium text-un1t-light uppercase">
+                          <span className="text-xs font-medium text-un1t-subtle uppercase">
                             {iconConfig.label}
                           </span>
                           {item.type === 'activity' && item.activityType !== 'note' && (
                             <span className="text-sm font-medium">{item.subject}</span>
                           )}
                         </div>
-                        <span className="text-xs text-un1t-mid">
+                        <span className="text-xs text-un1t-muted">
                           {new Date(item.date).toLocaleString('en-IE', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
                         </span>
                       </div>
-                      <p className="text-sm mt-1 whitespace-pre-wrap text-un1t-light">
+                      <p className="text-sm mt-1 whitespace-pre-wrap text-un1t-subtle">
                         {item.content || item.note || item.description || ''}
                       </p>
                       {item.type === 'activity' && item.done && item.activityType !== 'pipeline' && item.activityType !== 'booking' && (
@@ -472,7 +472,7 @@ export default async function ContactDetailPage(props) {
 function InfoRow({ label, value }) {
   return (
     <div className="flex justify-between text-sm">
-      <span className="text-un1t-light">{label}</span>
+      <span className="text-un1t-subtle">{label}</span>
       <span className="font-medium">{value ?? '—'}</span>
     </div>
   )
@@ -613,11 +613,11 @@ function GlofoxProfileCard({ contact }) {
     : []
 
   return (
-    <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-4 space-y-3">
+    <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4 space-y-3">
       <div className="flex items-center justify-between">
-        <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light">Glofox membership</h3>
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle">Glofox membership</h3>
         {linked && (
-          <span className="text-[10px] text-un1t-mid">
+          <span className="text-[10px] text-un1t-muted">
             Synced {contact.glofox_synced_at ? relativeTime(contact.glofox_synced_at) : 'never'}
           </span>
         )}
@@ -625,7 +625,7 @@ function GlofoxProfileCard({ contact }) {
 
       {!linked && (
         <div className="space-y-2">
-          <div className="text-sm text-un1t-mid py-2 text-center">
+          <div className="text-sm text-un1t-muted py-2 text-center">
             Not yet linked to Glofox.
             <p className="text-xs mt-1">Push this contact to Glofox: we&apos;ll search by email first, and create + attach the trial if they don&apos;t exist yet.</p>
           </div>
@@ -647,31 +647,31 @@ function GlofoxProfileCard({ contact }) {
               </span>
             )}
             {credits != null && (
-              <span className="text-xs text-un1t-light">· {credits} credit{credits === 1 ? '' : 's'}</span>
+              <span className="text-xs text-un1t-subtle">· {credits} credit{credits === 1 ? '' : 's'}</span>
             )}
             {ltv && (
-              <span className="text-xs text-un1t-light">· {ltv} LTV</span>
+              <span className="text-xs text-un1t-subtle">· {ltv} LTV</span>
             )}
           </div>
 
           {/* Current membership plan (CHURN-PREP.2) */}
           {contact.glofox_membership_plan && (
-            <p className="text-sm font-medium text-un1t-white">{contact.glofox_membership_plan}</p>
+            <p className="text-sm font-medium text-un1t-text">{contact.glofox_membership_plan}</p>
           )}
 
           {/* Billing + renewal (GLOFOX-PROFILE) */}
           {billingLine && (
-            <p className="text-xs text-un1t-light">{billingLine}</p>
+            <p className="text-xs text-un1t-subtle">{billingLine}</p>
           )}
           {expiryDate && (
-            <p className={`text-xs ${expiryPast ? 'text-red-400/90' : 'text-un1t-light'}`}>
+            <p className={`text-xs ${expiryPast ? 'text-red-400/90' : 'text-un1t-subtle'}`}>
               {expiryPast ? 'Expired' : 'Renews'} {expiryDate}
-              {expiryRel && <span className="text-un1t-mid"> · {expiryRel}</span>}
+              {expiryRel && <span className="text-un1t-muted"> · {expiryRel}</span>}
             </p>
           )}
 
           {/* Tenure + engagement strip */}
-          <div className="text-xs text-un1t-light space-y-1">
+          <div className="text-xs text-un1t-subtle space-y-1">
             {tenure && <p>{tenure}</p>}
             {lastAttended && <p>Last attended {lastAttended}</p>}
             {Number(contact.total_attended_30d) > 0 && (
@@ -695,13 +695,13 @@ function GlofoxProfileCard({ contact }) {
           {/* Sign-up answers (GLOFOX-PROFILE) — goals, referral
               source etc. captured on the Glofox join form. */}
           {answers.length > 0 && (
-            <div className="pt-2 border-t border-un1t-gray">
-              <p className="text-[10px] uppercase tracking-wider text-un1t-mid mb-1.5">Sign-up answers</p>
+            <div className="pt-2 border-t border-un1t-border">
+              <p className="text-[10px] uppercase tracking-wider text-un1t-muted mb-1.5">Sign-up answers</p>
               <div className="space-y-1">
                 {answers.map((ans, i) => (
                   <p key={i} className="text-xs leading-snug">
-                    {ans.q && <span className="text-un1t-mid">{ans.q}: </span>}
-                    <span className="text-un1t-light">{ans.a}</span>
+                    {ans.q && <span className="text-un1t-muted">{ans.q}: </span>}
+                    <span className="text-un1t-subtle">{ans.a}</span>
                   </p>
                 ))}
               </div>
@@ -709,7 +709,7 @@ function GlofoxProfileCard({ contact }) {
           )}
 
           {/* Reference info — profile attributes + identifiers */}
-          <div className="pt-2 border-t border-un1t-gray text-[11px] text-un1t-mid space-y-0.5">
+          <div className="pt-2 border-t border-un1t-border text-[11px] text-un1t-muted space-y-0.5">
             {contact.dob && <p>DOB: {contact.dob}</p>}
             {contact.gender && <p>Gender: {humanise(contact.gender)}</p>}
             {contact.emergency_contact && <p>Emergency contact: {contact.emergency_contact}</p>}
@@ -742,10 +742,10 @@ function BookingsSubsection({ bookings }) {
                        .sort((a, b) => Number(b.time_start) - Number(a.time_start))
   if (upcoming.length === 0 && past.length === 0) return null
   return (
-    <div className="pt-2 border-t border-un1t-gray space-y-3">
+    <div className="pt-2 border-t border-un1t-border space-y-3">
       {upcoming.length > 0 && (
         <div>
-          <p className="text-[10px] uppercase tracking-wider text-un1t-mid mb-1.5">Upcoming</p>
+          <p className="text-[10px] uppercase tracking-wider text-un1t-muted mb-1.5">Upcoming</p>
           <div className="space-y-1.5">
             {upcoming.map(b => <BookingRow key={b.glofox_id || b.time_start} b={b} when="future" />)}
           </div>
@@ -753,7 +753,7 @@ function BookingsSubsection({ bookings }) {
       )}
       {past.length > 0 && (
         <div>
-          <p className="text-[10px] uppercase tracking-wider text-un1t-mid mb-1.5">Recent</p>
+          <p className="text-[10px] uppercase tracking-wider text-un1t-muted mb-1.5">Recent</p>
           <div className="space-y-1.5">
             {past.map(b => <BookingRow key={b.glofox_id || b.time_start} b={b} when="past" />)}
           </div>
@@ -785,10 +785,10 @@ function BookingRow({ b, when }) {
   return (
     <div className="flex items-start justify-between text-sm gap-2">
       <div className="min-w-0 flex-1">
-        <p className={`font-medium truncate ${isCancelled ? 'line-through text-un1t-mid' : ''}`}>
+        <p className={`font-medium truncate ${isCancelled ? 'line-through text-un1t-muted' : ''}`}>
           {b.event_name || b.model_name || '—'}
         </p>
-        <p className="text-xs text-un1t-mid">{dateStr}</p>
+        <p className="text-xs text-un1t-muted">{dateStr}</p>
       </div>
       {badge && (
         <span className={`text-[10px] px-1.5 py-0.5 rounded whitespace-nowrap ${badge.cls}`}>

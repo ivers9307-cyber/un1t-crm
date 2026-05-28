@@ -45,7 +45,7 @@ export default function TestPushButton({ recipientId, recipientName }) {
           ? <><Check size={12} className="text-emerald-400" /> <span className="text-emerald-300">sent {sent}</span></>
           : <><AlertTriangle size={12} className="text-amber-400" /> <span className="text-amber-200">0 sent</span></>}
         {invalidated > 0 && <span className="text-red-300">· {invalidated} stale</span>}
-        {skipped > 0 && <span className="text-un1t-mid">· {skipped} blocked</span>}
+        {skipped > 0 && <span className="text-un1t-muted">· {skipped} blocked</span>}
       </span>
     )
   }
@@ -64,7 +64,7 @@ export default function TestPushButton({ recipientId, recipientName }) {
       onClick={send}
       disabled={state === 'sending'}
       title={`Send a test push to ${recipientName}`}
-      className="inline-flex items-center gap-1 text-[11px] text-un1t-light hover:text-un1t-white border border-un1t-gray rounded px-2 py-1 disabled:opacity-50"
+      className="inline-flex items-center gap-1 text-[11px] text-un1t-subtle hover:text-un1t-text border border-un1t-border rounded px-2 py-1 disabled:opacity-50"
     >
       {state === 'sending'
         ? <><Loader2 size={11} className="animate-spin" /> sending</>

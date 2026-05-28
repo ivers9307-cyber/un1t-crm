@@ -33,17 +33,17 @@ import {
 } from 'lucide-react'
 
 const STATUSES = [
-  { key: 'todo',        label: 'To do',       Icon: CircleDashed,  bg: 'bg-un1t-gray/40' },
+  { key: 'todo',        label: 'To do',       Icon: CircleDashed,  bg: 'bg-un1t-border/40' },
   { key: 'in_progress', label: 'In progress', Icon: Circle,        bg: 'bg-blue-500/10' },
   { key: 'done',        label: 'Done',        Icon: CheckCircle2,  bg: 'bg-emerald-500/10' },
-  { key: 'cancelled',   label: 'Cancelled',   Icon: MinusCircle,   bg: 'bg-un1t-gray/40' },
+  { key: 'cancelled',   label: 'Cancelled',   Icon: MinusCircle,   bg: 'bg-un1t-border/40' },
 ]
 
 const PRIORITIES = [
   { key: 'urgent', label: 'Urgent', cls: 'text-red-400' },
   { key: 'high',   label: 'High',   cls: 'text-orange-400' },
   { key: 'medium', label: 'Medium', cls: 'text-amber-300' },
-  { key: 'low',    label: 'Low',    cls: 'text-un1t-light' },
+  { key: 'low',    label: 'Low',    cls: 'text-un1t-subtle' },
 ]
 
 export default function TasksPage({ initialTasks, locationId, profiles, projectsSeed }) {
@@ -145,13 +145,13 @@ export default function TasksPage({ initialTasks, locationId, profiles, projects
           <ViewSwitcher value={view} onChange={setView} />
           <button
             onClick={() => setCreateOpen(true)}
-            className="inline-flex items-center gap-1.5 text-sm bg-un1t-white text-un1t-black font-medium px-3 py-1.5 rounded-md hover:bg-un1t-accent"
+            className="inline-flex items-center gap-1.5 text-sm bg-un1t-text text-un1t-bg font-medium px-3 py-1.5 rounded-md hover:bg-un1t-accent"
           >
             <Plus size={14} /> New task
           </button>
         </div>
       </div>
-      <p className="text-sm text-un1t-light mb-4">Manual follow-ups, calls, reminders, and project work.</p>
+      <p className="text-sm text-un1t-subtle mb-4">Manual follow-ups, calls, reminders, and project work.</p>
 
       <FiltersBar filter={filter} setFilter={setFilter} profiles={profiles} projects={projects} />
 
@@ -173,17 +173,17 @@ export default function TasksPage({ initialTasks, locationId, profiles, projects
         <div className="space-y-4">
           {STATUSES.map(col => byStatus[col.key].length > 0 && (
             <div key={col.key}>
-              <h3 className="text-xs uppercase tracking-wide text-un1t-light mb-2 flex items-center gap-2">
-                <col.Icon size={12} /> {col.label} <span className="text-un1t-mid">· {byStatus[col.key].length}</span>
+              <h3 className="text-xs uppercase tracking-wide text-un1t-subtle mb-2 flex items-center gap-2">
+                <col.Icon size={12} /> {col.label} <span className="text-un1t-muted">· {byStatus[col.key].length}</span>
               </h3>
-              <div className="bg-un1t-dark border border-un1t-gray rounded-lg divide-y divide-un1t-gray">
+              <div className="bg-un1t-surface border border-un1t-border rounded-lg divide-y divide-un1t-border">
                 {byStatus[col.key].map(t => <TaskListRow key={t.id} task={t} onStatus={updateStatus} />)}
               </div>
             </div>
           ))}
           {visibleTasks.length === 0 && (
-            <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-12 text-center text-sm text-un1t-mid">
-              No tasks match these filters. Click <span className="text-un1t-light">New task</span> to add one.
+            <div className="bg-un1t-surface border border-un1t-border rounded-lg p-12 text-center text-sm text-un1t-muted">
+              No tasks match these filters. Click <span className="text-un1t-subtle">New task</span> to add one.
             </div>
           )}
         </div>
@@ -205,7 +205,7 @@ export default function TasksPage({ initialTasks, locationId, profiles, projects
 
 function ViewSwitcher({ value, onChange }) {
   return (
-    <div className="inline-flex border border-un1t-gray rounded-md overflow-hidden">
+    <div className="inline-flex border border-un1t-border rounded-md overflow-hidden">
       {[
         { key: 'board', Icon: LayoutGrid, label: 'Board' },
         { key: 'list',  Icon: LayoutList, label: 'List' },
@@ -215,8 +215,8 @@ function ViewSwitcher({ value, onChange }) {
           onClick={() => onChange(key)}
           className={`inline-flex items-center gap-1.5 text-xs px-3 py-1.5 transition-colors ${
             value === key
-              ? 'bg-un1t-gray text-un1t-white'
-              : 'text-un1t-light hover:text-un1t-white hover:bg-un1t-gray/30'
+              ? 'bg-un1t-border text-un1t-text'
+              : 'text-un1t-subtle hover:text-un1t-text hover:bg-un1t-border/30'
           }`}
         >
           <Icon size={12} /> {label}
@@ -229,7 +229,7 @@ function ViewSwitcher({ value, onChange }) {
 function FiltersBar({ filter, setFilter, profiles, projects }) {
   return (
     <div className="flex flex-wrap items-center gap-2 mb-4 text-xs">
-      <Filter size={12} className="text-un1t-light" />
+      <Filter size={12} className="text-un1t-subtle" />
       <SelectFilter
         value={filter.assignee}
         onChange={v => setFilter(f => ({ ...f, assignee: v }))}
@@ -259,7 +259,7 @@ function FiltersBar({ filter, setFilter, profiles, projects }) {
       {(filter.assignee !== 'any' || filter.project !== 'any' || filter.priority !== 'any') && (
         <button
           onClick={() => setFilter({ assignee: 'any', project: 'any', priority: 'any' })}
-          className="inline-flex items-center gap-1 text-un1t-light hover:text-un1t-white"
+          className="inline-flex items-center gap-1 text-un1t-subtle hover:text-un1t-text"
         >
           <X size={12} /> Clear
         </button>
@@ -273,7 +273,7 @@ function SelectFilter({ value, onChange, options }) {
     <select
       value={value}
       onChange={e => onChange(e.target.value)}
-      className="bg-un1t-dark border border-un1t-gray rounded-md px-2 py-1 text-xs text-un1t-white focus:outline-none focus:border-un1t-mid"
+      className="bg-un1t-surface border border-un1t-border rounded-md px-2 py-1 text-xs text-un1t-text focus:outline-none focus:border-un1t-muted"
     >
       {options.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
     </select>
@@ -285,13 +285,13 @@ function Column({ status, tasks }) {
   return (
     <div
       ref={setNodeRef}
-      className={`rounded-lg border border-un1t-gray ${status.bg} ${isOver ? 'ring-2 ring-un1t-white/40' : ''} flex flex-col min-h-[200px]`}
+      className={`rounded-lg border border-un1t-border ${status.bg} ${isOver ? 'ring-2 ring-un1t-text/40' : ''} flex flex-col min-h-[200px]`}
     >
-      <div className="px-3 py-2 border-b border-un1t-gray flex items-center justify-between">
-        <div className="flex items-center gap-1.5 text-xs uppercase tracking-wide text-un1t-light">
+      <div className="px-3 py-2 border-b border-un1t-border flex items-center justify-between">
+        <div className="flex items-center gap-1.5 text-xs uppercase tracking-wide text-un1t-subtle">
           <status.Icon size={12} /> {status.label}
         </div>
-        <span className="text-[10px] text-un1t-mid">{tasks.length}</span>
+        <span className="text-[10px] text-un1t-muted">{tasks.length}</span>
       </div>
       <SortableContext items={tasks.map(t => t.id)} strategy={verticalListSortingStrategy}>
         <div className="p-2 space-y-2 flex-1">
@@ -324,12 +324,12 @@ function SortableTaskCard({ task }) {
 function TaskCard({ task, dragging }) {
   const isOverdue = task.due_date && task.status !== 'done' && task.status !== 'cancelled' && task.due_date < new Date().toISOString().slice(0, 10)
   return (
-    <div className={`bg-un1t-black border ${isOverdue ? 'border-red-500/30' : 'border-un1t-gray'} rounded-md p-3 cursor-grab ${dragging ? 'shadow-lg' : ''}`}>
-      <p className="text-sm text-un1t-white">{task.subject}</p>
-      {task.note && <p className="text-xs text-un1t-mid mt-1 line-clamp-2">{task.note}</p>}
+    <div className={`bg-un1t-bg border ${isOverdue ? 'border-red-500/30' : 'border-un1t-border'} rounded-md p-3 cursor-grab ${dragging ? 'shadow-lg' : ''}`}>
+      <p className="text-sm text-un1t-text">{task.subject}</p>
+      {task.note && <p className="text-xs text-un1t-muted mt-1 line-clamp-2">{task.note}</p>}
       <div className="flex items-center gap-2 mt-2 flex-wrap text-[10px]">
         {task.project && (
-          <span className="px-1.5 py-0.5 rounded bg-un1t-gray/60 text-un1t-light">{task.project}</span>
+          <span className="px-1.5 py-0.5 rounded bg-un1t-border/60 text-un1t-subtle">{task.project}</span>
         )}
         {task.priority && (
           <span className={`inline-flex items-center gap-0.5 ${PRIORITIES.find(p => p.key === task.priority)?.cls || ''}`}>
@@ -338,18 +338,18 @@ function TaskCard({ task, dragging }) {
           </span>
         )}
         {task.due_date && (
-          <span className={`inline-flex items-center gap-0.5 ${isOverdue ? 'text-red-400' : 'text-un1t-light'}`}>
+          <span className={`inline-flex items-center gap-0.5 ${isOverdue ? 'text-red-400' : 'text-un1t-subtle'}`}>
             <Clock size={9} /> {task.due_date}{task.due_time ? ` ${task.due_time.slice(0,5)}` : ''}
           </span>
         )}
         {task.contacts && (
-          <Link href={`/contacts/${task.contacts.id}`} className="inline-flex items-center gap-0.5 text-un1t-light hover:text-un1t-white" onClick={e => e.stopPropagation()}>
+          <Link href={`/contacts/${task.contacts.id}`} className="inline-flex items-center gap-0.5 text-un1t-subtle hover:text-un1t-text" onClick={e => e.stopPropagation()}>
             <User size={9} /> {task.contacts.name}
           </Link>
         )}
       </div>
       {task.profiles && (
-        <p className="text-[10px] text-un1t-mid mt-1.5">@ {task.profiles.full_name}</p>
+        <p className="text-[10px] text-un1t-muted mt-1.5">@ {task.profiles.full_name}</p>
       )}
     </div>
   )
@@ -360,21 +360,21 @@ function TaskListRow({ task, onStatus }) {
     <div className="flex items-start gap-3 p-3">
       <button
         onClick={() => onStatus(task.id, task.status === 'done' ? 'todo' : 'done')}
-        className="mt-0.5 text-un1t-light hover:text-un1t-white"
+        className="mt-0.5 text-un1t-subtle hover:text-un1t-text"
         aria-label="Toggle done"
       >
         {task.status === 'done' ? <CheckCircle2 size={16} /> : <Circle size={16} />}
       </button>
       <div className="flex-1 min-w-0">
-        <p className={`text-sm ${task.status === 'done' ? 'line-through text-un1t-light' : 'text-un1t-white'}`}>{task.subject}</p>
-        <div className="flex items-center gap-2 mt-0.5 flex-wrap text-[11px] text-un1t-light">
-          {task.project && <span className="px-1.5 py-0.5 rounded bg-un1t-gray/60">{task.project}</span>}
+        <p className={`text-sm ${task.status === 'done' ? 'line-through text-un1t-subtle' : 'text-un1t-text'}`}>{task.subject}</p>
+        <div className="flex items-center gap-2 mt-0.5 flex-wrap text-[11px] text-un1t-subtle">
+          {task.project && <span className="px-1.5 py-0.5 rounded bg-un1t-border/60">{task.project}</span>}
           {task.priority && (
             <span className={PRIORITIES.find(p => p.key === task.priority)?.cls || ''}>{task.priority}</span>
           )}
           {task.due_date && <span><Clock size={10} className="inline mr-1" />{task.due_date}</span>}
           {task.contacts && (
-            <Link href={`/contacts/${task.contacts.id}`} className="hover:text-un1t-white">
+            <Link href={`/contacts/${task.contacts.id}`} className="hover:text-un1t-text">
               <User size={10} className="inline mr-1" />{task.contacts.name}
             </Link>
           )}
@@ -430,37 +430,37 @@ function NewTaskModal({ onClose, onCreate, profiles, projects }) {
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={onClose}>
-      <div className="bg-un1t-dark border border-un1t-gray rounded-lg w-full max-w-md p-5" onClick={e => e.stopPropagation()}>
+      <div className="bg-un1t-surface border border-un1t-border rounded-lg w-full max-w-md p-5" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-lg font-semibold">New task</h3>
-          <button onClick={onClose} className="text-un1t-light hover:text-un1t-white"><X size={16} /></button>
+          <button onClick={onClose} className="text-un1t-subtle hover:text-un1t-text"><X size={16} /></button>
         </div>
 
-        <label className="block text-xs text-un1t-light mb-1">Subject *</label>
+        <label className="block text-xs text-un1t-subtle mb-1">Subject *</label>
         <input
           autoFocus
           value={subject}
           onChange={e => setSubject(e.target.value)}
           placeholder="e.g. Follow up with Sarah re: trial"
-          className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid mb-3"
+          className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted mb-3"
         />
 
-        <label className="block text-xs text-un1t-light mb-1">Notes</label>
+        <label className="block text-xs text-un1t-subtle mb-1">Notes</label>
         <textarea
           value={note}
           onChange={e => setNote(e.target.value)}
           rows={3}
           placeholder="Optional context"
-          className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid mb-3"
+          className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted mb-3"
         />
 
         <div className="grid grid-cols-2 gap-3 mb-3">
           <div>
-            <label className="block text-xs text-un1t-light mb-1">Assignee</label>
+            <label className="block text-xs text-un1t-subtle mb-1">Assignee</label>
             <select
               value={assigneeId}
               onChange={e => setAssigneeId(e.target.value)}
-              className="w-full bg-un1t-black border border-un1t-gray rounded-md px-2 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
+              className="w-full bg-un1t-bg border border-un1t-border rounded-md px-2 py-2 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted"
             >
               <option value="">Unassigned</option>
               {(profiles || []).map(p => (
@@ -469,11 +469,11 @@ function NewTaskModal({ onClose, onCreate, profiles, projects }) {
             </select>
           </div>
           <div>
-            <label className="block text-xs text-un1t-light mb-1">Priority</label>
+            <label className="block text-xs text-un1t-subtle mb-1">Priority</label>
             <select
               value={priority}
               onChange={e => setPriority(e.target.value)}
-              className="w-full bg-un1t-black border border-un1t-gray rounded-md px-2 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
+              className="w-full bg-un1t-bg border border-un1t-border rounded-md px-2 py-2 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted"
             >
               <option value="">None</option>
               {PRIORITIES.map(p => <option key={p.key} value={p.key}>{p.label}</option>)}
@@ -483,32 +483,32 @@ function NewTaskModal({ onClose, onCreate, profiles, projects }) {
 
         <div className="grid grid-cols-2 gap-3 mb-3">
           <div>
-            <label className="block text-xs text-un1t-light mb-1">Due date</label>
+            <label className="block text-xs text-un1t-subtle mb-1">Due date</label>
             <input
               type="date"
               value={dueDate}
               onChange={e => setDueDate(e.target.value)}
-              className="w-full bg-un1t-black border border-un1t-gray rounded-md px-2 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
+              className="w-full bg-un1t-bg border border-un1t-border rounded-md px-2 py-2 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted"
             />
           </div>
           <div>
-            <label className="block text-xs text-un1t-light mb-1">Due time</label>
+            <label className="block text-xs text-un1t-subtle mb-1">Due time</label>
             <input
               type="time"
               value={dueTime}
               onChange={e => setDueTime(e.target.value)}
-              className="w-full bg-un1t-black border border-un1t-gray rounded-md px-2 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
+              className="w-full bg-un1t-bg border border-un1t-border rounded-md px-2 py-2 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted"
             />
           </div>
         </div>
 
-        <label className="block text-xs text-un1t-light mb-1">Project (free-text tag)</label>
+        <label className="block text-xs text-un1t-subtle mb-1">Project (free-text tag)</label>
         <input
           value={project}
           onChange={e => setProject(e.target.value)}
           placeholder="e.g. marketing, ops, product"
           list="task-project-suggestions"
-          className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid mb-3"
+          className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted mb-3"
         />
         <datalist id="task-project-suggestions">
           {projects.map(p => <option key={p} value={p} />)}
@@ -523,14 +523,14 @@ function NewTaskModal({ onClose, onCreate, profiles, projects }) {
         <div className="flex justify-end gap-2 mt-3">
           <button
             onClick={onClose}
-            className="text-sm text-un1t-light hover:text-un1t-white px-3 py-1.5 rounded-md"
+            className="text-sm text-un1t-subtle hover:text-un1t-text px-3 py-1.5 rounded-md"
           >
             Cancel
           </button>
           <button
             onClick={submit}
             disabled={saving || !subject.trim()}
-            className="text-sm bg-un1t-white text-un1t-black font-medium px-4 py-1.5 rounded-md hover:bg-un1t-accent disabled:opacity-50"
+            className="text-sm bg-un1t-text text-un1t-bg font-medium px-4 py-1.5 rounded-md hover:bg-un1t-accent disabled:opacity-50"
           >
             {saving ? 'Saving…' : 'Create task'}
           </button>

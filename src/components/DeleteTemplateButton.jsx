@@ -25,7 +25,7 @@ export default function DeleteTemplateButton({ templateId }) {
     <button
       onClick={handleDelete}
       disabled={deleting}
-      className="p-1.5 text-un1t-mid hover:text-red-400 transition-colors rounded disabled:opacity-50"
+      className="p-1.5 text-un1t-muted hover:text-red-400 transition-colors rounded disabled:opacity-50"
       title="Delete template"
     >
       <Trash2 size={14} />

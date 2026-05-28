@@ -40,7 +40,7 @@ export default function SegmentsGrid() {
   }
   if (!data) {
     return (
-      <div className="text-sm text-un1t-light inline-flex items-center gap-2">
+      <div className="text-sm text-un1t-subtle inline-flex items-center gap-2">
         <Loader2 size={14} className="animate-spin" /> Loading segments…
       </div>
     )
@@ -51,30 +51,30 @@ export default function SegmentsGrid() {
       {data.map((s) => (
         <div
           key={s.tag}
-          className="bg-un1t-dark border border-un1t-gray rounded-lg p-4 flex flex-col"
+          className="bg-un1t-surface border border-un1t-border rounded-lg p-4 flex flex-col"
         >
           <div className="flex items-start justify-between gap-2 mb-2">
             <div className="flex items-center gap-2">
-              <Tag size={14} className="text-un1t-light" />
-              <span className="text-sm font-mono text-un1t-white">{s.tag}</span>
+              <Tag size={14} className="text-un1t-subtle" />
+              <span className="text-sm font-mono text-un1t-text">{s.tag}</span>
             </div>
-            <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded-full bg-un1t-gray/40 text-un1t-light inline-flex items-center gap-1">
+            <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded-full bg-un1t-border/40 text-un1t-subtle inline-flex items-center gap-1">
               <Users size={10} /> {s.count}
             </span>
           </div>
-          <p className="text-xs text-un1t-light flex-1">{s.description}</p>
-          <div className="mt-3 pt-3 border-t border-un1t-gray flex items-center justify-between gap-2">
+          <p className="text-xs text-un1t-subtle flex-1">{s.description}</p>
+          <div className="mt-3 pt-3 border-t border-un1t-border flex items-center justify-between gap-2">
             <div className="flex items-center gap-3">
               <Link
                 href={`/email/campaigns/new?segment=${encodeURIComponent(s.tag)}`}
-                className="text-xs text-un1t-white hover:text-un1t-accent inline-flex items-center gap-1"
+                className="text-xs text-un1t-text hover:text-un1t-accent inline-flex items-center gap-1"
                 title={`Start an email campaign targeting ${s.tag}`}
               >
                 <Mail size={11} /> Email
               </Link>
               <Link
                 href={`/communications/sms/broadcasts/new?segment=${encodeURIComponent(s.tag)}`}
-                className="text-xs text-un1t-white hover:text-un1t-accent inline-flex items-center gap-1"
+                className="text-xs text-un1t-text hover:text-un1t-accent inline-flex items-center gap-1"
                 title={`Start an SMS broadcast targeting ${s.tag}`}
               >
                 <MessageSquare size={11} /> SMS
@@ -82,7 +82,7 @@ export default function SegmentsGrid() {
             </div>
             <Link
               href={`/contacts?tag=${encodeURIComponent(s.tag)}`}
-              className="text-xs text-un1t-light hover:text-un1t-white"
+              className="text-xs text-un1t-subtle hover:text-un1t-text"
             >
               View contacts →
             </Link>
@@ -90,7 +90,7 @@ export default function SegmentsGrid() {
         </div>
       ))}
       {data.length === 0 && (
-        <div className="text-sm text-un1t-light italic px-2 py-8 text-center col-span-full">
+        <div className="text-sm text-un1t-subtle italic px-2 py-8 text-center col-span-full">
           No segments defined yet. Tags appear here as they get assigned.
         </div>
       )}

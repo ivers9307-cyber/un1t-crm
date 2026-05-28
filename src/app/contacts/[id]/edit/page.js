@@ -35,7 +35,7 @@ export default async function EditContactPage(props) {
   return (
     <div className="p-8 max-w-2xl">
       <h2 className="text-2xl font-bold mb-1">Edit contact</h2>
-      <p className="text-sm text-un1t-light mb-6">{contact.name}</p>
+      <p className="text-sm text-un1t-subtle mb-6">{contact.name}</p>
       <ContactForm contact={contact} onCancelHref={`/contacts/${contact.id}`} />
     </div>
   )

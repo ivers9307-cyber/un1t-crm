@@ -19,8 +19,8 @@ export default async function ChurnRadarPage() {
   return (
     <div className="p-6 max-w-6xl mx-auto">
       <header className="mb-6">
-        <h1 className="text-2xl font-semibold text-un1t-white">Churn Radar</h1>
-        <p className="text-sm text-un1t-light mt-1">
+        <h1 className="text-2xl font-semibold text-un1t-text">Churn Radar</h1>
+        <p className="text-sm text-un1t-subtle mt-1">
           Paying members at risk of churning, scored on attendance. Act early —
           a quick check-in turns most of these around.
         </p>

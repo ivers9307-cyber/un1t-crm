@@ -20,7 +20,7 @@ import { createBrowserClient } from '@/lib/supabase'
 // version artifact.
 export default function LoginPageWrapper() {
   return (
-    <Suspense fallback={<div className="min-h-screen bg-un1t-black" />}>
+    <Suspense fallback={<div className="min-h-screen bg-un1t-bg" />}>
       <LoginInner />
     </Suspense>
   )
@@ -115,7 +115,7 @@ function LoginInner() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-un1t-black p-4">
+    <div className="min-h-screen flex items-center justify-center bg-un1t-bg p-4">
       <div className="w-full max-w-sm">
         {/* Logo / wordmark */}
         <div className="text-center mb-8">
@@ -126,22 +126,22 @@ function LoginInner() {
               className="h-12 mx-auto object-contain"
             />
           ) : (
-            <h1 className="text-3xl font-bold tracking-wider text-un1t-white">
+            <h1 className="text-3xl font-bold tracking-wider text-un1t-text">
               {branding?.company_name || 'UN1T'}
             </h1>
           )}
-          <p className="text-sm text-un1t-light mt-2">Lead Management</p>
+          <p className="text-sm text-un1t-subtle mt-2">Lead Management</p>
         </div>
 
         {/* Mode toggle */}
-        <div className="flex gap-1 mb-4 bg-un1t-dark border border-un1t-gray rounded-md p-1">
+        <div className="flex gap-1 mb-4 bg-un1t-surface border border-un1t-border rounded-md p-1">
           <button
             type="button"
             onClick={() => switchMode('login')}
             className={`flex-1 py-1.5 text-xs rounded transition-colors inline-flex items-center justify-center gap-1.5 ${
               mode === 'login'
-                ? 'bg-un1t-gray/60 text-un1t-white'
-                : 'text-un1t-light hover:text-un1t-white'
+                ? 'bg-un1t-border/60 text-un1t-text'
+                : 'text-un1t-subtle hover:text-un1t-text'
             }`}
           >
             <Lock size={12} /> Sign in
@@ -151,8 +151,8 @@ function LoginInner() {
             onClick={() => switchMode('forgot')}
             className={`flex-1 py-1.5 text-xs rounded transition-colors inline-flex items-center justify-center gap-1.5 ${
               mode === 'forgot'
-                ? 'bg-un1t-gray/60 text-un1t-white'
-                : 'text-un1t-light hover:text-un1t-white'
+                ? 'bg-un1t-border/60 text-un1t-text'
+                : 'text-un1t-subtle hover:text-un1t-text'
             }`}
           >
             <Mail size={12} /> Reset password
@@ -162,7 +162,7 @@ function LoginInner() {
         {mode === 'login' ? (
           <form onSubmit={handleLogin} className="space-y-3">
             <label className="block">
-              <span className="block text-xs text-un1t-light mb-1">Email</span>
+              <span className="block text-xs text-un1t-subtle mb-1">Email</span>
               <input
                 type="email"
                 required
@@ -171,11 +171,11 @@ function LoginInner() {
                 disabled={busy}
                 placeholder="you@un1t.ie"
                 autoComplete="email"
-                className="w-full bg-un1t-dark border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid"
+                className="w-full bg-un1t-surface border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted"
               />
             </label>
             <label className="block">
-              <span className="block text-xs text-un1t-light mb-1">Password</span>
+              <span className="block text-xs text-un1t-subtle mb-1">Password</span>
               <input
                 type="password"
                 required
@@ -184,13 +184,13 @@ function LoginInner() {
                 disabled={busy}
                 placeholder="••••••••"
                 autoComplete="current-password"
-                className="w-full bg-un1t-dark border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid"
+                className="w-full bg-un1t-surface border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted"
               />
             </label>
             <button
               type="submit"
               disabled={busy || !email || !password}
-              className="w-full px-4 py-2 rounded-md bg-un1t-white text-un1t-black text-sm font-semibold hover:bg-un1t-accent disabled:opacity-50"
+              className="w-full px-4 py-2 rounded-md bg-un1t-text text-un1t-bg text-sm font-semibold hover:bg-un1t-accent disabled:opacity-50"
             >
               {busy ? 'Signing in…' : 'Sign in'}
             </button>
@@ -198,11 +198,11 @@ function LoginInner() {
           </form>
         ) : (
           <form onSubmit={handleForgot} className="space-y-3">
-            <p className="text-xs text-un1t-light">
+            <p className="text-xs text-un1t-subtle">
               Enter your email and we'll send you a reset link.
             </p>
             <label className="block">
-              <span className="block text-xs text-un1t-light mb-1">Email</span>
+              <span className="block text-xs text-un1t-subtle mb-1">Email</span>
               <input
                 type="email"
                 required
@@ -211,13 +211,13 @@ function LoginInner() {
                 disabled={busy}
                 placeholder="you@un1t.ie"
                 autoComplete="email"
-                className="w-full bg-un1t-dark border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid"
+                className="w-full bg-un1t-surface border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted"
               />
             </label>
             <button
               type="submit"
               disabled={busy || !email}
-              className="w-full px-4 py-2 rounded-md bg-un1t-white text-un1t-black text-sm font-semibold hover:bg-un1t-accent disabled:opacity-50"
+              className="w-full px-4 py-2 rounded-md bg-un1t-text text-un1t-bg text-sm font-semibold hover:bg-un1t-accent disabled:opacity-50"
             >
               {busy ? 'Sending…' : 'Send reset link'}
             </button>
@@ -230,7 +230,7 @@ function LoginInner() {
           </form>
         )}
 
-        <p className="text-center text-xs text-un1t-mid mt-8">UN1T CRM</p>
+        <p className="text-center text-xs text-un1t-muted mt-8">UN1T CRM</p>
       </div>
     </div>
   )

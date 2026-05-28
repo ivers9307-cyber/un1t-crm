@@ -111,22 +111,22 @@ export default function XeroLocationCard({ location, connection }) {
   }
 
   return (
-    <div className="bg-un1t-dark border border-un1t-gray rounded-2xl p-4">
+    <div className="bg-un1t-surface border border-un1t-border rounded-2xl p-4">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <div className="text-sm font-semibold text-un1t-white">{location.name}</div>
+          <div className="text-sm font-semibold text-un1t-text">{location.name}</div>
           {connection ? (
-            <div className="text-xs text-un1t-light mt-1 space-y-0.5">
+            <div className="text-xs text-un1t-subtle mt-1 space-y-0.5">
               <div>
-                Connected to <span className="text-un1t-white">{connection.tenant_name || connection.tenant_id}</span>
+                Connected to <span className="text-un1t-text">{connection.tenant_name || connection.tenant_id}</span>
               </div>
-              <div className="text-un1t-mid">
+              <div className="text-un1t-muted">
                 Linked {fmt(connection.connected_at)}
                 {connection.last_refreshed_at && <> · refreshed {fmt(connection.last_refreshed_at)}</>}
               </div>
             </div>
           ) : (
-            <div className="text-xs text-un1t-light mt-1">Not connected.</div>
+            <div className="text-xs text-un1t-subtle mt-1">Not connected.</div>
           )}
         </div>
 
@@ -136,7 +136,7 @@ export default function XeroLocationCard({ location, connection }) {
               <button
                 onClick={onConnect}
                 disabled={busy}
-                className="flex items-center gap-1 text-xs px-3 py-1.5 bg-un1t-gray/40 hover:bg-un1t-gray text-un1t-white rounded-md disabled:opacity-50"
+                className="flex items-center gap-1 text-xs px-3 py-1.5 bg-un1t-border/40 hover:bg-un1t-border text-un1t-text rounded-md disabled:opacity-50"
               >
                 <RefreshCw size={12} /> Reconnect
               </button>
@@ -152,7 +152,7 @@ export default function XeroLocationCard({ location, connection }) {
             <button
               onClick={onConnect}
               disabled={busy}
-              className="flex items-center gap-1 text-xs px-3 py-1.5 bg-un1t-white text-un1t-black rounded-md font-semibold hover:bg-un1t-accent disabled:opacity-50"
+              className="flex items-center gap-1 text-xs px-3 py-1.5 bg-un1t-text text-un1t-bg rounded-md font-semibold hover:bg-un1t-accent disabled:opacity-50"
             >
               <Plug size={12} /> Connect Xero
             </button>
@@ -167,11 +167,11 @@ export default function XeroLocationCard({ location, connection }) {
           (see mig 187 header); no UI surface for it anymore. */}
 
       {connection && (
-        <div className="mt-4 pt-3 border-t border-un1t-gray/50">
-          <label className="block text-xs uppercase tracking-wider text-un1t-light font-semibold mb-1">
+        <div className="mt-4 pt-3 border-t border-un1t-border/50">
+          <label className="block text-xs uppercase tracking-wider text-un1t-subtle font-semibold mb-1">
             <Database size={11} className="inline-block mr-1 mb-0.5" /> Xero data cache
           </label>
-          <p className="text-[11px] text-un1t-light mb-2">
+          <p className="text-[11px] text-un1t-subtle mb-2">
             The chart of accounts and contacts list are cached locally so the /invoices accountant
             review can suggest exact Xero accounts + suppliers without hammering the Xero API.
             Press refresh after adding a new contact or account in Xero.
@@ -180,22 +180,22 @@ export default function XeroLocationCard({ location, connection }) {
           {/* Two side-by-side panels — accounts on the left, contacts on the right. */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
             {/* Accounts */}
-            <div className="bg-un1t-black/30 border border-un1t-gray/50 rounded-md p-2.5">
+            <div className="bg-un1t-bg/30 border border-un1t-border/50 rounded-md p-2.5">
               <div className="flex items-center justify-between gap-2 mb-1">
-                <div className="text-[11px] font-semibold text-un1t-white inline-flex items-center gap-1">
+                <div className="text-[11px] font-semibold text-un1t-text inline-flex items-center gap-1">
                   <Database size={11} /> Chart of accounts
                 </div>
                 <button
                   onClick={onSyncAccounts}
                   disabled={syncingAccounts}
-                  className="text-[11px] px-2 py-1 bg-un1t-gray/40 hover:bg-un1t-gray text-un1t-white rounded inline-flex items-center gap-1 disabled:opacity-50"
+                  className="text-[11px] px-2 py-1 bg-un1t-border/40 hover:bg-un1t-border text-un1t-text rounded inline-flex items-center gap-1 disabled:opacity-50"
                 >
                   <RefreshCw size={10} className={syncingAccounts ? 'animate-spin' : ''} />
                   {syncingAccounts ? 'Syncing…' : 'Refresh'}
                 </button>
               </div>
-              <div className="text-[10px] text-un1t-light">
-                Last synced: <span className="text-un1t-white">{fmtRelative(connection.accounts_last_synced_at)}</span>
+              <div className="text-[10px] text-un1t-subtle">
+                Last synced: <span className="text-un1t-text">{fmtRelative(connection.accounts_last_synced_at)}</span>
               </div>
               {accountsResult?.count !== undefined && (
                 <div className="mt-1 text-[10px] text-emerald-400">
@@ -212,22 +212,22 @@ export default function XeroLocationCard({ location, connection }) {
             </div>
 
             {/* Contacts */}
-            <div className="bg-un1t-black/30 border border-un1t-gray/50 rounded-md p-2.5">
+            <div className="bg-un1t-bg/30 border border-un1t-border/50 rounded-md p-2.5">
               <div className="flex items-center justify-between gap-2 mb-1">
-                <div className="text-[11px] font-semibold text-un1t-white inline-flex items-center gap-1">
+                <div className="text-[11px] font-semibold text-un1t-text inline-flex items-center gap-1">
                   <Users size={11} /> Contacts (suppliers)
                 </div>
                 <button
                   onClick={onSyncContacts}
                   disabled={syncingContacts}
-                  className="text-[11px] px-2 py-1 bg-un1t-gray/40 hover:bg-un1t-gray text-un1t-white rounded inline-flex items-center gap-1 disabled:opacity-50"
+                  className="text-[11px] px-2 py-1 bg-un1t-border/40 hover:bg-un1t-border text-un1t-text rounded inline-flex items-center gap-1 disabled:opacity-50"
                 >
                   <RefreshCw size={10} className={syncingContacts ? 'animate-spin' : ''} />
                   {syncingContacts ? 'Syncing…' : 'Refresh'}
                 </button>
               </div>
-              <div className="text-[10px] text-un1t-light">
-                Last synced: <span className="text-un1t-white">{fmtRelative(connection.contacts_last_synced_at)}</span>
+              <div className="text-[10px] text-un1t-subtle">
+                Last synced: <span className="text-un1t-text">{fmtRelative(connection.contacts_last_synced_at)}</span>
               </div>
               {contactsResult?.count !== undefined && (
                 <div className="mt-1 text-[10px] text-emerald-400">
@@ -317,11 +317,11 @@ function CarSalesAccountSection({ location, connection }) {
   }
 
   return (
-    <div className="mt-4 pt-3 border-t border-un1t-gray/50">
-      <label className="block text-xs uppercase tracking-wider text-un1t-light font-semibold mb-1">
+    <div className="mt-4 pt-3 border-t border-un1t-border/50">
+      <label className="block text-xs uppercase tracking-wider text-un1t-subtle font-semibold mb-1">
         Car-invoice sales account
       </label>
-      <p className="text-[11px] text-un1t-light mb-2">
+      <p className="text-[11px] text-un1t-subtle mb-2">
         Used when issuing a car invoice from car processing → push to Xero. Pick the REVENUE/SALES
         account this location books car sales against. Sourced from the cached chart of accounts —
         if a new one is missing, hit <strong>Refresh</strong> on the chart-of-accounts panel above.
@@ -331,7 +331,7 @@ function CarSalesAccountSection({ location, connection }) {
           value={picked}
           onChange={(e) => setPicked(e.target.value)}
           disabled={loading || saving || accounts.length === 0}
-          className="flex-1 bg-un1t-black/30 border border-un1t-gray rounded-md px-3 py-1.5 text-xs text-un1t-white focus:outline-none focus:border-un1t-light disabled:opacity-50"
+          className="flex-1 bg-un1t-bg/30 border border-un1t-border rounded-md px-3 py-1.5 text-xs text-un1t-text focus:outline-none focus:border-un1t-subtle disabled:opacity-50"
         >
           <option value="">{loading ? 'Loading…' : (accounts.length === 0 ? 'No REVENUE/SALES accounts cached — refresh above' : '— Use default (env or 200) —')}</option>
           {accounts.map((a) => (
@@ -343,7 +343,7 @@ function CarSalesAccountSection({ location, connection }) {
         <button
           type="submit"
           disabled={saving || loading}
-          className="text-xs px-3 py-1.5 bg-un1t-white text-un1t-black rounded-md font-semibold hover:bg-un1t-accent disabled:opacity-50 inline-flex items-center gap-1"
+          className="text-xs px-3 py-1.5 bg-un1t-text text-un1t-bg rounded-md font-semibold hover:bg-un1t-accent disabled:opacity-50 inline-flex items-center gap-1"
         >
           {saved ? <><Check size={12} /> Saved</> : (saving ? 'Saving…' : 'Save')}
         </button>

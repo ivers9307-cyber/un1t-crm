@@ -18,7 +18,7 @@ const STATUS_META = {
   terms_accepted:  { label: 'Terms accepted',  cls: 'bg-amber-500/20 text-amber-400',   icon: CheckCircle2 },
   paid:            { label: 'Deposit paid',    cls: 'bg-green-500/20 text-green-400',   icon: CheckCircle2 },
   failed:          { label: 'Payment failed',  cls: 'bg-red-500/20 text-red-400',       icon: AlertCircle },
-  cancelled:       { label: 'Cancelled',       cls: 'bg-un1t-gray/40 text-un1t-light',  icon: Clock },
+  cancelled:       { label: 'Cancelled',       cls: 'bg-un1t-border/40 text-un1t-subtle',  icon: Clock },
   refunded:        { label: 'Refunded',        cls: 'bg-purple-500/20 text-purple-400', icon: RefreshCw },
 }
 
@@ -101,11 +101,11 @@ export default function DepositCard({ car, setCar, setError, disabled, defaultAm
   }
 
   return (
-    <div className="bg-un1t-dark border border-un1t-gray rounded-2xl p-5 mb-4">
+    <div className="bg-un1t-surface border border-un1t-border rounded-2xl p-5 mb-4">
       <div className="flex items-start justify-between gap-4 mb-3">
         <div>
-          <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light">Buyer deposit</h3>
-          <p className="text-xs text-un1t-light mt-1">
+          <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle">Buyer deposit</h3>
+          <p className="text-xs text-un1t-subtle mt-1">
             One link by email + WhatsApp. Buyer accepts T&amp;Cs, pays via Revolut, you get notified here.
           </p>
         </div>
@@ -118,13 +118,13 @@ export default function DepositCard({ car, setCar, setError, disabled, defaultAm
       </div>
 
       {isPaid ? (
-        <div className="text-sm text-un1t-white space-y-1">
+        <div className="text-sm text-un1t-text space-y-1">
           <p>
             <Check inline /> €{Number(car.deposit_paid_amount ?? car.deposit_amount ?? 0).toFixed(2)} received
             {car.deposit_paid_at && ` · ${new Date(car.deposit_paid_at).toLocaleString('en-IE')}`}
           </p>
           {car.deposit_terms_accepted_at && (
-            <p className="text-xs text-un1t-light">
+            <p className="text-xs text-un1t-subtle">
               T&amp;Cs accepted {new Date(car.deposit_terms_accepted_at).toLocaleString('en-IE')}
               {car.deposit_terms_accepted_ip && ` from ${car.deposit_terms_accepted_ip}`}
               {car.deposit_terms_accepted_version && ` · v${car.deposit_terms_accepted_version}`}
@@ -134,7 +134,7 @@ export default function DepositCard({ car, setCar, setError, disabled, defaultAm
       ) : (
         <>
           <div className="flex items-end gap-3 mb-3">
-            <label className="block text-xs text-un1t-light">
+            <label className="block text-xs text-un1t-subtle">
               Amount (EUR)
               <input
                 type="number"
@@ -143,13 +143,13 @@ export default function DepositCard({ car, setCar, setError, disabled, defaultAm
                 value={override}
                 onChange={(e) => setOverride(parseFloat(e.target.value) || 0)}
                 disabled={busy || disabled}
-                className="block mt-1 w-32 bg-un1t-black border border-un1t-gray rounded-md px-2 py-1.5 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
+                className="block mt-1 w-32 bg-un1t-bg border border-un1t-border rounded-md px-2 py-1.5 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted"
               />
             </label>
             <button
               onClick={issueLink}
               disabled={busy || disabled || !override}
-              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-un1t-white text-un1t-black text-sm font-semibold hover:bg-un1t-accent disabled:opacity-50"
+              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-un1t-text text-un1t-bg text-sm font-semibold hover:bg-un1t-accent disabled:opacity-50"
             >
               {hasLink
                 ? <><RefreshCw size={14} /> {busy ? 'Resending…' : 'Resend deposit link'}</>
@@ -158,7 +158,7 @@ export default function DepositCard({ car, setCar, setError, disabled, defaultAm
           </div>
 
           {car.deposit_link_sent_at && (
-            <p className="text-xs text-un1t-light mb-3">
+            <p className="text-xs text-un1t-subtle mb-3">
               Last sent {new Date(car.deposit_link_sent_at).toLocaleString('en-IE')}
               {car.deposit_link_sent_via && (
                 <> · via {car.deposit_link_sent_via.split(',').map(c => (
@@ -190,7 +190,7 @@ export default function DepositCard({ car, setCar, setError, disabled, defaultAm
               confirm: first click arms the button, second click
               within 5s actually fires. Auto-disarms on timeout. */}
           {canCancel && (
-            <div className="mt-3 pt-3 border-t border-un1t-gray/40">
+            <div className="mt-3 pt-3 border-t border-un1t-border/40">
               {!cancelArmed ? (
                 <button
                   onClick={armCancel}
@@ -212,7 +212,7 @@ export default function DepositCard({ car, setCar, setError, disabled, defaultAm
                   <button
                     onClick={() => setCancelArmed(false)}
                     disabled={busy}
-                    className="text-xs px-2 py-1 rounded bg-un1t-gray/40 text-un1t-light hover:bg-un1t-gray/60"
+                    className="text-xs px-2 py-1 rounded bg-un1t-border/40 text-un1t-subtle hover:bg-un1t-border/60"
                   >
                     Keep
                   </button>
@@ -249,7 +249,7 @@ function ExpiryHint({ expiresAt }) {
   const hours = Math.floor(remainingMs / (60 * 60 * 1000))
   const mins = Math.floor((remainingMs % (60 * 60 * 1000)) / (60 * 1000))
   const label = hours >= 1 ? `${hours}h ${mins}m` : `${mins}m`
-  return <span className="ml-2 text-un1t-light">· expires in {label}</span>
+  return <span className="ml-2 text-un1t-subtle">· expires in {label}</span>
 }
 
 function extractTokenFromLink(link) {

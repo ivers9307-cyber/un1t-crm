@@ -22,7 +22,7 @@ import RadarOutreachButton from '@/components/RadarOutreachButton'
 const TIER_STYLE = {
   high:   { label: 'High',   cls: 'bg-red-100 text-red-700' },
   medium: { label: 'Medium', cls: 'bg-amber-100 text-amber-700' },
-  low:    { label: 'Low',    cls: 'bg-un1t-gray text-un1t-light' },
+  low:    { label: 'Low',    cls: 'bg-un1t-border text-un1t-subtle' },
 }
 
 const SIGNAL_ICON = {
@@ -174,7 +174,7 @@ export default function ChurnRadar() {
     })
   }
 
-  if (loading) return <p className="text-sm text-un1t-light">Loading radar…</p>
+  if (loading) return <p className="text-sm text-un1t-subtle">Loading radar…</p>
 
   const summary = radar?.summary || {
     activeBase: 0, atRisk: 0, highRisk: 0, quarantine: 0, paused: 0, overdue: 0,
@@ -240,7 +240,7 @@ export default function ChurnRadar() {
       )}
 
       {/* Tabs */}
-      <div className="flex gap-1 border-b border-un1t-gray mb-4">
+      <div className="flex gap-1 border-b border-un1t-border mb-4">
         <Tab active={tab === 'radar'} onClick={() => setTab('radar')}
           icon={Radar} label={`At Risk (${radar?.radar?.length || 0})`} />
         <Tab active={tab === 'winback'} onClick={() => setTab('winback')}
@@ -322,18 +322,18 @@ function DigestSettings() {
   }
 
   return (
-    <div className="mt-8 rounded-xl border border-un1t-gray bg-un1t-dark p-4">
+    <div className="mt-8 rounded-xl border border-un1t-border bg-un1t-surface p-4">
       <div className="flex items-center gap-2">
-        <Mail size={15} className="text-un1t-light" />
-        <h3 className="text-sm font-medium text-un1t-white">Weekly email digest</h3>
+        <Mail size={15} className="text-un1t-subtle" />
+        <h3 className="text-sm font-medium text-un1t-text">Weekly email digest</h3>
       </div>
-      <p className="mt-1 text-xs text-un1t-light">
+      <p className="mt-1 text-xs text-un1t-subtle">
         Who receives the Monday churn-radar summary — current numbers, the
         week-over-week change, and the recent-weeks trend. One email address per
         line. Leave blank to turn the digest off.
       </p>
       {text === null ? (
-        <p className="mt-3 text-sm text-un1t-light">Loading…</p>
+        <p className="mt-3 text-sm text-un1t-subtle">Loading…</p>
       ) : (
         <>
           <textarea
@@ -341,7 +341,7 @@ function DigestSettings() {
             onChange={(e) => setText(e.target.value)}
             rows={3}
             placeholder="owner@un1t.ie"
-            className="mt-3 w-full rounded-lg border border-un1t-gray bg-un1t-black p-2 text-sm text-un1t-white"
+            className="mt-3 w-full rounded-lg border border-un1t-border bg-un1t-bg p-2 text-sm text-un1t-text"
           />
           <div className="mt-2 flex items-center gap-3">
             <button type="button" onClick={save} disabled={saving}
@@ -369,12 +369,12 @@ const ACTION_DONE = {
 
 function StatCard({ label, value, accent, breakdown, delta, deltaGoodDir, deltaIsMoney }) {
   const valueCls = accent === 'red' ? 'text-red-600'
-    : accent === 'amber' ? 'text-amber-600' : 'text-un1t-white'
+    : accent === 'amber' ? 'text-amber-600' : 'text-un1t-text'
   return (
-    <div className="rounded-xl border border-un1t-gray bg-white p-4">
-      <p className="text-xs text-un1t-light">{label}</p>
+    <div className="rounded-xl border border-un1t-border bg-white p-4">
+      <p className="text-xs text-un1t-subtle">{label}</p>
       <p className={`mt-1 text-2xl font-bold tabular-nums ${valueCls}`}>{value}</p>
-      {breakdown && <p className="mt-0.5 text-[11px] text-un1t-mid">{breakdown}</p>}
+      {breakdown && <p className="mt-0.5 text-[11px] text-un1t-muted">{breakdown}</p>}
       <TrendDelta delta={delta} goodDir={deltaGoodDir} money={deltaIsMoney} />
     </div>
   )
@@ -386,10 +386,10 @@ function StatCard({ label, value, accent, breakdown, delta, deltaGoodDir, deltaI
 function TrendDelta({ delta, goodDir, money }) {
   if (!Number.isFinite(delta)) return null  // no snapshot to compare yet
   if (delta === 0) {
-    return <p className="mt-0.5 text-[11px] text-un1t-mid">— no change vs last week</p>
+    return <p className="mt-0.5 text-[11px] text-un1t-muted">— no change vs last week</p>
   }
   const up = delta > 0
-  let cls = 'text-un1t-mid'
+  let cls = 'text-un1t-muted'
   if (goodDir === 'up') cls = up ? 'text-green-600' : 'text-red-600'
   else if (goodDir === 'down') cls = up ? 'text-red-600' : 'text-green-600'
   const mag = money ? formatMoney(Math.abs(delta)) : Math.abs(delta)
@@ -407,8 +407,8 @@ function Tab({ active, onClick, icon: Icon, label }) {
       onClick={onClick}
       className={`inline-flex items-center gap-1.5 px-3 py-2 text-sm font-medium border-b-2 -mb-px ${
         active
-          ? 'border-un1t-white text-un1t-white'
-          : 'border-transparent text-un1t-light hover:text-un1t-white'
+          ? 'border-un1t-text text-un1t-text'
+          : 'border-transparent text-un1t-subtle hover:text-un1t-text'
       }`}
     >
       <Icon size={15} />
@@ -420,10 +420,10 @@ function Tab({ active, onClick, icon: Icon, label }) {
 function RadarList({ radar, busy, onAction, snoozed }) {
   if (radar.length === 0) {
     return (
-      <div className="rounded-2xl border border-dashed border-un1t-gray p-10 text-center">
-        <Radar size={28} className="mx-auto text-un1t-light" />
-        <p className="mt-3 font-medium text-un1t-white">Nobody at risk right now</p>
-        <p className="mt-1 text-sm text-un1t-light">
+      <div className="rounded-2xl border border-dashed border-un1t-border p-10 text-center">
+        <Radar size={28} className="mx-auto text-un1t-subtle" />
+        <p className="mt-3 font-medium text-un1t-text">Nobody at risk right now</p>
+        <p className="mt-1 text-sm text-un1t-subtle">
           Every active member is attending normally. The radar refreshes nightly.
         </p>
       </div>
@@ -432,7 +432,7 @@ function RadarList({ radar, busy, onAction, snoozed }) {
   return (
     <div className="space-y-2">
       {snoozed > 0 && (
-        <p className="text-xs text-un1t-mid">{snoozed} member{snoozed === 1 ? '' : 's'} snoozed and hidden.</p>
+        <p className="text-xs text-un1t-muted">{snoozed} member{snoozed === 1 ? '' : 's'} snoozed and hidden.</p>
       )}
       {radar.map((m) => <RadarRow key={m.contactId} m={m} busy={busy} onAction={onAction} />)}
     </div>
@@ -443,18 +443,18 @@ function RadarRow({ m, busy, onAction }) {
   const tier = TIER_STYLE[m.tier] || TIER_STYLE.low
   const isBusy = busy === m.contactId
   return (
-    <div className="rounded-lg border border-un1t-gray bg-un1t-dark p-4">
+    <div className="rounded-lg border border-un1t-border bg-un1t-surface p-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
-            <a href={`/contacts/${m.contactId}`} className="font-medium text-un1t-white hover:underline">
+            <a href={`/contacts/${m.contactId}`} className="font-medium text-un1t-text hover:underline">
               {m.name}
             </a>
             <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${tier.cls}`}>
               {tier.label} · {m.score}
             </span>
           </div>
-          <p className="mt-0.5 text-xs text-un1t-light">
+          <p className="mt-0.5 text-xs text-un1t-subtle">
             {m.membershipPlan || m.membershipStatus}
             {m.monthlyValueCents > 0 && ` · ${formatMoney(m.monthlyValueCents)}/mo`}
             {m.daysSinceAttended != null && ` · last class ${m.daysSinceAttended}d ago`}
@@ -505,7 +505,7 @@ function ActionBtn({ icon: Icon, label, onClick, disabled, primary }) {
       className={`inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-medium disabled:opacity-50 ${
         primary
           ? 'bg-indigo-600 text-white hover:bg-indigo-500'
-          : 'border border-un1t-gray bg-un1t-black text-un1t-light hover:text-un1t-white'
+          : 'border border-un1t-border bg-un1t-bg text-un1t-subtle hover:text-un1t-text'
       }`}
     >
       <Icon size={13} />
@@ -515,13 +515,13 @@ function ActionBtn({ icon: Icon, label, onClick, disabled, primary }) {
 }
 
 function Quarantine({ items, selected, busy, onToggle, onSelectAll, onTriage }) {
-  if (items === null) return <p className="text-sm text-un1t-light">Loading quarantine…</p>
+  if (items === null) return <p className="text-sm text-un1t-subtle">Loading quarantine…</p>
   if (items.length === 0) {
     return (
-      <div className="rounded-2xl border border-dashed border-un1t-gray p-10 text-center">
+      <div className="rounded-2xl border border-dashed border-un1t-border p-10 text-center">
         <Check size={28} className="mx-auto text-green-500" />
-        <p className="mt-3 font-medium text-un1t-white">Quarantine is clear</p>
-        <p className="mt-1 text-sm text-un1t-light">Every member has activity data or has been triaged.</p>
+        <p className="mt-3 font-medium text-un1t-text">Quarantine is clear</p>
+        <p className="mt-1 text-sm text-un1t-subtle">Every member has activity data or has been triaged.</p>
       </div>
     )
   }
@@ -534,14 +534,14 @@ function Quarantine({ items, selected, busy, onToggle, onSelectAll, onTriage }) 
         most are stale records. Review and mark them stale (reclassified to dormant) or keep them.
       </p>
       <div className="mb-2 flex items-center justify-between">
-        <label className="inline-flex items-center gap-2 text-xs text-un1t-light">
+        <label className="inline-flex items-center gap-2 text-xs text-un1t-subtle">
           <input type="checkbox" checked={allSelected} onChange={(e) => onSelectAll(e.target.checked)} />
           Select all ({items.length})
         </label>
         {selected.size > 0 && (
           <div className="flex gap-2">
             <button type="button" disabled={isBusy} onClick={() => onTriage('keep')}
-              className="rounded-md border border-un1t-gray bg-un1t-black px-2.5 py-1 text-xs font-medium text-un1t-light hover:text-un1t-white disabled:opacity-50">
+              className="rounded-md border border-un1t-border bg-un1t-bg px-2.5 py-1 text-xs font-medium text-un1t-subtle hover:text-un1t-text disabled:opacity-50">
               Keep {selected.size}
             </button>
             <button type="button" disabled={isBusy} onClick={() => onTriage('stale')}
@@ -554,13 +554,13 @@ function Quarantine({ items, selected, busy, onToggle, onSelectAll, onTriage }) 
       <ul className="space-y-1.5">
         {items.map((q) => (
           <li key={q.contactId}
-            className="flex items-center gap-3 rounded-lg border border-un1t-gray bg-un1t-dark p-3">
+            className="flex items-center gap-3 rounded-lg border border-un1t-border bg-un1t-surface p-3">
             <input type="checkbox" checked={selected.has(q.contactId)} onChange={() => onToggle(q.contactId)} />
             <div className="min-w-0 flex-1">
-              <a href={`/contacts/${q.contactId}`} className="text-sm font-medium text-un1t-white hover:underline">
+              <a href={`/contacts/${q.contactId}`} className="text-sm font-medium text-un1t-text hover:underline">
                 {q.name}
               </a>
-              <p className="text-xs text-un1t-light">
+              <p className="text-xs text-un1t-subtle">
                 {q.membershipPlan || q.membershipStatus} · joined {formatJoined(q.joinedAt)}
               </p>
             </div>
@@ -574,14 +574,14 @@ function Quarantine({ items, selected, busy, onToggle, onSelectAll, onTriage }) 
 // ── win-back ─────────────────────────────────────────────────────
 
 function WinbackList({ data, busy, onAction }) {
-  if (data === null) return <p className="text-sm text-un1t-light">Loading win-back…</p>
+  if (data === null) return <p className="text-sm text-un1t-subtle">Loading win-back…</p>
   const rows = data.winback || []
   if (rows.length === 0) {
     return (
-      <div className="rounded-2xl border border-dashed border-un1t-gray p-10 text-center">
-        <RotateCcw size={28} className="mx-auto text-un1t-light" />
-        <p className="mt-3 font-medium text-un1t-white">No win-back candidates</p>
-        <p className="mt-1 text-sm text-un1t-light">
+      <div className="rounded-2xl border border-dashed border-un1t-border p-10 text-center">
+        <RotateCcw size={28} className="mx-auto text-un1t-subtle" />
+        <p className="mt-3 font-medium text-un1t-text">No win-back candidates</p>
+        <p className="mt-1 text-sm text-un1t-subtle">
           No former members in the 45–365 day window. Members appear here once
           they lapse past the at-risk stage.
         </p>
@@ -595,7 +595,7 @@ function WinbackList({ data, busy, onAction }) {
         ago. Warmest (most recently lapsed, highest value) first.
       </p>
       {data.summary?.snoozed > 0 && (
-        <p className="text-xs text-un1t-mid">{data.summary.snoozed} snoozed and hidden.</p>
+        <p className="text-xs text-un1t-muted">{data.summary.snoozed} snoozed and hidden.</p>
       )}
       {rows.map((m) => <WinbackRow key={m.contactId} m={m} busy={busy} onAction={onAction} />)}
     </div>
@@ -606,16 +606,16 @@ function WinbackRow({ m, busy, onAction }) {
   const tier = TIER_STYLE[m.tier] || TIER_STYLE.low
   const isBusy = busy === m.contactId
   return (
-    <div className="rounded-lg border border-un1t-gray bg-un1t-dark p-4">
+    <div className="rounded-lg border border-un1t-border bg-un1t-surface p-4">
       <div className="flex items-center gap-2">
-        <a href={`/contacts/${m.contactId}`} className="font-medium text-un1t-white hover:underline">
+        <a href={`/contacts/${m.contactId}`} className="font-medium text-un1t-text hover:underline">
           {m.name}
         </a>
         <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${tier.cls}`}>
           {tier.label}
         </span>
       </div>
-      <p className="mt-0.5 text-xs text-un1t-light">
+      <p className="mt-0.5 text-xs text-un1t-subtle">
         {m.membershipPlan || m.status?.replace(/_/g, ' ')}
         {` · last class ${m.daysSinceAttended}d ago`}
         {m.monthlyValueCents > 0 && ` · ${formatMoney(m.monthlyValueCents)}/mo`}
@@ -638,14 +638,14 @@ function WinbackRow({ m, busy, onAction }) {
 // ── overdue ──────────────────────────────────────────────────────
 
 function OverdueList({ data, busy, onAction }) {
-  if (data === null) return <p className="text-sm text-un1t-light">Loading overdue…</p>
+  if (data === null) return <p className="text-sm text-un1t-subtle">Loading overdue…</p>
   const rows = data.overdue || []
   if (rows.length === 0) {
     return (
-      <div className="rounded-2xl border border-dashed border-un1t-gray p-10 text-center">
+      <div className="rounded-2xl border border-dashed border-un1t-border p-10 text-center">
         <Check size={28} className="mx-auto text-green-500" />
-        <p className="mt-3 font-medium text-un1t-white">Nobody overdue</p>
-        <p className="mt-1 text-sm text-un1t-light">
+        <p className="mt-3 font-medium text-un1t-text">Nobody overdue</p>
+        <p className="mt-1 text-sm text-un1t-subtle">
           Every live membership is paid up. Members appear here when a Glofox
           payment fails.
         </p>
@@ -672,18 +672,18 @@ function OverdueRow({ m, busy, onAction }) {
       ? `still training — last class ${m.daysSinceAttended}d ago`
       : `last class ${m.daysSinceAttended}d ago`
   return (
-    <div className="rounded-lg border border-un1t-gray bg-un1t-dark p-4">
+    <div className="rounded-lg border border-un1t-border bg-un1t-surface p-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
-            <a href={`/contacts/${m.contactId}`} className="font-medium text-un1t-white hover:underline">
+            <a href={`/contacts/${m.contactId}`} className="font-medium text-un1t-text hover:underline">
               {m.name}
             </a>
-            <span className="rounded-full bg-un1t-gray px-2 py-0.5 text-[10px] font-semibold uppercase text-un1t-light">
+            <span className="rounded-full bg-un1t-border px-2 py-0.5 text-[10px] font-semibold uppercase text-un1t-subtle">
               {m.segment === 'credit' ? 'Pack' : 'Member'}
             </span>
           </div>
-          <p className="mt-0.5 text-xs text-un1t-light">
+          <p className="mt-0.5 text-xs text-un1t-subtle">
             {m.membershipPlan || m.membershipStatus}
             {m.monthlyValueCents > 0 && ` · ${formatMoney(m.monthlyValueCents)}/mo`}
             {` · ${attendLine}`}

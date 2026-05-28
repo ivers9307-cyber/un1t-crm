@@ -45,20 +45,20 @@ export default async function PolicyViewerPage({ params }) {
 
   return (
     <div className="p-6 md:p-8 max-w-3xl">
-      <Link href="/policies" className="inline-flex items-center gap-1 text-xs text-un1t-light hover:text-un1t-white mb-4">
+      <Link href="/policies" className="inline-flex items-center gap-1 text-xs text-un1t-subtle hover:text-un1t-text mb-4">
         <ChevronLeft size={12} /> All policies
       </Link>
 
       <div className="flex items-baseline justify-between flex-wrap gap-2 mb-1">
         <h2 className="text-2xl font-bold">{policy.title}</h2>
         {ver && (
-          <span className="text-xs text-un1t-light">
+          <span className="text-xs text-un1t-subtle">
             v{ver.version_number} · effective {fmtDate(ver.effective_date)}
           </span>
         )}
       </div>
       {policy.description && (
-        <p className="text-sm text-un1t-light mb-2">{policy.description}</p>
+        <p className="text-sm text-un1t-subtle mb-2">{policy.description}</p>
       )}
       {ver?.change_summary && ver.version_number > 1 && (
         <div className="bg-blue-500/10 border border-blue-500/30 text-blue-700 rounded-md px-3 py-2 mt-3 mb-2 text-xs">
@@ -67,7 +67,7 @@ export default async function PolicyViewerPage({ params }) {
         </div>
       )}
       {policy.viewed_at && (
-        <div className="mt-3 inline-flex items-center gap-1.5 text-[11px] text-un1t-light">
+        <div className="mt-3 inline-flex items-center gap-1.5 text-[11px] text-un1t-subtle">
           <Eye size={11} />
           You last opened this version on {fmtDateTime(policy.viewed_at)}
           {policy.view_count > 1 && ` · ${policy.view_count} sessions`}

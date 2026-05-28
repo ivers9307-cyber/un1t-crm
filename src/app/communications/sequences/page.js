@@ -56,7 +56,7 @@ export default async function SequencesListPage() {
       <div className="flex items-center justify-between mb-4">
         <div>
           <h2 className="text-lg font-semibold">Sequences</h2>
-          <p className="text-xs text-un1t-light mt-0.5">Automated drip campaigns triggered by events</p>
+          <p className="text-xs text-un1t-subtle mt-0.5">Automated drip campaigns triggered by events</p>
         </div>
         <div className="flex items-center gap-2">
           {/* Discoverable gallery link — the SequenceTemplatePicker
@@ -64,7 +64,7 @@ export default async function SequencesListPage() {
               the new primary surface for browsing templates. */}
           <Link
             href="/communications/sequences/templates"
-            className="inline-flex items-center gap-2 border border-un1t-gray text-un1t-light text-sm font-medium px-4 py-2 rounded-lg hover:text-un1t-white hover:border-un1t-mid transition-colors"
+            className="inline-flex items-center gap-2 border border-un1t-border text-un1t-subtle text-sm font-medium px-4 py-2 rounded-lg hover:text-un1t-text hover:border-un1t-muted transition-colors"
           >
             <LayoutTemplate size={16} />
             Browse templates
@@ -72,7 +72,7 @@ export default async function SequencesListPage() {
           <SequenceTemplatePicker />
           <Link
             href="/email/sequences/new"
-            className="flex items-center gap-2 bg-un1t-white text-un1t-black text-sm font-medium px-4 py-2 rounded-lg hover:bg-un1t-accent transition-colors"
+            className="flex items-center gap-2 bg-un1t-text text-un1t-bg text-sm font-medium px-4 py-2 rounded-lg hover:bg-un1t-accent transition-colors"
           >
             <Plus size={16} />
             New Sequence
@@ -81,21 +81,21 @@ export default async function SequencesListPage() {
       </div>
 
       {(!sequences || sequences.length === 0) ? (
-        <div className="bg-un1t-dark border border-un1t-gray rounded-2xl p-10 text-center">
-          <Zap size={32} className="mx-auto mb-3 text-un1t-light" />
+        <div className="bg-un1t-surface border border-un1t-border rounded-2xl p-10 text-center">
+          <Zap size={32} className="mx-auto mb-3 text-un1t-subtle" />
           <h3 className="text-base font-semibold mb-2">No sequences yet</h3>
-          <p className="text-sm text-un1t-light mb-4">
+          <p className="text-sm text-un1t-subtle mb-4">
             Create automated email sequences that trigger on bookings, status changes, or tags.
           </p>
           <Link
             href="/email/sequences/new"
-            className="inline-flex items-center gap-2 bg-un1t-white text-un1t-black text-sm font-medium px-4 py-2 rounded-lg hover:bg-un1t-accent transition-colors"
+            className="inline-flex items-center gap-2 bg-un1t-text text-un1t-bg text-sm font-medium px-4 py-2 rounded-lg hover:bg-un1t-accent transition-colors"
           >
             <Plus size={16} /> Create Sequence
           </Link>
         </div>
       ) : (
-        <div className="bg-un1t-dark border border-un1t-gray rounded-2xl divide-y divide-un1t-gray">
+        <div className="bg-un1t-surface border border-un1t-border rounded-2xl divide-y divide-un1t-border">
           {sequences.map(seq => {
             const config = statusConfig[seq.status] || statusConfig.draft
             const StatusIcon = config.icon
@@ -106,25 +106,25 @@ export default async function SequencesListPage() {
             return (
               <div
                 key={seq.id}
-                className="flex items-center justify-between px-5 py-4 hover:bg-un1t-gray/20 transition-colors"
+                className="flex items-center justify-between px-5 py-4 hover:bg-un1t-border/20 transition-colors"
               >
                 <Link
                   href={`/email/sequences/${seq.id}`}
                   className="flex items-center gap-4 flex-1 min-w-0"
                 >
-                  <div className="w-10 h-10 rounded-lg bg-un1t-gray/30 flex items-center justify-center shrink-0">
-                    <Zap size={18} className="text-un1t-light" />
+                  <div className="w-10 h-10 rounded-lg bg-un1t-border/30 flex items-center justify-center shrink-0">
+                    <Zap size={18} className="text-un1t-subtle" />
                   </div>
                   <div className="min-w-0">
                     <p className="text-sm font-medium truncate">{seq.name}</p>
-                    <p className="text-xs text-un1t-light mt-0.5">
+                    <p className="text-xs text-un1t-subtle mt-0.5">
                       {triggerLabels[seq.trigger_type] || seq.trigger_type} · {stepsCount} step{stepsCount !== 1 ? 's' : ''}
                     </p>
                   </div>
                 </Link>
                 <div className="flex items-center gap-3 shrink-0">
                   {seq.total_enrolled > 0 && (
-                    <span className="text-xs text-un1t-light">{seq.total_enrolled} enrolled</span>
+                    <span className="text-xs text-un1t-subtle">{seq.total_enrolled} enrolled</span>
                   )}
                   <span className={`flex items-center gap-1 text-xs px-2 py-0.5 rounded-full ${config.color}`}>
                     <StatusIcon size={10} />

@@ -68,7 +68,7 @@ export default function AcControlPanel() {
     return (
       <Card>
         <Header />
-        <div className="text-sm text-un1t-light inline-flex items-center gap-2">
+        <div className="text-sm text-un1t-subtle inline-flex items-center gap-2">
           <Loader2 size={14} className="animate-spin" /> Loading…
         </div>
       </Card>
@@ -79,14 +79,14 @@ export default function AcControlPanel() {
     return (
       <Card>
         <Header />
-        <div className="bg-un1t-black/40 border border-un1t-gray rounded-md p-4 text-sm text-un1t-light inline-flex items-start gap-2">
+        <div className="bg-un1t-bg/40 border border-un1t-border rounded-md p-4 text-sm text-un1t-subtle inline-flex items-start gap-2">
           <Settings size={14} className="mt-0.5 shrink-0" />
           <div>
             No AC units are set up for you at this location yet. A master
             adds devices under{' '}
-            <strong className="text-un1t-white">Settings → Locations → AC Devices</strong>{' '}
+            <strong className="text-un1t-text">Settings → Locations → AC Devices</strong>{' '}
             and ticks the ones you should be able to control on your{' '}
-            <strong className="text-un1t-white">staff record</strong>.
+            <strong className="text-un1t-text">staff record</strong>.
           </div>
         </div>
       </Card>
@@ -107,7 +107,7 @@ export default function AcControlPanel() {
       <div className="space-y-5">
         {groups.map(({ name, devices: groupDevices }) => (
           <div key={name} className="space-y-2">
-            <div className="text-[11px] uppercase tracking-wider text-un1t-light px-1">
+            <div className="text-[11px] uppercase tracking-wider text-un1t-subtle px-1">
               {name}
             </div>
             <div className="space-y-3">
@@ -232,22 +232,22 @@ function DeviceCard({ device }) {
     ` · fan ${device.default_fan || 'auto'} · ${device.session_minutes || 30} min`
 
   return (
-    <div className={`rounded-lg p-4 ${isOn ? 'bg-blue-600/10 border-2 border-blue-500/40' : 'bg-un1t-black/40 border border-un1t-gray'}`}>
+    <div className={`rounded-lg p-4 ${isOn ? 'bg-blue-600/10 border-2 border-blue-500/40' : 'bg-un1t-bg/40 border border-un1t-border'}`}>
       <div className="flex items-start justify-between gap-3 mb-2">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
             <Snowflake size={16} className={isOn ? 'text-blue-300' : 'text-blue-400'} />
-            <span className="text-sm font-bold text-un1t-white truncate">{device.label}</span>
-            <span className="text-[10px] uppercase tracking-wider text-un1t-mid font-mono">{providerLabel}</span>
+            <span className="text-sm font-bold text-un1t-text truncate">{device.label}</span>
+            <span className="text-[10px] uppercase tracking-wider text-un1t-muted font-mono">{providerLabel}</span>
           </div>
-          <div className="text-[11px] text-un1t-light mt-0.5">{presetLabel}</div>
+          <div className="text-[11px] text-un1t-subtle mt-0.5">{presetLabel}</div>
         </div>
         {isOn && controlSource === 'app' && (
           <div className="text-right shrink-0">
             <div className="text-xl font-bold text-blue-200 inline-flex items-center gap-1.5">
               <Clock size={14} /> {minsLeft != null ? `${minsLeft} min` : '—'}
             </div>
-            <div className="text-[10px] text-un1t-light">until auto-off</div>
+            <div className="text-[10px] text-un1t-subtle">until auto-off</div>
           </div>
         )}
         {/* STUDIO-AC-EXTERNAL-RULE.1 — when an external auto-off
@@ -260,13 +260,13 @@ function DeviceCard({ device }) {
             <div className="text-xl font-bold text-blue-200 inline-flex items-center gap-1.5">
               <Clock size={14} /> {minsLeft} min
             </div>
-            <div className="text-[10px] text-un1t-light">until auto-off · external</div>
+            <div className="text-[10px] text-un1t-subtle">until auto-off · external</div>
           </div>
         )}
         {isOn && controlSource === 'external' && minsLeft == null && (
           <div className="text-right shrink-0">
             <div className="text-[11px] uppercase tracking-wider text-blue-200">Running</div>
-            <div className="text-[10px] text-un1t-light">started externally</div>
+            <div className="text-[10px] text-un1t-subtle">started externally</div>
           </div>
         )}
       </div>
@@ -290,7 +290,7 @@ function DeviceCard({ device }) {
       ) : (
         <div className="space-y-2">
           {controlSource === 'app' && session?.profiles?.full_name && (
-            <div className="text-[11px] text-un1t-light">
+            <div className="text-[11px] text-un1t-subtle">
               Started by {session.profiles.full_name} · {timeAgo(session.started_at)}
             </div>
           )}
@@ -302,7 +302,7 @@ function DeviceCard({ device }) {
             </div>
           )}
           {state?.state && (
-            <div className="text-[11px] text-un1t-light bg-un1t-black/40 rounded px-3 py-1.5">
+            <div className="text-[11px] text-un1t-subtle bg-un1t-bg/40 rounded px-3 py-1.5">
               Live: {state.state.on ? 'on' : 'off'}
               {state.state.mode ? ` · ${state.state.mode}` : ''}
               {state.state.target_temp_c != null ? ` · ${state.state.target_temp_c}°C` : ''}
@@ -316,7 +316,7 @@ function DeviceCard({ device }) {
               <button
                 onClick={() => call('extend', 'extend')}
                 disabled={busy === 'extend'}
-                className="bg-un1t-gray/30 text-un1t-light border border-un1t-gray hover:text-un1t-white text-xs font-semibold px-3 py-2 rounded-md inline-flex items-center justify-center gap-1.5 disabled:opacity-50"
+                className="bg-un1t-border/30 text-un1t-subtle border border-un1t-border hover:text-un1t-text text-xs font-semibold px-3 py-2 rounded-md inline-flex items-center justify-center gap-1.5 disabled:opacity-50"
               >
                 {busy === 'extend' ? <Loader2 size={12} className="animate-spin" /> : <Plus size={12} />}
                 +{device.session_minutes || 30} min
@@ -356,10 +356,10 @@ function Header({ count }) {
     <div className="flex items-center justify-between gap-2 mb-3">
       <div className="flex items-center gap-2">
         <Snowflake size={18} className="text-blue-400" />
-        <h3 className="text-sm font-bold text-un1t-white uppercase tracking-wider">Air conditioning</h3>
+        <h3 className="text-sm font-bold text-un1t-text uppercase tracking-wider">Air conditioning</h3>
       </div>
       {typeof count === 'number' && count > 0 && (
-        <span className="text-[10px] uppercase tracking-wider text-un1t-mid">
+        <span className="text-[10px] uppercase tracking-wider text-un1t-muted">
           {count} unit{count === 1 ? '' : 's'}
         </span>
       )}
@@ -369,7 +369,7 @@ function Header({ count }) {
 
 function Card({ children }) {
   return (
-    <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5">
+    <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5">
       {children}
     </div>
   )

@@ -24,7 +24,7 @@ export default async function IssuesPage() {
   return (
     <div className="p-6 md:p-8 max-w-5xl">
       <h2 className="text-2xl font-bold mb-1">Issues</h2>
-      <p className="text-sm text-un1t-light mb-6 max-w-3xl">
+      <p className="text-sm text-un1t-subtle mb-6 max-w-3xl">
         Problems reported by staff at the studio. Pick one up, mark it resolved when fixed, and the original reporter gets pinged.
       </p>
       <IssuesInbox />

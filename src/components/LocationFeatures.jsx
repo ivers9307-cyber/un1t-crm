@@ -27,14 +27,14 @@ function FeatureToggle({ on, onToggle, busy, label, hint }) {
   return (
     <div className="flex items-start justify-between gap-3 py-2">
       <div className="flex-1 min-w-0">
-        <div className="text-sm text-un1t-white">{label}</div>
-        {hint && <div className="text-[11px] text-un1t-light mt-0.5">{hint}</div>}
+        <div className="text-sm text-un1t-text">{label}</div>
+        {hint && <div className="text-[11px] text-un1t-subtle mt-0.5">{hint}</div>}
       </div>
       <button
         type="button"
         onClick={onToggle}
         disabled={busy}
-        className={`shrink-0 w-10 h-5 rounded-full transition-colors disabled:opacity-40 ${on ? 'bg-green-500' : 'bg-un1t-gray'}`}
+        className={`shrink-0 w-10 h-5 rounded-full transition-colors disabled:opacity-40 ${on ? 'bg-green-500' : 'bg-un1t-border'}`}
         aria-pressed={on}
       >
         <div className={`w-4 h-4 rounded-full bg-white transition-transform ${on ? 'translate-x-5' : 'translate-x-0.5'}`} />
@@ -95,21 +95,21 @@ export default function LocationFeatures({ location }) {
   // both sub-sections.
 
   return (
-    <details className="bg-un1t-dark border border-un1t-gray rounded-lg group">
+    <details className="bg-un1t-surface border border-un1t-border rounded-lg group">
       <summary className="cursor-pointer list-none px-5 py-4 flex items-center justify-between">
         <div className="flex-1 min-w-0">
-          <div className="text-sm font-semibold text-un1t-white">Per-location feature toggles</div>
-          <div className="text-xs text-un1t-light mt-0.5">
+          <div className="text-sm font-semibold text-un1t-text">Per-location feature toggles</div>
+          <div className="text-xs text-un1t-subtle mt-0.5">
             {webFeatures.length + mobileFeatures.length} features — click to expand.
             Toggling off hides a feature for every user at this location.
           </div>
         </div>
-        <ChevronRight size={14} className="text-un1t-light transition-transform group-open:rotate-90 shrink-0" />
+        <ChevronRight size={14} className="text-un1t-subtle transition-transform group-open:rotate-90 shrink-0" />
       </summary>
 
-      <div className="border-t border-un1t-gray p-5 space-y-5">
+      <div className="border-t border-un1t-border p-5 space-y-5">
         <div>
-          <p className="text-xs text-un1t-light">
+          <p className="text-xs text-un1t-subtle">
             Toggle features off to hide them for every user at this location.
             User-level permissions and role defaults are still applied <em>within</em> the features that are on.
           </p>
@@ -126,8 +126,8 @@ export default function LocationFeatures({ location }) {
         </div>
 
         <section>
-          <h4 className="text-xs font-semibold uppercase tracking-wider text-un1t-light mb-2">Web features</h4>
-          <div className="divide-y divide-un1t-gray/40 border border-un1t-gray rounded-md px-3">
+          <h4 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle mb-2">Web features</h4>
+          <div className="divide-y divide-un1t-border/40 border border-un1t-border rounded-md px-3">
             {webFeatures.map(f => (
               <FeatureToggle
                 key={`web-${f.key}`}
@@ -142,11 +142,11 @@ export default function LocationFeatures({ location }) {
         </section>
 
         <section>
-          <h4 className="text-xs font-semibold uppercase tracking-wider text-un1t-light mb-2">Mobile features</h4>
-          <p className="text-[11px] text-un1t-light mb-2">
+          <h4 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle mb-2">Mobile features</h4>
+          <p className="text-[11px] text-un1t-subtle mb-2">
             Notification preferences (per-user) are intentionally not listed here.
           </p>
-          <div className="divide-y divide-un1t-gray/40 border border-un1t-gray rounded-md px-3">
+          <div className="divide-y divide-un1t-border/40 border border-un1t-border rounded-md px-3">
             {mobileFeatures.map(f => (
               <FeatureToggle
                 key={`mobile-${f.key}`}

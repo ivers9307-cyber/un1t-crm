@@ -65,7 +65,7 @@ export default function ScheduleApprovals({ user }) {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h2 className="text-2xl font-bold">Approvals</h2>
-          <p className="text-sm text-un1t-light mt-1">
+          <p className="text-sm text-un1t-subtle mt-1">
             {totalPending} pending request{totalPending !== 1 ? 's' : ''} · {user.activeLocation?.name}
           </p>
         </div>
@@ -75,7 +75,7 @@ export default function ScheduleApprovals({ user }) {
               key={f}
               onClick={() => setFilter(f)}
               className={`px-3 py-1.5 rounded-full transition-colors capitalize ${
-                filter === f ? 'bg-un1t-white text-un1t-black' : 'bg-un1t-dark border border-un1t-gray text-un1t-light hover:text-un1t-white'
+                filter === f ? 'bg-un1t-text text-un1t-bg' : 'bg-un1t-surface border border-un1t-border text-un1t-subtle hover:text-un1t-text'
               }`}
             >
               {f === 'pending' ? 'Pending' : 'All Requests'}
@@ -85,18 +85,18 @@ export default function ScheduleApprovals({ user }) {
       </div>
 
       {loading ? (
-        <div className="text-center py-16 text-un1t-light">Loading approvals...</div>
+        <div className="text-center py-16 text-un1t-subtle">Loading approvals...</div>
       ) : (timeOffRequests.length === 0 && swapRequests.length === 0) ? (
         <div className="text-center py-16">
-          <Inbox size={40} className="mx-auto text-un1t-mid mb-3" />
-          <p className="text-un1t-light text-sm">No {filter === 'pending' ? 'pending ' : ''}requests</p>
+          <Inbox size={40} className="mx-auto text-un1t-muted mb-3" />
+          <p className="text-un1t-subtle text-sm">No {filter === 'pending' ? 'pending ' : ''}requests</p>
         </div>
       ) : (
         <div className="space-y-6">
           {/* Time-Off Requests */}
           {timeOffRequests.length > 0 && (
             <div>
-              <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light mb-3">
+              <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle mb-3">
                 Time Off Requests ({timeOffRequests.length})
               </h3>
               <div className="space-y-2">
@@ -106,7 +106,7 @@ export default function ScheduleApprovals({ user }) {
                   const isPending = req.status === 'pending'
 
                   return (
-                    <div key={req.id} className="bg-un1t-dark border border-un1t-gray rounded-lg p-4 flex items-center gap-4">
+                    <div key={req.id} className="bg-un1t-surface border border-un1t-border rounded-lg p-4 flex items-center gap-4">
                       <div className="w-10 h-10 rounded-lg flex items-center justify-center shrink-0" style={{ backgroundColor: conf.color + '20' }}>
                         <Icon size={20} style={{ color: conf.color }} />
                       </div>
@@ -119,20 +119,20 @@ export default function ScheduleApprovals({ user }) {
                             <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium uppercase ${
                               req.status === 'approved' ? 'bg-green-500/20 text-green-400' :
                               req.status === 'rejected' ? 'bg-red-500/20 text-red-400' :
-                              'bg-un1t-gray/30 text-un1t-mid'
+                              'bg-un1t-border/30 text-un1t-muted'
                             }`}>
                               {req.status}
                             </span>
                           )}
                         </div>
-                        <div className="text-xs text-un1t-light mt-1 flex items-center gap-3">
+                        <div className="text-xs text-un1t-subtle mt-1 flex items-center gap-3">
                           <span className="flex items-center gap-1">
                             <Clock size={10} />
                             {new Date(req.start_date + 'T00:00:00').toLocaleDateString('en-IE', { day: 'numeric', month: 'short' })}
                             {req.start_date !== req.end_date && ` – ${new Date(req.end_date + 'T00:00:00').toLocaleDateString('en-IE', { day: 'numeric', month: 'short' })}`}
                           </span>
                           <span>{req.total_days} day{Number(req.total_days) !== 1 ? 's' : ''}</span>
-                          {req.reason && <span className="text-un1t-mid truncate max-w-[200px]">{req.reason}</span>}
+                          {req.reason && <span className="text-un1t-muted truncate max-w-[200px]">{req.reason}</span>}
                         </div>
                       </div>
 
@@ -164,7 +164,7 @@ export default function ScheduleApprovals({ user }) {
           {/* Swap Requests */}
           {swapRequests.length > 0 && (
             <div>
-              <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light mb-3">
+              <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle mb-3">
                 Shift Swap Requests ({swapRequests.length})
               </h3>
               <div className="space-y-2">
@@ -174,7 +174,7 @@ export default function ScheduleApprovals({ user }) {
                   const tmpl = reqShift?.shift_templates || {}
 
                   return (
-                    <div key={req.id} className="bg-un1t-dark border border-un1t-gray rounded-lg p-4 flex items-center gap-4">
+                    <div key={req.id} className="bg-un1t-surface border border-un1t-border rounded-lg p-4 flex items-center gap-4">
                       <div className="w-10 h-10 rounded-lg bg-blue-500/20 flex items-center justify-center shrink-0">
                         <ArrowLeftRight size={20} className="text-blue-400" />
                       </div>
@@ -187,15 +187,15 @@ export default function ScheduleApprovals({ user }) {
                             <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium uppercase ${
                               req.status === 'approved' ? 'bg-green-500/20 text-green-400' :
                               req.status === 'rejected' ? 'bg-red-500/20 text-red-400' :
-                              'bg-un1t-gray/30 text-un1t-mid'
+                              'bg-un1t-border/30 text-un1t-muted'
                             }`}>
                               {req.status}
                             </span>
                           )}
                         </div>
-                        <div className="text-xs text-un1t-light mt-1 flex items-center gap-3">
+                        <div className="text-xs text-un1t-subtle mt-1 flex items-center gap-3">
                           <span>{tmpl.name} — {reqShift?.shift_date && new Date(reqShift.shift_date + 'T00:00:00').toLocaleDateString('en-IE', { weekday: 'short', day: 'numeric', month: 'short' })}</span>
-                          {req.reason && <span className="text-un1t-mid truncate max-w-[200px]">{req.reason}</span>}
+                          {req.reason && <span className="text-un1t-muted truncate max-w-[200px]">{req.reason}</span>}
                         </div>
                       </div>
 

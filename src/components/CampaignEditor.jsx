@@ -494,9 +494,9 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
   return (
     <div className="flex flex-col h-screen">
       {/* Top Bar */}
-      <div className="flex items-center justify-between px-5 py-3 border-b border-un1t-gray bg-un1t-dark shrink-0">
+      <div className="flex items-center justify-between px-5 py-3 border-b border-un1t-border bg-un1t-surface shrink-0">
         <div className="flex items-center gap-4">
-          <Link href="/email" className="text-un1t-light hover:text-un1t-white transition-colors">
+          <Link href="/email" className="text-un1t-subtle hover:text-un1t-text transition-colors">
             <ArrowLeft size={20} />
           </Link>
           <input
@@ -504,14 +504,14 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
             value={name}
             onChange={e => setName(e.target.value)}
             placeholder="Campaign name..."
-            className="bg-transparent text-lg font-semibold text-un1t-white placeholder:text-un1t-mid focus:outline-none w-64"
+            className="bg-transparent text-lg font-semibold text-un1t-text placeholder:text-un1t-muted focus:outline-none w-64"
           />
-          <span className="text-xs bg-un1t-gray text-un1t-light px-2 py-0.5 rounded-full">Draft</span>
+          <span className="text-xs bg-un1t-border text-un1t-subtle px-2 py-0.5 rounded-full">Draft</span>
         </div>
 
         <div className="flex items-center gap-2">
           {audienceCount !== null && (
-            <span className="text-xs text-un1t-light mr-2">
+            <span className="text-xs text-un1t-subtle mr-2">
               <Users size={12} className="inline mr-1" />
               {audienceCount} recipients
             </span>
@@ -519,7 +519,7 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
           <button
             onClick={handleSave}
             disabled={saving}
-            className="flex items-center gap-1.5 text-sm text-un1t-light hover:text-un1t-white border border-un1t-gray hover:border-un1t-white/30 px-3 py-1.5 rounded-md transition-colors disabled:opacity-50"
+            className="flex items-center gap-1.5 text-sm text-un1t-subtle hover:text-un1t-text border border-un1t-border hover:border-un1t-text/30 px-3 py-1.5 rounded-md transition-colors disabled:opacity-50"
           >
             <Save size={14} />
             {saving ? 'Saving...' : 'Save'}
@@ -537,7 +537,7 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
               actually sends. Toast-style status sits below the bar. */}
           <button
             onClick={() => setTestOpen((v) => !v)}
-            className="flex items-center gap-1.5 text-sm text-un1t-light hover:text-un1t-white border border-un1t-gray hover:border-un1t-white/30 px-3 py-1.5 rounded-md transition-colors"
+            className="flex items-center gap-1.5 text-sm text-un1t-subtle hover:text-un1t-text border border-un1t-border hover:border-un1t-text/30 px-3 py-1.5 rounded-md transition-colors"
             title="Send a test copy to your inbox before broadcasting"
           >
             <Mail size={14} />
@@ -550,7 +550,7 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
               <button
                 onClick={() => setScheduleOpen((v) => !v)}
                 disabled={sending || !subject}
-                className="flex items-center gap-1.5 text-sm text-un1t-light hover:text-un1t-white border border-un1t-gray hover:border-un1t-white/30 px-3 py-1.5 rounded-md transition-colors disabled:opacity-50"
+                className="flex items-center gap-1.5 text-sm text-un1t-subtle hover:text-un1t-text border border-un1t-border hover:border-un1t-text/30 px-3 py-1.5 rounded-md transition-colors disabled:opacity-50"
                 title="Send at a later date and time"
               >
                 <Calendar size={14} />
@@ -559,14 +559,14 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
               <button
                 onClick={handleSend}
                 disabled={sending || !subject}
-                className="flex items-center gap-1.5 text-sm bg-un1t-white text-un1t-black font-medium px-4 py-1.5 rounded-md hover:bg-un1t-accent transition-colors disabled:opacity-50"
+                className="flex items-center gap-1.5 text-sm bg-un1t-text text-un1t-bg font-medium px-4 py-1.5 rounded-md hover:bg-un1t-accent transition-colors disabled:opacity-50"
               >
                 <Send size={14} />
                 {sending ? 'Queueing…' : 'Send Campaign'}
               </button>
               <button
                 onClick={handleDelete}
-                className="flex items-center gap-1.5 text-sm text-red-400 hover:text-red-300 border border-un1t-gray hover:border-red-400/40 px-3 py-1.5 rounded-md transition-colors"
+                className="flex items-center gap-1.5 text-sm text-red-400 hover:text-red-300 border border-un1t-border hover:border-red-400/40 px-3 py-1.5 rounded-md transition-colors"
                 title="Delete this draft"
               >
                 <Trash2 size={14} />
@@ -581,14 +581,14 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
               </span>
               <button
                 onClick={handleCancel}
-                className="flex items-center gap-1.5 text-sm text-un1t-light hover:text-un1t-white border border-un1t-gray hover:border-un1t-white/30 px-3 py-1.5 rounded-md transition-colors"
+                className="flex items-center gap-1.5 text-sm text-un1t-subtle hover:text-un1t-text border border-un1t-border hover:border-un1t-text/30 px-3 py-1.5 rounded-md transition-colors"
               >
                 <X size={14} />
                 Unschedule
               </button>
               <button
                 onClick={handleDelete}
-                className="flex items-center gap-1.5 text-sm text-red-400 hover:text-red-300 border border-un1t-gray hover:border-red-400/40 px-3 py-1.5 rounded-md transition-colors"
+                className="flex items-center gap-1.5 text-sm text-red-400 hover:text-red-300 border border-un1t-border hover:border-red-400/40 px-3 py-1.5 rounded-md transition-colors"
               >
                 <Trash2 size={14} />
               </button>
@@ -596,7 +596,7 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
           )}
           {['queued', 'sending'].includes(campaignStatus) && (
             <>
-              <span className="text-xs text-un1t-light flex items-center gap-1.5">
+              <span className="text-xs text-un1t-subtle flex items-center gap-1.5">
                 <Loader2 size={12} className="animate-spin" />
                 {progress.cancel_requested_at
                   ? 'Cancelling…'
@@ -607,7 +607,7 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
               <button
                 onClick={handleCancel}
                 disabled={!!progress.cancel_requested_at}
-                className="flex items-center gap-1.5 text-sm text-red-400 hover:text-red-300 border border-un1t-gray hover:border-red-400/40 px-3 py-1.5 rounded-md transition-colors disabled:opacity-50"
+                className="flex items-center gap-1.5 text-sm text-red-400 hover:text-red-300 border border-un1t-border hover:border-red-400/40 px-3 py-1.5 rounded-md transition-colors disabled:opacity-50"
               >
                 <X size={14} />
                 Cancel
@@ -615,7 +615,7 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
             </>
           )}
           {['sent', 'cancelled'].includes(campaignStatus) && (
-            <span className="text-xs text-un1t-light">
+            <span className="text-xs text-un1t-subtle">
               {campaignStatus === 'sent'
                 ? `Sent ${progress.total_sent.toLocaleString()} / ${progress.total_recipients.toLocaleString()}`
                 : 'Cancelled'}
@@ -626,14 +626,14 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
 
       {/* CAMPAIGN.13 — schedule tray (mirrors the test-send tray). */}
       {scheduleOpen && (
-        <div className="bg-un1t-dark border-b border-un1t-gray px-5 py-3 flex items-center gap-3">
-          <Calendar size={14} className="text-un1t-light" />
-          <span className="text-sm text-un1t-light">Send at:</span>
+        <div className="bg-un1t-surface border-b border-un1t-border px-5 py-3 flex items-center gap-3">
+          <Calendar size={14} className="text-un1t-subtle" />
+          <span className="text-sm text-un1t-subtle">Send at:</span>
           <input
             type="datetime-local"
             value={scheduleAt}
             onChange={(e) => setScheduleAt(e.target.value)}
-            className="bg-un1t-black border border-un1t-gray rounded-md px-3 py-1.5 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
+            className="bg-un1t-bg border border-un1t-border rounded-md px-3 py-1.5 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted"
           />
           <button
             onClick={handleSchedule}
@@ -644,7 +644,7 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
           </button>
           <button
             onClick={() => setScheduleOpen(false)}
-            className="text-sm text-un1t-light hover:text-un1t-white"
+            className="text-sm text-un1t-subtle hover:text-un1t-text"
           >
             Cancel
           </button>
@@ -656,15 +656,15 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
           if blank), fire it, and see the status without leaving the
           editor view. */}
       {testOpen && (
-        <div className="bg-un1t-dark border-b border-un1t-gray px-5 py-3 flex items-center gap-3">
-          <Mail size={14} className="text-un1t-light" />
-          <span className="text-sm text-un1t-light">Send a test copy to:</span>
+        <div className="bg-un1t-surface border-b border-un1t-border px-5 py-3 flex items-center gap-3">
+          <Mail size={14} className="text-un1t-subtle" />
+          <span className="text-sm text-un1t-subtle">Send a test copy to:</span>
           <input
             type="email"
             value={testEmail}
             onChange={(e) => setTestEmail(e.target.value)}
             placeholder="your@email.com (defaults to your account email)"
-            className="flex-1 max-w-md bg-un1t-black border border-un1t-gray rounded-md px-3 py-1.5 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid"
+            className="flex-1 max-w-md bg-un1t-bg border border-un1t-border rounded-md px-3 py-1.5 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted"
           />
           <button
             type="button"
@@ -696,15 +696,15 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
       )}
 
       {/* Tabs */}
-      <div className="flex border-b border-un1t-gray bg-un1t-dark shrink-0">
+      <div className="flex border-b border-un1t-border bg-un1t-surface shrink-0">
         {tabs.map(t => (
           <button
             key={t.key}
             onClick={() => switchTab(t.key)}
             className={`px-5 py-2.5 text-sm font-medium border-b-2 transition-colors ${
               tab === t.key
-                ? 'text-un1t-white border-un1t-white'
-                : 'text-un1t-light border-transparent hover:text-un1t-white'
+                ? 'text-un1t-text border-un1t-text'
+                : 'text-un1t-subtle border-transparent hover:text-un1t-text'
             }`}
           >
             {t.label}
@@ -717,11 +717,11 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
         {tab === 'design' && (
           <div className="h-full flex flex-col">
             {/* Visual/Code toggle */}
-            <div className="flex items-center gap-2 px-5 py-2 bg-un1t-dark border-b border-un1t-gray">
+            <div className="flex items-center gap-2 px-5 py-2 bg-un1t-surface border-b border-un1t-border">
               <button
                 onClick={() => setEditorMode('visual')}
                 className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md transition-colors ${
-                  editorMode === 'visual' ? 'bg-un1t-white text-un1t-black' : 'text-un1t-light hover:text-un1t-white'
+                  editorMode === 'visual' ? 'bg-un1t-text text-un1t-bg' : 'text-un1t-subtle hover:text-un1t-text'
                 }`}
               >
                 <Paintbrush size={12} /> Visual Editor
@@ -737,7 +737,7 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
                   setEditorMode('code')
                 }}
                 className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md transition-colors ${
-                  editorMode === 'code' ? 'bg-un1t-white text-un1t-black' : 'text-un1t-light hover:text-un1t-white'
+                  editorMode === 'code' ? 'bg-un1t-text text-un1t-bg' : 'text-un1t-subtle hover:text-un1t-text'
                 }`}
               >
                 <Code size={12} /> HTML Code
@@ -761,7 +761,7 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
         {tab === 'audience' && (
           <div className="p-6 max-w-3xl">
             <h3 className="text-lg font-semibold mb-1">Audience</h3>
-            <p className="text-sm text-un1t-light mb-4">
+            <p className="text-sm text-un1t-subtle mb-4">
               Define who receives this campaign. Only contacts who have opted in to email marketing will be included.
             </p>
             {/* CAMPAIGN.1 — prominent recipient-count banner. Updates
@@ -784,12 +784,12 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
                 <div className={`${tone} border rounded-lg p-4 mb-6 flex items-center gap-3`}>
                   <Users size={20} className={`${iconColor} shrink-0`} />
                   <div>
-                    <div className="text-2xl font-semibold text-un1t-white tabular-nums">
+                    <div className="text-2xl font-semibold text-un1t-text tabular-nums">
                       {showCount
                         ? audienceCount.toLocaleString()
                         : isLoading ? 'Computing…' : '—'}
                     </div>
-                    <div className="text-xs text-un1t-light">
+                    <div className="text-xs text-un1t-subtle">
                       {showCount
                         ? `contact${audienceCount === 1 ? '' : 's'} will receive this campaign — already filtered for marketing opt-in, valid email, non-ClassPass.`
                         : isError
@@ -815,8 +815,8 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
 
         {tab === 'settings' && (
           <div className="p-6 max-w-2xl space-y-6">
-            <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5 space-y-4">
-              <h3 className="font-semibold text-sm text-un1t-light uppercase tracking-wider">Email Settings</h3>
+            <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5 space-y-4">
+              <h3 className="font-semibold text-sm text-un1t-subtle uppercase tracking-wider">Email Settings</h3>
 
               <div>
                 <label className="block text-sm mb-1.5">Subject Line *</label>
@@ -825,7 +825,7 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
                   value={subject}
                   onChange={e => setSubject(e.target.value)}
                   placeholder="Your subject line — use {{first_name}} for personalisation"
-                  className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid"
+                  className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted"
                 />
               </div>
 
@@ -836,7 +836,7 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
                   value={previewText}
                   onChange={e => setPreviewText(e.target.value)}
                   placeholder="Short text shown in inbox preview (optional)"
-                  className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid"
+                  className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted"
                 />
               </div>
 
@@ -848,7 +848,7 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
                     value={fromName}
                     onChange={e => setFromName(e.target.value)}
                     placeholder="UN1T"
-                    className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid"
+                    className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted"
                   />
                 </div>
                 <div>
@@ -858,7 +858,7 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
                     value={fromEmail}
                     onChange={e => setFromEmail(e.target.value)}
                     placeholder="hello@un1t.ie"
-                    className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid"
+                    className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted"
                   />
                 </div>
               </div>
@@ -870,14 +870,14 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
                   value={replyTo}
                   onChange={e => setReplyTo(e.target.value)}
                   placeholder="Same as From if left empty"
-                  className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid"
+                  className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted"
                 />
               </div>
             </div>
 
-            <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5">
-              <h3 className="font-semibold text-sm text-un1t-light uppercase tracking-wider mb-3">Merge Tags</h3>
-              <p className="text-xs text-un1t-mid mb-3">Use these in your subject line or email body for personalisation:</p>
+            <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5">
+              <h3 className="font-semibold text-sm text-un1t-subtle uppercase tracking-wider mb-3">Merge Tags</h3>
+              <p className="text-xs text-un1t-muted mb-3">Use these in your subject line or email body for personalisation:</p>
               <div className="grid grid-cols-2 gap-2 text-xs">
                 {[
                   ['{{first_name}}', "Contact's first name"],
@@ -888,9 +888,9 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
                   ['{{preference_url}}', 'Preference centre link'],
                   ['{{current_year}}', 'Current year'],
                 ].map(([tag, desc]) => (
-                  <div key={tag} className="flex items-center gap-2 p-2 bg-un1t-dark rounded">
+                  <div key={tag} className="flex items-center gap-2 p-2 bg-un1t-surface rounded">
                     <code className="text-blue-400">{tag}</code>
-                    <span className="text-un1t-mid">{desc}</span>
+                    <span className="text-un1t-muted">{desc}</span>
                   </div>
                 ))}
               </div>

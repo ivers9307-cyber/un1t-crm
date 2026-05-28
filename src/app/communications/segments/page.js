@@ -16,7 +16,7 @@ export default async function SegmentsTabPage() {
 
   return (
     <div>
-      <p className="text-sm text-un1t-light mb-4">
+      <p className="text-sm text-un1t-subtle mb-4">
         Tag-defined audiences for retargeting. Tags update automatically as orders complete and races run.
       </p>
       <SegmentsGrid />

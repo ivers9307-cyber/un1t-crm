@@ -39,16 +39,16 @@ export default async function SmsBroadcastsListPage() {
       <div className="flex items-center justify-between mb-4">
         <div>
           <h2 className="text-lg font-semibold">SMS Broadcasts</h2>
-          <p className="text-xs text-un1t-light mt-0.5">
+          <p className="text-xs text-un1t-subtle mt-0.5">
             One-off SMS sends to a filtered audience. Sender ID:{' '}
-            <code className="text-un1t-white">
+            <code className="text-un1t-text">
               {user.activeLocation?.twilio_alpha_sender_id || 'not set — using fallback'}
             </code>
           </p>
         </div>
         <Link
           href="/communications/sms/broadcasts/new"
-          className="flex items-center gap-2 bg-un1t-white text-un1t-black text-sm font-medium px-4 py-2 rounded-lg hover:bg-un1t-accent transition-colors"
+          className="flex items-center gap-2 bg-un1t-text text-un1t-bg text-sm font-medium px-4 py-2 rounded-lg hover:bg-un1t-accent transition-colors"
         >
           <Plus size={16} />
           New SMS Broadcast
@@ -56,21 +56,21 @@ export default async function SmsBroadcastsListPage() {
       </div>
 
       {(!broadcasts || broadcasts.length === 0) ? (
-        <div className="bg-un1t-dark border border-un1t-gray rounded-2xl p-10 text-center">
-          <MessageSquare size={32} className="mx-auto mb-3 text-un1t-light" />
+        <div className="bg-un1t-surface border border-un1t-border rounded-2xl p-10 text-center">
+          <MessageSquare size={32} className="mx-auto mb-3 text-un1t-subtle" />
           <h3 className="text-base font-semibold mb-2">No SMS broadcasts yet</h3>
-          <p className="text-sm text-un1t-light mb-4">
+          <p className="text-sm text-un1t-subtle mb-4">
             Create a broadcast to send a freeform SMS to a filtered audience at this location.
           </p>
           <Link
             href="/communications/sms/broadcasts/new"
-            className="inline-flex items-center gap-2 bg-un1t-white text-un1t-black text-sm font-medium px-4 py-2 rounded-lg hover:bg-un1t-accent transition-colors"
+            className="inline-flex items-center gap-2 bg-un1t-text text-un1t-bg text-sm font-medium px-4 py-2 rounded-lg hover:bg-un1t-accent transition-colors"
           >
             <Plus size={16} /> Create SMS Broadcast
           </Link>
         </div>
       ) : (
-        <div className="bg-un1t-dark border border-un1t-gray rounded-2xl divide-y divide-un1t-gray">
+        <div className="bg-un1t-surface border border-un1t-border rounded-2xl divide-y divide-un1t-border">
           {broadcasts.map(b => {
             const config = statusConfig[b.status] || statusConfig.draft
             const StatusIcon = config.icon
@@ -78,7 +78,7 @@ export default async function SmsBroadcastsListPage() {
               <Link
                 key={b.id}
                 href={`/communications/sms/broadcasts/${b.id}`}
-                className="flex items-center justify-between px-5 py-4 hover:bg-un1t-gray/20 transition-colors"
+                className="flex items-center justify-between px-5 py-4 hover:bg-un1t-border/20 transition-colors"
               >
                 <div className="flex items-center gap-4 min-w-0">
                   <div className="w-10 h-10 rounded-lg bg-cyan-500/20 flex items-center justify-center shrink-0">
@@ -86,14 +86,14 @@ export default async function SmsBroadcastsListPage() {
                   </div>
                   <div className="min-w-0">
                     <p className="text-sm font-medium truncate">{b.name}</p>
-                    <p className="text-xs text-un1t-light mt-0.5 truncate">
+                    <p className="text-xs text-un1t-subtle mt-0.5 truncate">
                       {b.body.length > 80 ? b.body.slice(0, 80) + '…' : b.body}
                     </p>
                   </div>
                 </div>
                 <div className="flex items-center gap-3 shrink-0 ml-4">
                   {b.status === 'sent' && (
-                    <span className="text-xs text-un1t-light">
+                    <span className="text-xs text-un1t-subtle">
                       {b.total_sent}/{b.total_recipients} sent
                       {b.total_failed > 0 && (
                         <span className="text-red-400 ml-1">({b.total_failed} failed)</span>

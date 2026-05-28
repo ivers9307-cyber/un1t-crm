@@ -107,12 +107,12 @@ export default async function EventsIndexPage(props) {
         <h2 className="text-2xl font-bold">Events</h2>
         <Link
           href="/events/new"
-          className="inline-flex items-center gap-1.5 text-xs bg-un1t-white text-un1t-black px-3 py-1.5 rounded-md hover:bg-un1t-accent font-medium"
+          className="inline-flex items-center gap-1.5 text-xs bg-un1t-text text-un1t-bg px-3 py-1.5 rounded-md hover:bg-un1t-accent font-medium"
         >
           <Plus size={12} /> New event
         </Link>
       </div>
-      <p className="text-sm text-un1t-light mb-6">
+      <p className="text-sm text-un1t-subtle mb-6">
         Standalone events at this location — races (Hyrox sims with race-day timing + TV display), workshops, seminars, open days, masterclasses. Customers register via a dedicated public signup page; per-seat name + email is captured for every event kind.
       </p>
 
@@ -120,7 +120,7 @@ export default async function EventsIndexPage(props) {
           param — full page reload on switch but data is small and the
           UX is "I want to see history" rather than "rapid back-and-
           forth". Keeps the page a pure server component. */}
-      <div className="flex items-center gap-1 mb-5 border-b border-un1t-gray">
+      <div className="flex items-center gap-1 mb-5 border-b border-un1t-border">
         {tabs.map((t) => {
           const active = tab === t.id
           return (
@@ -129,13 +129,13 @@ export default async function EventsIndexPage(props) {
               href={t.href}
               className={`flex items-center gap-2 px-4 py-2.5 text-sm border-b-2 transition-colors -mb-px ${
                 active
-                  ? 'border-un1t-white text-un1t-white font-medium'
-                  : 'border-transparent text-un1t-light hover:text-un1t-white'
+                  ? 'border-un1t-text text-un1t-text font-medium'
+                  : 'border-transparent text-un1t-subtle hover:text-un1t-text'
               }`}
             >
               {t.label}
               <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${
-                active ? 'bg-un1t-white/15 text-un1t-white' : 'bg-un1t-gray/40 text-un1t-light'
+                active ? 'bg-un1t-text/15 text-un1t-text' : 'bg-un1t-border/40 text-un1t-subtle'
               }`}>{t.count}</span>
             </Link>
           )
@@ -143,9 +143,9 @@ export default async function EventsIndexPage(props) {
       </div>
 
       {visible.length === 0 ? (
-        <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-8 text-center">
-          <Flag size={28} className="mx-auto text-un1t-light mb-3" />
-          <p className="text-sm text-un1t-light mb-4">
+        <div className="bg-un1t-surface border border-un1t-border rounded-lg p-8 text-center">
+          <Flag size={28} className="mx-auto text-un1t-subtle mb-3" />
+          <p className="text-sm text-un1t-subtle mb-4">
             {tab === 'past'
               ? 'No past events yet.'
               : 'No upcoming events. Create one to get started.'}
@@ -153,7 +153,7 @@ export default async function EventsIndexPage(props) {
           {tab === 'upcoming' && (
             <Link
               href="/events/new"
-              className="inline-flex items-center gap-1.5 text-xs bg-un1t-white text-un1t-black px-3 py-1.5 rounded-md hover:bg-un1t-accent font-medium"
+              className="inline-flex items-center gap-1.5 text-xs bg-un1t-text text-un1t-bg px-3 py-1.5 rounded-md hover:bg-un1t-accent font-medium"
             >
               <Plus size={12} /> Create the first one
             </Link>
@@ -163,10 +163,10 @@ export default async function EventsIndexPage(props) {
         <>
           {/* Desktop / tablet: original table — hidden below md so
               phones don't horizontal-scroll a 6-column grid. */}
-          <div className="hidden md:block bg-un1t-dark border border-un1t-gray rounded-lg overflow-hidden">
+          <div className="hidden md:block bg-un1t-surface border border-un1t-border rounded-lg overflow-hidden">
             <table className="w-full text-sm">
               <thead>
-                <tr className="border-b border-un1t-gray text-un1t-light text-[11px] uppercase tracking-wider">
+                <tr className="border-b border-un1t-border text-un1t-subtle text-[11px] uppercase tracking-wider">
                   <th className="text-left p-3">Event</th>
                   <th className="text-left p-3">Type</th>
                   <th className="text-left p-3">Date</th>
@@ -176,33 +176,33 @@ export default async function EventsIndexPage(props) {
                   <th className="text-right p-3">Actions</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-un1t-gray">
+              <tbody className="divide-y divide-un1t-border">
                 {visible.map((r) => {
                   const confirmedCount = (r.registrations || []).filter(x => x.status === 'confirmed').length
                   const publicUrl = appOrigin ? `${appOrigin}/event/${r.slug}` : `/event/${r.slug}`
                   const isRace = (r.kind || 'race') === 'race'
                   const badge = kindBadge(r.kind || 'race')
                   return (
-                    <tr key={r.id} className="hover:bg-un1t-gray/20">
+                    <tr key={r.id} className="hover:bg-un1t-border/20">
                       <td className="p-3">
-                        <div className="font-medium text-un1t-white">{r.name}</div>
-                        <div className="text-[11px] text-un1t-light font-mono mt-0.5">/{r.slug}</div>
+                        <div className="font-medium text-un1t-text">{r.name}</div>
+                        <div className="text-[11px] text-un1t-subtle font-mono mt-0.5">/{r.slug}</div>
                       </td>
                       <td className="p-3">
                         <span className={`text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded-full ${badge.cls}`}>
                           {badge.label}
                         </span>
                       </td>
-                      <td className="p-3 text-un1t-light whitespace-nowrap">
+                      <td className="p-3 text-un1t-subtle whitespace-nowrap">
                         {r.race_date}
-                        {r.start_time && <span className="text-[11px] text-un1t-mid ml-1">@ {r.start_time.slice(0, 5)}</span>}
+                        {r.start_time && <span className="text-[11px] text-un1t-muted ml-1">@ {r.start_time.slice(0, 5)}</span>}
                       </td>
-                      <td className="p-3 text-un1t-light">
+                      <td className="p-3 text-un1t-subtle">
                         <span className="inline-flex items-center gap-1">
                           <Users size={11} /> {confirmedCount}{r.capacity ? ` / ${r.capacity}` : ''}
                         </span>
                       </td>
-                      <td className="p-3 text-un1t-light text-xs">
+                      <td className="p-3 text-un1t-subtle text-xs">
                         {(r.allowed_team_sizes || []).join(', ')}
                       </td>
                       <td className="p-3">
@@ -216,13 +216,13 @@ export default async function EventsIndexPage(props) {
                             href={publicUrl}
                             target="_blank"
                             rel="noreferrer"
-                            className="text-[11px] text-un1t-light hover:text-un1t-white inline-flex items-center gap-1"
+                            className="text-[11px] text-un1t-subtle hover:text-un1t-text inline-flex items-center gap-1"
                           >
                             Public <ExternalLink size={10} />
                           </a>
                           <Link
                             href={`/events/${r.id}/teams`}
-                            className="text-[11px] text-un1t-light hover:text-un1t-white"
+                            className="text-[11px] text-un1t-subtle hover:text-un1t-text"
                             title={isRace ? 'View + manage registered teams' : 'View + manage registered attendees'}
                           >
                             {isRace ? 'Teams' : 'Attendees'}
@@ -243,14 +243,14 @@ export default async function EventsIndexPage(props) {
                           <a
                             href={`/api/events/${r.id}/qr-code`}
                             download
-                            className="text-[11px] text-un1t-light hover:text-un1t-white"
+                            className="text-[11px] text-un1t-subtle hover:text-un1t-text"
                             title="Download a printable QR code that links to the public signup page"
                           >
                             QR
                           </a>
                           <Link
                             href={`/events/${r.id}/edit`}
-                            className="text-[11px] text-un1t-light hover:text-un1t-white"
+                            className="text-[11px] text-un1t-subtle hover:text-un1t-text"
                           >
                             Edit
                           </Link>
@@ -275,12 +275,12 @@ export default async function EventsIndexPage(props) {
               return (
                 <div
                   key={r.id}
-                  className="bg-un1t-dark border border-un1t-gray rounded-lg p-4"
+                  className="bg-un1t-surface border border-un1t-border rounded-lg p-4"
                 >
                   <div className="flex items-start justify-between gap-2 mb-2">
                     <div className="min-w-0 flex-1">
-                      <div className="font-semibold text-un1t-white">{r.name}</div>
-                      <div className="text-[11px] text-un1t-light font-mono mt-0.5">/{r.slug}</div>
+                      <div className="font-semibold text-un1t-text">{r.name}</div>
+                      <div className="text-[11px] text-un1t-subtle font-mono mt-0.5">/{r.slug}</div>
                     </div>
                     <div className="flex items-center gap-1.5 shrink-0">
                       <span className={`text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded-full ${badge.cls}`}>
@@ -293,16 +293,16 @@ export default async function EventsIndexPage(props) {
                       </span>
                     </div>
                   </div>
-                  <div className="flex items-center gap-3 text-xs text-un1t-light mb-3">
+                  <div className="flex items-center gap-3 text-xs text-un1t-subtle mb-3">
                     <span className="whitespace-nowrap">
                       {r.race_date}
-                      {r.start_time && <span className="text-un1t-mid"> · {r.start_time.slice(0, 5)}</span>}
+                      {r.start_time && <span className="text-un1t-muted"> · {r.start_time.slice(0, 5)}</span>}
                     </span>
                     <span className="inline-flex items-center gap-1">
                       <Users size={11} /> {confirmedCount}{r.capacity ? ` / ${r.capacity}` : ''}
                     </span>
                     {(r.allowed_team_sizes || []).length > 0 && (
-                      <span className="text-un1t-mid">
+                      <span className="text-un1t-muted">
                         {(r.allowed_team_sizes || []).join(', ')}
                       </span>
                     )}
@@ -311,7 +311,7 @@ export default async function EventsIndexPage(props) {
                       day-of operator path is highlighted in blue
                       (highest-frequency mobile use). For non-race
                       kinds we drop the Race-day button. */}
-                  <div className="flex flex-wrap items-center gap-2 pt-3 border-t border-un1t-gray text-xs">
+                  <div className="flex flex-wrap items-center gap-2 pt-3 border-t border-un1t-border text-xs">
                     {isRace && (
                       <Link
                         href={`/events/${r.id}/control`}
@@ -322,13 +322,13 @@ export default async function EventsIndexPage(props) {
                     )}
                     <Link
                       href={`/events/${r.id}/teams`}
-                      className="px-3 py-1.5 rounded-md border border-un1t-gray text-un1t-light"
+                      className="px-3 py-1.5 rounded-md border border-un1t-border text-un1t-subtle"
                     >
                       {isRace ? 'Teams' : 'Attendees'}
                     </Link>
                     <Link
                       href={`/events/${r.id}/edit`}
-                      className="px-3 py-1.5 rounded-md border border-un1t-gray text-un1t-light"
+                      className="px-3 py-1.5 rounded-md border border-un1t-border text-un1t-subtle"
                     >
                       Edit
                     </Link>
@@ -336,7 +336,7 @@ export default async function EventsIndexPage(props) {
                       href={publicUrl}
                       target="_blank"
                       rel="noreferrer"
-                      className="ml-auto px-3 py-1.5 rounded-md text-un1t-light inline-flex items-center gap-1"
+                      className="ml-auto px-3 py-1.5 rounded-md text-un1t-subtle inline-flex items-center gap-1"
                     >
                       Public <ExternalLink size={10} />
                     </a>

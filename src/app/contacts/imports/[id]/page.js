@@ -19,7 +19,7 @@ const ACTION_BADGE = {
   updated:     'bg-blue-500/20 text-blue-700',
   skipped:     'bg-amber-500/20 text-amber-700',
   errored:     'bg-red-500/20 text-red-700',
-  rolled_back: 'bg-un1t-gray/30 text-un1t-light',
+  rolled_back: 'bg-un1t-border/30 text-un1t-subtle',
 }
 
 export default async function ImportDetailPage(props) {
@@ -50,17 +50,17 @@ export default async function ImportDetailPage(props) {
 
   return (
     <div className="p-6 max-w-5xl">
-      <Link href="/contacts/imports" className="inline-flex items-center gap-1.5 text-sm text-un1t-light hover:text-un1t-white mb-4">
+      <Link href="/contacts/imports" className="inline-flex items-center gap-1.5 text-sm text-un1t-subtle hover:text-un1t-text mb-4">
         <ArrowLeft size={14} /> Import history
       </Link>
 
       <header className="flex items-start justify-between mb-6 gap-4">
         <div className="min-w-0">
           <h2 className="text-2xl font-bold truncate">{batch.source_filename || 'Untitled import'}</h2>
-          <p className="text-sm text-un1t-light mt-1">
+          <p className="text-sm text-un1t-subtle mt-1">
             {new Date(batch.created_at).toLocaleString('en-IE')} · by {batch.actor?.full_name || batch.actor?.email || 'unknown'}
             {batch.batch_tag && (
-              <> · tag <strong className="text-un1t-white">{batch.batch_tag}</strong></>
+              <> · tag <strong className="text-un1t-text">{batch.batch_tag}</strong></>
             )}
           </p>
         </div>
@@ -68,7 +68,7 @@ export default async function ImportDetailPage(props) {
           {hasFailedRows && (
             <a
               href={`/api/contacts/imports/${batch.id}/error-csv`}
-              className="inline-flex items-center gap-1.5 border border-un1t-gray text-un1t-light text-xs font-medium px-3 py-1.5 rounded-md hover:text-un1t-white"
+              className="inline-flex items-center gap-1.5 border border-un1t-border text-un1t-subtle text-xs font-medium px-3 py-1.5 rounded-md hover:text-un1t-text"
             >
               <Download size={12} /> Error rows
             </a>
@@ -92,11 +92,11 @@ export default async function ImportDetailPage(props) {
         </div>
       )}
 
-      <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light mb-2">Rows</h3>
-      <div className="bg-un1t-dark border border-un1t-gray rounded-lg overflow-x-auto">
+      <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle mb-2">Rows</h3>
+      <div className="bg-un1t-surface border border-un1t-border rounded-lg overflow-x-auto">
         <table className="w-full text-xs min-w-[600px]">
-          <thead className="text-[10px] uppercase tracking-wider text-un1t-light">
-            <tr className="border-b border-un1t-gray">
+          <thead className="text-[10px] uppercase tracking-wider text-un1t-subtle">
+            <tr className="border-b border-un1t-border">
               <th className="text-left p-2 w-12">#</th>
               <th className="text-left p-2 w-24">Action</th>
               <th className="text-left p-2">Email</th>
@@ -105,14 +105,14 @@ export default async function ImportDetailPage(props) {
           </thead>
           <tbody>
             {(rows || []).map(r => (
-              <tr key={r.id} className="border-t border-un1t-gray/40">
-                <td className="p-2 text-un1t-mid tabular-nums">{r.row_number}</td>
+              <tr key={r.id} className="border-t border-un1t-border/40">
+                <td className="p-2 text-un1t-muted tabular-nums">{r.row_number}</td>
                 <td className="p-2">
                   <span className={`inline-flex items-center text-[10px] uppercase tracking-wider px-2 py-0.5 rounded-full ${ACTION_BADGE[r.action] || ''}`}>
                     {r.action.replace('_', ' ')}
                   </span>
                 </td>
-                <td className="p-2 text-un1t-white">
+                <td className="p-2 text-un1t-text">
                   {r.contact_id ? (
                     <Link href={`/contacts/${r.contact_id}`} className="hover:underline">
                       {r.raw_row?.email || r.raw_row?.Email || '—'}
@@ -121,7 +121,7 @@ export default async function ImportDetailPage(props) {
                     r.raw_row?.email || r.raw_row?.Email || '—'
                   )}
                 </td>
-                <td className="p-2 text-un1t-light">{r.error_message || ''}</td>
+                <td className="p-2 text-un1t-subtle">{r.error_message || ''}</td>
               </tr>
             ))}
           </tbody>
@@ -137,7 +137,7 @@ function Stat({ label, value, tone }) {
     blue:    'border-blue-500/40 text-blue-700',
     amber:   'border-amber-500/40 text-amber-700',
     red:     'border-red-500/40 text-red-700',
-    muted:   'border-un1t-gray text-un1t-light',
+    muted:   'border-un1t-border text-un1t-subtle',
   }
   return (
     <div className={`border rounded-md p-3 text-center ${toneClasses[tone] || toneClasses.muted}`}>

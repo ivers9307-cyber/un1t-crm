@@ -95,14 +95,14 @@ export default function ShiftTemplateManager({ user }) {
 
   return (
     <div>
-      <Link href="/settings" className="inline-flex items-center gap-1.5 text-sm text-un1t-light hover:text-un1t-white mb-6">
+      <Link href="/settings" className="inline-flex items-center gap-1.5 text-sm text-un1t-subtle hover:text-un1t-text mb-6">
         <ArrowLeft size={16} /> Back to Settings
       </Link>
 
       <div className="flex items-center justify-between mb-6">
         <div>
           <h2 className="text-2xl font-bold">Shift Templates</h2>
-          <p className="text-sm text-un1t-light mt-1">{user.activeLocation?.name} — Define your demand windows (when the studio needs coaches)</p>
+          <p className="text-sm text-un1t-subtle mt-1">{user.activeLocation?.name} — Define your demand windows (when the studio needs coaches)</p>
         </div>
         <button
           onClick={() => setShowForm('new')}
@@ -127,12 +127,12 @@ export default function ShiftTemplateManager({ user }) {
       )}
 
       {loading ? (
-        <div className="text-center py-12 text-un1t-light">Loading templates...</div>
+        <div className="text-center py-12 text-un1t-subtle">Loading templates...</div>
       ) : activeTemplates.length === 0 ? (
-        <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-12 text-center">
-          <Clock size={40} className="mx-auto mb-4 text-un1t-light" />
+        <div className="bg-un1t-surface border border-un1t-border rounded-lg p-12 text-center">
+          <Clock size={40} className="mx-auto mb-4 text-un1t-subtle" />
           <h3 className="text-lg font-semibold mb-2">No shift templates yet</h3>
-          <p className="text-sm text-un1t-light mb-4">Create your first shift to start building rosters</p>
+          <p className="text-sm text-un1t-subtle mb-4">Create your first shift to start building rosters</p>
           <button
             onClick={() => setShowForm('new')}
             className="inline-flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium px-4 py-2.5 rounded-lg transition-colors"
@@ -147,12 +147,12 @@ export default function ShiftTemplateManager({ user }) {
             const max = t.max_coaches || 15
             const noDays = !daysLabel
             return (
-              <div key={t.id} className="bg-un1t-dark border border-un1t-gray rounded-lg p-4 flex items-center justify-between">
+              <div key={t.id} className="bg-un1t-surface border border-un1t-border rounded-lg p-4 flex items-center justify-between">
                 <div className="flex items-center gap-4">
                   <div className="w-3 h-10 rounded-full" style={{ backgroundColor: t.color }} />
                   <div>
                     <div className="font-semibold">{t.name}</div>
-                    <div className="text-sm text-un1t-light flex items-center gap-3 mt-0.5 flex-wrap">
+                    <div className="text-sm text-un1t-subtle flex items-center gap-3 mt-0.5 flex-wrap">
                       <span className="flex items-center gap-1"><Clock size={12} /> {formatTime(t.start_time)} – {formatTime(t.end_time)}</span>
                       <span className="flex items-center gap-1"><Users size={12} /> up to {max} {max === 1 ? 'coach' : 'coaches'}</span>
                       {noDays ? (
@@ -167,14 +167,14 @@ export default function ShiftTemplateManager({ user }) {
                 <div className="flex items-center gap-2">
                   <button
                     onClick={() => setShowForm(t)}
-                    className="p-2 rounded hover:bg-un1t-gray/50 text-un1t-light hover:text-un1t-white transition-colors"
+                    className="p-2 rounded hover:bg-un1t-border/50 text-un1t-subtle hover:text-un1t-text transition-colors"
                     title="Edit"
                   >
                     <Pencil size={16} />
                   </button>
                   <button
                     onClick={() => handleDeactivate(t.id)}
-                    className="p-2 rounded hover:bg-red-500/20 text-un1t-light hover:text-red-400 transition-colors"
+                    className="p-2 rounded hover:bg-red-500/20 text-un1t-subtle hover:text-red-400 transition-colors"
                     title="Deactivate"
                   >
                     <Trash2 size={16} />
@@ -186,9 +186,9 @@ export default function ShiftTemplateManager({ user }) {
 
           {inactiveTemplates.length > 0 && (
             <div className="mt-4">
-              <h4 className="text-xs font-semibold uppercase tracking-wider text-un1t-mid mb-2">Inactive</h4>
+              <h4 className="text-xs font-semibold uppercase tracking-wider text-un1t-muted mb-2">Inactive</h4>
               {inactiveTemplates.map(t => (
-                <div key={t.id} className="bg-un1t-dark/50 border border-un1t-gray/50 rounded-lg p-3 flex items-center justify-between opacity-60 mb-2">
+                <div key={t.id} className="bg-un1t-surface/50 border border-un1t-border/50 rounded-lg p-3 flex items-center justify-between opacity-60 mb-2">
                   <div className="flex items-center gap-3">
                     <div className="w-2 h-8 rounded-full" style={{ backgroundColor: t.color }} />
                     <span className="text-sm">{t.name} ({formatTime(t.start_time)}–{formatTime(t.end_time)})</span>
@@ -258,54 +258,54 @@ function TemplateFormModal({ template, onSave, onClose }) {
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={onClose}>
-      <div className="bg-un1t-dark border border-un1t-gray rounded-xl p-6 w-full max-w-lg" onClick={e => e.stopPropagation()}>
+      <div className="bg-un1t-surface border border-un1t-border rounded-xl p-6 w-full max-w-lg" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-4">
           <h3 className="font-semibold">{template ? 'Edit Shift Template' : 'New Shift Template'}</h3>
-          <button onClick={onClose} className="text-un1t-light hover:text-un1t-white"><X size={18} /></button>
+          <button onClick={onClose} className="text-un1t-subtle hover:text-un1t-text"><X size={18} /></button>
         </div>
 
         <div className="space-y-4 max-h-[70vh] overflow-y-auto pr-1">
           <div>
-            <label className="block text-xs text-un1t-light mb-1">Name *</label>
+            <label className="block text-xs text-un1t-subtle mb-1">Name *</label>
             <input
               type="text"
               value={name}
               onChange={e => setName(e.target.value)}
               placeholder="e.g. Morning, Afternoon, Evening"
-              className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
+              className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
             />
           </div>
 
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-xs text-un1t-light mb-1">Start Time *</label>
+              <label className="block text-xs text-un1t-subtle mb-1">Start Time *</label>
               <input
                 type="time"
                 value={startTime}
                 onChange={e => setStartTime(e.target.value)}
-                className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
+                className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
               />
             </div>
             <div>
-              <label className="block text-xs text-un1t-light mb-1">End Time *</label>
+              <label className="block text-xs text-un1t-subtle mb-1">End Time *</label>
               <input
                 type="time"
                 value={endTime}
                 onChange={e => setEndTime(e.target.value)}
-                className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
+                className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
               />
             </div>
           </div>
 
           <div>
             <div className="flex items-center justify-between mb-1.5">
-              <label className="text-xs text-un1t-light">Days this shift applies to *</label>
+              <label className="text-xs text-un1t-subtle">Days this shift applies to *</label>
               <div className="flex items-center gap-2 text-[11px]">
                 <button type="button" onClick={selectAllWeek} className="text-blue-400 hover:text-blue-300">Mon–Fri</button>
-                <span className="text-un1t-mid">·</span>
+                <span className="text-un1t-muted">·</span>
                 <button type="button" onClick={selectAll} className="text-blue-400 hover:text-blue-300">All</button>
-                <span className="text-un1t-mid">·</span>
-                <button type="button" onClick={clearAll} className="text-un1t-light hover:text-un1t-white">Clear</button>
+                <span className="text-un1t-muted">·</span>
+                <button type="button" onClick={clearAll} className="text-un1t-subtle hover:text-un1t-text">Clear</button>
               </div>
             </div>
             <div className="grid grid-cols-7 gap-1.5">
@@ -319,7 +319,7 @@ function TemplateFormModal({ template, onSave, onClose }) {
                     className={`py-2 rounded text-xs font-medium border transition-colors ${
                       selected
                         ? 'bg-blue-600 border-blue-500 text-white'
-                        : 'bg-un1t-black border-un1t-gray text-un1t-light hover:border-un1t-mid'
+                        : 'bg-un1t-bg border-un1t-border text-un1t-subtle hover:border-un1t-muted'
                     }`}
                   >
                     {d.label}
@@ -327,14 +327,14 @@ function TemplateFormModal({ template, onSave, onClose }) {
                 )
               })}
             </div>
-            <p className="text-[11px] text-un1t-light mt-1.5">
+            <p className="text-[11px] text-un1t-subtle mt-1.5">
               When you save, blocks for the next 8 weeks are generated for these days. Existing blocks aren&apos;t touched.
             </p>
           </div>
 
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-xs text-un1t-light mb-1">Minimum coaches *</label>
+              <label className="block text-xs text-un1t-subtle mb-1">Minimum coaches *</label>
               <input
                 type="number"
                 min={0}
@@ -344,14 +344,14 @@ function TemplateFormModal({ template, onSave, onClose }) {
                   const v = Math.max(0, Math.min(maxCoaches, parseInt(e.target.value || '0', 10)))
                   setMinCoaches(v)
                 }}
-                className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
+                className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
               />
-              <p className="text-[11px] text-un1t-light mt-1.5">
+              <p className="text-[11px] text-un1t-subtle mt-1.5">
                 Blocks with fewer assigned flip the Studio Overview to amber. 0 = no floor.
               </p>
             </div>
             <div>
-              <label className="block text-xs text-un1t-light mb-1">Maximum coaches *</label>
+              <label className="block text-xs text-un1t-subtle mb-1">Maximum coaches *</label>
               <input
                 type="number"
                 min={Math.max(1, minCoaches)}
@@ -364,34 +364,34 @@ function TemplateFormModal({ template, onSave, onClose }) {
                   // the current min, snap min down too.
                   if (minCoaches > v) setMinCoaches(v)
                 }}
-                className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
+                className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
               />
-              <p className="text-[11px] text-un1t-light mt-1.5">
+              <p className="text-[11px] text-un1t-subtle mt-1.5">
                 Set high enough to cover an &ldquo;all-hands&rdquo; day.
               </p>
             </div>
           </div>
 
           <div>
-            <label className="block text-xs text-un1t-light mb-1">Default Role / Position</label>
+            <label className="block text-xs text-un1t-subtle mb-1">Default Role / Position</label>
             <input
               type="text"
               value={roleLabel}
               onChange={e => setRoleLabel(e.target.value)}
               placeholder="e.g. Floor Coach, Front Desk (optional)"
-              className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
+              className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
             />
           </div>
 
           <div>
-            <label className="block text-xs text-un1t-light mb-2">Colour</label>
+            <label className="block text-xs text-un1t-subtle mb-2">Colour</label>
             <div className="flex gap-2 flex-wrap">
               {PRESET_COLORS.map(c => (
                 <button
                   key={c}
                   type="button"
                   onClick={() => setColor(c)}
-                  className={`w-8 h-8 rounded-full transition-transform ${color === c ? 'scale-110 ring-2 ring-white ring-offset-2 ring-offset-un1t-dark' : 'hover:scale-105'}`}
+                  className={`w-8 h-8 rounded-full transition-transform ${color === c ? 'scale-110 ring-2 ring-white ring-offset-2 ring-offset-un1t-surface' : 'hover:scale-105'}`}
                   style={{ backgroundColor: c }}
                 />
               ))}
@@ -416,7 +416,7 @@ function TemplateFormModal({ template, onSave, onClose }) {
             })
           }
           disabled={!name || !startTime || !endTime}
-          className="w-full mt-5 bg-un1t-white text-un1t-black font-medium text-sm py-2.5 rounded-md hover:bg-un1t-accent transition-colors disabled:opacity-50"
+          className="w-full mt-5 bg-un1t-text text-un1t-bg font-medium text-sm py-2.5 rounded-md hover:bg-un1t-accent transition-colors disabled:opacity-50"
         >
           {template ? 'Save Changes' : 'Create Shift Template'}
         </button>

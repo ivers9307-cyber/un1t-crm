@@ -147,19 +147,19 @@ export default function SequencePicker({ contactIds, locationId, variant = 'popo
   const maxHCls = variant === 'modal' ? 'max-h-[70vh]' : 'max-h-96'
 
   return (
-    <div className={`bg-un1t-dark border border-un1t-gray rounded-lg p-4 shadow-lg ${widthCls}`}>
+    <div className={`bg-un1t-surface border border-un1t-border rounded-lg p-4 shadow-lg ${widthCls}`}>
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2">
-          <Mail size={14} className="text-un1t-light" />
-          <span className="text-sm font-semibold text-un1t-white">
+          <Mail size={14} className="text-un1t-subtle" />
+          <span className="text-sm font-semibold text-un1t-text">
             Add to sequence
           </span>
-          <span className="text-xs text-un1t-light">
+          <span className="text-xs text-un1t-subtle">
             ({contactIds.length} contact{contactIds.length === 1 ? '' : 's'})
           </span>
         </div>
         {onClose && (
-          <button onClick={onClose} className="text-xs text-un1t-light hover:text-un1t-white">
+          <button onClick={onClose} className="text-xs text-un1t-subtle hover:text-un1t-text">
             ✕
           </button>
         )}
@@ -207,11 +207,11 @@ export default function SequencePicker({ contactIds, locationId, variant = 'popo
           )}
 
           {!loadError && sequences === null && (
-            <div className="text-xs text-un1t-light py-2">Loading sequences…</div>
+            <div className="text-xs text-un1t-subtle py-2">Loading sequences…</div>
           )}
 
           {sequences && sequences.length === 0 && (
-            <div className="text-xs text-un1t-light py-2">
+            <div className="text-xs text-un1t-subtle py-2">
               No active sequences at this location.
               <br />
               <a href="/communications/sequences" className="text-blue-400 hover:underline">
@@ -224,7 +224,7 @@ export default function SequencePicker({ contactIds, locationId, variant = 'popo
             <div className={`space-y-1.5 overflow-y-auto ${maxHCls}`}>
               {sequences.map(s => {
                 const meta = TRIGGER_META[s.trigger_type] || {
-                  label: s.trigger_type, icon: MessageSquare, cls: 'bg-un1t-gray/40 text-un1t-light',
+                  label: s.trigger_type, icon: MessageSquare, cls: 'bg-un1t-border/40 text-un1t-subtle',
                 }
                 const Icon = meta.icon
                 const isLoadingThis = busy && selectedSequence?.id === s.id
@@ -233,13 +233,13 @@ export default function SequencePicker({ contactIds, locationId, variant = 'popo
                     key={s.id}
                     onClick={() => loadPreview(s)}
                     disabled={busy}
-                    className="w-full text-left p-2.5 rounded border border-un1t-gray hover:border-un1t-mid hover:bg-un1t-gray/20 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                    className="w-full text-left p-2.5 rounded border border-un1t-border hover:border-un1t-muted hover:bg-un1t-border/20 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                   >
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0 flex-1">
-                        <div className="text-sm font-medium text-un1t-white truncate">{s.name}</div>
+                        <div className="text-sm font-medium text-un1t-text truncate">{s.name}</div>
                         {s.description && (
-                          <div className="text-xs text-un1t-light line-clamp-2 mt-0.5">{s.description}</div>
+                          <div className="text-xs text-un1t-subtle line-clamp-2 mt-0.5">{s.description}</div>
                         )}
                       </div>
                       <span className={`text-[10px] uppercase font-semibold px-1.5 py-0.5 rounded inline-flex items-center gap-1 shrink-0 ${meta.cls}`}>
@@ -248,7 +248,7 @@ export default function SequencePicker({ contactIds, locationId, variant = 'popo
                       </span>
                     </div>
                     {isLoadingThis && (
-                      <div className="text-[10px] text-un1t-light mt-1 inline-flex items-center gap-1">
+                      <div className="text-[10px] text-un1t-subtle mt-1 inline-flex items-center gap-1">
                         <Loader2 size={10} className="animate-spin" /> Building preview…
                       </div>
                     )}
@@ -287,13 +287,13 @@ function PreviewPanel({ preview, sequence, contactCount, maxHCls, busy, onConfir
         type="button"
         onClick={onBack}
         disabled={busy}
-        className="text-xs text-un1t-light hover:text-un1t-white inline-flex items-center gap-1 mb-3 disabled:opacity-40"
+        className="text-xs text-un1t-subtle hover:text-un1t-text inline-flex items-center gap-1 mb-3 disabled:opacity-40"
       >
         <ChevronLeft size={11} /> Back to sequences
       </button>
 
-      <div className="text-sm font-medium text-un1t-white mb-1">{sequence.name}</div>
-      <p className="text-[11px] text-un1t-light mb-3">
+      <div className="text-sm font-medium text-un1t-text mb-1">{sequence.name}</div>
+      <p className="text-[11px] text-un1t-subtle mb-3">
         Preview of what will happen when you enrol {contactCount} contact{contactCount === 1 ? '' : 's'}.
       </p>
 
@@ -304,16 +304,16 @@ function PreviewPanel({ preview, sequence, contactCount, maxHCls, busy, onConfir
       </div>
 
       {preview.sample && preview.sample.length > 0 && (
-        <div className={`mb-3 overflow-y-auto border border-un1t-gray rounded ${maxHCls}`}>
-          <div className="text-[10px] uppercase tracking-wider text-un1t-light px-2 py-1.5 bg-un1t-gray/20 sticky top-0">
+        <div className={`mb-3 overflow-y-auto border border-un1t-border rounded ${maxHCls}`}>
+          <div className="text-[10px] uppercase tracking-wider text-un1t-subtle px-2 py-1.5 bg-un1t-border/20 sticky top-0">
             Sample ({preview.sample.length} of {preview.total_requested})
           </div>
-          <ul className="divide-y divide-un1t-gray/40">
+          <ul className="divide-y divide-un1t-border/40">
             {preview.sample.map((c) => (
               <li key={c.id} className="px-2 py-1.5 flex items-center justify-between gap-2 text-xs">
                 <div className="min-w-0 flex-1">
-                  <div className="text-un1t-white truncate">{c.name}</div>
-                  {c.email && <div className="text-[10px] text-un1t-light truncate">{c.email}</div>}
+                  <div className="text-un1t-text truncate">{c.name}</div>
+                  {c.email && <div className="text-[10px] text-un1t-subtle truncate">{c.email}</div>}
                 </div>
                 <span className={`text-[10px] px-1.5 py-0.5 rounded-full whitespace-nowrap ${STATUS_PILL[c.status]}`}>
                   {STATUS_LABEL[c.status] || c.status}
@@ -335,7 +335,7 @@ function PreviewPanel({ preview, sequence, contactCount, maxHCls, busy, onConfir
         type="button"
         onClick={onConfirm}
         disabled={busy || nothingToDo}
-        className="w-full inline-flex items-center justify-center gap-1.5 text-sm bg-un1t-white text-un1t-black font-semibold px-4 py-2 rounded-md hover:bg-un1t-accent disabled:opacity-40"
+        className="w-full inline-flex items-center justify-center gap-1.5 text-sm bg-un1t-text text-un1t-bg font-semibold px-4 py-2 rounded-md hover:bg-un1t-accent disabled:opacity-40"
       >
         {busy ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
         {busy ? 'Enrolling…' : `Enrol ${preview.would_enrol} contact${preview.would_enrol === 1 ? '' : 's'}`}
@@ -349,7 +349,7 @@ function Stat({ label, value, tone }) {
     ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700'
     : tone === 'amber'
       ? 'border-amber-500/30 bg-amber-500/10 text-amber-700'
-      : 'border-un1t-gray bg-un1t-black/40 text-un1t-light'
+      : 'border-un1t-border bg-un1t-bg/40 text-un1t-subtle'
   return (
     <div className={`border rounded p-2 ${toneCls}`}>
       <div className="text-[10px] uppercase tracking-wider opacity-80">{label}</div>

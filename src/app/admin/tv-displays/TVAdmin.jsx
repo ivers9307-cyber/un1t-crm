@@ -77,12 +77,12 @@ export default function TVAdmin({ initialDisplays, initialTemplates, locationId,
         <h2 className="text-2xl font-bold">TV Displays</h2>
         <button
           onClick={() => setRegisterOpen(true)}
-          className="inline-flex items-center gap-1.5 text-sm bg-un1t-white text-un1t-black font-medium px-3 py-1.5 rounded-md hover:bg-un1t-accent"
+          className="inline-flex items-center gap-1.5 text-sm bg-un1t-text text-un1t-bg font-medium px-3 py-1.5 rounded-md hover:bg-un1t-accent"
         >
           <Plus size={14} /> Register TV
         </button>
       </div>
-      <p className="text-sm text-un1t-light mb-5">
+      <p className="text-sm text-un1t-subtle mb-5">
         Each TV gets a unique URL. Paste it into UC Cast Pro&apos;s &ldquo;Web URL&rdquo; content source — the cast will render whatever the CRM serves at that URL.
       </p>
 
@@ -94,10 +94,10 @@ export default function TVAdmin({ initialDisplays, initialTemplates, locationId,
 
       <div className="space-y-4">
         {displays.length === 0 && !registerOpen && (
-          <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-12 text-center">
-            <Tv size={32} className="text-un1t-mid mx-auto mb-3" />
-            <p className="text-sm text-un1t-light mb-1">No TVs registered yet.</p>
-            <p className="text-xs text-un1t-mid">Click &ldquo;Register TV&rdquo; to add one and get a URL for UC Cast Pro.</p>
+          <div className="bg-un1t-surface border border-un1t-border rounded-lg p-12 text-center">
+            <Tv size={32} className="text-un1t-muted mx-auto mb-3" />
+            <p className="text-sm text-un1t-subtle mb-1">No TVs registered yet.</p>
+            <p className="text-xs text-un1t-muted">Click &ldquo;Register TV&rdquo; to add one and get a URL for UC Cast Pro.</p>
           </div>
         )}
 
@@ -162,30 +162,30 @@ function TemplatesSection({ templates, locationId, currentUserId, db, onError, o
     <section className="mt-10">
       <div className="flex items-baseline justify-between mb-1 flex-wrap gap-2">
         <h3 className="text-lg font-semibold inline-flex items-center gap-2">
-          <LayoutTemplate size={16} className="text-un1t-light" /> Templates
+          <LayoutTemplate size={16} className="text-un1t-subtle" /> Templates
         </h3>
         <button
           onClick={() => setEditing('new')}
-          className="inline-flex items-center gap-1.5 text-sm bg-un1t-white text-un1t-black font-medium px-3 py-1.5 rounded-md hover:bg-un1t-accent"
+          className="inline-flex items-center gap-1.5 text-sm bg-un1t-text text-un1t-bg font-medium px-3 py-1.5 rounded-md hover:bg-un1t-accent"
         >
           <Plus size={14} /> New template
         </button>
       </div>
-      <p className="text-sm text-un1t-light mb-4">
+      <p className="text-sm text-un1t-subtle mb-4">
         A fixed branded image with text zones. Staff retype the text and push it to a TV — the design stays on-brand.
       </p>
 
       {templates.length === 0 ? (
-        <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-8 text-center">
-          <LayoutTemplate size={28} className="text-un1t-mid mx-auto mb-3" />
-          <p className="text-sm text-un1t-light mb-1">No templates yet.</p>
-          <p className="text-xs text-un1t-mid">Create one to let staff push branded messages without designing a fresh image each time.</p>
+        <div className="bg-un1t-surface border border-un1t-border rounded-lg p-8 text-center">
+          <LayoutTemplate size={28} className="text-un1t-muted mx-auto mb-3" />
+          <p className="text-sm text-un1t-subtle mb-1">No templates yet.</p>
+          <p className="text-xs text-un1t-muted">Create one to let staff push branded messages without designing a fresh image each time.</p>
         </div>
       ) : (
         <div className="grid sm:grid-cols-2 gap-3">
           {templates.map(t => (
-            <div key={t.id} className="bg-un1t-dark border border-un1t-gray rounded-lg overflow-hidden flex">
-              <div className="w-28 shrink-0 bg-un1t-black flex items-center justify-center">
+            <div key={t.id} className="bg-un1t-surface border border-un1t-border rounded-lg overflow-hidden flex">
+              <div className="w-28 shrink-0 bg-un1t-bg flex items-center justify-center">
                 <img
                   src={bucketPublicUrl(t.base_image_path)}
                   alt=""
@@ -193,20 +193,20 @@ function TemplatesSection({ templates, locationId, currentUserId, db, onError, o
                 />
               </div>
               <div className="flex-1 min-w-0 p-3 flex flex-col">
-                <div className="text-sm font-medium text-un1t-white truncate">{t.name}</div>
-                <div className="text-xs text-un1t-mid mt-0.5 inline-flex items-center gap-1">
+                <div className="text-sm font-medium text-un1t-text truncate">{t.name}</div>
+                <div className="text-xs text-un1t-muted mt-0.5 inline-flex items-center gap-1">
                   <Type size={11} /> {(t.zones?.length || 0)} text {t.zones?.length === 1 ? 'zone' : 'zones'}
                 </div>
                 <div className="mt-auto pt-2 flex items-center gap-2">
                   <button
                     onClick={() => setEditing(t)}
-                    className="inline-flex items-center gap-1 text-xs text-un1t-light hover:text-un1t-white border border-un1t-gray hover:border-un1t-white/30 px-2 py-1 rounded-md"
+                    className="inline-flex items-center gap-1 text-xs text-un1t-subtle hover:text-un1t-text border border-un1t-border hover:border-un1t-text/30 px-2 py-1 rounded-md"
                   >
                     <Pencil size={12} /> Edit
                   </button>
                   <button
                     onClick={() => deleteTemplate(t)}
-                    className="inline-flex items-center text-xs text-red-400 hover:text-red-300 border border-un1t-gray hover:border-red-400/40 px-2 py-1 rounded-md"
+                    className="inline-flex items-center text-xs text-red-400 hover:text-red-300 border border-un1t-border hover:border-red-400/40 px-2 py-1 rounded-md"
                   >
                     <Trash2 size={12} />
                   </button>
@@ -263,16 +263,16 @@ function TVCard({ display, templates, currentUserId, onError, onChange, db }) {
   }
 
   return (
-    <div className="bg-un1t-dark border border-un1t-gray rounded-lg overflow-hidden">
-      <div className="p-4 flex flex-wrap items-start gap-3 border-b border-un1t-gray">
+    <div className="bg-un1t-surface border border-un1t-border rounded-lg overflow-hidden">
+      <div className="p-4 flex flex-wrap items-start gap-3 border-b border-un1t-border">
         <div className="flex-1 min-w-[200px]">
           <div className="flex items-center gap-2">
-            <Tv size={16} className="text-un1t-light" />
-            <span className="text-sm font-medium text-un1t-white">{display.label}</span>
-            {!display.active && <span className="text-[10px] text-un1t-mid uppercase">Inactive</span>}
+            <Tv size={16} className="text-un1t-subtle" />
+            <span className="text-sm font-medium text-un1t-text">{display.label}</span>
+            {!display.active && <span className="text-[10px] text-un1t-muted uppercase">Inactive</span>}
           </div>
           <div className="mt-2 flex items-center gap-2 max-w-full">
-            <code className="text-[11px] text-un1t-light bg-un1t-black border border-un1t-gray rounded px-2 py-1 flex-1 truncate">
+            <code className="text-[11px] text-un1t-subtle bg-un1t-bg border border-un1t-border rounded px-2 py-1 flex-1 truncate">
               {tvUrl}
             </code>
             <button
@@ -281,7 +281,7 @@ function TVCard({ display, templates, currentUserId, onError, onChange, db }) {
                 setCopied(true)
                 setTimeout(() => setCopied(false), 1500)
               }}
-              className="inline-flex items-center gap-1 text-xs text-un1t-light hover:text-un1t-white px-2 py-1 rounded border border-un1t-gray"
+              className="inline-flex items-center gap-1 text-xs text-un1t-subtle hover:text-un1t-text px-2 py-1 rounded border border-un1t-border"
               title="Copy URL"
             >
               {copied ? <Check size={12} className="text-emerald-400" /> : <Copy size={12} />}
@@ -292,14 +292,14 @@ function TVCard({ display, templates, currentUserId, onError, onChange, db }) {
         <div className="flex items-center gap-2">
           <button
             onClick={() => setPushOpen(true)}
-            className="inline-flex items-center gap-1.5 text-sm bg-un1t-white text-un1t-black font-medium px-3 py-1.5 rounded-md hover:bg-un1t-accent"
+            className="inline-flex items-center gap-1.5 text-sm bg-un1t-text text-un1t-bg font-medium px-3 py-1.5 rounded-md hover:bg-un1t-accent"
           >
             <ImageIcon size={14} /> Push image
           </button>
           {content && (
             <button
               onClick={clearContent}
-              className="inline-flex items-center gap-1 text-sm text-un1t-light hover:text-un1t-white border border-un1t-gray hover:border-un1t-white/30 px-3 py-1.5 rounded-md"
+              className="inline-flex items-center gap-1 text-sm text-un1t-subtle hover:text-un1t-text border border-un1t-border hover:border-un1t-text/30 px-3 py-1.5 rounded-md"
               title="Revert to idle screen"
             >
               <RotateCcw size={14} /> Clear
@@ -307,7 +307,7 @@ function TVCard({ display, templates, currentUserId, onError, onChange, db }) {
           )}
           <button
             onClick={deleteTV}
-            className="inline-flex items-center text-sm text-red-400 hover:text-red-300 border border-un1t-gray hover:border-red-400/40 px-2 py-1.5 rounded-md"
+            className="inline-flex items-center text-sm text-red-400 hover:text-red-300 border border-un1t-border hover:border-red-400/40 px-2 py-1.5 rounded-md"
             title="Delete TV"
           >
             <Trash2 size={14} />
@@ -315,18 +315,18 @@ function TVCard({ display, templates, currentUserId, onError, onChange, db }) {
         </div>
       </div>
 
-      <div className="px-4 py-3 text-xs text-un1t-light flex items-center gap-3 flex-wrap">
-        <span className="text-un1t-mid uppercase tracking-wide">Now showing</span>
+      <div className="px-4 py-3 text-xs text-un1t-subtle flex items-center gap-3 flex-wrap">
+        <span className="text-un1t-muted uppercase tracking-wide">Now showing</span>
         {content ? (
           <>
-            <span className="text-un1t-white">{content.label || content.source_ref}</span>
-            <span className="text-un1t-mid">·</span>
-            <span className="text-un1t-mid">{content.source_type}</span>
-            <span className="text-un1t-mid">·</span>
-            <span className="text-un1t-mid">pushed {new Date(content.pushed_at).toLocaleString('en-IE', { hour: '2-digit', minute: '2-digit', day: 'numeric', month: 'short' })}</span>
+            <span className="text-un1t-text">{content.label || content.source_ref}</span>
+            <span className="text-un1t-muted">·</span>
+            <span className="text-un1t-muted">{content.source_type}</span>
+            <span className="text-un1t-muted">·</span>
+            <span className="text-un1t-muted">pushed {new Date(content.pushed_at).toLocaleString('en-IE', { hour: '2-digit', minute: '2-digit', day: 'numeric', month: 'short' })}</span>
           </>
         ) : (
-          <span className="text-un1t-mid">Idle — UN1T mark + clock</span>
+          <span className="text-un1t-muted">Idle — UN1T mark + clock</span>
         )}
         <OrientationControl display={display} db={db} onError={onError} onChange={onChange} />
       </div>
@@ -384,14 +384,14 @@ function OrientationControl({ display, db, onError, onChange }) {
   }
 
   return (
-    <label className="ml-auto inline-flex items-center gap-1.5 text-un1t-mid">
-      {rotation === 0 ? <RotateCw size={12} /> : <RotateCw size={12} className="text-un1t-light" />}
+    <label className="ml-auto inline-flex items-center gap-1.5 text-un1t-muted">
+      {rotation === 0 ? <RotateCw size={12} /> : <RotateCw size={12} className="text-un1t-subtle" />}
       <span className="uppercase tracking-wide">Orientation</span>
       <select
         value={rotation}
         disabled={saving}
         onChange={e => setRotation(Number(e.target.value))}
-        className="bg-un1t-black border border-un1t-gray rounded px-2 py-1 text-un1t-white focus:outline-none focus:border-un1t-mid disabled:opacity-50"
+        className="bg-un1t-bg border border-un1t-border rounded px-2 py-1 text-un1t-text focus:outline-none focus:border-un1t-muted disabled:opacity-50"
       >
         {ORIENTATION_OPTIONS.map(o => (
           <option key={o.value} value={o.value}>{o.label}</option>
@@ -415,28 +415,28 @@ function RegisterTVModal({ onClose, onCreate }) {
 
   return (
     <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-un1t-dark border border-un1t-gray rounded-lg w-full max-w-md p-5" onClick={e => e.stopPropagation()}>
+      <div className="bg-un1t-surface border border-un1t-border rounded-lg w-full max-w-md p-5" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-lg font-semibold">Register TV</h3>
-          <button onClick={onClose} className="text-un1t-light hover:text-un1t-white"><X size={16} /></button>
+          <button onClick={onClose} className="text-un1t-subtle hover:text-un1t-text"><X size={16} /></button>
         </div>
-        <label className="block text-xs text-un1t-light mb-1">Label</label>
+        <label className="block text-xs text-un1t-subtle mb-1">Label</label>
         <input
           autoFocus
           value={label}
           onChange={e => setLabel(e.target.value)}
           placeholder="e.g. Lobby TV"
-          className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid"
+          className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted"
         />
-        <p className="text-xs text-un1t-mid mt-2">
+        <p className="text-xs text-un1t-muted mt-2">
           A unique URL gets generated. Paste it into UC Cast Pro&apos;s Web URL content source on the device.
         </p>
         <div className="flex justify-end gap-2 mt-4">
-          <button onClick={onClose} className="text-sm text-un1t-light hover:text-un1t-white px-3 py-1.5 rounded-md">Cancel</button>
+          <button onClick={onClose} className="text-sm text-un1t-subtle hover:text-un1t-text px-3 py-1.5 rounded-md">Cancel</button>
           <button
             onClick={submit}
             disabled={saving || !label.trim()}
-            className="text-sm bg-un1t-white text-un1t-black font-medium px-4 py-1.5 rounded-md hover:bg-un1t-accent disabled:opacity-50"
+            className="text-sm bg-un1t-text text-un1t-bg font-medium px-4 py-1.5 rounded-md hover:bg-un1t-accent disabled:opacity-50"
           >
             {saving ? 'Saving…' : 'Register'}
           </button>
@@ -545,18 +545,18 @@ function PushModal({ onClose, onPush, locationId, templates }) {
   return (
     <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4" onClick={onClose}>
       <div
-        className={`bg-un1t-dark border border-un1t-gray rounded-lg w-full flex flex-col ${isTemplate ? 'max-w-5xl h-[88vh]' : 'max-w-md max-h-[92vh]'}`}
+        className={`bg-un1t-surface border border-un1t-border rounded-lg w-full flex flex-col ${isTemplate ? 'max-w-5xl h-[88vh]' : 'max-w-md max-h-[92vh]'}`}
         onClick={e => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="flex items-center justify-between p-4 border-b border-un1t-gray shrink-0">
+        <div className="flex items-center justify-between p-4 border-b border-un1t-border shrink-0">
           <h3 className="text-lg font-semibold">Push to TV</h3>
-          <button onClick={onClose} className="text-un1t-light hover:text-un1t-white"><X size={16} /></button>
+          <button onClick={onClose} className="text-un1t-subtle hover:text-un1t-text"><X size={16} /></button>
         </div>
 
         {/* Tab strip */}
         <div className="px-4 pt-3 shrink-0">
-          <div className="inline-flex border border-un1t-gray rounded-md overflow-hidden">
+          <div className="inline-flex border border-un1t-border rounded-md overflow-hidden">
             {[
               { key: 'template', Icon: LayoutTemplate, label: 'Template' },
               { key: 'upload',   Icon: Upload,         label: 'Upload' },
@@ -565,7 +565,7 @@ function PushModal({ onClose, onPush, locationId, templates }) {
               <button
                 key={key}
                 onClick={() => setMode(key)}
-                className={`inline-flex items-center gap-1.5 text-xs px-3 py-1.5 ${mode === key ? 'bg-un1t-gray text-un1t-white' : 'text-un1t-light hover:bg-un1t-gray/30'}`}
+                className={`inline-flex items-center gap-1.5 text-xs px-3 py-1.5 ${mode === key ? 'bg-un1t-border text-un1t-text' : 'text-un1t-subtle hover:bg-un1t-border/30'}`}
               >
                 <Icon size={12} /> {label}
               </button>
@@ -578,18 +578,18 @@ function PushModal({ onClose, onPush, locationId, templates }) {
           {isTemplate && (
             (!templates || templates.length === 0) ? (
               <div className="p-4">
-                <p className="text-xs text-un1t-mid bg-un1t-black border border-un1t-gray rounded-md px-3 py-3">
+                <p className="text-xs text-un1t-muted bg-un1t-bg border border-un1t-border rounded-md px-3 py-3">
                   No templates yet. Create one in the Templates section to push branded messages.
                 </p>
               </div>
             ) : (
               <div className="flex flex-col flex-1 min-h-0">
                 <div className="px-4 pt-3 shrink-0">
-                  <label className="block text-xs text-un1t-light mb-1">Template</label>
+                  <label className="block text-xs text-un1t-subtle mb-1">Template</label>
                   <select
                     value={templateId}
                     onChange={e => pickTemplate(e.target.value)}
-                    className="w-full max-w-sm bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
+                    className="w-full max-w-sm bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted"
                   >
                     <option value="">Choose a template…</option>
                     {templates.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
@@ -597,12 +597,12 @@ function PushModal({ onClose, onPush, locationId, templates }) {
                 </div>
 
                 {!selectedTemplate ? (
-                  <div className="p-4 text-xs text-un1t-mid">Choose a template to preview and edit it.</div>
+                  <div className="p-4 text-xs text-un1t-muted">Choose a template to preview and edit it.</div>
                 ) : (
                   <div className="flex gap-4 flex-1 min-h-0 p-4">
                     {/* Live preview — identical render to the TV.
                         Editable: zones can be dragged + corner-resized. */}
-                    <div className="flex-1 min-w-0 relative rounded-md border border-un1t-gray bg-black overflow-hidden">
+                    <div className="flex-1 min-w-0 relative rounded-md border border-un1t-border bg-black overflow-hidden">
                       <TemplateCanvas
                         content={previewContent}
                         editable
@@ -615,7 +615,7 @@ function PushModal({ onClose, onPush, locationId, templates }) {
                     {/* Per-zone text editing */}
                     <div className="w-80 shrink-0 overflow-y-auto pr-0.5">
                       {(selectedTemplate.zones || []).length === 0 ? (
-                        <p className="text-[11px] text-un1t-mid">This template has no text zones — it pushes as-is.</p>
+                        <p className="text-[11px] text-un1t-muted">This template has no text zones — it pushes as-is.</p>
                       ) : (
                         <div className="space-y-2">
                           {(selectedTemplate.zones || []).map(z => (
@@ -644,10 +644,10 @@ function PushModal({ onClose, onPush, locationId, templates }) {
                 type="file"
                 accept="image/*"
                 onChange={e => setFile(e.target.files?.[0] || null)}
-                className="block w-full text-xs text-un1t-light file:mr-3 file:py-2 file:px-3 file:rounded-md file:border-0 file:bg-un1t-gray file:text-un1t-white hover:file:bg-un1t-mid"
+                className="block w-full text-xs text-un1t-subtle file:mr-3 file:py-2 file:px-3 file:rounded-md file:border-0 file:bg-un1t-border file:text-un1t-text hover:file:bg-un1t-muted"
               />
               {file && (
-                <p className="text-[11px] text-un1t-mid mt-1.5">{file.name} · {Math.round(file.size / 1024)} KB</p>
+                <p className="text-[11px] text-un1t-muted mt-1.5">{file.name} · {Math.round(file.size / 1024)} KB</p>
               )}
             </div>
           )}
@@ -659,9 +659,9 @@ function PushModal({ onClose, onPush, locationId, templates }) {
                 value={externalUrl}
                 onChange={e => setExternalUrl(e.target.value)}
                 placeholder="https://…image.jpg"
-                className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid"
+                className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted"
               />
-              <p className="text-[11px] text-un1t-mid mt-1.5">
+              <p className="text-[11px] text-un1t-muted mt-1.5">
                 The cast loads this URL directly. Make sure it&apos;s publicly accessible.
               </p>
             </div>
@@ -669,23 +669,23 @@ function PushModal({ onClose, onPush, locationId, templates }) {
         </div>
 
         {/* Footer */}
-        <div className="border-t border-un1t-gray p-4 shrink-0">
+        <div className="border-t border-un1t-border p-4 shrink-0">
           <div className="flex items-end gap-3 flex-wrap">
             <label className="flex-1 min-w-[180px]">
-              <span className="block text-xs text-un1t-light mb-1">Label (optional)</span>
+              <span className="block text-xs text-un1t-subtle mb-1">Label (optional)</span>
               <input
                 value={label}
                 onChange={e => setLabel(e.target.value)}
                 placeholder="e.g. Welcome Sarah"
-                className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid"
+                className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted"
               />
             </label>
             <div className="flex gap-2">
-              <button onClick={onClose} className="text-sm text-un1t-light hover:text-un1t-white px-3 py-2 rounded-md">Cancel</button>
+              <button onClick={onClose} className="text-sm text-un1t-subtle hover:text-un1t-text px-3 py-2 rounded-md">Cancel</button>
               <button
                 onClick={submit}
                 disabled={busy}
-                className="text-sm bg-un1t-white text-un1t-black font-medium px-4 py-2 rounded-md hover:bg-un1t-accent disabled:opacity-50"
+                className="text-sm bg-un1t-text text-un1t-bg font-medium px-4 py-2 rounded-md hover:bg-un1t-accent disabled:opacity-50"
               >
                 {busy ? 'Pushing…' : 'Push to TV'}
               </button>
@@ -721,7 +721,7 @@ function ZonePushEditor({ zone, value, onChange }) {
   const selRef = useRef({ start: 0, end: 0 })
   const [selColor, setSelColor] = useState('#FFD400')
   const [selNote, setSelNote] = useState('')
-  const cls = 'w-full bg-un1t-black border border-un1t-gray rounded px-2 py-1 text-xs text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid'
+  const cls = 'w-full bg-un1t-bg border border-un1t-border rounded px-2 py-1 text-xs text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted'
 
   function captureSelection() {
     const ta = taRef.current
@@ -784,8 +784,8 @@ function ZonePushEditor({ zone, value, onChange }) {
   }
 
   return (
-    <div className="bg-un1t-black/50 border border-un1t-gray rounded-md p-2.5">
-      <div className="text-[11px] text-un1t-light uppercase tracking-wide mb-1.5">{zone.label}</div>
+    <div className="bg-un1t-bg/50 border border-un1t-border rounded-md p-2.5">
+      <div className="text-[11px] text-un1t-subtle uppercase tracking-wide mb-1.5">{zone.label}</div>
       <textarea
         ref={taRef}
         value={v.text ?? ''}
@@ -807,7 +807,7 @@ function ZonePushEditor({ zone, value, onChange }) {
             type="button"
             onClick={() => insertEmoji(em)}
             title={`Insert ${em}`}
-            className="w-7 h-7 text-base leading-none rounded hover:bg-un1t-gray/60"
+            className="w-7 h-7 text-base leading-none rounded hover:bg-un1t-border/60"
           >
             {em}
           </button>
@@ -816,33 +816,33 @@ function ZonePushEditor({ zone, value, onChange }) {
 
       {/* Per-selection colour — recolour just the highlighted words. */}
       <div className="flex items-center gap-1.5 mb-1 flex-wrap">
-        <span className="text-[10px] text-un1t-mid">Colour selected text:</span>
+        <span className="text-[10px] text-un1t-muted">Colour selected text:</span>
         <input
           type="color"
           value={selColor}
           onChange={e => setSelColor(e.target.value)}
-          className="w-7 h-7 bg-un1t-black border border-un1t-gray rounded cursor-pointer"
+          className="w-7 h-7 bg-un1t-bg border border-un1t-border rounded cursor-pointer"
         />
         <button
           type="button" onMouseDown={captureSelection} onClick={applySelColor}
-          className="text-[11px] px-2 py-1 rounded border border-un1t-gray text-un1t-light hover:text-un1t-white hover:border-un1t-white/40"
+          className="text-[11px] px-2 py-1 rounded border border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-text/40"
         >
           Apply
         </button>
         <button
           type="button" onMouseDown={captureSelection} onClick={clearSelColor}
-          className="text-[11px] px-2 py-1 rounded border border-un1t-gray text-un1t-light hover:text-un1t-white hover:border-un1t-white/40"
+          className="text-[11px] px-2 py-1 rounded border border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-text/40"
         >
           Reset
         </button>
       </div>
-      <p className={`text-[10px] mb-2 ${selNote ? 'text-amber-400' : 'text-un1t-mid'}`}>
+      <p className={`text-[10px] mb-2 ${selNote ? 'text-amber-400' : 'text-un1t-muted'}`}>
         {selNote || 'Highlight words in the text box, pick a colour, then Apply — only those words change.'}
       </p>
 
       <div className="grid grid-cols-2 gap-2">
         <label className="block">
-          <span className="block text-[10px] text-un1t-mid mb-0.5">Size</span>
+          <span className="block text-[10px] text-un1t-muted mb-0.5">Size</span>
           <input
             type="number" min={2} max={40} step={0.5}
             value={v.fontSize ?? 6}
@@ -854,7 +854,7 @@ function ZonePushEditor({ zone, value, onChange }) {
           />
         </label>
         <label className="block">
-          <span className="block text-[10px] text-un1t-mid mb-0.5">Line spacing</span>
+          <span className="block text-[10px] text-un1t-muted mb-0.5">Line spacing</span>
           <input
             type="number" min={0.8} max={3} step={0.05}
             value={v.lineHeight ?? 1.15}
@@ -866,13 +866,13 @@ function ZonePushEditor({ zone, value, onChange }) {
           />
         </label>
         <label className="block">
-          <span className="block text-[10px] text-un1t-mid mb-0.5">Weight</span>
+          <span className="block text-[10px] text-un1t-muted mb-0.5">Weight</span>
           <select value={v.fontWeight ?? 700} onChange={e => onChange({ fontWeight: Number(e.target.value) })} className={cls}>
             {PUSH_FONT_WEIGHTS.map(w => <option key={w.value} value={w.value}>{w.label}</option>)}
           </select>
         </label>
         <label className="block">
-          <span className="block text-[10px] text-un1t-mid mb-0.5">Align</span>
+          <span className="block text-[10px] text-un1t-muted mb-0.5">Align</span>
           <select value={v.align ?? 'center'} onChange={e => onChange({ align: e.target.value })} className={cls}>
             <option value="left">Left</option>
             <option value="center">Centre</option>
@@ -880,7 +880,7 @@ function ZonePushEditor({ zone, value, onChange }) {
           </select>
         </label>
         <label className="block">
-          <span className="block text-[10px] text-un1t-mid mb-0.5">Vertical</span>
+          <span className="block text-[10px] text-un1t-muted mb-0.5">Vertical</span>
           <select value={v.vAlign ?? 'middle'} onChange={e => onChange({ vAlign: e.target.value })} className={cls}>
             <option value="top">Top</option>
             <option value="middle">Middle</option>
@@ -888,21 +888,21 @@ function ZonePushEditor({ zone, value, onChange }) {
           </select>
         </label>
         <label className="block">
-          <span className="block text-[10px] text-un1t-mid mb-0.5">Base colour</span>
+          <span className="block text-[10px] text-un1t-muted mb-0.5">Base colour</span>
           <input
             type="color"
             value={v.color ?? '#FFFFFF'}
             onChange={e => onChange({ color: e.target.value })}
-            className="w-full h-7 bg-un1t-black border border-un1t-gray rounded cursor-pointer"
+            className="w-full h-7 bg-un1t-bg border border-un1t-border rounded cursor-pointer"
           />
         </label>
-        <label className="flex items-center gap-1.5 text-xs text-un1t-light pt-4">
+        <label className="flex items-center gap-1.5 text-xs text-un1t-subtle pt-4">
           <input type="checkbox" checked={!!v.uppercase} onChange={e => onChange({ uppercase: e.target.checked })} />
           UPPERCASE
         </label>
       </div>
 
-      <p className="text-[10px] text-un1t-mid mt-2">
+      <p className="text-[10px] text-un1t-muted mt-2">
         Drag the zone on the preview to move it; drag the green corner to resize.
       </p>
     </div>

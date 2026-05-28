@@ -342,8 +342,8 @@ export default function EventForm({ event, locationId }) {
       )}
 
       {/* Basic Info */}
-      <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5 space-y-4">
-        <h3 className="font-semibold text-sm text-un1t-light uppercase tracking-wider">Basic Info</h3>
+      <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5 space-y-4">
+        <h3 className="font-semibold text-sm text-un1t-subtle uppercase tracking-wider">Basic Info</h3>
 
         <div>
           <label className="block text-sm mb-1.5">Event Name *</label>
@@ -353,7 +353,7 @@ export default function EventForm({ event, locationId }) {
             onChange={e => setName(e.target.value)}
             placeholder="e.g. Free Consultation"
             required
-            className="w-full bg-un1t-black border border-un1t-gray rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+            className="w-full bg-un1t-bg border border-un1t-border rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
           />
         </div>
 
@@ -364,7 +364,7 @@ export default function EventForm({ event, locationId }) {
             onChange={e => setDescription(e.target.value)}
             placeholder="Brief description shown on the booking page"
             rows={2}
-            className="w-full bg-un1t-black border border-un1t-gray rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none resize-none"
+            className="w-full bg-un1t-bg border border-un1t-border rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none resize-none"
           />
         </div>
 
@@ -377,7 +377,7 @@ export default function EventForm({ event, locationId }) {
               onChange={e => setDuration(e.target.value)}
               min={5}
               max={480}
-              className="w-full bg-un1t-black border border-un1t-gray rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+              className="w-full bg-un1t-bg border border-un1t-border rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
             />
           </div>
           <div>
@@ -388,7 +388,7 @@ export default function EventForm({ event, locationId }) {
               onChange={e => setBuffer(e.target.value)}
               min={0}
               max={120}
-              className="w-full bg-un1t-black border border-un1t-gray rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+              className="w-full bg-un1t-bg border border-un1t-border rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
             />
           </div>
           <div>
@@ -399,7 +399,7 @@ export default function EventForm({ event, locationId }) {
               onChange={e => setMaxDays(e.target.value)}
               min={1}
               max={365}
-              className="w-full bg-un1t-black border border-un1t-gray rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+              className="w-full bg-un1t-bg border border-un1t-border rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
             />
           </div>
           <div>
@@ -415,11 +415,11 @@ export default function EventForm({ event, locationId }) {
               min={0}
               max={50}
               step={1}
-              className="w-full bg-un1t-black border border-un1t-gray rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+              className="w-full bg-un1t-bg border border-un1t-border rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
             />
           </div>
         </div>
-        <p className="text-[11px] text-un1t-light -mt-2">
+        <p className="text-[11px] text-un1t-subtle -mt-2">
           <strong>Staff required</strong> drives the demand check on the schedule overview. Default 1 — set 0 if this booking type is covered by another role already on shift (e.g. consultations done by the on-shift PT coach).
         </p>
 
@@ -431,7 +431,7 @@ export default function EventForm({ event, locationId }) {
                 key={c}
                 type="button"
                 onClick={() => setColor(c)}
-                className={`w-8 h-8 rounded-full transition-all ${color === c ? 'ring-2 ring-white ring-offset-2 ring-offset-un1t-dark' : 'hover:scale-110'}`}
+                className={`w-8 h-8 rounded-full transition-all ${color === c ? 'ring-2 ring-white ring-offset-2 ring-offset-un1t-surface' : 'hover:scale-110'}`}
                 style={{ backgroundColor: c }}
               />
             ))}
@@ -440,8 +440,8 @@ export default function EventForm({ event, locationId }) {
       </div>
 
       {/* Availability */}
-      <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5 space-y-4">
-        <h3 className="font-semibold text-sm text-un1t-light uppercase tracking-wider">Availability</h3>
+      <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5 space-y-4">
+        <h3 className="font-semibold text-sm text-un1t-subtle uppercase tracking-wider">Availability</h3>
 
         <div className="space-y-2">
           {DAYS.map(({ key, label }) => (
@@ -452,7 +452,7 @@ export default function EventForm({ event, locationId }) {
                 className={`w-20 text-xs py-1.5 rounded text-center transition-colors ${
                   availability[key]
                     ? 'bg-blue-600/20 text-blue-400 border border-blue-600/30'
-                    : 'bg-un1t-gray/30 text-un1t-light border border-un1t-gray'
+                    : 'bg-un1t-border/30 text-un1t-subtle border border-un1t-border'
                 }`}
               >
                 {label.slice(0, 3)}
@@ -463,18 +463,18 @@ export default function EventForm({ event, locationId }) {
                     type="time"
                     value={availability[key].start}
                     onChange={e => updateDayTime(key, 'start', e.target.value)}
-                    className="bg-un1t-black border border-un1t-gray rounded px-2 py-1 text-sm focus:border-blue-500 focus:outline-none"
+                    className="bg-un1t-bg border border-un1t-border rounded px-2 py-1 text-sm focus:border-blue-500 focus:outline-none"
                   />
-                  <span className="text-un1t-light text-sm">to</span>
+                  <span className="text-un1t-subtle text-sm">to</span>
                   <input
                     type="time"
                     value={availability[key].end}
                     onChange={e => updateDayTime(key, 'end', e.target.value)}
-                    className="bg-un1t-black border border-un1t-gray rounded px-2 py-1 text-sm focus:border-blue-500 focus:outline-none"
+                    className="bg-un1t-bg border border-un1t-border rounded px-2 py-1 text-sm focus:border-blue-500 focus:outline-none"
                   />
                 </div>
               ) : (
-                <span className="text-xs text-un1t-light">Unavailable</span>
+                <span className="text-xs text-un1t-subtle">Unavailable</span>
               )}
             </div>
           ))}
@@ -482,9 +482,9 @@ export default function EventForm({ event, locationId }) {
       </div>
 
       {/* Custom Form Fields */}
-      <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5 space-y-4">
+      <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5 space-y-4">
         <div className="flex items-center justify-between">
-          <h3 className="font-semibold text-sm text-un1t-light uppercase tracking-wider">Custom Form Fields</h3>
+          <h3 className="font-semibold text-sm text-un1t-subtle uppercase tracking-wider">Custom Form Fields</h3>
           <button
             type="button"
             onClick={addCustomField}
@@ -495,35 +495,35 @@ export default function EventForm({ event, locationId }) {
           </button>
         </div>
 
-        <p className="text-xs text-un1t-light">
+        <p className="text-xs text-un1t-subtle">
           Name, email, and phone are always included. Add custom fields for extra information.
         </p>
 
         {customFields.length === 0 ? (
-          <p className="text-xs text-un1t-light py-2">No custom fields added yet.</p>
+          <p className="text-xs text-un1t-subtle py-2">No custom fields added yet.</p>
         ) : (
           <div className="space-y-3">
             {customFields.map((field, index) => (
-              <div key={field.id} className="bg-un1t-black border border-un1t-gray rounded-lg p-3 space-y-3">
+              <div key={field.id} className="bg-un1t-bg border border-un1t-border rounded-lg p-3 space-y-3">
                 <div className="flex items-start gap-3">
                   <div className="flex-1 space-y-3">
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       <div>
-                        <label className="block text-xs text-un1t-light mb-1">Label</label>
+                        <label className="block text-xs text-un1t-subtle mb-1">Label</label>
                         <input
                           type="text"
                           value={field.label}
                           onChange={e => updateField(index, 'label', e.target.value)}
                           placeholder="e.g. Experience level"
-                          className="w-full bg-un1t-dark border border-un1t-gray rounded px-2 py-1.5 text-sm focus:border-blue-500 focus:outline-none"
+                          className="w-full bg-un1t-surface border border-un1t-border rounded px-2 py-1.5 text-sm focus:border-blue-500 focus:outline-none"
                         />
                       </div>
                       <div>
-                        <label className="block text-xs text-un1t-light mb-1">Type</label>
+                        <label className="block text-xs text-un1t-subtle mb-1">Type</label>
                         <select
                           value={field.type}
                           onChange={e => updateField(index, 'type', e.target.value)}
-                          className="w-full bg-un1t-dark border border-un1t-gray rounded px-2 py-1.5 text-sm focus:border-blue-500 focus:outline-none"
+                          className="w-full bg-un1t-surface border border-un1t-border rounded px-2 py-1.5 text-sm focus:border-blue-500 focus:outline-none"
                         >
                           {FIELD_TYPES.map(t => (
                             <option key={t.value} value={t.value}>{t.label}</option>
@@ -534,13 +534,13 @@ export default function EventForm({ event, locationId }) {
 
                     {['dropdown', 'radio'].includes(field.type) && (
                       <div>
-                        <label className="block text-xs text-un1t-light mb-1">Options (comma-separated)</label>
+                        <label className="block text-xs text-un1t-subtle mb-1">Options (comma-separated)</label>
                         <input
                           type="text"
                           value={(field.options || []).join(', ')}
                           onChange={e => updateFieldOptions(index, e.target.value)}
                           placeholder="e.g. Beginner, Intermediate, Advanced"
-                          className="w-full bg-un1t-dark border border-un1t-gray rounded px-2 py-1.5 text-sm focus:border-blue-500 focus:outline-none"
+                          className="w-full bg-un1t-surface border border-un1t-border rounded px-2 py-1.5 text-sm focus:border-blue-500 focus:outline-none"
                         />
                       </div>
                     )}
@@ -550,9 +550,9 @@ export default function EventForm({ event, locationId }) {
                         type="checkbox"
                         checked={field.required}
                         onChange={e => updateField(index, 'required', e.target.checked)}
-                        className="rounded border-un1t-gray"
+                        className="rounded border-un1t-border"
                       />
-                      <span className="text-un1t-light">Required field</span>
+                      <span className="text-un1t-subtle">Required field</span>
                     </label>
                   </div>
 
@@ -573,9 +573,9 @@ export default function EventForm({ event, locationId }) {
       {/* Booking confirmation (mig 077). One-shot message sent at
           booking creation time. Per-event-type config — singular
           (vs reminders which are multi-row). */}
-      <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5 space-y-4">
+      <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5 space-y-4">
         <div className="flex items-center justify-between gap-3">
-          <h3 className="font-semibold text-sm text-un1t-light uppercase tracking-wider flex items-center gap-2">
+          <h3 className="font-semibold text-sm text-un1t-subtle uppercase tracking-wider flex items-center gap-2">
             <Check size={14} /> Booking confirmation
           </h3>
           <label className="text-sm flex items-center gap-2 cursor-pointer">
@@ -588,7 +588,7 @@ export default function EventForm({ event, locationId }) {
             <span>Enabled</span>
           </label>
         </div>
-        <p className="text-xs text-un1t-light">
+        <p className="text-xs text-un1t-subtle">
           Sent immediately when a customer submits a booking, before any reminders fire.
           Treated as a transactional / utility message — administrative opt-out is honoured,
           marketing opt-out isn&apos;t. Same channel set as reminders (email + SMS).
@@ -604,8 +604,8 @@ export default function EventForm({ event, locationId }) {
                   onClick={() => toggleConfirmationChannel('email')}
                   className={`flex-1 px-3 py-2 rounded-lg text-sm flex items-center justify-center gap-2 transition-colors ${
                     confirmationChannels.includes('email')
-                      ? 'bg-un1t-white text-un1t-black border border-un1t-white'
-                      : 'border border-un1t-gray text-un1t-light hover:text-un1t-white hover:border-un1t-mid'
+                      ? 'bg-un1t-text text-un1t-bg border border-un1t-text'
+                      : 'border border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-muted'
                   }`}
                 >
                   <Mail size={14} /> Email
@@ -615,21 +615,21 @@ export default function EventForm({ event, locationId }) {
                   onClick={() => toggleConfirmationChannel('sms')}
                   className={`flex-1 px-3 py-2 rounded-lg text-sm flex items-center justify-center gap-2 transition-colors ${
                     confirmationChannels.includes('sms')
-                      ? 'bg-un1t-white text-un1t-black border border-un1t-white'
-                      : 'border border-un1t-gray text-un1t-light hover:text-un1t-white hover:border-un1t-mid'
+                      ? 'bg-un1t-text text-un1t-bg border border-un1t-text'
+                      : 'border border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-muted'
                   }`}
                 >
                   <MessageSquare size={14} /> SMS
                 </button>
               </div>
-              <p className="text-[11px] text-un1t-mid mt-1">
+              <p className="text-[11px] text-un1t-muted mt-1">
                 Pick one or both. Both = a separate email and SMS go out at booking time.
               </p>
             </div>
 
             {confirmationChannels.includes('email') && (
-              <div className="space-y-3 border-t border-un1t-gray/50 pt-3">
-                <div className="text-[11px] text-un1t-light uppercase tracking-wider flex items-center gap-1.5">
+              <div className="space-y-3 border-t border-un1t-border/50 pt-3">
+                <div className="text-[11px] text-un1t-subtle uppercase tracking-wider flex items-center gap-1.5">
                   <Mail size={11} /> Email
                 </div>
                 <div>
@@ -637,7 +637,7 @@ export default function EventForm({ event, locationId }) {
                   <select
                     value={confirmationEmailTemplateId}
                     onChange={e => setConfirmationEmailTemplateId(e.target.value)}
-                    className="w-full bg-un1t-black border border-un1t-gray rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+                    className="w-full bg-un1t-bg border border-un1t-border rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
                   >
                     <option value="">— Select a template —</option>
                     {(emailTemplates || []).map(t => (
@@ -657,9 +657,9 @@ export default function EventForm({ event, locationId }) {
                     value={confirmationEmailSubject}
                     onChange={e => setConfirmationEmailSubject(e.target.value)}
                     placeholder="Defaults to the template subject, or 'Booking confirmed: <event name>'"
-                    className="w-full bg-un1t-black border border-un1t-gray rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+                    className="w-full bg-un1t-bg border border-un1t-border rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
                   />
-                  <p className="text-[11px] text-un1t-mid mt-1">
+                  <p className="text-[11px] text-un1t-muted mt-1">
                     Merge tags: {'{{first_name}}'}, {'{{event_name}}'}, {'{{event_time}}'}
                   </p>
                 </div>
@@ -667,13 +667,13 @@ export default function EventForm({ event, locationId }) {
             )}
 
             {confirmationChannels.includes('sms') && (
-              <div className="space-y-2 border-t border-un1t-gray/50 pt-3">
-                <div className="text-[11px] text-un1t-light uppercase tracking-wider flex items-center gap-1.5">
+              <div className="space-y-2 border-t border-un1t-border/50 pt-3">
+                <div className="text-[11px] text-un1t-subtle uppercase tracking-wider flex items-center gap-1.5">
                   <MessageSquare size={11} /> SMS
                 </div>
                 <div className="flex items-center justify-between mb-1.5">
                   <label className="block text-sm">SMS body</label>
-                  <span className={`text-[11px] ${confirmationSmsBody.length > 160 ? 'text-amber-700' : 'text-un1t-light'}`}>
+                  <span className={`text-[11px] ${confirmationSmsBody.length > 160 ? 'text-amber-700' : 'text-un1t-subtle'}`}>
                     {confirmationSmsBody.length} chars
                     {confirmationSmsBody.length > 0 && (
                       <> · {confirmationSmsBody.length <= 160 ? 1 : Math.ceil(confirmationSmsBody.length / 153)} segment{confirmationSmsBody.length <= 160 ? '' : 's'}</>
@@ -686,9 +686,9 @@ export default function EventForm({ event, locationId }) {
                   rows={3}
                   maxLength={1600}
                   placeholder="Hi {{first_name}}, your {{event_name}} on {{event_time}} is confirmed. See you at {{location_name}}."
-                  className="w-full bg-un1t-black border border-un1t-gray rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none resize-y"
+                  className="w-full bg-un1t-bg border border-un1t-border rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none resize-y"
                 />
-                <p className="text-[11px] text-un1t-mid">
+                <p className="text-[11px] text-un1t-muted">
                   Merge tags: <code>{'{{first_name}}'}</code>, <code>{'{{name}}'}</code>,
                   {' '}<code>{'{{event_name}}'}</code>, <code>{'{{event_time}}'}</code>,
                   {' '}<code>{'{{location_name}}'}</code>.
@@ -697,7 +697,7 @@ export default function EventForm({ event, locationId }) {
             )}
 
             {confirmationChannels.length === 0 && (
-              <p className="text-[11px] text-amber-700 border-t border-un1t-gray/50 pt-3">
+              <p className="text-[11px] text-amber-700 border-t border-un1t-border/50 pt-3">
                 Pick at least one channel — confirmation won&apos;t be sent without one.
               </p>
             )}
@@ -706,34 +706,34 @@ export default function EventForm({ event, locationId }) {
       </div>
 
       {/* Reminders — multi-reminder (mig 076) */}
-      <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5 space-y-4">
+      <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5 space-y-4">
         <div className="flex items-center justify-between gap-3">
-          <h3 className="font-semibold text-sm text-un1t-light uppercase tracking-wider flex items-center gap-2">
+          <h3 className="font-semibold text-sm text-un1t-subtle uppercase tracking-wider flex items-center gap-2">
             <Bell size={14} /> Reminders
           </h3>
           <button
             type="button"
             onClick={addReminder}
-            className="text-xs px-2.5 py-1.5 rounded-md border border-un1t-gray text-un1t-light hover:text-un1t-white hover:border-un1t-white/30 flex items-center gap-1"
+            className="text-xs px-2.5 py-1.5 rounded-md border border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-text/30 flex items-center gap-1"
           >
             <Plus size={12} /> Add reminder
           </button>
         </div>
-        <p className="text-xs text-un1t-light">
+        <p className="text-xs text-un1t-subtle">
           Set as many reminders as you want — e.g. 24h email + 2h SMS + day-of both.
           Each reminder picks its own channels (email, SMS, or both). Reminders are
-          treated as <span className="text-un1t-white">transactional / utility</span>
+          treated as <span className="text-un1t-text">transactional / utility</span>
           messages — marketing opt-outs are ignored, but contacts who've opted out of
           <em> administrative</em> messages won&apos;t receive them. The cron checks every 5
           minutes; actual send time is within ±1 hour of the configured offset.
         </p>
 
         {!remindersLoaded && (
-          <p className="text-xs text-un1t-mid italic">Loading reminders…</p>
+          <p className="text-xs text-un1t-muted italic">Loading reminders…</p>
         )}
 
         {remindersLoaded && reminders.length === 0 && (
-          <div className="border border-dashed border-un1t-gray rounded-md p-4 text-center text-xs text-un1t-mid">
+          <div className="border border-dashed border-un1t-border rounded-md p-4 text-center text-xs text-un1t-muted">
             No reminders configured. Click <strong>Add reminder</strong> to send one (or many) before each booking.
           </div>
         )}
@@ -745,16 +745,16 @@ export default function EventForm({ event, locationId }) {
           return (
             <div
               key={r.id || r._localId || idx}
-              className="border border-un1t-gray/70 rounded-lg p-4 space-y-3 bg-un1t-black/30"
+              className="border border-un1t-border/70 rounded-lg p-4 space-y-3 bg-un1t-bg/30"
             >
               <div className="flex items-start justify-between gap-3">
                 <div className="flex items-center gap-2 text-sm">
-                  <span className="text-un1t-light text-xs uppercase tracking-wider">Reminder {idx + 1}</span>
+                  <span className="text-un1t-subtle text-xs uppercase tracking-wider">Reminder {idx + 1}</span>
                 </div>
                 <button
                   type="button"
                   onClick={() => removeReminder(idx)}
-                  className="p-1.5 rounded hover:bg-red-500/20 text-un1t-light hover:text-red-700"
+                  className="p-1.5 rounded hover:bg-red-500/20 text-un1t-subtle hover:text-red-700"
                   title="Remove this reminder"
                 >
                   <Trash2 size={14} />
@@ -771,11 +771,11 @@ export default function EventForm({ event, locationId }) {
                       step={0.5}
                       value={r.hours_before ?? 24}
                       onChange={e => updateReminder(idx, { hours_before: parseFloat(e.target.value) || 0 })}
-                      className="w-28 bg-un1t-black border border-un1t-gray rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+                      className="w-28 bg-un1t-bg border border-un1t-border rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
                     />
-                    <span className="text-xs text-un1t-light">hours</span>
+                    <span className="text-xs text-un1t-subtle">hours</span>
                   </div>
-                  <p className="text-[11px] text-un1t-mid mt-1">Common: 24 = day before · 2 = couple of hours before · 0.5 = 30 min before</p>
+                  <p className="text-[11px] text-un1t-muted mt-1">Common: 24 = day before · 2 = couple of hours before · 0.5 = 30 min before</p>
                 </div>
                 <div>
                   <label className="block text-sm mb-1.5">Channels</label>
@@ -785,8 +785,8 @@ export default function EventForm({ event, locationId }) {
                       onClick={() => toggleReminderChannel(idx, 'email')}
                       className={`flex-1 px-3 py-2 rounded-lg text-sm flex items-center justify-center gap-2 transition-colors ${
                         hasEmail
-                          ? 'bg-un1t-white text-un1t-black border border-un1t-white'
-                          : 'border border-un1t-gray text-un1t-light hover:text-un1t-white hover:border-un1t-mid'
+                          ? 'bg-un1t-text text-un1t-bg border border-un1t-text'
+                          : 'border border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-muted'
                       }`}
                     >
                       <Mail size={14} /> Email
@@ -796,20 +796,20 @@ export default function EventForm({ event, locationId }) {
                       onClick={() => toggleReminderChannel(idx, 'sms')}
                       className={`flex-1 px-3 py-2 rounded-lg text-sm flex items-center justify-center gap-2 transition-colors ${
                         hasSms
-                          ? 'bg-un1t-white text-un1t-black border border-un1t-white'
-                          : 'border border-un1t-gray text-un1t-light hover:text-un1t-white hover:border-un1t-mid'
+                          ? 'bg-un1t-text text-un1t-bg border border-un1t-text'
+                          : 'border border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-muted'
                       }`}
                     >
                       <MessageSquare size={14} /> SMS
                     </button>
                   </div>
-                  <p className="text-[11px] text-un1t-mid mt-1">Pick one or both. Both = a separate email and SMS go out at the same offset.</p>
+                  <p className="text-[11px] text-un1t-muted mt-1">Pick one or both. Both = a separate email and SMS go out at the same offset.</p>
                 </div>
               </div>
 
               {hasEmail && (
-                <div className="space-y-3 border-t border-un1t-gray/50 pt-3">
-                  <div className="text-[11px] text-un1t-light uppercase tracking-wider flex items-center gap-1.5">
+                <div className="space-y-3 border-t border-un1t-border/50 pt-3">
+                  <div className="text-[11px] text-un1t-subtle uppercase tracking-wider flex items-center gap-1.5">
                     <Mail size={11} /> Email
                   </div>
                   <div>
@@ -817,7 +817,7 @@ export default function EventForm({ event, locationId }) {
                     <select
                       value={r.email_template_id || ''}
                       onChange={e => updateReminder(idx, { email_template_id: e.target.value })}
-                      className="w-full bg-un1t-black border border-un1t-gray rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+                      className="w-full bg-un1t-bg border border-un1t-border rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
                     >
                       <option value="">— Select a template —</option>
                       {(emailTemplates || []).map(t => (
@@ -837,9 +837,9 @@ export default function EventForm({ event, locationId }) {
                       value={r.email_subject || ''}
                       onChange={e => updateReminder(idx, { email_subject: e.target.value })}
                       placeholder="Defaults to the template subject, or 'Reminder: <event name>'"
-                      className="w-full bg-un1t-black border border-un1t-gray rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+                      className="w-full bg-un1t-bg border border-un1t-border rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
                     />
-                    <p className="text-[11px] text-un1t-mid mt-1">
+                    <p className="text-[11px] text-un1t-muted mt-1">
                       Merge tags: {'{{first_name}}'}, {'{{event_name}}'}, {'{{event_time}}'}
                     </p>
                   </div>
@@ -847,13 +847,13 @@ export default function EventForm({ event, locationId }) {
               )}
 
               {hasSms && (
-                <div className="space-y-2 border-t border-un1t-gray/50 pt-3">
-                  <div className="text-[11px] text-un1t-light uppercase tracking-wider flex items-center gap-1.5">
+                <div className="space-y-2 border-t border-un1t-border/50 pt-3">
+                  <div className="text-[11px] text-un1t-subtle uppercase tracking-wider flex items-center gap-1.5">
                     <MessageSquare size={11} /> SMS
                   </div>
                   <div className="flex items-center justify-between mb-1.5">
                     <label className="block text-sm">SMS body</label>
-                    <span className={`text-[11px] ${smsLen > 160 ? 'text-amber-700' : 'text-un1t-light'}`}>
+                    <span className={`text-[11px] ${smsLen > 160 ? 'text-amber-700' : 'text-un1t-subtle'}`}>
                       {smsLen} chars
                       {smsLen > 0 && (
                         <> · {smsLen <= 160 ? 1 : Math.ceil(smsLen / 153)} segment{smsLen <= 160 ? '' : 's'}</>
@@ -866,13 +866,13 @@ export default function EventForm({ event, locationId }) {
                     rows={3}
                     maxLength={1600}
                     placeholder="Hi {{first_name}}, just a reminder for {{event_name}} at {{event_time}}. See you at {{location_name}}."
-                    className="w-full bg-un1t-black border border-un1t-gray rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none resize-y"
+                    className="w-full bg-un1t-bg border border-un1t-border rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none resize-y"
                   />
-                  <p className="text-[11px] text-un1t-mid">
+                  <p className="text-[11px] text-un1t-muted">
                     Merge tags: <code>{'{{first_name}}'}</code>, <code>{'{{name}}'}</code>,
                     {' '}<code>{'{{event_name}}'}</code>, <code>{'{{event_time}}'}</code>,
                     {' '}<code>{'{{location_name}}'}</code>.
-                    Sender ID is set per-location in <span className="text-un1t-light">Settings → Locations → SMS</span>.
+                    Sender ID is set per-location in <span className="text-un1t-subtle">Settings → Locations → SMS</span>.
                   </p>
                 </div>
               )}
@@ -891,9 +891,9 @@ export default function EventForm({ event, locationId }) {
           booking type in. When on, every public booking against
           this event type fires findOrCreateGlofoxMember in
           create-and-trial mode after the booking lands. */}
-      <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5 space-y-4">
+      <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5 space-y-4">
         <div className="flex items-center justify-between gap-3">
-          <h3 className="font-semibold text-sm text-un1t-light uppercase tracking-wider flex items-center gap-2">
+          <h3 className="font-semibold text-sm text-un1t-subtle uppercase tracking-wider flex items-center gap-2">
             <UserPlus size={14} /> Glofox sync
           </h3>
           <label className="text-sm flex items-center gap-2 cursor-pointer">
@@ -906,7 +906,7 @@ export default function EventForm({ event, locationId }) {
             <span>Create in Glofox</span>
           </label>
         </div>
-        <p className="text-xs text-un1t-light">
+        <p className="text-xs text-un1t-subtle">
           When on, every booking on this event type pushes the customer to Glofox:
           first we search by email and link if a Glofox account already exists; if
           not, we create a fresh Glofox account, attach this location&apos;s trial
@@ -916,7 +916,7 @@ export default function EventForm({ event, locationId }) {
         {createInGlofox && (
           <p className="text-[11px] text-amber-700">
             Make sure the trial membership picker is set on
-            <span className="text-un1t-white"> Settings → Locations → Glofox Integration</span>
+            <span className="text-un1t-text"> Settings → Locations → Glofox Integration</span>
             {' '}for this location, otherwise the push will land in the Review tab as
             <em> needs_review</em>.
           </p>
@@ -924,9 +924,9 @@ export default function EventForm({ event, locationId }) {
       </div>
 
       {/* Webhook (n8n) */}
-      <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5 space-y-4">
-        <h3 className="font-semibold text-sm text-un1t-light uppercase tracking-wider">Webhook (n8n)</h3>
-        <p className="text-xs text-un1t-light">
+      <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5 space-y-4">
+        <h3 className="font-semibold text-sm text-un1t-subtle uppercase tracking-wider">Webhook (n8n)</h3>
+        <p className="text-xs text-un1t-subtle">
           When a booking is made, the CRM will POST the booking details to this URL. Use your n8n webhook URL to trigger automations.
         </p>
         <input
@@ -934,7 +934,7 @@ export default function EventForm({ event, locationId }) {
           value={webhookUrl}
           onChange={e => setWebhookUrl(e.target.value)}
           placeholder="https://your-n8n.com/webhook/xxxxx"
-          className="w-full bg-un1t-black border border-un1t-gray rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+          className="w-full bg-un1t-bg border border-un1t-border rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
         />
       </div>
 
@@ -950,7 +950,7 @@ export default function EventForm({ event, locationId }) {
         <button
           type="button"
           onClick={() => router.push('/bookings/event-types')}
-          className="text-sm text-un1t-light hover:text-un1t-white px-4 py-2.5 transition-colors"
+          className="text-sm text-un1t-subtle hover:text-un1t-text px-4 py-2.5 transition-colors"
         >
           Cancel
         </button>

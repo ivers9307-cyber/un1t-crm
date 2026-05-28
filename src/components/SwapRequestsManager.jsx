@@ -59,21 +59,21 @@ export default function SwapRequestsManager({ user }) {
 
   return (
     <div>
-      <Link href="/schedule" className="inline-flex items-center gap-1.5 text-sm text-un1t-light hover:text-un1t-white mb-6">
+      <Link href="/schedule" className="inline-flex items-center gap-1.5 text-sm text-un1t-subtle hover:text-un1t-text mb-6">
         <ArrowLeft size={16} /> Back to Schedule
       </Link>
 
       <div className="flex items-center justify-between mb-6">
         <div>
           <h2 className="text-2xl font-bold">Swap Requests</h2>
-          <p className="text-sm text-un1t-light mt-1">Review and manage shift swap requests</p>
+          <p className="text-sm text-un1t-subtle mt-1">Review and manage shift swap requests</p>
         </div>
-        <div className="flex bg-un1t-dark border border-un1t-gray rounded-lg overflow-hidden text-xs">
+        <div className="flex bg-un1t-surface border border-un1t-border rounded-lg overflow-hidden text-xs">
           {['pending', 'approved', 'rejected', ''].map(s => (
             <button
               key={s}
               onClick={() => setFilter(s)}
-              className={`px-3 py-2 transition-colors ${filter === s ? 'bg-un1t-white text-un1t-black' : 'text-un1t-light hover:text-un1t-white'}`}
+              className={`px-3 py-2 transition-colors ${filter === s ? 'bg-un1t-text text-un1t-bg' : 'text-un1t-subtle hover:text-un1t-text'}`}
             >
               {s || 'All'}
             </button>
@@ -82,12 +82,12 @@ export default function SwapRequestsManager({ user }) {
       </div>
 
       {loading ? (
-        <div className="text-center py-12 text-un1t-light">Loading requests...</div>
+        <div className="text-center py-12 text-un1t-subtle">Loading requests...</div>
       ) : requests.length === 0 ? (
-        <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-12 text-center">
-          <ArrowLeftRight size={40} className="mx-auto mb-4 text-un1t-light" />
+        <div className="bg-un1t-surface border border-un1t-border rounded-lg p-12 text-center">
+          <ArrowLeftRight size={40} className="mx-auto mb-4 text-un1t-subtle" />
           <h3 className="text-lg font-semibold mb-2">No swap requests</h3>
-          <p className="text-sm text-un1t-light">
+          <p className="text-sm text-un1t-subtle">
             {filter === 'pending' ? 'No pending requests to review' : 'No requests match this filter'}
           </p>
         </div>
@@ -100,7 +100,7 @@ export default function SwapRequestsManager({ user }) {
             const tgtTmpl = tgtShift?.shift_templates || {}
 
             return (
-              <div key={req.id} className="bg-un1t-dark border border-un1t-gray rounded-lg p-4">
+              <div key={req.id} className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
                 <div className="flex items-start justify-between">
                   <div className="flex-1">
                     {/* Requester info */}
@@ -111,12 +111,12 @@ export default function SwapRequestsManager({ user }) {
 
                     {/* Their shift */}
                     <div className="text-sm">
-                      <span className="text-un1t-light">Wants to swap: </span>
+                      <span className="text-un1t-subtle">Wants to swap: </span>
                       <span className="font-medium" style={{ color: reqTmpl.color }}>
                         {reqTmpl.name}
                       </span>
                       {reqShift && (
-                        <span className="text-un1t-light">
+                        <span className="text-un1t-subtle">
                           {' '} on {formatDate(reqShift.shift_date)} ({formatTime(reqShift.start_time_override || reqTmpl.start_time)}–{formatTime(reqShift.end_time_override || reqTmpl.end_time)})
                         </span>
                       )}
@@ -125,27 +125,27 @@ export default function SwapRequestsManager({ user }) {
                     {/* Target shift if specified */}
                     {tgtShift && (
                       <div className="text-sm mt-1">
-                        <span className="text-un1t-light">For: </span>
+                        <span className="text-un1t-subtle">For: </span>
                         <span className="font-medium">{req.target?.full_name}'s</span>
                         <span className="font-medium" style={{ color: tgtTmpl.color }}> {tgtTmpl.name}</span>
-                        <span className="text-un1t-light">
+                        <span className="text-un1t-subtle">
                           {' '} on {formatDate(tgtShift.shift_date)}
                         </span>
                       </div>
                     )}
 
                     {!tgtShift && (
-                      <div className="text-sm mt-1 text-un1t-light flex items-center gap-1">
+                      <div className="text-sm mt-1 text-un1t-subtle flex items-center gap-1">
                         <AlertCircle size={12} /> Requesting to drop this shift (no swap)
                       </div>
                     )}
 
                     {req.reason && (
-                      <div className="text-xs text-un1t-mid mt-2 italic">"{req.reason}"</div>
+                      <div className="text-xs text-un1t-muted mt-2 italic">"{req.reason}"</div>
                     )}
 
                     {req.review_note && (
-                      <div className="text-xs text-un1t-light mt-1">Manager note: {req.review_note}</div>
+                      <div className="text-xs text-un1t-subtle mt-1">Manager note: {req.review_note}</div>
                     )}
                   </div>
 

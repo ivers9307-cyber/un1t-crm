@@ -36,31 +36,31 @@ export default async function TemplatesPage() {
     <div className="p-6 md:p-8 max-w-5xl">
       <div className="flex items-start justify-between gap-3 mb-2">
         <div>
-          <Link href="/admin/contracts" className="text-xs text-un1t-light hover:text-un1t-white">
+          <Link href="/admin/contracts" className="text-xs text-un1t-subtle hover:text-un1t-text">
             ← Contracts
           </Link>
           <h2 className="text-2xl font-bold mt-1">Templates</h2>
         </div>
         <Link
           href="/admin/contracts/templates/new"
-          className="inline-flex items-center gap-1.5 text-xs bg-un1t-white text-un1t-black px-3 py-1.5 rounded-md hover:bg-un1t-accent font-medium"
+          className="inline-flex items-center gap-1.5 text-xs bg-un1t-text text-un1t-bg px-3 py-1.5 rounded-md hover:bg-un1t-accent font-medium"
         >
           <Plus size={12} /> New template
         </Link>
       </div>
-      <p className="text-sm text-un1t-light mb-6">
+      <p className="text-sm text-un1t-subtle mb-6">
         Reusable contract bodies with <code className="text-xs">{'{{variable}}'}</code> placeholders. The
         issue wizard merges in profile + custom values at issue time and freezes the rendered text on
         the contract row.
       </p>
 
       {rows.length === 0 ? (
-        <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-8 text-center">
-          <FileText size={28} className="mx-auto text-un1t-light mb-3" />
-          <p className="text-sm text-un1t-light mb-4">No templates yet.</p>
+        <div className="bg-un1t-surface border border-un1t-border rounded-lg p-8 text-center">
+          <FileText size={28} className="mx-auto text-un1t-subtle mb-3" />
+          <p className="text-sm text-un1t-subtle mb-4">No templates yet.</p>
           <Link
             href="/admin/contracts/templates/new"
-            className="inline-flex items-center gap-1.5 text-xs bg-un1t-white text-un1t-black px-3 py-1.5 rounded-md hover:bg-un1t-accent font-medium"
+            className="inline-flex items-center gap-1.5 text-xs bg-un1t-text text-un1t-bg px-3 py-1.5 rounded-md hover:bg-un1t-accent font-medium"
           >
             <Plus size={12} /> Create your first template
           </Link>
@@ -71,27 +71,27 @@ export default async function TemplatesPage() {
             <Link
               key={t.id}
               href={`/admin/contracts/templates/${t.id}`}
-              className="block bg-un1t-dark border border-un1t-gray rounded-lg p-4 hover:border-un1t-mid/60"
+              className="block bg-un1t-surface border border-un1t-border rounded-lg p-4 hover:border-un1t-muted/60"
             >
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2 flex-wrap">
-                    <span className="font-medium text-un1t-white">{t.name}</span>
+                    <span className="font-medium text-un1t-text">{t.name}</span>
                     {!t.active && (
                       <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded-full bg-gray-500/20 text-gray-600">
                         Archived
                       </span>
                     )}
-                    <span className="text-[10px] uppercase tracking-wider text-un1t-mid">
+                    <span className="text-[10px] uppercase tracking-wider text-un1t-muted">
                       v{t.version}
                     </span>
                   </div>
                   {t.description && (
-                    <p className="text-xs text-un1t-light mt-1 truncate">{t.description}</p>
+                    <p className="text-xs text-un1t-subtle mt-1 truncate">{t.description}</p>
                   )}
-                  <p className="text-[11px] text-un1t-mid mt-1">{TYPE_LABEL[t.employment_type]}</p>
+                  <p className="text-[11px] text-un1t-muted mt-1">{TYPE_LABEL[t.employment_type]}</p>
                 </div>
-                <ChevronRight size={16} className="text-un1t-mid shrink-0 mt-1" />
+                <ChevronRight size={16} className="text-un1t-muted shrink-0 mt-1" />
               </div>
             </Link>
           ))}

@@ -17,8 +17,8 @@ export default async function CarsLayout({ children }) {
 
   return (
     <div className="p-6 max-w-6xl mx-auto">
-      <h1 className="text-2xl font-bold text-un1t-white mb-1">Car Processing</h1>
-      <p className="text-sm text-un1t-light mb-5">
+      <h1 className="text-2xl font-bold text-un1t-text mb-1">Car Processing</h1>
+      <p className="text-sm text-un1t-subtle mb-5">
         {user.activeLocation?.name || 'Tesla import workflow'}
       </p>
       <CarTabs />

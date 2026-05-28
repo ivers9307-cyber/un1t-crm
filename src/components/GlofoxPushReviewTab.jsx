@@ -114,7 +114,7 @@ export default function GlofoxPushReviewTab() {
 
   if (events === null) {
     return (
-      <div className="flex items-center gap-2 text-sm text-un1t-light py-8 justify-center">
+      <div className="flex items-center gap-2 text-sm text-un1t-subtle py-8 justify-center">
         <Loader2 size={14} className="animate-spin" /> Loading push events…
       </div>
     )
@@ -128,9 +128,9 @@ export default function GlofoxPushReviewTab() {
   }
   if (events.length === 0) {
     return (
-      <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-8 text-center text-sm text-un1t-light">
+      <div className="bg-un1t-surface border border-un1t-border rounded-lg p-8 text-center text-sm text-un1t-subtle">
         <Check size={24} className="mx-auto text-emerald-400 mb-2" />
-        <p className="text-un1t-white font-medium">All clear.</p>
+        <p className="text-un1t-text font-medium">All clear.</p>
         <p className="mt-1">No failed or needs-review pushes outstanding.</p>
       </div>
     )
@@ -138,7 +138,7 @@ export default function GlofoxPushReviewTab() {
 
   return (
     <div className="space-y-3">
-      <p className="text-xs text-un1t-light">
+      <p className="text-xs text-un1t-subtle">
         Showing the {events.length} most recent push event{events.length === 1 ? '' : 's'} needing review.
         Retry re-runs the same push (search-and-link for dup-check rows, search-or-create-with-trial for the rest).
         Dismiss marks the row reviewed without retrying — use for cases you fixed in Glofox directly.
@@ -163,13 +163,13 @@ export default function GlofoxPushReviewTab() {
               <div className="flex items-start gap-2 min-w-0 flex-1">
                 <Icon size={14} className="mt-0.5 shrink-0" />
                 <div className="min-w-0 flex-1">
-                  <div className="text-sm font-medium text-un1t-white truncate">
+                  <div className="text-sm font-medium text-un1t-text truncate">
                     {contactLabel}
                     {c?.email && c.name && (
-                      <span className="text-un1t-light font-normal ml-1.5">· {c.email}</span>
+                      <span className="text-un1t-subtle font-normal ml-1.5">· {c.email}</span>
                     )}
                   </div>
-                  <div className="text-[11px] text-un1t-light mt-0.5">
+                  <div className="text-[11px] text-un1t-subtle mt-0.5">
                     <span className="uppercase tracking-wider">{ev.status.replace('_', ' ')}</span>
                     {' · '}
                     {SOURCE_LABEL[ev.source] || ev.source}
@@ -177,12 +177,12 @@ export default function GlofoxPushReviewTab() {
                     {relativeTime(ev.created_at)}
                   </div>
                   {ev.error_message && (
-                    <p className="text-[11px] text-un1t-light mt-1 leading-snug whitespace-pre-wrap break-words">
+                    <p className="text-[11px] text-un1t-subtle mt-1 leading-snug whitespace-pre-wrap break-words">
                       {ev.error_message}
                     </p>
                   )}
                   {ev.glofox_member_id && (
-                    <p className="text-[11px] text-un1t-mid mt-1 font-mono truncate">
+                    <p className="text-[11px] text-un1t-muted mt-1 font-mono truncate">
                       Glofox ID: {ev.glofox_member_id}
                     </p>
                   )}
@@ -214,7 +214,7 @@ export default function GlofoxPushReviewTab() {
                 type="button"
                 onClick={() => dismiss(ev)}
                 disabled={isBusy}
-                className="text-[11px] px-2.5 py-1 rounded-md border border-un1t-gray text-un1t-light hover:text-un1t-white hover:border-un1t-mid disabled:opacity-50 inline-flex items-center gap-1"
+                className="text-[11px] px-2.5 py-1 rounded-md border border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-muted disabled:opacity-50 inline-flex items-center gap-1"
               >
                 <Check size={11} /> Mark reviewed
               </button>

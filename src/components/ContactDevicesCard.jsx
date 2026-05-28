@@ -59,7 +59,7 @@ export default function ContactDevicesCard({ contactId, canEdit }) {
   }
 
   return (
-    <div className="rounded-xl border border-un1t-gray bg-white p-5">
+    <div className="rounded-xl border border-un1t-border bg-white p-5">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Heart size={16} className="text-red-500" />
@@ -77,7 +77,7 @@ export default function ContactDevicesCard({ contactId, canEdit }) {
       </div>
 
       {devices === null && (
-        <p className="mt-3 text-sm text-un1t-light">Loading…</p>
+        <p className="mt-3 text-sm text-un1t-subtle">Loading…</p>
       )}
 
       {error && (
@@ -85,7 +85,7 @@ export default function ContactDevicesCard({ contactId, canEdit }) {
       )}
 
       {devices && devices.length === 0 && !adding && (
-        <p className="mt-3 text-sm text-un1t-light">
+        <p className="mt-3 text-sm text-un1t-subtle">
           No devices registered. The member&apos;s HR won&apos;t auto-route at the
           studio until a chest strap MAC is added here, or by the member
           via their app account.
@@ -97,19 +97,19 @@ export default function ContactDevicesCard({ contactId, canEdit }) {
           {devices.map((d) => (
             <li
               key={d.id}
-              className="flex items-center gap-3 rounded-md border border-un1t-gray bg-un1t-dark p-2.5"
+              className="flex items-center gap-3 rounded-md border border-un1t-border bg-un1t-surface p-2.5"
             >
               <DeviceIcon type={d.device_type} />
               <div className="min-w-0 flex-1">
                 <p className="truncate text-sm font-medium">
                   {d.label || d.identifier}
                   {!d.is_active && (
-                    <span className="ml-2 inline-block rounded-full bg-un1t-gray px-1.5 py-0.5 text-[10px] text-un1t-light">
+                    <span className="ml-2 inline-block rounded-full bg-un1t-border px-1.5 py-0.5 text-[10px] text-un1t-subtle">
                       inactive
                     </span>
                   )}
                 </p>
-                <p className="truncate text-xs text-un1t-light">
+                <p className="truncate text-xs text-un1t-subtle">
                   {d.identifier}
                   {d.manufacturer && ` · ${d.manufacturer}`}
                   {d.added_by_contact && ' · self-added'}
@@ -119,7 +119,7 @@ export default function ContactDevicesCard({ contactId, canEdit }) {
                 <button
                   type="button"
                   onClick={() => handleDelete(d.id)}
-                  className="rounded p-1.5 text-un1t-light hover:bg-red-500/10 hover:text-red-600"
+                  className="rounded p-1.5 text-un1t-subtle hover:bg-red-500/10 hover:text-red-600"
                   title="Remove device"
                 >
                   <Trash2 size={14} />
@@ -141,7 +141,7 @@ export default function ContactDevicesCard({ contactId, canEdit }) {
 }
 
 function DeviceIcon({ type }) {
-  if (type === 'watch') return <Watch size={16} className="shrink-0 text-un1t-light" />
+  if (type === 'watch') return <Watch size={16} className="shrink-0 text-un1t-subtle" />
   return <Heart size={16} className="shrink-0 text-red-500" />
 }
 
@@ -175,9 +175,9 @@ function AddDeviceForm({ onSubmit, onCancel }) {
   const isAnt = protocol === 'ant'
 
   return (
-    <form onSubmit={submit} className="mt-4 space-y-2 rounded-md border border-un1t-gray bg-un1t-dark p-3">
+    <form onSubmit={submit} className="mt-4 space-y-2 rounded-md border border-un1t-border bg-un1t-surface p-3">
       <div>
-        <label className="block text-xs font-medium text-un1t-light">Protocol</label>
+        <label className="block text-xs font-medium text-un1t-subtle">Protocol</label>
         <div className="mt-1 flex gap-2">
           {[['ble', 'Bluetooth'], ['ant', 'ANT+']].map(([val, lbl]) => (
             <button
@@ -187,7 +187,7 @@ function AddDeviceForm({ onSubmit, onCancel }) {
               className={`flex-1 rounded-md border px-2.5 py-1.5 text-xs font-medium ${
                 protocol === val
                   ? 'border-indigo-500 bg-indigo-600 text-white'
-                  : 'border-un1t-gray bg-un1t-black text-un1t-light hover:text-un1t-white'
+                  : 'border-un1t-border bg-un1t-bg text-un1t-subtle hover:text-un1t-text'
               }`}
             >
               {lbl}
@@ -196,7 +196,7 @@ function AddDeviceForm({ onSubmit, onCancel }) {
         </div>
       </div>
       <div>
-        <label className="block text-xs font-medium text-un1t-light">
+        <label className="block text-xs font-medium text-un1t-subtle">
           {isAnt ? 'ANT+ device number' : 'Strap MAC'}
         </label>
         <input
@@ -205,26 +205,26 @@ function AddDeviceForm({ onSubmit, onCancel }) {
           value={identifier}
           onChange={(e) => setIdentifier(e.target.value)}
           placeholder={isAnt ? '12345' : 'AA:BB:CC:DD:EE:FF'}
-          className="mt-1 w-full rounded-md border border-un1t-gray bg-un1t-black px-2.5 py-1.5 font-mono text-sm tracking-tight"
+          className="mt-1 w-full rounded-md border border-un1t-border bg-un1t-bg px-2.5 py-1.5 font-mono text-sm tracking-tight"
         />
       </div>
       <div className="grid grid-cols-2 gap-2">
         <div>
-          <label className="block text-xs font-medium text-un1t-light">Label</label>
+          <label className="block text-xs font-medium text-un1t-subtle">Label</label>
           <input
             type="text"
             value={label}
             onChange={(e) => setLabel(e.target.value)}
             placeholder="Polar H10"
-            className="mt-1 w-full rounded-md border border-un1t-gray bg-un1t-black px-2.5 py-1.5 text-sm"
+            className="mt-1 w-full rounded-md border border-un1t-border bg-un1t-bg px-2.5 py-1.5 text-sm"
           />
         </div>
         <div>
-          <label className="block text-xs font-medium text-un1t-light">Manufacturer</label>
+          <label className="block text-xs font-medium text-un1t-subtle">Manufacturer</label>
           <select
             value={manufacturer}
             onChange={(e) => setManufacturer(e.target.value)}
-            className="mt-1 w-full rounded-md border border-un1t-gray bg-un1t-black px-2.5 py-1.5 text-sm"
+            className="mt-1 w-full rounded-md border border-un1t-border bg-un1t-bg px-2.5 py-1.5 text-sm"
           >
             <option value="">—</option>
             {MANUFACTURERS.map((m) => (
@@ -245,7 +245,7 @@ function AddDeviceForm({ onSubmit, onCancel }) {
         <button
           type="button"
           onClick={onCancel}
-          className="text-xs font-medium text-un1t-light hover:text-un1t-white"
+          className="text-xs font-medium text-un1t-subtle hover:text-un1t-text"
         >
           Cancel
         </button>

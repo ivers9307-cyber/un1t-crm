@@ -21,8 +21,8 @@ export default async function OrdersIndexPage() {
   return (
     <div className="p-6 max-w-7xl mx-auto">
       <header className="mb-6">
-        <h1 className="text-2xl font-semibold text-un1t-white">Orders</h1>
-        <p className="text-sm text-un1t-light mt-1">
+        <h1 className="text-2xl font-semibold text-un1t-text">Orders</h1>
+        <p className="text-sm text-un1t-subtle mt-1">
           Every transaction across races, cars, and future revenue streams.
         </p>
       </header>

@@ -67,11 +67,11 @@ export default async function AccountContractDetail(props) {
   return (
     <div className="p-6 md:p-8 max-w-3xl print:p-0 print:max-w-none">
       <div className="print:hidden">
-        <Link href="/account/contracts" className="text-xs text-un1t-light hover:text-un1t-white">
+        <Link href="/account/contracts" className="text-xs text-un1t-subtle hover:text-un1t-text">
           ← Your contracts
         </Link>
         <h2 className="text-2xl font-bold mt-1">{c.template?.name || 'Contract'}</h2>
-        <p className="text-xs text-un1t-light mb-4">
+        <p className="text-xs text-un1t-subtle mb-4">
           Issued by {c.issuer?.full_name} on {fmtDate(c.issued_at)}
         </p>
       </div>
@@ -79,8 +79,8 @@ export default async function AccountContractDetail(props) {
       {revoked && (
         <div className="bg-gray-500/10 border border-gray-500/30 rounded-lg p-4 mb-4 print:hidden">
           <p className="text-sm font-semibold">This contract has been withdrawn.</p>
-          {c.revoked_reason && <p className="text-xs text-un1t-light mt-1">{c.revoked_reason}</p>}
-          <p className="text-[11px] text-un1t-mid mt-2">No action required.</p>
+          {c.revoked_reason && <p className="text-xs text-un1t-subtle mt-1">{c.revoked_reason}</p>}
+          <p className="text-[11px] text-un1t-muted mt-2">No action required.</p>
         </div>
       )}
       {declined && (

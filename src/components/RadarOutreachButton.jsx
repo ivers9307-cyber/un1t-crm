@@ -75,33 +75,33 @@ export default function RadarOutreachButton({ contactName, disabled, busy, onSel
         type="button"
         onClick={() => setOpen((v) => !v)}
         disabled={disabled}
-        className="inline-flex items-center gap-1 rounded-md border border-un1t-gray bg-un1t-black px-2.5 py-1 text-xs font-medium text-un1t-light hover:text-un1t-white disabled:opacity-50"
+        className="inline-flex items-center gap-1 rounded-md border border-un1t-border bg-un1t-bg px-2.5 py-1 text-xs font-medium text-un1t-subtle hover:text-un1t-text disabled:opacity-50"
       >
         <MessageCircle size={13} />
         WhatsApp
       </button>
 
       {open && (
-        <div className="absolute left-0 z-20 mt-1 w-72 rounded-lg border border-un1t-gray bg-un1t-black p-2 shadow-xl">
+        <div className="absolute left-0 z-20 mt-1 w-72 rounded-lg border border-un1t-border bg-un1t-bg p-2 shadow-xl">
           <div className="flex items-start justify-between gap-2 px-1 pb-1.5">
-            <p className="text-[11px] font-semibold text-un1t-light">
+            <p className="text-[11px] font-semibold text-un1t-subtle">
               Send a WhatsApp to {contactName || 'this contact'}
             </p>
             <button
               type="button"
               onClick={() => setOpen(false)}
-              className="shrink-0 text-un1t-mid hover:text-un1t-white"
+              className="shrink-0 text-un1t-muted hover:text-un1t-text"
               aria-label="Close"
             >
               <X size={13} />
             </button>
           </div>
 
-          {loading && <p className="px-1 py-3 text-xs text-un1t-light">Loading templates…</p>}
+          {loading && <p className="px-1 py-3 text-xs text-un1t-subtle">Loading templates…</p>}
           {error && <p className="px-1 py-3 text-xs text-red-400">{error}</p>}
 
           {!loading && !error && sendable.length === 0 && (
-            <p className="px-1 py-3 text-xs text-un1t-light">
+            <p className="px-1 py-3 text-xs text-un1t-subtle">
               No approved utility templates yet. Create one under WhatsApp &rarr; Templates
               (category: Utility) and sync.
             </p>
@@ -115,11 +115,11 @@ export default function RadarOutreachButton({ contactName, disabled, busy, onSel
                     type="button"
                     disabled={busy}
                     onClick={() => pick(t.name)}
-                    className="w-full rounded-md px-2 py-1.5 text-left hover:bg-un1t-gray/40 disabled:opacity-50"
+                    className="w-full rounded-md px-2 py-1.5 text-left hover:bg-un1t-border/40 disabled:opacity-50"
                   >
-                    <span className="block text-xs font-medium text-un1t-white">{t.name}</span>
+                    <span className="block text-xs font-medium text-un1t-text">{t.name}</span>
                     {t.bodyText && (
-                      <span className="mt-0.5 block text-[11px] leading-snug text-un1t-light">
+                      <span className="mt-0.5 block text-[11px] leading-snug text-un1t-subtle">
                         {t.bodyText}
                       </span>
                     )}
@@ -129,7 +129,7 @@ export default function RadarOutreachButton({ contactName, disabled, busy, onSel
             </ul>
           )}
 
-          <p className="mt-1 border-t border-un1t-gray px-1 pt-1.5 text-[10px] text-un1t-mid">
+          <p className="mt-1 border-t border-un1t-border px-1 pt-1.5 text-[10px] text-un1t-muted">
             Utility message &mdash; a one-off, not marketing.
           </p>
         </div>

@@ -13,7 +13,7 @@ import { Radio, Plus, KeyRound, Copy, Check } from 'lucide-react'
 
 const STATUS_STYLES = {
   online: 'bg-green-100 text-green-700',
-  offline: 'bg-un1t-gray text-un1t-light',
+  offline: 'bg-un1t-border text-un1t-subtle',
   error: 'bg-red-100 text-red-700',
 }
 
@@ -77,10 +77,10 @@ export default function BridgesAdmin({ locations }) {
   return (
     <div className="p-6 md:p-8 max-w-4xl">
       <div className="flex items-center gap-2">
-        <Radio size={20} className="text-un1t-light" />
+        <Radio size={20} className="text-un1t-subtle" />
         <h2 className="text-2xl font-bold">HR Bridges</h2>
       </div>
-      <p className="mt-1 mb-6 max-w-2xl text-sm text-un1t-light">
+      <p className="mt-1 mb-6 max-w-2xl text-sm text-un1t-subtle">
         Each studio runs a champ-bridge on a Raspberry Pi that reads
         heart-rate straps over ANT+ and Bluetooth. Register a bridge
         here to get its token, then paste it into the Pi&apos;s config.
@@ -117,10 +117,10 @@ export default function BridgesAdmin({ locations }) {
         />
       )}
 
-      {bridges === null && <p className="text-sm text-un1t-light">Loading…</p>}
+      {bridges === null && <p className="text-sm text-un1t-subtle">Loading…</p>}
 
       {bridges && bridges.length === 0 && !adding && (
-        <p className="rounded-lg border border-dashed border-un1t-gray p-6 text-center text-sm text-un1t-light">
+        <p className="rounded-lg border border-dashed border-un1t-border p-6 text-center text-sm text-un1t-subtle">
           No bridges registered yet. Register one to deploy a studio Pi.
         </p>
       )}
@@ -132,20 +132,20 @@ export default function BridgesAdmin({ locations }) {
             return (
               <li
                 key={b.id}
-                className="rounded-lg border border-un1t-gray bg-un1t-dark p-4"
+                className="rounded-lg border border-un1t-border bg-un1t-surface p-4"
               >
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">
-                      <p className="font-medium text-un1t-white">{b.name}</p>
+                      <p className="font-medium text-un1t-text">{b.name}</p>
                       <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${STATUS_STYLES[b.status] || STATUS_STYLES.offline}`}>
                         {b.status}
                       </span>
                     </div>
-                    <p className="mt-0.5 text-xs text-un1t-light">
+                    <p className="mt-0.5 text-xs text-un1t-subtle">
                       {locationName(b.location_id)} · <span className="font-mono">{b.hardware_id}</span>
                     </p>
-                    <p className="mt-0.5 text-xs text-un1t-mid">
+                    <p className="mt-0.5 text-xs text-un1t-muted">
                       {b.last_seen_at
                         ? `Last seen ${formatSince(b.last_seen_at)}`
                         : 'Never connected'}
@@ -157,7 +157,7 @@ export default function BridgesAdmin({ locations }) {
                     type="button"
                     onClick={() => handleRotate(b)}
                     disabled={rotatingId === b.id}
-                    className="inline-flex items-center gap-1 rounded-md border border-un1t-gray bg-un1t-black px-2.5 py-1.5 text-xs font-medium text-un1t-light hover:text-un1t-white disabled:opacity-50"
+                    className="inline-flex items-center gap-1 rounded-md border border-un1t-border bg-un1t-bg px-2.5 py-1.5 text-xs font-medium text-un1t-subtle hover:text-un1t-text disabled:opacity-50"
                     title="Issue a new token — invalidates the current one"
                   >
                     <KeyRound size={13} />
@@ -230,7 +230,7 @@ function CopyBox({ value, mono, multiline }) {
 
   return (
     <div className="flex items-stretch gap-2">
-      <pre className={`min-w-0 flex-1 overflow-x-auto rounded-md border border-amber-300 bg-white p-2 text-xs text-un1t-white ${mono ? 'font-mono' : ''} ${multiline ? 'whitespace-pre' : 'whitespace-nowrap'}`}>
+      <pre className={`min-w-0 flex-1 overflow-x-auto rounded-md border border-amber-300 bg-white p-2 text-xs text-un1t-text ${mono ? 'font-mono' : ''} ${multiline ? 'whitespace-pre' : 'whitespace-nowrap'}`}>
         {value}
       </pre>
       <button
@@ -274,27 +274,27 @@ function RegisterForm({ locations, onSubmit, onCancel }) {
   return (
     <form
       onSubmit={submit}
-      className="mb-4 space-y-3 rounded-lg border border-un1t-gray bg-un1t-dark p-4"
+      className="mb-4 space-y-3 rounded-lg border border-un1t-border bg-un1t-surface p-4"
     >
       <div>
-        <label className="block text-xs font-medium text-un1t-light">Bridge name</label>
+        <label className="block text-xs font-medium text-un1t-subtle">Bridge name</label>
         <input
           type="text"
           required
           value={name}
           onChange={(e) => setName(e.target.value)}
           placeholder="Stillorgan studio bridge"
-          className="mt-1 w-full rounded-md border border-un1t-gray bg-un1t-black px-2.5 py-1.5 text-sm"
+          className="mt-1 w-full rounded-md border border-un1t-border bg-un1t-bg px-2.5 py-1.5 text-sm"
         />
       </div>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <div>
-          <label className="block text-xs font-medium text-un1t-light">Location</label>
+          <label className="block text-xs font-medium text-un1t-subtle">Location</label>
           <select
             required
             value={locationId}
             onChange={(e) => setLocationId(e.target.value)}
-            className="mt-1 w-full rounded-md border border-un1t-gray bg-un1t-black px-2.5 py-1.5 text-sm"
+            className="mt-1 w-full rounded-md border border-un1t-border bg-un1t-bg px-2.5 py-1.5 text-sm"
           >
             <option value="" disabled>Select a studio…</option>
             {locations.map((l) => (
@@ -303,18 +303,18 @@ function RegisterForm({ locations, onSubmit, onCancel }) {
           </select>
         </div>
         <div>
-          <label className="block text-xs font-medium text-un1t-light">Hardware ID</label>
+          <label className="block text-xs font-medium text-un1t-subtle">Hardware ID</label>
           <input
             type="text"
             required
             value={hardwareId}
             onChange={(e) => setHardwareId(e.target.value)}
             placeholder="stillorgan-pi-01"
-            className="mt-1 w-full rounded-md border border-un1t-gray bg-un1t-black px-2.5 py-1.5 font-mono text-sm"
+            className="mt-1 w-full rounded-md border border-un1t-border bg-un1t-bg px-2.5 py-1.5 font-mono text-sm"
           />
         </div>
       </div>
-      <p className="text-xs text-un1t-mid">
+      <p className="text-xs text-un1t-muted">
         The hardware ID is a unique label for the physical Pi — anything
         memorable works (e.g. the studio name plus a number).
       </p>
@@ -330,7 +330,7 @@ function RegisterForm({ locations, onSubmit, onCancel }) {
         <button
           type="button"
           onClick={onCancel}
-          className="text-xs font-medium text-un1t-light hover:text-un1t-white"
+          className="text-xs font-medium text-un1t-subtle hover:text-un1t-text"
         >
           Cancel
         </button>

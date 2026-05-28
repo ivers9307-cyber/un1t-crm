@@ -3,7 +3,7 @@
 @tailwind utilities;
 
 body {
-  @apply bg-un1t-black text-un1t-white;
+  @apply bg-un1t-bg text-un1t-text;
 }
 
 /* Scrollbar styling */

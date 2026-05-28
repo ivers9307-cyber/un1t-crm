@@ -184,7 +184,7 @@ export default function PolicyViewTracker({ slug, body }) {
   }, [])
 
   return (
-    <article className="bg-white text-gray-900 rounded-lg p-6 md:p-8 my-6 border border-un1t-gray">
+    <article className="bg-white text-gray-900 rounded-lg p-6 md:p-8 my-6 border border-un1t-border">
       <div className="whitespace-pre-wrap font-serif text-sm md:text-base leading-relaxed">
         {sections.map((s, i) => (
           <section

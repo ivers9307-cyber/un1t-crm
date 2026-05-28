@@ -21,7 +21,7 @@ import { TrendingUp, TrendingDown, AlertTriangle, Wallet } from 'lucide-react'
 import { summarizeWeek } from '@/lib/roster-summary'
 
 // Text colours use the -700 ramp so they read clearly against
-// the light card background (un1t-dark = #F7F8FA). The -300
+// the light card background (un1t-surface = #F7F8FA). The -300
 // variants we'd use on a dark theme look washed-out here. Same
 // retune we did for shared/location-colors.js after the light-
 // theme migration.
@@ -32,7 +32,7 @@ const STATUS_STYLES = {
   overtime:    { bar: 'bg-red-500',     label: 'Over hours',        text: 'text-red-700' },
   on_target:   { bar: 'bg-emerald-500', label: 'On target',         text: 'text-emerald-700' },
   underused:   { bar: 'bg-amber-500',   label: 'Underused',         text: 'text-amber-700' },
-  no_contract: { bar: 'bg-un1t-mid',    label: 'No contract',       text: 'text-un1t-light' },
+  no_contract: { bar: 'bg-un1t-muted',    label: 'No contract',       text: 'text-un1t-subtle' },
 }
 
 function formatEur(amount) {
@@ -77,19 +77,19 @@ export default function RosterSummaryPanel({
   return (
     <div className="mt-4 grid grid-cols-1 lg:grid-cols-2 gap-3">
       {/* FTE utilisation */}
-      <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-3">
+      <div className="bg-un1t-surface border border-un1t-border rounded-lg p-3">
         <div className="flex items-center justify-between mb-3">
           <h3 className="text-sm font-semibold flex items-center gap-2">
             <TrendingUp size={14} className="text-blue-400" />
             FTE utilisation — this week
           </h3>
-          <span className="text-[11px] text-un1t-light">
+          <span className="text-[11px] text-un1t-subtle">
             {week.fte.length} {week.fte.length === 1 ? 'coach' : 'coaches'} rostered
           </span>
         </div>
 
         {week.fte.length === 0 ? (
-          <p className="text-xs text-un1t-light py-2">
+          <p className="text-xs text-un1t-subtle py-2">
             No FTE coaches assigned to this week yet.
           </p>
         ) : (
@@ -118,20 +118,20 @@ export default function RosterSummaryPanel({
               return (
                 <div key={row.profile_id}>
                   <div className="flex items-center justify-between text-xs mb-1 gap-2">
-                    <span className="font-medium text-un1t-white truncate">{row.full_name}</span>
+                    <span className="font-medium text-un1t-text truncate">{row.full_name}</span>
                     <span className={`flex-shrink-0 text-right ${style.text}`}>
                       {row.allocated_hours}h
                       {denomLabel && ` / ${denomLabel}`}
                       {pct != null && pct < 999 && ` · ${pct}%`}
                     </span>
                   </div>
-                  <div className="h-1.5 bg-un1t-gray/40 rounded overflow-hidden">
+                  <div className="h-1.5 bg-un1t-border/40 rounded overflow-hidden">
                     <div className={`h-full ${style.bar}`} style={{ width: `${barWidthPct}%` }} />
                   </div>
                   <div className={`text-[10px] mt-0.5 flex items-center justify-between gap-2 ${style.text}`}>
                     <span>{style.label}</span>
                     {onLeave && (
-                      <span className="text-un1t-light">
+                      <span className="text-un1t-subtle">
                         {row.leave_hours}h on leave this week
                       </span>
                     )}
@@ -143,7 +143,7 @@ export default function RosterSummaryPanel({
         )}
 
         {canSeePay && week.incompleteProfileNames.length > 0 && (
-          <div className="mt-3 pt-3 border-t border-un1t-gray flex items-start gap-2 text-[11px] text-amber-700">
+          <div className="mt-3 pt-3 border-t border-un1t-border flex items-start gap-2 text-[11px] text-amber-700">
             <AlertTriangle size={12} className="mt-0.5 flex-shrink-0 text-amber-600" />
             <span>
               Pay data missing for {week.incompleteProfileNames.slice(0, 3).join(', ')}
@@ -158,13 +158,13 @@ export default function RosterSummaryPanel({
           so head_coach sees the totals without being granted
           hourly_rate visibility. While the parent is fetching the
           aggregate, month is null and we show a calculating state. */}
-      <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-3">
+      <div className="bg-un1t-surface border border-un1t-border rounded-lg p-3">
         {month == null ? (
           <div className="flex items-center justify-between">
             <h3 className="text-sm font-semibold flex items-center gap-2">
               <Wallet size={14} className="text-emerald-400" /> Contractor spend
             </h3>
-            <span className="text-[11px] text-un1t-light">Calculating…</span>
+            <span className="text-[11px] text-un1t-subtle">Calculating…</span>
           </div>
         ) : (
           <>
@@ -174,7 +174,7 @@ export default function RosterSummaryPanel({
                 Contractor spend — {monthLabel(month.monthStartIso)}
               </h3>
               {month.utilisationPct != null && (
-                <span className={`text-[11px] font-medium ${month.overBudget ? 'text-red-700' : 'text-un1t-light'}`}>
+                <span className={`text-[11px] font-medium ${month.overBudget ? 'text-red-700' : 'text-un1t-subtle'}`}>
                   {month.utilisationPct}% of budget
                 </span>
               )}
@@ -182,40 +182,40 @@ export default function RosterSummaryPanel({
 
             <div className="grid grid-cols-2 gap-3 mb-3">
               <div>
-                <div className="text-[10px] uppercase tracking-wider text-un1t-light">Spent</div>
-                <div className={`text-xl font-semibold ${month.overBudget ? 'text-red-700' : 'text-un1t-white'}`}>
+                <div className="text-[10px] uppercase tracking-wider text-un1t-subtle">Spent</div>
+                <div className={`text-xl font-semibold ${month.overBudget ? 'text-red-700' : 'text-un1t-text'}`}>
                   {formatEur(month.contractorCostEur)}
                 </div>
               </div>
               <div>
-                <div className="text-[10px] uppercase tracking-wider text-un1t-light">Budget</div>
-                <div className="text-xl font-semibold text-un1t-white">
-                  {month.monthlyBudgetEur != null ? formatEur(month.monthlyBudgetEur) : <span className="text-un1t-light">Not set</span>}
+                <div className="text-[10px] uppercase tracking-wider text-un1t-subtle">Budget</div>
+                <div className="text-xl font-semibold text-un1t-text">
+                  {month.monthlyBudgetEur != null ? formatEur(month.monthlyBudgetEur) : <span className="text-un1t-subtle">Not set</span>}
                 </div>
               </div>
             </div>
 
             {month.monthlyBudgetEur != null && (
               <>
-                <div className="h-1.5 bg-un1t-gray/40 rounded overflow-hidden">
+                <div className="h-1.5 bg-un1t-border/40 rounded overflow-hidden">
                   <div
                     className={`h-full ${month.overBudget ? 'bg-red-500' : month.utilisationPct >= 90 ? 'bg-amber-500' : 'bg-emerald-500'}`}
                     style={{ width: `${Math.min(month.utilisationPct ?? 0, 100)}%` }}
                   />
                 </div>
                 <div className="mt-2 flex items-center justify-between text-[11px]">
-                  <span className={month.overBudget ? 'text-red-700 font-medium' : 'text-un1t-light'}>
+                  <span className={month.overBudget ? 'text-red-700 font-medium' : 'text-un1t-subtle'}>
                     {month.overBudget
                       ? <><TrendingDown size={11} className="inline mr-1" /> {formatEur(Math.abs(month.remainingEur))} over</>
                       : `${formatEur(month.remainingEur)} remaining`}
                   </span>
-                  <span className="text-un1t-mid">FTE labour (sunk cost): {formatEur(month.fteImplicitCostEur)}</span>
+                  <span className="text-un1t-muted">FTE labour (sunk cost): {formatEur(month.fteImplicitCostEur)}</span>
                 </div>
               </>
             )}
 
             {month.monthlyBudgetEur == null && (
-              <p className="text-[11px] text-un1t-light mt-1">
+              <p className="text-[11px] text-un1t-subtle mt-1">
                 Set a monthly contractor budget in <span className="font-medium">Settings → Locations</span> to track spend against a ceiling.
               </p>
             )}

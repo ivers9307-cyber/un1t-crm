@@ -32,7 +32,7 @@ export default function RosterApprovalActions({ rosterId, canApprove }) {
 
   if (!canApprove) {
     return (
-      <span className="text-xs text-un1t-light italic">
+      <span className="text-xs text-un1t-subtle italic">
         Owner approval required
       </span>
     )

@@ -68,7 +68,7 @@ export default async function EditLocationPage(props) {
   return (
     <div className="p-8 max-w-3xl">
       <h2 className="text-2xl font-bold mb-1">Edit Location</h2>
-      <p className="text-sm text-un1t-light mb-6">Update {location.name} details and integrations</p>
+      <p className="text-sm text-un1t-subtle mb-6">Update {location.name} details and integrations</p>
 
       <LocationForm location={location} callerRole={user.role} organizations={organizations || []} />
 
@@ -78,7 +78,7 @@ export default async function EditLocationPage(props) {
       {canEditLocationFeatures(user) && (
         <section className="mt-10">
           <div className="flex items-center gap-2 mb-3">
-            <ToggleRight size={16} className="text-un1t-light" />
+            <ToggleRight size={16} className="text-un1t-subtle" />
             <h3 className="text-lg font-semibold">Features</h3>
           </div>
           <LocationFeatures location={location} />
@@ -90,7 +90,7 @@ export default async function EditLocationPage(props) {
           Same access gate as the rest of the page. */}
       <section className="mt-10">
         <div className="flex items-center gap-2 mb-3">
-          <ImageIcon size={16} className="text-un1t-light" />
+          <ImageIcon size={16} className="text-un1t-subtle" />
           <h3 className="text-lg font-semibold">Branding</h3>
         </div>
         <BrandingSettings user={user} locationId={location.id} />
@@ -112,37 +112,37 @@ export default async function EditLocationPage(props) {
           you'll edit a different studio's data. */}
       <section className="mt-10">
         <div className="flex items-center gap-2 mb-3">
-          <Clock size={16} className="text-un1t-light" />
+          <Clock size={16} className="text-un1t-subtle" />
           <h3 className="text-lg font-semibold">Schedule</h3>
         </div>
         <div className="space-y-2">
           <Link
             href="/settings/shifts"
-            className="bg-un1t-dark border border-un1t-gray hover:border-un1t-light rounded-lg p-4 flex items-center justify-between text-sm group transition-colors"
+            className="bg-un1t-surface border border-un1t-border hover:border-un1t-subtle rounded-lg p-4 flex items-center justify-between text-sm group transition-colors"
           >
             <div>
-              <div className="text-un1t-white inline-flex items-center gap-2">
-                <Clock size={14} className="text-un1t-light" /> Shift templates
+              <div className="text-un1t-text inline-flex items-center gap-2">
+                <Clock size={14} className="text-un1t-subtle" /> Shift templates
               </div>
-              <div className="text-xs text-un1t-light mt-1">
+              <div className="text-xs text-un1t-subtle mt-1">
                 Named shifts (Morning, Afternoon, Evening) used when building the weekly roster at this location.
               </div>
             </div>
-            <ChevronRight size={16} className="text-un1t-light group-hover:text-un1t-white" />
+            <ChevronRight size={16} className="text-un1t-subtle group-hover:text-un1t-text" />
           </Link>
           <Link
             href="/settings/holidays"
-            className="bg-un1t-dark border border-un1t-gray hover:border-un1t-light rounded-lg p-4 flex items-center justify-between text-sm group transition-colors"
+            className="bg-un1t-surface border border-un1t-border hover:border-un1t-subtle rounded-lg p-4 flex items-center justify-between text-sm group transition-colors"
           >
             <div>
-              <div className="text-un1t-white inline-flex items-center gap-2">
-                <CalendarDays size={14} className="text-un1t-light" /> Bank holidays
+              <div className="text-un1t-text inline-flex items-center gap-2">
+                <CalendarDays size={14} className="text-un1t-subtle" /> Bank holidays
               </div>
-              <div className="text-xs text-un1t-light mt-1">
+              <div className="text-xs text-un1t-subtle mt-1">
                 Public holidays for {location.country || 'IE'} auto-highlight on the schedule. Add custom closures (Good Friday, Christmas Eve early-close) per location.
               </div>
             </div>
-            <ChevronRight size={16} className="text-un1t-light group-hover:text-un1t-white" />
+            <ChevronRight size={16} className="text-un1t-subtle group-hover:text-un1t-text" />
           </Link>
         </div>
       </section>
@@ -153,7 +153,7 @@ export default async function EditLocationPage(props) {
           tab strip; owner + master can edit. */}
       <section className="mt-10">
         <div className="flex items-center gap-2 mb-3">
-          <Bell size={16} className="text-un1t-light" />
+          <Bell size={16} className="text-un1t-subtle" />
           <h3 className="text-lg font-semibold">Push notifications</h3>
         </div>
         <NotificationConfigCard locationId={location.id} callerRole={user.role} />

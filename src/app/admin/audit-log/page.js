@@ -37,7 +37,7 @@ export default async function AdminAuditLogPage() {
   return (
     <div className="p-8 max-w-7xl">
       <h2 className="text-2xl font-bold mb-1">Audit log</h2>
-      <p className="text-sm text-un1t-light mb-8">
+      <p className="text-sm text-un1t-subtle mb-8">
         Unified record of authentication events, high-value business
         actions, and assignment / role changes across the platform.
         Append-only — entries are never edited or deleted. Filter at the

@@ -25,7 +25,7 @@ import RadarOutreachButton from '@/components/RadarOutreachButton'
 const TIER_STYLE = {
   high:   { label: 'High',   cls: 'bg-red-100 text-red-700' },
   medium: { label: 'Medium', cls: 'bg-amber-100 text-amber-700' },
-  low:    { label: 'Low',    cls: 'bg-un1t-gray text-un1t-light' },
+  low:    { label: 'Low',    cls: 'bg-un1t-border text-un1t-subtle' },
 }
 
 const SIGNAL_ICON = {
@@ -179,7 +179,7 @@ export default function LeadRadar() {
     })
   }
 
-  if (loading) return <p className="text-sm text-un1t-light">Loading radar…</p>
+  if (loading) return <p className="text-sm text-un1t-subtle">Loading radar…</p>
 
   const summary = funnel?.summary || {
     funnelTotal: 0, funnel: { attending: 0, fresh: 0 },
@@ -235,7 +235,7 @@ export default function LeadRadar() {
       )}
 
       {/* Tabs */}
-      <div className="flex gap-1 border-b border-un1t-gray mb-4">
+      <div className="flex gap-1 border-b border-un1t-border mb-4">
         <Tab active={tab === 'funnel'} onClick={() => setTab('funnel')}
           icon={Radar} label={`Funnel (${funnel?.funnel?.length || 0})`} />
         <Tab active={tab === 'classpass'} onClick={() => setTab('classpass')}
@@ -268,12 +268,12 @@ export default function LeadRadar() {
 
 function StatCard({ label, value, accent, breakdown, delta, deltaGoodDir }) {
   const valueCls = accent === 'green' ? 'text-green-600'
-    : accent === 'amber' ? 'text-amber-600' : 'text-un1t-white'
+    : accent === 'amber' ? 'text-amber-600' : 'text-un1t-text'
   return (
-    <div className="rounded-xl border border-un1t-gray bg-white p-4">
-      <p className="text-xs text-un1t-light">{label}</p>
+    <div className="rounded-xl border border-un1t-border bg-white p-4">
+      <p className="text-xs text-un1t-subtle">{label}</p>
       <p className={`mt-1 text-2xl font-bold tabular-nums ${valueCls}`}>{value}</p>
-      {breakdown && <p className="mt-0.5 text-[11px] text-un1t-mid">{breakdown}</p>}
+      {breakdown && <p className="mt-0.5 text-[11px] text-un1t-muted">{breakdown}</p>}
       <TrendDelta delta={delta} goodDir={deltaGoodDir} />
     </div>
   )
@@ -285,10 +285,10 @@ function StatCard({ label, value, accent, breakdown, delta, deltaGoodDir }) {
 function TrendDelta({ delta, goodDir }) {
   if (!Number.isFinite(delta)) return null  // no snapshot to compare yet
   if (delta === 0) {
-    return <p className="mt-0.5 text-[11px] text-un1t-mid">— no change vs last week</p>
+    return <p className="mt-0.5 text-[11px] text-un1t-muted">— no change vs last week</p>
   }
   const up = delta > 0
-  let cls = 'text-un1t-mid'
+  let cls = 'text-un1t-muted'
   if (goodDir === 'up') cls = up ? 'text-green-600' : 'text-red-600'
   else if (goodDir === 'down') cls = up ? 'text-red-600' : 'text-green-600'
   return (
@@ -305,8 +305,8 @@ function Tab({ active, onClick, icon: Icon, label }) {
       onClick={onClick}
       className={`inline-flex items-center gap-1.5 px-3 py-2 text-sm font-medium border-b-2 -mb-px ${
         active
-          ? 'border-un1t-white text-un1t-white'
-          : 'border-transparent text-un1t-light hover:text-un1t-white'
+          ? 'border-un1t-text text-un1t-text'
+          : 'border-transparent text-un1t-subtle hover:text-un1t-text'
       }`}
     >
       <Icon size={15} />
@@ -318,10 +318,10 @@ function Tab({ active, onClick, icon: Icon, label }) {
 function FunnelList({ rows, busy, onAction, snoozed }) {
   if (rows.length === 0) {
     return (
-      <div className="rounded-2xl border border-dashed border-un1t-gray p-10 text-center">
-        <Radar size={28} className="mx-auto text-un1t-light" />
-        <p className="mt-3 font-medium text-un1t-white">No live prospects right now</p>
-        <p className="mt-1 text-sm text-un1t-light">
+      <div className="rounded-2xl border border-dashed border-un1t-border p-10 text-center">
+        <Radar size={28} className="mx-auto text-un1t-subtle" />
+        <p className="mt-3 font-medium text-un1t-text">No live prospects right now</p>
+        <p className="mt-1 text-sm text-un1t-subtle">
           No non-members attending or freshly joined. New signups will appear here.
         </p>
       </div>
@@ -330,7 +330,7 @@ function FunnelList({ rows, busy, onAction, snoozed }) {
   return (
     <div className="space-y-2">
       {snoozed > 0 && (
-        <p className="text-xs text-un1t-mid">{snoozed} contact{snoozed === 1 ? '' : 's'} snoozed and hidden.</p>
+        <p className="text-xs text-un1t-muted">{snoozed} contact{snoozed === 1 ? '' : 's'} snoozed and hidden.</p>
       )}
       {rows.map((r) => <FunnelRow key={r.contactId} r={r} busy={busy} onAction={onAction} />)}
     </div>
@@ -342,16 +342,16 @@ function FunnelRow({ r, busy, onAction }) {
   const isBusy = busy === r.contactId
   const Icon = SIGNAL_ICON[r.signal.key] || Activity
   return (
-    <div className="rounded-lg border border-un1t-gray bg-un1t-dark p-4">
+    <div className="rounded-lg border border-un1t-border bg-un1t-surface p-4">
       <div className="flex items-center gap-2">
-        <a href={`/contacts/${r.contactId}`} className="font-medium text-un1t-white hover:underline">
+        <a href={`/contacts/${r.contactId}`} className="font-medium text-un1t-text hover:underline">
           {r.name}
         </a>
         <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${tier.cls}`}>
           {tier.label}
         </span>
       </div>
-      <p className="mt-0.5 text-xs text-un1t-light">
+      <p className="mt-0.5 text-xs text-un1t-subtle">
         {r.status?.replace(/_/g, ' ')}
         {r.category === 'attending' && r.daysSinceActivity != null && ` · last class ${r.daysSinceActivity}d ago`}
         {r.category === 'fresh' && r.daysSinceJoined != null && ` · joined ${r.daysSinceJoined}d ago`}
@@ -386,7 +386,7 @@ function ActionBtn({ icon: Icon, label, onClick, disabled }) {
       type="button"
       onClick={onClick}
       disabled={disabled}
-      className="inline-flex items-center gap-1 rounded-md border border-un1t-gray bg-un1t-black px-2.5 py-1 text-xs font-medium text-un1t-light hover:text-un1t-white disabled:opacity-50"
+      className="inline-flex items-center gap-1 rounded-md border border-un1t-border bg-un1t-bg px-2.5 py-1 text-xs font-medium text-un1t-subtle hover:text-un1t-text disabled:opacity-50"
     >
       <Icon size={13} />
       {label}
@@ -417,8 +417,8 @@ function Cleanup({ data, bucket, onBucket, summary, selected, busy, onToggle, on
             onClick={() => onBucket(b.key)}
             className={`rounded-md px-2.5 py-1 text-xs font-medium ${
               bucket === b.key
-                ? 'bg-un1t-white text-un1t-black'
-                : 'border border-un1t-gray text-un1t-light hover:text-un1t-white'
+                ? 'bg-un1t-text text-un1t-bg'
+                : 'border border-un1t-border text-un1t-subtle hover:text-un1t-text'
             }`}
           >
             {b.label} ({countFor(b.key)})
@@ -427,12 +427,12 @@ function Cleanup({ data, bucket, onBucket, summary, selected, busy, onToggle, on
       </div>
 
       {data === null ? (
-        <p className="text-sm text-un1t-light">Loading cleanup…</p>
+        <p className="text-sm text-un1t-subtle">Loading cleanup…</p>
       ) : data.items.length === 0 ? (
-        <div className="rounded-2xl border border-dashed border-un1t-gray p-10 text-center">
+        <div className="rounded-2xl border border-dashed border-un1t-border p-10 text-center">
           <Check size={28} className="mx-auto text-green-500" />
-          <p className="mt-3 font-medium text-un1t-white">Nothing to triage here</p>
-          <p className="mt-1 text-sm text-un1t-light">Every record in this bucket has been triaged.</p>
+          <p className="mt-3 font-medium text-un1t-text">Nothing to triage here</p>
+          <p className="mt-1 text-sm text-un1t-subtle">Every record in this bucket has been triaged.</p>
         </div>
       ) : (
         <CleanupList data={data} selected={selected} busy={busy}
@@ -449,17 +449,17 @@ function CleanupList({ data, selected, busy, onToggle, onSelectAll, onTriage }) 
   return (
     <div>
       <div className="mb-2 flex items-center justify-between">
-        <label className="inline-flex items-center gap-2 text-xs text-un1t-light">
+        <label className="inline-flex items-center gap-2 text-xs text-un1t-subtle">
           <input type="checkbox" checked={allSelected} onChange={(e) => onSelectAll(e.target.checked)} />
           Select all shown ({items.length})
           {data.total > items.length && (
-            <span className="text-un1t-mid">· {data.total.toLocaleString('en-IE')} total — triage in pages</span>
+            <span className="text-un1t-muted">· {data.total.toLocaleString('en-IE')} total — triage in pages</span>
           )}
         </label>
         {selected.size > 0 && (
           <div className="flex gap-2">
             <button type="button" disabled={isBusy} onClick={() => onTriage('keep')}
-              className="rounded-md border border-un1t-gray bg-un1t-black px-2.5 py-1 text-xs font-medium text-un1t-light hover:text-un1t-white disabled:opacity-50">
+              className="rounded-md border border-un1t-border bg-un1t-bg px-2.5 py-1 text-xs font-medium text-un1t-subtle hover:text-un1t-text disabled:opacity-50">
               Keep {selected.size}
             </button>
             <button type="button" disabled={isBusy} onClick={() => onTriage('archive')}
@@ -472,17 +472,17 @@ function CleanupList({ data, selected, busy, onToggle, onSelectAll, onTriage }) 
       <ul className="space-y-1.5">
         {items.map((c) => (
           <li key={c.contactId}
-            className="flex items-center gap-3 rounded-lg border border-un1t-gray bg-un1t-dark p-3">
+            className="flex items-center gap-3 rounded-lg border border-un1t-border bg-un1t-surface p-3">
             <input type="checkbox" checked={selected.has(c.contactId)} onChange={() => onToggle(c.contactId)} />
             <div className="min-w-0 flex-1">
-              <a href={`/contacts/${c.contactId}`} className="text-sm font-medium text-un1t-white hover:underline">
+              <a href={`/contacts/${c.contactId}`} className="text-sm font-medium text-un1t-text hover:underline">
                 {c.name}
               </a>
-              <p className="text-xs text-un1t-light">
+              <p className="text-xs text-un1t-subtle">
                 {c.status?.replace(/_/g, ' ')} · joined {formatJoined(c.joinedAt)} · {c.reason}
               </p>
             </div>
-            <Users size={14} className="shrink-0 text-un1t-mid" />
+            <Users size={14} className="shrink-0 text-un1t-muted" />
           </li>
         ))}
       </ul>
@@ -505,7 +505,7 @@ function ClassPass({ data, filter, onFilter, summary }) {
 
   return (
     <div>
-      <p className="mb-3 rounded-lg border border-un1t-gray bg-un1t-dark p-3 text-xs text-un1t-light">
+      <p className="mb-3 rounded-lg border border-un1t-border bg-un1t-surface p-3 text-xs text-un1t-subtle">
         ClassPass drop-ins pay per visit through ClassPass and rarely convert to a
         direct membership, so they sit outside the Funnel. This list is{' '}
         <strong>read-only</strong> — for awareness, not a follow-up queue.{' '}
@@ -521,8 +521,8 @@ function ClassPass({ data, filter, onFilter, summary }) {
             onClick={() => onFilter(f.key)}
             className={`rounded-md px-2.5 py-1 text-xs font-medium ${
               filter === f.key
-                ? 'bg-un1t-white text-un1t-black'
-                : 'border border-un1t-gray text-un1t-light hover:text-un1t-white'
+                ? 'bg-un1t-text text-un1t-bg'
+                : 'border border-un1t-border text-un1t-subtle hover:text-un1t-text'
             }`}
           >
             {f.label} ({countFor(f.key)})
@@ -531,12 +531,12 @@ function ClassPass({ data, filter, onFilter, summary }) {
       </div>
 
       {data === null ? (
-        <p className="text-sm text-un1t-light">Loading ClassPass…</p>
+        <p className="text-sm text-un1t-subtle">Loading ClassPass…</p>
       ) : data.items.length === 0 ? (
-        <div className="rounded-2xl border border-dashed border-un1t-gray p-10 text-center">
-          <CreditCard size={28} className="mx-auto text-un1t-light" />
-          <p className="mt-3 font-medium text-un1t-white">No ClassPass contacts here</p>
-          <p className="mt-1 text-sm text-un1t-light">Nothing matches this filter.</p>
+        <div className="rounded-2xl border border-dashed border-un1t-border p-10 text-center">
+          <CreditCard size={28} className="mx-auto text-un1t-subtle" />
+          <p className="mt-3 font-medium text-un1t-text">No ClassPass contacts here</p>
+          <p className="mt-1 text-sm text-un1t-subtle">Nothing matches this filter.</p>
         </div>
       ) : (
         <ClassPassList data={data} />
@@ -550,19 +550,19 @@ function ClassPassList({ data }) {
   return (
     <div>
       {data.total > items.length && (
-        <p className="mb-2 text-xs text-un1t-mid">
+        <p className="mb-2 text-xs text-un1t-muted">
           Showing {items.length} of {data.total.toLocaleString('en-IE')} — narrow with the filter.
         </p>
       )}
       <ul className="space-y-1.5">
         {items.map((c) => (
           <li key={c.contactId}
-            className="flex items-center gap-3 rounded-lg border border-un1t-gray bg-un1t-dark p-3">
+            className="flex items-center gap-3 rounded-lg border border-un1t-border bg-un1t-surface p-3">
             <div className="min-w-0 flex-1">
-              <a href={`/contacts/${c.contactId}`} className="text-sm font-medium text-un1t-white hover:underline">
+              <a href={`/contacts/${c.contactId}`} className="text-sm font-medium text-un1t-text hover:underline">
                 {c.name}
               </a>
-              <p className="text-xs text-un1t-light">
+              <p className="text-xs text-un1t-subtle">
                 {c.daysSinceActivity != null
                   ? `last class ${c.daysSinceActivity}d ago`
                   : 'no class activity'}
@@ -570,7 +570,7 @@ function ClassPassList({ data }) {
               </p>
             </div>
             <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${
-              c.attending ? 'bg-green-100 text-green-700' : 'bg-un1t-gray text-un1t-light'
+              c.attending ? 'bg-green-100 text-green-700' : 'bg-un1t-border text-un1t-subtle'
             }`}>
               {c.attending ? 'Attending' : 'Lapsed'}
             </span>

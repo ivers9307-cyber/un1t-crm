@@ -59,15 +59,15 @@ export default function AppShell({ children, user }) {
           unnecessary. The branding text mirrors what the sidebar
           shows so the user always knows what app + location they're
           in even when the drawer is closed. */}
-      <header className="md:hidden sticky top-0 z-30 bg-un1t-dark border-b border-un1t-gray flex items-center justify-between px-4 py-2.5">
+      <header className="md:hidden sticky top-0 z-30 bg-un1t-surface border-b border-un1t-border flex items-center justify-between px-4 py-2.5">
         <button
           onClick={() => setSidebarOpen(true)}
           aria-label="Open menu"
-          className="p-2 -ml-2 text-un1t-light hover:text-un1t-white active:bg-un1t-gray/40 rounded-md transition-colors"
+          className="p-2 -ml-2 text-un1t-subtle hover:text-un1t-text active:bg-un1t-border/40 rounded-md transition-colors"
         >
           <Menu size={22} />
         </button>
-        <span className="text-sm font-semibold tracking-wider text-un1t-white">
+        <span className="text-sm font-semibold tracking-wider text-un1t-text">
           UN1T
         </span>
         {/* Right-side spacer to keep the title centred (matches the

@@ -143,9 +143,9 @@ export default function TemplateEditor({ template, locationId, userId }) {
   return (
     <div className="flex flex-col h-screen">
       {/* Top bar */}
-      <div className="flex items-center justify-between px-5 py-3 border-b border-un1t-gray bg-un1t-dark shrink-0">
+      <div className="flex items-center justify-between px-5 py-3 border-b border-un1t-border bg-un1t-surface shrink-0">
         <div className="flex items-center gap-4">
-          <Link href="/email/templates" className="text-un1t-light hover:text-un1t-white transition-colors">
+          <Link href="/email/templates" className="text-un1t-subtle hover:text-un1t-text transition-colors">
             <ArrowLeft size={20} />
           </Link>
           <input
@@ -153,12 +153,12 @@ export default function TemplateEditor({ template, locationId, userId }) {
             value={name}
             onChange={e => setName(e.target.value)}
             placeholder="Template name..."
-            className="bg-transparent text-lg font-semibold text-un1t-white placeholder:text-un1t-mid focus:outline-none w-64"
+            className="bg-transparent text-lg font-semibold text-un1t-text placeholder:text-un1t-muted focus:outline-none w-64"
           />
           <select
             value={category}
             onChange={e => setCategory(e.target.value)}
-            className="bg-un1t-gray text-xs text-un1t-light px-2 py-1 rounded-md border-0 focus:outline-none"
+            className="bg-un1t-border text-xs text-un1t-subtle px-2 py-1 rounded-md border-0 focus:outline-none"
           >
             {categories.map(c => (
               <option key={c} value={c}>{c}</option>
@@ -169,7 +169,7 @@ export default function TemplateEditor({ template, locationId, userId }) {
         <button
           onClick={handleSave}
           disabled={saving}
-          className="flex items-center gap-1.5 text-sm bg-un1t-white text-un1t-black font-medium px-4 py-1.5 rounded-md hover:bg-un1t-accent transition-colors disabled:opacity-50"
+          className="flex items-center gap-1.5 text-sm bg-un1t-text text-un1t-bg font-medium px-4 py-1.5 rounded-md hover:bg-un1t-accent transition-colors disabled:opacity-50"
         >
           <Save size={14} />
           {saving ? 'Saving...' : 'Save Template'}
@@ -183,22 +183,22 @@ export default function TemplateEditor({ template, locationId, userId }) {
       )}
 
       {/* Description */}
-      <div className="px-5 py-2 border-b border-un1t-gray bg-un1t-dark">
+      <div className="px-5 py-2 border-b border-un1t-border bg-un1t-surface">
         <input
           type="text"
           value={description}
           onChange={e => setDescription(e.target.value)}
           placeholder="Template description (optional)..."
-          className="bg-transparent text-sm text-un1t-light placeholder:text-un1t-mid focus:outline-none w-full"
+          className="bg-transparent text-sm text-un1t-subtle placeholder:text-un1t-muted focus:outline-none w-full"
         />
       </div>
 
       {/* Visual/Code toggle */}
-      <div className="flex items-center gap-2 px-5 py-2 bg-un1t-dark border-b border-un1t-gray">
+      <div className="flex items-center gap-2 px-5 py-2 bg-un1t-surface border-b border-un1t-border">
         <button
           onClick={() => setEditorMode('visual')}
           className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md transition-colors ${
-            editorMode === 'visual' ? 'bg-un1t-white text-un1t-black' : 'text-un1t-light hover:text-un1t-white'
+            editorMode === 'visual' ? 'bg-un1t-text text-un1t-bg' : 'text-un1t-subtle hover:text-un1t-text'
           }`}
         >
           <Paintbrush size={12} /> Visual Editor
@@ -213,7 +213,7 @@ export default function TemplateEditor({ template, locationId, userId }) {
             setEditorMode('code')
           }}
           className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md transition-colors ${
-            editorMode === 'code' ? 'bg-un1t-white text-un1t-black' : 'text-un1t-light hover:text-un1t-white'
+            editorMode === 'code' ? 'bg-un1t-text text-un1t-bg' : 'text-un1t-subtle hover:text-un1t-text'
           }`}
         >
           <Code size={12} /> HTML Code

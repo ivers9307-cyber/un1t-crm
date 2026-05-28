@@ -18,11 +18,11 @@ export default async function IssueContractPage() {
 
   return (
     <div className="p-6 md:p-8 max-w-3xl">
-      <Link href="/admin/contracts" className="text-xs text-un1t-light hover:text-un1t-white">
+      <Link href="/admin/contracts" className="text-xs text-un1t-subtle hover:text-un1t-text">
         ← Contracts
       </Link>
       <h2 className="text-2xl font-bold mt-1 mb-1">Issue a contract</h2>
-      <p className="text-sm text-un1t-light mb-6">
+      <p className="text-sm text-un1t-subtle mb-6">
         Pick a recipient and template, fill any custom variables, countersign, and send.
       </p>
       <ContractIssueWizard issuerName={user.full_name} />

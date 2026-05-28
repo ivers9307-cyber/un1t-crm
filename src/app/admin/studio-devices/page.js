@@ -32,7 +32,7 @@ export default async function StudioDevicesPage() {
   return (
     <div className="p-6 md:p-8 max-w-6xl">
       <h2 className="text-2xl font-bold mb-1">Studio devices</h2>
-      <p className="text-sm text-un1t-light mb-6 max-w-3xl">
+      <p className="text-sm text-un1t-subtle mb-6 max-w-3xl">
         Manage Mac shells and iPads that are paired with studio locations
         for PIN-based staff login. Add the studio&apos;s public IP(s) here
         first, then pair each device from this page and paste the

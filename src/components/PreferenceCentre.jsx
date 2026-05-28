@@ -95,20 +95,20 @@ export default function PreferenceCentre({ token }) {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-un1t-black flex items-center justify-center">
-        <p className="text-un1t-light">Loading preferences...</p>
+      <div className="min-h-screen bg-un1t-bg flex items-center justify-center">
+        <p className="text-un1t-subtle">Loading preferences...</p>
       </div>
     )
   }
 
   if (error && !contact) {
     return (
-      <div className="min-h-screen bg-un1t-black flex items-center justify-center p-4">
+      <div className="min-h-screen bg-un1t-bg flex items-center justify-center p-4">
         <div className="w-full max-w-md text-center">
           <h1 className="text-2xl font-bold tracking-wider mb-8">UN1T</h1>
-          <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-8">
+          <div className="bg-un1t-surface border border-un1t-border rounded-lg p-8">
             <h2 className="text-lg font-semibold text-red-400 mb-2">Link not valid</h2>
-            <p className="text-sm text-un1t-light">
+            <p className="text-sm text-un1t-subtle">
               This preference link is invalid or has expired. Please contact us if you need assistance.
             </p>
           </div>
@@ -118,23 +118,23 @@ export default function PreferenceCentre({ token }) {
   }
 
   return (
-    <div className="min-h-screen bg-un1t-black flex items-center justify-center p-4">
+    <div className="min-h-screen bg-un1t-bg flex items-center justify-center p-4">
       <div className="w-full max-w-lg">
         <div className="text-center mb-8">
           <h1 className="text-2xl font-bold tracking-wider">UN1T</h1>
-          <p className="text-sm text-un1t-light mt-1">Communication Preferences</p>
+          <p className="text-sm text-un1t-subtle mt-1">Communication Preferences</p>
         </div>
 
-        <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-6">
+        <div className="bg-un1t-surface border border-un1t-border rounded-lg p-6">
           {contact && (
-            <div className="mb-6 pb-4 border-b border-un1t-gray">
-              <p className="text-sm text-un1t-light">
-                Managing preferences for <strong className="text-un1t-white">{contact.email}</strong>
+            <div className="mb-6 pb-4 border-b border-un1t-border">
+              <p className="text-sm text-un1t-subtle">
+                Managing preferences for <strong className="text-un1t-text">{contact.email}</strong>
               </p>
             </div>
           )}
 
-          <p className="text-sm text-un1t-light mb-5">
+          <p className="text-sm text-un1t-subtle mb-5">
             Choose which communications you'd like to receive from us. Administrative messages may still be sent for essential account and booking information even if marketing is turned off.
           </p>
 
@@ -142,16 +142,16 @@ export default function PreferenceCentre({ token }) {
             {CHANNELS.map(ch => (
               <div
                 key={ch.key}
-                className="flex items-start justify-between p-4 bg-un1t-dark rounded-lg border border-un1t-gray"
+                className="flex items-start justify-between p-4 bg-un1t-surface rounded-lg border border-un1t-border"
               >
                 <div className="flex-1 mr-4">
                   <p className="text-sm font-medium">{ch.label}</p>
-                  <p className="text-xs text-un1t-mid mt-0.5">{ch.description}</p>
+                  <p className="text-xs text-un1t-muted mt-0.5">{ch.description}</p>
                 </div>
                 <button
                   onClick={() => toggleChannel(ch.key)}
                   className={`relative w-11 h-6 rounded-full transition-colors shrink-0 mt-0.5 ${
-                    prefs[ch.key] ? 'bg-green-500' : 'bg-un1t-gray'
+                    prefs[ch.key] ? 'bg-green-500' : 'bg-un1t-border'
                   }`}
                 >
                   <span
@@ -175,13 +175,13 @@ export default function PreferenceCentre({ token }) {
           <button
             onClick={handleSave}
             disabled={saving}
-            className="w-full mt-6 bg-un1t-white text-un1t-black font-medium py-2.5 rounded-md hover:bg-un1t-accent transition-colors disabled:opacity-50"
+            className="w-full mt-6 bg-un1t-text text-un1t-bg font-medium py-2.5 rounded-md hover:bg-un1t-accent transition-colors disabled:opacity-50"
           >
             {saving ? 'Saving...' : 'Save Preferences'}
           </button>
         </div>
 
-        <p className="text-xs text-un1t-mid text-center mt-6">
+        <p className="text-xs text-un1t-muted text-center mt-6">
           Under GDPR, you have the right to control how your data is used for communication.
           All changes are logged for compliance purposes.
         </p>

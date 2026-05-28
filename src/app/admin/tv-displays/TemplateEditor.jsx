@@ -35,7 +35,7 @@ const FONT_WEIGHTS = [
 const clamp = (n, lo, hi) => Math.min(hi, Math.max(lo, n))
 
 const INPUT_CLASS =
-  'w-full bg-un1t-black border border-un1t-gray rounded px-2 py-1.5 text-xs text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid'
+  'w-full bg-un1t-bg border border-un1t-border rounded px-2 py-1.5 text-xs text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted'
 
 function newZone() {
   return {
@@ -137,25 +137,25 @@ export default function TemplateEditor({ template, locationId, currentUserId, db
 
   return (
     <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4">
-      <div className="bg-un1t-dark border border-un1t-gray rounded-lg w-full max-w-5xl max-h-[92vh] flex flex-col">
+      <div className="bg-un1t-surface border border-un1t-border rounded-lg w-full max-w-5xl max-h-[92vh] flex flex-col">
         {/* Header */}
-        <div className="flex items-center justify-between p-4 border-b border-un1t-gray">
+        <div className="flex items-center justify-between p-4 border-b border-un1t-border">
           <div className="flex items-center gap-2">
-            <Type size={16} className="text-un1t-light" />
+            <Type size={16} className="text-un1t-subtle" />
             <h3 className="text-lg font-semibold">{isEdit ? 'Edit template' : 'New template'}</h3>
           </div>
-          <button onClick={onClose} className="text-un1t-light hover:text-un1t-white"><X size={16} /></button>
+          <button onClick={onClose} className="text-un1t-subtle hover:text-un1t-text"><X size={16} /></button>
         </div>
 
         {/* Body */}
         <div className="flex-1 overflow-auto p-4">
           <div className="mb-4">
-            <label className="block text-xs text-un1t-light mb-1">Template name</label>
+            <label className="block text-xs text-un1t-subtle mb-1">Template name</label>
             <input
               value={name}
               onChange={e => setName(e.target.value)}
               placeholder="e.g. Welcome board"
-              className="w-full max-w-sm bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid"
+              className="w-full max-w-sm bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted"
             />
           </div>
 
@@ -166,14 +166,14 @@ export default function TemplateEditor({ template, locationId, currentUserId, db
               {/* Canvas */}
               <div className="flex-1 min-w-0">
                 <div className="flex items-center justify-between mb-2">
-                  <span className="text-xs text-un1t-mid uppercase tracking-wide">
+                  <span className="text-xs text-un1t-muted uppercase tracking-wide">
                     Drag zones to move · drag the corner to resize
                   </span>
                   <div className="flex items-center gap-2">
                     <ReplaceBaseButton busy={busy} onPick={uploadBase} />
                     <button
                       onClick={addZone}
-                      className="inline-flex items-center gap-1 text-xs bg-un1t-white text-un1t-black font-medium px-2.5 py-1 rounded-md hover:bg-un1t-accent"
+                      className="inline-flex items-center gap-1 text-xs bg-un1t-text text-un1t-bg font-medium px-2.5 py-1 rounded-md hover:bg-un1t-accent"
                     >
                       <Plus size={12} /> Add zone
                     </button>
@@ -197,7 +197,7 @@ export default function TemplateEditor({ template, locationId, currentUserId, db
                     onDelete={() => deleteZone(selected.id)}
                   />
                 ) : (
-                  <div className="bg-un1t-black border border-un1t-gray rounded-lg p-4 text-xs text-un1t-mid">
+                  <div className="bg-un1t-bg border border-un1t-border rounded-lg p-4 text-xs text-un1t-muted">
                     {zones.length === 0
                       ? 'No text zones yet. Click “Add zone” to drop one onto the image.'
                       : 'Select a zone on the image to edit its text and styling.'}
@@ -215,14 +215,14 @@ export default function TemplateEditor({ template, locationId, currentUserId, db
         </div>
 
         {/* Footer */}
-        <div className="flex justify-end gap-2 p-4 border-t border-un1t-gray">
-          <button onClick={onClose} className="text-sm text-un1t-light hover:text-un1t-white px-3 py-1.5 rounded-md">
+        <div className="flex justify-end gap-2 p-4 border-t border-un1t-border">
+          <button onClick={onClose} className="text-sm text-un1t-subtle hover:text-un1t-text px-3 py-1.5 rounded-md">
             Cancel
           </button>
           <button
             onClick={save}
             disabled={busy}
-            className="text-sm bg-un1t-white text-un1t-black font-medium px-4 py-1.5 rounded-md hover:bg-un1t-accent disabled:opacity-50"
+            className="text-sm bg-un1t-text text-un1t-bg font-medium px-4 py-1.5 rounded-md hover:bg-un1t-accent disabled:opacity-50"
           >
             {busy ? 'Saving…' : isEdit ? 'Save changes' : 'Create template'}
           </button>
@@ -236,13 +236,13 @@ export default function TemplateEditor({ template, locationId, currentUserId, db
 
 function BaseImageUploader({ busy, onPick }) {
   return (
-    <div className="bg-un1t-black border border-dashed border-un1t-gray rounded-lg p-10 text-center">
-      <ImageIcon size={28} className="text-un1t-mid mx-auto mb-3" />
-      <p className="text-sm text-un1t-light mb-1">Upload the branded base image</p>
-      <p className="text-xs text-un1t-mid mb-4">
+    <div className="bg-un1t-bg border border-dashed border-un1t-border rounded-lg p-10 text-center">
+      <ImageIcon size={28} className="text-un1t-muted mx-auto mb-3" />
+      <p className="text-sm text-un1t-subtle mb-1">Upload the branded base image</p>
+      <p className="text-xs text-un1t-muted mb-4">
         This stays fixed for the template — staff only change the text on top of it. Landscape, ideally 1920×1080.
       </p>
-      <label className="inline-flex items-center gap-1.5 text-sm bg-un1t-white text-un1t-black font-medium px-3 py-1.5 rounded-md hover:bg-un1t-accent cursor-pointer">
+      <label className="inline-flex items-center gap-1.5 text-sm bg-un1t-text text-un1t-bg font-medium px-3 py-1.5 rounded-md hover:bg-un1t-accent cursor-pointer">
         <Upload size={14} /> {busy ? 'Uploading…' : 'Choose image'}
         <input
           type="file"
@@ -258,7 +258,7 @@ function BaseImageUploader({ busy, onPick }) {
 
 function ReplaceBaseButton({ busy, onPick }) {
   return (
-    <label className="inline-flex items-center gap-1 text-xs text-un1t-light hover:text-un1t-white border border-un1t-gray hover:border-un1t-white/30 px-2.5 py-1 rounded-md cursor-pointer">
+    <label className="inline-flex items-center gap-1 text-xs text-un1t-subtle hover:text-un1t-text border border-un1t-border hover:border-un1t-text/30 px-2.5 py-1 rounded-md cursor-pointer">
       <Upload size={12} /> {busy ? 'Uploading…' : 'Replace image'}
       <input
         type="file"
@@ -292,7 +292,7 @@ function Canvas({ baseImageUrl, zones, selectedId, onSelect, onZoneChange }) {
       ref={canvasRef}
       onPointerDown={() => onSelect(null)}
       style={{ position: 'relative', width: '100%', userSelect: 'none', background: '#000' }}
-      className="border border-un1t-gray rounded-md overflow-hidden"
+      className="border border-un1t-border rounded-md overflow-hidden"
     >
       <img
         src={baseImageUrl}
@@ -430,9 +430,9 @@ function ZoneBox({ zone, canvasSize, selected, onSelect, onChange }) {
 
 function ZoneProperties({ zone, onChange, onDelete }) {
   return (
-    <div className="bg-un1t-black border border-un1t-gray rounded-lg p-3 space-y-3">
+    <div className="bg-un1t-bg border border-un1t-border rounded-lg p-3 space-y-3">
       <div className="flex items-center justify-between">
-        <span className="text-xs text-un1t-light uppercase tracking-wide">Zone</span>
+        <span className="text-xs text-un1t-subtle uppercase tracking-wide">Zone</span>
         <button
           onClick={onDelete}
           className="inline-flex items-center gap-1 text-xs text-red-400 hover:text-red-300"
@@ -510,10 +510,10 @@ function ZoneProperties({ zone, onChange, onDelete }) {
             type="color"
             value={zone.color}
             onChange={e => onChange({ color: e.target.value })}
-            className="w-full h-8 bg-un1t-black border border-un1t-gray rounded cursor-pointer"
+            className="w-full h-8 bg-un1t-bg border border-un1t-border rounded cursor-pointer"
           />
         </Field>
-        <label className="flex items-center gap-1.5 text-xs text-un1t-light pt-4 whitespace-nowrap">
+        <label className="flex items-center gap-1.5 text-xs text-un1t-subtle pt-4 whitespace-nowrap">
           <input
             type="checkbox"
             checked={!!zone.uppercase}
@@ -529,7 +529,7 @@ function ZoneProperties({ zone, onChange, onDelete }) {
 function Field({ label, children }) {
   return (
     <label className="block">
-      <span className="block text-[11px] text-un1t-mid mb-1">{label}</span>
+      <span className="block text-[11px] text-un1t-muted mb-1">{label}</span>
       {children}
     </label>
   )
