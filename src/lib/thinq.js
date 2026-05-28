@@ -235,9 +235,25 @@ function normaliseState(r) {
   if (!r || typeof r !== 'object') return null
   const opMode = r.operation?.airConOperationMode || null
   const job    = r.airConJobMode?.currentJobMode || null
-  const tempC  = r.temperature?.targetTemperatureC ?? null
-  const cur    = r.temperature?.currentTemperatureC ?? null
-  const wind   = r.airFlow?.windStrength || null
+
+  // Modern LG units expose temperature under `temperatureInUnits`
+  // (verified against the Python SDK profile_map — there is no
+  // `temperature` resource on AirConditionerDevice). Legacy firmware
+  // may still use `temperature` so we fall back rather than ignore.
+  const tempC  =
+    r.temperatureInUnits?.targetTemperatureC ??
+    r.temperatureInUnits?.targetTemperature ??
+    r.temperature?.targetTemperatureC ??
+    null
+  const cur    =
+    r.temperatureInUnits?.currentTemperatureC ??
+    r.temperatureInUnits?.currentTemperature ??
+    r.temperature?.currentTemperatureC ??
+    null
+  // Some firmware uses `windStrengthDetail` instead of `windStrength`
+  // for the fan setting (Python SDK's _get_preferred_property_key
+  // picks Detail first when present). Fall back to either.
+  const wind   = r.airFlow?.windStrength || r.airFlow?.windStrengthDetail || null
 
   return {
     on:             opMode === 'POWER_ON',
@@ -276,7 +292,13 @@ function toNum(v) {
 // device return code 2207 'Invalid command error'. After that the
 // remaining resources can be sent in any order; we keep a stable
 // sequence so logs are predictable.
-const CONTROL_SEQUENCE = ['operation', 'airConJobMode', 'temperature', 'airFlow']
+//
+// `temperatureInUnits` is the modern resource (matches the Python
+// SDK profile_map). Older firmware may instead expose `temperature`
+// — we keep both in the sequence as a defensive fallback in case
+// future buildTurnOnState ever emits the legacy shape; today
+// buildTurnOnState only emits `temperatureInUnits`.
+const CONTROL_SEQUENCE = ['operation', 'airConJobMode', 'temperatureInUnits', 'temperature', 'airFlow']
 
 /**
  * Send a control command.
@@ -317,31 +339,58 @@ export async function setDeviceState(deviceId, command, { pat, clientId, country
     throw new ThinqError('command body has no resource keys.')
   }
 
+  // Of the resources we POST in a Turn-on flow, only `operation`
+  // (POWER_ON/POWER_OFF) is critical. If the unit successfully
+  // powers on but a downstream resource fails (e.g. firmware-
+  // specific quirks around temperatureInUnits vs temperature, or
+  // windStrength vs windStrengthDetail), the AC is still ON — the
+  // operator just gets a less-customised state. Swallowing the
+  // error there beats stranding the user with "Invalid command
+  // error" while the unit is physically running.
+  //
+  // A failure on `operation` itself is still fatal — the whole
+  // call rejects up the stack and the dispatcher reports it.
   let lastJson = null
+  const warnings = []
   for (const key of keys) {
     const body = { [key]: command[key] }
-    lastJson = await thinqFetch(
-      `/devices/${encodeURIComponent(deviceId)}/control`,
-      {
-        pat,
-        clientId,
-        countryCode,
-        method: 'POST',
-        body,
-        // The header doesn't hurt for single-resource POSTs either,
-        // and keeping it on every call matches the Python SDK's
-        // posture (they include it unconditionally).
-        extraHeaders: { 'x-conditional-control': 'true' },
+    try {
+      lastJson = await thinqFetch(
+        `/devices/${encodeURIComponent(deviceId)}/control`,
+        {
+          pat,
+          clientId,
+          countryCode,
+          method: 'POST',
+          body,
+          // The header doesn't hurt for single-resource POSTs either,
+          // and keeping it on every call matches the Python SDK's
+          // posture (they include it unconditionally).
+          extraHeaders: { 'x-conditional-control': 'true' },
+        }
+      )
+    } catch (e) {
+      if (key === 'operation') {
+        // Power on/off didn't apply — abort the whole call.
+        throw e
       }
-    )
+      // Non-critical resource — log + carry on. Keeps audit visibility
+      // without breaking the user's flow.
+      warnings.push({ resource: key, message: e?.message || 'unknown', code: e?.code || null })
+      console.warn(`[thinq] non-critical control POST for resource "${key}" failed: ${e?.message || e}`)
+    }
   }
 
   // LG's control response sometimes echoes the new state, sometimes
   // returns an empty success envelope. Callers that need the new
   // state should do a follow-up getDeviceState() — we surface
-  // whatever LG returned on the LAST call (typically the airFlow
-  // POST), normalised, or null.
-  return normaliseState(lastJson?.response || null)
+  // whatever LG returned on the LAST successful call, normalised,
+  // or null.
+  const normalised = normaliseState(lastJson?.response || null)
+  if (warnings.length && normalised) {
+    normalised.warnings = warnings
+  }
+  return normalised
 }
 
 /**
@@ -371,9 +420,17 @@ export function buildTurnOnState({ mode, tempC, fan } = {}) {
   const lgFan  = FAN_MAP[String(fan || 'auto').toLowerCase()] || 'AUTO'
   const t = tempC == null ? 22 : Number(tempC)
   return {
-    operation:      { airConOperationMode: 'POWER_ON' },
-    airConJobMode:  { currentJobMode: lgMode },
-    temperature:    { targetTemperatureC: t },
-    airFlow:        { windStrength: lgFan },
+    operation:          { airConOperationMode: 'POWER_ON' },
+    airConJobMode:      { currentJobMode: lgMode },
+    // LG's AirConditioner profile (verified against pythinqconnect)
+    // exposes temperature under `temperatureInUnits`, NOT
+    // `temperature` — there is no `temperature` resource on the
+    // AC profile_map. Property key is `targetTemperature` (no C
+    // suffix) with a sibling `unit` discriminator. Sending the
+    // legacy `temperature: { targetTemperatureC }` shape returns
+    // code 2207 'Invalid command error' because LG doesn't
+    // recognise the resource at all.
+    temperatureInUnits: { targetTemperature: t, unit: 'C' },
+    airFlow:            { windStrength: lgFan },
   }
 }

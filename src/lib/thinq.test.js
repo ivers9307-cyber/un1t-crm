@@ -74,24 +74,33 @@ describe('ThinqError', () => {
 describe('buildTurnOnState', () => {
   it('uses defaults when args are omitted (cool/22/AUTO)', () => {
     expect(buildTurnOnState({})).toEqual({
-      operation:     { airConOperationMode: 'POWER_ON' },
-      airConJobMode: { currentJobMode: 'COOL' },
-      temperature:   { targetTemperatureC: 22 },
-      airFlow:       { windStrength: 'AUTO' },
+      operation:          { airConOperationMode: 'POWER_ON' },
+      airConJobMode:      { currentJobMode: 'COOL' },
+      temperatureInUnits: { targetTemperature: 22, unit: 'C' },
+      airFlow:            { windStrength: 'AUTO' },
     })
   })
 
   it('upcases lowercase Sensibo-style mode + fan to LG enums', () => {
     expect(buildTurnOnState({ mode: 'heat', tempC: 24, fan: 'high' })).toEqual({
-      operation:     { airConOperationMode: 'POWER_ON' },
-      airConJobMode: { currentJobMode: 'HEAT' },
-      temperature:   { targetTemperatureC: 24 },
-      airFlow:       { windStrength: 'HIGH' },
+      operation:          { airConOperationMode: 'POWER_ON' },
+      airConJobMode:      { currentJobMode: 'HEAT' },
+      temperatureInUnits: { targetTemperature: 24, unit: 'C' },
+      airFlow:            { windStrength: 'HIGH' },
     })
   })
 
   it("maps Sensibo's 'medium' fan onto LG's 'MID'", () => {
     expect(buildTurnOnState({ fan: 'medium' }).airFlow.windStrength).toBe('MID')
+  })
+
+  it("uses LG's modern `temperatureInUnits` resource — NOT legacy `temperature`", () => {
+    // The Python SDK profile_map has no `temperature` resource on
+    // AirConditionerDevice. Sending the legacy shape returns code
+    // 2207 'Invalid command error' from LG.
+    const out = buildTurnOnState({ tempC: 21 })
+    expect(out.temperatureInUnits).toEqual({ targetTemperature: 21, unit: 'C' })
+    expect(out.temperature).toBeUndefined()
   })
 
   it("maps 'quiet' → LOW and 'strong' → HIGH (LG has no exact match)", () => {
@@ -108,7 +117,7 @@ describe('buildTurnOnState', () => {
   })
 
   it('respects tempC: 0 without overriding to 22 (defensive)', () => {
-    expect(buildTurnOnState({ tempC: 0 }).temperature.targetTemperatureC).toBe(0)
+    expect(buildTurnOnState({ tempC: 0 }).temperatureInUnits.targetTemperature).toBe(0)
   })
 
   it('always sets POWER_ON (this is the "turn on" state builder)', () => {
@@ -214,12 +223,12 @@ describe('listDevices', () => {
 // ----------------------------------------------------------------
 
 describe('getDeviceState', () => {
-  it('normalises a powered-on cool state', async () => {
+  it('normalises a powered-on cool state (modern temperatureInUnits shape)', async () => {
     global.fetch = vi.fn(async () => jsonResponse({
       response: {
         operation: { airConOperationMode: 'POWER_ON' },
         airConJobMode: { currentJobMode: 'COOL' },
-        temperature: { targetTemperatureC: 22, currentTemperatureC: 24 },
+        temperatureInUnits: { targetTemperatureC: 22, currentTemperatureC: 24, unit: 'C' },
         airFlow: { windStrength: 'HIGH' },
       },
     }))
@@ -232,6 +241,28 @@ describe('getDeviceState', () => {
       fan: 'high',
     })
     expect(s.raw).toBeDefined()
+  })
+
+  it('falls back to legacy `temperature` resource if temperatureInUnits is absent', async () => {
+    global.fetch = vi.fn(async () => jsonResponse({
+      response: {
+        operation: { airConOperationMode: 'POWER_ON' },
+        temperature: { targetTemperatureC: 19, currentTemperatureC: 21 },
+      },
+    }))
+    const s = await getDeviceState('ac-1', CTX)
+    expect(s.target_temp_c).toBe(19)
+    expect(s.current_temp_c).toBe(21)
+  })
+
+  it("falls back to `windStrengthDetail` when LG firmware uses that key", async () => {
+    global.fetch = vi.fn(async () => jsonResponse({
+      response: {
+        operation: { airConOperationMode: 'POWER_ON' },
+        airFlow: { windStrengthDetail: 'LOW' },
+      },
+    }))
+    expect((await getDeviceState('ac-1', CTX)).fan).toBe('low')
   })
 
   it("translates LG's 'MID' fan strength back to 'medium'", async () => {
@@ -293,8 +324,47 @@ describe('setDeviceState', () => {
     // Remaining three carry the rest of the composite — in stable
     // order so logs are predictable.
     expect(bodies[1]).toEqual({ airConJobMode: { currentJobMode: 'COOL' } })
-    expect(bodies[2]).toEqual({ temperature: { targetTemperatureC: 22 } })
+    expect(bodies[2]).toEqual({ temperatureInUnits: { targetTemperature: 22, unit: 'C' } })
     expect(bodies[3]).toEqual({ airFlow: { windStrength: 'AUTO' } })
+  })
+
+  it('swallows downstream resource errors after operation succeeds (best-effort)', async () => {
+    // Real-world failure: temp / fan resource shape isn't accepted
+    // on some firmware. operation:POWER_ON has already succeeded
+    // and the unit is physically on — stranding the user with an
+    // error message would be wrong. We log + continue + return
+    // whatever the last successful POST gave us.
+    let n = 0
+    global.fetch = vi.fn(async () => {
+      n++
+      // 1: operation OK. 2: airConJobMode rejected. 3: temperatureInUnits OK. 4: airFlow OK.
+      if (n === 2) {
+        return jsonResponse({ error: { code: '2207', message: 'Invalid command error' } }, { status: 400 })
+      }
+      return jsonResponse({ response: {} })
+    })
+    const out = await setDeviceState('ac-1', buildTurnOnState({ mode: 'cool' }), CTX)
+    expect(global.fetch).toHaveBeenCalledTimes(4)
+    // setDeviceState returns the last successful normalised state
+    // (or null if every response was empty) + a warnings array
+    // describing the failed resources.
+    expect(out).not.toBeNull()
+    expect(out.warnings).toBeDefined()
+    expect(out.warnings).toHaveLength(1)
+    expect(out.warnings[0]).toMatchObject({ resource: 'airConJobMode', code: '2207' })
+  })
+
+  it('still throws when the operation POST itself fails (power-on never happened)', async () => {
+    // operation failure = unit is still off = user needs to see the error.
+    global.fetch = vi.fn(async () => jsonResponse(
+      { error: { code: '2207', message: 'Invalid command error' } },
+      { status: 400 }
+    ))
+    await expect(
+      setDeviceState('ac-1', buildTurnOnState({}), CTX)
+    ).rejects.toThrow(/Invalid command error/i)
+    // No subsequent POSTs once operation rejects.
+    expect(global.fetch).toHaveBeenCalledTimes(1)
   })
 
   it('uses POST and returns the normalised response from the LAST call', async () => {
