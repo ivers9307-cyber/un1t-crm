@@ -24,7 +24,12 @@ export async function GET(_request, { params }) {
     return NextResponse.json({ success: false, error: 'Master only.' }, { status: 403 })
   }
 
-  const locationId = params?.id
+  // Next.js 15+ delivers `params` as a Promise — the existing
+  // /api/locations/[id]/unifi-doors route awaits it the same way.
+  // Reading `params.id` synchronously returns undefined and short-
+  // circuits to the 400 below, which is what was happening before
+  // this fix.
+  const { id: locationId } = await params
   if (!locationId) {
     return NextResponse.json({ success: false, error: 'Location id required.' }, { status: 400 })
   }
