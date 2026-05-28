@@ -69,7 +69,7 @@ export default function ApprovalsInbox() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between flex-wrap gap-3">
-        <div className="flex items-center gap-1 border border-un1t-grey rounded-lg p-1 bg-un1t-bg/40 flex-wrap">
+        <div className="flex items-center gap-1 border border-un1t-border rounded-lg p-1 bg-un1t-bg/40 flex-wrap">
           {providers.map((p) => {
             const isActive = p.key === activeKey
             return (
@@ -103,7 +103,7 @@ export default function ApprovalsInbox() {
             type="button"
             onClick={load}
             disabled={loading}
-            className="p-1.5 rounded-md border border-un1t-grey text-un1t-subtle hover:text-un1t-text disabled:opacity-50"
+            className="p-1.5 rounded-md border border-un1t-border text-un1t-subtle hover:text-un1t-text disabled:opacity-50"
             aria-label="Refresh"
           >
             <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
@@ -125,20 +125,20 @@ export default function ApprovalsInbox() {
 function ProviderList({ provider, loading }) {
   if (!provider) {
     return (
-      <div className="border border-un1t-grey rounded-lg p-8 text-center text-sm text-un1t-subtle">
+      <div className="border border-un1t-border rounded-lg p-8 text-center text-sm text-un1t-subtle">
         {loading ? 'Loading…' : 'Nothing waiting on your review.'}
       </div>
     )
   }
   if (provider.items.length === 0) {
     return (
-      <div className="border border-un1t-grey rounded-lg p-8 text-center text-sm text-un1t-subtle">
+      <div className="border border-un1t-border rounded-lg p-8 text-center text-sm text-un1t-subtle">
         Nothing pending in {provider.label.toLowerCase()}. <Link href={provider.reviewBase} className="underline">Open {provider.label}</Link>
       </div>
     )
   }
   return (
-    <ul className="border border-un1t-grey rounded-lg divide-y divide-un1t-grey/50 overflow-hidden">
+    <ul className="border border-un1t-border rounded-lg divide-y divide-un1t-border/50 overflow-hidden">
       {provider.items.map((it) => (
         <li key={it.id}>
           <Link
@@ -149,7 +149,7 @@ function ProviderList({ provider, loading }) {
               <div className="flex items-center gap-2 flex-wrap">
                 <span className="text-sm font-medium text-un1t-text truncate">{it.title}</span>
                 {it.meta && (
-                  <span className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-un1t-grey/30 text-un1t-subtle border border-un1t-grey">
+                  <span className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-un1t-border/30 text-un1t-subtle border border-un1t-border">
                     {it.meta}
                   </span>
                 )}

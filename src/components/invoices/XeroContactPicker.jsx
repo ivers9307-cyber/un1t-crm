@@ -174,7 +174,7 @@ export default function XeroContactPicker({ locationId, value, onChange, label =
             </button>
           </div>
         ) : (
-          <div className="flex items-center gap-1 bg-un1t-bg border border-un1t-grey rounded-md px-2 py-1.5">
+          <div className="flex items-center gap-1 bg-un1t-bg border border-un1t-border rounded-md px-2 py-1.5">
             <Search size={12} className="text-un1t-subtle shrink-0" />
             <input
               ref={inputRef}
@@ -188,7 +188,7 @@ export default function XeroContactPicker({ locationId, value, onChange, label =
         )}
 
         {open && !summary && (
-          <div className="absolute z-20 mt-1 w-full bg-un1t-bg border border-un1t-grey rounded-md shadow-xl max-h-72 overflow-hidden flex flex-col">
+          <div className="absolute z-20 mt-1 w-full bg-un1t-bg border border-un1t-border rounded-md shadow-xl max-h-72 overflow-hidden flex flex-col">
             {error && <div className="p-2 text-xs text-red-400">{error}</div>}
             {!error && query.trim().length < MIN_QUERY && (
               <div className="p-2 text-xs text-un1t-subtle">Type at least {MIN_QUERY} characters to search.</div>
@@ -205,7 +205,7 @@ export default function XeroContactPicker({ locationId, value, onChange, label =
                   <button
                     type="button"
                     onClick={() => pickExisting(c)}
-                    className="w-full text-left px-2 py-1.5 text-sm hover:bg-un1t-grey/30"
+                    className="w-full text-left px-2 py-1.5 text-sm hover:bg-un1t-border/30"
                   >
                     <div className="text-un1t-text">{c.name}</div>
                     {c.email && <div className="text-[10px] text-un1t-subtle">{c.email}</div>}
@@ -217,14 +217,14 @@ export default function XeroContactPicker({ locationId, value, onChange, label =
               <button
                 type="button"
                 onClick={pickNew}
-                className="border-t border-un1t-grey/50 px-2 py-1.5 text-left text-xs text-amber-400 hover:bg-un1t-grey/20 inline-flex items-center gap-1.5"
+                className="border-t border-un1t-border/50 px-2 py-1.5 text-left text-xs text-amber-400 hover:bg-un1t-border/20 inline-flex items-center gap-1.5"
               >
                 <UserPlus size={11} />
                 Create new Xero contact: <strong className="text-amber-300">{query.trim()}</strong>
               </button>
             )}
             {stale && (
-              <div className="px-2 py-1.5 border-t border-un1t-grey/50 text-[10px] text-amber-400 inline-flex items-center gap-1">
+              <div className="px-2 py-1.5 border-t border-un1t-border/50 text-[10px] text-amber-400 inline-flex items-center gap-1">
                 <AlertTriangle size={10} /> Contact cache older than 30 days — refresh in Settings.
               </div>
             )}
