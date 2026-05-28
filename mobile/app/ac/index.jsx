@@ -116,15 +116,45 @@ function DeviceList({ locationId }) {
     )
   }
 
+  // STUDIO-AC-GROUPS.1 — same grouping logic as the web
+  // AcControlPanel. Master sets the group per device on the web
+  // settings tab; mobile is read-only on the grouping.
+  const groups = groupDevicesMobile(devices)
+
   return (
     <ScrollView className="flex-1 bg-un1t-black" contentContainerClassName="p-4">
-      <View className="gap-3">
-        {devices.map((d) => (
-          <DeviceCard key={d.id} device={d} locationId={locationId} />
+      <View className="gap-5">
+        {groups.map(({ name, devices: groupDevices }) => (
+          <View key={name} className="gap-2">
+            <Text className="text-[11px] uppercase tracking-wider text-un1t-light px-1">
+              {name}
+            </Text>
+            <View className="gap-3">
+              {groupDevices.map((d) => (
+                <DeviceCard key={d.id} device={d} locationId={locationId} />
+              ))}
+            </View>
+          </View>
         ))}
       </View>
     </ScrollView>
   )
+}
+
+function groupDevicesMobile(devices) {
+  const map = new Map()
+  for (const d of devices) {
+    const key = d.device_group || 'Other'
+    if (!map.has(key)) map.set(key, [])
+    map.get(key).push(d)
+  }
+  return [...map.entries()]
+    .sort(([a], [b]) => {
+      if (a === 'Other') return 1
+      if (b === 'Other') return -1
+      return a.localeCompare(b)
+    })
+    .map(([name, ds]) => ({ name, devices: ds }))
 }
 
 // ── DeviceCard ────────────────────────────────────────────────────

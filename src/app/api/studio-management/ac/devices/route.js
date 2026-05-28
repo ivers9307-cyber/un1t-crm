@@ -36,9 +36,15 @@ export const GET = withAuth(
   async ({ user, db, locationId }) => {
     const { data: devices, error: devErr } = await db
       .from('ac_devices')
-      .select('id, location_id, label, provider, default_mode, default_temp_c, default_fan, session_minutes, enabled, created_at, updated_at')
+      .select('id, location_id, label, provider, device_group, default_mode, default_temp_c, default_fan, session_minutes, enabled, created_at, updated_at')
       .eq('location_id', locationId)
       .eq('enabled', true)
+      // Order primarily by group so devices land in their section
+      // consecutively when the UI groups by device_group. Label
+      // breaks ties inside a group. NULLs sort last in PG ASC
+      // ordering, which puts ungrouped devices at the bottom — the
+      // panel renders those under a generic 'Other' header.
+      .order('device_group', { ascending: true, nullsFirst: false })
       .order('label', { ascending: true })
     if (devErr) {
       return NextResponse.json({ success: false, error: devErr.message }, { status: 500 })
@@ -131,6 +137,14 @@ export const POST = withAuth(
       ...(body?.default_temp_c  ? { default_temp_c:  Number(body.default_temp_c) } : {}),
       ...(body?.default_fan     ? { default_fan:     body.default_fan } : {}),
       ...(body?.session_minutes ? { session_minutes: Number(body.session_minutes) } : {}),
+      // STUDIO-AC-GROUPS.1 — pre-populate device_group with the
+      // same sensible defaults the mig 211 backfill used so the
+      // new row lands in a group on first save. The operator
+      // re-categorises from the settings UI if needed (e.g. moving
+      // an LG office unit out of 'Bathrooms').
+      device_group: body?.device_group
+        ? String(body.device_group).trim() || null
+        : (provider === 'sensibo' ? 'Gym Floor' : 'Bathrooms'),
     }
 
     const { data: row, error: insErr } = await db
