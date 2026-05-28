@@ -33,6 +33,10 @@
       "schedule": "*/5 * * * *"
     },
     {
+      "path": "/api/cron/checklist-sweep",
+      "schedule": "*/15 * * * *"
+    },
+    {
       "path": "/api/cron/auto-end-stale-hr-sessions",
       "schedule": "*/5 * * * *"
     },
