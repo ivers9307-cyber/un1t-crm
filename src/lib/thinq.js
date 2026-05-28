@@ -270,39 +270,78 @@ function toNum(v) {
 
 // ── Control ──────────────────────────────────────────────────────
 
+// Order matters for the sequential POST path below. LG needs to
+// see POWER_ON before it will accept job-mode / temperature / fan
+// for a unit that's currently off — settings on a powered-down
+// device return code 2207 'Invalid command error'. After that the
+// remaining resources can be sent in any order; we keep a stable
+// sequence so logs are predictable.
+const CONTROL_SEQUENCE = ['operation', 'airConJobMode', 'temperature', 'airFlow']
+
 /**
- * Send a control command. The body should be the LG-shaped control
- * payload (e.g. the result of buildTurnOnState). Returns the
- * device's state after the command per LG's response envelope —
- * normalised the same way as getDeviceState.
+ * Send a control command.
+ *
+ * IMPORTANT: LG's /control endpoint silently rejects bodies that
+ * touch more than one resource block — every composite payload
+ * returns code 2207 'Invalid command error', regardless of the
+ * `x-conditional-control` header. Verified against the official
+ * Python SDK (thinq-connect/pythinqconnect): every "set" method on
+ * AirConditionerDevice (operation, job mode, temperature, fan)
+ * goes through `do_attribute_command` or `do_enum_attribute_command`
+ * which fire one POST per attribute. They never combine.
+ *
+ * So when the caller passes a composite body (e.g. buildTurnOnState
+ * which sets operation + airConJobMode + temperature + airFlow),
+ * we split it into N POSTs and fire them sequentially. The last
+ * response's state is returned, normalised. Single-resource bodies
+ * (e.g. turnOff sending just `operation`) pass through unchanged.
  */
 export async function setDeviceState(deviceId, command, { pat, clientId, countryCode } = {}) {
   if (!deviceId) throw new ThinqError('deviceId is required.')
   if (!command || typeof command !== 'object') {
     throw new ThinqError('command body is required.')
   }
-  // `x-conditional-control: true` is required for composite control
-  // payloads — anything that sets more than one resource in a single
-  // body (e.g. buildTurnOnState sets operation + airConJobMode +
-  // temperature + airFlow at once). Without this header LG returns
-  // code 2207 'Invalid command error'. The official Python SDK sends
-  // this header on every /control POST; we mirror that.
-  const json = await thinqFetch(
-    `/devices/${encodeURIComponent(deviceId)}/control`,
-    {
-      pat,
-      clientId,
-      countryCode,
-      method: 'POST',
-      body: command,
-      extraHeaders: { 'x-conditional-control': 'true' },
-    }
-  )
+
+  // Build the ordered list of single-resource bodies. Resources
+  // mentioned in CONTROL_SEQUENCE come first in that order; anything
+  // else (defensive — we don't currently send anything outside the
+  // sequence) follows. Skip empty / null sub-objects so the
+  // dispatcher's buildTurnOnState callers stay loose.
+  const keys = [
+    ...CONTROL_SEQUENCE.filter((k) => command[k] && typeof command[k] === 'object'),
+    ...Object.keys(command).filter(
+      (k) => !CONTROL_SEQUENCE.includes(k) && command[k] && typeof command[k] === 'object'
+    ),
+  ]
+  if (keys.length === 0) {
+    throw new ThinqError('command body has no resource keys.')
+  }
+
+  let lastJson = null
+  for (const key of keys) {
+    const body = { [key]: command[key] }
+    lastJson = await thinqFetch(
+      `/devices/${encodeURIComponent(deviceId)}/control`,
+      {
+        pat,
+        clientId,
+        countryCode,
+        method: 'POST',
+        body,
+        // The header doesn't hurt for single-resource POSTs either,
+        // and keeping it on every call matches the Python SDK's
+        // posture (they include it unconditionally).
+        extraHeaders: { 'x-conditional-control': 'true' },
+      }
+    )
+  }
+
   // LG's control response sometimes echoes the new state, sometimes
   // returns an empty success envelope. Callers that need the new
   // state should do a follow-up getDeviceState() — we surface
-  // whatever LG returned, normalised, or null.
-  return normaliseState(json?.response || null)
+  // whatever LG returned on the LAST call (typically the airFlow
+  // POST), normalised, or null.
+  return normaliseState(lastJson?.response || null)
 }
 
 /**
