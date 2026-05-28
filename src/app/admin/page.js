@@ -12,6 +12,7 @@ import { redirect } from 'next/navigation'
 import {
   FileSignature, Tv, Download, BookOpen, ChevronRight,
   Award, ScrollText, Plug, LayoutGrid, Radio, Smartphone,
+  CheckSquare,
 } from 'lucide-react'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
@@ -63,6 +64,10 @@ export default async function AdminHubPage() {
     // won't see this card (and the page itself would redirect them
     // back to /).
     { ownerOrMasterOnly: true,    href: '/admin/policies',          icon: BookOpen,      title: 'Policies',            desc: 'Manage HR policies — versioning, view tracking, change history.' },
+    // CHECKLIST.1 — per-(role, day) closer / opener checklists for
+    // coaches on shift. Master + owner write; anyone with admin
+    // access can browse to see the current layout.
+    { ownerOrMasterOnly: true,    href: '/admin/checklists',        icon: CheckSquare,   title: 'Checklists',          desc: 'Role + day-of-week checklists for coaches. Items shown on the mobile app during their shift.' },
   ].filter((t) => {
     if (master) return true
     if (t.ownerOrMasterOnly) return ownerOrMaster
