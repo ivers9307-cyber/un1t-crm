@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { requireApiKey } from '@/lib/api-auth'
+import { authenticateApiKey, assertCreateInOrg } from '@/lib/api-auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 
@@ -18,13 +18,17 @@ const NoteCreateSchema = z.object({
 
 // POST /api/notes — Create a note (replaces Pipedrive POST /v1/notes)
 export async function POST(request) {
-  const authError = requireApiKey(request)
-  if (authError) return authError
+  const auth = await authenticateApiKey(request)
+  if (!auth.ok) return auth.response
 
   const validation = await validateBody(request, NoteCreateSchema)
   if (!validation.ok) return validation.response
   const body = validation.data
   const db = createServerClient()
+
+  // APIKEYS.3 — per-org key may only create within its org.
+  const scopeErr = await assertCreateInOrg({ db, orgId: auth.orgId, locationId: body.location_id, contactId: body.contact_id || body.person_id })
+  if (scopeErr) return scopeErr
 
   const { data, error } = await db.from('notes').insert({
     contact_id: body.contact_id || body.person_id,  // accept either name

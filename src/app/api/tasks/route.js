@@ -22,7 +22,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { requireApiKey } from '@/lib/api-auth'
+import { authenticateApiKey, scopeQueryToOrg, assertCreateInOrg } from '@/lib/api-auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 
@@ -43,8 +43,8 @@ const CreateTaskSchema = z.object({
 })
 
 export async function GET(request) {
-  const authError = requireApiKey(request)
-  if (authError) return authError
+  const auth = await authenticateApiKey(request)
+  if (!auth.ok) return auth.response
 
   const { searchParams } = new URL(request.url)
   const db = createServerClient()
@@ -52,6 +52,9 @@ export async function GET(request) {
   let query = db.from('activities')
     .select('id, subject, note, status, priority, project, due_date, due_time, assignee_id, contact_id, location_id, created_at, updated_at, completed_at')
     .eq('kind', 'task')
+
+  // APIKEYS.3 — per-org key: restrict to the org's locations.
+  query = await scopeQueryToOrg(query, db, auth.orgId)
 
   const locationId = searchParams.get('location_id')
   if (locationId) query = query.eq('location_id', locationId)
@@ -71,13 +74,16 @@ export async function GET(request) {
 }
 
 export async function POST(request) {
-  const authError = requireApiKey(request)
-  if (authError) return authError
+  const auth = await authenticateApiKey(request)
+  if (!auth.ok) return auth.response
 
   const validation = await validateBody(request, CreateTaskSchema)
   if (!validation.ok) return validation.response
 
   const db = createServerClient()
+  // APIKEYS.3 — per-org key may only create a task at a location in its org.
+  const scopeErr = await assertCreateInOrg({ db, orgId: auth.orgId, locationId: validation.data.location_id, contactId: validation.data.contact_id })
+  if (scopeErr) return scopeErr
   const insert = {
     ...validation.data,
     kind: 'task',

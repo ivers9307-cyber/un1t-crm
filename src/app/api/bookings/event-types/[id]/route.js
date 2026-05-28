@@ -4,7 +4,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { requireApiKeyOrManager } from '@/lib/api-auth'
+import { requireApiKeyOrManager, assertRowInOrg } from '@/lib/api-auth'
 import { validateBody } from '@/lib/validate'
 import { hexColor, url } from '@/lib/schemas'
 
@@ -40,6 +40,8 @@ export async function GET(request, props) {
   if (!auth.ok) return auth.response
 
   const db = createServerClient()
+  const scopeErr = await assertRowInOrg({ db, orgId: auth.orgId, table: 'event_types', id: params.id })
+  if (scopeErr) return scopeErr
   const { data, error } = await db.from('event_types').select('*').eq('id', params.id).single()
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 404 })
 
@@ -56,6 +58,8 @@ export async function PUT(request, props) {
   if (!validation.ok) return validation.response
   const body = validation.data
   const db = createServerClient()
+  const scopeErr = await assertRowInOrg({ db, orgId: auth.orgId, table: 'event_types', id: params.id })
+  if (scopeErr) return scopeErr
 
   const updates = { ...body }
 
@@ -77,6 +81,8 @@ export async function DELETE(request, props) {
   if (!auth.ok) return auth.response
 
   const db = createServerClient()
+  const scopeErr = await assertRowInOrg({ db, orgId: auth.orgId, table: 'event_types', id: params.id })
+  if (scopeErr) return scopeErr
   const { data, error } = await db.from('event_types').update({ active: false }).eq('id', params.id).select().single()
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
 

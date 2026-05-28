@@ -40,6 +40,62 @@ export async function orgLocationIds(db, orgId) {
   return (data || []).map((l) => l.id)
 }
 
+// Sentinel uuid: an org with zero locations must match NOTHING, never
+// fall through to "no filter" (which would expose every row).
+const NO_MATCH_UUID = '00000000-0000-0000-0000-000000000000'
+
+/**
+ * APIKEYS.3 — scope a list/select query to an org's locations (for
+ * tables with a `location_id` column). No-op when orgId is falsy
+ * (legacy shared key / cookie callers), so existing behaviour is kept.
+ * @returns the (possibly) filtered query builder.
+ */
+export async function scopeQueryToOrg(query, db, orgId) {
+  if (!orgId) return query
+  const locIds = await orgLocationIds(db, orgId)
+  return query.in('location_id', locIds.length ? locIds : [NO_MATCH_UUID])
+}
+
+/**
+ * APIKEYS.3 — gate a CREATE on a location_id-bearing resource for a
+ * per-org key. The target location is the explicit `locationId`, else
+ * the `contactId`'s location. Returns null when allowed, or a
+ * NextResponse (400 if no location resolvable, 403 if outside the org).
+ * No-op (null) when orgId is falsy.
+ */
+export async function assertCreateInOrg({ db, orgId, locationId = null, contactId = null }) {
+  if (!orgId) return null
+  const locIds = await orgLocationIds(db, orgId)
+  let loc = locationId || null
+  if (!loc && contactId) {
+    const { data } = await db.from('contacts').select('location_id').eq('id', contactId).maybeSingle()
+    loc = data?.location_id || null
+  }
+  if (!loc) {
+    return NextResponse.json({ success: false, error: 'location_id required for org-scoped key' }, { status: 400 })
+  }
+  if (!locIds.includes(loc)) {
+    return NextResponse.json({ success: false, error: 'not in your organization' }, { status: 403 })
+  }
+  return null
+}
+
+/**
+ * APIKEYS.3 — gate a read/mutate-by-id on a location_id-bearing resource
+ * for a per-org key. Returns null when allowed, or a 404 NextResponse
+ * (404 not 403, so we don't confirm the id exists across orgs). No-op
+ * when orgId is falsy.
+ */
+export async function assertRowInOrg({ db, orgId, table, id }) {
+  if (!orgId) return null
+  const locIds = await orgLocationIds(db, orgId)
+  const { data } = await db.from(table).select('location_id').eq('id', id).maybeSingle()
+  if (!data || !locIds.includes(data.location_id)) {
+    return NextResponse.json({ success: false, error: 'not_found' }, { status: 404 })
+  }
+  return null
+}
+
 // Validates the API key sent by n8n in the Authorization header.
 // Comparison is constant-time so an attacker can't observe how many leading
 // bytes of CRM_API_KEY they got right by timing 401 responses. Vercel's edge

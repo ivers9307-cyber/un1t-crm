@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { requireApiKey } from '@/lib/api-auth'
+import { authenticateApiKey, assertCreateInOrg } from '@/lib/api-auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike, isoDate, timeOfDay, activityTypeSchema } from '@/lib/schemas'
 
@@ -25,13 +25,18 @@ const ActivityCreateSchema = z.object({
 
 // POST /api/activities — Create an activity (replaces Pipedrive POST /v1/activities)
 export async function POST(request) {
-  const authError = requireApiKey(request)
-  if (authError) return authError
+  const auth = await authenticateApiKey(request)
+  if (!auth.ok) return auth.response
 
   const validation = await validateBody(request, ActivityCreateSchema)
   if (!validation.ok) return validation.response
   const body = validation.data
   const db = createServerClient()
+
+  // APIKEYS.3 — per-org key may only create within its org (anchored on
+  // the explicit location_id, else the contact's location).
+  const scopeErr = await assertCreateInOrg({ db, orgId: auth.orgId, locationId: body.location_id, contactId: body.contact_id || body.person_id })
+  if (scopeErr) return scopeErr
 
   const inferredKind = body.kind || (body.due_date ? 'task' : 'event')
 
