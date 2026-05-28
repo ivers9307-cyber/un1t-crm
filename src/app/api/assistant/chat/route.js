@@ -5,6 +5,19 @@ import { SYSTEM_PROMPT, TOOLS } from '@/lib/assistant-prompt'
 import { getCurrentUser } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { MANAGER_ROLES, ADMIN_ROLES } from '@/lib/schemas'
+import {
+  splitSSEEvents,
+  initTurn,
+  applyAnthropicEvent,
+  finalizeTurn,
+  encodeClientEvent,
+} from '@/lib/assistant-stream'
+
+export const runtime = 'nodejs'
+export const dynamic = 'force-dynamic'
+// Streaming a tool-loop turn can run longer than the default; give it
+// the same headroom as the heavier crons.
+export const maxDuration = 60
 
 const ChatRequestSchema = z.object({
   // Anthropic messages array — content can be string or block array, both valid.
@@ -12,6 +25,10 @@ const ChatRequestSchema = z.object({
     role: z.enum(['user', 'assistant']),
     content: z.union([z.string(), z.array(z.unknown())]),
   })).min(1).max(200),
+  // ASSIST-STREAM.1 — opt-in token streaming. When true the route
+  // returns text/event-stream; when absent/false it returns the legacy
+  // buffered JSON (kept as the client's automatic fallback).
+  stream: z.boolean().optional(),
   // userContext is informational only — server overwrites role/locationId/userId
   // from the trusted session in the handler.
   userContext: z.object({
@@ -20,6 +37,8 @@ const ChatRequestSchema = z.object({
 })
 
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages'
+const ASSISTANT_MODEL = 'claude-sonnet-4-20250514'
+const MAX_TOOL_ITERATIONS = 5
 
 // Role-based tool permissions — server-side enforcement
 // 'all' = any role, 'manager' = owner/manager/head_coach, 'admin' = owner/manager only
@@ -295,7 +314,7 @@ export async function POST(request) {
 
   const validation = await validateBody(request, ChatRequestSchema)
   if (!validation.ok) return validation.response
-  const { messages, userContext: clientContext } = validation.data
+  const { messages, userContext: clientContext, stream: wantStream } = validation.data
 
   // Trusted context derived from the session. Display-only hints
   // (currentPage, permissions for UI) can still come from the client.
@@ -332,8 +351,115 @@ export async function POST(request) {
     content: m.content,
   }))
 
+  const toolContext = {
+    locationId: userContext.locationId,
+    userId: userContext.userId,
+    role: userContext.role,
+  }
+
+  // ── Streaming path (ASSIST-STREAM.1) ────────────────────────────────
+  // Opt-in via { stream: true }. Forwards Anthropic text deltas to the
+  // client as SSE while still running the buffered tool-execution loop
+  // between turns. The pure framing/accumulation logic is unit-tested in
+  // assistant-stream.test.js; this function owns only the network + the
+  // tool loop. The legacy buffered path below is untouched and is the
+  // client's automatic fallback.
+  if (wantStream) {
+    const encoder = new TextEncoder()
+    const sseStream = new ReadableStream({
+      async start(controller) {
+        const send = (obj) => controller.enqueue(encoder.encode(encodeClientEvent(obj)))
+        let navigateTo = null
+        try {
+          let iterations = MAX_TOOL_ITERATIONS
+          while (iterations-- > 0) {
+            const res = await fetch(ANTHROPIC_API_URL, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'x-api-key': apiKey,
+                'anthropic-version': '2023-06-01',
+              },
+              body: JSON.stringify({
+                model: ASSISTANT_MODEL,
+                max_tokens: 1024,
+                system: systemPrompt,
+                messages: claudeMessages,
+                tools: allowedTools,
+                stream: true,
+              }),
+            })
+            if (!res.ok || !res.body) {
+              const errText = await res.text().catch(() => 'stream_open_failed')
+              send({ type: 'error', error: `Claude API error: ${errText}` })
+              break
+            }
+
+            const reader = res.body.getReader()
+            const decoder = new TextDecoder()
+            const turn = initTurn()
+            let buf = ''
+            while (true) {
+              const { done, value } = await reader.read()
+              if (done) break
+              buf += decoder.decode(value, { stream: true })
+              const { events, rest } = splitSSEEvents(buf)
+              buf = rest
+              for (const evt of events) {
+                const { textDelta } = applyAnthropicEvent(turn, evt)
+                if (textDelta) send({ type: 'text', delta: textDelta })
+              }
+            }
+
+            const { content, stopReason } = finalizeTurn(turn)
+
+            if (stopReason === 'tool_use') {
+              claudeMessages.push({ role: 'assistant', content })
+              const toolResults = []
+              for (const block of content) {
+                if (block.type === 'tool_use') {
+                  const result = await executeTool(block.name, block.input, toolContext)
+                  if (result && result.action === 'navigate') navigateTo = result.path
+                  toolResults.push({
+                    type: 'tool_result',
+                    tool_use_id: block.id,
+                    content: JSON.stringify(result),
+                  })
+                }
+              }
+              claudeMessages.push({ role: 'user', content: toolResults })
+              send({ type: 'tool' }) // lets the client show a "working…" beat
+              continue
+            }
+
+            // Final turn — text already streamed. Close out.
+            send({ type: 'done', navigateTo })
+            controller.close()
+            return
+          }
+          // Ran out of iterations without a non-tool turn.
+          send({ type: 'done', navigateTo })
+          controller.close()
+        } catch (err) {
+          try { send({ type: 'error', error: err?.message || 'stream_error' }) } catch { /* controller already closed */ }
+          try { controller.close() } catch { /* already closed */ }
+        }
+      },
+    })
+
+    return new Response(sseStream, {
+      headers: {
+        'Content-Type': 'text/event-stream; charset=utf-8',
+        'Cache-Control': 'no-store, no-transform',
+        'Connection': 'keep-alive',
+        'X-Accel-Buffering': 'no',
+      },
+    })
+  }
+
+  // ── Buffered path (legacy / fallback) ───────────────────────────────
   // Loop to handle tool use (Claude may call multiple tools)
-  let maxIterations = 5
+  let maxIterations = MAX_TOOL_ITERATIONS
   let finalResponse = null
 
   while (maxIterations > 0) {

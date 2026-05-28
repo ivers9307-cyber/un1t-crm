@@ -32,51 +32,124 @@ export default function AssistantBubble({ user }) {
     if (isOpen) inputRef.current?.focus()
   }, [isOpen])
 
+  // Apply a buffered (non-streaming) JSON response. Used both when the
+  // server returns JSON and as the fallback when streaming fails.
+  function applyBuffered(baseMessages, data) {
+    if (!data || data.error) {
+      setMessages([...baseMessages, { role: 'assistant', content: `Sorry, something went wrong: ${data?.error || 'unknown error'}` }])
+      return
+    }
+    setMessages([...baseMessages, { role: 'assistant', content: data.response, navigateTo: data.navigateTo }])
+    if (data.navigateTo) router.push(data.navigateTo)
+  }
+
   async function sendMessage(text) {
     if (!text.trim() || loading) return
     setHasInteracted(true)
 
     const userMessage = { role: 'user', content: text }
-    const newMessages = [...messages, userMessage]
-    setMessages(newMessages)
+    const baseMessages = [...messages, userMessage]
+    setMessages(baseMessages)
     setInput('')
     setLoading(true)
 
+    const payload = {
+      messages: baseMessages.map(({ role, content }) => ({ role, content })),
+      userContext: {
+        name: user?.full_name,
+        role: user?.role,
+        userId: user?.id,
+        currentPage: pathname,
+        locationId: user?.activeLocation?.id,
+        locationName: user?.activeLocation?.name,
+        permissions: user?.permissions,
+      },
+    }
+
+    // Update the in-flight streaming assistant bubble with accumulated text.
+    const paintStreaming = (content) => setMessages((prev) => {
+      const copy = prev.slice()
+      for (let i = copy.length - 1; i >= 0; i--) {
+        if (copy[i].role === 'assistant' && copy[i].streaming) {
+          copy[i] = { ...copy[i], content }
+          break
+        }
+      }
+      return copy
+    })
+
     try {
+      // Prefer streaming (ASSIST-STREAM.1).
       const res = await fetch('/api/assistant/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          messages: newMessages,
-          userContext: {
-            name: user?.full_name,
-            role: user?.role,
-            userId: user?.id,
-            currentPage: pathname,
-            locationId: user?.activeLocation?.id,
-            locationName: user?.activeLocation?.name,
-            permissions: user?.permissions,
-          },
-        }),
+        body: JSON.stringify({ ...payload, stream: true }),
       })
+      const ct = res.headers.get('content-type') || ''
 
-      const data = await res.json()
+      if (res.ok && ct.includes('text/event-stream') && res.body) {
+        setLoading(false)
+        setMessages((prev) => [...prev, { role: 'assistant', content: '', streaming: true }])
 
-      if (data.error) {
-        setMessages([...newMessages, { role: 'assistant', content: `Sorry, something went wrong: ${data.error}` }])
-      } else {
-        setMessages([...newMessages, { role: 'assistant', content: data.response, navigateTo: data.navigateTo }])
+        const reader = res.body.getReader()
+        const decoder = new TextDecoder()
+        let buf = ''
+        let acc = ''
+        let navigateTo = null
 
-        // If the assistant suggests navigation, offer to go there
-        if (data.navigateTo) {
-          router.push(data.navigateTo)
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+          buf += decoder.decode(value, { stream: true })
+          const frames = buf.split('\n\n')
+          buf = frames.pop() || ''
+          for (const f of frames) {
+            const dataLine = f.split('\n').find((l) => l.startsWith('data:'))
+            if (!dataLine) continue
+            let obj
+            try { obj = JSON.parse(dataLine.slice(5).trim()) } catch { continue }
+            if (obj.type === 'text') { acc += obj.delta || ''; paintStreaming(acc) }
+            else if (obj.type === 'done') { navigateTo = obj.navigateTo || null }
+            else if (obj.type === 'error') { acc = acc || `Sorry, something went wrong: ${obj.error}`; paintStreaming(acc) }
+          }
         }
-      }
-    } catch {
-      setMessages([...newMessages, { role: 'assistant', content: 'Sorry, I couldn\'t connect to the assistant. Please try again.' }])
-    }
 
-    setLoading(false)
+        // Finalize the bubble.
+        setMessages((prev) => {
+          const copy = prev.slice()
+          for (let i = copy.length - 1; i >= 0; i--) {
+            if (copy[i].role === 'assistant' && copy[i].streaming) {
+              copy[i] = { role: 'assistant', content: acc || '…', navigateTo }
+              break
+            }
+          }
+          return copy
+        })
+        if (navigateTo) router.push(navigateTo)
+        return
+      }
+
+      // Server didn't stream — consume as buffered JSON.
+      if (ct.includes('application/json')) {
+        applyBuffered(baseMessages, await res.json())
+        setLoading(false)
+        return
+      }
+      throw new Error('unexpected response')
+    } catch {
+      // Fallback: one buffered (non-streaming) attempt.
+      try {
+        const res2 = await fetch('/api/assistant/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        })
+        applyBuffered(baseMessages, await res2.json())
+      } catch {
+        setMessages([...baseMessages, { role: 'assistant', content: 'Sorry, I couldn\'t connect to the assistant. Please try again.' }])
+      }
+      setLoading(false)
+    }
   }
 
   function handleKeyDown(e) {
@@ -158,7 +231,7 @@ export default function AssistantBubble({ user }) {
                       : 'bg-un1t-border/30 rounded-tl-sm'
                   }`}
                 >
-                  {msg.content}
+                  {msg.content || (msg.streaming ? '▍' : '')}
                 </div>
                 {msg.role === 'user' && (
                   <div className="w-7 h-7 rounded-full bg-un1t-border flex items-center justify-center shrink-0 mt-0.5">
