@@ -2,8 +2,9 @@
 
 A native Mac app that wraps the web CRM at `crm.un1tdublin.com` in a
 WKWebView window. Lives in the dock, persists the user's session
-across launches, supports auto-launch on boot, and ships as a signed
-+ notarised DMG with auto-update.
+across launches, and distributes through the **Mac App Store** as an
+unlisted app alongside the existing iOS app (Universal Purchase on
+`com.un1tdublin.crm`).
 
 This is **Phase 2** of the studio-devices initiative — see
 [`../docs/STUDIO_DEVICES_DESIGN.md`](../docs/STUDIO_DEVICES_DESIGN.md)
@@ -13,9 +14,14 @@ for the full design.
 
 A thin [Tauri 2](https://v2.tauri.app/) shell. The "app" is the
 existing web CRM; the shell just provides the native window, the
-dock icon, single-instance behaviour, auto-launch, and the updater
-mechanism. There's no application code in here — un1t-crm is the
-application.
+dock icon, and single-instance behaviour. There's no application
+code in here — un1t-crm is the application.
+
+The shell runs in the macOS App Sandbox (mandatory for App Store
+distribution). Its `entitlements.plist` requests only outbound
+network access (to talk to crm.un1tdublin.com) and print. No file
+access, no camera, no microphone — the embedded web app inherits
+the standard WKWebView surface.
 
 Why Tauri instead of Electron:
 
@@ -26,61 +32,52 @@ Why Tauri instead of Electron:
 - The Rust core is rock-solid for the small native surface
   (window management, auto-update, deep-link, autostart).
 
-## How to get a DMG (CI — the supported path)
+## How to ship a build (CI — App Store, the supported path)
 
-You don't need Rust, Tauri, or Xcode on your laptop. There are
-**two** GitHub Actions workflows; together they produce a signed
-+ notarised DMG you can install on any Mac without the right-click
-→ *Open* dance.
-
-### Workflow 1: Desktop build
-
-Compiles the shell, code-signs the `.app`, and submits it to
-Apple's notarisation queue with `--no-wait`. Exits in 5–10 min
-regardless of how busy Apple's queue is.
-
-To trigger a build:
-
-- **Automatic** — any push to `main` that touches `desktop/**`.
-- **On demand** — Actions tab on GitHub → *Desktop build* →
-  *Run workflow*.
-
-When the run finishes, open its summary panel. You'll see the
-notarisation submission UUID and a copy-pasteable build run id.
-
-### Workflow 2: Desktop finalize
-
-Picks up where Desktop build left off: waits for Apple to accept
-the submission, staples the ticket, packages a fresh DMG, signs
-it, runs the DMG through its own notarisation pass, and uploads
-the final artefacts.
+You don't need Rust, Tauri, or Xcode on your laptop. The
+**Desktop App Store** GitHub Actions workflow compiles the shell
+on macos-latest, signs it with the Mac App Distribution +
+Installer certs, wraps it in a `.pkg`, and uploads it directly to
+App Store Connect for review.
 
 To trigger:
 
-- Actions tab → *Desktop finalize* → *Run workflow*. Paste the
-  build run id into `build_run_id` and hit *Run workflow*.
+- Actions tab on GitHub → *Desktop App Store* → *Run workflow* →
+  *main* → *Run workflow*.
 
-The signed + notarised DMG appears under *Artifacts* on the
-finalize run page as `cf-studio-mac-<run#>-dmg`. Universal binary;
-works on both Apple Silicon and Intel Macs.
+The workflow doesn't auto-fire on `desktop/**` pushes — App Store
+builds count against Apple's review queue, so they're deliberate.
 
-### Why split the pipeline?
+When the run finishes (~8-12 min cold, 4-6 min cached) the build
+will appear in App Store Connect under the CF Studio macOS
+platform within ~10 min of upload. From there:
 
-First-time submissions on a fresh Developer ID can sit in Apple's
-notarisation queue for 30–60+ min, sometimes longer. Holding a
-`macos-latest` minute for that whole window is expensive and
-brittle — any GitHub flake during the wait means rebuilding from
-scratch. Splitting means build returns fast and finalisation is
-cheap to retry until Apple responds.
+1. Select the build for the version you want to ship.
+2. Submit for review.
+3. Once approved (typically 24-48 h first time, 12-24 h on
+   updates), share the unlisted App Store link with the studio
+   team. They install via Mac App Store like any other app.
 
-### Signing prerequisites
+### One-time setup
 
-Both workflows depend on the six `APPLE_*` GitHub secrets being
-present. See [`SIGNING_SETUP.md`](./SIGNING_SETUP.md) for the
-one-time setup — step-by-step Apple Developer portal + Keychain
-+ GitHub secrets walkthrough. Until those secrets are added,
-Desktop build falls back to producing an unsigned `.app` (which
-isn't useful) and finalize will fail.
+The workflow depends on six App Store GitHub secrets plus the
+Universal Purchase wiring in ASC. See
+[`APPSTORE_SETUP.md`](./APPSTORE_SETUP.md) for the step-by-step
+Apple Developer portal + Keychain + ASC + GitHub secrets
+walkthrough.
+
+## Fallback: non-App-Store DMG distribution
+
+The `Desktop build` + `Desktop finalize` workflows are still in
+the repo for the outside-the-App-Store distribution path
+(Developer ID + notarisation, downloaded DMG). See
+[`SIGNING_SETUP.md`](./SIGNING_SETUP.md) for that path's setup.
+
+We're not using this path right now because Apple's notarisation
+queue stalled for >15 h on first-time submissions for our
+Developer ID. If the queue health recovers and we ever want a
+non-App-Store channel (e.g. for a beta build that skips review),
+the workflows are ready.
 
 ## Local development (optional — if you already have Rust)
 
@@ -119,26 +116,31 @@ build it once signing is wired up.
 
 ## Plugins
 
-The shell uses three Tauri plugins:
+The shell uses a single Tauri plugin:
 
 - **`tauri-plugin-single-instance`** — opening the app twice focuses
   the existing window instead of launching a second one. Important
   for a dock app: clicking the dock icon a second time should not
   spawn a duplicate session.
-- **`tauri-plugin-autostart`** — registers the shell as a login
-  item that launches at boot. Suits the always-on reception Mac.
-  The user can disable this from System Settings → General →
-  Login Items.
-- **`tauri-plugin-updater`** — periodic check against a JSON
-  manifest at `crm.un1tdublin.com/desktop/updater.json`. Pubkey
-  pinned in `tauri.conf.json`; private key lives in CI secrets only.
+
+The `tauri-plugin-autostart` and `tauri-plugin-updater` plugins
+were removed in STUDIO-MAC.8. App Store sandbox forbids launch-agent
+registration (autostart) and App Store policy forbids self-updating
+apps (the App Store handles updates itself).
+
+For auto-launch behaviour on the reception Mac: add CF Studio to
+**System Settings → General → Login Items** manually. We may add
+this back later via Apple's `SMAppService` API, which is the
+sandbox-compatible way to register login items.
 
 ## Auth + session
 
 The Mac shell uses the same Supabase auth + cookie session as the
-web CRM. WKWebView persists cookies across launches in its own data
-directory under `~/Library/WebKit/CF Studio/`. The shell's
-configured boot URL is `https://crm.un1tdublin.com/studio-login`
+web CRM. WKWebView persists cookies across launches in its own
+sandboxed data container at
+`~/Library/Containers/com.un1tdublin.crm/Data/Library/WebKit/`. The
+shell's configured boot URL is
+`https://crm.un1tdublin.com/studio-login`
 (set in `src-tauri/tauri.conf.json` →
 `app.windows[0].url`), so paired Macs always land at the PIN entry
 pad. Combined with the studio-device PIN-auth foundation from
