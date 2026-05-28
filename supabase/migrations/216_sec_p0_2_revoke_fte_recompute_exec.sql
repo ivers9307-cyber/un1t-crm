@@ -1,0 +1,23 @@
+-- SEC-P0.2 — revoke anon/authenticated EXECUTE on a trigger-only
+-- SECURITY DEFINER function.
+--
+-- public.fte_expense_recompute_totals() is the trigger helper behind
+-- `fte_expense_items_recompute` on fte_expense_items. It was granted
+-- EXECUTE to anon + authenticated, so it was callable unauthenticated
+-- via PostgREST at /rest/v1/rpc/fte_expense_recompute_totals
+-- (Supabase advisors 0028 anon_security_definer_function_executable /
+-- 0029 authenticated_security_definer_function_executable). No
+-- application calls it via .rpc() — it only ever runs from the trigger,
+-- and triggers execute it regardless of these role grants — so
+-- revoking EXECUTE closes the surface with zero functional impact.
+--
+-- Intentionally NOT touched here:
+--   public.list_enabled_integrations()  -- champ-app /account/integrations
+--   public.scan_straps_for_contact()    -- champ-app device strap scan
+-- Both are deliberately called by signed-in (authenticated) champ-app
+-- customers and must keep their authenticated EXECUTE grant.
+--
+-- Applied to production via Supabase MCP on 2026-05-28; this file
+-- records it in the migration history for repeatability.
+
+REVOKE EXECUTE ON FUNCTION public.fte_expense_recompute_totals() FROM anon, authenticated;
