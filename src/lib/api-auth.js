@@ -5,6 +5,41 @@ import { MANAGER_ROLES } from './schemas'
 import { createServerClient } from './supabase'
 import { hashApiKey, isApiKeyToken } from './api-keys'
 
+// APIKEYS.3 — shared per-org key lookup, used by both authenticateApiKey
+// and requireApiKeyOrManager. Returns { orgId, keyId } for an active
+// per-org key (and stamps last_used_at, fire-and-forget); null otherwise.
+async function resolveApiKeyOrg(token) {
+  if (!isApiKeyToken(token)) return null
+  const db = createServerClient()
+  const { data } = await db
+    .from('api_keys')
+    .select('id, organization_id')
+    .eq('key_hash', hashApiKey(token))
+    .is('revoked_at', null)
+    .maybeSingle()
+  if (!data) return null
+  db.from('api_keys')
+    .update({ last_used_at: new Date().toISOString() })
+    .eq('id', data.id)
+    .then(() => {}, () => {})
+  return { orgId: data.organization_id, keyId: data.id }
+}
+
+/**
+ * APIKEYS.3 — location ids belonging to an organization. For scoping
+ * list/lookup queries on resources that carry `location_id` (not
+ * `organization_id`) — contacts, deals, bookings, etc. Returns [] when
+ * the org has no locations; callers should treat [] as "match nothing".
+ *
+ * @param {import('@supabase/supabase-js').SupabaseClient} db  service-role client
+ * @param {string} orgId
+ * @returns {Promise<string[]>}
+ */
+export async function orgLocationIds(db, orgId) {
+  const { data } = await db.from('locations').select('id').eq('organization_id', orgId)
+  return (data || []).map((l) => l.id)
+}
+
 // Validates the API key sent by n8n in the Authorization header.
 // Comparison is constant-time so an attacker can't observe how many leading
 // bytes of CRM_API_KEY they got right by timing 401 responses. Vercel's edge
@@ -56,14 +91,23 @@ export async function requireApiKeyOrManager(request) {
   const token = auth.startsWith('Bearer ') ? auth.slice('Bearer '.length) : ''
   const expected = process.env.CRM_API_KEY
   if (expected && token && safeEqual(token, expected)) {
-    return { ok: true, user: null }
+    // Legacy shared key — unscoped (orgId null) for back-compat.
+    return { ok: true, user: null, orgId: null }
+  }
+
+  // APIKEYS.3 — per-org key. Returns the scoping org so handlers can
+  // filter by organization; legacy + cookie callers get orgId null and
+  // behave exactly as before.
+  const resolved = await resolveApiKeyOrg(token)
+  if (resolved) {
+    return { ok: true, user: null, orgId: resolved.orgId }
   }
 
   // Cookie path. Manager+ only — we don't want random staff
   // accidentally hitting these endpoints.
   const user = await getCurrentUser()
   if (user && MANAGER_ROLES.includes(user.role)) {
-    return { ok: true, user }
+    return { ok: true, user, orgId: null }
   }
 
   return {
@@ -109,22 +153,9 @@ export async function authenticateApiKey(request) {
   }
 
   // Per-org key — look up by hash, must be active (not revoked).
-  if (isApiKeyToken(token)) {
-    const db = createServerClient()
-    const { data } = await db
-      .from('api_keys')
-      .select('id, organization_id')
-      .eq('key_hash', hashApiKey(token))
-      .is('revoked_at', null)
-      .maybeSingle()
-    if (data) {
-      // Fire-and-forget usage stamp — never block or fail auth on it.
-      db.from('api_keys')
-        .update({ last_used_at: new Date().toISOString() })
-        .eq('id', data.id)
-        .then(() => {}, () => {})
-      return { ok: true, orgId: data.organization_id, legacy: false, keyId: data.id }
-    }
+  const resolved = await resolveApiKeyOrg(token)
+  if (resolved) {
+    return { ok: true, orgId: resolved.orgId, legacy: false, keyId: resolved.keyId }
   }
 
   return unauthorized()

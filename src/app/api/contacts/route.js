@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { requireApiKey, requireApiKeyOrManager } from '@/lib/api-auth'
+import { authenticateApiKey, requireApiKeyOrManager, orgLocationIds } from '@/lib/api-auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike, email, phone, leadSourceSchema, MANAGER_ROLES } from '@/lib/schemas'
 import { sendPushToRolesAtLocation } from '@/lib/push'
@@ -42,6 +42,19 @@ export async function POST(request) {
     body.location_id = auth.user.activeLocation.id
   }
   const db = createServerClient()
+
+  // APIKEYS.3 — a per-org key may only create contacts at a location
+  // within its organization. Legacy shared key + cookie managers have
+  // orgId null and are unchanged.
+  if (auth.orgId) {
+    if (!body.location_id) {
+      return NextResponse.json({ success: false, error: 'location_id required' }, { status: 400 })
+    }
+    const locIds = await orgLocationIds(db, auth.orgId)
+    if (!locIds.includes(body.location_id)) {
+      return NextResponse.json({ success: false, error: 'location not in your organization' }, { status: 403 })
+    }
+  }
 
   const { data, error } = await db.from('contacts').insert({
     name: body.name,
@@ -114,13 +127,22 @@ export async function POST(request) {
 // Query params: lead_status, lead_source, limit, offset
 // Replaces Pipedrive GET /v1/persons?filter_id=X
 export async function GET(request) {
-  const authError = requireApiKey(request)
-  if (authError) return authError
+  const auth = await authenticateApiKey(request)
+  if (!auth.ok) return auth.response
 
   const { searchParams } = new URL(request.url)
   const db = createServerClient()
 
   let query = db.from('contacts').select('*')
+
+  // APIKEYS.3 — per-org key: restrict to the org's own locations so a
+  // leaked key can't read another org's contacts. Legacy shared key
+  // (orgId null) stays unscoped — unchanged until n8n migrates.
+  if (auth.orgId) {
+    const locIds = await orgLocationIds(db, auth.orgId)
+    // Empty org → match nothing (sentinel uuid) rather than everything.
+    query = query.in('location_id', locIds.length ? locIds : ['00000000-0000-0000-0000-000000000000'])
+  }
 
   // Location filter
   const locationId = searchParams.get('location_id')
