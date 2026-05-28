@@ -367,10 +367,11 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     notify_shift_adjusted: true,
     notify_contract_issued: true,
     notify_tasks: true, notify_bookings: true,
-    // Managers oversee front-of-house — they get the compliance
-    // summary by default but not the personal heads-up (they rarely
-    // work a roster shift themselves).
-    notify_checklist_overdue: false, notify_checklist_compliance: true,
+    // Managers oversee front-of-house + sometimes work a shift —
+    // get both the personal heads-up and the compliance summary.
+    // Also required by the parity invariant (manager must be a
+    // superset of staff; staff has notify_checklist_overdue on).
+    notify_checklist_overdue: true, notify_checklist_compliance: true,
   },
   owner: {
     schedule: true, pipeline: true, whatsapp: true,
@@ -384,9 +385,11 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     notify_shift_adjusted: true,
     notify_contract_issued: true,
     notify_tasks: true, notify_bookings: true,
-    // Owners get the compliance summary; personal heads-up off
-    // (they don't work shifts).
-    notify_checklist_overdue: false, notify_checklist_compliance: true,
+    // Owners get both — they get the compliance summary as
+    // operators and the personal heads-up for the rare cases they
+    // cover a shift. Can be opted out per-user. (Also avoids any
+    // future owner-vs-manager superset invariant.)
+    notify_checklist_overdue: true, notify_checklist_compliance: true,
   },
 })
 
