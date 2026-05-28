@@ -234,7 +234,7 @@ export default function InvoicesInbox({ locations, isMaster, isBookkeeper = fals
 
       {/* Source-type tabs — primary navigation */}
       <div className="flex items-center justify-between flex-wrap gap-3">
-        <div className="flex items-center gap-1 border border-un1t-grey rounded-lg p-1 bg-un1t-bg/40 flex-wrap">
+        <div className="flex items-center gap-1 border border-un1t-border rounded-lg p-1 bg-un1t-bg/40 flex-wrap">
           {SOURCE_TABS.map((t) => {
             const count = sourceCounts[t.key === 'all' ? 'all' : t.sourceTypes[0]] || 0
             const isActive = sourceTab === t.key
@@ -252,7 +252,7 @@ export default function InvoicesInbox({ locations, isMaster, isBookkeeper = fals
                 {t.label}
                 {count > 0 && (
                   <span className={`inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 text-[10px] font-semibold rounded-full ${
-                    isActive ? 'bg-un1t-bg text-un1t-text' : 'bg-un1t-grey/40 text-un1t-subtle'
+                    isActive ? 'bg-un1t-bg text-un1t-text' : 'bg-un1t-border/40 text-un1t-subtle'
                   }`}>{count}</span>
                 )}
               </button>
@@ -264,7 +264,7 @@ export default function InvoicesInbox({ locations, isMaster, isBookkeeper = fals
           <select
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value)}
-            className="bg-un1t-bg border border-un1t-grey rounded-md px-3 py-1.5 text-sm text-un1t-text"
+            className="bg-un1t-bg border border-un1t-border rounded-md px-3 py-1.5 text-sm text-un1t-text"
           >
             {STATUS_FILTERS.map((s) => (
               <option key={s.key} value={s.key}>{s.label}</option>
@@ -274,7 +274,7 @@ export default function InvoicesInbox({ locations, isMaster, isBookkeeper = fals
             <select
               value={locationFilter}
               onChange={(e) => setLocationFilter(e.target.value)}
-              className="bg-un1t-bg border border-un1t-grey rounded-md px-3 py-1.5 text-sm text-un1t-text"
+              className="bg-un1t-bg border border-un1t-border rounded-md px-3 py-1.5 text-sm text-un1t-text"
             >
               <option value="all">All locations</option>
               {locations.map((l) => (
@@ -334,7 +334,7 @@ export default function InvoicesInbox({ locations, isMaster, isBookkeeper = fals
 function ForwardingAddresses({ locations }) {
   if (!locations.length) return null
   return (
-    <div className="border border-un1t-grey rounded-lg p-4 bg-un1t-bg/40">
+    <div className="border border-un1t-border rounded-lg p-4 bg-un1t-bg/40">
       <p className="text-xs uppercase tracking-wide text-un1t-subtle mb-2">Forwarding addresses</p>
       <ul className="space-y-1 text-sm">
         {locations.map((l) => (
@@ -360,8 +360,8 @@ function InboxList({
 }) {
   const allVisibleSelected = rows.length > 0 && rows.every((r) => bulkSelection.has(r.id))
   return (
-    <aside className="border border-un1t-grey rounded-lg overflow-hidden">
-      <header className="px-3 py-2 border-b border-un1t-grey flex items-center justify-between gap-2">
+    <aside className="border border-un1t-border rounded-lg overflow-hidden">
+      <header className="px-3 py-2 border-b border-un1t-border flex items-center justify-between gap-2">
         <span className="text-xs uppercase tracking-wide text-un1t-subtle">
           {loading ? 'Loading…' : `${rows.length} ${rows.length === 1 ? 'item' : 'items'}`}
         </span>
@@ -375,7 +375,7 @@ function InboxList({
           </button>
         )}
       </header>
-      <ul className="divide-y divide-un1t-grey/50 max-h-[70vh] overflow-y-auto">
+      <ul className="divide-y divide-un1t-border/50 max-h-[70vh] overflow-y-auto">
         {rows.length === 0 && !loading && (
           <li className="p-4 text-sm text-un1t-subtle">Nothing here.</li>
         )}
@@ -433,7 +433,7 @@ function InboxList({
 
 function SourceTypePill({ source }) {
   const label = SOURCE_TYPE_LABEL[source] || source
-  const tone = SOURCE_TYPE_TONE[source] || 'bg-un1t-grey/30 text-un1t-subtle border-un1t-grey'
+  const tone = SOURCE_TYPE_TONE[source] || 'bg-un1t-border/30 text-un1t-subtle border-un1t-border'
   return (
     <span className={`text-[9px] uppercase tracking-wide border rounded px-1 py-0.5 whitespace-nowrap ${tone}`}>
       {label}
@@ -459,7 +459,7 @@ function BulkActionBar({
     ['received', 'quality_approved', 'extracted', 'data_approved'].includes(r.status)).length
 
   return (
-    <div className="fixed inset-x-0 bottom-0 z-40 border-t border-un1t-grey bg-un1t-bg/95 backdrop-blur p-4">
+    <div className="fixed inset-x-0 bottom-0 z-40 border-t border-un1t-border bg-un1t-bg/95 backdrop-blur p-4">
       <div className="max-w-7xl mx-auto flex items-center gap-3 flex-wrap">
         <span className="text-sm text-un1t-text font-medium">
           {selectedCount} selected
@@ -470,7 +470,7 @@ function BulkActionBar({
             type="button"
             disabled={analysableCount === 0 || !!busy}
             onClick={onAnalyse}
-            className="px-3 py-1.5 text-sm rounded-md border border-un1t-grey text-un1t-text disabled:opacity-40"
+            className="px-3 py-1.5 text-sm rounded-md border border-un1t-border text-un1t-text disabled:opacity-40"
             title={analysableCount === 0 ? 'No selected rows are eligible for analysis' : ''}
           >
             {busy === 'analyse' ? 'Analysing…' : `Analyse (${analysableCount})`}
@@ -488,7 +488,7 @@ function BulkActionBar({
             type="button"
             disabled={rejectableCount === 0 || !!busy}
             onClick={() => setShowRejectForm((v) => !v)}
-            className="px-3 py-1.5 text-sm rounded-md border border-un1t-grey text-un1t-subtle disabled:opacity-40"
+            className="px-3 py-1.5 text-sm rounded-md border border-un1t-border text-un1t-subtle disabled:opacity-40"
           >
             Reject ({rejectableCount})…
           </button>
@@ -503,13 +503,13 @@ function BulkActionBar({
       </div>
 
       {showRejectForm && (
-        <div className="max-w-7xl mx-auto mt-3 space-y-2 border border-un1t-grey rounded-md p-3">
+        <div className="max-w-7xl mx-auto mt-3 space-y-2 border border-un1t-border rounded-md p-3">
           <label className="text-xs uppercase tracking-wide text-un1t-subtle">Reject reason (applied to all selected)</label>
           <textarea
             value={rejectReason}
             onChange={(e) => setRejectReason(e.target.value)}
             rows={2}
-            className="w-full bg-un1t-bg border border-un1t-grey rounded-md p-2 text-sm text-un1t-text"
+            className="w-full bg-un1t-bg border border-un1t-border rounded-md p-2 text-sm text-un1t-text"
             placeholder="e.g. Wrong attachment uploaded; duplicate of #1234; not an invoice"
           />
           <button
@@ -529,7 +529,7 @@ function BulkActionBar({
         </div>
       )}
       {summary && (
-        <div className="max-w-7xl mx-auto mt-3 border border-un1t-grey rounded-lg p-2 text-xs text-un1t-subtle flex flex-wrap gap-3">
+        <div className="max-w-7xl mx-auto mt-3 border border-un1t-border rounded-lg p-2 text-xs text-un1t-subtle flex flex-wrap gap-3">
           <strong className="text-un1t-text">{summary.action} result:</strong>
           {Object.entries(summary.counts || {}).map(([k, v]) => (
             <span key={k}>{k}: <strong className="text-un1t-text">{v}</strong></span>
@@ -549,7 +549,7 @@ function StatusPill({ status, stage }) {
     forwarded:        { label: 'Sent to Xero',     cls: 'bg-green-500/20 text-green-300 border-green-500/40' },
     rejected:         { label: `Rejected (${stage || 'quality'})`, cls: 'bg-red-500/20 text-red-300 border-red-500/40' },
   }
-  const it = map[status] || { label: status, cls: 'bg-un1t-grey/30 text-un1t-subtle border-un1t-grey' }
+  const it = map[status] || { label: status, cls: 'bg-un1t-border/30 text-un1t-subtle border-un1t-border' }
   return (
     <span className={`text-[10px] uppercase tracking-wide border rounded px-1.5 py-0.5 whitespace-nowrap ${it.cls}`}>
       {it.label}
@@ -577,7 +577,7 @@ function InboxDetail({ row, onChanged }) {
 
   if (!row) {
     return (
-      <section className="border border-un1t-grey rounded-lg p-6 text-sm text-un1t-subtle min-h-[200px] flex items-center justify-center">
+      <section className="border border-un1t-border rounded-lg p-6 text-sm text-un1t-subtle min-h-[200px] flex items-center justify-center">
         Select an invoice from the list to review.
       </section>
     )
@@ -638,7 +638,7 @@ function InboxDetail({ row, onChanged }) {
   }
 
   return (
-    <section className="border border-un1t-grey rounded-lg p-5 space-y-5">
+    <section className="border border-un1t-border rounded-lg p-5 space-y-5">
       <DetailHeader row={row} />
 
       {actionError && (
@@ -705,15 +705,15 @@ function DetailHeader({ row }) {
 
 function AttachmentPreview({ attachment, loading, mime }) {
   if (loading) {
-    return <div className="border border-un1t-grey rounded-lg p-4 text-sm text-un1t-subtle">Loading attachment…</div>
+    return <div className="border border-un1t-border rounded-lg p-4 text-sm text-un1t-subtle">Loading attachment…</div>
   }
   if (!attachment) {
-    return <div className="border border-un1t-grey rounded-lg p-4 text-sm text-un1t-subtle">No attachment available.</div>
+    return <div className="border border-un1t-border rounded-lg p-4 text-sm text-un1t-subtle">No attachment available.</div>
   }
   const isPdf = mime === 'application/pdf'
   return (
-    <div className="border border-un1t-grey rounded-lg overflow-hidden">
-      <div className="px-3 py-2 border-b border-un1t-grey flex justify-between items-center text-xs">
+    <div className="border border-un1t-border rounded-lg overflow-hidden">
+      <div className="px-3 py-2 border-b border-un1t-border flex justify-between items-center text-xs">
         <span className="text-un1t-subtle truncate">{attachment.filename}</span>
         <a href={attachment.url} target="_blank" rel="noreferrer" className="text-un1t-text underline">
           Open in new tab
@@ -755,19 +755,19 @@ function StageOneActions({ busy, onApprove, onReject }) {
           type="button"
           disabled={!!busy}
           onClick={() => setShowRejectForm((v) => !v)}
-          className="px-4 py-2 rounded-md border border-un1t-grey text-un1t-text disabled:opacity-50"
+          className="px-4 py-2 rounded-md border border-un1t-border text-un1t-text disabled:opacity-50"
         >
           Reject…
         </button>
       </div>
       {showRejectForm && (
-        <div className="space-y-2 border border-un1t-grey rounded-md p-3">
+        <div className="space-y-2 border border-un1t-border rounded-md p-3">
           <label className="text-xs uppercase tracking-wide text-un1t-subtle">Reason</label>
           <textarea
             value={reason}
             onChange={(e) => setReason(e.target.value)}
             rows={2}
-            className="w-full bg-un1t-bg border border-un1t-grey rounded-md p-2 text-sm text-un1t-text"
+            className="w-full bg-un1t-bg border border-un1t-border rounded-md p-2 text-sm text-un1t-text"
             placeholder="e.g. Not a real invoice / unreadable / wrong location"
           />
           <button
@@ -925,7 +925,7 @@ function StageTwoBlock({ row, busy, onSaveFields, onApprove, onReject }) {
           type="button"
           disabled={!dirty || !!busy || isApproved}
           onClick={() => onSaveFields(fields)}
-          className="px-4 py-2 rounded-md border border-un1t-grey text-un1t-text disabled:opacity-50"
+          className="px-4 py-2 rounded-md border border-un1t-border text-un1t-text disabled:opacity-50"
         >
           {busy === 'fields' ? 'Saving…' : 'Save edits'}
         </button>
@@ -960,19 +960,19 @@ function StageTwoBlock({ row, busy, onSaveFields, onApprove, onReject }) {
           type="button"
           disabled={!!busy}
           onClick={() => setShowRejectForm((v) => !v)}
-          className="px-4 py-2 rounded-md border border-un1t-grey text-un1t-text disabled:opacity-50"
+          className="px-4 py-2 rounded-md border border-un1t-border text-un1t-text disabled:opacity-50"
         >
           Reject…
         </button>
       </div>
       {showRejectForm && (
-        <div className="space-y-2 border border-un1t-grey rounded-md p-3">
+        <div className="space-y-2 border border-un1t-border rounded-md p-3">
           <label className="text-xs uppercase tracking-wide text-un1t-subtle">Reason</label>
           <textarea
             value={reason}
             onChange={(e) => setReason(e.target.value)}
             rows={2}
-            className="w-full bg-un1t-bg border border-un1t-grey rounded-md p-2 text-sm text-un1t-text"
+            className="w-full bg-un1t-bg border border-un1t-border rounded-md p-2 text-sm text-un1t-text"
             placeholder="e.g. Duplicate, wrong amount, not a real invoice"
           />
           <button
@@ -998,7 +998,7 @@ function FieldRow({ label, value, onChange, type = 'text', placeholder }) {
         value={value}
         placeholder={placeholder}
         onChange={(e) => onChange(e.target.value)}
-        className="mt-1 w-full bg-un1t-bg border border-un1t-grey rounded-md px-2 py-1.5 text-sm text-un1t-text"
+        className="mt-1 w-full bg-un1t-bg border border-un1t-border rounded-md px-2 py-1.5 text-sm text-un1t-text"
         step={type === 'number' ? '0.01' : undefined}
       />
     </label>
@@ -1015,7 +1015,7 @@ function SelectRow({ label, value, onChange, options }) {
       <select
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="mt-1 w-full bg-un1t-bg border border-un1t-grey rounded-md px-2 py-1.5 text-sm text-un1t-text"
+        className="mt-1 w-full bg-un1t-bg border border-un1t-border rounded-md px-2 py-1.5 text-sm text-un1t-text"
       >
         <option value="">—</option>
         {options.map((o) => (
@@ -1107,7 +1107,7 @@ function RejectedSummary({ row, busy, onDelete }) {
         type="button"
         disabled={!!busy}
         onClick={onDelete}
-        className="px-3 py-1.5 text-sm rounded-md border border-un1t-grey text-un1t-subtle disabled:opacity-50"
+        className="px-3 py-1.5 text-sm rounded-md border border-un1t-border text-un1t-subtle disabled:opacity-50"
       >
         {busy === 'delete' ? 'Deleting…' : 'Delete permanently'}
       </button>

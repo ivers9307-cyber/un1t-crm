@@ -98,15 +98,15 @@ export default function XeroAccountPicker({ locationId, value, onChange, label =
         <button
           type="button"
           onClick={() => setOpen((v) => !v)}
-          className="w-full bg-un1t-bg border border-un1t-grey rounded-md px-2 py-1.5 text-sm text-un1t-text text-left inline-flex items-center justify-between gap-2"
+          className="w-full bg-un1t-bg border border-un1t-border rounded-md px-2 py-1.5 text-sm text-un1t-text text-left inline-flex items-center justify-between gap-2"
         >
           <span className={selected ? '' : 'text-un1t-subtle'}>{buttonLabel}</span>
           <ChevronDown size={14} className="shrink-0 text-un1t-subtle" />
         </button>
 
         {open && (
-          <div className="absolute z-20 mt-1 w-full bg-un1t-bg border border-un1t-grey rounded-md shadow-xl max-h-72 overflow-hidden flex flex-col">
-            <div className="flex items-center gap-1 px-2 py-1.5 border-b border-un1t-grey/50">
+          <div className="absolute z-20 mt-1 w-full bg-un1t-bg border border-un1t-border rounded-md shadow-xl max-h-72 overflow-hidden flex flex-col">
+            <div className="flex items-center gap-1 px-2 py-1.5 border-b border-un1t-border/50">
               <Search size={12} className="text-un1t-subtle" />
               <input
                 autoFocus
@@ -138,7 +138,7 @@ export default function XeroAccountPicker({ locationId, value, onChange, label =
                       setOpen(false)
                       setQuery('')
                     }}
-                    className={`w-full text-left px-2 py-1.5 text-sm hover:bg-un1t-grey/30 ${selected?.xero_account_id === a.xero_account_id ? 'bg-un1t-grey/40' : ''}`}
+                    className={`w-full text-left px-2 py-1.5 text-sm hover:bg-un1t-border/30 ${selected?.xero_account_id === a.xero_account_id ? 'bg-un1t-border/40' : ''}`}
                   >
                     <div className="text-un1t-text">
                       {a.code && <span className="text-un1t-subtle mr-1">{a.code}</span>}
@@ -152,7 +152,7 @@ export default function XeroAccountPicker({ locationId, value, onChange, label =
               ))}
             </ul>
             {stale && accounts.length > 0 && (
-              <div className="px-2 py-1.5 border-t border-un1t-grey/50 text-[10px] text-amber-400 inline-flex items-center gap-1">
+              <div className="px-2 py-1.5 border-t border-un1t-border/50 text-[10px] text-amber-400 inline-flex items-center gap-1">
                 <AlertTriangle size={10} /> Cache older than 30 days — consider refreshing in Settings.
               </div>
             )}
