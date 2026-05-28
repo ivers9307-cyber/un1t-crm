@@ -10,6 +10,7 @@ import { describe, it, expect } from 'vitest'
 import {
   mapProfileLocationToAssignment,
   canEditStaffMember,
+  canOverrideStaffPassword,
   canEditLocationFeatures,
 } from './staff-access.js'
 
@@ -118,6 +119,51 @@ describe('canEditStaffMember — owner cannot edit themselves or peers', () => {
     expect(canEditStaffMember(null, ownerA)).toBe(false)
     expect(canEditStaffMember(ownerA, null)).toBe(false)
     expect(canEditStaffMember(null, null)).toBe(false)
+  })
+})
+
+describe('canOverrideStaffPassword — AUTH.1 cross-org takeover guard', () => {
+  const master = { id: 'm1', role: 'master', isMaster: true }
+  // Owner of locations A + B.
+  const ownerAB = { id: 'o1', role: 'owner', locations: [{ id: 'A' }, { id: 'B' }] }
+
+  it('master can reset anyone, regardless of location', () => {
+    expect(canOverrideStaffPassword(master, { id: 's', role: 'staff', locationIds: ['Z'] })).toBe(true)
+    expect(canOverrideStaffPassword(master, { id: 'o2', role: 'owner', locationIds: ['Z'] })).toBe(true)
+    expect(canOverrideStaffPassword(master, { id: 'm2', role: 'master', locationIds: ['Z'] })).toBe(true)
+  })
+
+  it('owner CAN reset a manager/staff who shares one of their locations', () => {
+    expect(canOverrideStaffPassword(ownerAB, { id: 's', role: 'staff', locationIds: ['B'] })).toBe(true)
+    expect(canOverrideStaffPassword(ownerAB, { id: 'mg', role: 'manager', locationIds: ['A', 'C'] })).toBe(true)
+    expect(canOverrideStaffPassword(ownerAB, { id: 'hc', role: 'head_coach', locationIds: ['A'] })).toBe(true)
+  })
+
+  it('owner CANNOT reset a staffer at a location they do not own (cross-org block)', () => {
+    expect(canOverrideStaffPassword(ownerAB, { id: 's', role: 'staff', locationIds: ['Z'] })).toBe(false)
+    expect(canOverrideStaffPassword(ownerAB, { id: 's', role: 'staff', locationIds: [] })).toBe(false)
+  })
+
+  it('owner CANNOT reset another owner (peer) even at a shared location', () => {
+    expect(canOverrideStaffPassword(ownerAB, { id: 'o2', role: 'owner', locationIds: ['A'] })).toBe(false)
+  })
+
+  it('owner CANNOT reset a master (privilege escalation block)', () => {
+    expect(canOverrideStaffPassword(ownerAB, { id: 'm2', role: 'master', locationIds: ['A'] })).toBe(false)
+  })
+
+  it('owner CANNOT reset themselves', () => {
+    expect(canOverrideStaffPassword(ownerAB, { id: 'o1', role: 'owner', locationIds: ['A'] })).toBe(false)
+  })
+
+  it('non-owner / non-master callers are denied', () => {
+    const manager = { id: 'mg', role: 'manager', locations: [{ id: 'A' }] }
+    expect(canOverrideStaffPassword(manager, { id: 's', role: 'staff', locationIds: ['A'] })).toBe(false)
+  })
+
+  it('null / undefined inputs deny safely', () => {
+    expect(canOverrideStaffPassword(null, { id: 's', role: 'staff' })).toBe(false)
+    expect(canOverrideStaffPassword(ownerAB, null)).toBe(false)
   })
 })
 
