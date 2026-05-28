@@ -45,12 +45,25 @@ export const GET = withAuth(
       .limit(1)
     const activeSession = activeRows?.[0] || null
 
+    // STUDIO-AC-EXTERNAL-RULE.1 — surface the external-start row
+    // if one exists. The cron maintains this table; the panel
+    // reads it to show "Started externally · auto-off at HH:MM"
+    // instead of just "Running". null when the unit isn't running
+    // externally, when the rule is disabled for this device, or
+    // when the cron hasn't observed it yet (up to one tick lag).
+    const { data: externalStartRow } = await db
+      .from('ac_external_starts')
+      .select('first_seen_at, expected_off_at')
+      .eq('device_id', out.device.id)
+      .maybeSingle()
+
     return NextResponse.json({
       success: true,
       data: {
         device: out.device,
         state: out.state,
         active_session: activeSession,
+        external_start: externalStartRow || null,
       },
     })
   }
@@ -88,7 +101,13 @@ export const PATCH = withAuth(
     // provider_device_id / location_id (which would corrupt the
     // device's identity).
     const patch = {}
-    for (const key of ['label', 'device_group', 'default_mode', 'default_temp_c', 'default_fan', 'session_minutes', 'enabled']) {
+    for (const key of [
+      'label', 'device_group',
+      'default_mode', 'default_temp_c', 'default_fan',
+      'session_minutes',
+      'external_auto_off_minutes',  // STUDIO-AC-EXTERNAL-RULE.1
+      'enabled',
+    ]) {
       if (key in body) patch[key] = body[key]
     }
     // Normalise device_group: trim, treat empty string as null so a
@@ -104,6 +123,18 @@ export const PATCH = withAuth(
     }
     if ('default_temp_c'  in patch) patch.default_temp_c  = Number(patch.default_temp_c)
     if ('session_minutes' in patch) patch.session_minutes = Number(patch.session_minutes)
+    // external_auto_off_minutes — allow null (master clearing the
+    // field to disable the rule for this device). Empty string,
+    // null, undefined → null. Otherwise coerce to integer.
+    if ('external_auto_off_minutes' in patch) {
+      const raw = patch.external_auto_off_minutes
+      if (raw === null || raw === '' || raw === undefined) {
+        patch.external_auto_off_minutes = null
+      } else {
+        const n = Number(raw)
+        patch.external_auto_off_minutes = Number.isFinite(n) && n > 0 ? Math.round(n) : null
+      }
+    }
 
     const { data: row, error: updErr } = await db
       .from('ac_devices')

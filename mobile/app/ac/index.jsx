@@ -183,12 +183,14 @@ function DeviceCard({ device, locationId }) {
   }, [load])
 
   // Re-render every second when active so the countdown updates
-  // without polling.
+  // without polling. Either source — app-session auto_off_at or
+  // the cron-set expected_off_at on the external_start row —
+  // drives the same countdown.
   useEffect(() => {
-    if (!state?.active_session?.auto_off_at) return
+    if (!state?.active_session?.auto_off_at && !state?.external_start?.expected_off_at) return
     const i = setInterval(() => setTick((t) => t + 1), 1000)
     return () => clearInterval(i)
-  }, [state?.active_session?.auto_off_at])
+  }, [state?.active_session?.auto_off_at, state?.external_start?.expected_off_at])
   void tick
 
   async function turnOn() {
@@ -235,15 +237,23 @@ function DeviceCard({ device, locationId }) {
 
   // STUDIO-AC-EXTERNAL.1 — same reconciliation as the web panel.
   // Vendor on + no session = control_source 'external' (wall panel
-  // or vendor schedule turned it on). No countdown then, but the
-  // Turn-off button still works.
+  // or vendor schedule turned it on).
+  //
+  // STUDIO-AC-EXTERNAL-RULE.1 — when the cron has observed an
+  // external start and the device has an external_auto_off_minutes
+  // rule, we have an expected_off_at to count down to. Falls back
+  // to the no-timer "running" state otherwise.
   const session = state?.active_session
   const vendorOn = state?.state?.on === true
+  const externalStart = state?.external_start
   const controlSource = session ? 'app' : (vendorOn ? 'external' : null)
   const isOn = !!controlSource
   let minsLeft = null
   if (session?.auto_off_at) {
     const ms = new Date(session.auto_off_at).getTime() - Date.now()
+    minsLeft = Math.max(0, Math.ceil(ms / 60_000))
+  } else if (externalStart?.expected_off_at && controlSource === 'external') {
+    const ms = new Date(externalStart.expected_off_at).getTime() - Date.now()
     minsLeft = Math.max(0, Math.ceil(ms / 60_000))
   }
 
@@ -285,7 +295,16 @@ function DeviceCard({ device, locationId }) {
             <Text className="text-[10px] text-un1t-light">auto-off</Text>
           </View>
         )}
-        {isOn && controlSource === 'external' && (
+        {isOn && controlSource === 'external' && minsLeft != null && (
+          <View className="items-end">
+            <View className="flex-row items-center">
+              <Ionicons name="time-outline" size={14} color="#93C5FD" />
+              <Text className="text-xl font-bold text-blue-200 ml-1">{minsLeft}m</Text>
+            </View>
+            <Text className="text-[10px] text-un1t-light">auto-off · external</Text>
+          </View>
+        )}
+        {isOn && controlSource === 'external' && minsLeft == null && (
           <View className="items-end">
             <Text className="text-[11px] uppercase tracking-wider text-blue-200">Running</Text>
             <Text className="text-[10px] text-un1t-light">externally</Text>

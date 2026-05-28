@@ -52,7 +52,7 @@ export async function loadDeviceForUser(deviceId, { user, db } = {}) {
 
   const { data: device } = await db
     .from('ac_devices')
-    .select('id, location_id, label, provider, provider_device_id, default_mode, default_temp_c, default_fan, session_minutes, enabled')
+    .select('id, location_id, label, provider, provider_device_id, default_mode, default_temp_c, default_fan, session_minutes, external_auto_off_minutes, enabled')
     .eq('id', deviceId)
     .single()
   if (!device) {
@@ -410,6 +410,30 @@ export async function vendorTurnOff(device, location, { vendorAdapters } = {}) {
   try {
     await adapter.adapter.turnOff(device.provider_device_id, creds.creds)
     return { ok: true }
+  } catch (e) {
+    return vendorError(e)
+  }
+}
+
+/**
+ * Pure vendor state read — dispatches to the right adapter with no
+ * permission check. Used by the ac-external-rule cron, which needs
+ * to poll every enabled device on every tick to detect units that
+ * were started outside the CRM (LG remote, Sensibo app, wall
+ * panel). Symmetric with vendorTurnOff above.
+ *
+ * Returns { ok: true, state } on success — same shape as the
+ * dispatcher's getState() — or { ok: false, error, status?, code? }
+ * if anything goes wrong (creds missing, vendor down, etc.).
+ */
+export async function vendorGetState(device, location, { vendorAdapters } = {}) {
+  const adapter = pickAdapter(device.provider, { vendorAdapters })
+  if (adapter.error) return adapter.error
+  const creds = resolveCredentials(device, location)
+  if (creds.error) return creds.error
+  try {
+    const state = await adapter.adapter.getState(device.provider_device_id, creds.creds)
+    return { ok: true, state }
   } catch (e) {
     return vendorError(e)
   }

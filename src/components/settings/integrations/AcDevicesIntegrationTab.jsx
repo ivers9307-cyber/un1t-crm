@@ -410,6 +410,12 @@ function DeviceRow({ device, onPatch, onDisable }) {
   const [tempC, setTempC] = useState(device.default_temp_c ?? 22)
   const [fan, setFan] = useState(device.default_fan || 'auto')
   const [sessionMinutes, setSessionMinutes] = useState(device.session_minutes ?? 30)
+  // STUDIO-AC-EXTERNAL-RULE.1 — '' (empty input) means "off". Any
+  // positive integer is the cap in minutes. The PATCH route
+  // coerces both to a clean integer or null.
+  const [externalOff, setExternalOff] = useState(
+    device.external_auto_off_minutes == null ? '' : String(device.external_auto_off_minutes)
+  )
 
   function reset() {
     setLabel(device.label)
@@ -418,6 +424,7 @@ function DeviceRow({ device, onPatch, onDisable }) {
     setTempC(device.default_temp_c ?? 22)
     setFan(device.default_fan || 'auto')
     setSessionMinutes(device.session_minutes ?? 30)
+    setExternalOff(device.external_auto_off_minutes == null ? '' : String(device.external_auto_off_minutes))
   }
 
   async function save() {
@@ -430,6 +437,9 @@ function DeviceRow({ device, onPatch, onDisable }) {
       default_temp_c: Number(tempC),
       default_fan: fan,
       session_minutes: Number(sessionMinutes),
+      // Send the raw value. The PATCH handler coerces '' / null to
+      // null (disable rule), positive int to int.
+      external_auto_off_minutes: externalOff === '' ? null : Number(externalOff),
     })
     setEditing(false)
   }
@@ -454,6 +464,12 @@ function DeviceRow({ device, onPatch, onDisable }) {
           </div>
           <div className="text-[11px] text-un1t-light mt-0.5">
             Default: {device.default_mode} · {device.default_temp_c}°C · fan {device.default_fan} · {device.session_minutes} min
+          </div>
+          <div className="text-[11px] text-un1t-light mt-0.5">
+            External auto-off:{' '}
+            {device.external_auto_off_minutes == null
+              ? <span className="text-un1t-mid">off</span>
+              : <span className="text-blue-300">{device.external_auto_off_minutes} min</span>}
           </div>
         </div>
         <div className="flex items-center gap-2 shrink-0">
@@ -542,6 +558,20 @@ function DeviceRow({ device, onPatch, onDisable }) {
                 className="w-full bg-un1t-black border border-un1t-gray rounded-md px-2 py-2 text-sm text-un1t-white" />
             </Field>
           </div>
+          <Field
+            label="External auto-off (min)"
+            hint="Cap how long this unit may run when started outside the CRM (LG remote, Sensibo app, wall panel). Leave empty to disable the rule for this device."
+          >
+            <input
+              type="number"
+              min={5}
+              max={720}
+              value={externalOff}
+              onChange={(e) => setExternalOff(e.target.value)}
+              placeholder="off"
+              className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
+            />
+          </Field>
           <div className="flex justify-end gap-2">
             <button type="button" onClick={() => { reset(); setEditing(false) }}
               className="text-xs text-un1t-light hover:text-un1t-white px-3 py-1.5">

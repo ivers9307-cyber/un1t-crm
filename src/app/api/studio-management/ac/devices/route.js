@@ -36,7 +36,7 @@ export const GET = withAuth(
   async ({ user, db, locationId }) => {
     const { data: devices, error: devErr } = await db
       .from('ac_devices')
-      .select('id, location_id, label, provider, device_group, default_mode, default_temp_c, default_fan, session_minutes, enabled, created_at, updated_at')
+      .select('id, location_id, label, provider, device_group, default_mode, default_temp_c, default_fan, session_minutes, external_auto_off_minutes, enabled, created_at, updated_at')
       .eq('location_id', locationId)
       .eq('enabled', true)
       // Order primarily by group so devices land in their section
