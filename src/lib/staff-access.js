@@ -55,6 +55,14 @@ export function mapProfileLocationToAssignment(pl) {
     // which the form treats as "all doors" mode. An empty array
     // means "no doors visible".
     unifi_door_ids: Array.isArray(pl.unifi_door_ids) ? pl.unifi_door_ids : (pl.unifi_door_ids ?? null),
+    // STUDIO-AC-DEVICES.1 (mig 210) — per-location AC device
+    // allowlist. Same null/empty/populated semantics as
+    // unifi_door_ids: NULL surfaces as `null` and the dispatcher
+    // treats it as "all devices" for manager+; an empty array
+    // is the strict-opt-in default for staff/head_coach/contractor
+    // after the mig 210 backfill; a populated array means exactly
+    // those devices.
+    ac_device_ids: Array.isArray(pl.ac_device_ids) ? pl.ac_device_ids : (pl.ac_device_ids ?? null),
     // P2.4 — Protect face link (mig 142). Surfaced here so the
     // ProtectFacePicker can pre-select the current value.
     protect_face_id: pl.protect_face_id || null,

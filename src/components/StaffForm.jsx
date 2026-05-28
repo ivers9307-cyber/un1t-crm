@@ -328,6 +328,13 @@ export default function StaffForm({
         // null is reserved for the manager+ legacy "all doors"
         // fallback and isn't reachable from this form.
         unifi_door_ids: Array.isArray(a.unifi_door_ids) ? a.unifi_door_ids : [],
+        // STUDIO-AC-DEVICES.3 — same shape as unifi_door_ids.
+        // Always send an array (defaulting to [] for legacy null
+        // values) so the server can detect "user cleared the
+        // allowlist" vs "field absent — leave alone". Master users
+        // editing other masters never see the picker, so this
+        // never overwrites their legacy NULL fallback.
+        ac_device_ids: Array.isArray(a.ac_device_ids) ? a.ac_device_ids : [],
         permissions: a.permissions || {},
       })),
       active: form.active,
@@ -612,6 +619,21 @@ export default function StaffForm({
                   value={Array.isArray(a.unifi_door_ids) ? a.unifi_door_ids : []}
                   onChange={(unifi_door_ids) =>
                     updateAssignment(a.location_id, { unifi_door_ids })
+                  }
+                />
+              )}
+              {/* STUDIO-AC-DEVICES.3 — per-location AC device allowlist.
+                  Sibling of the doors picker, same semantics. Empty
+                  array = the user sees no AC; null is reserved for
+                  the manager+ legacy "all devices" fallback and isn't
+                  reachable from this form. */}
+              {isEdit && configured && (
+                <AcDeviceAllowlistPicker
+                  locationId={a.location_id}
+                  locationName={loc.name}
+                  value={Array.isArray(a.ac_device_ids) ? a.ac_device_ids : []}
+                  onChange={(ac_device_ids) =>
+                    updateAssignment(a.location_id, { ac_device_ids })
                   }
                 />
               )}
@@ -1771,6 +1793,149 @@ function DoorAllowlistPicker({ locationId, locationName, value, onChange }) {
       <div className="text-[11px] text-un1t-light px-1">
         Doors this user can remote-unlock from the Studio Management screen at {locationName}.
         UniFi card-tap access is controlled separately by the user's policy.
+      </div>
+    </div>
+  )
+}
+
+// ── AcDeviceAllowlistPicker ────────────────────────────────────────
+//
+// STUDIO-AC-DEVICES.3 — sibling of DoorAllowlistPicker. Lists the
+// AC devices configured at this location and lets the master tick
+// which ones a staffer can control. Same UX shape on purpose so
+// muscle memory carries between the two pickers in this form.
+
+function AcDeviceAllowlistPicker({ locationId, locationName, value, onChange }) {
+  const [open, setOpen] = useState(false)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState(null)
+  const [devices, setDevices] = useState(null)
+
+  const selected = Array.isArray(value) ? value : []
+  const selectedSet = new Set(selected)
+
+  const currentLabel = (() => {
+    if (selected.length === 0) return 'No AC units selected'
+    if (!devices) {
+      return `${selected.length} AC unit${selected.length === 1 ? '' : 's'} selected`
+    }
+    const names = selected
+      .map((id) => devices.find((d) => d.id === id)?.label || id)
+      .slice(0, 3)
+    const more = selected.length - names.length
+    return more > 0 ? `${names.join(', ')} +${more} more` : names.join(', ')
+  })()
+
+  async function fetchDevices() {
+    if (loading) return
+    setLoading(true); setError(null)
+    try {
+      const res = await fetch(`/api/locations/${locationId}/ac-devices`, { cache: 'no-store' })
+      const json = await res.json()
+      if (!json.success) throw new Error(json.message || json.error || 'Fetch failed')
+      setDevices(json.devices || [])
+    } catch (e) {
+      setError(e.message || 'Could not load AC devices')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  function handleToggle() {
+    const next = !open
+    setOpen(next)
+    if (next && devices === null) fetchDevices()
+  }
+
+  function toggleDevice(deviceId) {
+    if (selectedSet.has(deviceId)) {
+      onChange(selected.filter((id) => id !== deviceId))
+    } else {
+      onChange([...selected, deviceId])
+    }
+  }
+
+  function selectAll() {
+    if (!devices) return
+    onChange(devices.map((d) => d.id))
+  }
+  function selectNone() {
+    onChange([])
+  }
+
+  return (
+    <div className="space-y-1.5">
+      <button
+        type="button"
+        onClick={handleToggle}
+        className="w-full flex items-center justify-between text-left rounded-md border border-un1t-gray bg-un1t-black px-3 py-2 text-sm hover:border-un1t-mid"
+      >
+        <div className="min-w-0">
+          <div className="text-xs text-un1t-light">Studio Management AC units</div>
+          <div className="truncate">{currentLabel}</div>
+        </div>
+        <span className="text-un1t-light text-xs ml-2">{open ? '▴' : '▾'}</span>
+      </button>
+
+      {open && (
+        <div className="rounded-md border border-un1t-gray bg-un1t-black p-2 space-y-1">
+          {loading && (
+            <div className="text-xs text-un1t-light px-2 py-1.5">Loading AC devices from {locationName}…</div>
+          )}
+          {error && (
+            <div className="text-xs text-red-300 px-2 py-1.5">{error}</div>
+          )}
+          {!loading && !error && devices && (
+            <>
+              <div className="flex items-center justify-between px-2 py-1">
+                <span className="text-[11px] text-un1t-light uppercase tracking-wider">
+                  {selected.length} of {devices.length} selected
+                </span>
+                <div className="flex gap-3 text-[11px]">
+                  <button type="button" onClick={selectAll} className="text-blue-300 hover:text-blue-200">All</button>
+                  <button type="button" onClick={selectNone} className="text-blue-300 hover:text-blue-200">Clear</button>
+                </div>
+              </div>
+              <div className="border-t border-un1t-gray/50 my-1" />
+              <div className="max-h-64 overflow-y-auto">
+                {devices.length === 0 && (
+                  <div className="text-xs text-un1t-light px-2 py-1.5">
+                    No AC devices configured at this location. Add devices under Settings → Locations → AC Devices first.
+                  </div>
+                )}
+                {devices.map((d) => {
+                  const isOn = selectedSet.has(d.id)
+                  return (
+                    <button
+                      key={d.id}
+                      type="button"
+                      onClick={() => toggleDevice(d.id)}
+                      className="w-full text-left text-sm px-2 py-1.5 rounded hover:bg-un1t-gray/40 flex items-center gap-2"
+                    >
+                      <span
+                        className={`inline-block w-3.5 h-3.5 rounded border flex items-center justify-center text-[10px] ${
+                          isOn
+                            ? 'bg-blue-500 border-blue-500 text-white'
+                            : 'border-un1t-gray text-transparent'
+                        }`}
+                      >
+                        {isOn ? '✓' : ''}
+                      </span>
+                      <span className="truncate">{d.label}</span>
+                      <span className="ml-auto text-[10px] uppercase tracking-wider text-un1t-mid font-mono shrink-0">
+                        {d.provider === 'thinq' ? 'LG ThinQ' : 'Sensibo'}
+                      </span>
+                    </button>
+                  )
+                })}
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      <div className="text-[11px] text-un1t-light px-1">
+        AC units this user can control from the Studio Management screen at {locationName}.
       </div>
     </div>
   )

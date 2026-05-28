@@ -95,6 +95,11 @@ export const assignmentSchema = z.object({
   // /api/locations/[id]/unifi-doors and the operator ticks the ones
   // the member is allowed to see.
   unifi_door_ids: z.array(z.string().min(1).max(200)).nullable().optional(),
+  // STUDIO-AC-DEVICES.1 (mig 210) — per-location allowlist of
+  // ac_devices.id values this user can control from the Studio
+  // Management screen. Same NULL / empty / populated semantics
+  // as unifi_door_ids. UUIDs, not arbitrary strings.
+  ac_device_ids: z.array(z.string().uuid()).nullable().optional(),
   // Per-location user permission overrides (mig 058). Empty `{}` =
   // "use the role default at this assignment's role". Top-level
   // keys mirror WEB_PERMISSIONS; nested `mobile` sub-object mirrors
