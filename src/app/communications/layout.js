@@ -26,8 +26,8 @@ export default async function CommunicationsLayout({ children }) {
 
   return (
     <div className="p-6 max-w-7xl mx-auto">
-      <h1 className="text-2xl font-bold text-un1t-white mb-1">Communications</h1>
-      <p className="text-sm text-un1t-light mb-5">
+      <h1 className="text-2xl font-bold text-un1t-text mb-1">Communications</h1>
+      <p className="text-sm text-un1t-subtle mb-5">
         {[
           canEmail && 'email',
           canWhatsapp && 'WhatsApp',

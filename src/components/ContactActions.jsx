@@ -52,27 +52,27 @@ export default function ContactActions({ contactId, locationId }) {
     <div className="relative">
       <div className="flex gap-2 flex-wrap">
         <button onClick={() => setShowForm(showForm === 'note' ? null : 'note')}
-          className="text-xs px-2.5 py-1 rounded border border-un1t-gray text-un1t-light hover:text-un1t-white hover:border-un1t-mid flex items-center gap-1">
+          className="text-xs px-2.5 py-1 rounded border border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-muted flex items-center gap-1">
           <Plus size={12} /> Note
         </button>
         <button onClick={() => setShowForm(showForm === 'activity' ? null : 'activity')}
-          className="text-xs px-2.5 py-1 rounded border border-un1t-gray text-un1t-light hover:text-un1t-white hover:border-un1t-mid flex items-center gap-1">
+          className="text-xs px-2.5 py-1 rounded border border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-muted flex items-center gap-1">
           <Plus size={12} /> Activity
         </button>
         <button onClick={() => setShowForm(showForm === 'sequence' ? null : 'sequence')}
-          className="text-xs px-2.5 py-1 rounded border border-un1t-gray text-un1t-light hover:text-un1t-white hover:border-un1t-mid flex items-center gap-1">
+          className="text-xs px-2.5 py-1 rounded border border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-muted flex items-center gap-1">
           <Mail size={12} /> Sequence
         </button>
       </div>
 
       {showForm === 'note' && (
-        <form onSubmit={addNote} className="absolute right-0 top-10 z-10 bg-un1t-dark border border-un1t-gray rounded-lg p-4 w-80 shadow-lg">
+        <form onSubmit={addNote} className="absolute right-0 top-10 z-10 bg-un1t-surface border border-un1t-border rounded-lg p-4 w-80 shadow-lg">
           <textarea name="content" rows={3} placeholder="Add a note..."
-            className="w-full bg-un1t-black border border-un1t-gray rounded p-2 text-sm text-un1t-white placeholder:text-un1t-mid resize-none focus:outline-none focus:border-un1t-mid" />
+            className="w-full bg-un1t-bg border border-un1t-border rounded p-2 text-sm text-un1t-text placeholder:text-un1t-muted resize-none focus:outline-none focus:border-un1t-muted" />
           <div className="flex justify-end gap-2 mt-2">
-            <button type="button" onClick={() => setShowForm(null)} className="text-xs text-un1t-light hover:text-un1t-white">Cancel</button>
+            <button type="button" onClick={() => setShowForm(null)} className="text-xs text-un1t-subtle hover:text-un1t-text">Cancel</button>
             <button type="submit" disabled={saving}
-              className="text-xs px-3 py-1 bg-un1t-white text-un1t-black rounded font-medium hover:bg-un1t-accent disabled:opacity-50">
+              className="text-xs px-3 py-1 bg-un1t-text text-un1t-bg rounded font-medium hover:bg-un1t-accent disabled:opacity-50">
               {saving ? 'Saving...' : 'Save'}
             </button>
           </div>
@@ -91,11 +91,11 @@ export default function ContactActions({ contactId, locationId }) {
       )}
 
       {showForm === 'activity' && (
-        <form onSubmit={addActivity} className="absolute right-0 top-10 z-10 bg-un1t-dark border border-un1t-gray rounded-lg p-4 w-80 shadow-lg space-y-2">
+        <form onSubmit={addActivity} className="absolute right-0 top-10 z-10 bg-un1t-surface border border-un1t-border rounded-lg p-4 w-80 shadow-lg space-y-2">
           <input name="subject" placeholder="Follow up with lead" required
-            className="w-full bg-un1t-black border border-un1t-gray rounded px-2 py-1.5 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid" />
+            className="w-full bg-un1t-bg border border-un1t-border rounded px-2 py-1.5 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted" />
           <select name="type"
-            className="w-full bg-un1t-black border border-un1t-gray rounded px-2 py-1.5 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid">
+            className="w-full bg-un1t-bg border border-un1t-border rounded px-2 py-1.5 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted">
             <option value="call">Call</option>
             <option value="email">Email</option>
             <option value="meeting">Meeting</option>
@@ -103,16 +103,16 @@ export default function ContactActions({ contactId, locationId }) {
           </select>
           <div className="flex gap-2">
             <input name="due_date" type="date"
-              className="flex-1 bg-un1t-black border border-un1t-gray rounded px-2 py-1.5 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid" />
+              className="flex-1 bg-un1t-bg border border-un1t-border rounded px-2 py-1.5 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted" />
             <input name="due_time" type="time"
-              className="w-28 bg-un1t-black border border-un1t-gray rounded px-2 py-1.5 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid" />
+              className="w-28 bg-un1t-bg border border-un1t-border rounded px-2 py-1.5 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted" />
           </div>
           <textarea name="note" rows={2} placeholder="Optional note..."
-            className="w-full bg-un1t-black border border-un1t-gray rounded p-2 text-sm text-un1t-white placeholder:text-un1t-mid resize-none focus:outline-none focus:border-un1t-mid" />
+            className="w-full bg-un1t-bg border border-un1t-border rounded p-2 text-sm text-un1t-text placeholder:text-un1t-muted resize-none focus:outline-none focus:border-un1t-muted" />
           <div className="flex justify-end gap-2">
-            <button type="button" onClick={() => setShowForm(null)} className="text-xs text-un1t-light hover:text-un1t-white">Cancel</button>
+            <button type="button" onClick={() => setShowForm(null)} className="text-xs text-un1t-subtle hover:text-un1t-text">Cancel</button>
             <button type="submit" disabled={saving}
-              className="text-xs px-3 py-1 bg-un1t-white text-un1t-black rounded font-medium hover:bg-un1t-accent disabled:opacity-50">
+              className="text-xs px-3 py-1 bg-un1t-text text-un1t-bg rounded font-medium hover:bg-un1t-accent disabled:opacity-50">
               {saving ? 'Saving...' : 'Save'}
             </button>
           </div>

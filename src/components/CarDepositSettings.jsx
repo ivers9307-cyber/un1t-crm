@@ -63,18 +63,18 @@ export default function CarDepositSettings({ location }) {
   return (
     <section className="mt-10">
       <div className="flex items-center gap-2 mb-3">
-        <Banknote size={16} className="text-un1t-light" />
+        <Banknote size={16} className="text-un1t-subtle" />
         <h3 className="text-lg font-semibold">Car deposit</h3>
-        <span className="text-xs text-un1t-mid ml-2">
+        <span className="text-xs text-un1t-muted ml-2">
           v{location.car_deposit_terms_version || 1}
         </span>
       </div>
-      <p className="text-xs text-un1t-light mb-4">
+      <p className="text-xs text-un1t-subtle mb-4">
         Powers the &lsquo;Send deposit link&rsquo; button on each car. Buyers receive a tokenised
         URL via SMS (Twilio) with these terms; on accept, payment is taken via Revolut Merchant.
       </p>
 
-      <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5 space-y-5">
+      <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5 space-y-5">
         <div>
           <label className="block text-sm mb-1.5 flex items-center gap-1.5">
             <Banknote size={12} /> Default deposit amount (EUR)
@@ -85,9 +85,9 @@ export default function CarDepositSettings({ location }) {
             step="0.01"
             value={defaultAmount}
             onChange={(e) => setDefaultAmount(parseFloat(e.target.value) || 0)}
-            className="w-40 bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
+            className="w-40 bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted"
           />
-          <p className="text-[11px] text-un1t-mid mt-1">Operator can override per car at issue time.</p>
+          <p className="text-[11px] text-un1t-muted mt-1">Operator can override per car at issue time.</p>
         </div>
 
         <div>
@@ -99,9 +99,9 @@ export default function CarDepositSettings({ location }) {
             onChange={(e) => setTerms(e.target.value)}
             rows={10}
             placeholder="The deposit is non-refundable and secures the car for the buyer..."
-            className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid font-mono leading-relaxed"
+            className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted font-mono leading-relaxed"
           />
-          <p className="text-[11px] text-un1t-mid mt-1">
+          <p className="text-[11px] text-un1t-muted mt-1">
             Plain text or markdown. Saving any change bumps the terms version &mdash; in-flight buyers
             on the public page will be asked to refresh and re-read before paying.
           </p>
@@ -119,7 +119,7 @@ export default function CarDepositSettings({ location }) {
               <span className="block text-sm flex items-center gap-1.5">
                 <MessageSquare size={12} /> Send buyer a receipt SMS when their deposit is paid
               </span>
-              <span className="block text-[11px] text-un1t-mid mt-0.5">
+              <span className="block text-[11px] text-un1t-muted mt-0.5">
                 Fired by the Revolut webhook on ORDER_COMPLETED. Confirms the captured amount and
                 the car. Skipped if the buyer has no phone number on file. Each send is logged as a
                 system note on the car so you can verify delivery (or fetch the Twilio SID).
@@ -136,7 +136,7 @@ export default function CarDepositSettings({ location }) {
           <button
             onClick={handleSave}
             disabled={saving}
-            className="inline-flex items-center gap-1.5 text-sm bg-un1t-white text-un1t-black font-semibold px-4 py-2 rounded-md hover:bg-un1t-accent disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 text-sm bg-un1t-text text-un1t-bg font-semibold px-4 py-2 rounded-md hover:bg-un1t-accent disabled:opacity-50"
           >
             <Save size={14} /> {saving ? 'Saving…' : 'Save deposit settings'}
           </button>

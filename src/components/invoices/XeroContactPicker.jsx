@@ -149,16 +149,16 @@ export default function XeroContactPicker({ locationId, value, onChange, label =
 
   return (
     <div className="block" ref={wrapRef}>
-      <span className="text-xs uppercase tracking-wide text-un1t-light">{label}</span>
+      <span className="text-xs uppercase tracking-wide text-un1t-subtle">{label}</span>
       <div className="relative mt-1">
         {summary ? (
           // Chip-shaped read-only view of the current pick. Click X
           // to clear back to the search input.
           <div className={`flex items-center justify-between gap-2 border rounded-md px-2 py-1.5 ${
-            summary.tone === 'success' ? 'bg-un1t-black border-emerald-500/40' : 'bg-un1t-black border-amber-500/40'
+            summary.tone === 'success' ? 'bg-un1t-bg border-emerald-500/40' : 'bg-un1t-bg border-amber-500/40'
           }`}>
             <div className="min-w-0">
-              <div className="text-sm text-un1t-white truncate">{summary.text}</div>
+              <div className="text-sm text-un1t-text truncate">{summary.text}</div>
               <div className={`text-[10px] truncate ${summary.tone === 'success' ? 'text-emerald-400' : 'text-amber-400'}`}>
                 {summary.tone === 'warning' && <UserPlus size={9} className="inline-block mr-1" />}
                 {summary.sub}
@@ -167,37 +167,37 @@ export default function XeroContactPicker({ locationId, value, onChange, label =
             <button
               type="button"
               onClick={clear}
-              className="text-un1t-light hover:text-un1t-white shrink-0"
+              className="text-un1t-subtle hover:text-un1t-text shrink-0"
               aria-label="Clear supplier"
             >
               <X size={14} />
             </button>
           </div>
         ) : (
-          <div className="flex items-center gap-1 bg-un1t-black border border-un1t-grey rounded-md px-2 py-1.5">
-            <Search size={12} className="text-un1t-light shrink-0" />
+          <div className="flex items-center gap-1 bg-un1t-bg border border-un1t-grey rounded-md px-2 py-1.5">
+            <Search size={12} className="text-un1t-subtle shrink-0" />
             <input
               ref={inputRef}
               value={query}
               onChange={(e) => { setQuery(e.target.value); setOpen(true) }}
               onFocus={() => setOpen(true)}
               placeholder="Search Xero suppliers…"
-              className="flex-1 bg-transparent text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none"
+              className="flex-1 bg-transparent text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none"
             />
           </div>
         )}
 
         {open && !summary && (
-          <div className="absolute z-20 mt-1 w-full bg-un1t-black border border-un1t-grey rounded-md shadow-xl max-h-72 overflow-hidden flex flex-col">
+          <div className="absolute z-20 mt-1 w-full bg-un1t-bg border border-un1t-grey rounded-md shadow-xl max-h-72 overflow-hidden flex flex-col">
             {error && <div className="p-2 text-xs text-red-400">{error}</div>}
             {!error && query.trim().length < MIN_QUERY && (
-              <div className="p-2 text-xs text-un1t-light">Type at least {MIN_QUERY} characters to search.</div>
+              <div className="p-2 text-xs text-un1t-subtle">Type at least {MIN_QUERY} characters to search.</div>
             )}
             {!error && query.trim().length >= MIN_QUERY && loading && (
-              <div className="p-2 text-xs text-un1t-light">Searching…</div>
+              <div className="p-2 text-xs text-un1t-subtle">Searching…</div>
             )}
             {!error && !loading && query.trim().length >= MIN_QUERY && results.length === 0 && (
-              <div className="p-2 text-xs text-un1t-light">No suppliers match &ldquo;{query.trim()}&rdquo;.</div>
+              <div className="p-2 text-xs text-un1t-subtle">No suppliers match &ldquo;{query.trim()}&rdquo;.</div>
             )}
             <ul className="overflow-y-auto">
               {results.map((c) => (
@@ -207,8 +207,8 @@ export default function XeroContactPicker({ locationId, value, onChange, label =
                     onClick={() => pickExisting(c)}
                     className="w-full text-left px-2 py-1.5 text-sm hover:bg-un1t-grey/30"
                   >
-                    <div className="text-un1t-white">{c.name}</div>
-                    {c.email && <div className="text-[10px] text-un1t-light">{c.email}</div>}
+                    <div className="text-un1t-text">{c.name}</div>
+                    {c.email && <div className="text-[10px] text-un1t-subtle">{c.email}</div>}
                   </button>
                 </li>
               ))}

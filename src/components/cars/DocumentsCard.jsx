@@ -48,11 +48,11 @@ export default function DocumentsCard({ car, setCar, setError, disabled }) {
   }
 
   return (
-    <div className="bg-un1t-dark border border-un1t-gray rounded-2xl p-5 mb-4">
+    <div className="bg-un1t-surface border border-un1t-border rounded-2xl p-5 mb-4">
       <div className="flex items-center justify-between mb-3 gap-3">
-        <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light">Documents & invoices</h3>
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle">Documents & invoices</h3>
       </div>
-      <p className="text-xs text-un1t-light mb-3">
+      <p className="text-xs text-un1t-subtle mb-3">
         Uploads automatically enter the bookkeeper queue at <a href="/invoices" className="underline">/invoices</a>.
         The accountant reviews + pushes each one to Xero from there.
       </p>
@@ -77,10 +77,10 @@ export default function DocumentsCard({ car, setCar, setError, disabled }) {
             badge = { label: 'In Xero', cls: 'text-green-500' }
           }
           return (
-            <div key={t.key} className="border border-un1t-gray rounded-md p-3">
+            <div key={t.key} className="border border-un1t-border rounded-md p-3">
               <div className="flex items-center justify-between mb-2">
                 <div>
-                  <span className="text-sm font-medium text-un1t-white">{t.label}</span>
+                  <span className="text-sm font-medium text-un1t-text">{t.label}</span>
                   {badge && (
                     <span className={`ml-2 text-[10px] uppercase ${badge.cls}`}>{badge.label}</span>
                   )}
@@ -92,7 +92,7 @@ export default function DocumentsCard({ car, setCar, setError, disabled }) {
                   {docs.map(d => (
                     <div key={d.id} className="text-xs">
                       <div className="flex items-center justify-between gap-2">
-                        <button onClick={() => open(d.id)} className="text-un1t-white hover:underline truncate text-left flex-1 inline-flex items-center gap-1.5 min-w-0">
+                        <button onClick={() => open(d.id)} className="text-un1t-text hover:underline truncate text-left flex-1 inline-flex items-center gap-1.5 min-w-0">
                           <FileText size={12} className="shrink-0" />
                           <span className="truncate">{d.filename}</span>
                         </button>
@@ -115,14 +115,14 @@ export default function DocumentsCard({ car, setCar, setError, disabled }) {
                             // link to /invoices.
                             <a
                               href="/invoices"
-                              className="inline-flex items-center gap-1 text-[10px] uppercase text-un1t-light hover:text-un1t-white"
+                              className="inline-flex items-center gap-1 text-[10px] uppercase text-un1t-subtle hover:text-un1t-text"
                               title="Bookkeeper handles the Xero push from /invoices"
                             >
                               <Inbox size={11} /> In queue
                             </a>
                           )}
                           {!disabled && (
-                            <button onClick={() => remove(d.id)} className="text-un1t-light hover:text-red-500 p-0.5">
+                            <button onClick={() => remove(d.id)} className="text-un1t-subtle hover:text-red-500 p-0.5">
                               <X size={14} />
                             </button>
                           )}
@@ -161,7 +161,7 @@ function UploadOne({ disabled, loading, onPick }) {
         type="button"
         disabled={disabled}
         onClick={() => inputRef.current?.click()}
-        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-un1t-gray/40 text-un1t-white text-xs hover:bg-un1t-gray/60 disabled:opacity-50"
+        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-un1t-border/40 text-un1t-text text-xs hover:bg-un1t-border/60 disabled:opacity-50"
       >
         <Upload size={12} /> {loading ? 'Uploading…' : 'Upload'}
       </button>

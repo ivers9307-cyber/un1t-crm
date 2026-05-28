@@ -52,22 +52,22 @@ export default async function RosterApprovalsPage() {
 
   return (
     <div>
-      <Link href="/schedule" className="inline-flex items-center gap-1.5 text-sm text-un1t-light hover:text-un1t-white mb-6">
+      <Link href="/schedule" className="inline-flex items-center gap-1.5 text-sm text-un1t-subtle hover:text-un1t-text mb-6">
         <ArrowLeft size={16} /> Back to Schedule
       </Link>
 
       <div className="mb-6">
         <h2 className="text-2xl font-bold">Roster approvals</h2>
-        <p className="text-sm text-un1t-light mt-1">
+        <p className="text-sm text-un1t-subtle mt-1">
           Drafts published over the monthly contractor budget that need an owner&apos;s sign-off.
         </p>
       </div>
 
       {(!drafts || drafts.length === 0) ? (
-        <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-12 text-center">
-          <Calendar size={40} className="mx-auto mb-4 text-un1t-light" />
+        <div className="bg-un1t-surface border border-un1t-border rounded-lg p-12 text-center">
+          <Calendar size={40} className="mx-auto mb-4 text-un1t-subtle" />
           <h3 className="text-lg font-semibold mb-1">No approvals waiting</h3>
-          <p className="text-sm text-un1t-light">All published rosters are within budget.</p>
+          <p className="text-sm text-un1t-subtle">All published rosters are within budget.</p>
         </div>
       ) : (
         <div className="space-y-3">
@@ -76,21 +76,21 @@ export default async function RosterApprovalsPage() {
             const requesterRoleAtLocation = d.created_by_profile?.full_name || 'Someone'
             const canApprove = isOwner && (user.role === 'master' || user.rolesByLocation?.[d.location_id] === 'owner')
             return (
-              <div key={d.id} className="bg-un1t-dark border border-un1t-gray rounded-lg p-4">
+              <div key={d.id} className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
                 <div className="flex items-start justify-between gap-4">
                   <div>
                     <div className="flex items-center gap-2 text-sm font-semibold">
                       <AlertTriangle size={14} className="text-amber-400" />
                       {d.locations?.name || 'Location'} — {d.period_start} to {d.period_end}
                     </div>
-                    <div className="text-xs text-un1t-light mt-1">
+                    <div className="text-xs text-un1t-subtle mt-1">
                       Submitted by {requesterRoleAtLocation}
                       {' · '}
                       Projected {formatEur(d.projected_contractor_eur)} of {formatEur(d.budget_at_publish_eur)} budget
                       {overrun > 0 && <span className="text-red-700 font-medium"> ({formatEur(overrun)} over)</span>}
                     </div>
                     {d.notes && (
-                      <p className="text-xs text-un1t-light mt-2 italic">&ldquo;{d.notes}&rdquo;</p>
+                      <p className="text-xs text-un1t-subtle mt-2 italic">&ldquo;{d.notes}&rdquo;</p>
                     )}
                   </div>
                   <RosterApprovalActions rosterId={d.id} canApprove={canApprove} />

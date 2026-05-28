@@ -54,12 +54,12 @@ export default function ContractRevokeButton({ contractId }) {
         value={reason}
         onChange={e => setReason(e.target.value)}
         placeholder="Reason (required)"
-        className="flex-1 min-w-[180px] bg-un1t-black border border-un1t-gray rounded px-2 py-1 text-xs"
+        className="flex-1 min-w-[180px] bg-un1t-bg border border-un1t-border rounded px-2 py-1 text-xs"
       />
       <button
         type="button"
         onClick={() => { setConfirming(false); setReason(''); setError(null) }}
-        className="text-xs px-2 py-1 rounded text-un1t-light"
+        className="text-xs px-2 py-1 rounded text-un1t-subtle"
       >Cancel</button>
       <button
         type="button"

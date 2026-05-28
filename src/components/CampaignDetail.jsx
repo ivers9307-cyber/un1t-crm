@@ -20,13 +20,13 @@ const recipientStatusConfig = {
 
 function StatCard({ icon: Icon, label, value, subValue, color }) {
   return (
-    <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-4">
+    <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
       <div className="flex items-center gap-2 mb-2">
-        <Icon size={16} className={color || 'text-un1t-light'} />
-        <span className="text-xs text-un1t-light uppercase tracking-wider">{label}</span>
+        <Icon size={16} className={color || 'text-un1t-subtle'} />
+        <span className="text-xs text-un1t-subtle uppercase tracking-wider">{label}</span>
       </div>
       <p className="text-2xl font-bold">{value}</p>
-      {subValue && <p className="text-xs text-un1t-mid mt-0.5">{subValue}</p>}
+      {subValue && <p className="text-xs text-un1t-muted mt-0.5">{subValue}</p>}
     </div>
   )
 }
@@ -43,7 +43,7 @@ export default function CampaignDetail({ campaign, recipients = [], locationId: 
       router.replace(`/email/campaigns/${campaign.id}?edit=1`)
     }
     return (
-      <div className="flex items-center justify-center h-screen text-un1t-light">
+      <div className="flex items-center justify-center h-screen text-un1t-subtle">
         Opening draft editor…
       </div>
     )
@@ -72,18 +72,18 @@ export default function CampaignDetail({ campaign, recipients = [], locationId: 
   return (
     <div className="flex flex-col h-screen">
       {/* Top bar */}
-      <div className="flex items-center justify-between px-5 py-3 border-b border-un1t-gray bg-un1t-dark shrink-0">
+      <div className="flex items-center justify-between px-5 py-3 border-b border-un1t-border bg-un1t-surface shrink-0">
         <div className="flex items-center gap-4">
-          <Link href="/email" className="text-un1t-light hover:text-un1t-white transition-colors">
+          <Link href="/email" className="text-un1t-subtle hover:text-un1t-text transition-colors">
             <ArrowLeft size={20} />
           </Link>
           <div>
             <h2 className="text-lg font-semibold">{campaign.name}</h2>
-            <p className="text-xs text-un1t-light">{campaign.subject || 'No subject'}</p>
+            <p className="text-xs text-un1t-subtle">{campaign.subject || 'No subject'}</p>
           </div>
         </div>
         <div className="flex items-center gap-3">
-          <span className="text-xs text-un1t-light">{sentDate}</span>
+          <span className="text-xs text-un1t-subtle">{sentDate}</span>
           <span className="text-xs bg-green-500/20 text-green-400 px-2 py-0.5 rounded-full">
             Sent
           </span>
@@ -91,15 +91,15 @@ export default function CampaignDetail({ campaign, recipients = [], locationId: 
       </div>
 
       {/* Tabs */}
-      <div className="flex border-b border-un1t-gray bg-un1t-dark shrink-0">
+      <div className="flex border-b border-un1t-border bg-un1t-surface shrink-0">
         {tabs.map(t => (
           <button
             key={t.key}
             onClick={() => setTab(t.key)}
             className={`px-5 py-2.5 text-sm font-medium border-b-2 transition-colors ${
               tab === t.key
-                ? 'text-un1t-white border-un1t-white'
-                : 'text-un1t-light border-transparent hover:text-un1t-white'
+                ? 'text-un1t-text border-un1t-text'
+                : 'text-un1t-subtle border-transparent hover:text-un1t-text'
             }`}
           >
             {t.label}
@@ -120,23 +120,23 @@ export default function CampaignDetail({ campaign, recipients = [], locationId: 
             </div>
 
             {/* Campaign details */}
-            <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5 space-y-3">
-              <h3 className="font-semibold text-sm text-un1t-light uppercase tracking-wider mb-3">Campaign Details</h3>
+            <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5 space-y-3">
+              <h3 className="font-semibold text-sm text-un1t-subtle uppercase tracking-wider mb-3">Campaign Details</h3>
               <div className="grid grid-cols-2 gap-4 text-sm">
                 <div>
-                  <span className="text-un1t-mid">From</span>
+                  <span className="text-un1t-muted">From</span>
                   <p>{campaign.from_name ? `${campaign.from_name} <${campaign.from_email}>` : campaign.from_email || '—'}</p>
                 </div>
                 <div>
-                  <span className="text-un1t-mid">Reply To</span>
+                  <span className="text-un1t-muted">Reply To</span>
                   <p>{campaign.reply_to || 'Same as From'}</p>
                 </div>
                 <div>
-                  <span className="text-un1t-mid">Preview Text</span>
+                  <span className="text-un1t-muted">Preview Text</span>
                   <p>{campaign.preview_text || '—'}</p>
                 </div>
                 <div>
-                  <span className="text-un1t-mid">Total Recipients</span>
+                  <span className="text-un1t-muted">Total Recipients</span>
                   <p>{campaign.total_recipients || totalSent}</p>
                 </div>
               </div>
@@ -144,18 +144,18 @@ export default function CampaignDetail({ campaign, recipients = [], locationId: 
 
             {/* Audience filter summary */}
             {campaign.audience_filter?.filters?.length > 0 && (
-              <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5">
-                <h3 className="font-semibold text-sm text-un1t-light uppercase tracking-wider mb-3">Audience Filters</h3>
+              <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5">
+                <h3 className="font-semibold text-sm text-un1t-subtle uppercase tracking-wider mb-3">Audience Filters</h3>
                 <div className="space-y-1.5">
                   {campaign.audience_filter.filters.map((f, i) => (
                     <div key={i} className="flex items-center gap-2 text-sm">
                       {i > 0 && (
-                        <span className="text-xs text-un1t-mid font-medium uppercase">
+                        <span className="text-xs text-un1t-muted font-medium uppercase">
                           {campaign.audience_filter.logic || 'and'}
                         </span>
                       )}
-                      <span className="text-un1t-white">{f.field.replace(/_/g, ' ')}</span>
-                      <span className="text-un1t-mid">{f.op.replace(/_/g, ' ')}</span>
+                      <span className="text-un1t-text">{f.field.replace(/_/g, ' ')}</span>
+                      <span className="text-un1t-muted">{f.op.replace(/_/g, ' ')}</span>
                       {!['is_null', 'not_null'].includes(f.op) && (
                         <span className="text-blue-400">{f.value}</span>
                       )}
@@ -170,15 +170,15 @@ export default function CampaignDetail({ campaign, recipients = [], locationId: 
         {tab === 'recipients' && (
           <div className="p-6">
             {recipients.length === 0 ? (
-              <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-8 text-center">
-                <Users size={32} className="mx-auto mb-3 text-un1t-light" />
-                <p className="text-sm text-un1t-light">No recipient data available yet</p>
+              <div className="bg-un1t-surface border border-un1t-border rounded-lg p-8 text-center">
+                <Users size={32} className="mx-auto mb-3 text-un1t-subtle" />
+                <p className="text-sm text-un1t-subtle">No recipient data available yet</p>
               </div>
             ) : (
-              <div className="bg-un1t-dark border border-un1t-gray rounded-lg overflow-x-auto">
+              <div className="bg-un1t-surface border border-un1t-border rounded-lg overflow-x-auto">
                 <table className="w-full text-sm min-w-[600px]">
                   <thead>
-                    <tr className="border-b border-un1t-gray text-left text-xs text-un1t-light uppercase tracking-wider">
+                    <tr className="border-b border-un1t-border text-left text-xs text-un1t-subtle uppercase tracking-wider">
                       <th className="px-4 py-3">Contact</th>
                       <th className="px-4 py-3">Status</th>
                       <th className="px-4 py-3">Sent</th>
@@ -186,23 +186,23 @@ export default function CampaignDetail({ campaign, recipients = [], locationId: 
                       <th className="px-4 py-3">Clicked</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-un1t-gray">
+                  <tbody className="divide-y divide-un1t-border">
                     {recipients.map(r => {
                       const config = recipientStatusConfig[r.status] || recipientStatusConfig.sent
                       const StatusIcon = config.icon
                       const contact = r.contacts
 
                       return (
-                        <tr key={r.id} className="hover:bg-un1t-gray/20 transition-colors">
+                        <tr key={r.id} className="hover:bg-un1t-border/20 transition-colors">
                           <td className="px-4 py-3">
                             <div>
                               <Link
                                 href={`/contacts/${r.contact_id}`}
-                                className="text-un1t-white hover:underline"
+                                className="text-un1t-text hover:underline"
                               >
                                 {contact?.name || 'Unknown'}
                               </Link>
-                              <p className="text-xs text-un1t-mid">{contact?.email || r.contact_id}</p>
+                              <p className="text-xs text-un1t-muted">{contact?.email || r.contact_id}</p>
                             </div>
                           </td>
                           <td className="px-4 py-3">
@@ -211,13 +211,13 @@ export default function CampaignDetail({ campaign, recipients = [], locationId: 
                               {config.label}
                             </span>
                           </td>
-                          <td className="px-4 py-3 text-xs text-un1t-light">
+                          <td className="px-4 py-3 text-xs text-un1t-subtle">
                             {r.sent_at ? new Date(r.sent_at).toLocaleString('en-IE', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—'}
                           </td>
-                          <td className="px-4 py-3 text-xs text-un1t-light">
+                          <td className="px-4 py-3 text-xs text-un1t-subtle">
                             {r.opened_at ? new Date(r.opened_at).toLocaleString('en-IE', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—'}
                           </td>
-                          <td className="px-4 py-3 text-xs text-un1t-light">
+                          <td className="px-4 py-3 text-xs text-un1t-subtle">
                             {r.clicked_at ? new Date(r.clicked_at).toLocaleString('en-IE', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—'}
                           </td>
                         </tr>

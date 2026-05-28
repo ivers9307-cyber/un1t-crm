@@ -38,8 +38,8 @@ export default async function ExpensesPage() {
   return (
     <div className="p-6 max-w-6xl mx-auto">
       <header className="mb-6">
-        <h1 className="text-2xl font-semibold text-un1t-white">Expenses</h1>
-        <p className="text-sm text-un1t-light mt-1">
+        <h1 className="text-2xl font-semibold text-un1t-text">Expenses</h1>
+        <p className="text-sm text-un1t-subtle mt-1">
           {isFte && !isApprover && 'Submit your monthly expense receipts for reimbursement. Approved claims are paid via the next payroll run.'}
           {isApprover && !isFte && 'Review and approve expense claims submitted by your team.'}
           {isFte && isApprover && 'Submit your own expenses and approve your team’s.'}

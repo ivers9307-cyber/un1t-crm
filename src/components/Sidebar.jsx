@@ -358,7 +358,7 @@ export default function Sidebar({ user, mobileOpen = false, onMobileClose }) {
     // want a one-frame slide on first paint.
     <aside
       className={clsx(
-        'w-64 md:w-56 bg-un1t-dark border-r border-un1t-gray flex flex-col shrink-0',
+        'w-64 md:w-56 bg-un1t-surface border-r border-un1t-border flex flex-col shrink-0',
         // Mobile-only overlay positioning + slide animation
         'fixed inset-y-0 left-0 z-50 transform transition-transform duration-200',
         mobileOpen ? 'translate-x-0' : '-translate-x-full',
@@ -367,7 +367,7 @@ export default function Sidebar({ user, mobileOpen = false, onMobileClose }) {
       )}
     >
       {/* Logo + Location + mobile close button */}
-      <div className="p-5 border-b border-un1t-gray">
+      <div className="p-5 border-b border-un1t-border">
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0">
             {branding?.logo_url ? (
@@ -382,7 +382,7 @@ export default function Sidebar({ user, mobileOpen = false, onMobileClose }) {
           <button
             onClick={onMobileClose}
             aria-label="Close menu"
-            className="md:hidden p-1.5 -m-1 text-un1t-light hover:text-un1t-white rounded transition-colors"
+            className="md:hidden p-1.5 -m-1 text-un1t-subtle hover:text-un1t-text rounded transition-colors"
           >
             <X size={18} />
           </button>
@@ -394,7 +394,7 @@ export default function Sidebar({ user, mobileOpen = false, onMobileClose }) {
               activeLocationId={user.activeLocation?.id}
             />
           ) : (
-            <p className="text-xs text-un1t-light">
+            <p className="text-xs text-un1t-subtle">
               {user?.activeLocation?.name || 'Lead Management'}
             </p>
           )}
@@ -439,7 +439,7 @@ export default function Sidebar({ user, mobileOpen = false, onMobileClose }) {
           href="https://platform.un1tdublin.com"
           target="_blank"
           rel="noreferrer"
-          className="flex items-center gap-3 px-5 py-2.5 text-sm transition-colors text-un1t-light hover:text-un1t-white hover:bg-un1t-gray/30 border-l-2 border-transparent border-t border-un1t-gray"
+          className="flex items-center gap-3 px-5 py-2.5 text-sm transition-colors text-un1t-subtle hover:text-un1t-text hover:bg-un1t-border/30 border-l-2 border-transparent border-t border-un1t-border"
           title="Sentinel ops dashboard (master-only, opens in new tab)"
         >
           <Activity size={18} />
@@ -453,7 +453,7 @@ export default function Sidebar({ user, mobileOpen = false, onMobileClose }) {
           (so the master can cycle to a different user without
           stopping first). */}
       {(user?.role === 'master' || user?.impersonatingFrom) && (
-        <div className="border-t border-un1t-gray py-2">
+        <div className="border-t border-un1t-border py-2">
           <ImpersonatePicker />
         </div>
       )}
@@ -462,19 +462,19 @@ export default function Sidebar({ user, mobileOpen = false, onMobileClose }) {
           for self-service preferences (default landing page, access
           history, …). The sign-out button stays a sibling so muscle
           memory is unchanged. */}
-      <div className="border-t border-un1t-gray p-4">
+      <div className="border-t border-un1t-border p-4">
         <div className="flex items-center justify-between gap-2">
           <Link
             href="/account"
-            className="min-w-0 flex-1 -m-1 p-1 rounded hover:bg-un1t-gray/40 transition-colors"
+            className="min-w-0 flex-1 -m-1 p-1 rounded hover:bg-un1t-border/40 transition-colors"
             title="Account preferences"
           >
             <p className="text-sm font-medium truncate">{user?.full_name || 'User'}</p>
-            <p className="text-xs text-un1t-light truncate">{roleLabels[user?.role] || user?.role || ''}</p>
+            <p className="text-xs text-un1t-subtle truncate">{roleLabels[user?.role] || user?.role || ''}</p>
           </Link>
           <button
             onClick={handleLogout}
-            className="p-1.5 text-un1t-light hover:text-un1t-white transition-colors rounded hover:bg-un1t-gray/50 shrink-0"
+            className="p-1.5 text-un1t-subtle hover:text-un1t-text transition-colors rounded hover:bg-un1t-border/50 shrink-0"
             title="Sign out"
           >
             <LogOut size={16} />
@@ -495,8 +495,8 @@ function leafClassName(active, isChild = false) {
     'flex items-center gap-3 text-sm transition-colors',
     isChild ? 'pl-12 pr-5 py-2' : 'px-5 py-2.5',
     active
-      ? 'text-un1t-white bg-un1t-gray/50 border-l-2 border-un1t-white'
-      : 'text-un1t-light hover:text-un1t-white hover:bg-un1t-gray/30 border-l-2 border-transparent'
+      ? 'text-un1t-text bg-un1t-border/50 border-l-2 border-un1t-text'
+      : 'text-un1t-subtle hover:text-un1t-text hover:bg-un1t-border/30 border-l-2 border-transparent'
   )
 }
 
@@ -580,7 +580,7 @@ function SidebarGroup({ item, pathname, open, onToggle }) {
             onClick={onToggle}
             aria-expanded={open}
             aria-label={open ? `Collapse ${label}` : `Expand ${label}`}
-            className="px-3 text-un1t-light hover:text-un1t-white transition-colors"
+            className="px-3 text-un1t-subtle hover:text-un1t-text transition-colors"
           >
             <Chevron size={14} />
           </button>

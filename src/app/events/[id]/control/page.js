@@ -45,7 +45,7 @@ export default async function RaceControlPage(props) {
       <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
         <div>
           <h2 className="text-2xl font-bold">{race.name} — Race control</h2>
-          <p className="text-sm text-un1t-light mt-0.5">
+          <p className="text-sm text-un1t-subtle mt-0.5">
             {race.race_date}{race.start_time ? ` · first wave ${race.start_time.slice(0, 5)}` : ''} · auto-refreshes every 2 seconds
           </p>
         </div>
@@ -54,7 +54,7 @@ export default async function RaceControlPage(props) {
             href={`/event/${race.slug}/display`}
             target="_blank"
             rel="noopener noreferrer"
-            className="inline-flex items-center gap-2 border border-un1t-gray text-un1t-light text-sm font-medium px-4 py-2 rounded-lg hover:text-un1t-white hover:border-un1t-mid transition-colors"
+            className="inline-flex items-center gap-2 border border-un1t-border text-un1t-subtle text-sm font-medium px-4 py-2 rounded-lg hover:text-un1t-text hover:border-un1t-muted transition-colors"
             title="Public TV-friendly board for the studio screen"
           >
             <Tv size={16} />

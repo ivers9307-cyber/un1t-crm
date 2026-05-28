@@ -34,11 +34,11 @@ export default async function BroadcastsListPage() {
       <div className="flex items-center justify-between mb-4">
         <div>
           <h2 className="text-lg font-semibold">Broadcasts</h2>
-          <p className="text-xs text-un1t-light mt-0.5">Send approved template messages to filtered audiences</p>
+          <p className="text-xs text-un1t-subtle mt-0.5">Send approved template messages to filtered audiences</p>
         </div>
         <Link
           href="/whatsapp/broadcasts/new"
-          className="flex items-center gap-2 bg-un1t-white text-un1t-black text-sm font-medium px-4 py-2 rounded-lg hover:bg-un1t-accent transition-colors"
+          className="flex items-center gap-2 bg-un1t-text text-un1t-bg text-sm font-medium px-4 py-2 rounded-lg hover:bg-un1t-accent transition-colors"
         >
           <Plus size={16} />
           New Broadcast
@@ -46,21 +46,21 @@ export default async function BroadcastsListPage() {
       </div>
 
       {(!broadcasts || broadcasts.length === 0) ? (
-        <div className="bg-un1t-dark border border-un1t-gray rounded-2xl p-10 text-center">
-          <Megaphone size={32} className="mx-auto mb-3 text-un1t-light" />
+        <div className="bg-un1t-surface border border-un1t-border rounded-2xl p-10 text-center">
+          <Megaphone size={32} className="mx-auto mb-3 text-un1t-subtle" />
           <h3 className="text-base font-semibold mb-2">No broadcasts yet</h3>
-          <p className="text-sm text-un1t-light mb-4">
+          <p className="text-sm text-un1t-subtle mb-4">
             Create a broadcast to send an approved template message to your contacts.
           </p>
           <Link
             href="/whatsapp/broadcasts/new"
-            className="inline-flex items-center gap-2 bg-un1t-white text-un1t-black text-sm font-medium px-4 py-2 rounded-lg hover:bg-un1t-accent transition-colors"
+            className="inline-flex items-center gap-2 bg-un1t-text text-un1t-bg text-sm font-medium px-4 py-2 rounded-lg hover:bg-un1t-accent transition-colors"
           >
             <Plus size={16} /> Create Broadcast
           </Link>
         </div>
       ) : (
-        <div className="bg-un1t-dark border border-un1t-gray rounded-2xl divide-y divide-un1t-gray">
+        <div className="bg-un1t-surface border border-un1t-border rounded-2xl divide-y divide-un1t-border">
           {broadcasts.map(b => {
             const config = statusConfig[b.status] || statusConfig.draft
             const StatusIcon = config.icon
@@ -68,15 +68,15 @@ export default async function BroadcastsListPage() {
               <Link
                 key={b.id}
                 href={`/whatsapp/broadcasts/${b.id}`}
-                className="flex items-center justify-between px-5 py-4 hover:bg-un1t-gray/20 transition-colors"
+                className="flex items-center justify-between px-5 py-4 hover:bg-un1t-border/20 transition-colors"
               >
                 <div className="flex items-center gap-4">
-                  <div className="w-10 h-10 rounded-lg bg-un1t-gray/30 flex items-center justify-center">
-                    <Megaphone size={18} className="text-un1t-light" />
+                  <div className="w-10 h-10 rounded-lg bg-un1t-border/30 flex items-center justify-center">
+                    <Megaphone size={18} className="text-un1t-subtle" />
                   </div>
                   <div>
                     <p className="text-sm font-medium">{b.name}</p>
-                    <p className="text-xs text-un1t-light mt-0.5">
+                    <p className="text-xs text-un1t-subtle mt-0.5">
                       Template: {b.whatsapp_templates?.name || 'None'}
                       {b.sent_at && <span> · Sent {new Date(b.sent_at).toLocaleDateString('en-IE', { month: 'short', day: 'numeric' })}</span>}
                     </p>
@@ -84,7 +84,7 @@ export default async function BroadcastsListPage() {
                 </div>
                 <div className="flex items-center gap-4">
                   {b.status === 'sent' && (
-                    <div className="flex items-center gap-3 text-xs text-un1t-light">
+                    <div className="flex items-center gap-3 text-xs text-un1t-subtle">
                       <span>{b.total_sent || 0} sent</span>
                       <span>{b.total_delivered || 0} delivered</span>
                       <span>{b.total_read || 0} read</span>

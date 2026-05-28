@@ -41,7 +41,7 @@ export default function InstallTemplateButton({ templateId, templateName }) {
         onClick={install}
         disabled={busy}
         aria-label={`Install ${templateName}`}
-        className="inline-flex items-center gap-1.5 bg-un1t-white text-un1t-black text-xs font-semibold px-3 py-1.5 rounded-md hover:bg-un1t-accent transition-colors disabled:opacity-50"
+        className="inline-flex items-center gap-1.5 bg-un1t-text text-un1t-bg text-xs font-semibold px-3 py-1.5 rounded-md hover:bg-un1t-accent transition-colors disabled:opacity-50"
       >
         {busy ? <Loader2 size={12} className="animate-spin" /> : <ArrowRight size={12} />}
         {busy ? 'Installing…' : 'Install'}

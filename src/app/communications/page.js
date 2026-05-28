@@ -14,12 +14,12 @@ export const dynamic = 'force-dynamic'
 
 function StatCard({ label, value, icon: Icon, accent }) {
   return (
-    <div className="bg-un1t-dark border border-un1t-gray rounded-2xl p-5">
-      <div className="flex items-center gap-2 text-xs uppercase tracking-wider text-un1t-light mb-2">
+    <div className="bg-un1t-surface border border-un1t-border rounded-2xl p-5">
+      <div className="flex items-center gap-2 text-xs uppercase tracking-wider text-un1t-subtle mb-2">
         {Icon && <Icon size={14} />}
         {label}
       </div>
-      <div className={`text-2xl font-bold ${accent || 'text-un1t-white'}`}>{value}</div>
+      <div className={`text-2xl font-bold ${accent || 'text-un1t-text'}`}>{value}</div>
     </div>
   )
 }
@@ -28,13 +28,13 @@ function ActionCard({ href, icon: Icon, color, title, desc }) {
   return (
     <Link
       href={href}
-      className="bg-un1t-dark border border-un1t-gray rounded-2xl p-5 hover:border-un1t-white/30 transition-colors group"
+      className="bg-un1t-surface border border-un1t-border rounded-2xl p-5 hover:border-un1t-text/30 transition-colors group"
     >
       <div className={`w-10 h-10 rounded-lg ${color} flex items-center justify-center mb-3`}>
         <Icon size={20} />
       </div>
-      <div className="text-sm font-semibold text-un1t-white group-hover:text-un1t-accent">{title}</div>
-      <div className="text-xs text-un1t-light mt-0.5">{desc}</div>
+      <div className="text-sm font-semibold text-un1t-text group-hover:text-un1t-accent">{title}</div>
+      <div className="text-xs text-un1t-subtle mt-0.5">{desc}</div>
     </Link>
   )
 }
@@ -165,7 +165,7 @@ export default async function CommunicationsHub() {
               <StatCard
                 label="SMS failure rate"
                 value={`${smsFailureRate}%`}
-                accent={smsFailureRate > 5 ? 'text-red-400' : 'text-un1t-light'}
+                accent={smsFailureRate > 5 ? 'text-red-400' : 'text-un1t-subtle'}
               />
             )}
           </>
@@ -173,7 +173,7 @@ export default async function CommunicationsHub() {
       </div>
 
       {/* Quick actions */}
-      <h3 className="text-sm font-semibold uppercase tracking-wider text-un1t-light mb-3">Jump in</h3>
+      <h3 className="text-sm font-semibold uppercase tracking-wider text-un1t-subtle mb-3">Jump in</h3>
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
         {canWhatsapp && (
           <ActionCard
@@ -229,7 +229,7 @@ export default async function CommunicationsHub() {
         <ActionCard
           href="/communications/templates"
           icon={FileText}
-          color="bg-un1t-gray/40 text-un1t-light"
+          color="bg-un1t-border/40 text-un1t-subtle"
           title="Templates"
           desc="Reusable email + WhatsApp content"
         />

@@ -19,7 +19,7 @@ import { Calendar, AlertCircle, Loader2, Flag, Palmtree, Users, X as XIcon, Cloc
 const STATUS_STYLES = {
   red:   { border: 'border-red-500/60',    bg: 'bg-red-500/5',    label: 'Uncovered' },
   amber: { border: 'border-amber-500/60',  bg: 'bg-amber-500/5',  label: 'Undermanned' },
-  green: { border: 'border-emerald-500/30', bg: 'bg-un1t-dark',   label: 'OK' },
+  green: { border: 'border-emerald-500/30', bg: 'bg-un1t-surface',   label: 'OK' },
 }
 
 const KIND_LABELS = {
@@ -89,7 +89,7 @@ export default function StudioOverviewStrip({ range, locationId, dataVersion = 0
   }
   if (!data) {
     return (
-      <div className="text-xs text-un1t-light inline-flex items-center gap-2 mb-4">
+      <div className="text-xs text-un1t-subtle inline-flex items-center gap-2 mb-4">
         <Loader2 size={12} className="animate-spin" /> Loading overview…
       </div>
     )
@@ -103,14 +103,14 @@ export default function StudioOverviewStrip({ range, locationId, dataVersion = 0
   return (
     <section className="mb-4">
       <div className="flex items-center gap-2 mb-2">
-        <Calendar size={13} className="text-un1t-light" />
-        <h3 className="text-xs uppercase tracking-wider text-un1t-light font-semibold">Studio overview</h3>
+        <Calendar size={13} className="text-un1t-subtle" />
+        <h3 className="text-xs uppercase tracking-wider text-un1t-subtle font-semibold">Studio overview</h3>
         <span className={`text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded-full ${
           flagged === 0 ? 'bg-emerald-500/15 text-emerald-700' : 'bg-amber-500/15 text-amber-700'
         }`}>
           {range_label}
         </span>
-        {loading && <Loader2 size={11} className="animate-spin text-un1t-light" />}
+        {loading && <Loader2 size={11} className="animate-spin text-un1t-subtle" />}
       </div>
 
       <div className="overflow-x-auto -mx-2 px-2">
@@ -143,9 +143,9 @@ function DayCard({ day, onClick }) {
     >
       <div className="flex items-baseline justify-between mb-1.5">
         <div>
-          <div className="text-[10px] uppercase tracking-wider text-un1t-light">{dayName}</div>
-          <div className="text-base font-semibold text-un1t-white leading-none">{dayNum}</div>
-          <div className="text-[10px] text-un1t-mid">{monthShort}</div>
+          <div className="text-[10px] uppercase tracking-wider text-un1t-subtle">{dayName}</div>
+          <div className="text-base font-semibold text-un1t-text leading-none">{dayNum}</div>
+          <div className="text-[10px] text-un1t-muted">{monthShort}</div>
         </div>
         <div className="text-right">
           <div className={`text-[10px] uppercase tracking-wider ${
@@ -155,13 +155,13 @@ function DayCard({ day, onClick }) {
           }`}>
             {status.label}
           </div>
-          <div className="font-mono tabular-nums text-sm font-semibold text-un1t-white">
-            {Math.max(0, supply)}<span className="text-un1t-mid">/{day.demand}</span>
+          <div className="font-mono tabular-nums text-sm font-semibold text-un1t-text">
+            {Math.max(0, supply)}<span className="text-un1t-muted">/{day.demand}</span>
           </div>
         </div>
       </div>
 
-      <div className="space-y-0.5 text-[11px] text-un1t-light">
+      <div className="space-y-0.5 text-[11px] text-un1t-subtle">
         {day.events.length > 0 && (
           <div className="flex items-center gap-1">
             <Flag size={10} /> {day.events.length}
@@ -178,7 +178,7 @@ function DayCard({ day, onClick }) {
           </div>
         )}
         {day.time_off.length > 0 && (
-          <div className="flex items-center gap-1 text-un1t-mid">
+          <div className="flex items-center gap-1 text-un1t-muted">
             <Palmtree size={10} /> {day.time_off.length}
           </div>
         )}
@@ -214,16 +214,16 @@ function DayDetailModal({ day, onClose }) {
       aria-modal="true"
     >
       <div
-        className="bg-un1t-dark border border-un1t-gray rounded-lg max-w-md w-full max-h-[85vh] overflow-y-auto"
+        className="bg-un1t-surface border border-un1t-border rounded-lg max-w-md w-full max-h-[85vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-5 py-3 border-b border-un1t-gray">
+        <div className="flex items-center justify-between px-5 py-3 border-b border-un1t-border">
           <div>
-            <div className="text-[10px] uppercase tracking-wider text-un1t-light">Studio overview</div>
-            <div className="text-base font-semibold text-un1t-white">{longDate}</div>
+            <div className="text-[10px] uppercase tracking-wider text-un1t-subtle">Studio overview</div>
+            <div className="text-base font-semibold text-un1t-text">{longDate}</div>
           </div>
-          <button onClick={onClose} className="text-un1t-light hover:text-un1t-white p-1" title="Close (Esc)">
+          <button onClick={onClose} className="text-un1t-subtle hover:text-un1t-text p-1" title="Close (Esc)">
             <XIcon size={18} />
           </button>
         </div>
@@ -238,7 +238,7 @@ function DayDetailModal({ day, onClose }) {
             }`}>
               {status.label}
             </span>
-            <span className="font-mono tabular-nums text-un1t-white">
+            <span className="font-mono tabular-nums text-un1t-text">
               Supply {supply} / Demand {day.demand}
             </span>
           </div>
@@ -254,8 +254,8 @@ function DayDetailModal({ day, onClose }) {
               {day.under_min_blocks.map((b) => (
                 <li key={b.id} className="flex items-baseline justify-between gap-3 text-sm">
                   <div className="min-w-0">
-                    <div className="text-un1t-white truncate">{b.label}</div>
-                    <div className="text-[10px] text-un1t-mid">
+                    <div className="text-un1t-text truncate">{b.label}</div>
+                    <div className="text-[10px] text-un1t-muted">
                       <span className="inline-flex items-center gap-1">
                         <Clock size={9} /> {b.time}
                       </span>
@@ -279,17 +279,17 @@ function DayDetailModal({ day, onClose }) {
               {day.events.map((e) => (
                 <li key={e.id} className="flex items-baseline justify-between gap-3 text-sm">
                   <div className="min-w-0">
-                    <div className="text-un1t-white truncate">{e.name}</div>
-                    <div className="text-[10px] text-un1t-mid uppercase tracking-wider">
+                    <div className="text-un1t-text truncate">{e.name}</div>
+                    <div className="text-[10px] text-un1t-muted uppercase tracking-wider">
                       {KIND_LABELS[e.kind] || e.kind}
                       {e.start_time && (
-                        <span className="ml-1.5 text-un1t-light normal-case tracking-normal">
+                        <span className="ml-1.5 text-un1t-subtle normal-case tracking-normal">
                           @ {fmtTime(e.start_time)}
                         </span>
                       )}
                     </div>
                   </div>
-                  <span className="text-xs text-un1t-light tabular-nums shrink-0">
+                  <span className="text-xs text-un1t-subtle tabular-nums shrink-0">
                     needs {e.staff_required}
                   </span>
                 </li>
@@ -307,8 +307,8 @@ function DayDetailModal({ day, onClose }) {
               {day.event_types.map((et) => (
                 <li key={et.id} className="flex items-baseline justify-between gap-3 text-sm">
                   <div className="min-w-0">
-                    <div className="text-un1t-white truncate">{et.name}</div>
-                    <div className="text-[10px] text-un1t-mid">
+                    <div className="text-un1t-text truncate">{et.name}</div>
+                    <div className="text-[10px] text-un1t-muted">
                       {fmtTime(et.window_start) && fmtTime(et.window_end) ? (
                         <span className="inline-flex items-center gap-1">
                           <Clock size={9} />
@@ -317,7 +317,7 @@ function DayDetailModal({ day, onClose }) {
                       ) : 'window unknown'}
                     </div>
                   </div>
-                  <span className="text-xs text-un1t-light tabular-nums shrink-0">
+                  <span className="text-xs text-un1t-subtle tabular-nums shrink-0">
                     {et.staff_required === 0 ? 'no own demand' : `needs ${et.staff_required}`}
                   </span>
                 </li>
@@ -328,23 +328,23 @@ function DayDetailModal({ day, onClose }) {
 
         {/* Staffing section */}
         <DetailSection icon={Users} title="Staffing">
-          <div className="text-sm text-un1t-white">
+          <div className="text-sm text-un1t-text">
             <span className="tabular-nums font-semibold">{day.staff_scheduled}</span>
-            <span className="text-un1t-light"> scheduled</span>
+            <span className="text-un1t-subtle"> scheduled</span>
             {day.staff_on_leave > 0 && (
               <>
-                <span className="text-un1t-light">, </span>
+                <span className="text-un1t-subtle">, </span>
                 <span className="tabular-nums font-semibold text-amber-700">{day.staff_on_leave}</span>
-                <span className="text-un1t-light"> on leave</span>
+                <span className="text-un1t-subtle"> on leave</span>
               </>
             )}
           </div>
           {day.time_off.length > 0 && (
             <div className="mt-1.5">
-              <div className="text-[10px] uppercase tracking-wider text-un1t-mid mb-1 inline-flex items-center gap-1">
+              <div className="text-[10px] uppercase tracking-wider text-un1t-muted mb-1 inline-flex items-center gap-1">
                 <Palmtree size={10} /> On leave
               </div>
-              <ul className="text-xs text-un1t-light space-y-0.5">
+              <ul className="text-xs text-un1t-subtle space-y-0.5">
                 {day.time_off.map((name, i) => (
                   <li key={`${name}-${i}`}>{name}</li>
                 ))}
@@ -353,7 +353,7 @@ function DayDetailModal({ day, onClose }) {
           )}
         </DetailSection>
 
-        <div className="px-5 py-3 border-t border-un1t-gray text-[11px] text-un1t-mid">
+        <div className="px-5 py-3 border-t border-un1t-border text-[11px] text-un1t-muted">
           Edit events at <code>/events</code>, booking types at <code>/bookings/event-types</code>, shifts inside the calendar below.
         </div>
       </div>
@@ -363,8 +363,8 @@ function DayDetailModal({ day, onClose }) {
 
 function DetailSection({ icon: Icon, title, children }) {
   return (
-    <section className="px-5 py-4 border-t border-un1t-gray first:border-t-0">
-      <h4 className="text-[10px] uppercase tracking-wider text-un1t-light font-semibold mb-2 inline-flex items-center gap-1.5">
+    <section className="px-5 py-4 border-t border-un1t-border first:border-t-0">
+      <h4 className="text-[10px] uppercase tracking-wider text-un1t-subtle font-semibold mb-2 inline-flex items-center gap-1.5">
         <Icon size={11} /> {title}
       </h4>
       {children}
@@ -373,5 +373,5 @@ function DetailSection({ icon: Icon, title, children }) {
 }
 
 function Muted({ children }) {
-  return <p className="text-xs text-un1t-mid italic">{children}</p>
+  return <p className="text-xs text-un1t-muted italic">{children}</p>
 }

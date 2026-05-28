@@ -22,7 +22,7 @@ export default async function AdminIntegrationsPage() {
   return (
     <div className="p-8 max-w-4xl">
       <h2 className="text-2xl font-bold mb-1">Service integrations</h2>
-      <p className="text-sm text-un1t-light mb-8 max-w-3xl">
+      <p className="text-sm text-un1t-subtle mb-8 max-w-3xl">
         Third-party app credentials — Strava, Garmin, Apple Health.
         Members can connect their accounts only when an integration
         is configured (client_id + client_secret) and toggled on.

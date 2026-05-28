@@ -182,7 +182,7 @@ export default function AcDevicesIntegrationTab({ location, canEdit }) {
 
   if (!canEdit) {
     return (
-      <div className="text-xs text-un1t-light">
+      <div className="text-xs text-un1t-subtle">
         Only owners + masters can edit AC settings.
       </div>
     )
@@ -190,7 +190,7 @@ export default function AcDevicesIntegrationTab({ location, canEdit }) {
 
   return (
     <div className="space-y-8">
-      <p className="text-xs text-un1t-light">
+      <p className="text-xs text-un1t-subtle">
         AC devices at this location. Sensibo and LG ThinQ are supported.
         Credentials are per-account-per-vendor (one Sensibo API key
         controls all pods on that account; one ThinQ PAT controls all
@@ -203,13 +203,13 @@ export default function AcDevicesIntegrationTab({ location, canEdit }) {
           1. Sensibo credentials
       ============================================================ */}
       <section className="space-y-3">
-        <h4 className="text-xs font-bold text-un1t-white uppercase tracking-wider">Sensibo credentials</h4>
+        <h4 className="text-xs font-bold text-un1t-text uppercase tracking-wider">Sensibo credentials</h4>
         <Field label="API key" hint="From Sensibo Web → Profile → API Keys.">
           <input
             type="text"
             value={sensiboApiKey}
             onChange={(e) => setSensiboApiKey(e.target.value)}
-            className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm font-mono text-un1t-white"
+            className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm font-mono text-un1t-text"
             placeholder="paste Sensibo API key"
           />
         </Field>
@@ -219,16 +219,16 @@ export default function AcDevicesIntegrationTab({ location, canEdit }) {
           2. LG ThinQ credentials
       ============================================================ */}
       <section className="space-y-3">
-        <h4 className="text-xs font-bold text-un1t-white uppercase tracking-wider">LG ThinQ credentials</h4>
-        <p className="text-[11px] text-un1t-mid">
-          Generate a PAT at <a href="https://connect-pat.lgthinq.com/" target="_blank" rel="noopener noreferrer" className="text-un1t-white underline">connect-pat.lgthinq.com</a> scoped to Air Conditioner status + control. Client id is auto-generated when you first save a PAT.
+        <h4 className="text-xs font-bold text-un1t-text uppercase tracking-wider">LG ThinQ credentials</h4>
+        <p className="text-[11px] text-un1t-muted">
+          Generate a PAT at <a href="https://connect-pat.lgthinq.com/" target="_blank" rel="noopener noreferrer" className="text-un1t-text underline">connect-pat.lgthinq.com</a> scoped to Air Conditioner status + control. Client id is auto-generated when you first save a PAT.
         </p>
         <Field label="Personal Access Token (PAT)">
           <input
             type="text"
             value={thinqPat}
             onChange={(e) => setThinqPat(e.target.value)}
-            className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm font-mono text-un1t-white"
+            className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm font-mono text-un1t-text"
             placeholder="paste LG ThinQ PAT"
           />
         </Field>
@@ -238,7 +238,7 @@ export default function AcDevicesIntegrationTab({ location, canEdit }) {
               type="text"
               value={thinqClientId}
               onChange={(e) => setThinqClientId(e.target.value)}
-              className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm font-mono text-un1t-white"
+              className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm font-mono text-un1t-text"
               placeholder="auto-generated on save"
             />
           </Field>
@@ -248,7 +248,7 @@ export default function AcDevicesIntegrationTab({ location, canEdit }) {
               value={thinqCountryCode}
               onChange={(e) => setThinqCountryCode(e.target.value.toUpperCase())}
               maxLength={2}
-              className="w-24 bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm font-mono uppercase text-un1t-white"
+              className="w-24 bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm font-mono uppercase text-un1t-text"
             />
           </Field>
         </div>
@@ -272,7 +272,7 @@ export default function AcDevicesIntegrationTab({ location, canEdit }) {
           type="button"
           onClick={saveCreds}
           disabled={savingCreds}
-          className="inline-flex items-center gap-1.5 px-4 py-2 rounded-md bg-un1t-white text-un1t-black text-sm font-semibold hover:bg-un1t-accent disabled:opacity-50"
+          className="inline-flex items-center gap-1.5 px-4 py-2 rounded-md bg-un1t-text text-un1t-bg text-sm font-semibold hover:bg-un1t-accent disabled:opacity-50"
         >
           {savingCreds
             ? <><Loader2 size={12} className="animate-spin" /> Saving…</>
@@ -284,15 +284,15 @@ export default function AcDevicesIntegrationTab({ location, canEdit }) {
       {/* ============================================================
           3. Devices table
       ============================================================ */}
-      <section className="space-y-3 pt-4 border-t border-un1t-gray/40">
+      <section className="space-y-3 pt-4 border-t border-un1t-border/40">
         <div className="flex items-center justify-between">
-          <h4 className="text-xs font-bold text-un1t-white uppercase tracking-wider">Devices</h4>
+          <h4 className="text-xs font-bold text-un1t-text uppercase tracking-wider">Devices</h4>
           <div className="flex items-center gap-2">
             <button
               type="button"
               onClick={() => startDiscovery('sensibo')}
               disabled={!sensiboApiKey.trim() || discoveryLoading}
-              className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md border border-un1t-gray text-xs text-un1t-light hover:text-un1t-white disabled:opacity-50"
+              className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md border border-un1t-border text-xs text-un1t-subtle hover:text-un1t-text disabled:opacity-50"
               title={!sensiboApiKey.trim() ? 'Save a Sensibo API key first' : ''}
             >
               <Plus size={11} /> Add Sensibo
@@ -301,7 +301,7 @@ export default function AcDevicesIntegrationTab({ location, canEdit }) {
               type="button"
               onClick={() => startDiscovery('thinq')}
               disabled={!thinqPat.trim() || !thinqClientId.trim() || discoveryLoading}
-              className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md border border-un1t-gray text-xs text-un1t-light hover:text-un1t-white disabled:opacity-50"
+              className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md border border-un1t-border text-xs text-un1t-subtle hover:text-un1t-text disabled:opacity-50"
               title={!thinqPat.trim() ? 'Save a ThinQ PAT first' : ''}
             >
               <Plus size={11} /> Add LG ThinQ
@@ -311,22 +311,22 @@ export default function AcDevicesIntegrationTab({ location, canEdit }) {
 
         {/* Add-device discovery panel */}
         {adding && (
-          <div className="bg-un1t-black/60 border border-un1t-gray rounded-md p-3 space-y-2">
+          <div className="bg-un1t-bg/60 border border-un1t-border rounded-md p-3 space-y-2">
             <div className="flex items-center justify-between">
-              <span className="text-xs font-bold text-un1t-white">
+              <span className="text-xs font-bold text-un1t-text">
                 Discover {adding === 'sensibo' ? 'Sensibo pods' : 'LG ThinQ devices'}
               </span>
               <button
                 type="button"
                 onClick={() => { setAdding(null); setDiscoveryResults(null); setDiscoveryError(null) }}
-                className="text-un1t-light hover:text-un1t-white"
+                className="text-un1t-subtle hover:text-un1t-text"
                 aria-label="Close"
               >
                 <X size={14} />
               </button>
             </div>
             {discoveryLoading && (
-              <div className="text-xs text-un1t-light inline-flex items-center gap-2">
+              <div className="text-xs text-un1t-subtle inline-flex items-center gap-2">
                 <Loader2 size={12} className="animate-spin" /> Asking the vendor…
               </div>
             )}
@@ -336,7 +336,7 @@ export default function AcDevicesIntegrationTab({ location, canEdit }) {
               </div>
             )}
             {discoveryResults && discoveryResults.length === 0 && (
-              <div className="text-xs text-un1t-light">No devices returned by the vendor.</div>
+              <div className="text-xs text-un1t-subtle">No devices returned by the vendor.</div>
             )}
             {discoveryResults && discoveryResults.length > 0 && (
               <div className="space-y-1">
@@ -353,10 +353,10 @@ export default function AcDevicesIntegrationTab({ location, canEdit }) {
                         const name = prompt(`CRM label for this device?`, defaultLabel)
                         if (name && name.trim()) addDevice(adding, pdid, name.trim())
                       }}
-                      className="w-full text-left bg-un1t-black border border-un1t-gray rounded p-2 hover:border-un1t-mid"
+                      className="w-full text-left bg-un1t-bg border border-un1t-border rounded p-2 hover:border-un1t-muted"
                     >
-                      <div className="text-sm text-un1t-white">{defaultLabel}</div>
-                      <div className="text-[11px] text-un1t-mid font-mono">{pdid}</div>
+                      <div className="text-sm text-un1t-text">{defaultLabel}</div>
+                      <div className="text-[11px] text-un1t-muted font-mono">{pdid}</div>
                     </button>
                   )
                 })}
@@ -367,7 +367,7 @@ export default function AcDevicesIntegrationTab({ location, canEdit }) {
 
         {/* Devices list */}
         {devicesLoading && devices.length === 0 && (
-          <div className="text-xs text-un1t-light inline-flex items-center gap-2">
+          <div className="text-xs text-un1t-subtle inline-flex items-center gap-2">
             <Loader2 size={12} className="animate-spin" /> Loading…
           </div>
         )}
@@ -377,7 +377,7 @@ export default function AcDevicesIntegrationTab({ location, canEdit }) {
           </div>
         )}
         {!devicesLoading && devices.length === 0 && (
-          <div className="text-xs text-un1t-light">
+          <div className="text-xs text-un1t-subtle">
             No devices configured. Add one above after saving credentials.
           </div>
         )}
@@ -445,12 +445,12 @@ function DeviceRow({ device, onPatch, onDisable }) {
   }
 
   return (
-    <div className="bg-un1t-black/40 border border-un1t-gray rounded-md p-3">
+    <div className="bg-un1t-bg/40 border border-un1t-border rounded-md p-3">
       <div className="flex items-center justify-between gap-3 mb-1">
         <div className="min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-sm font-semibold text-un1t-white truncate">{device.label}</span>
-            <span className="text-[10px] uppercase tracking-wider text-un1t-mid font-mono">
+            <span className="text-sm font-semibold text-un1t-text truncate">{device.label}</span>
+            <span className="text-[10px] uppercase tracking-wider text-un1t-muted font-mono">
               {device.provider === 'thinq' ? 'LG ThinQ' : 'Sensibo'}
             </span>
             {device.device_group && (
@@ -462,13 +462,13 @@ function DeviceRow({ device, onPatch, onDisable }) {
               <span className="text-[10px] uppercase tracking-wider text-red-400">disabled</span>
             )}
           </div>
-          <div className="text-[11px] text-un1t-light mt-0.5">
+          <div className="text-[11px] text-un1t-subtle mt-0.5">
             Default: {device.default_mode} · {device.default_temp_c}°C · fan {device.default_fan} · {device.session_minutes} min
           </div>
-          <div className="text-[11px] text-un1t-light mt-0.5">
+          <div className="text-[11px] text-un1t-subtle mt-0.5">
             External auto-off:{' '}
             {device.external_auto_off_minutes == null
-              ? <span className="text-un1t-mid">off</span>
+              ? <span className="text-un1t-muted">off</span>
               : <span className="text-blue-300">{device.external_auto_off_minutes} min</span>}
           </div>
         </div>
@@ -476,7 +476,7 @@ function DeviceRow({ device, onPatch, onDisable }) {
           <button
             type="button"
             onClick={() => { reset(); setEditing(!editing) }}
-            className="text-un1t-light hover:text-un1t-white"
+            className="text-un1t-subtle hover:text-un1t-text"
             aria-label={editing ? 'Cancel edit' : 'Edit device'}
           >
             {editing ? <X size={14} /> : <Edit3 size={14} />}
@@ -506,13 +506,13 @@ function DeviceRow({ device, onPatch, onDisable }) {
       </div>
 
       {editing && (
-        <div className="mt-3 pt-3 border-t border-un1t-gray/40 space-y-2">
+        <div className="mt-3 pt-3 border-t border-un1t-border/40 space-y-2">
           <Field label="Label">
             <input
               type="text"
               value={label}
               onChange={(e) => setLabel(e.target.value)}
-              className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
+              className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
             />
           </Field>
           <Field
@@ -524,13 +524,13 @@ function DeviceRow({ device, onPatch, onDisable }) {
               value={deviceGroup}
               onChange={(e) => setDeviceGroup(e.target.value)}
               placeholder="e.g. Bathrooms"
-              className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
+              className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
             />
           </Field>
           <div className="grid grid-cols-4 gap-2">
             <Field label="Mode">
               <select value={mode} onChange={(e) => setMode(e.target.value)}
-                className="w-full bg-un1t-black border border-un1t-gray rounded-md px-2 py-2 text-sm text-un1t-white">
+                className="w-full bg-un1t-bg border border-un1t-border rounded-md px-2 py-2 text-sm text-un1t-text">
                 <option value="cool">Cool</option>
                 <option value="heat">Heat</option>
                 <option value="auto">Auto</option>
@@ -541,11 +541,11 @@ function DeviceRow({ device, onPatch, onDisable }) {
             <Field label="Temp °C">
               <input type="number" min={16} max={30} value={tempC}
                 onChange={(e) => setTempC(e.target.value)}
-                className="w-full bg-un1t-black border border-un1t-gray rounded-md px-2 py-2 text-sm text-un1t-white" />
+                className="w-full bg-un1t-bg border border-un1t-border rounded-md px-2 py-2 text-sm text-un1t-text" />
             </Field>
             <Field label="Fan">
               <select value={fan} onChange={(e) => setFan(e.target.value)}
-                className="w-full bg-un1t-black border border-un1t-gray rounded-md px-2 py-2 text-sm text-un1t-white">
+                className="w-full bg-un1t-bg border border-un1t-border rounded-md px-2 py-2 text-sm text-un1t-text">
                 <option value="auto">Auto</option>
                 <option value="low">Low</option>
                 <option value="medium">Medium</option>
@@ -555,7 +555,7 @@ function DeviceRow({ device, onPatch, onDisable }) {
             <Field label="Session (min)">
               <input type="number" min={5} max={720} value={sessionMinutes}
                 onChange={(e) => setSessionMinutes(e.target.value)}
-                className="w-full bg-un1t-black border border-un1t-gray rounded-md px-2 py-2 text-sm text-un1t-white" />
+                className="w-full bg-un1t-bg border border-un1t-border rounded-md px-2 py-2 text-sm text-un1t-text" />
             </Field>
           </div>
           <Field
@@ -569,16 +569,16 @@ function DeviceRow({ device, onPatch, onDisable }) {
               value={externalOff}
               onChange={(e) => setExternalOff(e.target.value)}
               placeholder="off"
-              className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
+              className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
             />
           </Field>
           <div className="flex justify-end gap-2">
             <button type="button" onClick={() => { reset(); setEditing(false) }}
-              className="text-xs text-un1t-light hover:text-un1t-white px-3 py-1.5">
+              className="text-xs text-un1t-subtle hover:text-un1t-text px-3 py-1.5">
               Cancel
             </button>
             <button type="button" onClick={save}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-un1t-white text-un1t-black text-xs font-semibold hover:bg-un1t-accent">
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-un1t-text text-un1t-bg text-xs font-semibold hover:bg-un1t-accent">
               <Save size={11} /> Save
             </button>
           </div>
@@ -591,9 +591,9 @@ function DeviceRow({ device, onPatch, onDisable }) {
 function Field({ label, hint, children }) {
   return (
     <div className="flex-1">
-      <label className="block text-xs text-un1t-light mb-1">{label}</label>
+      <label className="block text-xs text-un1t-subtle mb-1">{label}</label>
       {children}
-      {hint && <p className="text-[11px] text-un1t-mid mt-1">{hint}</p>}
+      {hint && <p className="text-[11px] text-un1t-muted mt-1">{hint}</p>}
     </div>
   )
 }

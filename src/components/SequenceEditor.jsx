@@ -41,7 +41,7 @@ const CHANNEL_CONFIG = {
   email:    { icon: Mail,          color: 'bg-blue-500/20 text-blue-400',   label: 'Email' },
   whatsapp: { icon: MessageCircle, color: 'bg-green-500/20 text-green-400', label: 'WhatsApp' },
   sms:      { icon: MessageSquare, color: 'bg-cyan-500/20 text-cyan-400',   label: 'SMS' },
-  wait:     { icon: Hourglass,     color: 'bg-un1t-gray/40 text-un1t-light', label: 'Wait' },
+  wait:     { icon: Hourglass,     color: 'bg-un1t-border/40 text-un1t-subtle', label: 'Wait' },
   branch:   { icon: GitBranch,     color: 'bg-purple-500/20 text-purple-700', label: 'Branch' },
   move_pipeline_stage: { icon: ArrowRightCircle, color: 'bg-emerald-500/20 text-emerald-400', label: 'Move pipeline' },
 }
@@ -105,19 +105,19 @@ function StepCard({ step, index, onUpdate, onDelete, onMoveUp, onMoveDown, isFir
 
   return (
     <div className="relative">
-      {!isFirst && <div className="absolute left-6 -top-4 w-px h-4 bg-un1t-gray" />}
+      {!isFirst && <div className="absolute left-6 -top-4 w-px h-4 bg-un1t-border" />}
 
-      <div className="bg-un1t-dark border border-un1t-gray rounded-lg overflow-hidden">
+      <div className="bg-un1t-surface border border-un1t-border rounded-lg overflow-hidden">
         {/* Step header */}
         <div
-          className="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-un1t-gray/20 transition-colors"
+          className="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-un1t-border/20 transition-colors"
           onClick={() => setExpanded(!expanded)}
         >
-          <div className="flex items-center gap-1 text-un1t-mid">
-            <button onClick={e => { e.stopPropagation(); onMoveUp() }} disabled={isFirst} className="p-0.5 hover:text-un1t-white disabled:opacity-30">
+          <div className="flex items-center gap-1 text-un1t-muted">
+            <button onClick={e => { e.stopPropagation(); onMoveUp() }} disabled={isFirst} className="p-0.5 hover:text-un1t-text disabled:opacity-30">
               <ChevronUp size={12} />
             </button>
-            <button onClick={e => { e.stopPropagation(); onMoveDown() }} disabled={isLast} className="p-0.5 hover:text-un1t-white disabled:opacity-30">
+            <button onClick={e => { e.stopPropagation(); onMoveDown() }} disabled={isLast} className="p-0.5 hover:text-un1t-text disabled:opacity-30">
               <ChevronDown size={12} />
             </button>
           </div>
@@ -128,7 +128,7 @@ function StepCard({ step, index, onUpdate, onDelete, onMoveUp, onMoveDown, isFir
 
           <div className="flex-1 min-w-0">
             <p className="text-sm font-medium truncate">{headerLabel}</p>
-            <p className="text-xs text-un1t-mid">
+            <p className="text-xs text-un1t-muted">
               <Clock size={10} className="inline mr-1" />
               Wait {step.delay_days || 0}d {step.delay_hours || 0}h
               {stepType !== 'wait' && ' then send'}
@@ -140,7 +140,7 @@ function StepCard({ step, index, onUpdate, onDelete, onMoveUp, onMoveDown, isFir
               have data — saved-step-with-sends. Compact pill so it
               fits the header. */}
           {stats && stats.sent > 0 && (
-            <div className="hidden md:flex items-center gap-3 text-[11px] text-un1t-light">
+            <div className="hidden md:flex items-center gap-3 text-[11px] text-un1t-subtle">
               <span title="Sent" className="tabular-nums">{stats.sent} sent</span>
               {stepType === 'email' && (
                 <>
@@ -160,23 +160,23 @@ function StepCard({ step, index, onUpdate, onDelete, onMoveUp, onMoveDown, isFir
             </div>
           )}
 
-          <button onClick={e => { e.stopPropagation(); onDelete() }} className="p-1.5 text-un1t-mid hover:text-red-400">
+          <button onClick={e => { e.stopPropagation(); onDelete() }} className="p-1.5 text-un1t-muted hover:text-red-400">
             <Trash2 size={14} />
           </button>
 
-          {expanded ? <ChevronUp size={16} className="text-un1t-light" /> : <ChevronDown size={16} className="text-un1t-light" />}
+          {expanded ? <ChevronUp size={16} className="text-un1t-subtle" /> : <ChevronDown size={16} className="text-un1t-subtle" />}
         </div>
 
         {expanded && (
-          <div className="border-t border-un1t-gray p-4 space-y-4">
+          <div className="border-t border-un1t-border p-4 space-y-4">
             {/* Channel + delay row */}
             <div className="flex flex-wrap items-end gap-4">
               <div>
-                <label className="block text-xs text-un1t-light mb-1">Channel</label>
+                <label className="block text-xs text-un1t-subtle mb-1">Channel</label>
                 <select
                   value={stepType}
                   onChange={e => onUpdate({ step_type: e.target.value })}
-                  className="bg-un1t-black border border-un1t-gray rounded-md px-3 py-1.5 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
+                  className="bg-un1t-bg border border-un1t-border rounded-md px-3 py-1.5 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted"
                 >
                   <option value="email">Email</option>
                   <option value="whatsapp">WhatsApp</option>
@@ -191,27 +191,27 @@ function StepCard({ step, index, onUpdate, onDelete, onMoveUp, onMoveDown, isFir
                 </select>
               </div>
               <div>
-                <label className="block text-xs text-un1t-light mb-1">Delay (days)</label>
+                <label className="block text-xs text-un1t-subtle mb-1">Delay (days)</label>
                 <input
                   type="number"
                   min="0"
                   value={step.delay_days || 0}
                   onChange={e => onUpdate({ delay_days: parseInt(e.target.value) || 0 })}
-                  className="bg-un1t-black border border-un1t-gray rounded-md px-2.5 py-1.5 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid w-20"
+                  className="bg-un1t-bg border border-un1t-border rounded-md px-2.5 py-1.5 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted w-20"
                 />
               </div>
               <div>
-                <label className="block text-xs text-un1t-light mb-1">Hours</label>
+                <label className="block text-xs text-un1t-subtle mb-1">Hours</label>
                 <input
                   type="number"
                   min="0"
                   max="23"
                   value={step.delay_hours || 0}
                   onChange={e => onUpdate({ delay_hours: parseInt(e.target.value) || 0 })}
-                  className="bg-un1t-black border border-un1t-gray rounded-md px-2.5 py-1.5 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid w-20"
+                  className="bg-un1t-bg border border-un1t-border rounded-md px-2.5 py-1.5 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted w-20"
                 />
               </div>
-              <p className="text-xs text-un1t-mid pb-2">
+              <p className="text-xs text-un1t-muted pb-2">
                 {index === 0 ? 'after enrollment' : 'after previous step'}
               </p>
             </div>
@@ -220,25 +220,25 @@ function StepCard({ step, index, onUpdate, onDelete, onMoveUp, onMoveDown, isFir
             {stepType === 'email' && (
               <>
                 <div>
-                  <label className="block text-xs text-un1t-light mb-1">Subject Line</label>
+                  <label className="block text-xs text-un1t-subtle mb-1">Subject Line</label>
                   <input
                     type="text"
                     value={step.subject || ''}
                     onChange={e => onUpdate({ subject: e.target.value })}
                     placeholder="Email subject — use {{first_name}} for personalisation"
-                    className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid"
+                    className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs text-un1t-light mb-1">Email HTML</label>
+                  <label className="block text-xs text-un1t-subtle mb-1">Email HTML</label>
                   <textarea
                     value={step.html_content || ''}
                     onChange={e => onUpdate({ html_content: e.target.value })}
                     placeholder="Paste your HTML email content here..."
                     rows={8}
-                    className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-green-400 font-mono placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid resize-y"
+                    className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-green-400 font-mono placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted resize-y"
                   />
-                  <p className="text-xs text-un1t-mid mt-1">
+                  <p className="text-xs text-un1t-muted mt-1">
                     Merge tags: {'{{first_name}}'}, {'{{name}}'}, {'{{email}}'}, {'{{unsubscribe_url}}'}
                   </p>
                 </div>
@@ -249,14 +249,14 @@ function StepCard({ step, index, onUpdate, onDelete, onMoveUp, onMoveDown, isFir
             {stepType === 'whatsapp' && (
               <>
                 <div>
-                  <label className="block text-xs text-un1t-light mb-1">WhatsApp Template (Meta-approved)</label>
+                  <label className="block text-xs text-un1t-subtle mb-1">WhatsApp Template (Meta-approved)</label>
                   <select
                     value={step.whatsapp_template_id || ''}
                     onChange={e => onUpdate({
                       whatsapp_template_id: e.target.value || null,
                       whatsapp_variables: {}, // reset on template change
                     })}
-                    className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
+                    className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted"
                   >
                     <option value="">— Select a template —</option>
                     {whatsappTemplates.map(t => (
@@ -273,9 +273,9 @@ function StepCard({ step, index, onUpdate, onDelete, onMoveUp, onMoveDown, isFir
                 </div>
 
                 {selectedWaTemplate && (
-                  <div className="bg-un1t-black/50 border border-un1t-gray rounded-md p-3 space-y-2">
-                    <p className="text-[11px] uppercase tracking-wider text-un1t-light">Template body preview</p>
-                    <p className="text-xs text-un1t-mid whitespace-pre-wrap">
+                  <div className="bg-un1t-bg/50 border border-un1t-border rounded-md p-3 space-y-2">
+                    <p className="text-[11px] uppercase tracking-wider text-un1t-subtle">Template body preview</p>
+                    <p className="text-xs text-un1t-muted whitespace-pre-wrap">
                       {(selectedWaTemplate.components || []).find(c => c.type === 'BODY')?.text || '(no body text)'}
                     </p>
                   </div>
@@ -283,14 +283,14 @@ function StepCard({ step, index, onUpdate, onDelete, onMoveUp, onMoveDown, isFir
 
                 {waVariables.length > 0 && (
                   <div>
-                    <label className="block text-xs text-un1t-light mb-1">Variable mapping</label>
-                    <p className="text-[11px] text-un1t-mid mb-2">
+                    <label className="block text-xs text-un1t-subtle mb-1">Variable mapping</label>
+                    <p className="text-[11px] text-un1t-muted mb-2">
                       Type a contact field name (<code>first_name</code>, <code>name</code>, <code>email</code>, <code>phone</code>) or a literal value.
                     </p>
                     <div className="space-y-2">
                       {waVariables.map(num => (
                         <div key={num} className="flex items-center gap-2">
-                          <span className="text-xs text-un1t-light w-12">{`{{${num}}}`}</span>
+                          <span className="text-xs text-un1t-subtle w-12">{`{{${num}}}`}</span>
                           <input
                             type="text"
                             value={(step.whatsapp_variables || {})[num] || ''}
@@ -301,7 +301,7 @@ function StepCard({ step, index, onUpdate, onDelete, onMoveUp, onMoveDown, isFir
                               },
                             })}
                             placeholder={num === '1' ? 'e.g. first_name' : 'field name or literal text'}
-                            className="flex-1 bg-un1t-black border border-un1t-gray rounded-md px-3 py-1.5 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid"
+                            className="flex-1 bg-un1t-bg border border-un1t-border rounded-md px-3 py-1.5 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted"
                           />
                         </div>
                       ))}
@@ -317,9 +317,9 @@ function StepCard({ step, index, onUpdate, onDelete, onMoveUp, onMoveDown, isFir
             {stepType === 'sms' && (
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
-                  <label className="block text-xs text-un1t-light">SMS body</label>
+                  <label className="block text-xs text-un1t-subtle">SMS body</label>
                   {smsSeg && (
-                    <span className={`text-[11px] ${smsSeg.segments > 1 ? 'text-amber-500' : 'text-un1t-light'}`}>
+                    <span className={`text-[11px] ${smsSeg.segments > 1 ? 'text-amber-500' : 'text-un1t-subtle'}`}>
                       {smsSeg.len} chars · {smsSeg.segments} segment{smsSeg.segments === 1 ? '' : 's'}
                     </span>
                   )}
@@ -330,18 +330,18 @@ function StepCard({ step, index, onUpdate, onDelete, onMoveUp, onMoveDown, isFir
                   rows={4}
                   maxLength={1600}
                   placeholder="Hi {{first_name}}, just a reminder your trial expires in 2 days at {{location_name}}."
-                  className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid resize-y"
+                  className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted resize-y"
                 />
-                <p className="text-[11px] text-un1t-mid">
-                  Merge tags: <code className="text-un1t-light">{'{{first_name}}'}</code>, <code className="text-un1t-light">{'{{name}}'}</code>, <code className="text-un1t-light">{'{{location_name}}'}</code>. Sender ID is set per-location in <Link href="/settings" className="underline">Location Settings</Link>.
+                <p className="text-[11px] text-un1t-muted">
+                  Merge tags: <code className="text-un1t-subtle">{'{{first_name}}'}</code>, <code className="text-un1t-subtle">{'{{name}}'}</code>, <code className="text-un1t-subtle">{'{{location_name}}'}</code>. Sender ID is set per-location in <Link href="/settings" className="underline">Location Settings</Link>.
                 </p>
               </div>
             )}
 
             {/* Wait step has no content beyond the delay configured above. */}
             {stepType === 'wait' && (
-              <div className="bg-un1t-black/40 border border-un1t-gray rounded-md p-3">
-                <p className="text-xs text-un1t-light">
+              <div className="bg-un1t-bg/40 border border-un1t-border rounded-md p-3">
+                <p className="text-xs text-un1t-subtle">
                   Wait steps just hold the contact for the delay above before the next step fires. Useful between channels (e.g. WhatsApp → wait 2 days → email follow-up).
                 </p>
               </div>
@@ -352,16 +352,16 @@ function StepCard({ step, index, onUpdate, onDelete, onMoveUp, onMoveDown, isFir
                 trigger on a different sequence. */}
             {stepType === 'apply_tag' && (
               <div className="space-y-2">
-                <label className="block text-xs text-un1t-light">Tag to apply</label>
+                <label className="block text-xs text-un1t-subtle">Tag to apply</label>
                 <input
                   type="text"
                   value={step.config?.tag || ''}
                   onChange={e => onUpdate({ config: { ...(step.config || {}), tag: e.target.value } })}
                   placeholder="e.g. engaged_competitor"
                   maxLength={60}
-                  className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
+                  className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted"
                 />
-                <p className="text-[11px] text-un1t-mid">
+                <p className="text-[11px] text-un1t-muted">
                   Lower-case + underscores recommended. Lets a different sequence with trigger=&quot;Tag Added&quot; pick this contact up.
                 </p>
               </div>
@@ -376,27 +376,27 @@ function StepCard({ step, index, onUpdate, onDelete, onMoveUp, onMoveDown, isFir
               <div className="space-y-2">
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-xs text-un1t-light mb-1">Field</label>
+                    <label className="block text-xs text-un1t-subtle mb-1">Field</label>
                     <select
                       value={step.config?.field || 'label'}
                       onChange={e => onUpdate({ config: { ...(step.config || {}), field: e.target.value } })}
-                      className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
+                      className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted"
                     >
                       <option value="label">label</option>
                     </select>
                   </div>
                   <div>
-                    <label className="block text-xs text-un1t-light mb-1">Value</label>
+                    <label className="block text-xs text-un1t-subtle mb-1">Value</label>
                     <input
                       type="text"
                       value={step.config?.value || ''}
                       onChange={e => onUpdate({ config: { ...(step.config || {}), value: e.target.value } })}
                       placeholder="Value"
-                      className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
+                      className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted"
                     />
                   </div>
                 </div>
-                <p className="text-[11px] text-un1t-mid">
+                <p className="text-[11px] text-un1t-muted">
                   Useful for tagging contacts into a free-form bucket (e.g. &quot;deposit-paid&quot;) when they hit a milestone. To move a contact between pipeline stages, move the deal on the kanban — pipeline_stage_slug is auto-derived from deals.stage_id.
                 </p>
               </div>
@@ -408,37 +408,37 @@ function StepCard({ step, index, onUpdate, onDelete, onMoveUp, onMoveDown, isFir
             {stepType === 'internal_task' && (
               <div className="space-y-2">
                 <div>
-                  <label className="block text-xs text-un1t-light mb-1">Task subject</label>
+                  <label className="block text-xs text-un1t-subtle mb-1">Task subject</label>
                   <input
                     type="text"
                     value={step.config?.subject || ''}
                     onChange={e => onUpdate({ config: { ...(step.config || {}), subject: e.target.value } })}
                     placeholder="e.g. Follow up with this race competitor"
                     maxLength={200}
-                    className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
+                    className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs text-un1t-light mb-1">Note (optional)</label>
+                  <label className="block text-xs text-un1t-subtle mb-1">Note (optional)</label>
                   <textarea
                     value={step.config?.note || ''}
                     onChange={e => onUpdate({ config: { ...(step.config || {}), note: e.target.value } })}
                     rows={3}
                     placeholder="Context for whoever picks this up…"
-                    className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
+                    className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs text-un1t-light mb-1">Due (minutes from now)</label>
+                  <label className="block text-xs text-un1t-subtle mb-1">Due (minutes from now)</label>
                   <input
                     type="number"
                     min="0"
                     value={step.config?.due_offset_minutes ?? 0}
                     onChange={e => onUpdate({ config: { ...(step.config || {}), due_offset_minutes: parseInt(e.target.value) || 0 } })}
-                    className="w-32 bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
+                    className="w-32 bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted"
                   />
                 </div>
-                <p className="text-[11px] text-un1t-mid">
+                <p className="text-[11px] text-un1t-muted">
                   Task lands unassigned by default — staff pick it up from the activities queue. Pair with a Wait step before to delay the task.
                 </p>
               </div>
@@ -451,21 +451,21 @@ function StepCard({ step, index, onUpdate, onDelete, onMoveUp, onMoveDown, isFir
               <div className="space-y-2">
                 <div className="grid grid-cols-[1fr_auto] gap-2 items-end">
                   <div>
-                    <label className="block text-xs text-un1t-light mb-1">URL (https only)</label>
+                    <label className="block text-xs text-un1t-subtle mb-1">URL (https only)</label>
                     <input
                       type="url"
                       value={step.config?.url || ''}
                       onChange={e => onUpdate({ config: { ...(step.config || {}), url: e.target.value } })}
                       placeholder="https://hook.example.com/un1t-sequence"
-                      className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
+                      className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted"
                     />
                   </div>
                   <div>
-                    <label className="block text-xs text-un1t-light mb-1">Method</label>
+                    <label className="block text-xs text-un1t-subtle mb-1">Method</label>
                     <select
                       value={step.config?.method || 'POST'}
                       onChange={e => onUpdate({ config: { ...(step.config || {}), method: e.target.value } })}
-                      className="bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
+                      className="bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted"
                     >
                       <option value="POST">POST</option>
                       <option value="PUT">PUT</option>
@@ -475,7 +475,7 @@ function StepCard({ step, index, onUpdate, onDelete, onMoveUp, onMoveDown, isFir
                     </select>
                   </div>
                 </div>
-                <p className="text-[11px] text-un1t-mid">
+                <p className="text-[11px] text-un1t-muted">
                   Default payload includes contact + sequence + enrolment context. To override, supply a custom payload object via the API. For auth, include an <code>Authorization</code> header in <code>config.headers</code>.
                 </p>
               </div>
@@ -500,11 +500,11 @@ function StepCard({ step, index, onUpdate, onDelete, onMoveUp, onMoveDown, isFir
               return (
                 <div className="space-y-3">
                   <div>
-                    <label className="block text-xs text-un1t-light mb-1">If predicate is…</label>
+                    <label className="block text-xs text-un1t-subtle mb-1">If predicate is…</label>
                     <select
                       value={predicate.type || 'has_tag'}
                       onChange={e => setPredicate({ type: e.target.value })}
-                      className="bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
+                      className="bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted"
                     >
                       <option value="has_tag">Has tag</option>
                       <option value="field_equals">Field equals</option>
@@ -514,13 +514,13 @@ function StepCard({ step, index, onUpdate, onDelete, onMoveUp, onMoveDown, isFir
 
                   {predicate.type === 'has_tag' && (
                     <div>
-                      <label className="block text-xs text-un1t-light mb-1">Tag</label>
+                      <label className="block text-xs text-un1t-subtle mb-1">Tag</label>
                       <input
                         type="text"
                         value={predicate.tag || ''}
                         onChange={e => setPredicate({ tag: e.target.value })}
                         placeholder="e.g. race_completed"
-                        className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
+                        className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted"
                       />
                     </div>
                   )}
@@ -528,11 +528,11 @@ function StepCard({ step, index, onUpdate, onDelete, onMoveUp, onMoveDown, isFir
                   {(predicate.type === 'field_equals' || predicate.type === 'field_in') && (
                     <div className="grid grid-cols-2 gap-3">
                       <div>
-                        <label className="block text-xs text-un1t-light mb-1">Field</label>
+                        <label className="block text-xs text-un1t-subtle mb-1">Field</label>
                         <select
                           value={predicate.field || 'pipeline_stage_slug'}
                           onChange={e => setPredicate({ field: e.target.value })}
-                          className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
+                          className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted"
                         >
                           <option value="pipeline_stage_slug">pipeline_stage_slug</option>
                           <option value="label">label</option>
@@ -542,7 +542,7 @@ function StepCard({ step, index, onUpdate, onDelete, onMoveUp, onMoveDown, isFir
                         </select>
                       </div>
                       <div>
-                        <label className="block text-xs text-un1t-light mb-1">
+                        <label className="block text-xs text-un1t-subtle mb-1">
                           {predicate.type === 'field_in' ? 'Values (comma-sep)' : 'Value'}
                         </label>
                         {predicate.type === 'field_in' ? (
@@ -553,7 +553,7 @@ function StepCard({ step, index, onUpdate, onDelete, onMoveUp, onMoveDown, isFir
                               values: e.target.value.split(',').map(s => s.trim()).filter(Boolean),
                             })}
                             placeholder="active_member, hot_conversion"
-                            className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
+                            className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted"
                           />
                         ) : (
                           <input
@@ -561,7 +561,7 @@ function StepCard({ step, index, onUpdate, onDelete, onMoveUp, onMoveDown, isFir
                             value={predicate.value ?? ''}
                             onChange={e => setPredicate({ value: e.target.value })}
                             placeholder="active_member"
-                            className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
+                            className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted"
                           />
                         )}
                       </div>
@@ -570,30 +570,30 @@ function StepCard({ step, index, onUpdate, onDelete, onMoveUp, onMoveDown, isFir
 
                   <div className="grid grid-cols-2 gap-3">
                     <div>
-                      <label className="block text-xs text-un1t-light mb-1">Then jump to step</label>
+                      <label className="block text-xs text-un1t-subtle mb-1">Then jump to step</label>
                       <input
                         type="number"
                         min={ownOrder + 1}
                         value={cfg.then_step_order ?? ''}
                         onChange={e => setPointer('then_step_order', e.target.value)}
                         placeholder={`${ownOrder + 1} (next step)`}
-                        className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
+                        className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted"
                       />
                     </div>
                     <div>
-                      <label className="block text-xs text-un1t-light mb-1">Else jump to step</label>
+                      <label className="block text-xs text-un1t-subtle mb-1">Else jump to step</label>
                       <input
                         type="number"
                         min={ownOrder + 1}
                         value={cfg.else_step_order ?? ''}
                         onChange={e => setPointer('else_step_order', e.target.value)}
                         placeholder={`${ownOrder + 2} (skip 1)`}
-                        className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
+                        className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted"
                       />
                     </div>
                   </div>
 
-                  <p className="text-[11px] text-un1t-mid">
+                  <p className="text-[11px] text-un1t-muted">
                     Branch steps don&apos;t send anything — they reroute the contact based on a check. Step orders must be greater than this branch&apos;s own order ({ownOrder}); the runner refuses backwards jumps to keep enrolments from looping.
                   </p>
                 </div>
@@ -651,11 +651,11 @@ function MovePipelineStageEditor({ step, onUpdate }) {
   return (
     <div className="space-y-2">
       <div>
-        <label className="block text-xs text-un1t-light mb-1">Target pipeline stage</label>
+        <label className="block text-xs text-un1t-subtle mb-1">Target pipeline stage</label>
         <select
           value={currentSlug}
           onChange={e => onUpdate({ config: { ...(step.config || {}), stage_slug: e.target.value } })}
-          className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
+          className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted"
         >
           <option value="">— Select a stage —</option>
           {stages === null && <option disabled>Loading…</option>}
@@ -674,7 +674,7 @@ function MovePipelineStageEditor({ step, onUpdate }) {
           </p>
         )}
       </div>
-      <p className="text-[11px] text-un1t-mid">
+      <p className="text-[11px] text-un1t-muted">
         Moves the contact&apos;s open deal to this stage. If no open deal exists, or the deal is already at the target,
         the step logs a no-op on the contact&apos;s timeline and the sequence continues. Idempotent — safe to run twice.
       </p>
@@ -896,9 +896,9 @@ export default function SequenceEditor({ sequence, locationId, userId }) {
   return (
     <div className="flex flex-col h-screen">
       {/* Top bar */}
-      <div className="flex items-center justify-between px-5 py-3 border-b border-un1t-gray bg-un1t-dark shrink-0">
+      <div className="flex items-center justify-between px-5 py-3 border-b border-un1t-border bg-un1t-surface shrink-0">
         <div className="flex items-center gap-4">
-          <Link href="/email/sequences" className="text-un1t-light hover:text-un1t-white transition-colors">
+          <Link href="/email/sequences" className="text-un1t-subtle hover:text-un1t-text transition-colors">
             <ArrowLeft size={20} />
           </Link>
           <input
@@ -906,7 +906,7 @@ export default function SequenceEditor({ sequence, locationId, userId }) {
             value={name}
             onChange={e => setName(e.target.value)}
             placeholder="Sequence name..."
-            className="bg-transparent text-lg font-semibold text-un1t-white placeholder:text-un1t-mid focus:outline-none w-64"
+            className="bg-transparent text-lg font-semibold text-un1t-text placeholder:text-un1t-muted focus:outline-none w-64"
           />
           <span className={`text-xs px-2 py-0.5 rounded-full ${
             status === 'active' ? 'bg-green-500/20 text-green-400' :
@@ -946,7 +946,7 @@ export default function SequenceEditor({ sequence, locationId, userId }) {
                   setTestStatus({ ok: false, message: e.message || 'Network error' })
                 }
               }}
-              className="flex items-center gap-1.5 text-sm border border-un1t-gray text-un1t-light hover:text-un1t-white px-3 py-1.5 rounded-md"
+              className="flex items-center gap-1.5 text-sm border border-un1t-border text-un1t-subtle hover:text-un1t-text px-3 py-1.5 rounded-md"
               title="Enrol your own contact with delays accelerated to 60s — preview every step in a couple of minutes"
             >
               <Zap size={14} /> Send test
@@ -955,7 +955,7 @@ export default function SequenceEditor({ sequence, locationId, userId }) {
           <button
             onClick={handleSave}
             disabled={saving}
-            className="flex items-center gap-1.5 text-sm bg-un1t-white text-un1t-black font-medium px-4 py-1.5 rounded-md hover:bg-un1t-accent transition-colors disabled:opacity-50"
+            className="flex items-center gap-1.5 text-sm bg-un1t-text text-un1t-bg font-medium px-4 py-1.5 rounded-md hover:bg-un1t-accent transition-colors disabled:opacity-50"
           >
             <Save size={14} />
             {saving ? 'Saving...' : 'Save'}
@@ -981,12 +981,12 @@ export default function SequenceEditor({ sequence, locationId, userId }) {
       <div className="flex-1 overflow-auto p-6">
         <div className="max-w-3xl mx-auto space-y-6">
           {/* Trigger config */}
-          <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5">
-            <h3 className="font-semibold text-sm text-un1t-light uppercase tracking-wider mb-3">
+          <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5">
+            <h3 className="font-semibold text-sm text-un1t-subtle uppercase tracking-wider mb-3">
               <Zap size={14} className="inline mr-1.5" />
               Trigger
             </h3>
-            <p className="text-xs text-un1t-mid mb-4">What causes contacts to enter this sequence?</p>
+            <p className="text-xs text-un1t-muted mb-4">What causes contacts to enter this sequence?</p>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               {TRIGGER_TYPES.map(t => (
@@ -995,12 +995,12 @@ export default function SequenceEditor({ sequence, locationId, userId }) {
                   onClick={() => setTriggerType(t.value)}
                   className={`text-left p-3 rounded-lg border transition-colors ${
                     triggerType === t.value
-                      ? 'border-un1t-white bg-un1t-gray/30'
-                      : 'border-un1t-gray hover:border-un1t-white/30'
+                      ? 'border-un1t-text bg-un1t-border/30'
+                      : 'border-un1t-border hover:border-un1t-text/30'
                   }`}
                 >
                   <p className="text-sm font-medium">{t.label}</p>
-                  <p className="text-xs text-un1t-mid mt-0.5">{t.description}</p>
+                  <p className="text-xs text-un1t-muted mt-0.5">{t.description}</p>
                 </button>
               ))}
             </div>
@@ -1008,11 +1008,11 @@ export default function SequenceEditor({ sequence, locationId, userId }) {
             {/* Trigger-specific config */}
             {triggerType === 'status_change' && (
               <div className="mt-4">
-                <label className="block text-xs text-un1t-light mb-1">Trigger when status changes to:</label>
+                <label className="block text-xs text-un1t-subtle mb-1">Trigger when status changes to:</label>
                 <select
                   value={triggerConfig.to_status || ''}
                   onChange={e => setTriggerConfig({ ...triggerConfig, to_status: e.target.value })}
-                  className="bg-un1t-black border border-un1t-gray rounded-md px-2.5 py-1.5 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
+                  className="bg-un1t-bg border border-un1t-border rounded-md px-2.5 py-1.5 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted"
                 >
                   <option value="">Any status</option>
                   <option value="active_trial">Active Trial</option>
@@ -1026,13 +1026,13 @@ export default function SequenceEditor({ sequence, locationId, userId }) {
 
             {triggerType === 'tag_added' && (
               <div className="mt-4">
-                <label className="block text-xs text-un1t-light mb-1">Trigger when tag is added:</label>
+                <label className="block text-xs text-un1t-subtle mb-1">Trigger when tag is added:</label>
                 <input
                   type="text"
                   value={triggerConfig.tag || ''}
                   onChange={e => setTriggerConfig({ ...triggerConfig, tag: e.target.value })}
                   placeholder="e.g. new_member, trial_expired"
-                  className="bg-un1t-black border border-un1t-gray rounded-md px-2.5 py-1.5 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid w-64"
+                  className="bg-un1t-bg border border-un1t-border rounded-md px-2.5 py-1.5 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted w-64"
                 />
               </div>
             )}
@@ -1043,11 +1043,11 @@ export default function SequenceEditor({ sequence, locationId, userId }) {
                 segments yet — point them at /contacts. */}
             {(triggerType === 'segment_added' || triggerType === 'segment_removed') && (
               <div className="mt-4">
-                <label className="block text-xs text-un1t-light mb-1">
+                <label className="block text-xs text-un1t-subtle mb-1">
                   {triggerType === 'segment_added' ? 'Trigger when a contact enters this segment:' : 'Trigger when a contact exits this segment:'}
                 </label>
                 {segments.length === 0 ? (
-                  <div className="bg-un1t-black border border-un1t-gray rounded-md p-3 text-xs text-un1t-light">
+                  <div className="bg-un1t-bg border border-un1t-border rounded-md p-3 text-xs text-un1t-subtle">
                     No saved segments at this location yet.{' '}
                     <Link href="/contacts" className="text-blue-400 hover:underline">
                       Build a filter on /contacts and save it as a segment
@@ -1058,7 +1058,7 @@ export default function SequenceEditor({ sequence, locationId, userId }) {
                   <select
                     value={triggerConfig.segment_id || ''}
                     onChange={e => setTriggerConfig({ ...triggerConfig, segment_id: e.target.value })}
-                    className="bg-un1t-black border border-un1t-gray rounded-md px-2.5 py-1.5 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid w-72"
+                    className="bg-un1t-bg border border-un1t-border rounded-md px-2.5 py-1.5 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted w-72"
                   >
                     <option value="">— Select a segment —</option>
                     {segments.map(s => (
@@ -1066,7 +1066,7 @@ export default function SequenceEditor({ sequence, locationId, userId }) {
                     ))}
                   </select>
                 )}
-                <p className="text-xs text-un1t-mid mt-1.5">
+                <p className="text-xs text-un1t-muted mt-1.5">
                   Membership is snapshotted every 5 min by a background sweep — transitions surface on the next tick after the contact&apos;s attributes change.
                 </p>
               </div>
@@ -1074,16 +1074,16 @@ export default function SequenceEditor({ sequence, locationId, userId }) {
 
             {triggerType === 'event_reminder' && (
               <div className="mt-4">
-                <label className="block text-xs text-un1t-light mb-1">Send reminder before event:</label>
+                <label className="block text-xs text-un1t-subtle mb-1">Send reminder before event:</label>
                 <div className="flex items-center gap-2">
                   <input
                     type="number"
                     min="1"
                     value={triggerConfig.hours_before || 24}
                     onChange={e => setTriggerConfig({ ...triggerConfig, hours_before: parseInt(e.target.value) || 24 })}
-                    className="bg-un1t-black border border-un1t-gray rounded-md px-2.5 py-1.5 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid w-20"
+                    className="bg-un1t-bg border border-un1t-border rounded-md px-2.5 py-1.5 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted w-20"
                   />
-                  <span className="text-xs text-un1t-mid">hours before</span>
+                  <span className="text-xs text-un1t-muted">hours before</span>
                 </div>
               </div>
             )}
@@ -1096,15 +1096,15 @@ export default function SequenceEditor({ sequence, locationId, userId }) {
             {triggerType === 'webhook' && (
               <div className="mt-4 space-y-3">
                 {!webhookToken ? (
-                  <div className="bg-un1t-black border border-un1t-gray rounded-md p-3 text-xs text-un1t-light">
+                  <div className="bg-un1t-bg border border-un1t-border rounded-md p-3 text-xs text-un1t-subtle">
                     Save the sequence first — we&apos;ll generate a unique webhook URL for it.
                   </div>
                 ) : (
                   <>
                     <div>
-                      <label className="block text-xs text-un1t-light mb-1">Webhook URL (POST JSON to this)</label>
+                      <label className="block text-xs text-un1t-subtle mb-1">Webhook URL (POST JSON to this)</label>
                       <div className="flex items-center gap-2">
-                        <code className="flex-1 bg-un1t-black border border-un1t-gray rounded-md px-2.5 py-1.5 text-xs text-green-400 font-mono break-all">
+                        <code className="flex-1 bg-un1t-bg border border-un1t-border rounded-md px-2.5 py-1.5 text-xs text-green-400 font-mono break-all">
                           {typeof window !== 'undefined' ? window.location.origin : ''}/api/webhooks/sequence/{webhookToken}
                         </code>
                         <button
@@ -1117,7 +1117,7 @@ export default function SequenceEditor({ sequence, locationId, userId }) {
                               setTimeout(() => setWebhookCopied(false), 1500)
                             } catch { /* ignore */ }
                           }}
-                          className="text-xs px-2 py-1.5 bg-un1t-black border border-un1t-gray rounded-md text-un1t-light hover:text-un1t-white"
+                          className="text-xs px-2 py-1.5 bg-un1t-bg border border-un1t-border rounded-md text-un1t-subtle hover:text-un1t-text"
                         >
                           {webhookCopied ? 'Copied' : 'Copy'}
                         </button>
@@ -1140,7 +1140,7 @@ export default function SequenceEditor({ sequence, locationId, userId }) {
                               }
                             } finally { setWebhookBusy(false) }
                           }}
-                          className="text-xs px-2 py-1.5 bg-un1t-black border border-un1t-gray rounded-md text-un1t-light hover:text-un1t-white disabled:opacity-50"
+                          className="text-xs px-2 py-1.5 bg-un1t-bg border border-un1t-border rounded-md text-un1t-subtle hover:text-un1t-text disabled:opacity-50"
                         >
                           Regenerate
                         </button>
@@ -1148,12 +1148,12 @@ export default function SequenceEditor({ sequence, locationId, userId }) {
                     </div>
 
                     <div>
-                      <label className="block text-xs text-un1t-light mb-1">
-                        Shared secret <span className="text-un1t-mid normal-case">(optional — sender posts in <code>X-Webhook-Secret</code> header)</span>
+                      <label className="block text-xs text-un1t-subtle mb-1">
+                        Shared secret <span className="text-un1t-muted normal-case">(optional — sender posts in <code>X-Webhook-Secret</code> header)</span>
                       </label>
                       {webhookSecret ? (
                         <div className="flex items-center gap-2">
-                          <code className="flex-1 bg-un1t-black border border-un1t-gray rounded-md px-2.5 py-1.5 text-xs text-un1t-light font-mono">
+                          <code className="flex-1 bg-un1t-bg border border-un1t-border rounded-md px-2.5 py-1.5 text-xs text-un1t-subtle font-mono">
                             {'•'.repeat(Math.min(32, webhookSecret.length))}
                           </code>
                           <button
@@ -1172,7 +1172,7 @@ export default function SequenceEditor({ sequence, locationId, userId }) {
                                 if (j.success) setWebhookSecret('')
                               } finally { setWebhookBusy(false) }
                             }}
-                            className="text-xs px-2 py-1.5 bg-un1t-black border border-un1t-gray rounded-md text-un1t-light hover:text-un1t-white disabled:opacity-50"
+                            className="text-xs px-2 py-1.5 bg-un1t-bg border border-un1t-border rounded-md text-un1t-subtle hover:text-un1t-text disabled:opacity-50"
                           >
                             Clear
                           </button>
@@ -1185,7 +1185,7 @@ export default function SequenceEditor({ sequence, locationId, userId }) {
                             onChange={(e) => setWebhookSecretInput(e.target.value)}
                             placeholder="e.g. paste a 32-char hex string from a password manager"
                             maxLength={128}
-                            className="flex-1 bg-un1t-black border border-un1t-gray rounded-md px-2.5 py-1.5 text-xs text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid font-mono"
+                            className="flex-1 bg-un1t-bg border border-un1t-border rounded-md px-2.5 py-1.5 text-xs text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted font-mono"
                           />
                           <button
                             type="button"
@@ -1206,7 +1206,7 @@ export default function SequenceEditor({ sequence, locationId, userId }) {
                                 }
                               } finally { setWebhookBusy(false) }
                             }}
-                            className="text-xs px-2 py-1.5 bg-un1t-white text-un1t-black rounded-md hover:bg-un1t-accent disabled:opacity-50 font-medium"
+                            className="text-xs px-2 py-1.5 bg-un1t-text text-un1t-bg rounded-md hover:bg-un1t-accent disabled:opacity-50 font-medium"
                           >
                             Set secret
                           </button>
@@ -1214,12 +1214,12 @@ export default function SequenceEditor({ sequence, locationId, userId }) {
                       )}
                     </div>
 
-                    <details className="text-xs text-un1t-light">
-                      <summary className="cursor-pointer hover:text-un1t-white select-none">Example: enrol a contact via curl</summary>
-                      <pre className="mt-2 bg-un1t-black border border-un1t-gray rounded-md p-3 text-[11px] text-green-400 font-mono overflow-x-auto">{`curl -X POST '${typeof window !== 'undefined' ? window.location.origin : 'https://crm.un1tdublin.com'}/api/webhooks/sequence/${webhookToken}' \\
+                    <details className="text-xs text-un1t-subtle">
+                      <summary className="cursor-pointer hover:text-un1t-text select-none">Example: enrol a contact via curl</summary>
+                      <pre className="mt-2 bg-un1t-bg border border-un1t-border rounded-md p-3 text-[11px] text-green-400 font-mono overflow-x-auto">{`curl -X POST '${typeof window !== 'undefined' ? window.location.origin : 'https://crm.un1tdublin.com'}/api/webhooks/sequence/${webhookToken}' \\
   -H 'Content-Type: application/json'${webhookSecret ? ` \\\n  -H 'X-Webhook-Secret: ${webhookSecret}'` : ''} \\
   -d '{"contact_email":"member@example.com","source_ref":"glofox-event-123"}'`}</pre>
-                      <p className="mt-2 text-un1t-mid">
+                      <p className="mt-2 text-un1t-muted">
                         Body must include <code>contact_email</code> OR <code>contact_id</code>. Optional <code>source_ref</code> appears in the audit trail.
                       </p>
                     </details>
@@ -1232,11 +1232,11 @@ export default function SequenceEditor({ sequence, locationId, userId }) {
           {/* Goal (mig 088). Optional. When met, enrolment auto-exits
               with exit_reason='goal_met' so the contact doesn't get
               the rest of the sequence after they've already converted. */}
-          <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5">
-            <h3 className="font-semibold text-sm text-un1t-light uppercase tracking-wider mb-3">
-              Goal <span className="text-xs text-un1t-mid normal-case font-normal">(optional)</span>
+          <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5">
+            <h3 className="font-semibold text-sm text-un1t-subtle uppercase tracking-wider mb-3">
+              Goal <span className="text-xs text-un1t-muted normal-case font-normal">(optional)</span>
             </h3>
-            <p className="text-xs text-un1t-mid mb-3">
+            <p className="text-xs text-un1t-muted mb-3">
               Auto-exits the contact when they hit a milestone — they won&apos;t get the day-3 follow-up if they&apos;ve already converted.
             </p>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
@@ -1247,7 +1247,7 @@ export default function SequenceEditor({ sequence, locationId, userId }) {
                   if (!t) setGoalConfig(null)
                   else setGoalConfig({ type: t })
                 }}
-                className="bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
+                className="bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted"
               >
                 <option value="">No goal</option>
                 <option value="pipeline_stage">Pipeline stage reaches…</option>
@@ -1258,7 +1258,7 @@ export default function SequenceEditor({ sequence, locationId, userId }) {
                 <select
                   value={goalConfig?.value || ''}
                   onChange={e => setGoalConfig({ ...goalConfig, value: e.target.value })}
-                  className="bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid sm:col-span-2"
+                  className="bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted sm:col-span-2"
                 >
                   <option value="">(pick one)</option>
                   <option value="new_lead">new_lead</option>
@@ -1279,11 +1279,11 @@ export default function SequenceEditor({ sequence, locationId, userId }) {
                   onChange={e => setGoalConfig({ ...goalConfig, tag: e.target.value })}
                   placeholder="e.g. race_completed"
                   maxLength={60}
-                  className="bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid sm:col-span-2"
+                  className="bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted sm:col-span-2"
                 />
               )}
               {goalConfig?.type === 'booking_made' && (
-                <p className="text-xs text-un1t-mid sm:col-span-2 self-center">
+                <p className="text-xs text-un1t-muted sm:col-span-2 self-center">
                   Triggers when this contact creates ANY booking. (Per-event-type filter coming soon.)
                 </p>
               )}
@@ -1295,16 +1295,16 @@ export default function SequenceEditor({ sequence, locationId, userId }) {
               window — avoids 3am SMS pings. Skip days are
               0=Sunday … 6=Saturday. Non-message steps (apply_tag,
               update_field, internal_task, webhook) ignore this. */}
-          <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5">
-            <h3 className="font-semibold text-sm text-un1t-light uppercase tracking-wider mb-3">
-              Send window <span className="text-xs text-un1t-mid normal-case font-normal">(optional, Europe/Dublin time)</span>
+          <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5">
+            <h3 className="font-semibold text-sm text-un1t-subtle uppercase tracking-wider mb-3">
+              Send window <span className="text-xs text-un1t-muted normal-case font-normal">(optional, Europe/Dublin time)</span>
             </h3>
-            <p className="text-xs text-un1t-mid mb-3">
+            <p className="text-xs text-un1t-muted mb-3">
               Pushes message-step fires forward to land within the chosen window. Test mode bypasses for QA.
             </p>
             <div className="flex flex-wrap items-end gap-3">
               <div>
-                <label className="block text-xs text-un1t-light mb-1">Start hour</label>
+                <label className="block text-xs text-un1t-subtle mb-1">Start hour</label>
                 <input
                   type="number"
                   min="0"
@@ -1315,11 +1315,11 @@ export default function SequenceEditor({ sequence, locationId, userId }) {
                     setSendWindow({ ...(sendWindow || {}), start_hour: v })
                   }}
                   placeholder="9"
-                  className="bg-un1t-black border border-un1t-gray rounded-md px-2.5 py-1.5 text-sm text-un1t-white w-20 focus:outline-none focus:border-un1t-mid"
+                  className="bg-un1t-bg border border-un1t-border rounded-md px-2.5 py-1.5 text-sm text-un1t-text w-20 focus:outline-none focus:border-un1t-muted"
                 />
               </div>
               <div>
-                <label className="block text-xs text-un1t-light mb-1">End hour (excl.)</label>
+                <label className="block text-xs text-un1t-subtle mb-1">End hour (excl.)</label>
                 <input
                   type="number"
                   min="0"
@@ -1330,11 +1330,11 @@ export default function SequenceEditor({ sequence, locationId, userId }) {
                     setSendWindow({ ...(sendWindow || {}), end_hour: v })
                   }}
                   placeholder="17"
-                  className="bg-un1t-black border border-un1t-gray rounded-md px-2.5 py-1.5 text-sm text-un1t-white w-20 focus:outline-none focus:border-un1t-mid"
+                  className="bg-un1t-bg border border-un1t-border rounded-md px-2.5 py-1.5 text-sm text-un1t-text w-20 focus:outline-none focus:border-un1t-muted"
                 />
               </div>
               <div className="flex-1 min-w-[200px]">
-                <label className="block text-xs text-un1t-light mb-1">Skip days</label>
+                <label className="block text-xs text-un1t-subtle mb-1">Skip days</label>
                 <div className="flex gap-1 flex-wrap">
                   {[
                     { v: 0, l: 'Sun' }, { v: 1, l: 'Mon' }, { v: 2, l: 'Tue' },
@@ -1354,7 +1354,7 @@ export default function SequenceEditor({ sequence, locationId, userId }) {
                         className={`text-[11px] px-2 py-1 rounded-md border ${
                           on
                             ? 'border-amber-500/50 bg-amber-500/10 text-amber-700'
-                            : 'border-un1t-gray text-un1t-light hover:border-un1t-mid'
+                            : 'border-un1t-border text-un1t-subtle hover:border-un1t-muted'
                         }`}
                       >
                         {d.l}
@@ -1367,7 +1367,7 @@ export default function SequenceEditor({ sequence, locationId, userId }) {
                 <button
                   type="button"
                   onClick={() => setSendWindow(null)}
-                  className="text-[11px] text-un1t-light hover:text-un1t-white"
+                  className="text-[11px] text-un1t-subtle hover:text-un1t-text"
                 >
                   Clear
                 </button>
@@ -1381,16 +1381,16 @@ export default function SequenceEditor({ sequence, locationId, userId }) {
               after their previous run ended N days ago. The canonical
               use case is the anniversary sequence — set 350 so it can
               fire each year without colliding with itself. */}
-          <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5">
-            <h3 className="font-semibold text-sm text-un1t-light uppercase tracking-wider mb-3">
-              Re-enrolment <span className="text-xs text-un1t-mid normal-case font-normal">(optional)</span>
+          <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5">
+            <h3 className="font-semibold text-sm text-un1t-subtle uppercase tracking-wider mb-3">
+              Re-enrolment <span className="text-xs text-un1t-muted normal-case font-normal">(optional)</span>
             </h3>
-            <p className="text-xs text-un1t-mid mb-3">
+            <p className="text-xs text-un1t-muted mb-3">
               Empty = each contact runs through this sequence at most once. Set days to allow the same contact to re-enter after their last run ended that long ago. Useful for anniversary or seasonal flows.
             </p>
             <div className="flex items-end gap-3">
               <div>
-                <label className="block text-xs text-un1t-light mb-1">Cooldown (days)</label>
+                <label className="block text-xs text-un1t-subtle mb-1">Cooldown (days)</label>
                 <input
                   type="number"
                   min="0"
@@ -1398,14 +1398,14 @@ export default function SequenceEditor({ sequence, locationId, userId }) {
                   value={reEnrolCooldown}
                   onChange={e => setReEnrolCooldown(e.target.value)}
                   placeholder="e.g. 350"
-                  className="bg-un1t-black border border-un1t-gray rounded-md px-2.5 py-1.5 text-sm text-un1t-white w-28 focus:outline-none focus:border-un1t-mid"
+                  className="bg-un1t-bg border border-un1t-border rounded-md px-2.5 py-1.5 text-sm text-un1t-text w-28 focus:outline-none focus:border-un1t-muted"
                 />
               </div>
               {reEnrolCooldown !== '' && reEnrolCooldown !== null && (
                 <button
                   type="button"
                   onClick={() => setReEnrolCooldown('')}
-                  className="text-[11px] text-un1t-light hover:text-un1t-white pb-2"
+                  className="text-[11px] text-un1t-subtle hover:text-un1t-text pb-2"
                 >
                   Clear
                 </button>
@@ -1414,14 +1414,14 @@ export default function SequenceEditor({ sequence, locationId, userId }) {
           </div>
 
           {/* Description */}
-          <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5">
-            <label className="block text-xs text-un1t-light mb-1.5">Description (internal)</label>
+          <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5">
+            <label className="block text-xs text-un1t-subtle mb-1.5">Description (internal)</label>
             <input
               type="text"
               value={description}
               onChange={e => setDescription(e.target.value)}
               placeholder="What is this sequence for?"
-              className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid"
+              className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted"
             />
           </div>
 
@@ -1429,38 +1429,38 @@ export default function SequenceEditor({ sequence, locationId, userId }) {
               sequences with stats data. Five-stat strip showing the
               enrolment funnel + exit reasons. */}
           {stats && stats.enrolments?.total > 0 && (
-            <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5">
-              <h3 className="font-semibold text-sm text-un1t-light uppercase tracking-wider mb-3">
+            <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5">
+              <h3 className="font-semibold text-sm text-un1t-subtle uppercase tracking-wider mb-3">
                 Performance
               </h3>
               <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 text-center">
                 <div>
-                  <div className="text-2xl font-bold tabular-nums text-un1t-white">{stats.enrolments.total}</div>
-                  <div className="text-[11px] text-un1t-light">enrolled</div>
+                  <div className="text-2xl font-bold tabular-nums text-un1t-text">{stats.enrolments.total}</div>
+                  <div className="text-[11px] text-un1t-subtle">enrolled</div>
                 </div>
                 <div>
                   <div className="text-2xl font-bold tabular-nums text-amber-700">{stats.enrolments.active}</div>
-                  <div className="text-[11px] text-un1t-light">active</div>
+                  <div className="text-[11px] text-un1t-subtle">active</div>
                 </div>
                 <div>
                   <div className="text-2xl font-bold tabular-nums text-emerald-700">{stats.enrolments.completed}</div>
-                  <div className="text-[11px] text-un1t-light">completed</div>
+                  <div className="text-[11px] text-un1t-subtle">completed</div>
                 </div>
                 <div>
                   <div className="text-2xl font-bold tabular-nums text-blue-700">{stats.enrolments.exited}</div>
-                  <div className="text-[11px] text-un1t-light">exited</div>
+                  <div className="text-[11px] text-un1t-subtle">exited</div>
                 </div>
                 <div>
                   <div className="text-2xl font-bold tabular-nums text-red-700">{stats.enrolments.paused}</div>
-                  <div className="text-[11px] text-un1t-light">paused</div>
+                  <div className="text-[11px] text-un1t-subtle">paused</div>
                 </div>
               </div>
               {stats.exit_reasons && Object.keys(stats.exit_reasons).length > 0 && (
-                <div className="mt-3 pt-3 border-t border-un1t-gray text-[11px] text-un1t-light flex flex-wrap gap-3">
-                  <span className="text-un1t-mid">Exit reasons:</span>
+                <div className="mt-3 pt-3 border-t border-un1t-border text-[11px] text-un1t-subtle flex flex-wrap gap-3">
+                  <span className="text-un1t-muted">Exit reasons:</span>
                   {Object.entries(stats.exit_reasons).map(([reason, count]) => (
                     <span key={reason}>
-                      <span className="font-mono">{reason}</span>: <span className="tabular-nums text-un1t-white">{count}</span>
+                      <span className="font-mono">{reason}</span>: <span className="tabular-nums text-un1t-text">{count}</span>
                     </span>
                   ))}
                 </div>
@@ -1470,16 +1470,16 @@ export default function SequenceEditor({ sequence, locationId, userId }) {
 
           {/* Steps */}
           <div>
-            <h3 className="font-semibold text-sm text-un1t-light uppercase tracking-wider mb-3">
+            <h3 className="font-semibold text-sm text-un1t-subtle uppercase tracking-wider mb-3">
               <Mail size={14} className="inline mr-1.5" />
               Steps ({steps.length})
             </h3>
 
             {steps.length === 0 && (
-              <div className="bg-un1t-dark border border-dashed border-un1t-gray rounded-lg p-8 text-center">
-                <Mail size={28} className="mx-auto mb-2 text-un1t-mid" />
-                <p className="text-sm text-un1t-light mb-1">No steps yet</p>
-                <p className="text-xs text-un1t-mid">Add your first email step below</p>
+              <div className="bg-un1t-surface border border-dashed border-un1t-border rounded-lg p-8 text-center">
+                <Mail size={28} className="mx-auto mb-2 text-un1t-muted" />
+                <p className="text-sm text-un1t-subtle mb-1">No steps yet</p>
+                <p className="text-xs text-un1t-muted">Add your first email step below</p>
               </div>
             )}
 
@@ -1503,7 +1503,7 @@ export default function SequenceEditor({ sequence, locationId, userId }) {
 
             <button
               onClick={addStep}
-              className="flex items-center gap-2 mt-4 text-sm text-un1t-light hover:text-un1t-white border border-dashed border-un1t-gray hover:border-un1t-white/30 px-4 py-2.5 rounded-lg w-full justify-center transition-colors"
+              className="flex items-center gap-2 mt-4 text-sm text-un1t-subtle hover:text-un1t-text border border-dashed border-un1t-border hover:border-un1t-text/30 px-4 py-2.5 rounded-lg w-full justify-center transition-colors"
             >
               <Plus size={16} />
               Add Step

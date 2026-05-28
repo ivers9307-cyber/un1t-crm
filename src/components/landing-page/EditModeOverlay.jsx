@@ -301,7 +301,7 @@ function InsertGap({ index, open, onToggle, onPick }) {
       </button>
       {open && (
         <div
-          className="absolute left-1/2 top-1/2 mt-3 -translate-x-1/2 z-40 bg-un1t-dark border border-un1t-gray rounded-lg shadow-2xl p-2 w-[420px] max-w-[90vw] grid grid-cols-2 gap-1"
+          className="absolute left-1/2 top-1/2 mt-3 -translate-x-1/2 z-40 bg-un1t-surface border border-un1t-border rounded-lg shadow-2xl p-2 w-[420px] max-w-[90vw] grid grid-cols-2 gap-1"
           onClick={(e) => e.stopPropagation()}
           role="menu"
           aria-label={`Insert section at position ${index + 1}`}
@@ -311,16 +311,16 @@ function InsertGap({ index, open, onToggle, onPick }) {
               key={t.type}
               type="button"
               onClick={(e) => { e.stopPropagation(); onPick(t.type) }}
-              className="text-left p-2 rounded hover:bg-un1t-gray/40 transition-colors"
+              className="text-left p-2 rounded hover:bg-un1t-border/40 transition-colors"
             >
-              <div className="text-xs font-semibold text-un1t-white">{t.label}</div>
-              <div className="text-[10px] text-un1t-mid mt-0.5 leading-snug">{t.description}</div>
+              <div className="text-xs font-semibold text-un1t-text">{t.label}</div>
+              <div className="text-[10px] text-un1t-muted mt-0.5 leading-snug">{t.description}</div>
             </button>
           ))}
           <button
             type="button"
             onClick={(e) => { e.stopPropagation(); onToggle() }}
-            className="col-span-2 text-[10px] text-un1t-mid hover:text-un1t-light pt-2 mt-1 border-t border-un1t-gray"
+            className="col-span-2 text-[10px] text-un1t-muted hover:text-un1t-subtle pt-2 mt-1 border-t border-un1t-border"
           >
             Cancel
           </button>

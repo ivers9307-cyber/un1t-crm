@@ -12,7 +12,7 @@ export default function ContractPrintButton({ className }) {
     <button
       type="button"
       onClick={() => window.print()}
-      className={className || 'text-xs px-3 py-1.5 rounded-md border border-un1t-gray text-un1t-light hover:text-un1t-white'}
+      className={className || 'text-xs px-3 py-1.5 rounded-md border border-un1t-border text-un1t-subtle hover:text-un1t-text'}
     >
       Print / Save as PDF
     </button>

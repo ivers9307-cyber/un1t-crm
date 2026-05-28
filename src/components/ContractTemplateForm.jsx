@@ -123,22 +123,22 @@ export default function ContractTemplateForm({ initial, isEdit = false }) {
       {/* Top row — name + employment_type + description */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div>
-          <label className="block text-sm text-un1t-light mb-1">Template name</label>
+          <label className="block text-sm text-un1t-subtle mb-1">Template name</label>
           <input
             type="text"
             required
             value={name}
             onChange={e => setName(e.target.value)}
             placeholder="e.g. UN1T Coach FTE Contract v1"
-            className="w-full bg-un1t-dark border border-un1t-gray rounded-md px-3 py-2 text-sm"
+            className="w-full bg-un1t-surface border border-un1t-border rounded-md px-3 py-2 text-sm"
           />
         </div>
         <div>
-          <label className="block text-sm text-un1t-light mb-1">Employment type</label>
+          <label className="block text-sm text-un1t-subtle mb-1">Employment type</label>
           <select
             value={employmentType}
             onChange={e => setEmploymentType(e.target.value)}
-            className="w-full bg-un1t-dark border border-un1t-gray rounded-md px-3 py-2 text-sm"
+            className="w-full bg-un1t-surface border border-un1t-border rounded-md px-3 py-2 text-sm"
           >
             <option value="both">FTE or contractor</option>
             <option value="fte">FTE only</option>
@@ -148,34 +148,34 @@ export default function ContractTemplateForm({ initial, isEdit = false }) {
       </div>
 
       <div>
-        <label className="block text-sm text-un1t-light mb-1">Description (optional)</label>
+        <label className="block text-sm text-un1t-subtle mb-1">Description (optional)</label>
         <input
           type="text"
           value={description}
           onChange={e => setDescription(e.target.value)}
           placeholder="Internal note — not shown to the recipient"
-          className="w-full bg-un1t-dark border border-un1t-gray rounded-md px-3 py-2 text-sm"
+          className="w-full bg-un1t-surface border border-un1t-border rounded-md px-3 py-2 text-sm"
         />
       </div>
 
       {/* Custom variables manager */}
-      <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-4">
+      <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
         <div className="flex items-center justify-between mb-3">
           <h3 className="text-sm font-semibold">Custom variables</h3>
           <button
             type="button"
             onClick={addVar}
-            className="text-xs px-2 py-1 rounded-md border border-un1t-gray text-un1t-light hover:text-un1t-white inline-flex items-center gap-1"
+            className="text-xs px-2 py-1 rounded-md border border-un1t-border text-un1t-subtle hover:text-un1t-text inline-flex items-center gap-1"
           >
             <Plus size={11} /> Add
           </button>
         </div>
-        <p className="text-[11px] text-un1t-light mb-3">
+        <p className="text-[11px] text-un1t-subtle mb-3">
           Custom variables are filled in by the issuer at issue time (e.g. start_date, notice_period).
           Profile-derived variables are auto-filled — no need to declare those here.
         </p>
         {vars.length === 0 ? (
-          <p className="text-xs text-un1t-mid italic">No custom variables. Add one if your template references something not in the profile.</p>
+          <p className="text-xs text-un1t-muted italic">No custom variables. Add one if your template references something not in the profile.</p>
         ) : (
           <div className="space-y-2">
             {vars.map((v, idx) => (
@@ -185,25 +185,25 @@ export default function ContractTemplateForm({ initial, isEdit = false }) {
                   value={v.key}
                   onChange={e => updateVar(idx, { key: e.target.value.replace(/[^a-zA-Z0-9_]/g, '') })}
                   placeholder="key (e.g. start_date)"
-                  className="sm:col-span-3 bg-un1t-black border border-un1t-gray rounded-md px-2 py-1.5 text-xs font-mono"
+                  className="sm:col-span-3 bg-un1t-bg border border-un1t-border rounded-md px-2 py-1.5 text-xs font-mono"
                 />
                 <input
                   type="text"
                   value={v.label}
                   onChange={e => updateVar(idx, { label: e.target.value })}
                   placeholder="label shown in wizard"
-                  className="sm:col-span-4 bg-un1t-black border border-un1t-gray rounded-md px-2 py-1.5 text-xs"
+                  className="sm:col-span-4 bg-un1t-bg border border-un1t-border rounded-md px-2 py-1.5 text-xs"
                 />
                 <select
                   value={v.type}
                   onChange={e => updateVar(idx, { type: e.target.value })}
-                  className="sm:col-span-2 bg-un1t-black border border-un1t-gray rounded-md px-2 py-1.5 text-xs"
+                  className="sm:col-span-2 bg-un1t-bg border border-un1t-border rounded-md px-2 py-1.5 text-xs"
                 >
                   <option value="text">text</option>
                   <option value="number">number</option>
                   <option value="date">date</option>
                 </select>
-                <label className="sm:col-span-2 flex items-center gap-1.5 text-xs text-un1t-light">
+                <label className="sm:col-span-2 flex items-center gap-1.5 text-xs text-un1t-subtle">
                   <input
                     type="checkbox"
                     checked={!!v.required}
@@ -214,7 +214,7 @@ export default function ContractTemplateForm({ initial, isEdit = false }) {
                 <button
                   type="button"
                   onClick={() => removeVar(idx)}
-                  className="sm:col-span-1 text-un1t-light hover:text-red-700 inline-flex items-center justify-center"
+                  className="sm:col-span-1 text-un1t-subtle hover:text-red-700 inline-flex items-center justify-center"
                   title="Remove variable"
                 >
                   <Trash2 size={14} />
@@ -226,43 +226,43 @@ export default function ContractTemplateForm({ initial, isEdit = false }) {
       </div>
 
       {/* Mobile tab toggle */}
-      <div className="md:hidden flex border-b border-un1t-gray">
+      <div className="md:hidden flex border-b border-un1t-border">
         <button
           type="button"
           onClick={() => setTab('write')}
-          className={`flex-1 py-2 text-sm ${tab === 'write' ? 'border-b-2 border-un1t-white' : 'text-un1t-light'}`}
+          className={`flex-1 py-2 text-sm ${tab === 'write' ? 'border-b-2 border-un1t-text' : 'text-un1t-subtle'}`}
         >Write</button>
         <button
           type="button"
           onClick={() => setTab('preview')}
-          className={`flex-1 py-2 text-sm ${tab === 'preview' ? 'border-b-2 border-un1t-white' : 'text-un1t-light'}`}
+          className={`flex-1 py-2 text-sm ${tab === 'preview' ? 'border-b-2 border-un1t-text' : 'text-un1t-subtle'}`}
         >Preview</button>
       </div>
 
       {/* Two-pane editor / preview */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div className={`${tab === 'preview' ? 'hidden md:block' : ''}`}>
-          <label className="block text-sm text-un1t-light mb-1">Body (markdown)</label>
+          <label className="block text-sm text-un1t-subtle mb-1">Body (markdown)</label>
           <textarea
             value={body}
             onChange={e => setBody(e.target.value)}
             rows={20}
-            className="w-full bg-un1t-dark border border-un1t-gray rounded-md px-3 py-2 text-sm font-mono"
+            className="w-full bg-un1t-surface border border-un1t-border rounded-md px-3 py-2 text-sm font-mono"
             placeholder="# Contract&#10;&#10;This Agreement is between UN1T Dublin Ltd and {{full_name}}..."
           />
-          <details className="mt-3 text-xs text-un1t-light" open>
-            <summary className="cursor-pointer font-semibold text-un1t-white mb-2">
+          <details className="mt-3 text-xs text-un1t-subtle" open>
+            <summary className="cursor-pointer font-semibold text-un1t-text mb-2">
               Available auto-fill variables
             </summary>
-            <p className="text-[11px] text-un1t-light mb-2">
+            <p className="text-[11px] text-un1t-subtle mb-2">
               Drop these directly into the body — they&apos;re replaced with the recipient&apos;s real
               values at issue time. The custom variables you defined above appear in the issue
               wizard for the issuer to fill in.
             </p>
-            <div className="overflow-x-auto border border-un1t-gray rounded-md">
+            <div className="overflow-x-auto border border-un1t-border rounded-md">
               <table className="w-full text-[11px] min-w-[480px]">
-                <thead className="bg-un1t-gray/30">
-                  <tr className="text-left text-un1t-light uppercase tracking-wider text-[10px]">
+                <thead className="bg-un1t-border/30">
+                  <tr className="text-left text-un1t-subtle uppercase tracking-wider text-[10px]">
                     <th className="px-3 py-2">Variable</th>
                     <th className="px-3 py-2">Sample</th>
                     <th className="px-3 py-2">Notes</th>
@@ -276,7 +276,7 @@ export default function ContractTemplateForm({ initial, isEdit = false }) {
                       if (v.group !== lastGroup) {
                         out.push(
                           <tr key={`g-${v.group}`}>
-                            <td colSpan={3} className="px-3 pt-3 pb-1 text-[10px] uppercase tracking-wider text-un1t-mid">
+                            <td colSpan={3} className="px-3 pt-3 pb-1 text-[10px] uppercase tracking-wider text-un1t-muted">
                               {v.group}
                             </td>
                           </tr>
@@ -284,10 +284,10 @@ export default function ContractTemplateForm({ initial, isEdit = false }) {
                         lastGroup = v.group
                       }
                       out.push(
-                        <tr key={v.key} className="border-t border-un1t-gray/40 align-top">
-                          <td className="px-3 py-2"><code className="text-un1t-white">{`{{${v.key}}}`}</code></td>
-                          <td className="px-3 py-2 text-un1t-mid font-mono">{v.sample}</td>
-                          <td className="px-3 py-2 text-un1t-light">{v.desc}</td>
+                        <tr key={v.key} className="border-t border-un1t-border/40 align-top">
+                          <td className="px-3 py-2"><code className="text-un1t-text">{`{{${v.key}}}`}</code></td>
+                          <td className="px-3 py-2 text-un1t-muted font-mono">{v.sample}</td>
+                          <td className="px-3 py-2 text-un1t-subtle">{v.desc}</td>
                         </tr>
                       )
                     })
@@ -299,18 +299,18 @@ export default function ContractTemplateForm({ initial, isEdit = false }) {
           </details>
         </div>
         <div className={`${tab === 'write' ? 'hidden md:block' : ''}`}>
-          <label className="block text-sm text-un1t-light mb-1">Live preview</label>
-          <div className="bg-white text-gray-900 border border-un1t-gray rounded-md p-4 min-h-[400px] whitespace-pre-wrap text-sm leading-relaxed">
+          <label className="block text-sm text-un1t-subtle mb-1">Live preview</label>
+          <div className="bg-white text-gray-900 border border-un1t-border rounded-md p-4 min-h-[400px] whitespace-pre-wrap text-sm leading-relaxed">
             {preview || <span className="text-gray-400">Start typing in the body…</span>}
           </div>
-          <p className="text-[10px] text-un1t-mid mt-1">
+          <p className="text-[10px] text-un1t-muted mt-1">
             Preview uses sample profile data ({SAMPLE_PROFILE.full_name}, salary {`{{annual_salary}}`} etc.). At issue time the recipient&apos;s real values replace these.
           </p>
         </div>
       </div>
 
       {isEdit && (
-        <label className="flex items-center gap-2 text-sm text-un1t-light">
+        <label className="flex items-center gap-2 text-sm text-un1t-subtle">
           <input
             type="checkbox"
             checked={active}
@@ -326,12 +326,12 @@ export default function ContractTemplateForm({ initial, isEdit = false }) {
         <button
           type="button"
           onClick={() => router.push('/admin/contracts/templates')}
-          className="text-xs px-3 py-1.5 rounded-md border border-un1t-gray text-un1t-light hover:text-un1t-white"
+          className="text-xs px-3 py-1.5 rounded-md border border-un1t-border text-un1t-subtle hover:text-un1t-text"
         >Cancel</button>
         <button
           type="submit"
           disabled={busy || !name || !body}
-          className="text-xs bg-un1t-white text-un1t-black px-4 py-1.5 rounded-md font-medium hover:bg-un1t-accent disabled:opacity-50"
+          className="text-xs bg-un1t-text text-un1t-bg px-4 py-1.5 rounded-md font-medium hover:bg-un1t-accent disabled:opacity-50"
         >
           <FileText size={12} className="inline -mt-0.5 mr-1" />
           {busy ? 'Saving…' : isEdit ? 'Save changes' : 'Create template'}

@@ -66,8 +66,8 @@ export default function InvoicesManager({ user }) {
   return (
     <div className="space-y-8">
       <header>
-        <h1 className="text-2xl font-bold text-un1t-white">Contractor invoices</h1>
-        <p className="text-sm text-un1t-light mt-1">
+        <h1 className="text-2xl font-bold text-un1t-text">Contractor invoices</h1>
+        <p className="text-sm text-un1t-subtle mt-1">
           {reviewerMode
             ? 'Review submitted invoices against scheduled hours, then approve to forward to Xero or decline with a reason.'
             : canSubmit
@@ -80,7 +80,7 @@ export default function InvoicesManager({ user }) {
           ScheduleTabs hides the tab entirely for these users, so this is a
           defence-in-depth path (direct URL, role flip, etc.). */}
       {!canSubmit && !reviewerMode && (
-        <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-12 text-center text-sm text-un1t-light">
+        <div className="bg-un1t-surface border border-un1t-border rounded-lg p-12 text-center text-sm text-un1t-subtle">
           You don&apos;t have access to invoice submission or review.
           {' '}If you should be set up as a contractor, ask an owner to update your profile.
         </div>
@@ -95,21 +95,21 @@ export default function InvoicesManager({ user }) {
           see the review queue + history tabs. Hidden for the in-between
           empty case. */}
       {(canSubmit || reviewerMode) && (
-      <div className="bg-un1t-dark border border-un1t-gray rounded-lg overflow-hidden">
+      <div className="bg-un1t-surface border border-un1t-border rounded-lg overflow-hidden">
         {/* Tabs */}
         {reviewerMode ? (
-          <div className="border-b border-un1t-gray flex flex-wrap">
+          <div className="border-b border-un1t-border flex flex-wrap">
             <Tab id="submitted" label={`Awaiting review · ${grouped.submitted.length}`} active={activeTab} onClick={setActiveTab} />
             <Tab id="approved" label={`Approved · ${grouped.approved.length}`} active={activeTab} onClick={setActiveTab} />
             <Tab id="declined" label={`Declined · ${grouped.declined.length}`} active={activeTab} onClick={setActiveTab} />
             <Tab id="revoked" label={`Revoked · ${grouped.revoked.length}`} active={activeTab} onClick={setActiveTab} />
           </div>
         ) : (
-          <div className="border-b border-un1t-gray px-4 py-3 flex items-center justify-between">
-            <h2 className="text-xs font-semibold uppercase tracking-wider text-un1t-light">My submissions · {invoices.length}</h2>
+          <div className="border-b border-un1t-border px-4 py-3 flex items-center justify-between">
+            <h2 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle">My submissions · {invoices.length}</h2>
             <button
               onClick={fetchList}
-              className="text-xs text-un1t-light hover:text-un1t-white inline-flex items-center gap-1"
+              className="text-xs text-un1t-subtle hover:text-un1t-text inline-flex items-center gap-1"
             >
               <RefreshCw size={11} /> Refresh
             </button>
@@ -117,13 +117,13 @@ export default function InvoicesManager({ user }) {
         )}
 
         {loading ? (
-          <div className="p-12 text-center text-un1t-light text-sm inline-flex items-center justify-center gap-2 w-full">
+          <div className="p-12 text-center text-un1t-subtle text-sm inline-flex items-center justify-center gap-2 w-full">
             <Loader2 size={14} className="animate-spin" /> Loading…
           </div>
         ) : (grouped[activeTab] || []).length === 0 ? (
           <EmptyState reviewerMode={reviewerMode} tab={activeTab} />
         ) : (
-          <ul className="divide-y divide-un1t-gray">
+          <ul className="divide-y divide-un1t-border">
             {grouped[activeTab].map(inv => (
               <InvoiceListRow
                 key={inv.id}
@@ -155,7 +155,7 @@ function Tab({ id, label, active, onClick }) {
     <button
       onClick={() => onClick(id)}
       className={`flex-1 px-4 py-3 text-xs font-semibold uppercase tracking-wider transition-colors ${
-        active === id ? 'bg-un1t-white text-un1t-black' : 'text-un1t-light hover:text-un1t-white'
+        active === id ? 'bg-un1t-text text-un1t-bg' : 'text-un1t-subtle hover:text-un1t-text'
       }`}
     >
       {label}
@@ -172,7 +172,7 @@ function EmptyState({ reviewerMode, tab }) {
     else if (tab === 'revoked') msg = 'No revoked invoices — contractors haven\'t pulled any submissions back.'
   }
   return (
-    <div className="p-12 text-center text-un1t-light text-sm">{msg}</div>
+    <div className="p-12 text-center text-un1t-subtle text-sm">{msg}</div>
   )
 }
 
@@ -238,14 +238,14 @@ function SubmitForm({ user, onSubmitted }) {
   }
 
   return (
-    <form onSubmit={handleSubmit} className="bg-un1t-dark border border-un1t-gray rounded-lg p-5 space-y-4">
+    <form onSubmit={handleSubmit} className="bg-un1t-surface border border-un1t-border rounded-lg p-5 space-y-4">
       <div>
-        <h2 className="text-xs font-semibold uppercase tracking-wider text-un1t-light">Submit a new invoice</h2>
-        <p className="text-xs text-un1t-light mt-1">
+        <h2 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle">Submit a new invoice</h2>
+        <p className="text-xs text-un1t-subtle mt-1">
           One invoice per calendar month. PDF only, max 10 MB.
           {activeLocation?.name && (
             <>
-              {' '}Submitting for <span className="text-un1t-white font-medium">{activeLocation.name}</span>
+              {' '}Submitting for <span className="text-un1t-text font-medium">{activeLocation.name}</span>
               {' '}— switch studios in the sidebar to change.
             </>
           )}
@@ -254,11 +254,11 @@ function SubmitForm({ user, onSubmitted }) {
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div>
-          <label className="block text-xs text-un1t-light mb-1">Period *</label>
+          <label className="block text-xs text-un1t-subtle mb-1">Period *</label>
           <select
             value={month}
             onChange={(e) => setMonth(e.target.value)}
-            className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
+            className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted"
           >
             {months.map(m => (
               <option key={m.key} value={m.key}>{m.label}</option>
@@ -266,7 +266,7 @@ function SubmitForm({ user, onSubmitted }) {
           </select>
         </div>
         <div>
-          <label className="block text-xs text-un1t-light mb-1">Amount (€) *</label>
+          <label className="block text-xs text-un1t-subtle mb-1">Amount (€) *</label>
           <input
             type="number"
             min="0"
@@ -275,43 +275,43 @@ function SubmitForm({ user, onSubmitted }) {
             value={amount}
             onChange={(e) => setAmount(e.target.value)}
             placeholder="e.g. 1250.00"
-            className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
+            className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted"
           />
         </div>
       </div>
 
       <div>
-        <label className="block text-xs text-un1t-light mb-1">Your invoice reference (optional)</label>
+        <label className="block text-xs text-un1t-subtle mb-1">Your invoice reference (optional)</label>
         <input
           type="text"
           value={invoiceNumber}
           onChange={(e) => setInvoiceNumber(e.target.value)}
           placeholder="e.g. INV-2026-04"
           maxLength={50}
-          className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
+          className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted"
         />
       </div>
 
       <div>
-        <label className="block text-xs text-un1t-light mb-1">Notes (optional)</label>
+        <label className="block text-xs text-un1t-subtle mb-1">Notes (optional)</label>
         <textarea
           rows={2}
           value={notes}
           onChange={(e) => setNotes(e.target.value)}
           maxLength={500}
-          className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
+          className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted"
         />
       </div>
 
       <div>
-        <label className="block text-xs text-un1t-light mb-1">PDF *</label>
+        <label className="block text-xs text-un1t-subtle mb-1">PDF *</label>
         <input
           id="invoice-pdf-input"
           type="file"
           accept="application/pdf"
           required
           onChange={(e) => setPdf(e.target.files?.[0] || null)}
-          className="block w-full text-xs text-un1t-light file:mr-3 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-xs file:font-semibold file:bg-un1t-gray/40 file:text-un1t-white hover:file:bg-un1t-gray/60"
+          className="block w-full text-xs text-un1t-subtle file:mr-3 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-xs file:font-semibold file:bg-un1t-border/40 file:text-un1t-text hover:file:bg-un1t-border/60"
         />
       </div>
 
@@ -329,7 +329,7 @@ function SubmitForm({ user, onSubmitted }) {
       <button
         type="submit"
         disabled={submitting}
-        className="bg-un1t-white text-un1t-black font-medium text-sm px-4 py-2 rounded-md hover:bg-un1t-accent transition-colors disabled:opacity-50 inline-flex items-center gap-1.5"
+        className="bg-un1t-text text-un1t-bg font-medium text-sm px-4 py-2 rounded-md hover:bg-un1t-accent transition-colors disabled:opacity-50 inline-flex items-center gap-1.5"
       >
         {submitting ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
         {submitting ? 'Submitting…' : 'Submit invoice'}
@@ -345,22 +345,22 @@ function InvoiceListRow({ invoice, reviewerMode, onOpen }) {
     <li>
       <button
         onClick={onOpen}
-        className="w-full text-left px-4 py-3 hover:bg-un1t-gray/20 transition-colors flex items-center gap-4"
+        className="w-full text-left px-4 py-3 hover:bg-un1t-border/20 transition-colors flex items-center gap-4"
       >
         <StatusIcon status={invoice.status} />
         <div className="flex-1 min-w-0">
           <div className="flex items-baseline gap-3">
-            <h3 className="text-sm font-semibold text-un1t-white truncate">
+            <h3 className="text-sm font-semibold text-un1t-text truncate">
               {reviewerMode
                 ? `${invoice.contractor?.full_name || 'Contractor'} · ${periodLabel(invoice.period_start)}`
                 : periodLabel(invoice.period_start)}
             </h3>
-            <span className="text-xs text-un1t-light shrink-0">€{Number(invoice.invoice_amount).toFixed(2)}</span>
+            <span className="text-xs text-un1t-subtle shrink-0">€{Number(invoice.invoice_amount).toFixed(2)}</span>
           </div>
-          <p className="text-xs text-un1t-light mt-0.5">
+          <p className="text-xs text-un1t-subtle mt-0.5">
             {reviewerMode && (
               <>
-                <span className="text-un1t-mid">{invoice.location?.name || 'No location'}</span>
+                <span className="text-un1t-muted">{invoice.location?.name || 'No location'}</span>
                 <span className="mx-2">·</span>
               </>
             )}
@@ -375,7 +375,7 @@ function InvoiceListRow({ invoice, reviewerMode, onOpen }) {
             )}
           </p>
         </div>
-        <Eye size={14} className="text-un1t-mid shrink-0" />
+        <Eye size={14} className="text-un1t-muted shrink-0" />
       </button>
     </li>
   )
@@ -386,7 +386,7 @@ function StatusIcon({ status }) {
   // green tick as approved (both happy-path post-owner-approval).
   if (status === 'approved' || status === 'awaiting_accountant_review') return <CheckCircle2 size={18} className="text-green-400 shrink-0" />
   if (status === 'declined') return <XCircle size={18} className="text-red-400 shrink-0" />
-  if (status === 'revoked') return <Undo2 size={18} className="text-un1t-light shrink-0" />
+  if (status === 'revoked') return <Undo2 size={18} className="text-un1t-subtle shrink-0" />
   return <Clock size={18} className="text-amber-400 shrink-0" />
 }
 function StatusLabel({ status }) {
@@ -396,7 +396,7 @@ function StatusLabel({ status }) {
   // owner.
   if (status === 'awaiting_accountant_review') return <span className="text-green-300 font-medium">With accountant</span>
   if (status === 'declined') return <span className="text-red-300 font-medium">Declined</span>
-  if (status === 'revoked') return <span className="text-un1t-light font-medium">Revoked by contractor</span>
+  if (status === 'revoked') return <span className="text-un1t-subtle font-medium">Revoked by contractor</span>
   return <span className="text-amber-300 font-medium">Awaiting review</span>
 }
 
@@ -490,36 +490,36 @@ function InvoiceDetailModal({ invoiceId, reviewerMode, onClose, onChanged }) {
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={onClose}>
       <div
-        className="bg-un1t-dark border border-un1t-gray rounded-lg max-w-4xl w-full max-h-[90vh] overflow-hidden flex flex-col"
+        className="bg-un1t-surface border border-un1t-border rounded-lg max-w-4xl w-full max-h-[90vh] overflow-hidden flex flex-col"
         onClick={(e) => e.stopPropagation()}
       >
         {loading || !data ? (
-          <div className="p-12 text-center text-un1t-light text-sm inline-flex items-center justify-center gap-2">
+          <div className="p-12 text-center text-un1t-subtle text-sm inline-flex items-center justify-center gap-2">
             <Loader2 size={14} className="animate-spin" /> Loading…
           </div>
         ) : (
           <>
             {/* Header */}
-            <div className="flex items-start justify-between gap-3 p-5 border-b border-un1t-gray">
+            <div className="flex items-start justify-between gap-3 p-5 border-b border-un1t-border">
               <div className="min-w-0">
-                <h3 className="font-semibold text-un1t-white">
+                <h3 className="font-semibold text-un1t-text">
                   {data.contractor?.full_name || 'Contractor'} · {periodLabel(data.period_start)}
                 </h3>
-                <p className="text-xs text-un1t-light mt-1">
+                <p className="text-xs text-un1t-subtle mt-1">
                   {data.location?.name} · €{Number(data.invoice_amount).toFixed(2)}
-                  {data.invoice_number && <span className="ml-2 text-un1t-mid">Ref {data.invoice_number}</span>}
+                  {data.invoice_number && <span className="ml-2 text-un1t-muted">Ref {data.invoice_number}</span>}
                 </p>
               </div>
-              <button onClick={onClose} className="text-un1t-light hover:text-un1t-white shrink-0">
+              <button onClick={onClose} className="text-un1t-subtle hover:text-un1t-text shrink-0">
                 <XCircle size={18} />
               </button>
             </div>
 
             {/* Body — split: PDF on left (or nothing if mobile), details on right */}
             <div className="flex-1 overflow-y-auto grid grid-cols-1 md:grid-cols-2 gap-0">
-              <div className="border-r border-un1t-gray bg-un1t-black/40 min-h-[400px] flex flex-col">
-                <div className="p-3 border-b border-un1t-gray flex items-center justify-between">
-                  <span className="text-xs uppercase font-semibold text-un1t-light">PDF</span>
+              <div className="border-r border-un1t-border bg-un1t-bg/40 min-h-[400px] flex flex-col">
+                <div className="p-3 border-b border-un1t-border flex items-center justify-between">
+                  <span className="text-xs uppercase font-semibold text-un1t-subtle">PDF</span>
                   {pdfUrl && (
                     <a
                       href={pdfUrl}
@@ -538,7 +538,7 @@ function InvoiceDetailModal({ invoiceId, reviewerMode, onClose, onChanged }) {
                     className="flex-1 w-full bg-white"
                   />
                 ) : (
-                  <div className="flex-1 flex items-center justify-center text-un1t-light text-xs">
+                  <div className="flex-1 flex items-center justify-center text-un1t-subtle text-xs">
                     PDF preview unavailable
                   </div>
                 )}
@@ -553,10 +553,10 @@ function InvoiceDetailModal({ invoiceId, reviewerMode, onClose, onChanged }) {
                     block for self-views as a defence-in-depth. */}
                 {reviewerMode && data.computed_scheduled && (
                   <div>
-                    <h4 className="text-xs font-semibold uppercase tracking-wider text-un1t-light mb-2">
+                    <h4 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle mb-2">
                       Schedule vs invoice
                     </h4>
-                    <div className="bg-un1t-black/60 border border-un1t-gray rounded-lg p-4 space-y-2 text-sm">
+                    <div className="bg-un1t-bg/60 border border-un1t-border rounded-lg p-4 space-y-2 text-sm">
                       <Row label="Scheduled hours" value={`${data.computed_scheduled.scheduled_hours} h`} sub={`${data.computed_scheduled.shift_count} shifts`} />
                       <Row
                         label="Hourly rate"
@@ -571,7 +571,7 @@ function InvoiceDetailModal({ invoiceId, reviewerMode, onClose, onChanged }) {
                           : '—'}
                         emphasize
                       />
-                      <div className="pt-2 mt-2 border-t border-un1t-gray">
+                      <div className="pt-2 mt-2 border-t border-un1t-border">
                         <Row
                           label="Invoiced amount"
                           value={`€${Number(data.invoice_amount).toFixed(2)}`}
@@ -588,14 +588,14 @@ function InvoiceDetailModal({ invoiceId, reviewerMode, onClose, onChanged }) {
 
                 {/* Status block */}
                 <div>
-                  <h4 className="text-xs font-semibold uppercase tracking-wider text-un1t-light mb-2">Status</h4>
-                  <div className="bg-un1t-black/60 border border-un1t-gray rounded-lg p-4 text-sm">
+                  <h4 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle mb-2">Status</h4>
+                  <div className="bg-un1t-bg/60 border border-un1t-border rounded-lg p-4 text-sm">
                     <p className="inline-flex items-center gap-2">
                       <StatusIcon status={data.status} />
                       <StatusLabel status={data.status} />
                     </p>
                     {data.status === 'approved' && (
-                      <p className="text-xs text-un1t-light mt-2">
+                      <p className="text-xs text-un1t-subtle mt-2">
                         Approved {timeAgo(data.approved_at)}
                         {data.reviewer?.full_name ? ` by ${data.reviewer.full_name}` : ''}.
                         {data.xero_synced_at
@@ -610,7 +610,7 @@ function InvoiceDetailModal({ invoiceId, reviewerMode, onClose, onChanged }) {
                       </div>
                     )}
                     {data.status === 'revoked' && (
-                      <p className="text-xs text-un1t-light mt-2">
+                      <p className="text-xs text-un1t-subtle mt-2">
                         Revoked by the contractor {timeAgo(data.revoked_at)}.
                         A fresh submission can be made for the same period.
                       </p>
@@ -626,8 +626,8 @@ function InvoiceDetailModal({ invoiceId, reviewerMode, onClose, onChanged }) {
 
                 {data.notes && (
                   <div>
-                    <h4 className="text-xs font-semibold uppercase tracking-wider text-un1t-light mb-2">Contractor notes</h4>
-                    <p className="text-sm text-un1t-white whitespace-pre-wrap">{data.notes}</p>
+                    <h4 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle mb-2">Contractor notes</h4>
+                    <p className="text-sm text-un1t-text whitespace-pre-wrap">{data.notes}</p>
                   </div>
                 )}
 
@@ -646,8 +646,8 @@ function InvoiceDetailModal({ invoiceId, reviewerMode, onClose, onChanged }) {
                     invoice while it's still pending review. */}
                 {!reviewerMode && data.status === 'submitted' && data.viewer_role === 'self' && (
                   actionState === 'confirming-revoke' ? (
-                    <div className="space-y-2 pt-2 border-t border-un1t-gray">
-                      <p className="text-xs text-un1t-light">
+                    <div className="space-y-2 pt-2 border-t border-un1t-border">
+                      <p className="text-xs text-un1t-subtle">
                         Revoke this submission? It stays in your history (and the approver's audit
                         trail) but is no longer in the review queue. You can submit a fresh invoice
                         for the same month afterwards.
@@ -656,24 +656,24 @@ function InvoiceDetailModal({ invoiceId, reviewerMode, onClose, onChanged }) {
                         <button
                           onClick={revoke}
                           disabled={actionState === 'working'}
-                          className="bg-un1t-light text-un1t-black hover:bg-un1t-white text-xs font-semibold px-3 py-2 rounded-md inline-flex items-center gap-1.5 disabled:opacity-50"
+                          className="bg-un1t-subtle text-un1t-bg hover:bg-un1t-text text-xs font-semibold px-3 py-2 rounded-md inline-flex items-center gap-1.5 disabled:opacity-50"
                         >
                           {actionState === 'working' ? <Loader2 size={11} className="animate-spin" /> : <Undo2 size={11} />}
                           Yes, revoke
                         </button>
                         <button
                           onClick={() => { setActionState('idle'); setError(null) }}
-                          className="text-xs text-un1t-light hover:text-un1t-white px-3"
+                          className="text-xs text-un1t-subtle hover:text-un1t-text px-3"
                         >
                           Cancel
                         </button>
                       </div>
                     </div>
                   ) : (
-                    <div className="pt-2 border-t border-un1t-gray">
+                    <div className="pt-2 border-t border-un1t-border">
                       <button
                         onClick={() => setActionState('confirming-revoke')}
-                        className="text-xs text-un1t-light hover:text-un1t-white border border-un1t-gray hover:border-un1t-mid px-3 py-2 rounded-md inline-flex items-center gap-1.5"
+                        className="text-xs text-un1t-subtle hover:text-un1t-text border border-un1t-border hover:border-un1t-muted px-3 py-2 rounded-md inline-flex items-center gap-1.5"
                         title="Pull this submission back so you can resubmit"
                       >
                         <Undo2 size={11} /> Revoke this submission
@@ -685,8 +685,8 @@ function InvoiceDetailModal({ invoiceId, reviewerMode, onClose, onChanged }) {
                 {/* Action footer — owner/master + submitted only */}
                 {reviewerMode && data.status === 'submitted' && (
                   actionState === 'confirming-decline' ? (
-                    <div className="space-y-2 pt-2 border-t border-un1t-gray">
-                      <label className="block text-xs text-un1t-light">Reason for decline (sent to contractor)</label>
+                    <div className="space-y-2 pt-2 border-t border-un1t-border">
+                      <label className="block text-xs text-un1t-subtle">Reason for decline (sent to contractor)</label>
                       <textarea
                         rows={3}
                         value={reason}
@@ -694,7 +694,7 @@ function InvoiceDetailModal({ invoiceId, reviewerMode, onClose, onChanged }) {
                         autoFocus
                         maxLength={1000}
                         placeholder="e.g. Hours don't match scheduled shifts — please re-issue with corrected total."
-                        className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
+                        className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
                       />
                       <div className="flex gap-2">
                         <button
@@ -706,14 +706,14 @@ function InvoiceDetailModal({ invoiceId, reviewerMode, onClose, onChanged }) {
                         </button>
                         <button
                           onClick={() => { setActionState('idle'); setReason(''); setError(null) }}
-                          className="text-xs text-un1t-light hover:text-un1t-white px-3"
+                          className="text-xs text-un1t-subtle hover:text-un1t-text px-3"
                         >
                           Cancel
                         </button>
                       </div>
                     </div>
                   ) : (
-                    <div className="flex gap-2 pt-2 border-t border-un1t-gray">
+                    <div className="flex gap-2 pt-2 border-t border-un1t-border">
                       <button
                         onClick={approve}
                         disabled={actionState === 'working'}
@@ -744,10 +744,10 @@ function InvoiceDetailModal({ invoiceId, reviewerMode, onClose, onChanged }) {
 function Row({ label, value, sub, emphasize = false }) {
   return (
     <div className="flex items-baseline justify-between gap-3">
-      <span className="text-un1t-light text-xs">{label}</span>
-      <span className={emphasize ? 'text-un1t-white font-bold' : 'text-un1t-white'}>
+      <span className="text-un1t-subtle text-xs">{label}</span>
+      <span className={emphasize ? 'text-un1t-text font-bold' : 'text-un1t-text'}>
         {value}
-        {sub && <span className="text-un1t-mid text-[11px] ml-2">({sub})</span>}
+        {sub && <span className="text-un1t-muted text-[11px] ml-2">({sub})</span>}
       </span>
     </div>
   )
@@ -859,17 +859,17 @@ function AuditTimeline({ data }) {
 
   return (
     <div>
-      <h4 className="text-xs font-semibold uppercase tracking-wider text-un1t-light mb-2 inline-flex items-center gap-1.5">
+      <h4 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle mb-2 inline-flex items-center gap-1.5">
         <History size={12} /> Audit trail
       </h4>
-      <ol className="bg-un1t-black/60 border border-un1t-gray rounded-lg p-4 space-y-3">
+      <ol className="bg-un1t-bg/60 border border-un1t-border rounded-lg p-4 space-y-3">
         {events.map((e, i) => (
           <li key={i} className="flex gap-3">
             <TimelineDot tone={e.tone} />
             <div className="flex-1 min-w-0">
-              <div className="text-sm text-un1t-white font-medium">{e.label}</div>
-              {e.sub && <div className="text-xs text-un1t-light mt-0.5">{e.sub}</div>}
-              <div className="text-[11px] text-un1t-mid mt-0.5">
+              <div className="text-sm text-un1t-text font-medium">{e.label}</div>
+              {e.sub && <div className="text-xs text-un1t-subtle mt-0.5">{e.sub}</div>}
+              <div className="text-[11px] text-un1t-muted mt-0.5">
                 {new Date(e.ts).toLocaleString('en-IE', { dateStyle: 'medium', timeStyle: 'short' })}
               </div>
             </div>
@@ -885,6 +885,6 @@ function TimelineDot({ tone }) {
     tone === 'green' ? 'bg-green-400' :
     tone === 'red' ? 'bg-red-400' :
     tone === 'amber' ? 'bg-amber-400' :
-    'bg-un1t-light'
+    'bg-un1t-subtle'
   return <span className={`inline-block w-2 h-2 rounded-full mt-1.5 shrink-0 ${cls}`} />
 }

@@ -112,20 +112,20 @@ export default function ContactMarketingPreferencesCard({ contactId, canEdit, gl
   }
 
   return (
-    <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-4">
+    <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
       <div className="flex items-center justify-between mb-3">
-        <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light">
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle">
           Marketing preferences
         </h3>
         {!canEdit && (
-          <span className="text-[10px] text-un1t-mid inline-flex items-center gap-1">
+          <span className="text-[10px] text-un1t-muted inline-flex items-center gap-1">
             <Lock size={10} /> read-only
           </span>
         )}
       </div>
 
       {loading && (
-        <div className="flex items-center gap-2 text-xs text-un1t-mid py-2">
+        <div className="flex items-center gap-2 text-xs text-un1t-muted py-2">
           <Loader2 size={12} className="animate-spin" /> loading…
         </div>
       )}
@@ -162,10 +162,10 @@ export default function ContactMarketingPreferencesCard({ contactId, canEdit, gl
               return (
                 <div key={key} className="flex items-center justify-between gap-2 py-1.5">
                   <div className="flex items-start gap-2 min-w-0">
-                    <Icon size={14} className={`mt-0.5 shrink-0 ${on ? 'text-emerald-500' : 'text-un1t-mid'}`} />
+                    <Icon size={14} className={`mt-0.5 shrink-0 ${on ? 'text-emerald-500' : 'text-un1t-muted'}`} />
                     <div className="min-w-0">
-                      <div className="text-sm text-un1t-white">{label}</div>
-                      <div className="text-[11px] text-un1t-mid truncate">{description}</div>
+                      <div className="text-sm text-un1t-text">{label}</div>
+                      <div className="text-[11px] text-un1t-muted truncate">{description}</div>
                     </div>
                   </div>
                   <button
@@ -174,7 +174,7 @@ export default function ContactMarketingPreferencesCard({ contactId, canEdit, gl
                     disabled={!canEdit || saving}
                     aria-pressed={on}
                     className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors disabled:opacity-50 ${
-                      on ? 'bg-emerald-500' : 'bg-un1t-gray'
+                      on ? 'bg-emerald-500' : 'bg-un1t-border'
                     }`}
                   >
                     <span
@@ -185,7 +185,7 @@ export default function ContactMarketingPreferencesCard({ contactId, canEdit, gl
                     {(saving || saved) && (
                       <span className="absolute -right-5 top-0.5">
                         {saving
-                          ? <Loader2 size={12} className="animate-spin text-un1t-mid" />
+                          ? <Loader2 size={12} className="animate-spin text-un1t-muted" />
                           : <CheckCircle2 size={12} className="text-emerald-500" />}
                       </span>
                     )}
@@ -199,11 +199,11 @@ export default function ContactMarketingPreferencesCard({ contactId, canEdit, gl
               CLAUDE.md "opting out of marketing should never block a
               booking reminder" convention. Shown for reassurance so
               the operator can see what WILL still go through. */}
-          <div className="mt-4 pt-3 border-t border-un1t-gray/60">
-            <div className="flex items-start gap-2 text-[11px] text-un1t-mid">
+          <div className="mt-4 pt-3 border-t border-un1t-border/60">
+            <div className="flex items-start gap-2 text-[11px] text-un1t-muted">
               <Lock size={11} className="mt-0.5 shrink-0" />
               <div>
-                <div className="font-medium text-un1t-light">Transactional sends remain on</div>
+                <div className="font-medium text-un1t-subtle">Transactional sends remain on</div>
                 <div className="mt-1">
                   Booking confirmations, class reminders, schedule changes and account
                   updates always go through on{' '}

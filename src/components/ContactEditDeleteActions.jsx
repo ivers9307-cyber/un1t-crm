@@ -71,7 +71,7 @@ export default function ContactEditDeleteActions({ contact, canEdit, canDelete }
       {canEdit && (
         <Link
           href={`/contacts/${contact.id}/edit`}
-          className="inline-flex items-center gap-1.5 border border-un1t-gray text-un1t-light text-sm font-medium px-3 py-1.5 rounded-md hover:text-un1t-white hover:border-un1t-mid"
+          className="inline-flex items-center gap-1.5 border border-un1t-border text-un1t-subtle text-sm font-medium px-3 py-1.5 rounded-md hover:text-un1t-text hover:border-un1t-muted"
         >
           <Pencil size={14} /> Edit
         </Link>
@@ -92,19 +92,19 @@ export default function ContactEditDeleteActions({ contact, canEdit, canDelete }
           onClick={() => !deleting && setConfirming(false)}
         >
           <div
-            className="bg-un1t-dark border border-un1t-gray rounded-xl max-w-lg w-full p-6"
+            className="bg-un1t-surface border border-un1t-border rounded-xl max-w-lg w-full p-6"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-start gap-3 mb-4">
               <AlertTriangle size={22} className="text-red-500 mt-0.5 shrink-0" />
               <div className="flex-1">
-                <h3 className="text-base font-semibold text-un1t-white">Delete {contact.name}?</h3>
-                <p className="text-xs text-un1t-light mt-1">This cannot be undone.</p>
+                <h3 className="text-base font-semibold text-un1t-text">Delete {contact.name}?</h3>
+                <p className="text-xs text-un1t-subtle mt-1">This cannot be undone.</p>
               </div>
               <button
                 type="button"
                 onClick={() => !deleting && setConfirming(false)}
-                className="text-un1t-light hover:text-un1t-white"
+                className="text-un1t-subtle hover:text-un1t-text"
                 disabled={deleting}
               >
                 <X size={16} />
@@ -118,13 +118,13 @@ export default function ContactEditDeleteActions({ contact, canEdit, canDelete }
             )}
 
             {!impact && !impactError && (
-              <div className="text-xs text-un1t-light inline-flex items-center gap-2 mb-3">
+              <div className="text-xs text-un1t-subtle inline-flex items-center gap-2 mb-3">
                 <Loader2 size={12} className="animate-spin" /> Calculating impact…
               </div>
             )}
 
             {impact && (
-              <div className="text-sm text-un1t-light space-y-3 mb-4">
+              <div className="text-sm text-un1t-subtle space-y-3 mb-4">
                 {impact.redact_on_delete?.length > 0 && (
                   <div>
                     <div className="text-xs uppercase tracking-wider text-amber-700 mb-1">Will be redacted</div>
@@ -135,7 +135,7 @@ export default function ContactEditDeleteActions({ contact, canEdit, canDelete }
                         </li>
                       ))}
                     </ul>
-                    <p className="text-[11px] text-un1t-mid mt-1">
+                    <p className="text-[11px] text-un1t-muted mt-1">
                       Phone, profile name, message bodies, and media URLs are wiped. Conversation thread + timestamps stay for audit (GDPR right-to-erasure).
                     </p>
                   </div>
@@ -156,7 +156,7 @@ export default function ContactEditDeleteActions({ contact, canEdit, canDelete }
 
                 {impact.cascade_on_delete?.length > 0 && (
                   <div>
-                    <div className="text-xs uppercase tracking-wider text-un1t-light mb-1">Will be deleted</div>
+                    <div className="text-xs uppercase tracking-wider text-un1t-subtle mb-1">Will be deleted</div>
                     <ul className="text-xs space-y-0.5">
                       {impact.cascade_on_delete.map(t => (
                         <li key={`${t.table}.${t.column}`}>
@@ -169,7 +169,7 @@ export default function ContactEditDeleteActions({ contact, canEdit, canDelete }
 
                 {impact.keep_on_delete?.length > 0 && (
                   <div>
-                    <div className="text-xs uppercase tracking-wider text-un1t-light mb-1">Will stay (unlinked)</div>
+                    <div className="text-xs uppercase tracking-wider text-un1t-subtle mb-1">Will stay (unlinked)</div>
                     <ul className="text-xs space-y-0.5">
                       {impact.keep_on_delete.map(t => (
                         <li key={`${t.table}.${t.column}`}>
@@ -177,7 +177,7 @@ export default function ContactEditDeleteActions({ contact, canEdit, canDelete }
                         </li>
                       ))}
                     </ul>
-                    <p className="text-[11px] text-un1t-mid mt-1">
+                    <p className="text-[11px] text-un1t-muted mt-1">
                       These rows preserve revenue / event history but lose the contact link.
                     </p>
                   </div>
@@ -192,15 +192,15 @@ export default function ContactEditDeleteActions({ contact, canEdit, canDelete }
             {impact && impact.block_delete?.length === 0 && (
               <div className="space-y-3">
                 <div>
-                  <label className="block text-xs text-un1t-light mb-1">
-                    Type <strong className="text-un1t-white">{expected}</strong> to confirm:
+                  <label className="block text-xs text-un1t-subtle mb-1">
+                    Type <strong className="text-un1t-text">{expected}</strong> to confirm:
                   </label>
                   <input
                     type="text"
                     value={confirmName}
                     onChange={(e) => setConfirmName(e.target.value)}
                     disabled={deleting}
-                    className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
+                    className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
                   />
                 </div>
                 {deleteError && (

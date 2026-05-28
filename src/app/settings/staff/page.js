@@ -45,22 +45,22 @@ export default async function StaffIndexPage() {
     <div className="p-8 max-w-5xl">
       <Link
         href="/settings"
-        className="inline-flex items-center gap-1 text-xs text-un1t-light hover:text-un1t-white mb-3"
+        className="inline-flex items-center gap-1 text-xs text-un1t-subtle hover:text-un1t-text mb-3"
       >
         <ChevronLeft size={14} /> Settings
       </Link>
       <div className="flex items-center justify-between mb-6">
         <div>
           <h2 className="text-2xl font-bold inline-flex items-center gap-2">
-            <Users size={20} className="text-un1t-light" /> Team Members
+            <Users size={20} className="text-un1t-subtle" /> Team Members
           </h2>
-          <p className="text-sm text-un1t-light mt-1">
+          <p className="text-sm text-un1t-subtle mt-1">
             {staff.length} {staff.length === 1 ? 'member' : 'members'} across all locations.
           </p>
         </div>
         <Link
           href="/settings/staff/new"
-          className="text-sm bg-un1t-white text-un1t-black px-4 py-2 rounded-md hover:bg-un1t-accent transition-colors font-medium"
+          className="text-sm bg-un1t-text text-un1t-bg px-4 py-2 rounded-md hover:bg-un1t-accent transition-colors font-medium"
         >
           Add Staff
         </Link>

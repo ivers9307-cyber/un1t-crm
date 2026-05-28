@@ -20,7 +20,7 @@ export default async function TVDisplaysAdmin() {
   if (!hasPermission(user, 'tv_displays')) {
     return (
       <div className="p-6">
-        <p className="text-sm text-un1t-light">You don&apos;t have access to TV management.</p>
+        <p className="text-sm text-un1t-subtle">You don&apos;t have access to TV management.</p>
       </div>
     )
   }

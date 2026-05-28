@@ -79,7 +79,7 @@ export default function OrdersTable() {
       )}
 
       {/* Status tabs with counts */}
-      <div className="flex flex-wrap gap-2 border-b border-un1t-gray pb-2">
+      <div className="flex flex-wrap gap-2 border-b border-un1t-border pb-2">
         {STATUS_TABS.map((t) => {
           const active = status === t.id
           const count = counts[t.id] ?? 0
@@ -90,12 +90,12 @@ export default function OrdersTable() {
               onClick={() => { setStatus(t.id); setPage(1) }}
               className={`text-sm px-3 py-1.5 rounded-md border transition-colors ${
                 active
-                  ? 'bg-un1t-white text-un1t-black border-un1t-white'
-                  : 'border-transparent text-un1t-light hover:text-un1t-white hover:bg-un1t-gray/30'
+                  ? 'bg-un1t-text text-un1t-bg border-un1t-text'
+                  : 'border-transparent text-un1t-subtle hover:text-un1t-text hover:bg-un1t-border/30'
               }`}
             >
               {t.label}
-              <span className={`ml-2 text-xs ${active ? 'text-un1t-black/60' : 'text-un1t-mid'}`}>
+              <span className={`ml-2 text-xs ${active ? 'text-un1t-bg/60' : 'text-un1t-muted'}`}>
                 {count}
               </span>
             </button>
@@ -104,7 +104,7 @@ export default function OrdersTable() {
         <button
           type="button"
           onClick={load}
-          className="ml-auto text-xs text-un1t-light hover:text-un1t-white inline-flex items-center gap-1"
+          className="ml-auto text-xs text-un1t-subtle hover:text-un1t-text inline-flex items-center gap-1"
           title="Refresh"
         >
           <RefreshCw size={12} className={loading ? 'animate-spin' : ''} /> Refresh
@@ -114,19 +114,19 @@ export default function OrdersTable() {
       {/* Filter row */}
       <div className="flex flex-wrap items-center gap-2">
         <div className="relative">
-          <Search size={12} className="absolute left-2 top-1/2 -translate-y-1/2 text-un1t-light" />
+          <Search size={12} className="absolute left-2 top-1/2 -translate-y-1/2 text-un1t-subtle" />
           <input
             type="text"
             value={q}
             onChange={(e) => { setQ(e.target.value); setPage(1) }}
             placeholder="Email or name…"
-            className="pl-7 pr-3 py-1.5 text-sm bg-un1t-black border border-un1t-gray rounded-md text-un1t-white w-56"
+            className="pl-7 pr-3 py-1.5 text-sm bg-un1t-bg border border-un1t-border rounded-md text-un1t-text w-56"
           />
         </div>
         <select
           value={sourceType}
           onChange={(e) => { setSourceType(e.target.value); setPage(1) }}
-          className="text-sm bg-un1t-black border border-un1t-gray rounded-md px-2 py-1.5 text-un1t-white"
+          className="text-sm bg-un1t-bg border border-un1t-border rounded-md px-2 py-1.5 text-un1t-text"
         >
           <option value="">All sources</option>
           <option value="race_registration">Race signups</option>
@@ -136,21 +136,21 @@ export default function OrdersTable() {
           type="date"
           value={from}
           onChange={(e) => { setFrom(e.target.value); setPage(1) }}
-          className="text-sm bg-un1t-black border border-un1t-gray rounded-md px-2 py-1.5 text-un1t-white"
+          className="text-sm bg-un1t-bg border border-un1t-border rounded-md px-2 py-1.5 text-un1t-text"
           title="From"
         />
         <input
           type="date"
           value={to}
           onChange={(e) => { setTo(e.target.value); setPage(1) }}
-          className="text-sm bg-un1t-black border border-un1t-gray rounded-md px-2 py-1.5 text-un1t-white"
+          className="text-sm bg-un1t-bg border border-un1t-border rounded-md px-2 py-1.5 text-un1t-text"
           title="To"
         />
         {(sourceType || from || to || q) && (
           <button
             type="button"
             onClick={() => { setSourceType(''); setFrom(''); setTo(''); setQ(''); setPage(1) }}
-            className="text-xs text-un1t-light hover:text-un1t-white inline-flex items-center gap-1"
+            className="text-xs text-un1t-subtle hover:text-un1t-text inline-flex items-center gap-1"
           >
             <X size={12} /> Clear
           </button>
@@ -159,13 +159,13 @@ export default function OrdersTable() {
 
       {/* Rows */}
       {loading && !data && (
-        <div className="text-sm text-un1t-light inline-flex items-center gap-2">
+        <div className="text-sm text-un1t-subtle inline-flex items-center gap-2">
           <Loader2 size={14} className="animate-spin" /> Loading orders…
         </div>
       )}
 
       {data && rows.length === 0 && (
-        <div className="text-sm text-un1t-light italic px-2 py-8 text-center">
+        <div className="text-sm text-un1t-subtle italic px-2 py-8 text-center">
           No orders match the current filters.
         </div>
       )}
@@ -174,10 +174,10 @@ export default function OrdersTable() {
         <>
           {/* Desktop table — hidden below md so phones don't have to
               horizontal-scroll a 6-column grid with inline refund UI. */}
-          <div className="hidden md:block overflow-x-auto border border-un1t-gray rounded-lg">
+          <div className="hidden md:block overflow-x-auto border border-un1t-border rounded-lg">
             <table className="w-full text-sm">
               <thead>
-                <tr className="text-[11px] uppercase tracking-wider text-un1t-light bg-un1t-gray/20">
+                <tr className="text-[11px] uppercase tracking-wider text-un1t-subtle bg-un1t-border/20">
                   <th className="text-left px-3 py-2">Date</th>
                   <th className="text-left px-3 py-2">Contact</th>
                   <th className="text-left px-3 py-2">Source</th>
@@ -208,21 +208,21 @@ export default function OrdersTable() {
 
       {/* Pagination */}
       {totalPages > 1 && (
-        <div className="flex items-center justify-between text-xs text-un1t-light">
+        <div className="flex items-center justify-between text-xs text-un1t-subtle">
           <div>{total} order{total === 1 ? '' : 's'}</div>
           <div className="flex items-center gap-2">
             <button
               type="button"
               disabled={page <= 1}
               onClick={() => setPage(p => Math.max(1, p - 1))}
-              className="px-2 py-1 border border-un1t-gray rounded-md disabled:opacity-30"
+              className="px-2 py-1 border border-un1t-border rounded-md disabled:opacity-30"
             >Prev</button>
             <span>{page} / {totalPages}</span>
             <button
               type="button"
               disabled={page >= totalPages}
               onClick={() => setPage(p => Math.min(totalPages, p + 1))}
-              className="px-2 py-1 border border-un1t-gray rounded-md disabled:opacity-30"
+              className="px-2 py-1 border border-un1t-border rounded-md disabled:opacity-30"
             >Next</button>
           </div>
         </div>
@@ -306,19 +306,19 @@ function OrderRow({ row, onRefunded }) {
 
   return (
     <tr
-      className="border-t border-un1t-gray hover:bg-un1t-gray/10 cursor-pointer"
+      className="border-t border-un1t-border hover:bg-un1t-border/10 cursor-pointer"
       onClick={navigateToDetail}
     >
-      <td className="px-3 py-2 text-un1t-light whitespace-nowrap">{dateLabel}</td>
+      <td className="px-3 py-2 text-un1t-subtle whitespace-nowrap">{dateLabel}</td>
       <td className="px-3 py-2">
-        <div className="text-un1t-white">{row.contact_name || row.contact_email}</div>
+        <div className="text-un1t-text">{row.contact_name || row.contact_email}</div>
         {row.contact_name && (
-          <div className="text-[11px] text-un1t-light">{row.contact_email}</div>
+          <div className="text-[11px] text-un1t-subtle">{row.contact_email}</div>
         )}
       </td>
       <td className="px-3 py-2">
-        <div className="text-un1t-white">{sourceLabel}</div>
-        {sourceDetail && <div className="text-[11px] text-un1t-light">{sourceDetail}</div>}
+        <div className="text-un1t-text">{sourceLabel}</div>
+        {sourceDetail && <div className="text-[11px] text-un1t-subtle">{sourceDetail}</div>}
         {row.retry_of_order_id && (
           <div className="text-[11px] text-blue-700 mt-0.5">
             ↻ Retry of an earlier failure
@@ -334,7 +334,7 @@ function OrderRow({ row, onRefunded }) {
           <button
             type="button"
             onClick={() => setConfirming(true)}
-            className="text-[11px] text-un1t-light hover:text-purple-700 inline-flex items-center gap-1"
+            className="text-[11px] text-un1t-subtle hover:text-purple-700 inline-flex items-center gap-1"
             title="Issue a full refund via Revolut"
           >
             <Undo2 size={11} /> Refund
@@ -342,7 +342,7 @@ function OrderRow({ row, onRefunded }) {
         )}
         {canRefund && confirming && (
           <div className="inline-flex items-center gap-1.5">
-            <span className="text-[11px] text-un1t-light">Refund €</span>
+            <span className="text-[11px] text-un1t-subtle">Refund €</span>
             <input
               type="number"
               min="0.01"
@@ -350,7 +350,7 @@ function OrderRow({ row, onRefunded }) {
               max={row.amount_cents / 100}
               value={refundEuros}
               onChange={(e) => setRefundEuros(e.target.value)}
-              className="text-[11px] bg-un1t-black border border-un1t-gray rounded px-1.5 py-0.5 text-un1t-white w-20 tabular-nums"
+              className="text-[11px] bg-un1t-bg border border-un1t-border rounded px-1.5 py-0.5 text-un1t-text w-20 tabular-nums"
               title={`Up to ${amount} (full refund). Lower for partial.`}
             />
             <button
@@ -366,7 +366,7 @@ function OrderRow({ row, onRefunded }) {
               type="button"
               onClick={() => { setConfirming(false); setRefundError(null) }}
               disabled={busy}
-              className="text-[11px] text-un1t-light hover:text-un1t-white"
+              className="text-[11px] text-un1t-subtle hover:text-un1t-text"
             >
               Cancel
             </button>
@@ -407,26 +407,26 @@ function OrderCard({ row }) {
     <button
       type="button"
       onClick={() => router.push(`/orders/${row.id}`)}
-      className="w-full text-left bg-un1t-dark border border-un1t-gray rounded-lg p-3 active:bg-un1t-gray/30 transition-colors"
+      className="w-full text-left bg-un1t-surface border border-un1t-border rounded-lg p-3 active:bg-un1t-border/30 transition-colors"
     >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
-          <div className="font-medium text-un1t-white truncate">
+          <div className="font-medium text-un1t-text truncate">
             {row.contact_name || row.contact_email || 'Unknown'}
           </div>
           {row.contact_name && row.contact_email && (
-            <div className="text-[11px] text-un1t-light truncate">{row.contact_email}</div>
+            <div className="text-[11px] text-un1t-subtle truncate">{row.contact_email}</div>
           )}
         </div>
         <div className="text-right shrink-0">
-          <div className="font-mono tabular-nums text-un1t-white">{amount}</div>
-          <div className="text-[10px] text-un1t-light">{dateLabel}</div>
+          <div className="font-mono tabular-nums text-un1t-text">{amount}</div>
+          <div className="text-[10px] text-un1t-subtle">{dateLabel}</div>
         </div>
       </div>
       <div className="flex items-center justify-between gap-2 mt-2">
-        <div className="text-[11px] text-un1t-light truncate">
+        <div className="text-[11px] text-un1t-subtle truncate">
           {sourceLabel}
-          {sourceDetail && <span className="text-un1t-mid"> · {sourceDetail}</span>}
+          {sourceDetail && <span className="text-un1t-muted"> · {sourceDetail}</span>}
           {row.retry_of_order_id && (
             <span className="text-blue-700"> · ↻ Retry</span>
           )}
@@ -447,7 +447,7 @@ function StatusPill({ status }) {
     refunded: 'bg-purple-500/15 text-purple-700',
   }
   return (
-    <span className={`text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded-full ${map[status] || 'bg-un1t-gray/30 text-un1t-light'}`}>
+    <span className={`text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded-full ${map[status] || 'bg-un1t-border/30 text-un1t-subtle'}`}>
       {status}
     </span>
   )

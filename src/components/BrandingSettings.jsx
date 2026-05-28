@@ -138,26 +138,26 @@ export default function BrandingSettings({ user, locationId: propLocationId }) {
   }
 
   if (loading) {
-    return <div className="text-sm text-un1t-light py-4">Loading branding...</div>
+    return <div className="text-sm text-un1t-subtle py-4">Loading branding...</div>
   }
 
   return (
     <div className="space-y-6">
       {/* Company Name */}
       <div>
-        <label className="block text-xs font-medium text-un1t-light mb-1.5">Company Name</label>
+        <label className="block text-xs font-medium text-un1t-subtle mb-1.5">Company Name</label>
         <div className="flex gap-2">
           <input
             type="text"
             value={companyName}
             onChange={e => setCompanyName(e.target.value)}
-            className="flex-1 bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid"
+            className="flex-1 bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted"
             placeholder="UN1T"
           />
           <button
             onClick={handleSaveName}
             disabled={saving}
-            className="px-4 py-2 bg-un1t-white text-un1t-black text-xs font-medium rounded-md hover:bg-un1t-accent transition-colors disabled:opacity-50 flex items-center gap-1.5"
+            className="px-4 py-2 bg-un1t-text text-un1t-bg text-xs font-medium rounded-md hover:bg-un1t-accent transition-colors disabled:opacity-50 flex items-center gap-1.5"
           >
             {saved ? <><Check size={12} /> Saved</> : saving ? 'Saving...' : 'Save'}
           </button>
@@ -166,17 +166,17 @@ export default function BrandingSettings({ user, locationId: propLocationId }) {
 
       {/* Logo Upload */}
       <div>
-        <label className="block text-xs font-medium text-un1t-light mb-1.5">Logo</label>
-        <p className="text-xs text-un1t-mid mb-3">Transparent PNG or SVG recommended. Displayed in the sidebar and login page.</p>
+        <label className="block text-xs font-medium text-un1t-subtle mb-1.5">Logo</label>
+        <p className="text-xs text-un1t-muted mb-3">Transparent PNG or SVG recommended. Displayed in the sidebar and login page.</p>
 
         <div className="flex items-start gap-4">
           {/* Preview */}
-          <div className="w-32 h-16 bg-un1t-black border border-un1t-gray rounded-lg flex items-center justify-center overflow-hidden shrink-0"
+          <div className="w-32 h-16 bg-un1t-bg border border-un1t-border rounded-lg flex items-center justify-center overflow-hidden shrink-0"
                style={{ backgroundImage: 'url("data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' width=\'16\' height=\'16\' fill=\'none\'%3E%3Crect x=\'0\' y=\'0\' width=\'8\' height=\'8\' fill=\'%23222\'/%3E%3Crect x=\'8\' y=\'8\' width=\'8\' height=\'8\' fill=\'%23222\'/%3E%3C/svg%3E")' }}>
             {settings?.logo_url ? (
               <img src={settings.logo_url} alt="Logo" className="max-w-full max-h-full object-contain" />
             ) : (
-              <ImageIcon size={20} className="text-un1t-mid" />
+              <ImageIcon size={20} className="text-un1t-muted" />
             )}
           </div>
 
@@ -191,7 +191,7 @@ export default function BrandingSettings({ user, locationId: propLocationId }) {
             <button
               onClick={() => logoInputRef.current?.click()}
               disabled={uploading === 'logo'}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-un1t-dark border border-un1t-gray rounded-md text-un1t-white hover:bg-un1t-gray/50 transition-colors disabled:opacity-50"
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-un1t-surface border border-un1t-border rounded-md text-un1t-text hover:bg-un1t-border/50 transition-colors disabled:opacity-50"
             >
               <Upload size={12} />
               {uploading === 'logo' ? 'Uploading...' : 'Upload Logo'}
@@ -211,17 +211,17 @@ export default function BrandingSettings({ user, locationId: propLocationId }) {
 
       {/* Favicon Upload */}
       <div>
-        <label className="block text-xs font-medium text-un1t-light mb-1.5">Favicon</label>
-        <p className="text-xs text-un1t-mid mb-3">Small icon shown in browser tabs. PNG or ICO, ideally 32x32 or 64x64.</p>
+        <label className="block text-xs font-medium text-un1t-subtle mb-1.5">Favicon</label>
+        <p className="text-xs text-un1t-muted mb-3">Small icon shown in browser tabs. PNG or ICO, ideally 32x32 or 64x64.</p>
 
         <div className="flex items-start gap-4">
           {/* Preview */}
-          <div className="w-16 h-16 bg-un1t-black border border-un1t-gray rounded-lg flex items-center justify-center overflow-hidden shrink-0"
+          <div className="w-16 h-16 bg-un1t-bg border border-un1t-border rounded-lg flex items-center justify-center overflow-hidden shrink-0"
                style={{ backgroundImage: 'url("data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' width=\'16\' height=\'16\' fill=\'none\'%3E%3Crect x=\'0\' y=\'0\' width=\'8\' height=\'8\' fill=\'%23222\'/%3E%3Crect x=\'8\' y=\'8\' width=\'8\' height=\'8\' fill=\'%23222\'/%3E%3C/svg%3E")' }}>
             {settings?.favicon_url ? (
               <img src={settings.favicon_url} alt="Favicon" className="w-8 h-8 object-contain" />
             ) : (
-              <ImageIcon size={16} className="text-un1t-mid" />
+              <ImageIcon size={16} className="text-un1t-muted" />
             )}
           </div>
 
@@ -236,7 +236,7 @@ export default function BrandingSettings({ user, locationId: propLocationId }) {
             <button
               onClick={() => faviconInputRef.current?.click()}
               disabled={uploading === 'favicon'}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-un1t-dark border border-un1t-gray rounded-md text-un1t-white hover:bg-un1t-gray/50 transition-colors disabled:opacity-50"
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-un1t-surface border border-un1t-border rounded-md text-un1t-text hover:bg-un1t-border/50 transition-colors disabled:opacity-50"
             >
               <Upload size={12} />
               {uploading === 'favicon' ? 'Uploading...' : 'Upload Favicon'}

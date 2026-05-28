@@ -89,12 +89,12 @@ export default async function FlowTemplatesGallery() {
         <div>
           <Link
             href="/communications/sequences"
-            className="inline-flex items-center gap-1 text-xs text-un1t-light hover:text-un1t-white mb-2"
+            className="inline-flex items-center gap-1 text-xs text-un1t-subtle hover:text-un1t-text mb-2"
           >
             <ChevronLeft size={12} /> Back to sequences
           </Link>
           <h2 className="text-lg font-semibold">Flow templates</h2>
-          <p className="text-xs text-un1t-light mt-0.5">
+          <p className="text-xs text-un1t-subtle mt-0.5">
             Pre-built automation recipes. Install one, then edit it like any other sequence — triggers, steps, copy, timing all yours to change.
           </p>
         </div>
@@ -103,7 +103,7 @@ export default async function FlowTemplatesGallery() {
       <div className="space-y-8">
         {visibleGroups.map(([cat, items]) => (
           <section key={cat}>
-            <div className="text-[11px] uppercase tracking-wider text-un1t-light mb-3">{cat}</div>
+            <div className="text-[11px] uppercase tracking-wider text-un1t-subtle mb-3">{cat}</div>
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
               {items.map((t) => (
                 <TemplateCard key={t.id} template={t} />
@@ -124,7 +124,7 @@ function TemplateCard({ template }) {
     return (
       <span
         key={i}
-        className="inline-flex items-center gap-1 bg-un1t-black border border-un1t-gray rounded px-1.5 py-0.5 text-[10px] text-un1t-light"
+        className="inline-flex items-center gap-1 bg-un1t-bg border border-un1t-border rounded px-1.5 py-0.5 text-[10px] text-un1t-subtle"
         title={`Step ${i + 1}: ${meta.label}${(s.delay_days || s.delay_hours) ? ` after ${formatDelay(s)}` : ''}`}
       >
         <Icon size={10} /> {meta.label}
@@ -133,17 +133,17 @@ function TemplateCard({ template }) {
   })
 
   return (
-    <div className="bg-un1t-dark border border-un1t-gray rounded-xl p-4 flex flex-col">
+    <div className="bg-un1t-surface border border-un1t-border rounded-xl p-4 flex flex-col">
       <div className="flex items-start justify-between gap-2 mb-2">
         <div className="min-w-0">
-          <h3 className="text-sm font-semibold text-un1t-white leading-snug">{template.name}</h3>
-          <p className="text-[11px] text-un1t-mid mt-0.5">
+          <h3 className="text-sm font-semibold text-un1t-text leading-snug">{template.name}</h3>
+          <p className="text-[11px] text-un1t-muted mt-0.5">
             Fires: {triggerLabels[template.trigger_type] || template.trigger_type.replace(/_/g, ' ')}
           </p>
         </div>
       </div>
 
-      <p className="text-xs text-un1t-light leading-relaxed mb-3 flex-1">
+      <p className="text-xs text-un1t-subtle leading-relaxed mb-3 flex-1">
         {template.description}
       </p>
 
@@ -151,8 +151,8 @@ function TemplateCard({ template }) {
         {stepChips}
       </div>
 
-      <div className="flex items-center justify-between gap-2 mt-auto pt-3 border-t border-un1t-gray">
-        <span className="text-[11px] text-un1t-mid">
+      <div className="flex items-center justify-between gap-2 mt-auto pt-3 border-t border-un1t-border">
+        <span className="text-[11px] text-un1t-muted">
           {(template.steps || []).length} step{(template.steps || []).length === 1 ? '' : 's'}
         </span>
         <InstallTemplateButton templateId={template.id} templateName={template.name} />

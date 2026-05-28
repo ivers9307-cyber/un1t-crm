@@ -57,7 +57,7 @@ function hasPermissionOverrides(link) {
 function RoleCell({ link }) {
   const role = link?.role
   if (!role) {
-    return <span className="text-un1t-mid text-xs">—</span>
+    return <span className="text-un1t-muted text-xs">—</span>
   }
   const overrides = hasPermissionOverrides(link)
   return (
@@ -200,24 +200,24 @@ export default function AdminAccessMatrix({ organizations, locationsByOrg, staff
 
   return (
     <>
-      <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5">
+      <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5">
         {/* Filter + bulk select controls */}
         <div className="mb-4 flex items-center gap-3 flex-wrap">
           <div className="relative flex-1 min-w-[200px] max-w-sm">
-            <Search size={14} className="absolute left-2 top-1/2 -translate-y-1/2 text-un1t-mid pointer-events-none" />
+            <Search size={14} className="absolute left-2 top-1/2 -translate-y-1/2 text-un1t-muted pointer-events-none" />
             <input
               type="text"
               value={filter}
               onChange={(e) => setFilter(e.target.value)}
               placeholder="Filter by name or email…"
-              className="w-full pl-8 pr-3 py-1.5 text-sm bg-un1t-black border border-un1t-gray rounded-md text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid"
+              className="w-full pl-8 pr-3 py-1.5 text-sm bg-un1t-bg border border-un1t-border rounded-md text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted"
             />
           </div>
           {selectedIds.size > 0 ? (
             <button
               type="button"
               onClick={clearSelection}
-              className="text-xs text-un1t-light hover:text-un1t-white"
+              className="text-xs text-un1t-subtle hover:text-un1t-text"
             >
               Clear ({selectedIds.size})
             </button>
@@ -225,7 +225,7 @@ export default function AdminAccessMatrix({ organizations, locationsByOrg, staff
             <button
               type="button"
               onClick={selectAllVisible}
-              className="text-xs text-un1t-light hover:text-un1t-white"
+              className="text-xs text-un1t-subtle hover:text-un1t-text"
             >
               Select all visible
             </button>
@@ -236,8 +236,8 @@ export default function AdminAccessMatrix({ organizations, locationsByOrg, staff
           <table className="text-xs border-collapse w-full">
             <thead>
               <tr>
-                <th className="sticky left-0 z-10 bg-un1t-dark p-2 w-8"></th>
-                <th className="sticky left-8 z-10 bg-un1t-dark text-left p-2 font-medium text-un1t-light min-w-[200px]">
+                <th className="sticky left-0 z-10 bg-un1t-surface p-2 w-8"></th>
+                <th className="sticky left-8 z-10 bg-un1t-surface text-left p-2 font-medium text-un1t-subtle min-w-[200px]">
                   User
                 </th>
                 {organizations.map(org => {
@@ -247,7 +247,7 @@ export default function AdminAccessMatrix({ organizations, locationsByOrg, staff
                     <th
                       key={`org-h-${org.id}`}
                       colSpan={locs.length}
-                      className="px-2 py-1 text-center font-semibold text-un1t-light bg-un1t-gray/30 text-[11px] uppercase tracking-wider border-l border-un1t-gray"
+                      className="px-2 py-1 text-center font-semibold text-un1t-subtle bg-un1t-border/30 text-[11px] uppercase tracking-wider border-l border-un1t-border"
                     >
                       <div className="inline-flex items-center gap-1.5">
                         <Building2 size={11} /> {org.name}
@@ -255,18 +255,18 @@ export default function AdminAccessMatrix({ organizations, locationsByOrg, staff
                     </th>
                   )
                 })}
-                <th className="px-2 py-1 text-center font-medium text-un1t-light w-[80px] border-l border-un1t-gray">
+                <th className="px-2 py-1 text-center font-medium text-un1t-subtle w-[80px] border-l border-un1t-border">
                   Master
                 </th>
               </tr>
               <tr>
-                <th className="sticky left-0 z-10 bg-un1t-dark p-2"></th>
-                <th className="sticky left-8 z-10 bg-un1t-dark p-2"></th>
+                <th className="sticky left-0 z-10 bg-un1t-surface p-2"></th>
+                <th className="sticky left-8 z-10 bg-un1t-surface p-2"></th>
                 {organizations.map(org => (
                   (locationsByOrg[org.id] || []).map(loc => (
                     <th
                       key={loc.id}
-                      className="px-2 py-1.5 text-left font-medium text-un1t-light whitespace-nowrap text-[11px]"
+                      className="px-2 py-1.5 text-left font-medium text-un1t-subtle whitespace-nowrap text-[11px]"
                     >
                       {loc.name}
                     </th>
@@ -278,14 +278,14 @@ export default function AdminAccessMatrix({ organizations, locationsByOrg, staff
             <tbody>
               {visibleStaff.length === 0 && (
                 <tr>
-                  <td colSpan={99} className="p-6 text-center text-un1t-light text-sm">
+                  <td colSpan={99} className="p-6 text-center text-un1t-subtle text-sm">
                     No users match &ldquo;{filter}&rdquo;.
                   </td>
                 </tr>
               )}
               {visibleStaff.map(s => (
-                <tr key={s.id} className="hover:bg-un1t-gray/10 group">
-                  <td className="sticky left-0 z-10 bg-un1t-dark px-2 py-1.5 text-center">
+                <tr key={s.id} className="hover:bg-un1t-border/10 group">
+                  <td className="sticky left-0 z-10 bg-un1t-surface px-2 py-1.5 text-center">
                     <input
                       type="checkbox"
                       checked={selectedIds.has(s.id)}
@@ -294,14 +294,14 @@ export default function AdminAccessMatrix({ organizations, locationsByOrg, staff
                       aria-label={`Select ${s.full_name}`}
                     />
                   </td>
-                  <td className="sticky left-8 z-10 bg-un1t-dark px-2 py-1.5">
+                  <td className="sticky left-8 z-10 bg-un1t-surface px-2 py-1.5">
                     <button
                       type="button"
                       onClick={() => setOpenUserId(s.id)}
                       className="block text-left hover:text-blue-700 transition-colors"
                     >
-                      <div className="font-medium text-un1t-white whitespace-nowrap">{s.full_name}</div>
-                      <div className="text-[10px] text-un1t-light truncate max-w-[220px]">{s.email}</div>
+                      <div className="font-medium text-un1t-text whitespace-nowrap">{s.full_name}</div>
+                      <div className="text-[10px] text-un1t-subtle truncate max-w-[220px]">{s.email}</div>
                     </button>
                   </td>
                   {organizations.map(org => (
@@ -311,11 +311,11 @@ export default function AdminAccessMatrix({ organizations, locationsByOrg, staff
                       </td>
                     ))
                   ))}
-                  <td className="px-2 py-1.5 text-center border-l border-un1t-gray/40">
+                  <td className="px-2 py-1.5 text-center border-l border-un1t-border/40">
                     <button
                       type="button"
                       onClick={() => setMasterToggleTarget(s)}
-                      className={`inline-flex items-center gap-1 transition-colors ${s.role === 'master' ? 'text-amber-700 hover:text-amber-800' : 'text-un1t-mid hover:text-un1t-light'}`}
+                      className={`inline-flex items-center gap-1 transition-colors ${s.role === 'master' ? 'text-amber-700 hover:text-amber-800' : 'text-un1t-muted hover:text-un1t-subtle'}`}
                       title={s.role === 'master'
                         ? `Currently master. ${currentMasterCount === 1 ? 'CANNOT demote — last active master.' : 'Click to demote.'}`
                         : 'Click to promote to master'}
@@ -329,7 +329,7 @@ export default function AdminAccessMatrix({ organizations, locationsByOrg, staff
           </table>
         </div>
 
-        <p className="mt-4 text-[11px] text-un1t-light">
+        <p className="mt-4 text-[11px] text-un1t-subtle">
           Click a user to edit their assignments. Click the master shield to promote / demote.
           {' '}Multi-select with the checkboxes to apply a role at one location to many users at once.
           The platform must always have at least one active master — demoting the last one is blocked
@@ -387,21 +387,21 @@ function MasterToggleConfirm({ target, currentMasterCount, busy, error, onCancel
   return (
     <>
       <div className="fixed inset-0 bg-black/50 z-50" onClick={() => !busy && onCancel()} aria-hidden="true" />
-      <div role="dialog" className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-50 bg-un1t-black border border-un1t-gray rounded-lg p-6 w-[420px] max-w-[90vw] shadow-2xl">
+      <div role="dialog" className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-50 bg-un1t-bg border border-un1t-border rounded-lg p-6 w-[420px] max-w-[90vw] shadow-2xl">
         <div className="flex items-start justify-between gap-3 mb-4">
-          <h3 className="text-base font-semibold text-un1t-white inline-flex items-center gap-2">
+          <h3 className="text-base font-semibold text-un1t-text inline-flex items-center gap-2">
             <ShieldCheck size={16} className="text-amber-700" />
             {isPromote ? 'Promote to master?' : 'Demote master?'}
           </h3>
-          <button type="button" onClick={() => !busy && onCancel()} disabled={busy} className="text-un1t-light hover:text-un1t-white disabled:opacity-40">
+          <button type="button" onClick={() => !busy && onCancel()} disabled={busy} className="text-un1t-subtle hover:text-un1t-text disabled:opacity-40">
             <X size={16} />
           </button>
         </div>
 
-        <p className="text-sm text-un1t-light mb-2">
-          <span className="text-un1t-white font-medium">{target.full_name}</span> ({target.email})
+        <p className="text-sm text-un1t-subtle mb-2">
+          <span className="text-un1t-text font-medium">{target.full_name}</span> ({target.email})
         </p>
-        <p className="text-xs text-un1t-light mb-4">
+        <p className="text-xs text-un1t-subtle mb-4">
           {isPromote
             ? 'Master users see and modify every organization\'s data. They can also promote / demote other masters. Their existing per-location assignments remain in effect.'
             : 'Demoting will remove platform-wide access. Their per-location assignments stay in place; they\'ll be visible to whatever the fallback role allows.'}
@@ -420,14 +420,14 @@ function MasterToggleConfirm({ target, currentMasterCount, busy, error, onCancel
         )}
 
         <div className="flex items-center justify-end gap-2">
-          <button type="button" onClick={() => !busy && onCancel()} disabled={busy} className="text-sm text-un1t-light hover:text-un1t-white disabled:opacity-40">
+          <button type="button" onClick={() => !busy && onCancel()} disabled={busy} className="text-sm text-un1t-subtle hover:text-un1t-text disabled:opacity-40">
             Cancel
           </button>
           <button
             type="button"
             onClick={onConfirm}
             disabled={busy || wouldOrphan}
-            className={`inline-flex items-center gap-1.5 text-sm font-semibold px-4 py-2 rounded-md disabled:opacity-40 ${isPromote ? 'bg-un1t-white text-un1t-black hover:bg-un1t-accent' : 'bg-red-500 text-white hover:bg-red-600'}`}
+            className={`inline-flex items-center gap-1.5 text-sm font-semibold px-4 py-2 rounded-md disabled:opacity-40 ${isPromote ? 'bg-un1t-text text-un1t-bg hover:bg-un1t-accent' : 'bg-red-500 text-white hover:bg-red-600'}`}
           >
             {busy ? <Loader2 size={14} className="animate-spin" /> : <ShieldCheck size={14} />}
             {busy ? 'Working…' : (isPromote ? 'Promote' : 'Demote')}
@@ -444,8 +444,8 @@ function BulkActionBar({
   onLocationChange, onRoleChange, onApply, onClear,
 }) {
   return (
-    <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-40 bg-un1t-black border border-un1t-gray rounded-lg shadow-2xl p-4 flex items-center gap-3 max-w-[95vw]">
-      <div className="text-sm font-medium text-un1t-white whitespace-nowrap">
+    <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-40 bg-un1t-bg border border-un1t-border rounded-lg shadow-2xl p-4 flex items-center gap-3 max-w-[95vw]">
+      <div className="text-sm font-medium text-un1t-text whitespace-nowrap">
         {selectedCount} selected
       </div>
 
@@ -453,7 +453,7 @@ function BulkActionBar({
         value={locationId}
         onChange={(e) => onLocationChange(e.target.value)}
         disabled={busy}
-        className="text-sm bg-un1t-dark border border-un1t-gray rounded px-2 py-1.5 text-un1t-white disabled:opacity-40"
+        className="text-sm bg-un1t-surface border border-un1t-border rounded px-2 py-1.5 text-un1t-text disabled:opacity-40"
       >
         <option value="">Pick a location…</option>
         {organizations.map((org) => {
@@ -473,7 +473,7 @@ function BulkActionBar({
         value={role}
         onChange={(e) => onRoleChange(e.target.value)}
         disabled={busy}
-        className="text-sm bg-un1t-dark border border-un1t-gray rounded px-2 py-1.5 text-un1t-white disabled:opacity-40"
+        className="text-sm bg-un1t-surface border border-un1t-border rounded px-2 py-1.5 text-un1t-text disabled:opacity-40"
       >
         {PERMISSION_ROLE_OPTIONS.map((o) => (
           <option key={o.value} value={o.value}>Set as {o.label}</option>
@@ -485,7 +485,7 @@ function BulkActionBar({
         type="button"
         onClick={onApply}
         disabled={busy || !locationId}
-        className="inline-flex items-center gap-1.5 text-sm bg-un1t-white text-un1t-black font-semibold px-4 py-2 rounded-md hover:bg-un1t-accent disabled:opacity-40"
+        className="inline-flex items-center gap-1.5 text-sm bg-un1t-text text-un1t-bg font-semibold px-4 py-2 rounded-md hover:bg-un1t-accent disabled:opacity-40"
       >
         {busy ? <Loader2 size={14} className="animate-spin" /> : null}
         {busy ? 'Applying…' : 'Apply'}
@@ -495,7 +495,7 @@ function BulkActionBar({
         type="button"
         onClick={onClear}
         disabled={busy}
-        className="text-un1t-light hover:text-un1t-white disabled:opacity-40 p-1"
+        className="text-un1t-subtle hover:text-un1t-text disabled:opacity-40 p-1"
         title="Clear selection"
       >
         <X size={14} />

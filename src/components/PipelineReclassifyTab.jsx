@@ -68,18 +68,18 @@ export default function PipelineReclassifyTab() {
 
   return (
     <div className="space-y-6">
-      <div className="bg-un1t-darker border border-un1t-gray rounded-lg p-5">
+      <div className="bg-un1t-surfaceer border border-un1t-border rounded-lg p-5">
         <div className="flex items-center gap-2 mb-2">
           <Sparkles size={16} className="text-emerald-400" />
           <h3 className="text-base font-semibold">Re-classify all contacts</h3>
         </div>
-        <p className="text-sm text-un1t-light mb-4 max-w-3xl">
+        <p className="text-sm text-un1t-subtle mb-4 max-w-3xl">
           Runs the same engagement-aware classifier the nightly cron uses (03:30 Dublin),
           but immediately. Use this after a fresh threshold tweak in
-          <code className="px-1 mx-1 text-[11px] bg-un1t-gray/30 rounded">pipeline-classifier.js</code>
+          <code className="px-1 mx-1 text-[11px] bg-un1t-border/30 rounded">pipeline-classifier.js</code>
           or right after a bulk import so every deal is in the right column without waiting.
         </p>
-        <p className="text-xs text-un1t-light mb-5 max-w-3xl">
+        <p className="text-xs text-un1t-subtle mb-5 max-w-3xl">
           <strong>Preview</strong> is a dry-run — it computes every move the classifier
           would make and shows you the from→to matrix without touching the deals table.
           <strong> Commit</strong> writes the moves and stamps an audit row.
@@ -90,7 +90,7 @@ export default function PipelineReclassifyTab() {
             type="button"
             onClick={() => run({ dryRun: true })}
             disabled={busy}
-            className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-md bg-un1t-gray/40 border border-un1t-gray hover:bg-un1t-gray/60 disabled:opacity-50"
+            className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-md bg-un1t-border/40 border border-un1t-border hover:bg-un1t-border/60 disabled:opacity-50"
           >
             {busy && mode === 'preview' ? <Loader2 size={14} className="animate-spin" /> : <Eye size={14} />}
             Preview moves
@@ -115,7 +115,7 @@ export default function PipelineReclassifyTab() {
           <AlertTriangle size={16} className="text-rose-400 mt-0.5 shrink-0" />
           <div>
             <div className="text-sm font-medium text-rose-300">Re-classification failed</div>
-            <div className="text-xs text-un1t-light mt-1">{error}</div>
+            <div className="text-xs text-un1t-subtle mt-1">{error}</div>
           </div>
         </div>
       )}
@@ -133,7 +133,7 @@ function ResultPanel({ result, mode }) {
   matrixRows.sort((a, b) => b.count - a.count)
 
   return (
-    <div className="bg-un1t-darker border border-un1t-gray rounded-lg p-5">
+    <div className="bg-un1t-surfaceer border border-un1t-border rounded-lg p-5">
       <div className="flex items-center gap-2 mb-4">
         <CheckCircle2 size={16} className="text-emerald-400" />
         <h3 className="text-base font-semibold">
@@ -150,7 +150,7 @@ function ResultPanel({ result, mode }) {
       </div>
 
       {matrixRows.length === 0 ? (
-        <div className="text-sm text-un1t-light italic">
+        <div className="text-sm text-un1t-subtle italic">
           No moves needed — every deal is already in the right stage.
         </div>
       ) : (
@@ -159,7 +159,7 @@ function ResultPanel({ result, mode }) {
           <div className="overflow-x-auto mb-5">
             <table className="w-full text-sm">
               <thead>
-                <tr className="text-left text-xs uppercase tracking-wide text-un1t-light border-b border-un1t-gray">
+                <tr className="text-left text-xs uppercase tracking-wide text-un1t-subtle border-b border-un1t-border">
                   <th className="py-2 pr-4">From</th>
                   <th className="py-2 pr-4">To</th>
                   <th className="py-2 text-right">Count</th>
@@ -167,8 +167,8 @@ function ResultPanel({ result, mode }) {
               </thead>
               <tbody>
                 {matrixRows.map((r, i) => (
-                  <tr key={i} className="border-b border-un1t-gray/40">
-                    <td className="py-1.5 pr-4 text-un1t-light">{fmtSlug(r.from)}</td>
+                  <tr key={i} className="border-b border-un1t-border/40">
+                    <td className="py-1.5 pr-4 text-un1t-subtle">{fmtSlug(r.from)}</td>
                     <td className="py-1.5 pr-4">{fmtSlug(r.to)}</td>
                     <td className="py-1.5 text-right tabular-nums font-medium">{r.count}</td>
                   </tr>
@@ -182,10 +182,10 @@ function ResultPanel({ result, mode }) {
       {Array.isArray(result.samples) && result.samples.length > 0 && (
         <>
           <h4 className="text-sm font-medium mb-2">Sample moves ({result.samples.length})</h4>
-          <ul className="space-y-1 text-xs text-un1t-light max-h-64 overflow-y-auto">
+          <ul className="space-y-1 text-xs text-un1t-subtle max-h-64 overflow-y-auto">
             {result.samples.map((s, i) => (
               <li key={i}>
-                <span className="text-un1t-white">{s.contact_name || s.contact_id}</span>
+                <span className="text-un1t-text">{s.contact_name || s.contact_id}</span>
                 <span className="mx-2">{fmtSlug(s.from_slug)} → {fmtSlug(s.to_slug)}</span>
               </li>
             ))}
@@ -194,8 +194,8 @@ function ResultPanel({ result, mode }) {
       )}
 
       {result.run_id && (
-        <div className="mt-4 text-[11px] text-un1t-light">
-          Audit run: <code className="bg-un1t-gray/30 px-1 rounded">{result.run_id}</code>
+        <div className="mt-4 text-[11px] text-un1t-subtle">
+          Audit run: <code className="bg-un1t-border/30 px-1 rounded">{result.run_id}</code>
         </div>
       )}
     </div>
@@ -206,10 +206,10 @@ function Stat({ label, value, highlight }) {
   const ring =
     highlight === 'amber' ? 'border-amber-500/40 bg-amber-500/10' :
     highlight === 'rose'  ? 'border-rose-500/40 bg-rose-500/10' :
-    'border-un1t-gray bg-un1t-gray/10'
+    'border-un1t-border bg-un1t-border/10'
   return (
     <div className={`border rounded-md px-3 py-2 ${ring}`}>
-      <div className="text-[10px] uppercase tracking-wide text-un1t-light">{label}</div>
+      <div className="text-[10px] uppercase tracking-wide text-un1t-subtle">{label}</div>
       <div className="text-lg font-semibold tabular-nums">{value ?? 0}</div>
     </div>
   )

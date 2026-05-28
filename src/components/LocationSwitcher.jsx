@@ -36,23 +36,23 @@ export default function LocationSwitcher({ locations, activeLocationId }) {
         onClick={() => setOpen(!open)}
         className="flex items-center gap-1.5 w-full text-left group"
       >
-        <MapPin size={12} className="text-un1t-mid shrink-0" />
-        <span className="text-xs text-un1t-light group-hover:text-un1t-white transition-colors truncate">
+        <MapPin size={12} className="text-un1t-muted shrink-0" />
+        <span className="text-xs text-un1t-subtle group-hover:text-un1t-text transition-colors truncate">
           {active.name}
         </span>
-        <ChevronDown size={12} className={`text-un1t-mid shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} />
+        <ChevronDown size={12} className={`text-un1t-muted shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} />
       </button>
 
       {open && (
-        <div className="absolute left-0 top-full mt-1 w-full bg-un1t-dark border border-un1t-gray rounded-md shadow-lg z-50 py-1">
+        <div className="absolute left-0 top-full mt-1 w-full bg-un1t-surface border border-un1t-border rounded-md shadow-lg z-50 py-1">
           {locations.map(loc => (
             <button
               key={loc.id}
               onClick={() => switchLocation(loc.id)}
               className={`w-full text-left px-3 py-2 text-xs transition-colors ${
                 loc.id === activeLocationId
-                  ? 'text-un1t-white bg-un1t-gray/50'
-                  : 'text-un1t-light hover:text-un1t-white hover:bg-un1t-gray/30'
+                  ? 'text-un1t-text bg-un1t-border/50'
+                  : 'text-un1t-subtle hover:text-un1t-text hover:bg-un1t-border/30'
               }`}
             >
               {loc.name}

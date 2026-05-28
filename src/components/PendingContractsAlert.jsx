@@ -98,18 +98,18 @@ export default function PendingContractsAlert() {
           role="dialog"
           aria-modal="true"
         >
-          <div className="bg-un1t-dark border border-un1t-gray rounded-2xl max-w-md w-full p-5">
+          <div className="bg-un1t-surface border border-un1t-border rounded-2xl max-w-md w-full p-5">
             <div className="flex items-start gap-3">
               <div className="w-10 h-10 rounded-full bg-amber-500/20 flex items-center justify-center shrink-0">
                 <FileSignature size={20} className="text-amber-700" />
               </div>
               <div className="min-w-0 flex-1">
-                <h2 className="text-lg font-semibold text-un1t-white">
+                <h2 className="text-lg font-semibold text-un1t-text">
                   {count === 1
                     ? 'You have a contract awaiting signature'
                     : `You have ${count} contracts awaiting signature`}
                 </h2>
-                <p className="text-xs text-un1t-light mt-1">
+                <p className="text-xs text-un1t-subtle mt-1">
                   {count === 1
                     ? 'UN1T Dublin needs your signature on this document.'
                     : 'UN1T Dublin needs your signature on these documents.'}
@@ -118,7 +118,7 @@ export default function PendingContractsAlert() {
               <button
                 onClick={dismiss}
                 aria-label="Dismiss"
-                className="text-un1t-light hover:text-un1t-white -mt-1 -mr-1 p-1"
+                className="text-un1t-subtle hover:text-un1t-text -mt-1 -mr-1 p-1"
               >
                 <X size={16} />
               </button>
@@ -128,9 +128,9 @@ export default function PendingContractsAlert() {
               {pending.slice(0, 5).map(c => (
                 <li
                   key={c.id}
-                  className="flex items-center justify-between gap-2 px-3 py-2 rounded-md bg-un1t-gray/40"
+                  className="flex items-center justify-between gap-2 px-3 py-2 rounded-md bg-un1t-border/40"
                 >
-                  <span className="text-sm text-un1t-white truncate">{c.template_name}</span>
+                  <span className="text-sm text-un1t-text truncate">{c.template_name}</span>
                   <Link
                     href={`/account/contracts/${c.id}`}
                     onClick={() => setModalOpen(false)}
@@ -141,7 +141,7 @@ export default function PendingContractsAlert() {
                 </li>
               ))}
               {count > 5 && (
-                <li className="px-3 py-1 text-[11px] text-un1t-light italic">
+                <li className="px-3 py-1 text-[11px] text-un1t-subtle italic">
                   +{count - 5} more in your account.
                 </li>
               )}
@@ -150,14 +150,14 @@ export default function PendingContractsAlert() {
             <div className="flex items-center justify-end gap-2 mt-5">
               <button
                 onClick={dismiss}
-                className="text-xs px-3 py-1.5 rounded-md text-un1t-light hover:text-un1t-white"
+                className="text-xs px-3 py-1.5 rounded-md text-un1t-subtle hover:text-un1t-text"
               >
                 Remind me later
               </button>
               <Link
                 href={signHref}
                 onClick={() => setModalOpen(false)}
-                className="text-xs bg-un1t-white text-un1t-black px-4 py-1.5 rounded-md font-medium hover:bg-un1t-accent inline-flex items-center gap-1.5"
+                className="text-xs bg-un1t-text text-un1t-bg px-4 py-1.5 rounded-md font-medium hover:bg-un1t-accent inline-flex items-center gap-1.5"
               >
                 <FileSignature size={11} /> Sign now
               </Link>

@@ -24,7 +24,7 @@ export default function CommunicationsTabs({ canEmail, canWhatsapp }) {
   ].filter(Boolean)
 
   return (
-    <div className="flex p-1 bg-un1t-dark border border-un1t-gray rounded-xl mb-6 max-w-3xl">
+    <div className="flex p-1 bg-un1t-surface border border-un1t-border rounded-xl mb-6 max-w-3xl">
       {tabs.map(t => {
         const active = pathname === t.href || pathname.startsWith(`${t.href}/`)
         return (
@@ -34,8 +34,8 @@ export default function CommunicationsTabs({ canEmail, canWhatsapp }) {
             className={clsx(
               'flex-1 text-center py-2 rounded-lg text-sm transition-colors',
               active
-                ? 'bg-un1t-white text-un1t-black font-semibold'
-                : 'text-un1t-light hover:text-un1t-white'
+                ? 'bg-un1t-text text-un1t-bg font-semibold'
+                : 'text-un1t-subtle hover:text-un1t-text'
             )}
           >
             {t.label}

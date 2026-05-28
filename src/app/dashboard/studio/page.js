@@ -60,7 +60,7 @@ export default async function StudioDashboardPage() {
           label="WhatsApp unread"
           value={totalUnreadWhatsapp}
           sublabel="across the inbox"
-          accent={totalUnreadWhatsapp > 0 ? 'text-un1t-white' : 'text-un1t-mid'}
+          accent={totalUnreadWhatsapp > 0 ? 'text-un1t-text' : 'text-un1t-muted'}
           href={totalUnreadWhatsapp > 0 ? '/whatsapp' : undefined}
         />
       </KpiRow>
@@ -74,7 +74,7 @@ export default async function StudioDashboardPage() {
         <KpiCard label={pretty(headline[2].key)} value={headline[2].count} />
         <KpiCard label={pretty(headline[3].key)} value={headline[3].count} />
       </KpiRow>
-      <p className="text-xs text-un1t-mid mt-1 px-1">
+      <p className="text-xs text-un1t-muted mt-1 px-1">
         {totalContacts} total contacts at {user.activeLocation?.name || 'this location'}
       </p>
 

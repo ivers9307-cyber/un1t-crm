@@ -47,11 +47,11 @@ export default async function CampaignsListPage(props) {
       <div className="flex items-center justify-between mb-4">
         <div>
           <h2 className="text-lg font-semibold">Campaigns</h2>
-          <p className="text-xs text-un1t-light mt-0.5">One-off email blasts to filtered audiences</p>
+          <p className="text-xs text-un1t-subtle mt-0.5">One-off email blasts to filtered audiences</p>
         </div>
         <Link
           href="/email/campaigns/new"
-          className="flex items-center gap-2 bg-un1t-white text-un1t-black text-sm font-medium px-4 py-2 rounded-lg hover:bg-un1t-accent transition-colors"
+          className="flex items-center gap-2 bg-un1t-text text-un1t-bg text-sm font-medium px-4 py-2 rounded-lg hover:bg-un1t-accent transition-colors"
         >
           <Plus size={16} /> New Campaign
         </Link>
@@ -64,8 +64,8 @@ export default async function CampaignsListPage(props) {
             href={`/communications/campaigns${f.key !== 'all' ? `?filter=${f.key}` : ''}`}
             className={`text-xs px-3 py-1.5 rounded-full transition-colors ${
               filter === f.key
-                ? 'bg-un1t-white text-un1t-black'
-                : 'border border-un1t-gray text-un1t-light hover:text-un1t-white hover:border-un1t-white/30'
+                ? 'bg-un1t-text text-un1t-bg'
+                : 'border border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-text/30'
             }`}
           >
             {f.label}
@@ -74,19 +74,19 @@ export default async function CampaignsListPage(props) {
       </div>
 
       {(!campaigns || campaigns.length === 0) ? (
-        <div className="bg-un1t-dark border border-un1t-gray rounded-2xl p-10 text-center">
-          <Mail size={32} className="mx-auto mb-3 text-un1t-light" />
+        <div className="bg-un1t-surface border border-un1t-border rounded-2xl p-10 text-center">
+          <Mail size={32} className="mx-auto mb-3 text-un1t-subtle" />
           <h3 className="text-base font-semibold mb-2">No campaigns yet</h3>
-          <p className="text-sm text-un1t-light mb-4">Create your first email campaign to start reaching your contacts.</p>
+          <p className="text-sm text-un1t-subtle mb-4">Create your first email campaign to start reaching your contacts.</p>
           <Link
             href="/email/campaigns/new"
-            className="inline-flex items-center gap-2 bg-un1t-white text-un1t-black text-sm font-medium px-4 py-2 rounded-lg hover:bg-un1t-accent transition-colors"
+            className="inline-flex items-center gap-2 bg-un1t-text text-un1t-bg text-sm font-medium px-4 py-2 rounded-lg hover:bg-un1t-accent transition-colors"
           >
             <Plus size={16} /> Create Campaign
           </Link>
         </div>
       ) : (
-        <div className="bg-un1t-dark border border-un1t-gray rounded-2xl divide-y divide-un1t-gray">
+        <div className="bg-un1t-surface border border-un1t-border rounded-2xl divide-y divide-un1t-border">
           {campaigns.map(c => {
             const config = statusConfig[c.status] || statusConfig.draft
             const StatusIcon = config.icon
@@ -94,15 +94,15 @@ export default async function CampaignsListPage(props) {
               <Link
                 key={c.id}
                 href={`/email/campaigns/${c.id}`}
-                className="flex items-center justify-between px-5 py-4 hover:bg-un1t-gray/20 transition-colors"
+                className="flex items-center justify-between px-5 py-4 hover:bg-un1t-border/20 transition-colors"
               >
                 <div className="flex items-center gap-4">
-                  <div className="w-10 h-10 rounded-lg bg-un1t-gray/30 flex items-center justify-center">
-                    <StatusIcon size={18} className="text-un1t-light" />
+                  <div className="w-10 h-10 rounded-lg bg-un1t-border/30 flex items-center justify-center">
+                    <StatusIcon size={18} className="text-un1t-subtle" />
                   </div>
                   <div>
                     <p className="text-sm font-medium">{c.name}</p>
-                    <p className="text-xs text-un1t-light mt-0.5">
+                    <p className="text-xs text-un1t-subtle mt-0.5">
                       {c.subject || 'No subject'}
                       {c.sent_at && <span> · Sent {new Date(c.sent_at).toLocaleDateString('en-IE', { month: 'short', day: 'numeric' })}</span>}
                     </p>
@@ -110,7 +110,7 @@ export default async function CampaignsListPage(props) {
                 </div>
                 <div className="flex items-center gap-4">
                   {c.status === 'sent' && (
-                    <div className="flex items-center gap-3 text-xs text-un1t-light">
+                    <div className="flex items-center gap-3 text-xs text-un1t-subtle">
                       <span>{c.total_sent || 0} sent</span>
                       <span>{c.total_opened || 0} opened</span>
                       <span>{c.total_clicked || 0} clicked</span>

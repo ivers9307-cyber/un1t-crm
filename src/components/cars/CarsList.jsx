@@ -65,11 +65,11 @@ export default function CarsList({ statuses, locationId, addButton, emptyText, l
         </div>
       )}
       {loading && !cars.length ? (
-        <p className="text-sm text-un1t-light">Loading…</p>
+        <p className="text-sm text-un1t-subtle">Loading…</p>
       ) : cars.length === 0 ? (
-        <div className="bg-un1t-dark border border-un1t-gray rounded-2xl p-8 text-center">
-          <Car size={28} className="text-un1t-mid mx-auto mb-2" />
-          <p className="text-sm text-un1t-light">{emptyText || 'No cars yet.'}</p>
+        <div className="bg-un1t-surface border border-un1t-border rounded-2xl p-8 text-center">
+          <Car size={28} className="text-un1t-muted mx-auto mb-2" />
+          <p className="text-sm text-un1t-subtle">{emptyText || 'No cars yet.'}</p>
         </div>
       ) : (
         <div className="space-y-2">
@@ -80,26 +80,26 @@ export default function CarsList({ statuses, locationId, addButton, emptyText, l
               <Link
                 key={car.id}
                 href={`/cars/${car.id}`}
-                className="block bg-un1t-dark border border-un1t-gray rounded-2xl p-4 hover:border-un1t-mid/50 transition-colors"
+                className="block bg-un1t-surface border border-un1t-border rounded-2xl p-4 hover:border-un1t-muted/50 transition-colors"
               >
                 <div className="flex items-start gap-4">
-                  <div className="w-10 h-10 rounded-full bg-un1t-gray/40 flex items-center justify-center shrink-0">
-                    <Car size={18} className="text-un1t-white" />
+                  <div className="w-10 h-10 rounded-full bg-un1t-border/40 flex items-center justify-center shrink-0">
+                    <Car size={18} className="text-un1t-text" />
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-                      <span className="text-base font-semibold text-un1t-white">
+                      <span className="text-base font-semibold text-un1t-text">
                         {car.make || 'Tesla'} {car.model || ''}
                       </span>
                       <StatusBadge status={car.status} />
-                      <span className={`text-xs ${car.uk_reg ? 'text-un1t-light' : 'text-un1t-mid italic'}`}>
+                      <span className={`text-xs ${car.uk_reg ? 'text-un1t-subtle' : 'text-un1t-muted italic'}`}>
                         UK · {car.uk_reg || 'not set'}
                       </span>
-                      <span className={`text-xs ${car.irish_reg ? 'text-un1t-light' : 'text-un1t-mid italic'}`}>
+                      <span className={`text-xs ${car.irish_reg ? 'text-un1t-subtle' : 'text-un1t-muted italic'}`}>
                         IE · {car.irish_reg || 'not set'}
                       </span>
                     </div>
-                    <div className="text-xs text-un1t-light mt-1 flex flex-wrap gap-x-4 gap-y-1">
+                    <div className="text-xs text-un1t-subtle mt-1 flex flex-wrap gap-x-4 gap-y-1">
                       <span>UK ex-VAT {fmtMoney(car.uk_purchase_price_ex_vat)}</span>
                       <span>IE inc-VAT {fmtMoney(car.irish_sale_price_inc_vat)}</span>
                       {profit != null && (
@@ -120,7 +120,7 @@ export default function CarsList({ statuses, locationId, addButton, emptyText, l
                       </div>
                     )}
                     {car.status === 'completed' && car.completed_at && (
-                      <div className="text-xs text-un1t-mid mt-1">
+                      <div className="text-xs text-un1t-muted mt-1">
                         Completed {new Date(car.completed_at).toLocaleDateString()}
                       </div>
                     )}

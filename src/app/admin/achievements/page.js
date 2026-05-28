@@ -54,7 +54,7 @@ export default async function AdminAchievementsPage() {
   return (
     <div className="p-8 max-w-7xl">
       <h2 className="text-2xl font-bold mb-1">Achievements</h2>
-      <p className="text-sm text-un1t-light mb-8 max-w-3xl">
+      <p className="text-sm text-un1t-subtle mb-8 max-w-3xl">
         The badges members can earn. Each rule is data-driven —
         change a threshold without a code change. Rule type and
         config define how detection runs against each session;

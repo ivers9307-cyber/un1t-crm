@@ -339,7 +339,7 @@ export default function LandingPageSettingsForm({ locationId, initialSettings, a
           <button
             type="button"
             onClick={() => setExpanded((prev) => prev.size === blocks.length ? new Set() : new Set(blocks.map(b => b.id)))}
-            className="text-xs text-un1t-light hover:text-un1t-white inline-flex items-center gap-1"
+            className="text-xs text-un1t-subtle hover:text-un1t-text inline-flex items-center gap-1"
           >
             <Layers size={12} /> {expanded.size === blocks.length ? 'Collapse all' : 'Expand all'}
           </button>
@@ -352,10 +352,10 @@ export default function LandingPageSettingsForm({ locationId, initialSettings, a
       {/* Site header (mig 129) — chrome that always renders, lives
           OUTSIDE the blocks list because it doesn't move and the
           operator can't have more than one. */}
-      <section className="bg-un1t-dark border border-un1t-gray rounded-lg p-4 space-y-3">
+      <section className="bg-un1t-surface border border-un1t-border rounded-lg p-4 space-y-3">
         <div>
-          <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light">Site header</h3>
-          <p className="text-[11px] text-un1t-mid mt-1">Logo for the top nav. Renders on every page state regardless of section ordering. Leave the logo blank to fall back to the &ldquo;UN1T&rdquo; wordmark text.</p>
+          <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle">Site header</h3>
+          <p className="text-[11px] text-un1t-muted mt-1">Logo for the top nav. Renders on every page state regardless of section ordering. Leave the logo blank to fall back to the &ldquo;UN1T&rdquo; wordmark text.</p>
         </div>
         <Field label="Logo image" hint="PNG / JPEG / WebP, ≤ 5MB. Transparent PNG works best on the dark nav background.">
           <MediaSlot
@@ -382,7 +382,7 @@ export default function LandingPageSettingsForm({ locationId, initialSettings, a
               value={logoWidthPx}
               onChange={(e) => setLogoWidthPx(e.target.value)}
               placeholder="200"
-              className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
+              className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
             />
           </Field>
         </div>
@@ -425,8 +425,8 @@ export default function LandingPageSettingsForm({ locationId, initialSettings, a
         </SortableContext>
         <DragOverlay>
           {activeBlock ? (
-            <div className="bg-un1t-dark border border-un1t-mid rounded-lg p-3 shadow-2xl opacity-90">
-              <div className="flex items-center gap-2 text-sm text-un1t-white">
+            <div className="bg-un1t-surface border border-un1t-muted rounded-lg p-3 shadow-2xl opacity-90">
+              <div className="flex items-center gap-2 text-sm text-un1t-text">
                 <GripVertical size={14} /> {labelFor(activeBlock.type)}
               </div>
             </div>
@@ -439,27 +439,27 @@ export default function LandingPageSettingsForm({ locationId, initialSettings, a
         <button
           type="button"
           onClick={() => setPickerOpen((v) => !v)}
-          className="w-full bg-un1t-dark border-2 border-dashed border-un1t-gray hover:border-un1t-mid rounded-lg py-3 text-sm text-un1t-light hover:text-un1t-white inline-flex items-center justify-center gap-2"
+          className="w-full bg-un1t-surface border-2 border-dashed border-un1t-border hover:border-un1t-muted rounded-lg py-3 text-sm text-un1t-subtle hover:text-un1t-text inline-flex items-center justify-center gap-2"
         >
           <Plus size={14} /> Add section
         </button>
         {pickerOpen && (
-          <div className="absolute z-30 left-0 right-0 mt-2 bg-un1t-dark border border-un1t-gray rounded-lg shadow-xl p-2 grid grid-cols-1 md:grid-cols-2 gap-1">
+          <div className="absolute z-30 left-0 right-0 mt-2 bg-un1t-surface border border-un1t-border rounded-lg shadow-xl p-2 grid grid-cols-1 md:grid-cols-2 gap-1">
             {BLOCK_TYPES.map((t) => (
               <button
                 key={t.type}
                 type="button"
                 onClick={() => addBlock(t.type)}
-                className="text-left p-3 rounded-md hover:bg-un1t-gray/40 transition-colors"
+                className="text-left p-3 rounded-md hover:bg-un1t-border/40 transition-colors"
               >
-                <div className="text-sm font-semibold text-un1t-white">{t.label}</div>
-                <div className="text-[11px] text-un1t-mid mt-0.5">{t.description}</div>
+                <div className="text-sm font-semibold text-un1t-text">{t.label}</div>
+                <div className="text-[11px] text-un1t-muted mt-0.5">{t.description}</div>
               </button>
             ))}
             <button
               type="button"
               onClick={() => setPickerOpen(false)}
-              className="md:col-span-2 text-[11px] text-un1t-mid hover:text-un1t-light pt-2 mt-1 border-t border-un1t-gray"
+              className="md:col-span-2 text-[11px] text-un1t-muted hover:text-un1t-subtle pt-2 mt-1 border-t border-un1t-border"
             >
               Cancel
             </button>
@@ -469,19 +469,19 @@ export default function LandingPageSettingsForm({ locationId, initialSettings, a
 
       {/* Sticky save bar (lives inside the left pane so it sits
           under the form scroll, not the iframe). */}
-      <div className="sticky bottom-4 flex items-center justify-end gap-2 bg-un1t-dark/80 backdrop-blur border border-un1t-gray rounded-md p-3">
+      <div className="sticky bottom-4 flex items-center justify-end gap-2 bg-un1t-surface/80 backdrop-blur border border-un1t-border rounded-md p-3">
         <a
           href="/welcome"
           target="_blank"
           rel="noopener noreferrer"
-          className="text-xs text-un1t-light hover:text-un1t-white inline-flex items-center gap-1.5"
+          className="text-xs text-un1t-subtle hover:text-un1t-text inline-flex items-center gap-1.5"
         >
           <ExternalLink size={12} /> Preview
         </a>
         <button
           type="submit"
           disabled={saving}
-          className="inline-flex items-center gap-2 bg-un1t-white text-un1t-black font-semibold text-sm py-2 px-4 rounded-md hover:bg-un1t-accent disabled:opacity-50"
+          className="inline-flex items-center gap-2 bg-un1t-text text-un1t-bg font-semibold text-sm py-2 px-4 rounded-md hover:bg-un1t-accent disabled:opacity-50"
         >
           {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
           {saving ? 'Saving…' : 'Save changes'}
@@ -495,8 +495,8 @@ export default function LandingPageSettingsForm({ locationId, initialSettings, a
           its edit panel auto-expands + scrolls into view in the
           left pane. */}
       <aside className="hidden xl:block xl:sticky xl:top-4">
-        <div className="border border-un1t-gray rounded-lg overflow-hidden bg-un1t-black">
-          <div className="flex items-center justify-between px-3 py-2 bg-un1t-dark border-b border-un1t-gray text-[11px] text-un1t-light">
+        <div className="border border-un1t-border rounded-lg overflow-hidden bg-un1t-bg">
+          <div className="flex items-center justify-between px-3 py-2 bg-un1t-surface border-b border-un1t-border text-[11px] text-un1t-subtle">
             <span className="inline-flex items-center gap-1.5">
               <span className="w-2 h-2 rounded-full bg-emerald-500" />
               Live preview · click a section to edit
@@ -504,7 +504,7 @@ export default function LandingPageSettingsForm({ locationId, initialSettings, a
             <button
               type="button"
               onClick={() => { try { iframeRef.current?.contentWindow?.location?.reload() } catch { /* cross-origin guard */ } }}
-              className="text-un1t-mid hover:text-un1t-white"
+              className="text-un1t-muted hover:text-un1t-text"
               title="Reload preview"
             >
               ⟳
@@ -544,7 +544,7 @@ function SortableBlockCard({
     <div
       ref={setNodeRef}
       style={style}
-      className="bg-un1t-dark border border-un1t-gray rounded-lg overflow-hidden"
+      className="bg-un1t-surface border border-un1t-border rounded-lg overflow-hidden"
     >
       <div className="flex items-center gap-2 p-3">
         <button
@@ -552,7 +552,7 @@ function SortableBlockCard({
           {...attributes}
           {...listeners}
           aria-label={`Drag ${labelFor(block.type)}`}
-          className="cursor-grab active:cursor-grabbing text-un1t-mid hover:text-un1t-white touch-none"
+          className="cursor-grab active:cursor-grabbing text-un1t-muted hover:text-un1t-text touch-none"
           title="Drag to reorder"
         >
           <GripVertical size={16} />
@@ -562,9 +562,9 @@ function SortableBlockCard({
           onClick={onToggleExpand}
           className="flex-1 flex items-center gap-2 text-left min-w-0"
         >
-          {expanded ? <ChevronDown size={14} className="text-un1t-mid" /> : <ChevronRight size={14} className="text-un1t-mid" />}
-          <span className="text-sm font-semibold text-un1t-white">{labelFor(block.type)}</span>
-          <span className="text-[11px] text-un1t-mid truncate">{summaryFor(block)}</span>
+          {expanded ? <ChevronDown size={14} className="text-un1t-muted" /> : <ChevronRight size={14} className="text-un1t-muted" />}
+          <span className="text-sm font-semibold text-un1t-text">{labelFor(block.type)}</span>
+          <span className="text-[11px] text-un1t-muted truncate">{summaryFor(block)}</span>
         </button>
         <button
           type="button"
@@ -572,14 +572,14 @@ function SortableBlockCard({
             if (confirm(`Remove this ${labelFor(block.type)} section?`)) onRemove()
           }}
           aria-label="Delete section"
-          className="text-un1t-mid hover:text-red-400 p-1"
+          className="text-un1t-muted hover:text-red-400 p-1"
           title="Delete section"
         >
           <Trash2 size={14} />
         </button>
       </div>
       {expanded && (
-        <div className="border-t border-un1t-gray p-4 space-y-3">
+        <div className="border-t border-un1t-border p-4 space-y-3">
           <BlockEditPanel
             block={block}
             onUpdate={onUpdate}
@@ -679,7 +679,7 @@ function BookingEdit({ block, onUpdate, availableBookingTypes }) {
         <select
           value={block.slug || ''}
           onChange={(e) => onUpdate({ slug: e.target.value })}
-          className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
+          className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
         >
           <option value="">— Pick a booking type —</option>
           {availableBookingTypes.map((bt) => (
@@ -713,13 +713,13 @@ function PillarsEdit({ block, onUpdate, uploadMedia, uploading, uploadErr }) {
       {items.slice(0, 6).map((p, i) => {
         const k = (suffix) => `${block.id}-pillar-${i}-${suffix}`
         return (
-          <div key={i} className="border border-un1t-gray rounded-md p-3 space-y-3">
+          <div key={i} className="border border-un1t-border rounded-md p-3 space-y-3">
             <div className="flex items-center justify-between">
-              <div className="text-[11px] uppercase tracking-wider text-un1t-mid">Pillar {i + 1}</div>
+              <div className="text-[11px] uppercase tracking-wider text-un1t-muted">Pillar {i + 1}</div>
               <div className="flex items-center gap-1">
-                <button type="button" disabled={i === 0} onClick={() => move(i, -1)} className="p-1 text-un1t-mid hover:text-un1t-white disabled:opacity-30" title="Move up"><ArrowUp size={11} /></button>
-                <button type="button" disabled={i === items.length - 1} onClick={() => move(i, 1)} className="p-1 text-un1t-mid hover:text-un1t-white disabled:opacity-30" title="Move down"><ArrowDown size={11} /></button>
-                <button type="button" onClick={() => removeItem(i)} className="p-1 text-un1t-mid hover:text-red-400" title="Remove pillar"><Trash2 size={11} /></button>
+                <button type="button" disabled={i === 0} onClick={() => move(i, -1)} className="p-1 text-un1t-muted hover:text-un1t-text disabled:opacity-30" title="Move up"><ArrowUp size={11} /></button>
+                <button type="button" disabled={i === items.length - 1} onClick={() => move(i, 1)} className="p-1 text-un1t-muted hover:text-un1t-text disabled:opacity-30" title="Move down"><ArrowDown size={11} /></button>
+                <button type="button" onClick={() => removeItem(i)} className="p-1 text-un1t-muted hover:text-red-400" title="Remove pillar"><Trash2 size={11} /></button>
               </div>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-[80px_1fr] gap-3 items-start">
@@ -730,7 +730,7 @@ function PillarsEdit({ block, onUpdate, uploadMedia, uploading, uploadErr }) {
               </div>
             </div>
             <div>
-              <p className="text-[11px] text-un1t-mid mb-2">Optional photo above this pillar</p>
+              <p className="text-[11px] text-un1t-muted mb-2">Optional photo above this pillar</p>
               <MediaSlot
                 url={p.photo_url || ''}
                 onClear={() => setItem(i, { photo_url: null })}
@@ -746,7 +746,7 @@ function PillarsEdit({ block, onUpdate, uploadMedia, uploading, uploadErr }) {
         )
       })}
       {items.length < 6 && (
-        <button type="button" onClick={addItem} className="text-xs text-un1t-light hover:text-un1t-white inline-flex items-center gap-1.5">
+        <button type="button" onClick={addItem} className="text-xs text-un1t-subtle hover:text-un1t-text inline-flex items-center gap-1.5">
           <Plus size={12} /> Add pillar
         </button>
       )}
@@ -778,7 +778,7 @@ function GalleryEdit({ block, onUpdate, uploadMedia, uploading, uploadErr }) {
       <Field label={`Photos (${items.length}/24)`} hint="PNG/JPEG/WebP, ≤ 5MB each.">
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           {items.map((g, i) => (
-            <div key={i} className="relative group border border-un1t-gray rounded-md overflow-hidden bg-un1t-black">
+            <div key={i} className="relative group border border-un1t-border rounded-md overflow-hidden bg-un1t-bg">
               { }
               <img src={g.url} alt={g.alt || ''} className="w-full aspect-square object-cover" />
               <div className="p-2 space-y-1">
@@ -788,7 +788,7 @@ function GalleryEdit({ block, onUpdate, uploadMedia, uploading, uploadErr }) {
                   onChange={(e) => setItem(i, { caption: e.target.value })}
                   placeholder="Caption (optional)"
                   maxLength={400}
-                  className="w-full bg-un1t-dark border border-un1t-gray rounded px-2 py-1 text-[11px] text-un1t-white"
+                  className="w-full bg-un1t-surface border border-un1t-border rounded px-2 py-1 text-[11px] text-un1t-text"
                 />
                 <input
                   type="text"
@@ -796,7 +796,7 @@ function GalleryEdit({ block, onUpdate, uploadMedia, uploading, uploadErr }) {
                   onChange={(e) => setItem(i, { alt: e.target.value })}
                   placeholder="Alt text (a11y)"
                   maxLength={400}
-                  className="w-full bg-un1t-dark border border-un1t-gray rounded px-2 py-1 text-[11px] text-un1t-white"
+                  className="w-full bg-un1t-surface border border-un1t-border rounded px-2 py-1 text-[11px] text-un1t-text"
                 />
               </div>
               <div className="absolute top-1 right-1 flex gap-1">
@@ -807,7 +807,7 @@ function GalleryEdit({ block, onUpdate, uploadMedia, uploading, uploadErr }) {
             </div>
           ))}
           {items.length < 24 && (
-            <label className={`bg-un1t-black border-2 border-dashed border-un1t-gray hover:border-un1t-mid rounded-md aspect-square flex flex-col items-center justify-center text-un1t-light cursor-pointer ${uploading[k] ? 'opacity-50 pointer-events-none' : ''}`}>
+            <label className={`bg-un1t-bg border-2 border-dashed border-un1t-border hover:border-un1t-muted rounded-md aspect-square flex flex-col items-center justify-center text-un1t-subtle cursor-pointer ${uploading[k] ? 'opacity-50 pointer-events-none' : ''}`}>
               {uploading[k] ? <Loader2 size={20} className="animate-spin" /> : <ImagePlus size={20} />}
               <span className="text-[10px] mt-2">{uploading[k] ? 'Uploading…' : 'Add photo'}</span>
               <input
@@ -860,14 +860,14 @@ function StatsEdit({ block, onUpdate }) {
           <Input value={s.number || ''} onChange={(v) => setItem(i, { number: v })} maxLength={20} placeholder="200+" />
           <Input value={s.label || ''} onChange={(v) => setItem(i, { label: v })} maxLength={200} placeholder="Label" />
           <div className="flex items-center gap-1">
-            <button type="button" disabled={i === 0} onClick={() => move(i, -1)} className="p-1 text-un1t-mid hover:text-un1t-white disabled:opacity-30" title="Move up"><ArrowUp size={11} /></button>
-            <button type="button" disabled={i === items.length - 1} onClick={() => move(i, 1)} className="p-1 text-un1t-mid hover:text-un1t-white disabled:opacity-30" title="Move down"><ArrowDown size={11} /></button>
-            <button type="button" onClick={() => removeItem(i)} className="p-1 text-un1t-mid hover:text-red-400" title="Remove stat"><Trash2 size={11} /></button>
+            <button type="button" disabled={i === 0} onClick={() => move(i, -1)} className="p-1 text-un1t-muted hover:text-un1t-text disabled:opacity-30" title="Move up"><ArrowUp size={11} /></button>
+            <button type="button" disabled={i === items.length - 1} onClick={() => move(i, 1)} className="p-1 text-un1t-muted hover:text-un1t-text disabled:opacity-30" title="Move down"><ArrowDown size={11} /></button>
+            <button type="button" onClick={() => removeItem(i)} className="p-1 text-un1t-muted hover:text-red-400" title="Remove stat"><Trash2 size={11} /></button>
           </div>
         </div>
       ))}
       {items.length < 6 && (
-        <button type="button" onClick={addItem} className="text-xs text-un1t-light hover:text-un1t-white inline-flex items-center gap-1.5">
+        <button type="button" onClick={addItem} className="text-xs text-un1t-subtle hover:text-un1t-text inline-flex items-center gap-1.5">
           <Plus size={12} /> Add stat
         </button>
       )}
@@ -895,9 +895,9 @@ function TestimonialEdit({ block, onUpdate }) {
 function Field({ label, hint, children }) {
   return (
     <div>
-      <label className="block text-sm text-un1t-light mb-1">{label}</label>
+      <label className="block text-sm text-un1t-subtle mb-1">{label}</label>
       {children}
-      {hint && <p className="text-[11px] text-un1t-mid mt-1">{hint}</p>}
+      {hint && <p className="text-[11px] text-un1t-muted mt-1">{hint}</p>}
     </div>
   )
 }
@@ -910,7 +910,7 @@ function Input({ value, onChange, maxLength, placeholder }) {
       onChange={(e) => onChange(e.target.value)}
       maxLength={maxLength}
       placeholder={placeholder}
-      className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
+      className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
     />
   )
 }
@@ -923,7 +923,7 @@ function Textarea({ value, onChange, maxLength, rows, placeholder }) {
       maxLength={maxLength}
       rows={rows || 2}
       placeholder={placeholder}
-      className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white resize-y"
+      className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text resize-y"
     />
   )
 }
@@ -934,22 +934,22 @@ function MediaSlot({ url, onClear, onUpload, uploading, error, accept, label, ki
       {url ? (
         <div className="relative inline-block">
           {kind === 'video' ? (
-            <video src={url} className="w-40 h-24 object-cover rounded-md border border-un1t-gray bg-black" muted playsInline autoPlay loop />
+            <video src={url} className="w-40 h-24 object-cover rounded-md border border-un1t-border bg-black" muted playsInline autoPlay loop />
           ) : (
              
-            <img src={url} alt="Preview" className="w-40 h-24 object-cover rounded-md border border-un1t-gray" />
+            <img src={url} alt="Preview" className="w-40 h-24 object-cover rounded-md border border-un1t-border" />
           )}
           <button
             type="button"
             onClick={onClear}
-            className="absolute -top-2 -right-2 bg-un1t-dark border border-un1t-gray rounded-full p-1 text-un1t-light hover:text-red-500"
+            className="absolute -top-2 -right-2 bg-un1t-surface border border-un1t-border rounded-full p-1 text-un1t-subtle hover:text-red-500"
             title="Clear"
           >
             <XIcon size={11} />
           </button>
         </div>
       ) : (
-        <label className={`bg-un1t-black border-2 border-dashed border-un1t-gray hover:border-un1t-mid rounded-md w-40 h-24 flex flex-col items-center justify-center text-un1t-light cursor-pointer ${uploading ? 'opacity-50 pointer-events-none' : ''}`}>
+        <label className={`bg-un1t-bg border-2 border-dashed border-un1t-border hover:border-un1t-muted rounded-md w-40 h-24 flex flex-col items-center justify-center text-un1t-subtle cursor-pointer ${uploading ? 'opacity-50 pointer-events-none' : ''}`}>
           {uploading
             ? <Loader2 size={18} className="animate-spin" />
             : (kind === 'video' ? <Video size={18} /> : <ImagePlus size={18} />)}

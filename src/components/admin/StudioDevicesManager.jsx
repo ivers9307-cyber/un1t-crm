@@ -209,51 +209,51 @@ function TrustedIpsPanel({ ips, locations, loading, onAdd, onRemove }) {
           <h3 className="text-lg font-semibold flex items-center gap-2">
             <Wifi size={16} className="text-blue-400" /> Trusted IPs
           </h3>
-          <p className="text-xs text-un1t-light mt-0.5">
+          <p className="text-xs text-un1t-subtle mt-0.5">
             CIDRs that PIN-login accepts as &quot;on studio wifi.&quot; Get the studio&apos;s public IP from <a className="underline" href="https://www.whatismyip.com/" target="_blank" rel="noreferrer">whatismyip.com</a> when standing on the studio network.
           </p>
         </div>
         <button
           onClick={() => setShowForm((v) => !v)}
-          className="inline-flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg bg-un1t-white text-un1t-black hover:bg-un1t-light/90 transition-colors"
+          className="inline-flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg bg-un1t-text text-un1t-bg hover:bg-un1t-subtle/90 transition-colors"
         >
           <Plus size={14} /> Add IP
         </button>
       </div>
 
       {showForm && (
-        <form onSubmit={submit} className="rounded-lg border border-un1t-gray bg-un1t-dark p-4 mb-3 grid grid-cols-1 md:grid-cols-4 gap-3 text-sm">
+        <form onSubmit={submit} className="rounded-lg border border-un1t-border bg-un1t-surface p-4 mb-3 grid grid-cols-1 md:grid-cols-4 gap-3 text-sm">
           <label className="flex flex-col gap-1">
-            <span className="text-xs text-un1t-light">Location</span>
+            <span className="text-xs text-un1t-subtle">Location</span>
             <select
               required
               value={form.location_id}
               onChange={(e) => setForm({ ...form, location_id: e.target.value })}
-              className="bg-un1t-black border border-un1t-gray rounded-md px-2 py-1.5 text-un1t-white"
+              className="bg-un1t-bg border border-un1t-border rounded-md px-2 py-1.5 text-un1t-text"
             >
               <option value="">— pick a location —</option>
               {locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
             </select>
           </label>
           <label className="flex flex-col gap-1">
-            <span className="text-xs text-un1t-light">CIDR</span>
+            <span className="text-xs text-un1t-subtle">CIDR</span>
             <input
               required
               type="text"
               placeholder="203.0.113.0/24 or 192.168.1.10"
               value={form.ip_cidr}
               onChange={(e) => setForm({ ...form, ip_cidr: e.target.value })}
-              className="bg-un1t-black border border-un1t-gray rounded-md px-2 py-1.5 text-un1t-white"
+              className="bg-un1t-bg border border-un1t-border rounded-md px-2 py-1.5 text-un1t-text"
             />
           </label>
           <label className="flex flex-col gap-1">
-            <span className="text-xs text-un1t-light">Label (optional)</span>
+            <span className="text-xs text-un1t-subtle">Label (optional)</span>
             <input
               type="text"
               placeholder="Main wifi"
               value={form.label}
               onChange={(e) => setForm({ ...form, label: e.target.value })}
-              className="bg-un1t-black border border-un1t-gray rounded-md px-2 py-1.5 text-un1t-white"
+              className="bg-un1t-bg border border-un1t-border rounded-md px-2 py-1.5 text-un1t-text"
             />
           </label>
           <div className="flex items-end gap-2">
@@ -267,7 +267,7 @@ function TrustedIpsPanel({ ips, locations, loading, onAdd, onRemove }) {
             <button
               type="button"
               onClick={() => setShowForm(false)}
-              className="text-xs px-3 py-2 rounded-lg border border-un1t-gray text-un1t-light hover:text-un1t-white"
+              className="text-xs px-3 py-2 rounded-lg border border-un1t-border text-un1t-subtle hover:text-un1t-text"
             >
               Cancel
             </button>
@@ -275,16 +275,16 @@ function TrustedIpsPanel({ ips, locations, loading, onAdd, onRemove }) {
         </form>
       )}
 
-      <div className="rounded-lg border border-un1t-gray overflow-hidden">
+      <div className="rounded-lg border border-un1t-border overflow-hidden">
         {loading ? (
-          <div className="p-4 text-xs text-un1t-light">Loading...</div>
+          <div className="p-4 text-xs text-un1t-subtle">Loading...</div>
         ) : ips.length === 0 ? (
-          <div className="p-4 text-xs text-un1t-light flex items-center gap-2">
+          <div className="p-4 text-xs text-un1t-subtle flex items-center gap-2">
             <WifiOff size={14} /> No trusted IPs configured yet. Add the studio&apos;s public IP before pairing any devices.
           </div>
         ) : (
           <table className="w-full text-sm">
-            <thead className="text-xs text-un1t-light bg-un1t-gray/30">
+            <thead className="text-xs text-un1t-subtle bg-un1t-border/30">
               <tr>
                 <th className="text-left px-3 py-2">Location</th>
                 <th className="text-left px-3 py-2">CIDR</th>
@@ -293,13 +293,13 @@ function TrustedIpsPanel({ ips, locations, loading, onAdd, onRemove }) {
                 <th className="px-3 py-2"></th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-un1t-gray">
+            <tbody className="divide-y divide-un1t-border">
               {ips.map((ip) => (
-                <tr key={ip.id} className="hover:bg-un1t-gray/20">
-                  <td className="px-3 py-2 text-un1t-white">{locName(ip.location_id)}</td>
+                <tr key={ip.id} className="hover:bg-un1t-border/20">
+                  <td className="px-3 py-2 text-un1t-text">{locName(ip.location_id)}</td>
                   <td className="px-3 py-2 font-mono text-xs">{ip.ip_cidr}</td>
-                  <td className="px-3 py-2 text-un1t-light">{ip.label || <span className="text-un1t-mid italic">—</span>}</td>
-                  <td className="px-3 py-2 text-xs text-un1t-light">
+                  <td className="px-3 py-2 text-un1t-subtle">{ip.label || <span className="text-un1t-muted italic">—</span>}</td>
+                  <td className="px-3 py-2 text-xs text-un1t-subtle">
                     {new Date(ip.created_at).toLocaleDateString('en-IE')}
                   </td>
                   <td className="px-3 py-2 text-right">
@@ -353,52 +353,52 @@ function DevicesPanel({ devices, locations, loading, onPair, onRevoke }) {
           <h3 className="text-lg font-semibold flex items-center gap-2">
             <Monitor size={16} className="text-purple-400" /> Paired devices
           </h3>
-          <p className="text-xs text-un1t-light mt-0.5">
+          <p className="text-xs text-un1t-subtle mt-0.5">
             Each Mac shell or iPad in the studio needs to be paired before staff can PIN-login on it.
           </p>
         </div>
         <button
           onClick={() => setShowForm((v) => !v)}
-          className="inline-flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg bg-un1t-white text-un1t-black hover:bg-un1t-light/90 transition-colors"
+          className="inline-flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg bg-un1t-text text-un1t-bg hover:bg-un1t-subtle/90 transition-colors"
         >
           <Plus size={14} /> Pair new device
         </button>
       </div>
 
       {showForm && (
-        <form onSubmit={submit} className="rounded-lg border border-un1t-gray bg-un1t-dark p-4 mb-3 grid grid-cols-1 md:grid-cols-4 gap-3 text-sm">
+        <form onSubmit={submit} className="rounded-lg border border-un1t-border bg-un1t-surface p-4 mb-3 grid grid-cols-1 md:grid-cols-4 gap-3 text-sm">
           <label className="flex flex-col gap-1">
-            <span className="text-xs text-un1t-light">Location</span>
+            <span className="text-xs text-un1t-subtle">Location</span>
             <select
               required
               value={form.location_id}
               onChange={(e) => setForm({ ...form, location_id: e.target.value })}
-              className="bg-un1t-black border border-un1t-gray rounded-md px-2 py-1.5 text-un1t-white"
+              className="bg-un1t-bg border border-un1t-border rounded-md px-2 py-1.5 text-un1t-text"
             >
               <option value="">— pick a location —</option>
               {locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
             </select>
           </label>
           <label className="flex flex-col gap-1">
-            <span className="text-xs text-un1t-light">Kind</span>
+            <span className="text-xs text-un1t-subtle">Kind</span>
             <select
               value={form.device_kind}
               onChange={(e) => setForm({ ...form, device_kind: e.target.value })}
-              className="bg-un1t-black border border-un1t-gray rounded-md px-2 py-1.5 text-un1t-white"
+              className="bg-un1t-bg border border-un1t-border rounded-md px-2 py-1.5 text-un1t-text"
             >
               <option value="mac">Mac</option>
               <option value="ipad">iPad</option>
             </select>
           </label>
           <label className="flex flex-col gap-1">
-            <span className="text-xs text-un1t-light">Label</span>
+            <span className="text-xs text-un1t-subtle">Label</span>
             <input
               required
               type="text"
               placeholder="Reception Mac"
               value={form.label}
               onChange={(e) => setForm({ ...form, label: e.target.value })}
-              className="bg-un1t-black border border-un1t-gray rounded-md px-2 py-1.5 text-un1t-white"
+              className="bg-un1t-bg border border-un1t-border rounded-md px-2 py-1.5 text-un1t-text"
             />
           </label>
           <div className="flex items-end gap-2">
@@ -412,7 +412,7 @@ function DevicesPanel({ devices, locations, loading, onPair, onRevoke }) {
             <button
               type="button"
               onClick={() => setShowForm(false)}
-              className="text-xs px-3 py-2 rounded-lg border border-un1t-gray text-un1t-light hover:text-un1t-white"
+              className="text-xs px-3 py-2 rounded-lg border border-un1t-border text-un1t-subtle hover:text-un1t-text"
             >
               Cancel
             </button>
@@ -445,17 +445,17 @@ function DevicesPanel({ devices, locations, loading, onPair, onRevoke }) {
 
 function DevicesTable({ title, rows, locName, loading, onRevoke }) {
   return (
-    <div className="rounded-lg border border-un1t-gray overflow-hidden">
-      <div className="text-xs uppercase tracking-wider text-un1t-light px-3 py-2 bg-un1t-gray/30">
+    <div className="rounded-lg border border-un1t-border overflow-hidden">
+      <div className="text-xs uppercase tracking-wider text-un1t-subtle px-3 py-2 bg-un1t-border/30">
         {title} ({rows.length})
       </div>
       {loading ? (
-        <div className="p-4 text-xs text-un1t-light">Loading...</div>
+        <div className="p-4 text-xs text-un1t-subtle">Loading...</div>
       ) : rows.length === 0 ? (
-        <div className="p-4 text-xs text-un1t-light">None.</div>
+        <div className="p-4 text-xs text-un1t-subtle">None.</div>
       ) : (
         <table className="w-full text-sm">
-          <thead className="text-xs text-un1t-light bg-un1t-gray/20">
+          <thead className="text-xs text-un1t-subtle bg-un1t-border/20">
             <tr>
               <th className="text-left px-3 py-2">Label</th>
               <th className="text-left px-3 py-2">Kind</th>
@@ -465,22 +465,22 @@ function DevicesTable({ title, rows, locName, loading, onRevoke }) {
               <th className="px-3 py-2"></th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-un1t-gray">
+          <tbody className="divide-y divide-un1t-border">
             {rows.map((d) => (
-              <tr key={d.id} className="hover:bg-un1t-gray/20">
-                <td className="px-3 py-2 text-un1t-white">{d.label || <span className="text-un1t-mid italic">—</span>}</td>
-                <td className="px-3 py-2 text-un1t-light inline-flex items-center gap-1.5">
+              <tr key={d.id} className="hover:bg-un1t-border/20">
+                <td className="px-3 py-2 text-un1t-text">{d.label || <span className="text-un1t-muted italic">—</span>}</td>
+                <td className="px-3 py-2 text-un1t-subtle inline-flex items-center gap-1.5">
                   {d.device_kind === 'ipad' ? <Smartphone size={12} /> : <Monitor size={12} />}
                   {d.device_kind}
                 </td>
-                <td className="px-3 py-2 text-un1t-light">{locName(d.location_id)}</td>
-                <td className="px-3 py-2 text-xs text-un1t-light">
+                <td className="px-3 py-2 text-un1t-subtle">{locName(d.location_id)}</td>
+                <td className="px-3 py-2 text-xs text-un1t-subtle">
                   {new Date(d.paired_at).toLocaleDateString('en-IE')}
                 </td>
-                <td className="px-3 py-2 text-xs text-un1t-light">
+                <td className="px-3 py-2 text-xs text-un1t-subtle">
                   {d.last_seen_at
                     ? new Date(d.last_seen_at).toLocaleString('en-IE', { dateStyle: 'short', timeStyle: 'short' })
-                    : <span className="text-un1t-mid italic">never</span>}
+                    : <span className="text-un1t-muted italic">never</span>}
                 </td>
                 <td className="px-3 py-2 text-right">
                   {onRevoke && (
@@ -519,7 +519,7 @@ function PairingTokenBanner({ token, device, locations, copied, onCopy, onDismis
             Copy this now — it&apos;s shown only once. Paste it into the device&apos;s pairing screen.
           </div>
           <div className="mt-3 flex items-center gap-2">
-            <code className="flex-1 font-mono text-xs bg-un1t-black/40 border border-amber-500/30 rounded px-3 py-2 text-amber-100 break-all">
+            <code className="flex-1 font-mono text-xs bg-un1t-bg/40 border border-amber-500/30 rounded px-3 py-2 text-amber-100 break-all">
               {token}
             </code>
             <button

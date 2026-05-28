@@ -91,12 +91,12 @@ export default function XeroCard({ car, setCar, setError, busy, setBusy, disable
     && Math.abs(issuedAmount - currentAmount) > 0.005
 
   return (
-    <div className="bg-un1t-dark border border-un1t-gray rounded-2xl p-5 mb-4">
+    <div className="bg-un1t-surface border border-un1t-border rounded-2xl p-5 mb-4">
       <div className="flex items-start justify-between gap-4">
         <div className="flex-1 min-w-0">
-          <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light">Customer invoice (Xero)</h3>
+          <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle">Customer invoice (Xero)</h3>
           {issued ? (
-            <div className="text-sm text-un1t-white mt-1 space-y-1">
+            <div className="text-sm text-un1t-text mt-1 space-y-1">
               <div className="flex flex-wrap items-center gap-2">
                 <Check size={14} className="inline-block text-green-500 mr-1" />
                 <span>Issued · {car.xero_invoice_number || car.xero_invoice_id} · €{issuedAmount.toFixed(2)}</span>
@@ -107,22 +107,22 @@ export default function XeroCard({ car, setCar, setError, busy, setBusy, disable
                   : car.xero_invoice_status === 'VOIDED'
                     ? <span className="text-[10px] uppercase font-semibold bg-red-500/20 text-red-400 px-2 py-0.5 rounded-full">Voided</span>
                     : car.xero_invoice_status
-                      ? <span className="text-[10px] uppercase font-semibold bg-un1t-gray/40 text-un1t-light px-2 py-0.5 rounded-full">{car.xero_invoice_status}</span>
+                      ? <span className="text-[10px] uppercase font-semibold bg-un1t-border/40 text-un1t-subtle px-2 py-0.5 rounded-full">{car.xero_invoice_status}</span>
                       : <span className="text-[10px] uppercase font-semibold bg-amber-500/20 text-amber-400 px-2 py-0.5 rounded-full">Awaiting payment</span>}
               </div>
-              <div className="text-xs text-un1t-light flex flex-wrap gap-x-3 gap-y-1">
+              <div className="text-xs text-un1t-subtle flex flex-wrap gap-x-3 gap-y-1">
                 {car.xero_invoice_url && (
-                  <a href={car.xero_invoice_url} target="_blank" rel="noreferrer" className="hover:text-un1t-white underline inline-flex items-center gap-1">
+                  <a href={car.xero_invoice_url} target="_blank" rel="noreferrer" className="hover:text-un1t-text underline inline-flex items-center gap-1">
                     Open in Xero
                   </a>
                 )}
                 {car.xero_invoice_pdf_path && (
-                  <button onClick={viewPdf} className="hover:text-un1t-white underline inline-flex items-center gap-1">
+                  <button onClick={viewPdf} className="hover:text-un1t-text underline inline-flex items-center gap-1">
                     <FileDown size={11} /> View PDF
                   </button>
                 )}
                 {car.xero_invoice_online_url && (
-                  <a href={car.xero_invoice_online_url} target="_blank" rel="noreferrer" className="hover:text-un1t-white underline">Customer pay link</a>
+                  <a href={car.xero_invoice_online_url} target="_blank" rel="noreferrer" className="hover:text-un1t-text underline">Customer pay link</a>
                 )}
                 {car.xero_invoice_emailed_at
                   ? <span className="text-green-500">Emailed to buyer</span>
@@ -130,7 +130,7 @@ export default function XeroCard({ car, setCar, setError, busy, setBusy, disable
               </div>
             </div>
           ) : (
-            <div className="text-xs text-un1t-light mt-1 space-y-1">
+            <div className="text-xs text-un1t-subtle mt-1 space-y-1">
               <p>
                 Pushes a sales invoice to Xero (IE 23% VAT, &ldquo;Car&rdquo; branding theme),
                 emails it to the buyer, and saves a PDF copy.
@@ -151,7 +151,7 @@ export default function XeroCard({ car, setCar, setError, busy, setBusy, disable
               onClick={issue}
               disabled={busy || disabled || missing.length > 0}
               title={missing.length ? `Missing: ${missing.join(', ')}` : ''}
-              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-un1t-white text-un1t-black text-xs font-semibold hover:bg-un1t-accent disabled:opacity-50"
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-un1t-text text-un1t-bg text-xs font-semibold hover:bg-un1t-accent disabled:opacity-50"
             >
               <Receipt size={14} /> Issue invoice
             </button>

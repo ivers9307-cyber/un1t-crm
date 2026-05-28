@@ -51,8 +51,8 @@ export default async function AccountPage() {
   return (
     <div className="p-8 max-w-3xl">
       <div className="mb-6">
-        <h1 className="text-2xl font-semibold text-un1t-white">Account</h1>
-        <p className="text-sm text-un1t-light mt-1">
+        <h1 className="text-2xl font-semibold text-un1t-text">Account</h1>
+        <p className="text-sm text-un1t-subtle mt-1">
           Personal preferences for {user.email}.
         </p>
       </div>
@@ -62,7 +62,7 @@ export default async function AccountPage() {
         allowed={allowed}
       />
 
-      <div className="mt-8 pt-6 border-t border-un1t-gray">
+      <div className="mt-8 pt-6 border-t border-un1t-border">
         <PasswordChangeForm email={user.email} />
       </div>
 
@@ -74,40 +74,40 @@ export default async function AccountPage() {
         />
       </div>
 
-      <div className="mt-8 pt-6 border-t border-un1t-gray">
-        <h2 className="text-sm font-semibold uppercase tracking-wider text-un1t-light mb-3">
+      <div className="mt-8 pt-6 border-t border-un1t-border">
+        <h2 className="text-sm font-semibold uppercase tracking-wider text-un1t-subtle mb-3">
           More
         </h2>
         <div className="space-y-2">
           <Link
             href="/account/contracts"
-            className="flex items-center justify-between p-4 rounded-xl bg-un1t-dark border border-un1t-gray hover:border-un1t-light transition-colors"
+            className="flex items-center justify-between p-4 rounded-xl bg-un1t-surface border border-un1t-border hover:border-un1t-subtle transition-colors"
           >
             <div className="flex items-center gap-3">
-              <FileSignature size={18} className="text-un1t-light" />
+              <FileSignature size={18} className="text-un1t-subtle" />
               <div>
-                <div className="text-sm font-medium text-un1t-white">Your contracts</div>
-                <div className="text-xs text-un1t-light mt-0.5">
+                <div className="text-sm font-medium text-un1t-text">Your contracts</div>
+                <div className="text-xs text-un1t-subtle mt-0.5">
                   Review and sign documents UN1T has issued you
                 </div>
               </div>
             </div>
-            <ChevronRight size={16} className="text-un1t-light" />
+            <ChevronRight size={16} className="text-un1t-subtle" />
           </Link>
           <Link
             href="/account/access-history"
-            className="flex items-center justify-between p-4 rounded-xl bg-un1t-dark border border-un1t-gray hover:border-un1t-light transition-colors"
+            className="flex items-center justify-between p-4 rounded-xl bg-un1t-surface border border-un1t-border hover:border-un1t-subtle transition-colors"
           >
             <div className="flex items-center gap-3">
-              <History size={18} className="text-un1t-light" />
+              <History size={18} className="text-un1t-subtle" />
               <div>
-                <div className="text-sm font-medium text-un1t-white">Access history</div>
-                <div className="text-xs text-un1t-light mt-0.5">
+                <div className="text-sm font-medium text-un1t-text">Access history</div>
+                <div className="text-xs text-un1t-subtle mt-0.5">
                   See if anyone has impersonated your account
                 </div>
               </div>
             </div>
-            <ChevronRight size={16} className="text-un1t-light" />
+            <ChevronRight size={16} className="text-un1t-subtle" />
           </Link>
         </div>
       </div>

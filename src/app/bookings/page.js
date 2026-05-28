@@ -63,7 +63,7 @@ export default async function BookingsPage(props) {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h2 className="text-2xl font-bold">Bookings</h2>
-          <p className="text-sm text-un1t-light mt-1">Confirmed reservations across every event type at this location.</p>
+          <p className="text-sm text-un1t-subtle mt-1">Confirmed reservations across every event type at this location.</p>
         </div>
       </div>
 
@@ -75,8 +75,8 @@ export default async function BookingsPage(props) {
             href={`/bookings?filter=${f.key}`}
             className={`text-xs px-3 py-1.5 rounded-full transition-colors ${
               filter === f.key
-                ? 'bg-un1t-white text-un1t-black'
-                : 'border border-un1t-gray text-un1t-light hover:text-un1t-white hover:border-un1t-white/30'
+                ? 'bg-un1t-text text-un1t-bg'
+                : 'border border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-text/30'
             }`}
           >
             {f.label}
@@ -86,15 +86,15 @@ export default async function BookingsPage(props) {
 
       {/* Bookings List */}
       {bookings.length === 0 ? (
-        <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-12 text-center">
-          <Calendar size={40} className="mx-auto mb-4 text-un1t-light" />
+        <div className="bg-un1t-surface border border-un1t-border rounded-lg p-12 text-center">
+          <Calendar size={40} className="mx-auto mb-4 text-un1t-subtle" />
           <h3 className="text-lg font-semibold mb-2">No bookings found</h3>
-          <p className="text-sm text-un1t-light">
+          <p className="text-sm text-un1t-subtle">
             {filter === 'upcoming' ? 'No upcoming bookings. Share your event links to start receiving bookings.' : 'No bookings match this filter.'}
           </p>
         </div>
       ) : (
-        <div className="bg-un1t-dark border border-un1t-gray rounded-lg divide-y divide-un1t-gray">
+        <div className="bg-un1t-surface border border-un1t-border rounded-lg divide-y divide-un1t-border">
           {bookings.map(booking => {
             const isPast = booking.booking_date < today
             const isToday = booking.booking_date === today
@@ -104,7 +104,7 @@ export default async function BookingsPage(props) {
                 <div className="flex items-center gap-4">
                   {/* Date block */}
                   <div className={`text-center min-w-[52px] ${isPast ? 'opacity-50' : ''}`}>
-                    <p className="text-xs text-un1t-light">
+                    <p className="text-xs text-un1t-subtle">
                       {new Date(booking.booking_date + 'T00:00:00').toLocaleDateString('en-IE', { month: 'short' })}
                     </p>
                     <p className="text-xl font-bold">
@@ -125,10 +125,10 @@ export default async function BookingsPage(props) {
                       <p className="text-sm font-medium">
                         {booking.contacts?.name || booking.customer_name}
                       </p>
-                      <span className="text-xs text-un1t-light">·</span>
-                      <span className="text-xs text-un1t-light">{booking.event_types?.name || 'Event'}</span>
+                      <span className="text-xs text-un1t-subtle">·</span>
+                      <span className="text-xs text-un1t-subtle">{booking.event_types?.name || 'Event'}</span>
                     </div>
-                    <div className="flex items-center gap-3 mt-1 text-xs text-un1t-light">
+                    <div className="flex items-center gap-3 mt-1 text-xs text-un1t-subtle">
                       <span className="flex items-center gap-1">
                         <Clock size={11} /> {formatTime(booking.start_time)} — {formatTime(booking.end_time)}
                       </span>

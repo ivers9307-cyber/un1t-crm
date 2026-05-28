@@ -64,7 +64,7 @@ export default async function EditStaffPage(props) {
   return (
     <div className="p-8 max-w-2xl">
       <h2 className="text-2xl font-bold mb-1">Edit Team Member</h2>
-      <p className="text-sm text-un1t-light mb-6">Update role, permissions, and access</p>
+      <p className="text-sm text-un1t-subtle mb-6">Update role, permissions, and access</p>
       <StaffForm
         staff={staff}
         locations={locationsRes.data || []}

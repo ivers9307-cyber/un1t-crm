@@ -35,7 +35,7 @@ function ChannelPill({ active, onClick, icon: Icon, label }) {
       type="button"
       onClick={onClick}
       className={`inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded font-medium ${
-        active ? 'bg-un1t-white text-un1t-black' : 'border border-un1t-gray text-un1t-light hover:text-un1t-white'
+        active ? 'bg-un1t-text text-un1t-bg' : 'border border-un1t-border text-un1t-subtle hover:text-un1t-text'
       }`}
     >
       <Icon size={11} /> {label}
@@ -120,9 +120,9 @@ export default function ContactComposer({
   }
 
   return (
-    <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-4 mb-5">
+    <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4 mb-5">
       <div className="flex items-center justify-between mb-3">
-        <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light">
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle">
           Message {contactName || 'contact'}
         </h3>
         {waAvailable && smsAvailable && (
@@ -145,12 +145,12 @@ export default function ContactComposer({
       {channel === 'whatsapp' && waAvailable && (
         windowClosed ? (
           <div>
-            <p className="text-xs text-un1t-mid mb-2">
+            <p className="text-xs text-un1t-muted mb-2">
               The 24-hour WhatsApp window is closed. Pick a utility template to reopen the
               conversation{smsAvailable ? ', or switch to SMS' : ''}.
             </p>
             {sendable.length === 0 ? (
-              <p className="text-xs text-un1t-light">
+              <p className="text-xs text-un1t-subtle">
                 No approved utility templates yet. Add one under WhatsApp &rarr; Templates
                 (category: Utility) and sync.
               </p>
@@ -158,16 +158,16 @@ export default function ContactComposer({
               <ul className="space-y-1.5">
                 {sendable.map((t) => (
                   <li key={t.name}
-                    className="flex items-start gap-2 rounded border border-un1t-gray bg-un1t-black p-2">
+                    className="flex items-start gap-2 rounded border border-un1t-border bg-un1t-bg p-2">
                     <div className="min-w-0 flex-1">
-                      <p className="text-xs font-medium text-un1t-white">{t.name}</p>
-                      {t.bodyText && <p className="text-[11px] text-un1t-light mt-0.5">{t.bodyText}</p>}
+                      <p className="text-xs font-medium text-un1t-text">{t.name}</p>
+                      {t.bodyText && <p className="text-[11px] text-un1t-subtle mt-0.5">{t.bodyText}</p>}
                     </div>
                     <button
                       type="button"
                       disabled={sending}
                       onClick={() => sendTemplate(t.name)}
-                      className="shrink-0 text-xs px-2.5 py-1 bg-un1t-white text-un1t-black rounded font-medium hover:bg-un1t-accent disabled:opacity-50"
+                      className="shrink-0 text-xs px-2.5 py-1 bg-un1t-text text-un1t-bg rounded font-medium hover:bg-un1t-accent disabled:opacity-50"
                     >
                       Send
                     </button>
@@ -184,17 +184,17 @@ export default function ContactComposer({
               rows={3}
               maxLength={4096}
               placeholder={`Message ${contactName || 'the customer'} on WhatsApp…`}
-              className="w-full bg-un1t-black border border-un1t-gray rounded p-2 text-sm text-un1t-white placeholder:text-un1t-mid resize-none focus:outline-none focus:border-un1t-mid"
+              className="w-full bg-un1t-bg border border-un1t-border rounded p-2 text-sm text-un1t-text placeholder:text-un1t-muted resize-none focus:outline-none focus:border-un1t-muted"
             />
             <div className="flex items-center justify-between mt-2">
-              <span className="text-[11px] text-un1t-mid">
+              <span className="text-[11px] text-un1t-muted">
                 Free-texting open{whatsappWindowExpiresAt ? ` · closes ${formatWhen(whatsappWindowExpiresAt)}` : ''}
               </span>
               <button
                 type="button"
                 disabled={sending || !text.trim()}
                 onClick={sendWhatsAppText}
-                className="inline-flex items-center gap-1 text-xs px-3 py-1 bg-un1t-white text-un1t-black rounded font-medium hover:bg-un1t-accent disabled:opacity-50"
+                className="inline-flex items-center gap-1 text-xs px-3 py-1 bg-un1t-text text-un1t-bg rounded font-medium hover:bg-un1t-accent disabled:opacity-50"
               >
                 <Send size={12} /> {sending ? 'Sending…' : 'Send'}
               </button>
@@ -218,17 +218,17 @@ export default function ContactComposer({
                 rows={3}
                 maxLength={1600}
                 placeholder={`Text ${contactName || 'the customer'}…  (merge tags: {{first_name}})`}
-                className="w-full bg-un1t-black border border-un1t-gray rounded p-2 text-sm text-un1t-white placeholder:text-un1t-mid resize-none focus:outline-none focus:border-un1t-mid"
+                className="w-full bg-un1t-bg border border-un1t-border rounded p-2 text-sm text-un1t-text placeholder:text-un1t-muted resize-none focus:outline-none focus:border-un1t-muted"
               />
               <div className="flex items-center justify-between mt-2">
-                <span className={`text-[11px] ${seg.segments > 1 ? 'text-amber-500' : 'text-un1t-mid'}`}>
+                <span className={`text-[11px] ${seg.segments > 1 ? 'text-amber-500' : 'text-un1t-muted'}`}>
                   {seg.len} chars · {seg.segments} segment{seg.segments === 1 ? '' : 's'}
                 </span>
                 <button
                   type="button"
                   disabled={sending || !text.trim()}
                   onClick={sendSms}
-                  className="inline-flex items-center gap-1 text-xs px-3 py-1 bg-un1t-white text-un1t-black rounded font-medium hover:bg-un1t-accent disabled:opacity-50"
+                  className="inline-flex items-center gap-1 text-xs px-3 py-1 bg-un1t-text text-un1t-bg rounded font-medium hover:bg-un1t-accent disabled:opacity-50"
                 >
                   <Send size={12} /> {sending ? 'Sending…' : 'Send SMS'}
                 </button>

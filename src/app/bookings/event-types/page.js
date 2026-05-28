@@ -69,7 +69,7 @@ export default async function BookingTypesPage(props) {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h2 className="text-2xl font-bold">Booking types</h2>
-          <p className="text-sm text-un1t-light mt-1">Bookable templates customers reserve from. Configure once, reuse on every booking page.</p>
+          <p className="text-sm text-un1t-subtle mt-1">Bookable templates customers reserve from. Configure once, reuse on every booking page.</p>
         </div>
         <Link
           href="/bookings/event-types/new"
@@ -85,7 +85,7 @@ export default async function BookingTypesPage(props) {
           Inactive booking types stay hidden from the public booking
           page (active=true filter on /api/public/bookings/[slug]) but
           are kept for historical bookings reporting context. */}
-      <div className="flex items-center gap-1 mb-5 border-b border-un1t-gray">
+      <div className="flex items-center gap-1 mb-5 border-b border-un1t-border">
         {tabs.map((t) => {
           const active = tab === t.id
           return (
@@ -94,13 +94,13 @@ export default async function BookingTypesPage(props) {
               href={t.href}
               className={`flex items-center gap-2 px-4 py-2.5 text-sm border-b-2 transition-colors -mb-px ${
                 active
-                  ? 'border-un1t-white text-un1t-white font-medium'
-                  : 'border-transparent text-un1t-light hover:text-un1t-white'
+                  ? 'border-un1t-text text-un1t-text font-medium'
+                  : 'border-transparent text-un1t-subtle hover:text-un1t-text'
               }`}
             >
               {t.label}
               <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${
-                active ? 'bg-un1t-white/15 text-un1t-white' : 'bg-un1t-gray/40 text-un1t-light'
+                active ? 'bg-un1t-text/15 text-un1t-text' : 'bg-un1t-border/40 text-un1t-subtle'
               }`}>{t.count}</span>
             </Link>
           )
@@ -108,12 +108,12 @@ export default async function BookingTypesPage(props) {
       </div>
 
       {visible.length === 0 ? (
-        <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-12 text-center">
-          <Calendar size={40} className="mx-auto mb-4 text-un1t-light" />
+        <div className="bg-un1t-surface border border-un1t-border rounded-lg p-12 text-center">
+          <Calendar size={40} className="mx-auto mb-4 text-un1t-subtle" />
           <h3 className="text-lg font-semibold mb-2">
             {tab === 'inactive' ? 'No inactive booking types' : 'No booking types yet'}
           </h3>
-          <p className="text-sm text-un1t-light mb-4">
+          <p className="text-sm text-un1t-subtle mb-4">
             {tab === 'inactive'
               ? 'Deleted or disabled types will appear here so you can re-enable them.'
               : 'Create your first bookable template to start accepting bookings'}
@@ -131,7 +131,7 @@ export default async function BookingTypesPage(props) {
       ) : (
         <div className="grid gap-4">
           {visible.map(event => (
-            <div key={event.id} className="bg-un1t-dark border border-un1t-gray rounded-lg p-5">
+            <div key={event.id} className="bg-un1t-surface border border-un1t-border rounded-lg p-5">
               <div className="flex items-start justify-between">
                 <div className="flex items-start gap-4">
                   <div
@@ -148,9 +148,9 @@ export default async function BookingTypesPage(props) {
                       )}
                     </div>
                     {event.description && (
-                      <p className="text-sm text-un1t-light mt-1">{event.description}</p>
+                      <p className="text-sm text-un1t-subtle mt-1">{event.description}</p>
                     )}
-                    <div className="flex items-center gap-4 mt-3 text-xs text-un1t-light">
+                    <div className="flex items-center gap-4 mt-3 text-xs text-un1t-subtle">
                       <span className="flex items-center gap-1">
                         <Clock size={12} /> {event.duration_minutes} min
                       </span>
@@ -171,7 +171,7 @@ export default async function BookingTypesPage(props) {
                   <EventActions slug={event.slug} eventId={event.id} eventName={event.name} />
                   <Link
                     href={`/bookings/event-types/${event.id}`}
-                    className="text-xs px-3 py-1.5 rounded border border-un1t-gray text-un1t-light hover:text-un1t-white hover:border-un1t-white/30 transition-colors"
+                    className="text-xs px-3 py-1.5 rounded border border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-text/30 transition-colors"
                   >
                     Manage
                   </Link>

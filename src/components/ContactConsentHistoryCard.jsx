@@ -40,7 +40,7 @@ const TONE_CLASS = {
   amber:   'bg-amber-500/10 text-amber-700 border-amber-500/30',
   purple:  'bg-purple-500/10 text-purple-700 border-purple-500/30',
   emerald: 'bg-emerald-500/10 text-emerald-700 border-emerald-500/30',
-  gray:    'bg-un1t-gray/30 text-un1t-light border-un1t-gray',
+  gray:    'bg-un1t-border/30 text-un1t-subtle border-un1t-border',
 }
 
 function fmtSource(s) {
@@ -92,35 +92,35 @@ export default function ContactConsentHistoryCard({ contactId }) {
   }
 
   return (
-    <div className="bg-un1t-dark border border-un1t-gray rounded-lg">
+    <div className="bg-un1t-surface border border-un1t-border rounded-lg">
       <button
         type="button"
         onClick={toggle}
-        className="w-full flex items-center justify-between gap-2 p-4 text-left hover:bg-un1t-gray/10"
+        className="w-full flex items-center justify-between gap-2 p-4 text-left hover:bg-un1t-border/10"
       >
         <div className="flex items-center gap-2">
           {open
-            ? <ChevronDown size={14} className="text-un1t-light" />
-            : <ChevronRight size={14} className="text-un1t-light" />}
-          <ShieldCheck size={14} className="text-un1t-light" />
-          <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light">
+            ? <ChevronDown size={14} className="text-un1t-subtle" />
+            : <ChevronRight size={14} className="text-un1t-subtle" />}
+          <ShieldCheck size={14} className="text-un1t-subtle" />
+          <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle">
             Consent history
           </h3>
           {loaded && (
-            <span className="ml-1 text-[11px] text-un1t-mid tabular-nums">
+            <span className="ml-1 text-[11px] text-un1t-muted tabular-nums">
               {rows.length}{truncated ? '+' : ''} event{rows.length === 1 ? '' : 's'}
             </span>
           )}
         </div>
-        <span className="text-[11px] text-un1t-mid">
+        <span className="text-[11px] text-un1t-muted">
           {open ? 'hide' : 'show'}
         </span>
       </button>
 
       {open && (
-        <div className="px-4 pb-4 border-t border-un1t-gray">
+        <div className="px-4 pb-4 border-t border-un1t-border">
           {loading && (
-            <div className="flex items-center gap-2 text-xs text-un1t-mid py-3">
+            <div className="flex items-center gap-2 text-xs text-un1t-muted py-3">
               <Loader2 size={12} className="animate-spin" /> loading…
             </div>
           )}
@@ -133,7 +133,7 @@ export default function ContactConsentHistoryCard({ contactId }) {
           )}
 
           {!loading && loaded && rows.length === 0 && (
-            <p className="text-xs text-un1t-mid italic py-3">
+            <p className="text-xs text-un1t-muted italic py-3">
               No consent events on file.
             </p>
           )}
@@ -143,7 +143,7 @@ export default function ContactConsentHistoryCard({ contactId }) {
               <div className="overflow-x-auto pt-3">
                 <table className="w-full text-xs">
                   <thead>
-                    <tr className="text-left text-[10px] uppercase tracking-wider text-un1t-mid border-b border-un1t-gray">
+                    <tr className="text-left text-[10px] uppercase tracking-wider text-un1t-muted border-b border-un1t-border">
                       <th className="py-1.5 pr-3 font-medium">When</th>
                       <th className="py-1.5 pr-3 font-medium">Action</th>
                       <th className="py-1.5 pr-3 font-medium">Channel</th>
@@ -158,8 +158,8 @@ export default function ContactConsentHistoryCard({ contactId }) {
                       const ActionIcon = r.action === 'opt_in' ? ArrowUp : ArrowDown
                       const actionCls = r.action === 'opt_in' ? 'text-emerald-600' : 'text-rose-600'
                       return (
-                        <tr key={r.id} className="border-b border-un1t-gray/40 last:border-0">
-                          <td className="py-1.5 pr-3 text-un1t-light tabular-nums whitespace-nowrap">
+                        <tr key={r.id} className="border-b border-un1t-border/40 last:border-0">
+                          <td className="py-1.5 pr-3 text-un1t-subtle tabular-nums whitespace-nowrap">
                             {fmtDate(r.created_at)}
                           </td>
                           <td className="py-1.5 pr-3">
@@ -168,15 +168,15 @@ export default function ContactConsentHistoryCard({ contactId }) {
                               {r.action === 'opt_in' ? 'Opt-in' : 'Opt-out'}
                             </span>
                           </td>
-                          <td className="py-1.5 pr-3 text-un1t-white">{fmtChannel(r.channel)}</td>
+                          <td className="py-1.5 pr-3 text-un1t-text">{fmtChannel(r.channel)}</td>
                           <td className="py-1.5 pr-3">
                             <span className={`inline-block px-1.5 py-0.5 rounded border text-[10px] ${tonecls}`}>
                               {srcLabel}
                             </span>
                           </td>
-                          <td className="py-1.5 pr-3 text-un1t-light">
+                          <td className="py-1.5 pr-3 text-un1t-subtle">
                             {r.performed_by_name || (
-                              <span className="text-un1t-mid italic">
+                              <span className="text-un1t-muted italic">
                                 {r.source === 'preference_centre' || r.source === 'unsubscribe_one_click'
                                   ? 'customer'
                                   : 'system'}

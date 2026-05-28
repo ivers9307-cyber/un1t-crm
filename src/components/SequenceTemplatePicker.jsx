@@ -74,7 +74,7 @@ export default function SequenceTemplatePicker() {
       <button
         type="button"
         onClick={openPicker}
-        className="inline-flex items-center gap-2 border border-un1t-gray text-un1t-light text-sm font-medium px-4 py-2 rounded-lg hover:text-un1t-white hover:border-un1t-mid transition-colors"
+        className="inline-flex items-center gap-2 border border-un1t-border text-un1t-subtle text-sm font-medium px-4 py-2 rounded-lg hover:text-un1t-text hover:border-un1t-muted transition-colors"
       >
         <LayoutTemplate size={16} />
         Use template
@@ -83,20 +83,20 @@ export default function SequenceTemplatePicker() {
       {open && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setOpen(false)}>
           <div
-            className="bg-un1t-dark border border-un1t-gray rounded-xl max-w-3xl w-full max-h-[80vh] overflow-auto p-6"
+            className="bg-un1t-surface border border-un1t-border rounded-xl max-w-3xl w-full max-h-[80vh] overflow-auto p-6"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between mb-4">
               <div>
-                <h3 className="text-base font-semibold text-un1t-white">Pick a template</h3>
-                <p className="text-xs text-un1t-light mt-0.5">
+                <h3 className="text-base font-semibold text-un1t-text">Pick a template</h3>
+                <p className="text-xs text-un1t-subtle mt-0.5">
                   Clones into a fresh draft you can rename, edit, and activate.
                 </p>
               </div>
               <button
                 type="button"
                 onClick={() => setOpen(false)}
-                className="text-un1t-light hover:text-un1t-white p-1"
+                className="text-un1t-subtle hover:text-un1t-text p-1"
               >
                 <X size={16} />
               </button>
@@ -115,14 +115,14 @@ export default function SequenceTemplatePicker() {
             )}
 
             {!templates && !loadError && (
-              <div className="text-sm text-un1t-light inline-flex items-center gap-2">
+              <div className="text-sm text-un1t-subtle inline-flex items-center gap-2">
                 <Loader2 size={14} className="animate-spin" /> Loading…
               </div>
             )}
 
             {grouped && Object.keys(grouped).map((category) => (
               <div key={category} className="mb-5">
-                <div className="text-[11px] uppercase tracking-wider text-un1t-light mb-2">{category}</div>
+                <div className="text-[11px] uppercase tracking-wider text-un1t-subtle mb-2">{category}</div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
                   {grouped[category].map((t) => (
                     <button
@@ -130,14 +130,14 @@ export default function SequenceTemplatePicker() {
                       type="button"
                       onClick={() => pick(t.id)}
                       disabled={busyId !== null}
-                      className="text-left bg-un1t-black border border-un1t-gray hover:border-un1t-mid rounded-lg p-3 disabled:opacity-40"
+                      className="text-left bg-un1t-bg border border-un1t-border hover:border-un1t-muted rounded-lg p-3 disabled:opacity-40"
                     >
                       <div className="flex items-center justify-between gap-2">
-                        <div className="text-sm font-medium text-un1t-white">{t.name}</div>
-                        {busyId === t.id && <Loader2 size={12} className="animate-spin text-un1t-light" />}
+                        <div className="text-sm font-medium text-un1t-text">{t.name}</div>
+                        {busyId === t.id && <Loader2 size={12} className="animate-spin text-un1t-subtle" />}
                       </div>
-                      <div className="text-xs text-un1t-light mt-1">{t.description}</div>
-                      <div className="text-[10px] uppercase tracking-wider text-un1t-mid mt-2">
+                      <div className="text-xs text-un1t-subtle mt-1">{t.description}</div>
+                      <div className="text-[10px] uppercase tracking-wider text-un1t-muted mt-2">
                         {t.trigger_type.replaceAll('_', ' ')} · {t.step_count} step{t.step_count === 1 ? '' : 's'}
                       </div>
                     </button>

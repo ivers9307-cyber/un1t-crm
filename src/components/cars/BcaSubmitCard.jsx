@@ -128,7 +128,7 @@ export default function BcaSubmitCard({ car }) {
 
   if (state.loading) {
     return (
-      <div className="bg-un1t-dark border border-un1t-gray rounded-2xl p-5 mb-4 flex items-center gap-2 text-xs text-un1t-light">
+      <div className="bg-un1t-surface border border-un1t-border rounded-2xl p-5 mb-4 flex items-center gap-2 text-xs text-un1t-subtle">
         <Loader2 size={14} className="animate-spin" /> Loading BCA pack…
       </div>
     )
@@ -149,9 +149,9 @@ export default function BcaSubmitCard({ car }) {
   const canSubmit = allFilled && !submitting && !!config.send_from && !!config.send_to
 
   return (
-    <div className="bg-un1t-dark border border-un1t-gray rounded-2xl p-5 mb-4">
+    <div className="bg-un1t-surface border border-un1t-border rounded-2xl p-5 mb-4">
       <div className="flex items-center justify-between mb-3 gap-3">
-        <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light">BCA Submit</h3>
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle">BCA Submit</h3>
         <BcaStatusPill
           hasActive={hasActiveSubmission}
           filled={filledCount}
@@ -160,18 +160,18 @@ export default function BcaSubmitCard({ car }) {
         />
       </div>
 
-      <p className="text-xs text-un1t-light mb-3">
+      <p className="text-xs text-un1t-subtle mb-3">
         Upload all {totalSlots} document{totalSlots === 1 ? '' : 's'} required for the UK VAT claim, then submit to BCA.
         Once submitted, the merged PDF is emailed to{' '}
-        <span className="text-un1t-white font-mono">{config.send_to || '—'}</span>{' '}
-        from <span className="text-un1t-white font-mono">{config.send_from || '—'}</span>
-        {config.cc && <>{' '}(cc <span className="text-un1t-white font-mono">{config.cc}</span>)</>}
+        <span className="text-un1t-text font-mono">{config.send_to || '—'}</span>{' '}
+        from <span className="text-un1t-text font-mono">{config.send_from || '—'}</span>
+        {config.cc && <>{' '}(cc <span className="text-un1t-text font-mono">{config.cc}</span>)</>}
         .
       </p>
 
       {activeSubmission && (
-        <div className="bg-un1t-gray/20 border border-un1t-gray/40 rounded-md p-2.5 mb-3">
-          <div className="text-[10px] uppercase tracking-wider text-un1t-mid mb-1">
+        <div className="bg-un1t-border/20 border border-un1t-border/40 rounded-md p-2.5 mb-3">
+          <div className="text-[10px] uppercase tracking-wider text-un1t-muted mb-1">
             Activity on the active submission
           </div>
           <BcaMetricStrip row={activeSubmission} />
@@ -205,7 +205,7 @@ export default function BcaSubmitCard({ car }) {
           <Check size={14} className="mt-0.5 shrink-0" />
           <div>
             <div className="font-semibold">Sent to BCA</div>
-            <div className="text-un1t-light mt-1">
+            <div className="text-un1t-subtle mt-1">
               {submitResult.attachmentName} · {(submitResult.sizeBytes / 1024).toFixed(0)} KB ·
               Postmark message id <span className="font-mono">{submitResult.messageId}</span>
             </div>
@@ -213,8 +213,8 @@ export default function BcaSubmitCard({ car }) {
         </div>
       )}
 
-      <div className="flex items-center justify-between gap-3 pt-3 border-t border-un1t-gray/40">
-        <div className="text-xs text-un1t-light">
+      <div className="flex items-center justify-between gap-3 pt-3 border-t border-un1t-border/40">
+        <div className="text-xs text-un1t-subtle">
           {filledCount} / {totalSlots} document{totalSlots === 1 ? '' : 's'} staged.
           {!allFilled && (
             <span className="text-amber-400">
@@ -231,7 +231,7 @@ export default function BcaSubmitCard({ car }) {
           type="button"
           onClick={submit}
           disabled={!canSubmit}
-          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-un1t-white text-un1t-black text-xs font-semibold hover:bg-un1t-accent disabled:bg-un1t-gray/40 disabled:text-un1t-mid disabled:cursor-not-allowed"
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-un1t-text text-un1t-bg text-xs font-semibold hover:bg-un1t-accent disabled:bg-un1t-border/40 disabled:text-un1t-muted disabled:cursor-not-allowed"
         >
           {submitting
             ? <><Loader2 size={11} className="animate-spin" /> Submitting…</>
@@ -240,9 +240,9 @@ export default function BcaSubmitCard({ car }) {
         </button>
       </div>
 
-      <p className="text-[11px] text-un1t-mid mt-3">
+      <p className="text-[11px] text-un1t-muted mt-3">
         Slot labels + recipient address are configured at{' '}
-        <a href={`/settings/locations/${car.location_id}/bca`} className="underline hover:text-un1t-light">
+        <a href={`/settings/locations/${car.location_id}/bca`} className="underline hover:text-un1t-subtle">
           Settings → BCA Submit
         </a>
         .
@@ -261,11 +261,11 @@ export default function BcaSubmitCard({ car }) {
 
 function BcaSubmissionHistory({ submissions, open, onToggle }) {
   return (
-    <div className="mt-4 pt-3 border-t border-un1t-gray/40">
+    <div className="mt-4 pt-3 border-t border-un1t-border/40">
       <button
         type="button"
         onClick={onToggle}
-        className="inline-flex items-center gap-1 text-xs text-un1t-light hover:text-un1t-white"
+        className="inline-flex items-center gap-1 text-xs text-un1t-subtle hover:text-un1t-text"
       >
         {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
         Submission history ({submissions.length})
@@ -273,24 +273,24 @@ function BcaSubmissionHistory({ submissions, open, onToggle }) {
       {open && (
         <ul className="mt-2 space-y-2">
           {submissions.map(s => (
-            <li key={s.id} className="border border-un1t-gray/40 rounded-md p-2.5 text-xs">
+            <li key={s.id} className="border border-un1t-border/40 rounded-md p-2.5 text-xs">
               <div className="flex items-center justify-between gap-2 mb-1">
-                <span className="text-un1t-white">
+                <span className="text-un1t-text">
                   {new Date(s.submitted_at).toLocaleString()}
                 </span>
                 <BcaSubmissionStatus row={s} />
               </div>
-              <div className="text-un1t-light truncate" title={s.email_subject}>
-                <span className="text-un1t-mid">Subject:</span> {s.email_subject}
+              <div className="text-un1t-subtle truncate" title={s.email_subject}>
+                <span className="text-un1t-muted">Subject:</span> {s.email_subject}
               </div>
-              <div className="text-un1t-light mt-0.5">
-                <span className="text-un1t-mid">To:</span> {s.email_to}
+              <div className="text-un1t-subtle mt-0.5">
+                <span className="text-un1t-muted">To:</span> {s.email_to}
                 {' · '}
-                <span className="text-un1t-mid">From:</span> {s.email_from}
+                <span className="text-un1t-muted">From:</span> {s.email_from}
               </div>
               {s.merged_pdf_size > 0 && (
-                <div className="text-un1t-light mt-0.5">
-                  <span className="text-un1t-mid">Merged PDF:</span>{' '}
+                <div className="text-un1t-subtle mt-0.5">
+                  <span className="text-un1t-muted">Merged PDF:</span>{' '}
                   {(s.merged_pdf_size / 1024).toFixed(0)} KB
                   {' · '}
                   {Array.isArray(s.documents) ? s.documents.length : 0} source doc{(s.documents?.length || 0) === 1 ? '' : 's'}
@@ -304,7 +304,7 @@ function BcaSubmissionHistory({ submissions, open, onToggle }) {
                 </div>
               )}
               {s.postmark_message_id && (
-                <div className="text-[10px] text-un1t-mid mt-1 font-mono truncate">
+                <div className="text-[10px] text-un1t-muted mt-1 font-mono truncate">
                   Postmark id: {s.postmark_message_id}
                 </div>
               )}
@@ -314,7 +314,7 @@ function BcaSubmissionHistory({ submissions, open, onToggle }) {
                     href={s.merged_pdf_signed_url}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1 text-un1t-light hover:text-un1t-white"
+                    className="inline-flex items-center gap-1 text-un1t-subtle hover:text-un1t-text"
                   >
                     <Download size={11} /> Download merged PDF
                   </a>
@@ -327,11 +327,11 @@ function BcaSubmissionHistory({ submissions, open, onToggle }) {
                     title={s.download_expires_at
                       ? `Public re-download link for BCA — expires ${new Date(s.download_expires_at).toLocaleDateString()}`
                       : 'Public re-download link for BCA'}
-                    className="inline-flex items-center gap-1 text-un1t-light hover:text-un1t-white"
+                    className="inline-flex items-center gap-1 text-un1t-subtle hover:text-un1t-text"
                   >
                     <Eye size={11} /> Public link
                     {s.download_expires_at && (
-                      <span className="text-[10px] text-un1t-mid">
+                      <span className="text-[10px] text-un1t-muted">
                         (exp {new Date(s.download_expires_at).toLocaleDateString()})
                       </span>
                     )}
@@ -416,7 +416,7 @@ function BcaMetricStrip({ row }) {
   // entirely from the row layout.
   if (chips.length === 0) {
     return (
-      <div className="mt-1.5 text-[10px] text-un1t-mid inline-flex items-center gap-1">
+      <div className="mt-1.5 text-[10px] text-un1t-muted inline-flex items-center gap-1">
         <RefreshCw size={10} /> No activity yet from BCA.
       </div>
     )
@@ -450,7 +450,7 @@ function BcaSubmissionStatus({ row }) {
   }
   if (row.superseded_at) {
     return (
-      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] uppercase font-semibold bg-un1t-gray/40 text-un1t-light">
+      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] uppercase font-semibold bg-un1t-border/40 text-un1t-subtle">
         Superseded
       </span>
     )
@@ -531,7 +531,7 @@ function BcaSlot({ index, label, slug, file, uploading, removing, onUpload, onRe
           ? 'border-blue-400 bg-blue-500/10'
           : file
             ? 'border-green-500/40 bg-green-500/5'
-            : 'border-un1t-gray'
+            : 'border-un1t-border'
       }`}
     >
       <input
@@ -544,8 +544,8 @@ function BcaSlot({ index, label, slug, file, uploading, removing, onUpload, onRe
 
       <div className="flex items-start justify-between gap-2 mb-1">
         <div className="min-w-0 flex-1">
-          <div className="text-[10px] text-un1t-mid font-mono">{slug.toUpperCase()} · slot {index}</div>
-          <div className="text-sm text-un1t-white truncate" title={label}>{label}</div>
+          <div className="text-[10px] text-un1t-muted font-mono">{slug.toUpperCase()} · slot {index}</div>
+          <div className="text-sm text-un1t-text truncate" title={label}>{label}</div>
         </div>
         {file
           ? <Check size={14} className="text-green-500 shrink-0 mt-0.5" />
@@ -555,8 +555,8 @@ function BcaSlot({ index, label, slug, file, uploading, removing, onUpload, onRe
 
       {file ? (
         <div className="flex items-center gap-2">
-          <FileText size={12} className="text-un1t-light shrink-0" />
-          <span className="text-xs text-un1t-light truncate flex-1" title={file.filename}>
+          <FileText size={12} className="text-un1t-subtle shrink-0" />
+          <span className="text-xs text-un1t-subtle truncate flex-1" title={file.filename}>
             {file.filename}
           </span>
           <div className="flex items-center gap-1 shrink-0">
@@ -565,7 +565,7 @@ function BcaSlot({ index, label, slug, file, uploading, removing, onUpload, onRe
                 href={file.signed_url}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-un1t-light hover:text-un1t-white p-0.5"
+                className="text-un1t-subtle hover:text-un1t-text p-0.5"
                 title="Preview"
               >
                 <Eye size={12} />
@@ -575,7 +575,7 @@ function BcaSlot({ index, label, slug, file, uploading, removing, onUpload, onRe
               type="button"
               onClick={pick}
               disabled={uploading || removing}
-              className="text-un1t-light hover:text-un1t-white p-0.5 disabled:opacity-40"
+              className="text-un1t-subtle hover:text-un1t-text p-0.5 disabled:opacity-40"
               title="Replace"
             >
               <Upload size={12} />
@@ -584,7 +584,7 @@ function BcaSlot({ index, label, slug, file, uploading, removing, onUpload, onRe
               type="button"
               onClick={onRemove}
               disabled={uploading || removing}
-              className="text-un1t-light hover:text-red-500 p-0.5 disabled:opacity-40"
+              className="text-un1t-subtle hover:text-red-500 p-0.5 disabled:opacity-40"
               title="Remove"
             >
               {removing ? <Loader2 size={12} className="animate-spin" /> : <X size={12} />}
@@ -596,7 +596,7 @@ function BcaSlot({ index, label, slug, file, uploading, removing, onUpload, onRe
           type="button"
           onClick={pick}
           disabled={uploading}
-          className="w-full inline-flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-md bg-un1t-gray/30 hover:bg-un1t-gray/50 text-xs text-un1t-light hover:text-un1t-white disabled:opacity-50"
+          className="w-full inline-flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-md bg-un1t-border/30 hover:bg-un1t-border/50 text-xs text-un1t-subtle hover:text-un1t-text disabled:opacity-50"
         >
           {uploading
             ? <><Loader2 size={11} className="animate-spin" /> Uploading…</>

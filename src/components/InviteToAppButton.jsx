@@ -41,8 +41,8 @@ export default function InviteToAppButton({ contactId, hasUserAccount }) {
   const Icon = result?.ok ? Check : Smartphone
 
   // Two visual variants. Both pin solid bg + white text against the
-  // light page background (un1t-black is white in this theme; the
-  // earlier first-cut styling used un1t-gray which is the panel
+  // light page background (un1t-bg is white in this theme; the
+  // earlier first-cut styling used un1t-border which is the panel
   // colour, leaving the button nearly invisible).
   //   - First-time invite: indigo, the brand-ish "go" colour. Stands out.
   //   - Resend: neutral slate. Clear it's a secondary, but still readable.

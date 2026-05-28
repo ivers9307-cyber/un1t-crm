@@ -32,12 +32,12 @@ export default async function HolidaysSettingsPage() {
 
   return (
     <div className="p-8 max-w-3xl">
-      <Link href="/settings" className="inline-flex items-center gap-1.5 text-sm text-un1t-light hover:text-un1t-white mb-4">
+      <Link href="/settings" className="inline-flex items-center gap-1.5 text-sm text-un1t-subtle hover:text-un1t-text mb-4">
         <ArrowLeft size={16} /> Back to Settings
       </Link>
       <h2 className="text-2xl font-bold mb-1">Bank Holidays</h2>
-      <p className="text-sm text-un1t-light mb-2">
-        Public holidays for <span className="text-un1t-white font-medium">{user.activeLocation?.name}</span>
+      <p className="text-sm text-un1t-subtle mb-2">
+        Public holidays for <span className="text-un1t-text font-medium">{user.activeLocation?.name}</span>
         {' '}({countryName(country)}) are highlighted on the schedule. Add custom holidays
         here for closures specific to this location.
       </p>

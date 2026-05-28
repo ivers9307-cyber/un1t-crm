@@ -50,7 +50,7 @@ export default async function BusinessDashboardPage() {
           label="Lost this month"
           value={lostCountMTD}
           sublabel={lostCountMTD === 1 ? 'deal' : 'deals'}
-          accent={lostCountMTD > 0 ? 'text-red-500' : 'text-un1t-mid'}
+          accent={lostCountMTD > 0 ? 'text-red-500' : 'text-un1t-muted'}
         />
         <KpiCard
           label="Win rate"
@@ -76,7 +76,7 @@ export default async function BusinessDashboardPage() {
           sublabel="excludes overtime premium"
         />
       </KpiRow>
-      <p className="text-xs text-un1t-mid mt-1 px-1">
+      <p className="text-xs text-un1t-muted mt-1 px-1">
         Labour cost is a base estimate from each staffer&apos;s contract / hourly rate.
         The full payroll report (including overtime, NI, etc.) lives under{' '}
         <a href="/schedule" className="underline">Schedule</a>.

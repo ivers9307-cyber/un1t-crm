@@ -148,7 +148,7 @@ export default function AttendanceReportClient({ activeLocationName }) {
       {/* Table */}
       <div className="overflow-hidden rounded-xl border border-neutral-200 bg-white">
         <table className="w-full text-sm">
-          <thead className="bg-neutral-50 text-left text-xs uppercase text-un1t-light">
+          <thead className="bg-neutral-50 text-left text-xs uppercase text-un1t-subtle">
             <tr>
               <th className="px-3 py-2">Date</th>
               <th className="px-3 py-2">Staff</th>
@@ -161,14 +161,14 @@ export default function AttendanceReportClient({ activeLocationName }) {
           </thead>
           <tbody>
             {filtered.length === 0 && !loading && (
-              <tr><td colSpan={7} className="px-3 py-8 text-center text-sm text-un1t-light">No shifts in this window.</td></tr>
+              <tr><td colSpan={7} className="px-3 py-8 text-center text-sm text-un1t-subtle">No shifts in this window.</td></tr>
             )}
             {filtered.map((r) => (
               <tr key={r.assignment_id} className="border-t border-neutral-200">
                 <td className="px-3 py-2 tabular-nums">{r.block_date}</td>
                 <td className="px-3 py-2">
                   <span className="font-medium">{r.profile_name}</span>
-                  {r.profile_role && <span className="ml-2 text-xs text-un1t-light">{r.profile_role}</span>}
+                  {r.profile_role && <span className="ml-2 text-xs text-un1t-subtle">{r.profile_role}</span>}
                 </td>
                 <td className="px-3 py-2 font-mono text-xs">{(r.scheduled_start || '').slice(0, 5)}</td>
                 <td className="px-3 py-2 font-mono text-xs">{r.actual_start ? r.actual_start.slice(0, 5) : '—'}</td>
@@ -201,7 +201,7 @@ export default function AttendanceReportClient({ activeLocationName }) {
         <TailgatesPanel tailgates={data.tailgates} totalCount={data.tailgate_count} />
       )}
 
-      <p className="mt-3 text-xs text-un1t-light">
+      <p className="mt-3 text-xs text-un1t-subtle">
         Showing data for <strong>{activeLocationName || data?.location?.name || 'active location'}</strong>.
         Switch locations with the location picker to see other studios.
       </p>
@@ -230,7 +230,7 @@ function SummaryTile({ label, value, accent }) {
 // the corroboration.
 function SourceBadges({ sources }) {
   if (!sources || sources.length === 0) {
-    return <span className="text-xs text-un1t-light">—</span>
+    return <span className="text-xs text-un1t-subtle">—</span>
   }
   const meta = {
     unifi_access: { label: 'Access', cls: 'bg-blue-50 text-blue-800 border-blue-200',  title: 'Card tap (UniFi Access)' },

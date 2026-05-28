@@ -105,7 +105,7 @@ export default function ScheduleReporting({ user }) {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h2 className="text-2xl font-bold">Reporting</h2>
-          <p className="text-sm text-un1t-light mt-1">{user.activeLocation?.name} — Schedule & labour reports</p>
+          <p className="text-sm text-un1t-subtle mt-1">{user.activeLocation?.name} — Schedule & labour reports</p>
         </div>
       </div>
 
@@ -120,7 +120,7 @@ export default function ScheduleReporting({ user }) {
             key={t.key}
             onClick={() => setView(t.key)}
             className={`flex items-center gap-1.5 px-3 py-2 rounded-lg transition-colors ${
-              view === t.key ? 'bg-un1t-white text-un1t-black' : 'bg-un1t-dark border border-un1t-gray text-un1t-light hover:text-un1t-white'
+              view === t.key ? 'bg-un1t-text text-un1t-bg' : 'bg-un1t-surface border border-un1t-border text-un1t-subtle hover:text-un1t-text'
             }`}
           >
             <t.icon size={14} /> {t.label}
@@ -141,8 +141,8 @@ export default function ScheduleReporting({ user }) {
                   onClick={() => { setSelectedReport(rt.key); setReportResult(null) }}
                   className={`flex flex-col items-center gap-2 p-4 rounded-lg border text-xs transition-colors ${
                     selectedReport === rt.key
-                      ? 'border-un1t-white/40 bg-un1t-gray/30 text-un1t-white'
-                      : 'border-un1t-gray bg-un1t-dark text-un1t-light hover:border-white/20 hover:text-un1t-white'
+                      ? 'border-un1t-text/40 bg-un1t-border/30 text-un1t-text'
+                      : 'border-un1t-border bg-un1t-surface text-un1t-subtle hover:border-white/20 hover:text-un1t-text'
                   }`}
                 >
                   <Icon size={20} />
@@ -154,40 +154,40 @@ export default function ScheduleReporting({ user }) {
 
           {selectedReport && (
             <>
-              <div className="text-sm text-un1t-light">
+              <div className="text-sm text-un1t-subtle">
                 {REPORT_TYPES.find(r => r.key === selectedReport)?.description}
               </div>
 
               {/* Date range + generate */}
               <div className="flex items-end gap-3">
                 <div>
-                  <label className="block text-xs text-un1t-light mb-1">Start Date</label>
+                  <label className="block text-xs text-un1t-subtle mb-1">Start Date</label>
                   <input
                     type="date"
                     value={periodStart}
                     onChange={e => setPeriodStart(e.target.value)}
-                    className="bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
+                    className="bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs text-un1t-light mb-1">End Date</label>
+                  <label className="block text-xs text-un1t-subtle mb-1">End Date</label>
                   <input
                     type="date"
                     value={periodEnd}
                     onChange={e => setPeriodEnd(e.target.value)}
-                    className="bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
+                    className="bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
                   />
                 </div>
                 <button
                   onClick={generateReport}
                   disabled={generating}
-                  className="flex items-center gap-1.5 px-4 py-2 bg-un1t-white text-un1t-black text-sm font-medium rounded-md hover:bg-un1t-accent transition-colors disabled:opacity-50"
+                  className="flex items-center gap-1.5 px-4 py-2 bg-un1t-text text-un1t-bg text-sm font-medium rounded-md hover:bg-un1t-accent transition-colors disabled:opacity-50"
                 >
                   <Play size={14} /> {generating ? 'Generating...' : 'Generate'}
                 </button>
                 <button
                   onClick={() => setShowScheduleModal(selectedReport)}
-                  className="flex items-center gap-1.5 px-4 py-2 border border-un1t-gray text-sm text-un1t-light hover:text-un1t-white rounded-md transition-colors"
+                  className="flex items-center gap-1.5 px-4 py-2 border border-un1t-border text-sm text-un1t-subtle hover:text-un1t-text rounded-md transition-colors"
                 >
                   <Calendar size={14} /> Schedule
                 </button>
@@ -202,12 +202,12 @@ export default function ScheduleReporting({ user }) {
               {reportResult.summary && (
                 <div className="grid grid-cols-4 gap-3">
                   {Object.entries(reportResult.summary).map(([key, val]) => (
-                    <div key={key} className="bg-un1t-dark border border-un1t-gray rounded-lg p-4">
-                      <div className="text-xs text-un1t-light uppercase tracking-wider">{key.replace(/_/g, ' ')}</div>
+                    <div key={key} className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
+                      <div className="text-xs text-un1t-subtle uppercase tracking-wider">{key.replace(/_/g, ' ')}</div>
                       <div className="text-xl font-bold mt-1">
                         {key.includes('cost') || key === 'currency' ? (typeof val === 'number' ? formatCurrency(val) : val) : val}
-                        {key.includes('hours') && <span className="text-sm text-un1t-light ml-1">hrs</span>}
-                        {key.includes('utilisation') && <span className="text-sm text-un1t-light ml-1">%</span>}
+                        {key.includes('hours') && <span className="text-sm text-un1t-subtle ml-1">hrs</span>}
+                        {key.includes('utilisation') && <span className="text-sm text-un1t-subtle ml-1">%</span>}
                       </div>
                     </div>
                   ))}
@@ -215,16 +215,16 @@ export default function ScheduleReporting({ user }) {
               )}
 
               {/* Report period */}
-              <div className="text-xs text-un1t-light">
+              <div className="text-xs text-un1t-subtle">
                 Period: {new Date(reportResult.period_start + 'T00:00:00').toLocaleDateString('en-IE', { day: 'numeric', month: 'short', year: 'numeric' })} – {new Date(reportResult.period_end + 'T00:00:00').toLocaleDateString('en-IE', { day: 'numeric', month: 'short', year: 'numeric' })}
               </div>
 
               {/* Staff data table */}
               {reportResult.report_data?.staff && (
-                <div className="bg-un1t-dark border border-un1t-gray rounded-lg overflow-x-auto">
+                <div className="bg-un1t-surface border border-un1t-border rounded-lg overflow-x-auto">
                   <table className="w-full text-sm min-w-[600px]">
                     <thead>
-                      <tr className="border-b border-un1t-gray text-xs text-un1t-light uppercase">
+                      <tr className="border-b border-un1t-border text-xs text-un1t-subtle uppercase">
                         <th className="text-left px-4 py-3">Staff Member</th>
                         <th className="text-left px-4 py-3">Role</th>
                         <th className="text-left px-4 py-3">Type</th>
@@ -239,9 +239,9 @@ export default function ScheduleReporting({ user }) {
                     </thead>
                     <tbody>
                       {reportResult.report_data.staff.map((s, i) => (
-                        <tr key={i} className="border-b border-un1t-gray/50 hover:bg-un1t-gray/30">
+                        <tr key={i} className="border-b border-un1t-border/50 hover:bg-un1t-border/30">
                           <td className="px-4 py-3 font-medium">{s.name}</td>
-                          <td className="px-4 py-3 text-un1t-light capitalize">{s.role}</td>
+                          <td className="px-4 py-3 text-un1t-subtle capitalize">{s.role}</td>
                           <td className="px-4 py-3">
                             <span className={`text-xs px-2 py-0.5 rounded-full ${s.employment_type === 'contractor' ? 'bg-amber-500/20 text-amber-400' : 'bg-blue-500/20 text-blue-400'}`}>
                               {s.employment_type === 'contractor' ? 'Contractor' : 'FTE'}
@@ -275,10 +275,10 @@ export default function ScheduleReporting({ user }) {
 
               {/* Time-off by staff table */}
               {reportResult.report_data?.by_staff && (
-                <div className="bg-un1t-dark border border-un1t-gray rounded-lg overflow-x-auto">
+                <div className="bg-un1t-surface border border-un1t-border rounded-lg overflow-x-auto">
                   <table className="w-full text-sm min-w-[600px]">
                     <thead>
-                      <tr className="border-b border-un1t-gray text-xs text-un1t-light uppercase">
+                      <tr className="border-b border-un1t-border text-xs text-un1t-subtle uppercase">
                         <th className="text-left px-4 py-3">Staff Member</th>
                         <th className="text-right px-4 py-3">Holiday</th>
                         <th className="text-right px-4 py-3">Sick</th>
@@ -288,7 +288,7 @@ export default function ScheduleReporting({ user }) {
                     </thead>
                     <tbody>
                       {Object.entries(reportResult.report_data.by_staff).map(([name, data]) => (
-                        <tr key={name} className="border-b border-un1t-gray/50 hover:bg-un1t-gray/30">
+                        <tr key={name} className="border-b border-un1t-border/50 hover:bg-un1t-border/30">
                           <td className="px-4 py-3 font-medium">{name}</td>
                           <td className="px-4 py-3 text-right text-green-400">{data.holiday || 0}</td>
                           <td className="px-4 py-3 text-right text-red-400">{data.sick || 0}</td>
@@ -303,10 +303,10 @@ export default function ScheduleReporting({ user }) {
 
               {/* Roster coverage day view */}
               {reportResult.report_data?.days && (
-                <div className="bg-un1t-dark border border-un1t-gray rounded-lg overflow-x-auto">
+                <div className="bg-un1t-surface border border-un1t-border rounded-lg overflow-x-auto">
                   <table className="w-full text-sm min-w-[600px]">
                     <thead>
-                      <tr className="border-b border-un1t-gray text-xs text-un1t-light uppercase">
+                      <tr className="border-b border-un1t-border text-xs text-un1t-subtle uppercase">
                         <th className="text-left px-4 py-3">Date</th>
                         <th className="text-right px-4 py-3">Shifts</th>
                         <th className="text-right px-4 py-3">Staff Working</th>
@@ -315,13 +315,13 @@ export default function ScheduleReporting({ user }) {
                     </thead>
                     <tbody>
                       {reportResult.report_data.days.map(day => (
-                        <tr key={day.date} className="border-b border-un1t-gray/50 hover:bg-un1t-gray/30">
+                        <tr key={day.date} className="border-b border-un1t-border/50 hover:bg-un1t-border/30">
                           <td className="px-4 py-3 font-medium">
                             {new Date(day.date + 'T00:00:00').toLocaleDateString('en-IE', { weekday: 'short', day: 'numeric', month: 'short' })}
                           </td>
                           <td className="px-4 py-3 text-right">{day.shifts_count}</td>
                           <td className="px-4 py-3 text-right">{day.staff_working}</td>
-                          <td className="px-4 py-3 text-un1t-light text-xs">
+                          <td className="px-4 py-3 text-un1t-subtle text-xs">
                             {day.staff_off.length > 0 ? day.staff_off.join(', ') : '—'}
                           </td>
                         </tr>
@@ -339,11 +339,11 @@ export default function ScheduleReporting({ user }) {
       {view === 'history' && (
         <div>
           {loadingHistory ? (
-            <div className="text-center py-16 text-un1t-light">Loading report history...</div>
+            <div className="text-center py-16 text-un1t-subtle">Loading report history...</div>
           ) : history.length === 0 ? (
             <div className="text-center py-16">
-              <FileText size={40} className="mx-auto text-un1t-mid mb-3" />
-              <p className="text-un1t-light text-sm">No reports generated yet</p>
+              <FileText size={40} className="mx-auto text-un1t-muted mb-3" />
+              <p className="text-un1t-subtle text-sm">No reports generated yet</p>
             </div>
           ) : (
             <div className="space-y-2">
@@ -354,14 +354,14 @@ export default function ScheduleReporting({ user }) {
                   <button
                     key={r.id}
                     onClick={() => viewHistoricReport(r)}
-                    className="w-full bg-un1t-dark border border-un1t-gray rounded-lg p-4 flex items-center gap-4 text-left hover:border-white/20 transition-colors"
+                    className="w-full bg-un1t-surface border border-un1t-border rounded-lg p-4 flex items-center gap-4 text-left hover:border-white/20 transition-colors"
                   >
                     <div className="w-10 h-10 rounded-lg bg-blue-500/20 flex items-center justify-center shrink-0">
                       <Icon size={20} className="text-blue-400" />
                     </div>
                     <div className="flex-1 min-w-0">
                       <div className="font-medium text-sm">{r.report_name}</div>
-                      <div className="text-xs text-un1t-light mt-0.5">
+                      <div className="text-xs text-un1t-subtle mt-0.5">
                         {new Date(r.period_start + 'T00:00:00').toLocaleDateString('en-IE', { day: 'numeric', month: 'short' })} – {new Date(r.period_end + 'T00:00:00').toLocaleDateString('en-IE', { day: 'numeric', month: 'short', year: 'numeric' })}
                         <span className="mx-2">·</span>
                         Generated {new Date(r.created_at).toLocaleDateString('en-IE', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
@@ -373,7 +373,7 @@ export default function ScheduleReporting({ user }) {
                           <div className="text-sm font-bold">{formatCurrency(r.summary.total_cost)}</div>
                         )}
                         {r.summary.total_hours !== undefined && (
-                          <div className="text-xs text-un1t-light">{r.summary.total_hours} hrs</div>
+                          <div className="text-xs text-un1t-subtle">{r.summary.total_hours} hrs</div>
                         )}
                       </div>
                     )}
@@ -390,9 +390,9 @@ export default function ScheduleReporting({ user }) {
         <div>
           {scheduledReports.length === 0 ? (
             <div className="text-center py-16">
-              <Repeat size={40} className="mx-auto text-un1t-mid mb-3" />
-              <p className="text-un1t-light text-sm">No scheduled reports</p>
-              <p className="text-xs text-un1t-mid mt-1">Schedule reports from the Generate Report tab</p>
+              <Repeat size={40} className="mx-auto text-un1t-muted mb-3" />
+              <p className="text-un1t-subtle text-sm">No scheduled reports</p>
+              <p className="text-xs text-un1t-muted mt-1">Schedule reports from the Generate Report tab</p>
             </div>
           ) : (
             <div className="space-y-2">
@@ -402,14 +402,14 @@ export default function ScheduleReporting({ user }) {
                 return (
                   <div
                     key={sr.id}
-                    className={`bg-un1t-dark border border-un1t-gray rounded-lg p-4 flex items-center gap-4 ${!sr.active ? 'opacity-50' : ''}`}
+                    className={`bg-un1t-surface border border-un1t-border rounded-lg p-4 flex items-center gap-4 ${!sr.active ? 'opacity-50' : ''}`}
                   >
                     <div className="w-10 h-10 rounded-lg bg-purple-500/20 flex items-center justify-center shrink-0">
                       <Icon size={20} className="text-purple-400" />
                     </div>
                     <div className="flex-1 min-w-0">
                       <div className="font-medium text-sm">{sr.report_name}</div>
-                      <div className="text-xs text-un1t-light mt-0.5 flex items-center gap-2">
+                      <div className="text-xs text-un1t-subtle mt-0.5 flex items-center gap-2">
                         <span className="capitalize">{sr.frequency}</span>
                         {sr.day_of_week != null && <span>· {DAY_NAMES[sr.day_of_week]}</span>}
                         {sr.day_of_month && <span>· Day {sr.day_of_month}</span>}
@@ -418,7 +418,7 @@ export default function ScheduleReporting({ user }) {
                       </div>
                     </div>
                     {sr.next_run_at && (
-                      <div className="text-xs text-un1t-light text-right shrink-0">
+                      <div className="text-xs text-un1t-subtle text-right shrink-0">
                         Next: {new Date(sr.next_run_at).toLocaleDateString('en-IE', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
                       </div>
                     )}
@@ -479,29 +479,29 @@ function ScheduleReportModal({ reportType, locationId, onClose, onSave }) {
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={onClose}>
-      <div className="bg-un1t-dark border border-un1t-gray rounded-xl p-6 w-full max-w-md" onClick={e => e.stopPropagation()}>
+      <div className="bg-un1t-surface border border-un1t-border rounded-xl p-6 w-full max-w-md" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-4">
           <h3 className="font-semibold">Schedule Recurring Report</h3>
-          <button onClick={onClose} className="text-un1t-light hover:text-un1t-white"><Plus size={18} className="rotate-45" /></button>
+          <button onClick={onClose} className="text-un1t-subtle hover:text-un1t-text"><Plus size={18} className="rotate-45" /></button>
         </div>
 
         <div className="space-y-4">
           <div>
-            <label className="block text-xs text-un1t-light mb-1">Report Name</label>
+            <label className="block text-xs text-un1t-subtle mb-1">Report Name</label>
             <input
               type="text"
               value={name}
               onChange={e => setName(e.target.value)}
-              className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
+              className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
             />
           </div>
 
           <div>
-            <label className="block text-xs text-un1t-light mb-1">Frequency</label>
+            <label className="block text-xs text-un1t-subtle mb-1">Frequency</label>
             <select
               value={frequency}
               onChange={e => setFrequency(e.target.value)}
-              className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
+              className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
             >
               {FREQ_OPTIONS.map(f => <option key={f.value} value={f.value}>{f.label}</option>)}
             </select>
@@ -509,11 +509,11 @@ function ScheduleReportModal({ reportType, locationId, onClose, onSave }) {
 
           {(frequency === 'weekly' || frequency === 'fortnightly') && (
             <div>
-              <label className="block text-xs text-un1t-light mb-1">Day of Week</label>
+              <label className="block text-xs text-un1t-subtle mb-1">Day of Week</label>
               <select
                 value={dayOfWeek}
                 onChange={e => setDayOfWeek(Number(e.target.value))}
-                className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
+                className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
               >
                 {DAY_NAMES.map((d, i) => <option key={i} value={i}>{d}</option>)}
               </select>
@@ -522,20 +522,20 @@ function ScheduleReportModal({ reportType, locationId, onClose, onSave }) {
 
           {frequency === 'monthly' && (
             <div>
-              <label className="block text-xs text-un1t-light mb-1">Day of Month</label>
+              <label className="block text-xs text-un1t-subtle mb-1">Day of Month</label>
               <input
                 type="number"
                 min={1}
                 max={28}
                 value={dayOfMonth}
                 onChange={e => setDayOfMonth(Number(e.target.value))}
-                className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
+                className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
               />
             </div>
           )}
 
           <div className="space-y-3">
-            <label className="block text-xs text-un1t-light">Delivery</label>
+            <label className="block text-xs text-un1t-subtle">Delivery</label>
             <label className="flex items-center gap-3 cursor-pointer">
               <input type="checkbox" checked={deliverNotification} onChange={e => setDeliverNotification(e.target.checked)} className="rounded" />
               <span className="text-sm flex items-center gap-1.5"><Bell size={14} /> In-app notification</span>
@@ -546,13 +546,13 @@ function ScheduleReportModal({ reportType, locationId, onClose, onSave }) {
             </label>
             {deliverEmail && (
               <div>
-                <label className="block text-xs text-un1t-light mb-1">Recipients (comma-separated)</label>
+                <label className="block text-xs text-un1t-subtle mb-1">Recipients (comma-separated)</label>
                 <input
                   type="text"
                   value={emailRecipients}
                   onChange={e => setEmailRecipients(e.target.value)}
                   placeholder="manager@un1t.ie, owner@un1t.ie"
-                  className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
+                  className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
                 />
               </div>
             )}
@@ -562,7 +562,7 @@ function ScheduleReportModal({ reportType, locationId, onClose, onSave }) {
         <button
           onClick={handleSave}
           disabled={!name || saving}
-          className="w-full mt-5 bg-un1t-white text-un1t-black font-medium text-sm py-2.5 rounded-md hover:bg-un1t-accent transition-colors disabled:opacity-50"
+          className="w-full mt-5 bg-un1t-text text-un1t-bg font-medium text-sm py-2.5 rounded-md hover:bg-un1t-accent transition-colors disabled:opacity-50"
         >
           {saving ? 'Saving...' : 'Create Schedule'}
         </button>

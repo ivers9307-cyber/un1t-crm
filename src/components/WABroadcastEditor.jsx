@@ -113,9 +113,9 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, us
   return (
     <div className="flex flex-col h-screen">
       {/* Top bar */}
-      <div className="flex items-center justify-between px-5 py-3 border-b border-un1t-gray bg-un1t-dark shrink-0">
+      <div className="flex items-center justify-between px-5 py-3 border-b border-un1t-border bg-un1t-surface shrink-0">
         <div className="flex items-center gap-4">
-          <Link href="/whatsapp/broadcasts" className="text-un1t-light hover:text-un1t-white transition-colors">
+          <Link href="/whatsapp/broadcasts" className="text-un1t-subtle hover:text-un1t-text transition-colors">
             <ArrowLeft size={20} />
           </Link>
           <input
@@ -124,7 +124,7 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, us
             onChange={e => setName(e.target.value)}
             placeholder="Broadcast name..."
             disabled={isSent}
-            className="bg-transparent text-lg font-semibold text-un1t-white placeholder:text-un1t-mid focus:outline-none w-64 disabled:opacity-70"
+            className="bg-transparent text-lg font-semibold text-un1t-text placeholder:text-un1t-muted focus:outline-none w-64 disabled:opacity-70"
           />
           {broadcast?.status && (
             <span className={`text-xs px-2 py-0.5 rounded-full ${
@@ -140,7 +140,7 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, us
             <button
               onClick={handleSave}
               disabled={saving}
-              className="flex items-center gap-1.5 text-sm text-un1t-light hover:text-un1t-white border border-un1t-gray hover:border-un1t-white/30 px-3 py-1.5 rounded-md transition-colors disabled:opacity-50"
+              className="flex items-center gap-1.5 text-sm text-un1t-subtle hover:text-un1t-text border border-un1t-border hover:border-un1t-text/30 px-3 py-1.5 rounded-md transition-colors disabled:opacity-50"
             >
               <Save size={14} />
               {saving ? 'Saving...' : 'Save'}
@@ -165,7 +165,7 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, us
 
       {/* Tabs for sent broadcasts */}
       {isSent && (
-        <div className="flex border-b border-un1t-gray bg-un1t-dark shrink-0">
+        <div className="flex border-b border-un1t-border bg-un1t-surface shrink-0">
           {[
             { key: 'results', label: 'Results' },
             { key: 'recipients', label: `Recipients (${broadcast.total_sent || 0})` },
@@ -174,7 +174,7 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, us
               key={t.key}
               onClick={() => setTab(t.key)}
               className={`px-5 py-2.5 text-sm font-medium border-b-2 transition-colors ${
-                tab === t.key ? 'text-un1t-white border-un1t-white' : 'text-un1t-light border-transparent hover:text-un1t-white'
+                tab === t.key ? 'text-un1t-text border-un1t-text' : 'text-un1t-subtle border-transparent hover:text-un1t-text'
               }`}
             >
               {t.label}
@@ -188,20 +188,20 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, us
         {isSent && tab === 'results' && (
           <div className="max-w-3xl space-y-4">
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-              <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-4">
-                <p className="text-xs text-un1t-light uppercase">Sent</p>
+              <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
+                <p className="text-xs text-un1t-subtle uppercase">Sent</p>
                 <p className="text-2xl font-bold mt-1">{broadcast.total_sent || 0}</p>
               </div>
-              <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-4">
-                <p className="text-xs text-un1t-light uppercase">Delivered</p>
+              <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
+                <p className="text-xs text-un1t-subtle uppercase">Delivered</p>
                 <p className="text-2xl font-bold mt-1 text-green-400">{broadcast.total_delivered || 0}</p>
               </div>
-              <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-4">
-                <p className="text-xs text-un1t-light uppercase">Read</p>
+              <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
+                <p className="text-xs text-un1t-subtle uppercase">Read</p>
                 <p className="text-2xl font-bold mt-1 text-blue-400">{broadcast.total_read || 0}</p>
               </div>
-              <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-4">
-                <p className="text-xs text-un1t-light uppercase">Failed</p>
+              <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
+                <p className="text-xs text-un1t-subtle uppercase">Failed</p>
                 <p className="text-2xl font-bold mt-1 text-red-400">{broadcast.total_failed || 0}</p>
               </div>
             </div>
@@ -209,10 +209,10 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, us
         )}
 
         {isSent && tab === 'recipients' && (
-          <div className="bg-un1t-dark border border-un1t-gray rounded-lg overflow-x-auto">
+          <div className="bg-un1t-surface border border-un1t-border rounded-lg overflow-x-auto">
             <table className="w-full text-sm min-w-[600px]">
               <thead>
-                <tr className="border-b border-un1t-gray text-left text-xs text-un1t-light uppercase tracking-wider">
+                <tr className="border-b border-un1t-border text-left text-xs text-un1t-subtle uppercase tracking-wider">
                   <th className="px-4 py-3">Contact</th>
                   <th className="px-4 py-3">Status</th>
                   <th className="px-4 py-3">Sent</th>
@@ -220,31 +220,31 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, us
                   <th className="px-4 py-3">Read</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-un1t-gray">
+              <tbody className="divide-y divide-un1t-border">
                 {recipients.map(r => (
-                  <tr key={r.id} className="hover:bg-un1t-gray/20">
+                  <tr key={r.id} className="hover:bg-un1t-border/20">
                     <td className="px-4 py-3">
                       <p className="font-medium">{r.contacts?.name || 'Unknown'}</p>
-                      <p className="text-xs text-un1t-mid">{r.contacts?.wa_phone || r.contacts?.phone}</p>
+                      <p className="text-xs text-un1t-muted">{r.contacts?.wa_phone || r.contacts?.phone}</p>
                     </td>
                     <td className="px-4 py-3">
                       <span className={`flex items-center gap-1 text-xs ${
                         r.status === 'read' ? 'text-blue-400' :
                         r.status === 'delivered' ? 'text-green-400' :
                         r.status === 'failed' ? 'text-red-400' :
-                        'text-un1t-light'
+                        'text-un1t-subtle'
                       }`}>
                         {r.status === 'failed' ? <XCircle size={12} /> : <CheckCircle2 size={12} />}
                         {r.status}
                       </span>
                     </td>
-                    <td className="px-4 py-3 text-xs text-un1t-light">
+                    <td className="px-4 py-3 text-xs text-un1t-subtle">
                       {r.sent_at ? new Date(r.sent_at).toLocaleString('en-IE', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—'}
                     </td>
-                    <td className="px-4 py-3 text-xs text-un1t-light">
+                    <td className="px-4 py-3 text-xs text-un1t-subtle">
                       {r.delivered_at ? new Date(r.delivered_at).toLocaleString('en-IE', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—'}
                     </td>
-                    <td className="px-4 py-3 text-xs text-un1t-light">
+                    <td className="px-4 py-3 text-xs text-un1t-subtle">
                       {r.read_at ? new Date(r.read_at).toLocaleString('en-IE', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—'}
                     </td>
                   </tr>
@@ -257,12 +257,12 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, us
         {!isSent && (
           <div className="max-w-3xl space-y-6">
             {/* Template selection */}
-            <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5 space-y-4">
-              <h3 className="font-semibold text-sm text-un1t-light uppercase tracking-wider">Template</h3>
+            <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5 space-y-4">
+              <h3 className="font-semibold text-sm text-un1t-subtle uppercase tracking-wider">Template</h3>
 
               {templates.length === 0 ? (
                 <div className="text-center py-4">
-                  <p className="text-sm text-un1t-light mb-2">No approved templates available</p>
+                  <p className="text-sm text-un1t-subtle mb-2">No approved templates available</p>
                   <Link href="/whatsapp/templates/new" className="text-sm text-blue-400 hover:underline">
                     Create a template first
                   </Link>
@@ -271,7 +271,7 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, us
                 <select
                   value={templateId}
                   onChange={e => setTemplateId(e.target.value)}
-                  className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
+                  className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted"
                 >
                   <option value="">Select a template...</option>
                   {templates.map(t => (
@@ -295,16 +295,16 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, us
               {/* Variable mapping */}
               {bodyVars.length > 0 && (
                 <div className="space-y-2">
-                  <p className="text-xs text-un1t-light">Map template variables to contact fields:</p>
+                  <p className="text-xs text-un1t-subtle">Map template variables to contact fields:</p>
                   {bodyVars.map((v, i) => {
                     const varNum = v.replace(/[{}]/g, '')
                     return (
                       <div key={i} className="flex items-center gap-2">
-                        <span className="text-xs text-un1t-mid w-12">{v}</span>
+                        <span className="text-xs text-un1t-muted w-12">{v}</span>
                         <select
                           value={variableMapping[varNum] || ''}
                           onChange={e => setVariableMapping({ ...variableMapping, [varNum]: e.target.value })}
-                          className="flex-1 bg-un1t-black border border-un1t-gray rounded-md px-2.5 py-1.5 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
+                          className="flex-1 bg-un1t-bg border border-un1t-border rounded-md px-2.5 py-1.5 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted"
                         >
                           <option value="">Select field...</option>
                           {VARIABLE_OPTIONS.map(opt => (
@@ -320,25 +320,25 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, us
               {/* Header media URL */}
               {headerComp && ['IMAGE', 'VIDEO', 'DOCUMENT'].includes(headerComp.format) && (
                 <div>
-                  <label className="block text-xs text-un1t-light mb-1">Header media URL</label>
+                  <label className="block text-xs text-un1t-subtle mb-1">Header media URL</label>
                   <input
                     type="url"
                     value={headerMediaUrl}
                     onChange={e => setHeaderMediaUrl(e.target.value)}
                     placeholder="https://..."
-                    className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid"
+                    className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted"
                   />
                 </div>
               )}
             </div>
 
             {/* Audience */}
-            <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5">
-              <h3 className="font-semibold text-sm text-un1t-light uppercase tracking-wider mb-4">
+            <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5">
+              <h3 className="font-semibold text-sm text-un1t-subtle uppercase tracking-wider mb-4">
                 <Users size={14} className="inline mr-1.5" />
                 Audience
               </h3>
-              <p className="text-xs text-un1t-mid mb-4">
+              <p className="text-xs text-un1t-muted mb-4">
                 Only contacts with a WhatsApp number who have opted in to WhatsApp marketing will receive this broadcast.
               </p>
               <AudienceBuilder

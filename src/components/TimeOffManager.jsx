@@ -15,7 +15,7 @@ const STATUS_STYLES = {
   pending:   'bg-yellow-500/20 text-yellow-400',
   approved:  'bg-green-500/20 text-green-400',
   rejected:  'bg-red-500/20 text-red-400',
-  cancelled: 'bg-un1t-gray/30 text-un1t-mid',
+  cancelled: 'bg-un1t-border/30 text-un1t-muted',
 }
 
 export default function TimeOffManager({ user }) {
@@ -134,13 +134,13 @@ export default function TimeOffManager({ user }) {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h2 className="text-2xl font-bold">Time Off</h2>
-          <p className="text-sm text-un1t-light mt-1">
+          <p className="text-sm text-un1t-subtle mt-1">
             {user.activeLocation?.name} — Holiday & leave management
           </p>
         </div>
         <button
           onClick={() => setShowForm(true)}
-          className="flex items-center gap-1.5 text-sm px-4 py-2 rounded-lg bg-un1t-white text-un1t-black font-medium hover:bg-un1t-accent transition-colors"
+          className="flex items-center gap-1.5 text-sm px-4 py-2 rounded-lg bg-un1t-text text-un1t-bg font-medium hover:bg-un1t-accent transition-colors"
         >
           <Plus size={16} /> Request Time Off
         </button>
@@ -149,38 +149,38 @@ export default function TimeOffManager({ user }) {
       {/* Allowance Card */}
       {allowance && (
         <div className="grid grid-cols-4 gap-3 mb-6">
-          <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-4">
-            <div className="text-xs text-un1t-light uppercase tracking-wider">Total Allowance</div>
-            <div className="text-2xl font-bold mt-1">{allowance.total_days} <span className="text-sm text-un1t-light">days</span></div>
+          <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
+            <div className="text-xs text-un1t-subtle uppercase tracking-wider">Total Allowance</div>
+            <div className="text-2xl font-bold mt-1">{allowance.total_days} <span className="text-sm text-un1t-subtle">days</span></div>
           </div>
-          <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-4">
-            <div className="text-xs text-un1t-light uppercase tracking-wider">Used</div>
-            <div className="text-2xl font-bold mt-1 text-red-400">{allowance.used_days} <span className="text-sm text-un1t-light">days</span></div>
+          <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
+            <div className="text-xs text-un1t-subtle uppercase tracking-wider">Used</div>
+            <div className="text-2xl font-bold mt-1 text-red-400">{allowance.used_days} <span className="text-sm text-un1t-subtle">days</span></div>
           </div>
-          <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-4">
-            <div className="text-xs text-un1t-light uppercase tracking-wider">Carried Over</div>
-            <div className="text-2xl font-bold mt-1 text-blue-400">{allowance.carried_over} <span className="text-sm text-un1t-light">days</span></div>
+          <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
+            <div className="text-xs text-un1t-subtle uppercase tracking-wider">Carried Over</div>
+            <div className="text-2xl font-bold mt-1 text-blue-400">{allowance.carried_over} <span className="text-sm text-un1t-subtle">days</span></div>
           </div>
-          <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-4">
-            <div className="text-xs text-un1t-light uppercase tracking-wider">Remaining</div>
-            <div className="text-2xl font-bold mt-1 text-green-400">{allowance.remaining} <span className="text-sm text-un1t-light">days</span></div>
+          <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
+            <div className="text-xs text-un1t-subtle uppercase tracking-wider">Remaining</div>
+            <div className="text-2xl font-bold mt-1 text-green-400">{allowance.remaining} <span className="text-sm text-un1t-subtle">days</span></div>
           </div>
         </div>
       )}
 
       {/* Tabs & Filters */}
       <div className="flex items-center justify-between mb-4">
-        <div className="flex bg-un1t-dark border border-un1t-gray rounded-lg overflow-hidden text-xs">
+        <div className="flex bg-un1t-surface border border-un1t-border rounded-lg overflow-hidden text-xs">
           <button
             onClick={() => setTab('my')}
-            className={`px-3 py-2 transition-colors ${tab === 'my' ? 'bg-un1t-white text-un1t-black' : 'text-un1t-light hover:text-un1t-white'}`}
+            className={`px-3 py-2 transition-colors ${tab === 'my' ? 'bg-un1t-text text-un1t-bg' : 'text-un1t-subtle hover:text-un1t-text'}`}
           >
             My Requests
           </button>
           {isManager && (
             <button
               onClick={() => setTab('team')}
-              className={`px-3 py-2 transition-colors ${tab === 'team' ? 'bg-un1t-white text-un1t-black' : 'text-un1t-light hover:text-un1t-white'}`}
+              className={`px-3 py-2 transition-colors ${tab === 'team' ? 'bg-un1t-text text-un1t-bg' : 'text-un1t-subtle hover:text-un1t-text'}`}
             >
               Team Requests
             </button>
@@ -192,7 +192,7 @@ export default function TimeOffManager({ user }) {
             <button
               key={f}
               onClick={() => setFilter(f)}
-              className={`px-3 py-1.5 rounded-full transition-colors capitalize ${filter === f ? 'bg-un1t-white text-un1t-black' : 'bg-un1t-dark border border-un1t-gray text-un1t-light hover:text-un1t-white'}`}
+              className={`px-3 py-1.5 rounded-full transition-colors capitalize ${filter === f ? 'bg-un1t-text text-un1t-bg' : 'bg-un1t-surface border border-un1t-border text-un1t-subtle hover:text-un1t-text'}`}
             >
               {f}
             </button>
@@ -202,11 +202,11 @@ export default function TimeOffManager({ user }) {
 
       {/* Requests List */}
       {loading ? (
-        <div className="text-center py-16 text-un1t-light">Loading requests...</div>
+        <div className="text-center py-16 text-un1t-subtle">Loading requests...</div>
       ) : requests.length === 0 ? (
         <div className="text-center py-16">
-          <CalendarOff size={40} className="mx-auto text-un1t-mid mb-3" />
-          <p className="text-un1t-light text-sm">No time-off requests found</p>
+          <CalendarOff size={40} className="mx-auto text-un1t-muted mb-3" />
+          <p className="text-un1t-subtle text-sm">No time-off requests found</p>
         </div>
       ) : (
         <div className="space-y-2">
@@ -225,10 +225,10 @@ export default function TimeOffManager({ user }) {
                   if (node) rowRefs.current.set(req.id, node)
                   else rowRefs.current.delete(req.id)
                 }}
-                className={`bg-un1t-dark border rounded-lg p-4 flex items-center gap-4 transition-colors ${
+                className={`bg-un1t-surface border rounded-lg p-4 flex items-center gap-4 transition-colors ${
                   isFocused
-                    ? 'border-un1t-white ring-2 ring-un1t-white/40'
-                    : 'border-un1t-gray'
+                    ? 'border-un1t-text ring-2 ring-un1t-text/40'
+                    : 'border-un1t-border'
                 }`}
               >
                 {/* Type icon */}
@@ -247,16 +247,16 @@ export default function TimeOffManager({ user }) {
                       {req.status}
                     </span>
                   </div>
-                  <div className="text-xs text-un1t-light mt-1 flex items-center gap-3">
+                  <div className="text-xs text-un1t-subtle mt-1 flex items-center gap-3">
                     <span>
                       {new Date(req.start_date + 'T00:00:00').toLocaleDateString('en-IE', { day: 'numeric', month: 'short' })}
                       {req.start_date !== req.end_date && ` – ${new Date(req.end_date + 'T00:00:00').toLocaleDateString('en-IE', { day: 'numeric', month: 'short' })}`}
                     </span>
                     <span>{req.total_days} day{req.total_days !== 1 ? 's' : ''}</span>
-                    {req.reason && <span className="text-un1t-mid truncate max-w-[200px]" title={req.reason}>{req.reason}</span>}
+                    {req.reason && <span className="text-un1t-muted truncate max-w-[200px]" title={req.reason}>{req.reason}</span>}
                   </div>
                   {req.review_note && (
-                    <div className="text-xs text-un1t-mid mt-1 italic">
+                    <div className="text-xs text-un1t-muted mt-1 italic">
                       Note: {req.review_note} {req.reviewer && `— ${req.reviewer.full_name}`}
                     </div>
                   )}
@@ -285,7 +285,7 @@ export default function TimeOffManager({ user }) {
                   {canCancel && (
                     <button
                       onClick={() => handleCancel(req.id)}
-                      className="text-xs px-3 py-1.5 rounded-lg border border-un1t-gray text-un1t-light hover:text-red-400 hover:border-red-400/30 transition-colors"
+                      className="text-xs px-3 py-1.5 rounded-lg border border-un1t-border text-un1t-subtle hover:text-red-400 hover:border-red-400/30 transition-colors"
                     >
                       Cancel
                     </button>
@@ -351,10 +351,10 @@ function TimeOffFormModal({ user, allowance, onClose, onSubmit }) {
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={onClose}>
-      <div className="bg-un1t-dark border border-un1t-gray rounded-xl p-6 w-full max-w-md" onClick={e => e.stopPropagation()}>
+      <div className="bg-un1t-surface border border-un1t-border rounded-xl p-6 w-full max-w-md" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-4">
           <h3 className="font-semibold">Request Time Off</h3>
-          <button onClick={onClose} className="text-un1t-light hover:text-un1t-white"><X size={18} /></button>
+          <button onClick={onClose} className="text-un1t-subtle hover:text-un1t-text"><X size={18} /></button>
         </div>
 
         {error && (
@@ -366,7 +366,7 @@ function TimeOffFormModal({ user, allowance, onClose, onSubmit }) {
         <form onSubmit={handleSubmit} className="space-y-4">
           {/* Type selection */}
           <div>
-            <label className="block text-xs text-un1t-light mb-2">Type</label>
+            <label className="block text-xs text-un1t-subtle mb-2">Type</label>
             <div className="grid grid-cols-3 gap-2">
               {Object.entries(TYPE_CONFIG).map(([key, conf]) => {
                 const Icon = conf.icon
@@ -377,8 +377,8 @@ function TimeOffFormModal({ user, allowance, onClose, onSubmit }) {
                     onClick={() => setType(key)}
                     className={`flex flex-col items-center gap-1.5 p-3 rounded-lg border text-xs transition-colors ${
                       type === key
-                        ? 'border-un1t-white/40 bg-un1t-gray/30'
-                        : 'border-un1t-gray hover:border-white/20'
+                        ? 'border-un1t-text/40 bg-un1t-border/30'
+                        : 'border-un1t-border hover:border-white/20'
                     }`}
                   >
                     <Icon size={18} style={{ color: conf.color }} />
@@ -392,7 +392,7 @@ function TimeOffFormModal({ user, allowance, onClose, onSubmit }) {
           {/* Dates */}
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-xs text-un1t-light mb-1">Start Date *</label>
+              <label className="block text-xs text-un1t-subtle mb-1">Start Date *</label>
               <input
                 type="date"
                 required
@@ -402,24 +402,24 @@ function TimeOffFormModal({ user, allowance, onClose, onSubmit }) {
                   if (!endDate || e.target.value > endDate) setEndDate(e.target.value)
                 }}
                 min={new Date().toISOString().split('T')[0]}
-                className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
+                className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
               />
             </div>
             <div>
-              <label className="block text-xs text-un1t-light mb-1">End Date *</label>
+              <label className="block text-xs text-un1t-subtle mb-1">End Date *</label>
               <input
                 type="date"
                 required
                 value={endDate}
                 onChange={e => setEndDate(e.target.value)}
                 min={startDate || new Date().toISOString().split('T')[0]}
-                className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
+                className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
               />
             </div>
           </div>
 
           {totalDays > 0 && (
-            <div className="text-sm text-un1t-light">
+            <div className="text-sm text-un1t-subtle">
               {totalDays} day{totalDays !== 1 ? 's' : ''} requested
               {type === 'holiday' && allowance && (
                 <span className="ml-2">
@@ -434,24 +434,24 @@ function TimeOffFormModal({ user, allowance, onClose, onSubmit }) {
 
           {/* Reason */}
           <div>
-            <label className="block text-xs text-un1t-light mb-1">Reason (optional)</label>
+            <label className="block text-xs text-un1t-subtle mb-1">Reason (optional)</label>
             <textarea
               value={reason}
               onChange={e => setReason(e.target.value)}
               rows={2}
               placeholder="e.g. Family holiday, doctor's appointment..."
-              className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white resize-none"
+              className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text resize-none"
             />
           </div>
 
           <button
             type="submit"
             disabled={!startDate || !endDate || saving}
-            className="w-full bg-un1t-white text-un1t-black font-medium text-sm py-2.5 rounded-md hover:bg-un1t-accent transition-colors disabled:opacity-50"
+            className="w-full bg-un1t-text text-un1t-bg font-medium text-sm py-2.5 rounded-md hover:bg-un1t-accent transition-colors disabled:opacity-50"
           >
             {saving ? 'Submitting...' : 'Submit Request'}
           </button>
-          <p className="text-xs text-un1t-mid text-center">
+          <p className="text-xs text-un1t-muted text-center">
             Your request will be reviewed by a manager
           </p>
         </form>

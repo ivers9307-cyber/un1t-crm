@@ -69,7 +69,7 @@ export default function DealCard({ deal, locationId }) {
     <div className="relative mb-2">
       <div
         onClick={navigateToContact}
-        className={`block bg-un1t-black border border-un1t-gray ${borderColor} border-l-2 rounded-md p-3 hover:border-un1t-mid transition-colors cursor-pointer`}
+        className={`block bg-un1t-bg border border-un1t-border ${borderColor} border-l-2 rounded-md p-3 hover:border-un1t-muted transition-colors cursor-pointer`}
       >
         <div className="flex items-start justify-between gap-2">
           <p className="text-sm font-medium truncate flex-1">{deal.title}</p>
@@ -77,7 +77,7 @@ export default function DealCard({ deal, locationId }) {
             <button
               ref={buttonRef}
               onClick={(e) => { e.stopPropagation(); setMenuOpen(o => !o) }}
-              className="shrink-0 text-un1t-light hover:text-un1t-white p-0.5 -m-0.5 rounded"
+              className="shrink-0 text-un1t-subtle hover:text-un1t-text p-0.5 -m-0.5 rounded"
               title="Actions"
             >
               <MoreVertical size={14} />
@@ -85,13 +85,13 @@ export default function DealCard({ deal, locationId }) {
           )}
         </div>
         {contact.name && (
-          <div className="flex items-center gap-1.5 mt-1.5 text-xs text-un1t-light">
+          <div className="flex items-center gap-1.5 mt-1.5 text-xs text-un1t-subtle">
             <User size={12} />
             <span className="truncate">{contact.name}</span>
           </div>
         )}
         {contact.lead_source && (
-          <span className="inline-block mt-1.5 text-[10px] px-1.5 py-0.5 bg-un1t-gray rounded text-un1t-light">
+          <span className="inline-block mt-1.5 text-[10px] px-1.5 py-0.5 bg-un1t-border rounded text-un1t-subtle">
             {contact.lead_source}
           </span>
         )}
@@ -103,10 +103,10 @@ export default function DealCard({ deal, locationId }) {
       </div>
 
       {menuOpen && (
-        <div ref={menuRef} className="absolute right-1 top-8 z-20 bg-un1t-dark border border-un1t-gray rounded-md shadow-lg py-1 min-w-[160px]">
+        <div ref={menuRef} className="absolute right-1 top-8 z-20 bg-un1t-surface border border-un1t-border rounded-md shadow-lg py-1 min-w-[160px]">
           <button
             onClick={(e) => { e.stopPropagation(); setMenuOpen(false); setPicker(true) }}
-            className="w-full text-left px-3 py-1.5 text-xs text-un1t-white hover:bg-un1t-gray/40"
+            className="w-full text-left px-3 py-1.5 text-xs text-un1t-text hover:bg-un1t-border/40"
           >
             Add to sequence
           </button>

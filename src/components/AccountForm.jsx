@@ -47,24 +47,24 @@ export default function AccountForm({ initialPreference, allowed }) {
   }
 
   return (
-    <div className="bg-un1t-dark border border-un1t-gray rounded-2xl overflow-hidden">
+    <div className="bg-un1t-surface border border-un1t-border rounded-2xl overflow-hidden">
       <div className="px-5 pt-5 pb-3">
-        <h2 className="text-base font-semibold text-un1t-white">Default landing page</h2>
-        <p className="text-xs text-un1t-light mt-1">
+        <h2 className="text-base font-semibold text-un1t-text">Default landing page</h2>
+        <p className="text-xs text-un1t-subtle mt-1">
           The page you see first when you open the CRM on web or mobile. Mobile reads the same setting — change it once, applies everywhere.
         </p>
       </div>
 
-      <div className="border-t border-un1t-gray">
+      <div className="border-t border-un1t-border">
         {LANDING_PREFERENCE_OPTIONS.map((opt) => {
           const isAllowed = allowed[opt.value]
           const selected = preference === opt.value
           return (
             <label
               key={opt.value}
-              className={`flex items-start gap-3 px-5 py-3.5 border-b border-un1t-gray last:border-b-0 transition-colors ${
-                isAllowed ? 'cursor-pointer hover:bg-un1t-gray/30' : 'opacity-50 cursor-not-allowed'
-              } ${selected && isAllowed ? 'bg-un1t-gray/40' : ''}`}
+              className={`flex items-start gap-3 px-5 py-3.5 border-b border-un1t-border last:border-b-0 transition-colors ${
+                isAllowed ? 'cursor-pointer hover:bg-un1t-border/30' : 'opacity-50 cursor-not-allowed'
+              } ${selected && isAllowed ? 'bg-un1t-border/40' : ''}`}
             >
               <input
                 type="radio"
@@ -73,18 +73,18 @@ export default function AccountForm({ initialPreference, allowed }) {
                 checked={selected}
                 disabled={!isAllowed || saving}
                 onChange={() => isAllowed && setPreference(opt.value)}
-                className="mt-1 accent-un1t-white shrink-0"
+                className="mt-1 accent-un1t-text shrink-0"
               />
               <div className="min-w-0">
-                <div className="text-sm font-medium text-un1t-white flex items-center gap-2">
+                <div className="text-sm font-medium text-un1t-text flex items-center gap-2">
                   {opt.label}
                   {!isAllowed && opt.value !== 'auto' && (
-                    <span className="text-[10px] uppercase tracking-wider text-un1t-mid">
+                    <span className="text-[10px] uppercase tracking-wider text-un1t-muted">
                       not available at this location
                     </span>
                   )}
                 </div>
-                <div className="text-xs text-un1t-light mt-0.5">
+                <div className="text-xs text-un1t-subtle mt-0.5">
                   {opt.hint}
                 </div>
               </div>
@@ -93,7 +93,7 @@ export default function AccountForm({ initialPreference, allowed }) {
         })}
       </div>
 
-      <div className="px-5 py-4 border-t border-un1t-gray flex items-center justify-between gap-3">
+      <div className="px-5 py-4 border-t border-un1t-border flex items-center justify-between gap-3">
         <div className="min-h-5 text-xs">
           {status === 'saved' && (
             <span className="flex items-center gap-1.5 text-emerald-500">
@@ -113,8 +113,8 @@ export default function AccountForm({ initialPreference, allowed }) {
           disabled={!dirty || saving}
           className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
             dirty && !saving
-              ? 'bg-un1t-white text-un1t-black hover:bg-un1t-white/90'
-              : 'bg-un1t-gray text-un1t-light cursor-not-allowed'
+              ? 'bg-un1t-text text-un1t-bg hover:bg-un1t-text/90'
+              : 'bg-un1t-border text-un1t-subtle cursor-not-allowed'
           }`}
         >
           {saving ? (

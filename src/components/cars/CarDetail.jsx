@@ -100,14 +100,14 @@ export default function CarDetail({
       <div className="flex items-center justify-between mb-4">
         <Link
           href={car.status === 'completed' ? '/cars/completed' : '/cars/active'}
-          className="inline-flex items-center gap-1.5 text-sm text-un1t-light hover:text-un1t-white"
+          className="inline-flex items-center gap-1.5 text-sm text-un1t-subtle hover:text-un1t-text"
         >
           <ArrowLeft size={16} /> Back to {car.status === 'completed' ? 'completed' : 'active'}
         </Link>
         <button
           onClick={deleteCar}
           disabled={busy}
-          className="inline-flex items-center gap-1.5 text-xs text-un1t-light hover:text-red-500 disabled:opacity-50"
+          className="inline-flex items-center gap-1.5 text-xs text-un1t-subtle hover:text-red-500 disabled:opacity-50"
         >
           <Trash2 size={14} /> Delete
         </button>
@@ -115,13 +115,13 @@ export default function CarDetail({
 
       <div className="flex items-baseline justify-between gap-4 mb-4">
         <div>
-          <h2 className="text-xl font-bold text-un1t-white">
+          <h2 className="text-xl font-bold text-un1t-text">
             {car.make} {car.model} {car.vehicle_year ? `· ${car.vehicle_year}` : ''}
           </h2>
-          <p className="text-xs text-un1t-light mt-1">
-            {car.uk_reg && <>UK · <span className="text-un1t-white font-mono">{car.uk_reg}</span></>}
+          <p className="text-xs text-un1t-subtle mt-1">
+            {car.uk_reg && <>UK · <span className="text-un1t-text font-mono">{car.uk_reg}</span></>}
             {car.uk_reg && car.irish_reg && '   ·   '}
-            {car.irish_reg && <>IE · <span className="text-un1t-white font-mono">{car.irish_reg}</span></>}
+            {car.irish_reg && <>IE · <span className="text-un1t-text font-mono">{car.irish_reg}</span></>}
             {!car.uk_reg && !car.irish_reg && 'No registration set'}
           </p>
         </div>
@@ -143,15 +143,15 @@ export default function CarDetail({
 
       {/* New → Pending CTA */}
       {car.status === 'new' && (
-        <div className="bg-un1t-dark border border-un1t-gray rounded-2xl p-5 mb-4 flex items-center justify-between">
+        <div className="bg-un1t-surface border border-un1t-border rounded-2xl p-5 mb-4 flex items-center justify-between">
           <div>
-            <h3 className="text-sm font-semibold text-un1t-white">Got a buyer?</h3>
-            <p className="text-xs text-un1t-light">Move this car to Pending to start the closing checklist.</p>
+            <h3 className="text-sm font-semibold text-un1t-text">Got a buyer?</h3>
+            <p className="text-xs text-un1t-subtle">Move this car to Pending to start the closing checklist.</p>
           </div>
           <button
             onClick={() => promote('pending')}
             disabled={busy}
-            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-un1t-white text-un1t-black text-sm font-semibold hover:bg-un1t-accent disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-un1t-text text-un1t-bg text-sm font-semibold hover:bg-un1t-accent disabled:opacity-50"
           >
             Move to Pending <ChevronRight size={16} />
           </button>
@@ -172,8 +172,8 @@ export default function CarDetail({
 
       {/* Pending → Completed CTA + checklist */}
       {car.status === 'pending' && (
-        <div className="bg-un1t-dark border border-un1t-gray rounded-2xl p-5 mb-4">
-          <h3 className="text-sm font-semibold text-un1t-white mb-2">Ready to complete?</h3>
+        <div className="bg-un1t-surface border border-un1t-border rounded-2xl p-5 mb-4">
+          <h3 className="text-sm font-semibold text-un1t-text mb-2">Ready to complete?</h3>
           {gaps.length === 0 ? (
             <button
               onClick={() => promote('completed')}
@@ -184,7 +184,7 @@ export default function CarDetail({
             </button>
           ) : (
             <>
-              <p className="text-xs text-un1t-light mb-2">{gaps.length} item{gaps.length === 1 ? '' : 's'} outstanding:</p>
+              <p className="text-xs text-un1t-subtle mb-2">{gaps.length} item{gaps.length === 1 ? '' : 's'} outstanding:</p>
               <ul className="text-sm text-amber-500 space-y-1">
                 {gaps.map(g => (
                   <li key={g} className="flex items-center gap-2">
@@ -198,7 +198,7 @@ export default function CarDetail({
       )}
 
       {car.status === 'completed' && (
-        <div className="bg-un1t-dark border border-un1t-gray rounded-2xl p-5 mb-4 text-center">
+        <div className="bg-un1t-surface border border-un1t-border rounded-2xl p-5 mb-4 text-center">
           <p className="text-sm text-green-500 font-semibold">
             <Check size={14} className="inline-block mr-1" /> Completed
             {car.completed_at && ` · ${new Date(car.completed_at).toLocaleDateString()}`}
@@ -206,7 +206,7 @@ export default function CarDetail({
           <button
             onClick={() => promote('pending')}
             disabled={busy}
-            className="text-xs text-un1t-light hover:text-un1t-white mt-2 underline"
+            className="text-xs text-un1t-subtle hover:text-un1t-text mt-2 underline"
           >
             Reopen
           </button>
@@ -234,9 +234,9 @@ function StatusBadge({ status }) {
 function CarFieldsCard({ car, patch, disabled, liveFxRate, fxFetchedAt }) {
   const breakdown = profitBreakdown(car, liveFxRate)
   return (
-    <div className="bg-un1t-dark border border-un1t-gray rounded-2xl p-5 mb-4 space-y-5">
+    <div className="bg-un1t-surface border border-un1t-border rounded-2xl p-5 mb-4 space-y-5">
       <div>
-        <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light mb-3">Vehicle</h3>
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle mb-3">Vehicle</h3>
         <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
           <InlineField label="UK reg"      value={car.uk_reg}        onSave={v => patch({ uk_reg: v })} disabled={disabled} />
           <InlineField label="Irish reg"   value={car.irish_reg}     onSave={v => patch({ irish_reg: v })} disabled={disabled} />
@@ -248,7 +248,7 @@ function CarFieldsCard({ car, patch, disabled, liveFxRate, fxFetchedAt }) {
       </div>
 
       <div>
-        <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light mb-3">Prices</h3>
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle mb-3">Prices</h3>
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
           <InlineField label="UK ex-VAT (£)"  value={car.uk_purchase_price_ex_vat} type="number" step="0.01" onSave={v => patch({ uk_purchase_price_ex_vat: v ? Number(v) : null })} disabled={disabled} />
           {/* UK VAT — the amount HMRC owes back. Kept as a reference
@@ -315,7 +315,7 @@ function CarFieldsCard({ car, patch, disabled, liveFxRate, fxFetchedAt }) {
       </div>
 
       <div>
-        <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light mb-3">Costs</h3>
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle mb-3">Costs</h3>
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
           {COST_FIELDS.map(c => {
             const sym = c.currency === 'GBP' ? '£' : '€'
@@ -335,8 +335,8 @@ function CarFieldsCard({ car, patch, disabled, liveFxRate, fxFetchedAt }) {
       </div>
 
       {breakdown && (
-        <div className="bg-un1t-gray/30 border border-un1t-gray rounded-md px-4 py-3 space-y-1">
-          <div className="text-sm text-un1t-white">
+        <div className="bg-un1t-border/30 border border-un1t-border rounded-md px-4 py-3 space-y-1">
+          <div className="text-sm text-un1t-text">
             Sale €{Math.round(breakdown.saleEur)}
             {' − '}UK ex-VAT £{Math.round(breakdown.ukExVatGbp)} (€{Math.round(breakdown.ukExVatEur)} @ {breakdown.fx.toFixed(4)})
             {breakdown.ancillaryGbp > 0 && (
@@ -350,7 +350,7 @@ function CarFieldsCard({ car, patch, disabled, liveFxRate, fxFetchedAt }) {
               €{Math.round(breakdown.profit)}
             </span>
           </div>
-          <div className="text-xs text-un1t-light">
+          <div className="text-xs text-un1t-subtle">
             {breakdown.isUsingDefaultFx
               ? `FX £→€ ${breakdown.fx} (live rate unavailable — fallback)`
               : breakdown.fxIsCarSnapshot
@@ -365,9 +365,9 @@ function CarFieldsCard({ car, patch, disabled, liveFxRate, fxFetchedAt }) {
 
 function BuyerCard({ car, patch, disabled }) {
   return (
-    <div className="bg-un1t-dark border border-un1t-gray rounded-2xl p-5 mb-4">
+    <div className="bg-un1t-surface border border-un1t-border rounded-2xl p-5 mb-4">
       <div className="flex items-center justify-between mb-3 gap-2">
-        <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light">Buyer</h3>
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle">Buyer</h3>
         {!disabled && <XeroContactSearch carId={car.id} onPick={c => patch(c)} />}
       </div>
       <div className="space-y-2">
@@ -446,31 +446,31 @@ function XeroContactSearch({ carId, onPick }) {
           // Focus the input on next tick so it works on first click.
           setTimeout(() => inputRef.current?.focus(), 0)
         }}
-        className="text-xs inline-flex items-center gap-1 px-2 py-1 rounded-md bg-un1t-gray/40 text-un1t-light hover:bg-un1t-gray hover:text-un1t-white"
+        className="text-xs inline-flex items-center gap-1 px-2 py-1 rounded-md bg-un1t-border/40 text-un1t-subtle hover:bg-un1t-border hover:text-un1t-text"
         title="Search existing Xero customers and pre-fill the buyer fields"
       >
         <Search size={11} /> Lookup in Xero
       </button>
 
       {open && (
-        <div className="absolute right-0 top-full mt-1 w-80 bg-un1t-dark border border-un1t-gray rounded-lg shadow-xl z-40">
-          <div className="p-2 border-b border-un1t-gray">
+        <div className="absolute right-0 top-full mt-1 w-80 bg-un1t-surface border border-un1t-border rounded-lg shadow-xl z-40">
+          <div className="p-2 border-b border-un1t-border">
             <input
               ref={inputRef}
               value={query}
               onChange={e => setQuery(e.target.value)}
               placeholder="Search by name or email…"
-              className="w-full bg-un1t-black border border-un1t-gray rounded-md px-2.5 py-1.5 text-xs text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-light"
+              className="w-full bg-un1t-bg border border-un1t-border rounded-md px-2.5 py-1.5 text-xs text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-subtle"
             />
           </div>
           <div className="max-h-72 overflow-auto">
-            {loading && <p className="px-3 py-2 text-xs text-un1t-light">Searching Xero…</p>}
+            {loading && <p className="px-3 py-2 text-xs text-un1t-subtle">Searching Xero…</p>}
             {error && <p className="px-3 py-2 text-xs text-red-400">{error}</p>}
             {!loading && !error && query.trim().length < 2 && (
-              <p className="px-3 py-2 text-xs text-un1t-light">Type 2+ characters to search.</p>
+              <p className="px-3 py-2 text-xs text-un1t-subtle">Type 2+ characters to search.</p>
             )}
             {!loading && !error && query.trim().length >= 2 && results.length === 0 && (
-              <p className="px-3 py-2 text-xs text-un1t-light">
+              <p className="px-3 py-2 text-xs text-un1t-subtle">
                 No matches. Type the buyer&rsquo;s details manually below — they&rsquo;ll be created in Xero on Issue Invoice.
               </p>
             )}
@@ -478,14 +478,14 @@ function XeroContactSearch({ carId, onPick }) {
               <button
                 key={c.id}
                 onClick={() => pick(c)}
-                className="block w-full text-left px-3 py-2 hover:bg-un1t-gray/40 border-b border-un1t-gray/40 last:border-0"
+                className="block w-full text-left px-3 py-2 hover:bg-un1t-border/40 border-b border-un1t-border/40 last:border-0"
               >
-                <div className="text-sm text-un1t-white truncate">{c.name}</div>
-                <div className="text-[11px] text-un1t-light truncate">
+                <div className="text-sm text-un1t-text truncate">{c.name}</div>
+                <div className="text-[11px] text-un1t-subtle truncate">
                   {c.email || '(no email)'}
                   {c.phone && <> · {c.phone}</>}
                 </div>
-                {c.address && <div className="text-[11px] text-un1t-mid truncate">{c.address}</div>}
+                {c.address && <div className="text-[11px] text-un1t-muted truncate">{c.address}</div>}
               </button>
             ))}
           </div>
@@ -497,10 +497,10 @@ function XeroContactSearch({ carId, onPick }) {
 
 function UkVatRefundCard({ car, patch, disabled }) {
   return (
-    <div className="bg-un1t-dark border border-un1t-gray rounded-2xl p-5 mb-4 flex items-center justify-between">
+    <div className="bg-un1t-surface border border-un1t-border rounded-2xl p-5 mb-4 flex items-center justify-between">
       <div>
-        <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light">UK VAT refund</h3>
-        <p className="text-xs text-un1t-light mt-1">
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle">UK VAT refund</h3>
+        <p className="text-xs text-un1t-subtle mt-1">
           {car.uk_vat_refund_received
             ? `Received ${car.uk_vat_refund_received_at ? new Date(car.uk_vat_refund_received_at).toLocaleDateString() : ''}`
             : 'Toggle on once HMRC has refunded the UK VAT.'}
@@ -510,7 +510,7 @@ function UkVatRefundCard({ car, patch, disabled }) {
         type="button"
         disabled={disabled}
         onClick={() => patch({ uk_vat_refund_received: !car.uk_vat_refund_received })}
-        className={`w-10 h-5 rounded-full transition-colors disabled:opacity-40 ${car.uk_vat_refund_received ? 'bg-green-500' : 'bg-un1t-gray'}`}
+        className={`w-10 h-5 rounded-full transition-colors disabled:opacity-40 ${car.uk_vat_refund_received ? 'bg-green-500' : 'bg-un1t-border'}`}
       >
         <div className={`w-4 h-4 rounded-full bg-white transition-transform ${car.uk_vat_refund_received ? 'translate-x-5' : 'translate-x-0.5'}`} />
       </button>
@@ -525,11 +525,11 @@ function UkVatRefundCard({ car, patch, disabled }) {
 function DerivedField({ label, value, hint }) {
   return (
     <div className="text-left w-full opacity-90">
-      <div className="text-xs text-un1t-light">{label}</div>
-      <div className={`text-sm ${value == null || value === '' ? 'text-un1t-mid italic' : 'text-un1t-white'}`}>
+      <div className="text-xs text-un1t-subtle">{label}</div>
+      <div className={`text-sm ${value == null || value === '' ? 'text-un1t-muted italic' : 'text-un1t-text'}`}>
         {value == null || value === '' ? '—' : Number(value).toFixed(2)}
       </div>
-      {hint && <div className="text-[10px] text-un1t-mid">{hint}</div>}
+      {hint && <div className="text-[10px] text-un1t-muted">{hint}</div>}
     </div>
   )
 }
@@ -554,21 +554,21 @@ function InlineField({ label, value, onSave, type = 'text', step, multiline, dis
     if (multiline) {
       return (
         <div>
-          <label className="block text-xs text-un1t-light mb-1">{label}</label>
+          <label className="block text-xs text-un1t-subtle mb-1">{label}</label>
           <textarea
             autoFocus
             value={draft}
             onChange={e => setDraft(e.target.value)}
             onBlur={commit}
             rows={3}
-            className="w-full bg-un1t-black border border-un1t-mid rounded-md px-2 py-1.5 text-sm text-un1t-white focus:outline-none"
+            className="w-full bg-un1t-bg border border-un1t-muted rounded-md px-2 py-1.5 text-sm text-un1t-text focus:outline-none"
           />
         </div>
       )
     }
     return (
       <div>
-        <label className="block text-xs text-un1t-light mb-1">{label}</label>
+        <label className="block text-xs text-un1t-subtle mb-1">{label}</label>
         <input
           autoFocus
           type={type}
@@ -577,15 +577,15 @@ function InlineField({ label, value, onSave, type = 'text', step, multiline, dis
           onChange={e => setDraft(e.target.value)}
           onBlur={commit}
           onKeyDown={e => { if (e.key === 'Enter') e.target.blur() }}
-          className="w-full bg-un1t-black border border-un1t-mid rounded-md px-2 py-1.5 text-sm text-un1t-white focus:outline-none"
+          className="w-full bg-un1t-bg border border-un1t-muted rounded-md px-2 py-1.5 text-sm text-un1t-text focus:outline-none"
         />
       </div>
     )
   }
   return (
     <button type="button" onClick={start} className="text-left w-full" disabled={disabled}>
-      <div className="text-xs text-un1t-light">{label}</div>
-      <div className={`text-sm ${value == null || value === '' ? 'text-un1t-mid italic' : 'text-un1t-white'}`}>
+      <div className="text-xs text-un1t-subtle">{label}</div>
+      <div className={`text-sm ${value == null || value === '' ? 'text-un1t-muted italic' : 'text-un1t-text'}`}>
         {value == null || value === '' ? '—' : String(value)}
       </div>
     </button>

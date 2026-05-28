@@ -215,9 +215,9 @@ export default function WATemplateEditor({ template, locationId, userId }) {
   return (
     <div className="flex flex-col h-screen">
       {/* Top bar */}
-      <div className="flex items-center justify-between px-5 py-3 border-b border-un1t-gray bg-un1t-dark shrink-0">
+      <div className="flex items-center justify-between px-5 py-3 border-b border-un1t-border bg-un1t-surface shrink-0">
         <div className="flex items-center gap-4">
-          <Link href="/whatsapp/templates" className="text-un1t-light hover:text-un1t-white transition-colors">
+          <Link href="/whatsapp/templates" className="text-un1t-subtle hover:text-un1t-text transition-colors">
             <ArrowLeft size={20} />
           </Link>
           <h2 className="text-lg font-semibold">
@@ -238,7 +238,7 @@ export default function WATemplateEditor({ template, locationId, userId }) {
         <button
           onClick={handleSave}
           disabled={saving || isSubmitted}
-          className="flex items-center gap-1.5 text-sm bg-un1t-white text-un1t-black font-medium px-4 py-1.5 rounded-md hover:bg-un1t-accent transition-colors disabled:opacity-50"
+          className="flex items-center gap-1.5 text-sm bg-un1t-text text-un1t-bg font-medium px-4 py-1.5 rounded-md hover:bg-un1t-accent transition-colors disabled:opacity-50"
         >
           {isEditing ? <Save size={14} /> : <Send size={14} />}
           {saving ? 'Submitting...' : isEditing ? 'Update' : 'Submit to Meta'}
@@ -269,7 +269,7 @@ export default function WATemplateEditor({ template, locationId, userId }) {
           {/* Left: Form */}
           <div className="flex-1 space-y-5">
             {/* Name & Category */}
-            <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5 space-y-4">
+            <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5 space-y-4">
               <div>
                 <label className="block text-sm mb-1.5">Template Name *</label>
                 <input
@@ -278,9 +278,9 @@ export default function WATemplateEditor({ template, locationId, userId }) {
                   onChange={e => setName(e.target.value)}
                   placeholder="e.g. welcome_new_member"
                   disabled={isSubmitted}
-                  className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid disabled:opacity-50"
+                  className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted disabled:opacity-50"
                 />
-                <p className="text-xs text-un1t-mid mt-1">Lowercase letters, numbers, and underscores only</p>
+                <p className="text-xs text-un1t-muted mt-1">Lowercase letters, numbers, and underscores only</p>
               </div>
 
               <div className="grid grid-cols-2 gap-4">
@@ -290,7 +290,7 @@ export default function WATemplateEditor({ template, locationId, userId }) {
                     value={category}
                     onChange={e => setCategory(e.target.value)}
                     disabled={isSubmitted}
-                    className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid disabled:opacity-50"
+                    className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted disabled:opacity-50"
                   >
                     {CATEGORIES.map(c => (
                       <option key={c.value} value={c.value}>{c.label} — {c.description}</option>
@@ -303,7 +303,7 @@ export default function WATemplateEditor({ template, locationId, userId }) {
                     value={language}
                     onChange={e => setLanguage(e.target.value)}
                     disabled={isSubmitted}
-                    className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid disabled:opacity-50"
+                    className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted disabled:opacity-50"
                   >
                     <option value="en">English</option>
                     <option value="en_US">English (US)</option>
@@ -314,13 +314,13 @@ export default function WATemplateEditor({ template, locationId, userId }) {
             </div>
 
             {/* Header */}
-            <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5 space-y-3">
-              <h3 className="font-semibold text-sm text-un1t-light uppercase tracking-wider">Header (optional)</h3>
+            <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5 space-y-3">
+              <h3 className="font-semibold text-sm text-un1t-subtle uppercase tracking-wider">Header (optional)</h3>
               <select
                 value={headerFormat}
                 onChange={e => setHeaderFormat(e.target.value)}
                 disabled={isSubmitted}
-                className="bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid disabled:opacity-50"
+                className="bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted disabled:opacity-50"
               >
                 {HEADER_FORMATS.map(h => (
                   <option key={h.value} value={h.value}>{h.label}</option>
@@ -335,13 +335,13 @@ export default function WATemplateEditor({ template, locationId, userId }) {
                   placeholder="Header text (max 60 chars)"
                   maxLength={60}
                   disabled={isSubmitted}
-                  className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid disabled:opacity-50"
+                  className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted disabled:opacity-50"
                 />
               )}
 
               {['IMAGE', 'VIDEO', 'DOCUMENT'].includes(headerFormat) && (
                 <div className="space-y-2">
-                  <p className="text-xs text-un1t-mid">
+                  <p className="text-xs text-un1t-muted">
                     Meta requires a real example asset for {headerFormat.toLowerCase()} headers — a placeholder URL gets the template rejected.
                     The file you upload here is BOTH submitted for approval AND used at send time as the default media.
                   </p>
@@ -360,29 +360,29 @@ export default function WATemplateEditor({ template, locationId, userId }) {
                         type="button"
                         onClick={() => fileInputRef.current?.click()}
                         disabled={isSubmitted || uploading}
-                        className="inline-flex items-center gap-2 text-sm bg-un1t-black border border-un1t-gray hover:border-un1t-mid text-un1t-white px-3 py-2 rounded-md transition-colors disabled:opacity-50"
+                        className="inline-flex items-center gap-2 text-sm bg-un1t-bg border border-un1t-border hover:border-un1t-muted text-un1t-text px-3 py-2 rounded-md transition-colors disabled:opacity-50"
                       >
                         <Upload size={14} />
                         {uploading ? 'Uploading…' : `Upload ${headerFormat.toLowerCase()}`}
                       </button>
-                      <p className="text-[11px] text-un1t-mid">
-                        Requirement: <span className="text-un1t-light">{MEDIA_LIMITS[headerFormat].label}</span>.
+                      <p className="text-[11px] text-un1t-muted">
+                        Requirement: <span className="text-un1t-subtle">{MEDIA_LIMITS[headerFormat].label}</span>.
                         Same caps for every template category — Meta limits per file type, not per category.
                       </p>
                     </>
                   ) : (
-                    <div className="flex items-center gap-2 p-2.5 bg-un1t-black border border-un1t-gray rounded-md">
+                    <div className="flex items-center gap-2 p-2.5 bg-un1t-bg border border-un1t-border rounded-md">
                       {headerFormat === 'IMAGE' && mediaUrl && (
                          
                         <img src={mediaUrl} alt="" className="w-10 h-10 object-cover rounded" />
                       )}
-                      {headerFormat === 'VIDEO' && <Video size={20} className="text-un1t-light" />}
-                      {headerFormat === 'DOCUMENT' && <FileText size={20} className="text-un1t-light" />}
+                      {headerFormat === 'VIDEO' && <Video size={20} className="text-un1t-subtle" />}
+                      {headerFormat === 'DOCUMENT' && <FileText size={20} className="text-un1t-subtle" />}
                       <div className="flex-1 min-w-0">
-                        <div className="text-sm text-un1t-white truncate">
+                        <div className="text-sm text-un1t-text truncate">
                           {mediaName || mediaPath?.split('/').pop() || 'Uploaded'}
                         </div>
-                        <div className="text-[11px] text-un1t-mid truncate">
+                        <div className="text-[11px] text-un1t-muted truncate">
                           {mediaHandle ? 'Ready for Meta approval' : 'Uploaded — Meta handle missing, retry needed'}
                         </div>
                       </div>
@@ -390,7 +390,7 @@ export default function WATemplateEditor({ template, locationId, userId }) {
                         <button
                           type="button"
                           onClick={clearMedia}
-                          className="text-un1t-mid hover:text-red-400 p-1"
+                          className="text-un1t-muted hover:text-red-400 p-1"
                           title="Remove and re-upload"
                         >
                           <X size={14} />
@@ -407,8 +407,8 @@ export default function WATemplateEditor({ template, locationId, userId }) {
             </div>
 
             {/* Body */}
-            <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5 space-y-3">
-              <h3 className="font-semibold text-sm text-un1t-light uppercase tracking-wider">Body *</h3>
+            <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5 space-y-3">
+              <h3 className="font-semibold text-sm text-un1t-subtle uppercase tracking-wider">Body *</h3>
               <textarea
                 value={bodyText}
                 onChange={e => setBodyText(e.target.value)}
@@ -416,17 +416,17 @@ export default function WATemplateEditor({ template, locationId, userId }) {
                 rows={5}
                 maxLength={1024}
                 disabled={isSubmitted}
-                className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid resize-y disabled:opacity-50"
+                className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted resize-y disabled:opacity-50"
               />
-              <p className="text-xs text-un1t-mid">
+              <p className="text-xs text-un1t-muted">
                 Use {'{{1}}'}, {'{{2}}'}, etc. for variables. Max 1024 characters.
                 Variables will be mapped to contact fields when sending.
               </p>
             </div>
 
             {/* Footer */}
-            <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5 space-y-3">
-              <h3 className="font-semibold text-sm text-un1t-light uppercase tracking-wider">Footer (optional)</h3>
+            <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5 space-y-3">
+              <h3 className="font-semibold text-sm text-un1t-subtle uppercase tracking-wider">Footer (optional)</h3>
               <input
                 type="text"
                 value={footerText}
@@ -434,23 +434,23 @@ export default function WATemplateEditor({ template, locationId, userId }) {
                 placeholder="e.g. Reply STOP to unsubscribe"
                 maxLength={60}
                 disabled={isSubmitted}
-                className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid disabled:opacity-50"
+                className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted disabled:opacity-50"
               />
             </div>
 
             {/* Buttons */}
-            <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5 space-y-3">
-              <h3 className="font-semibold text-sm text-un1t-light uppercase tracking-wider">Buttons (optional, max 3)</h3>
+            <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5 space-y-3">
+              <h3 className="font-semibold text-sm text-un1t-subtle uppercase tracking-wider">Buttons (optional, max 3)</h3>
 
               {buttons.map((btn, i) => (
-                <div key={i} className="flex items-start gap-2 p-3 bg-un1t-dark rounded-lg border border-un1t-gray">
+                <div key={i} className="flex items-start gap-2 p-3 bg-un1t-surface rounded-lg border border-un1t-border">
                   <div className="flex-1 space-y-2">
                     <div className="flex gap-2">
                       <select
                         value={btn.type}
                         onChange={e => updateButton(i, { type: e.target.value })}
                         disabled={isSubmitted}
-                        className="bg-un1t-dark border border-un1t-gray rounded-md px-2 py-1.5 text-xs text-un1t-white focus:outline-none disabled:opacity-50"
+                        className="bg-un1t-surface border border-un1t-border rounded-md px-2 py-1.5 text-xs text-un1t-text focus:outline-none disabled:opacity-50"
                       >
                         <option value="QUICK_REPLY">Quick Reply</option>
                         <option value="URL">URL</option>
@@ -463,7 +463,7 @@ export default function WATemplateEditor({ template, locationId, userId }) {
                         placeholder="Button text"
                         maxLength={25}
                         disabled={isSubmitted}
-                        className="flex-1 bg-un1t-dark border border-un1t-gray rounded-md px-2 py-1.5 text-xs text-un1t-white placeholder:text-un1t-mid focus:outline-none disabled:opacity-50"
+                        className="flex-1 bg-un1t-surface border border-un1t-border rounded-md px-2 py-1.5 text-xs text-un1t-text placeholder:text-un1t-muted focus:outline-none disabled:opacity-50"
                       />
                     </div>
                     {btn.type === 'URL' && (
@@ -473,7 +473,7 @@ export default function WATemplateEditor({ template, locationId, userId }) {
                         onChange={e => updateButton(i, { url: e.target.value })}
                         placeholder="https://..."
                         disabled={isSubmitted}
-                        className="w-full bg-un1t-dark border border-un1t-gray rounded-md px-2 py-1.5 text-xs text-un1t-white placeholder:text-un1t-mid focus:outline-none disabled:opacity-50"
+                        className="w-full bg-un1t-surface border border-un1t-border rounded-md px-2 py-1.5 text-xs text-un1t-text placeholder:text-un1t-muted focus:outline-none disabled:opacity-50"
                       />
                     )}
                     {btn.type === 'PHONE_NUMBER' && (
@@ -483,12 +483,12 @@ export default function WATemplateEditor({ template, locationId, userId }) {
                         onChange={e => updateButton(i, { phone_number: e.target.value })}
                         placeholder="+353..."
                         disabled={isSubmitted}
-                        className="w-full bg-un1t-dark border border-un1t-gray rounded-md px-2 py-1.5 text-xs text-un1t-white placeholder:text-un1t-mid focus:outline-none disabled:opacity-50"
+                        className="w-full bg-un1t-surface border border-un1t-border rounded-md px-2 py-1.5 text-xs text-un1t-text placeholder:text-un1t-muted focus:outline-none disabled:opacity-50"
                       />
                     )}
                   </div>
                   {!isSubmitted && (
-                    <button onClick={() => removeButton(i)} className="p-1 text-un1t-mid hover:text-red-400">
+                    <button onClick={() => removeButton(i)} className="p-1 text-un1t-muted hover:text-red-400">
                       <Trash2 size={14} />
                     </button>
                   )}
@@ -497,13 +497,13 @@ export default function WATemplateEditor({ template, locationId, userId }) {
 
               {buttons.length < 3 && !isSubmitted && (
                 <div className="flex gap-2">
-                  <button onClick={() => addButton('QUICK_REPLY')} className="text-xs text-un1t-light hover:text-un1t-white border border-un1t-gray px-3 py-1.5 rounded-md transition-colors">
+                  <button onClick={() => addButton('QUICK_REPLY')} className="text-xs text-un1t-subtle hover:text-un1t-text border border-un1t-border px-3 py-1.5 rounded-md transition-colors">
                     + Quick Reply
                   </button>
-                  <button onClick={() => addButton('URL')} className="text-xs text-un1t-light hover:text-un1t-white border border-un1t-gray px-3 py-1.5 rounded-md transition-colors">
+                  <button onClick={() => addButton('URL')} className="text-xs text-un1t-subtle hover:text-un1t-text border border-un1t-border px-3 py-1.5 rounded-md transition-colors">
                     + URL Button
                   </button>
-                  <button onClick={() => addButton('PHONE_NUMBER')} className="text-xs text-un1t-light hover:text-un1t-white border border-un1t-gray px-3 py-1.5 rounded-md transition-colors">
+                  <button onClick={() => addButton('PHONE_NUMBER')} className="text-xs text-un1t-subtle hover:text-un1t-text border border-un1t-border px-3 py-1.5 rounded-md transition-colors">
                     + Call Button
                   </button>
                 </div>
@@ -514,7 +514,7 @@ export default function WATemplateEditor({ template, locationId, userId }) {
           {/* Right: Preview */}
           <div className="w-80 shrink-0">
             <div className="sticky top-6">
-              <h3 className="text-sm font-semibold text-un1t-light mb-3">Preview</h3>
+              <h3 className="text-sm font-semibold text-un1t-subtle mb-3">Preview</h3>
               <div className="bg-[#e5ddd5] rounded-lg p-4">
                 <div className="bg-white rounded-lg p-3 shadow-sm max-w-[260px]">
                   {headerFormat === 'TEXT' && headerText && (

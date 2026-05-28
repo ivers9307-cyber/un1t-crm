@@ -201,18 +201,18 @@ export default function UserAssignmentsPanel({
       <div
         role="dialog"
         aria-label={`Edit assignments for ${user.full_name}`}
-        className="fixed top-0 right-0 bottom-0 w-full sm:w-[480px] bg-un1t-black border-l border-un1t-gray z-50 overflow-y-auto"
+        className="fixed top-0 right-0 bottom-0 w-full sm:w-[480px] bg-un1t-bg border-l border-un1t-border z-50 overflow-y-auto"
       >
-        <header className="sticky top-0 bg-un1t-black border-b border-un1t-gray p-4 flex items-start justify-between gap-3">
+        <header className="sticky top-0 bg-un1t-bg border-b border-un1t-border p-4 flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <h3 className="text-base font-semibold text-un1t-white truncate">{user.full_name}</h3>
-            <p className="text-xs text-un1t-light truncate">{user.email}</p>
+            <h3 className="text-base font-semibold text-un1t-text truncate">{user.full_name}</h3>
+            <p className="text-xs text-un1t-subtle truncate">{user.email}</p>
           </div>
           <button
             type="button"
             onClick={() => !busy && onClose()}
             disabled={busy}
-            className="text-un1t-light hover:text-un1t-white disabled:opacity-40"
+            className="text-un1t-subtle hover:text-un1t-text disabled:opacity-40"
             aria-label="Close"
           >
             <X size={18} />
@@ -222,8 +222,8 @@ export default function UserAssignmentsPanel({
         <div className="p-4 space-y-6">
           {/* Master toggle */}
           <section>
-            <h4 className="text-xs font-semibold uppercase tracking-wider text-un1t-light mb-2">Platform role</h4>
-            <label className="flex items-start gap-2 p-3 bg-un1t-dark border border-un1t-gray rounded-md cursor-pointer hover:border-un1t-mid">
+            <h4 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle mb-2">Platform role</h4>
+            <label className="flex items-start gap-2 p-3 bg-un1t-surface border border-un1t-border rounded-md cursor-pointer hover:border-un1t-muted">
               <input
                 type="checkbox"
                 checked={isMaster}
@@ -232,10 +232,10 @@ export default function UserAssignmentsPanel({
                 disabled={busy}
               />
               <span className="flex-1">
-                <span className="block text-sm font-medium text-un1t-white inline-flex items-center gap-1.5">
+                <span className="block text-sm font-medium text-un1t-text inline-flex items-center gap-1.5">
                   <ShieldCheck size={12} className="text-amber-700" /> Master (platform admin)
                 </span>
-                <span className="block text-[11px] text-un1t-light mt-0.5">
+                <span className="block text-[11px] text-un1t-subtle mt-0.5">
                   Sees and modifies every organization&apos;s data. Per-location role assignments
                   below remain in effect even when master is on.
                 </span>
@@ -255,7 +255,7 @@ export default function UserAssignmentsPanel({
             if (locs.length === 0) return null
             return (
               <section key={org.id}>
-                <h4 className="text-xs font-semibold uppercase tracking-wider text-un1t-light mb-2">{org.name}</h4>
+                <h4 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle mb-2">{org.name}</h4>
                 <div className="space-y-1.5">
                   {locs.map((loc) => {
                     const currentRole = assignments[loc.id]
@@ -263,16 +263,16 @@ export default function UserAssignmentsPanel({
                     return (
                       <div
                         key={loc.id}
-                        className="flex items-center gap-2 p-2 bg-un1t-dark border border-un1t-gray rounded-md"
+                        className="flex items-center gap-2 p-2 bg-un1t-surface border border-un1t-border rounded-md"
                       >
-                        <div className="flex-1 min-w-0 text-sm text-un1t-white truncate">{loc.name}</div>
+                        <div className="flex-1 min-w-0 text-sm text-un1t-text truncate">{loc.name}</div>
                         {hasRole ? (
                           <>
                             <select
                               value={currentRole}
                               onChange={(e) => setRoleAt(loc.id, e.target.value)}
                               disabled={busy}
-                              className="text-xs bg-un1t-black border border-un1t-gray rounded px-2 py-1 text-un1t-white disabled:opacity-40"
+                              className="text-xs bg-un1t-bg border border-un1t-border rounded px-2 py-1 text-un1t-text disabled:opacity-40"
                             >
                               {ROLE_OPTIONS.map((o) => (
                                 <option key={o.value} value={o.value}>{o.label}</option>
@@ -282,7 +282,7 @@ export default function UserAssignmentsPanel({
                               type="button"
                               onClick={() => removeAt(loc.id)}
                               disabled={busy}
-                              className="text-un1t-light hover:text-red-700 disabled:opacity-40 p-1"
+                              className="text-un1t-subtle hover:text-red-700 disabled:opacity-40 p-1"
                               title="Remove from this location"
                             >
                               <Trash2 size={14} />
@@ -319,12 +319,12 @@ export default function UserAssignmentsPanel({
           )}
         </div>
 
-        <footer className="sticky bottom-0 bg-un1t-black border-t border-un1t-gray p-4 flex items-center justify-between gap-3">
+        <footer className="sticky bottom-0 bg-un1t-bg border-t border-un1t-border p-4 flex items-center justify-between gap-3">
           <button
             type="button"
             onClick={() => !busy && onClose()}
             disabled={busy}
-            className="text-sm text-un1t-light hover:text-un1t-white disabled:opacity-40"
+            className="text-sm text-un1t-subtle hover:text-un1t-text disabled:opacity-40"
           >
             Cancel
           </button>
@@ -332,7 +332,7 @@ export default function UserAssignmentsPanel({
             type="button"
             onClick={handleSave}
             disabled={busy || !hasChanges || wouldDemoteLastMaster}
-            className="inline-flex items-center gap-1.5 text-sm bg-un1t-white text-un1t-black font-semibold px-4 py-2 rounded-md hover:bg-un1t-accent disabled:opacity-40"
+            className="inline-flex items-center gap-1.5 text-sm bg-un1t-text text-un1t-bg font-semibold px-4 py-2 rounded-md hover:bg-un1t-accent disabled:opacity-40"
           >
             {busy ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
             {busy ? 'Saving…' : `Save${hasChanges ? ` (${diff.assignments.length + (diff.masterToggle ? 1 : 0)})` : ''}`}

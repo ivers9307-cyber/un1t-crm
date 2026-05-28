@@ -19,7 +19,7 @@ export default async function EditBookingTypePage(props) {
   if (!event) {
     return (
       <div className="p-8">
-        <p className="text-un1t-light">Booking type not found.</p>
+        <p className="text-un1t-subtle">Booking type not found.</p>
         <Link href="/bookings/event-types" className="text-blue-400 text-sm mt-2 inline-block">Back to Booking types</Link>
       </div>
     )
@@ -28,7 +28,7 @@ export default async function EditBookingTypePage(props) {
   return (
     <div className="p-8 max-w-3xl">
       <h2 className="text-2xl font-bold mb-2">Edit booking type</h2>
-      <p className="text-sm text-un1t-light mb-6">Update {event.name}</p>
+      <p className="text-sm text-un1t-subtle mb-6">Update {event.name}</p>
       <EventForm event={event} locationId={user.activeLocation?.id} />
     </div>
   )

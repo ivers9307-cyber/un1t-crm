@@ -621,40 +621,40 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
       <div className="flex items-center justify-between mb-6">
         <div>
           <h2 className="text-2xl font-bold">Schedule</h2>
-          <p className="text-sm text-un1t-light mt-1">
+          <p className="text-sm text-un1t-subtle mt-1">
             {user.activeLocation?.name} — Staff roster
           </p>
         </div>
         <div className="flex items-center gap-2">
           <Link
             href="/schedule/time-off"
-            className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg border border-un1t-gray text-un1t-light hover:text-un1t-white hover:border-un1t-white/30 transition-colors"
+            className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg border border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-text/30 transition-colors"
           >
             <CalendarOff size={14} /> Time Off
           </Link>
 
-          <div className="flex bg-un1t-dark border border-un1t-gray rounded-lg overflow-hidden text-xs">
+          <div className="flex bg-un1t-surface border border-un1t-border rounded-lg overflow-hidden text-xs">
             <button
               onClick={() => setViewMode('my')}
-              className={`flex items-center gap-1.5 px-3 py-2 transition-colors ${viewMode === 'my' ? 'bg-un1t-white text-un1t-black' : 'text-un1t-light hover:text-un1t-white'}`}
+              className={`flex items-center gap-1.5 px-3 py-2 transition-colors ${viewMode === 'my' ? 'bg-un1t-text text-un1t-bg' : 'text-un1t-subtle hover:text-un1t-text'}`}
             >
               <User size={14} /> My Shifts
             </button>
             <button
               onClick={() => setViewMode('all')}
-              className={`flex items-center gap-1.5 px-3 py-2 transition-colors ${viewMode === 'all' ? 'bg-un1t-white text-un1t-black' : 'text-un1t-light hover:text-un1t-white'}`}
+              className={`flex items-center gap-1.5 px-3 py-2 transition-colors ${viewMode === 'all' ? 'bg-un1t-text text-un1t-bg' : 'text-un1t-subtle hover:text-un1t-text'}`}
             >
               <Users size={14} /> All Staff
             </button>
           </div>
 
-          <div className="flex bg-un1t-dark border border-un1t-gray rounded-lg overflow-hidden text-xs">
+          <div className="flex bg-un1t-surface border border-un1t-border rounded-lg overflow-hidden text-xs">
             <button
               onClick={() => {
                 if (viewType === 'month') setWeekStart(getMonday(monthStart))
                 setViewType('week')
               }}
-              className={`flex items-center gap-1.5 px-3 py-2 transition-colors ${viewType === 'week' ? 'bg-un1t-white text-un1t-black' : 'text-un1t-light hover:text-un1t-white'}`}
+              className={`flex items-center gap-1.5 px-3 py-2 transition-colors ${viewType === 'week' ? 'bg-un1t-text text-un1t-bg' : 'text-un1t-subtle hover:text-un1t-text'}`}
             >
               <CalendarDays size={14} /> Week
             </button>
@@ -663,7 +663,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
                 if (viewType === 'week') setMonthStart(getMonthStart(weekStart))
                 setViewType('month')
               }}
-              className={`flex items-center gap-1.5 px-3 py-2 transition-colors ${viewType === 'month' ? 'bg-un1t-white text-un1t-black' : 'text-un1t-light hover:text-un1t-white'}`}
+              className={`flex items-center gap-1.5 px-3 py-2 transition-colors ${viewType === 'month' ? 'bg-un1t-text text-un1t-bg' : 'text-un1t-subtle hover:text-un1t-text'}`}
             >
               <CalendarRange size={14} /> Month
             </button>
@@ -684,7 +684,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
                 className={`flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg border transition-colors ${
                   selectMode
                     ? 'bg-amber-500/20 border-amber-500/50 text-amber-300'
-                    : 'border-un1t-gray text-un1t-light hover:text-un1t-white hover:border-un1t-white/30'
+                    : 'border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-text/30'
                 }`}
                 title={selectMode ? 'Exit multi-select' : 'Select multiple shifts to assign a coach in bulk'}
               >
@@ -699,7 +699,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
               <button
                 onClick={handleCopyWeek}
                 disabled={copying}
-                className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg border border-un1t-gray text-un1t-light hover:text-un1t-white hover:border-un1t-white/30 transition-colors disabled:opacity-50"
+                className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg border border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-text/30 transition-colors disabled:opacity-50"
                 title="Duplicate last week's shifts into this week"
               >
                 <Copy size={14} /> {copying ? 'Copying...' : 'Copy Last Week'}
@@ -707,7 +707,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
               <button
                 onClick={handleCopyMonth}
                 disabled={copying}
-                className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg border border-un1t-gray text-un1t-light hover:text-un1t-white hover:border-un1t-white/30 transition-colors disabled:opacity-50"
+                className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg border border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-text/30 transition-colors disabled:opacity-50"
                 title="Duplicate last month's shifts into this month"
               >
                 <Copy size={14} /> {copying ? 'Copying...' : 'Copy Last Month'}
@@ -722,7 +722,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
                   from the view where they think about templates. */}
               <Link
                 href="/settings/shifts"
-                className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg border border-un1t-gray text-un1t-light hover:text-un1t-white hover:border-un1t-white/30 transition-colors"
+                className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg border border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-text/30 transition-colors"
                 title="Add, edit, or retire the shift templates that build this roster"
               >
                 <Settings size={14} /> Manage templates
@@ -748,7 +748,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
             if (viewType === 'month') setMonthStart(addMonths(monthStart, -1))
             else setWeekStart(addDays(weekStart, -7))
           }}
-          className="p-2 rounded-lg hover:bg-un1t-gray/50 text-un1t-light hover:text-un1t-white transition-colors"
+          className="p-2 rounded-lg hover:bg-un1t-border/50 text-un1t-subtle hover:text-un1t-text transition-colors"
         >
           <ChevronLeft size={20} />
         </button>
@@ -770,7 +770,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
             if (viewType === 'month') setMonthStart(addMonths(monthStart, 1))
             else setWeekStart(addDays(weekStart, 7))
           }}
-          className="p-2 rounded-lg hover:bg-un1t-gray/50 text-un1t-light hover:text-un1t-white transition-colors"
+          className="p-2 rounded-lg hover:bg-un1t-border/50 text-un1t-subtle hover:text-un1t-text transition-colors"
         >
           <ChevronRight size={20} />
         </button>
@@ -820,10 +820,10 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
                     key={s.id}
                     className={`text-xs rounded-md px-2.5 py-1.5 border ${isOver
                       ? 'border-amber-500/40 bg-amber-500/10 text-amber-700'
-                      : 'border-un1t-gray bg-un1t-dark/40 text-un1t-light'
+                      : 'border-un1t-border bg-un1t-surface/40 text-un1t-subtle'
                     }`}
                   >
-                    <span className="font-medium text-un1t-white">{s.full_name}</span>
+                    <span className="font-medium text-un1t-text">{s.full_name}</span>
                     {' — '}
                     <span>{cost.actual_hours.toFixed(1)}h / {cost.contracted_hours}h</span>
                     {isOver && (
@@ -835,7 +835,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
                 )
               })}
             </div>
-            <p className="text-[11px] text-un1t-mid mt-2">
+            <p className="text-[11px] text-un1t-muted mt-2">
               FTE staff scheduled at or above their contracted hours for {weekLabel}.
             </p>
           </div>
@@ -844,7 +844,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
 
       {/* Calendar Grid */}
       {loading ? (
-        <div className="text-center py-20 text-un1t-light">Loading roster...</div>
+        <div className="text-center py-20 text-un1t-subtle">Loading roster...</div>
       ) : viewType === 'month' ? (
         // ── MONTH VIEW ──
         // Renders a 6x7 grid; each cell shows the date + count of
@@ -854,7 +854,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
         <div>
           <div className="grid grid-cols-7 gap-1.5 mb-1.5">
             {DAY_LABELS.map(label => (
-              <div key={label} className="text-[11px] font-semibold text-un1t-light uppercase tracking-wider text-center py-1">
+              <div key={label} className="text-[11px] font-semibold text-un1t-subtle uppercase tracking-wider text-center py-1">
                 {label}
               </div>
             ))}
@@ -886,12 +886,12 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
                       setWeekStart(getMonday(date))
                       setViewType('week')
                     }}
-                    className={`text-left bg-un1t-dark border rounded-md p-1.5 min-h-[88px] transition-colors hover:border-un1t-white/30 ${
-                      inFocusedMonth ? 'border-un1t-gray' : 'border-un1t-gray/50 opacity-60'
+                    className={`text-left bg-un1t-surface border rounded-md p-1.5 min-h-[88px] transition-colors hover:border-un1t-text/30 ${
+                      inFocusedMonth ? 'border-un1t-border' : 'border-un1t-border/50 opacity-60'
                     } ${isToday ? 'ring-1 ring-blue-400/50' : ''} ${holiday ? 'bg-amber-500/[0.06]' : ''}`}
                   >
                     <div className="flex items-center justify-between mb-1">
-                      <span className={`text-xs font-semibold ${isToday ? 'text-blue-400' : inFocusedMonth ? 'text-un1t-white' : 'text-un1t-mid'}`}>
+                      <span className={`text-xs font-semibold ${isToday ? 'text-blue-400' : inFocusedMonth ? 'text-un1t-text' : 'text-un1t-muted'}`}>
                         {date.getDate()}
                       </span>
                       <div className="flex items-center gap-1">
@@ -901,7 +901,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
                           </span>
                         )}
                         {totalAssignmentCount > 0 && (
-                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-un1t-gray/60 text-un1t-light">
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-un1t-border/60 text-un1t-subtle">
                             {totalAssignmentCount}
                           </span>
                         )}
@@ -929,7 +929,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
                         )
                       })}
                       {visibleBlocks.length > 3 && (
-                        <div className="text-[10px] text-un1t-mid">+{visibleBlocks.length - 3} more</div>
+                        <div className="text-[10px] text-un1t-muted">+{visibleBlocks.length - 3} more</div>
                       )}
                       {dayTimeOff.slice(0, 1).map(t => {
                         const conf = TIME_OFF_CONFIG[t.type] || TIME_OFF_CONFIG.unavailable
@@ -972,13 +972,13 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
                 ? 'bg-blue-600 text-white'
                 : holiday
                   ? 'bg-amber-500/15 text-amber-300 border border-amber-500/30'
-                  : 'bg-un1t-dark text-un1t-light'
+                  : 'bg-un1t-surface text-un1t-subtle'
 
               return (
                 <div key={i} className="min-h-[200px]">
                   <div className={`text-center py-2 rounded-t-lg text-xs font-semibold ${headerCls}`} title={holiday?.name || undefined}>
                     <div>{label}</div>
-                    <div className={`text-lg font-bold ${isToday ? 'text-white' : 'text-un1t-white'}`}>{date.getDate()}</div>
+                    <div className={`text-lg font-bold ${isToday ? 'text-white' : 'text-un1t-text'}`}>{date.getDate()}</div>
                     {holiday && (
                       <div className={`mt-0.5 text-[10px] font-medium leading-tight px-1 truncate ${isToday ? 'text-white/80' : 'text-amber-300'}`}>
                         {holiday.source === 'national' ? '🇮🇪 ' : '🏷 '}{holiday.name}
@@ -986,7 +986,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
                     )}
                   </div>
 
-                  <div className={`bg-un1t-dark/50 border border-un1t-gray border-t-0 rounded-b-lg p-1.5 space-y-1.5 min-h-[160px] ${holiday ? 'bg-amber-500/[0.04]' : ''}`}>
+                  <div className={`bg-un1t-surface/50 border border-un1t-border border-t-0 rounded-b-lg p-1.5 space-y-1.5 min-h-[160px] ${holiday ? 'bg-amber-500/[0.04]' : ''}`}>
                     {/* Time-off bars */}
                     {timeOff
                       .filter(t => t.start_date <= dateStr && t.end_date >= dateStr)
@@ -1010,7 +1010,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
                     }
 
                     {dayBlocks.length === 0 && timeOff.filter(t => t.start_date <= dateStr && t.end_date >= dateStr).length === 0 && (
-                      <div className="text-center py-6 text-xs text-un1t-mid">No shifts</div>
+                      <div className="text-center py-6 text-xs text-un1t-muted">No shifts</div>
                     )}
 
                     {dayBlocks.map(block => {
@@ -1035,7 +1035,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
                             if (selectMode) toggleBlockSelection(block.id)
                             else setBlockDetail(block)
                           }}
-                          className={`rounded-md p-2 text-xs relative group cursor-pointer hover:ring-1 hover:ring-un1t-light/40 ${myAssignment ? 'ring-1 ring-blue-400/50' : ''} ${unstaffed ? 'border border-red-500/50' : ''} ${isSelected ? 'ring-2 ring-amber-400 ring-offset-1 ring-offset-un1t-black' : ''}`}
+                          className={`rounded-md p-2 text-xs relative group cursor-pointer hover:ring-1 hover:ring-un1t-subtle/40 ${myAssignment ? 'ring-1 ring-blue-400/50' : ''} ${unstaffed ? 'border border-red-500/50' : ''} ${isSelected ? 'ring-2 ring-amber-400 ring-offset-1 ring-offset-un1t-bg' : ''}`}
                           style={{ backgroundColor: unstaffed ? '#7F1D1D20' : blockColor + '20', borderLeft: `3px solid ${unstaffed ? '#EF4444' : blockColor}` }}
                           title={selectMode ? 'Click to select / deselect' : 'Click to manage this shift'}
                         >
@@ -1048,7 +1048,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
                                 unstaffed
                                   ? 'bg-red-500/20 text-red-300'
                                   : atCapacity
-                                    ? 'bg-un1t-gray/60 text-un1t-white'
+                                    ? 'bg-un1t-border/60 text-un1t-text'
                                     : ''
                               }`}
                               style={!unstaffed && !atCapacity ? { backgroundColor: blockColor + '30', color: blockColor } : undefined}
@@ -1056,7 +1056,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
                               {count}/{max}
                             </span>
                           </div>
-                          <div className="text-un1t-light mt-0.5 flex items-center gap-1">
+                          <div className="text-un1t-subtle mt-0.5 flex items-center gap-1">
                             <Clock size={10} />
                             {formatTime(block.start_time)}–{formatTime(block.end_time)}
                           </div>
@@ -1073,7 +1073,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
                                 const hasOverride = !!(a.start_time_override || a.end_time_override)
                                 return (
                                   <div key={a.id} className="flex items-center justify-between gap-1 text-[11px]">
-                                    <span className={`truncate ${isMe ? 'text-blue-300 font-medium' : 'text-un1t-white'}`}>
+                                    <span className={`truncate ${isMe ? 'text-blue-300 font-medium' : 'text-un1t-text'}`}>
                                       {a.profiles?.full_name || 'Unknown'}
                                       {hasOverride && (
                                         <span
@@ -1098,7 +1098,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
                               edits, remove coach, delete block, swap) lives in
                               the modal that opens on click. */}
                           {(isManager || myAssignment) && (
-                            <div className="mt-1.5 text-[10px] text-un1t-mid italic text-right opacity-0 group-hover:opacity-100 transition-opacity">
+                            <div className="mt-1.5 text-[10px] text-un1t-muted italic text-right opacity-0 group-hover:opacity-100 transition-opacity">
                               Click to manage
                             </div>
                           )}
@@ -1110,7 +1110,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
                     {isManager && (
                       <button
                         onClick={() => setCreateTarget({ date: dateStr })}
-                        className="w-full py-2 rounded-md border border-dashed border-un1t-gray text-un1t-mid hover:text-un1t-white hover:border-un1t-white/30 text-xs transition-colors flex items-center justify-center gap-1"
+                        className="w-full py-2 rounded-md border border-dashed border-un1t-border text-un1t-muted hover:text-un1t-text hover:border-un1t-text/30 text-xs transition-colors flex items-center justify-center gap-1"
                       >
                         <Plus size={12} /> Add Slot
                       </button>
@@ -1229,11 +1229,11 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
           add/remove from the selection without losing the picker.
           Cancel exits select mode + clears selection. */}
       {selectMode && (
-        <div className="fixed bottom-0 left-0 right-0 z-40 bg-un1t-dark border-t border-amber-500/50 shadow-2xl shadow-amber-500/10">
+        <div className="fixed bottom-0 left-0 right-0 z-40 bg-un1t-surface border-t border-amber-500/50 shadow-2xl shadow-amber-500/10">
           <div className="max-w-7xl mx-auto px-4 py-3 flex items-center gap-3 flex-wrap">
             <div className="flex items-center gap-2 text-sm">
               <Check size={16} className="text-amber-400" />
-              <span className="font-semibold text-un1t-white">
+              <span className="font-semibold text-un1t-text">
                 {selectedBlockIds.size === 0
                   ? 'Click shifts on the calendar to select'
                   : `${selectedBlockIds.size} shift${selectedBlockIds.size === 1 ? '' : 's'} selected`}
@@ -1244,7 +1244,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
                 value={bulkAssignProfile}
                 onChange={(e) => setBulkAssignProfile(e.target.value)}
                 disabled={selectedBlockIds.size === 0 || bulkAssignBusy}
-                className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white disabled:opacity-50"
+                className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text disabled:opacity-50"
               >
                 <option value="">— Select a coach —</option>
                 {locationStaff.map((s) => (
@@ -1256,7 +1256,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
               type="button"
               onClick={bulkAssign}
               disabled={!bulkAssignProfile || selectedBlockIds.size === 0 || bulkAssignBusy}
-              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-md bg-amber-500 text-un1t-black text-sm font-semibold hover:bg-amber-400 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-md bg-amber-500 text-un1t-bg text-sm font-semibold hover:bg-amber-400 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {bulkAssignBusy ? 'Assigning…' : `Assign to ${selectedBlockIds.size || 0}`}
             </button>
@@ -1264,7 +1264,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
               type="button"
               onClick={exitSelectMode}
               disabled={bulkAssignBusy}
-              className="text-sm text-un1t-light hover:text-un1t-white disabled:opacity-50"
+              className="text-sm text-un1t-subtle hover:text-un1t-text disabled:opacity-50"
             >
               Cancel
             </button>
@@ -1341,36 +1341,36 @@ function AssignCoachModal({ block, staff, onAssign, onClose }) {
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={onClose}>
-      <div className="bg-un1t-dark border border-un1t-gray rounded-xl p-6 w-full max-w-md" onClick={(e) => e.stopPropagation()}>
+      <div className="bg-un1t-surface border border-un1t-border rounded-xl p-6 w-full max-w-md" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-4">
           <h3 className="font-semibold">Assign coaches</h3>
-          <button onClick={onClose} className="text-un1t-light hover:text-un1t-white"><X size={18} /></button>
+          <button onClick={onClose} className="text-un1t-subtle hover:text-un1t-text"><X size={18} /></button>
         </div>
         <div className="bg-black/30 rounded-lg p-3 mb-4 text-sm">
           <div className="font-medium">{tmpl.name || 'Shift'} — {dayLabel}</div>
-          <div className="text-un1t-light text-xs mt-1">
+          <div className="text-un1t-subtle text-xs mt-1">
             {formatTime(block.start_time)}–{formatTime(block.end_time)} · {currentCount}/{block.max_coaches} assigned · {slotsLeft} slot{slotsLeft === 1 ? '' : 's'} open
           </div>
         </div>
         <div>
-          <label className="block text-xs text-un1t-light mb-2">Pick one or more coaches</label>
+          <label className="block text-xs text-un1t-subtle mb-2">Pick one or more coaches</label>
           {available.length === 0 ? (
-            <p className="text-[11px] text-un1t-light">All staff already assigned to this slot.</p>
+            <p className="text-[11px] text-un1t-subtle">All staff already assigned to this slot.</p>
           ) : (
-            <ul className="max-h-72 overflow-y-auto border border-un1t-gray rounded-md divide-y divide-un1t-gray/50">
+            <ul className="max-h-72 overflow-y-auto border border-un1t-border rounded-md divide-y divide-un1t-border/50">
               {available.map((s) => {
                 const checked = selectedIds.has(s.id)
                 return (
                   <li key={s.id}>
-                    <label className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-un1t-gray/30">
+                    <label className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-un1t-border/30">
                       <input
                         type="checkbox"
                         checked={checked}
                         onChange={() => toggle(s.id)}
-                        className="accent-un1t-white"
+                        className="accent-un1t-text"
                       />
-                      <span className="text-sm text-un1t-white flex-1">{s.full_name}</span>
-                      <span className="text-[10px] text-un1t-light">{s.role}</span>
+                      <span className="text-sm text-un1t-text flex-1">{s.full_name}</span>
+                      <span className="text-[10px] text-un1t-subtle">{s.role}</span>
                     </label>
                   </li>
                 )
@@ -1386,7 +1386,7 @@ function AssignCoachModal({ block, staff, onAssign, onClose }) {
         <button
           onClick={handleClick}
           disabled={selectedIds.size === 0 || saving || available.length === 0}
-          className="w-full mt-4 bg-un1t-white text-un1t-black font-medium text-sm py-2.5 rounded-md hover:bg-un1t-accent transition-colors disabled:opacity-50"
+          className="w-full mt-4 bg-un1t-text text-un1t-bg font-medium text-sm py-2.5 rounded-md hover:bg-un1t-accent transition-colors disabled:opacity-50"
         >
           {submitLabel}
         </button>
@@ -1409,17 +1409,17 @@ function CreateBlockModal({ date, templates, onCreate, onClose }) {
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={onClose}>
-      <div className="bg-un1t-dark border border-un1t-gray rounded-xl p-6 w-full max-w-md" onClick={e => e.stopPropagation()}>
+      <div className="bg-un1t-surface border border-un1t-border rounded-xl p-6 w-full max-w-md" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-4">
           <h3 className="font-semibold">Add Shift Slot — {dayLabel}</h3>
-          <button onClick={onClose} className="text-un1t-light hover:text-un1t-white"><X size={18} /></button>
+          <button onClick={onClose} className="text-un1t-subtle hover:text-un1t-text"><X size={18} /></button>
         </div>
-        <p className="text-xs text-un1t-light mb-3">
+        <p className="text-xs text-un1t-subtle mb-3">
           Adds a one-off block for this day. To make a slot recur, edit the template and add this weekday to its days_of_week.
         </p>
         <div>
-          <label className="block text-xs text-un1t-light mb-1">Template *</label>
-          <select value={templateId} onChange={e => setTemplateId(e.target.value)} className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white">
+          <label className="block text-xs text-un1t-subtle mb-1">Template *</label>
+          <select value={templateId} onChange={e => setTemplateId(e.target.value)} className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text">
             <option value="">Select template...</option>
             {templates.map(t => (
               <option key={t.id} value={t.id}>{t.name} ({formatTime(t.start_time)}–{formatTime(t.end_time)})</option>
@@ -1429,7 +1429,7 @@ function CreateBlockModal({ date, templates, onCreate, onClose }) {
         <button
           onClick={handleClick}
           disabled={!templateId || saving}
-          className="w-full mt-4 bg-un1t-white text-un1t-black font-medium text-sm py-2.5 rounded-md hover:bg-un1t-accent transition-colors disabled:opacity-50"
+          className="w-full mt-4 bg-un1t-text text-un1t-bg font-medium text-sm py-2.5 rounded-md hover:bg-un1t-accent transition-colors disabled:opacity-50"
         >
           {saving ? 'Adding...' : 'Add Slot'}
         </button>
@@ -1510,19 +1510,19 @@ function PublishRosterModal({ locationId, isOwner, period, onSubmit, onClose, pu
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={onClose}>
-      <div className="bg-un1t-dark border border-un1t-gray rounded-xl p-6 w-full max-w-lg" onClick={e => e.stopPropagation()}>
+      <div className="bg-un1t-surface border border-un1t-border rounded-xl p-6 w-full max-w-lg" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-4">
           <h3 className="font-semibold">Publish roster</h3>
-          <button onClick={onClose} className="text-un1t-light hover:text-un1t-white"><X size={18} /></button>
+          <button onClick={onClose} className="text-un1t-subtle hover:text-un1t-text"><X size={18} /></button>
         </div>
 
         <div className="bg-black/30 rounded-lg p-3 mb-4 text-sm">
-          <div className="text-un1t-light text-xs">Period</div>
+          <div className="text-un1t-subtle text-xs">Period</div>
           <div className="font-medium">{period.periodStart} – {period.periodEnd}</div>
         </div>
 
         {loading && (
-          <div className="text-center py-6 text-sm text-un1t-light">Calculating budget impact…</div>
+          <div className="text-center py-6 text-sm text-un1t-subtle">Calculating budget impact…</div>
         )}
 
         {!loading && submitResult?.needsApproval && (
@@ -1543,19 +1543,19 @@ function PublishRosterModal({ locationId, isOwner, period, onSubmit, onClose, pu
         {!loading && impact && !submitResult && (
           <>
             <div className="grid grid-cols-2 gap-3 mb-4 text-sm">
-              <div className="rounded-lg border border-un1t-gray p-3">
-                <div className="text-[10px] uppercase tracking-wider text-un1t-light">Blocks in period</div>
+              <div className="rounded-lg border border-un1t-border p-3">
+                <div className="text-[10px] uppercase tracking-wider text-un1t-subtle">Blocks in period</div>
                 <div className="text-xl font-semibold">{impact.blockCount}</div>
               </div>
-              <div className="rounded-lg border border-un1t-gray p-3">
-                <div className="text-[10px] uppercase tracking-wider text-un1t-light">Period contractor cost</div>
+              <div className="rounded-lg border border-un1t-border p-3">
+                <div className="text-[10px] uppercase tracking-wider text-un1t-subtle">Period contractor cost</div>
                 <div className="text-xl font-semibold">{fmtEur(impact.periodProjectedEur)}</div>
               </div>
-              <div className="rounded-lg border border-un1t-gray p-3 col-span-2">
-                <div className="text-[10px] uppercase tracking-wider text-un1t-light">Month total after publish (vs budget)</div>
-                <div className={`text-xl font-semibold ${overBudget ? 'text-red-700' : 'text-un1t-white'}`}>
+              <div className="rounded-lg border border-un1t-border p-3 col-span-2">
+                <div className="text-[10px] uppercase tracking-wider text-un1t-subtle">Month total after publish (vs budget)</div>
+                <div className={`text-xl font-semibold ${overBudget ? 'text-red-700' : 'text-un1t-text'}`}>
                   {fmtEur(impact.monthProjectedTotalEur)}
-                  <span className="text-xs text-un1t-light font-normal ml-2">
+                  <span className="text-xs text-un1t-subtle font-normal ml-2">
                     of {fmtEur(impact.monthlyBudgetEur)}
                   </span>
                 </div>
@@ -1582,7 +1582,7 @@ function PublishRosterModal({ locationId, isOwner, period, onSubmit, onClose, pu
             <div className="flex justify-end gap-2">
               <button
                 onClick={onClose}
-                className="px-3 py-2 rounded-md text-sm border border-un1t-gray text-un1t-light hover:text-un1t-white hover:border-un1t-white/30"
+                className="px-3 py-2 rounded-md text-sm border border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-text/30"
               >
                 Cancel
               </button>
@@ -1619,31 +1619,31 @@ function SwapModal({ shift, onSubmit, onClose }) {
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={onClose}>
-      <div className="bg-un1t-dark border border-un1t-gray rounded-xl p-6 w-full max-w-md" onClick={e => e.stopPropagation()}>
+      <div className="bg-un1t-surface border border-un1t-border rounded-xl p-6 w-full max-w-md" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-4">
           <h3 className="font-semibold">Request Shift Swap</h3>
-          <button onClick={onClose} className="text-un1t-light hover:text-un1t-white"><X size={18} /></button>
+          <button onClick={onClose} className="text-un1t-subtle hover:text-un1t-text"><X size={18} /></button>
         </div>
         <div className="bg-black/30 rounded-lg p-3 mb-4 text-sm">
           <div className="font-medium">{tmpl.name} — {new Date(shift.shift_date + 'T00:00:00').toLocaleDateString('en-IE', { weekday: 'long', day: 'numeric', month: 'long' })}</div>
-          <div className="text-un1t-light text-xs mt-1">
+          <div className="text-un1t-subtle text-xs mt-1">
             {formatTime(shift.start_time_override || tmpl.start_time)}–{formatTime(shift.end_time_override || tmpl.end_time)}
             {shift.role_label && ` · ${shift.role_label}`}
           </div>
         </div>
         <div>
-          <label className="block text-xs text-un1t-light mb-1">Reason (optional)</label>
+          <label className="block text-xs text-un1t-subtle mb-1">Reason (optional)</label>
           <textarea
             value={reason}
             onChange={e => setReason(e.target.value)}
             rows={3}
             placeholder="Why do you need to swap this shift?"
-            className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white resize-none"
+            className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text resize-none"
           />
         </div>
         <button
           onClick={() => onSubmit(shift.id, reason)}
-          className="w-full mt-4 bg-un1t-white text-un1t-black font-medium text-sm py-2.5 rounded-md hover:bg-un1t-accent transition-colors"
+          className="w-full mt-4 bg-un1t-text text-un1t-bg font-medium text-sm py-2.5 rounded-md hover:bg-un1t-accent transition-colors"
         >
           Submit Swap Request
         </button>
@@ -1681,15 +1681,15 @@ function BlockDetailModal({
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={onClose}>
       <div
-        className="bg-un1t-dark border border-un1t-gray rounded-lg p-5 max-w-lg w-full max-h-[90vh] overflow-y-auto"
+        className="bg-un1t-surface border border-un1t-border rounded-lg p-5 max-w-lg w-full max-h-[90vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
         <div className="flex items-start justify-between gap-3 mb-4">
           <div className="min-w-0">
-            <h3 className="font-semibold text-un1t-white">{tmpl.name || 'Shift'}</h3>
-            <p className="text-xs text-un1t-light mt-0.5">{dateLabel}</p>
-            <p className="text-xs text-un1t-mid mt-1 inline-flex items-center gap-1.5">
+            <h3 className="font-semibold text-un1t-text">{tmpl.name || 'Shift'}</h3>
+            <p className="text-xs text-un1t-subtle mt-0.5">{dateLabel}</p>
+            <p className="text-xs text-un1t-muted mt-1 inline-flex items-center gap-1.5">
               <Clock size={11} />
               {formatTime(block.start_time)}–{formatTime(block.end_time)}
               <span className="mx-1">·</span>
@@ -1698,7 +1698,7 @@ function BlockDetailModal({
           </div>
           <button
             onClick={onClose}
-            className="text-un1t-light hover:text-un1t-white shrink-0"
+            className="text-un1t-subtle hover:text-un1t-text shrink-0"
             title="Close"
           >
             <X size={18} />
@@ -1707,11 +1707,11 @@ function BlockDetailModal({
 
         {/* Assigned coaches */}
         <div className="space-y-2 mb-4">
-          <div className="text-[11px] font-semibold uppercase tracking-wider text-un1t-light">
+          <div className="text-[11px] font-semibold uppercase tracking-wider text-un1t-subtle">
             Coaches
           </div>
           {assignments.length === 0 ? (
-            <p className="text-xs text-un1t-light italic">No coaches assigned yet.</p>
+            <p className="text-xs text-un1t-subtle italic">No coaches assigned yet.</p>
           ) : (
             assignments.map((a) => (
               <AssignmentRow
@@ -1733,7 +1733,7 @@ function BlockDetailModal({
         </div>
 
         {/* Action footer */}
-        <div className="border-t border-un1t-gray pt-4 flex items-center justify-between gap-2">
+        <div className="border-t border-un1t-border pt-4 flex items-center justify-between gap-2">
           {isManager && !atCapacity ? (
             <button
               onClick={onAddCoach}
@@ -1812,10 +1812,10 @@ function AssignmentRow({ assignment, block, isMe, canEdit, onUnassign, onSave, o
   }
 
   return (
-    <div className="bg-un1t-black/40 border border-un1t-gray rounded-md p-3">
+    <div className="bg-un1t-bg/40 border border-un1t-border rounded-md p-3">
       <div className="flex items-center justify-between gap-2">
         <div className="min-w-0">
-          <div className={`text-sm font-medium ${isMe ? 'text-blue-300' : 'text-un1t-white'}`}>
+          <div className={`text-sm font-medium ${isMe ? 'text-blue-300' : 'text-un1t-text'}`}>
             {assignment.profiles?.full_name || 'Unknown'}
             {hasOverride && (
               <span className="ml-1.5 text-[10px] uppercase font-bold bg-amber-400 text-amber-950 px-1.5 py-0.5 rounded">
@@ -1823,15 +1823,15 @@ function AssignmentRow({ assignment, block, isMe, canEdit, onUnassign, onSave, o
               </span>
             )}
           </div>
-          <div className="text-xs text-un1t-light mt-0.5 inline-flex items-center gap-1">
+          <div className="text-xs text-un1t-subtle mt-0.5 inline-flex items-center gap-1">
             <Clock size={10} />
             {effStart}–{effEnd}
             {hasOverride && (
-              <span className="text-un1t-mid ml-1">(block default {formatTime(block.start_time)}–{formatTime(block.end_time)})</span>
+              <span className="text-un1t-muted ml-1">(block default {formatTime(block.start_time)}–{formatTime(block.end_time)})</span>
             )}
           </div>
           {assignment.partial_reason && !editing && (
-            <div className="text-[11px] text-un1t-mid mt-1 italic">
+            <div className="text-[11px] text-un1t-muted mt-1 italic">
               &ldquo;{assignment.partial_reason}&rdquo;
             </div>
           )}
@@ -1840,7 +1840,7 @@ function AssignmentRow({ assignment, block, isMe, canEdit, onUnassign, onSave, o
           {onSwapRequest && !editing && (
             <button
               onClick={onSwapRequest}
-              className="text-[11px] text-un1t-light hover:text-un1t-white inline-flex items-center gap-1 px-2 py-1 rounded hover:bg-un1t-gray/40"
+              className="text-[11px] text-un1t-subtle hover:text-un1t-text inline-flex items-center gap-1 px-2 py-1 rounded hover:bg-un1t-border/40"
               title="Request swap"
             >
               <ArrowLeftRight size={11} />
@@ -1859,7 +1859,7 @@ function AssignmentRow({ assignment, block, isMe, canEdit, onUnassign, onSave, o
           {canEdit && !editing && (
             <button
               onClick={onUnassign}
-              className="text-[11px] text-un1t-light hover:text-red-400 inline-flex items-center gap-1 px-2 py-1 rounded hover:bg-red-500/10"
+              className="text-[11px] text-un1t-subtle hover:text-red-400 inline-flex items-center gap-1 px-2 py-1 rounded hover:bg-red-500/10"
               title="Remove coach"
             >
               <X size={11} />
@@ -1869,36 +1869,36 @@ function AssignmentRow({ assignment, block, isMe, canEdit, onUnassign, onSave, o
       </div>
 
       {editing && (
-        <div className="mt-3 pt-3 border-t border-un1t-gray space-y-2">
-          <div className="text-[11px] text-un1t-light">
+        <div className="mt-3 pt-3 border-t border-un1t-border space-y-2">
+          <div className="text-[11px] text-un1t-subtle">
             Set the actual times this coach worked. Leave equal to the block default
             ({formatTime(block.start_time)}–{formatTime(block.end_time)}) to inherit.
           </div>
           <div className="flex items-center gap-2">
-            <label className="text-xs text-un1t-light w-12">Start</label>
+            <label className="text-xs text-un1t-subtle w-12">Start</label>
             <input
               type="time"
               value={start}
               onChange={(e) => setStart(e.target.value)}
-              className="flex-1 bg-un1t-black border border-un1t-gray rounded-md px-2 py-1.5 text-sm text-un1t-white focus:outline-none focus:border-amber-500/50"
+              className="flex-1 bg-un1t-bg border border-un1t-border rounded-md px-2 py-1.5 text-sm text-un1t-text focus:outline-none focus:border-amber-500/50"
             />
-            <label className="text-xs text-un1t-light w-8 text-center">End</label>
+            <label className="text-xs text-un1t-subtle w-8 text-center">End</label>
             <input
               type="time"
               value={end}
               onChange={(e) => setEnd(e.target.value)}
-              className="flex-1 bg-un1t-black border border-un1t-gray rounded-md px-2 py-1.5 text-sm text-un1t-white focus:outline-none focus:border-amber-500/50"
+              className="flex-1 bg-un1t-bg border border-un1t-border rounded-md px-2 py-1.5 text-sm text-un1t-text focus:outline-none focus:border-amber-500/50"
             />
           </div>
           <div>
-            <label className="text-xs text-un1t-light block mb-1">Reason (optional)</label>
+            <label className="text-xs text-un1t-subtle block mb-1">Reason (optional)</label>
             <input
               type="text"
               value={reason}
               onChange={(e) => setReason(e.target.value)}
               maxLength={200}
               placeholder="e.g. left early — sick, covered until 1pm for Mike"
-              className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-1.5 text-sm text-un1t-white focus:outline-none focus:border-amber-500/50"
+              className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-1.5 text-sm text-un1t-text focus:outline-none focus:border-amber-500/50"
             />
           </div>
           {error && (
@@ -1918,7 +1918,7 @@ function AssignmentRow({ assignment, block, isMe, canEdit, onUnassign, onSave, o
               <button
                 onClick={() => { setEditing(false); setError(null); setStart(overrideStart || blockStart); setEnd(overrideEnd || blockEnd); setReason(assignment.partial_reason || '') }}
                 disabled={saving}
-                className="text-xs text-un1t-light hover:text-un1t-white px-2 py-1.5"
+                className="text-xs text-un1t-subtle hover:text-un1t-text px-2 py-1.5"
               >
                 Cancel
               </button>
@@ -1927,7 +1927,7 @@ function AssignmentRow({ assignment, block, isMe, canEdit, onUnassign, onSave, o
               <button
                 onClick={handleClear}
                 disabled={saving}
-                className="text-[11px] text-un1t-mid hover:text-red-300"
+                className="text-[11px] text-un1t-muted hover:text-red-300"
                 title="Remove the override and inherit the block default"
               >
                 Clear override

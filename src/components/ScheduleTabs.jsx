@@ -75,15 +75,15 @@ export default function ScheduleTabs({ user }) {
   return (
     <div>
       {/* Tab bar */}
-      <div className="flex items-center gap-1 mb-6 border-b border-un1t-gray">
+      <div className="flex items-center gap-1 mb-6 border-b border-un1t-border">
         {tabs.map(tab => (
           <button
             key={tab.key}
             onClick={() => setActiveTab(tab.key)}
             className={`flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 transition-colors -mb-px ${
               activeTab === tab.key
-                ? 'border-un1t-white text-un1t-white'
-                : 'border-transparent text-un1t-light hover:text-un1t-white'
+                ? 'border-un1t-text text-un1t-text'
+                : 'border-transparent text-un1t-subtle hover:text-un1t-text'
             }`}
           >
             <tab.icon size={16} />

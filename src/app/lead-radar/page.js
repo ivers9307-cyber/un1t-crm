@@ -19,8 +19,8 @@ export default async function LeadRadarPage() {
   return (
     <div className="p-6 max-w-6xl mx-auto">
       <header className="mb-6">
-        <h1 className="text-2xl font-semibold text-un1t-white">Lead Radar</h1>
-        <p className="text-sm text-un1t-light mt-1">
+        <h1 className="text-2xl font-semibold text-un1t-text">Lead Radar</h1>
+        <p className="text-sm text-un1t-subtle mt-1">
           The non-member base — leads, trials and ClassPass drop-ins. The
           Funnel is who to chase to convert; ClassPass is a read-only view
           of drop-ins (who rarely convert to a membership); Cleanup clears

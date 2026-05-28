@@ -23,7 +23,7 @@ export default async function DashboardIndex() {
   // Falls back to the layout's chrome (header + segmented control)
   // with this empty-state message in the body.
   return (
-    <p className="text-sm text-un1t-light">
+    <p className="text-sm text-un1t-subtle">
       You don&apos;t have access to any dashboards yet. Ask an admin to enable
       Today, Studio, or Business in your profile.
     </p>

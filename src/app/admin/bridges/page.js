@@ -21,7 +21,7 @@ export default async function BridgesAdminPage() {
   if (user.profileRole !== 'master' && user.role !== 'master') {
     return (
       <div className="p-6">
-        <p className="text-sm text-un1t-light">HR bridge management is master-only.</p>
+        <p className="text-sm text-un1t-subtle">HR bridge management is master-only.</p>
       </div>
     )
   }

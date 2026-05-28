@@ -82,44 +82,44 @@ function rangeLabelFor(startIso, endIso) {
 function WeekPanel({ title, startIso, endIso, shifts, showLocation }) {
   const days = buildWeek(startIso, shifts || [])
   return (
-    <div className="bg-un1t-dark border border-un1t-gray rounded-2xl overflow-hidden">
+    <div className="bg-un1t-surface border border-un1t-border rounded-2xl overflow-hidden">
       <div className="px-4 pt-3 pb-2 flex items-baseline justify-between">
-        <span className="text-xs font-semibold uppercase tracking-wider text-un1t-light">{title}</span>
-        <span className="text-xs text-un1t-mid">{rangeLabelFor(startIso, endIso)}</span>
+        <span className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle">{title}</span>
+        <span className="text-xs text-un1t-muted">{rangeLabelFor(startIso, endIso)}</span>
       </div>
       {days.map((day, idx) => {
         const isLast = idx === days.length - 1
         return (
           <div
             key={day.iso}
-            className={`flex px-4 py-2.5 ${!isLast ? 'border-b border-un1t-gray' : ''} ${
-              day.isToday ? 'bg-un1t-gray/30' : ''
+            className={`flex px-4 py-2.5 ${!isLast ? 'border-b border-un1t-border' : ''} ${
+              day.isToday ? 'bg-un1t-border/30' : ''
             }`}
           >
             <div className="w-14 shrink-0">
               <div className={`text-[10px] font-semibold uppercase tracking-wider ${
-                day.isToday ? 'text-un1t-white'
-                : day.isPast ? 'text-un1t-mid'
-                : 'text-un1t-light'
+                day.isToday ? 'text-un1t-text'
+                : day.isPast ? 'text-un1t-muted'
+                : 'text-un1t-subtle'
               }`}>
                 {day.label}
               </div>
               <div className={`text-base font-semibold ${
-                day.isPast ? 'text-un1t-mid' : 'text-un1t-white'
+                day.isPast ? 'text-un1t-muted' : 'text-un1t-text'
               }`}>
                 {day.dayNum}
               </div>
             </div>
             <div className="flex-1 min-w-0">
               {day.shifts.length === 0 ? (
-                <div className={`text-sm pt-1 ${day.isPast ? 'text-un1t-mid' : 'text-un1t-light'}`}>
+                <div className={`text-sm pt-1 ${day.isPast ? 'text-un1t-muted' : 'text-un1t-subtle'}`}>
                   Off
                 </div>
               ) : (
                 day.shifts.map((s, i) => (
                   <div key={s.id} className={i > 0 ? 'mt-1' : ''}>
                     <div className="flex items-center justify-between gap-2">
-                      <div className={`text-sm font-medium truncate ${day.isPast ? 'text-un1t-light' : 'text-un1t-white'}`}>
+                      <div className={`text-sm font-medium truncate ${day.isPast ? 'text-un1t-subtle' : 'text-un1t-text'}`}>
                         {s.shift_templates?.name || 'Shift'}
                       </div>
                       {s.published === false && (
@@ -133,7 +133,7 @@ function WeekPanel({ title, startIso, endIso, shifts, showLocation }) {
                         </span>
                       )}
                     </div>
-                    <div className={`text-xs flex items-center gap-1.5 flex-wrap ${day.isPast ? 'text-un1t-mid' : 'text-un1t-light'}`}>
+                    <div className={`text-xs flex items-center gap-1.5 flex-wrap ${day.isPast ? 'text-un1t-muted' : 'text-un1t-subtle'}`}>
                       <span>{shiftTime(s)} · {shiftHours(s)}h</span>
                       {showLocation && s.locations?.name && (() => {
                         // Per-location accent colour so chips for
@@ -243,7 +243,7 @@ export default async function PersonalDashboardPage() {
           label="Inbox"
           value={unreadInbox}
           sublabel={unreadInbox === 1 ? 'unread message' : 'unread messages'}
-          accent={unreadInbox > 0 ? 'text-un1t-white' : 'text-un1t-mid'}
+          accent={unreadInbox > 0 ? 'text-un1t-text' : 'text-un1t-muted'}
           href={unreadInbox > 0 ? '/whatsapp' : undefined}
         />
       </KpiRow>

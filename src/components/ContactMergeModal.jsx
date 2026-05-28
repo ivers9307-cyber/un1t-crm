@@ -110,18 +110,18 @@ export default function ContactMergeModal({ contactIds, contacts, onClose }) {
       onClick={() => !submitting && onClose()}
     >
       <div
-        className="bg-un1t-dark border border-un1t-gray rounded-xl max-w-2xl w-full max-h-[85vh] overflow-auto p-6"
+        className="bg-un1t-surface border border-un1t-border rounded-xl max-w-2xl w-full max-h-[85vh] overflow-auto p-6"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-start gap-3 mb-4">
-          <GitMerge size={20} className="text-un1t-light mt-0.5 shrink-0" />
+          <GitMerge size={20} className="text-un1t-subtle mt-0.5 shrink-0" />
           <div className="flex-1">
-            <h3 className="text-base font-semibold text-un1t-white">Merge contacts</h3>
-            <p className="text-xs text-un1t-light mt-0.5">
+            <h3 className="text-base font-semibold text-un1t-text">Merge contacts</h3>
+            <p className="text-xs text-un1t-subtle mt-0.5">
               Pick which contact survives. The other will be deleted and its history folds across.
             </p>
           </div>
-          <button type="button" onClick={() => !submitting && onClose()} disabled={submitting} className="text-un1t-light hover:text-un1t-white">
+          <button type="button" onClick={() => !submitting && onClose()} disabled={submitting} className="text-un1t-subtle hover:text-un1t-text">
             <X size={16} />
           </button>
         </div>
@@ -141,20 +141,20 @@ export default function ContactMergeModal({ contactIds, contacts, onClose }) {
                     className={`text-left rounded-lg p-3 border transition-colors ${
                       chosen
                         ? 'border-emerald-500/60 bg-emerald-500/10'
-                        : 'border-un1t-gray hover:border-un1t-mid'
+                        : 'border-un1t-border hover:border-un1t-muted'
                     }`}
                   >
                     <div className="flex items-center justify-between mb-2">
-                      <span className="text-sm font-semibold text-un1t-white">{c.name || c.email || '(no name)'}</span>
+                      <span className="text-sm font-semibold text-un1t-text">{c.name || c.email || '(no name)'}</span>
                       {chosen && (
                         <span className="text-[10px] uppercase tracking-wider text-emerald-700 font-bold">Survivor</span>
                       )}
                     </div>
-                    <ul className="text-xs text-un1t-light space-y-0.5">
-                      <li>{c.email || <span className="text-un1t-mid">no email</span>}</li>
-                      <li>{c.phone || <span className="text-un1t-mid">no phone</span>}</li>
-                      <li>Stage: {c.pipeline_stage_slug || <span className="text-un1t-mid">none</span>}</li>
-                      <li>Source: {c.lead_source || <span className="text-un1t-mid">none</span>}</li>
+                    <ul className="text-xs text-un1t-subtle space-y-0.5">
+                      <li>{c.email || <span className="text-un1t-muted">no email</span>}</li>
+                      <li>{c.phone || <span className="text-un1t-muted">no phone</span>}</li>
+                      <li>Stage: {c.pipeline_stage_slug || <span className="text-un1t-muted">none</span>}</li>
+                      <li>Source: {c.lead_source || <span className="text-un1t-muted">none</span>}</li>
                       <li>Created: {c.created_at ? new Date(c.created_at).toLocaleDateString() : '—'}</li>
                     </ul>
                   </button>
@@ -165,7 +165,7 @@ export default function ContactMergeModal({ contactIds, contacts, onClose }) {
             <button
               type="button"
               onClick={() => setStage('confirm')}
-              className="w-full inline-flex items-center justify-center gap-2 bg-un1t-white text-un1t-black text-sm font-medium py-2 rounded-md hover:bg-un1t-accent"
+              className="w-full inline-flex items-center justify-center gap-2 bg-un1t-text text-un1t-bg text-sm font-medium py-2 rounded-md hover:bg-un1t-accent"
             >
               Continue <ArrowRight size={14} />
             </button>
@@ -174,22 +174,22 @@ export default function ContactMergeModal({ contactIds, contacts, onClose }) {
 
         {stage === 'confirm' && (
           <>
-            <div className="bg-un1t-black border border-un1t-gray rounded-md p-3 mb-3">
-              <div className="text-xs uppercase tracking-wider text-un1t-light mb-2">After merge</div>
-              <ul className="text-xs text-un1t-white space-y-1">
-                <li><span className="text-un1t-light">Name:</span> {merged.name || '—'}</li>
-                <li><span className="text-un1t-light">Email:</span> {merged.email || '—'}</li>
-                <li><span className="text-un1t-light">Phone:</span> {merged.phone || '—'}</li>
-                <li><span className="text-un1t-light">Stage:</span> {merged.pipeline_stage_slug || '—'}</li>
-                <li><span className="text-un1t-light">Source:</span> {merged.lead_source || '—'}</li>
+            <div className="bg-un1t-bg border border-un1t-border rounded-md p-3 mb-3">
+              <div className="text-xs uppercase tracking-wider text-un1t-subtle mb-2">After merge</div>
+              <ul className="text-xs text-un1t-text space-y-1">
+                <li><span className="text-un1t-subtle">Name:</span> {merged.name || '—'}</li>
+                <li><span className="text-un1t-subtle">Email:</span> {merged.email || '—'}</li>
+                <li><span className="text-un1t-subtle">Phone:</span> {merged.phone || '—'}</li>
+                <li><span className="text-un1t-subtle">Stage:</span> {merged.pipeline_stage_slug || '—'}</li>
+                <li><span className="text-un1t-subtle">Source:</span> {merged.lead_source || '—'}</li>
               </ul>
-              <p className="text-[11px] text-un1t-mid mt-2">
+              <p className="text-[11px] text-un1t-muted mt-2">
                 Tags from both contacts will union. Any field that&apos;s empty on the survivor is filled from the loser.
               </p>
             </div>
 
             {loadingImpact && (
-              <div className="text-xs text-un1t-light inline-flex items-center gap-2 mb-3">
+              <div className="text-xs text-un1t-subtle inline-flex items-center gap-2 mb-3">
                 <Loader2 size={12} className="animate-spin" /> Calculating what folds across…
               </div>
             )}
@@ -199,9 +199,9 @@ export default function ContactMergeModal({ contactIds, contacts, onClose }) {
               </div>
             )}
             {impact && (impact.cascade_on_delete?.length > 0 || impact.keep_on_delete?.length > 0 || impact.block_delete?.length > 0 || impact.redact_on_delete?.length > 0) && (
-              <div className="bg-un1t-black border border-un1t-gray rounded-md p-3 mb-3">
-                <div className="text-xs uppercase tracking-wider text-un1t-light mb-2">Folding across from <strong className="text-un1t-white">{loser.name || loser.email}</strong></div>
-                <ul className="text-xs text-un1t-light space-y-0.5">
+              <div className="bg-un1t-bg border border-un1t-border rounded-md p-3 mb-3">
+                <div className="text-xs uppercase tracking-wider text-un1t-subtle mb-2">Folding across from <strong className="text-un1t-text">{loser.name || loser.email}</strong></div>
+                <ul className="text-xs text-un1t-subtle space-y-0.5">
                   {[...(impact.block_delete || []), ...(impact.cascade_on_delete || []), ...(impact.redact_on_delete || []), ...(impact.keep_on_delete || [])].map(t => (
                     <li key={`${t.table}.${t.column}`}>{t.count} {t.label}</li>
                   ))}
@@ -218,15 +218,15 @@ export default function ContactMergeModal({ contactIds, contacts, onClose }) {
 
             <div className="space-y-3">
               <div>
-                <label className="block text-xs text-un1t-light mb-1">
-                  Type <strong className="text-un1t-white">{expected}</strong> to confirm:
+                <label className="block text-xs text-un1t-subtle mb-1">
+                  Type <strong className="text-un1t-text">{expected}</strong> to confirm:
                 </label>
                 <input
                   type="text"
                   value={confirmName}
                   onChange={(e) => setConfirmName(e.target.value)}
                   disabled={submitting}
-                  className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
+                  className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
                 />
               </div>
               {error && (
@@ -239,7 +239,7 @@ export default function ContactMergeModal({ contactIds, contacts, onClose }) {
                   type="button"
                   onClick={() => setStage('pick')}
                   disabled={submitting}
-                  className="flex-1 inline-flex items-center justify-center text-sm border border-un1t-gray text-un1t-light py-2 rounded-md hover:text-un1t-white hover:border-un1t-mid"
+                  className="flex-1 inline-flex items-center justify-center text-sm border border-un1t-border text-un1t-subtle py-2 rounded-md hover:text-un1t-text hover:border-un1t-muted"
                 >
                   Back
                 </button>

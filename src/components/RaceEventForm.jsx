@@ -384,7 +384,7 @@ export default function RaceEventForm({ race, locationId }) {
 
   return (
     <form onSubmit={handleSubmit} className="space-y-6">
-      <Link href="/events" className="inline-flex items-center gap-1.5 text-sm text-un1t-light hover:text-un1t-white">
+      <Link href="/events" className="inline-flex items-center gap-1.5 text-sm text-un1t-subtle hover:text-un1t-text">
         <ArrowLeft size={16} /> Back to Events
       </Link>
 
@@ -398,10 +398,10 @@ export default function RaceEventForm({ race, locationId }) {
           changing kind on a saved event would orphan its data
           (race waves on a workshop, etc.). The lock-on-edit message
           tells the operator how to do it intentionally if needed. */}
-      <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5 space-y-3">
-        <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light">Event type</h3>
+      <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5 space-y-3">
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle">Event type</h3>
         {isEditing && (
-          <p className="text-[11px] text-un1t-mid -mt-2">
+          <p className="text-[11px] text-un1t-muted -mt-2">
             Locked after creation — changing the type would orphan registrations and waves. Create a new event if you need a different type.
           </p>
         )}
@@ -417,40 +417,40 @@ export default function RaceEventForm({ race, locationId }) {
                 onClick={() => handleKindChange(k.value)}
                 className={`text-left p-3 rounded-md border transition-colors ${
                   on
-                    ? 'bg-emerald-500/15 border-emerald-500/40 text-un1t-white'
-                    : 'bg-un1t-black border-un1t-gray text-un1t-light hover:border-un1t-mid disabled:opacity-30 disabled:hover:border-un1t-gray disabled:cursor-not-allowed'
+                    ? 'bg-emerald-500/15 border-emerald-500/40 text-un1t-text'
+                    : 'bg-un1t-bg border-un1t-border text-un1t-subtle hover:border-un1t-muted disabled:opacity-30 disabled:hover:border-un1t-border disabled:cursor-not-allowed'
                 }`}
               >
                 <div className="flex items-center gap-2 mb-1">
                   <Icon size={14} />
                   <span className="text-sm font-medium">{k.label}</span>
                 </div>
-                <div className="text-[11px] text-un1t-light leading-snug">{k.description}</div>
+                <div className="text-[11px] text-un1t-subtle leading-snug">{k.description}</div>
               </button>
             )
           })}
         </div>
       </div>
 
-      <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5 space-y-4">
-        <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light">{meta.sectionLabel}</h3>
+      <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5 space-y-4">
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle">{meta.sectionLabel}</h3>
 
         <div>
-          <label className="block text-sm text-un1t-light mb-1">Name *</label>
+          <label className="block text-sm text-un1t-subtle mb-1">Name *</label>
           <input
             type="text"
             required
             value={name}
             onChange={e => onNameChange(e.target.value)}
             placeholder={meta.value === 'race' ? 'Hyrox race sim — May 2026' : meta.value === 'workshop' ? 'Mobility workshop — May 2026' : meta.value === 'seminar' ? 'Nutrition seminar — May 2026' : meta.value === 'masterclass' ? 'Olympic-lift masterclass — May 2026' : 'Open day — May 2026'}
-            className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
+            className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
           />
         </div>
 
         <div>
-          <label className="block text-sm text-un1t-light mb-1">
+          <label className="block text-sm text-un1t-subtle mb-1">
             Slug
-            {slugAuto && <span className="ml-1 text-[10px] text-un1t-mid">(auto-derived)</span>}
+            {slugAuto && <span className="ml-1 text-[10px] text-un1t-muted">(auto-derived)</span>}
           </label>
           <input
             type="text"
@@ -459,9 +459,9 @@ export default function RaceEventForm({ race, locationId }) {
             disabled={isEditing}
             pattern="^[a-z0-9]+(-[a-z0-9]+)*$"
             placeholder="hyrox-may-2026"
-            className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white font-mono disabled:opacity-50"
+            className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text font-mono disabled:opacity-50"
           />
-          <p className="text-[11px] text-un1t-mid mt-1">
+          <p className="text-[11px] text-un1t-muted mt-1">
             Public signup page is at <span className="font-mono">/event/{slug || 'your-slug'}</span>.
             {isEditing && ' Slug cannot be changed after creation (would break shared links).'}
           </p>
@@ -482,19 +482,19 @@ export default function RaceEventForm({ race, locationId }) {
         </div>
 
         <div>
-          <label className="block text-sm text-un1t-light mb-1">Description</label>
+          <label className="block text-sm text-un1t-subtle mb-1">Description</label>
           <textarea
             value={description}
             onChange={e => setDescription(e.target.value)}
             rows={3}
             placeholder={meta.value === 'race' ? 'Tell teams what to expect…' : 'Tell attendees what to expect — agenda, materials, who it\'s for…'}
-            className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
+            className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
           />
         </div>
       </div>
 
-      <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5 space-y-4">
-        <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light flex items-center gap-2">
+      <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5 space-y-4">
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle flex items-center gap-2">
           <Calendar size={14} /> {meta.dateLabel}
         </h3>
         <div>
@@ -503,35 +503,35 @@ export default function RaceEventForm({ race, locationId }) {
             required
             value={raceDate}
             onChange={e => setRaceDate(e.target.value)}
-            className="w-56 bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
+            className="w-56 bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
           />
         </div>
 
         {/* Non-race kinds: single start_time + capacity input,
             replacing the waves UI block below. */}
         {!meta.showWaves && (
-          <div className="grid grid-cols-2 gap-3 pt-2 border-t border-un1t-gray">
+          <div className="grid grid-cols-2 gap-3 pt-2 border-t border-un1t-border">
             <div>
-              <label className="block text-sm text-un1t-light mb-1">{meta.timeLabel} *</label>
+              <label className="block text-sm text-un1t-subtle mb-1">{meta.timeLabel} *</label>
               <input
                 type="time"
                 required
                 value={singleStartTime}
                 onChange={e => setSingleStartTime(e.target.value)}
-                className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
+                className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
               />
             </div>
             <div>
-              <label className="block text-sm text-un1t-light mb-1">Capacity</label>
+              <label className="block text-sm text-un1t-subtle mb-1">Capacity</label>
               <input
                 type="number"
                 min={1}
                 placeholder="Unlimited"
                 value={singleCapacity}
                 onChange={e => setSingleCapacity(e.target.value)}
-                className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
+                className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
               />
-              <p className="text-[11px] text-un1t-mid mt-1">Total seats. Empty = unlimited.</p>
+              <p className="text-[11px] text-un1t-muted mt-1">Total seats. Empty = unlimited.</p>
             </div>
           </div>
         )}
@@ -540,9 +540,9 @@ export default function RaceEventForm({ race, locationId }) {
       {/* Waves — race only. Non-race kinds use the single
           start_time + capacity inputs above. */}
       {meta.showWaves && (
-        <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5 space-y-3">
+        <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5 space-y-3">
           <div className="flex items-center justify-between gap-2">
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light flex items-center gap-2">
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle flex items-center gap-2">
               <Clock size={14} /> Waves
             </h3>
             <button
@@ -553,7 +553,7 @@ export default function RaceEventForm({ race, locationId }) {
               <Plus size={11} /> Add wave
             </button>
           </div>
-          <p className="text-[11px] text-un1t-light -mt-2">
+          <p className="text-[11px] text-un1t-subtle -mt-2">
             Multiple start times throughout the race day. Each wave has its own capacity. Teams pick a
             wave at signup. Per-wave capacity is soft-enforced at signup time (a fast-fingered team
             can in theory squeeze in over the cap during a near-simultaneous signup; acceptable for v1).
@@ -566,7 +566,7 @@ export default function RaceEventForm({ race, locationId }) {
                   required
                   value={w.start_time}
                   onChange={e => setWaves(prev => prev.map((x, j) => j === i ? { ...x, start_time: e.target.value } : x))}
-                  className="bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
+                  className="bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
                 />
                 <input
                   type="number"
@@ -574,7 +574,7 @@ export default function RaceEventForm({ race, locationId }) {
                   placeholder="Unlimited"
                   value={w.capacity}
                   onChange={e => setWaves(prev => prev.map((x, j) => j === i ? { ...x, capacity: e.target.value } : x))}
-                  className="bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
+                  className="bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
                   title="Max teams in this wave (empty = unlimited)"
                 />
                 <input
@@ -582,13 +582,13 @@ export default function RaceEventForm({ race, locationId }) {
                   placeholder="Label (optional, e.g. Morning)"
                   value={w.label}
                   onChange={e => setWaves(prev => prev.map((x, j) => j === i ? { ...x, label: e.target.value } : x))}
-                  className="bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
+                  className="bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
                 />
                 <button
                   type="button"
                   onClick={() => setWaves(prev => prev.length > 1 ? prev.filter((_, j) => j !== i) : prev)}
                   disabled={waves.length === 1}
-                  className="text-un1t-light hover:text-red-700 disabled:opacity-30 p-1"
+                  className="text-un1t-subtle hover:text-red-700 disabled:opacity-30 p-1"
                   title={waves.length === 1 ? 'A race must have at least one wave' : 'Remove this wave'}
                 >
                   <Trash2 size={14} />
@@ -599,30 +599,30 @@ export default function RaceEventForm({ race, locationId }) {
         </div>
       )}
 
-      <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5 space-y-4">
-        <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light flex items-center gap-2">
+      <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5 space-y-4">
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle flex items-center gap-2">
           <Clock size={14} /> Registration window
         </h3>
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <label className="block text-sm text-un1t-light mb-1">Opens</label>
+            <label className="block text-sm text-un1t-subtle mb-1">Opens</label>
             <input
               type="datetime-local"
               value={registrationOpensAt}
               onChange={e => setRegistrationOpensAt(e.target.value)}
-              className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
+              className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
             />
-            <p className="text-[11px] text-un1t-mid mt-1">Empty = open from now.</p>
+            <p className="text-[11px] text-un1t-muted mt-1">Empty = open from now.</p>
           </div>
           <div>
-            <label className="block text-sm text-un1t-light mb-1">Closes</label>
+            <label className="block text-sm text-un1t-subtle mb-1">Closes</label>
             <input
               type="datetime-local"
               value={registrationClosesAt}
               onChange={e => setRegistrationClosesAt(e.target.value)}
-              className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
+              className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
             />
-            <p className="text-[11px] text-un1t-mid mt-1">Empty = open until {meta.value === 'race' ? 'race date' : 'event date'}.</p>
+            <p className="text-[11px] text-un1t-muted mt-1">Empty = open until {meta.value === 'race' ? 'race date' : 'event date'}.</p>
           </div>
         </div>
       </div>
@@ -630,12 +630,12 @@ export default function RaceEventForm({ race, locationId }) {
       {/* Mig 125: staffing requirement for the studio overview demand
           classifier on /schedule. Pre-fills from the kind's default
           when the operator hasn't manually edited it. */}
-      <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5 space-y-3">
-        <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light flex items-center gap-2">
+      <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5 space-y-3">
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle flex items-center gap-2">
           <Users size={14} /> Staffing
         </h3>
         <div>
-          <label className="block text-sm text-un1t-light mb-1">Staff required *</label>
+          <label className="block text-sm text-un1t-subtle mb-1">Staff required *</label>
           <input
             type="number"
             min={0}
@@ -644,9 +644,9 @@ export default function RaceEventForm({ race, locationId }) {
             required
             value={staffRequired}
             onChange={e => { setStaffRequired(e.target.value); setStaffRequiredTouched(true) }}
-            className="w-32 bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white tabular-nums"
+            className="w-32 bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text tabular-nums"
           />
-          <p className="text-[11px] text-un1t-mid mt-1">
+          <p className="text-[11px] text-un1t-muted mt-1">
             How many staff are needed to run this {meta.label.toLowerCase()}.
             Used by the studio overview on <code>/schedule</code> to flag undermanned days.
             Default for {meta.label.toLowerCase()}: {meta.defaultStaffRequired}.
@@ -655,11 +655,11 @@ export default function RaceEventForm({ race, locationId }) {
         </div>
       </div>
 
-      <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5 space-y-3">
-        <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light flex items-center gap-2">
+      <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5 space-y-3">
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle flex items-center gap-2">
           <Users size={14} /> {meta.sizeLabel}
         </h3>
-        <p className="text-[11px] text-un1t-light">
+        <p className="text-[11px] text-un1t-subtle">
           {meta.sizeHint}
         </p>
         <div className="flex flex-wrap gap-2">
@@ -675,7 +675,7 @@ export default function RaceEventForm({ race, locationId }) {
                 className={`text-xs px-3 py-1.5 rounded-md border ${
                   on
                     ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-700'
-                    : 'bg-un1t-black border-un1t-gray text-un1t-light hover:border-un1t-mid'
+                    : 'bg-un1t-bg border-un1t-border text-un1t-subtle hover:border-un1t-muted'
                 }`}
               >
                 {s}-{meta.value === 'race' ? 'person' : 'seat'}
@@ -685,18 +685,18 @@ export default function RaceEventForm({ race, locationId }) {
         </div>
       </div>
 
-      <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5 space-y-4">
-        <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light flex items-center gap-2">
+      <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5 space-y-4">
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle flex items-center gap-2">
           <BadgeEuro size={14} /> Pricing
         </h3>
-        <p className="text-[11px] text-un1t-light -mt-2">
+        <p className="text-[11px] text-un1t-subtle -mt-2">
           Per-person pricing. Mixed groups pay each head at their own rate (e.g. 2 members + 2
           non-members on a 4-{meta.value === 'race' ? 'person team' : 'seat group'} = 2 × member fee + 2 × non-member fee). Leave a fee blank
           to make that category free. UN1T members are matched by the email on their member account.
         </p>
 
         <div>
-          <label className="block text-sm text-un1t-light mb-1">Non-member fee (€ per person)</label>
+          <label className="block text-sm text-un1t-subtle mb-1">Non-member fee (€ per person)</label>
           <input
             type="number"
             min={0}
@@ -704,22 +704,22 @@ export default function RaceEventForm({ race, locationId }) {
             value={nonMemberFee}
             onChange={e => setNonMemberFee(e.target.value)}
             placeholder="Free"
-            className="w-40 bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
+            className="w-40 bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
           />
-          <p className="text-[11px] text-un1t-mid mt-1">
+          <p className="text-[11px] text-un1t-muted mt-1">
             Charged per non-member entrant. Leave empty for a free {meta.value === 'race' ? 'race' : 'event'}.
           </p>
         </div>
 
-        <div className="flex items-center justify-between gap-3 pt-2 border-t border-un1t-gray">
+        <div className="flex items-center justify-between gap-3 pt-2 border-t border-un1t-border">
           <div>
-            <div className="text-sm text-un1t-white">Different pricing for UN1T members</div>
-            <div className="text-[11px] text-un1t-light">When on, the signup form validates member emails and applies the member rate per verified head.</div>
+            <div className="text-sm text-un1t-text">Different pricing for UN1T members</div>
+            <div className="text-[11px] text-un1t-subtle">When on, the signup form validates member emails and applies the member rate per verified head.</div>
           </div>
           <button
             type="button"
             onClick={() => setMemberPricingEnabled(v => !v)}
-            className={`shrink-0 w-10 h-5 rounded-full ${memberPricingEnabled ? 'bg-emerald-500' : 'bg-un1t-gray'}`}
+            className={`shrink-0 w-10 h-5 rounded-full ${memberPricingEnabled ? 'bg-emerald-500' : 'bg-un1t-border'}`}
           >
             <div className={`w-4 h-4 rounded-full bg-white transition-transform ${memberPricingEnabled ? 'translate-x-5' : 'translate-x-0.5'}`} />
           </button>
@@ -727,7 +727,7 @@ export default function RaceEventForm({ race, locationId }) {
 
         {memberPricingEnabled && (
           <div className="pl-2">
-            <label className="block text-sm text-un1t-light mb-1">Member fee (€ per person)</label>
+            <label className="block text-sm text-un1t-subtle mb-1">Member fee (€ per person)</label>
             <input
               type="number"
               min={0}
@@ -735,23 +735,23 @@ export default function RaceEventForm({ race, locationId }) {
               value={memberFee}
               onChange={e => setMemberFee(e.target.value)}
               placeholder="Free for members"
-              className="w-40 bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
+              className="w-40 bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
             />
-            <p className="text-[11px] text-un1t-mid mt-1">
+            <p className="text-[11px] text-un1t-muted mt-1">
               Empty = members enter free. Members are matched against contacts with active membership at the {meta.value === 'race' ? 'race\'s' : 'event\'s'} location.
             </p>
           </div>
         )}
 
-        <div className="flex items-center justify-between gap-3 pt-2 border-t border-un1t-gray">
+        <div className="flex items-center justify-between gap-3 pt-2 border-t border-un1t-border">
           <div>
-            <div className="text-sm text-un1t-white">Members only</div>
-            <div className="text-[11px] text-un1t-light">Refuse signups containing any unverified members. Independent of pricing — a free members-only {meta.value === 'race' ? 'race' : 'event'} is valid.</div>
+            <div className="text-sm text-un1t-text">Members only</div>
+            <div className="text-[11px] text-un1t-subtle">Refuse signups containing any unverified members. Independent of pricing — a free members-only {meta.value === 'race' ? 'race' : 'event'} is valid.</div>
           </div>
           <button
             type="button"
             onClick={() => setMembersOnly(v => !v)}
-            className={`shrink-0 w-10 h-5 rounded-full ${membersOnly ? 'bg-amber-500' : 'bg-un1t-gray'}`}
+            className={`shrink-0 w-10 h-5 rounded-full ${membersOnly ? 'bg-amber-500' : 'bg-un1t-border'}`}
           >
             <div className={`w-4 h-4 rounded-full bg-white transition-transform ${membersOnly ? 'translate-x-5' : 'translate-x-0.5'}`} />
           </button>
@@ -763,19 +763,19 @@ export default function RaceEventForm({ race, locationId }) {
           exists because the upload route needs an id to namespace
           the storage path. */}
       {meta.showLogos && (
-        <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5 space-y-4">
+        <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5 space-y-4">
           <div className="flex items-start gap-3">
-            <Tv size={18} className="text-un1t-light mt-0.5 shrink-0" />
+            <Tv size={18} className="text-un1t-subtle mt-0.5 shrink-0" />
             <div>
-              <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light">TV display logos</h3>
-              <p className="text-[11px] text-un1t-light mt-1">
+              <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle">TV display logos</h3>
+              <p className="text-[11px] text-un1t-subtle mt-1">
                 Up to 3 logos rendered centred in the header of <code>/event/&lt;slug&gt;/display</code>. Use the same height across logos for the cleanest look. PNG/JPEG/WebP/SVG, max 2MB each.
               </p>
             </div>
           </div>
 
           {!isEditing ? (
-            <div className="bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-[11px] text-un1t-light">
+            <div className="bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-[11px] text-un1t-subtle">
               Save the race first — you&apos;ll be able to add logos after it&apos;s created.
             </div>
           ) : (
@@ -797,7 +797,7 @@ export default function RaceEventForm({ race, locationId }) {
                   />
                 ))}
               </div>
-              <p className="text-[11px] text-un1t-mid">
+              <p className="text-[11px] text-un1t-muted">
                 Logo bytes save immediately. The slot order doesn&apos;t persist until you click <strong>Save Changes</strong> below.
               </p>
             </>
@@ -812,20 +812,20 @@ export default function RaceEventForm({ race, locationId }) {
           registration lands. For race kinds this means every team
           member (captain + others); for non-race kinds, the single
           registrant. */}
-      <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5 space-y-4">
+      <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5 space-y-4">
         <div className="flex items-center justify-between gap-3">
-          <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light flex items-center gap-2">
+          <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle flex items-center gap-2">
             <UserPlus size={14} /> Glofox sync
           </h3>
           <button
             type="button"
             onClick={() => setCreateInGlofox(v => !v)}
-            className={`shrink-0 w-10 h-5 rounded-full ${createInGlofox ? 'bg-emerald-500' : 'bg-un1t-gray'}`}
+            className={`shrink-0 w-10 h-5 rounded-full ${createInGlofox ? 'bg-emerald-500' : 'bg-un1t-border'}`}
           >
             <div className={`w-4 h-4 rounded-full bg-white transition-transform ${createInGlofox ? 'translate-x-5' : 'translate-x-0.5'}`} />
           </button>
         </div>
-        <p className="text-[11px] text-un1t-light">
+        <p className="text-[11px] text-un1t-subtle">
           When on, every confirmed registration on this {meta.value === 'race' ? 'race' : 'event'} pushes
           the registrant
           {meta.value === 'race' ? ' AND every team member ' : ' '}
@@ -837,7 +837,7 @@ export default function RaceEventForm({ race, locationId }) {
         {createInGlofox && (
           <p className="text-[11px] text-amber-700">
             Make sure the trial membership picker is set on
-            <span className="text-un1t-white"> Settings → Locations → Glofox Integration</span>
+            <span className="text-un1t-text"> Settings → Locations → Glofox Integration</span>
             {' '}for this location, otherwise pushes will land in the Review tab as
             <em> needs_review</em>.
           </p>
@@ -845,15 +845,15 @@ export default function RaceEventForm({ race, locationId }) {
       </div>
 
       {isEditing && (
-        <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5 flex items-center justify-between">
+        <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5 flex items-center justify-between">
           <div>
-            <div className="text-sm text-un1t-white">Active</div>
-            <div className="text-[11px] text-un1t-light">Inactive {meta.value === 'race' ? 'races' : 'events'} are hidden from public signup but kept for history.</div>
+            <div className="text-sm text-un1t-text">Active</div>
+            <div className="text-[11px] text-un1t-subtle">Inactive {meta.value === 'race' ? 'races' : 'events'} are hidden from public signup but kept for history.</div>
           </div>
           <button
             type="button"
             onClick={() => setActive(v => !v)}
-            className={`shrink-0 w-10 h-5 rounded-full ${active ? 'bg-emerald-500' : 'bg-un1t-gray'}`}
+            className={`shrink-0 w-10 h-5 rounded-full ${active ? 'bg-emerald-500' : 'bg-un1t-border'}`}
           >
             <div className={`w-4 h-4 rounded-full bg-white transition-transform ${active ? 'translate-x-5' : 'translate-x-0.5'}`} />
           </button>
@@ -863,7 +863,7 @@ export default function RaceEventForm({ race, locationId }) {
       <button
         type="submit"
         disabled={saving}
-        className="w-full inline-flex items-center justify-center gap-2 bg-un1t-white text-un1t-black font-medium text-sm py-2.5 rounded-md hover:bg-un1t-accent disabled:opacity-50"
+        className="w-full inline-flex items-center justify-center gap-2 bg-un1t-text text-un1t-bg font-medium text-sm py-2.5 rounded-md hover:bg-un1t-accent disabled:opacity-50"
       >
         {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
         {saving ? 'Saving…' : isEditing ? 'Save Changes' : meta.submitLabel}
@@ -879,26 +879,26 @@ function LogoSlot({ slot, url, busy, onPick, onRemove }) {
   const inputId = `race-logo-input-${slot}`
   if (url) {
     return (
-      <div className="relative bg-un1t-black border border-un1t-gray rounded-md aspect-video flex items-center justify-center p-3 group">
+      <div className="relative bg-un1t-bg border border-un1t-border rounded-md aspect-video flex items-center justify-center p-3 group">
         { }
         <img src={url} alt={`Logo ${slot + 1}`} className="max-h-full max-w-full object-contain" />
         <button
           type="button"
           onClick={onRemove}
           disabled={busy}
-          className="absolute top-1 right-1 bg-un1t-dark/90 border border-un1t-gray rounded-full p-1 text-un1t-light hover:text-red-500 disabled:opacity-50"
+          className="absolute top-1 right-1 bg-un1t-surface/90 border border-un1t-border rounded-full p-1 text-un1t-subtle hover:text-red-500 disabled:opacity-50"
           title="Remove logo"
         >
           {busy ? <Loader2 size={12} className="animate-spin" /> : <XIcon size={12} />}
         </button>
-        <span className="absolute bottom-1 left-2 text-[10px] text-un1t-mid">Slot {slot + 1}</span>
+        <span className="absolute bottom-1 left-2 text-[10px] text-un1t-muted">Slot {slot + 1}</span>
       </div>
     )
   }
   return (
     <label
       htmlFor={inputId}
-      className={`bg-un1t-black border-2 border-dashed border-un1t-gray hover:border-un1t-mid rounded-md aspect-video flex flex-col items-center justify-center text-un1t-light cursor-pointer ${busy ? 'opacity-50 pointer-events-none' : ''}`}
+      className={`bg-un1t-bg border-2 border-dashed border-un1t-border hover:border-un1t-muted rounded-md aspect-video flex flex-col items-center justify-center text-un1t-subtle cursor-pointer ${busy ? 'opacity-50 pointer-events-none' : ''}`}
     >
       {busy ? <Loader2 size={20} className="animate-spin" /> : <ImagePlus size={20} />}
       <span className="text-[11px] mt-1">{busy ? 'Uploading…' : `Add logo ${slot + 1}`}</span>

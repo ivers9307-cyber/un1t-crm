@@ -30,17 +30,17 @@ function Card({ href, icon: Icon, title, description }) {
   return (
     <Link
       href={href}
-      className="flex items-start gap-3 p-4 rounded-xl border border-un1t-gray bg-un1t-dark hover:bg-un1t-gray/30 transition-colors"
+      className="flex items-start gap-3 p-4 rounded-xl border border-un1t-border bg-un1t-surface hover:bg-un1t-border/30 transition-colors"
     >
-      <div className="w-9 h-9 rounded-md bg-un1t-gray/40 flex items-center justify-center shrink-0">
-        <Icon size={16} className="text-un1t-light" />
+      <div className="w-9 h-9 rounded-md bg-un1t-border/40 flex items-center justify-center shrink-0">
+        <Icon size={16} className="text-un1t-subtle" />
       </div>
       <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-1 text-un1t-white font-medium text-sm">
+        <div className="flex items-center gap-1 text-un1t-text font-medium text-sm">
           {title}
-          <ChevronRight size={14} className="text-un1t-mid" />
+          <ChevronRight size={14} className="text-un1t-muted" />
         </div>
-        <div className="text-xs text-un1t-light mt-0.5">{description}</div>
+        <div className="text-xs text-un1t-subtle mt-0.5">{description}</div>
       </div>
     </Link>
   )
@@ -87,7 +87,7 @@ export default async function AdminHubPage() {
   return (
     <div className="p-6 md:p-8 max-w-4xl">
       <h2 className="text-2xl font-bold mb-1">Admin</h2>
-      <p className="text-sm text-un1t-light mb-6 max-w-2xl">
+      <p className="text-sm text-un1t-subtle mb-6 max-w-2xl">
         {master
           ? 'Platform and studio administration. Use the cards below to manage org-wide settings.'
           : 'Tools you have access to. Need more? Ask an owner or master to update your permissions in Staff settings.'}
@@ -95,7 +95,7 @@ export default async function AdminHubPage() {
 
       {studioTools.length > 0 && (
         <section className="mb-8">
-          <h3 className="text-xs uppercase tracking-wider text-un1t-light font-semibold mb-3">Studio Management</h3>
+          <h3 className="text-xs uppercase tracking-wider text-un1t-subtle font-semibold mb-3">Studio Management</h3>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             {studioTools.map((t) => (
               <Card key={t.href} href={t.href} icon={t.icon} title={t.title} description={t.desc} />
@@ -106,7 +106,7 @@ export default async function AdminHubPage() {
 
       {masterTools.length > 0 && (
         <section>
-          <h3 className="text-xs uppercase tracking-wider text-un1t-light font-semibold mb-3">Platform (master only)</h3>
+          <h3 className="text-xs uppercase tracking-wider text-un1t-subtle font-semibold mb-3">Platform (master only)</h3>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             {masterTools.map((t) => (
               <Card key={t.href} href={t.href} icon={t.icon} title={t.title} description={t.desc} />
@@ -116,7 +116,7 @@ export default async function AdminHubPage() {
       )}
 
       {studioTools.length === 0 && masterTools.length === 0 && (
-        <div className="text-sm text-un1t-mid italic">No admin tools available with your current permissions.</div>
+        <div className="text-sm text-un1t-muted italic">No admin tools available with your current permissions.</div>
       )}
     </div>
   )

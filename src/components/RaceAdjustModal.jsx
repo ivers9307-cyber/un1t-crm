@@ -162,16 +162,16 @@ export default function RaceAdjustModal({ open, registration, teamName, onClose,
       aria-modal="true"
     >
       <div
-        className="bg-un1t-dark border border-un1t-gray rounded-lg max-w-lg w-full max-h-[90vh] overflow-y-auto"
+        className="bg-un1t-surface border border-un1t-border rounded-lg max-w-lg w-full max-h-[90vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-5 py-3 border-b border-un1t-gray">
+        <div className="flex items-center justify-between px-5 py-3 border-b border-un1t-border">
           <div>
-            <div className="text-[10px] uppercase tracking-wider text-un1t-light">Adjust race data</div>
-            <div className="text-base font-semibold text-un1t-white">{teamName}</div>
+            <div className="text-[10px] uppercase tracking-wider text-un1t-subtle">Adjust race data</div>
+            <div className="text-base font-semibold text-un1t-text">{teamName}</div>
           </div>
-          <button onClick={onClose} className="text-un1t-light hover:text-un1t-white p-1">
+          <button onClick={onClose} className="text-un1t-subtle hover:text-un1t-text p-1">
             <XIcon size={18} />
           </button>
         </div>
@@ -184,22 +184,22 @@ export default function RaceAdjustModal({ open, registration, teamName, onClose,
 
         {/* Times */}
         <section className="px-5 py-4 space-y-3">
-          <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light">Times</h3>
+          <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle">Times</h3>
 
           <div>
-            <label className="block text-[11px] text-un1t-light mb-1">Race started at</label>
+            <label className="block text-[11px] text-un1t-subtle mb-1">Race started at</label>
             <input
               type="datetime-local"
               step="1"
               value={startInput}
               onChange={(e) => setStartInput(e.target.value)}
-              className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
+              className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
             />
-            <p className="text-[10px] text-un1t-mid mt-1">Empty = clear (equivalent to Reset).</p>
+            <p className="text-[10px] text-un1t-muted mt-1">Empty = clear (equivalent to Reset).</p>
           </div>
 
           <div>
-            <label className="block text-[11px] text-un1t-light mb-1 flex items-center justify-between">
+            <label className="block text-[11px] text-un1t-subtle mb-1 flex items-center justify-between">
               <span>Race finished at</span>
               {canUnFinish && (
                 <button
@@ -217,46 +217,46 @@ export default function RaceAdjustModal({ open, registration, teamName, onClose,
               step="1"
               value={finishInput}
               onChange={(e) => setFinishInput(e.target.value)}
-              className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
+              className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
             />
-            <p className="text-[10px] text-un1t-mid mt-1">Empty + start kept = un-finish (team returns to On Course).</p>
+            <p className="text-[10px] text-un1t-muted mt-1">Empty + start kept = un-finish (team returns to On Course).</p>
           </div>
 
           <button
             type="button"
             onClick={handleSaveTimes}
             disabled={savingTimes}
-            className="w-full inline-flex items-center justify-center gap-2 bg-un1t-white hover:bg-un1t-accent text-un1t-black font-semibold text-sm py-2 rounded-md disabled:opacity-50"
+            className="w-full inline-flex items-center justify-center gap-2 bg-un1t-text hover:bg-un1t-accent text-un1t-bg font-semibold text-sm py-2 rounded-md disabled:opacity-50"
           >
             {savingTimes ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
             {savingTimes ? 'Saving…' : 'Save times'}
           </button>
         </section>
 
-        <div className="border-t border-un1t-gray" />
+        <div className="border-t border-un1t-border" />
 
         {/* Penalties */}
         <section className="px-5 py-4 space-y-3">
-          <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light">Penalties</h3>
+          <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle">Penalties</h3>
 
           {penalties.length === 0 ? (
-            <p className="text-[11px] text-un1t-mid">No penalties applied.</p>
+            <p className="text-[11px] text-un1t-muted">No penalties applied.</p>
           ) : (
             <ul className="space-y-1.5">
               {penalties.map((p) => {
                 const sign = p.seconds > 0 ? '+' : ''
                 const tone = p.seconds > 0 ? 'text-amber-700' : 'text-emerald-700'
                 return (
-                  <li key={p.id} className="flex items-center gap-2 text-sm bg-un1t-black border border-un1t-gray rounded-md px-3 py-2">
+                  <li key={p.id} className="flex items-center gap-2 text-sm bg-un1t-bg border border-un1t-border rounded-md px-3 py-2">
                     <span className={`font-mono font-semibold tabular-nums ${tone} min-w-[55px]`}>
                       {sign}{p.seconds}s
                     </span>
-                    <span className="flex-1 text-un1t-light text-xs truncate" title={p.reason}>{p.reason}</span>
+                    <span className="flex-1 text-un1t-subtle text-xs truncate" title={p.reason}>{p.reason}</span>
                     <button
                       type="button"
                       onClick={() => handleDeletePenalty(p.id)}
                       disabled={deletingId === p.id}
-                      className="text-un1t-light hover:text-red-500 disabled:opacity-40 p-1"
+                      className="text-un1t-subtle hover:text-red-500 disabled:opacity-40 p-1"
                       title="Remove penalty"
                     >
                       {deletingId === p.id ? <Loader2 size={12} className="animate-spin" /> : <Trash2 size={12} />}
@@ -277,7 +277,7 @@ export default function RaceAdjustModal({ open, registration, teamName, onClose,
               value={penaltySeconds}
               onChange={(e) => setPenaltySeconds(e.target.value)}
               title="Seconds — positive = penalty, negative = credit"
-              className="bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white tabular-nums"
+              className="bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text tabular-nums"
             />
             <input
               type="text"
@@ -285,19 +285,19 @@ export default function RaceAdjustModal({ open, registration, teamName, onClose,
               value={penaltyReason}
               onChange={(e) => setPenaltyReason(e.target.value)}
               maxLength={500}
-              className="bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
+              className="bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
             />
             <button
               type="button"
               onClick={handleAddPenalty}
               disabled={addingPen}
-              className="bg-un1t-white hover:bg-un1t-accent text-un1t-black font-semibold text-sm px-3 py-2 rounded-md disabled:opacity-50 inline-flex items-center gap-1"
+              className="bg-un1t-text hover:bg-un1t-accent text-un1t-bg font-semibold text-sm px-3 py-2 rounded-md disabled:opacity-50 inline-flex items-center gap-1"
             >
               {addingPen ? <Loader2 size={12} className="animate-spin" /> : <Plus size={12} />}
               Add
             </button>
           </div>
-          <p className="text-[10px] text-un1t-mid">Positive seconds add to elapsed time (penalty); negative subtract (credit). Reason is required.</p>
+          <p className="text-[10px] text-un1t-muted">Positive seconds add to elapsed time (penalty); negative subtract (credit). Reason is required.</p>
         </section>
       </div>
     </div>

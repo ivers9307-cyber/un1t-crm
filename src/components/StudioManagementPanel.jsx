@@ -55,12 +55,12 @@ export default function StudioManagementPanel() {
       <AcControlPanel />
 
       <div className="flex items-center justify-between">
-        <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light">Doors</h3>
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle">Doors</h3>
         <button
           type="button"
           onClick={loadDoors}
           disabled={refreshing}
-          className="inline-flex items-center gap-1.5 text-xs text-un1t-light hover:text-un1t-white disabled:opacity-50"
+          className="inline-flex items-center gap-1.5 text-xs text-un1t-subtle hover:text-un1t-text disabled:opacity-50"
         >
           {refreshing ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
           Refresh
@@ -72,7 +72,7 @@ export default function StudioManagementPanel() {
           <AlertCircle size={14} className="mt-0.5 shrink-0" />
           <div>
             <div>{loadError}</div>
-            <div className="text-[11px] text-un1t-mid mt-1">
+            <div className="text-[11px] text-un1t-muted mt-1">
               If UniFi isn&apos;t configured for this location yet, ask a master to fill in the controller settings under Settings → Locations.
             </div>
           </div>
@@ -80,15 +80,15 @@ export default function StudioManagementPanel() {
       )}
 
       {doors === null && !loadError && (
-        <div className="text-sm text-un1t-light inline-flex items-center gap-2">
+        <div className="text-sm text-un1t-subtle inline-flex items-center gap-2">
           <Loader2 size={14} className="animate-spin" /> Loading doors…
         </div>
       )}
 
       {doors && doors.length === 0 && !loadError && (
-        <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-6 text-center">
-          <DoorOpen size={28} className="mx-auto mb-2 text-un1t-light" />
-          <p className="text-sm text-un1t-light">
+        <div className="bg-un1t-surface border border-un1t-border rounded-lg p-6 text-center">
+          <DoorOpen size={28} className="mx-auto mb-2 text-un1t-subtle" />
+          <p className="text-sm text-un1t-subtle">
             No doors found on the controller. Add at least one door in the UniFi Access console.
           </p>
         </div>
@@ -167,9 +167,9 @@ function DoorTile({ door }) {
   }
 
   const colorByStage = {
-    idle: 'border-un1t-gray hover:border-un1t-mid',
+    idle: 'border-un1t-border hover:border-un1t-muted',
     armed: 'border-amber-500 bg-amber-500/10',
-    unlocking: 'border-un1t-mid',
+    unlocking: 'border-un1t-muted',
     unlocked: 'border-emerald-500 bg-emerald-500/10',
     error: 'border-red-500 bg-red-500/10',
   }
@@ -179,17 +179,17 @@ function DoorTile({ door }) {
       type="button"
       onClick={handleClick}
       disabled={stage === 'unlocking'}
-      className={`text-left bg-un1t-dark border rounded-lg p-4 flex items-center gap-3 transition-colors disabled:cursor-wait ${colorByStage[stage]}`}
+      className={`text-left bg-un1t-surface border rounded-lg p-4 flex items-center gap-3 transition-colors disabled:cursor-wait ${colorByStage[stage]}`}
     >
-      <div className="w-10 h-10 rounded-lg bg-un1t-black/40 flex items-center justify-center shrink-0">
+      <div className="w-10 h-10 rounded-lg bg-un1t-bg/40 flex items-center justify-center shrink-0">
         {stage === 'unlocking' ? <Loader2 size={18} className="animate-spin" /> :
          stage === 'unlocked' ? <CheckCircle2 size={18} className="text-emerald-700" /> :
          stage === 'error' ? <AlertCircle size={18} className="text-red-700" /> :
-         <DoorOpen size={18} className="text-un1t-light" />}
+         <DoorOpen size={18} className="text-un1t-subtle" />}
       </div>
       <div className="flex-1 min-w-0">
-        <div className="text-sm font-medium text-un1t-white truncate">{door.name}</div>
-        <div className="text-[11px] text-un1t-light">{labelByStage[stage]}</div>
+        <div className="text-sm font-medium text-un1t-text truncate">{door.name}</div>
+        <div className="text-[11px] text-un1t-subtle">{labelByStage[stage]}</div>
         {stage === 'error' && error && (
           <div className="text-[11px] text-red-700 mt-1 truncate">{error}</div>
         )}

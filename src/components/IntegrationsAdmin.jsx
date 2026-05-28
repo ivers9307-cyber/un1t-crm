@@ -34,7 +34,7 @@ export default function IntegrationsAdmin({ initial }) {
 
       <div className="overflow-hidden rounded-xl border border-neutral-200 bg-white">
         <table className="w-full text-sm">
-          <thead className="bg-neutral-50 text-left text-xs uppercase text-un1t-light">
+          <thead className="bg-neutral-50 text-left text-xs uppercase text-un1t-subtle">
             <tr>
               <th className="px-4 py-2">Provider</th>
               <th className="px-4 py-2">Client ID</th>
@@ -173,7 +173,7 @@ function Field({ label, hint, children }) {
     <label className="block">
       <span className="mb-0.5 block text-xs font-medium text-neutral-700">
         {label}
-        {hint && <span className="ml-2 font-normal text-un1t-light">{hint}</span>}
+        {hint && <span className="ml-2 font-normal text-un1t-subtle">{hint}</span>}
       </span>
       {children}
     </label>

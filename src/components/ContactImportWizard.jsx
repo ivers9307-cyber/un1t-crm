@@ -201,13 +201,13 @@ export default function ContactImportWizard({ onClose, locations = [], defaultLo
   return (
     <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => !busy && onClose()}>
       <div
-        className="bg-un1t-dark border border-un1t-gray rounded-xl max-w-3xl w-full max-h-[90vh] overflow-auto p-6"
+        className="bg-un1t-surface border border-un1t-border rounded-xl max-w-3xl w-full max-h-[90vh] overflow-auto p-6"
         onClick={(e) => e.stopPropagation()}
       >
         <header className="flex items-start justify-between mb-4">
           <div>
-            <h3 className="text-base font-semibold text-un1t-white">Import contacts</h3>
-            <p className="text-xs text-un1t-light mt-0.5">
+            <h3 className="text-base font-semibold text-un1t-text">Import contacts</h3>
+            <p className="text-xs text-un1t-subtle mt-0.5">
               {stage === 'upload' && 'Upload a CSV. Email column is required; everything else is optional.'}
               {stage === 'map' && 'Map your CSV columns to contact fields. We pre-fill obvious matches.'}
               {stage === 'review' && 'Dry-run summary. Nothing is written until you click Import.'}
@@ -215,7 +215,7 @@ export default function ContactImportWizard({ onClose, locations = [], defaultLo
           {stage === 'done' && 'Import complete. Any failed rows can be downloaded as CSV.'}
             </p>
           </div>
-          <button type="button" onClick={() => !busy && onClose()} disabled={busy} className="text-un1t-light hover:text-un1t-white">
+          <button type="button" onClick={() => !busy && onClose()} disabled={busy} className="text-un1t-subtle hover:text-un1t-text">
             <X size={16} />
           </button>
         </header>
@@ -285,12 +285,12 @@ function Steps({ stage }) {
   return (
     <div className="flex items-center gap-2 mb-4 text-[11px] uppercase tracking-wider">
       {order.map((s, i) => (
-        <span key={s} className={`flex items-center gap-2 ${i <= idx ? 'text-un1t-white' : 'text-un1t-mid'}`}>
-          <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] ${i <= idx ? 'bg-un1t-white text-un1t-black' : 'bg-un1t-gray text-un1t-light'}`}>
+        <span key={s} className={`flex items-center gap-2 ${i <= idx ? 'text-un1t-text' : 'text-un1t-muted'}`}>
+          <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] ${i <= idx ? 'bg-un1t-text text-un1t-bg' : 'bg-un1t-border text-un1t-subtle'}`}>
             {i + 1}
           </span>
           {labels[s]}
-          {i < order.length - 1 && <span className="text-un1t-mid">›</span>}
+          {i < order.length - 1 && <span className="text-un1t-muted">›</span>}
         </span>
       ))}
     </div>
@@ -302,17 +302,17 @@ function UploadStage({ onFile, batchTag, setBatchTag, downloadTemplate, location
     <div className="space-y-4">
       {locations?.length > 1 && (
         <div>
-          <label className="block text-xs text-un1t-light mb-1">Target location</label>
+          <label className="block text-xs text-un1t-subtle mb-1">Target location</label>
           <select
             value={locationId}
             onChange={(e) => setLocationId(e.target.value)}
-            className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
+            className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
           >
             {locations.map(l => (
               <option key={l.id} value={l.id}>{l.name}</option>
             ))}
           </select>
-          <p className="text-[11px] text-un1t-mid mt-1">
+          <p className="text-[11px] text-un1t-muted mt-1">
             Imported contacts land here. Email-match dedup is per-location — same email at two studios stays as two contacts.
           </p>
         </div>
@@ -320,11 +320,11 @@ function UploadStage({ onFile, batchTag, setBatchTag, downloadTemplate, location
 
       <label
         htmlFor="contact-import-file"
-        className="block bg-un1t-black border-2 border-dashed border-un1t-gray hover:border-un1t-mid rounded-lg p-8 text-center cursor-pointer"
+        className="block bg-un1t-bg border-2 border-dashed border-un1t-border hover:border-un1t-muted rounded-lg p-8 text-center cursor-pointer"
       >
-        <Upload size={28} className="mx-auto mb-2 text-un1t-light" />
-        <div className="text-sm text-un1t-white font-medium">Click to choose a CSV</div>
-        <div className="text-[11px] text-un1t-mid mt-1">Up to 5,000 rows per import</div>
+        <Upload size={28} className="mx-auto mb-2 text-un1t-subtle" />
+        <div className="text-sm text-un1t-text font-medium">Click to choose a CSV</div>
+        <div className="text-[11px] text-un1t-muted mt-1">Up to 5,000 rows per import</div>
         <input
           id="contact-import-file"
           type="file"
@@ -335,15 +335,15 @@ function UploadStage({ onFile, batchTag, setBatchTag, downloadTemplate, location
       </label>
 
       <div>
-        <label className="block text-xs text-un1t-light mb-1">Tag this batch as <span className="text-un1t-mid">(optional, comma-separated)</span></label>
+        <label className="block text-xs text-un1t-subtle mb-1">Tag this batch as <span className="text-un1t-muted">(optional, comma-separated)</span></label>
         <input
           type="text"
           value={batchTag}
           onChange={(e) => setBatchTag(e.target.value)}
           placeholder="lead_magnet_jan26, cold_lead"
-          className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
+          className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
         />
-        <p className="text-[11px] text-un1t-mid mt-1">
+        <p className="text-[11px] text-un1t-muted mt-1">
           Stamped on every imported contact. Useful for segmenting + retargeting downstream.
         </p>
       </div>
@@ -351,7 +351,7 @@ function UploadStage({ onFile, batchTag, setBatchTag, downloadTemplate, location
       <button
         type="button"
         onClick={downloadTemplate}
-        className="inline-flex items-center gap-2 text-xs text-un1t-light hover:text-un1t-white"
+        className="inline-flex items-center gap-2 text-xs text-un1t-subtle hover:text-un1t-text"
       >
         <Download size={12} /> Download CSV template
       </button>
@@ -362,12 +362,12 @@ function UploadStage({ onFile, batchTag, setBatchTag, downloadTemplate, location
 function MapStage({ headers, rows, mapping, setMapping, mappedFieldCount, onBack, onNext, busy }) {
   return (
     <div className="space-y-4">
-      <div className="text-xs text-un1t-light">
+      <div className="text-xs text-un1t-subtle">
         {rows.length} row{rows.length === 1 ? '' : 's'} detected · {mappedFieldCount} field{mappedFieldCount === 1 ? '' : 's'} mapped
       </div>
-      <div className="bg-un1t-black border border-un1t-gray rounded-md max-h-72 overflow-auto">
+      <div className="bg-un1t-bg border border-un1t-border rounded-md max-h-72 overflow-auto">
         <table className="w-full text-xs">
-          <thead className="text-[10px] uppercase tracking-wider text-un1t-light sticky top-0 bg-un1t-black">
+          <thead className="text-[10px] uppercase tracking-wider text-un1t-subtle sticky top-0 bg-un1t-bg">
             <tr>
               <th className="text-left p-2">CSV column</th>
               <th className="text-left p-2">Sample value</th>
@@ -376,14 +376,14 @@ function MapStage({ headers, rows, mapping, setMapping, mappedFieldCount, onBack
           </thead>
           <tbody>
             {headers.map(h => (
-              <tr key={h} className="border-t border-un1t-gray/40">
-                <td className="p-2 text-un1t-white font-mono">{h}</td>
-                <td className="p-2 text-un1t-light truncate max-w-[200px]">{rows[0]?.[h] ?? ''}</td>
+              <tr key={h} className="border-t border-un1t-border/40">
+                <td className="p-2 text-un1t-text font-mono">{h}</td>
+                <td className="p-2 text-un1t-subtle truncate max-w-[200px]">{rows[0]?.[h] ?? ''}</td>
                 <td className="p-2">
                   <select
                     value={mapping[h] || ''}
                     onChange={(e) => setMapping({ ...mapping, [h]: e.target.value || null })}
-                    className="w-full bg-un1t-dark border border-un1t-gray rounded-md px-2 py-1 text-xs text-un1t-white"
+                    className="w-full bg-un1t-surface border border-un1t-border rounded-md px-2 py-1 text-xs text-un1t-text"
                   >
                     {FIELD_OPTIONS.map(o => (
                       <option key={o.value} value={o.value}>{o.label}</option>
@@ -401,7 +401,7 @@ function MapStage({ headers, rows, mapping, setMapping, mappedFieldCount, onBack
           type="button"
           onClick={onBack}
           disabled={busy}
-          className="flex-1 inline-flex items-center justify-center gap-1.5 text-sm border border-un1t-gray text-un1t-light py-2 rounded-md hover:text-un1t-white"
+          className="flex-1 inline-flex items-center justify-center gap-1.5 text-sm border border-un1t-border text-un1t-subtle py-2 rounded-md hover:text-un1t-text"
         >
           <ArrowLeft size={14} /> Back
         </button>
@@ -409,7 +409,7 @@ function MapStage({ headers, rows, mapping, setMapping, mappedFieldCount, onBack
           type="button"
           onClick={onNext}
           disabled={busy}
-          className="flex-1 inline-flex items-center justify-center gap-2 bg-un1t-white text-un1t-black text-sm font-medium py-2 rounded-md hover:bg-un1t-accent disabled:opacity-50"
+          className="flex-1 inline-flex items-center justify-center gap-2 bg-un1t-text text-un1t-bg text-sm font-medium py-2 rounded-md hover:bg-un1t-accent disabled:opacity-50"
         >
           {busy ? <Loader2 size={14} className="animate-spin" /> : <ArrowRight size={14} />}
           {busy ? 'Validating…' : 'Run dry-run'}
@@ -444,9 +444,9 @@ function ReviewStage({ preview, batchTag, resolutions, setResolutions, locationN
         <Stat label="Error" value={summary.to_error} tone="red" />
       </div>
 
-      <div className="text-[11px] text-un1t-light flex flex-wrap gap-3">
-        {locationName && <span>Target: <strong className="text-un1t-white">{locationName}</strong></span>}
-        {batchTag && <span>Tag: <strong className="text-un1t-white">{batchTag}</strong></span>}
+      <div className="text-[11px] text-un1t-subtle flex flex-wrap gap-3">
+        {locationName && <span>Target: <strong className="text-un1t-text">{locationName}</strong></span>}
+        {batchTag && <span>Tag: <strong className="text-un1t-text">{batchTag}</strong></span>}
         {summary.with_conflicts > 0 && (
           <span className="text-amber-700">{summary.with_conflicts} row{summary.with_conflicts === 1 ? ' has' : 's have'} conflicts</span>
         )}
@@ -454,25 +454,25 @@ function ReviewStage({ preview, batchTag, resolutions, setResolutions, locationN
 
       {/* Conflict resolution UI — only when there's at least one. */}
       {conflicted.length > 0 && (
-        <div className="bg-un1t-black border border-amber-500/30 rounded-md p-3">
+        <div className="bg-un1t-bg border border-amber-500/30 rounded-md p-3">
           <div className="flex items-center justify-between mb-2">
             <div>
               <div className="text-xs font-semibold text-amber-700">Conflicts</div>
-              <div className="text-[11px] text-un1t-mid">
+              <div className="text-[11px] text-un1t-muted">
                 {conflicted.length} update row{conflicted.length === 1 ? '' : 's'} differ from existing values. Pick a resolution per row, or set all at once.
               </div>
             </div>
             <div className="flex gap-1 text-[10px]">
               <button type="button" onClick={() => setAllConflicts('row_wins')}
-                className="px-2 py-1 border border-un1t-gray text-un1t-light hover:text-un1t-white rounded">
+                className="px-2 py-1 border border-un1t-border text-un1t-subtle hover:text-un1t-text rounded">
                 All: row wins
               </button>
               <button type="button" onClick={() => setAllConflicts('preserve_existing')}
-                className="px-2 py-1 border border-un1t-gray text-un1t-light hover:text-un1t-white rounded">
+                className="px-2 py-1 border border-un1t-border text-un1t-subtle hover:text-un1t-text rounded">
                 All: preserve
               </button>
               <button type="button" onClick={() => setAllConflicts('skip')}
-                className="px-2 py-1 border border-un1t-gray text-un1t-light hover:text-un1t-white rounded">
+                className="px-2 py-1 border border-un1t-border text-un1t-subtle hover:text-un1t-text rounded">
                 All: skip
               </button>
             </div>
@@ -481,31 +481,31 @@ function ReviewStage({ preview, batchTag, resolutions, setResolutions, locationN
             {conflicted.slice(0, 100).map(r => {
               const choice = resolutions[r.row_number] || 'row_wins'
               return (
-                <div key={r.row_number} className="border border-un1t-gray/60 rounded p-2 text-[11px]">
+                <div key={r.row_number} className="border border-un1t-border/60 rounded p-2 text-[11px]">
                   <div className="flex items-center justify-between mb-1">
-                    <div className="text-un1t-white">
-                      Row {r.row_number} · <span className="text-un1t-light">{r.email}</span>
+                    <div className="text-un1t-text">
+                      Row {r.row_number} · <span className="text-un1t-subtle">{r.email}</span>
                       {r.match_key === 'glofox_member_id' && (
-                        <span className="ml-2 text-[10px] text-un1t-mid">(matched on Glofox ID)</span>
+                        <span className="ml-2 text-[10px] text-un1t-muted">(matched on Glofox ID)</span>
                       )}
                     </div>
                     <select
                       value={choice}
                       onChange={(e) => setResolution(r.row_number, e.target.value)}
-                      className="bg-un1t-dark border border-un1t-gray rounded px-2 py-0.5 text-[10px] text-un1t-white"
+                      className="bg-un1t-surface border border-un1t-border rounded px-2 py-0.5 text-[10px] text-un1t-text"
                     >
                       <option value="row_wins">Row wins (overwrite)</option>
                       <option value="preserve_existing">Preserve existing (fill empties only)</option>
                       <option value="skip">Skip this row</option>
                     </select>
                   </div>
-                  <ul className="text-un1t-light space-y-0.5">
+                  <ul className="text-un1t-subtle space-y-0.5">
                     {r.conflicts.map((c, i) => (
                       <li key={i}>
-                        <span className="text-un1t-mid">{c.field}:</span>{' '}
+                        <span className="text-un1t-muted">{c.field}:</span>{' '}
                         <span className="line-through opacity-70">{String(c.existing)}</span>{' '}
                         →{' '}
-                        <span className={choice === 'preserve_existing' ? 'text-un1t-mid line-through' : 'text-un1t-white'}>
+                        <span className={choice === 'preserve_existing' ? 'text-un1t-muted line-through' : 'text-un1t-text'}>
                           {String(c.incoming)}
                         </span>
                       </li>
@@ -515,7 +515,7 @@ function ReviewStage({ preview, batchTag, resolutions, setResolutions, locationN
               )
             })}
             {conflicted.length > 100 && (
-              <div className="text-[11px] text-un1t-mid">
+              <div className="text-[11px] text-un1t-muted">
                 …and {conflicted.length - 100} more conflict rows. Use the bulk buttons above to set them in one click.
               </div>
             )}
@@ -524,8 +524,8 @@ function ReviewStage({ preview, batchTag, resolutions, setResolutions, locationN
       )}
 
       {(errored.length > 0 || skipped.length > 0) && (
-        <div className="bg-un1t-black border border-un1t-gray rounded-md p-3 text-xs space-y-2 max-h-48 overflow-auto">
-          <div className="text-[10px] uppercase tracking-wider text-un1t-light">Issues</div>
+        <div className="bg-un1t-bg border border-un1t-border rounded-md p-3 text-xs space-y-2 max-h-48 overflow-auto">
+          <div className="text-[10px] uppercase tracking-wider text-un1t-subtle">Issues</div>
           <ul className="space-y-0.5">
             {[...errored, ...skipped].slice(0, 50).map(r => (
               <li key={r.row_number} className={r.action === 'errored' ? 'text-red-700' : 'text-amber-700'}>
@@ -533,7 +533,7 @@ function ReviewStage({ preview, batchTag, resolutions, setResolutions, locationN
               </li>
             ))}
             {(errored.length + skipped.length) > 50 && (
-              <li className="text-un1t-mid">…and {(errored.length + skipped.length) - 50} more</li>
+              <li className="text-un1t-muted">…and {(errored.length + skipped.length) - 50} more</li>
             )}
           </ul>
         </div>
@@ -544,7 +544,7 @@ function ReviewStage({ preview, batchTag, resolutions, setResolutions, locationN
           type="button"
           onClick={onBack}
           disabled={busy}
-          className="flex-1 inline-flex items-center justify-center gap-1.5 text-sm border border-un1t-gray text-un1t-light py-2 rounded-md hover:text-un1t-white"
+          className="flex-1 inline-flex items-center justify-center gap-1.5 text-sm border border-un1t-border text-un1t-subtle py-2 rounded-md hover:text-un1t-text"
         >
           <ArrowLeft size={14} /> Back
         </button>
@@ -566,22 +566,22 @@ function ProcessingStage({ result, onClose }) {
   if (!result) return null
   return (
     <div className="space-y-4">
-      <div className="bg-un1t-black border border-un1t-gray rounded-md p-6 text-center">
-        <Loader2 size={32} className="mx-auto mb-3 animate-spin text-un1t-light" />
-        <div className="text-base font-semibold text-un1t-white mb-1">Processing in the background</div>
-        <div className="text-xs text-un1t-light">
+      <div className="bg-un1t-bg border border-un1t-border rounded-md p-6 text-center">
+        <Loader2 size={32} className="mx-auto mb-3 animate-spin text-un1t-subtle" />
+        <div className="text-base font-semibold text-un1t-text mb-1">Processing in the background</div>
+        <div className="text-xs text-un1t-subtle">
           Estimated {Math.ceil((result.estimated_seconds || 60) / 60)} minute{Math.ceil((result.estimated_seconds || 60) / 60) === 1 ? '' : 's'}.
           You can close this window — the import keeps running.
         </div>
       </div>
-      <div className="text-[11px] text-un1t-mid text-center">
+      <div className="text-[11px] text-un1t-muted text-center">
         Track progress on the <Link href={`/contacts/imports/${result.import_id}`} className="underline">batch detail page</Link>{' '}
         or in the <Link href="/contacts/imports" className="underline">import history</Link>.
       </div>
       <button
         type="button"
         onClick={onClose}
-        className="w-full inline-flex items-center justify-center text-sm border border-un1t-gray text-un1t-light py-2 rounded-md hover:text-un1t-white"
+        className="w-full inline-flex items-center justify-center text-sm border border-un1t-border text-un1t-subtle py-2 rounded-md hover:text-un1t-text"
       >
         Close window
       </button>
@@ -597,21 +597,21 @@ function DoneStage({ result, onDone }) {
         <div className="bg-red-500/10 border border-red-500/30 rounded-md p-4 flex items-start gap-3">
           <AlertTriangle size={20} className="text-red-500 mt-0.5 shrink-0" />
           <div>
-            <div className="text-base font-semibold text-un1t-white mb-1">Import failed</div>
-            <div className="text-xs text-un1t-light">{result.error_message || 'The background worker reported an error. Check the import history for details.'}</div>
+            <div className="text-base font-semibold text-un1t-text mb-1">Import failed</div>
+            <div className="text-xs text-un1t-subtle">{result.error_message || 'The background worker reported an error. Check the import history for details.'}</div>
           </div>
         </div>
         <div className="flex gap-2">
           <Link
             href={`/contacts/imports/${result.import_id}`}
-            className="flex-1 inline-flex items-center justify-center gap-2 text-sm border border-un1t-gray text-un1t-light py-2 rounded-md hover:text-un1t-white"
+            className="flex-1 inline-flex items-center justify-center gap-2 text-sm border border-un1t-border text-un1t-subtle py-2 rounded-md hover:text-un1t-text"
           >
             <FileText size={14} /> View batch
           </Link>
           <button
             type="button"
             onClick={onDone}
-            className="flex-1 inline-flex items-center justify-center text-sm bg-un1t-white text-un1t-black font-medium py-2 rounded-md hover:bg-un1t-accent"
+            className="flex-1 inline-flex items-center justify-center text-sm bg-un1t-text text-un1t-bg font-medium py-2 rounded-md hover:bg-un1t-accent"
           >
             Close
           </button>
@@ -625,8 +625,8 @@ function DoneStage({ result, onDone }) {
       <div className="flex items-center gap-3 mb-2">
         <CheckCircle2 size={28} className="text-emerald-700" />
         <div>
-          <div className="text-base font-semibold text-un1t-white">Import complete</div>
-          <div className="text-xs text-un1t-light">{result.summary.total} row{result.summary.total === 1 ? '' : 's'} processed.</div>
+          <div className="text-base font-semibold text-un1t-text">Import complete</div>
+          <div className="text-xs text-un1t-subtle">{result.summary.total} row{result.summary.total === 1 ? '' : 's'} processed.</div>
         </div>
       </div>
 
@@ -641,21 +641,21 @@ function DoneStage({ result, onDone }) {
         {hasErrors && (
           <a
             href={`/api/contacts/imports/${result.import_id}/error-csv`}
-            className="flex-1 inline-flex items-center justify-center gap-2 text-sm border border-un1t-gray text-un1t-light py-2 rounded-md hover:text-un1t-white"
+            className="flex-1 inline-flex items-center justify-center gap-2 text-sm border border-un1t-border text-un1t-subtle py-2 rounded-md hover:text-un1t-text"
           >
             <Download size={14} /> Download error rows
           </a>
         )}
         <a
           href={`/contacts/imports/${result.import_id}`}
-          className="flex-1 inline-flex items-center justify-center gap-2 text-sm border border-un1t-gray text-un1t-light py-2 rounded-md hover:text-un1t-white"
+          className="flex-1 inline-flex items-center justify-center gap-2 text-sm border border-un1t-border text-un1t-subtle py-2 rounded-md hover:text-un1t-text"
         >
           <FileText size={14} /> View batch
         </a>
         <button
           type="button"
           onClick={onDone}
-          className="flex-1 inline-flex items-center justify-center text-sm bg-un1t-white text-un1t-black font-medium py-2 rounded-md hover:bg-un1t-accent"
+          className="flex-1 inline-flex items-center justify-center text-sm bg-un1t-text text-un1t-bg font-medium py-2 rounded-md hover:bg-un1t-accent"
         >
           Done
         </button>
@@ -672,7 +672,7 @@ function Stat({ label, value, tone }) {
     red:     'border-red-500/40 text-red-700',
   }
   return (
-    <div className={`border rounded-md p-3 text-center ${toneClasses[tone] || 'border-un1t-gray'}`}>
+    <div className={`border rounded-md p-3 text-center ${toneClasses[tone] || 'border-un1t-border'}`}>
       <div className="text-[10px] uppercase tracking-wider opacity-80">{label}</div>
       <div className="text-2xl font-bold tabular-nums mt-0.5">{value}</div>
     </div>

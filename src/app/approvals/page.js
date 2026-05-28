@@ -26,8 +26,8 @@ export default async function ApprovalsPage() {
   return (
     <div className="p-6 max-w-6xl mx-auto">
       <header className="mb-6">
-        <h1 className="text-2xl font-semibold text-un1t-white">Approvals</h1>
-        <p className="text-sm text-un1t-light mt-1">
+        <h1 className="text-2xl font-semibold text-un1t-text">Approvals</h1>
+        <p className="text-sm text-un1t-subtle mt-1">
           Everything waiting on your review. Click an item to open the source page and approve or decline.
         </p>
       </header>

@@ -44,14 +44,14 @@ export default function WhatsAppIntegrationTab({ location, canEdit }) {
   return (
     <div className="space-y-4">
       <div>
-        <h4 className="text-sm font-semibold text-un1t-white mb-1">WhatsApp numbers</h4>
-        <p className="text-xs text-un1t-light">
+        <h4 className="text-sm font-semibold text-un1t-text mb-1">WhatsApp numbers</h4>
+        <p className="text-xs text-un1t-subtle">
           Register the WhatsApp Cloud API numbers active at this location. One number is the
           <span className="font-medium"> default</span> — outbound sends from broadcasts,
           sequences, and the inbox route through it. Inbound webhooks land at whichever
           number Meta posted to.
         </p>
-        <p className="text-[11px] text-un1t-mid mt-1">
+        <p className="text-[11px] text-un1t-muted mt-1">
           Coexistence (linking an existing WhatsApp Business mobile number) requires Meta-side
           approval on our Tech Provider account.{' '}
           <a
@@ -73,16 +73,16 @@ export default function WhatsAppIntegrationTab({ location, canEdit }) {
       )}
 
       {loading ? (
-        <div className="text-xs text-un1t-light inline-flex items-center gap-2">
+        <div className="text-xs text-un1t-subtle inline-flex items-center gap-2">
           <Loader2 size={12} className="animate-spin" /> Loading…
         </div>
       ) : (
         <>
           <div className="space-y-2">
             {numbers.length === 0 && (
-              <div className="text-xs text-un1t-light bg-un1t-black border border-un1t-gray rounded p-3">
+              <div className="text-xs text-un1t-subtle bg-un1t-bg border border-un1t-border rounded p-3">
                 No numbers configured. This location falls back to the global
-                <code className="text-un1t-mid"> WHATSAPP_*</code> env vars (legacy single-number setup).
+                <code className="text-un1t-muted"> WHATSAPP_*</code> env vars (legacy single-number setup).
                 Add a number below to migrate.
               </div>
             )}
@@ -112,7 +112,7 @@ export default function WhatsAppIntegrationTab({ location, canEdit }) {
               <button
                 type="button"
                 onClick={() => setAdding(true)}
-                className="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md bg-un1t-white text-un1t-black font-semibold hover:bg-un1t-accent"
+                className="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md bg-un1t-text text-un1t-bg font-semibold hover:bg-un1t-accent"
               >
                 <Plus size={12} /> Add WhatsApp number
               </button>
@@ -155,29 +155,29 @@ function NumberRow({ location, number, canEdit, expanded, onExpand, onReload, on
   }
 
   return (
-    <div className="bg-un1t-black border border-un1t-gray rounded-md">
+    <div className="bg-un1t-bg border border-un1t-border rounded-md">
       <div className="flex items-center justify-between p-3 gap-3">
         <button type="button" onClick={onExpand} className="flex items-center gap-2 flex-1 min-w-0 text-left">
           {expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
-              <span className="text-sm font-medium text-un1t-white truncate">{number.label}</span>
+              <span className="text-sm font-medium text-un1t-text truncate">{number.label}</span>
               {number.is_default && (
                 <span className="inline-flex items-center gap-0.5 text-[10px] uppercase text-amber-400">
                   <Star size={10} className="fill-amber-400" /> Default
                 </span>
               )}
               {!number.is_active && (
-                <span className="text-[10px] uppercase text-un1t-mid">Inactive</span>
+                <span className="text-[10px] uppercase text-un1t-muted">Inactive</span>
               )}
-              <span className="text-[10px] uppercase text-un1t-mid">
+              <span className="text-[10px] uppercase text-un1t-muted">
                 {number.source === 'coexistence' ? 'Coexistence' : 'Cloud API'}
               </span>
             </div>
-            <div className="text-[11px] text-un1t-light truncate">
+            <div className="text-[11px] text-un1t-subtle truncate">
               {number.display_phone || number.phone_number_id}
-              <span className="mx-1.5 text-un1t-mid">·</span>
-              <span className="text-un1t-mid">PhoneNumberID:</span> {number.phone_number_id}
+              <span className="mx-1.5 text-un1t-muted">·</span>
+              <span className="text-un1t-muted">PhoneNumberID:</span> {number.phone_number_id}
             </div>
           </div>
         </button>
@@ -187,14 +187,14 @@ function NumberRow({ location, number, canEdit, expanded, onExpand, onReload, on
               type="button"
               onClick={setDefault}
               disabled={busy}
-              className="inline-flex items-center gap-1 text-[10px] text-un1t-light hover:text-amber-400 disabled:opacity-50"
+              className="inline-flex items-center gap-1 text-[10px] text-un1t-subtle hover:text-amber-400 disabled:opacity-50"
               title="Make this the default outbound number"
             >
               <Star size={11} /> Set default
             </button>
           )}
           {canEdit && (
-            <button type="button" onClick={remove} disabled={busy} className="text-un1t-light hover:text-red-500 p-1 disabled:opacity-50">
+            <button type="button" onClick={remove} disabled={busy} className="text-un1t-subtle hover:text-red-500 p-1 disabled:opacity-50">
               <Trash2 size={12} />
             </button>
           )}
@@ -252,33 +252,33 @@ function AddNumberForm({ locationId, onCancel, onSaved, onError }) {
   }
 
   return (
-    <div className="bg-un1t-black border border-un1t-gray rounded-md p-3 space-y-2">
-      <h5 className="text-xs font-semibold text-un1t-white">Add WhatsApp number</h5>
+    <div className="bg-un1t-bg border border-un1t-border rounded-md p-3 space-y-2">
+      <h5 className="text-xs font-semibold text-un1t-text">Add WhatsApp number</h5>
       <Row label="Label" hint="A short name for the operator UI (e.g. 'Stillorgan mobile')">
-        <input className="w-full bg-un1t-dark border border-un1t-gray rounded px-2 py-1 text-[11px] text-un1t-white" value={form.label} onChange={(e) => setForm({ ...form, label: e.target.value })} />
+        <input className="w-full bg-un1t-surface border border-un1t-border rounded px-2 py-1 text-[11px] text-un1t-text" value={form.label} onChange={(e) => setForm({ ...form, label: e.target.value })} />
       </Row>
       <Row label="Phone Number ID" hint={FIELD_HELP.phone_number_id}>
-        <input className="w-full bg-un1t-dark border border-un1t-gray rounded px-2 py-1 text-[11px] text-un1t-white font-mono" value={form.phone_number_id} onChange={(e) => setForm({ ...form, phone_number_id: e.target.value.trim() })} />
+        <input className="w-full bg-un1t-surface border border-un1t-border rounded px-2 py-1 text-[11px] text-un1t-text font-mono" value={form.phone_number_id} onChange={(e) => setForm({ ...form, phone_number_id: e.target.value.trim() })} />
       </Row>
       <Row label="Display phone" hint="Friendly format for the UI, e.g. +353 1 234 5678">
-        <input className="w-full bg-un1t-dark border border-un1t-gray rounded px-2 py-1 text-[11px] text-un1t-white" value={form.display_phone} onChange={(e) => setForm({ ...form, display_phone: e.target.value })} />
+        <input className="w-full bg-un1t-surface border border-un1t-border rounded px-2 py-1 text-[11px] text-un1t-text" value={form.display_phone} onChange={(e) => setForm({ ...form, display_phone: e.target.value })} />
       </Row>
       <Row label="Access token" hint={FIELD_HELP.access_token}>
-        <textarea rows={2} className="w-full bg-un1t-dark border border-un1t-gray rounded px-2 py-1 text-[11px] text-un1t-white font-mono" value={form.access_token} onChange={(e) => setForm({ ...form, access_token: e.target.value })} />
+        <textarea rows={2} className="w-full bg-un1t-surface border border-un1t-border rounded px-2 py-1 text-[11px] text-un1t-text font-mono" value={form.access_token} onChange={(e) => setForm({ ...form, access_token: e.target.value })} />
       </Row>
       <Row label="WABA ID" hint={FIELD_HELP.business_account_id}>
-        <input className="w-full bg-un1t-dark border border-un1t-gray rounded px-2 py-1 text-[11px] text-un1t-white font-mono" value={form.business_account_id} onChange={(e) => setForm({ ...form, business_account_id: e.target.value.trim() })} />
+        <input className="w-full bg-un1t-surface border border-un1t-border rounded px-2 py-1 text-[11px] text-un1t-text font-mono" value={form.business_account_id} onChange={(e) => setForm({ ...form, business_account_id: e.target.value.trim() })} />
       </Row>
       <Row label="App ID" hint={FIELD_HELP.app_id}>
-        <input className="w-full bg-un1t-dark border border-un1t-gray rounded px-2 py-1 text-[11px] text-un1t-white font-mono" value={form.app_id} onChange={(e) => setForm({ ...form, app_id: e.target.value.trim() })} />
+        <input className="w-full bg-un1t-surface border border-un1t-border rounded px-2 py-1 text-[11px] text-un1t-text font-mono" value={form.app_id} onChange={(e) => setForm({ ...form, app_id: e.target.value.trim() })} />
       </Row>
       <Row label="Source">
-        <select className="bg-un1t-dark border border-un1t-gray rounded px-2 py-1 text-[11px] text-un1t-white" value={form.source} onChange={(e) => setForm({ ...form, source: e.target.value })}>
+        <select className="bg-un1t-surface border border-un1t-border rounded px-2 py-1 text-[11px] text-un1t-text" value={form.source} onChange={(e) => setForm({ ...form, source: e.target.value })}>
           <option value="cloud_api">Cloud API</option>
           <option value="coexistence">Coexistence (mobile + API)</option>
         </select>
       </Row>
-      <label className="flex items-center gap-2 text-[11px] text-un1t-light">
+      <label className="flex items-center gap-2 text-[11px] text-un1t-subtle">
         <input type="checkbox" checked={form.is_default} onChange={(e) => setForm({ ...form, is_default: e.target.checked })} />
         Make this the default outbound number for this location
       </label>
@@ -287,12 +287,12 @@ function AddNumberForm({ locationId, onCancel, onSaved, onError }) {
           type="button"
           onClick={save}
           disabled={saving || !form.label.trim() || !form.phone_number_id.trim() || !form.access_token.trim()}
-          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded bg-un1t-white text-un1t-black text-[11px] font-semibold hover:bg-un1t-accent disabled:opacity-50"
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded bg-un1t-text text-un1t-bg text-[11px] font-semibold hover:bg-un1t-accent disabled:opacity-50"
         >
           {saving ? <Loader2 size={11} className="animate-spin" /> : <CheckCircle2 size={11} />}
           {saving ? 'Saving…' : 'Save'}
         </button>
-        <button type="button" onClick={onCancel} className="text-[11px] text-un1t-light hover:text-un1t-white">
+        <button type="button" onClick={onCancel} className="text-[11px] text-un1t-subtle hover:text-un1t-text">
           Cancel
         </button>
       </div>
@@ -340,28 +340,28 @@ function EditNumberForm({ locationId, number, canEdit, onSaved, onError }) {
   }
 
   return (
-    <div className="border-t border-un1t-gray p-3 space-y-2 bg-un1t-dark/30">
+    <div className="border-t border-un1t-border p-3 space-y-2 bg-un1t-surface/30">
       <Row label="Label">
-        <input disabled={!canEdit} className="w-full bg-un1t-dark border border-un1t-gray rounded px-2 py-1 text-[11px] text-un1t-white" value={form.label} onChange={(e) => setForm({ ...form, label: e.target.value })} />
+        <input disabled={!canEdit} className="w-full bg-un1t-surface border border-un1t-border rounded px-2 py-1 text-[11px] text-un1t-text" value={form.label} onChange={(e) => setForm({ ...form, label: e.target.value })} />
       </Row>
       <Row label="Display phone">
-        <input disabled={!canEdit} className="w-full bg-un1t-dark border border-un1t-gray rounded px-2 py-1 text-[11px] text-un1t-white" value={form.display_phone} onChange={(e) => setForm({ ...form, display_phone: e.target.value })} />
+        <input disabled={!canEdit} className="w-full bg-un1t-surface border border-un1t-border rounded px-2 py-1 text-[11px] text-un1t-text" value={form.display_phone} onChange={(e) => setForm({ ...form, display_phone: e.target.value })} />
       </Row>
       <Row label="WABA ID">
-        <input disabled={!canEdit} className="w-full bg-un1t-dark border border-un1t-gray rounded px-2 py-1 text-[11px] text-un1t-white font-mono" value={form.business_account_id} onChange={(e) => setForm({ ...form, business_account_id: e.target.value.trim() })} />
+        <input disabled={!canEdit} className="w-full bg-un1t-surface border border-un1t-border rounded px-2 py-1 text-[11px] text-un1t-text font-mono" value={form.business_account_id} onChange={(e) => setForm({ ...form, business_account_id: e.target.value.trim() })} />
       </Row>
       <Row label="App ID">
-        <input disabled={!canEdit} className="w-full bg-un1t-dark border border-un1t-gray rounded px-2 py-1 text-[11px] text-un1t-white font-mono" value={form.app_id} onChange={(e) => setForm({ ...form, app_id: e.target.value.trim() })} />
+        <input disabled={!canEdit} className="w-full bg-un1t-surface border border-un1t-border rounded px-2 py-1 text-[11px] text-un1t-text font-mono" value={form.app_id} onChange={(e) => setForm({ ...form, app_id: e.target.value.trim() })} />
       </Row>
       <Row label="Current token" hint="Stored value (last 6 chars shown). To change, paste a new token below.">
-        <code className="block w-full bg-un1t-dark/50 border border-un1t-gray rounded px-2 py-1 text-[11px] text-un1t-mid">
+        <code className="block w-full bg-un1t-surface/50 border border-un1t-border rounded px-2 py-1 text-[11px] text-un1t-muted">
           {number.access_token_redacted || '••••'}
         </code>
       </Row>
       <Row label="New access token (leave blank to keep current)">
-        <textarea disabled={!canEdit} rows={2} className="w-full bg-un1t-dark border border-un1t-gray rounded px-2 py-1 text-[11px] text-un1t-white font-mono" value={form.new_access_token} onChange={(e) => setForm({ ...form, new_access_token: e.target.value })} />
+        <textarea disabled={!canEdit} rows={2} className="w-full bg-un1t-surface border border-un1t-border rounded px-2 py-1 text-[11px] text-un1t-text font-mono" value={form.new_access_token} onChange={(e) => setForm({ ...form, new_access_token: e.target.value })} />
       </Row>
-      <label className="flex items-center gap-2 text-[11px] text-un1t-light">
+      <label className="flex items-center gap-2 text-[11px] text-un1t-subtle">
         <input type="checkbox" disabled={!canEdit} checked={form.is_active} onChange={(e) => setForm({ ...form, is_active: e.target.checked })} />
         Active (uncheck to disable without deleting — useful for temporary maintenance)
       </label>
@@ -371,7 +371,7 @@ function EditNumberForm({ locationId, number, canEdit, onSaved, onError }) {
             type="button"
             onClick={save}
             disabled={saving}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded bg-un1t-white text-un1t-black text-[11px] font-semibold hover:bg-un1t-accent disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded bg-un1t-text text-un1t-bg text-[11px] font-semibold hover:bg-un1t-accent disabled:opacity-50"
           >
             {saving ? <Loader2 size={11} className="animate-spin" /> : <CheckCircle2 size={11} />}
             {saving ? 'Saving…' : 'Save'}
@@ -385,9 +385,9 @@ function EditNumberForm({ locationId, number, canEdit, onSaved, onError }) {
 function Row({ label, hint, children }) {
   return (
     <label className="block">
-      <div className="text-[10px] uppercase tracking-wider text-un1t-light mb-0.5">{label}</div>
+      <div className="text-[10px] uppercase tracking-wider text-un1t-subtle mb-0.5">{label}</div>
       {children}
-      {hint && <div className="text-[10px] text-un1t-mid mt-0.5">{hint}</div>}
+      {hint && <div className="text-[10px] text-un1t-muted mt-0.5">{hint}</div>}
     </label>
   )
 }

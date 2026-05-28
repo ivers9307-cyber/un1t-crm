@@ -42,7 +42,7 @@ export default async function SettingsPage() {
   return (
     <div className="p-8 max-w-4xl">
       <h2 className="text-2xl font-bold mb-1">Settings</h2>
-      <p className="text-sm text-un1t-light mb-8">Manage your team, locations, and permissions</p>
+      <p className="text-sm text-un1t-subtle mb-8">Manage your team, locations, and permissions</p>
 
       {/* Master tools — platform-level admin links. Moved to the TOP
           of the settings page in SETTINGS.3 since this is the most
@@ -68,32 +68,32 @@ export default async function SettingsPage() {
                   the two masters reach for most often. */}
               <Link
                 href="/admin"
-                className="text-xs bg-un1t-white text-un1t-black px-3 py-1.5 rounded-md hover:bg-un1t-accent transition-colors font-medium inline-flex items-center gap-1.5"
+                className="text-xs bg-un1t-text text-un1t-bg px-3 py-1.5 rounded-md hover:bg-un1t-accent transition-colors font-medium inline-flex items-center gap-1.5"
               >
                 <LayoutGrid size={12} /> Admin
               </Link>
               <Link
                 href="/admin/achievements"
-                className="text-xs bg-un1t-white text-un1t-black px-3 py-1.5 rounded-md hover:bg-un1t-accent transition-colors font-medium inline-flex items-center gap-1.5"
+                className="text-xs bg-un1t-text text-un1t-bg px-3 py-1.5 rounded-md hover:bg-un1t-accent transition-colors font-medium inline-flex items-center gap-1.5"
               >
                 <Trophy size={12} /> Achievements
               </Link>
               <Link
                 href="/admin/integrations"
-                className="text-xs bg-un1t-white text-un1t-black px-3 py-1.5 rounded-md hover:bg-un1t-accent transition-colors font-medium inline-flex items-center gap-1.5"
+                className="text-xs bg-un1t-text text-un1t-bg px-3 py-1.5 rounded-md hover:bg-un1t-accent transition-colors font-medium inline-flex items-center gap-1.5"
               >
                 <Cable size={12} /> Integrations
               </Link>
               <Link
                 href="/settings/impersonate"
-                className="text-xs bg-amber-500 text-un1t-black px-3 py-1.5 rounded-md hover:bg-amber-400 transition-colors font-medium"
+                className="text-xs bg-amber-500 text-un1t-bg px-3 py-1.5 rounded-md hover:bg-amber-400 transition-colors font-medium"
               >
                 View as user
               </Link>
             </div>
           </div>
-          <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5">
-            <p className="text-sm text-un1t-light">Sign in as another user to debug their experience. Every session is audited.</p>
+          <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5">
+            <p className="text-sm text-un1t-subtle">Sign in as another user to debug their experience. Every session is audited.</p>
           </div>
         </div>
       )}
@@ -106,13 +106,13 @@ export default async function SettingsPage() {
       <div className="mb-10">
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-2">
-            <Users size={18} className="text-un1t-light" />
+            <Users size={18} className="text-un1t-subtle" />
             <h3 className="text-lg font-semibold">Team Members</h3>
-            <span className="text-xs bg-un1t-gray text-un1t-light px-2 py-0.5 rounded-full ml-1">{staffCount || 0}</span>
+            <span className="text-xs bg-un1t-border text-un1t-subtle px-2 py-0.5 rounded-full ml-1">{staffCount || 0}</span>
           </div>
           <Link
             href="/settings/staff/new"
-            className="text-xs bg-un1t-white text-un1t-black px-3 py-1.5 rounded-md hover:bg-un1t-accent transition-colors font-medium"
+            className="text-xs bg-un1t-text text-un1t-bg px-3 py-1.5 rounded-md hover:bg-un1t-accent transition-colors font-medium"
           >
             Add Staff
           </Link>
@@ -120,15 +120,15 @@ export default async function SettingsPage() {
 
         <Link
           href="/settings/staff"
-          className="bg-un1t-dark border border-un1t-gray hover:border-un1t-light rounded-lg p-4 flex items-center justify-between text-sm group transition-colors"
+          className="bg-un1t-surface border border-un1t-border hover:border-un1t-subtle rounded-lg p-4 flex items-center justify-between text-sm group transition-colors"
         >
           <div>
-            <div className="text-un1t-white">View team</div>
-            <div className="text-xs text-un1t-light mt-0.5">
+            <div className="text-un1t-text">View team</div>
+            <div className="text-xs text-un1t-subtle mt-0.5">
               Searchable list of all {staffCount || 0} team members. Filter by status, role, location, or name.
             </div>
           </div>
-          <ChevronRight size={16} className="text-un1t-light group-hover:text-un1t-white" />
+          <ChevronRight size={16} className="text-un1t-subtle group-hover:text-un1t-text" />
         </Link>
       </div>
 
@@ -136,26 +136,26 @@ export default async function SettingsPage() {
       <div className="mb-10">
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-2">
-            <MapPin size={18} className="text-un1t-light" />
+            <MapPin size={18} className="text-un1t-subtle" />
             <h3 className="text-lg font-semibold">Locations</h3>
-            <span className="text-xs bg-un1t-gray text-un1t-light px-2 py-0.5 rounded-full ml-1">{locations.length}</span>
+            <span className="text-xs bg-un1t-border text-un1t-subtle px-2 py-0.5 rounded-full ml-1">{locations.length}</span>
           </div>
           {user.role === 'master' && (
             <Link
               href="/settings/locations/new"
-              className="text-xs bg-un1t-white text-un1t-black px-3 py-1.5 rounded-md hover:bg-un1t-accent transition-colors font-medium"
+              className="text-xs bg-un1t-text text-un1t-bg px-3 py-1.5 rounded-md hover:bg-un1t-accent transition-colors font-medium"
             >
               Add Location
             </Link>
           )}
         </div>
 
-        <div className="bg-un1t-dark border border-un1t-gray rounded-lg divide-y divide-un1t-gray">
+        <div className="bg-un1t-surface border border-un1t-border rounded-lg divide-y divide-un1t-border">
           {locations.map(loc => (
             <div key={loc.id} className="p-4 flex items-center justify-between">
               <div>
                 <p className="text-sm font-medium">{loc.name}</p>
-                <p className="text-xs text-un1t-light mt-0.5">{loc.address || loc.slug}</p>
+                <p className="text-xs text-un1t-subtle mt-0.5">{loc.address || loc.slug}</p>
               </div>
               <div className="flex items-center gap-3">
                 <span className={`text-xs px-2 py-0.5 rounded-full ${loc.active ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`}>
@@ -179,20 +179,20 @@ export default async function SettingsPage() {
           each location's edit page. */}
       <div className="mb-10">
         <div className="flex items-center gap-2 mb-4">
-          <Bell size={18} className="text-un1t-light" />
+          <Bell size={18} className="text-un1t-subtle" />
           <h3 className="text-lg font-semibold">Push Notifications</h3>
         </div>
         <Link
           href="/settings/notifications"
-          className="bg-un1t-dark border border-un1t-gray hover:border-un1t-light rounded-lg p-4 flex items-center justify-between text-sm group transition-colors"
+          className="bg-un1t-surface border border-un1t-border hover:border-un1t-subtle rounded-lg p-4 flex items-center justify-between text-sm group transition-colors"
         >
           <div>
-            <div className="text-un1t-white">Notification registry</div>
-            <div className="text-xs text-un1t-light mt-0.5">
+            <div className="text-un1t-text">Notification registry</div>
+            <div className="text-xs text-un1t-subtle mt-0.5">
               Every notification the CRM sends — who fires it, who receives it, lead-time config per category.
             </div>
           </div>
-          <ChevronRight size={16} className="text-un1t-light group-hover:text-un1t-white" />
+          <ChevronRight size={16} className="text-un1t-subtle group-hover:text-un1t-text" />
         </Link>
       </div>
 
@@ -211,34 +211,34 @@ export default async function SettingsPage() {
       {/* Security Section */}
       <div>
         <div className="flex items-center gap-2 mb-4">
-          <Shield size={18} className="text-un1t-light" />
+          <Shield size={18} className="text-un1t-subtle" />
           <h3 className="text-lg font-semibold">Security</h3>
         </div>
 
-        <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-4 space-y-4">
+        <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4 space-y-4">
           <Link
             href="/account/access-history"
-            className="flex items-center justify-between hover:bg-un1t-gray/20 -m-4 p-4 rounded-lg transition-colors"
+            className="flex items-center justify-between hover:bg-un1t-border/20 -m-4 p-4 rounded-lg transition-colors"
           >
             <div>
               <p className="text-sm font-medium">Account access history</p>
-              <p className="text-xs text-un1t-light mt-0.5">See every time a master account has signed in as you</p>
+              <p className="text-xs text-un1t-subtle mt-0.5">See every time a master account has signed in as you</p>
             </div>
-            <span className="text-xs text-un1t-light">View →</span>
+            <span className="text-xs text-un1t-subtle">View →</span>
           </Link>
           <div className="flex items-center justify-between">
             <div>
               <p className="text-sm font-medium">Two-Factor Authentication</p>
-              <p className="text-xs text-un1t-light mt-0.5">Require 2FA for all team members</p>
+              <p className="text-xs text-un1t-subtle mt-0.5">Require 2FA for all team members</p>
             </div>
-            <span className="text-xs bg-un1t-gray text-un1t-light px-2 py-0.5 rounded-full">Coming soon</span>
+            <span className="text-xs bg-un1t-border text-un1t-subtle px-2 py-0.5 rounded-full">Coming soon</span>
           </div>
           <div className="flex items-center justify-between">
             <div>
               <p className="text-sm font-medium">Single Sign-On (SSO)</p>
-              <p className="text-xs text-un1t-light mt-0.5">Connect your identity provider via SAML</p>
+              <p className="text-xs text-un1t-subtle mt-0.5">Connect your identity provider via SAML</p>
             </div>
-            <span className="text-xs bg-un1t-gray text-un1t-light px-2 py-0.5 rounded-full">Coming soon</span>
+            <span className="text-xs bg-un1t-border text-un1t-subtle px-2 py-0.5 rounded-full">Coming soon</span>
           </div>
         </div>
       </div>

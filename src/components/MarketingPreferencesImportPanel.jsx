@@ -87,12 +87,12 @@ export default function MarketingPreferencesImportPanel() {
 
   return (
     <div className="space-y-6">
-      <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5">
+      <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5">
         <div className="flex items-center gap-2 mb-2">
           <Upload size={16} className="text-emerald-400" />
           <h3 className="text-base font-semibold">Upload preferences CSV</h3>
         </div>
-        <p className="text-sm text-un1t-light mb-4 max-w-3xl">
+        <p className="text-sm text-un1t-subtle mb-4 max-w-3xl">
           The file needs at least one identifier column —{' '}
           <code>email</code> (or <code>email_address</code>, <code>member_email</code>) and / or{' '}
           <code>phone</code> (or <code>mobile</code>, <code>sms_number</code>, <code>whatsapp_number</code>) —
@@ -103,7 +103,7 @@ export default function MarketingPreferencesImportPanel() {
           (<code>Subscribed</code>, <code>opted_out</code>, <code>marketing_consent_email</code>,
           Mailchimp&apos;s <code>Unsubscribed</code> timestamp) are auto-detected.
         </p>
-        <p className="text-xs text-un1t-mid mb-4 max-w-3xl">
+        <p className="text-xs text-un1t-muted mb-4 max-w-3xl">
           Phones can be in any format —{' '}
           <code>+353 87 068 8181</code>, <code>0870688181</code>,{' '}
           <code>(087) 068-8181</code> all match the same contact (we strip non-digits
@@ -115,19 +115,19 @@ export default function MarketingPreferencesImportPanel() {
 
         <div className="flex items-end gap-3 mb-4">
           <div className="flex-1">
-            <label className="block text-xs text-un1t-light mb-1">CSV file</label>
+            <label className="block text-xs text-un1t-subtle mb-1">CSV file</label>
             <input
               type="file"
               accept=".csv,text/csv"
               onChange={(e) => { setFile(e.target.files?.[0] || null); setResult(null); setError(null) }}
-              className="w-full text-sm text-un1t-light file:mr-3 file:py-2 file:px-3 file:rounded-md file:border-0 file:bg-un1t-gray/40 file:text-un1t-white file:cursor-pointer hover:file:bg-un1t-gray/60"
+              className="w-full text-sm text-un1t-subtle file:mr-3 file:py-2 file:px-3 file:rounded-md file:border-0 file:bg-un1t-border/40 file:text-un1t-text file:cursor-pointer hover:file:bg-un1t-border/60"
             />
           </div>
           <button
             type="button"
             onClick={() => run({ preview: true })}
             disabled={busy || !file}
-            className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-md bg-un1t-gray/40 border border-un1t-gray hover:bg-un1t-gray/60 disabled:opacity-50"
+            className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-md bg-un1t-border/40 border border-un1t-border hover:bg-un1t-border/60 disabled:opacity-50"
           >
             {busy && mode === 'preview' ? <Loader2 size={14} className="animate-spin" /> : <Eye size={14} />}
             Preview
@@ -146,10 +146,10 @@ export default function MarketingPreferencesImportPanel() {
           </button>
         </div>
 
-        <div className="flex items-start gap-2 text-[11px] text-un1t-light">
+        <div className="flex items-start gap-2 text-[11px] text-un1t-subtle">
           <Lock size={11} className="mt-0.5 shrink-0" />
           <div>
-            <strong className="text-un1t-white">ClassPass safety:</strong> contacts with{' '}
+            <strong className="text-un1t-text">ClassPass safety:</strong> contacts with{' '}
             <code>glofox_membership_status=&apos;classpass_payg&apos;</code> are excluded from
             the import — the CONSENT.2 blanket rule wins. They&apos;re reported under
             &ldquo;ClassPass skipped&rdquo; below if any are in your CSV.
@@ -162,7 +162,7 @@ export default function MarketingPreferencesImportPanel() {
           <AlertTriangle size={16} className="text-rose-400 mt-0.5 shrink-0" />
           <div className="flex-1">
             <div className="text-sm font-medium text-rose-300">Import failed</div>
-            <div className="text-xs text-un1t-light mt-1">{error}</div>
+            <div className="text-xs text-un1t-subtle mt-1">{error}</div>
             {result?.headers && (
               <details className="mt-2 text-[11px]">
                 <summary className="cursor-pointer">Headers we found</summary>
@@ -181,7 +181,7 @@ export default function MarketingPreferencesImportPanel() {
 function ResultPanel({ result }) {
   const isCommit = result.mode === 'commit'
   return (
-    <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5 space-y-5">
+    <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5 space-y-5">
       <div className="flex items-center gap-2">
         <CheckCircle2 size={16} className="text-emerald-400" />
         <h3 className="text-base font-semibold">
@@ -195,14 +195,14 @@ function ResultPanel({ result }) {
           this — if 'subscribed' got mapped to email_marketing but the
           export's semantics were inverse, this is where they'd notice. */}
       <div>
-        <h4 className="text-xs font-medium uppercase tracking-wider text-un1t-light mb-2">Column mapping</h4>
+        <h4 className="text-xs font-medium uppercase tracking-wider text-un1t-subtle mb-2">Column mapping</h4>
         <div className="text-xs space-y-1">
           {Object.keys(result.mapping || {}).length === 0
-            ? <div className="text-un1t-mid italic">No columns matched.</div>
+            ? <div className="text-un1t-muted italic">No columns matched.</div>
             : Object.entries(result.mapping).map(([canonical, sourceCol]) => (
               <div key={canonical} className="flex items-center gap-2">
-                <code className="text-un1t-light">{sourceCol}</code>
-                <span className="text-un1t-mid">→</span>
+                <code className="text-un1t-subtle">{sourceCol}</code>
+                <span className="text-un1t-muted">→</span>
                 <code className="text-emerald-400">{canonical}</code>
               </div>
             ))}
@@ -226,17 +226,17 @@ function ResultPanel({ result }) {
       {/* Sample matched rows */}
       {Array.isArray(result.samples?.matched) && result.samples.matched.length > 0 && (
         <div>
-          <h4 className="text-xs font-medium uppercase tracking-wider text-un1t-light mb-2">
+          <h4 className="text-xs font-medium uppercase tracking-wider text-un1t-subtle mb-2">
             Sample {isCommit ? 'changes' : 'planned moves'} ({result.samples.matched.length})
           </h4>
           <ul className="text-xs space-y-1 max-h-64 overflow-y-auto">
             {result.samples.matched.map((s, i) => (
               <li key={i} className="flex items-baseline gap-2">
-                <span className="text-un1t-white">{s.email || s.phone || '(unknown)'}</span>
+                <span className="text-un1t-text">{s.email || s.phone || '(unknown)'}</span>
                 {s.matched_by === 'phone' && (
-                  <span className="text-[10px] text-un1t-mid bg-un1t-gray/30 px-1 rounded">phone</span>
+                  <span className="text-[10px] text-un1t-muted bg-un1t-border/30 px-1 rounded">phone</span>
                 )}
-                <span className="text-un1t-mid">
+                <span className="text-un1t-muted">
                   {Object.entries(s.prefs).map(([k, v]) => (
                     <span key={k} className="ml-2">
                       {PREF_LABELS[k]}: <span className={v ? 'text-emerald-400' : 'text-rose-400'}>{v ? 'on' : 'off'}</span>
@@ -252,24 +252,24 @@ function ResultPanel({ result }) {
       {/* Unmatched + ClassPass + errors — collapsed by default */}
       {Array.isArray(result.samples?.unmatched) && result.samples.unmatched.length > 0 && (
         <details className="text-xs">
-          <summary className="cursor-pointer text-un1t-light">
+          <summary className="cursor-pointer text-un1t-subtle">
             Unmatched emails ({result.stats?.unmatched_email ?? 0} total — these emails aren&apos;t in your contacts)
           </summary>
           <ul className="mt-2 max-h-48 overflow-y-auto pl-4">
             {result.samples.unmatched.map((e, i) => (
-              <li key={i} className="text-un1t-mid">{e}</li>
+              <li key={i} className="text-un1t-muted">{e}</li>
             ))}
           </ul>
         </details>
       )}
       {Array.isArray(result.samples?.classpass) && result.samples.classpass.length > 0 && (
         <details className="text-xs">
-          <summary className="cursor-pointer text-un1t-light">
+          <summary className="cursor-pointer text-un1t-subtle">
             ClassPass skipped ({result.stats?.classpass_skipped ?? 0} total — protected by the deliverability rule)
           </summary>
           <ul className="mt-2 max-h-48 overflow-y-auto pl-4">
             {result.samples.classpass.map((e, i) => (
-              <li key={i} className="text-un1t-mid">{e}</li>
+              <li key={i} className="text-un1t-muted">{e}</li>
             ))}
           </ul>
         </details>
@@ -277,7 +277,7 @@ function ResultPanel({ result }) {
       {isCommit && Array.isArray(result.error_sample) && result.error_sample.length > 0 && (
         <details className="text-xs" open>
           <summary className="cursor-pointer text-rose-400">Errors ({result.errors})</summary>
-          <pre className="mt-2 bg-un1t-black border border-un1t-gray rounded p-2 overflow-auto max-h-48 text-[10px]">
+          <pre className="mt-2 bg-un1t-bg border border-un1t-border rounded p-2 overflow-auto max-h-48 text-[10px]">
             {JSON.stringify(result.error_sample, null, 2)}
           </pre>
         </details>
@@ -290,10 +290,10 @@ function Stat({ label, value, highlight }) {
   const ring =
     highlight === 'emerald' ? 'border-emerald-500/40 bg-emerald-500/10' :
     highlight === 'rose'    ? 'border-rose-500/40 bg-rose-500/10' :
-    'border-un1t-gray bg-un1t-gray/10'
+    'border-un1t-border bg-un1t-border/10'
   return (
     <div className={`border rounded-md px-3 py-2 ${ring}`}>
-      <div className="text-[10px] uppercase tracking-wide text-un1t-light">{label}</div>
+      <div className="text-[10px] uppercase tracking-wide text-un1t-subtle">{label}</div>
       <div className="text-lg font-semibold tabular-nums">{value ?? 0}</div>
     </div>
   )

@@ -117,7 +117,7 @@ export default function AddCarButton({ locationId, liveFxRate = null }) {
     return (
       <button
         onClick={() => setOpen(true)}
-        className="mb-4 inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-un1t-white text-un1t-black text-sm font-semibold hover:bg-un1t-accent transition-colors"
+        className="mb-4 inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-un1t-text text-un1t-bg text-sm font-semibold hover:bg-un1t-accent transition-colors"
       >
         <Plus size={16} /> Add car
       </button>
@@ -125,10 +125,10 @@ export default function AddCarButton({ locationId, liveFxRate = null }) {
   }
 
   return (
-    <form onSubmit={submit} className="bg-un1t-dark border border-un1t-gray rounded-2xl p-5 mb-4 space-y-4">
+    <form onSubmit={submit} className="bg-un1t-surface border border-un1t-border rounded-2xl p-5 mb-4 space-y-4">
       <div className="flex items-center justify-between">
-        <h3 className="text-sm font-semibold text-un1t-white">Add car</h3>
-        <button type="button" onClick={() => setOpen(false)} className="text-un1t-light hover:text-un1t-white">
+        <h3 className="text-sm font-semibold text-un1t-text">Add car</h3>
+        <button type="button" onClick={() => setOpen(false)} className="text-un1t-subtle hover:text-un1t-text">
           <X size={18} />
         </button>
       </div>
@@ -226,8 +226,8 @@ export default function AddCarButton({ locationId, liveFxRate = null }) {
       </Section>
 
       {profit != null && (
-        <div className="bg-un1t-gray/30 border border-un1t-gray rounded-md px-4 py-3 space-y-1">
-          <div className="text-sm text-un1t-white">
+        <div className="bg-un1t-border/30 border border-un1t-border rounded-md px-4 py-3 space-y-1">
+          <div className="text-sm text-un1t-text">
             Sale €{Math.round(saleEur)} − UK ex-VAT £{Math.round(ukExVatGbp)} (€{Math.round(ukExVatEur)} @ {fx.toFixed(4)})
             {ancillaryGbp > 0 && <> − UK costs £{Math.round(ancillaryGbp)} (€{Math.round(ancillaryGbp * fx)})</>}
             {ancillaryEur > 0 && <> − IE costs €{Math.round(ancillaryEur)}</>}
@@ -236,7 +236,7 @@ export default function AddCarButton({ locationId, liveFxRate = null }) {
               €{Math.round(profit)}
             </span>
           </div>
-          <div className="text-xs text-un1t-light">
+          <div className="text-xs text-un1t-subtle">
             {fxIsDefault
               ? `FX £→€ ${DEFAULT_GBP_TO_EUR} (live rate unavailable — fallback)`
               : `FX £→€ ${fx.toFixed(4)} · auto-updated daily from ECB`}
@@ -245,12 +245,12 @@ export default function AddCarButton({ locationId, liveFxRate = null }) {
       )}
 
       <div>
-        <label className="block text-sm text-un1t-light mb-1">Notes</label>
+        <label className="block text-sm text-un1t-subtle mb-1">Notes</label>
         <textarea
           value={form.notes}
           onChange={e => setForm(f => ({ ...f, notes: e.target.value }))}
           rows={3}
-          className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
+          className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted"
           placeholder="Anything not covered above"
         />
       </div>
@@ -258,7 +258,7 @@ export default function AddCarButton({ locationId, liveFxRate = null }) {
       <button
         type="submit"
         disabled={saving}
-        className="w-full bg-un1t-white text-un1t-black font-semibold text-sm py-2.5 rounded-md hover:bg-un1t-accent transition-colors disabled:opacity-50"
+        className="w-full bg-un1t-text text-un1t-bg font-semibold text-sm py-2.5 rounded-md hover:bg-un1t-accent transition-colors disabled:opacity-50"
       >
         {saving ? 'Saving…' : 'Add car'}
       </button>
@@ -269,7 +269,7 @@ export default function AddCarButton({ locationId, liveFxRate = null }) {
 function Section({ title, children }) {
   return (
     <div>
-      <h4 className="text-xs font-semibold uppercase tracking-wider text-un1t-light mb-2">{title}</h4>
+      <h4 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle mb-2">{title}</h4>
       <div className="space-y-2">{children}</div>
     </div>
   )
@@ -278,14 +278,14 @@ function Section({ title, children }) {
 function Field({ label, value, onChange, type = 'text', placeholder, step }) {
   return (
     <div>
-      <label className="block text-xs text-un1t-light mb-1">{label}</label>
+      <label className="block text-xs text-un1t-subtle mb-1">{label}</label>
       <input
         type={type}
         step={step}
         value={value}
         onChange={e => onChange(e.target.value)}
         placeholder={placeholder}
-        className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
+        className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted"
       />
     </div>
   )
@@ -297,11 +297,11 @@ function Field({ label, value, onChange, type = 'text', placeholder, step }) {
 function ReadOnlyField({ label, value, hint }) {
   return (
     <div>
-      <label className="block text-xs text-un1t-light mb-1">{label}</label>
-      <div className="w-full bg-un1t-gray/30 border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white">
-        {value === '' || value == null ? <span className="text-un1t-mid">—</span> : value}
+      <label className="block text-xs text-un1t-subtle mb-1">{label}</label>
+      <div className="w-full bg-un1t-border/30 border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text">
+        {value === '' || value == null ? <span className="text-un1t-muted">—</span> : value}
       </div>
-      {hint && <p className="text-[10px] text-un1t-mid mt-0.5">{hint}</p>}
+      {hint && <p className="text-[10px] text-un1t-muted mt-0.5">{hint}</p>}
     </div>
   )
 }

@@ -28,27 +28,27 @@ export default async function ImportsPage() {
 
   return (
     <div className="p-6 max-w-5xl">
-      <Link href="/contacts" className="inline-flex items-center gap-1.5 text-sm text-un1t-light hover:text-un1t-white mb-4">
+      <Link href="/contacts" className="inline-flex items-center gap-1.5 text-sm text-un1t-subtle hover:text-un1t-text mb-4">
         <ArrowLeft size={14} /> Back to contacts
       </Link>
       <h2 className="text-2xl font-bold mb-1">Import history</h2>
-      <p className="text-sm text-un1t-light mb-6">
+      <p className="text-sm text-un1t-subtle mb-6">
         Every CSV import at {user.activeLocation?.name || 'this location'}, newest first.
       </p>
 
       {(!batches || batches.length === 0) ? (
-        <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-10 text-center">
-          <FileText size={28} className="mx-auto mb-2 text-un1t-light" />
+        <div className="bg-un1t-surface border border-un1t-border rounded-lg p-10 text-center">
+          <FileText size={28} className="mx-auto mb-2 text-un1t-subtle" />
           <h3 className="text-base font-semibold mb-1">No imports yet</h3>
-          <p className="text-sm text-un1t-light">
+          <p className="text-sm text-un1t-subtle">
             Use the <strong>Import contacts</strong> button on the Contacts page (master-only).
           </p>
         </div>
       ) : (
-        <div className="bg-un1t-dark border border-un1t-gray rounded-lg overflow-x-auto">
+        <div className="bg-un1t-surface border border-un1t-border rounded-lg overflow-x-auto">
           <table className="w-full text-sm min-w-[600px]">
-            <thead className="text-[11px] uppercase tracking-wider text-un1t-light">
-              <tr className="border-b border-un1t-gray">
+            <thead className="text-[11px] uppercase tracking-wider text-un1t-subtle">
+              <tr className="border-b border-un1t-border">
                 <th className="text-left p-3">When</th>
                 <th className="text-left p-3">By</th>
                 <th className="text-left p-3">File</th>
@@ -62,17 +62,17 @@ export default async function ImportsPage() {
             </thead>
             <tbody>
               {batches.map(b => (
-                <tr key={b.id} className="border-t border-un1t-gray/40 hover:bg-un1t-gray/10">
-                  <td className="p-3 text-un1t-light text-xs">
+                <tr key={b.id} className="border-t border-un1t-border/40 hover:bg-un1t-border/10">
+                  <td className="p-3 text-un1t-subtle text-xs">
                     {new Date(b.created_at).toLocaleString('en-IE', { dateStyle: 'short', timeStyle: 'short' })}
                   </td>
-                  <td className="p-3 text-un1t-light text-xs">{b.actor?.full_name || b.actor?.email || '—'}</td>
-                  <td className="p-3 text-un1t-white text-xs truncate max-w-[200px]">{b.source_filename || '(no filename)'}</td>
+                  <td className="p-3 text-un1t-subtle text-xs">{b.actor?.full_name || b.actor?.email || '—'}</td>
+                  <td className="p-3 text-un1t-text text-xs truncate max-w-[200px]">{b.source_filename || '(no filename)'}</td>
                   <td className="p-3 text-right tabular-nums">{b.created_count}</td>
                   <td className="p-3 text-right tabular-nums">{b.updated_count}</td>
-                  <td className="p-3 text-right tabular-nums text-un1t-light">{b.skipped_count}</td>
+                  <td className="p-3 text-right tabular-nums text-un1t-subtle">{b.skipped_count}</td>
                   <td className="p-3 text-right tabular-nums">
-                    {b.errored_count > 0 ? <span className="text-red-700">{b.errored_count}</span> : <span className="text-un1t-mid">0</span>}
+                    {b.errored_count > 0 ? <span className="text-red-700">{b.errored_count}</span> : <span className="text-un1t-muted">0</span>}
                   </td>
                   <td className="p-3">
                     {b.status === 'rolled_back' && (
@@ -81,7 +81,7 @@ export default async function ImportsPage() {
                       </span>
                     )}
                     {b.status === 'completed' && <span className="text-xs text-emerald-700">Completed</span>}
-                    {b.status === 'rolling_back' && <span className="text-xs text-un1t-light">Rolling back…</span>}
+                    {b.status === 'rolling_back' && <span className="text-xs text-un1t-subtle">Rolling back…</span>}
                     {b.status === 'failed' && (
                       <span className="inline-flex items-center gap-1 text-xs text-red-700">
                         <AlertCircle size={11} /> Failed

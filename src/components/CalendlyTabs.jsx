@@ -35,7 +35,7 @@ export default function CalendlyTabs() {
     .filter(t => pathname === t.href || (t.href !== '/' && pathname.startsWith(t.href + '/')))
     .sort((a, b) => b.href.length - a.href.length)[0]
   return (
-    <div className="flex gap-1 mb-5 border-b border-un1t-gray">
+    <div className="flex gap-1 mb-5 border-b border-un1t-border">
       {TABS.map(tab => {
         const active = bestMatch?.href === tab.href
         const Icon = tab.icon
@@ -45,8 +45,8 @@ export default function CalendlyTabs() {
             href={tab.href}
             className={`flex items-center gap-2 px-4 py-2.5 text-sm border-b-2 transition-colors -mb-px ${
               active
-                ? 'border-un1t-white text-un1t-white font-medium'
-                : 'border-transparent text-un1t-light hover:text-un1t-white'
+                ? 'border-un1t-text text-un1t-text font-medium'
+                : 'border-transparent text-un1t-subtle hover:text-un1t-text'
             }`}
           >
             <Icon size={14} />

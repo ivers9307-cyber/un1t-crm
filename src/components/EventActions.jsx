@@ -52,14 +52,14 @@ export default function EventActions({ slug, eventId, eventName }) {
           href={`/book/${slug}`}
           target="_blank"
           rel="noopener noreferrer"
-          className="text-xs px-3 py-1.5 rounded border border-un1t-gray text-un1t-light hover:text-un1t-white hover:border-un1t-white/30 transition-colors flex items-center gap-1.5"
+          className="text-xs px-3 py-1.5 rounded border border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-text/30 transition-colors flex items-center gap-1.5"
         >
           <ExternalLink size={12} />
           Preview
         </a>
         <button
           onClick={copyEmbed}
-          className="text-xs px-3 py-1.5 rounded border border-un1t-gray text-un1t-light hover:text-un1t-white hover:border-un1t-white/30 transition-colors flex items-center gap-1.5"
+          className="text-xs px-3 py-1.5 rounded border border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-text/30 transition-colors flex items-center gap-1.5"
         >
           {copied ? <Check size={12} /> : <Copy size={12} />}
           {copied ? 'Copied!' : 'Embed'}
@@ -67,7 +67,7 @@ export default function EventActions({ slug, eventId, eventName }) {
         {eventId && (
           <button
             onClick={() => setConfirmOpen(true)}
-            className="text-xs px-3 py-1.5 rounded border border-un1t-gray text-un1t-light hover:text-red-500 hover:border-red-500/40 transition-colors flex items-center gap-1.5"
+            className="text-xs px-3 py-1.5 rounded border border-un1t-border text-un1t-subtle hover:text-red-500 hover:border-red-500/40 transition-colors flex items-center gap-1.5"
             title="Hide this booking type from the public page (preserves history)"
           >
             <Trash2 size={12} />
@@ -84,13 +84,13 @@ export default function EventActions({ slug, eventId, eventName }) {
           aria-modal="true"
         >
           <div
-            className="bg-un1t-dark border border-un1t-gray rounded-lg max-w-md w-full p-5"
+            className="bg-un1t-surface border border-un1t-border rounded-lg max-w-md w-full p-5"
             onClick={(e) => e.stopPropagation()}
           >
-            <h3 className="text-base font-semibold text-un1t-white mb-2">
+            <h3 className="text-base font-semibold text-un1t-text mb-2">
               Delete &ldquo;{eventName || 'this booking type'}&rdquo;?
             </h3>
-            <p className="text-sm text-un1t-light mb-4">
+            <p className="text-sm text-un1t-subtle mb-4">
               The booking type will be hidden from the public page so no new bookings can be made.
               Existing booking history is preserved — you can re-enable later by editing the type
               and toggling Active back on.
@@ -104,7 +104,7 @@ export default function EventActions({ slug, eventId, eventName }) {
               <button
                 onClick={() => setConfirmOpen(false)}
                 disabled={deleting}
-                className="text-xs px-3 py-2 rounded border border-un1t-gray text-un1t-light hover:text-un1t-white"
+                className="text-xs px-3 py-2 rounded border border-un1t-border text-un1t-subtle hover:text-un1t-text"
               >
                 Cancel
               </button>

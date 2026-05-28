@@ -88,14 +88,14 @@ export default function UnsubscribePage({ token }) {
   }
 
   return (
-    <div className="min-h-screen bg-un1t-black flex items-center justify-center p-4">
+    <div className="min-h-screen bg-un1t-bg flex items-center justify-center p-4">
       <div className="w-full max-w-md text-center">
         <h1 className="text-2xl font-bold tracking-wider mb-8">UN1T</h1>
 
         {status === 'idle' && (
-          <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-6 text-left">
+          <div className="bg-un1t-surface border border-un1t-border rounded-lg p-6 text-left">
             <h2 className="text-lg font-semibold mb-2 text-center">Manage your unsubscribe</h2>
-            <p className="text-sm text-un1t-light mb-4 text-center">
+            <p className="text-sm text-un1t-subtle mb-4 text-center">
               Pick which marketing channels you'd like to stop hearing from. Untick anything you want to keep.
             </p>
 
@@ -107,20 +107,20 @@ export default function UnsubscribePage({ token }) {
                     key={key}
                     className={`flex items-start gap-3 p-3 rounded-md border cursor-pointer transition-colors ${
                       isSelected
-                        ? 'border-un1t-white bg-un1t-gray/30'
-                        : 'border-un1t-gray hover:border-un1t-mid'
+                        ? 'border-un1t-text bg-un1t-border/30'
+                        : 'border-un1t-border hover:border-un1t-muted'
                     }`}
                   >
                     <input
                       type="checkbox"
                       checked={isSelected}
                       onChange={() => toggle(key)}
-                      className="mt-0.5 accent-un1t-white shrink-0"
+                      className="mt-0.5 accent-un1t-text shrink-0"
                     />
-                    <Icon size={16} className="mt-0.5 text-un1t-light shrink-0" />
+                    <Icon size={16} className="mt-0.5 text-un1t-subtle shrink-0" />
                     <div className="min-w-0">
-                      <div className="text-sm font-medium text-un1t-white">{label}</div>
-                      <div className="text-xs text-un1t-light mt-0.5">{description}</div>
+                      <div className="text-sm font-medium text-un1t-text">{label}</div>
+                      <div className="text-xs text-un1t-subtle mt-0.5">{description}</div>
                     </div>
                   </label>
                 )
@@ -150,14 +150,14 @@ export default function UnsubscribePage({ token }) {
             <button
               onClick={handleUnsubscribe}
               disabled={selected.size === 0}
-              className="w-full bg-un1t-white text-un1t-black font-medium py-2.5 rounded-md hover:bg-un1t-accent transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              className="w-full bg-un1t-text text-un1t-bg font-medium py-2.5 rounded-md hover:bg-un1t-accent transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               Unsubscribe from {selected.size} {selected.size === 1 ? 'channel' : 'channels'}
             </button>
 
             <Link
               href={`/preferences/${token}`}
-              className="block mt-3 text-xs text-un1t-light hover:text-un1t-white transition-colors text-center"
+              className="block mt-3 text-xs text-un1t-subtle hover:text-un1t-text transition-colors text-center"
             >
               Or manage all your communication preferences
             </Link>
@@ -165,33 +165,33 @@ export default function UnsubscribePage({ token }) {
         )}
 
         {status === 'loading' && (
-          <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-8">
-            <p className="text-un1t-light">Processing…</p>
+          <div className="bg-un1t-surface border border-un1t-border rounded-lg p-8">
+            <p className="text-un1t-subtle">Processing…</p>
           </div>
         )}
 
         {status === 'done' && (
-          <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-8">
+          <div className="bg-un1t-surface border border-un1t-border rounded-lg p-8">
             <div className="w-12 h-12 rounded-full bg-green-500/20 flex items-center justify-center mx-auto mb-4">
               <Check size={24} className="text-green-400" />
             </div>
             <h2 className="text-lg font-semibold mb-2">You've been unsubscribed</h2>
-            <p className="text-sm text-un1t-light mb-3">
+            <p className="text-sm text-un1t-subtle mb-3">
               {unsubChannels.length === 0
                 ? "You're already opted out of those channels — no changes needed."
                 : <>You won't receive marketing on{' '}
-                    <span className="text-un1t-white">
+                    <span className="text-un1t-text">
                       {unsubChannels.map(c => c.replace('_marketing', '').replace('_', ' ')).join(', ')}
                     </span>
                     {' '}anymore.</>
               }
             </p>
-            <p className="text-xs text-un1t-mid mb-4">
+            <p className="text-xs text-un1t-muted mb-4">
               Utility communications (booking confirmations, reminders, schedule changes) will continue.
             </p>
             <Link
               href={`/preferences/${token}`}
-              className="text-sm text-un1t-light hover:text-un1t-white transition-colors"
+              className="text-sm text-un1t-subtle hover:text-un1t-text transition-colors"
             >
               Manage all preferences
             </Link>
@@ -199,14 +199,14 @@ export default function UnsubscribePage({ token }) {
         )}
 
         {status === 'error' && (
-          <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-8">
+          <div className="bg-un1t-surface border border-un1t-border rounded-lg p-8">
             <h2 className="text-lg font-semibold mb-2 text-red-400">Something went wrong</h2>
-            <p className="text-sm text-un1t-light mb-4">
+            <p className="text-sm text-un1t-subtle mb-4">
               {errorMsg || "We couldn't process your request. The link may be invalid or expired."}
             </p>
             <button
               onClick={() => { setStatus('idle'); setErrorMsg(null) }}
-              className="text-sm text-un1t-light hover:text-un1t-white transition-colors"
+              className="text-sm text-un1t-subtle hover:text-un1t-text transition-colors"
             >
               Try again
             </button>

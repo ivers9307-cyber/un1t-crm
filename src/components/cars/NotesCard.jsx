@@ -67,13 +67,13 @@ export default function NotesCard({ carId }) {
   }
 
   return (
-    <div className="bg-un1t-dark border border-un1t-gray rounded-2xl p-5 mb-4">
+    <div className="bg-un1t-surface border border-un1t-border rounded-2xl p-5 mb-4">
       <div className="flex items-center justify-between mb-3">
-        <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light flex items-center gap-1.5">
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle flex items-center gap-1.5">
           <StickyNote size={12} /> Notes
         </h3>
         {notes && notes.length > 0 && (
-          <span className="text-[11px] text-un1t-mid">{notes.length} entr{notes.length === 1 ? 'y' : 'ies'}</span>
+          <span className="text-[11px] text-un1t-muted">{notes.length} entr{notes.length === 1 ? 'y' : 'ies'}</span>
         )}
       </div>
 
@@ -84,13 +84,13 @@ export default function NotesCard({ carId }) {
           onChange={(e) => setContent(e.target.value)}
           placeholder="Add a note about this car…"
           rows={2}
-          className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid resize-y"
+          className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted resize-y"
         />
         <div className="flex justify-end mt-2">
           <button
             type="submit"
             disabled={adding || !content.trim()}
-            className="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md bg-un1t-white text-un1t-black font-semibold hover:bg-un1t-accent disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md bg-un1t-text text-un1t-bg font-semibold hover:bg-un1t-accent disabled:opacity-50"
           >
             <Plus size={11} /> {adding ? 'Adding…' : 'Add note'}
           </button>
@@ -104,9 +104,9 @@ export default function NotesCard({ carId }) {
       {/* List */}
       <div className="space-y-2">
         {notes === null ? (
-          <p className="text-xs text-un1t-light">Loading…</p>
+          <p className="text-xs text-un1t-subtle">Loading…</p>
         ) : notes.length === 0 ? (
-          <p className="text-xs text-un1t-mid italic">No notes yet.</p>
+          <p className="text-xs text-un1t-muted italic">No notes yet.</p>
         ) : (
           notes.map(n => <NoteRow key={n.id} note={n} onDelete={() => remove(n.id)} />)
         )}
@@ -121,18 +121,18 @@ function NoteRow({ note, onDelete }) {
     <div className={`p-3 rounded-md border text-sm ${
       isSystem
         ? 'bg-blue-500/5 border-blue-500/20'
-        : 'bg-un1t-black border-un1t-gray'
+        : 'bg-un1t-bg border-un1t-border'
     }`}>
       <div className="flex items-start justify-between gap-2 mb-1.5">
-        <div className="flex items-center gap-1.5 text-[11px] text-un1t-light">
+        <div className="flex items-center gap-1.5 text-[11px] text-un1t-subtle">
           {isSystem ? <Sparkles size={10} className="text-blue-400" /> : <User size={10} />}
           <span>{isSystem ? 'System' : (note.profiles?.full_name || 'Operator')}</span>
-          <span className="text-un1t-mid">·</span>
+          <span className="text-un1t-muted">·</span>
           <span>{new Date(note.created_at).toLocaleString('en-IE')}</span>
         </div>
         <button
           onClick={onDelete}
-          className="text-un1t-mid hover:text-red-400 p-0.5 -m-0.5"
+          className="text-un1t-muted hover:text-red-400 p-0.5 -m-0.5"
           title="Delete note"
         >
           <Trash2 size={12} />
@@ -150,7 +150,7 @@ function NoteRow({ note, onDelete }) {
 function NoteContent({ content }) {
   const lines = content.split('\n')
   return (
-    <div className="text-un1t-white whitespace-pre-wrap break-words text-sm">
+    <div className="text-un1t-text whitespace-pre-wrap break-words text-sm">
       {lines.map((line, i) => {
         const urlMatch = line.match(/^(https?:\/\/\S+)(.*)$/)
         if (urlMatch) {
@@ -166,7 +166,7 @@ function NoteContent({ content }) {
               </a>
               <CopyButton value={urlMatch[1]} />
               {urlMatch[2] && (
-                <span className="text-[11px] text-un1t-light">{urlMatch[2].trim()}</span>
+                <span className="text-[11px] text-un1t-subtle">{urlMatch[2].trim()}</span>
               )}
             </div>
           )
@@ -188,7 +188,7 @@ function CopyButton({ value }) {
   return (
     <button
       onClick={copy}
-      className="text-un1t-light hover:text-un1t-white p-1 rounded shrink-0"
+      className="text-un1t-subtle hover:text-un1t-text p-1 rounded shrink-0"
       title={copied ? 'Copied!' : 'Copy URL'}
     >
       {copied ? <Check size={12} className="text-green-500" /> : <Copy size={12} />}

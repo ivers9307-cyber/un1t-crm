@@ -67,7 +67,7 @@ export default function ChecklistTemplatesEditor({ canEdit }) {
   }
   if (rows === null) {
     return (
-      <div className="text-sm text-un1t-light inline-flex items-center gap-2">
+      <div className="text-sm text-un1t-subtle inline-flex items-center gap-2">
         <Loader2 size={14} className="animate-spin" /> Loading…
       </div>
     )
@@ -80,9 +80,9 @@ export default function ChecklistTemplatesEditor({ canEdit }) {
         <table className="w-full border-separate" style={{ borderSpacing: '6px' }}>
           <thead>
             <tr>
-              <th className="text-left text-[11px] uppercase tracking-wider text-un1t-light font-semibold px-2 py-1">Role</th>
+              <th className="text-left text-[11px] uppercase tracking-wider text-un1t-subtle font-semibold px-2 py-1">Role</th>
               {DOW_DISPLAY_ORDER.map((dow) => (
-                <th key={dow} className="text-left text-[11px] uppercase tracking-wider text-un1t-light font-semibold px-2 py-1">
+                <th key={dow} className="text-left text-[11px] uppercase tracking-wider text-un1t-subtle font-semibold px-2 py-1">
                   {DAY_LABELS[dow]}
                 </th>
               ))}
@@ -91,7 +91,7 @@ export default function ChecklistTemplatesEditor({ canEdit }) {
           <tbody>
             {ROLES.map((role) => (
               <tr key={role}>
-                <td className="text-sm font-semibold text-un1t-white px-2 py-2 whitespace-nowrap">{ROLE_LABELS[role]}</td>
+                <td className="text-sm font-semibold text-un1t-text px-2 py-2 whitespace-nowrap">{ROLE_LABELS[role]}</td>
                 {DOW_DISPLAY_ORDER.map((dow) => {
                   const tpl = index[role][dow]
                   if (tpl) {
@@ -106,7 +106,7 @@ export default function ChecklistTemplatesEditor({ canEdit }) {
                           <div className="text-[11px] uppercase tracking-wider text-blue-200 font-semibold truncate">
                             {tpl.name}
                           </div>
-                          <div className="text-[11px] text-un1t-light mt-0.5 inline-flex items-center gap-1">
+                          <div className="text-[11px] text-un1t-subtle mt-0.5 inline-flex items-center gap-1">
                             <CheckSquare size={11} /> {tpl.items?.length || 0} item{(tpl.items?.length || 0) === 1 ? '' : 's'}
                           </div>
                         </button>
@@ -119,12 +119,12 @@ export default function ChecklistTemplatesEditor({ canEdit }) {
                         <button
                           type="button"
                           onClick={() => setEditing({ mode: 'create', role, dow })}
-                          className="w-full bg-un1t-black/40 hover:bg-un1t-gray/30 border border-dashed border-un1t-gray/60 rounded-md p-2 text-un1t-mid inline-flex items-center justify-center gap-1.5 min-h-[58px]"
+                          className="w-full bg-un1t-bg/40 hover:bg-un1t-border/30 border border-dashed border-un1t-border/60 rounded-md p-2 text-un1t-muted inline-flex items-center justify-center gap-1.5 min-h-[58px]"
                         >
                           <Plus size={14} /> <span className="text-xs">Add</span>
                         </button>
                       ) : (
-                        <div className="w-full bg-un1t-black/40 border border-dashed border-un1t-gray/60 rounded-md p-2 text-un1t-mid text-[11px] inline-flex items-center justify-center min-h-[58px]">
+                        <div className="w-full bg-un1t-bg/40 border border-dashed border-un1t-border/60 rounded-md p-2 text-un1t-muted text-[11px] inline-flex items-center justify-center min-h-[58px]">
                           —
                         </div>
                       )}
@@ -147,7 +147,7 @@ export default function ChecklistTemplatesEditor({ canEdit }) {
       )}
 
       {!canEdit && (
-        <div className="mt-4 text-[12px] text-un1t-mid italic">
+        <div className="mt-4 text-[12px] text-un1t-muted italic">
           Read-only — ask a master or owner to add new templates or edit items.
         </div>
       )}
@@ -249,20 +249,20 @@ function TemplateDrawer({ editing, onClose, onSaved }) {
   return (
     <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4" onClick={onClose}>
       <div
-        className="bg-un1t-dark border border-un1t-gray rounded-2xl w-full max-w-lg max-h-[85vh] overflow-y-auto"
+        className="bg-un1t-surface border border-un1t-border rounded-2xl w-full max-w-lg max-h-[85vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="p-5 border-b border-un1t-gray">
+        <div className="p-5 border-b border-un1t-border">
           <div className="flex items-center justify-between">
             <div className="min-w-0">
-              <div className="text-[11px] uppercase tracking-wider text-un1t-light">
+              <div className="text-[11px] uppercase tracking-wider text-un1t-subtle">
                 {ROLE_LABELS[editing.role]} · {DAY_LABELS[editing.dow]}
               </div>
-              <h3 className="text-lg font-bold text-un1t-white mt-0.5 truncate">
+              <h3 className="text-lg font-bold text-un1t-text mt-0.5 truncate">
                 {isEdit ? 'Edit checklist' : 'New checklist'}
               </h3>
             </div>
-            <button onClick={onClose} className="text-un1t-light hover:text-un1t-white p-1">
+            <button onClick={onClose} className="text-un1t-subtle hover:text-un1t-text p-1">
               <X size={18} />
             </button>
           </div>
@@ -270,38 +270,38 @@ function TemplateDrawer({ editing, onClose, onSaved }) {
 
         <div className="p-5 space-y-4">
           <div>
-            <label className="block text-xs text-un1t-light mb-1.5">Name</label>
+            <label className="block text-xs text-un1t-subtle mb-1.5">Name</label>
             <input
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder={`e.g. ${DAY_LABELS[editing.dow]} ${ROLE_LABELS[editing.role].toLowerCase()} closer`}
               maxLength={100}
-              className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
+              className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
             />
           </div>
 
           <div>
-            <label className="block text-xs text-un1t-light mb-1.5">Items</label>
+            <label className="block text-xs text-un1t-subtle mb-1.5">Items</label>
             {items.length === 0 ? (
-              <div className="text-[12px] text-un1t-mid italic mb-2">No items yet — add one to get started.</div>
+              <div className="text-[12px] text-un1t-muted italic mb-2">No items yet — add one to get started.</div>
             ) : (
               <div className="space-y-1.5">
                 {items.map((it, idx) => (
                   <div key={it.id || idx} className="flex items-center gap-2">
                     <div className="flex flex-col">
-                      <button type="button" onClick={() => moveItem(idx, -1)} disabled={idx === 0} className="text-un1t-light hover:text-un1t-white disabled:opacity-30">
+                      <button type="button" onClick={() => moveItem(idx, -1)} disabled={idx === 0} className="text-un1t-subtle hover:text-un1t-text disabled:opacity-30">
                         <GripVertical size={12} />
                       </button>
                     </div>
-                    <Square size={14} className="text-un1t-mid shrink-0" />
+                    <Square size={14} className="text-un1t-muted shrink-0" />
                     <input
                       type="text"
                       value={it.label}
                       onChange={(e) => setItem(idx, e.target.value)}
                       placeholder={`Item ${idx + 1}`}
                       maxLength={200}
-                      className="flex-1 bg-un1t-black border border-un1t-gray rounded-md px-3 py-1.5 text-sm text-un1t-white"
+                      className="flex-1 bg-un1t-bg border border-un1t-border rounded-md px-3 py-1.5 text-sm text-un1t-text"
                     />
                     <button type="button" onClick={() => removeItem(idx)} className="text-red-400 hover:text-red-300">
                       <Trash2 size={14} />
@@ -326,7 +326,7 @@ function TemplateDrawer({ editing, onClose, onSaved }) {
           )}
         </div>
 
-        <div className="p-5 border-t border-un1t-gray flex items-center justify-between gap-2">
+        <div className="p-5 border-t border-un1t-border flex items-center justify-between gap-2">
           {isEdit ? (
             <button
               type="button"
@@ -339,7 +339,7 @@ function TemplateDrawer({ editing, onClose, onSaved }) {
             </button>
           ) : <span />}
           <div className="flex items-center gap-2">
-            <button type="button" onClick={onClose} className="text-un1t-light hover:text-un1t-white text-sm px-3 py-1.5">
+            <button type="button" onClick={onClose} className="text-un1t-subtle hover:text-un1t-text text-sm px-3 py-1.5">
               Cancel
             </button>
             <button

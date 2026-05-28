@@ -61,26 +61,26 @@ export default function StaffSearchableList({ staff, user: _user, canEditFns }) 
       {/* Search + status filter row */}
       <div className="flex items-center gap-3 flex-wrap">
         <div className="relative flex-1 min-w-[240px]">
-          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-un1t-light pointer-events-none" />
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-un1t-subtle pointer-events-none" />
           <input
             type="text"
             value={query}
             onChange={e => setQuery(e.target.value)}
             placeholder="Search by name, email, role, or location…"
-            className="w-full pl-9 pr-9 py-2 bg-un1t-black border border-un1t-gray rounded-md text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid"
+            className="w-full pl-9 pr-9 py-2 bg-un1t-bg border border-un1t-border rounded-md text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted"
           />
           {query && (
             <button
               type="button"
               onClick={() => setQuery('')}
-              className="absolute right-2 top-1/2 -translate-y-1/2 text-un1t-light hover:text-un1t-white p-1"
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-un1t-subtle hover:text-un1t-text p-1"
               title="Clear"
             >
               <X size={12} />
             </button>
           )}
         </div>
-        <div className="inline-flex border border-un1t-gray rounded-md overflow-hidden">
+        <div className="inline-flex border border-un1t-border rounded-md overflow-hidden">
           {[
             { key: 'all', label: 'All' },
             { key: 'active', label: 'Active' },
@@ -91,22 +91,22 @@ export default function StaffSearchableList({ staff, user: _user, canEditFns }) 
               type="button"
               onClick={() => setStatusFilter(key)}
               className={`text-xs px-3 py-1.5 ${
-                statusFilter === key ? 'bg-un1t-gray text-un1t-white' : 'text-un1t-light hover:bg-un1t-gray/30'
+                statusFilter === key ? 'bg-un1t-border text-un1t-text' : 'text-un1t-subtle hover:bg-un1t-border/30'
               }`}
             >
               {label}
             </button>
           ))}
         </div>
-        <div className="text-xs text-un1t-light">
+        <div className="text-xs text-un1t-subtle">
           {filtered.length} of {staff.length}
         </div>
       </div>
 
-      <div className="bg-un1t-dark border border-un1t-gray rounded-lg overflow-x-auto">
+      <div className="bg-un1t-surface border border-un1t-border rounded-lg overflow-x-auto">
         <table className="w-full text-sm min-w-[600px]">
           <thead>
-            <tr className="border-b border-un1t-gray text-un1t-light text-xs uppercase tracking-wider">
+            <tr className="border-b border-un1t-border text-un1t-subtle text-xs uppercase tracking-wider">
               <th className="text-left p-3">Name</th>
               <th className="text-left p-3">Email</th>
               <th className="text-left p-3">Role</th>
@@ -115,10 +115,10 @@ export default function StaffSearchableList({ staff, user: _user, canEditFns }) 
               <th className="w-8"></th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-un1t-gray">
+          <tbody className="divide-y divide-un1t-border">
             {filtered.length === 0 && (
               <tr>
-                <td colSpan={6} className="p-6 text-center text-sm text-un1t-light">
+                <td colSpan={6} className="p-6 text-center text-sm text-un1t-subtle">
                   {staff.length === 0 ? 'No team members yet.' : 'No matches for that search.'}
                 </td>
               </tr>
@@ -126,15 +126,15 @@ export default function StaffSearchableList({ staff, user: _user, canEditFns }) 
             {filtered.map(s => {
               const canEdit = canEditFns[s.id]
               return (
-                <tr key={s.id} className="hover:bg-un1t-gray/20 transition-colors">
+                <tr key={s.id} className="hover:bg-un1t-border/20 transition-colors">
                   <td className="p-3 font-medium">{s.full_name}</td>
-                  <td className="p-3 text-un1t-light">{s.email}</td>
+                  <td className="p-3 text-un1t-subtle">{s.email}</td>
                   <td className="p-3">
                     <span className={`text-xs px-2 py-0.5 rounded-full ${ROLE_COLORS[s.role] || ROLE_COLORS.staff}`}>
                       {ROLE_LABELS[s.role] || s.role}
                     </span>
                   </td>
-                  <td className="p-3 text-un1t-light text-xs">
+                  <td className="p-3 text-un1t-subtle text-xs">
                     {(s.profile_locations || []).map(pl => pl.locations?.name).filter(Boolean).join(', ') || '—'}
                   </td>
                   <td className="p-3">
@@ -152,7 +152,7 @@ export default function StaffSearchableList({ staff, user: _user, canEditFns }) 
                       </Link>
                     ) : (
                       <span
-                        className="text-xs text-un1t-mid"
+                        className="text-xs text-un1t-muted"
                         title="Master only — owners can't edit themselves or other owners"
                       >
                         Locked

@@ -69,7 +69,7 @@ export default function ApprovalsInbox() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between flex-wrap gap-3">
-        <div className="flex items-center gap-1 border border-un1t-grey rounded-lg p-1 bg-un1t-black/40 flex-wrap">
+        <div className="flex items-center gap-1 border border-un1t-grey rounded-lg p-1 bg-un1t-bg/40 flex-wrap">
           {providers.map((p) => {
             const isActive = p.key === activeKey
             return (
@@ -79,14 +79,14 @@ export default function ApprovalsInbox() {
                 onClick={() => setActiveKey(p.key)}
                 className={`px-3 py-1.5 text-sm rounded-md transition-colors flex items-center gap-2 ${
                   isActive
-                    ? 'bg-un1t-white text-un1t-black font-medium'
-                    : 'text-un1t-light hover:text-un1t-white'
+                    ? 'bg-un1t-text text-un1t-bg font-medium'
+                    : 'text-un1t-subtle hover:text-un1t-text'
                 }`}
               >
                 {p.label}
                 {p.count > 0 && (
                   <span className={`inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 text-[10px] font-semibold rounded-full ${
-                    isActive ? 'bg-un1t-black text-un1t-white' : 'bg-red-500 text-white'
+                    isActive ? 'bg-un1t-bg text-un1t-text' : 'bg-red-500 text-white'
                   }`}>
                     {p.count > 99 ? '99+' : p.count}
                   </span>
@@ -96,14 +96,14 @@ export default function ApprovalsInbox() {
           })}
         </div>
         <div className="flex items-center gap-2">
-          <span className="text-sm text-un1t-light">
+          <span className="text-sm text-un1t-subtle">
             {total === 0 ? 'All clear' : `${total} pending`}
           </span>
           <button
             type="button"
             onClick={load}
             disabled={loading}
-            className="p-1.5 rounded-md border border-un1t-grey text-un1t-light hover:text-un1t-white disabled:opacity-50"
+            className="p-1.5 rounded-md border border-un1t-grey text-un1t-subtle hover:text-un1t-text disabled:opacity-50"
             aria-label="Refresh"
           >
             <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
@@ -125,14 +125,14 @@ export default function ApprovalsInbox() {
 function ProviderList({ provider, loading }) {
   if (!provider) {
     return (
-      <div className="border border-un1t-grey rounded-lg p-8 text-center text-sm text-un1t-light">
+      <div className="border border-un1t-grey rounded-lg p-8 text-center text-sm text-un1t-subtle">
         {loading ? 'Loading…' : 'Nothing waiting on your review.'}
       </div>
     )
   }
   if (provider.items.length === 0) {
     return (
-      <div className="border border-un1t-grey rounded-lg p-8 text-center text-sm text-un1t-light">
+      <div className="border border-un1t-grey rounded-lg p-8 text-center text-sm text-un1t-subtle">
         Nothing pending in {provider.label.toLowerCase()}. <Link href={provider.reviewBase} className="underline">Open {provider.label}</Link>
       </div>
     )
@@ -143,28 +143,28 @@ function ProviderList({ provider, loading }) {
         <li key={it.id}>
           <Link
             href={it.reviewUrl}
-            className="flex items-center gap-4 p-4 hover:bg-un1t-white/5 transition-colors"
+            className="flex items-center gap-4 p-4 hover:bg-un1t-text/5 transition-colors"
           >
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2 flex-wrap">
-                <span className="text-sm font-medium text-un1t-white truncate">{it.title}</span>
+                <span className="text-sm font-medium text-un1t-text truncate">{it.title}</span>
                 {it.meta && (
-                  <span className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-un1t-grey/30 text-un1t-light border border-un1t-grey">
+                  <span className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-un1t-grey/30 text-un1t-subtle border border-un1t-grey">
                     {it.meta}
                   </span>
                 )}
               </div>
-              <div className="text-xs text-un1t-light truncate mt-1">{it.subtitle}</div>
-              <div className="text-xs text-un1t-light mt-1">
+              <div className="text-xs text-un1t-subtle truncate mt-1">{it.subtitle}</div>
+              <div className="text-xs text-un1t-subtle mt-1">
                 Submitted {formatDateTime(it.submittedAt)}
               </div>
             </div>
             {formatAmount(it.amount, it.currency) && (
-              <div className="text-sm text-un1t-white font-medium tabular-nums">
+              <div className="text-sm text-un1t-text font-medium tabular-nums">
                 {formatAmount(it.amount, it.currency)}
               </div>
             )}
-            <ChevronRight size={16} className="text-un1t-light shrink-0" />
+            <ChevronRight size={16} className="text-un1t-subtle shrink-0" />
           </Link>
         </li>
       ))}

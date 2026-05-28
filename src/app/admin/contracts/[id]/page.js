@@ -53,19 +53,19 @@ export default async function ContractDetailAdmin(props) {
     .maybeSingle()
   if (!c) notFound()
 
-  const badge = STATUS_BADGE[c.status] || { label: c.status, class: 'bg-un1t-gray text-un1t-light' }
+  const badge = STATUS_BADGE[c.status] || { label: c.status, class: 'bg-un1t-border text-un1t-subtle' }
   const canRevoke = c.status === 'issued' || c.status === 'viewed'
 
   return (
     <div className="p-6 md:p-8 max-w-3xl print:p-0 print:max-w-none">
       <div className="print:hidden">
-        <Link href="/admin/contracts" className="text-xs text-un1t-light hover:text-un1t-white">
+        <Link href="/admin/contracts" className="text-xs text-un1t-subtle hover:text-un1t-text">
           ← Contracts
         </Link>
         <div className="flex items-start justify-between gap-3 mt-1 mb-4">
           <div>
             <h2 className="text-2xl font-bold">{c.template?.name || 'Contract'}</h2>
-            <p className="text-xs text-un1t-light">v{c.template?.version} · issued {fmtDate(c.issued_at)}</p>
+            <p className="text-xs text-un1t-subtle">v{c.template?.version} · issued {fmtDate(c.issued_at)}</p>
           </div>
           <span className={`text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded-full ${badge.class}`}>
             {badge.label}
@@ -74,16 +74,16 @@ export default async function ContractDetailAdmin(props) {
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-6 print:hidden">
-        <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-4">
-          <p className="text-xs text-un1t-light mb-1">Recipient</p>
-          <p className="font-medium text-un1t-white">{c.profile?.full_name}</p>
-          <p className="text-[11px] text-un1t-light">{c.profile?.email}</p>
-          <p className="text-[11px] text-un1t-mid mt-1">{c.profile?.employment_type} · {c.profile?.role}</p>
+        <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
+          <p className="text-xs text-un1t-subtle mb-1">Recipient</p>
+          <p className="font-medium text-un1t-text">{c.profile?.full_name}</p>
+          <p className="text-[11px] text-un1t-subtle">{c.profile?.email}</p>
+          <p className="text-[11px] text-un1t-muted mt-1">{c.profile?.employment_type} · {c.profile?.role}</p>
         </div>
-        <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-4">
-          <p className="text-xs text-un1t-light mb-1">Issued by</p>
-          <p className="font-medium text-un1t-white">{c.issuer?.full_name}</p>
-          <p className="text-[11px] text-un1t-light">{c.issuer?.email}</p>
+        <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
+          <p className="text-xs text-un1t-subtle mb-1">Issued by</p>
+          <p className="font-medium text-un1t-text">{c.issuer?.full_name}</p>
+          <p className="text-[11px] text-un1t-subtle">{c.issuer?.email}</p>
         </div>
       </div>
 
@@ -95,8 +95,8 @@ export default async function ContractDetailAdmin(props) {
       )}
       {c.status === 'revoked' && (
         <div className="bg-gray-500/10 border border-gray-500/30 rounded-lg p-4 mb-4 print:hidden">
-          <p className="text-xs font-semibold text-un1t-light">Revoked {fmtDate(c.revoked_at)}</p>
-          {c.revoked_reason && <p className="text-sm text-un1t-light mt-1">{c.revoked_reason}</p>}
+          <p className="text-xs font-semibold text-un1t-subtle">Revoked {fmtDate(c.revoked_at)}</p>
+          {c.revoked_reason && <p className="text-sm text-un1t-subtle mt-1">{c.revoked_reason}</p>}
         </div>
       )}
 

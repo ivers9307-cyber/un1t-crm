@@ -29,7 +29,7 @@ function ToggleCell({ on, busy, onClick }) {
       type="button"
       onClick={onClick}
       disabled={busy}
-      className={`shrink-0 w-8 h-4 rounded-full transition-colors disabled:opacity-40 ${on ? 'bg-green-500' : 'bg-un1t-gray'}`}
+      className={`shrink-0 w-8 h-4 rounded-full transition-colors disabled:opacity-40 ${on ? 'bg-green-500' : 'bg-un1t-border'}`}
       aria-pressed={on}
       title={on ? 'Enabled — click to disable' : 'Disabled — click to enable'}
     >
@@ -94,7 +94,7 @@ export default function AdminFeatureMatrix({ organizations, locationsByOrg }) {
   }
 
   return (
-    <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5">
+    <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5">
       {error && (
         <div className="mb-3 bg-red-500/10 border border-red-500/30 text-red-700 text-xs rounded-md p-2 flex items-start gap-2">
           <AlertCircle size={12} className="mt-0.5" /> {error}
@@ -144,20 +144,20 @@ function FeatureSection({
 
   return (
     <section>
-      <h4 className="text-xs font-semibold uppercase tracking-wider text-un1t-light mb-2">
+      <h4 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle mb-2">
         {title}
       </h4>
       <div className="overflow-x-auto -mx-1 px-1">
         <table className="text-xs border-collapse">
           <thead>
             <tr>
-              <th className="sticky left-0 z-10 bg-un1t-dark text-left p-2 font-medium text-un1t-light min-w-[180px]">
+              <th className="sticky left-0 z-10 bg-un1t-surface text-left p-2 font-medium text-un1t-subtle min-w-[180px]">
                 Location
               </th>
               {features.map(f => (
                 <th
                   key={f.key}
-                  className="p-2 text-left font-medium text-un1t-light whitespace-nowrap"
+                  className="p-2 text-left font-medium text-un1t-subtle whitespace-nowrap"
                   title={f.hint || ''}
                 >
                   {f.label}
@@ -194,7 +194,7 @@ function FeatureOrgRows({ org, locations, features, featuresByLoc, busyCell, onT
       <tr>
         <td
           colSpan={features.length + 1}
-          className="sticky left-0 bg-un1t-gray/30 px-2 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-un1t-light"
+          className="sticky left-0 bg-un1t-border/30 px-2 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-un1t-subtle"
         >
           <div className="inline-flex items-center gap-1.5">
             <Building2 size={11} /> {org.name}
@@ -202,8 +202,8 @@ function FeatureOrgRows({ org, locations, features, featuresByLoc, busyCell, onT
         </td>
       </tr>
       {locations.map(loc => (
-        <tr key={loc.id} className="hover:bg-un1t-gray/10">
-          <td className="sticky left-0 z-10 bg-un1t-dark px-2 py-1.5 font-medium text-un1t-white whitespace-nowrap">
+        <tr key={loc.id} className="hover:bg-un1t-border/10">
+          <td className="sticky left-0 z-10 bg-un1t-surface px-2 py-1.5 font-medium text-un1t-text whitespace-nowrap">
             {loc.name}
           </td>
           {features.map(f => {

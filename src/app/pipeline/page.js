@@ -121,7 +121,7 @@ export default async function PipelinePage(props) {
     <div className="p-6">
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-2xl font-bold">Pipeline</h2>
-        <span className="text-sm text-un1t-light">
+        <span className="text-sm text-un1t-subtle">
           {deals.length.toLocaleString()} {view === 'dormant' ? 'dormant' : 'active'} deals
           {deals.length === DEALS_HARD_LIMIT && (
             <span className="ml-2 text-amber-400">(showing first {DEALS_HARD_LIMIT.toLocaleString()})</span>

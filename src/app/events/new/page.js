@@ -15,7 +15,7 @@ export default async function NewRacePage() {
   return (
     <div className="p-8 max-w-2xl">
       <h2 className="text-2xl font-bold mb-1">New race event</h2>
-      <p className="text-sm text-un1t-light mb-6">
+      <p className="text-sm text-un1t-subtle mb-6">
         Standalone race occurrence (Hyrox sim, etc). Teams register via a public signup page; the
         race-day operator UI lets you start and finish each team&apos;s timer.
       </p>

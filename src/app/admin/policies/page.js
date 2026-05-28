@@ -66,13 +66,13 @@ export default async function AdminPoliciesPage() {
   return (
     <div className="p-6 md:p-8 max-w-4xl">
       <h2 className="text-2xl font-bold mb-1">Policies</h2>
-      <p className="text-sm text-un1t-light mb-6 max-w-2xl">
+      <p className="text-sm text-un1t-subtle mb-6 max-w-2xl">
         Manage the policies staff can read. Publishing a new version
         resets the view-tracking state — every active employee shows
         as "not opened" until they next open the new version.
       </p>
 
-      <div className="border border-un1t-gray rounded-lg overflow-hidden">
+      <div className="border border-un1t-border rounded-lg overflow-hidden">
         {(policies || []).map((p, i) => {
           const ver = (p.policy_versions || []).find((v) => v.is_current)
           const viewers = ver ? viewerCount.get(ver.id) || 0 : 0
@@ -80,39 +80,39 @@ export default async function AdminPoliciesPage() {
             <Link
               key={p.id}
               href={`/admin/policies/${p.slug}`}
-              className={`flex items-center gap-4 px-4 py-3 hover:bg-un1t-gray/30 transition-colors ${
-                i < policies.length - 1 ? 'border-b border-un1t-gray' : ''
+              className={`flex items-center gap-4 px-4 py-3 hover:bg-un1t-border/30 transition-colors ${
+                i < policies.length - 1 ? 'border-b border-un1t-border' : ''
               }`}
             >
-              <FileText size={18} className="text-un1t-light shrink-0" />
+              <FileText size={18} className="text-un1t-subtle shrink-0" />
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
-                  <span className="text-sm text-un1t-white font-medium truncate">{p.title}</span>
+                  <span className="text-sm text-un1t-text font-medium truncate">{p.title}</span>
                   {ver && (
-                    <span className="text-[10px] uppercase tracking-wider text-un1t-mid">
+                    <span className="text-[10px] uppercase tracking-wider text-un1t-muted">
                       v{ver.version_number}
                     </span>
                   )}
                   {!p.active && (
-                    <span className="text-[10px] uppercase tracking-wider text-un1t-mid bg-un1t-gray/40 px-1.5 py-0.5 rounded">
+                    <span className="text-[10px] uppercase tracking-wider text-un1t-muted bg-un1t-border/40 px-1.5 py-0.5 rounded">
                       Archived
                     </span>
                   )}
                 </div>
-                <div className="text-xs text-un1t-light truncate">
+                <div className="text-xs text-un1t-subtle truncate">
                   {ver
                     ? `Effective ${fmtDate(ver.effective_date)} · published ${fmtDate(ver.published_at)}`
                     : 'No version published'}
                 </div>
               </div>
               <div className="text-right shrink-0">
-                <div className="text-sm text-un1t-white tabular-nums">
+                <div className="text-sm text-un1t-text tabular-nums">
                   {viewers}
-                  {activeStaffCount != null && <span className="text-un1t-mid"> / {activeStaffCount}</span>}
+                  {activeStaffCount != null && <span className="text-un1t-muted"> / {activeStaffCount}</span>}
                 </div>
-                <div className="text-[10px] uppercase tracking-wider text-un1t-mid">opened</div>
+                <div className="text-[10px] uppercase tracking-wider text-un1t-muted">opened</div>
               </div>
-              <ChevronRight size={14} className="text-un1t-mid shrink-0" />
+              <ChevronRight size={14} className="text-un1t-muted shrink-0" />
             </Link>
           )
         })}

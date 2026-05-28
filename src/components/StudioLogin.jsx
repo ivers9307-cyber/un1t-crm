@@ -127,31 +127,31 @@ export default function StudioLogin() {
 
   if (showPairing) {
     return (
-      <div className="min-h-screen bg-un1t-black flex items-center justify-center p-6">
-        <form onSubmit={savePairing} className="w-full max-w-md bg-un1t-dark border border-un1t-gray rounded-xl p-6 space-y-4">
+      <div className="min-h-screen bg-un1t-bg flex items-center justify-center p-6">
+        <form onSubmit={savePairing} className="w-full max-w-md bg-un1t-surface border border-un1t-border rounded-xl p-6 space-y-4">
           <div className="flex items-center gap-2">
-            <Lock size={18} className="text-un1t-light" />
-            <h1 className="text-lg font-semibold text-un1t-white">Pair this device</h1>
+            <Lock size={18} className="text-un1t-subtle" />
+            <h1 className="text-lg font-semibold text-un1t-text">Pair this device</h1>
           </div>
-          <p className="text-sm text-un1t-light">
+          <p className="text-sm text-un1t-subtle">
             Ask a master to create a pairing token at <span className="font-mono">/admin/studio-devices</span> and paste it here.
           </p>
           <label className="flex flex-col gap-1.5">
-            <span className="text-xs text-un1t-light">Pairing token</span>
+            <span className="text-xs text-un1t-subtle">Pairing token</span>
             <input
               autoFocus
               value={pairingInput}
               onChange={(e) => setPairingInput(e.target.value)}
-              className="bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-un1t-white font-mono text-sm"
+              className="bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-un1t-text font-mono text-sm"
               placeholder="Paste the token here"
             />
           </label>
           <label className="flex flex-col gap-1.5">
-            <span className="text-xs text-un1t-light">Device label (optional, for your records)</span>
+            <span className="text-xs text-un1t-subtle">Device label (optional, for your records)</span>
             <input
               value={pairingLabel}
               onChange={(e) => setPairingLabel(e.target.value)}
-              className="bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-un1t-white text-sm"
+              className="bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-un1t-text text-sm"
               placeholder="Reception Mac"
             />
           </label>
@@ -160,7 +160,7 @@ export default function StudioLogin() {
           )}
           <button
             type="submit"
-            className="w-full bg-un1t-white text-un1t-black font-medium px-3 py-2.5 rounded-md flex items-center justify-center gap-2 hover:bg-un1t-light/90"
+            className="w-full bg-un1t-text text-un1t-bg font-medium px-3 py-2.5 rounded-md flex items-center justify-center gap-2 hover:bg-un1t-subtle/90"
           >
             Pair device <ArrowRight size={14} />
           </button>
@@ -170,12 +170,12 @@ export default function StudioLogin() {
   }
 
   return (
-    <div className="min-h-screen bg-un1t-black flex items-center justify-center p-6">
+    <div className="min-h-screen bg-un1t-bg flex items-center justify-center p-6">
       <div className="w-full max-w-xs">
         <div className="text-center mb-8">
-          <div className="text-xs uppercase tracking-widest text-un1t-light mb-2">CF Studio</div>
-          <div className="text-2xl font-bold text-un1t-white">Enter your PIN</div>
-          {label && <div className="text-xs text-un1t-mid mt-1">{label}</div>}
+          <div className="text-xs uppercase tracking-widest text-un1t-subtle mb-2">CF Studio</div>
+          <div className="text-2xl font-bold text-un1t-text">Enter your PIN</div>
+          {label && <div className="text-xs text-un1t-muted mt-1">{label}</div>}
         </div>
 
         <PinDisplay value={pin} error={Boolean(error)} />
@@ -193,7 +193,7 @@ export default function StudioLogin() {
           <button
             onClick={backspace}
             disabled={submitting || pin.length === 0}
-            className="aspect-square rounded-2xl bg-un1t-dark border border-un1t-gray text-un1t-light hover:bg-un1t-gray/40 disabled:opacity-40 flex items-center justify-center"
+            className="aspect-square rounded-2xl bg-un1t-surface border border-un1t-border text-un1t-subtle hover:bg-un1t-border/40 disabled:opacity-40 flex items-center justify-center"
           >
             <Delete size={22} />
           </button>
@@ -201,7 +201,7 @@ export default function StudioLogin() {
 
         <button
           onClick={unpair}
-          className="block mx-auto mt-8 text-[11px] text-un1t-mid hover:text-un1t-light underline"
+          className="block mx-auto mt-8 text-[11px] text-un1t-muted hover:text-un1t-subtle underline"
         >
           Forget pairing on this device
         </button>
@@ -220,8 +220,8 @@ function PinDisplay({ value, error }) {
             error
               ? 'bg-red-500/30 border-red-500/70'
               : value.length > i
-                ? 'bg-un1t-white border-un1t-white'
-                : 'bg-transparent border-un1t-gray'
+                ? 'bg-un1t-text border-un1t-text'
+                : 'bg-transparent border-un1t-border'
           }`}
         />
       ))}
@@ -234,7 +234,7 @@ function PinButton({ digit, onPress, disabled }) {
     <button
       onClick={onPress}
       disabled={disabled}
-      className="aspect-square rounded-2xl bg-un1t-dark border border-un1t-gray text-un1t-white text-2xl font-semibold hover:bg-un1t-gray/40 disabled:opacity-40 active:scale-95 transition-transform"
+      className="aspect-square rounded-2xl bg-un1t-surface border border-un1t-border text-un1t-text text-2xl font-semibold hover:bg-un1t-border/40 disabled:opacity-40 active:scale-95 transition-transform"
     >
       {digit}
     </button>

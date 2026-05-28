@@ -73,7 +73,7 @@ export default function AddOrganizationButton() {
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="inline-flex items-center gap-1.5 text-xs bg-un1t-white text-un1t-black px-3 py-1.5 rounded-md hover:bg-un1t-accent font-medium"
+        className="inline-flex items-center gap-1.5 text-xs bg-un1t-text text-un1t-bg px-3 py-1.5 rounded-md hover:bg-un1t-accent font-medium"
       >
         <Plus size={12} /> Add organization
       </button>
@@ -83,24 +83,24 @@ export default function AddOrganizationButton() {
           <div className="fixed inset-0 bg-black/50 z-40" onClick={close} aria-hidden="true" />
           <form
             onSubmit={handleCreate}
-            className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-50 bg-un1t-black border border-un1t-gray rounded-lg p-6 w-[440px] max-w-[90vw] shadow-2xl"
+            className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-50 bg-un1t-bg border border-un1t-border rounded-lg p-6 w-[440px] max-w-[90vw] shadow-2xl"
           >
             <div className="flex items-start justify-between gap-3 mb-4">
-              <h3 className="text-base font-semibold text-un1t-white inline-flex items-center gap-2">
+              <h3 className="text-base font-semibold text-un1t-text inline-flex items-center gap-2">
                 <Building2 size={16} /> Add organization
               </h3>
               <button
                 type="button"
                 onClick={close}
                 disabled={busy}
-                className="text-un1t-light hover:text-un1t-white disabled:opacity-40"
+                className="text-un1t-subtle hover:text-un1t-text disabled:opacity-40"
                 aria-label="Close"
               >
                 <X size={16} />
               </button>
             </div>
 
-            <p className="text-xs text-un1t-light mb-4">
+            <p className="text-xs text-un1t-subtle mb-4">
               Tenant grouping above locations. After creating, head to Settings → Locations →
               Add Location to create the first location under this org. Members are added via
               the access matrix.
@@ -108,7 +108,7 @@ export default function AddOrganizationButton() {
 
             <div className="space-y-3">
               <div>
-                <label className="block text-xs text-un1t-light mb-1">Name <span className="text-red-700">*</span></label>
+                <label className="block text-xs text-un1t-subtle mb-1">Name <span className="text-red-700">*</span></label>
                 <input
                   type="text"
                   required
@@ -116,13 +116,13 @@ export default function AddOrganizationButton() {
                   onChange={(e) => onNameChange(e.target.value)}
                   disabled={busy}
                   placeholder="UN1T Group"
-                  className="w-full bg-un1t-dark border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid"
+                  className="w-full bg-un1t-surface border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted"
                 />
               </div>
               <div>
-                <label className="block text-xs text-un1t-light mb-1">
+                <label className="block text-xs text-un1t-subtle mb-1">
                   Slug
-                  {slugAuto && <span className="ml-1 text-[10px] text-un1t-mid">(auto-derived)</span>}
+                  {slugAuto && <span className="ml-1 text-[10px] text-un1t-muted">(auto-derived)</span>}
                 </label>
                 <input
                   type="text"
@@ -131,9 +131,9 @@ export default function AddOrganizationButton() {
                   disabled={busy}
                   placeholder="un1t-group"
                   pattern="^[a-z0-9]+(-[a-z0-9]+)*$"
-                  className="w-full bg-un1t-dark border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid font-mono"
+                  className="w-full bg-un1t-surface border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted font-mono"
                 />
-                <p className="text-[11px] text-un1t-mid mt-1">
+                <p className="text-[11px] text-un1t-muted mt-1">
                   Lowercase letters, digits, hyphens. Reserved for future per-org sub-paths.
                 </p>
               </div>
@@ -150,14 +150,14 @@ export default function AddOrganizationButton() {
                 type="button"
                 onClick={close}
                 disabled={busy}
-                className="text-sm text-un1t-light hover:text-un1t-white disabled:opacity-40"
+                className="text-sm text-un1t-subtle hover:text-un1t-text disabled:opacity-40"
               >
                 Cancel
               </button>
               <button
                 type="submit"
                 disabled={busy || !name.trim() || !slug.trim()}
-                className="inline-flex items-center gap-1.5 text-sm bg-un1t-white text-un1t-black font-semibold px-4 py-2 rounded-md hover:bg-un1t-accent disabled:opacity-40"
+                className="inline-flex items-center gap-1.5 text-sm bg-un1t-text text-un1t-bg font-semibold px-4 py-2 rounded-md hover:bg-un1t-accent disabled:opacity-40"
               >
                 {busy ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}
                 {busy ? 'Creating…' : 'Create organization'}

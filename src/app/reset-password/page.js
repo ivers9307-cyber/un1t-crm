@@ -193,24 +193,24 @@ export default function ResetPasswordPage() {
   }
 
   return (
-    <div className="min-h-screen bg-un1t-black flex items-center justify-center p-4">
+    <div className="min-h-screen bg-un1t-bg flex items-center justify-center p-4">
       <div className="w-full max-w-sm">
         {/* Logo */}
         <div className="text-center mb-8">
           {branding?.logo_url ? (
             <img src={branding.logo_url} alt={branding.company_name || 'Logo'} className="h-10 mx-auto object-contain" />
           ) : (
-            <h1 className="text-3xl font-bold tracking-wider text-un1t-white">{branding?.company_name || 'UN1T'}</h1>
+            <h1 className="text-3xl font-bold tracking-wider text-un1t-text">{branding?.company_name || 'UN1T'}</h1>
           )}
           <p className="text-sm text-gray-500 mt-1">Lead Management</p>
         </div>
 
-        <form onSubmit={handleReset} className="bg-un1t-dark border border-un1t-gray rounded-lg p-6 space-y-4">
+        <form onSubmit={handleReset} className="bg-un1t-surface border border-un1t-border rounded-lg p-6 space-y-4">
           <div>
-            <h2 className="text-sm font-semibold text-un1t-white mb-1">
+            <h2 className="text-sm font-semibold text-un1t-text mb-1">
               {flowType === 'invite' ? 'Welcome — set your password' : 'Set a new password'}
             </h2>
-            <p className="text-xs text-un1t-light">
+            <p className="text-xs text-un1t-subtle">
               {flowType === 'invite'
                 ? 'Pick a password for your account. You\'ll use this with your email to sign in from now on.'
                 : 'Enter your new password below.'}
@@ -226,21 +226,21 @@ export default function ResetPasswordPage() {
           )}
 
           <div>
-            <label className="block text-xs font-medium text-un1t-light mb-1.5">New Password</label>
+            <label className="block text-xs font-medium text-un1t-subtle mb-1.5">New Password</label>
             <input
               type="password"
               required
               minLength={8}
               value={password}
               onChange={e => setPassword(e.target.value)}
-              className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2.5 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid"
+              className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2.5 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted"
               placeholder="Strong password"
             />
             <ul className="mt-2 space-y-1">
               {passwordRequirements.map(r => {
                 const ok = r.test(password || '')
                 return (
-                  <li key={r.id} className={`flex items-center gap-2 text-xs ${ok ? 'text-green-400' : 'text-un1t-mid'}`}>
+                  <li key={r.id} className={`flex items-center gap-2 text-xs ${ok ? 'text-green-400' : 'text-un1t-muted'}`}>
                     {ok ? <Check size={12} /> : <X size={12} />}
                     <span>{r.label}</span>
                   </li>
@@ -250,14 +250,14 @@ export default function ResetPasswordPage() {
           </div>
 
           <div>
-            <label className="block text-xs font-medium text-un1t-light mb-1.5">Confirm Password</label>
+            <label className="block text-xs font-medium text-un1t-subtle mb-1.5">Confirm Password</label>
             <input
               type="password"
               required
               minLength={8}
               value={confirmPassword}
               onChange={e => setConfirmPassword(e.target.value)}
-              className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2.5 text-sm text-un1t-white placeholder:text-un1t-mid focus:outline-none focus:border-un1t-mid"
+              className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2.5 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted"
               placeholder="Confirm your password"
             />
           </div>
@@ -271,7 +271,7 @@ export default function ResetPasswordPage() {
           <button
             type="submit"
             disabled={loading || !ready}
-            className="w-full bg-un1t-white text-un1t-black font-medium text-sm py-2.5 rounded-md hover:bg-un1t-accent transition-colors disabled:opacity-50"
+            className="w-full bg-un1t-text text-un1t-bg font-medium text-sm py-2.5 rounded-md hover:bg-un1t-accent transition-colors disabled:opacity-50"
           >
             {loading
               ? (flowType === 'invite' ? 'Setting…' : 'Updating…')
@@ -279,7 +279,7 @@ export default function ResetPasswordPage() {
           </button>
         </form>
 
-        <p className="text-center text-xs text-un1t-mid mt-6">UN1T CRM v1.0</p>
+        <p className="text-center text-xs text-un1t-muted mt-6">UN1T CRM v1.0</p>
       </div>
     </div>
   )

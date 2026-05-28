@@ -23,7 +23,7 @@ export default async function MarketingImportPage() {
   return (
     <div className="p-8 max-w-5xl">
       <h2 className="text-2xl font-bold mb-1">Marketing preferences import</h2>
-      <p className="text-sm text-un1t-light mb-6 max-w-3xl">
+      <p className="text-sm text-un1t-subtle mb-6 max-w-3xl">
         Migrate consent state from another platform (Mailchimp, Klaviyo, ActiveCampaign,
         anything that exports a CSV). Preview the change plan before committing — only
         contacts whose preferences actually need to change will be touched, and ClassPass

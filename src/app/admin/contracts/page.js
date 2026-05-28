@@ -58,30 +58,30 @@ export default async function ContractsAdminPage() {
         <div className="flex items-center gap-2">
           <Link
             href="/admin/contracts/templates"
-            className="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md border border-un1t-gray text-un1t-light hover:text-un1t-white"
+            className="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md border border-un1t-border text-un1t-subtle hover:text-un1t-text"
           >
             <SettingsIcon size={12} /> Templates
           </Link>
           <Link
             href="/admin/contracts/issue"
-            className="inline-flex items-center gap-1.5 text-xs bg-un1t-white text-un1t-black px-3 py-1.5 rounded-md hover:bg-un1t-accent font-medium"
+            className="inline-flex items-center gap-1.5 text-xs bg-un1t-text text-un1t-bg px-3 py-1.5 rounded-md hover:bg-un1t-accent font-medium"
           >
             <Plus size={12} /> Issue contract
           </Link>
         </div>
       </div>
-      <p className="text-sm text-un1t-light mb-6">
+      <p className="text-sm text-un1t-subtle mb-6">
         Send digital contracts to staff and contractors. Each one is countersigned at issue and
         signed by the recipient in their portal.
       </p>
 
       {rows.length === 0 ? (
-        <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-8 text-center">
-          <FileText size={28} className="mx-auto text-un1t-light mb-3" />
-          <p className="text-sm text-un1t-light mb-4">No contracts issued yet.</p>
+        <div className="bg-un1t-surface border border-un1t-border rounded-lg p-8 text-center">
+          <FileText size={28} className="mx-auto text-un1t-subtle mb-3" />
+          <p className="text-sm text-un1t-subtle mb-4">No contracts issued yet.</p>
           <Link
             href="/admin/contracts/issue"
-            className="inline-flex items-center gap-1.5 text-xs bg-un1t-white text-un1t-black px-3 py-1.5 rounded-md hover:bg-un1t-accent font-medium"
+            className="inline-flex items-center gap-1.5 text-xs bg-un1t-text text-un1t-bg px-3 py-1.5 rounded-md hover:bg-un1t-accent font-medium"
           >
             <Plus size={12} /> Issue your first contract
           </Link>
@@ -89,10 +89,10 @@ export default async function ContractsAdminPage() {
       ) : (
         <>
           {/* Desktop table */}
-          <div className="hidden md:block bg-un1t-dark border border-un1t-gray rounded-lg overflow-hidden">
+          <div className="hidden md:block bg-un1t-surface border border-un1t-border rounded-lg overflow-hidden">
             <table className="w-full text-sm">
               <thead>
-                <tr className="border-b border-un1t-gray text-un1t-light text-[11px] uppercase tracking-wider">
+                <tr className="border-b border-un1t-border text-un1t-subtle text-[11px] uppercase tracking-wider">
                   <th className="text-left p-3">Recipient</th>
                   <th className="text-left p-3">Template</th>
                   <th className="text-left p-3">Issued</th>
@@ -100,17 +100,17 @@ export default async function ContractsAdminPage() {
                   <th className="text-right p-3"></th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-un1t-gray">
+              <tbody className="divide-y divide-un1t-border">
                 {rows.map(r => {
-                  const badge = STATUS_BADGE[r.status] || { label: r.status, class: 'bg-un1t-gray text-un1t-light' }
+                  const badge = STATUS_BADGE[r.status] || { label: r.status, class: 'bg-un1t-border text-un1t-subtle' }
                   return (
-                    <tr key={r.id} className="hover:bg-un1t-gray/20">
+                    <tr key={r.id} className="hover:bg-un1t-border/20">
                       <td className="p-3">
-                        <div className="font-medium text-un1t-white">{r.profile?.full_name || '—'}</div>
-                        <div className="text-[11px] text-un1t-light">{r.profile?.email}</div>
+                        <div className="font-medium text-un1t-text">{r.profile?.full_name || '—'}</div>
+                        <div className="text-[11px] text-un1t-subtle">{r.profile?.email}</div>
                       </td>
-                      <td className="p-3 text-un1t-light">{r.template?.name || '—'}</td>
-                      <td className="p-3 text-un1t-light whitespace-nowrap">{fmtDate(r.issued_at)}</td>
+                      <td className="p-3 text-un1t-subtle">{r.template?.name || '—'}</td>
+                      <td className="p-3 text-un1t-subtle whitespace-nowrap">{fmtDate(r.issued_at)}</td>
                       <td className="p-3">
                         <span className={`text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded-full ${badge.class}`}>
                           {badge.label}
@@ -119,7 +119,7 @@ export default async function ContractsAdminPage() {
                       <td className="p-3 text-right">
                         <Link
                           href={`/admin/contracts/${r.id}`}
-                          className="text-xs text-un1t-light hover:text-un1t-white inline-flex items-center"
+                          className="text-xs text-un1t-subtle hover:text-un1t-text inline-flex items-center"
                         >
                           Open <ChevronRight size={12} className="ml-0.5" />
                         </Link>
@@ -134,23 +134,23 @@ export default async function ContractsAdminPage() {
           {/* Mobile card list */}
           <div className="md:hidden space-y-2">
             {rows.map(r => {
-              const badge = STATUS_BADGE[r.status] || { label: r.status, class: 'bg-un1t-gray text-un1t-light' }
+              const badge = STATUS_BADGE[r.status] || { label: r.status, class: 'bg-un1t-border text-un1t-subtle' }
               return (
                 <Link
                   key={r.id}
                   href={`/admin/contracts/${r.id}`}
-                  className="block bg-un1t-dark border border-un1t-gray rounded-lg p-3 active:bg-un1t-gray/30"
+                  className="block bg-un1t-surface border border-un1t-border rounded-lg p-3 active:bg-un1t-border/30"
                 >
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0 flex-1">
-                      <div className="font-medium text-un1t-white truncate">{r.profile?.full_name || '—'}</div>
-                      <div className="text-[11px] text-un1t-light truncate">{r.template?.name || '—'}</div>
+                      <div className="font-medium text-un1t-text truncate">{r.profile?.full_name || '—'}</div>
+                      <div className="text-[11px] text-un1t-subtle truncate">{r.template?.name || '—'}</div>
                     </div>
                     <span className={`text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded-full shrink-0 ${badge.class}`}>
                       {badge.label}
                     </span>
                   </div>
-                  <div className="text-[11px] text-un1t-light mt-1">{fmtDate(r.issued_at)}</div>
+                  <div className="text-[11px] text-un1t-subtle mt-1">{fmtDate(r.issued_at)}</div>
                 </Link>
               )
             })}

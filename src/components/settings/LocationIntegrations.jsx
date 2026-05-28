@@ -137,13 +137,13 @@ export default function LocationIntegrations({ location, xeroConnection, user, s
   return (
     <section className="mt-10">
       <div className="flex items-center gap-2 mb-3">
-        <Plug size={16} className="text-un1t-light" />
+        <Plug size={16} className="text-un1t-subtle" />
         <h3 className="text-lg font-semibold">Integrations</h3>
       </div>
 
-      <div className="bg-un1t-dark border border-un1t-gray rounded-lg overflow-hidden">
+      <div className="bg-un1t-surface border border-un1t-border rounded-lg overflow-hidden">
         {/* Tab strip */}
-        <div className="flex border-b border-un1t-gray overflow-x-auto">
+        <div className="flex border-b border-un1t-border overflow-x-auto">
           {tabs.map(({ key, label, Icon, status }) => {
             const isActive = key === activeKey
             return (
@@ -153,8 +153,8 @@ export default function LocationIntegrations({ location, xeroConnection, user, s
                 onClick={() => switchTab(key)}
                 className={`flex-shrink-0 inline-flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 transition-colors ${
                   isActive
-                    ? 'border-un1t-white text-un1t-white bg-un1t-gray/30'
-                    : 'border-transparent text-un1t-light hover:text-un1t-white hover:bg-un1t-gray/20'
+                    ? 'border-un1t-text text-un1t-text bg-un1t-border/30'
+                    : 'border-transparent text-un1t-subtle hover:text-un1t-text hover:bg-un1t-border/20'
                 }`}
               >
                 <Icon size={14} />
@@ -202,5 +202,5 @@ function StatusDot({ status }) {
     return <AlertCircle size={10} className="text-red-400" />
   }
   // not-configured: small grey dot
-  return <span className="w-2 h-2 rounded-full bg-un1t-mid inline-block" />
+  return <span className="w-2 h-2 rounded-full bg-un1t-muted inline-block" />
 }

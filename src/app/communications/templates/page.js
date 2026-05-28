@@ -52,13 +52,13 @@ export default async function TemplatesListPage(props) {
       <div className="flex items-center justify-between mb-4">
         <div>
           <h2 className="text-lg font-semibold">Templates</h2>
-          <p className="text-xs text-un1t-light mt-0.5">Reusable email + WhatsApp content</p>
+          <p className="text-xs text-un1t-subtle mt-0.5">Reusable email + WhatsApp content</p>
         </div>
         <div className="flex gap-2">
           {canEmail && (
             <Link
               href="/email/templates/new"
-              className="flex items-center gap-2 bg-un1t-white text-un1t-black text-sm font-medium px-3 py-2 rounded-lg hover:bg-un1t-accent transition-colors"
+              className="flex items-center gap-2 bg-un1t-text text-un1t-bg text-sm font-medium px-3 py-2 rounded-lg hover:bg-un1t-accent transition-colors"
             >
               <Plus size={14} /> Email
             </Link>
@@ -66,7 +66,7 @@ export default async function TemplatesListPage(props) {
           {canWhatsapp && (
             <Link
               href="/whatsapp/templates/new"
-              className="flex items-center gap-2 bg-un1t-white text-un1t-black text-sm font-medium px-3 py-2 rounded-lg hover:bg-un1t-accent transition-colors"
+              className="flex items-center gap-2 bg-un1t-text text-un1t-bg text-sm font-medium px-3 py-2 rounded-lg hover:bg-un1t-accent transition-colors"
             >
               <Plus size={14} /> WhatsApp
             </Link>
@@ -82,8 +82,8 @@ export default async function TemplatesListPage(props) {
               href={`/communications/templates${f.key !== 'all' ? `?channel=${f.key}` : ''}`}
               className={`text-xs px-3 py-1.5 rounded-full transition-colors ${
                 channel === f.key
-                  ? 'bg-un1t-white text-un1t-black'
-                  : 'border border-un1t-gray text-un1t-light hover:text-un1t-white hover:border-un1t-white/30'
+                  ? 'bg-un1t-text text-un1t-bg'
+                  : 'border border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-text/30'
               }`}
             >
               {f.label}
@@ -95,16 +95,16 @@ export default async function TemplatesListPage(props) {
       {(channel === 'all' || channel === 'email') && (emailRes.data?.length ?? 0) > 0 && (
         <section className="mb-6">
           {channel === 'all' && (
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light mb-2 inline-flex items-center gap-2">
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle mb-2 inline-flex items-center gap-2">
               <Mail size={12} /> Email
             </h3>
           )}
-          <div className="bg-un1t-dark border border-un1t-gray rounded-2xl divide-y divide-un1t-gray">
+          <div className="bg-un1t-surface border border-un1t-border rounded-2xl divide-y divide-un1t-border">
             {emailRes.data.map(t => (
               <Link
                 key={`e-${t.id}`}
                 href={`/email/templates/${t.id}`}
-                className="flex items-center justify-between px-5 py-3 hover:bg-un1t-gray/20"
+                className="flex items-center justify-between px-5 py-3 hover:bg-un1t-border/20"
               >
                 <div className="flex items-center gap-4 min-w-0">
                   <div className="w-9 h-9 rounded-lg bg-blue-500/15 flex items-center justify-center shrink-0">
@@ -112,10 +112,10 @@ export default async function TemplatesListPage(props) {
                   </div>
                   <div className="min-w-0">
                     <p className="text-sm font-medium truncate">{t.name}</p>
-                    <p className="text-xs text-un1t-light truncate">{t.subject || 'No subject'}</p>
+                    <p className="text-xs text-un1t-subtle truncate">{t.subject || 'No subject'}</p>
                   </div>
                 </div>
-                <span className="text-[11px] text-un1t-mid">{new Date(t.updated_at).toLocaleDateString()}</span>
+                <span className="text-[11px] text-un1t-muted">{new Date(t.updated_at).toLocaleDateString()}</span>
               </Link>
             ))}
           </div>
@@ -125,16 +125,16 @@ export default async function TemplatesListPage(props) {
       {(channel === 'all' || channel === 'whatsapp') && (waRes.data?.length ?? 0) > 0 && (
         <section className="mb-6">
           {channel === 'all' && (
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light mb-2 inline-flex items-center gap-2">
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle mb-2 inline-flex items-center gap-2">
               <MessageCircle size={12} /> WhatsApp
             </h3>
           )}
-          <div className="bg-un1t-dark border border-un1t-gray rounded-2xl divide-y divide-un1t-gray">
+          <div className="bg-un1t-surface border border-un1t-border rounded-2xl divide-y divide-un1t-border">
             {waRes.data.map(t => (
               <Link
                 key={`w-${t.id}`}
                 href={`/whatsapp/templates/${t.id}`}
-                className="flex items-center justify-between px-5 py-3 hover:bg-un1t-gray/20"
+                className="flex items-center justify-between px-5 py-3 hover:bg-un1t-border/20"
               >
                 <div className="flex items-center gap-4 min-w-0">
                   <div className="w-9 h-9 rounded-lg bg-green-500/15 flex items-center justify-center shrink-0">
@@ -142,12 +142,12 @@ export default async function TemplatesListPage(props) {
                   </div>
                   <div className="min-w-0">
                     <p className="text-sm font-medium truncate">{t.name}</p>
-                    <p className="text-xs text-un1t-light truncate">
-                      {t.category} · {t.language} · <span className={t.status === 'APPROVED' ? 'text-green-500' : 'text-un1t-mid'}>{t.status}</span>
+                    <p className="text-xs text-un1t-subtle truncate">
+                      {t.category} · {t.language} · <span className={t.status === 'APPROVED' ? 'text-green-500' : 'text-un1t-muted'}>{t.status}</span>
                     </p>
                   </div>
                 </div>
-                <span className="text-[11px] text-un1t-mid">{new Date(t.updated_at).toLocaleDateString()}</span>
+                <span className="text-[11px] text-un1t-muted">{new Date(t.updated_at).toLocaleDateString()}</span>
               </Link>
             ))}
           </div>
@@ -155,10 +155,10 @@ export default async function TemplatesListPage(props) {
       )}
 
       {((emailRes.data?.length ?? 0) === 0) && ((waRes.data?.length ?? 0) === 0) && (
-        <div className="bg-un1t-dark border border-un1t-gray rounded-2xl p-10 text-center">
-          <FileText size={32} className="mx-auto mb-3 text-un1t-light" />
+        <div className="bg-un1t-surface border border-un1t-border rounded-2xl p-10 text-center">
+          <FileText size={32} className="mx-auto mb-3 text-un1t-subtle" />
           <h3 className="text-base font-semibold mb-2">No templates yet</h3>
-          <p className="text-sm text-un1t-light">Create your first reusable email or WhatsApp template using the buttons above.</p>
+          <p className="text-sm text-un1t-subtle">Create your first reusable email or WhatsApp template using the buttons above.</p>
         </div>
       )}
     </div>

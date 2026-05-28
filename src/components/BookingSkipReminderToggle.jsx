@@ -53,7 +53,7 @@ export default function BookingSkipReminderToggle({ bookingId, skipReminder, rem
       className={`p-1.5 rounded-md transition-colors ${
         skip
           ? 'text-amber-700 bg-amber-500/10 hover:bg-amber-500/20'
-          : 'text-un1t-light hover:text-un1t-white hover:bg-un1t-gray/40'
+          : 'text-un1t-subtle hover:text-un1t-text hover:bg-un1t-border/40'
       } disabled:opacity-50`}
     >
       <Icon size={14} />

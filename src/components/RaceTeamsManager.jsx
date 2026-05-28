@@ -46,7 +46,7 @@ export default function RaceTeamsManager({ race }) {
   }
   if (!registrations) {
     return (
-      <div className="text-sm text-un1t-light inline-flex items-center gap-2">
+      <div className="text-sm text-un1t-subtle inline-flex items-center gap-2">
         <Loader2 size={14} className="animate-spin" /> Loading teams…
       </div>
     )
@@ -62,14 +62,14 @@ export default function RaceTeamsManager({ race }) {
       )}
 
       <div className="flex items-center justify-between">
-        <div className="text-sm text-un1t-light">
+        <div className="text-sm text-un1t-subtle">
           {registrations.length} team{registrations.length === 1 ? '' : 's'} registered
         </div>
         {!showAddForm && (
           <button
             type="button"
             onClick={() => setShowAddForm(true)}
-            className="text-xs bg-un1t-white text-un1t-black px-3 py-1.5 rounded-md hover:bg-un1t-accent inline-flex items-center gap-1.5"
+            className="text-xs bg-un1t-text text-un1t-bg px-3 py-1.5 rounded-md hover:bg-un1t-accent inline-flex items-center gap-1.5"
           >
             <Plus size={12} /> Add team
           </button>
@@ -87,7 +87,7 @@ export default function RaceTeamsManager({ race }) {
       )}
 
       {registrations.length === 0 && !showAddForm && (
-        <div className="text-sm text-un1t-light italic px-2 py-8 text-center">
+        <div className="text-sm text-un1t-subtle italic px-2 py-8 text-center">
           No teams yet.
         </div>
       )}
@@ -168,8 +168,8 @@ function AddTeamForm({ race, waves, onCancel, onAdded, onError }) {
   }
 
   return (
-    <form onSubmit={handleSubmit} className="bg-un1t-dark border border-un1t-gray rounded-lg p-4 space-y-3">
-      <div className="text-xs uppercase tracking-wider text-un1t-light">New team</div>
+    <form onSubmit={handleSubmit} className="bg-un1t-surface border border-un1t-border rounded-lg p-4 space-y-3">
+      <div className="text-xs uppercase tracking-wider text-un1t-subtle">New team</div>
       <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
         <input
           type="text"
@@ -177,19 +177,19 @@ function AddTeamForm({ race, waves, onCancel, onAdded, onError }) {
           placeholder="Team name *"
           value={teamName}
           onChange={(e) => setTeamName(e.target.value)}
-          className="bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm"
+          className="bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm"
         />
         <select
           value={teamSize}
           onChange={(e) => setTeamSize(Number(e.target.value))}
-          className="bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm"
+          className="bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm"
         >
           {sizes.map((s) => <option key={s} value={s}>{s}-person</option>)}
         </select>
         <select
           value={waveId}
           onChange={(e) => setWaveId(e.target.value)}
-          className="bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm"
+          className="bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm"
         >
           {waves.map((w) => (
             <option key={w.id} value={w.id}>
@@ -198,8 +198,8 @@ function AddTeamForm({ race, waves, onCancel, onAdded, onError }) {
           ))}
         </select>
       </div>
-      <div className="space-y-2 pt-2 border-t border-un1t-gray/50">
-        <div className="text-[11px] text-un1t-light uppercase tracking-wider">Members (first row = captain)</div>
+      <div className="space-y-2 pt-2 border-t border-un1t-border/50">
+        <div className="text-[11px] text-un1t-subtle uppercase tracking-wider">Members (first row = captain)</div>
         {members.map((m, i) => (
           <div key={i} className="grid grid-cols-2 gap-2">
             <input
@@ -208,14 +208,14 @@ function AddTeamForm({ race, waves, onCancel, onAdded, onError }) {
               placeholder={i === 0 ? 'Captain name *' : `Member ${i + 1} name *`}
               value={m.name}
               onChange={(e) => setMembers((prev) => prev.map((x, j) => j === i ? { ...x, name: e.target.value } : x))}
-              className="bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm"
+              className="bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm"
             />
             <input
               type="email"
               placeholder="Email (optional)"
               value={m.email}
               onChange={(e) => setMembers((prev) => prev.map((x, j) => j === i ? { ...x, email: e.target.value } : x))}
-              className="bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm"
+              className="bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm"
             />
           </div>
         ))}
@@ -225,14 +225,14 @@ function AddTeamForm({ race, waves, onCancel, onAdded, onError }) {
           type="button"
           onClick={onCancel}
           disabled={busy}
-          className="text-xs px-3 py-1.5 text-un1t-light hover:text-un1t-white"
+          className="text-xs px-3 py-1.5 text-un1t-subtle hover:text-un1t-text"
         >
           Cancel
         </button>
         <button
           type="submit"
           disabled={busy}
-          className="text-xs bg-un1t-white text-un1t-black px-3 py-1.5 rounded-md hover:bg-un1t-accent inline-flex items-center gap-1.5 disabled:opacity-40"
+          className="text-xs bg-un1t-text text-un1t-bg px-3 py-1.5 rounded-md hover:bg-un1t-accent inline-flex items-center gap-1.5 disabled:opacity-40"
         >
           {busy ? <Loader2 size={11} className="animate-spin" /> : <Check size={11} />}
           {busy ? 'Adding…' : 'Add team'}
@@ -288,12 +288,12 @@ function TeamCard({ registration, waves, onChanged, onError }) {
   }
 
   return (
-    <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-4">
+    <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-base font-semibold text-un1t-white">{team?.name || '(no team)'}</span>
+          <span className="text-base font-semibold text-un1t-text">{team?.name || '(no team)'}</span>
           {team?.size && (
-            <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded-full bg-un1t-gray/40 text-un1t-light inline-flex items-center gap-1">
+            <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded-full bg-un1t-border/40 text-un1t-subtle inline-flex items-center gap-1">
               <Users size={10} /> {team.size}-person
             </span>
           )}
@@ -309,7 +309,7 @@ function TeamCard({ registration, waves, onChanged, onError }) {
             value={registration.wave_id || ''}
             onChange={(e) => moveWave(e.target.value)}
             disabled={busy}
-            className="text-[11px] bg-un1t-black border border-un1t-gray rounded-md px-2 py-1 text-un1t-white disabled:opacity-40"
+            className="text-[11px] bg-un1t-bg border border-un1t-border rounded-md px-2 py-1 text-un1t-text disabled:opacity-40"
             title="Move to a different wave"
           >
             {waves.map((w) => (
@@ -323,7 +323,7 @@ function TeamCard({ registration, waves, onChanged, onError }) {
             type="button"
             onClick={removeRegistration}
             disabled={busy}
-            className="text-[11px] text-un1t-light hover:text-red-700 inline-flex items-center gap-1"
+            className="text-[11px] text-un1t-subtle hover:text-red-700 inline-flex items-center gap-1"
             title="Remove this team from the race"
           >
             <Trash2 size={11} /> Remove
@@ -332,12 +332,12 @@ function TeamCard({ registration, waves, onChanged, onError }) {
       </div>
 
       {wave && (
-        <div className="text-[11px] text-un1t-light mt-1">
+        <div className="text-[11px] text-un1t-subtle mt-1">
           Wave: {wave.label ? `${wave.label} · ` : ''}{(wave.start_time || '').slice(0, 5)}
         </div>
       )}
 
-      <div className="mt-3 pt-3 border-t border-un1t-gray/50 space-y-1.5">
+      <div className="mt-3 pt-3 border-t border-un1t-border/50 space-y-1.5">
         {members.map((m) => (
           <MemberRow key={m.id} member={m} onChanged={onChanged} onError={onError} />
         ))}
@@ -352,7 +352,7 @@ function TeamCard({ registration, waves, onChanged, onError }) {
           <button
             type="button"
             onClick={() => setShowAddMember(true)}
-            className="text-[11px] text-un1t-light hover:text-un1t-white inline-flex items-center gap-1"
+            className="text-[11px] text-un1t-subtle hover:text-un1t-text inline-flex items-center gap-1"
           >
             <Plus size={11} /> Add member
           </button>
@@ -410,14 +410,14 @@ function MemberRow({ member, onChanged, onError }) {
           type="text"
           value={name}
           onChange={(e) => setName(e.target.value)}
-          className="bg-un1t-black border border-un1t-gray rounded-md px-2 py-1 text-sm"
+          className="bg-un1t-bg border border-un1t-border rounded-md px-2 py-1 text-sm"
         />
         <input
           type="email"
           value={email}
           onChange={(e) => setEmail(e.target.value)}
           placeholder="email"
-          className="bg-un1t-black border border-un1t-gray rounded-md px-2 py-1 text-sm"
+          className="bg-un1t-bg border border-un1t-border rounded-md px-2 py-1 text-sm"
         />
         <div className="flex items-center gap-1">
           <button
@@ -433,7 +433,7 @@ function MemberRow({ member, onChanged, onError }) {
             type="button"
             onClick={() => { setEditing(false); setName(member.name); setEmail(member.email || '') }}
             disabled={busy}
-            className="text-[11px] text-un1t-light hover:text-un1t-white"
+            className="text-[11px] text-un1t-subtle hover:text-un1t-text"
           >
             Cancel
           </button>
@@ -445,18 +445,18 @@ function MemberRow({ member, onChanged, onError }) {
   return (
     <div className="flex items-center justify-between text-sm">
       <div className="flex items-center gap-1.5">
-        <span className={member.role === 'captain' ? 'text-un1t-white font-medium' : 'text-un1t-light'}>
+        <span className={member.role === 'captain' ? 'text-un1t-text font-medium' : 'text-un1t-subtle'}>
           {member.name}
         </span>
         {member.role === 'captain' && <Star size={10} className="text-amber-700" />}
         {member.is_member && <BadgeCheck size={11} className="text-emerald-700" />}
-        {member.email && <span className="text-[11px] text-un1t-mid">· {member.email}</span>}
+        {member.email && <span className="text-[11px] text-un1t-muted">· {member.email}</span>}
       </div>
       <div className="flex items-center gap-1">
         <button
           type="button"
           onClick={() => setEditing(true)}
-          className="text-un1t-light hover:text-un1t-white p-1"
+          className="text-un1t-subtle hover:text-un1t-text p-1"
           title="Edit"
         >
           <Pencil size={11} />
@@ -465,7 +465,7 @@ function MemberRow({ member, onChanged, onError }) {
           type="button"
           onClick={remove}
           disabled={busy}
-          className="text-un1t-light hover:text-red-700 p-1 disabled:opacity-40"
+          className="text-un1t-subtle hover:text-red-700 p-1 disabled:opacity-40"
           title="Remove"
         >
           <Trash2 size={11} />
@@ -507,14 +507,14 @@ function AddMemberRow({ teamId, onAdded, onCancel, onError }) {
         placeholder="Member name *"
         value={name}
         onChange={(e) => setName(e.target.value)}
-        className="bg-un1t-black border border-un1t-gray rounded-md px-2 py-1 text-sm"
+        className="bg-un1t-bg border border-un1t-border rounded-md px-2 py-1 text-sm"
       />
       <input
         type="email"
         placeholder="Email (optional)"
         value={email}
         onChange={(e) => setEmail(e.target.value)}
-        className="bg-un1t-black border border-un1t-gray rounded-md px-2 py-1 text-sm"
+        className="bg-un1t-bg border border-un1t-border rounded-md px-2 py-1 text-sm"
       />
       <div className="flex items-center gap-1">
         <button
@@ -530,7 +530,7 @@ function AddMemberRow({ teamId, onAdded, onCancel, onError }) {
           type="button"
           onClick={onCancel}
           disabled={busy}
-          className="text-[11px] text-un1t-light hover:text-un1t-white"
+          className="text-[11px] text-un1t-subtle hover:text-un1t-text"
         >
           Cancel
         </button>
@@ -547,7 +547,7 @@ function StatusPill({ status }) {
     no_show: 'bg-red-500/15 text-red-700',
   }
   return (
-    <span className={`text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded-full ${map[status] || 'bg-un1t-gray/30 text-un1t-light'}`}>
+    <span className={`text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded-full ${map[status] || 'bg-un1t-border/30 text-un1t-subtle'}`}>
       {status?.replaceAll('_', ' ')}
     </span>
   )

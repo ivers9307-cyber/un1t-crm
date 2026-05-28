@@ -65,7 +65,7 @@ export default function ContactBulkDeleteModal({ contacts, onClose, onDeleted })
       onClick={() => !submitting && (result ? closeAndRefresh() : onClose())}
     >
       <div
-        className="bg-un1t-dark border border-un1t-gray rounded-xl max-w-lg w-full max-h-[85vh] overflow-auto p-6"
+        className="bg-un1t-surface border border-un1t-border rounded-xl max-w-lg w-full max-h-[85vh] overflow-auto p-6"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-start gap-3 mb-4">
@@ -75,17 +75,17 @@ export default function ContactBulkDeleteModal({ contacts, onClose, onDeleted })
             <AlertTriangle size={20} className="text-red-500 mt-0.5 shrink-0" />
           )}
           <div className="flex-1">
-            <h3 className="text-base font-semibold text-un1t-white">
+            <h3 className="text-base font-semibold text-un1t-text">
               {result ? 'Bulk delete complete' : `Delete ${contacts.length} contact${contacts.length === 1 ? '' : 's'}?`}
             </h3>
             {!result && (
-              <p className="text-xs text-un1t-light mt-1">This cannot be undone.</p>
+              <p className="text-xs text-un1t-subtle mt-1">This cannot be undone.</p>
             )}
           </div>
           <button
             type="button"
             onClick={() => !submitting && (result ? closeAndRefresh() : onClose())}
-            className="text-un1t-light hover:text-un1t-white"
+            className="text-un1t-subtle hover:text-un1t-text"
             disabled={submitting}
           >
             <X size={16} />
@@ -94,34 +94,34 @@ export default function ContactBulkDeleteModal({ contacts, onClose, onDeleted })
 
         {!result && (
           <>
-            <div className="bg-un1t-black border border-un1t-gray rounded-md p-3 mb-3">
-              <div className="text-xs uppercase tracking-wider text-un1t-light mb-2">Selected</div>
-              <ul className="text-xs text-un1t-white space-y-0.5 max-h-32 overflow-auto">
+            <div className="bg-un1t-bg border border-un1t-border rounded-md p-3 mb-3">
+              <div className="text-xs uppercase tracking-wider text-un1t-subtle mb-2">Selected</div>
+              <ul className="text-xs text-un1t-text space-y-0.5 max-h-32 overflow-auto">
                 {contacts.slice(0, 12).map(c => (
                   <li key={c.id}>{c.name || c.email || c.id}</li>
                 ))}
                 {contacts.length > 12 && (
-                  <li className="text-un1t-mid">…and {contacts.length - 12} more</li>
+                  <li className="text-un1t-muted">…and {contacts.length - 12} more</li>
                 )}
               </ul>
             </div>
-            <div className="bg-un1t-black border border-un1t-gray rounded-md p-3 mb-3 text-[11px] text-un1t-light space-y-1">
-              <div><strong className="text-un1t-white">Will be deleted:</strong> deals, notes, activities, sequence enrolments, send history.</div>
-              <div><strong className="text-un1t-white">Will stay (unlinked):</strong> bookings, orders, race registrations, race payments — revenue history is preserved.</div>
-              <div><strong className="text-un1t-white">Will be redacted:</strong> WhatsApp conversations + messages — PII (phone, profile name, message body, media) is wiped, conversation thread stays for audit (GDPR right-to-erasure).</div>
+            <div className="bg-un1t-bg border border-un1t-border rounded-md p-3 mb-3 text-[11px] text-un1t-subtle space-y-1">
+              <div><strong className="text-un1t-text">Will be deleted:</strong> deals, notes, activities, sequence enrolments, send history.</div>
+              <div><strong className="text-un1t-text">Will stay (unlinked):</strong> bookings, orders, race registrations, race payments — revenue history is preserved.</div>
+              <div><strong className="text-un1t-text">Will be redacted:</strong> WhatsApp conversations + messages — PII (phone, profile name, message body, media) is wiped, conversation thread stays for audit (GDPR right-to-erasure).</div>
             </div>
 
             <div className="space-y-3">
               <div>
-                <label className="block text-xs text-un1t-light mb-1">
-                  Type <strong className="text-un1t-white">{CONFIRM_WORD}</strong> to confirm:
+                <label className="block text-xs text-un1t-subtle mb-1">
+                  Type <strong className="text-un1t-text">{CONFIRM_WORD}</strong> to confirm:
                 </label>
                 <input
                   type="text"
                   value={confirm}
                   onChange={(e) => setConfirm(e.target.value)}
                   disabled={submitting}
-                  className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
+                  className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
                 />
               </div>
               {error && (
@@ -177,7 +177,7 @@ export default function ContactBulkDeleteModal({ contacts, onClose, onDeleted })
             <button
               type="button"
               onClick={closeAndRefresh}
-              className="w-full inline-flex items-center justify-center text-sm bg-un1t-white text-un1t-black font-medium py-2 rounded-md hover:bg-un1t-accent"
+              className="w-full inline-flex items-center justify-center text-sm bg-un1t-text text-un1t-bg font-medium py-2 rounded-md hover:bg-un1t-accent"
             >
               Done
             </button>
@@ -191,7 +191,7 @@ export default function ContactBulkDeleteModal({ contacts, onClose, onDeleted })
 function Stat({ label, value, tone }) {
   const toneClasses = {
     emerald: 'border-emerald-500/40 text-emerald-700',
-    muted:   'border-un1t-gray text-un1t-light',
+    muted:   'border-un1t-border text-un1t-subtle',
   }
   return (
     <div className={`border rounded-md p-3 ${toneClasses[tone] || toneClasses.muted}`}>
@@ -205,7 +205,7 @@ function Section({ title, hint, rows, tone }) {
   const toneClasses = {
     amber: 'border-amber-500/30 bg-amber-500/5 text-amber-700',
     red:   'border-red-500/30 bg-red-500/5 text-red-700',
-    muted: 'border-un1t-gray text-un1t-light',
+    muted: 'border-un1t-border text-un1t-subtle',
   }
   return (
     <div className={`border rounded-md p-3 ${toneClasses[tone] || toneClasses.muted}`}>

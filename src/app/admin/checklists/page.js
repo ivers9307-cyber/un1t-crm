@@ -32,7 +32,7 @@ export default async function ChecklistsAdminPage() {
   return (
     <div className="p-6 md:p-8 max-w-6xl">
       <h2 className="text-2xl font-bold mb-1">Checklists</h2>
-      <p className="text-sm text-un1t-light mb-6 max-w-3xl">
+      <p className="text-sm text-un1t-subtle mb-6 max-w-3xl">
         Define what each role needs to tick off on each day of the week. Coaches see their matching checklist on their phone when they have a shift; head coaches and owners get notified when items are left undone.
       </p>
       <ChecklistTemplatesEditor canEdit={user.role === 'master' || user.isMaster || user.role === 'owner'} />

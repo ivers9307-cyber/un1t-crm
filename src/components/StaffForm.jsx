@@ -375,7 +375,7 @@ export default function StaffForm({
 
   return (
     <form onSubmit={handleSubmit} className="space-y-6">
-      <Link href="/settings" className="inline-flex items-center gap-1.5 text-sm text-un1t-light hover:text-un1t-white">
+      <Link href="/settings" className="inline-flex items-center gap-1.5 text-sm text-un1t-subtle hover:text-un1t-text">
         <ArrowLeft size={16} /> Back to Settings
       </Link>
 
@@ -386,35 +386,35 @@ export default function StaffForm({
       )}
 
       {/* Account Details */}
-      <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5 space-y-4">
-        <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light">Account Details</h3>
+      <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5 space-y-4">
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle">Account Details</h3>
 
         <div>
-          <label className="block text-sm text-un1t-light mb-1">Full Name *</label>
+          <label className="block text-sm text-un1t-subtle mb-1">Full Name *</label>
           <input
             type="text"
             required
             value={form.full_name}
             onChange={e => setForm(prev => ({ ...prev, full_name: e.target.value }))}
-            className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
+            className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted"
           />
         </div>
 
         <div>
-          <label className="block text-sm text-un1t-light mb-1">Email *</label>
+          <label className="block text-sm text-un1t-subtle mb-1">Email *</label>
           <input
             type="email"
             required
             disabled={isEdit}
             value={form.email}
             onChange={e => setForm(prev => ({ ...prev, email: e.target.value }))}
-            className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid disabled:opacity-50"
+            className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted disabled:opacity-50"
           />
         </div>
 
         {!isEdit && (
-          <div className="bg-un1t-black/40 border border-un1t-gray rounded-md p-3 text-xs text-un1t-light">
-            <div className="font-medium text-un1t-white mb-1">Password</div>
+          <div className="bg-un1t-bg/40 border border-un1t-border rounded-md p-3 text-xs text-un1t-subtle">
+            <div className="font-medium text-un1t-text mb-1">Password</div>
             On save, an invitation email goes to <span className="font-mono">{form.email || 'this address'}</span>.
             The new user clicks the link to set their own password — nobody on this side ever sees it.
             If they miss the email or the link expires, you can resend at any time using the
@@ -424,11 +424,11 @@ export default function StaffForm({
 
         {isEdit && (
           <div className="flex items-center gap-3">
-            <label className="text-sm text-un1t-light">Active</label>
+            <label className="text-sm text-un1t-subtle">Active</label>
             <button
               type="button"
               onClick={() => setForm(prev => ({ ...prev, active: !prev.active }))}
-              className={`w-10 h-5 rounded-full transition-colors ${form.active ? 'bg-green-500' : 'bg-un1t-gray'}`}
+              className={`w-10 h-5 rounded-full transition-colors ${form.active ? 'bg-green-500' : 'bg-un1t-border'}`}
             >
               <div className={`w-4 h-4 rounded-full bg-white transition-transform ${form.active ? 'translate-x-5' : 'translate-x-0.5'}`} />
             </button>
@@ -451,14 +451,14 @@ export default function StaffForm({
 
       {/* Master Account flag — only master callers can set this */}
       {callerIsMaster && (
-        <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5">
+        <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5">
           <div className="flex items-start justify-between gap-4">
             <div>
               <div className="flex items-center gap-2">
                 <Crown size={14} className="text-amber-400" />
-                <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light">Master / Platform Admin</h3>
+                <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle">Master / Platform Admin</h3>
               </div>
-              <p className="text-xs text-un1t-light mt-1">
+              <p className="text-xs text-un1t-subtle mt-1">
                 Platform-wide super-admin. Can create new locations, mint other masters,
                 see every studio regardless of assignments. Independent of per-location roles below.
               </p>
@@ -466,7 +466,7 @@ export default function StaffForm({
             <button
               type="button"
               onClick={() => setForm(prev => ({ ...prev, is_master: !prev.is_master }))}
-              className={`w-10 h-5 rounded-full transition-colors shrink-0 ${form.is_master ? 'bg-amber-500' : 'bg-un1t-gray'}`}
+              className={`w-10 h-5 rounded-full transition-colors shrink-0 ${form.is_master ? 'bg-amber-500' : 'bg-un1t-border'}`}
             >
               <div className={`w-4 h-4 rounded-full bg-white transition-transform ${form.is_master ? 'translate-x-5' : 'translate-x-0.5'}`} />
             </button>
@@ -475,10 +475,10 @@ export default function StaffForm({
       )}
 
       {/* Studio Assignments — the wizard */}
-      <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5 space-y-4">
+      <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5 space-y-4">
         <div>
-          <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light">Studio Assignments</h3>
-          <p className="text-xs text-un1t-light mt-1">
+          <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle">Studio Assignments</h3>
+          <p className="text-xs text-un1t-subtle mt-1">
             One row per studio. Each studio carries its OWN role and door access — owner at one studio,
             head coach at another is fine. Mark one as default to land them there on login.
           </p>
@@ -491,16 +491,16 @@ export default function StaffForm({
           const configured = isUnifiConfigured(loc)
           const isManagerRole = a.role === 'owner' || a.role === 'manager'
           return (
-            <div key={a.location_id} className="border border-un1t-gray/70 rounded-lg p-4 space-y-3">
+            <div key={a.location_id} className="border border-un1t-border/70 rounded-lg p-4 space-y-3">
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
-                  <div className="text-sm font-semibold text-un1t-white">{loc.name}</div>
-                  <div className="text-xs text-un1t-light">{loc.slug}</div>
+                  <div className="text-sm font-semibold text-un1t-text">{loc.name}</div>
+                  <div className="text-xs text-un1t-subtle">{loc.slug}</div>
                 </div>
                 <button
                   type="button"
                   onClick={() => removeAssignment(a.location_id)}
-                  className="text-un1t-light hover:text-red-400 shrink-0"
+                  className="text-un1t-subtle hover:text-red-400 shrink-0"
                   title="Remove this assignment"
                 >
                   <Trash2 size={16} />
@@ -508,11 +508,11 @@ export default function StaffForm({
               </div>
 
               <div>
-                <label className="block text-xs text-un1t-light mb-1">Role at this studio</label>
+                <label className="block text-xs text-un1t-subtle mb-1">Role at this studio</label>
                 <select
                   value={a.role}
                   onChange={e => updateAssignment(a.location_id, { role: e.target.value })}
-                  className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
+                  className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted"
                 >
                   {allowedRoles.map(r => (
                     <option key={r} value={r}>{ROLE_LABELS[r]}</option>
@@ -523,13 +523,13 @@ export default function StaffForm({
               <div className="flex items-center justify-between">
                 <div>
                   <div className="text-sm">Default studio</div>
-                  <div className="text-xs text-un1t-light">Lands here on login</div>
+                  <div className="text-xs text-un1t-subtle">Lands here on login</div>
                 </div>
                 <button
                   type="button"
                   onClick={() => updateAssignment(a.location_id, { is_default: true })}
                   disabled={a.is_default}
-                  className={`w-10 h-5 rounded-full transition-colors disabled:opacity-100 ${a.is_default ? 'bg-blue-500' : 'bg-un1t-gray hover:bg-un1t-mid'}`}
+                  className={`w-10 h-5 rounded-full transition-colors disabled:opacity-100 ${a.is_default ? 'bg-blue-500' : 'bg-un1t-border hover:bg-un1t-muted'}`}
                 >
                   <div className={`w-4 h-4 rounded-full bg-white transition-transform ${a.is_default ? 'translate-x-5' : 'translate-x-0.5'}`} />
                 </button>
@@ -540,7 +540,7 @@ export default function StaffForm({
                 <div className="flex items-center justify-between">
                   <div className="min-w-0">
                     <div className="text-sm">Door Access</div>
-                    <div className="text-xs text-un1t-light">
+                    <div className="text-xs text-un1t-subtle">
                       {configured
                         ? (isManagerRole ? 'Manager access (main + physio + office)' : 'Staff access (main + physio)')
                         : 'UniFi not configured for this location'}
@@ -551,7 +551,7 @@ export default function StaffForm({
                     disabled={!configured}
                     onClick={() => updateAssignment(a.location_id, { unifi_door_access: !a.unifi_door_access })}
                     className={`w-10 h-5 rounded-full transition-colors disabled:opacity-40 disabled:cursor-not-allowed shrink-0 ${
-                      a.unifi_door_access ? 'bg-green-500' : 'bg-un1t-gray'
+                      a.unifi_door_access ? 'bg-green-500' : 'bg-un1t-border'
                     }`}
                     title={!configured ? `Configure UniFi for ${loc.name} first` : ''}
                   >
@@ -644,16 +644,16 @@ export default function StaffForm({
         {/* Read-only cards (owner caller looking at staff also assigned elsewhere) */}
         {readOnlyAssignments.length > 0 && (
           <div className="space-y-2">
-            <div className="text-xs text-un1t-light uppercase tracking-wider">Other studios (read-only)</div>
+            <div className="text-xs text-un1t-subtle uppercase tracking-wider">Other studios (read-only)</div>
             {readOnlyAssignments.map(a => {
               const loc = locations.find(l => l.id === a.location_id)
               return (
-                <div key={a.location_id} className="border border-un1t-gray/40 bg-black/20 rounded-md px-3 py-2 flex items-center justify-between text-sm">
+                <div key={a.location_id} className="border border-un1t-border/40 bg-black/20 rounded-md px-3 py-2 flex items-center justify-between text-sm">
                   <div>
-                    <span className="text-un1t-white">{loc?.name || a.location_id}</span>
-                    <span className="text-un1t-light ml-2">— {ROLE_LABELS[a.role] || a.role}</span>
+                    <span className="text-un1t-text">{loc?.name || a.location_id}</span>
+                    <span className="text-un1t-subtle ml-2">— {ROLE_LABELS[a.role] || a.role}</span>
                   </div>
-                  <span className="text-xs text-un1t-mid">
+                  <span className="text-xs text-un1t-muted">
                     Owner of that studio can edit
                   </span>
                 </div>
@@ -665,19 +665,19 @@ export default function StaffForm({
         {/* Add another */}
         {addableLocations.length > 0 && (
           <div>
-            <label className="block text-xs text-un1t-light mb-1">Add a studio</label>
+            <label className="block text-xs text-un1t-subtle mb-1">Add a studio</label>
             <div className="flex gap-2">
               <select
                 value=""
                 onChange={e => { if (e.target.value) addAssignment(e.target.value) }}
-                className="flex-1 bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
+                className="flex-1 bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted"
               >
                 <option value="">— Pick a studio —</option>
                 {addableLocations.map(l => (
                   <option key={l.id} value={l.id}>{l.name}</option>
                 ))}
               </select>
-              <span className="inline-flex items-center text-un1t-mid">
+              <span className="inline-flex items-center text-un1t-muted">
                 <Plus size={16} />
               </span>
             </div>
@@ -694,11 +694,11 @@ export default function StaffForm({
       </div>
 
       {/* HR / Employment Details */}
-      <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5 space-y-4">
-        <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light">Employment Details</h3>
+      <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5 space-y-4">
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle">Employment Details</h3>
 
         <div>
-          <label className="block text-sm text-un1t-light mb-2">Employment Type</label>
+          <label className="block text-sm text-un1t-subtle mb-2">Employment Type</label>
           <div className="flex gap-2">
             {[
               { value: 'fte', label: 'Full-Time Employee' },
@@ -710,8 +710,8 @@ export default function StaffForm({
                 onClick={() => setForm(prev => ({ ...prev, employment_type: opt.value }))}
                 className={`flex-1 py-2 px-3 rounded-md text-sm border transition-colors ${
                   form.employment_type === opt.value
-                    ? 'border-un1t-white/40 bg-un1t-gray/30 text-un1t-white'
-                    : 'border-un1t-gray text-un1t-light hover:border-white/20'
+                    ? 'border-un1t-text/40 bg-un1t-border/30 text-un1t-text'
+                    : 'border-un1t-border text-un1t-subtle hover:border-white/20'
                 }`}
               >
                 {opt.label}
@@ -724,7 +724,7 @@ export default function StaffForm({
           <>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
-                <label className="block text-sm text-un1t-light mb-1">Annual Salary (€)</label>
+                <label className="block text-sm text-un1t-subtle mb-1">Annual Salary (€)</label>
                 <input
                   type="number"
                   step="0.01"
@@ -732,11 +732,11 @@ export default function StaffForm({
                   value={form.annual_salary}
                   onChange={e => setForm(prev => ({ ...prev, annual_salary: e.target.value }))}
                   placeholder="e.g. 35000"
-                  className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
+                  className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted"
                 />
               </div>
               <div>
-                <label className="block text-sm text-un1t-light mb-1">Contracted Hours / Week</label>
+                <label className="block text-sm text-un1t-subtle mb-1">Contracted Hours / Week</label>
                 <input
                   type="number"
                   step="0.5"
@@ -744,17 +744,17 @@ export default function StaffForm({
                   max="80"
                   value={form.contracted_hours_per_week}
                   onChange={e => setForm(prev => ({ ...prev, contracted_hours_per_week: e.target.value }))}
-                  className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
+                  className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted"
                 />
               </div>
             </div>
             {form.annual_salary && form.contracted_hours_per_week > 0 && (
-              <div className="text-xs text-un1t-light bg-black/30 rounded-md px-3 py-2">
-                Effective hourly rate: <span className="text-un1t-white font-medium">€{(Number(form.annual_salary) / (Number(form.contracted_hours_per_week) * 52)).toFixed(2)}</span>/hr
+              <div className="text-xs text-un1t-subtle bg-black/30 rounded-md px-3 py-2">
+                Effective hourly rate: <span className="text-un1t-text font-medium">€{(Number(form.annual_salary) / (Number(form.contracted_hours_per_week) * 52)).toFixed(2)}</span>/hr
               </div>
             )}
             <div>
-              <label className="block text-sm text-un1t-light mb-1">Annual Leave Entitlement (days)</label>
+              <label className="block text-sm text-un1t-subtle mb-1">Annual Leave Entitlement (days)</label>
               <input
                 type="number"
                 step="0.5"
@@ -762,12 +762,12 @@ export default function StaffForm({
                 max="50"
                 value={form.annual_leave_entitlement}
                 onChange={e => setForm(prev => ({ ...prev, annual_leave_entitlement: e.target.value }))}
-                className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
+                className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted"
               />
             </div>
             <div>
-              <label className="block text-sm text-un1t-light mb-1">
-                Overtime Rate (€/hr) <span className="text-un1t-mid">— optional</span>
+              <label className="block text-sm text-un1t-subtle mb-1">
+                Overtime Rate (€/hr) <span className="text-un1t-muted">— optional</span>
               </label>
               <input
                 type="number"
@@ -776,16 +776,16 @@ export default function StaffForm({
                 value={form.overtime_rate}
                 onChange={e => setForm(prev => ({ ...prev, overtime_rate: e.target.value }))}
                 placeholder="e.g. 30.00"
-                className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
+                className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted"
               />
-              <p className="text-xs text-un1t-light mt-1">
+              <p className="text-xs text-un1t-subtle mt-1">
                 Hours scheduled above contracted weekly hours pay at this rate. Leave blank to pay overtime at the regular rate (no premium).
               </p>
             </div>
           </>
         ) : (
           <div>
-            <label className="block text-sm text-un1t-light mb-1">Hourly Rate (€)</label>
+            <label className="block text-sm text-un1t-subtle mb-1">Hourly Rate (€)</label>
             <input
               type="number"
               step="0.01"
@@ -793,7 +793,7 @@ export default function StaffForm({
               value={form.hourly_rate}
               onChange={e => setForm(prev => ({ ...prev, hourly_rate: e.target.value }))}
               placeholder="e.g. 18.50"
-              className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
+              className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted"
             />
           </div>
         )}
@@ -804,10 +804,10 @@ export default function StaffForm({
           are per-location now, so there's one toggle list per
           location the user is assigned to. */}
       {form.assignments.length > 0 && (
-        <div className="bg-un1t-dark border border-un1t-gray rounded-lg overflow-hidden">
-          <div className="px-5 pt-4 pb-2 border-b border-un1t-gray">
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light">Feature Permissions</h3>
-            <p className="text-xs text-un1t-light mt-1">
+        <div className="bg-un1t-surface border border-un1t-border rounded-lg overflow-hidden">
+          <div className="px-5 pt-4 pb-2 border-b border-un1t-border">
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle">Feature Permissions</h3>
+            <p className="text-xs text-un1t-subtle mt-1">
               Per-location permissions — pick a studio below to set what this person sees there.
               Empty toggles fall back to the role default for their role at that studio.
             </p>
@@ -824,8 +824,8 @@ export default function StaffForm({
                   onClick={() => setSelectedPermLocationId(a.location_id)}
                   className={`px-3 py-1.5 text-xs rounded-md border transition-colors ${
                     isSelected
-                      ? 'bg-un1t-white text-un1t-black border-un1t-white font-medium'
-                      : 'bg-un1t-black text-un1t-light border-un1t-gray hover:text-un1t-white'
+                      ? 'bg-un1t-text text-un1t-bg border-un1t-text font-medium'
+                      : 'bg-un1t-bg text-un1t-subtle border-un1t-border hover:text-un1t-text'
                   }`}
                   title={isReadOnly ? "You don't manage this location — view only" : ''}
                 >
@@ -839,12 +839,12 @@ export default function StaffForm({
           {/* Web sidebar permissions for the selected assignment */}
           <div className="px-5 pt-4 pb-3">
             <div className="flex items-center justify-between mb-3">
-              <h4 className="text-xs font-semibold uppercase tracking-wider text-un1t-light">
+              <h4 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle">
                 Web sidebar — {selectedLocationName || '(pick a location)'}
               </h4>
               <div className="flex gap-2">
                 <button type="button" onClick={() => setAllPermissions(true)} className="text-xs text-blue-400 hover:text-blue-300">All on</button>
-                <span className="text-un1t-mid">·</span>
+                <span className="text-un1t-muted">·</span>
                 <button type="button" onClick={() => setAllPermissions(false)} className="text-xs text-blue-400 hover:text-blue-300">All off</button>
               </div>
             </div>
@@ -870,7 +870,7 @@ export default function StaffForm({
                       type="button"
                       onClick={() => togglePermission(perm.key)}
                       disabled={!selectedPermLocationId}
-                      className={`w-10 h-5 rounded-full transition-colors shrink-0 ${selectedPerms[perm.key] ? 'bg-green-500' : 'bg-un1t-gray'} ${!selectedPermLocationId ? 'opacity-50 cursor-not-allowed' : ''}`}
+                      className={`w-10 h-5 rounded-full transition-colors shrink-0 ${selectedPerms[perm.key] ? 'bg-green-500' : 'bg-un1t-border'} ${!selectedPermLocationId ? 'opacity-50 cursor-not-allowed' : ''}`}
                       title={offHere ? `Disabled at this location. Edit Location Features to enable.` : ''}
                     >
                       <div className={`w-4 h-4 rounded-full bg-white transition-transform ${selectedPerms[perm.key] ? 'translate-x-5' : 'translate-x-0.5'}`} />
@@ -886,19 +886,19 @@ export default function StaffForm({
       {/* Mobile Features + lead-time overrides (per-location, scoped
           to the currently selected tab above). */}
       {form.assignments.length > 0 && (
-      <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-5">
+      <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5">
         <div className="flex items-center justify-between mb-3">
           <div>
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-light">
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle">
               Mobile App Features — {selectedLocationName || '(pick a location)'}
             </h3>
-            <p className="text-xs text-un1t-light mt-1">
+            <p className="text-xs text-un1t-subtle mt-1">
               Controls what this person sees in the iOS app at the selected studio. Notification rows are silenced if Push Notifications is off.
             </p>
           </div>
           <div className="flex gap-2 shrink-0">
             <button type="button" onClick={() => setAllMobilePermissions(true)} className="text-xs text-blue-400 hover:text-blue-300">All on</button>
-            <span className="text-un1t-mid">·</span>
+            <span className="text-un1t-muted">·</span>
             <button type="button" onClick={() => setAllMobilePermissions(false)} className="text-xs text-blue-400 hover:text-blue-300">All off</button>
           </div>
         </div>
@@ -907,8 +907,8 @@ export default function StaffForm({
             staff profile. Only shown when editing an existing staff
             member (no profile id yet on the create form). */}
         {isEdit && staff?.id && (
-          <div className="flex items-center gap-3 mb-3 pb-3 border-b border-un1t-gray">
-            <span className="text-xs text-un1t-light">Verify delivery to this user&apos;s phone:</span>
+          <div className="flex items-center gap-3 mb-3 pb-3 border-b border-un1t-border">
+            <span className="text-xs text-un1t-subtle">Verify delivery to this user&apos;s phone:</span>
             <TestPushButton recipientId={staff.id} recipientName={form.full_name || staff.email} />
           </div>
         )}
@@ -943,7 +943,7 @@ export default function StaffForm({
                 <span className="text-sm">
                   {perm.label}
                   {perm.hint && (
-                    <span className="block text-xs text-un1t-light">{perm.hint}</span>
+                    <span className="block text-xs text-un1t-subtle">{perm.hint}</span>
                   )}
                   {offHere && (
                     <span className="block text-[11px] text-amber-500 mt-0.5">
@@ -955,7 +955,7 @@ export default function StaffForm({
                   type="button"
                   onClick={() => toggleMobilePermission(perm.key)}
                   disabled={!selectedPermLocationId}
-                  className={`w-10 h-5 rounded-full transition-colors shrink-0 ${selectedMobilePerms[perm.key] ? 'bg-green-500' : 'bg-un1t-gray'} ${!selectedPermLocationId ? 'opacity-50 cursor-not-allowed' : ''}`}
+                  className={`w-10 h-5 rounded-full transition-colors shrink-0 ${selectedMobilePerms[perm.key] ? 'bg-green-500' : 'bg-un1t-border'} ${!selectedPermLocationId ? 'opacity-50 cursor-not-allowed' : ''}`}
                   title={offHere ? `Disabled at this location. Edit Location Features to enable.` : ''}
                 >
                   <div className={`w-4 h-4 rounded-full bg-white transition-transform ${selectedMobilePerms[perm.key] ? 'translate-x-5' : 'translate-x-0.5'}`} />
@@ -970,7 +970,7 @@ export default function StaffForm({
       <button
         type="submit"
         disabled={saving}
-        className="w-full bg-un1t-white text-un1t-black font-medium text-sm py-2.5 rounded-md hover:bg-un1t-accent transition-colors disabled:opacity-50"
+        className="w-full bg-un1t-text text-un1t-bg font-medium text-sm py-2.5 rounded-md hover:bg-un1t-accent transition-colors disabled:opacity-50"
       >
         {saving ? 'Saving...' : isEdit ? 'Save Changes' : 'Create Team Member'}
       </button>
@@ -1006,7 +1006,7 @@ function DangerZone({ staffId, staffName, isActive, callerIsMaster }) {
     <div className="bg-red-500/5 border border-red-500/20 rounded-lg p-5 space-y-4">
       <div>
         <h3 className="text-xs font-semibold uppercase tracking-wider text-red-400">Danger Zone</h3>
-        <p className="text-xs text-un1t-light mt-1">
+        <p className="text-xs text-un1t-subtle mt-1">
           {isActive
             ? "Deactivating revokes all door access and prevents sign-in. Their history (shifts, contact events, audit log) stays intact — that's almost always what you want when someone leaves."
             : "This account is deactivated. They can't sign in. Reactivate to restore access, or permanently delete (master only) to fulfil a GDPR right-to-be-forgotten request."}
@@ -1052,9 +1052,9 @@ function DeactivateButton({ staffId, staffName }) {
 
   if (state === 'confirming' || state === 'working' || state === 'error') {
     return (
-      <div className="bg-un1t-black/40 border border-un1t-gray rounded-md p-3 space-y-2">
-        <div className="text-xs text-un1t-light">
-          Deactivate <span className="font-mono text-un1t-white">{staffName}</span>?
+      <div className="bg-un1t-bg/40 border border-un1t-border rounded-md p-3 space-y-2">
+        <div className="text-xs text-un1t-subtle">
+          Deactivate <span className="font-mono text-un1t-text">{staffName}</span>?
           They lose CRM access immediately and any UniFi door policies are revoked.
           You can reactivate them at any time.
         </div>
@@ -1072,7 +1072,7 @@ function DeactivateButton({ staffId, staffName }) {
             type="button"
             onClick={() => { setState('idle'); setError(null) }}
             disabled={state === 'working'}
-            className="text-xs text-un1t-light hover:text-un1t-white"
+            className="text-xs text-un1t-subtle hover:text-un1t-text"
           >
             Cancel
           </button>
@@ -1188,15 +1188,15 @@ function PermanentDeleteButton({ staffId, staffName }) {
           Use this only for a confirmed GDPR right-to-be-forgotten request.
         </div>
         <div>
-          <label className="block text-xs text-un1t-light mb-1">
-            Type <span className="font-mono text-un1t-white">{expectsConfirmText}</span> to confirm:
+          <label className="block text-xs text-un1t-subtle mb-1">
+            Type <span className="font-mono text-un1t-text">{expectsConfirmText}</span> to confirm:
           </label>
           <input
             type="text"
             value={typedName}
             onChange={(e) => setTypedName(e.target.value)}
             disabled={state === 'working'}
-            className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-red-500/50 disabled:opacity-50"
+            className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text focus:outline-none focus:border-red-500/50 disabled:opacity-50"
             autoComplete="off"
           />
         </div>
@@ -1214,7 +1214,7 @@ function PermanentDeleteButton({ staffId, staffName }) {
             type="button"
             onClick={() => { setState('idle'); setError(null); setTypedName('') }}
             disabled={state === 'working'}
-            className="text-xs text-un1t-light hover:text-un1t-white"
+            className="text-xs text-un1t-subtle hover:text-un1t-text"
           >
             Cancel
           </button>
@@ -1278,9 +1278,9 @@ function SendPasswordResetButton({ staffId, email }) {
 
   if (state === 'confirming') {
     return (
-      <div className="bg-un1t-black/40 border border-un1t-gray rounded-md p-3 space-y-2">
-        <div className="text-xs text-un1t-light">
-          Send a password reset email to <span className="font-mono text-un1t-white">{email}</span>?
+      <div className="bg-un1t-bg/40 border border-un1t-border rounded-md p-3 space-y-2">
+        <div className="text-xs text-un1t-subtle">
+          Send a password reset email to <span className="font-mono text-un1t-text">{email}</span>?
           They&apos;ll receive a link to set a new password and any existing session won&apos;t change
           until they actually use it.
         </div>
@@ -1288,14 +1288,14 @@ function SendPasswordResetButton({ staffId, email }) {
           <button
             type="button"
             onClick={send}
-            className="text-xs bg-un1t-white text-un1t-black px-3 py-1.5 rounded-md hover:bg-un1t-accent font-medium inline-flex items-center gap-1.5"
+            className="text-xs bg-un1t-text text-un1t-bg px-3 py-1.5 rounded-md hover:bg-un1t-accent font-medium inline-flex items-center gap-1.5"
           >
             <KeyRound size={11} /> Send
           </button>
           <button
             type="button"
             onClick={() => { setState('idle'); setError(null) }}
-            className="text-xs text-un1t-light hover:text-un1t-white"
+            className="text-xs text-un1t-subtle hover:text-un1t-text"
           >
             Cancel
           </button>
@@ -1315,7 +1315,7 @@ function SendPasswordResetButton({ staffId, email }) {
         type="button"
         onClick={() => setState('confirming')}
         disabled={state === 'sending'}
-        className="text-xs text-un1t-light hover:text-un1t-white inline-flex items-center gap-1.5 disabled:opacity-40"
+        className="text-xs text-un1t-subtle hover:text-un1t-text inline-flex items-center gap-1.5 disabled:opacity-40"
       >
         {state === 'sending' ? <Loader2 size={11} className="animate-spin" /> : <KeyRound size={11} />}
         {state === 'sending' ? 'Sending…' : 'Send password reset email'}
@@ -1417,22 +1417,22 @@ function ProtectFacePicker({ locationId, locationName, value, onChange }) {
       <button
         type="button"
         onClick={handleToggle}
-        className="w-full flex items-center justify-between text-left rounded-md border border-un1t-gray bg-un1t-black px-3 py-2 text-sm hover:border-un1t-mid"
+        className="w-full flex items-center justify-between text-left rounded-md border border-un1t-border bg-un1t-bg px-3 py-2 text-sm hover:border-un1t-muted"
       >
         <div className="min-w-0">
-          <div className="text-xs text-un1t-light">UniFi Protect face</div>
+          <div className="text-xs text-un1t-subtle">UniFi Protect face</div>
           <div className="truncate">{currentLabel}</div>
         </div>
-        <span className="text-un1t-light text-xs ml-2">{open ? '▴' : '▾'}</span>
+        <span className="text-un1t-subtle text-xs ml-2">{open ? '▴' : '▾'}</span>
       </button>
 
       {open && (
-        <div className="rounded-md border border-un1t-gray bg-un1t-black p-2 space-y-2">
+        <div className="rounded-md border border-un1t-border bg-un1t-bg p-2 space-y-2">
           {loading && (
-            <div className="text-xs text-un1t-light px-2 py-1.5">Loading faces from {locationName}…</div>
+            <div className="text-xs text-un1t-subtle px-2 py-1.5">Loading faces from {locationName}…</div>
           )}
           {error && (
-            <div className="text-xs text-un1t-light px-2 py-1.5">
+            <div className="text-xs text-un1t-subtle px-2 py-1.5">
               <div className="text-amber-300 mb-1">Could not load Protect faces:</div>
               <div className="opacity-80">{error}</div>
               <div className="mt-2">Use the manual text field below to paste the face id directly from UniFi Protect.</div>
@@ -1443,22 +1443,22 @@ function ProtectFacePicker({ locationId, locationName, value, onChange }) {
               <button
                 type="button"
                 onClick={() => { onChange(null); setOpen(false) }}
-                className={`w-full text-left text-sm px-2 py-1.5 rounded hover:bg-un1t-gray/40 ${!value ? 'text-blue-300' : ''}`}
+                className={`w-full text-left text-sm px-2 py-1.5 rounded hover:bg-un1t-border/40 ${!value ? 'text-blue-300' : ''}`}
               >
                 Clear link
-                <div className="text-xs text-un1t-light">Camera matches for this face will land as 'unknown_user'.</div>
+                <div className="text-xs text-un1t-subtle">Camera matches for this face will land as 'unknown_user'.</div>
               </button>
-              <div className="border-t border-un1t-gray/50 my-1" />
+              <div className="border-t border-un1t-border/50 my-1" />
               <div className="max-h-64 overflow-y-auto">
                 {faces.map((f) => (
                   <button
                     key={f.id}
                     type="button"
                     onClick={() => { onChange(f.id); setOpen(false) }}
-                    className={`w-full text-left text-sm px-2 py-1.5 rounded hover:bg-un1t-gray/40 ${value === f.id ? 'text-blue-300' : ''}`}
+                    className={`w-full text-left text-sm px-2 py-1.5 rounded hover:bg-un1t-border/40 ${value === f.id ? 'text-blue-300' : ''}`}
                   >
                     <div>{f.name}</div>
-                    <div className="text-xs text-un1t-light truncate">
+                    <div className="text-xs text-un1t-subtle truncate">
                       id: {f.id}{f.enrolledAt ? ' · enrolled ' + new Date(f.enrolledAt).toLocaleDateString() : ''}
                     </div>
                   </button>
@@ -1467,15 +1467,15 @@ function ProtectFacePicker({ locationId, locationName, value, onChange }) {
             </>
           )}
           {!loading && !error && faces && faces.length === 0 && (
-            <div className="text-xs text-un1t-light px-2 py-1.5">
+            <div className="text-xs text-un1t-subtle px-2 py-1.5">
               No faces enrolled in Protect at {locationName} yet. Enrol them in the UniFi Protect UI first, then come back.
             </div>
           )}
 
           {/* Manual entry — always available, even when the API works.
               The operator can hit "Save" without leaving the picker. */}
-          <div className="border-t border-un1t-gray/50 pt-2 mt-2">
-            <label className="text-xs text-un1t-light px-1">Or paste face id manually:</label>
+          <div className="border-t border-un1t-border/50 pt-2 mt-2">
+            <label className="text-xs text-un1t-subtle px-1">Or paste face id manually:</label>
             <input
               type="text"
               defaultValue={value || ''}
@@ -1484,9 +1484,9 @@ function ProtectFacePicker({ locationId, locationName, value, onChange }) {
                 onChange(trimmed || null)
               }}
               placeholder="e.g. abc123def456…"
-              className="mt-1 w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white focus:outline-none focus:border-un1t-mid"
+              className="mt-1 w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted"
             />
-            <div className="text-[11px] text-un1t-light px-1 mt-1">
+            <div className="text-[11px] text-un1t-subtle px-1 mt-1">
               Find the id in UniFi Protect → Cameras → Smart Detections → Known Faces.
             </div>
           </div>
@@ -1494,7 +1494,7 @@ function ProtectFacePicker({ locationId, locationName, value, onChange }) {
       )}
 
       {value && (
-        <div className="text-[11px] text-un1t-light px-1">
+        <div className="text-[11px] text-un1t-subtle px-1">
           When the camera at {locationName} matches this face, attendance auto-stamps their shift.
         </div>
       )}
@@ -1557,19 +1557,19 @@ function UnifiUserPicker({ locationId, locationName, value, onChange }) {
       <button
         type="button"
         onClick={handleToggle}
-        className="w-full flex items-center justify-between text-left rounded-md border border-un1t-gray bg-un1t-black px-3 py-2 text-sm hover:border-un1t-mid"
+        className="w-full flex items-center justify-between text-left rounded-md border border-un1t-border bg-un1t-bg px-3 py-2 text-sm hover:border-un1t-muted"
       >
         <div className="min-w-0">
-          <div className="text-xs text-un1t-light">UniFi Access user</div>
+          <div className="text-xs text-un1t-subtle">UniFi Access user</div>
           <div className="truncate">{currentLabel}</div>
         </div>
-        <span className="text-un1t-light text-xs ml-2">{open ? '▴' : '▾'}</span>
+        <span className="text-un1t-subtle text-xs ml-2">{open ? '▴' : '▾'}</span>
       </button>
 
       {open && (
-        <div className="rounded-md border border-un1t-gray bg-un1t-black p-2 space-y-1">
+        <div className="rounded-md border border-un1t-border bg-un1t-bg p-2 space-y-1">
           {loading && (
-            <div className="text-xs text-un1t-light px-2 py-1.5">Loading users from {locationName}…</div>
+            <div className="text-xs text-un1t-subtle px-2 py-1.5">Loading users from {locationName}…</div>
           )}
           {error && (
             <div className="text-xs text-red-300 px-2 py-1.5">{error}</div>
@@ -1579,25 +1579,25 @@ function UnifiUserPicker({ locationId, locationName, value, onChange }) {
               <button
                 type="button"
                 onClick={() => { onChange(null); setOpen(false) }}
-                className={`w-full text-left text-sm px-2 py-1.5 rounded hover:bg-un1t-gray/40 ${!value ? 'text-blue-300' : ''}`}
+                className={`w-full text-left text-sm px-2 py-1.5 rounded hover:bg-un1t-border/40 ${!value ? 'text-blue-300' : ''}`}
               >
                 Auto / clear link
-                <div className="text-xs text-un1t-light">Let the system match by email when door access is enabled</div>
+                <div className="text-xs text-un1t-subtle">Let the system match by email when door access is enabled</div>
               </button>
-              <div className="border-t border-un1t-gray/50 my-1" />
+              <div className="border-t border-un1t-border/50 my-1" />
               <div className="max-h-64 overflow-y-auto">
                 {users.length === 0 && (
-                  <div className="text-xs text-un1t-light px-2 py-1.5">No UniFi users registered at this controller.</div>
+                  <div className="text-xs text-un1t-subtle px-2 py-1.5">No UniFi users registered at this controller.</div>
                 )}
                 {users.map((u) => (
                   <button
                     key={u.id}
                     type="button"
                     onClick={() => { onChange(u.id); setOpen(false) }}
-                    className={`w-full text-left text-sm px-2 py-1.5 rounded hover:bg-un1t-gray/40 ${value === u.id ? 'text-blue-300' : ''}`}
+                    className={`w-full text-left text-sm px-2 py-1.5 rounded hover:bg-un1t-border/40 ${value === u.id ? 'text-blue-300' : ''}`}
                   >
                     <div>{u.full_name}</div>
-                    <div className="text-xs text-un1t-light">
+                    <div className="text-xs text-un1t-subtle">
                       {u.user_email || 'no email'}
                       {u.nfc_count > 0 && ` · ${u.nfc_count} NFC card${u.nfc_count === 1 ? '' : 's'}`}
                     </div>
@@ -1610,7 +1610,7 @@ function UnifiUserPicker({ locationId, locationName, value, onChange }) {
       )}
 
       {value && (
-        <div className="text-[11px] text-un1t-light px-1">
+        <div className="text-[11px] text-un1t-subtle px-1">
           When this person taps a door at {locationName}, attendance auto-stamps their shift.
         </div>
       )}
@@ -1699,19 +1699,19 @@ function DoorAllowlistPicker({ locationId, locationName, value, onChange }) {
       <button
         type="button"
         onClick={handleToggle}
-        className="w-full flex items-center justify-between text-left rounded-md border border-un1t-gray bg-un1t-black px-3 py-2 text-sm hover:border-un1t-mid"
+        className="w-full flex items-center justify-between text-left rounded-md border border-un1t-border bg-un1t-bg px-3 py-2 text-sm hover:border-un1t-muted"
       >
         <div className="min-w-0">
-          <div className="text-xs text-un1t-light">Studio Management doors</div>
+          <div className="text-xs text-un1t-subtle">Studio Management doors</div>
           <div className="truncate">{currentLabel}</div>
         </div>
-        <span className="text-un1t-light text-xs ml-2">{open ? '▴' : '▾'}</span>
+        <span className="text-un1t-subtle text-xs ml-2">{open ? '▴' : '▾'}</span>
       </button>
 
       {open && (
-        <div className="rounded-md border border-un1t-gray bg-un1t-black p-2 space-y-1">
+        <div className="rounded-md border border-un1t-border bg-un1t-bg p-2 space-y-1">
           {loading && (
-            <div className="text-xs text-un1t-light px-2 py-1.5">Loading doors from {locationName}…</div>
+            <div className="text-xs text-un1t-subtle px-2 py-1.5">Loading doors from {locationName}…</div>
           )}
           {error && (
             <div className="text-xs text-red-300 px-2 py-1.5">{error}</div>
@@ -1719,7 +1719,7 @@ function DoorAllowlistPicker({ locationId, locationName, value, onChange }) {
           {!loading && !error && doors && (
             <>
               <div className="flex items-center justify-between px-2 py-1">
-                <span className="text-[11px] text-un1t-light uppercase tracking-wider">
+                <span className="text-[11px] text-un1t-subtle uppercase tracking-wider">
                   {selected.length} of {doors.length} selected
                 </span>
                 <div className="flex items-center gap-2 text-[11px]">
@@ -1730,7 +1730,7 @@ function DoorAllowlistPicker({ locationId, locationName, value, onChange }) {
                   >
                     Select all
                   </button>
-                  <span className="text-un1t-gray">·</span>
+                  <span className="text-un1t-border">·</span>
                   <button
                     type="button"
                     onClick={selectNone}
@@ -1740,10 +1740,10 @@ function DoorAllowlistPicker({ locationId, locationName, value, onChange }) {
                   </button>
                 </div>
               </div>
-              <div className="border-t border-un1t-gray/50 my-1" />
+              <div className="border-t border-un1t-border/50 my-1" />
               <div className="max-h-64 overflow-y-auto">
                 {doors.length === 0 && (
-                  <div className="text-xs text-un1t-light px-2 py-1.5">No doors registered at this controller.</div>
+                  <div className="text-xs text-un1t-subtle px-2 py-1.5">No doors registered at this controller.</div>
                 )}
                 {doors.map((d) => {
                   const isOn = selectedSet.has(d.id)
@@ -1752,9 +1752,9 @@ function DoorAllowlistPicker({ locationId, locationName, value, onChange }) {
                       key={d.id}
                       type="button"
                       onClick={() => toggleDoor(d.id)}
-                      className={`w-full text-left text-sm px-2 py-1.5 rounded hover:bg-un1t-gray/40 flex items-center gap-2 ${isOn ? 'text-blue-300' : ''}`}
+                      className={`w-full text-left text-sm px-2 py-1.5 rounded hover:bg-un1t-border/40 flex items-center gap-2 ${isOn ? 'text-blue-300' : ''}`}
                     >
-                      <span className={`inline-block w-3.5 h-3.5 rounded border ${isOn ? 'bg-blue-500 border-blue-500' : 'border-un1t-gray'} flex items-center justify-center text-[10px] text-white`}>
+                      <span className={`inline-block w-3.5 h-3.5 rounded border ${isOn ? 'bg-blue-500 border-blue-500' : 'border-un1t-border'} flex items-center justify-center text-[10px] text-white`}>
                         {isOn ? '✓' : ''}
                       </span>
                       <span className="truncate">{d.name}</span>
@@ -1768,7 +1768,7 @@ function DoorAllowlistPicker({ locationId, locationName, value, onChange }) {
                   untick to clean up. */}
               {doors && selected.filter((id) => !doors.find((d) => d.id === id)).length > 0 && (
                 <>
-                  <div className="border-t border-un1t-gray/50 my-1" />
+                  <div className="border-t border-un1t-border/50 my-1" />
                   <div className="text-[11px] text-amber-300 px-2 py-1">
                     Unknown / removed doors still in this user's allowlist:
                   </div>
@@ -1777,7 +1777,7 @@ function DoorAllowlistPicker({ locationId, locationName, value, onChange }) {
                       key={id}
                       type="button"
                       onClick={() => toggleDoor(id)}
-                      className="w-full text-left text-sm px-2 py-1.5 rounded hover:bg-un1t-gray/40 flex items-center gap-2 text-amber-300"
+                      className="w-full text-left text-sm px-2 py-1.5 rounded hover:bg-un1t-border/40 flex items-center gap-2 text-amber-300"
                     >
                       <span className="inline-block w-3.5 h-3.5 rounded border bg-amber-500 border-amber-500 flex items-center justify-center text-[10px] text-black">✓</span>
                       <span className="truncate font-mono text-xs">{id}</span>
@@ -1790,7 +1790,7 @@ function DoorAllowlistPicker({ locationId, locationName, value, onChange }) {
         </div>
       )}
 
-      <div className="text-[11px] text-un1t-light px-1">
+      <div className="text-[11px] text-un1t-subtle px-1">
         Doors this user can remote-unlock from the Studio Management screen at {locationName}.
         UniFi card-tap access is controlled separately by the user's policy.
       </div>
@@ -1868,19 +1868,19 @@ function AcDeviceAllowlistPicker({ locationId, locationName, value, onChange }) 
       <button
         type="button"
         onClick={handleToggle}
-        className="w-full flex items-center justify-between text-left rounded-md border border-un1t-gray bg-un1t-black px-3 py-2 text-sm hover:border-un1t-mid"
+        className="w-full flex items-center justify-between text-left rounded-md border border-un1t-border bg-un1t-bg px-3 py-2 text-sm hover:border-un1t-muted"
       >
         <div className="min-w-0">
-          <div className="text-xs text-un1t-light">Studio Management AC units</div>
+          <div className="text-xs text-un1t-subtle">Studio Management AC units</div>
           <div className="truncate">{currentLabel}</div>
         </div>
-        <span className="text-un1t-light text-xs ml-2">{open ? '▴' : '▾'}</span>
+        <span className="text-un1t-subtle text-xs ml-2">{open ? '▴' : '▾'}</span>
       </button>
 
       {open && (
-        <div className="rounded-md border border-un1t-gray bg-un1t-black p-2 space-y-1">
+        <div className="rounded-md border border-un1t-border bg-un1t-bg p-2 space-y-1">
           {loading && (
-            <div className="text-xs text-un1t-light px-2 py-1.5">Loading AC devices from {locationName}…</div>
+            <div className="text-xs text-un1t-subtle px-2 py-1.5">Loading AC devices from {locationName}…</div>
           )}
           {error && (
             <div className="text-xs text-red-300 px-2 py-1.5">{error}</div>
@@ -1888,7 +1888,7 @@ function AcDeviceAllowlistPicker({ locationId, locationName, value, onChange }) 
           {!loading && !error && devices && (
             <>
               <div className="flex items-center justify-between px-2 py-1">
-                <span className="text-[11px] text-un1t-light uppercase tracking-wider">
+                <span className="text-[11px] text-un1t-subtle uppercase tracking-wider">
                   {selected.length} of {devices.length} selected
                 </span>
                 <div className="flex gap-3 text-[11px]">
@@ -1896,10 +1896,10 @@ function AcDeviceAllowlistPicker({ locationId, locationName, value, onChange }) 
                   <button type="button" onClick={selectNone} className="text-blue-300 hover:text-blue-200">Clear</button>
                 </div>
               </div>
-              <div className="border-t border-un1t-gray/50 my-1" />
+              <div className="border-t border-un1t-border/50 my-1" />
               <div className="max-h-64 overflow-y-auto">
                 {devices.length === 0 && (
-                  <div className="text-xs text-un1t-light px-2 py-1.5">
+                  <div className="text-xs text-un1t-subtle px-2 py-1.5">
                     No AC devices configured at this location. Add devices under Settings → Locations → AC Devices first.
                   </div>
                 )}
@@ -1910,19 +1910,19 @@ function AcDeviceAllowlistPicker({ locationId, locationName, value, onChange }) 
                       key={d.id}
                       type="button"
                       onClick={() => toggleDevice(d.id)}
-                      className="w-full text-left text-sm px-2 py-1.5 rounded hover:bg-un1t-gray/40 flex items-center gap-2"
+                      className="w-full text-left text-sm px-2 py-1.5 rounded hover:bg-un1t-border/40 flex items-center gap-2"
                     >
                       <span
                         className={`inline-block w-3.5 h-3.5 rounded border flex items-center justify-center text-[10px] ${
                           isOn
                             ? 'bg-blue-500 border-blue-500 text-white'
-                            : 'border-un1t-gray text-transparent'
+                            : 'border-un1t-border text-transparent'
                         }`}
                       >
                         {isOn ? '✓' : ''}
                       </span>
                       <span className="truncate">{d.label}</span>
-                      <span className="ml-auto text-[10px] uppercase tracking-wider text-un1t-mid font-mono shrink-0">
+                      <span className="ml-auto text-[10px] uppercase tracking-wider text-un1t-muted font-mono shrink-0">
                         {d.provider === 'thinq' ? 'LG ThinQ' : 'Sensibo'}
                       </span>
                     </button>
@@ -1934,7 +1934,7 @@ function AcDeviceAllowlistPicker({ locationId, locationName, value, onChange }) 
         </div>
       )}
 
-      <div className="text-[11px] text-un1t-light px-1">
+      <div className="text-[11px] text-un1t-subtle px-1">
         AC units this user can control from the Studio Management screen at {locationName}.
       </div>
     </div>

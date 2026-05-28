@@ -19,7 +19,7 @@ export default function MemberPasswordOverrideButton({ contactId, contactLabel }
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="inline-flex items-center gap-1.5 text-xs text-amber-300 hover:text-amber-200 border border-un1t-gray hover:border-amber-300/40 px-3 py-1.5 rounded-md transition-colors"
+        className="inline-flex items-center gap-1.5 text-xs text-amber-300 hover:text-amber-200 border border-un1t-border hover:border-amber-300/40 px-3 py-1.5 rounded-md transition-colors"
         title="Set a new password for this member's CRM login"
       >
         <ShieldAlert size={12} />

@@ -92,7 +92,7 @@ export default function GlofoxIntegrationTab({ location, canEdit }) {
 
   if (!canEdit) {
     return (
-      <div className="text-xs text-un1t-light">
+      <div className="text-xs text-un1t-subtle">
         Only owners + masters can edit Glofox credentials.
       </div>
     )
@@ -100,11 +100,11 @@ export default function GlofoxIntegrationTab({ location, canEdit }) {
 
   return (
     <div className="space-y-4">
-      <p className="text-xs text-un1t-light">
+      <p className="text-xs text-un1t-subtle">
         Glofox is the gym-side member + booking source. The three-header auth (Branch ID
         + API Key + API Token) is required by Glofox v3; the webhook secret signs incoming
         Glofox webhooks (HMAC-SHA256). The namespace is the value Glofox sends in
-        <code className="text-[10px] mx-1 px-1 bg-un1t-black/40 rounded">/Analytics/report</code>
+        <code className="text-[10px] mx-1 px-1 bg-un1t-bg/40 rounded">/Analytics/report</code>
         responses — set it once or the report endpoint silently returns empty.
       </p>
 
@@ -121,23 +121,23 @@ export default function GlofoxIntegrationTab({ location, canEdit }) {
 
       <Field label="Branch ID">
         <input type="text" value={branchId} onChange={e => setBranchId(e.target.value)}
-          className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm font-mono text-un1t-white" />
+          className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm font-mono text-un1t-text" />
       </Field>
       <Field label="API Key">
         <input type="text" value={apiKey} onChange={e => setApiKey(e.target.value)}
-          className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm font-mono text-un1t-white" />
+          className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm font-mono text-un1t-text" />
       </Field>
       <Field label="API Token">
         <input type="text" value={apiToken} onChange={e => setApiToken(e.target.value)}
-          className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm font-mono text-un1t-white" />
+          className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm font-mono text-un1t-text" />
       </Field>
       <Field label="Webhook Secret">
         <input type="text" value={webhookSecret} onChange={e => setWebhookSecret(e.target.value)}
-          className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm font-mono text-un1t-white" />
+          className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm font-mono text-un1t-text" />
       </Field>
       <Field label="Namespace" hint="Required for /Analytics/report queries. Glofox provides this on request.">
         <input type="text" value={namespace} onChange={e => setNamespace(e.target.value)}
-          className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm font-mono text-un1t-white" />
+          className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm font-mono text-un1t-text" />
       </Field>
 
       <Field
@@ -147,7 +147,7 @@ export default function GlofoxIntegrationTab({ location, canEdit }) {
         <select
           value={trialKey}
           onChange={e => setTrialKey(e.target.value)}
-          className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
+          className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
         >
           <option value="">— None —</option>
           {memberships.map(m => (
@@ -156,15 +156,15 @@ export default function GlofoxIntegrationTab({ location, canEdit }) {
             </option>
           ))}
         </select>
-        {membershipsLoading && <p className="text-[11px] text-un1t-mid mt-1">Loading membership list…</p>}
+        {membershipsLoading && <p className="text-[11px] text-un1t-muted mt-1">Loading membership list…</p>}
       </Field>
 
-      <div className="flex justify-end pt-2 border-t border-un1t-gray/40">
+      <div className="flex justify-end pt-2 border-t border-un1t-border/40">
         <button
           type="button"
           onClick={save}
           disabled={saving}
-          className="inline-flex items-center gap-1.5 px-4 py-2 rounded-md bg-un1t-white text-un1t-black text-sm font-semibold hover:bg-un1t-accent disabled:opacity-50"
+          className="inline-flex items-center gap-1.5 px-4 py-2 rounded-md bg-un1t-text text-un1t-bg text-sm font-semibold hover:bg-un1t-accent disabled:opacity-50"
         >
           {saving
             ? <><Loader2 size={12} className="animate-spin" /> Saving…</>
@@ -179,9 +179,9 @@ export default function GlofoxIntegrationTab({ location, canEdit }) {
 function Field({ label, hint, children }) {
   return (
     <div>
-      <label className="block text-xs text-un1t-light mb-1">{label}</label>
+      <label className="block text-xs text-un1t-subtle mb-1">{label}</label>
       {children}
-      {hint && <p className="text-[11px] text-un1t-mid mt-1">{hint}</p>}
+      {hint && <p className="text-[11px] text-un1t-muted mt-1">{hint}</p>}
     </div>
   )
 }
