@@ -295,6 +295,16 @@ describe('setDeviceState', () => {
     global.fetch = vi.fn(async () => jsonResponse({ messageId: 'm' }))
     expect(await setDeviceState('ac-1', { x: 1 }, CTX)).toBeNull()
   })
+
+  it("sends the 'x-conditional-control: true' header on every control POST", async () => {
+    // Without this header LG returns code 2207 'Invalid command
+    // error' for composite payloads (anything that touches more than
+    // one resource block — which buildTurnOnState always does).
+    global.fetch = vi.fn(async () => jsonResponse({ response: {} }))
+    await setDeviceState('ac-1', buildTurnOnState({}), CTX)
+    const [, init] = global.fetch.mock.calls[0]
+    expect(init.headers['x-conditional-control']).toBe('true')
+  })
 })
 
 describe('turnOff', () => {
@@ -311,6 +321,13 @@ describe('turnOff', () => {
     expect(body).toEqual({ operation: { airConOperationMode: 'POWER_OFF' } })
     expect(body.airConJobMode).toBeUndefined()
     expect(body.temperature).toBeUndefined()
+  })
+
+  it("also sends 'x-conditional-control: true' (goes through setDeviceState)", async () => {
+    global.fetch = vi.fn(async () => jsonResponse({ response: {} }))
+    await turnOff('ac-1', CTX)
+    const [, init] = global.fetch.mock.calls[0]
+    expect(init.headers['x-conditional-control']).toBe('true')
   })
 })
 
