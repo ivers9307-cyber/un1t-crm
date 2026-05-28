@@ -84,6 +84,13 @@ export default function More() {
     canMobile(profile, 'churn_radar', activeLocation) ||
     canMobile(profile, 'lead_radar', activeLocation)
   )
+  // MOBILE-AC.1 — AC control list (covers the new ThinQ bathroom
+  // units + existing Sensibo studio floor). Gated on the same
+  // studio_management permission the Studio tab uses. The screen
+  // itself re-filters by the per-staff ac_device_ids allowlist
+  // server-side, so a staff member only sees the devices their
+  // master has ticked for them.
+  const showAc = profile && canMobile(profile, 'studio_management', activeLocation)
 
   // POLICIES-VIEWS.1 — outstanding policies the user hasn't opened
   // yet. Re-fetched on each focus so opening a policy in the viewer
@@ -166,6 +173,21 @@ export default function More() {
             icon="pulse-outline"
             label="Radar"
             onPress={() => router.push('/radar')}
+            isLast
+          />
+        </Section>
+      )}
+
+      {/* MOBILE-AC.1 — air-conditioning device list. Studio Management
+          tab still has the legacy single-AC widget for the studio
+          floor; this entry is the multi-device view that includes
+          the bathroom LG units. */}
+      {showAc && (
+        <Section title="Studio">
+          <Row
+            icon="snow-outline"
+            label="Air conditioning"
+            onPress={() => router.push('/ac')}
             isLast
           />
         </Section>
