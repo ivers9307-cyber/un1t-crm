@@ -93,6 +93,8 @@ export default function ContactComposer({ contactId, contactName, onSent }) {
                   key={t.name}
                   disabled={sending}
                   onPress={() => sendTemplate(t.name)}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Send WhatsApp template ${t.name}`}
                   className="border border-un1t-border rounded-xl p-3 mb-2 active:opacity-70"
                 >
                   <View className="flex-row items-center justify-between">
@@ -123,6 +125,8 @@ export default function ContactComposer({ contactId, contactName, onSent }) {
             <Pressable
               onPress={sendText}
               disabled={!text.trim() || sending}
+              accessibilityRole="button"
+              accessibilityLabel="Send WhatsApp message"
               className={`mt-2 py-2.5 rounded-lg items-center ${
                 text.trim() && !sending ? 'bg-un1t-text' : 'bg-un1t-border'
               }`}

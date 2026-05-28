@@ -56,6 +56,10 @@ export default function PendingContractsBanner() {
     <SafeAreaView edges={['top']} style={{ backgroundColor: '#F59E0B' }}>
       <Pressable
         onPress={() => router.push(`/contracts/${top.id}`)}
+        accessibilityRole="button"
+        accessibilityLabel={count === 1
+          ? 'Sign the contract awaiting your signature'
+          : `Sign ${count} contracts awaiting your signature`}
         className="px-4 py-2 flex-row items-center"
       >
         <Ionicons name="document-text-outline" size={16} color="#000" />

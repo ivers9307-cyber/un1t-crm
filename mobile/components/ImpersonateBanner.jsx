@@ -47,6 +47,8 @@ export default function ImpersonateBanner() {
         <Pressable
           onPress={handleStop}
           disabled={stopping}
+          accessibilityRole="button"
+          accessibilityLabel="Stop viewing as this user"
           className="bg-black/80 active:opacity-80 px-3 py-1.5 rounded-md"
         >
           {stopping ? (
