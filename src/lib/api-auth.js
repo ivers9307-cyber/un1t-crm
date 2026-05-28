@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server'
 import { safeEqual } from './webhook-auth'
 import { getCurrentUser } from './auth'
 import { MANAGER_ROLES } from './schemas'
+import { createServerClient } from './supabase'
+import { hashApiKey, isApiKeyToken } from './api-keys'
 
 // Validates the API key sent by n8n in the Authorization header.
 // Comparison is constant-time so an attacker can't observe how many leading
@@ -71,4 +73,59 @@ export async function requireApiKeyOrManager(request) {
       { status: 401 },
     ),
   }
+}
+
+/**
+ * APIKEYS.1 — authenticate an external (n8n / integration) caller and
+ * resolve the ORGANIZATION the key is scoped to. Supports two token
+ * kinds during the rollout:
+ *
+ *   - per-org key (`unitk_…`): looked up by SHA-256 hash in `api_keys`;
+ *     returns { orgId } so handlers can scope queries by organization.
+ *   - legacy shared `CRM_API_KEY`: still accepted, returns orgId=null
+ *     (unscoped, all-org) so existing n8n flows keep working until they
+ *     migrate. Retire by unsetting CRM_API_KEY once migration is done.
+ *
+ * Return shape:
+ *   { ok: true,  orgId: <uuid>|null, legacy: boolean, keyId?: uuid }
+ *   { ok: false, response: <NextResponse 401> }
+ *
+ * Note: async (per-org keys require a DB lookup). Routes adopting this
+ * should `await` it.
+ */
+export async function authenticateApiKey(request) {
+  const auth = request.headers.get('authorization') || ''
+  const token = auth.startsWith('Bearer ') ? auth.slice('Bearer '.length) : ''
+  const unauthorized = () => ({
+    ok: false,
+    response: NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 }),
+  })
+  if (!token) return unauthorized()
+
+  // Legacy shared key first (cheap, header-only) — unscoped.
+  const expected = process.env.CRM_API_KEY
+  if (expected && safeEqual(token, expected)) {
+    return { ok: true, orgId: null, legacy: true }
+  }
+
+  // Per-org key — look up by hash, must be active (not revoked).
+  if (isApiKeyToken(token)) {
+    const db = createServerClient()
+    const { data } = await db
+      .from('api_keys')
+      .select('id, organization_id')
+      .eq('key_hash', hashApiKey(token))
+      .is('revoked_at', null)
+      .maybeSingle()
+    if (data) {
+      // Fire-and-forget usage stamp — never block or fail auth on it.
+      db.from('api_keys')
+        .update({ last_used_at: new Date().toISOString() })
+        .eq('id', data.id)
+        .then(() => {}, () => {})
+      return { ok: true, orgId: data.organization_id, legacy: false, keyId: data.id }
+    }
+  }
+
+  return unauthorized()
 }
