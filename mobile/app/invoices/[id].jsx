@@ -90,14 +90,14 @@ export default function InvoiceDetailScreen() {
 
   if (loading) {
     return (
-      <View className="flex-1 bg-un1t-black items-center justify-center">
+      <View className="flex-1 bg-un1t-bg items-center justify-center">
         <ActivityIndicator color="#94A3B8" />
       </View>
     )
   }
   if (error || !data) {
     return (
-      <View className="flex-1 bg-un1t-black items-center justify-center p-6">
+      <View className="flex-1 bg-un1t-bg items-center justify-center p-6">
         <Text className="text-sm text-red-700">{error || 'Not found'}</Text>
         <Pressable onPress={() => router.back()} className="mt-4">
           <Text className="text-sm text-blue-600">Back</Text>
@@ -120,24 +120,24 @@ export default function InvoiceDetailScreen() {
         }}
       />
       <ScrollView
-        className="flex-1 bg-un1t-black"
+        className="flex-1 bg-un1t-bg"
         contentContainerStyle={{ padding: 16, paddingBottom: 32 }}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#94A3B8" />}
       >
         {/* Header */}
-        <View className="bg-un1t-dark border border-un1t-gray rounded-2xl p-5 mb-4">
-          <Text className="text-xs uppercase font-semibold text-un1t-light mb-1">Period</Text>
-          <Text className="text-xl font-bold text-un1t-white mb-3">{periodLabel(data.period_start)}</Text>
+        <View className="bg-un1t-surface border border-un1t-border rounded-2xl p-5 mb-4">
+          <Text className="text-xs uppercase font-semibold text-un1t-subtle mb-1">Period</Text>
+          <Text className="text-xl font-bold text-un1t-text mb-3">{periodLabel(data.period_start)}</Text>
 
-          <Text className="text-xs uppercase font-semibold text-un1t-light mb-1">Amount</Text>
-          <Text className="text-2xl font-bold text-un1t-white mb-3">
+          <Text className="text-xs uppercase font-semibold text-un1t-subtle mb-1">Amount</Text>
+          <Text className="text-2xl font-bold text-un1t-text mb-3">
             €{Number(data.invoice_amount).toFixed(2)}
           </Text>
 
           {data.invoice_number ? (
             <>
-              <Text className="text-xs uppercase font-semibold text-un1t-light mb-1">Your reference</Text>
-              <Text className="text-sm text-un1t-white mb-3">{data.invoice_number}</Text>
+              <Text className="text-xs uppercase font-semibold text-un1t-subtle mb-1">Your reference</Text>
+              <Text className="text-sm text-un1t-text mb-3">{data.invoice_number}</Text>
             </>
           ) : null}
 
@@ -153,7 +153,7 @@ export default function InvoiceDetailScreen() {
         {data.status === 'declined' && data.decline_reason && (
           <View className="bg-amber-500/10 border-l-4 border-amber-500 p-4 mb-4 rounded-r-2xl">
             <Text className="text-xs uppercase font-semibold text-amber-700 mb-1">Reason for decline</Text>
-            <Text className="text-sm text-un1t-white">{data.decline_reason}</Text>
+            <Text className="text-sm text-un1t-text">{data.decline_reason}</Text>
             <Pressable
               onPress={() => router.push({ pathname: '/invoices/new', params: { resubmitMonth: monthKeyFromPeriod(data.period_start) } })}
               className="mt-3 bg-blue-600 active:opacity-80 px-4 py-2.5 rounded-xl items-center"
@@ -167,7 +167,7 @@ export default function InvoiceDetailScreen() {
         <Pressable
           onPress={handleViewPdf}
           disabled={pdfLoading}
-          className="bg-un1t-dark border border-un1t-gray rounded-2xl p-4 mb-4 flex-row items-center active:opacity-70"
+          className="bg-un1t-surface border border-un1t-border rounded-2xl p-4 mb-4 flex-row items-center active:opacity-70"
         >
           <View className="w-10 h-10 rounded-full bg-blue-500/20 items-center justify-center">
             {pdfLoading
@@ -175,22 +175,22 @@ export default function InvoiceDetailScreen() {
               : <Ionicons name="document-text" size={20} color="#2563EB" />}
           </View>
           <View className="flex-1 ml-3">
-            <Text className="text-sm font-semibold text-un1t-white">View PDF</Text>
-            <Text className="text-xs text-un1t-light">Opens in your browser</Text>
+            <Text className="text-sm font-semibold text-un1t-text">View PDF</Text>
+            <Text className="text-xs text-un1t-subtle">Opens in your browser</Text>
           </View>
           <Ionicons name="open-outline" size={18} color="#64748B" />
         </Pressable>
 
         {/* Audit timeline */}
-        <View className="bg-un1t-dark border border-un1t-gray rounded-2xl p-4 mb-4">
-          <Text className="text-xs uppercase font-semibold text-un1t-light mb-3">Audit trail</Text>
+        <View className="bg-un1t-surface border border-un1t-border rounded-2xl p-4 mb-4">
+          <Text className="text-xs uppercase font-semibold text-un1t-subtle mb-3">Audit trail</Text>
           <Timeline data={data} />
         </View>
 
         {data.notes ? (
-          <View className="bg-un1t-dark border border-un1t-gray rounded-2xl p-4 mb-4">
-            <Text className="text-xs uppercase font-semibold text-un1t-light mb-1">Your notes</Text>
-            <Text className="text-sm text-un1t-white">{data.notes}</Text>
+          <View className="bg-un1t-surface border border-un1t-border rounded-2xl p-4 mb-4">
+            <Text className="text-xs uppercase font-semibold text-un1t-subtle mb-1">Your notes</Text>
+            <Text className="text-sm text-un1t-text">{data.notes}</Text>
           </View>
         ) : null}
 
@@ -231,9 +231,9 @@ function Timeline({ data }) {
         <View key={i} className="flex-row gap-3">
           <View className={`w-2 h-2 rounded-full mt-2 ${dotColor(e.tone)}`} />
           <View className="flex-1">
-            <Text className="text-sm font-medium text-un1t-white">{e.label}</Text>
-            {e.sub ? <Text className="text-xs text-un1t-light mt-0.5">{e.sub}</Text> : null}
-            <Text className="text-[11px] text-un1t-light mt-0.5">{formatTs(e.ts)}</Text>
+            <Text className="text-sm font-medium text-un1t-text">{e.label}</Text>
+            {e.sub ? <Text className="text-xs text-un1t-subtle mt-0.5">{e.sub}</Text> : null}
+            <Text className="text-[11px] text-un1t-subtle mt-0.5">{formatTs(e.ts)}</Text>
           </View>
         </View>
       ))}

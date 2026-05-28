@@ -40,15 +40,15 @@ export default function Login() {
   }
 
   return (
-    <SafeAreaView className="flex-1 bg-un1t-black">
+    <SafeAreaView className="flex-1 bg-un1t-bg">
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         className="flex-1"
       >
         <View className="flex-1 px-6 justify-center">
           {/* Large title — iOS-native feeling */}
-          <Text className="text-3xl font-bold text-un1t-white mb-1">CF Studio</Text>
-          <Text className="text-base text-un1t-light mb-10">Sign in to continue</Text>
+          <Text className="text-3xl font-bold text-un1t-text mb-1">CF Studio</Text>
+          <Text className="text-base text-un1t-subtle mb-10">Sign in to continue</Text>
 
           {error ? (
             <View className="bg-red-500/10 border border-red-500/30 rounded-xl p-3 mb-4">
@@ -56,9 +56,9 @@ export default function Login() {
             </View>
           ) : null}
 
-          <View className="bg-un1t-dark rounded-2xl border border-un1t-gray overflow-hidden mb-4">
-            <View className="px-4 py-3 border-b border-un1t-gray">
-              <Text className="text-xs text-un1t-light mb-1">Email</Text>
+          <View className="bg-un1t-surface rounded-2xl border border-un1t-border overflow-hidden mb-4">
+            <View className="px-4 py-3 border-b border-un1t-border">
+              <Text className="text-xs text-un1t-subtle mb-1">Email</Text>
               <TextInput
                 value={email}
                 onChangeText={setEmail}
@@ -68,11 +68,11 @@ export default function Login() {
                 autoCorrect={false}
                 keyboardType="email-address"
                 textContentType="username"
-                className="text-base text-un1t-white"
+                className="text-base text-un1t-text"
               />
             </View>
             <View className="px-4 py-3">
-              <Text className="text-xs text-un1t-light mb-1">Password</Text>
+              <Text className="text-xs text-un1t-subtle mb-1">Password</Text>
               <TextInput
                 value={password}
                 onChangeText={setPassword}
@@ -80,7 +80,7 @@ export default function Login() {
                 placeholderTextColor="#94A3B8"
                 secureTextEntry
                 textContentType="password"
-                className="text-base text-un1t-white"
+                className="text-base text-un1t-text"
               />
             </View>
           </View>
@@ -89,17 +89,17 @@ export default function Login() {
             onPress={handleSignIn}
             disabled={submitting || !email || !password}
             className={`rounded-2xl py-4 items-center ${
-              submitting || !email || !password ? 'bg-un1t-gray' : 'bg-un1t-white'
+              submitting || !email || !password ? 'bg-un1t-border' : 'bg-un1t-text'
             }`}
           >
             {submitting ? (
               <ActivityIndicator color="#FFFFFF" />
             ) : (
-              <Text className="text-un1t-black font-semibold text-base">Sign in</Text>
+              <Text className="text-un1t-bg font-semibold text-base">Sign in</Text>
             )}
           </Pressable>
 
-          <Text className="text-xs text-un1t-light text-center mt-6">
+          <Text className="text-xs text-un1t-subtle text-center mt-6">
             Forgot your password? Use the web app at{'\n'}crm.un1tdublin.com to reset it.
           </Text>
         </View>

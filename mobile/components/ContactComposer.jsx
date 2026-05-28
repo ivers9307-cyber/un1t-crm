@@ -72,19 +72,19 @@ export default function ContactComposer({ contactId, contactName, onSent }) {
 
   return (
     <View className="mb-5">
-      <Text className="text-xs font-semibold uppercase tracking-wider text-un1t-light mb-2 px-1">
+      <Text className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle mb-2 px-1">
         Message {contactName || 'contact'}
       </Text>
-      <View className="bg-un1t-dark border border-un1t-gray rounded-2xl p-4">
+      <View className="bg-un1t-surface border border-un1t-border rounded-2xl p-4">
         {loading ? (
           <ActivityIndicator />
         ) : windowClosed ? (
           <View>
-            <Text className="text-xs text-un1t-light mb-2">
+            <Text className="text-xs text-un1t-subtle mb-2">
               The 24-hour WhatsApp window is closed. Send a utility template to reopen the conversation.
             </Text>
             {templates.length === 0 ? (
-              <Text className="text-xs text-un1t-light">
+              <Text className="text-xs text-un1t-subtle">
                 No approved utility templates yet. Add one on the web under WhatsApp → Templates.
               </Text>
             ) : (
@@ -93,14 +93,14 @@ export default function ContactComposer({ contactId, contactName, onSent }) {
                   key={t.name}
                   disabled={sending}
                   onPress={() => sendTemplate(t.name)}
-                  className="border border-un1t-gray rounded-xl p-3 mb-2 active:opacity-70"
+                  className="border border-un1t-border rounded-xl p-3 mb-2 active:opacity-70"
                 >
                   <View className="flex-row items-center justify-between">
-                    <Text className="text-sm font-medium text-un1t-white flex-1 mr-2">{t.name}</Text>
+                    <Text className="text-sm font-medium text-un1t-text flex-1 mr-2">{t.name}</Text>
                     <Ionicons name="send-outline" size={15} color="#111827" />
                   </View>
                   {!!t.bodyText && (
-                    <Text className="text-xs text-un1t-light mt-1">{t.bodyText}</Text>
+                    <Text className="text-xs text-un1t-subtle mt-1">{t.bodyText}</Text>
                   )}
                 </Pressable>
               ))
@@ -114,23 +114,23 @@ export default function ContactComposer({ contactId, contactName, onSent }) {
               multiline
               placeholder={`Message ${contactName || 'the customer'} on WhatsApp…`}
               placeholderTextColor="#94A3B8"
-              className="text-base text-un1t-white min-h-[72px]"
+              className="text-base text-un1t-text min-h-[72px]"
               textAlignVertical="top"
             />
-            <Text className="text-[11px] text-un1t-mid mt-1">
+            <Text className="text-[11px] text-un1t-muted mt-1">
               Free-texting is open — replies keep the 24-hour window alive.
             </Text>
             <Pressable
               onPress={sendText}
               disabled={!text.trim() || sending}
               className={`mt-2 py-2.5 rounded-lg items-center ${
-                text.trim() && !sending ? 'bg-un1t-white' : 'bg-un1t-gray'
+                text.trim() && !sending ? 'bg-un1t-text' : 'bg-un1t-border'
               }`}
             >
               {sending ? (
                 <ActivityIndicator />
               ) : (
-                <Text className="text-un1t-black font-semibold text-sm">Send WhatsApp</Text>
+                <Text className="text-un1t-bg font-semibold text-sm">Send WhatsApp</Text>
               )}
             </Pressable>
           </View>

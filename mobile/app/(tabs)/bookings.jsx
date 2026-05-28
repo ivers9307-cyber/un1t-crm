@@ -48,22 +48,22 @@ function BookingRow({ booking, onPress }) {
   return (
     <Pressable
       onPress={onPress}
-      className="bg-un1t-dark border border-un1t-gray rounded-2xl p-4 mb-2 active:opacity-70"
+      className="bg-un1t-surface border border-un1t-border rounded-2xl p-4 mb-2 active:opacity-70"
     >
       <View className="flex-row items-center mb-1.5">
         <View
           className="w-2 h-2 rounded-full mr-2"
           style={{ backgroundColor: dot }}
         />
-        <Text className="text-sm font-medium text-un1t-light">
+        <Text className="text-sm font-medium text-un1t-subtle">
           {evt?.name || 'Booking'}
         </Text>
       </View>
       <View className="flex-row items-center justify-between">
-        <Text className="text-base font-semibold text-un1t-white flex-1" numberOfLines={1}>
+        <Text className="text-base font-semibold text-un1t-text flex-1" numberOfLines={1}>
           {customer}
         </Text>
-        <Text className="text-base font-mono text-un1t-white ml-2">
+        <Text className="text-base font-mono text-un1t-text ml-2">
           {formatBookingTime(booking.start_time)}
         </Text>
       </View>
@@ -79,13 +79,13 @@ function BookingRow({ booking, onPress }) {
               className="flex-row items-center"
             >
               <Ionicons name="call-outline" size={13} color="#94A3B8" />
-              <Text className="text-[11px] text-un1t-light ml-1">{booking.customer_phone}</Text>
+              <Text className="text-[11px] text-un1t-subtle ml-1">{booking.customer_phone}</Text>
             </Pressable>
           )}
           {booking.customer_email && (
             <View className="flex-row items-center flex-1">
               <Ionicons name="mail-outline" size={13} color="#94A3B8" />
-              <Text className="text-[11px] text-un1t-light ml-1" numberOfLines={1}>
+              <Text className="text-[11px] text-un1t-subtle ml-1" numberOfLines={1}>
                 {booking.customer_email}
               </Text>
             </View>
@@ -93,7 +93,7 @@ function BookingRow({ booking, onPress }) {
         </View>
       )}
       {booking.notes && (
-        <Text className="text-xs text-un1t-light mt-1.5 italic" numberOfLines={2}>
+        <Text className="text-xs text-un1t-subtle mt-1.5 italic" numberOfLines={2}>
           {booking.notes}
         </Text>
       )}
@@ -104,8 +104,8 @@ function BookingRow({ booking, onPress }) {
 function DayHeader({ label, count }) {
   return (
     <View className="flex-row items-center justify-between mt-4 mb-2 px-1">
-      <Text className="text-xs uppercase tracking-wider text-un1t-light">{label}</Text>
-      <Text className="text-xs text-un1t-mid">
+      <Text className="text-xs uppercase tracking-wider text-un1t-subtle">{label}</Text>
+      <Text className="text-xs text-un1t-muted">
         {count} {count === 1 ? 'booking' : 'bookings'}
       </Text>
     </View>
@@ -151,7 +151,7 @@ export default function Bookings() {
   const tomorrows = byDate[tomorrow] || []
 
   return (
-    <TabletConstrained className="flex-1 bg-un1t-black">
+    <TabletConstrained className="flex-1 bg-un1t-bg">
       <ScrollView
         contentContainerClassName="px-4 pt-2 pb-10"
         refreshControl={
@@ -171,10 +171,10 @@ export default function Bookings() {
         ) : bookings.length === 0 ? (
           <View className="py-16 items-center px-6">
             <Ionicons name="calendar-clear-outline" size={32} color="#94A3B8" />
-            <Text className="text-base font-semibold text-un1t-white mt-3">
+            <Text className="text-base font-semibold text-un1t-text mt-3">
               No bookings in the next 24 hours
             </Text>
-            <Text className="text-xs text-un1t-light text-center mt-1">
+            <Text className="text-xs text-un1t-subtle text-center mt-1">
               Pull down to refresh.
             </Text>
           </View>
@@ -182,7 +182,7 @@ export default function Bookings() {
           <>
             <DayHeader label="Today" count={todays.length} />
             {todays.length === 0 ? (
-              <Text className="text-xs text-un1t-mid px-1 mb-2">Nothing else today.</Text>
+              <Text className="text-xs text-un1t-muted px-1 mb-2">Nothing else today.</Text>
             ) : (
               todays.map(b => (
                 <BookingRow
@@ -195,7 +195,7 @@ export default function Bookings() {
 
             <DayHeader label="Tomorrow" count={tomorrows.length} />
             {tomorrows.length === 0 ? (
-              <Text className="text-xs text-un1t-mid px-1">Nothing tomorrow.</Text>
+              <Text className="text-xs text-un1t-muted px-1">Nothing tomorrow.</Text>
             ) : (
               tomorrows.map(b => (
                 <BookingRow

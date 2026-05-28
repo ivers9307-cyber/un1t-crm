@@ -53,7 +53,7 @@ export default function BookingDetail() {
 
   if (loading) {
     return (
-      <View className="flex-1 bg-un1t-black items-center justify-center">
+      <View className="flex-1 bg-un1t-bg items-center justify-center">
         <Stack.Screen options={{ ...headerOptions, title: 'Booking' }} />
         <ActivityIndicator />
       </View>
@@ -62,15 +62,15 @@ export default function BookingDetail() {
 
   if (error || !booking) {
     return (
-      <View className="flex-1 bg-un1t-black items-center justify-center px-6">
+      <View className="flex-1 bg-un1t-bg items-center justify-center px-6">
         <Stack.Screen options={{ ...headerOptions, title: 'Booking' }} />
         <Ionicons name="alert-circle-outline" size={28} color="#DC2626" />
-        <Text className="text-base text-un1t-white mt-2">{error || 'Booking not found'}</Text>
+        <Text className="text-base text-un1t-text mt-2">{error || 'Booking not found'}</Text>
         <Pressable
           onPress={() => router.back()}
-          className="mt-4 px-4 py-2 rounded-full bg-un1t-dark border border-un1t-gray"
+          className="mt-4 px-4 py-2 rounded-full bg-un1t-surface border border-un1t-border"
         >
-          <Text className="text-sm text-un1t-white">Go back</Text>
+          <Text className="text-sm text-un1t-text">Go back</Text>
         </Pressable>
       </View>
     )
@@ -83,7 +83,7 @@ export default function BookingDetail() {
 
   return (
     <ScrollView
-      className="flex-1 bg-un1t-black"
+      className="flex-1 bg-un1t-bg"
       contentContainerClassName="px-4 pt-4 pb-10"
       refreshControl={
         <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#111827" />
@@ -95,32 +95,32 @@ export default function BookingDetail() {
           className="w-2.5 h-2.5 rounded-full mr-2"
           style={{ backgroundColor: evt?.color || '#94A3B8' }}
         />
-        <Text className="text-sm font-medium text-un1t-light">
+        <Text className="text-sm font-medium text-un1t-subtle">
           {evt?.name || 'Booking'}
         </Text>
       </View>
-      <Text className="text-2xl font-bold text-un1t-white">{customer}</Text>
+      <Text className="text-2xl font-bold text-un1t-text">{customer}</Text>
 
-      <View className="bg-un1t-dark border border-un1t-gray rounded-2xl p-4 mt-4">
+      <View className="bg-un1t-surface border border-un1t-border rounded-2xl p-4 mt-4">
         <View className="flex-row items-center mb-2">
           <Ionicons name="calendar-outline" size={16} color="#94A3B8" />
-          <Text className="text-sm text-un1t-white ml-2">{booking.booking_date}</Text>
+          <Text className="text-sm text-un1t-text ml-2">{booking.booking_date}</Text>
         </View>
         <View className="flex-row items-center mb-2">
           <Ionicons name="time-outline" size={16} color="#94A3B8" />
-          <Text className="text-sm text-un1t-white ml-2">
+          <Text className="text-sm text-un1t-text ml-2">
             {formatBookingTime(booking.start_time)} – {formatBookingTime(booking.end_time)}
           </Text>
         </View>
         <View className="flex-row items-center">
           <Ionicons name="information-circle-outline" size={16} color="#94A3B8" />
-          <Text className="text-sm text-un1t-white ml-2 capitalize">{booking.status}</Text>
+          <Text className="text-sm text-un1t-text ml-2 capitalize">{booking.status}</Text>
         </View>
       </View>
 
       {(booking.customer_phone || booking.customer_email) && (
-        <View className="bg-un1t-dark border border-un1t-gray rounded-2xl p-4 mt-3">
-          <Text className="text-xs uppercase tracking-wider text-un1t-light mb-2">Contact</Text>
+        <View className="bg-un1t-surface border border-un1t-border rounded-2xl p-4 mt-3">
+          <Text className="text-xs uppercase tracking-wider text-un1t-subtle mb-2">Contact</Text>
           {booking.customer_phone && (
             <Pressable
               onPress={() => Linking.openURL(`tel:${booking.customer_phone}`)}
@@ -143,13 +143,13 @@ export default function BookingDetail() {
       )}
 
       {booking.notes && (
-        <View className="bg-un1t-dark border border-un1t-gray rounded-2xl p-4 mt-3">
-          <Text className="text-xs uppercase tracking-wider text-un1t-light mb-1.5">Notes</Text>
-          <Text className="text-sm text-un1t-white leading-5">{booking.notes}</Text>
+        <View className="bg-un1t-surface border border-un1t-border rounded-2xl p-4 mt-3">
+          <Text className="text-xs uppercase tracking-wider text-un1t-subtle mb-1.5">Notes</Text>
+          <Text className="text-sm text-un1t-text leading-5">{booking.notes}</Text>
         </View>
       )}
 
-      <Text className="text-[11px] text-un1t-mid text-center mt-6">
+      <Text className="text-[11px] text-un1t-muted text-center mt-6">
         To reschedule or cancel, open this booking on the web.
       </Text>
     </ScrollView>

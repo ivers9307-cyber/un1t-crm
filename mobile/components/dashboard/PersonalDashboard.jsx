@@ -84,46 +84,46 @@ function rangeLabelFor(startIso, endIso) {
 function WeekPanel({ title, startIso, endIso, shifts, showLocation }) {
   const days = buildWeek(startIso, shifts || [])
   return (
-    <View className="bg-un1t-dark border border-un1t-gray rounded-2xl mb-3 overflow-hidden">
+    <View className="bg-un1t-surface border border-un1t-border rounded-2xl mb-3 overflow-hidden">
       <View className="px-4 pt-3 pb-2 flex-row items-baseline justify-between">
-        <Text className="text-xs font-semibold uppercase tracking-wider text-un1t-light">
+        <Text className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle">
           {title}
         </Text>
-        <Text className="text-xs text-un1t-mid">{rangeLabelFor(startIso, endIso)}</Text>
+        <Text className="text-xs text-un1t-muted">{rangeLabelFor(startIso, endIso)}</Text>
       </View>
       {days.map((day, idx) => {
         const isLast = idx === days.length - 1
         return (
           <View
             key={day.iso}
-            className={`flex-row px-4 py-2.5 ${!isLast ? 'border-b border-un1t-gray' : ''} ${
-              day.isToday ? 'bg-un1t-gray/30' : ''
+            className={`flex-row px-4 py-2.5 ${!isLast ? 'border-b border-un1t-border' : ''} ${
+              day.isToday ? 'bg-un1t-border/30' : ''
             }`}
           >
             <View className="w-14">
               <Text className={`text-[10px] font-semibold uppercase tracking-wider ${
-                day.isToday ? 'text-un1t-white'
-                : day.isPast ? 'text-un1t-mid'
-                : 'text-un1t-light'
+                day.isToday ? 'text-un1t-text'
+                : day.isPast ? 'text-un1t-muted'
+                : 'text-un1t-subtle'
               }`}>
                 {day.label}
               </Text>
               <Text className={`text-base font-semibold ${
-                day.isPast ? 'text-un1t-mid' : 'text-un1t-white'
+                day.isPast ? 'text-un1t-muted' : 'text-un1t-text'
               }`}>
                 {day.dayNum}
               </Text>
             </View>
             <View className="flex-1">
               {day.shifts.length === 0 ? (
-                <Text className={`text-sm ${day.isPast ? 'text-un1t-mid' : 'text-un1t-light'} pt-1`}>
+                <Text className={`text-sm ${day.isPast ? 'text-un1t-muted' : 'text-un1t-subtle'} pt-1`}>
                   Off
                 </Text>
               ) : (
                 day.shifts.map((s, i) => (
                   <View key={s.id} className={i > 0 ? 'mt-1' : ''}>
                     <View className="flex-row items-center justify-between">
-                      <Text className={`text-sm font-medium ${day.isPast ? 'text-un1t-light' : 'text-un1t-white'}`} numberOfLines={1}>
+                      <Text className={`text-sm font-medium ${day.isPast ? 'text-un1t-subtle' : 'text-un1t-text'}`} numberOfLines={1}>
                         {s.shift_templates?.name || 'Shift'}
                       </Text>
                       {s.published === false && (
@@ -138,7 +138,7 @@ function WeekPanel({ title, startIso, endIso, shifts, showLocation }) {
                       )}
                     </View>
                     <View className="flex-row items-center flex-wrap">
-                      <Text className={`text-xs ${day.isPast ? 'text-un1t-mid' : 'text-un1t-light'}`}>
+                      <Text className={`text-xs ${day.isPast ? 'text-un1t-muted' : 'text-un1t-subtle'}`}>
                         {shiftTime(s)} · {shiftHours(s)}h
                       </Text>
                       {showLocation && s.locations?.name && (() => {
@@ -226,7 +226,7 @@ export default function PersonalDashboard({ refreshKey }) {
     // Loaded with no error but no data — defensive empty state.
     return (
       <View className="py-8 items-center">
-        <Text className="text-sm text-un1t-light">No data</Text>
+        <Text className="text-sm text-un1t-subtle">No data</Text>
       </View>
     )
   }
@@ -273,7 +273,7 @@ export default function PersonalDashboard({ refreshKey }) {
           label="Inbox"
           value={unreadInbox}
           sublabel={unreadInbox === 1 ? 'unread message' : 'unread messages'}
-          accent={unreadInbox > 0 ? 'text-un1t-white' : 'text-un1t-mid'}
+          accent={unreadInbox > 0 ? 'text-un1t-text' : 'text-un1t-muted'}
           onPress={unreadInbox > 0 ? () => router.push('/(tabs)/whatsapp') : undefined}
         />
       </KpiRow>

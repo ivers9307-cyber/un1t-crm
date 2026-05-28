@@ -39,8 +39,8 @@ export default function AcScreen() {
   // would otherwise reach the page.
   if (!canMobile(profile, 'studio_management', activeLocation)) {
     return (
-      <View className="flex-1 bg-un1t-black items-center justify-center p-6">
-        <Text className="text-sm text-un1t-light text-center">
+      <View className="flex-1 bg-un1t-bg items-center justify-center p-6">
+        <Text className="text-sm text-un1t-subtle text-center">
           Studio Management isn&apos;t enabled for your role at this location.
         </Text>
         <Pressable onPress={() => router.back()} className="mt-4">
@@ -84,7 +84,7 @@ function DeviceList({ locationId }) {
 
   if (loading) {
     return (
-      <View className="flex-1 bg-un1t-black items-center justify-center">
+      <View className="flex-1 bg-un1t-bg items-center justify-center">
         <ActivityIndicator color="#94A3B8" />
       </View>
     )
@@ -92,7 +92,7 @@ function DeviceList({ locationId }) {
 
   if (error) {
     return (
-      <ScrollView className="flex-1 bg-un1t-black" contentContainerClassName="p-4">
+      <ScrollView className="flex-1 bg-un1t-bg" contentContainerClassName="p-4">
         <View className="bg-red-500/10 border border-red-500/30 rounded-xl p-3 flex-row items-start">
           <Ionicons name="alert-circle-outline" size={14} color="#DC2626" style={{ marginTop: 2 }} />
           <Text className="text-xs text-red-700 ml-2 flex-1">{error}</Text>
@@ -103,12 +103,12 @@ function DeviceList({ locationId }) {
 
   if (!devices || devices.length === 0) {
     return (
-      <ScrollView className="flex-1 bg-un1t-black" contentContainerClassName="p-4">
-        <View className="bg-un1t-dark border border-un1t-gray rounded-2xl p-4 flex-row items-start">
+      <ScrollView className="flex-1 bg-un1t-bg" contentContainerClassName="p-4">
+        <View className="bg-un1t-surface border border-un1t-border rounded-2xl p-4 flex-row items-start">
           <Ionicons name="settings-outline" size={14} color="#94A3B8" style={{ marginTop: 2 }} />
-          <Text className="text-xs text-un1t-light ml-2 flex-1">
+          <Text className="text-xs text-un1t-subtle ml-2 flex-1">
             No AC units are set up for you at this location yet. A master adds devices on the
-            web app under <Text className="text-un1t-white font-semibold">Settings → Locations → AC Devices</Text>
+            web app under <Text className="text-un1t-text font-semibold">Settings → Locations → AC Devices</Text>
             {' '}and ticks the ones you can control on your staff record.
           </Text>
         </View>
@@ -122,11 +122,11 @@ function DeviceList({ locationId }) {
   const groups = groupDevicesMobile(devices)
 
   return (
-    <ScrollView className="flex-1 bg-un1t-black" contentContainerClassName="p-4">
+    <ScrollView className="flex-1 bg-un1t-bg" contentContainerClassName="p-4">
       <View className="gap-5">
         {groups.map(({ name, devices: groupDevices }) => (
           <View key={name} className="gap-2">
-            <Text className="text-[11px] uppercase tracking-wider text-un1t-light px-1">
+            <Text className="text-[11px] uppercase tracking-wider text-un1t-subtle px-1">
               {name}
             </Text>
             <View className="gap-3">
@@ -267,7 +267,7 @@ function DeviceCard({ device, locationId }) {
       className={`rounded-2xl p-4 ${
         isOn
           ? 'bg-blue-600/10 border-2 border-blue-500/40'
-          : 'bg-un1t-dark border border-un1t-gray'
+          : 'bg-un1t-surface border border-un1t-border'
       }`}
     >
       {/* Header row */}
@@ -275,14 +275,14 @@ function DeviceCard({ device, locationId }) {
         <Ionicons name="snow-outline" size={20} color={isOn ? '#93C5FD' : '#60A5FA'} />
         <View className="flex-1 min-w-0">
           <View className="flex-row items-center gap-2">
-            <Text className="text-base font-bold text-un1t-white flex-shrink" numberOfLines={1}>
+            <Text className="text-base font-bold text-un1t-text flex-shrink" numberOfLines={1}>
               {device.label}
             </Text>
-            <Text className="text-[10px] uppercase tracking-wider text-un1t-mid font-mono">
+            <Text className="text-[10px] uppercase tracking-wider text-un1t-muted font-mono">
               {providerLabel}
             </Text>
           </View>
-          <Text className="text-[11px] text-un1t-light mt-0.5">{presetLabel}</Text>
+          <Text className="text-[11px] text-un1t-subtle mt-0.5">{presetLabel}</Text>
         </View>
         {isOn && controlSource === 'app' && (
           <View className="items-end">
@@ -292,7 +292,7 @@ function DeviceCard({ device, locationId }) {
                 {minsLeft != null ? `${minsLeft}m` : '—'}
               </Text>
             </View>
-            <Text className="text-[10px] text-un1t-light">auto-off</Text>
+            <Text className="text-[10px] text-un1t-subtle">auto-off</Text>
           </View>
         )}
         {isOn && controlSource === 'external' && minsLeft != null && (
@@ -301,13 +301,13 @@ function DeviceCard({ device, locationId }) {
               <Ionicons name="time-outline" size={14} color="#93C5FD" />
               <Text className="text-xl font-bold text-blue-200 ml-1">{minsLeft}m</Text>
             </View>
-            <Text className="text-[10px] text-un1t-light">auto-off · external</Text>
+            <Text className="text-[10px] text-un1t-subtle">auto-off · external</Text>
           </View>
         )}
         {isOn && controlSource === 'external' && minsLeft == null && (
           <View className="items-end">
             <Text className="text-[11px] uppercase tracking-wider text-blue-200">Running</Text>
-            <Text className="text-[10px] text-un1t-light">externally</Text>
+            <Text className="text-[10px] text-un1t-subtle">externally</Text>
           </View>
         )}
       </View>
@@ -339,7 +339,7 @@ function DeviceCard({ device, locationId }) {
       ) : (
         <View className="gap-2">
           {controlSource === 'app' && session?.profiles?.full_name && (
-            <Text className="text-[11px] text-un1t-light">
+            <Text className="text-[11px] text-un1t-subtle">
               Started by {session.profiles.full_name}
             </Text>
           )}
@@ -352,8 +352,8 @@ function DeviceCard({ device, locationId }) {
             </View>
           )}
           {state?.state && (
-            <View className="bg-un1t-black/40 rounded-md px-3 py-1.5">
-              <Text className="text-[11px] text-un1t-light">
+            <View className="bg-un1t-bg/40 rounded-md px-3 py-1.5">
+              <Text className="text-[11px] text-un1t-subtle">
                 Live: {state.state.on ? 'on' : 'off'}
                 {state.state.mode ? ` · ${state.state.mode}` : ''}
                 {state.state.target_temp_c != null ? ` · ${state.state.target_temp_c}°C` : ''}
@@ -366,12 +366,12 @@ function DeviceCard({ device, locationId }) {
               <Pressable
                 onPress={extend}
                 disabled={busy === 'extend'}
-                className="flex-1 bg-un1t-gray/40 active:opacity-70 disabled:opacity-50 px-3 py-2.5 rounded-xl flex-row items-center justify-center"
+                className="flex-1 bg-un1t-border/40 active:opacity-70 disabled:opacity-50 px-3 py-2.5 rounded-xl flex-row items-center justify-center"
               >
                 {busy === 'extend'
                   ? <ActivityIndicator color="#94A3B8" />
                   : <Ionicons name="add" size={14} color="#94A3B8" />}
-                <Text className="text-sm font-semibold text-un1t-light ml-1.5">
+                <Text className="text-sm font-semibold text-un1t-subtle ml-1.5">
                   +{device.session_minutes || 30}m
                 </Text>
               </Pressable>

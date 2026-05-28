@@ -28,13 +28,13 @@ function ItemRow({ item, checked, busy, onToggle, isLast }) {
     <Pressable
       onPress={() => onToggle(item.id, !checked)}
       disabled={busy}
-      className={`flex-row items-center px-4 py-4 active:bg-un1t-gray/30 ${
-        !isLast ? 'border-b border-un1t-gray' : ''
+      className={`flex-row items-center px-4 py-4 active:bg-un1t-border/30 ${
+        !isLast ? 'border-b border-un1t-border' : ''
       }`}
     >
       <View
         className={`w-7 h-7 rounded-md mr-3 items-center justify-center border-2 ${
-          checked ? 'bg-blue-600 border-blue-600' : 'border-un1t-gray bg-un1t-black/60'
+          checked ? 'bg-blue-600 border-blue-600' : 'border-un1t-border bg-un1t-bg/60'
         }`}
       >
         {busy ? (
@@ -45,7 +45,7 @@ function ItemRow({ item, checked, busy, onToggle, isLast }) {
       </View>
       <Text
         className={`flex-1 text-base ${
-          checked ? 'text-un1t-light line-through' : 'text-un1t-white'
+          checked ? 'text-un1t-subtle line-through' : 'text-un1t-text'
         }`}
       >
         {item.label}
@@ -113,7 +113,7 @@ export default function TodayChecklistScreen() {
 
   if (loading) {
     return (
-      <View className="flex-1 bg-un1t-black items-center justify-center">
+      <View className="flex-1 bg-un1t-bg items-center justify-center">
         <ActivityIndicator color="#94A3B8" />
       </View>
     )
@@ -122,14 +122,14 @@ export default function TodayChecklistScreen() {
   if (!instance) {
     return (
       <ScrollView
-        className="flex-1 bg-un1t-black"
+        className="flex-1 bg-un1t-bg"
         contentContainerStyle={{ padding: 16, paddingBottom: 48 }}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#94A3B8" />}
       >
         <View className="items-center py-16 px-6">
           <Ionicons name="checkmark-circle-outline" size={42} color="#475569" />
-          <Text className="text-lg font-bold text-un1t-white mt-3 mb-1">Nothing for today</Text>
-          <Text className="text-sm text-un1t-light text-center">
+          <Text className="text-lg font-bold text-un1t-text mt-3 mb-1">Nothing for today</Text>
+          <Text className="text-sm text-un1t-subtle text-center">
             You don&apos;t have a checklist today — either you&apos;re not on shift or your role doesn&apos;t have one configured for today.
           </Text>
         </View>
@@ -146,18 +146,18 @@ export default function TodayChecklistScreen() {
 
   return (
     <ScrollView
-      className="flex-1 bg-un1t-black"
+      className="flex-1 bg-un1t-bg"
       contentContainerStyle={{ padding: 16, paddingBottom: 48 }}
       refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#94A3B8" />}
     >
       {/* Header */}
       <View className="mb-4">
-        <Text className="text-xs font-semibold uppercase tracking-wider text-un1t-light mb-1">
+        <Text className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle mb-1">
           Progress
         </Text>
         <View className="flex-row items-end justify-between">
-          <Text className="text-3xl font-bold text-un1t-white">
-            {done} <Text className="text-un1t-light text-xl">/ {total}</Text>
+          <Text className="text-3xl font-bold text-un1t-text">
+            {done} <Text className="text-un1t-subtle text-xl">/ {total}</Text>
           </Text>
           {minsLeft != null && !isComplete && (
             <Text className={`text-[12px] font-semibold ${isOverdue ? 'text-amber-300' : 'text-blue-200'}`}>
@@ -170,7 +170,7 @@ export default function TodayChecklistScreen() {
             </Text>
           )}
         </View>
-        <View className="mt-3 h-2 bg-un1t-gray/40 rounded-full overflow-hidden">
+        <View className="mt-3 h-2 bg-un1t-border/40 rounded-full overflow-hidden">
           <View
             className={`h-2 rounded-full ${isComplete ? 'bg-green-400' : isOverdue ? 'bg-amber-400' : 'bg-blue-400'}`}
             style={{ width: total > 0 ? `${Math.round((done / total) * 100)}%` : '0%' }}
@@ -186,10 +186,10 @@ export default function TodayChecklistScreen() {
       )}
 
       {/* Items */}
-      <View className="bg-un1t-dark border border-un1t-gray rounded-2xl overflow-hidden">
+      <View className="bg-un1t-surface border border-un1t-border rounded-2xl overflow-hidden">
         {items.length === 0 ? (
           <View className="p-6 items-center">
-            <Text className="text-sm text-un1t-light text-center">
+            <Text className="text-sm text-un1t-subtle text-center">
               No items on this template yet.
             </Text>
           </View>
@@ -209,7 +209,7 @@ export default function TodayChecklistScreen() {
 
       {/* Footer hint */}
       {!isComplete && total > 0 && (
-        <Text className="text-[11px] text-un1t-mid text-center mt-4">
+        <Text className="text-[11px] text-un1t-muted text-center mt-4">
           {done < total
             ? `Tap each item as you finish it. ${total - done} left.`
             : 'Almost there.'}

@@ -63,7 +63,7 @@ export default function BusinessDashboard({ refreshKey }) {
           label="Lost this month"
           value={lostCountMTD}
           sublabel={lostCountMTD === 1 ? 'deal' : 'deals'}
-          accent={lostCountMTD > 0 ? 'text-red-500' : 'text-un1t-mid'}
+          accent={lostCountMTD > 0 ? 'text-red-500' : 'text-un1t-muted'}
         />
         <KpiCard
           label="Win rate"
@@ -89,7 +89,7 @@ export default function BusinessDashboard({ refreshKey }) {
           sublabel="excludes overtime premium"
         />
       </KpiRow>
-      <Text className="text-xs text-un1t-mid mt-1 px-1">
+      <Text className="text-xs text-un1t-muted mt-1 px-1">
         Cost is a base estimate from each staffer&apos;s contract / hourly rate.
         The full payroll report (including overtime, NI, etc.) lives in the web app.
       </Text>

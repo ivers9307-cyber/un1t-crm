@@ -63,7 +63,7 @@ export default function ExpensesScreen() {
   }
 
   return (
-    <View className="flex-1 bg-un1t-black">
+    <View className="flex-1 bg-un1t-bg">
       {/* STUDIO-IPAD.3 — constrain content on tablet; floating + button
           stays anchored to the device edge. */}
       <TabletConstrained className="flex-1">
@@ -71,8 +71,8 @@ export default function ExpensesScreen() {
         contentContainerStyle={{ padding: 16, paddingBottom: 96 }}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#94A3B8" />}
       >
-        <Text className="text-2xl font-bold text-un1t-white mb-1">Expenses</Text>
-        <Text className="text-sm text-un1t-light mb-5">
+        <Text className="text-2xl font-bold text-un1t-text mb-1">Expenses</Text>
+        <Text className="text-sm text-un1t-subtle mb-5">
           Capture receipts as you collect them. Submit at month-end for approval;
           reimbursement runs through the next payroll.
         </Text>
@@ -86,9 +86,9 @@ export default function ExpensesScreen() {
             <Text className="text-sm text-red-700">{error}</Text>
           </View>
         ) : claims.length === 0 ? (
-          <View className="bg-un1t-dark border border-un1t-gray rounded-2xl p-8 items-center">
+          <View className="bg-un1t-surface border border-un1t-border rounded-2xl p-8 items-center">
             <Ionicons name="wallet-outline" size={32} color="#64748B" />
-            <Text className="text-sm text-un1t-light mt-2 text-center">
+            <Text className="text-sm text-un1t-subtle mt-2 text-center">
               No expense claims yet. Tap + to start a claim for the current month.
             </Text>
           </View>
@@ -97,11 +97,11 @@ export default function ExpensesScreen() {
             <Pressable
               key={c.id}
               onPress={() => router.push(`/expenses/${c.id}`)}
-              className="bg-un1t-dark border border-un1t-gray rounded-2xl p-4 mb-2 active:opacity-70"
+              className="bg-un1t-surface border border-un1t-border rounded-2xl p-4 mb-2 active:opacity-70"
             >
               <View className="flex-row items-center justify-between mb-1.5">
-                <Text className="text-base font-semibold text-un1t-white">{periodLabel(c.period_start)}</Text>
-                <Text className="text-base font-semibold text-un1t-white">
+                <Text className="text-base font-semibold text-un1t-text">{periodLabel(c.period_start)}</Text>
+                <Text className="text-base font-semibold text-un1t-text">
                   €{Number(c.total_amount).toFixed(2)}
                 </Text>
               </View>
@@ -112,16 +112,16 @@ export default function ExpensesScreen() {
                     size={11}
                     color={STATUS_STYLE[c.status]?.color || '#64748B'}
                   />
-                  <Text className={`text-[11px] uppercase font-medium ml-1 ${STATUS_STYLE[c.status]?.text || 'text-un1t-light'}`}>
+                  <Text className={`text-[11px] uppercase font-medium ml-1 ${STATUS_STYLE[c.status]?.text || 'text-un1t-subtle'}`}>
                     {STATUS_STYLE[c.status]?.label || c.status}
                   </Text>
                 </View>
-                <Text className="text-[11px] text-un1t-light">
+                <Text className="text-[11px] text-un1t-subtle">
                   {c.item_count} item{c.item_count === 1 ? '' : 's'} · €{Number(c.total_vat_amount || 0).toFixed(2)} VAT
                 </Text>
               </View>
               {c.status === 'declined' && c.decline_reason && (
-                <Text className="text-xs text-un1t-light italic mt-2" numberOfLines={2}>
+                <Text className="text-xs text-un1t-subtle italic mt-2" numberOfLines={2}>
                   &ldquo;{c.decline_reason}&rdquo;
                 </Text>
               )}

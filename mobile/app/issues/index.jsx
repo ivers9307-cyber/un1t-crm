@@ -65,14 +65,14 @@ export default function IssuesListScreen() {
 
   if (issues === null) {
     return (
-      <View className="flex-1 bg-un1t-black items-center justify-center">
+      <View className="flex-1 bg-un1t-bg items-center justify-center">
         <ActivityIndicator color="#94A3B8" />
       </View>
     )
   }
 
   return (
-    <View className="flex-1 bg-un1t-black">
+    <View className="flex-1 bg-un1t-bg">
       <ScrollView
         contentContainerStyle={{ padding: 16, paddingBottom: 100 }}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#94A3B8" />}
@@ -87,8 +87,8 @@ export default function IssuesListScreen() {
         {issues.length === 0 ? (
           <View className="items-center py-16 px-6">
             <Ionicons name="alert-circle-outline" size={42} color="#475569" />
-            <Text className="text-lg font-bold text-un1t-white mt-3 mb-1">No reports yet</Text>
-            <Text className="text-sm text-un1t-light text-center mb-6">
+            <Text className="text-lg font-bold text-un1t-text mt-3 mb-1">No reports yet</Text>
+            <Text className="text-sm text-un1t-subtle text-center mb-6">
               Spotted something broken, dirty, or unsafe in the studio? Let the team know with a quick photo.
             </Text>
             <Pressable
@@ -105,26 +105,26 @@ export default function IssuesListScreen() {
               <Pressable
                 key={i.id}
                 onPress={() => router.push(`/issues/${i.id}`)}
-                className="bg-un1t-dark border border-un1t-gray rounded-2xl p-4 active:opacity-80"
+                className="bg-un1t-surface border border-un1t-border rounded-2xl p-4 active:opacity-80"
               >
                 <View className="flex-row items-start justify-between gap-3 mb-1">
                   <StatusPill status={i.status} />
-                  <Text className="text-[11px] text-un1t-light">{timeAgo(i.created_at)}</Text>
+                  <Text className="text-[11px] text-un1t-subtle">{timeAgo(i.created_at)}</Text>
                 </View>
-                <Text className="text-base text-un1t-white mt-1" numberOfLines={3}>
+                <Text className="text-base text-un1t-text mt-1" numberOfLines={3}>
                   {i.description}
                 </Text>
                 <View className="flex-row items-center mt-2 gap-3">
                   {i.locations?.name && (
                     <View className="flex-row items-center">
                       <Ionicons name="location-outline" size={11} color="#94A3B8" />
-                      <Text className="text-[11px] text-un1t-light ml-1">{i.locations.name}</Text>
+                      <Text className="text-[11px] text-un1t-subtle ml-1">{i.locations.name}</Text>
                     </View>
                   )}
                   {Array.isArray(i.issue_attachments) && i.issue_attachments.length > 0 && (
                     <View className="flex-row items-center">
                       <Ionicons name="image-outline" size={11} color="#94A3B8" />
-                      <Text className="text-[11px] text-un1t-light ml-1">
+                      <Text className="text-[11px] text-un1t-subtle ml-1">
                         {i.issue_attachments.length} photo{i.issue_attachments.length === 1 ? '' : 's'}
                       </Text>
                     </View>

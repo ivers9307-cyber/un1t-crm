@@ -43,7 +43,7 @@ function PhotoCard({ issueId, attachment }) {
 
   if (error) {
     return (
-      <View className="bg-un1t-dark border border-un1t-gray rounded-xl p-3 items-center justify-center" style={{ height: 200 }}>
+      <View className="bg-un1t-surface border border-un1t-border rounded-xl p-3 items-center justify-center" style={{ height: 200 }}>
         <Ionicons name="warning-outline" size={20} color="#F59E0B" />
         <Text className="text-[11px] text-amber-200 mt-1">Could not load photo</Text>
       </View>
@@ -51,7 +51,7 @@ function PhotoCard({ issueId, attachment }) {
   }
   if (!url) {
     return (
-      <View className="bg-un1t-dark border border-un1t-gray rounded-xl items-center justify-center" style={{ height: 200 }}>
+      <View className="bg-un1t-surface border border-un1t-border rounded-xl items-center justify-center" style={{ height: 200 }}>
         <ActivityIndicator color="#94A3B8" />
       </View>
     )
@@ -97,19 +97,19 @@ export default function IssueDetailScreen() {
 
   if (error) {
     return (
-      <View className="flex-1 bg-un1t-black items-center justify-center p-6">
+      <View className="flex-1 bg-un1t-bg items-center justify-center p-6">
         <Ionicons name="alert-circle-outline" size={42} color="#EF4444" />
-        <Text className="text-lg font-bold text-un1t-white mt-3 mb-1">Could not load</Text>
-        <Text className="text-sm text-un1t-light text-center mb-4">{error}</Text>
-        <Pressable onPress={load} className="bg-un1t-dark border border-un1t-gray px-5 py-2.5 rounded-xl active:opacity-80">
-          <Text className="text-un1t-white font-semibold">Try again</Text>
+        <Text className="text-lg font-bold text-un1t-text mt-3 mb-1">Could not load</Text>
+        <Text className="text-sm text-un1t-subtle text-center mb-4">{error}</Text>
+        <Pressable onPress={load} className="bg-un1t-surface border border-un1t-border px-5 py-2.5 rounded-xl active:opacity-80">
+          <Text className="text-un1t-text font-semibold">Try again</Text>
         </Pressable>
       </View>
     )
   }
   if (!issue) {
     return (
-      <View className="flex-1 bg-un1t-black items-center justify-center">
+      <View className="flex-1 bg-un1t-bg items-center justify-center">
         <ActivityIndicator color="#94A3B8" />
       </View>
     )
@@ -119,7 +119,7 @@ export default function IssueDetailScreen() {
   const isResolved = issue.status === 'resolved' || issue.status === 'closed'
 
   return (
-    <ScrollView className="flex-1 bg-un1t-black" contentContainerStyle={{ padding: 16, paddingBottom: 48 }}>
+    <ScrollView className="flex-1 bg-un1t-bg" contentContainerStyle={{ padding: 16, paddingBottom: 48 }}>
       {/* Header */}
       <View className="mb-4">
         <View className="flex-row items-center gap-2 mb-2">
@@ -127,27 +127,27 @@ export default function IssueDetailScreen() {
           {issue.locations?.name && (
             <View className="flex-row items-center">
               <Ionicons name="location-outline" size={11} color="#94A3B8" />
-              <Text className="text-[11px] text-un1t-light ml-1">{issue.locations.name}</Text>
+              <Text className="text-[11px] text-un1t-subtle ml-1">{issue.locations.name}</Text>
             </View>
           )}
         </View>
-        <Text className="text-[11px] text-un1t-light">
+        <Text className="text-[11px] text-un1t-subtle">
           Submitted {fmtDateTime(issue.created_at)}
         </Text>
       </View>
 
       {/* Description */}
-      <View className="bg-un1t-dark border border-un1t-gray rounded-2xl p-4 mb-4">
-        <Text className="text-xs font-semibold uppercase tracking-wider text-un1t-light mb-1">
+      <View className="bg-un1t-surface border border-un1t-border rounded-2xl p-4 mb-4">
+        <Text className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle mb-1">
           The report
         </Text>
-        <Text className="text-base text-un1t-white">{issue.description}</Text>
+        <Text className="text-base text-un1t-text">{issue.description}</Text>
       </View>
 
       {/* Photos */}
       {attachments.length > 0 && (
         <View className="mb-4">
-          <Text className="text-xs font-semibold uppercase tracking-wider text-un1t-light mb-2 px-1">
+          <Text className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle mb-2 px-1">
             Photos
           </Text>
           <View className="gap-3">
@@ -170,9 +170,9 @@ export default function IssueDetailScreen() {
             </Text>
           </View>
           {issue.resolution_notes ? (
-            <Text className="text-base text-un1t-white mt-1">{issue.resolution_notes}</Text>
+            <Text className="text-base text-un1t-text mt-1">{issue.resolution_notes}</Text>
           ) : (
-            <Text className="text-sm text-un1t-light mt-1">No notes added.</Text>
+            <Text className="text-sm text-un1t-subtle mt-1">No notes added.</Text>
           )}
         </View>
       )}

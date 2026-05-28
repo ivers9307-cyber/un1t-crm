@@ -57,7 +57,7 @@ export default function InvoicesScreen() {
   }
 
   return (
-    <View className="flex-1 bg-un1t-black">
+    <View className="flex-1 bg-un1t-bg">
       {/* STUDIO-IPAD.3 — constrain the list to a readable max-width on
           iPad. Floating action button stays anchored to the device
           edge (outside the constrained block) which is the right
@@ -67,8 +67,8 @@ export default function InvoicesScreen() {
         contentContainerStyle={{ padding: 16, paddingBottom: 96 }}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#94A3B8" />}
       >
-        <Text className="text-2xl font-bold text-un1t-white mb-1">Invoices</Text>
-        <Text className="text-sm text-un1t-light mb-5">
+        <Text className="text-2xl font-bold text-un1t-text mb-1">Invoices</Text>
+        <Text className="text-sm text-un1t-subtle mb-5">
           Submit your monthly invoice as a PDF. Approved invoices are forwarded to accounts;
           declined ones come back with notes for adjustment.
         </Text>
@@ -82,9 +82,9 @@ export default function InvoicesScreen() {
             <Text className="text-sm text-red-700">{error}</Text>
           </View>
         ) : invoices.length === 0 ? (
-          <View className="bg-un1t-dark border border-un1t-gray rounded-2xl p-8 items-center">
+          <View className="bg-un1t-surface border border-un1t-border rounded-2xl p-8 items-center">
             <Ionicons name="document-text-outline" size={32} color="#64748B" />
-            <Text className="text-sm text-un1t-light mt-2 text-center">
+            <Text className="text-sm text-un1t-subtle mt-2 text-center">
               No invoices yet. Tap the + button to submit your first.
             </Text>
           </View>
@@ -93,13 +93,13 @@ export default function InvoicesScreen() {
             <Pressable
               key={inv.id}
               onPress={() => router.push(`/invoices/${inv.id}`)}
-              className="bg-un1t-dark border border-un1t-gray rounded-2xl p-4 mb-2 active:opacity-70"
+              className="bg-un1t-surface border border-un1t-border rounded-2xl p-4 mb-2 active:opacity-70"
             >
               <View className="flex-row items-center justify-between mb-1.5">
-                <Text className="text-base font-semibold text-un1t-white">
+                <Text className="text-base font-semibold text-un1t-text">
                   {periodLabel(inv.period_start)}
                 </Text>
-                <Text className="text-base font-semibold text-un1t-white">
+                <Text className="text-base font-semibold text-un1t-text">
                   €{Number(inv.invoice_amount).toFixed(2)}
                 </Text>
               </View>
@@ -110,16 +110,16 @@ export default function InvoicesScreen() {
                     size={11}
                     color={STATUS_STYLE[inv.status]?.color || '#64748B'}
                   />
-                  <Text className={`text-[11px] uppercase font-medium ml-1 ${STATUS_STYLE[inv.status]?.text || 'text-un1t-light'}`}>
+                  <Text className={`text-[11px] uppercase font-medium ml-1 ${STATUS_STYLE[inv.status]?.text || 'text-un1t-subtle'}`}>
                     {STATUS_STYLE[inv.status]?.label || inv.status}
                   </Text>
                 </View>
                 {inv.xero_synced_at && (
-                  <Text className="text-[10px] text-un1t-light">Forwarded to accounts</Text>
+                  <Text className="text-[10px] text-un1t-subtle">Forwarded to accounts</Text>
                 )}
               </View>
               {inv.status === 'declined' && inv.decline_reason && (
-                <Text className="text-xs text-un1t-light italic mt-2" numberOfLines={2}>
+                <Text className="text-xs text-un1t-subtle italic mt-2" numberOfLines={2}>
                   &ldquo;{inv.decline_reason}&rdquo;
                 </Text>
               )}

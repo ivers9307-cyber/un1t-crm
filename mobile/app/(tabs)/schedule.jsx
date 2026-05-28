@@ -44,16 +44,16 @@ function WeekStrip({ anchor, selected, onSelect, byDate }) {
           <Pressable
             key={iso}
             onPress={() => onSelect(d)}
-            className={`flex-1 mx-0.5 items-center py-2 rounded-xl ${isSel ? 'bg-un1t-white' : 'bg-un1t-dark border border-un1t-gray'}`}
+            className={`flex-1 mx-0.5 items-center py-2 rounded-xl ${isSel ? 'bg-un1t-text' : 'bg-un1t-surface border border-un1t-border'}`}
           >
-            <Text className={`text-[11px] uppercase font-medium ${isSel ? 'text-un1t-black' : 'text-un1t-light'}`}>
+            <Text className={`text-[11px] uppercase font-medium ${isSel ? 'text-un1t-bg' : 'text-un1t-subtle'}`}>
               {DAY_LABELS[i]}
             </Text>
-            <Text className={`text-lg font-semibold ${isSel ? 'text-un1t-black' : 'text-un1t-white'}`}>
+            <Text className={`text-lg font-semibold ${isSel ? 'text-un1t-bg' : 'text-un1t-text'}`}>
               {d.getDate()}
             </Text>
             {count > 0 && (
-              <View className={`mt-0.5 w-1.5 h-1.5 rounded-full ${isSel ? 'bg-un1t-black' : 'bg-un1t-white'}`} />
+              <View className={`mt-0.5 w-1.5 h-1.5 rounded-full ${isSel ? 'bg-un1t-bg' : 'bg-un1t-text'}`} />
             )}
           </Pressable>
         )
@@ -76,12 +76,12 @@ function ShiftCard({ shift, onPress, onLongPress }) {
       onPress={onPress}
       onLongPress={onLongPress}
       delayLongPress={400}
-      className="bg-un1t-dark border border-un1t-gray rounded-xl p-2.5 mb-2 active:opacity-70"
+      className="bg-un1t-surface border border-un1t-border rounded-xl p-2.5 mb-2 active:opacity-70"
     >
-      <Text className="text-sm font-semibold text-un1t-white" numberOfLines={1}>
+      <Text className="text-sm font-semibold text-un1t-text" numberOfLines={1}>
         {tpl?.name || 'Shift'}
       </Text>
-      <Text className="text-[11px] text-un1t-light mt-0.5">
+      <Text className="text-[11px] text-un1t-subtle mt-0.5">
         {timeRange(effStart, effEnd)}
       </Text>
       <View className="flex-row gap-1 mt-1.5">
@@ -128,11 +128,11 @@ function WeekGridView({ anchor, shiftsByDate, timeOff, todayIso, canAdjust, open
         const isToday = iso === todayIso
         return (
           <View key={iso} className="flex-1 min-w-0">
-            <View className={`items-center py-2 mb-2 rounded-xl ${isToday ? 'bg-un1t-white' : 'bg-un1t-dark border border-un1t-gray'}`}>
-              <Text className={`text-[10px] uppercase font-medium ${isToday ? 'text-un1t-black' : 'text-un1t-light'}`}>
+            <View className={`items-center py-2 mb-2 rounded-xl ${isToday ? 'bg-un1t-text' : 'bg-un1t-surface border border-un1t-border'}`}>
+              <Text className={`text-[10px] uppercase font-medium ${isToday ? 'text-un1t-bg' : 'text-un1t-subtle'}`}>
                 {DAY_LABELS[i]}
               </Text>
-              <Text className={`text-lg font-semibold ${isToday ? 'text-un1t-black' : 'text-un1t-white'}`}>
+              <Text className={`text-lg font-semibold ${isToday ? 'text-un1t-bg' : 'text-un1t-text'}`}>
                 {d.getDate()}
               </Text>
             </View>
@@ -147,7 +147,7 @@ function WeekGridView({ anchor, shiftsByDate, timeOff, todayIso, canAdjust, open
               </View>
             ))}
             {dayShifts.length === 0 && dayLeave.length === 0 ? (
-              <Text className="text-[11px] text-un1t-mid italic text-center py-3">—</Text>
+              <Text className="text-[11px] text-un1t-muted italic text-center py-3">—</Text>
             ) : null}
             {dayShifts.map(s => (
               <ShiftCard
@@ -178,10 +178,10 @@ function ShiftRow({ shift, onPress, onLongPress }) {
       onPress={onPress}
       onLongPress={onLongPress}
       delayLongPress={400}
-      className="bg-un1t-dark border border-un1t-gray rounded-2xl p-4 mb-2 active:opacity-70"
+      className="bg-un1t-surface border border-un1t-border rounded-2xl p-4 mb-2 active:opacity-70"
     >
       <View className="flex-row items-center justify-between mb-1">
-        <Text className="text-base font-semibold text-un1t-white">
+        <Text className="text-base font-semibold text-un1t-text">
           {tpl?.name || 'Shift'}
         </Text>
         <View className="flex-row gap-1.5">
@@ -204,18 +204,18 @@ function ShiftRow({ shift, onPress, onLongPress }) {
       </View>
       <View className="flex-row items-center">
         <Ionicons name="time-outline" size={14} color="#64748B" />
-        <Text className="text-sm text-un1t-light ml-1">
+        <Text className="text-sm text-un1t-subtle ml-1">
           {timeRange(effStart, effEnd)} · {hours}h
         </Text>
       </View>
       {adjusted && (
-        <Text className="text-[11px] text-un1t-light mt-0.5 italic">
+        <Text className="text-[11px] text-un1t-subtle mt-0.5 italic">
           Block default {timeRange(shift.start_time, shift.end_time)}
           {shift.partial_reason ? ` · ${shift.partial_reason}` : ''}
         </Text>
       )}
       {shift.notes && (
-        <Text className="text-xs text-un1t-light mt-1.5">{shift.notes}</Text>
+        <Text className="text-xs text-un1t-subtle mt-1.5">{shift.notes}</Text>
       )}
     </Pressable>
   )
@@ -326,7 +326,7 @@ export default function Schedule() {
   }
 
   return (
-    <View className="flex-1 bg-un1t-black">
+    <View className="flex-1 bg-un1t-bg">
       <ScrollView
         contentContainerClassName="px-4 pt-4 pb-32"
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#111827" />}
@@ -342,9 +342,9 @@ export default function Schedule() {
               setAnchor(weekStart(today))
               setSelected(today)
             }}
-            className="px-3 py-1 rounded-full bg-un1t-dark border border-un1t-gray"
+            className="px-3 py-1 rounded-full bg-un1t-surface border border-un1t-border"
           >
-            <Text className="text-sm font-medium text-un1t-white">
+            <Text className="text-sm font-medium text-un1t-text">
               {shortDate(anchor)} – {shortDate(addDays(anchor, 6))}
             </Text>
           </Pressable>
@@ -362,7 +362,7 @@ export default function Schedule() {
         )}
 
         {!isTablet && (
-          <Text className="text-xs uppercase tracking-wider text-un1t-light mt-6 mb-2 px-1">
+          <Text className="text-xs uppercase tracking-wider text-un1t-subtle mt-6 mb-2 px-1">
             {selected.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })}
           </Text>
         )}
@@ -404,7 +404,7 @@ export default function Schedule() {
             {todays.length === 0 && todaysLeave.length === 0 && (
               <View className="py-10 items-center">
                 <Ionicons name="cafe-outline" size={28} color="#94A3B8" />
-                <Text className="text-sm text-un1t-light mt-2">No shifts today.</Text>
+                <Text className="text-sm text-un1t-subtle mt-2">No shifts today.</Text>
               </View>
             )}
 
@@ -417,7 +417,7 @@ export default function Schedule() {
               />
             ))}
             {todays.length > 0 && (
-              <Text className="text-[11px] text-un1t-mid text-center mt-1">
+              <Text className="text-[11px] text-un1t-muted text-center mt-1">
                 Tap to adjust times · long-press to request a swap.
               </Text>
             )}
@@ -428,10 +428,10 @@ export default function Schedule() {
       {/* Floating Request Time Off button */}
       <Pressable
         onPress={() => router.push('/schedule/time-off-new')}
-        className="absolute bottom-6 right-6 bg-un1t-white rounded-full px-5 py-3.5 flex-row items-center shadow-lg active:opacity-80"
+        className="absolute bottom-6 right-6 bg-un1t-text rounded-full px-5 py-3.5 flex-row items-center shadow-lg active:opacity-80"
       >
         <Ionicons name="add" size={20} color="#FFFFFF" />
-        <Text className="text-un1t-black font-semibold ml-1.5">Request time off</Text>
+        <Text className="text-un1t-bg font-semibold ml-1.5">Request time off</Text>
       </Pressable>
 
       {/* Adjust modal — partial-shift override editor (mig 099/100). */}
@@ -515,23 +515,23 @@ function AdjustSheet({ shift, onClose, onSaved, locationId }) {
         className="flex-1 justify-end bg-black/50"
       >
         <Pressable className="flex-1" onPress={onClose} />
-        <View className="bg-un1t-black border-t border-un1t-gray rounded-t-3xl p-5">
+        <View className="bg-un1t-bg border-t border-un1t-border rounded-t-3xl p-5">
           <View className="flex-row items-center justify-between mb-4">
-            <Text className="text-lg font-bold text-un1t-white">Adjust shift times</Text>
+            <Text className="text-lg font-bold text-un1t-text">Adjust shift times</Text>
             <Pressable onPress={onClose} hitSlop={10}>
               <Ionicons name="close" size={22} color="#94A3B8" />
             </Pressable>
           </View>
 
-          <Text className="text-xs text-un1t-light mb-4">
+          <Text className="text-xs text-un1t-subtle mb-4">
             {shift.shift_templates?.name || 'Shift'} · {shift.shift_date}{'\n'}
-            Block default: <Text className="font-mono text-un1t-white">{blockStart}–{blockEnd}</Text>.
+            Block default: <Text className="font-mono text-un1t-text">{blockStart}–{blockEnd}</Text>.
             {' '}Leave equal to inherit.
           </Text>
 
           <View className="flex-row gap-3 mb-4">
             <View className="flex-1">
-              <Text className="text-xs uppercase font-semibold text-un1t-light mb-1.5">Start (HH:MM)</Text>
+              <Text className="text-xs uppercase font-semibold text-un1t-subtle mb-1.5">Start (HH:MM)</Text>
               <TextInput
                 value={start}
                 onChangeText={setStart}
@@ -539,11 +539,11 @@ function AdjustSheet({ shift, onClose, onSaved, locationId }) {
                 placeholderTextColor="#64748B"
                 keyboardType="numbers-and-punctuation"
                 maxLength={5}
-                className="bg-un1t-dark border border-un1t-gray rounded-xl px-3 py-3 text-base text-un1t-white font-mono"
+                className="bg-un1t-surface border border-un1t-border rounded-xl px-3 py-3 text-base text-un1t-text font-mono"
               />
             </View>
             <View className="flex-1">
-              <Text className="text-xs uppercase font-semibold text-un1t-light mb-1.5">End (HH:MM)</Text>
+              <Text className="text-xs uppercase font-semibold text-un1t-subtle mb-1.5">End (HH:MM)</Text>
               <TextInput
                 value={end}
                 onChangeText={setEnd}
@@ -551,19 +551,19 @@ function AdjustSheet({ shift, onClose, onSaved, locationId }) {
                 placeholderTextColor="#64748B"
                 keyboardType="numbers-and-punctuation"
                 maxLength={5}
-                className="bg-un1t-dark border border-un1t-gray rounded-xl px-3 py-3 text-base text-un1t-white font-mono"
+                className="bg-un1t-surface border border-un1t-border rounded-xl px-3 py-3 text-base text-un1t-text font-mono"
               />
             </View>
           </View>
 
-          <Text className="text-xs uppercase font-semibold text-un1t-light mb-1.5">Reason (optional)</Text>
+          <Text className="text-xs uppercase font-semibold text-un1t-subtle mb-1.5">Reason (optional)</Text>
           <TextInput
             value={reason}
             onChangeText={setReason}
             placeholder="e.g. left early — sick, covered until 1pm for Mike"
             placeholderTextColor="#64748B"
             maxLength={200}
-            className="bg-un1t-dark border border-un1t-gray rounded-xl px-3 py-3 text-base text-un1t-white mb-4"
+            className="bg-un1t-surface border border-un1t-border rounded-xl px-3 py-3 text-base text-un1t-text mb-4"
           />
 
           {error && (
@@ -592,7 +592,7 @@ function AdjustSheet({ shift, onClose, onSaved, locationId }) {
               disabled={saving}
               className="mt-2 active:opacity-70 px-4 py-3 rounded-xl items-center"
             >
-              <Text className="text-sm font-medium text-un1t-light">Clear override (use block default)</Text>
+              <Text className="text-sm font-medium text-un1t-subtle">Clear override (use block default)</Text>
             </Pressable>
           )}
         </View>

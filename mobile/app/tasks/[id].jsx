@@ -22,7 +22,7 @@ function StatusPill({ status }) {
   const tone =
     status === 'done'        ? { bg: 'bg-emerald-500/20', fg: 'text-emerald-700' } :
     status === 'in_progress' ? { bg: 'bg-blue-500/20',    fg: 'text-blue-700' } :
-    status === 'cancelled'   ? { bg: 'bg-un1t-gray/40',    fg: 'text-un1t-mid' } :
+    status === 'cancelled'   ? { bg: 'bg-un1t-border/40',    fg: 'text-un1t-muted' } :
                                { bg: 'bg-amber-500/20',   fg: 'text-amber-700' }
   return (
     <View className={`px-2.5 py-1 rounded-full ${tone.bg} self-start`}>
@@ -103,7 +103,7 @@ export default function TaskDetail() {
 
   if (loading) {
     return (
-      <View className="flex-1 bg-un1t-black items-center justify-center">
+      <View className="flex-1 bg-un1t-bg items-center justify-center">
         <Stack.Screen options={{ ...headerOptions, title: 'Task' }} />
         <ActivityIndicator />
       </View>
@@ -112,15 +112,15 @@ export default function TaskDetail() {
 
   if (error || !task) {
     return (
-      <View className="flex-1 bg-un1t-black items-center justify-center px-6">
+      <View className="flex-1 bg-un1t-bg items-center justify-center px-6">
         <Stack.Screen options={{ ...headerOptions, title: 'Task' }} />
         <Ionicons name="alert-circle-outline" size={28} color="#DC2626" />
-        <Text className="text-base text-un1t-white mt-2">{error || 'Task not found'}</Text>
+        <Text className="text-base text-un1t-text mt-2">{error || 'Task not found'}</Text>
         <Pressable
           onPress={() => router.back()}
-          className="mt-4 px-4 py-2 rounded-full bg-un1t-dark border border-un1t-gray"
+          className="mt-4 px-4 py-2 rounded-full bg-un1t-surface border border-un1t-border"
         >
-          <Text className="text-sm text-un1t-white">Go back</Text>
+          <Text className="text-sm text-un1t-text">Go back</Text>
         </Pressable>
       </View>
     )
@@ -132,7 +132,7 @@ export default function TaskDetail() {
                  :                                  'Restart'
 
   return (
-    <View className="flex-1 bg-un1t-black">
+    <View className="flex-1 bg-un1t-bg">
       <Stack.Screen options={{ ...headerOptions, title: task.subject || 'Task' }} />
       <ScrollView
         contentContainerClassName="px-4 pt-4 pb-32"
@@ -142,13 +142,13 @@ export default function TaskDetail() {
       >
         <StatusPill status={task.status} />
 
-        <Text className="text-2xl font-bold text-un1t-white mt-3">{task.subject}</Text>
+        <Text className="text-2xl font-bold text-un1t-text mt-3">{task.subject}</Text>
 
-        <View className="bg-un1t-dark border border-un1t-gray rounded-2xl p-4 mt-4">
+        <View className="bg-un1t-surface border border-un1t-border rounded-2xl p-4 mt-4">
           {task.due_date && (
             <View className="flex-row items-center mb-2">
               <Ionicons name="calendar-outline" size={16} color="#94A3B8" />
-              <Text className="text-sm text-un1t-white ml-2">
+              <Text className="text-sm text-un1t-text ml-2">
                 Due {task.due_date}{task.due_time ? ` · ${String(task.due_time).slice(0,5)}` : ''}
               </Text>
             </View>
@@ -156,7 +156,7 @@ export default function TaskDetail() {
           {task.priority && (
             <View className="flex-row items-center mb-2">
               <Ionicons name="flag-outline" size={16} color="#94A3B8" />
-              <Text className="text-sm text-un1t-white ml-2 capitalize">
+              <Text className="text-sm text-un1t-text ml-2 capitalize">
                 {task.priority} priority
               </Text>
             </View>
@@ -164,13 +164,13 @@ export default function TaskDetail() {
           {task.project && (
             <View className="flex-row items-center mb-2">
               <Ionicons name="pricetag-outline" size={16} color="#94A3B8" />
-              <Text className="text-sm text-un1t-white ml-2">#{task.project}</Text>
+              <Text className="text-sm text-un1t-text ml-2">#{task.project}</Text>
             </View>
           )}
           {task.assignee && (
             <View className="flex-row items-center">
               <Ionicons name="person-outline" size={16} color="#94A3B8" />
-              <Text className="text-sm text-un1t-white ml-2">
+              <Text className="text-sm text-un1t-text ml-2">
                 {task.assignee.full_name}
               </Text>
             </View>
@@ -178,16 +178,16 @@ export default function TaskDetail() {
         </View>
 
         {task.note && (
-          <View className="bg-un1t-dark border border-un1t-gray rounded-2xl p-4 mt-3">
-            <Text className="text-xs uppercase tracking-wider text-un1t-light mb-1.5">Notes</Text>
-            <Text className="text-sm text-un1t-white leading-5">{task.note}</Text>
+          <View className="bg-un1t-surface border border-un1t-border rounded-2xl p-4 mt-3">
+            <Text className="text-xs uppercase tracking-wider text-un1t-subtle mb-1.5">Notes</Text>
+            <Text className="text-sm text-un1t-text leading-5">{task.note}</Text>
           </View>
         )}
 
         {task.contact && (
-          <View className="bg-un1t-dark border border-un1t-gray rounded-2xl p-4 mt-3">
-            <Text className="text-xs uppercase tracking-wider text-un1t-light mb-1.5">Contact</Text>
-            <Text className="text-base text-un1t-white">
+          <View className="bg-un1t-surface border border-un1t-border rounded-2xl p-4 mt-3">
+            <Text className="text-xs uppercase tracking-wider text-un1t-subtle mb-1.5">Contact</Text>
+            <Text className="text-base text-un1t-text">
               {task.contact.first_name} {task.contact.last_name}
             </Text>
             <View className="flex-row gap-3 mt-2">
@@ -206,22 +206,22 @@ export default function TaskDetail() {
         )}
 
         {task.completed_at && (
-          <Text className="text-[11px] text-un1t-mid text-center mt-4">
+          <Text className="text-[11px] text-un1t-muted text-center mt-4">
             Completed {new Date(task.completed_at).toLocaleString()}
           </Text>
         )}
       </ScrollView>
 
-      <View className="absolute bottom-0 inset-x-0 px-4 pb-8 pt-3 bg-un1t-black border-t border-un1t-gray">
+      <View className="absolute bottom-0 inset-x-0 px-4 pb-8 pt-3 bg-un1t-bg border-t border-un1t-border">
         <Pressable
           onPress={cycleStatus}
           disabled={busy}
-          className="bg-un1t-white active:opacity-80 disabled:opacity-50 px-4 py-3.5 rounded-xl items-center flex-row justify-center"
+          className="bg-un1t-text active:opacity-80 disabled:opacity-50 px-4 py-3.5 rounded-xl items-center flex-row justify-center"
         >
           {busy
             ? <ActivityIndicator color="#111827" />
             : <Ionicons name={task.status === 'done' ? 'refresh' : 'checkmark'} size={18} color="#111827" />}
-          <Text className="text-base font-semibold text-un1t-black ml-2">
+          <Text className="text-base font-semibold text-un1t-bg ml-2">
             {busy ? 'Saving…' : ctaLabel}
           </Text>
         </Pressable>

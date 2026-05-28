@@ -18,11 +18,11 @@ function Section({ title, children }) {
   return (
     <View className="mb-6">
       {title && (
-        <Text className="text-xs font-semibold uppercase tracking-wider text-un1t-light px-2 mb-2">
+        <Text className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle px-2 mb-2">
           {title}
         </Text>
       )}
-      <View className="bg-un1t-dark border border-un1t-gray rounded-2xl overflow-hidden">
+      <View className="bg-un1t-surface border border-un1t-border rounded-2xl overflow-hidden">
         {children}
       </View>
     </View>
@@ -33,8 +33,8 @@ function Row({ icon, label, value, onPress, isLast, destructive }) {
   return (
     <Pressable
       onPress={onPress}
-      className={`flex-row items-center px-4 py-3.5 active:bg-un1t-gray/40 ${
-        !isLast ? 'border-b border-un1t-gray' : ''
+      className={`flex-row items-center px-4 py-3.5 active:bg-un1t-border/40 ${
+        !isLast ? 'border-b border-un1t-border' : ''
       }`}
     >
       {icon && (
@@ -47,12 +47,12 @@ function Row({ icon, label, value, onPress, isLast, destructive }) {
       )}
       <Text
         className={`flex-1 text-base ${
-          destructive ? 'text-red-500' : 'text-un1t-white'
+          destructive ? 'text-red-500' : 'text-un1t-text'
         }`}
       >
         {label}
       </Text>
-      {value && <Text className="text-sm text-un1t-light mr-1">{value}</Text>}
+      {value && <Text className="text-sm text-un1t-subtle mr-1">{value}</Text>}
       {onPress && !destructive && (
         <Ionicons name="chevron-forward" size={16} color="#94A3B8" />
       )}
@@ -136,7 +136,7 @@ export default function More() {
   if (!profile) return null
 
   return (
-    <ScrollView className="flex-1 bg-un1t-black" contentContainerClassName="p-4">
+    <ScrollView className="flex-1 bg-un1t-bg" contentContainerClassName="p-4">
       <Section title="Account">
         <Row label={profile.full_name} value={profile.email} isLast />
       </Section>
@@ -259,7 +259,7 @@ export default function More() {
         />
       </Section>
 
-      <Text className="text-xs text-un1t-mid text-center mt-4">
+      <Text className="text-xs text-un1t-muted text-center mt-4">
         CF Studio · v1.0.0
       </Text>
     </ScrollView>

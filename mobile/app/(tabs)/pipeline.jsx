@@ -24,18 +24,18 @@ function StagePill({ stage, count, selected, onPress }) {
     <Pressable
       onPress={onPress}
       className={`mr-2 px-4 py-2 rounded-full flex-row items-center ${
-        selected ? 'bg-un1t-white' : 'bg-un1t-dark border border-un1t-gray'
+        selected ? 'bg-un1t-text' : 'bg-un1t-surface border border-un1t-border'
       }`}
     >
       <View
         className="w-2 h-2 rounded-full mr-2"
         style={{ backgroundColor: tint }}
       />
-      <Text className={`text-sm font-medium ${selected ? 'text-un1t-black' : 'text-un1t-white'}`}>
+      <Text className={`text-sm font-medium ${selected ? 'text-un1t-bg' : 'text-un1t-text'}`}>
         {stage.name}
       </Text>
-      <View className={`ml-2 px-1.5 py-0.5 rounded-full ${selected ? 'bg-un1t-black/10' : 'bg-un1t-gray/40'}`}>
-        <Text className={`text-[11px] font-semibold ${selected ? 'text-un1t-black' : 'text-un1t-light'}`}>
+      <View className={`ml-2 px-1.5 py-0.5 rounded-full ${selected ? 'bg-un1t-bg/10' : 'bg-un1t-border/40'}`}>
+        <Text className={`text-[11px] font-semibold ${selected ? 'text-un1t-bg' : 'text-un1t-subtle'}`}>
           {count}
         </Text>
       </View>
@@ -50,19 +50,19 @@ function DealRow({ deal, onPress }) {
   return (
     <Pressable
       onPress={onPress}
-      className="bg-un1t-dark border border-un1t-gray rounded-2xl p-4 mb-2 flex-row items-center active:opacity-70"
+      className="bg-un1t-surface border border-un1t-border rounded-2xl p-4 mb-2 flex-row items-center active:opacity-70"
     >
-      <View className="w-10 h-10 rounded-full bg-un1t-gray/40 items-center justify-center mr-3">
-        <Text className="text-base font-semibold text-un1t-white">
+      <View className="w-10 h-10 rounded-full bg-un1t-border/40 items-center justify-center mr-3">
+        <Text className="text-base font-semibold text-un1t-text">
           {(name[0] || '?').toUpperCase()}
         </Text>
       </View>
       <View className="flex-1">
-        <Text className="text-base font-semibold text-un1t-white">{deal.title}</Text>
-        <Text className="text-sm text-un1t-light capitalize">{name} · {sub}</Text>
+        <Text className="text-base font-semibold text-un1t-text">{deal.title}</Text>
+        <Text className="text-sm text-un1t-subtle capitalize">{name} · {sub}</Text>
       </View>
       {deal.value > 0 && (
-        <Text className="text-sm font-semibold text-un1t-white ml-2">€{deal.value}</Text>
+        <Text className="text-sm font-semibold text-un1t-text ml-2">€{deal.value}</Text>
       )}
       <Ionicons name="chevron-forward" size={16} color="#94A3B8" />
     </Pressable>
@@ -126,14 +126,14 @@ export default function Pipeline() {
 
   if (loading) {
     return (
-      <View className="flex-1 bg-un1t-black items-center justify-center">
+      <View className="flex-1 bg-un1t-bg items-center justify-center">
         <ActivityIndicator />
       </View>
     )
   }
 
   return (
-    <TabletConstrained className="flex-1 bg-un1t-black">
+    <TabletConstrained className="flex-1 bg-un1t-bg">
       <ScrollView
         contentContainerClassName="px-4 pt-3 pb-32"
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#111827" />}
@@ -164,7 +164,7 @@ export default function Pipeline() {
         {deals.length === 0 ? (
           <View className="py-12 items-center">
             <Ionicons name="folder-open-outline" size={28} color="#94A3B8" />
-            <Text className="text-sm text-un1t-light mt-2">
+            <Text className="text-sm text-un1t-subtle mt-2">
               No open deals in this stage.
             </Text>
           </View>

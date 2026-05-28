@@ -179,7 +179,7 @@ export default function PolicyViewer() {
 
   if (policy === null && error === null) {
     return (
-      <View className="flex-1 bg-un1t-black items-center justify-center">
+      <View className="flex-1 bg-un1t-bg items-center justify-center">
         <Stack.Screen options={{ title: 'Policy' }} />
         <ActivityIndicator />
       </View>
@@ -188,7 +188,7 @@ export default function PolicyViewer() {
 
   if (error) {
     return (
-      <View className="flex-1 bg-un1t-black p-6">
+      <View className="flex-1 bg-un1t-bg p-6">
         <Stack.Screen options={{ title: 'Policy' }} />
         <View className="bg-red-500/10 border border-red-500/30 rounded-2xl p-4">
           <Text className="text-sm font-semibold text-red-700">Couldn't load this policy</Text>
@@ -202,9 +202,9 @@ export default function PolicyViewer() {
             </Pressable>
             <Pressable
               onPress={() => router.back()}
-              className="bg-un1t-gray active:opacity-80 px-3 py-2 rounded-md"
+              className="bg-un1t-border active:opacity-80 px-3 py-2 rounded-md"
             >
-              <Text className="text-xs font-semibold text-un1t-white">Go back</Text>
+              <Text className="text-xs font-semibold text-un1t-text">Go back</Text>
             </Pressable>
           </View>
         </View>
@@ -218,21 +218,21 @@ export default function PolicyViewer() {
     <>
       <Stack.Screen options={{ title: policy.title }} />
       <ScrollView
-        className="flex-1 bg-un1t-black"
+        className="flex-1 bg-un1t-bg"
         contentContainerClassName="p-4 pb-20"
         scrollEventThrottle={250}
         onScroll={(e) => { scrollYRef.current = e.nativeEvent.contentOffset.y }}
         onLayout={(e) => { viewportHeightRef.current = e.nativeEvent.layout.height }}
       >
         <View className="mb-4">
-          <Text className="text-2xl font-bold text-un1t-white">{policy.title}</Text>
+          <Text className="text-2xl font-bold text-un1t-text">{policy.title}</Text>
           {ver && (
-            <Text className="text-xs text-un1t-light mt-1">
+            <Text className="text-xs text-un1t-subtle mt-1">
               v{ver.version_number} · effective {fmtDate(ver.effective_date)}
             </Text>
           )}
           {policy.description && (
-            <Text className="text-sm text-un1t-light mt-2">{policy.description}</Text>
+            <Text className="text-sm text-un1t-subtle mt-2">{policy.description}</Text>
           )}
           {ver?.change_summary && ver.version_number > 1 && (
             <View className="bg-blue-500/10 border border-blue-500/30 rounded-xl p-3 mt-3 flex-row gap-2">
@@ -256,7 +256,7 @@ export default function PolicyViewer() {
         )}
 
         {ver && (
-          <View className="bg-white rounded-2xl p-5 border border-un1t-gray">
+          <View className="bg-white rounded-2xl p-5 border border-un1t-border">
             {sections.map((s, i) => (
               <View
                 key={i}

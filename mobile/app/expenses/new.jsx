@@ -55,23 +55,23 @@ export default function NewExpenseClaimScreen() {
   }
 
   return (
-    <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} className="flex-1 bg-un1t-black">
+    <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} className="flex-1 bg-un1t-bg">
       <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 48 }}>
-        <Text className="text-2xl font-bold text-un1t-white mb-1">New expense claim</Text>
-        <Text className="text-sm text-un1t-light mb-5">
+        <Text className="text-2xl font-bold text-un1t-text mb-1">New expense claim</Text>
+        <Text className="text-sm text-un1t-subtle mb-5">
           One claim per month per location. Add receipts as you capture them, then submit at month-end.
         </Text>
 
-        <View className="bg-un1t-dark border border-un1t-gray rounded-2xl p-4 mb-3">
-          <Text className="text-[11px] uppercase tracking-wider text-un1t-light mb-2">Month</Text>
+        <View className="bg-un1t-surface border border-un1t-border rounded-2xl p-4 mb-3">
+          <Text className="text-[11px] uppercase tracking-wider text-un1t-subtle mb-2">Month</Text>
           <View className="flex-row flex-wrap gap-2">
             {months.map((m) => (
               <Pressable
                 key={m.key}
                 onPress={() => setMonthKey(m.key)}
-                className={`px-3 py-2 rounded-full border ${monthKey === m.key ? 'bg-un1t-white border-un1t-white' : 'bg-un1t-black border-un1t-gray'}`}
+                className={`px-3 py-2 rounded-full border ${monthKey === m.key ? 'bg-un1t-text border-un1t-text' : 'bg-un1t-bg border-un1t-border'}`}
               >
-                <Text className={`text-xs font-medium ${monthKey === m.key ? 'text-un1t-black' : 'text-un1t-light'}`}>
+                <Text className={`text-xs font-medium ${monthKey === m.key ? 'text-un1t-bg' : 'text-un1t-subtle'}`}>
                   {m.label}
                 </Text>
               </Pressable>
@@ -80,16 +80,16 @@ export default function NewExpenseClaimScreen() {
         </View>
 
         {availableLocations.length > 1 && (
-          <View className="bg-un1t-dark border border-un1t-gray rounded-2xl p-4 mb-3">
-            <Text className="text-[11px] uppercase tracking-wider text-un1t-light mb-2">Location</Text>
+          <View className="bg-un1t-surface border border-un1t-border rounded-2xl p-4 mb-3">
+            <Text className="text-[11px] uppercase tracking-wider text-un1t-subtle mb-2">Location</Text>
             <View className="flex-row flex-wrap gap-2">
               {availableLocations.map((l) => (
                 <Pressable
                   key={l.id}
                   onPress={() => setLocationId(l.id)}
-                  className={`px-3 py-2 rounded-full border ${locationId === l.id ? 'bg-un1t-white border-un1t-white' : 'bg-un1t-black border-un1t-gray'}`}
+                  className={`px-3 py-2 rounded-full border ${locationId === l.id ? 'bg-un1t-text border-un1t-text' : 'bg-un1t-bg border-un1t-border'}`}
                 >
-                  <Text className={`text-xs font-medium ${locationId === l.id ? 'text-un1t-black' : 'text-un1t-light'}`}>
+                  <Text className={`text-xs font-medium ${locationId === l.id ? 'text-un1t-bg' : 'text-un1t-subtle'}`}>
                     {l.name}
                   </Text>
                 </Pressable>
@@ -98,8 +98,8 @@ export default function NewExpenseClaimScreen() {
           </View>
         )}
 
-        <View className="bg-un1t-dark border border-un1t-gray rounded-2xl p-4 mb-3">
-          <Text className="text-[11px] uppercase tracking-wider text-un1t-light mb-2">Notes (optional)</Text>
+        <View className="bg-un1t-surface border border-un1t-border rounded-2xl p-4 mb-3">
+          <Text className="text-[11px] uppercase tracking-wider text-un1t-subtle mb-2">Notes (optional)</Text>
           <TextInput
             value={notes}
             onChangeText={setNotes}
@@ -108,7 +108,7 @@ export default function NewExpenseClaimScreen() {
             multiline
             numberOfLines={3}
             maxLength={2000}
-            className="text-sm text-un1t-white"
+            className="text-sm text-un1t-text"
           />
         </View>
 
@@ -121,7 +121,7 @@ export default function NewExpenseClaimScreen() {
         <Pressable
           onPress={submit}
           disabled={submitting || !locationId}
-          className={`rounded-full py-3.5 items-center ${submitting || !locationId ? 'bg-un1t-gray' : 'bg-blue-600 active:opacity-80'}`}
+          className={`rounded-full py-3.5 items-center ${submitting || !locationId ? 'bg-un1t-border' : 'bg-blue-600 active:opacity-80'}`}
         >
           {submitting ? (
             <ActivityIndicator color="#FFFFFF" />

@@ -83,7 +83,7 @@ export default function StudioDashboard({ refreshKey }) {
           label="WhatsApp unread"
           value={totalUnreadWhatsapp}
           sublabel="across the inbox"
-          accent={totalUnreadWhatsapp > 0 ? 'text-un1t-white' : 'text-un1t-mid'}
+          accent={totalUnreadWhatsapp > 0 ? 'text-un1t-text' : 'text-un1t-muted'}
           onPress={totalUnreadWhatsapp > 0 ? () => router.push('/(tabs)/whatsapp') : undefined}
         />
       </KpiRow>
@@ -100,7 +100,7 @@ export default function StudioDashboard({ refreshKey }) {
           <KpiCard label={pretty(headline[3].key)} value={headline[3].count} />
         </KpiRow>
       </View>
-      <Text className="text-xs text-un1t-mid mt-1 px-1">
+      <Text className="text-xs text-un1t-muted mt-1 px-1">
         {totalContacts} total contacts at {activeLocation?.name || 'this location'}
       </Text>
 

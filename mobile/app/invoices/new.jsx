@@ -109,13 +109,13 @@ export default function NewInvoiceScreen() {
       <Stack.Screen options={{ title: 'New invoice' }} />
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        className="flex-1 bg-un1t-black"
+        className="flex-1 bg-un1t-bg"
       >
         <ScrollView
           contentContainerStyle={{ padding: 16, paddingBottom: 48 }}
           keyboardShouldPersistTaps="handled"
         >
-          <Text className="text-sm text-un1t-light mb-5">
+          <Text className="text-sm text-un1t-subtle mb-5">
             One invoice per calendar month. PDF only, max 10 MB.
             {activeLocation?.name ? ` Submitting for ${activeLocation.name} — switch studios in the side menu to change.` : ''}
           </Text>
@@ -131,11 +131,11 @@ export default function NewInvoiceScreen() {
                     onPress={() => setMonth(m.key)}
                     className={`px-3 py-2 rounded-full border ${
                       selected
-                        ? 'bg-un1t-white border-un1t-white'
-                        : 'bg-un1t-dark border-un1t-gray'
+                        ? 'bg-un1t-text border-un1t-text'
+                        : 'bg-un1t-surface border-un1t-border'
                     }`}
                   >
-                    <Text className={`text-xs font-medium ${selected ? 'text-un1t-black' : 'text-un1t-light'}`}>
+                    <Text className={`text-xs font-medium ${selected ? 'text-un1t-bg' : 'text-un1t-subtle'}`}>
                       {m.label}
                     </Text>
                   </Pressable>
@@ -151,7 +151,7 @@ export default function NewInvoiceScreen() {
               onChangeText={setAmount}
               placeholder="e.g. 1250.00"
               placeholderTextColor="#64748B"
-              className="bg-un1t-dark border border-un1t-gray rounded-xl px-3 py-3 text-base text-un1t-white"
+              className="bg-un1t-surface border border-un1t-border rounded-xl px-3 py-3 text-base text-un1t-text"
             />
           </Field>
 
@@ -162,7 +162,7 @@ export default function NewInvoiceScreen() {
               placeholder="e.g. INV-2026-04"
               placeholderTextColor="#64748B"
               maxLength={50}
-              className="bg-un1t-dark border border-un1t-gray rounded-xl px-3 py-3 text-base text-un1t-white"
+              className="bg-un1t-surface border border-un1t-border rounded-xl px-3 py-3 text-base text-un1t-text"
             />
           </Field>
 
@@ -175,7 +175,7 @@ export default function NewInvoiceScreen() {
               maxLength={500}
               placeholder="Anything the approver should know"
               placeholderTextColor="#64748B"
-              className="bg-un1t-dark border border-un1t-gray rounded-xl px-3 py-3 text-base text-un1t-white"
+              className="bg-un1t-surface border border-un1t-border rounded-xl px-3 py-3 text-base text-un1t-text"
               style={{ minHeight: 80, textAlignVertical: 'top' }}
             />
           </Field>
@@ -183,24 +183,24 @@ export default function NewInvoiceScreen() {
           <Field label="PDF">
             <Pressable
               onPress={pickPdf}
-              className="bg-un1t-dark border border-dashed border-un1t-gray rounded-xl p-4 active:opacity-70"
+              className="bg-un1t-surface border border-dashed border-un1t-border rounded-xl p-4 active:opacity-70"
             >
               <View className="flex-row items-center">
                 <Ionicons name={file ? 'document-text' : 'cloud-upload-outline'} size={20} color={file ? '#2563EB' : '#94A3B8'} />
                 <View className="flex-1 ml-3">
                   {file ? (
                     <>
-                      <Text className="text-sm font-semibold text-un1t-white" numberOfLines={1}>
+                      <Text className="text-sm font-semibold text-un1t-text" numberOfLines={1}>
                         {file.name}
                       </Text>
-                      <Text className="text-xs text-un1t-light mt-0.5">
+                      <Text className="text-xs text-un1t-subtle mt-0.5">
                         {file.size ? `${(file.size / 1024 / 1024).toFixed(2)} MB · ` : ''}Tap to replace
                       </Text>
                     </>
                   ) : (
                     <>
-                      <Text className="text-sm font-semibold text-un1t-white">Choose PDF</Text>
-                      <Text className="text-xs text-un1t-light mt-0.5">Browse files on this device</Text>
+                      <Text className="text-sm font-semibold text-un1t-text">Choose PDF</Text>
+                      <Text className="text-xs text-un1t-subtle mt-0.5">Browse files on this device</Text>
                     </>
                   )}
                 </View>
@@ -237,7 +237,7 @@ export default function NewInvoiceScreen() {
 function Field({ label, children }) {
   return (
     <View className="mb-4">
-      <Text className="text-xs uppercase font-semibold text-un1t-light mb-2">{label}</Text>
+      <Text className="text-xs uppercase font-semibold text-un1t-subtle mb-2">{label}</Text>
       {children}
     </View>
   )
