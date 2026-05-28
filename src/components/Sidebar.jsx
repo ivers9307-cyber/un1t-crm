@@ -23,21 +23,26 @@ const roleLabels = {
 // segmented control at the top of /dashboard/* pages.
 const DASHBOARD_PERM_KEYS = ['dashboard_personal', 'dashboard_studio', 'dashboard_business']
 
+// UI-FOUND.4 — every top-level item carries a `section` so the sidebar
+// renders as labelled groups instead of one flat list. Dashboard has no
+// section (pinned at the top). Section order + headers live in
+// NAV_SECTIONS below. Within a section, items render in the order they
+// appear here.
 const allNav = [
   { href: '/dashboard',  label: 'Dashboard',   icon: LayoutDashboard, dashboardGroup: true },
-  { href: '/pipeline',   label: 'Pipeline',    icon: Columns3,        permission: 'pipeline' },
-  { href: '/contacts',   label: 'Contacts',    icon: Users,           permission: 'contacts' },
-  { href: '/activities', label: 'Tasks',        icon: CheckSquare,     permission: 'activities' },
+  { href: '/pipeline',   label: 'Pipeline',    icon: Columns3,        permission: 'pipeline',   section: 'sales' },
+  { href: '/contacts',   label: 'Contacts',    icon: Users,           permission: 'contacts',   section: 'sales' },
+  { href: '/activities', label: 'Tasks',        icon: CheckSquare,     permission: 'activities', section: 'sales' },
   // CHURN-RADAR.1 — at-risk member radar. Scores the active member
   // base on attendance signals + a quarantine triage list for
   // zero-activity records. Owner + head_coach by default. The
   // sidebar badge shows the high-risk count.
-  { href: '/churn-radar', label: 'Churn Radar', icon: Radar,           permission: 'churn_radar' },
+  { href: '/churn-radar', label: 'Churn Radar', icon: Radar,           permission: 'churn_radar', section: 'sales' },
   // LEAD-RADAR.1 — non-member triage radar. A funnel of leads /
   // trials / ClassPass drop-ins worth converting + a cleanup list
   // for dormant records. Owner + head_coach by default. The sidebar
   // badge shows the high-tier funnel count (ClassPass converts).
-  { href: '/lead-radar', label: 'Lead Radar', icon: UserPlus,          permission: 'lead_radar' },
+  { href: '/lead-radar', label: 'Lead Radar', icon: UserPlus,          permission: 'lead_radar', section: 'sales' },
   // Single "Calendly" entry replacing the old Events + Bookings.
   // The hub lands on /bookings (the high-frequency operational
   // view — "what's booked today / coming up") with a tab strip
@@ -51,13 +56,13 @@ const allNav = [
   // /bookings/event-types — no extraActivePaths needed since both
   // tabs now live under /bookings/*.
   { href: '/bookings',   label: 'Bookings',     icon: Calendar,
-    anyPermission: ['events', 'bookings'] },
+    anyPermission: ['events', 'bookings'], section: 'ops' },
   // Single Communications entry replacing the old Email + WhatsApp.
   // Visible if the user has EITHER permission — sub-tabs inside the
   // hub gate themselves further. Marked with a custom check function
   // since it ORs two permissions instead of requiring one.
   { href: '/communications', label: 'Communications', icon: MessagesSquare,
-    anyPermission: ['email', 'whatsapp'] },
+    anyPermission: ['email', 'whatsapp'], section: 'comms' },
   // Schedule hub — single sidebar entry. Internal tab strip
   // (ScheduleTabs.jsx) holds Schedule / Approvals / Reporting /
   // Invoices / Attendance. The Attendance tab (mig 120 — auto-
@@ -67,7 +72,7 @@ const allNav = [
   // about staff time + pay). Same attendance_reports permission
   // gate; the standalone /schedule/attendance URL still works as
   // a deep link for cron-driven emails / scheduled reminders.
-  { href: '/schedule',   label: 'Schedule',     icon: CalendarClock,   permission: 'schedule' },
+  { href: '/schedule',   label: 'Schedule',     icon: CalendarClock,   permission: 'schedule', section: 'ops' },
   // Events (mig 082 origin, multi-kind from mig 122 onwards). Was
   // labelled "Races" before the events expansion — same data table
   // (race_events), now spans race + workshop + seminar + open_day +
@@ -76,31 +81,31 @@ const allNav = [
   // user-visible). extraActivePaths keeps the entry highlighted on
   // old /events/* URLs that hit the back-compat rewrite.
   { href: '/events',     label: 'Events',       icon: Flag,            permission: 'races',
-    extraActivePaths: ['/events'] },
-  { href: '/cars',       label: 'Car Processing', icon: Car,           permission: 'car_processing' },
+    extraActivePaths: ['/events'], section: 'ops' },
+  { href: '/cars',       label: 'Car Processing', icon: Car,           permission: 'car_processing', section: 'ops' },
   // Orders (mig 085) spans all revenue streams (race signups + cars).
   // Got its own permission key in the mig-092 audit. Segments USED
   // to be a top-level entry too — moved under /communications/segments
   // because operators only ever come to segments to drive a broadcast.
   // The top-level entry is gone, the /segments URL still works
   // (legacy redirect).
-  { href: '/orders',     label: 'Orders',       icon: Receipt,         permission: 'orders' },
+  { href: '/orders',     label: 'Orders',       icon: Receipt,         permission: 'orders', section: 'ops' },
   // INVOICES.1 — Dext-style email-in inbox. Master + owner only by
   // default. Per-location forwarding addresses are shown at the top
   // of the page; quality + data approvals run before forward-to-Xero.
-  { href: '/invoices',   label: 'Invoices',     icon: Inbox,           permission: 'invoices_inbox' },
+  { href: '/invoices',   label: 'Invoices',     icon: Inbox,           permission: 'invoices_inbox', section: 'ops' },
   // APPROVALS.1 — central approvals dashboard. Aggregates contractor
   // invoices, FTE expense claims, time-off, swap requests, and any
   // future approval surfaces (extensible via src/lib/approvals
   // registry). Sidebar badge shows total pending count for items
   // the user can approve. Default-on for master + owner + manager —
   // head_coach + staff see nothing approvable so it's off for them.
-  { href: '/approvals',  label: 'Approvals',    icon: ClipboardCheck,  permission: 'approvals_inbox' },
+  { href: '/approvals',  label: 'Approvals',    icon: ClipboardCheck,  permission: 'approvals_inbox', section: 'ops' },
   // REPORT-ISSUE.2 — handler inbox for staff-reported issues at the
   // active location. Owner + master by default; the submit + own-
   // history surface (REPORT-ISSUE.1) is open to all staff via the
   // mobile More tab and doesn't appear on the web sidebar.
-  { href: '/issues',     label: 'Issues',       icon: AlertCircle,     permission: 'issues_inbox' },
+  { href: '/issues',     label: 'Issues',       icon: AlertCircle,     permission: 'issues_inbox', section: 'ops' },
   // Studio Management — expandable section. Parent route
   // /studio-management renders the door-unlock panel (mig 093 cross-
   // platform key). The six children below used to be top-level
@@ -110,11 +115,15 @@ const allNav = [
   // its own per-user permission (mig: STUDIO-GROUP.1 added four
   // new keys — contracts, tv_displays, glofox_import,
   // preferences_import) so operators can grant access individually.
+  // Lives in its own (header-less) `studio` section — it's already
+  // self-labelled and collapsible, so an extra section header would
+  // be redundant.
   {
     href: '/studio-management',
     label: 'Studio Management',
     icon: DoorOpen,
     permission: 'studio_management',
+    section: 'studio',
     groupId: 'studio',  // localStorage key for expand state
     children: [
       // Contracts (mig 106) — digital staff/contractor contracts.
@@ -135,16 +144,29 @@ const allNav = [
   // attendees with current zone color, available straps panel, and
   // override-pairing flow. /live redirects to /live/<activeLocation>.
   // Same permission gate as Studio Management — anyone running
-  // class can use it. Stays top-level rather than nested under
-  // Studio Management because operationally it's its own surface
+  // class can use it. Stays a top-level entry (not nested under
+  // Studio Management) because operationally it's its own surface
   // (live HR is a primary screen, not an admin task).
-  { href: '/live', label: 'Live HR', icon: Heart, permission: 'studio_management' },
+  { href: '/live', label: 'Live HR', icon: Heart, permission: 'studio_management', section: 'comms' },
   // Policies (POLICIES.1) — versioned HR policies, open to every
   // authenticated employee. No permission gate; sidebar always shows
   // the entry to anyone signed in so they can find the documents
   // they're being asked to acknowledge.
-  { href: '/policies',   label: 'Policies',     icon: BookOpen,        openToAll: true },
-  { href: '/settings',   label: 'Settings',     icon: Settings,        permission: 'settings' },
+  { href: '/policies',   label: 'Policies',     icon: BookOpen,        openToAll: true, section: 'account' },
+  { href: '/settings',   label: 'Settings',     icon: Settings,        permission: 'settings', section: 'account' },
+]
+
+// UI-FOUND.4 — section render order + headers. A `label` of null renders
+// the section's items with no header (used for the self-labelled Studio
+// Management group). A section with no visible items for the current
+// user renders nothing — no empty header. Dashboard is pinned above all
+// sections (it has no `section`).
+const NAV_SECTIONS = [
+  { id: 'sales',   label: 'Sales & CRM' },
+  { id: 'ops',     label: 'Operations' },
+  { id: 'comms',   label: 'Communications' },
+  { id: 'studio',  label: null },
+  { id: 'account', label: 'Account' },
 ]
 
 // Sidebar badge polling. Drives the red circles next to nav items
@@ -341,6 +363,26 @@ export default function Sidebar({ user, mobileOpen = false, onMobileClose }) {
     return openGroups[item.groupId] ?? autoOpen
   }
 
+  // Render a single nav entry — expandable group or leaf. Shared by
+  // the pinned items and every section so the markup stays in one place.
+  const renderNavItem = (item) =>
+    item.children ? (
+      <SidebarGroup
+        key={item.href}
+        item={item}
+        pathname={pathname}
+        open={isGroupOpen(item)}
+        onToggle={() => toggleGroup(item.groupId)}
+      />
+    ) : (
+      <SidebarItem
+        key={item.href}
+        item={item}
+        pathname={pathname}
+        badge={badges[item.href] || 0}
+      />
+    )
+
   async function handleLogout() {
     const supabase = createBrowserClient()
     await supabase.auth.signOut()
@@ -401,29 +443,19 @@ export default function Sidebar({ user, mobileOpen = false, onMobileClose }) {
         </div>
       </div>
 
-      {/* Navigation */}
+      {/* Navigation — Dashboard pinned at top, then labelled sections.
+          A section header renders only when the section has at least one
+          item visible to this user (no empty headers). */}
       <nav className="flex-1 py-4">
-        {nav.map((item) => {
-          // Expandable parent (Studio Management). The parent label
-          // navigates; a separate chevron toggles expand/collapse.
-          if (item.children) {
-            return (
-              <SidebarGroup
-                key={item.href}
-                item={item}
-                pathname={pathname}
-                open={isGroupOpen(item)}
-                onToggle={() => toggleGroup(item.groupId)}
-              />
-            )
-          }
+        {nav.filter((item) => !item.section).map(renderNavItem)}
+        {NAV_SECTIONS.map((section) => {
+          const items = nav.filter((item) => item.section === section.id)
+          if (items.length === 0) return null
           return (
-            <SidebarItem
-              key={item.href}
-              item={item}
-              pathname={pathname}
-              badge={badges[item.href] || 0}
-            />
+            <div key={section.id} className="mt-1">
+              {section.label && <SectionHeader label={section.label} />}
+              {items.map(renderNavItem)}
+            </div>
           )
         })}
       </nav>
@@ -488,7 +520,16 @@ export default function Sidebar({ user, mobileOpen = false, onMobileClose }) {
 // ----- Sidebar item renderers ------------------------------------
 // Pulled out into small components so the main Sidebar map() stays
 // readable. SidebarItem handles a single leaf nav entry; SidebarGroup
-// handles a parent + chevron + indented children list.
+// handles a parent + chevron + indented children list; SectionHeader
+// is the small uppercase label above each group.
+
+function SectionHeader({ label }) {
+  return (
+    <p className="px-5 pt-4 pb-1 text-[10px] font-semibold uppercase tracking-wider text-un1t-muted">
+      {label}
+    </p>
+  )
+}
 
 function leafClassName(active, isChild = false) {
   return clsx(
