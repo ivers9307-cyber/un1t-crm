@@ -183,11 +183,16 @@ const HIGHLIGHT_RULES = [
   },
 ]
 
-export function pickHighlight({ thisSession, history, eventTypeName }) {
+export function pickHighlight({ thisSession, history, eventTypeName, nowMs = Date.now() }) {
   if (!thisSession) return null
   const historyExclThis = (history || []).filter((s) => s.id !== thisSession.id)
   const sameTypeExclThis = sameClassType(historyExclThis, thisSession.event_type_id)
-  const recentSessionsExclThis = withinDays(historyExclThis, RECENT_DAYS)
+  // Pass nowMs through so the recent-window check matches the rest of
+  // this file (withinDays / inWindow / trendDelta all accept it).
+  // Without this the percentile-vs-last-28d highlight is non-
+  // deterministic against fixture data and stale CI runs flake when
+  // the test's anchor date drifts more than 28d behind today.
+  const recentSessionsExclThis = withinDays(historyExclThis, RECENT_DAYS, nowMs)
 
   const ctx = { thisSession, historyExclThis, sameTypeExclThis, recentSessionsExclThis, eventTypeName }
   for (const rule of HIGHLIGHT_RULES) {
@@ -233,7 +238,7 @@ export function buildSessionAnalytics({ thisSession, history, eventTypeName, now
   const overallPeakTrend = trendDelta(historyExclThis, 'peak_hr_bpm', nowMs)
   const classTypeMean = meanField(sameTypeRecent, 'effort_points')
   const classTypePercentile = percentileOf(Number(thisSession.effort_points), sameTypeRecent, 'effort_points')
-  const highlight = pickHighlight({ thisSession, history: historyExclThis, eventTypeName })
+  const highlight = pickHighlight({ thisSession, history: historyExclThis, eventTypeName, nowMs })
 
   return {
     highlight,
