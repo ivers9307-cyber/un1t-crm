@@ -116,6 +116,8 @@ export default function TabsLayout() {
         options={{
           title: 'Bookings',
           href: showBookings ? '/(tabs)/bookings' : null,
+          // MOB-UI.4 — reached from the More tab, not the bottom bar.
+          tabBarButton: () => null,
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="calendar-clear-outline" size={size} color={color} />
           ),
@@ -126,6 +128,8 @@ export default function TabsLayout() {
         options={{
           title: 'Pipeline',
           href: showPipeline ? '/(tabs)/pipeline' : null,
+          // MOB-UI.4 — reached from the More tab, not the bottom bar.
+          tabBarButton: () => null,
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="trending-up-outline" size={size} color={color} />
           ),
@@ -156,6 +160,8 @@ export default function TabsLayout() {
         options={{
           title: 'Invoices',
           href: showInvoices ? '/(tabs)/invoices' : null,
+          // MOB-UI.4 — reached from the More tab, not the bottom bar.
+          tabBarButton: () => null,
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="receipt-outline" size={size} color={color} />
           ),
@@ -166,6 +172,8 @@ export default function TabsLayout() {
         options={{
           title: 'Expenses',
           href: showExpenses ? '/(tabs)/expenses' : null,
+          // MOB-UI.4 — reached from the More tab, not the bottom bar.
+          tabBarButton: () => null,
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="wallet-outline" size={size} color={color} />
           ),

@@ -91,6 +91,11 @@ export default function More() {
   // server-side, so a staff member only sees the devices their
   // master has ticked for them.
   const showAc = profile && canMobile(profile, 'studio_management', activeLocation)
+  // MOB-UI.4 — surfaces moved off the crowded bottom bar into More.
+  const showBookings = profile && canMobile(profile, 'bookings', activeLocation)
+  const showPipeline = profile && canMobile(profile, 'pipeline', activeLocation)
+  const showInvoices = profile?.employment_type === 'contractor'
+  const showExpenses = profile?.employment_type === 'fte'
 
   // POLICIES-VIEWS.1 — outstanding policies the user hasn't opened
   // yet. Re-fetched on each focus so opening a policy in the viewer
@@ -162,6 +167,29 @@ export default function More() {
             onPress={() => router.push('/tasks')}
             isLast
           />
+        </Section>
+      )}
+
+      {/* MOB-UI.4 — Operations + Finance surfaces relocated from the
+          bottom bar (kept the bar to Home/Schedule/WhatsApp/Studio). */}
+      {(showBookings || showPipeline) && (
+        <Section title="Operations">
+          {showBookings && (
+            <Row icon="calendar-clear-outline" label="Bookings" onPress={() => router.push('/bookings')} isLast={!showPipeline} />
+          )}
+          {showPipeline && (
+            <Row icon="trending-up-outline" label="Pipeline" onPress={() => router.push('/pipeline')} isLast />
+          )}
+        </Section>
+      )}
+      {(showInvoices || showExpenses) && (
+        <Section title="Finance">
+          {showInvoices && (
+            <Row icon="receipt-outline" label="Invoices" onPress={() => router.push('/invoices')} isLast />
+          )}
+          {showExpenses && (
+            <Row icon="wallet-outline" label="Expenses" onPress={() => router.push('/expenses')} isLast />
+          )}
         </Section>
       )}
 
