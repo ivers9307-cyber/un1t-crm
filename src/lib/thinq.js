@@ -29,6 +29,15 @@
 const API_BASE = 'https://api-eic.lgthinq.com'
 const REQUEST_TIMEOUT_MS = 8000
 
+// LG's public client key — required on every Connect API call as the
+// `x-api-key` header. Same value across all PAT clients (it identifies
+// the Connect program, not the individual integration). Verified
+// against the official Python SDK's const.py
+// (https://github.com/thinq-connect/pythinqconnect/blob/main/thinqconnect/const.py).
+// Without this header — or with a wrong value — LG returns 401
+// regardless of how valid the PAT itself is.
+const THINQ_API_KEY = 'v6GFvkweNo7DK7yD3ylIZ9w52aKBU0eJ7wLXkSR3'
+
 // LG's control-body enumeration. Sensibo uses lowercase 'cool',
 // 'heat', etc., and per-device defaults in the CRM use that same
 // vocabulary (the ac_devices.default_mode column has a CHECK
@@ -109,13 +118,20 @@ async function thinqFetch(path, {
     if (v != null) url.searchParams.set(k, String(v))
   }
 
+  // Header casing matches the official Python SDK exactly. HTTP
+  // headers are case-insensitive per spec, but LG's gateway is strict
+  // — uppercase variants 401 even with a valid PAT + API key.
+  // x-service-phase: 'OP' is the production phase marker; missing
+  // this header also returns 401 from LG even though it's not
+  // documented in the public API reference.
   const headers = {
-    Authorization:   `Bearer ${pat}`,
-    'X-Country':     countryCode,
-    'X-Client-ID':   clientId,
-    'X-Message-ID':  newMessageId(),
-    'X-Api-Key':     'v6GFvkweNo7QSlazlAGwfTrFGqJL5QvY',  // LG's documented public api key, same for all PAT clients
-    Accept:          'application/json',
+    Authorization:      `Bearer ${pat}`,
+    'x-country':        countryCode,
+    'x-client-id':      clientId,
+    'x-message-id':     newMessageId(),
+    'x-api-key':        THINQ_API_KEY,
+    'x-service-phase':  'OP',
+    Accept:             'application/json',
   }
   const init = {
     method,

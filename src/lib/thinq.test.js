@@ -194,13 +194,18 @@ describe('listDevices', () => {
     expect(url).not.toMatch(/pat-xyz/)  // never on the URL
   })
 
-  it('sends X-Country + X-Client-ID + X-Message-ID headers', async () => {
+  it('sends x-country + x-client-id + x-message-id + x-api-key + x-service-phase headers (lowercase per LG)', async () => {
     global.fetch = vi.fn(async () => jsonResponse({ response: [] }))
     await listDevices(CTX)
     const [, init] = global.fetch.mock.calls[0]
-    expect(init.headers['X-Country']).toBe('IE')
-    expect(init.headers['X-Client-ID']).toBe('client-uuid')
-    expect(init.headers['X-Message-ID']).toMatch(/[0-9a-f-]+/i)
+    expect(init.headers['x-country']).toBe('IE')
+    expect(init.headers['x-client-id']).toBe('client-uuid')
+    expect(init.headers['x-message-id']).toMatch(/[0-9a-f-]+/i)
+    // x-api-key is the LG-documented public client key; missing or
+    // wrong value yields 401 regardless of PAT validity.
+    expect(init.headers['x-api-key']).toBe('v6GFvkweNo7DK7yD3ylIZ9w52aKBU0eJ7wLXkSR3')
+    // LG's gateway requires the production phase marker.
+    expect(init.headers['x-service-phase']).toBe('OP')
   })
 })
 
