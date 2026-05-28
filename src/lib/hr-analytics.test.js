@@ -132,13 +132,13 @@ describe('trendDelta', () => {
 
 describe('pickHighlight', () => {
   it('first_ever for a brand-new member', () => {
-    const h = pickHighlight({ thisSession: s({ id: 'now' }), history: [] })
+    const h = pickHighlight({ thisSession: s({ id: 'now' }), history: [], nowMs: NOW })
     expect(h.id).toBe('first_ever')
   })
   it('first_z5 when prior history has no Z5', () => {
     const thisSession = s({ id: 'now', zones: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 90 } })
     const history = [s({ id: 'p1', zones: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 } })]
-    const h = pickHighlight({ thisSession, history })
+    const h = pickHighlight({ thisSession, history, nowMs: NOW })
     expect(h.id).toBe('first_z5')
     expect(h.message).toMatch(/red zone|Z5/)
   })
@@ -148,7 +148,7 @@ describe('pickHighlight', () => {
       s({ id: 'p1', peak: 170 }),
       s({ id: 'p2', peak: 175 }),
     ]
-    const h = pickHighlight({ thisSession, history })
+    const h = pickHighlight({ thisSession, history, nowMs: NOW })
     expect(h.id).toBe('new_peak')
     expect(h.message).toMatch(/195/)
   })
@@ -159,7 +159,7 @@ describe('pickHighlight', () => {
       s({ id: 'p2', points: 120 }),
       s({ id: 'p3', points: 110 }),
     ]
-    const h = pickHighlight({ thisSession, history, eventTypeName: 'RIDE' })
+    const h = pickHighlight({ thisSession, history, eventTypeName: 'RIDE', nowMs: NOW })
     expect(h.id).toBe('best_class_type_points')
     expect(h.message).toMatch(/RIDE/)
   })
@@ -170,7 +170,12 @@ describe('pickHighlight', () => {
     const history = Array.from({ length: 8 }).map((_, i) =>
       s({ id: `p${i}`, eventType: 'evt-RIDE', startedDaysAgo: 5 + i, points: 50 + i, peak: 170 }),
     )
-    const h = pickHighlight({ thisSession, history })
+    // Pin the clock to NOW so the recent-28d window matches the
+    // fixtures (which are dated relative to NOW). Without nowMs the
+    // function uses real Date.now() and the fixtures fall outside
+    // the window once `NOW` is > 28 days behind today, which is
+    // exactly the flake that bit CI on this test in May 2026.
+    const h = pickHighlight({ thisSession, history, nowMs: NOW })
     expect(h.id).toBe('top_quartile_recent')
   })
   it('returns null when no rule fires', () => {
@@ -178,7 +183,7 @@ describe('pickHighlight', () => {
     const history = Array.from({ length: 10 }).map((_, i) =>
       s({ id: `p${i}`, startedDaysAgo: 5 + i, points: 100, peak: 170 }),
     )
-    expect(pickHighlight({ thisSession, history })).toBe(null)
+    expect(pickHighlight({ thisSession, history, nowMs: NOW })).toBe(null)
   })
 })
 
