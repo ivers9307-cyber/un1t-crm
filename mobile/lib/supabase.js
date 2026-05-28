@@ -2,11 +2,21 @@
 //
 // We can't use cookies on a mobile device, so the session lives in
 // expo-secure-store (iOS Keychain / Android Keystore). Supabase JS
-// supports a custom storage adapter — we plug SecureStore in.
+// supports a custom storage adapter — we plug a CHUNKED SecureStore
+// adapter in.
+//
+// Why chunked (MOBILE-AUDIT.4): SecureStore has a ~2 KB per-value limit
+// on iOS. A Supabase session is usually ~1.5 KB but can exceed 2 KB
+// (longer JWTs, extra claims, longer email) — at which point a plain
+// setItemAsync throws and the session silently fails to persist, logging
+// the user out on every cold start. The adapter below splits large
+// values across `<key>.0`, `<key>.1`, … under a small marker so the
+// whole session always fits, while keeping everything in the Keychain
+// (no AsyncStorage fallback, so nothing sensitive lands in plaintext).
 //
 // The same project URL and anon key the web app uses are read from
-// expo-constants.extra (set via app.config.js → process.env). Server-
-// side code never runs in the app, so we only need the anon key.
+// expo-constants.extra (set via app.config.js). Server-side code never
+// runs in the app, so we only need the anon key.
 
 import 'react-native-url-polyfill/auto'
 import { createClient } from '@supabase/supabase-js'
@@ -19,7 +29,6 @@ const SUPABASE_ANON_KEY = Constants.expoConfig?.extra?.supabaseAnonKey
 
 if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
   // Fail loud — same philosophy as src/lib/app-url.js (no silent fallbacks).
-  // The user will see this in the Expo dev tools immediately.
   // eslint-disable-next-line no-console
   console.error(
     '[supabase] Missing EXPO_PUBLIC_SUPABASE_URL / EXPO_PUBLIC_SUPABASE_ANON_KEY. ' +
@@ -27,14 +36,65 @@ if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
   )
 }
 
-// SecureStore has a 2KB per-value limit on iOS. Supabase sessions are
-// usually well under that (~1.5KB) but if you ever see a "Value too
-// long" error, fall back to AsyncStorage for the session and keep
-// SecureStore for the refresh token only. We keep it simple here.
+// Stay comfortably under the iOS 2 KB SecureStore limit (UTF-8 bytes can
+// exceed JS string length, so leave headroom).
+const CHUNK_SIZE = 1500
+const CHUNK_MARKER = '__chunks__:'
+// Cleanup is bounded — we never expect a session to exceed a handful of
+// chunks, but cap the scan so a corrupt marker can't loop unbounded.
+const MAX_CHUNKS = 16
+
 const SecureStoreAdapter = {
-  getItem: (key) => SecureStore.getItemAsync(key),
-  setItem: (key, value) => SecureStore.setItemAsync(key, value),
-  removeItem: (key) => SecureStore.deleteItemAsync(key),
+  async getItem(key) {
+    const head = await SecureStore.getItemAsync(key)
+    if (head == null) return null
+    // Legacy single-value sessions (written before chunking) and small
+    // values are stored plain — return as-is so existing users aren't
+    // logged out on upgrade.
+    if (!head.startsWith(CHUNK_MARKER)) return head
+    const count = parseInt(head.slice(CHUNK_MARKER.length), 10)
+    if (!Number.isInteger(count) || count < 1 || count > MAX_CHUNKS) return null
+    let out = ''
+    for (let i = 0; i < count; i++) {
+      const part = await SecureStore.getItemAsync(`${key}.${i}`)
+      if (part == null) return null // corrupt/partial — treat as no session
+      out += part
+    }
+    return out
+  },
+
+  async setItem(key, value) {
+    if (value.length <= CHUNK_SIZE) {
+      // Small enough to store plain. Drop any stale chunks from a
+      // previous large write so they can't be misread later.
+      await SecureStore.setItemAsync(key, value)
+      await clearChunks(key)
+      return
+    }
+    const count = Math.ceil(value.length / CHUNK_SIZE)
+    for (let i = 0; i < count; i++) {
+      await SecureStore.setItemAsync(`${key}.${i}`, value.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE))
+    }
+    await SecureStore.setItemAsync(key, `${CHUNK_MARKER}${count}`)
+  },
+
+  async removeItem(key) {
+    await clearChunks(key)
+    await SecureStore.deleteItemAsync(key)
+  },
+}
+
+// Best-effort removal of `<key>.0..N` chunk entries.
+async function clearChunks(key) {
+  for (let i = 0; i < MAX_CHUNKS; i++) {
+    try {
+      const existing = await SecureStore.getItemAsync(`${key}.${i}`)
+      if (existing == null) break
+      await SecureStore.deleteItemAsync(`${key}.${i}`)
+    } catch {
+      break
+    }
+  }
 }
 
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {

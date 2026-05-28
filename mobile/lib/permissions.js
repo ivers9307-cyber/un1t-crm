@@ -33,6 +33,19 @@ import {
   resolvePermission,
 } from '../../shared/permissions'
 
+// ── SECURITY BOUNDARY NOTE (MOBILE-AUDIT.5) ─────────────────────────
+// This resolver controls UI ONLY — which tabs/screens the app renders.
+// It is NOT a security control: the app talks to Supabase with the
+// public anon key + the user's JWT, so anyone could call the database
+// directly regardless of what this hides. The actual enforcement lives
+// in Row-Level Security. As of mig 218-219 the direct-CRUD tables
+// (deals, activities, notes, bookings, whatsapp_*) are RLS-scoped by the
+// SAME permission keys this file reads (via private.auth_mobile_can),
+// so the data layer now backs these gates. When adding a new
+// direct-Supabase screen, gate it here for UX AND confirm the table's
+// RLS policy enforces the permission — do not rely on this file alone.
+// ────────────────────────────────────────────────────────────────────
+
 // Re-export the shared definitions so screens that need labels/hints
 // (e.g. a future in-app notification preferences page) can import
 // them from `../lib/permissions` instead of crossing the shared/

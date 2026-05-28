@@ -10,3 +10,6 @@ _review/
 # locally to draft each commit's message, never meant to be checked
 # in. Matches the `_<short-name>-commit.mjs` convention.
 scripts/_*-commit.mjs
+
+# EAS Update code-signing private key (MOBILE-AUDIT.2) — never commit
+mobile/keys/
