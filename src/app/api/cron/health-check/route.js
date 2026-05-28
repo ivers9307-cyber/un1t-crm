@@ -22,11 +22,9 @@ export const dynamic = 'force-dynamic'
 
 export async function GET(request) {
   const cronSecret = process.env.CRON_SECRET
-  if (cronSecret) {
-    const authHeader = request.headers.get('authorization')
-    if (authHeader !== `Bearer ${cronSecret}`) {
-      return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-    }
+  const authHeader = request.headers.get('authorization')
+  if (!cronSecret || authHeader !== `Bearer ${cronSecret}`) {
+    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
   }
 
   const db = createServerClient()
