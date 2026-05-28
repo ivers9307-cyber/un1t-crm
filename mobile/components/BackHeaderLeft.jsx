@@ -34,6 +34,8 @@ export default function BackHeaderLeft({ label = 'Back', fallbackHref = '/' }) {
         else router.replace(fallbackHref)
       }}
       hitSlop={12}
+      accessibilityRole="button"
+      accessibilityLabel={label}
       className="flex-row items-center -ml-1"
     >
       <Ionicons name="chevron-back" size={26} color="#111827" />
