@@ -368,6 +368,73 @@ export function authoriseDevice({ user, assignment, deviceId }) {
 }
 
 // ============================================================
+// Cron + bookkeeping helpers
+// ============================================================
+
+/**
+ * Look up the joined device + location row by device id, with no
+ * permission check. Intended for the auto-off cron (system actor,
+ * no user). User-facing routes should still go through
+ * loadDeviceForUser so the allowlist gate runs.
+ */
+export async function loadDeviceWithLocation(deviceId, db) {
+  if (!deviceId) return { ok: false, status: 400, error: 'device_id is required.', code: 'missing_device_id' }
+  const { data: device } = await db
+    .from('ac_devices')
+    .select('id, location_id, label, provider, provider_device_id, enabled')
+    .eq('id', deviceId)
+    .single()
+  if (!device) return { ok: false, status: 404, error: 'AC device not found.', code: 'device_not_found' }
+
+  const { data: location } = await db
+    .from('locations')
+    .select('id, name, sensibo_api_key, sensibo_pod_id, thinq_pat, thinq_client_id, thinq_country_code')
+    .eq('id', device.location_id)
+    .single()
+  if (!location) return { ok: false, status: 404, error: 'Location for AC device not found.', code: 'location_not_found' }
+
+  return { ok: true, device, location }
+}
+
+/**
+ * Pure vendor power-off — dispatches to the right adapter based on
+ * device.provider with no DB writes, no permission check, no audit.
+ * The auto-off cron uses this so it can write its own AUTO_OFF
+ * session row (rather than the dispatcher's MANUAL_OFF default).
+ */
+export async function vendorTurnOff(device, location, { vendorAdapters } = {}) {
+  const adapter = pickAdapter(device.provider, { vendorAdapters })
+  if (adapter.error) return adapter.error
+  const creds = resolveCredentials(device, location)
+  if (creds.error) return creds.error
+  try {
+    await adapter.adapter.turnOff(device.provider_device_id, creds.creds)
+    return { ok: true }
+  } catch (e) {
+    return vendorError(e)
+  }
+}
+
+/**
+ * Find the first enabled AC device at a location, in stable order.
+ * Backward-compat shim for legacy callers that operate on the
+ * implicit "the location's AC" (pre-multi-device era). Returns
+ * `null` if no enabled device exists for the location.
+ */
+export async function findDefaultDeviceForLocation(locationId, db) {
+  if (!locationId) return null
+  const { data: row } = await db
+    .from('ac_devices')
+    .select('id, location_id, label, provider, provider_device_id, default_mode, default_temp_c, default_fan, session_minutes, enabled')
+    .eq('location_id', locationId)
+    .eq('enabled', true)
+    .order('created_at', { ascending: true })
+    .limit(1)
+    .maybeSingle()
+  return row || null
+}
+
+// ============================================================
 // Vendor dispatch
 // ============================================================
 

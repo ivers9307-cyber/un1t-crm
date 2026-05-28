@@ -22,6 +22,9 @@ vi.mock('@/lib/audit', () => ({
 import {
   authoriseDevice,
   loadDeviceForUser,
+  loadDeviceWithLocation,
+  vendorTurnOff,
+  findDefaultDeviceForLocation,
   turnOn,
   turnOff,
   extendSession,
@@ -491,6 +494,86 @@ describe('extendSession', () => {
 // ============================================================
 // getState — vendor dispatch
 // ============================================================
+
+// ============================================================
+// Cron helpers (loadDeviceWithLocation, vendorTurnOff,
+// findDefaultDeviceForLocation)
+// ============================================================
+
+describe('loadDeviceWithLocation', () => {
+  it('returns 400 when deviceId is missing', async () => {
+    expect(await loadDeviceWithLocation('', { from: () => {} }))
+      .toMatchObject({ ok: false, status: 400, code: 'missing_device_id' })
+  })
+
+  it('returns 404 when device row does not exist (no permission check)', async () => {
+    const db = makeDb({ ac_devices: { data: null } })
+    expect(await loadDeviceWithLocation('dev-x', db))
+      .toMatchObject({ ok: false, status: 404, code: 'device_not_found' })
+  })
+
+  it('returns device + location and skips the user/allowlist gate', async () => {
+    // No profile_locations mock — proves the cron path does not
+    // call the permission gate. If it did, makeDb would throw on
+    // the missing mock.
+    const db = makeDb({
+      ac_devices: { data: THINQ_DEVICE },
+      locations:  { data: LOCATION_FULL },
+    })
+    const out = await loadDeviceWithLocation('dev-thinq', db)
+    expect(out.ok).toBe(true)
+    expect(out.device.id).toBe('dev-thinq')
+    expect(out.location.id).toBe('loc-1')
+  })
+})
+
+describe('vendorTurnOff', () => {
+  it('dispatches to the right vendor adapter (no DB, no permission, no audit)', async () => {
+    const vendorAdapters = makeAdapters()
+    const out = await vendorTurnOff(THINQ_DEVICE, LOCATION_FULL, { vendorAdapters })
+    expect(out.ok).toBe(true)
+    expect(vendorAdapters.thinq.turnOff).toHaveBeenCalledWith('lg-aaa', {
+      pat: 'pat-x', clientId: 'cli-x', countryCode: 'IE',
+    })
+    expect(vendorAdapters.sensibo.turnOff).not.toHaveBeenCalled()
+    // No audit row for cron-initiated turn-offs.
+    expect(logAuditEvent).not.toHaveBeenCalled()
+  })
+
+  it('surfaces vendor errors as 502 vendor_error', async () => {
+    const vendorAdapters = makeAdapters()
+    vendorAdapters.sensibo.turnOff.mockRejectedValueOnce(new Error('Pod is offline'))
+    const out = await vendorTurnOff(SENSIBO_DEVICE, LOCATION_FULL, { vendorAdapters })
+    expect(out).toMatchObject({ ok: false, status: 502, code: 'vendor_error' })
+    expect(out.error).toMatch(/Pod is offline/)
+  })
+
+  it('returns 412 when credentials are missing on the location', async () => {
+    const out = await vendorTurnOff(
+      THINQ_DEVICE,
+      { ...LOCATION_FULL, thinq_pat: null },
+      { vendorAdapters: makeAdapters() }
+    )
+    expect(out).toMatchObject({ ok: false, status: 412, code: 'thinq_not_configured' })
+  })
+})
+
+describe('findDefaultDeviceForLocation', () => {
+  it('returns the first enabled device at the location', async () => {
+    const db = makeDb({ ac_devices: { data: SENSIBO_DEVICE } })
+    expect(await findDefaultDeviceForLocation('loc-1', db))
+      .toMatchObject({ id: 'dev-sensibo' })
+  })
+
+  it('returns null when there are no enabled devices', async () => {
+    const db = makeDb({ ac_devices: { data: null } })
+    expect(await findDefaultDeviceForLocation('loc-1', db)).toBeNull()
+  })
+
+  it('returns null when locationId is missing', async () => {
+    expect(await findDefaultDeviceForLocation(null, {})).toBeNull()
+  })
+})
 
 describe('getState', () => {
   it('dispatches to the right vendor based on device.provider', async () => {
