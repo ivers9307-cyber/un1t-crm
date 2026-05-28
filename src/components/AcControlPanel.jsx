@@ -199,8 +199,17 @@ function DeviceCard({ device }) {
     }
   }
 
+  // STUDIO-AC-EXTERNAL.1 — reconcile live vendor state with the
+  // session row. If the AC is physically on (via wall panel or a
+  // Sensibo / LG schedule) but there's no app-created session, we
+  // treat that as control_source='external' and render a running
+  // card without a countdown. Turn-off still works in that case —
+  // the vendor accepts the power-off regardless of how the unit
+  // was started.
   const session = state?.active_session
-  const isOn = !!session
+  const vendorOn = state?.state?.on === true
+  const controlSource = session ? 'app' : (vendorOn ? 'external' : null)
+  const isOn = !!controlSource
   let minsLeft = null
   if (session?.auto_off_at) {
     const ms = new Date(session.auto_off_at).getTime() - Date.now()
@@ -224,12 +233,20 @@ function DeviceCard({ device }) {
           </div>
           <div className="text-[11px] text-un1t-light mt-0.5">{presetLabel}</div>
         </div>
-        {isOn && (
+        {isOn && controlSource === 'app' && (
           <div className="text-right shrink-0">
             <div className="text-xl font-bold text-blue-200 inline-flex items-center gap-1.5">
               <Clock size={14} /> {minsLeft != null ? `${minsLeft} min` : '—'}
             </div>
             <div className="text-[10px] text-un1t-light">until auto-off</div>
+          </div>
+        )}
+        {/* No countdown for externally-controlled sessions —
+            we don't know when the unit was turned on. */}
+        {isOn && controlSource === 'external' && (
+          <div className="text-right shrink-0">
+            <div className="text-[11px] uppercase tracking-wider text-blue-200">Running</div>
+            <div className="text-[10px] text-un1t-light">started externally</div>
           </div>
         )}
       </div>
@@ -252,9 +269,16 @@ function DeviceCard({ device }) {
         </button>
       ) : (
         <div className="space-y-2">
-          {session?.profiles?.full_name && (
+          {controlSource === 'app' && session?.profiles?.full_name && (
             <div className="text-[11px] text-un1t-light">
               Started by {session.profiles.full_name} · {timeAgo(session.started_at)}
+            </div>
+          )}
+          {controlSource === 'external' && (
+            <div className="text-[11px] text-amber-200 bg-amber-500/10 border border-amber-500/30 rounded p-2 inline-flex items-start gap-2">
+              <AlertCircle size={11} className="mt-0.5 shrink-0" />
+              Turned on at the wall panel or by a vendor schedule. No
+              auto-off timer — turn it off here when you&apos;re done.
             </div>
           )}
           {state?.state && (
@@ -265,15 +289,19 @@ function DeviceCard({ device }) {
               {state.state.fan ? ` · fan ${state.state.fan}` : ''}
             </div>
           )}
-          <div className="grid grid-cols-2 gap-2">
-            <button
-              onClick={() => call('extend', 'extend')}
-              disabled={busy === 'extend'}
-              className="bg-un1t-gray/30 text-un1t-light border border-un1t-gray hover:text-un1t-white text-xs font-semibold px-3 py-2 rounded-md inline-flex items-center justify-center gap-1.5 disabled:opacity-50"
-            >
-              {busy === 'extend' ? <Loader2 size={12} className="animate-spin" /> : <Plus size={12} />}
-              +{device.session_minutes || 30} min
-            </button>
+          {/* Extend only makes sense when there's an app-started
+              session whose auto_off_at we can push forward. */}
+          <div className={controlSource === 'app' ? 'grid grid-cols-2 gap-2' : ''}>
+            {controlSource === 'app' && (
+              <button
+                onClick={() => call('extend', 'extend')}
+                disabled={busy === 'extend'}
+                className="bg-un1t-gray/30 text-un1t-light border border-un1t-gray hover:text-un1t-white text-xs font-semibold px-3 py-2 rounded-md inline-flex items-center justify-center gap-1.5 disabled:opacity-50"
+              >
+                {busy === 'extend' ? <Loader2 size={12} className="animate-spin" /> : <Plus size={12} />}
+                +{device.session_minutes || 30} min
+              </button>
+            )}
             <button
               onClick={() => {
                 if (!confirm(`Turn ${device.label} off now?`)) return

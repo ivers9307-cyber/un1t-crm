@@ -233,8 +233,14 @@ function DeviceCard({ device, locationId }) {
     }
   }
 
+  // STUDIO-AC-EXTERNAL.1 — same reconciliation as the web panel.
+  // Vendor on + no session = control_source 'external' (wall panel
+  // or vendor schedule turned it on). No countdown then, but the
+  // Turn-off button still works.
   const session = state?.active_session
-  const isOn = !!session
+  const vendorOn = state?.state?.on === true
+  const controlSource = session ? 'app' : (vendorOn ? 'external' : null)
+  const isOn = !!controlSource
   let minsLeft = null
   if (session?.auto_off_at) {
     const ms = new Date(session.auto_off_at).getTime() - Date.now()
@@ -268,7 +274,7 @@ function DeviceCard({ device, locationId }) {
           </View>
           <Text className="text-[11px] text-un1t-light mt-0.5">{presetLabel}</Text>
         </View>
-        {isOn && (
+        {isOn && controlSource === 'app' && (
           <View className="items-end">
             <View className="flex-row items-center">
               <Ionicons name="time-outline" size={14} color="#93C5FD" />
@@ -277,6 +283,12 @@ function DeviceCard({ device, locationId }) {
               </Text>
             </View>
             <Text className="text-[10px] text-un1t-light">auto-off</Text>
+          </View>
+        )}
+        {isOn && controlSource === 'external' && (
+          <View className="items-end">
+            <Text className="text-[11px] uppercase tracking-wider text-blue-200">Running</Text>
+            <Text className="text-[10px] text-un1t-light">externally</Text>
           </View>
         )}
       </View>
@@ -307,10 +319,18 @@ function DeviceCard({ device, locationId }) {
         </Pressable>
       ) : (
         <View className="gap-2">
-          {session?.profiles?.full_name && (
+          {controlSource === 'app' && session?.profiles?.full_name && (
             <Text className="text-[11px] text-un1t-light">
               Started by {session.profiles.full_name}
             </Text>
+          )}
+          {controlSource === 'external' && (
+            <View className="bg-amber-500/10 border border-amber-500/30 rounded-md p-2 flex-row items-start">
+              <Ionicons name="warning-outline" size={11} color="#F59E0B" style={{ marginTop: 2 }} />
+              <Text className="text-[11px] text-amber-700 ml-1.5 flex-1">
+                Turned on externally. No auto-off timer — use Off when done.
+              </Text>
+            </View>
           )}
           {state?.state && (
             <View className="bg-un1t-black/40 rounded-md px-3 py-1.5">
@@ -323,18 +343,20 @@ function DeviceCard({ device, locationId }) {
             </View>
           )}
           <View className="flex-row gap-2">
-            <Pressable
-              onPress={extend}
-              disabled={busy === 'extend'}
-              className="flex-1 bg-un1t-gray/40 active:opacity-70 disabled:opacity-50 px-3 py-2.5 rounded-xl flex-row items-center justify-center"
-            >
-              {busy === 'extend'
-                ? <ActivityIndicator color="#94A3B8" />
-                : <Ionicons name="add" size={14} color="#94A3B8" />}
-              <Text className="text-sm font-semibold text-un1t-light ml-1.5">
-                +{device.session_minutes || 30}m
-              </Text>
-            </Pressable>
+            {controlSource === 'app' && (
+              <Pressable
+                onPress={extend}
+                disabled={busy === 'extend'}
+                className="flex-1 bg-un1t-gray/40 active:opacity-70 disabled:opacity-50 px-3 py-2.5 rounded-xl flex-row items-center justify-center"
+              >
+                {busy === 'extend'
+                  ? <ActivityIndicator color="#94A3B8" />
+                  : <Ionicons name="add" size={14} color="#94A3B8" />}
+                <Text className="text-sm font-semibold text-un1t-light ml-1.5">
+                  +{device.session_minutes || 30}m
+                </Text>
+              </Pressable>
+            )}
             <Pressable
               onPress={confirmTurnOff}
               disabled={busy === 'off'}
