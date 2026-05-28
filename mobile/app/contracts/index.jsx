@@ -72,7 +72,7 @@ export default function ContractsList() {
 
   if (rows == null) {
     return (
-      <View className="flex-1 bg-un1t-black items-center justify-center">
+      <View className="flex-1 bg-un1t-bg items-center justify-center">
         <Stack.Screen options={{ ...headerOptions, title: 'Your contracts' }} />
         <ActivityIndicator />
       </View>
@@ -81,7 +81,7 @@ export default function ContractsList() {
 
   if (error) {
     return (
-      <View className="flex-1 bg-un1t-black p-6">
+      <View className="flex-1 bg-un1t-bg p-6">
         <Stack.Screen options={{ ...headerOptions, title: 'Your contracts' }} />
         <View className="bg-red-500/10 border border-red-500/30 rounded-2xl p-4">
           <Text className="text-sm font-semibold text-red-700">Couldn't load contracts</Text>
@@ -99,13 +99,13 @@ export default function ContractsList() {
 
   if (rows.length === 0) {
     return (
-      <View className="flex-1 bg-un1t-black items-center justify-center px-8">
+      <View className="flex-1 bg-un1t-bg items-center justify-center px-8">
         <Stack.Screen options={{ ...headerOptions, title: 'Your contracts' }} />
         <Ionicons name="document-text-outline" size={32} color="#94A3B8" />
-        <Text className="text-sm text-un1t-light mt-3 text-center">
+        <Text className="text-sm text-un1t-subtle mt-3 text-center">
           No contracts on file yet.
         </Text>
-        <Text className="text-xs text-un1t-mid mt-1 text-center">
+        <Text className="text-xs text-un1t-muted mt-1 text-center">
           When UN1T issues you a contract, you'll see it here.
         </Text>
       </View>
@@ -131,7 +131,7 @@ export default function ContractsList() {
     <>
       <Stack.Screen options={{ ...headerOptions, title: 'Your contracts' }} />
       <FlatList
-      className="flex-1 bg-un1t-black"
+      className="flex-1 bg-un1t-bg"
       contentContainerClassName="p-4"
       data={items}
       keyExtractor={i => i.key}
@@ -141,24 +141,24 @@ export default function ContractsList() {
       renderItem={({ item }) => {
         if (item.kind === 'header') {
           return (
-            <Text className="text-xs font-semibold uppercase tracking-wider text-un1t-light mt-2 mb-1.5">
+            <Text className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle mt-2 mb-1.5">
               {item.label}
             </Text>
           )
         }
         const c = item.row
-        const badge = STATUS_LABEL[c.status] || { text: c.status, bg: 'bg-un1t-gray', fg: 'text-un1t-light' }
+        const badge = STATUS_LABEL[c.status] || { text: c.status, bg: 'bg-un1t-border', fg: 'text-un1t-subtle' }
         return (
           <Pressable
             onPress={() => router.push(`/contracts/${c.id}`)}
-            className="bg-un1t-dark border border-un1t-gray rounded-xl p-3.5 mb-2 active:bg-un1t-gray/40"
+            className="bg-un1t-surface border border-un1t-border rounded-xl p-3.5 mb-2 active:bg-un1t-border/40"
           >
             <View className="flex-row items-start justify-between gap-2">
               <View className="flex-1 min-w-0">
-                <Text className="text-base font-medium text-un1t-white" numberOfLines={1}>
+                <Text className="text-base font-medium text-un1t-text" numberOfLines={1}>
                   {c.template?.name || 'Contract'}
                 </Text>
-                <Text className="text-[11px] text-un1t-light mt-0.5">
+                <Text className="text-[11px] text-un1t-subtle mt-0.5">
                   Issued {fmtDate(c.issued_at)}
                   {c.signed_at && ` · Signed ${fmtDate(c.signed_at)}`}
                 </Text>

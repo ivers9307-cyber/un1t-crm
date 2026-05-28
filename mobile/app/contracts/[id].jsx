@@ -98,7 +98,7 @@ export default function ContractDetail() {
 
   if (loading) {
     return (
-      <View className="flex-1 bg-un1t-black items-center justify-center">
+      <View className="flex-1 bg-un1t-bg items-center justify-center">
         <ActivityIndicator />
       </View>
     )
@@ -106,7 +106,7 @@ export default function ContractDetail() {
 
   if (error || !contract) {
     return (
-      <View className="flex-1 bg-un1t-black p-6">
+      <View className="flex-1 bg-un1t-bg p-6">
         <View className="bg-red-500/10 border border-red-500/30 rounded-2xl p-4">
           <Text className="text-sm font-semibold text-red-700">Couldn't load this contract</Text>
           <Text className="text-xs text-red-700 mt-1">{error || 'Not found'}</Text>
@@ -126,7 +126,7 @@ export default function ContractDetail() {
       style={{ flex: 1 }}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
-      <ScrollView className="flex-1 bg-un1t-black" contentContainerClassName="p-4 pb-32">
+      <ScrollView className="flex-1 bg-un1t-bg" contentContainerClassName="p-4 pb-32">
         {/* Status banner — quick read of where this contract is. */}
         <View className={`rounded-xl p-3 mb-4 ${
           signed   ? 'bg-emerald-500/10 border border-emerald-500/30' :
@@ -137,13 +137,13 @@ export default function ContractDetail() {
           <Text className={`text-sm font-semibold ${
             signed   ? 'text-emerald-700' :
             declined ? 'text-red-700' :
-            revoked  ? 'text-un1t-light' :
+            revoked  ? 'text-un1t-subtle' :
                        'text-amber-700'
           }`}>
             {STATUS_LABEL[c.status] || c.status}
           </Text>
           {c.template?.name && (
-            <Text className="text-xs text-un1t-light mt-0.5">
+            <Text className="text-xs text-un1t-subtle mt-0.5">
               {c.template.name}
             </Text>
           )}
@@ -151,7 +151,7 @@ export default function ContractDetail() {
             <Text className="text-xs text-red-700 mt-2">{c.declined_reason}</Text>
           )}
           {c.revoked_reason && (
-            <Text className="text-xs text-un1t-light mt-2">{c.revoked_reason}</Text>
+            <Text className="text-xs text-un1t-subtle mt-2">{c.revoked_reason}</Text>
           )}
         </View>
 
@@ -196,9 +196,9 @@ export default function ContractDetail() {
 
         {/* Sign sheet — only when pending */}
         {pending && !showDecline && (
-          <View className="bg-un1t-dark border border-un1t-gray rounded-xl p-4">
-            <Text className="text-sm font-semibold text-un1t-white">Your signature</Text>
-            <Text className="text-xs text-un1t-light mt-1 mb-3">
+          <View className="bg-un1t-surface border border-un1t-border rounded-xl p-4">
+            <Text className="text-sm font-semibold text-un1t-text">Your signature</Text>
+            <Text className="text-xs text-un1t-subtle mt-1 mb-3">
               Type your full name as it appears on the contract. By signing, you agree to the terms above.
             </Text>
             <TextInput
@@ -207,10 +207,10 @@ export default function ContractDetail() {
               placeholder="Your full name"
               placeholderTextColor="#94A3B8"
               autoCapitalize="words"
-              className="bg-un1t-black border border-un1t-gray rounded-md px-3 py-3 text-un1t-white"
+              className="bg-un1t-bg border border-un1t-border rounded-md px-3 py-3 text-un1t-text"
               style={{ fontFamily: Platform.OS === 'ios' ? 'Georgia' : 'serif', fontStyle: 'italic', fontSize: 18 }}
             />
-            <Text className="text-[10px] text-un1t-mid mt-2">
+            <Text className="text-[10px] text-un1t-muted mt-2">
               We record your IP, browser, and time of signing for legal verification (eIDAS Article 25).
             </Text>
             <View className="flex-row items-center justify-end gap-2 mt-4">
@@ -224,11 +224,11 @@ export default function ContractDetail() {
                 onPress={handleSign}
                 disabled={busy || !signature.trim()}
                 className={`px-4 py-2 rounded-md flex-row items-center gap-1.5 ${
-                  busy || !signature.trim() ? 'bg-un1t-gray' : 'bg-un1t-white active:opacity-80'
+                  busy || !signature.trim() ? 'bg-un1t-border' : 'bg-un1t-text active:opacity-80'
                 }`}
               >
                 <Ionicons name="checkmark" size={14} color="#111827" />
-                <Text className="text-xs font-semibold text-un1t-black">
+                <Text className="text-xs font-semibold text-un1t-bg">
                   {busy ? 'Signing…' : 'Sign contract'}
                 </Text>
               </Pressable>
@@ -240,7 +240,7 @@ export default function ContractDetail() {
         {showDecline && (
           <View className="bg-red-500/5 border border-red-500/30 rounded-xl p-4">
             <Text className="text-sm font-semibold text-red-700 mb-1">Decline this contract</Text>
-            <Text className="text-xs text-un1t-light mb-3">
+            <Text className="text-xs text-un1t-subtle mb-3">
               UN1T Dublin will be notified by email.
             </Text>
             <TextInput
@@ -250,15 +250,15 @@ export default function ContractDetail() {
               placeholderTextColor="#94A3B8"
               multiline
               numberOfLines={3}
-              className="bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-un1t-white text-sm"
+              className="bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-un1t-text text-sm"
               style={{ minHeight: 80, textAlignVertical: 'top' }}
             />
             <View className="flex-row items-center justify-end gap-2 mt-3">
               <Pressable
                 onPress={() => { setShowDecline(false); setDeclineReason('') }}
-                className="px-3 py-2 rounded-md border border-un1t-gray active:bg-un1t-gray/30"
+                className="px-3 py-2 rounded-md border border-un1t-border active:bg-un1t-border/30"
               >
-                <Text className="text-xs text-un1t-light">Cancel</Text>
+                <Text className="text-xs text-un1t-subtle">Cancel</Text>
               </Pressable>
               <Pressable
                 onPress={handleDecline}

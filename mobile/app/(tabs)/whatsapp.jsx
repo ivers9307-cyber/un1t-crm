@@ -32,25 +32,25 @@ function ConversationRow({ conv, onPress }) {
   return (
     <Pressable
       onPress={onPress}
-      className="bg-un1t-dark border border-un1t-gray rounded-2xl p-4 mb-2 flex-row items-center active:opacity-70"
+      className="bg-un1t-surface border border-un1t-border rounded-2xl p-4 mb-2 flex-row items-center active:opacity-70"
     >
-      <View className="w-11 h-11 rounded-full bg-un1t-gray/40 items-center justify-center mr-3">
-        <Text className="text-base font-semibold text-un1t-white">
+      <View className="w-11 h-11 rounded-full bg-un1t-border/40 items-center justify-center mr-3">
+        <Text className="text-base font-semibold text-un1t-text">
           {(name?.[0] || '?').toUpperCase()}
         </Text>
       </View>
       <View className="flex-1">
         <View className="flex-row items-center">
-          <Text className="text-base font-semibold text-un1t-white flex-1" numberOfLines={1}>
+          <Text className="text-base font-semibold text-un1t-text flex-1" numberOfLines={1}>
             {name}
           </Text>
-          <Text className="text-xs text-un1t-light ml-2">{time}</Text>
+          <Text className="text-xs text-un1t-subtle ml-2">{time}</Text>
         </View>
         <View className="flex-row items-center mt-0.5">
           {isInbound ? null : (
             <Ionicons name="checkmark" size={12} color="#94A3B8" style={{ marginRight: 4 }} />
           )}
-          <Text className="text-sm text-un1t-light flex-1" numberOfLines={1}>
+          <Text className="text-sm text-un1t-subtle flex-1" numberOfLines={1}>
             {conv.last_message_preview || '—'}
           </Text>
           {!windowOpen && (
@@ -114,7 +114,7 @@ export default function WhatsApp() {
 
   if (loading) {
     return (
-      <View className="flex-1 bg-un1t-black items-center justify-center">
+      <View className="flex-1 bg-un1t-bg items-center justify-center">
         <ActivityIndicator />
       </View>
     )
@@ -122,7 +122,7 @@ export default function WhatsApp() {
 
   return (
     <ScrollView
-      className="flex-1 bg-un1t-black"
+      className="flex-1 bg-un1t-bg"
       contentContainerClassName="p-4 pb-24"
       refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#111827" />}
     >
@@ -134,7 +134,7 @@ export default function WhatsApp() {
       {conversations.length === 0 ? (
         <View className="py-16 items-center">
           <Ionicons name="chatbubbles-outline" size={32} color="#94A3B8" />
-          <Text className="text-sm text-un1t-light mt-2">No conversations yet.</Text>
+          <Text className="text-sm text-un1t-subtle mt-2">No conversations yet.</Text>
         </View>
       ) : (
         conversations.map(c => (

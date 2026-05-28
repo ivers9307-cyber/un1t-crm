@@ -143,14 +143,14 @@ export default function ExpenseClaimDetailScreen() {
 
   if (loading) {
     return (
-      <View className="flex-1 bg-un1t-black items-center justify-center">
+      <View className="flex-1 bg-un1t-bg items-center justify-center">
         <ActivityIndicator color="#94A3B8" />
       </View>
     )
   }
   if (error || !claim) {
     return (
-      <View className="flex-1 bg-un1t-black p-6 items-center justify-center">
+      <View className="flex-1 bg-un1t-bg p-6 items-center justify-center">
         <Ionicons name="alert-circle" size={32} color="#DC2626" />
         <Text className="text-sm text-red-700 mt-2 text-center">{error || 'Claim not found'}</Text>
       </View>
@@ -163,40 +163,40 @@ export default function ExpenseClaimDetailScreen() {
   const statusStyle = STATUS_STYLE[claim.status]
 
   return (
-    <View className="flex-1 bg-un1t-black">
+    <View className="flex-1 bg-un1t-bg">
       <ScrollView
         contentContainerStyle={{ padding: 16, paddingBottom: 48 }}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#94A3B8" />}
       >
         {/* Header card */}
-        <View className="bg-un1t-dark border border-un1t-gray rounded-2xl p-4 mb-3">
+        <View className="bg-un1t-surface border border-un1t-border rounded-2xl p-4 mb-3">
           <View className="flex-row items-center justify-between mb-2">
-            <Text className="text-xl font-bold text-un1t-white">{periodLabel(claim.period_start)}</Text>
+            <Text className="text-xl font-bold text-un1t-text">{periodLabel(claim.period_start)}</Text>
             <View className={`px-2 py-1 rounded-full ${statusStyle.bg}`}>
               <Text className={`text-[11px] uppercase font-medium ${statusStyle.text}`}>
                 {statusStyle.label}
               </Text>
             </View>
           </View>
-          <Text className="text-xs text-un1t-light mb-3">
+          <Text className="text-xs text-un1t-subtle mb-3">
             {claim.profile?.full_name} · {claim.location?.name}
           </Text>
           <View className="flex-row items-end justify-between">
             <View>
-              <Text className="text-[11px] uppercase tracking-wider text-un1t-light">Total</Text>
-              <Text className="text-2xl font-bold text-un1t-white">€{Number(claim.total_amount).toFixed(2)}</Text>
+              <Text className="text-[11px] uppercase tracking-wider text-un1t-subtle">Total</Text>
+              <Text className="text-2xl font-bold text-un1t-text">€{Number(claim.total_amount).toFixed(2)}</Text>
             </View>
             <View className="items-end">
-              <Text className="text-[11px] text-un1t-light">
+              <Text className="text-[11px] text-un1t-subtle">
                 {claim.item_count} item{claim.item_count === 1 ? '' : 's'}
               </Text>
-              <Text className="text-[11px] text-un1t-light">
+              <Text className="text-[11px] text-un1t-subtle">
                 incl. €{Number(claim.total_vat_amount).toFixed(2)} VAT
               </Text>
             </View>
           </View>
           {claim.notes && (
-            <Text className="text-xs text-un1t-light mt-3 italic">{claim.notes}</Text>
+            <Text className="text-xs text-un1t-subtle mt-3 italic">{claim.notes}</Text>
           )}
         </View>
 
@@ -205,21 +205,21 @@ export default function ExpenseClaimDetailScreen() {
           <View className="bg-red-500/10 border border-red-500/30 rounded-xl p-4 mb-3">
             <Text className="text-xs uppercase tracking-wider text-red-700 font-semibold mb-1">Decline reason</Text>
             <Text className="text-sm text-red-800">{claim.decline_reason}</Text>
-            <Text className="text-xs text-un1t-light mt-2">
+            <Text className="text-xs text-un1t-subtle mt-2">
               You can start a new claim for the same month from the Expenses tab.
             </Text>
           </View>
         )}
 
         {/* Items list */}
-        <View className="bg-un1t-dark border border-un1t-gray rounded-2xl mb-3">
-          <View className="px-4 py-3 border-b border-un1t-gray flex-row items-center justify-between">
-            <Text className="text-sm font-semibold text-un1t-white">Items</Text>
-            <Text className="text-[11px] text-un1t-light">{claim.items?.length || 0}</Text>
+        <View className="bg-un1t-surface border border-un1t-border rounded-2xl mb-3">
+          <View className="px-4 py-3 border-b border-un1t-border flex-row items-center justify-between">
+            <Text className="text-sm font-semibold text-un1t-text">Items</Text>
+            <Text className="text-[11px] text-un1t-subtle">{claim.items?.length || 0}</Text>
           </View>
           {(!claim.items || claim.items.length === 0) ? (
             <View className="p-4 items-center">
-              <Text className="text-sm text-un1t-light text-center">
+              <Text className="text-sm text-un1t-subtle text-center">
                 {isDraft && isMine
                   ? 'No items yet. Tap "Add item" below to capture your first receipt.'
                   : 'No items.'}
@@ -227,17 +227,17 @@ export default function ExpenseClaimDetailScreen() {
             </View>
           ) : (
             claim.items.map((it) => (
-              <View key={it.id} className="px-4 py-3 border-b border-un1t-gray/40 flex-row items-center">
+              <View key={it.id} className="px-4 py-3 border-b border-un1t-border/40 flex-row items-center">
                 <View className="flex-1 mr-3">
                   <View className="flex-row items-center gap-2 mb-0.5">
-                    <Text className="text-sm text-un1t-white font-medium">€{Number(it.amount).toFixed(2)}</Text>
-                    <Text className="text-[11px] text-un1t-light">{EXPENSE_CATEGORY_LABELS[it.category]}</Text>
+                    <Text className="text-sm text-un1t-text font-medium">€{Number(it.amount).toFixed(2)}</Text>
+                    <Text className="text-[11px] text-un1t-subtle">{EXPENSE_CATEGORY_LABELS[it.category]}</Text>
                   </View>
-                  <Text className="text-xs text-un1t-light">
+                  <Text className="text-xs text-un1t-subtle">
                     {it.expense_date}{it.vendor ? ` · ${it.vendor}` : ''}
                   </Text>
                   {it.description && (
-                    <Text className="text-xs text-un1t-light mt-0.5" numberOfLines={2}>{it.description}</Text>
+                    <Text className="text-xs text-un1t-subtle mt-0.5" numberOfLines={2}>{it.description}</Text>
                   )}
                 </View>
                 <View className="flex-row items-center gap-2">
@@ -300,9 +300,9 @@ export default function ExpenseClaimDetailScreen() {
           <Pressable
             onPress={doRevoke}
             disabled={busy}
-            className="bg-un1t-dark border border-un1t-gray rounded-full py-3.5 mb-2 items-center active:opacity-80"
+            className="bg-un1t-surface border border-un1t-border rounded-full py-3.5 mb-2 items-center active:opacity-80"
           >
-            <Text className="text-un1t-light font-medium">Revoke claim</Text>
+            <Text className="text-un1t-subtle font-medium">Revoke claim</Text>
           </Pressable>
         )}
 
@@ -310,7 +310,7 @@ export default function ExpenseClaimDetailScreen() {
           <Pressable
             onPress={doDelete}
             disabled={busy}
-            className="bg-un1t-dark border border-red-500/30 rounded-full py-3.5 items-center active:opacity-80"
+            className="bg-un1t-surface border border-red-500/30 rounded-full py-3.5 items-center active:opacity-80"
           >
             <Text className="text-red-700 font-medium">Delete draft</Text>
           </Pressable>
@@ -418,17 +418,17 @@ function AddItemForm({ claimId, busy, setBusy, onCancel, onSaved }) {
   }
 
   return (
-    <View className="bg-un1t-dark border border-un1t-gray rounded-2xl p-4 mb-3">
-      <Text className="text-sm font-semibold text-un1t-white mb-3">Add expense item</Text>
+    <View className="bg-un1t-surface border border-un1t-border rounded-2xl p-4 mb-3">
+      <Text className="text-sm font-semibold text-un1t-text mb-3">Add expense item</Text>
 
       {/* Receipt capture */}
-      <Text className="text-[11px] uppercase tracking-wider text-un1t-light mb-2">Receipt</Text>
+      <Text className="text-[11px] uppercase tracking-wider text-un1t-subtle mb-2">Receipt</Text>
       {form.receipt ? (
         <>
-          <View className="flex-row items-center justify-between bg-un1t-black border border-un1t-gray rounded-xl p-3 mb-2">
+          <View className="flex-row items-center justify-between bg-un1t-bg border border-un1t-border rounded-xl p-3 mb-2">
             <View className="flex-row items-center gap-2 flex-1 min-w-0">
               <Ionicons name="document-attach" size={18} color="#059669" />
-              <Text className="text-xs text-un1t-light flex-1" numberOfLines={1}>{form.receipt.name}</Text>
+              <Text className="text-xs text-un1t-subtle flex-1" numberOfLines={1}>{form.receipt.name}</Text>
             </View>
             <Pressable
               onPress={() => {
@@ -446,31 +446,31 @@ function AddItemForm({ claimId, busy, setBusy, onCancel, onSaved }) {
         </>
       ) : (
         <View className="flex-row gap-2 mb-3">
-          <Pressable onPress={captureFromCamera} className="flex-1 bg-un1t-black border border-un1t-gray rounded-xl py-3 items-center active:opacity-70">
+          <Pressable onPress={captureFromCamera} className="flex-1 bg-un1t-bg border border-un1t-border rounded-xl py-3 items-center active:opacity-70">
             <Ionicons name="camera-outline" size={20} color="#94A3B8" />
-            <Text className="text-[11px] text-un1t-light mt-1">Camera</Text>
+            <Text className="text-[11px] text-un1t-subtle mt-1">Camera</Text>
           </Pressable>
-          <Pressable onPress={pickFromLibrary} className="flex-1 bg-un1t-black border border-un1t-gray rounded-xl py-3 items-center active:opacity-70">
+          <Pressable onPress={pickFromLibrary} className="flex-1 bg-un1t-bg border border-un1t-border rounded-xl py-3 items-center active:opacity-70">
             <Ionicons name="images-outline" size={20} color="#94A3B8" />
-            <Text className="text-[11px] text-un1t-light mt-1">Photos</Text>
+            <Text className="text-[11px] text-un1t-subtle mt-1">Photos</Text>
           </Pressable>
-          <Pressable onPress={pickPdf} className="flex-1 bg-un1t-black border border-un1t-gray rounded-xl py-3 items-center active:opacity-70">
+          <Pressable onPress={pickPdf} className="flex-1 bg-un1t-bg border border-un1t-border rounded-xl py-3 items-center active:opacity-70">
             <Ionicons name="document-outline" size={20} color="#94A3B8" />
-            <Text className="text-[11px] text-un1t-light mt-1">File</Text>
+            <Text className="text-[11px] text-un1t-subtle mt-1">File</Text>
           </Pressable>
         </View>
       )}
 
       {/* Category */}
-      <Text className="text-[11px] uppercase tracking-wider text-un1t-light mb-2">Category</Text>
+      <Text className="text-[11px] uppercase tracking-wider text-un1t-subtle mb-2">Category</Text>
       <View className="flex-row flex-wrap gap-1.5 mb-3">
         {EXPENSE_CATEGORIES.map((c) => (
           <Pressable
             key={c}
             onPress={() => setForm({ ...form, category: c })}
-            className={`px-3 py-1.5 rounded-full border ${form.category === c ? 'bg-un1t-white border-un1t-white' : 'bg-un1t-black border-un1t-gray'}`}
+            className={`px-3 py-1.5 rounded-full border ${form.category === c ? 'bg-un1t-text border-un1t-text' : 'bg-un1t-bg border-un1t-border'}`}
           >
-            <Text className={`text-xs ${form.category === c ? 'text-un1t-black font-semibold' : 'text-un1t-light'}`}>
+            <Text className={`text-xs ${form.category === c ? 'text-un1t-bg font-semibold' : 'text-un1t-subtle'}`}>
               {EXPENSE_CATEGORY_LABELS[c]}
             </Text>
           </Pressable>
@@ -480,58 +480,58 @@ function AddItemForm({ claimId, busy, setBusy, onCancel, onSaved }) {
       {/* Amount + VAT */}
       <View className="flex-row gap-2 mb-3">
         <View className="flex-1">
-          <Text className="text-[11px] uppercase tracking-wider text-un1t-light mb-1">Amount (€)</Text>
+          <Text className="text-[11px] uppercase tracking-wider text-un1t-subtle mb-1">Amount (€)</Text>
           <TextInput
             value={form.amount}
             onChangeText={(v) => setForm({ ...form, amount: v })}
             keyboardType="decimal-pad"
             placeholder="0.00"
             placeholderTextColor="#94A3B8"
-            className="bg-un1t-black border border-un1t-gray rounded-xl px-3 py-2.5 text-sm text-un1t-white"
+            className="bg-un1t-bg border border-un1t-border rounded-xl px-3 py-2.5 text-sm text-un1t-text"
           />
         </View>
         <View className="flex-1">
-          <Text className="text-[11px] uppercase tracking-wider text-un1t-light mb-1">VAT (€)</Text>
+          <Text className="text-[11px] uppercase tracking-wider text-un1t-subtle mb-1">VAT (€)</Text>
           <TextInput
             value={form.vat_amount}
             onChangeText={(v) => setForm({ ...form, vat_amount: v })}
             keyboardType="decimal-pad"
             placeholder="0.00"
             placeholderTextColor="#94A3B8"
-            className="bg-un1t-black border border-un1t-gray rounded-xl px-3 py-2.5 text-sm text-un1t-white"
+            className="bg-un1t-bg border border-un1t-border rounded-xl px-3 py-2.5 text-sm text-un1t-text"
           />
         </View>
       </View>
 
       {/* Date */}
-      <Text className="text-[11px] uppercase tracking-wider text-un1t-light mb-1">Date</Text>
+      <Text className="text-[11px] uppercase tracking-wider text-un1t-subtle mb-1">Date</Text>
       <TextInput
         value={form.expense_date}
         onChangeText={(v) => setForm({ ...form, expense_date: v })}
         placeholder="YYYY-MM-DD"
         placeholderTextColor="#94A3B8"
-        className="bg-un1t-black border border-un1t-gray rounded-xl px-3 py-2.5 text-sm text-un1t-white mb-3"
+        className="bg-un1t-bg border border-un1t-border rounded-xl px-3 py-2.5 text-sm text-un1t-text mb-3"
       />
 
       {/* Vendor + description (optional) */}
-      <Text className="text-[11px] uppercase tracking-wider text-un1t-light mb-1">Vendor (optional)</Text>
+      <Text className="text-[11px] uppercase tracking-wider text-un1t-subtle mb-1">Vendor (optional)</Text>
       <TextInput
         value={form.vendor}
         onChangeText={(v) => setForm({ ...form, vendor: v })}
         placeholder="e.g. Irish Rail"
         placeholderTextColor="#94A3B8"
         maxLength={200}
-        className="bg-un1t-black border border-un1t-gray rounded-xl px-3 py-2.5 text-sm text-un1t-white mb-3"
+        className="bg-un1t-bg border border-un1t-border rounded-xl px-3 py-2.5 text-sm text-un1t-text mb-3"
       />
 
-      <Text className="text-[11px] uppercase tracking-wider text-un1t-light mb-1">Description (optional)</Text>
+      <Text className="text-[11px] uppercase tracking-wider text-un1t-subtle mb-1">Description (optional)</Text>
       <TextInput
         value={form.description}
         onChangeText={(v) => setForm({ ...form, description: v })}
         placeholder="What was this for?"
         placeholderTextColor="#94A3B8"
         maxLength={500}
-        className="bg-un1t-black border border-un1t-gray rounded-xl px-3 py-2.5 text-sm text-un1t-white mb-3"
+        className="bg-un1t-bg border border-un1t-border rounded-xl px-3 py-2.5 text-sm text-un1t-text mb-3"
       />
 
       {error && (
@@ -543,14 +543,14 @@ function AddItemForm({ claimId, busy, setBusy, onCancel, onSaved }) {
       <View className="flex-row gap-2">
         <Pressable
           onPress={onCancel}
-          className="flex-1 bg-un1t-black border border-un1t-gray rounded-full py-3 items-center active:opacity-70"
+          className="flex-1 bg-un1t-bg border border-un1t-border rounded-full py-3 items-center active:opacity-70"
         >
-          <Text className="text-un1t-light font-medium">Cancel</Text>
+          <Text className="text-un1t-subtle font-medium">Cancel</Text>
         </Pressable>
         <Pressable
           onPress={submit}
           disabled={busy || !form.amount}
-          className={`flex-1 rounded-full py-3 items-center ${busy || !form.amount ? 'bg-un1t-gray' : 'bg-blue-600 active:opacity-80'}`}
+          className={`flex-1 rounded-full py-3 items-center ${busy || !form.amount ? 'bg-un1t-border' : 'bg-blue-600 active:opacity-80'}`}
         >
           {busy ? <ActivityIndicator color="#FFFFFF" /> : <Text className="text-white font-semibold">Save item</Text>}
         </Pressable>

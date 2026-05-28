@@ -81,9 +81,9 @@ export default function ImpersonatePicker() {
 
   if (!isMaster) {
     return (
-      <View className="flex-1 bg-un1t-black items-center justify-center px-6">
+      <View className="flex-1 bg-un1t-bg items-center justify-center px-6">
         <Stack.Screen options={{ title: 'View as user' }} />
-        <Text className="text-base text-un1t-light text-center">
+        <Text className="text-base text-un1t-subtle text-center">
           Only master accounts can switch into another user's view.
         </Text>
       </View>
@@ -96,10 +96,10 @@ export default function ImpersonatePicker() {
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
       <Stack.Screen options={{ title: 'View as user' }} />
-      <View className="flex-1 bg-un1t-black">
+      <View className="flex-1 bg-un1t-bg">
         {/* Search + reason field */}
-        <View className="px-4 pt-3 pb-2 border-b border-un1t-gray bg-un1t-dark">
-          <View className="flex-row items-center bg-un1t-gray rounded-lg px-3 py-2">
+        <View className="px-4 pt-3 pb-2 border-b border-un1t-border bg-un1t-surface">
+          <View className="flex-row items-center bg-un1t-border rounded-lg px-3 py-2">
             <Ionicons name="search" size={16} color="#94A3B8" />
             <TextInput
               value={query}
@@ -108,7 +108,7 @@ export default function ImpersonatePicker() {
               placeholderTextColor="#94A3B8"
               autoCapitalize="none"
               autoCorrect={false}
-              className="flex-1 ml-2 text-un1t-white"
+              className="flex-1 ml-2 text-un1t-text"
               style={{ paddingVertical: 0 }}
             />
             {query.length > 0 && (
@@ -118,7 +118,7 @@ export default function ImpersonatePicker() {
             )}
           </View>
 
-          <Text className="text-[10px] uppercase tracking-wider text-un1t-mid mt-3 mb-1">
+          <Text className="text-[10px] uppercase tracking-wider text-un1t-muted mt-3 mb-1">
             Reason (optional)
           </Text>
           <TextInput
@@ -126,7 +126,7 @@ export default function ImpersonatePicker() {
             onChangeText={setReason}
             placeholder="e.g. Debugging Sara's missing schedule"
             placeholderTextColor="#94A3B8"
-            className="bg-un1t-gray rounded-lg px-3 py-2 text-un1t-white text-sm"
+            className="bg-un1t-border rounded-lg px-3 py-2 text-un1t-text text-sm"
             maxLength={500}
           />
         </View>
@@ -142,7 +142,7 @@ export default function ImpersonatePicker() {
           </View>
         ) : users.length === 0 ? (
           <View className="px-6 py-8 items-center">
-            <Text className="text-sm text-un1t-light text-center">
+            <Text className="text-sm text-un1t-subtle text-center">
               {query ? 'No matches' : 'No users to show'}
             </Text>
           </View>
@@ -154,17 +154,17 @@ export default function ImpersonatePicker() {
               <Pressable
                 onPress={() => handlePick(item)}
                 disabled={starting}
-                className="px-4 py-3 border-b border-un1t-gray active:bg-un1t-gray/40 flex-row items-center"
+                className="px-4 py-3 border-b border-un1t-border active:bg-un1t-border/40 flex-row items-center"
               >
-                <View className="w-9 h-9 rounded-full bg-un1t-gray items-center justify-center">
-                  <Text className="text-un1t-white font-semibold text-sm">
+                <View className="w-9 h-9 rounded-full bg-un1t-border items-center justify-center">
+                  <Text className="text-un1t-text font-semibold text-sm">
                     {(item.full_name || item.email || '?').slice(0, 1).toUpperCase()}
                   </Text>
                 </View>
                 <View className="flex-1 ml-3">
                   <View className="flex-row items-center">
                     <Text
-                      className="text-base font-medium text-un1t-white"
+                      className="text-base font-medium text-un1t-text"
                       numberOfLines={1}
                     >
                       {item.full_name || item.email}
@@ -177,7 +177,7 @@ export default function ImpersonatePicker() {
                       </View>
                     )}
                   </View>
-                  <Text className="text-xs text-un1t-light" numberOfLines={1}>
+                  <Text className="text-xs text-un1t-subtle" numberOfLines={1}>
                     {item.email} · {item.role}
                     {item.locations.length > 0 && ` · ${item.locations.join(', ')}`}
                   </Text>

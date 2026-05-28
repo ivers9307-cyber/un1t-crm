@@ -51,7 +51,7 @@ export default function PoliciesList() {
 
   if (rows == null) {
     return (
-      <View className="flex-1 bg-un1t-black items-center justify-center">
+      <View className="flex-1 bg-un1t-bg items-center justify-center">
         <Stack.Screen options={{ ...headerOptions, title: 'Policies' }} />
         <ActivityIndicator />
       </View>
@@ -60,7 +60,7 @@ export default function PoliciesList() {
 
   if (error) {
     return (
-      <View className="flex-1 bg-un1t-black p-6">
+      <View className="flex-1 bg-un1t-bg p-6">
         <Stack.Screen options={{ ...headerOptions, title: 'Policies' }} />
         <View className="bg-red-500/10 border border-red-500/30 rounded-2xl p-4">
           <Text className="text-sm font-semibold text-red-700">Couldn't load policies</Text>
@@ -78,10 +78,10 @@ export default function PoliciesList() {
 
   if (rows.length === 0) {
     return (
-      <View className="flex-1 bg-un1t-black items-center justify-center px-8">
+      <View className="flex-1 bg-un1t-bg items-center justify-center px-8">
         <Stack.Screen options={{ ...headerOptions, title: 'Policies' }} />
         <Ionicons name="book-outline" size={32} color="#94A3B8" />
-        <Text className="text-sm text-un1t-light mt-3 text-center">
+        <Text className="text-sm text-un1t-subtle mt-3 text-center">
           No policies published yet.
         </Text>
       </View>
@@ -93,7 +93,7 @@ export default function PoliciesList() {
   return (
     <>
       <Stack.Screen options={{ ...headerOptions, title: 'Policies' }} />
-      <TabletConstrained className="flex-1 bg-un1t-black">
+      <TabletConstrained className="flex-1 bg-un1t-bg">
       <FlatList
         className="flex-1"
         contentContainerClassName="p-4"
@@ -118,27 +118,27 @@ export default function PoliciesList() {
           return (
             <Pressable
               onPress={() => router.push(`/policies/${p.slug}`)}
-              className="bg-un1t-dark border border-un1t-gray rounded-xl p-3.5 mb-2 active:bg-un1t-gray/40"
+              className="bg-un1t-surface border border-un1t-border rounded-xl p-3.5 mb-2 active:bg-un1t-border/40"
             >
               <View className="flex-row items-start justify-between gap-2">
                 <View className="flex-1 min-w-0">
                   <View className="flex-row items-center gap-2">
-                    <Text className="text-base font-medium text-un1t-white flex-shrink" numberOfLines={1}>
+                    <Text className="text-base font-medium text-un1t-text flex-shrink" numberOfLines={1}>
                       {p.title}
                     </Text>
                     {ver && (
-                      <Text className="text-[10px] uppercase tracking-wider text-un1t-mid">
+                      <Text className="text-[10px] uppercase tracking-wider text-un1t-muted">
                         v{ver.version_number}
                       </Text>
                     )}
                   </View>
                   {p.description && (
-                    <Text className="text-[11px] text-un1t-light mt-0.5" numberOfLines={2}>
+                    <Text className="text-[11px] text-un1t-subtle mt-0.5" numberOfLines={2}>
                       {p.description}
                     </Text>
                   )}
                   {ver && (
-                    <Text className="text-[10px] text-un1t-mid mt-1">
+                    <Text className="text-[10px] text-un1t-muted mt-1">
                       Effective {fmtDate(ver.effective_date)}
                     </Text>
                   )}

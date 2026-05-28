@@ -29,8 +29,8 @@ export default function StudioManagementScreen() {
   // would otherwise reach the page.
   if (!canMobile(profile, 'studio_management', activeLocation)) {
     return (
-      <View className="flex-1 bg-un1t-black items-center justify-center p-6">
-        <Text className="text-sm text-un1t-light text-center">
+      <View className="flex-1 bg-un1t-bg items-center justify-center p-6">
+        <Text className="text-sm text-un1t-subtle text-center">
           Studio Management isn&apos;t enabled for your role at this location.
         </Text>
         <Pressable onPress={() => router.back()} className="mt-4">
@@ -54,11 +54,11 @@ export default function StudioManagementScreen() {
 
   return (
     <ScrollView
-      className="flex-1 bg-un1t-black"
+      className="flex-1 bg-un1t-bg"
       contentContainerStyle={{ padding: 16, paddingBottom: 32 }}
       refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#94A3B8" />}
     >
-      <Text className="text-sm text-un1t-light mb-4">
+      <Text className="text-sm text-un1t-subtle mb-4">
         On-site actions for {activeLocation?.name || 'your active location'}.
       </Text>
 
@@ -162,9 +162,9 @@ function AcCard({ locationId }) {
     return (
       <Card>
         <Header label="Air conditioning" icon="snow-outline" tint="#2563EB" />
-        <View className="bg-un1t-black/40 border border-un1t-gray rounded-xl p-3 flex-row items-start">
+        <View className="bg-un1t-bg/40 border border-un1t-border rounded-xl p-3 flex-row items-start">
           <Ionicons name="settings-outline" size={14} color="#94A3B8" style={{ marginTop: 2 }} />
-          <Text className="text-xs text-un1t-light ml-2 flex-1">
+          <Text className="text-xs text-un1t-subtle ml-2 flex-1">
             AC isn&apos;t set up for this location yet. A master can add the Sensibo API key + pod ID
             under Settings → Locations → AC on the web app.
           </Text>
@@ -201,13 +201,13 @@ function AcCard({ locationId }) {
   return (
     <Card>
       <Header label="Air conditioning" icon="snow-outline" tint="#2563EB" />
-      <Text className="text-xs text-un1t-light mb-3">
+      <Text className="text-xs text-un1t-subtle mb-3">
         Preset:{' '}
-        <Text className="text-un1t-white font-semibold">
+        <Text className="text-un1t-text font-semibold">
           {data.defaults.mode || 'cool'} · {data.defaults.temp ?? 18}°C · fan {data.defaults.fan || 'high'}
         </Text>
         {' '}for{' '}
-        <Text className="text-un1t-white font-semibold">{data.defaults.session_minutes || 90} min</Text>.
+        <Text className="text-un1t-text font-semibold">{data.defaults.session_minutes || 90} min</Text>.
       </Text>
 
       {!isOn ? (
@@ -228,13 +228,13 @@ function AcCard({ locationId }) {
           <View className="flex-row items-start">
             <Ionicons name="snow" size={28} color="#60A5FA" />
             <View className="flex-1 ml-3">
-              <Text className="text-base font-bold text-un1t-white">AC is running</Text>
+              <Text className="text-base font-bold text-un1t-text">AC is running</Text>
               {controlSource === 'external' ? (
-                <Text className="text-xs text-un1t-light mt-0.5">
+                <Text className="text-xs text-un1t-subtle mt-0.5">
                   Turned on at the wall panel or by schedule
                 </Text>
               ) : session?.profiles?.full_name ? (
-                <Text className="text-xs text-un1t-light mt-0.5">
+                <Text className="text-xs text-un1t-subtle mt-0.5">
                   Started by {session.profiles.full_name}
                 </Text>
               ) : null}
@@ -251,13 +251,13 @@ function AcCard({ locationId }) {
                     {minsLeft != null ? `${minsLeft} min` : '—'}
                   </Text>
                 </View>
-                <Text className="text-[10px] text-un1t-light">until auto-off</Text>
+                <Text className="text-[10px] text-un1t-subtle">until auto-off</Text>
               </View>
             )}
           </View>
 
           {data.pod_state && (
-            <Text className="text-xs text-un1t-light bg-un1t-black/40 rounded px-3 py-2 mt-3">
+            <Text className="text-xs text-un1t-subtle bg-un1t-bg/40 rounded px-3 py-2 mt-3">
               Sensibo: {data.pod_state.on ? 'on' : 'off'}
               {data.pod_state.mode ? ` · ${data.pod_state.mode}` : ''}
               {data.pod_state.targetTemperature != null ? ` · ${data.pod_state.targetTemperature}°C` : ''}
@@ -314,7 +314,7 @@ function DoorsCard({ locationId }) {
           <Text className="text-sm text-red-700">{error}</Text>
         </View>
       ) : doors.length === 0 ? (
-        <Text className="text-sm text-un1t-light">No doors configured at this studio.</Text>
+        <Text className="text-sm text-un1t-subtle">No doors configured at this studio.</Text>
       ) : (
         doors.map((door, i) => (
           <DoorRow
@@ -369,7 +369,7 @@ function DoorRow({ door, locationId, isLast }) {
     <Pressable
       onPress={armed ? fire : arm}
       disabled={busy}
-      className={`flex-row items-center px-1 py-3.5 active:opacity-70 ${!isLast ? 'border-b border-un1t-gray' : ''}`}
+      className={`flex-row items-center px-1 py-3.5 active:opacity-70 ${!isLast ? 'border-b border-un1t-border' : ''}`}
     >
       <Ionicons
         name={armed ? 'lock-open' : 'lock-closed-outline'}
@@ -377,7 +377,7 @@ function DoorRow({ door, locationId, isLast }) {
         color={armed ? '#A855F7' : '#94A3B8'}
       />
       <View className="flex-1 ml-3">
-        <Text className="text-base font-semibold text-un1t-white">{door.name}</Text>
+        <Text className="text-base font-semibold text-un1t-text">{door.name}</Text>
         {unlockedAt && !armed && !busy && (
           <Text className="text-xs text-green-600 mt-0.5">Unlocked just now</Text>
         )}
@@ -400,7 +400,7 @@ function DoorRow({ door, locationId, isLast }) {
 
 function Card({ children }) {
   return (
-    <View className="bg-un1t-dark border border-un1t-gray rounded-2xl p-5">
+    <View className="bg-un1t-surface border border-un1t-border rounded-2xl p-5">
       {children}
     </View>
   )
@@ -409,7 +409,7 @@ function Header({ label, icon, tint }) {
   return (
     <View className="flex-row items-center mb-3">
       <Ionicons name={icon} size={18} color={tint} />
-      <Text className="text-xs font-bold text-un1t-white uppercase tracking-wider ml-2">{label}</Text>
+      <Text className="text-xs font-bold text-un1t-text uppercase tracking-wider ml-2">{label}</Text>
     </View>
   )
 }

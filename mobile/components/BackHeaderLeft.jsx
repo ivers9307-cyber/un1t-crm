@@ -37,7 +37,7 @@ export default function BackHeaderLeft({ label = 'Back', fallbackHref = '/' }) {
       className="flex-row items-center -ml-1"
     >
       <Ionicons name="chevron-back" size={26} color="#111827" />
-      <Text className="text-base text-un1t-white">{label}</Text>
+      <Text className="text-base text-un1t-text">{label}</Text>
     </Pressable>
   )
 }

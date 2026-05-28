@@ -36,7 +36,7 @@ function TaskRow({ task, onPress }) {
   return (
     <Pressable
       onPress={onPress}
-      className="bg-un1t-dark border border-un1t-gray rounded-2xl p-4 mb-2 active:opacity-70"
+      className="bg-un1t-surface border border-un1t-border rounded-2xl p-4 mb-2 active:opacity-70"
     >
       <View className="flex-row items-start">
         <View
@@ -44,19 +44,19 @@ function TaskRow({ task, onPress }) {
           style={{ backgroundColor: priorityDot || '#475569' }}
         />
         <View className="flex-1">
-          <Text className="text-base font-semibold text-un1t-white" numberOfLines={2}>
+          <Text className="text-base font-semibold text-un1t-text" numberOfLines={2}>
             {task.subject}
           </Text>
           <View className="flex-row items-center mt-1 flex-wrap">
             <View className={`px-2 py-0.5 rounded-full ${
               task.status === 'in_progress' ? 'bg-blue-500/20' :
               task.status === 'done'        ? 'bg-emerald-500/20' :
-                                              'bg-un1t-gray/40'
+                                              'bg-un1t-border/40'
             }`}>
               <Text className={`text-[10px] uppercase font-medium ${
                 task.status === 'in_progress' ? 'text-blue-700' :
                 task.status === 'done'        ? 'text-emerald-700' :
-                                                'text-un1t-light'
+                                                'text-un1t-subtle'
               }`}>{statusLabel(task.status)}</Text>
             </View>
             {task.due_date && (
@@ -66,18 +66,18 @@ function TaskRow({ task, onPress }) {
                   size={12}
                   color={overdue ? '#DC2626' : '#94A3B8'}
                 />
-                <Text className={`text-[11px] ml-1 ${overdue ? 'text-red-500 font-semibold' : 'text-un1t-light'}`}>
+                <Text className={`text-[11px] ml-1 ${overdue ? 'text-red-500 font-semibold' : 'text-un1t-subtle'}`}>
                   {task.due_date}{task.due_time ? ` · ${String(task.due_time).slice(0,5)}` : ''}
                   {overdue ? ' · overdue' : ''}
                 </Text>
               </View>
             )}
             {task.project && (
-              <Text className="text-[11px] text-un1t-mid ml-2">#{task.project}</Text>
+              <Text className="text-[11px] text-un1t-muted ml-2">#{task.project}</Text>
             )}
           </View>
           {task.contact && (
-            <Text className="text-xs text-un1t-light mt-1">
+            <Text className="text-xs text-un1t-subtle mt-1">
               {task.contact.first_name} {task.contact.last_name}
             </Text>
           )}
@@ -126,7 +126,7 @@ export default function TasksIndex() {
   )
 
   return (
-    <TabletConstrained className="flex-1 bg-un1t-black">
+    <TabletConstrained className="flex-1 bg-un1t-bg">
       {/* tasks/ is a single-screen sub-stack pushed from /more,
           so iOS won't auto-render a back chevron — opt in. */}
       <Stack.Screen
@@ -140,24 +140,24 @@ export default function TasksIndex() {
           onPress={() => setFilter('open')}
           className={`px-3 py-1.5 rounded-full border ${
             filter === 'open'
-              ? 'bg-un1t-white border-un1t-white'
-              : 'bg-un1t-dark border-un1t-gray'
+              ? 'bg-un1t-text border-un1t-text'
+              : 'bg-un1t-surface border-un1t-border'
           }`}
         >
           <Text className={`text-xs font-medium ${
-            filter === 'open' ? 'text-un1t-black' : 'text-un1t-light'
+            filter === 'open' ? 'text-un1t-bg' : 'text-un1t-subtle'
           }`}>Open{filter === 'open' ? ` · ${openCount}` : ''}</Text>
         </Pressable>
         <Pressable
           onPress={() => setFilter('all')}
           className={`px-3 py-1.5 rounded-full border ${
             filter === 'all'
-              ? 'bg-un1t-white border-un1t-white'
-              : 'bg-un1t-dark border-un1t-gray'
+              ? 'bg-un1t-text border-un1t-text'
+              : 'bg-un1t-surface border-un1t-border'
           }`}
         >
           <Text className={`text-xs font-medium ${
-            filter === 'all' ? 'text-un1t-black' : 'text-un1t-light'
+            filter === 'all' ? 'text-un1t-bg' : 'text-un1t-subtle'
           }`}>All</Text>
         </Pressable>
       </View>
@@ -181,10 +181,10 @@ export default function TasksIndex() {
         ) : tasks.length === 0 ? (
           <View className="py-16 items-center px-6">
             <Ionicons name="checkmark-done-circle-outline" size={32} color="#10B981" />
-            <Text className="text-base font-semibold text-un1t-white mt-3">
+            <Text className="text-base font-semibold text-un1t-text mt-3">
               {filter === 'open' ? 'No open tasks' : 'No tasks'}
             </Text>
-            <Text className="text-xs text-un1t-light text-center mt-1">
+            <Text className="text-xs text-un1t-subtle text-center mt-1">
               New tasks are created on the web. Pull down to refresh.
             </Text>
           </View>

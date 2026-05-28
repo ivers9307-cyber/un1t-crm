@@ -100,15 +100,15 @@ export default function NewIssueScreen() {
   return (
     <KeyboardAvoidingView
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      className="flex-1 bg-un1t-black"
+      className="flex-1 bg-un1t-bg"
     >
       <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 48 }}>
-        <Text className="text-2xl font-bold text-un1t-white mb-1">Report a problem</Text>
-        <Text className="text-sm text-un1t-light mb-4">
+        <Text className="text-2xl font-bold text-un1t-text mb-1">Report a problem</Text>
+        <Text className="text-sm text-un1t-subtle mb-4">
           The owners at {activeLocation?.name || 'this studio'} will be notified. You&apos;ll get an update when it&apos;s resolved.
         </Text>
 
-        <Text className="text-xs font-semibold uppercase tracking-wider text-un1t-light mb-2">
+        <Text className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle mb-2">
           What&apos;s the issue?
         </Text>
         <TextInput
@@ -118,7 +118,7 @@ export default function NewIssueScreen() {
           placeholderTextColor="#475569"
           multiline
           textAlignVertical="top"
-          className="bg-un1t-dark border border-un1t-gray rounded-xl px-4 py-3 text-base text-un1t-white"
+          className="bg-un1t-surface border border-un1t-border rounded-xl px-4 py-3 text-base text-un1t-text"
           style={{ minHeight: 140 }}
         />
         {description.length > DESCRIPTION_HINT_AT && (
@@ -128,10 +128,10 @@ export default function NewIssueScreen() {
         )}
 
         <View className="mt-6 mb-2 flex-row items-center justify-between">
-          <Text className="text-xs font-semibold uppercase tracking-wider text-un1t-light">
+          <Text className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle">
             Photos (optional)
           </Text>
-          <Text className="text-[11px] text-un1t-light">
+          <Text className="text-[11px] text-un1t-subtle">
             {photos.length} / {MAX_PHOTOS}
           </Text>
         </View>
@@ -161,17 +161,17 @@ export default function NewIssueScreen() {
           <View className="flex-row gap-2">
             <Pressable
               onPress={pickFromCamera}
-              className="flex-1 bg-un1t-dark border border-un1t-gray active:opacity-80 px-4 py-3 rounded-xl flex-row items-center justify-center"
+              className="flex-1 bg-un1t-surface border border-un1t-border active:opacity-80 px-4 py-3 rounded-xl flex-row items-center justify-center"
             >
               <Ionicons name="camera-outline" size={18} color="#FFFFFF" />
-              <Text className="text-un1t-white font-semibold ml-2">Camera</Text>
+              <Text className="text-un1t-text font-semibold ml-2">Camera</Text>
             </Pressable>
             <Pressable
               onPress={pickFromLibrary}
-              className="flex-1 bg-un1t-dark border border-un1t-gray active:opacity-80 px-4 py-3 rounded-xl flex-row items-center justify-center"
+              className="flex-1 bg-un1t-surface border border-un1t-border active:opacity-80 px-4 py-3 rounded-xl flex-row items-center justify-center"
             >
               <Ionicons name="images-outline" size={18} color="#FFFFFF" />
-              <Text className="text-un1t-white font-semibold ml-2">Photos</Text>
+              <Text className="text-un1t-text font-semibold ml-2">Photos</Text>
             </Pressable>
           </View>
         )}

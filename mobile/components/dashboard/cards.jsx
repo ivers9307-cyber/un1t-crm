@@ -14,16 +14,16 @@ export function KpiCard({ label, value, sublabel, onPress, accent }) {
   return (
     <Wrap
       onPress={onPress}
-      className="flex-1 bg-un1t-dark border border-un1t-gray rounded-2xl p-4 active:opacity-70"
+      className="flex-1 bg-un1t-surface border border-un1t-border rounded-2xl p-4 active:opacity-70"
     >
-      <Text className="text-xs uppercase tracking-wider text-un1t-light">
+      <Text className="text-xs uppercase tracking-wider text-un1t-subtle">
         {label}
       </Text>
-      <Text className={`text-2xl font-bold mt-1 ${accent || 'text-un1t-white'}`}>
+      <Text className={`text-2xl font-bold mt-1 ${accent || 'text-un1t-text'}`}>
         {value ?? '—'}
       </Text>
       {sublabel ? (
-        <Text className="text-xs text-un1t-light mt-0.5">{sublabel}</Text>
+        <Text className="text-xs text-un1t-subtle mt-0.5">{sublabel}</Text>
       ) : null}
     </Wrap>
   )
@@ -43,12 +43,12 @@ export function SectionHeader({ title, action, count }) {
   return (
     <View className="flex-row items-center justify-between mt-4 mb-2 px-1">
       <View className="flex-row items-center">
-        <Text className="text-xs font-semibold uppercase tracking-wider text-un1t-light">
+        <Text className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle">
           {title}
         </Text>
         {count != null && count > 0 ? (
-          <View className="ml-2 min-w-[18px] h-4 px-1.5 rounded-full bg-un1t-white items-center justify-center">
-            <Text className="text-[10px] font-semibold text-un1t-black">{count}</Text>
+          <View className="ml-2 min-w-[18px] h-4 px-1.5 rounded-full bg-un1t-text items-center justify-center">
+            <Text className="text-[10px] font-semibold text-un1t-bg">{count}</Text>
           </View>
         ) : null}
       </View>
@@ -62,26 +62,26 @@ export function PendingRow({ icon, title, subtitle, time, onPress, isLast }) {
     <Pressable
       onPress={onPress}
       className={`flex-row items-center px-4 py-3 ${
-        !isLast ? 'border-b border-un1t-gray' : ''
-      } active:bg-un1t-gray/40`}
+        !isLast ? 'border-b border-un1t-border' : ''
+      } active:bg-un1t-border/40`}
     >
       {icon ? (
-        <View className="w-8 h-8 rounded-full bg-un1t-gray/40 items-center justify-center mr-3">
+        <View className="w-8 h-8 rounded-full bg-un1t-border/40 items-center justify-center mr-3">
           <Ionicons name={icon} size={16} color="#111827" />
         </View>
       ) : null}
       <View className="flex-1">
-        <Text className="text-sm font-medium text-un1t-white" numberOfLines={1}>
+        <Text className="text-sm font-medium text-un1t-text" numberOfLines={1}>
           {title}
         </Text>
         {subtitle ? (
-          <Text className="text-xs text-un1t-light" numberOfLines={1}>
+          <Text className="text-xs text-un1t-subtle" numberOfLines={1}>
             {subtitle}
           </Text>
         ) : null}
       </View>
       {time ? (
-        <Text className="text-xs text-un1t-light mr-1">{time}</Text>
+        <Text className="text-xs text-un1t-subtle mr-1">{time}</Text>
       ) : null}
       {onPress ? (
         <Ionicons name="chevron-forward" size={14} color="#94A3B8" />
@@ -93,13 +93,13 @@ export function PendingRow({ icon, title, subtitle, time, onPress, isLast }) {
 export function ListCard({ children, empty, emptyText }) {
   if (empty) {
     return (
-      <View className="bg-un1t-dark border border-un1t-gray rounded-2xl p-4 items-center">
-        <Text className="text-sm text-un1t-light">{emptyText || 'Nothing pending.'}</Text>
+      <View className="bg-un1t-surface border border-un1t-border rounded-2xl p-4 items-center">
+        <Text className="text-sm text-un1t-subtle">{emptyText || 'Nothing pending.'}</Text>
       </View>
     )
   }
   return (
-    <View className="bg-un1t-dark border border-un1t-gray rounded-2xl overflow-hidden">
+    <View className="bg-un1t-surface border border-un1t-border rounded-2xl overflow-hidden">
       {children}
     </View>
   )

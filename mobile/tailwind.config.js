@@ -1,7 +1,9 @@
-// Mirrors the un1t-* token names in /tailwind.config.js (web) so a
-// component referencing bg-un1t-dark renders the same on both. The
-// inverted naming (un1t-black = #FFFFFF white background) is preserved
-// for parity — see CLAUDE.md "Light theme with inverted token names".
+// Mirrors the intent-based un1t-* token names in
+// /tailwind.config.js (web, renamed in UI-FOUND.1) so a component
+// referencing bg-un1t-surface renders the same on both platforms.
+// Hex values are unchanged; the names are no longer inverted
+// (previously 'un1t-black' held #FFFFFF — a class that lied about
+// its colour). MOB-UI.1.
 
 /** @type {import('tailwindcss').Config} */
 module.exports = {
@@ -10,12 +12,12 @@ module.exports = {
   theme: {
     extend: {
       colors: {
-        'un1t-black': '#FFFFFF',
-        'un1t-dark': '#F7F8FA',
-        'un1t-gray': '#E2E5E9',
-        'un1t-mid': '#94A3B8',
-        'un1t-light': '#64748B',
-        'un1t-white': '#111827',
+        'un1t-bg': '#FFFFFF',       // was 'un1t-black'  — page background
+        'un1t-surface': '#F7F8FA',  // was 'un1t-dark'   — cards / raised
+        'un1t-border': '#E2E5E9',   // was 'un1t-gray'   — hairlines
+        'un1t-muted': '#94A3B8',    // was 'un1t-mid'    — secondary text
+        'un1t-subtle': '#64748B',   // was 'un1t-light'  — tertiary text
+        'un1t-text': '#111827',     // was 'un1t-white'  — primary text
         'un1t-accent': '#1E293B',
       },
       fontFamily: {

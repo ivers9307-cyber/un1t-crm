@@ -28,7 +28,7 @@ function BackHeaderLeft({ router, label = 'Inbox' }) {
       className="flex-row items-center -ml-1"
     >
       <Ionicons name="chevron-back" size={26} color="#111827" />
-      <Text className="text-base text-un1t-white">{label}</Text>
+      <Text className="text-base text-un1t-text">{label}</Text>
     </Pressable>
   )
 }
@@ -47,19 +47,19 @@ function Bubble({ msg }) {
     <View className={`flex-row mb-1.5 ${out ? 'justify-end' : 'justify-start'}`}>
       <View
         className={`max-w-[80%] px-3.5 py-2 rounded-2xl ${
-          out ? 'bg-blue-500' : 'bg-un1t-dark border border-un1t-gray'
+          out ? 'bg-blue-500' : 'bg-un1t-surface border border-un1t-border'
         }`}
       >
         {msg.template_name && (
-          <Text className={`text-[10px] uppercase mb-1 ${out ? 'text-white/70' : 'text-un1t-mid'}`}>
+          <Text className={`text-[10px] uppercase mb-1 ${out ? 'text-white/70' : 'text-un1t-muted'}`}>
             Template · {msg.template_name}
           </Text>
         )}
-        <Text className={`text-base ${out ? 'text-white' : 'text-un1t-white'}`}>
+        <Text className={`text-base ${out ? 'text-white' : 'text-un1t-text'}`}>
           {msg.body || `[${msg.message_type}]`}
         </Text>
         <View className="flex-row items-center justify-end mt-1">
-          <Text className={`text-[10px] ${out ? 'text-white/60' : 'text-un1t-light'}`}>
+          <Text className={`text-[10px] ${out ? 'text-white/60' : 'text-un1t-subtle'}`}>
             {time}
           </Text>
           {out && (
@@ -172,7 +172,7 @@ export default function Conversation() {
       // this the composer ends up underneath the keyboard.
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       keyboardVerticalOffset={Platform.OS === 'ios' ? headerHeight : 0}
-      className="flex-1 bg-un1t-black"
+      className="flex-1 bg-un1t-bg"
     >
       <Stack.Screen
         options={{
@@ -210,12 +210,12 @@ export default function Conversation() {
               when the keyboard is open (KeyboardAvoidingView replaces
               the inset). */}
           <View
-            className="border-t border-un1t-gray bg-un1t-black px-3 pt-2 flex-row items-end"
+            className="border-t border-un1t-border bg-un1t-bg px-3 pt-2 flex-row items-end"
             style={{ paddingBottom: Math.max(insets.bottom, 8) }}
           >
             <Pressable
               onPress={pickTemplate}
-              className="w-10 h-10 rounded-full bg-un1t-dark border border-un1t-gray items-center justify-center mr-2 active:opacity-70"
+              className="w-10 h-10 rounded-full bg-un1t-surface border border-un1t-border items-center justify-center mr-2 active:opacity-70"
             >
               <Ionicons name="document-text-outline" size={18} color="#111827" />
             </Pressable>
@@ -226,14 +226,14 @@ export default function Conversation() {
               placeholder={windowOpen ? 'Message…' : 'Send a template instead'}
               placeholderTextColor="#94A3B8"
               editable={windowOpen}
-              className="flex-1 bg-un1t-dark border border-un1t-gray rounded-2xl px-4 py-2.5 text-base text-un1t-white max-h-32"
+              className="flex-1 bg-un1t-surface border border-un1t-border rounded-2xl px-4 py-2.5 text-base text-un1t-text max-h-32"
               textAlignVertical="top"
             />
             <Pressable
               onPress={send}
               disabled={!text.trim() || !windowOpen || sending}
               className={`w-10 h-10 rounded-full ml-2 items-center justify-center ${
-                text.trim() && windowOpen && !sending ? 'bg-blue-500' : 'bg-un1t-gray'
+                text.trim() && windowOpen && !sending ? 'bg-blue-500' : 'bg-un1t-border'
               }`}
             >
               {sending ? (
@@ -251,18 +251,18 @@ export default function Conversation() {
               onPress={() => setShowTemplates(false)}
             >
               <Pressable
-                className="bg-un1t-black border-t border-un1t-gray rounded-t-3xl mt-auto w-full max-h-[60%] p-4"
+                className="bg-un1t-bg border-t border-un1t-border rounded-t-3xl mt-auto w-full max-h-[60%] p-4"
                 onPress={() => {}}
               >
                 <View className="flex-row items-center justify-between mb-3">
-                  <Text className="text-base font-semibold text-un1t-white">Send template</Text>
+                  <Text className="text-base font-semibold text-un1t-text">Send template</Text>
                   <Pressable onPress={() => setShowTemplates(false)} hitSlop={10}>
                     <Ionicons name="close" size={22} color="#111827" />
                   </Pressable>
                 </View>
                 <ScrollView>
                   {templates.length === 0 && (
-                    <Text className="text-sm text-un1t-light text-center py-6">
+                    <Text className="text-sm text-un1t-subtle text-center py-6">
                       No approved templates available.
                     </Text>
                   )}
@@ -270,11 +270,11 @@ export default function Conversation() {
                     <Pressable
                       key={t.id}
                       onPress={() => sendChosenTemplate(t)}
-                      className="bg-un1t-dark border border-un1t-gray rounded-xl p-3 mb-2 active:opacity-70"
+                      className="bg-un1t-surface border border-un1t-border rounded-xl p-3 mb-2 active:opacity-70"
                     >
-                      <Text className="text-sm font-semibold text-un1t-white">{t.name}</Text>
+                      <Text className="text-sm font-semibold text-un1t-text">{t.name}</Text>
                       {t.body_text && (
-                        <Text className="text-xs text-un1t-light mt-1" numberOfLines={2}>
+                        <Text className="text-xs text-un1t-subtle mt-1" numberOfLines={2}>
                           {t.body_text}
                         </Text>
                       )}

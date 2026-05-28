@@ -59,12 +59,12 @@ const LEAD_ROWS = [
 function TrendDelta({ delta, goodDir, money }) {
   if (delta == null || !Number.isFinite(delta)) return null
   if (delta === 0) {
-    return <Text className="text-[11px] text-un1t-mid mt-0.5">— no change</Text>
+    return <Text className="text-[11px] text-un1t-muted mt-0.5">— no change</Text>
   }
   const up = delta > 0
   const good = goodDir && ((up && goodDir === 'up') || (!up && goodDir === 'down'))
   const bad = goodDir && !good
-  const color = good ? 'text-emerald-600' : bad ? 'text-red-500' : 'text-un1t-mid'
+  const color = good ? 'text-emerald-600' : bad ? 'text-red-500' : 'text-un1t-muted'
   const mag = money ? fmtMoney(Math.abs(delta)) : Math.abs(delta)
   return (
     <Text className={`text-[11px] mt-0.5 ${color}`}>
@@ -77,12 +77,12 @@ function StatRow({ label, value, delta, goodDir, money, isLast }) {
   return (
     <View
       className={`flex-row items-center justify-between px-4 py-3 ${
-        !isLast ? 'border-b border-un1t-gray' : ''
+        !isLast ? 'border-b border-un1t-border' : ''
       }`}
     >
-      <Text className="text-sm text-un1t-light flex-1">{label}</Text>
+      <Text className="text-sm text-un1t-subtle flex-1">{label}</Text>
       <View className="items-end">
-        <Text className="text-base font-semibold text-un1t-white">{value}</Text>
+        <Text className="text-base font-semibold text-un1t-text">{value}</Text>
         <TrendDelta delta={delta} goodDir={goodDir} money={money} />
       </View>
     </View>
@@ -94,14 +94,14 @@ function RadarCard({ icon, title, subtitle, children }) {
     <View className="mb-6">
       <View className="flex-row items-center px-1 mb-2">
         <Ionicons name={icon} size={16} color="#94A3B8" style={{ marginRight: 6 }} />
-        <Text className="text-xs font-semibold uppercase tracking-wider text-un1t-light">
+        <Text className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle">
           {title}
         </Text>
       </View>
       {subtitle && (
-        <Text className="text-xs text-un1t-mid px-1 mb-2">{subtitle}</Text>
+        <Text className="text-xs text-un1t-muted px-1 mb-2">{subtitle}</Text>
       )}
-      <View className="bg-un1t-dark border border-un1t-gray rounded-2xl overflow-hidden">
+      <View className="bg-un1t-surface border border-un1t-border rounded-2xl overflow-hidden">
         {children}
       </View>
     </View>
@@ -110,8 +110,8 @@ function RadarCard({ icon, title, subtitle, children }) {
 
 function EffectivenessLine({ text }) {
   return (
-    <View className="px-4 py-3 border-t border-un1t-gray bg-un1t-gray/20">
-      <Text className="text-xs text-un1t-light">{text}</Text>
+    <View className="px-4 py-3 border-t border-un1t-border bg-un1t-border/20">
+      <Text className="text-xs text-un1t-subtle">{text}</Text>
     </View>
   )
 }
@@ -153,7 +153,7 @@ export default function RadarGlance() {
   const lead = data?.lead || null
 
   return (
-    <View className="flex-1 bg-un1t-black">
+    <View className="flex-1 bg-un1t-bg">
       {/* radar/ is a single-screen sub-stack pushed from /more, so
           iOS won't auto-render a back chevron — opt in. */}
       <Stack.Screen
@@ -249,17 +249,17 @@ export default function RadarGlance() {
             {!churn && !lead && !error && (
               <View className="py-16 items-center px-6">
                 <Ionicons name="radio-outline" size={32} color="#94A3B8" />
-                <Text className="text-base font-semibold text-un1t-white mt-3">
+                <Text className="text-base font-semibold text-un1t-text mt-3">
                   Nothing to show
                 </Text>
-                <Text className="text-xs text-un1t-light text-center mt-1">
+                <Text className="text-xs text-un1t-subtle text-center mt-1">
                   The radar has no data for this location yet.
                 </Text>
               </View>
             )}
 
             {(churn || lead) && (
-              <Text className="text-xs text-un1t-mid text-center mt-1 px-4">
+              <Text className="text-xs text-un1t-muted text-center mt-1 px-4">
                 Read-only glance. Open the radar on the web to contact members,
                 run win-backs or triage the cleanup list.
               </Text>

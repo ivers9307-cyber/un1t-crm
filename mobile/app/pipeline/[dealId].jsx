@@ -29,7 +29,7 @@ function BackHeaderLeft({ router, label = 'Back' }) {
       className="flex-row items-center -ml-1"
     >
       <Ionicons name="chevron-back" size={26} color="#111827" />
-      <Text className="text-base text-un1t-white">{label}</Text>
+      <Text className="text-base text-un1t-text">{label}</Text>
     </Pressable>
   )
 }
@@ -54,10 +54,10 @@ function ContactActions({ contact }) {
         <Pressable
           key={it.label}
           onPress={() => Linking.openURL(it.url).catch(() => {})}
-          className="flex-1 mr-2 py-2.5 rounded-xl bg-un1t-gray/40 flex-row items-center justify-center active:opacity-70"
+          className="flex-1 mr-2 py-2.5 rounded-xl bg-un1t-border/40 flex-row items-center justify-center active:opacity-70"
         >
           <Ionicons name={it.icon} size={16} color="#111827" />
-          <Text className="text-sm font-medium text-un1t-white ml-1.5">{it.label}</Text>
+          <Text className="text-sm font-medium text-un1t-text ml-1.5">{it.label}</Text>
         </Pressable>
       ))}
     </View>
@@ -68,7 +68,7 @@ function Section({ title, children, action }) {
   return (
     <View className="mb-5">
       <View className="flex-row items-center justify-between mb-2 px-1">
-        <Text className="text-xs font-semibold uppercase tracking-wider text-un1t-light">
+        <Text className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle">
           {title}
         </Text>
         {action}
@@ -184,7 +184,7 @@ export default function DealDetail() {
 
   if (loading || !deal) {
     return (
-      <View className="flex-1 bg-un1t-black items-center justify-center">
+      <View className="flex-1 bg-un1t-bg items-center justify-center">
         <Stack.Screen
           options={{
             title: 'Deal',
@@ -210,7 +210,7 @@ export default function DealDetail() {
   return (
     <KeyboardAvoidingView
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      className="flex-1 bg-un1t-black"
+      className="flex-1 bg-un1t-bg"
     >
       <Stack.Screen
         options={{
@@ -225,17 +225,17 @@ export default function DealDetail() {
       >
         {/* Contact */}
         <Section title="Contact">
-          <View className="bg-un1t-dark border border-un1t-gray rounded-2xl p-4">
+          <View className="bg-un1t-surface border border-un1t-border rounded-2xl p-4">
             <View className="flex-row items-center">
-              <View className="w-12 h-12 rounded-full bg-un1t-gray/40 items-center justify-center mr-3">
-                <Text className="text-lg font-semibold text-un1t-white">
+              <View className="w-12 h-12 rounded-full bg-un1t-border/40 items-center justify-center mr-3">
+                <Text className="text-lg font-semibold text-un1t-text">
                   {(name[0] || '?').toUpperCase()}
                 </Text>
               </View>
               <View className="flex-1">
-                <Text className="text-base font-semibold text-un1t-white">{name}</Text>
+                <Text className="text-base font-semibold text-un1t-text">{name}</Text>
                 {contact?.pipeline_stage_slug && (
-                  <Text className="text-xs text-un1t-light capitalize">
+                  <Text className="text-xs text-un1t-subtle capitalize">
                     {contact.pipeline_stage_slug.replace(/_/g, ' ')}
                     {contact.lead_source ? ` · ${contact.lead_source}` : ''}
                   </Text>
@@ -268,11 +268,11 @@ export default function DealDetail() {
                   key={s.id}
                   onPress={() => moveToStage(s.id)}
                   className={`mr-2 px-4 py-2 rounded-full flex-row items-center ${
-                    sel ? 'bg-un1t-white' : 'bg-un1t-dark border border-un1t-gray'
+                    sel ? 'bg-un1t-text' : 'bg-un1t-surface border border-un1t-border'
                   }`}
                 >
                   <View className="w-2 h-2 rounded-full mr-2" style={{ backgroundColor: s.color || '#94A3B8' }} />
-                  <Text className={`text-sm ${sel ? 'text-un1t-black font-semibold' : 'text-un1t-white'}`}>
+                  <Text className={`text-sm ${sel ? 'text-un1t-bg font-semibold' : 'text-un1t-text'}`}>
                     {s.name}
                   </Text>
                 </Pressable>
@@ -318,18 +318,18 @@ export default function DealDetail() {
                   key={t.kind}
                   onPress={() => setLogKind(t.kind)}
                   className={`flex-1 mr-2 py-2.5 rounded-xl flex-row items-center justify-center border active:opacity-70 ${
-                    sel ? 'bg-un1t-white border-un1t-white' : 'bg-un1t-dark border-un1t-gray'
+                    sel ? 'bg-un1t-text border-un1t-text' : 'bg-un1t-surface border-un1t-border'
                   }`}
                 >
                   <Ionicons name={t.icon} size={14} color={sel ? '#FFFFFF' : '#111827'} />
-                  <Text className={`text-xs font-medium ml-1 ${sel ? 'text-un1t-black' : 'text-un1t-white'}`}>
+                  <Text className={`text-xs font-medium ml-1 ${sel ? 'text-un1t-bg' : 'text-un1t-text'}`}>
                     {t.label}
                   </Text>
                 </Pressable>
               )
             })}
           </View>
-          <View className="bg-un1t-dark border border-un1t-gray rounded-xl">
+          <View className="bg-un1t-surface border border-un1t-border rounded-xl">
             <TextInput
               value={logText}
               onChangeText={setLogText}
@@ -341,20 +341,20 @@ export default function DealDetail() {
                                         'Summary of the meeting…'
               }
               placeholderTextColor="#94A3B8"
-              className="px-4 py-3 text-base text-un1t-white min-h-[80px]"
+              className="px-4 py-3 text-base text-un1t-text min-h-[80px]"
               textAlignVertical="top"
             />
             <Pressable
               onPress={saveLog}
               disabled={!logText.trim() || submittingLog}
               className={`m-2 py-2.5 rounded-lg items-center ${
-                logText.trim() && !submittingLog ? 'bg-un1t-white' : 'bg-un1t-gray'
+                logText.trim() && !submittingLog ? 'bg-un1t-text' : 'bg-un1t-border'
               }`}
             >
               {submittingLog ? (
                 <ActivityIndicator />
               ) : (
-                <Text className="text-un1t-black font-semibold text-sm">
+                <Text className="text-un1t-bg font-semibold text-sm">
                   Save {logKind === 'note' ? 'note' : logKind}
                 </Text>
               )}
@@ -365,12 +365,12 @@ export default function DealDetail() {
         {/* Timeline */}
         <Section title="History">
           {timeline.length === 0 && (
-            <Text className="text-sm text-un1t-light text-center py-4">
+            <Text className="text-sm text-un1t-subtle text-center py-4">
               No activity yet.
             </Text>
           )}
           {timeline.map(t => (
-            <View key={`${t.kind}-${t.id}`} className="bg-un1t-dark border border-un1t-gray rounded-xl p-3 mb-2">
+            <View key={`${t.kind}-${t.id}`} className="bg-un1t-surface border border-un1t-border rounded-xl p-3 mb-2">
               <View className="flex-row items-center mb-1">
                 <Ionicons
                   name={
@@ -383,18 +383,18 @@ export default function DealDetail() {
                   size={14}
                   color="#64748B"
                 />
-                <Text className="text-xs text-un1t-light ml-1.5 capitalize">
+                <Text className="text-xs text-un1t-subtle ml-1.5 capitalize">
                   {t.kind === 'note' ? 'Note' : t.type || 'activity'}
                 </Text>
-                <Text className="text-xs text-un1t-mid ml-auto">
+                <Text className="text-xs text-un1t-muted ml-auto">
                   {t.created_at ? new Date(t.created_at).toLocaleDateString() : ''}
                 </Text>
               </View>
-              <Text className="text-sm text-un1t-white">
+              <Text className="text-sm text-un1t-text">
                 {t.subject || t.note || ''}
               </Text>
               {t.note && t.subject !== t.note && (
-                <Text className="text-sm text-un1t-light mt-1">{t.note}</Text>
+                <Text className="text-sm text-un1t-subtle mt-1">{t.note}</Text>
               )}
             </View>
           ))}

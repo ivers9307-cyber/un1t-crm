@@ -78,7 +78,7 @@ export default function TodayChecklistCard() {
       <View className="flex-row items-center justify-between mb-2">
         <View className="flex-row items-center gap-2 flex-1 min-w-0">
           <Ionicons name={tone.icon} size={16} color="#93C5FD" />
-          <Text className="text-xs font-semibold uppercase tracking-wider text-un1t-light">
+          <Text className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle">
             Today&apos;s checklist
           </Text>
         </View>
@@ -89,10 +89,10 @@ export default function TodayChecklistCard() {
 
       <View className="flex-row items-center justify-between">
         <View className="min-w-0 flex-1">
-          <Text className="text-base font-bold text-un1t-white" numberOfLines={1}>
+          <Text className="text-base font-bold text-un1t-text" numberOfLines={1}>
             {done} / {total} done
           </Text>
-          <Text className="text-[11px] text-un1t-light mt-0.5" numberOfLines={1}>
+          <Text className="text-[11px] text-un1t-subtle mt-0.5" numberOfLines={1}>
             {isComplete ? 'All done — nice work.' : 'Tap to tick items as you finish them.'}
           </Text>
         </View>
@@ -100,7 +100,7 @@ export default function TodayChecklistCard() {
       </View>
 
       {/* Progress bar */}
-      <View className="mt-3 h-1.5 bg-un1t-gray/40 rounded-full overflow-hidden">
+      <View className="mt-3 h-1.5 bg-un1t-border/40 rounded-full overflow-hidden">
         <View
           className={`h-1.5 rounded-full ${isComplete ? 'bg-green-400' : isOverdue ? 'bg-amber-400' : 'bg-blue-400'}`}
           style={{ width: total > 0 ? `${Math.round((done / total) * 100)}%` : '0%' }}
