@@ -273,37 +273,95 @@ describe('getDeviceState', () => {
 // ----------------------------------------------------------------
 
 describe('setDeviceState', () => {
-  it('POSTs the command body and returns the normalised response', async () => {
-    global.fetch = vi.fn(async () => jsonResponse({
-      response: {
-        operation: { airConOperationMode: 'POWER_ON' },
-        airConJobMode: { currentJobMode: 'COOL' },
-        temperature: { targetTemperatureC: 22 },
-        airFlow: { windStrength: 'AUTO' },
-      },
-    }))
+  it('fires a SEPARATE POST per resource (composite bodies are split)', async () => {
+    // LG returns code 2207 'Invalid command error' for any body
+    // that touches more than one resource block. The Python SDK
+    // fires single-attribute commands; we mirror that. Verified
+    // against the source at thinq-connect/pythinqconnect.
+    global.fetch = vi.fn(async () => jsonResponse({ response: {} }))
     const cmd = buildTurnOnState({ mode: 'cool', tempC: 22, fan: 'auto' })
-    const out = await setDeviceState('ac-1', cmd, CTX)
+    await setDeviceState('ac-1', cmd, CTX)
+
+    // 4 resources in buildTurnOnState → 4 POSTs.
+    expect(global.fetch).toHaveBeenCalledTimes(4)
+    const bodies = global.fetch.mock.calls.map(([, init]) => JSON.parse(init.body))
+    // Each body has exactly one resource key.
+    bodies.forEach((b) => expect(Object.keys(b)).toHaveLength(1))
+    // operation goes FIRST — LG won't accept job-mode/temp/fan
+    // changes on a powered-down unit.
+    expect(bodies[0]).toEqual({ operation: { airConOperationMode: 'POWER_ON' } })
+    // Remaining three carry the rest of the composite — in stable
+    // order so logs are predictable.
+    expect(bodies[1]).toEqual({ airConJobMode: { currentJobMode: 'COOL' } })
+    expect(bodies[2]).toEqual({ temperature: { targetTemperatureC: 22 } })
+    expect(bodies[3]).toEqual({ airFlow: { windStrength: 'AUTO' } })
+  })
+
+  it('uses POST and returns the normalised response from the LAST call', async () => {
+    // Sequential bodies — only the last call's response shape
+    // matters for the returned state. Make the last response on
+    // (airFlow) carry the full state echo.
+    let n = 0
+    global.fetch = vi.fn(async () => {
+      n++
+      if (n < 4) return jsonResponse({ response: {} })
+      return jsonResponse({
+        response: {
+          operation: { airConOperationMode: 'POWER_ON' },
+          airConJobMode: { currentJobMode: 'COOL' },
+          temperature: { targetTemperatureC: 22 },
+          airFlow: { windStrength: 'AUTO' },
+        },
+      })
+    })
+    const out = await setDeviceState(
+      'ac-1', buildTurnOnState({ mode: 'cool', tempC: 22, fan: 'auto' }), CTX
+    )
     expect(out).toMatchObject({ on: true, mode: 'cool', target_temp_c: 22, fan: 'auto' })
 
+    // Every call is a POST.
+    for (const [, init] of global.fetch.mock.calls) {
+      expect(init.method).toBe('POST')
+    }
+  })
+
+  it('passes a single-resource body through unchanged (turnOff path)', async () => {
+    global.fetch = vi.fn(async () => jsonResponse({ response: {} }))
+    await setDeviceState(
+      'ac-1',
+      { operation: { airConOperationMode: 'POWER_OFF' } },
+      CTX
+    )
+    expect(global.fetch).toHaveBeenCalledTimes(1)
     const [, init] = global.fetch.mock.calls[0]
-    expect(init.method).toBe('POST')
-    expect(JSON.parse(init.body)).toEqual(cmd)
+    expect(JSON.parse(init.body)).toEqual({
+      operation: { airConOperationMode: 'POWER_OFF' },
+    })
   })
 
   it('returns null when LG returns an empty success envelope', async () => {
     global.fetch = vi.fn(async () => jsonResponse({ messageId: 'm' }))
-    expect(await setDeviceState('ac-1', { x: 1 }, CTX)).toBeNull()
+    expect(
+      await setDeviceState('ac-1', { operation: { airConOperationMode: 'POWER_OFF' } }, CTX)
+    ).toBeNull()
   })
 
   it("sends the 'x-conditional-control: true' header on every control POST", async () => {
-    // Without this header LG returns code 2207 'Invalid command
-    // error' for composite payloads (anything that touches more than
-    // one resource block — which buildTurnOnState always does).
+    // Belt-and-braces alongside the sequential-POST fix. The header
+    // alone wasn't enough — LG still rejects composite bodies even
+    // with it set — but the Python SDK includes it on every call
+    // unconditionally and we mirror that posture.
     global.fetch = vi.fn(async () => jsonResponse({ response: {} }))
     await setDeviceState('ac-1', buildTurnOnState({}), CTX)
-    const [, init] = global.fetch.mock.calls[0]
-    expect(init.headers['x-conditional-control']).toBe('true')
+    for (const [, init] of global.fetch.mock.calls) {
+      expect(init.headers['x-conditional-control']).toBe('true')
+    }
+  })
+
+  it('throws when the command body has no resource keys', async () => {
+    global.fetch = vi.fn(async () => jsonResponse({ response: {} }))
+    await expect(setDeviceState('ac-1', { }, CTX))
+      .rejects.toThrow(/no resource keys/i)
   })
 })
 
@@ -326,6 +384,8 @@ describe('turnOff', () => {
   it("also sends 'x-conditional-control: true' (goes through setDeviceState)", async () => {
     global.fetch = vi.fn(async () => jsonResponse({ response: {} }))
     await turnOff('ac-1', CTX)
+    // turnOff sends one resource → one POST → one chance to check.
+    expect(global.fetch).toHaveBeenCalledTimes(1)
     const [, init] = global.fetch.mock.calls[0]
     expect(init.headers['x-conditional-control']).toBe('true')
   })
