@@ -16,6 +16,10 @@ import { pickLocationColor } from '../../../shared/location-colors'
 import {
   KpiCard, KpiRow, SectionHeader, PendingRow, ListCard,
 } from './cards'
+// CHECKLIST.2 — top-of-Today card showing the coach's checklist
+// when they're on shift today. Self-contained: renders nothing
+// when there's no instance to surface.
+import TodayChecklistCard from './TodayChecklistCard'
 
 function shiftTime(shift) {
   const start = (shift.start_time_override || shift.shift_templates?.start_time || '').slice(0, 5)
@@ -236,6 +240,14 @@ export default function PersonalDashboard({ refreshKey }) {
 
   return (
     <View>
+      {/* CHECKLIST.2 — coach's checklist for today, when applicable.
+          Self-renders null when the coach isn't on shift today or
+          has no matching template, so this is invisible for most
+          users on most days. Sits at the top so it's the first
+          thing on shift — closer / opener items shouldn't have to
+          scroll past a roster. */}
+      <TodayChecklistCard />
+
       {/* Roster — current week + next week, stacked vertically because
           a phone is too narrow for two side-by-side weeks. The web
           equivalent renders these in a 2-col grid. */}
