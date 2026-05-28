@@ -23,6 +23,10 @@ export const BUTTON_SIZES = Object.freeze({
   sm: 'h-8 px-3 text-sm',
   md: 'h-10 px-4 text-sm',
   lg: 'h-11 px-5 text-base',
+  // Square footprint for icon-only buttons (the most common button
+  // shape in this app — row actions, toolbars). Use with `icon` and no
+  // children; pair with variant="ghost" for the typical row-action look.
+  icon: 'h-8 w-8 p-0',
 })
 
 const BUTTON_BASE =

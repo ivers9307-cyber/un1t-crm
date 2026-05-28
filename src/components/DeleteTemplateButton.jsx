@@ -1,8 +1,14 @@
 'use client'
 
+// UI-FOUND.3 — migrated onto the shared <Button> primitive
+// (variant="ghost" size="icon"). Behaviour unchanged: confirm →
+// DELETE → refresh; the destructive red-on-hover is preserved via
+// className.
+
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Trash2 } from 'lucide-react'
+import { Button } from '@/components/ui'
 
 export default function DeleteTemplateButton({ templateId }) {
   const router = useRouter()
@@ -22,13 +28,14 @@ export default function DeleteTemplateButton({ templateId }) {
   }
 
   return (
-    <button
+    <Button
+      variant="ghost"
+      size="icon"
+      icon={Trash2}
+      loading={deleting}
       onClick={handleDelete}
-      disabled={deleting}
-      className="p-1.5 text-un1t-muted hover:text-red-400 transition-colors rounded disabled:opacity-50"
       title="Delete template"
-    >
-      <Trash2 size={14} />
-    </button>
+      className="text-un1t-muted hover:text-red-400"
+    />
   )
 }

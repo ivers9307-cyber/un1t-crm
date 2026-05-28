@@ -6,10 +6,15 @@
 // can rename and tweak. Pairs with the Flow templates gallery:
 // templates seed new sequences from canned recipes; this clones
 // the operator's already-customised sequences for dup-and-tweak.
+//
+// UI-FOUND.3 — migrated onto the shared <Button> primitive
+// (variant="ghost" size="icon"). Behaviour unchanged; the error
+// colouring is preserved via className.
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { Copy, Loader2 } from 'lucide-react'
+import { Copy } from 'lucide-react'
+import { Button } from '@/components/ui'
 
 export default function CloneSequenceButton({ sequenceId, sequenceName }) {
   const router = useRouter()
@@ -36,19 +41,19 @@ export default function CloneSequenceButton({ sequenceId, sequenceName }) {
   }
 
   return (
-    <button
-      type="button"
+    <Button
+      variant="ghost"
+      size="icon"
+      icon={Copy}
+      loading={busy}
       onClick={clone}
-      disabled={busy}
       title={error || `Clone "${sequenceName}"`}
       aria-label={`Clone ${sequenceName}`}
-      className={`p-1.5 rounded transition-colors ${
+      className={
         error
           ? 'text-red-400 hover:bg-red-500/10'
           : 'text-un1t-subtle hover:text-un1t-text hover:bg-un1t-border/40'
-      } disabled:opacity-50`}
-    >
-      {busy ? <Loader2 size={14} className="animate-spin" /> : <Copy size={14} />}
-    </button>
+      }
+    />
   )
 }

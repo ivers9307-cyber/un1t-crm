@@ -551,6 +551,8 @@ Multi-location users: `activeLocation` determines which gate applies. Switching 
 
 These patterns are enforced across the codebase; follow them when adding routes or features.
 
+**UI primitives (UI-FOUND.2+).** Shared presentational primitives live in `src/components/ui/` — `Button`, `Modal`, `Card`, `Field`, `Table` — exported from `@/components/ui`. New components compose these instead of re-implementing buttons/modals/cards/tables/labelled-fields by hand. Variant/size/aria logic lives in `src/components/ui/styles.js` (pure, unit-tested in `styles.test.js`); the `.jsx` files stay thin. Icon-only buttons use `<Button variant="ghost" size="icon" icon={…} />`. Modals that must force an explicit acknowledgement before closing pass `dismissable={false}`. Adoption is opportunistic — when you open an existing component for a feature/bugfix, migrate its ad-hoc buttons/modals to the primitives while you're there. Colours come from the intent-named `un1t-*` tokens (`bg/surface/border/muted/subtle/text/accent`) — never the old inverted names, and avoid new raw hex literals in `className`.
+
 **Response shape.** Every API response is `{ success: boolean, error?: string, issues?: [...], data?: ... }` (or a resource-specific key like `sequences`, `templates`, `broadcasts` for legacy compatibility — frontend already reads those). Errors include `success: false` consistently so client code can branch on `data.success === false`.
 
 **Mutation route skeleton.**

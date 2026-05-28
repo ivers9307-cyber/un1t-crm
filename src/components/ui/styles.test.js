@@ -30,6 +30,9 @@ describe('buttonClasses', () => {
   it('always includes the accessible focus ring', () => {
     expect(buttonClasses()).toContain('focus-visible:ring-un1t-accent')
   })
+  it('supports the square icon size for icon-only buttons', () => {
+    expect(buttonClasses({ size: 'icon' })).toContain(BUTTON_SIZES.icon)
+  })
 })
 
 describe('cardClasses', () => {

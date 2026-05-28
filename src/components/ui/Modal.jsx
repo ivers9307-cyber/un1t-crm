@@ -22,14 +22,18 @@ import { modalPanelClasses } from './styles.js'
  * @param {React.ReactNode} [props.title]
  * @param {React.ReactNode} [props.footer]  right-aligned action row
  * @param {'sm'|'md'|'lg'|'xl'} [props.size]
+ * @param {boolean} [props.dismissable]  when false, Esc / backdrop /
+ *   close-button are disabled — for flows that require an explicit
+ *   acknowledgement before closing (e.g. a one-time secret reveal).
+ *   Defaults to true.
  */
-export default function Modal({ open, onClose, title, footer, size = 'md', className, children }) {
+export default function Modal({ open, onClose, title, footer, size = 'md', dismissable = true, className, children }) {
   const panelRef = useRef(null)
   const titleId = useId()
 
   useEffect(() => {
     if (!open) return undefined
-    const onKey = (e) => { if (e.key === 'Escape') onClose?.() }
+    const onKey = (e) => { if (e.key === 'Escape' && dismissable) onClose?.() }
     document.addEventListener('keydown', onKey)
     const prevOverflow = document.body.style.overflow
     document.body.style.overflow = 'hidden'
@@ -39,14 +43,14 @@ export default function Modal({ open, onClose, title, footer, size = 'md', class
       document.removeEventListener('keydown', onKey)
       document.body.style.overflow = prevOverflow
     }
-  }, [open, onClose])
+  }, [open, onClose, dismissable])
 
   if (!open) return null
 
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
-      onMouseDown={(e) => { if (e.target === e.currentTarget) onClose?.() }}
+      onMouseDown={(e) => { if (dismissable && e.target === e.currentTarget) onClose?.() }}
     >
       <div
         ref={panelRef}
@@ -59,14 +63,16 @@ export default function Modal({ open, onClose, title, footer, size = 'md', class
         {(title != null) && (
           <div className="flex items-center justify-between border-b border-un1t-border px-5 py-3">
             <h2 id={titleId} className="text-sm font-semibold text-un1t-text">{title}</h2>
-            <button
-              type="button"
-              onClick={() => onClose?.()}
-              aria-label="Close"
-              className="rounded-md p-1 text-un1t-subtle hover:bg-un1t-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-un1t-accent"
-            >
-              <X className="h-4 w-4" aria-hidden="true" />
-            </button>
+            {dismissable && (
+              <button
+                type="button"
+                onClick={() => onClose?.()}
+                aria-label="Close"
+                className="rounded-md p-1 text-un1t-subtle hover:bg-un1t-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-un1t-accent"
+              >
+                <X className="h-4 w-4" aria-hidden="true" />
+              </button>
+            )}
           </div>
         )}
         <div className="px-5 py-4">{children}</div>
