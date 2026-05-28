@@ -152,19 +152,58 @@ if you saved the `.p12` somewhere else.)
 
 ## Step 7 — Trigger a build
 
+The desktop pipeline is split into **two** workflows:
+
+1. **Desktop build** — compiles, signs the `.app`, and submits it
+   to Apple's notarisation queue. Exits in 5–10 min regardless of
+   how busy Apple is.
+2. **Desktop finalize** — waits for Apple to accept the
+   submission, staples the ticket, packages a signed + notarised
+   DMG. Run manually after the build finishes.
+
+The split exists because first-time submissions on a fresh
+Developer ID can sit in Apple's queue for 30–60+ min, and we
+don't want a single workflow holding a `macos-latest` minute for
+that long. After a few successful notarisations on this account
+the typical wait drops to 1–5 min, but the split stays — it's
+strictly cheaper to retry.
+
+### Run the build workflow
+
 Either:
 
 - **On demand**: <https://github.com/ivers9307-cyber/un1t-crm/actions/workflows/desktop-build.yml>
   → *Run workflow* → *main* → *Run workflow*.
 - **By pushing**: any commit to `main` that touches `desktop/**`
-  fires the workflow automatically.
+  fires it automatically.
 
-The run should now include "Signing" and "Notarising" steps that
-weren't there before. Notarisation typically takes 1–3 minutes;
-the whole run is around 8–10 min cold.
+When the run finishes, open its summary panel — you'll see the
+notarisation submission UUID and the build run id. Copy the
+**run id** (the numeric id at the end of the run's URL, e.g.
+`.../actions/runs/12345678901` → `12345678901`).
 
-Download the artefact from the run page. Open the DMG — it should
-launch without the right-click → Open dance.
+### Run the finalize workflow
+
+Go to <https://github.com/ivers9307-cyber/un1t-crm/actions/workflows/desktop-finalize.yml>
+→ *Run workflow* → *main*. Paste the build run id into
+`build_run_id` and hit *Run workflow*.
+
+Finalize will:
+
+- Pull the signed `.app` and submission UUID from the build run
+- Wait on Apple's notarisation result (up to 60 min before timing
+  out)
+- Staple the notarisation ticket onto the `.app`
+- Package a fresh DMG containing the stapled `.app`
+- Sign the DMG, submit it for its own notarisation pass, staple it
+- Upload the final DMG + stapled `.app` as artefacts
+
+Download the artefact from the finalize run page. Open the DMG —
+it should launch without the right-click → Open dance.
+
+If finalize times out waiting on Apple, just rerun it with the
+same `build_run_id`. `notarytool wait` returns instantly once
+Apple has finished processing the submission.
 
 ---
 

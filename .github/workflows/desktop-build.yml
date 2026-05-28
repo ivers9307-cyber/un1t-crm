@@ -1,19 +1,38 @@
-# STUDIO-MAC.2 — CI build for the CF Studio Mac shell.
+# STUDIO-MAC.7 — async build half of the desktop pipeline.
 #
-# Compiles desktop/ (Tauri 2 + Rust) on macos-latest, produces a
-# universal (Intel + Apple Silicon) DMG, and uploads it as a
-# workflow artefact. The workflow run page has a "Download" link
-# under Artifacts that gives you the DMG without needing Rust /
-# Tauri / Xcode on your laptop.
+# Compiles desktop/ (Tauri 2 + Rust) on macos-latest, code-signs the
+# universal .app with the Developer ID certificate, then submits it
+# to Apple's notarisation service with --no-wait. The submission
+# UUID + the signed (but not-yet-stapled) .app are uploaded as
+# workflow artefacts.
 #
-# Two triggers:
+# Notarisation finalisation happens in a SEPARATE workflow
+# (desktop-finalize.yml) — that workflow polls Apple for the
+# result, staples the ticket, packages a fresh DMG, and signs it.
+#
+# WHY SPLIT THE PIPELINE?
+# First-time submissions on a fresh Developer ID can sit in Apple's
+# notarisation queue for 30–60+ min, sometimes longer. Running the
+# build and the notarisation wait in a single workflow means a
+# CI run that holds a macos-latest minute for that whole window —
+# expensive, slow, and brittle (any GitHub flake during the wait
+# means rebuilding from scratch). Splitting them means:
+#   - build returns in ~5–10 min regardless of Apple's queue depth
+#   - finalisation is cheap to retry until Apple responds
+#   - we can run finalisation hours or days later if needed
+#
+# Once a few builds have been notarised on this account Apple's
+# typical wait drops to 1–5 min, but the async architecture stays —
+# it's strictly safer than the synchronous variant.
+#
+# Triggers:
 #   - push to main when anything under desktop/** changes
 #   - workflow_dispatch — fire on demand from the Actions tab
 #
-# The DMG is currently UNSIGNED — macOS Gatekeeper will block it on
-# first open unless you right-click → Open and confirm. Signing +
-# notarisation is a follow-on PR (needs an Apple Developer ID
-# certificate + the signing secrets configured in repo settings).
+# Pairing with finalize:
+#   After this workflow succeeds, copy the run number, then open
+#   the Actions tab → Desktop finalize → Run workflow → paste the
+#   build run number as `build_run_id`. See desktop/SIGNING_SETUP.md.
 
 name: Desktop build
 
@@ -31,19 +50,17 @@ concurrency:
 
 jobs:
   build:
-    name: Build universal DMG
+    name: Build + submit for notarisation
     # macos-latest is Apple Silicon as of 2025. The default Rust
     # target on this runner is aarch64-apple-darwin; we add the
     # x86_64 target below so a universal binary works.
     runs-on: macos-latest
-    # STUDIO-MAC.6 — 90 min ceiling. Build + sign is ~5–8 min on a
-    # cold cache; the rest is Apple's notarisation wait. First-time
-    # submissions on a new Developer ID can sit in Apple's queue for
-    # 30–60 min before approval lands, especially around busy
-    # release cycles. Once a few builds have been notarised on this
-    # account the typical wait drops to 1–5 min and we'll never get
-    # close to this ceiling.
-    timeout-minutes: 90
+    # 30 min ceiling. The whole job (build + sign + submit-no-wait)
+    # should finish in 5–10 min cold and 2–4 min with a warm cache.
+    # The notarisation WAIT used to be in here and pushed the run to
+    # 60–90 min on first-time Developer IDs — that's moved out to
+    # the finalize workflow, which is why this can stay short.
+    timeout-minutes: 30
 
     steps:
       - name: Check out repo
@@ -84,16 +101,17 @@ jobs:
       # This is just a thin wrapper over `tauri build` that knows
       # about the platform conventions for artefact paths.
       #
-      # STUDIO-MAC.4 — when the six APPLE_* secrets are present in
-      # the repo settings, tauri-action automatically signs the .app
-      # with the Developer ID certificate AND submits it to Apple's
-      # notarytool for notarisation. When the secrets are ABSENT
-      # (because they haven't been added yet), tauri-action falls
-      # back to producing an unsigned bundle — no error, just a less
-      # friendly Gatekeeper experience on the resulting DMG.
+      # IMPORTANT: only APPLE_CERTIFICATE / APPLE_CERTIFICATE_PASSWORD
+      # / APPLE_SIGNING_IDENTITY are passed here. The notarisation
+      # trio (APPLE_ID / APPLE_PASSWORD / APPLE_TEAM_ID) is
+      # intentionally OMITTED — when those three are present
+      # tauri-action runs `xcrun notarytool submit --wait`
+      # synchronously, which is exactly what this split workflow
+      # exists to avoid. We submit to notarytool ourselves in the
+      # next step with --no-wait.
       #
-      # Setup guide for the secrets: desktop/SIGNING_SETUP.md
-      - name: Tauri build (universal)
+      # Setup guide for the certificate secrets: desktop/SIGNING_SETUP.md
+      - name: Tauri build (universal, signed but not notarised)
         uses: tauri-apps/tauri-action@v0
         env:
           # Code-signing — base64-encoded .p12 export of the
@@ -106,35 +124,102 @@ jobs:
           # the right identity inside the temporary keychain
           # tauri-action sets up for the build.
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          # Notarisation — submitted post-signing via Apple's
-          # notarytool. APPLE_PASSWORD is an APP-SPECIFIC password
-          # (NOT the regular Apple ID password) generated at
-          # appleid.apple.com → Sign-In and Security → App-Specific
-          # Passwords.
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
           projectPath: desktop
           args: --target universal-apple-darwin
 
-      # Upload the DMG (the only artefact a reviewer or installer
-      # actually needs). Retention is 30 days; the Actions UI gives
-      # the user a "Download" button on the run page.
-      - name: Upload DMG artefact
-        uses: actions/upload-artifact@v4
-        with:
-          name: cf-studio-mac-${{ github.run_number }}
-          path: desktop/src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
-          if-no-files-found: error
-          retention-days: 30
+      # Locate the signed .app, ditto-zip it (the macOS-aware
+      # archive format Apple's notarytool prefers), and submit
+      # asynchronously. We capture the submission UUID — the
+      # finalize workflow polls Apple for the result using that
+      # UUID.
+      #
+      # We deliberately do NOT use the DMG produced by tauri-action
+      # for the artefact: it contains a non-stapled .app, so
+      # shipping it as-is would be a regression vs. the stapled
+      # DMG the finalize workflow produces. The build workflow's
+      # only durable output is the signed .app + the UUID.
+      - name: Submit .app for notarisation (async)
+        id: notarize
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          APP_DIR="desktop/src-tauri/target/universal-apple-darwin/release/bundle/macos"
+          APP_PATH=$(ls -d "$APP_DIR"/*.app | head -n1)
+          if [ -z "$APP_PATH" ]; then
+            echo "::error::No .app bundle found under $APP_DIR"
+            exit 1
+          fi
+          echo "Found signed .app at: $APP_PATH"
 
-      # Bonus: the .app folder, in case someone wants to drop it
-      # straight into /Applications without unpacking a DMG.
-      - name: Upload .app artefact
+          # Stage the artefacts under a known dir.
+          STAGE="$RUNNER_TEMP/desktop-artefacts"
+          mkdir -p "$STAGE"
+
+          # ditto preserves macOS metadata (symlinks, code-signing
+          # resources, extended attributes) where a plain `zip`
+          # quietly mangles them. notarytool will reject a
+          # mis-archived bundle.
+          ZIP="$STAGE/cf-studio.zip"
+          ditto -c -k --keepParent "$APP_PATH" "$ZIP"
+          echo "Created zip for notarisation: $(ls -lh "$ZIP" | awk '{print $5}')"
+
+          # Submit. --output-format json gives us a stable parse
+          # surface; the id field is the submission UUID.
+          SUBMIT_JSON="$STAGE/notarization-submit.json"
+          xcrun notarytool submit "$ZIP" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --no-wait \
+            --output-format json | tee "$SUBMIT_JSON"
+
+          UUID=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["id"])' "$SUBMIT_JSON")
+          if [ -z "$UUID" ]; then
+            echo "::error::notarytool submit returned no id"
+            cat "$SUBMIT_JSON"
+            exit 1
+          fi
+
+          echo "Notarisation submission UUID: $UUID"
+          echo "$UUID" > "$STAGE/notarization-uuid.txt"
+
+          # Surface it in the workflow summary so a human reviewer
+          # of the run page can see the UUID without downloading
+          # the artefact.
+          {
+            echo "## Notarisation submitted"
+            echo ""
+            echo "**UUID:** \`$UUID\`"
+            echo ""
+            echo "Run the **Desktop finalize** workflow with:"
+            echo ""
+            echo "    build_run_id: ${{ github.run_id }}"
+            echo ""
+            echo "Or, once Apple has processed the submission, check status locally with:"
+            echo ""
+            echo "    xcrun notarytool info $UUID --apple-id <email> --password <app-pw> --team-id <teamid>"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # Make the staging dir available to later steps.
+          echo "STAGE=$STAGE" >> "$GITHUB_ENV"
+
+      # Upload the signed .app (zipped) + submission metadata.
+      # actions/upload-artifact handles upload-side compression, but
+      # the .app needs to be in a ditto archive on disk because we
+      # care about preserving the signature on round-trip; just
+      # uploading the directory could break Apple's code-signing
+      # resource layout.
+      - name: Upload signed app + notarisation metadata
         uses: actions/upload-artifact@v4
         with:
-          name: cf-studio-mac-app-${{ github.run_number }}
-          path: desktop/src-tauri/target/universal-apple-darwin/release/bundle/macos/*.app
-          if-no-files-found: warn
+          name: cf-studio-mac-${{ github.run_number }}-signed
+          path: |
+            ${{ env.STAGE }}/cf-studio.zip
+            ${{ env.STAGE }}/notarization-uuid.txt
+            ${{ env.STAGE }}/notarization-submit.json
+          if-no-files-found: error
           retention-days: 30

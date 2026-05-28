@@ -1,0 +1,361 @@
+# STUDIO-MAC.7 — finalisation half of the desktop pipeline.
+#
+# The `Desktop build` workflow signs the .app and submits it to
+# Apple's notarisation service with --no-wait, then exits. This
+# workflow picks up where that one left off:
+#
+#   1. Download the signed .app + submission UUID from the build run
+#   2. Wait on Apple's notarytool until the .app is Accepted
+#   3. Staple the notarisation ticket onto the .app
+#   4. Package the stapled .app into a fresh DMG
+#   5. Code-sign the DMG with the Developer ID cert
+#   6. Submit the DMG to notarytool, wait for acceptance, staple it
+#   7. Upload the final signed + notarised DMG + .app as artefacts
+#
+# Trigger this manually from the Actions tab after a build run has
+# finished:
+#   Actions → Desktop finalize → Run workflow → paste the build's
+#   run id into `build_run_id`.
+#
+# The run id is the numeric id in the build run's URL, not the
+# human-friendly run number. e.g. for
+# .../actions/runs/12345678901 it's 12345678901.
+#
+# Failure modes worth knowing about:
+#
+#   - The .app's notarisation status comes back "Invalid": Apple
+#     rejected the bundle. The workflow dumps `notarytool log`
+#     output before failing so you can see Apple's specific
+#     complaint without poking around locally.
+#
+#   - The wait times out (60 min): rerun this workflow with the
+#     same build_run_id. notarytool wait will return immediately if
+#     Apple has completed the submission in the meantime.
+#
+#   - The DMG notarisation fails: rerun this workflow with the same
+#     build_run_id — the .app notarisation is already cached on
+#     Apple's side, so polling that returns instantly; the DMG
+#     gets resubmitted.
+
+name: Desktop finalize
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_run_id:
+        description: 'Run id of the `Desktop build` workflow run to finalise (numeric, from the run URL)'
+        required: true
+        type: string
+
+concurrency:
+  group: desktop-finalize-${{ inputs.build_run_id }}
+  cancel-in-progress: false
+
+# `actions: read` is required for actions/download-artifact@v4 to
+# pull artefacts from a DIFFERENT workflow run (the build run) via
+# its run-id input. `contents: read` is the default but stated
+# explicitly so the permission surface is self-documenting.
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  finalize:
+    name: Wait + staple + package + ship
+    runs-on: macos-latest
+    # Hard ceiling. The interactive wait on notarytool is capped at
+    # 60 min internally; if Apple is sitting longer than that the
+    # workflow exits and the user reruns. Everything else (download,
+    # staple, DMG build, sign, DMG notarise) is <10 min combined.
+    timeout-minutes: 90
+
+    steps:
+      - name: Check out repo
+        # The repo isn't strictly required for the finalisation
+        # logic (everything we need comes from artefacts), but
+        # checking out lets us reuse the certificate setup pattern
+        # without copy-pasting it, and lets us write the workflow
+        # summary against a known $GITHUB_WORKSPACE.
+        uses: actions/checkout@v4
+
+      # Pull the artefacts the build workflow uploaded for the
+      # specified run. The pattern handles the embedded run_number
+      # in the artefact name without having to know it in advance.
+      - name: Download signed app + notarisation UUID
+        uses: actions/download-artifact@v4
+        with:
+          pattern: cf-studio-mac-*-signed
+          path: ${{ runner.temp }}/build-artefacts
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ inputs.build_run_id }}
+          merge-multiple: true
+
+      - name: Locate artefacts
+        id: artefacts
+        run: |
+          set -euo pipefail
+          ART="${RUNNER_TEMP}/build-artefacts"
+          ls -lh "$ART"
+
+          ZIP="$ART/cf-studio.zip"
+          UUID_FILE="$ART/notarization-uuid.txt"
+
+          if [ ! -f "$ZIP" ] || [ ! -f "$UUID_FILE" ]; then
+            echo "::error::Expected cf-studio.zip and notarization-uuid.txt under $ART"
+            exit 1
+          fi
+
+          UUID=$(tr -d '[:space:]' < "$UUID_FILE")
+          if [ -z "$UUID" ]; then
+            echo "::error::notarization-uuid.txt is empty"
+            exit 1
+          fi
+
+          echo "uuid=$UUID" >> "$GITHUB_OUTPUT"
+          echo "zip=$ZIP" >> "$GITHUB_OUTPUT"
+          echo "Build artefacts located. Submission UUID: $UUID"
+
+      # Set up an ephemeral keychain with the Developer ID cert so
+      # we can code-sign the freshly-built DMG later in this run.
+      # Mirrors what tauri-action does internally during the build
+      # job — we have to redo it because keychains don't persist
+      # across runners.
+      - name: Set up signing keychain
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          KEYCHAIN="$RUNNER_TEMP/build.keychain"
+          KEYCHAIN_PWD=$(openssl rand -hex 32)
+
+          security create-keychain -p "$KEYCHAIN_PWD" "$KEYCHAIN"
+          security set-keychain-settings -t 3600 -lut 3600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PWD" "$KEYCHAIN"
+
+          # Push the new keychain in front of the default search
+          # list so codesign + productbuild find our cert without
+          # having to be told which keychain to look in.
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+          security default-keychain -s "$KEYCHAIN"
+
+          CERT_PATH="$RUNNER_TEMP/cert.p12"
+          echo "$APPLE_CERTIFICATE" | base64 --decode > "$CERT_PATH"
+
+          security import "$CERT_PATH" \
+            -k "$KEYCHAIN" \
+            -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign \
+            -T /usr/bin/productbuild
+
+          # set-key-partition-list allows non-interactive use of the
+          # private key by codesign. Without this we'd get a GUI
+          # password prompt at sign time, which obviously hangs CI.
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PWD" "$KEYCHAIN" > /dev/null
+
+          # Wipe the on-disk .p12 once it's been imported into the
+          # keychain. Defence in depth — if a later step were to
+          # `tar` up RUNNER_TEMP for some reason, we don't want the
+          # raw cert riding along.
+          rm -f "$CERT_PATH"
+
+          # Surface the keychain path to subsequent steps via env
+          # so they can pass --keychain to codesign if needed.
+          echo "KEYCHAIN_PATH=$KEYCHAIN" >> "$GITHUB_ENV"
+
+      # Wait for Apple to finish processing the .app submission.
+      # notarytool wait polls Apple's API internally and returns
+      # when status is terminal (Accepted / Invalid / etc.).
+      # --timeout caps the wait; if Apple's queue is genuinely
+      # slow the user reruns this workflow.
+      - name: Wait for .app notarisation
+        id: wait-app
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          UUID: ${{ steps.artefacts.outputs.uuid }}
+        run: |
+          set -euo pipefail
+          STATUS_JSON="$RUNNER_TEMP/app-status.json"
+
+          echo "Waiting for Apple to accept submission $UUID (max 60 min)…"
+          xcrun notarytool wait "$UUID" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --timeout 60m \
+            --output-format json | tee "$STATUS_JSON"
+
+          STATUS=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["status"])' "$STATUS_JSON")
+          echo "Apple returned status: $STATUS"
+
+          if [ "$STATUS" != "Accepted" ]; then
+            echo "::error::.app notarisation status: $STATUS"
+            echo "Dumping notarytool log for diagnosis:"
+            xcrun notarytool log "$UUID" \
+              --apple-id "$APPLE_ID" \
+              --password "$APPLE_PASSWORD" \
+              --team-id "$APPLE_TEAM_ID" || true
+            exit 1
+          fi
+
+      # Unzip the signed .app and staple Apple's notarisation
+      # ticket onto it. Stapling embeds the ticket inside the
+      # bundle so offline Macs can verify the notarisation without
+      # an Apple round-trip.
+      - name: Staple .app
+        id: staple-app
+        run: |
+          set -euo pipefail
+          STAGE="$RUNNER_TEMP/stage"
+          mkdir -p "$STAGE"
+
+          # ditto -x extracts a ditto archive; with -k for the
+          # PKZip-style input format the build job created.
+          ditto -x -k "${{ steps.artefacts.outputs.zip }}" "$STAGE"
+
+          APP_PATH=$(ls -d "$STAGE"/*.app | head -n1)
+          if [ -z "$APP_PATH" ]; then
+            echo "::error::No .app inside cf-studio.zip"
+            exit 1
+          fi
+          echo "Extracted .app: $APP_PATH"
+
+          xcrun stapler staple "$APP_PATH"
+          xcrun stapler validate "$APP_PATH"
+
+          echo "app_path=$APP_PATH" >> "$GITHUB_OUTPUT"
+          echo "stage=$STAGE" >> "$GITHUB_OUTPUT"
+
+      # Package the stapled .app into a fresh DMG.
+      #
+      # We use hdiutil directly (rather than create-dmg from brew)
+      # because it's already on every macOS runner and doesn't
+      # spawn Finder to render a custom installer window. The
+      # output is a plain DMG: drag-to-Applications layout, no
+      # background image. We can polish that later — right now the
+      # priority is a Gatekeeper-clean install path, not pretty
+      # window art.
+      - name: Build DMG
+        id: dmg
+        env:
+          APP_PATH: ${{ steps.staple-app.outputs.app_path }}
+        run: |
+          set -euo pipefail
+          DMG_SRC="$RUNNER_TEMP/dmg-src"
+          mkdir -p "$DMG_SRC"
+
+          # cp -R doesn't preserve resource forks reliably for
+          # signed bundles. ditto does.
+          ditto "$APP_PATH" "$DMG_SRC/$(basename "$APP_PATH")"
+
+          # Standard "drag the app to Applications" affordance.
+          ln -s /Applications "$DMG_SRC/Applications"
+
+          DMG_OUT="$RUNNER_TEMP/CF Studio_${{ github.run_number }}.dmg"
+          hdiutil create \
+            -volname "CF Studio" \
+            -srcfolder "$DMG_SRC" \
+            -ov \
+            -format UDZO \
+            "$DMG_OUT"
+
+          ls -lh "$DMG_OUT"
+          echo "dmg_path=$DMG_OUT" >> "$GITHUB_OUTPUT"
+
+      # DMGs are themselves signed so Gatekeeper trusts the outer
+      # container. The .app inside is already signed + notarised +
+      # stapled, but Gatekeeper checks the DMG's signature when the
+      # user first mounts it.
+      - name: Sign DMG
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          DMG_PATH: ${{ steps.dmg.outputs.dmg_path }}
+        run: |
+          set -euo pipefail
+          codesign \
+            --force \
+            --sign "$APPLE_SIGNING_IDENTITY" \
+            --timestamp \
+            "$DMG_PATH"
+          codesign --verify --verbose=2 "$DMG_PATH"
+
+      # Notarise the DMG too. Since the .app inside has already
+      # been notarised, Apple typically returns this in 1–3 min
+      # rather than the long initial wait — the heavy lifting is
+      # done. Using --wait here is fine.
+      - name: Notarise DMG
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          DMG_PATH: ${{ steps.dmg.outputs.dmg_path }}
+        run: |
+          set -euo pipefail
+          STATUS_JSON="$RUNNER_TEMP/dmg-status.json"
+
+          xcrun notarytool submit "$DMG_PATH" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait \
+            --timeout 30m \
+            --output-format json | tee "$STATUS_JSON"
+
+          STATUS=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["status"])' "$STATUS_JSON")
+          if [ "$STATUS" != "Accepted" ]; then
+            UUID=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["id"])' "$STATUS_JSON")
+            echo "::error::DMG notarisation status: $STATUS"
+            xcrun notarytool log "$UUID" \
+              --apple-id "$APPLE_ID" \
+              --password "$APPLE_PASSWORD" \
+              --team-id "$APPLE_TEAM_ID" || true
+            exit 1
+          fi
+
+      - name: Staple DMG
+        env:
+          DMG_PATH: ${{ steps.dmg.outputs.dmg_path }}
+        run: |
+          set -euo pipefail
+          xcrun stapler staple "$DMG_PATH"
+          xcrun stapler validate "$DMG_PATH"
+
+      # The final, shippable DMG.
+      - name: Upload notarised DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: cf-studio-mac-${{ github.run_number }}-dmg
+          path: ${{ steps.dmg.outputs.dmg_path }}
+          if-no-files-found: error
+          retention-days: 90
+
+      # The stapled .app, in case someone wants to skip the DMG and
+      # drop it straight into /Applications.
+      - name: Upload notarised .app
+        uses: actions/upload-artifact@v4
+        with:
+          name: cf-studio-mac-${{ github.run_number }}-app
+          path: ${{ steps.staple-app.outputs.app_path }}
+          if-no-files-found: warn
+          retention-days: 90
+
+      - name: Summary
+        env:
+          DMG_PATH: ${{ steps.dmg.outputs.dmg_path }}
+          UUID: ${{ steps.artefacts.outputs.uuid }}
+        run: |
+          {
+            echo "## Notarisation complete"
+            echo ""
+            echo "**Build run:** ${{ inputs.build_run_id }}"
+            echo "**.app submission UUID:** \`$UUID\`"
+            echo "**Output DMG:** \`$(basename "$DMG_PATH")\`"
+            echo ""
+            echo "Download from the **Artifacts** section of this run page:"
+            echo ""
+            echo "- \`cf-studio-mac-${{ github.run_number }}-dmg\` — the signed + notarised DMG"
+            echo "- \`cf-studio-mac-${{ github.run_number }}-app\` — the stapled .app bundle"
+          } >> "$GITHUB_STEP_SUMMARY"
