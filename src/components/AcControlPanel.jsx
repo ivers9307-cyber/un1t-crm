@@ -93,16 +93,50 @@ export default function AcControlPanel() {
     )
   }
 
+  // STUDIO-AC-GROUPS.1 — bucket devices by `device_group` so the
+  // panel renders one section per group with the group name as a
+  // sub-heading. Master sets the group on each device from the AC
+  // Devices settings tab. NULL group → 'Other' bucket at the
+  // bottom. The API already orders devices by group then label, so
+  // we just walk the list in order and split on group boundaries.
+  const groups = groupDevices(devices)
+
   return (
     <Card>
       <Header count={devices.length} />
-      <div className="space-y-3">
-        {devices.map((d) => (
-          <DeviceCard key={d.id} device={d} />
+      <div className="space-y-5">
+        {groups.map(({ name, devices: groupDevices }) => (
+          <div key={name} className="space-y-2">
+            <div className="text-[11px] uppercase tracking-wider text-un1t-light px-1">
+              {name}
+            </div>
+            <div className="space-y-3">
+              {groupDevices.map((d) => (
+                <DeviceCard key={d.id} device={d} />
+              ))}
+            </div>
+          </div>
         ))}
       </div>
     </Card>
   )
+}
+
+function groupDevices(devices) {
+  const map = new Map()
+  for (const d of devices) {
+    const key = d.device_group || 'Other'
+    if (!map.has(key)) map.set(key, [])
+    map.get(key).push(d)
+  }
+  // Sort: named groups first (alphabetical), 'Other' last.
+  return [...map.entries()]
+    .sort(([a], [b]) => {
+      if (a === 'Other') return 1
+      if (b === 'Other') return -1
+      return a.localeCompare(b)
+    })
+    .map(([name, ds]) => ({ name, devices: ds }))
 }
 
 // ============================================================

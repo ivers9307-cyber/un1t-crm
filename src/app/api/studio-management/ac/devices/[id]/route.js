@@ -88,8 +88,16 @@ export const PATCH = withAuth(
     // provider_device_id / location_id (which would corrupt the
     // device's identity).
     const patch = {}
-    for (const key of ['label', 'default_mode', 'default_temp_c', 'default_fan', 'session_minutes', 'enabled']) {
+    for (const key of ['label', 'device_group', 'default_mode', 'default_temp_c', 'default_fan', 'session_minutes', 'enabled']) {
       if (key in body) patch[key] = body[key]
+    }
+    // Normalise device_group: trim, treat empty string as null so a
+    // master clearing the field unsets the group rather than saving
+    // an empty-string sentinel (which would render as its own
+    // section in the panel).
+    if ('device_group' in patch) {
+      const v = String(patch.device_group ?? '').trim()
+      patch.device_group = v || null
     }
     if (Object.keys(patch).length === 0) {
       return NextResponse.json({ success: false, error: 'No editable fields supplied.' }, { status: 400 })

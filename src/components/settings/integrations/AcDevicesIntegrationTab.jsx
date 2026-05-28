@@ -405,6 +405,7 @@ export default function AcDevicesIntegrationTab({ location, canEdit }) {
 function DeviceRow({ device, onPatch, onDisable }) {
   const [editing, setEditing] = useState(false)
   const [label, setLabel] = useState(device.label)
+  const [deviceGroup, setDeviceGroup] = useState(device.device_group || '')
   const [mode, setMode] = useState(device.default_mode || 'cool')
   const [tempC, setTempC] = useState(device.default_temp_c ?? 22)
   const [fan, setFan] = useState(device.default_fan || 'auto')
@@ -412,6 +413,7 @@ function DeviceRow({ device, onPatch, onDisable }) {
 
   function reset() {
     setLabel(device.label)
+    setDeviceGroup(device.device_group || '')
     setMode(device.default_mode || 'cool')
     setTempC(device.default_temp_c ?? 22)
     setFan(device.default_fan || 'auto')
@@ -421,6 +423,9 @@ function DeviceRow({ device, onPatch, onDisable }) {
   async function save() {
     await onPatch({
       label: label.trim() || device.label,
+      // Send empty string and let the server normalise to null. The
+      // PATCH handler treats null as "clear the group".
+      device_group: deviceGroup.trim(),
       default_mode: mode,
       default_temp_c: Number(tempC),
       default_fan: fan,
@@ -433,11 +438,16 @@ function DeviceRow({ device, onPatch, onDisable }) {
     <div className="bg-un1t-black/40 border border-un1t-gray rounded-md p-3">
       <div className="flex items-center justify-between gap-3 mb-1">
         <div className="min-w-0">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <span className="text-sm font-semibold text-un1t-white truncate">{device.label}</span>
             <span className="text-[10px] uppercase tracking-wider text-un1t-mid font-mono">
               {device.provider === 'thinq' ? 'LG ThinQ' : 'Sensibo'}
             </span>
+            {device.device_group && (
+              <span className="text-[10px] uppercase tracking-wider text-blue-300 bg-blue-500/15 px-1.5 py-0.5 rounded">
+                {device.device_group}
+              </span>
+            )}
             {!device.enabled && (
               <span className="text-[10px] uppercase tracking-wider text-red-400">disabled</span>
             )}
@@ -486,6 +496,18 @@ function DeviceRow({ device, onPatch, onDisable }) {
               type="text"
               value={label}
               onChange={(e) => setLabel(e.target.value)}
+              className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
+            />
+          </Field>
+          <Field
+            label="Group"
+            hint="Devices with the same group render together on the control panel (e.g. 'Gym Floor', 'Bathrooms'). Leave blank to show under 'Other'."
+          >
+            <input
+              type="text"
+              value={deviceGroup}
+              onChange={(e) => setDeviceGroup(e.target.value)}
+              placeholder="e.g. Bathrooms"
               className="w-full bg-un1t-black border border-un1t-gray rounded-md px-3 py-2 text-sm text-un1t-white"
             />
           </Field>
