@@ -131,12 +131,20 @@ export function withAuth(options, handler) {
     }
 
     const db = createServerClient()
+    // Next.js 15+ delivers `params` to route handlers as a Promise
+    // that must be awaited before the values inside are readable.
+    // Resolve once here so every withAuth-wrapped handler sees a
+    // plain object (e.g. `{ id: '...' }`) — discovered after the
+    // STUDIO-AC-DEVICES.3 routes were the first withAuth handlers
+    // to actually use params, and the picker on StaffForm got a
+    // 'Location id required' from the route below.
+    const params = ctx?.params ? await ctx.params : undefined
     return handler({
       user,
       db,
       locationId,
       request,
-      params: ctx?.params,
+      params,
     })
   }
 }
