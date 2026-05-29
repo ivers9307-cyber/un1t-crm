@@ -58,6 +58,24 @@ export const XERO_SCOPES = [
   'offline_access',
 ]
 
+// Xero validation failures return a generic top-level Message
+// ("A validation exception occurred") with the ACTUAL reason nested
+// under Elements[].ValidationErrors[].Message (e.g. "Currency GBP is
+// not added to your organisation", duplicate invoice number, archived
+// account). Flatten those so the operator sees WHY the bill was
+// rejected instead of a useless generic string. Pure + exported for
+// unit testing.
+export function flattenXeroValidationErrors(json) {
+  if (!json || !Array.isArray(json.Elements)) return []
+  const out = []
+  for (const el of json.Elements) {
+    for (const v of (el && el.ValidationErrors) || []) {
+      if (v && v.Message) out.push(v.Message)
+    }
+  }
+  return [...new Set(out)]
+}
+
 export class XeroError extends Error {
   constructor(message, { status, body, cause } = {}) {
     super(message)
@@ -248,7 +266,9 @@ export async function withFreshToken(locationId) {
     let json = null
     try { json = text ? JSON.parse(text) : null } catch { /* not json */ }
     if (!res.ok) {
-      const msg = json?.Detail || json?.Message || json?.detail || `Xero ${res.status} on ${path}`
+      const base = json?.Detail || json?.Message || json?.detail || `Xero ${res.status} on ${path}`
+      const details = flattenXeroValidationErrors(json)
+      const msg = details.length ? `${base}: ${details.join('; ')}` : base
       throw new XeroError(msg, { status: res.status, body: json || text })
     }
     return json
