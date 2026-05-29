@@ -66,10 +66,19 @@ function WeekStrip({ anchor, selected, onSelect, byDate }) {
 // Same shift, same actions, just squeezed into a column-width card
 // instead of a full-width row. The iPhone ShiftRow below stays
 // untouched so phone users see no change.
+// Effective shift times. The base block times live on the joined
+// shift_template; the legacy `shifts` row only carries per-assignment
+// overrides (mig 099/100), so reading shift.start_time alone yields
+// null for un-adjusted shifts and renders "— · 0h". Mirror the
+// dashboard's resolution (override → row → template) so the Schedule
+// tab shows the same time + duration.
+const effShiftStart = (s) => s.start_time_override || s.start_time || s.shift_templates?.start_time || null
+const effShiftEnd = (s) => s.end_time_override || s.end_time || s.shift_templates?.end_time || null
+
 function ShiftCard({ shift, onPress, onLongPress }) {
   const tpl = shift.shift_templates
-  const effStart = shift.start_time_override || shift.start_time
-  const effEnd = shift.end_time_override || shift.end_time
+  const effStart = effShiftStart(shift)
+  const effEnd = effShiftEnd(shift)
   const adjusted = !!(shift.start_time_override || shift.end_time_override)
   return (
     <Pressable
@@ -169,8 +178,8 @@ function ShiftRow({ shift, onPress, onLongPress }) {
   // Override-aware effective times. mig 099/100 mirror trigger
   // pushes assignment-level overrides into the legacy shifts row,
   // so this works for the partial-shift case automatically.
-  const effStart = shift.start_time_override || shift.start_time
-  const effEnd = shift.end_time_override || shift.end_time
+  const effStart = effShiftStart(shift)
+  const effEnd = effShiftEnd(shift)
   const hours = hoursBetween(effStart, effEnd)
   const adjusted = !!(shift.start_time_override || shift.end_time_override)
   return (
@@ -210,7 +219,7 @@ function ShiftRow({ shift, onPress, onLongPress }) {
       </View>
       {adjusted && (
         <Text className="text-[11px] text-un1t-subtle mt-0.5 italic">
-          Block default {timeRange(shift.start_time, shift.end_time)}
+          Block default {timeRange(shift.start_time || tpl?.start_time, shift.end_time || tpl?.end_time)}
           {shift.partial_reason ? ` · ${shift.partial_reason}` : ''}
         </Text>
       )}
@@ -451,8 +460,8 @@ export default function Schedule() {
 // Server emits a push to the coach if a manager (not self) changed
 // the override.
 function AdjustSheet({ shift, onClose, onSaved, locationId }) {
-  const blockStart = (shift?.start_time || '').slice(0, 5)
-  const blockEnd = (shift?.end_time || '').slice(0, 5)
+  const blockStart = (shift?.start_time || shift?.shift_templates?.start_time || '').slice(0, 5)
+  const blockEnd = (shift?.end_time || shift?.shift_templates?.end_time || '').slice(0, 5)
   const initialStart = (shift?.start_time_override || '').slice(0, 5) || blockStart
   const initialEnd = (shift?.end_time_override || '').slice(0, 5) || blockEnd
 
@@ -465,8 +474,8 @@ function AdjustSheet({ shift, onClose, onSaved, locationId }) {
   // Reset fields whenever a new shift is opened.
   useEffect(() => {
     if (!shift) return
-    setStart((shift.start_time_override || '').slice(0, 5) || (shift.start_time || '').slice(0, 5))
-    setEnd((shift.end_time_override || '').slice(0, 5) || (shift.end_time || '').slice(0, 5))
+    setStart((shift.start_time_override || '').slice(0, 5) || (shift.start_time || shift.shift_templates?.start_time || '').slice(0, 5))
+    setEnd((shift.end_time_override || '').slice(0, 5) || (shift.end_time || shift.shift_templates?.end_time || '').slice(0, 5))
     setReason(shift.partial_reason || '')
     setError(null)
   }, [shift])
