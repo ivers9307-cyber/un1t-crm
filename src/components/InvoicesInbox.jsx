@@ -863,8 +863,17 @@ function StageTwoBlock({ row, busy, onSaveFields, onApprove, onReject }) {
   const [showRejectForm, setShowRejectForm] = useState(false)
   const [reason, setReason] = useState('')
   const dirty = JSON.stringify(fields) !== JSON.stringify(initial)
-  // Reset when row changes.
-  useEffect(() => { setFields(row.extracted_fields || {}) }, [row.id, row.extracted_fields])
+  // Reset the edit form only when a DIFFERENT row is selected — never
+  // on a background refresh. INV-BULK.3's queue polling replaces the
+  // rows array (new extracted_fields object refs) every 5s while a
+  // batch drains; keying this on row.extracted_fields wiped the
+  // operator's in-progress edits (e.g. a half-picked Xero supplier)
+  // mid-review, so saves appeared not to stick. row.id is the
+  // identity that should reset the form.
+  useEffect(() => {
+    setFields(row.extracted_fields || {})
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [row.id])
 
   function setField(k, v) { setFields((f) => ({ ...f, [k]: v })) }
 
@@ -972,7 +981,12 @@ function StageTwoBlock({ row, busy, onSaveFields, onApprove, onReject }) {
       <div className="flex gap-2 flex-wrap">
         <button
           type="button"
-          disabled={!dirty || !!busy || isApproved}
+          // A 'data_approved' row whose Xero send FAILED (xero_error
+          // set, never forwarded) is re-opened for correction, so the
+          // operator can fix the field that broke the send and retry.
+          // Successfully forwarded rows stay frozen (isApproved without
+          // an error is the post-send state and never reaches here).
+          disabled={!dirty || !!busy || (isApproved && !row.xero_error)}
           onClick={() => onSaveFields(fields)}
           className="px-4 py-2 rounded-md border border-un1t-border text-un1t-text disabled:opacity-50"
         >
