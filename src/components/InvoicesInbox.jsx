@@ -371,7 +371,7 @@ export default function InvoicesInbox({ locations, isMaster, isBookkeeper = fals
           summary={bulkSummary}
           onQueueAnalyse={() => runBulk('queue-analysis', { ids: Array.from(bulkSelection) })}
           onSend={() => runBulk('send', { ids: Array.from(bulkSelection) })}
-          onMarkInXero={() => runBulk('mark-in-xero', { ids: Array.from(bulkSelection) })}
+          onMarkInXero={(ids) => runBulk('mark-in-xero', { ids })}
           onReject={(reason) => runBulk('reject', { ids: Array.from(bulkSelection), reason })}
           onClear={clearSelection}
         />
@@ -527,10 +527,16 @@ function BulkActionBar({
     ['extracted', 'data_approved'].includes(r.status) && r.extracted_fields).length
   const rejectableCount = selectedRows.filter((r) =>
     ['received', 'quality_approved', 'extracted', 'data_approved'].includes(r.status)).length
-  // INV-RECONCILE.1 — rows that can be reconciled as 'already in Xero'
-  // (clears duplicates the send path skipped). Same legal states as send.
-  const markableCount = selectedRows.filter((r) =>
-    ['extracted', 'data_approved'].includes(r.status) && r.extracted_fields).length
+  // INV-RECONCILE.1 — ONLY rows the send path flagged as already in
+  // Xero (xero_error carries the 'Already in Xero' message). This is the
+  // duplicate set to reconcile — NOT every selected row, so the button
+  // can't sweep genuine failures (missing account/supplier) into the
+  // 'in Xero' state. The endpoint re-verifies each against Xero anyway.
+  const markableRows = selectedRows.filter((r) =>
+    ['extracted', 'data_approved'].includes(r.status) &&
+    r.extracted_fields &&
+    /already in xero/i.test(r.xero_error || ''))
+  const markableCount = markableRows.length
 
   return (
     <div className="fixed inset-x-0 bottom-0 z-40 border-t border-un1t-border bg-un1t-bg/95 backdrop-blur p-4 max-h-[60vh] overflow-y-auto">
@@ -561,9 +567,9 @@ function BulkActionBar({
           <button
             type="button"
             disabled={markableCount === 0 || !!busy}
-            onClick={onMarkInXero}
+            onClick={() => onMarkInXero(markableRows.map((r) => r.id))}
             className="px-3 py-1.5 text-sm rounded-md border border-un1t-border text-un1t-subtle disabled:opacity-40"
-            title={markableCount === 0 ? 'No selected rows to reconcile' : 'For invoices already in Xero (e.g. via Dext): links each to its existing Xero bill and clears it from the queue. Never creates a duplicate.'}
+            title={markableCount === 0 ? 'Only rows flagged “already in Xero” (after a send attempt) can be reconciled here' : 'Links each invoice already in Xero to its existing bill and clears it from the queue. Never creates a duplicate.'}
           >
             {busy === 'mark-in-xero' ? 'Reconciling…' : `Mark as in Xero (${markableCount})`}
           </button>
