@@ -27,6 +27,7 @@ import { useSearchParams } from 'next/navigation'
 import { INVOICE_CATEGORIES } from '@/lib/invoice-extraction'
 import XeroAccountPicker from '@/components/invoices/XeroAccountPicker'
 import XeroContactPicker from '@/components/invoices/XeroContactPicker'
+import BulkUploadPanel from '@/components/invoices/BulkUploadPanel'
 
 // INVOICES.3 — friendly labels for the category dropdown. Keys
 // match the enum in INVOICE_CATEGORIES exactly; the underscore →
@@ -231,6 +232,11 @@ export default function InvoicesInbox({ locations, isMaster, isBookkeeper = fals
   return (
     <div className="space-y-6">
       <ForwardingAddresses locations={locations} />
+      <BulkUploadPanel
+        locations={locations}
+        defaultLocationId={locationFilter !== 'all' ? locationFilter : (locations.length === 1 ? locations[0].id : null)}
+        onUploaded={loadRows}
+      />
 
       {/* Source-type tabs — primary navigation */}
       <div className="flex items-center justify-between flex-wrap gap-3">
