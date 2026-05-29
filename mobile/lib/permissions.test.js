@@ -19,7 +19,7 @@
 // JS with no React-Native imports, so no RN runtime is required.
 
 import { describe, it, expect } from 'vitest'
-import { hasAnyMobileFeature } from './permissions.js'
+import { hasAnyMobileFeature, canMobile } from './permissions.js'
 import {
   MOBILE_PERMISSION_KEYS,
   CROSS_PLATFORM_DASHBOARD_KEYS,
@@ -112,5 +112,33 @@ describe('hasAnyMobileFeature', () => {
       permissions: { mobile: {} },
     }
     expect(hasAnyMobileFeature({ role: 'master' }, location)).toBe(true)
+  })
+})
+
+
+describe('canMobile — cross-platform keys (studio_management)', () => {
+  // Regression: studio_management is a CROSS_PLATFORM (top-level) key.
+  // A head_coach with it enabled for the web sidebar (top-level true)
+  // must also get the mobile Studio tab. Before the fix, canMobile read
+  // only the .mobile namespace + mobile defaults (where the key doesn't
+  // exist), so it returned false for every non-master role.
+  it('grants the Studio tab to a head_coach with top-level studio_management on', () => {
+    const location = { features: {}, permissions: { studio_management: true, mobile: {} } }
+    expect(canMobile({ role: 'head_coach' }, 'studio_management', location)).toBe(true)
+  })
+
+  it('withholds it from a head_coach when the top-level key is off (role default)', () => {
+    const location = { features: {}, permissions: { studio_management: false, mobile: {} } }
+    expect(canMobile({ role: 'head_coach' }, 'studio_management', location)).toBe(false)
+  })
+
+  it('honours the location feature gate (tier 1) even if the user key is on', () => {
+    const location = { features: { studio_management: false }, permissions: { studio_management: true, mobile: {} } }
+    expect(canMobile({ role: 'head_coach' }, 'studio_management', location)).toBe(false)
+  })
+
+  it('master sees it regardless (short-circuit)', () => {
+    const location = { features: {}, permissions: { mobile: {} } }
+    expect(canMobile({ role: 'master' }, 'studio_management', location)).toBe(true)
   })
 })
