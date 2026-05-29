@@ -66,6 +66,27 @@ const SUPPORTED_MIME = new Set([
 
 // Zod schema for the JSON Claude returns. Loose on number parsing
 // (Claude sometimes returns "€1,234.56" as a string) — coerce.
+// INVOICES — default the due date to 30 days after the issue date when
+// the supplier didn't give one. Many invoices (e.g. the transport
+// supplier) either omit a due date or echo the issue date; net-30 is
+// the house default. Only fills when due_date is missing OR equals the
+// invoice_date (the echo case) — a genuinely different due date is left
+// untouched. Pure + deterministic so it's unit-testable.
+export function addDaysIso(iso, days) {
+  if (typeof iso !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(iso)) return null
+  const d = new Date(iso + 'T00:00:00Z')
+  if (Number.isNaN(d.getTime())) return null
+  d.setUTCDate(d.getUTCDate() + days)
+  return d.toISOString().slice(0, 10)
+}
+
+export function applyDueDateDefault(fields) {
+  if (!fields || !fields.invoice_date) return fields
+  if (fields.due_date && fields.due_date !== fields.invoice_date) return fields
+  const due = addDaysIso(fields.invoice_date, 30)
+  return due ? { ...fields, due_date: due } : fields
+}
+
 const lineItem = z.object({
   description: z.string().min(1).max(500),
   quantity: z.coerce.number().nonnegative(),
@@ -336,7 +357,7 @@ export async function extractInvoiceFieldsFromBytes(bytes, mime) {
     }
   }
 
-  return { ok: true, fields: validation.data, raw_response: raw }
+  return { ok: true, fields: applyDueDateDefault(validation.data), raw_response: raw }
 }
 
 /**
