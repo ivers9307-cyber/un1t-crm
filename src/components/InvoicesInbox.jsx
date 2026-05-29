@@ -240,7 +240,11 @@ export default function InvoicesInbox({ locations, isMaster, isBookkeeper = fals
   )
 
   return (
-    <div className="space-y-6">
+    // INV-BULK.3 — reserve space at the bottom while the fixed bulk
+    // action bar is shown, so it never covers the detail panel's lower
+    // fields (e.g. the Xero supplier picker) and the page can scroll
+    // everything clear of it.
+    <div className={`space-y-6 ${isBookkeeper && bulkSelection.size > 0 ? 'pb-44' : ''}`}>
       <ForwardingAddresses locations={locations} />
       <BulkUploadPanel
         locations={locations}
@@ -496,7 +500,7 @@ function BulkActionBar({
     ['received', 'quality_approved', 'extracted', 'data_approved'].includes(r.status)).length
 
   return (
-    <div className="fixed inset-x-0 bottom-0 z-40 border-t border-un1t-border bg-un1t-bg/95 backdrop-blur p-4">
+    <div className="fixed inset-x-0 bottom-0 z-40 border-t border-un1t-border bg-un1t-bg/95 backdrop-blur p-4 max-h-[60vh] overflow-y-auto">
       <div className="max-w-7xl mx-auto flex items-center gap-3 flex-wrap">
         <span className="text-sm text-un1t-text font-medium">
           {selectedCount} selected
