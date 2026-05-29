@@ -117,6 +117,13 @@ export function buildAuthorizeUrl({ state }) {
   u.searchParams.set('redirect_uri', redirectUri)
   u.searchParams.set('scope', XERO_SCOPES.join(' '))
   u.searchParams.set('state', state)
+  // Force the consent screen on every (re)connect. Without this, a user
+  // who already authorised the app under an OLDER scope set is silently
+  // re-issued a token with the PREVIOUS scopes — so a newly-added scope
+  // (e.g. accounting.attachments) never gets granted just by clicking
+  // "reconnect". prompt=consent makes Xero re-present + grant the full
+  // current XERO_SCOPES list.
+  u.searchParams.set('prompt', 'consent')
   return u.toString()
 }
 
