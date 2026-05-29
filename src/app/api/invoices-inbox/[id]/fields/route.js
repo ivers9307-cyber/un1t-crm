@@ -30,10 +30,18 @@ export async function PATCH(request, { params }) {
   if (ctx.response) return ctx.response
   const { db, row } = ctx
 
-  if (row.status !== 'extracted') {
+  // Editable while 'extracted' (normal review) OR while
+  // 'data_approved' with a Xero send failure — that row was approved
+  // but never reached Xero (no bill created), so the operator must be
+  // able to correct the field that caused the failure (e.g. a missing
+  // supplier) and retry. A successfully 'forwarded' row stays frozen.
+  const editable =
+    row.status === 'extracted' ||
+    (row.status === 'data_approved' && !!row.xero_error)
+  if (!editable) {
     return NextResponse.json({
       success: false,
-      error: `Cannot edit fields in '${row.status}' state. Only 'extracted' is editable.`,
+      error: `Cannot edit fields in '${row.status}' state.`,
     }, { status: 409 })
   }
 
@@ -45,7 +53,7 @@ export async function PATCH(request, { params }) {
     .from('invoices_queue')
     .update({ extracted_fields })
     .eq('id', id)
-    .eq('status', 'extracted')
+    .eq('status', row.status)   // concurrency guard for the state we loaded
     .select('id, status, extracted_fields, updated_at')
     .single()
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
