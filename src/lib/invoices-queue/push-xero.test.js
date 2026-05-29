@@ -168,18 +168,21 @@ describe('pushQueueRowToXero — happy path (existing contact)', () => {
         line_items: [{ description: 'thing', quantity: 1, unit_amount: 100 }],
       },
     }
-    // Only the /Invoices POST should hit Xero — no /Contacts lookup.
-    xfetchMock.mockResolvedValueOnce({
-      Invoices: [{ InvoiceID: 'INV-XYZ', InvoiceNumber: 'BILL-0001' }],
-    })
+    // First a duplicate-check GET (none found), then the /Invoices
+    // POST. No /Contacts lookup (existing contact ref).
+    xfetchMock
+      .mockResolvedValueOnce({ Invoices: [] })
+      .mockResolvedValueOnce({ Invoices: [{ InvoiceID: 'INV-XYZ', InvoiceNumber: 'BILL-0001' }] })
 
     const r = await pushQueueRowToXero('q1')
     expect(r.billId).toBe('INV-XYZ')
     expect(r.billNumber).toBe('BILL-0001')
     expect(r.deepLinkUrl).toContain('InvoiceID=INV-XYZ')
-    expect(xfetchMock).toHaveBeenCalledTimes(1)
-    expect(xfetchMock.mock.calls[0][0]).toBe('/Invoices')
-    expect(xfetchMock.mock.calls[0][1].body.Invoices[0].Contact.ContactID).toBe('C-EXISTING')
+    expect(r.attachmentError).toBeNull()
+    expect(xfetchMock).toHaveBeenCalledTimes(2)
+    expect(xfetchMock.mock.calls[0][0]).toContain('/Invoices?where=')
+    const postCall = xfetchMock.mock.calls.find((c) => c[0] === '/Invoices')
+    expect(postCall[1].body.Invoices[0].Contact.ContactID).toBe('C-EXISTING')
   })
 })
 
@@ -200,6 +203,7 @@ describe('pushQueueRowToXero — new contact branch', () => {
     // Step 2: POST /Contacts → returns the new ContactID.
     // Step 3: POST /Invoices → returns the bill.
     xfetchMock
+      .mockResolvedValueOnce({ Invoices: [] }) // duplicate-check: none
       .mockResolvedValueOnce({ Contacts: [] })
       .mockResolvedValueOnce({ Contacts: [{ ContactID: 'C-NEW' }] })
       .mockResolvedValueOnce({ Invoices: [{ InvoiceID: 'INV-NEW', InvoiceNumber: 'B-0001' }] })
@@ -226,18 +230,63 @@ describe('pushQueueRowToXero — new contact branch', () => {
         line_items: [{ description: 'x', quantity: 1, unit_amount: 10 }],
       },
     }
-    // /Contacts lookup HITS — race-guard path.
+    // Duplicate-check (none), then /Contacts lookup HITS — race-guard.
     xfetchMock
+      .mockResolvedValueOnce({ Invoices: [] })
       .mockResolvedValueOnce({ Contacts: [{ ContactID: 'C-ALREADY', Name: 'Race Co', ContactStatus: 'ACTIVE' }] })
       .mockResolvedValueOnce({ Invoices: [{ InvoiceID: 'INV-R', InvoiceNumber: 'R-0001' }] })
 
     await pushQueueRowToXero('q1')
-    // Only 2 xfetch calls — no POST to /Contacts because the race-
-    // guard found an existing match.
-    expect(xfetchMock).toHaveBeenCalledTimes(2)
-    expect(xfetchMock.mock.calls[1][0]).toBe('/Invoices')
+    // 3 xfetch calls — dup-check + /Contacts lookup + /Invoices POST.
+    // No POST to /Contacts because the race-guard found an existing match.
+    expect(xfetchMock).toHaveBeenCalledTimes(3)
+    expect(xfetchMock.mock.calls.find((c) => c[0] === '/Invoices')).toBeTruthy()
     // The cache still gets the backfill so it knows about the
     // existing contact going forward.
     expect(dbCaptured.upserts.find((u) => u.table === 'xero_contacts')).toBeTruthy()
+  })
+})
+
+describe('pushQueueRowToXero — duplicate guard', () => {
+  it('skips + flags when a bill with the same invoice number already exists in Xero', async () => {
+    nextRow = {
+      id: 'q1', location_id: 'loc1', status: 'data_approved',
+      source_type: 'supplier_email',
+      extracted_fields: {
+        supplier_name: 'Dupe Co', invoice_number: 'DUP-1', invoice_date: '2026-05-01',
+        currency: 'EUR', total: 20,
+        xero_account_id: 'A1', account_code: '400',
+        xero_contact_ref: { kind: 'existing', xero_contact_id: 'C-1', name: 'Dupe Co' },
+        line_items: [{ description: 'x', quantity: 1, unit_amount: 20 }],
+      },
+    }
+    // Duplicate-check GET returns a matching authorised bill.
+    xfetchMock.mockResolvedValueOnce({
+      Invoices: [{ InvoiceID: 'EXIST', InvoiceNumber: 'DUP-1', Status: 'AUTHORISED' }],
+    })
+    await expect(pushQueueRowToXero('q1')).rejects.toThrow(/Already in Xero/)
+    // No create POST — only the duplicate-check GET ran.
+    expect(xfetchMock).toHaveBeenCalledTimes(1)
+    expect(xfetchMock.mock.calls.some((c) => c[0] === '/Invoices')).toBe(false)
+  })
+
+  it('reuses the stored bill id on retry (idempotent — no create) and re-derives the deep link', async () => {
+    nextRow = {
+      id: 'q1', location_id: 'loc1', status: 'data_approved',
+      source_type: 'supplier_email',
+      xero_bill_id: 'INV-PRIOR', xero_bill_number: 'P-1',
+      extracted_fields: {
+        supplier_name: 'Retry Co', invoice_number: 'RT-1', invoice_date: '2026-05-01',
+        currency: 'EUR', total: 20,
+        xero_account_id: 'A1', account_code: '400',
+        xero_contact_ref: { kind: 'existing', xero_contact_id: 'C-1', name: 'Retry Co' },
+        line_items: [{ description: 'x', quantity: 1, unit_amount: 20 }],
+      },
+    }
+    const r = await pushQueueRowToXero('q1')
+    expect(r.billId).toBe('INV-PRIOR')
+    expect(r.deepLinkUrl).toContain('InvoiceID=INV-PRIOR')
+    // No Xero calls at all (no attachment on this row) — never re-creates.
+    expect(xfetchMock.mock.calls.some((c) => c[0] === '/Invoices')).toBe(false)
   })
 })
