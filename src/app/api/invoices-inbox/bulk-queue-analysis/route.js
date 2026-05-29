@@ -93,5 +93,5 @@ export async function POST(request) {
     return acc
   }, {})
 
-  return NextResponse.json({ success: true, results, counts })
+  return NextResponse.json({ success: true, data: { results, counts } })
 }
