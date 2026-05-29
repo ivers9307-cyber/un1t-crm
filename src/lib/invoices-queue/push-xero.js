@@ -34,6 +34,17 @@ function escapeWhereString(str) {
   return String(str).replace(/'/g, "''")
 }
 
+// Infer a Content-Type from a filename extension. Xero can reject an
+// attachment sent as application/octet-stream, so fall back to the
+// extension when the stored MIME type is missing/generic.
+function inferMimeFromName(name) {
+  const ext = String(name || '').toLowerCase().split('.').pop()
+  return {
+    pdf: 'application/pdf', jpg: 'image/jpeg', jpeg: 'image/jpeg',
+    png: 'image/png', gif: 'image/gif', webp: 'image/webp',
+  }[ext] || 'application/octet-stream'
+}
+
 /**
  * Resolve the xero_contact_ref to a concrete ContactID.
  *   - kind='existing' → return the stored xero_contact_id directly.
@@ -194,6 +205,7 @@ export async function pushQueueRowToXero(queueId) {
     .select(`
       id, location_id, status, source_type, extracted_fields,
       attachment_bucket, attachment_path, attachment_filename, attachment_mime_type,
+      xero_bill_id, xero_bill_number, xero_deep_link_url,
       location:location_id ( id, name )
     `)
     .eq('id', queueId)
@@ -218,28 +230,66 @@ export async function pushQueueRowToXero(queueId) {
   // right tenant_id.
   const { conn, xfetch } = await withFreshToken(row.location_id)
 
-  // Resolve / create the contact. Hands back a stable ContactID
-  // suitable for /Invoices.Contact.ContactID.
-  const supplierContactId = await resolveContactId({
-    xfetch, db, locationId: row.location_id, contactRef: fields.xero_contact_ref,
-  })
+  const deepLink = (id) => `https://go.xero.com/AccountsPayable/View.aspx?InvoiceID=${id}`
 
-  // POST /Invoices.
-  const payload = buildBillPayload(fields, { supplierContactId })
-  const created = await xfetch('/Invoices', {
-    method: 'POST',
-    body: { Invoices: [payload] },
-  })
-  const inv = created?.Invoices?.[0]
-  if (!inv?.InvoiceID) {
-    throw new XeroError('Xero returned no InvoiceID for the created draft bill.', { body: created })
+  let billId = row.xero_bill_id || null
+  let billNumber = row.xero_bill_number || fields.invoice_number || null
+  let deepLinkUrl = row.xero_deep_link_url || (billId ? deepLink(billId) : null)
+
+  if (!billId) {
+    // CREATE PATH. First make sure we're not duplicating a bill that
+    // already exists in Xero — a prior orphaned push, a manual entry,
+    // or (during the Dext migration) one Dext already created. Policy
+    // is SKIP + FLAG: never touch the existing bill.
+    const num = (fields.invoice_number || '').trim()
+    if (num) {
+      const where = encodeURIComponent(`Type=="ACCPAY" AND InvoiceNumber=="${escapeWhereString(num)}"`)
+      const existing = await xfetch(`/Invoices?where=${where}`).catch((e) => {
+        if (e.status === 404) return null
+        throw e
+      })
+      const match = (existing?.Invoices || []).find((i) => (i.InvoiceNumber || '') === num)
+      if (match) {
+        throw new XeroError(
+          `Already in Xero as bill ${match.InvoiceNumber} (status ${match.Status}). Skipped to avoid a duplicate — open it in Xero to reconcile, or reject this row.`,
+          { status: 409, body: match },
+        )
+      }
+    }
+
+    // Resolve / create the supplier contact (only needed to create).
+    const supplierContactId = await resolveContactId({
+      xfetch, db, locationId: row.location_id, contactRef: fields.xero_contact_ref,
+    })
+
+    const payload = buildBillPayload(fields, { supplierContactId })
+    const created = await xfetch('/Invoices', { method: 'POST', body: { Invoices: [payload] } })
+    const inv = created?.Invoices?.[0]
+    if (!inv?.InvoiceID) {
+      throw new XeroError('Xero returned no InvoiceID for the created draft bill.', { body: created })
+    }
+    billId = inv.InvoiceID
+    billNumber = inv.InvoiceNumber || fields.invoice_number || null
+    deepLinkUrl = deepLink(billId)
+
+    // Persist the bill id IMMEDIATELY, before attaching. If the
+    // attachment then fails, a retry reuses this id (skips create
+    // above) and re-attaches instead of creating a duplicate bill.
+    await db.from('invoices_queue').update({
+      xero_bill_id: billId,
+      xero_bill_number: billNumber,
+      xero_deep_link_url: deepLinkUrl,
+    }).eq('id', queueId)
   }
+  // else: idempotent retry — the bill already exists from a previous
+  // attempt; fall through and (re)attach the source file to it.
 
-  // XERO-ATTACH.1 — attach the original supplier document to the
-  // draft bill, so the bookkeeper sees the source PDF alongside the
-  // figures in Xero (the Dext-style "source attached" behaviour).
-  // Best-effort: the bill is already created, so an attachment
-  // failure must not fail the push — it's logged and swallowed.
+  // XERO-ATTACH.1 — attach the original supplier document to the bill
+  // so the source travels to Xero (the CRM is the sole path now that
+  // Dext is being retired). Failures are NO LONGER swallowed: we
+  // report them so the caller can leave the row unsent and the
+  // operator can retry, which re-attaches to the same bill.
+  let attachmentError = null
   if (row.attachment_bucket && row.attachment_path) {
     try {
       const { data: blob, error: dlErr } = await db.storage
@@ -247,27 +297,23 @@ export async function pushQueueRowToXero(queueId) {
         .download(row.attachment_path)
       if (dlErr || !blob) throw new Error(dlErr?.message || 'storage download returned no file')
       const bytes = Buffer.from(await blob.arrayBuffer())
-      await attachInvoiceFile(xfetch, inv.InvoiceID, {
-        filename: row.attachment_filename || `invoice-${fields.invoice_number || inv.InvoiceID}.pdf`,
-        mimeType: row.attachment_mime_type,
+      const fname = row.attachment_filename || `invoice-${fields.invoice_number || billId}`
+      await attachInvoiceFile(xfetch, billId, {
+        filename: fname,
+        mimeType: row.attachment_mime_type || inferMimeFromName(fname),
         bytes,
       })
     } catch (e) {
-      console.warn(`[push-xero ${queueId}] attachment upload failed (bill ${inv.InvoiceID} still created): ${e?.message || e}`)
+      attachmentError = e?.message || String(e)
+      console.warn(`[push-xero ${queueId}] attachment upload failed (bill ${billId} created): ${attachmentError}`)
     }
   }
 
-  // Deep link — Xero's stable Bills-to-pay URL pattern. This
-  // works when the user already has the right tenant active in
-  // Xero (the common case). For users who are members of multiple
-  // tenants Xero will prompt them to switch; that's acceptable
-  // since most operators have a single tenant active at a time.
-  const deepLinkUrl = `https://go.xero.com/AccountsPayable/View.aspx?InvoiceID=${inv.InvoiceID}`
-
   return {
-    billId: inv.InvoiceID,
-    billNumber: inv.InvoiceNumber || fields.invoice_number || null,
+    billId,
+    billNumber,
     deepLinkUrl,
+    attachmentError,
     sentTo: conn?.tenant_name || conn?.tenant_id || null,
   }
 }

@@ -106,6 +106,29 @@ export async function POST(_request, { params }) {
     return NextResponse.json({ success: false, error: msg }, { status: 502 })
   }
 
+  // The bill was created in Xero, but the source file failed to
+  // attach. Do NOT mark it forwarded — the source must travel to Xero
+  // (the CRM is the sole path now that Dext is being retired). Persist
+  // the bill id (so a retry re-attaches to the SAME bill instead of
+  // creating a duplicate) and surface the reason; the row stays in
+  // data_approved with a Retry button.
+  if (pushResult.attachmentError) {
+    await db
+      .from('invoices_queue')
+      .update({
+        xero_bill_id: pushResult.billId,
+        xero_bill_number: pushResult.billNumber,
+        xero_deep_link_url: pushResult.deepLinkUrl,
+        xero_synced_at: new Date().toISOString(),
+        xero_error: `Bill created in Xero, but attaching the source file failed: ${pushResult.attachmentError}. Click "Retry send to Xero" to attach it.`,
+      })
+      .eq('id', id)
+    return NextResponse.json({
+      success: false,
+      error: `Bill created in Xero, but the source file didn't attach: ${pushResult.attachmentError}. Retry to attach it.`,
+    }, { status: 502 })
+  }
+
   // Stamp success state with the bill_id + deep link.
   const { data: updated, error: updErr } = await db
     .from('invoices_queue')
