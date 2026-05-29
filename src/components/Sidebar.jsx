@@ -446,7 +446,7 @@ export default function Sidebar({ user, mobileOpen = false, onMobileClose }) {
       {/* Navigation — Dashboard pinned at top, then labelled sections.
           A section header renders only when the section has at least one
           item visible to this user (no empty headers). */}
-      <nav className="flex-1 py-4">
+      <nav className="flex-1 min-h-0 overflow-y-auto py-4">
         {nav.filter((item) => !item.section).map(renderNavItem)}
         {NAV_SECTIONS.map((section) => {
           const items = nav.filter((item) => item.section === section.id)
