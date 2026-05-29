@@ -81,6 +81,23 @@ const SOURCE_TYPE_TONE = {
   car_document:       'bg-teal-500/20 text-teal-300 border-teal-500/40',
 }
 
+// INVOICES — order-insensitive comparison for the edit form's dirty
+// check. extracted_fields is stored as jsonb, which normalises (re-
+// orders) object keys on round-trip, so a plain JSON.stringify compare
+// reports a saved row as still "dirty" and leaves Approve disabled.
+// Canonicalise (recursively sort object keys; preserve array order)
+// before comparing so only real value changes count as dirty.
+function canonicaliseFields(v) {
+  if (Array.isArray(v)) return v.map(canonicaliseFields)
+  if (v && typeof v === 'object') {
+    return Object.keys(v).sort().reduce((o, k) => { o[k] = canonicaliseFields(v[k]); return o }, {})
+  }
+  return v
+}
+function fieldsEqual(a, b) {
+  return JSON.stringify(canonicaliseFields(a)) === JSON.stringify(canonicaliseFields(b))
+}
+
 function formatBytes(n) {
   if (!n) return '—'
   if (n < 1024) return `${n} B`
@@ -862,7 +879,7 @@ function StageTwoBlock({ row, busy, onSaveFields, onApprove, onReject }) {
   const [fields, setFields] = useState(initial)
   const [showRejectForm, setShowRejectForm] = useState(false)
   const [reason, setReason] = useState('')
-  const dirty = JSON.stringify(fields) !== JSON.stringify(initial)
+  const dirty = !fieldsEqual(fields, initial)
   // Reset the edit form only when a DIFFERENT row is selected — never
   // on a background refresh. INV-BULK.3's queue polling replaces the
   // rows array (new extracted_fields object refs) every 5s while a
