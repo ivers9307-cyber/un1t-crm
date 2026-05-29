@@ -11,19 +11,33 @@ import { View, Text, Pressable, ActivityIndicator } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
 import { useState } from 'react'
+import { useRouter } from 'expo-router'
 import { useAuth } from '../lib/auth-context'
 
 export default function ImpersonateBanner() {
   const { impersonatingFrom, profile, stopImpersonation } = useAuth()
   const [stopping, setStopping] = useState(false)
+  const router = useRouter()
 
   if (!impersonatingFrom) return null
 
   async function handleStop() {
     if (stopping) return
     setStopping(true)
+    // Navigate to the master's own profile (the More tab) BEFORE ending
+    // the session. Stopping reloads the master's profile, which changes
+    // which tabs/routes exist (Expenses, Invoices, Studio appear or
+    // disappear with role + employment_type). If the user is left on a
+    // route that no longer exists for their own account, expo-router
+    // crashes — the focused route gets removed underneath it. More is
+    // unconditional, so landing there first is always safe and matches
+    // the expected "back to my profile" behaviour.
+    router.replace('/(tabs)/more')
     try {
       await stopImpersonation()
+    } catch {
+      // A failed stop shouldn't crash the app; the banner stays up so
+      // the user can retry.
     } finally {
       setStopping(false)
     }
