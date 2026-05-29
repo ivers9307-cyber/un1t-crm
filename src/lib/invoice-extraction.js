@@ -368,3 +368,25 @@ export async function extractInvoiceFields(documentId) {
   const bytes = Buffer.from(dl.base64, 'base64')
   return extractInvoiceFieldsFromBytes(bytes, dl.mediaType)
 }
+
+/**
+ * Confidence hint for extracted fields — 'high' when every required
+ * field is present AND subtotal + tax reconciles to total within €0.01,
+ * else 'medium'. Pure; the operator always reviews regardless, so this
+ * only drives a UI badge. Single source of truth for the heuristic that
+ * the /extract, bulk-analyse, and cron drainer paths all use.
+ *
+ * @param {object} f  extracted fields
+ * @returns {'high'|'medium'}
+ */
+export function scoreExtractionConfidence(f) {
+  const fields = f || {}
+  const reconciles =
+    Math.abs((Number(fields.subtotal) + Number(fields.tax_amount)) - Number(fields.total)) <= 0.01
+  const allRequired =
+    Boolean(fields.supplier_name) &&
+    Boolean(fields.invoice_number) &&
+    Boolean(fields.invoice_date) &&
+    Number.isFinite(Number(fields.total))
+  return allRequired && reconciles ? 'high' : 'medium'
+}

@@ -10,7 +10,7 @@
 // out of scope here — those are I/O paths covered by smoke tests.
 
 import { describe, it, expect } from 'vitest'
-import { invoiceFieldsSchema } from './invoice-extraction.js'
+import { invoiceFieldsSchema, scoreExtractionConfidence } from './invoice-extraction.js'
 
 describe('invoiceFieldsSchema', () => {
   const valid = {
@@ -105,5 +105,30 @@ describe('invoiceFieldsSchema', () => {
     })
     expect(r.success).toBe(true)
     expect(r.data.line_items[0].account_code).toBe('310')
+  })
+})
+
+describe('scoreExtractionConfidence', () => {
+  const high = { supplier_name: 'Acme', invoice_number: 'INV-1', invoice_date: '2026-05-17', subtotal: 100, tax_amount: 23, total: 123 }
+
+  it('high when all required present and subtotal+tax == total', () => {
+    expect(scoreExtractionConfidence(high)).toBe('high')
+  })
+  it('tolerates a 1-cent rounding difference', () => {
+    expect(scoreExtractionConfidence({ ...high, total: 123.009 })).toBe('high')
+  })
+  it('medium when the maths does not reconcile', () => {
+    expect(scoreExtractionConfidence({ ...high, total: 130 })).toBe('medium')
+  })
+  it('medium when a required field is missing', () => {
+    expect(scoreExtractionConfidence({ ...high, invoice_number: '' })).toBe('medium')
+    expect(scoreExtractionConfidence({ ...high, supplier_name: undefined })).toBe('medium')
+  })
+  it('medium when total is not a finite number', () => {
+    expect(scoreExtractionConfidence({ ...high, total: 'abc' })).toBe('medium')
+  })
+  it('never throws on empty/garbage input', () => {
+    expect(scoreExtractionConfidence(undefined)).toBe('medium')
+    expect(scoreExtractionConfidence({})).toBe('medium')
   })
 })
