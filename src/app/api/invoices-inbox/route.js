@@ -80,6 +80,7 @@ export async function GET(request) {
       status, received_at,
       quality_reviewed_at, quality_reviewed_by,
       extracted_at, extraction_confidence, extraction_error,
+      analysis_queued_at, analysis_claimed_at,
       data_reviewed_at, data_reviewed_by,
       forwarded_at, rejected_at,
       reject_reason, rejected_stage,

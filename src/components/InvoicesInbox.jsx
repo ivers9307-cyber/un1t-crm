@@ -126,8 +126,8 @@ export default function InvoicesInbox({ locations, isMaster, isBookkeeper = fals
     [sourceTab],
   )
 
-  const loadRows = useCallback(async () => {
-    setLoading(true)
+  const loadRows = useCallback(async (opts = {}) => {
+    if (!opts.silent) setLoading(true)
     setError(null)
     try {
       const params = new URLSearchParams()
@@ -174,6 +174,16 @@ export default function InvoicesInbox({ locations, isMaster, isBookkeeper = fals
   }, [focusId, loading])
 
   const selected = rows.find((r) => r.id === selectedId) || null
+
+  // INV-BULK.3 — while any visible row is queued or mid-analysis,
+  // poll silently every 5s so the operator watches the queue drain
+  // (received/quality_approved → extracted) without manual refresh.
+  const queueActive = useMemo(() => rows.some((r) => r.analysis_queued_at), [rows])
+  useEffect(() => {
+    if (!queueActive) return
+    const t = setInterval(() => { loadRows({ silent: true }) }, 5000)
+    return () => clearInterval(t)
+  }, [queueActive, loadRows])
 
   // Tab counts — quick lookup so each tab's badge reflects pending
   // work without re-fetching per tab. We re-derive whenever rows
@@ -230,7 +240,11 @@ export default function InvoicesInbox({ locations, isMaster, isBookkeeper = fals
   )
 
   return (
-    <div className="space-y-6">
+    // INV-BULK.3 — reserve space at the bottom while the fixed bulk
+    // action bar is shown, so it never covers the detail panel's lower
+    // fields (e.g. the Xero supplier picker) and the page can scroll
+    // everything clear of it.
+    <div className={`space-y-6 ${isBookkeeper && bulkSelection.size > 0 ? 'pb-44' : ''}`}>
       <ForwardingAddresses locations={locations} />
       <BulkUploadPanel
         locations={locations}
@@ -327,7 +341,7 @@ export default function InvoicesInbox({ locations, isMaster, isBookkeeper = fals
           busy={bulkBusy}
           error={bulkError}
           summary={bulkSummary}
-          onAnalyse={() => runBulk('analyse', { ids: Array.from(bulkSelection) })}
+          onQueueAnalyse={() => runBulk('queue-analysis', { ids: Array.from(bulkSelection) })}
           onSend={() => runBulk('send', { ids: Array.from(bulkSelection) })}
           onReject={(reason) => runBulk('reject', { ids: Array.from(bulkSelection), reason })}
           onClear={clearSelection}
@@ -365,11 +379,28 @@ function InboxList({
   bulkSelection, onToggleSelect, onSelectAll, onClearSelection,
 }) {
   const allVisibleSelected = rows.length > 0 && rows.every((r) => bulkSelection.has(r.id))
+  // INV-BULK.3 — live queue progress across the visible list.
+  const queueProgress = rows.reduce(
+    (acc, r) => {
+      if (!r.analysis_queued_at) return acc
+      acc.total++
+      if (r.analysis_claimed_at) acc.analysing++
+      else acc.queued++
+      return acc
+    },
+    { total: 0, queued: 0, analysing: 0 },
+  )
   return (
     <aside className="border border-un1t-border rounded-lg overflow-hidden">
       <header className="px-3 py-2 border-b border-un1t-border flex items-center justify-between gap-2">
         <span className="text-xs uppercase tracking-wide text-un1t-subtle">
           {loading ? 'Loading…' : `${rows.length} ${rows.length === 1 ? 'item' : 'items'}`}
+          {queueProgress.total > 0 && (
+            <span className="ml-2 normal-case tracking-normal text-un1t-text">
+              · {queueProgress.analysing > 0 ? `${queueProgress.analysing} analysing, ` : ''}
+              {queueProgress.queued} queued
+            </span>
+          )}
         </span>
         {isBookkeeper && rows.length > 0 && (
           <button
@@ -415,7 +446,7 @@ function InboxList({
                     <div className="text-sm font-medium text-un1t-text truncate">
                       {r.extracted_fields?.supplier_name || r.sender_email || '(no sender)'}
                     </div>
-                    <StatusPill status={r.status} stage={r.rejected_stage} />
+                    <StatusPill status={r.status} stage={r.rejected_stage} queuedAt={r.analysis_queued_at} claimedAt={r.analysis_claimed_at} />
                   </div>
                   <div className="text-xs text-un1t-subtle truncate mt-1">
                     {r.subject || r.attachment_filename || '(no subject)'}
@@ -449,7 +480,7 @@ function SourceTypePill({ source }) {
 
 function BulkActionBar({
   selectedCount, selectedRows, busy, error, summary,
-  onAnalyse, onSend, onReject, onClear,
+  onQueueAnalyse, onSend, onReject, onClear,
 }) {
   const [showRejectForm, setShowRejectForm] = useState(false)
   const [rejectReason, setRejectReason] = useState('')
@@ -457,15 +488,19 @@ function BulkActionBar({
   // Per-action eligibility — the backend skips bad rows anyway, but
   // disabling the buttons when zero selected rows match the action's
   // legal states is friendlier UX.
-  const analysableCount = selectedRows.filter((r) =>
-    ['quality_approved', 'extracted'].includes(r.status)).length
+  // Queueable for background analysis: 'received' (the operator's
+  // selection vouches for quality) and 'quality_approved' not
+  // already in flight. Re-queuing a row that previously errored is
+  // allowed — the cron cleared its queue flags on failure.
+  const queueableCount = selectedRows.filter((r) =>
+    ['received', 'quality_approved'].includes(r.status) && !r.analysis_claimed_at).length
   const sendableCount = selectedRows.filter((r) =>
     ['extracted', 'data_approved'].includes(r.status) && r.extracted_fields).length
   const rejectableCount = selectedRows.filter((r) =>
     ['received', 'quality_approved', 'extracted', 'data_approved'].includes(r.status)).length
 
   return (
-    <div className="fixed inset-x-0 bottom-0 z-40 border-t border-un1t-border bg-un1t-bg/95 backdrop-blur p-4">
+    <div className="fixed inset-x-0 bottom-0 z-40 border-t border-un1t-border bg-un1t-bg/95 backdrop-blur p-4 max-h-[60vh] overflow-y-auto">
       <div className="max-w-7xl mx-auto flex items-center gap-3 flex-wrap">
         <span className="text-sm text-un1t-text font-medium">
           {selectedCount} selected
@@ -474,12 +509,12 @@ function BulkActionBar({
         <div className="flex items-center gap-2 ml-auto flex-wrap">
           <button
             type="button"
-            disabled={analysableCount === 0 || !!busy}
-            onClick={onAnalyse}
+            disabled={queueableCount === 0 || !!busy}
+            onClick={onQueueAnalyse}
             className="px-3 py-1.5 text-sm rounded-md border border-un1t-border text-un1t-text disabled:opacity-40"
-            title={analysableCount === 0 ? 'No selected rows are eligible for analysis' : ''}
+            title={queueableCount === 0 ? 'No selected rows are eligible for analysis' : 'Queues these for background extraction'}
           >
-            {busy === 'analyse' ? 'Analysing…' : `Analyse (${analysableCount})`}
+            {busy === 'queue-analysis' ? 'Queuing…' : `Send for analysis (${queueableCount})`}
           </button>
           <button
             type="button"
@@ -546,7 +581,15 @@ function BulkActionBar({
   )
 }
 
-function StatusPill({ status, stage }) {
+function StatusPill({ status, stage, queuedAt = null, claimedAt = null }) {
+  // INV-BULK.3 — a row queued for background analysis sits in
+  // 'quality_approved'; surface the live sub-state instead of the
+  // static label so the operator sees it move through the queue.
+  if (queuedAt && (status === 'quality_approved' || status === 'received')) {
+    return claimedAt
+      ? <span className="text-[10px] uppercase tracking-wide border rounded px-1.5 py-0.5 whitespace-nowrap bg-blue-500/20 text-blue-300 border-blue-500/40 animate-pulse">Analysing…</span>
+      : <span className="text-[10px] uppercase tracking-wide border rounded px-1.5 py-0.5 whitespace-nowrap bg-amber-500/20 text-amber-300 border-amber-500/40">Queued</span>
+  }
   const map = {
     received:         { label: 'Awaiting review',  cls: 'bg-yellow-500/20 text-yellow-300 border-yellow-500/40' },
     quality_approved: { label: 'Awaiting extract', cls: 'bg-blue-500/20 text-blue-300 border-blue-500/40' },
@@ -699,7 +742,7 @@ function DetailHeader({ row }) {
         <h2 className="text-lg font-semibold text-un1t-text">
           {row.extracted_fields?.supplier_name || row.sender_email || '(no sender)'}
         </h2>
-        <StatusPill status={row.status} stage={row.rejected_stage} />
+        <StatusPill status={row.status} stage={row.rejected_stage} queuedAt={row.analysis_queued_at} claimedAt={row.analysis_claimed_at} />
       </div>
       <p className="text-sm text-un1t-subtle">{row.subject || '(no subject)'}</p>
       <p className="text-xs text-un1t-subtle">
