@@ -104,6 +104,14 @@ export async function POST(request) {
     } catch (e) {
       const msg = e instanceof XeroError ? e.message : (e?.message || String(e))
       await db.from('invoices_queue').update({ xero_error: msg }).eq('id', id)
+      // A bill that already exists in Xero isn't a failure — it's a
+      // duplicate we deliberately skipped. Surface it as its own outcome
+      // so the bulk summary doesn't alarm the operator with a big
+      // 'failed' count, and they can clear these with 'Mark as in Xero'.
+      if (e instanceof XeroError && e.code === 'already_in_xero') {
+        results.push({ id, outcome: 'already_in_xero', note: msg })
+        continue
+      }
       results.push({ id, outcome: 'failed', error: msg, retry_state: 'data_approved' })
       continue
     }
