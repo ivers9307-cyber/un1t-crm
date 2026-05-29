@@ -67,6 +67,17 @@ const STATUS_FILTERS = [
   { key: 'all',       label: 'All',             statuses: null },
 ]
 
+// Human-friendly labels for bulk-action outcome keys in the summary.
+const OUTCOME_LABEL = {
+  ok: 'sent',
+  linked: 'linked to Xero',
+  already_in_xero: 'already in Xero',
+  queued: 'queued',
+  skipped: 'skipped',
+  failed: 'failed',
+  rejected: 'rejected',
+}
+
 const SOURCE_TYPE_LABEL = {
   supplier_email: 'Supplier email',
   contractor_invoice: 'Contractor invoice',
@@ -360,6 +371,7 @@ export default function InvoicesInbox({ locations, isMaster, isBookkeeper = fals
           summary={bulkSummary}
           onQueueAnalyse={() => runBulk('queue-analysis', { ids: Array.from(bulkSelection) })}
           onSend={() => runBulk('send', { ids: Array.from(bulkSelection) })}
+          onMarkInXero={() => runBulk('mark-in-xero', { ids: Array.from(bulkSelection) })}
           onReject={(reason) => runBulk('reject', { ids: Array.from(bulkSelection), reason })}
           onClear={clearSelection}
         />
@@ -497,7 +509,7 @@ function SourceTypePill({ source }) {
 
 function BulkActionBar({
   selectedCount, selectedRows, busy, error, summary,
-  onQueueAnalyse, onSend, onReject, onClear,
+  onQueueAnalyse, onSend, onMarkInXero, onReject, onClear,
 }) {
   const [showRejectForm, setShowRejectForm] = useState(false)
   const [rejectReason, setRejectReason] = useState('')
@@ -515,6 +527,10 @@ function BulkActionBar({
     ['extracted', 'data_approved'].includes(r.status) && r.extracted_fields).length
   const rejectableCount = selectedRows.filter((r) =>
     ['received', 'quality_approved', 'extracted', 'data_approved'].includes(r.status)).length
+  // INV-RECONCILE.1 — rows that can be reconciled as 'already in Xero'
+  // (clears duplicates the send path skipped). Same legal states as send.
+  const markableCount = selectedRows.filter((r) =>
+    ['extracted', 'data_approved'].includes(r.status) && r.extracted_fields).length
 
   return (
     <div className="fixed inset-x-0 bottom-0 z-40 border-t border-un1t-border bg-un1t-bg/95 backdrop-blur p-4 max-h-[60vh] overflow-y-auto">
@@ -541,6 +557,15 @@ function BulkActionBar({
             title={sendableCount === 0 ? 'No selected rows have extracted fields ready to send' : ''}
           >
             {busy === 'send' ? 'Sending…' : `Send to Xero (${sendableCount})`}
+          </button>
+          <button
+            type="button"
+            disabled={markableCount === 0 || !!busy}
+            onClick={onMarkInXero}
+            className="px-3 py-1.5 text-sm rounded-md border border-un1t-border text-un1t-subtle disabled:opacity-40"
+            title={markableCount === 0 ? 'No selected rows to reconcile' : 'For invoices already in Xero (e.g. via Dext): links each to its existing Xero bill and clears it from the queue. Never creates a duplicate.'}
+          >
+            {busy === 'mark-in-xero' ? 'Reconciling…' : `Mark as in Xero (${markableCount})`}
           </button>
           <button
             type="button"
@@ -590,7 +615,7 @@ function BulkActionBar({
         <div className="max-w-7xl mx-auto mt-3 border border-un1t-border rounded-lg p-2 text-xs text-un1t-subtle flex flex-wrap gap-3">
           <strong className="text-un1t-text">{summary.action} result:</strong>
           {Object.entries(summary.counts || {}).map(([k, v]) => (
-            <span key={k}>{k}: <strong className="text-un1t-text">{v}</strong></span>
+            <span key={k}>{OUTCOME_LABEL[k] || k}: <strong className="text-un1t-text">{v}</strong></span>
           ))}
         </div>
       )}

@@ -81,11 +81,12 @@ export function flattenXeroValidationErrors(json) {
 }
 
 export class XeroError extends Error {
-  constructor(message, { status, body, cause } = {}) {
+  constructor(message, { status, body, cause, code } = {}) {
     super(message)
     this.name = 'XeroError'
     this.status = status
     this.body = body
+    this.code = code  // machine-readable tag, e.g. 'already_in_xero'
     if (cause) this.cause = cause
   }
 }

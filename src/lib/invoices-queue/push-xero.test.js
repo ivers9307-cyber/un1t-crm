@@ -53,7 +53,7 @@ const mockDb = {
 }
 vi.mock('@/lib/supabase', () => ({ createServerClient: () => mockDb }))
 
-let pushQueueRowToXero, buildBillPayload
+let pushQueueRowToXero, buildBillPayload, findXeroBillByNumber
 beforeEach(async () => {
   vi.resetModules()
   xfetchMock.mockReset()
@@ -62,7 +62,7 @@ beforeEach(async () => {
   nextRowError = null
   dbCaptured.upserts = []
   dbCaptured.updates = []
-  ;({ pushQueueRowToXero, buildBillPayload } = await import('./push-xero'))
+  ;({ pushQueueRowToXero, buildBillPayload, findXeroBillByNumber } = await import('./push-xero'))
 })
 
 // ----- buildBillPayload (pure) -----------------------------
@@ -288,5 +288,26 @@ describe('pushQueueRowToXero — duplicate guard', () => {
     expect(r.deepLinkUrl).toContain('InvoiceID=INV-PRIOR')
     // No Xero calls at all (no attachment on this row) — never re-creates.
     expect(xfetchMock.mock.calls.some((c) => c[0] === '/Invoices')).toBe(false)
+  })
+})
+
+describe('findXeroBillByNumber', () => {
+  it('returns the matching ACCPAY bill', async () => {
+    xfetchMock.mockResolvedValueOnce({ Invoices: [{ InvoiceID: 'X1', InvoiceNumber: 'INV-9', Status: 'AUTHORISED' }] })
+    const m = await findXeroBillByNumber(xfetchMock, 'INV-9')
+    expect(m.InvoiceID).toBe('X1')
+    expect(xfetchMock.mock.calls[0][0]).toContain('/Invoices?where=')
+  })
+  it('returns null when nothing matches', async () => {
+    xfetchMock.mockResolvedValueOnce({ Invoices: [] })
+    expect(await findXeroBillByNumber(xfetchMock, 'NOPE')).toBeNull()
+  })
+  it('returns null (no call) for an empty number', async () => {
+    expect(await findXeroBillByNumber(xfetchMock, '')).toBeNull()
+    expect(xfetchMock).not.toHaveBeenCalled()
+  })
+  it('treats a 404 as no match', async () => {
+    xfetchMock.mockRejectedValueOnce(Object.assign(new Error('nope'), { status: 404 }))
+    expect(await findXeroBillByNumber(xfetchMock, 'INV-X')).toBeNull()
   })
 })

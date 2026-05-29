@@ -45,6 +45,25 @@ function inferMimeFromName(name) {
   }[ext] || 'application/octet-stream'
 }
 
+// Look up an existing Xero ACCPAY bill by its supplier invoice number.
+// Returns the matching Xero invoice ({ InvoiceID, InvoiceNumber, Status,
+// ... }) or null. Shared by the create-time duplicate guard and the
+// bulk "mark as already in Xero" reconciliation endpoint.
+export async function findXeroBillByNumber(xfetch, invoiceNumber) {
+  const num = (invoiceNumber || '').trim()
+  if (!num) return null
+  const where = encodeURIComponent(`Type=="ACCPAY" AND InvoiceNumber=="${escapeWhereString(num)}"`)
+  const res = await xfetch(`/Invoices?where=${where}`).catch((e) => {
+    if (e.status === 404) return null
+    throw e
+  })
+  return (res?.Invoices || []).find((i) => (i.InvoiceNumber || '') === num) || null
+}
+
+export function xeroBillDeepLink(invoiceId) {
+  return `https://go.xero.com/AccountsPayable/View.aspx?InvoiceID=${invoiceId}`
+}
+
 /**
  * Resolve the xero_contact_ref to a concrete ContactID.
  *   - kind='existing' → return the stored xero_contact_id directly.
@@ -230,7 +249,7 @@ export async function pushQueueRowToXero(queueId) {
   // right tenant_id.
   const { conn, xfetch } = await withFreshToken(row.location_id)
 
-  const deepLink = (id) => `https://go.xero.com/AccountsPayable/View.aspx?InvoiceID=${id}`
+  const deepLink = xeroBillDeepLink
 
   let billId = row.xero_bill_id || null
   let billNumber = row.xero_bill_number || fields.invoice_number || null
@@ -241,20 +260,12 @@ export async function pushQueueRowToXero(queueId) {
     // already exists in Xero — a prior orphaned push, a manual entry,
     // or (during the Dext migration) one Dext already created. Policy
     // is SKIP + FLAG: never touch the existing bill.
-    const num = (fields.invoice_number || '').trim()
-    if (num) {
-      const where = encodeURIComponent(`Type=="ACCPAY" AND InvoiceNumber=="${escapeWhereString(num)}"`)
-      const existing = await xfetch(`/Invoices?where=${where}`).catch((e) => {
-        if (e.status === 404) return null
-        throw e
-      })
-      const match = (existing?.Invoices || []).find((i) => (i.InvoiceNumber || '') === num)
-      if (match) {
-        throw new XeroError(
-          `Already in Xero as bill ${match.InvoiceNumber} (status ${match.Status}). Skipped to avoid a duplicate — open it in Xero to reconcile, or reject this row.`,
-          { status: 409, body: match },
-        )
-      }
+    const match = await findXeroBillByNumber(xfetch, fields.invoice_number)
+    if (match) {
+      throw new XeroError(
+        `Already in Xero as bill ${match.InvoiceNumber} (status ${match.Status}). Skipped to avoid a duplicate — open it in Xero to reconcile, or reject this row.`,
+        { status: 409, code: 'already_in_xero', body: match },
+      )
     }
 
     // Resolve / create the supplier contact (only needed to create).
