@@ -10,7 +10,7 @@
 // out of scope here — those are I/O paths covered by smoke tests.
 
 import { describe, it, expect } from 'vitest'
-import { invoiceFieldsSchema, scoreExtractionConfidence } from './invoice-extraction.js'
+import { invoiceFieldsSchema, scoreExtractionConfidence, applyDueDateDefault } from  './invoice-extraction.js'
 
 describe('invoiceFieldsSchema', () => {
   const valid = {
@@ -130,5 +130,27 @@ describe('scoreExtractionConfidence', () => {
   it('never throws on empty/garbage input', () => {
     expect(scoreExtractionConfidence(undefined)).toBe('medium')
     expect(scoreExtractionConfidence({})).toBe('medium')
+  })
+})
+
+describe('applyDueDateDefault', () => {
+  it('fills a missing due_date with issue date + 30 days', () => {
+    const out = applyDueDateDefault({ invoice_date: '2026-05-07', due_date: null })
+    expect(out.due_date).toBe('2026-06-06')
+  })
+  it('replaces a due_date that merely echoes the issue date', () => {
+    const out = applyDueDateDefault({ invoice_date: '2026-05-07', due_date: '2026-05-07' })
+    expect(out.due_date).toBe('2026-06-06')
+  })
+  it('leaves a genuinely different due_date untouched', () => {
+    const out = applyDueDateDefault({ invoice_date: '2026-05-07', due_date: '2026-05-21' })
+    expect(out.due_date).toBe('2026-05-21')
+  })
+  it('handles month/year rollover', () => {
+    expect(applyDueDateDefault({ invoice_date: '2026-12-20', due_date: null }).due_date).toBe('2027-01-19')
+  })
+  it('no-ops when there is no invoice_date', () => {
+    const f = { invoice_date: null, due_date: null }
+    expect(applyDueDateDefault(f)).toBe(f)
   })
 })

@@ -680,8 +680,12 @@ function InboxDetail({ row, onChanged }) {
       const j = await res.json()
       if (!j.success) throw new Error(j.error || 'Save failed')
       onChanged()
+      // Return the server's canonical stored fields so the editor can
+      // resync — keeps the dirty check accurate after any normalisation.
+      return j.data?.extracted_fields || extracted_fields
     } catch (e) {
       setActionError(e.message)
+      return null
     } finally {
       setBusy(null)
     }
@@ -1004,7 +1008,7 @@ function StageTwoBlock({ row, busy, onSaveFields, onApprove, onReject }) {
           // Successfully forwarded rows stay frozen (isApproved without
           // an error is the post-send state and never reaches here).
           disabled={!dirty || !!busy || (isApproved && !row.xero_error)}
-          onClick={() => onSaveFields(fields)}
+          onClick={async () => { const saved = await onSaveFields(fields); if (saved) setFields(saved) }}
           className="px-4 py-2 rounded-md border border-un1t-border text-un1t-text disabled:opacity-50"
         >
           {busy === 'fields' ? 'Saving…' : 'Save edits'}
@@ -1019,16 +1023,26 @@ function StageTwoBlock({ row, busy, onSaveFields, onApprove, onReject }) {
           if (!hasAccount) missing.push('Xero account')
           if (!hasContact) missing.push('Xero supplier')
           const gate = missing.length > 0
-          const title = dirty
-            ? 'Save edits before approving'
-            : gate
-              ? `Pick a ${missing.join(' + ')} before sending`
-              : ''
+          const title = gate
+            ? `Pick a ${missing.join(' + ')} before sending`
+            : (dirty ? 'Saves your edits, then sends to Xero' : '')
+          // Auto-save any unsaved edits before sending. The data-approve
+          // route reads extracted_fields from the DB, so we must persist
+          // first — doing it here means the operator picks supplier +
+          // account and clicks one button instead of Save-then-Approve.
+          const approve = async () => {
+            if (dirty) {
+              const saved = await onSaveFields(fields)
+              if (!saved) return   // save failed — error already surfaced
+              setFields(saved)
+            }
+            onApprove()
+          }
           return (
             <button
               type="button"
-              disabled={dirty || !!busy || gate}
-              onClick={onApprove}
+              disabled={!!busy || gate}
+              onClick={approve}
               className="px-4 py-2 rounded-md bg-un1t-text text-un1t-bg font-medium disabled:opacity-50"
               title={title}
             >
