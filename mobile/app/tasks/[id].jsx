@@ -17,6 +17,7 @@ import { useLocalSearchParams, useRouter, Stack } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { getTask, setTaskStatus, statusLabel, nextStatus } from '../../lib/tasks-api'
 import BackHeaderLeft from '../../components/BackHeaderLeft'
+import { colors } from '../../lib/colors'
 
 function StatusPill({ status }) {
   const tone =
@@ -114,7 +115,7 @@ export default function TaskDetail() {
     return (
       <View className="flex-1 bg-un1t-bg items-center justify-center px-6">
         <Stack.Screen options={{ ...headerOptions, title: 'Task' }} />
-        <Ionicons name="alert-circle-outline" size={28} color="#DC2626" />
+        <Ionicons name="alert-circle-outline" size={28} color={colors.semantic.danger} />
         <Text className="text-base text-un1t-text mt-2">{error || 'Task not found'}</Text>
         <Pressable
           onPress={() => router.back()}
@@ -137,7 +138,7 @@ export default function TaskDetail() {
       <ScrollView
         contentContainerClassName="px-4 pt-4 pb-32"
         refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#111827" />
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.text} />
         }
       >
         <StatusPill status={task.status} />
@@ -147,7 +148,7 @@ export default function TaskDetail() {
         <View className="bg-un1t-surface border border-un1t-border rounded-2xl p-4 mt-4">
           {task.due_date && (
             <View className="flex-row items-center mb-2">
-              <Ionicons name="calendar-outline" size={16} color="#94A3B8" />
+              <Ionicons name="calendar-outline" size={16} color={colors.muted} />
               <Text className="text-sm text-un1t-text ml-2">
                 Due {task.due_date}{task.due_time ? ` · ${String(task.due_time).slice(0,5)}` : ''}
               </Text>
@@ -155,7 +156,7 @@ export default function TaskDetail() {
           )}
           {task.priority && (
             <View className="flex-row items-center mb-2">
-              <Ionicons name="flag-outline" size={16} color="#94A3B8" />
+              <Ionicons name="flag-outline" size={16} color={colors.muted} />
               <Text className="text-sm text-un1t-text ml-2 capitalize">
                 {task.priority} priority
               </Text>
@@ -163,13 +164,13 @@ export default function TaskDetail() {
           )}
           {task.project && (
             <View className="flex-row items-center mb-2">
-              <Ionicons name="pricetag-outline" size={16} color="#94A3B8" />
+              <Ionicons name="pricetag-outline" size={16} color={colors.muted} />
               <Text className="text-sm text-un1t-text ml-2">#{task.project}</Text>
             </View>
           )}
           {task.assignee && (
             <View className="flex-row items-center">
-              <Ionicons name="person-outline" size={16} color="#94A3B8" />
+              <Ionicons name="person-outline" size={16} color={colors.muted} />
               <Text className="text-sm text-un1t-text ml-2">
                 {task.assignee.full_name}
               </Text>
@@ -219,8 +220,8 @@ export default function TaskDetail() {
           className="bg-un1t-text active:opacity-80 disabled:opacity-50 px-4 py-3.5 rounded-xl items-center flex-row justify-center"
         >
           {busy
-            ? <ActivityIndicator color="#111827" />
-            : <Ionicons name={task.status === 'done' ? 'refresh' : 'checkmark'} size={18} color="#111827" />}
+            ? <ActivityIndicator color={colors.text} />
+            : <Ionicons name={task.status === 'done' ? 'refresh' : 'checkmark'} size={18} color={colors.text} />}
           <Text className="text-base font-semibold text-un1t-bg ml-2">
             {busy ? 'Saving…' : ctaLabel}
           </Text>
