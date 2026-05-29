@@ -29,6 +29,7 @@
 import {
   MOBILE_PERMISSION_KEYS,
   CROSS_PLATFORM_DASHBOARD_KEYS,
+  CROSS_PLATFORM_KEYS,
   DEFAULT_MOBILE_PERMISSIONS_BY_ROLE, DEFAULT_WEB_PERMISSIONS_BY_ROLE,
   resolvePermission,
 } from '../../shared/permissions'
@@ -65,7 +66,18 @@ export {
  */
 export function canMobile(profile, key, activeLocation = null) {
   if (!profile) return false
-  // Mobile keys live under .mobile in the assignment's permissions
+  // Cross-platform keys (e.g. studio_management — mig 093) live at the
+  // TOP LEVEL of the permissions blob with the WEB defaults: one toggle
+  // governs both web and mobile. They have NO entry in the .mobile
+  // namespace or the mobile defaults map, so resolving them here would
+  // always return false for non-master roles (master short-circuits) —
+  // which is why a head_coach with studio_management ON for the web
+  // sidebar still didn't get the mobile Studio tab. Route them to the
+  // canonical top-level resolver instead.
+  if (CROSS_PLATFORM_KEYS.includes(key)) {
+    return canDashboard(profile, key, activeLocation)
+  }
+  // Mobile-only keys live under .mobile in the assignment's permissions
   // blob. Hand the canonical resolver the namespaced bag.
   return resolvePermission({
     role: profile.role,
