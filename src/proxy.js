@@ -79,7 +79,7 @@ export async function proxy(request) {
   // display moves here too). TV browsers don't have CRM accounts
   // and shouldn't need them; the API endpoints under /api/public/
   // expose only display-safe data.
-  const publicPaths = ['/login', '/reset-password', '/book/', '/event/', '/tv/', '/api/public/', '/unsubscribe/', '/preferences/', '/api/unsubscribe/', '/api/preferences/', '/api/webhooks/', '/api/cron/', '/deposit/', '/welcome', '/studio-login', '/api/auth/pin-login', '/api/auth/studio-heartbeat', '/api/auth/studio-signout']
+  const publicPaths = ['/login', '/reset-password', '/book/', '/event/', '/event-pay/', '/tv/', '/api/public/', '/unsubscribe/', '/preferences/', '/api/unsubscribe/', '/api/preferences/', '/api/webhooks/', '/api/cron/', '/deposit/', '/welcome', '/studio-login', '/api/auth/pin-login', '/api/auth/studio-heartbeat', '/api/auth/studio-signout']
   const isPublic = publicPaths.some(p => request.nextUrl.pathname.startsWith(p))
   if (isPublic) return NextResponse.next()
 
