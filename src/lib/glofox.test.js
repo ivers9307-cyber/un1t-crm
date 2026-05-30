@@ -271,3 +271,43 @@ describe('tagsForGlofoxEvent', () => {
     expect(b).toEqual(['glofox_booking_created'])
   })
 })
+
+describe('computeGlofoxBackoffMs', () => {
+  it('honours a numeric Retry-After (seconds → ms, capped 30s)', async () => {
+    const { computeGlofoxBackoffMs } = await import('./glofox.js')
+    expect(computeGlofoxBackoffMs(0, 2)).toBe(2000)
+    expect(computeGlofoxBackoffMs(0, 120)).toBe(30_000) // capped
+  })
+
+  it('falls back to exponential backoff with jitter when no Retry-After', async () => {
+    const { computeGlofoxBackoffMs } = await import('./glofox.js')
+    const a0 = computeGlofoxBackoffMs(0, null)
+    const a2 = computeGlofoxBackoffMs(2, null)
+    expect(a0).toBeGreaterThanOrEqual(500)
+    expect(a0).toBeLessThan(750)
+    expect(a2).toBeGreaterThanOrEqual(2000) // 500 * 2^2
+    expect(a2).toBeLessThan(2250)
+  })
+})
+
+describe('glofoxFetch 429 backoff (via fetchMemberById)', () => {
+  beforeEach(() => vi.stubGlobal('fetch', vi.fn()))
+  afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks() })
+
+  it('retries a 429 then succeeds', async () => {
+    const { fetchMemberById } = await import('./glofox.js')
+    const res = (status, body) => ({
+      ok: status >= 200 && status < 300,
+      status,
+      headers: { get: () => null },
+      json: async () => body,
+    })
+    global.fetch
+      .mockResolvedValueOnce(res(429, {}))
+      .mockResolvedValueOnce(res(200, { data: { _id: 'g1' } }))
+    const creds = { branchId: 'b', apiKey: 'k', apiToken: 't' }
+    const member = await fetchMemberById(creds, 'g1')
+    expect(member).toMatchObject({ _id: 'g1' })
+    expect(global.fetch).toHaveBeenCalledTimes(2)
+  })
+})

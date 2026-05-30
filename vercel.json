@@ -57,6 +57,10 @@
       "schedule": "0 5 * * *"
     },
     {
+      "path": "/api/cron/glofox-detail-refresh",
+      "schedule": "*/10 * * * *"
+    },
+    {
       "path": "/api/cron/pipeline-classify",
       "schedule": "30 3 * * *"
     },
