@@ -1341,6 +1341,20 @@ export async function buildCreditMemberContext(creds, member, membershipCache = 
   return { credits, memberships: cache }
 }
 
+// GLOFOX-DETAIL (2026-05-30) — the rich membership detail fields that
+// the single-member GET (/2.0/members/:id) carries on member.membership.
+// Written on the SHARED sync write-path (previewMemberSync/applyMemberSync)
+// so the webhook re-fetch keeps them fresh in near-real-time, matching the
+// set the attendance-refresh cron already writes. The bulk LIST payload
+// (nightly glofox-sync) omits member.membership, so we GUARD every write on
+// its presence — the list-sync can never null out detail captured elsewhere.
+const GLOFOX_DETAIL_KEYS = [
+  'glofox_membership_plan', 'glofox_membership_state', 'glofox_membership_type',
+  'glofox_membership_expiry', 'glofox_membership_price_cents', 'glofox_billing_interval',
+  'glofox_payment_method', 'glofox_account_active', 'glofox_source', 'glofox_image_url',
+  'gender', 'emergency_contact', 'glofox_signup_answers', 'glofox_roaming_enabled',
+]
+
 export async function previewMemberSync(db, locationId, member, opts = {}) {
   // GLOFOX2.1.11 — build the Plan A context (credits + parent
   // memberships) when creds are provided. Without creds, we degrade
@@ -1365,6 +1379,18 @@ export async function previewMemberSync(db, locationId, member, opts = {}) {
   // fetched for credit_member detection — zero extra API cost).
   if (ctx?.credits) {
     mapped.trial_credits_remaining = computeCreditsRemaining(ctx.credits)
+  }
+
+  // GLOFOX-DETAIL — attach membership detail to `mapped` when the payload
+  // is the single-member shape (has member.membership). extractMember* are
+  // pure; on the LIST payload member.membership is absent so we skip,
+  // leaving any previously-captured detail untouched.
+  const hasMembershipDetail = !!(member && typeof member === 'object'
+    && member.membership && typeof member.membership === 'object')
+  if (hasMembershipDetail) {
+    mapped.glofox_membership_plan  = extractMembershipPlan(member)
+    mapped.glofox_membership_state = extractMembershipState(member)
+    Object.assign(mapped, extractMemberProfile(member))
   }
 
   // GLOFOX2.1.14 — booking aggregates. Fetched alongside credits when
@@ -1537,6 +1563,18 @@ export async function previewMemberSync(db, locationId, member, opts = {}) {
     }
   }
 
+  // GLOFOX-DETAIL — diff the membership detail fields (only present on
+  // `mapped` when this is the single-member payload). Glofox is source of
+  // truth for these; null-vs-value diffs surface in the operator dry-run.
+  for (const k of GLOFOX_DETAIL_KEYS) {
+    if (!(k in mapped)) continue
+    const before = existing[k] ?? null
+    const after = mapped[k] ?? null
+    if (JSON.stringify(before) !== JSON.stringify(after)) {
+      changes[k] = { from: before, to: after }
+    }
+  }
+
   // GLOFOX2.1.14 — booking aggregates always overwrite when fetched
   // (full recompute is the source of truth; cron is the safety net
   // that corrects any webhook-counter drift).
@@ -1663,6 +1701,9 @@ export async function applyMemberSync(db, locationId, member, opts = {}) {
       total_attended_7d:    m.total_attended_7d    ?? 0,
       total_noshow_30d:     m.total_noshow_30d     ?? 0,
       // GLOFOX2.1.18 — last 10 bookings as JSONB.
+      // GLOFOX-DETAIL — membership detail when present on the mapped
+      // single-member payload (omitted entirely for LIST-sourced rows).
+      ...Object.fromEntries(GLOFOX_DETAIL_KEYS.filter(k => k in m).map(k => [k, m[k] ?? null])),
       recent_bookings:      m.recent_bookings      ?? null,
     }).select('id').single()
     if (error) return { ...preview, error: error.message }
@@ -1688,6 +1729,8 @@ export async function applyMemberSync(db, locationId, member, opts = {}) {
     if ('total_attended_7d'  in preview.changes)       updates.total_attended_7d  = m.total_attended_7d
     if ('total_noshow_30d'   in preview.changes)       updates.total_noshow_30d   = m.total_noshow_30d
     if ('recent_bookings'    in preview.changes)       updates.recent_bookings    = m.recent_bookings
+    // GLOFOX-DETAIL — write each detail field the diff flagged.
+    for (const k of GLOFOX_DETAIL_KEYS) { if (k in preview.changes) updates[k] = m[k] ?? null }
     // Recompose name only if first_name OR last_name changed.
     if ('first_name' in preview.changes || 'last_name' in preview.changes) {
       updates.name = m.name
