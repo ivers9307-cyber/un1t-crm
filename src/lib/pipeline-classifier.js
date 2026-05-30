@@ -141,6 +141,20 @@ export function classifyContact(contact, now = Date.now()) {
     return recentlyAttended ? 'classpass_active' : 'dormant_classpass'
   }
 
+  // ── Upcoming (membership_state='future') ─────────────────────
+  // GLOFOX-CLASSIFY.2 — Glofox marks a membership/trial 'future' when
+  // it hasn't started yet: a trial "starts" on first booking, and a
+  // paid membership can have a future start date. A RECENT future
+  // signup is a live upcoming relationship worth keeping visible in
+  // the funnel; an OLD one is an account that opened and never booked,
+  // so we let it fall through to the recency rules below (→ dormant).
+  // Null-safe: only fires when state is exactly 'future'.
+  if (membershipState === 'future') {
+    const recentlyJoined = daysSinceJoined !== null
+      && daysSinceJoined <= PIPELINE_THRESHOLDS.NEW_LEAD_RECENT_DAYS
+    if (recentlyJoined) return 'active_trial'
+  }
+
   // ── Hot Conversion (signal-driven) ──────────────────────────
   // Fires regardless of trial vs tour vs no_sale_trial as long as
   // the engagement signal is strong. The credits threshold

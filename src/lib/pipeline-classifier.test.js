@@ -56,6 +56,53 @@ describe('classifyContact — ClassPass paths', () => {
   })
 })
 
+// ── Upcoming (membership_state='future') — GLOFOX-CLASSIFY.2 ───
+
+describe('classifyContact — future membership state', () => {
+  it('recent future-state signup → active_trial (kept visible in funnel)', () => {
+    const c = {
+      glofox_membership_status: 'trial',
+      glofox_membership_state: 'future',
+      joined_at: daysAgo(10),
+      last_attended_at: null,
+    }
+    expect(classifyContact(c, NOW)).toBe('active_trial')
+  })
+
+  it('recent future-state PAID membership → active_trial (upcoming, not dormant)', () => {
+    const c = {
+      glofox_membership_status: 'member',
+      glofox_membership_state: 'future',
+      glofox_membership_type: 'time',
+      joined_at: daysAgo(5),
+      last_attended_at: null,
+    }
+    expect(classifyContact(c, NOW)).toBe('active_trial')
+  })
+
+  it('OLD future-state signup (never started) → dormant via recency fallthrough', () => {
+    // The real 741: opened an account >1yr ago, never booked a class.
+    const c = {
+      glofox_membership_status: 'trial',
+      glofox_membership_state: 'future',
+      joined_at: daysAgo(2 * 365),
+      last_attended_at: null,
+      trial_credits_remaining: 3,
+    }
+    expect(classifyContact(c, NOW)).toBe('dormant')
+  })
+
+  it('future-state with no joined_at → dormant (no freshness signal)', () => {
+    const c = {
+      glofox_membership_status: 'trial',
+      glofox_membership_state: 'future',
+      joined_at: null,
+      last_attended_at: null,
+    }
+    expect(classifyContact(c, NOW)).toBe('dormant')
+  })
+})
+
 // ── Hot Conversion — signal-driven ────────────────────────────
 
 describe('classifyContact — Hot Conversion (engagement-driven)', () => {
