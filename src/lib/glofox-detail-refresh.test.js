@@ -2,13 +2,13 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 // Mock the two external deps so the lib's logic is tested in isolation.
 vi.mock('./glofox.js', () => ({
-  fetchMemberById: vi.fn(),
+  fetchMemberDetail: vi.fn(),
 }))
 vi.mock('./glofox-sync.js', () => ({
   applyMemberSync: vi.fn(async () => ({ action: 'update' })),
 }))
 
-import { fetchMemberById } from './glofox.js'
+import { fetchMemberDetail } from './glofox.js'
 import { applyMemberSync } from './glofox-sync.js'
 import {
   DETAIL_COHORT_STATUSES,
@@ -106,7 +106,7 @@ describe('refreshOneContact', () => {
   }
 
   it('syncs detail and stamps the cursor when the member exists', async () => {
-    fetchMemberById.mockResolvedValueOnce({ _id: 'g1', membership_plan_name: '3 Month' })
+    fetchMemberDetail.mockResolvedValueOnce({ _id: 'g1', membership_plan_name: '3 Month' })
     const { db, update } = makeDb()
     const r = await refreshOneContact(db, { id: 'c1', glofox_member_id: 'g1', location_id: 'L' },
       { branchId: 'b' }, { now: () => 'NOW' })
@@ -116,7 +116,7 @@ describe('refreshOneContact', () => {
   })
 
   it('stamps the cursor but does not sync when the member is gone (404)', async () => {
-    fetchMemberById.mockResolvedValueOnce(null)
+    fetchMemberDetail.mockResolvedValueOnce(null)
     const { db, update } = makeDb()
     const r = await refreshOneContact(db, { id: 'c1', glofox_member_id: 'gX', location_id: 'L' }, {})
     expect(r).toBe('gone')
@@ -128,6 +128,6 @@ describe('refreshOneContact', () => {
     const { db } = makeDb()
     expect(await refreshOneContact(db, { id: 'c1', location_id: 'L' }, {})).toBe('skipped')
     expect(await refreshOneContact(db, { id: 'c1', glofox_member_id: 'g1' }, {})).toBe('skipped')
-    expect(fetchMemberById).not.toHaveBeenCalled()
+    expect(fetchMemberDetail).not.toHaveBeenCalled()
   })
 })

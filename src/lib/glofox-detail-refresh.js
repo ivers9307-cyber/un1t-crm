@@ -12,7 +12,7 @@
 // applyMemberSync already persists all the detail fields (preserve-on-
 // null) and runs credit-member detection + deal placement, so this
 // module just feeds it the rich by-id record and stamps the cursor.
-import { fetchMemberById } from './glofox.js'
+import { fetchMemberDetail } from './glofox.js'
 import { applyMemberSync } from './glofox-sync.js'
 
 // Option B cohort: everyone who has ever been a member / trial / pack
@@ -96,7 +96,7 @@ export async function refreshOneContact(db, contact, creds, opts = {}) {
   const locationId = contact?.location_id
   if (!memberId || !locationId) return 'skipped'
 
-  const member = await fetchMemberById(creds, memberId)
+  const member = await fetchMemberDetail(creds, memberId)
   if (!member) {
     await db.from('contacts').update({ glofox_detail_synced_at: now() }).eq('id', contact.id)
     return 'gone'

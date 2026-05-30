@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createHmac } from 'node:crypto'
 import { verifyGlofoxSignature, parseGlofoxEvent, tagsForGlofoxEvent } from './glofox.js'
 
@@ -290,24 +290,42 @@ describe('computeGlofoxBackoffMs', () => {
   })
 })
 
-describe('glofoxFetch 429 backoff (via fetchMemberById)', () => {
+describe('glofoxFetch 429 backoff (via fetchMemberDetail)', () => {
   beforeEach(() => vi.stubGlobal('fetch', vi.fn()))
   afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks() })
 
+  const res = (status, body) => ({
+    ok: status >= 200 && status < 300,
+    status,
+    headers: { get: () => null },
+    json: async () => body,
+  })
+
   it('retries a 429 then succeeds', async () => {
-    const { fetchMemberById } = await import('./glofox.js')
-    const res = (status, body) => ({
-      ok: status >= 200 && status < 300,
-      status,
-      headers: { get: () => null },
-      json: async () => body,
-    })
+    const { fetchMemberDetail } = await import('./glofox.js')
     global.fetch
       .mockResolvedValueOnce(res(429, {}))
       .mockResolvedValueOnce(res(200, { data: { _id: 'g1' } }))
     const creds = { branchId: 'b', apiKey: 'k', apiToken: 't' }
-    const member = await fetchMemberById(creds, 'g1')
+    const member = await fetchMemberDetail(creds, 'g1')
     expect(member).toMatchObject({ _id: 'g1' })
     expect(global.fetch).toHaveBeenCalledTimes(2)
+  })
+
+  it('gives up after the retry budget and surfaces the final status', async () => {
+    const { fetchMemberDetail } = await import('./glofox.js')
+    global.fetch.mockResolvedValue(res(500, {}))
+    const creds = { branchId: 'b', apiKey: 'k', apiToken: 't' }
+    await expect(fetchMemberDetail(creds, 'g1')).rejects.toThrow(/500/)
+    // initial attempt + GLOFOX_MAX_RETRIES (3) = 4 calls
+    expect(global.fetch).toHaveBeenCalledTimes(4)
+  })
+
+  it('returns null on 404 without retrying', async () => {
+    const { fetchMemberDetail } = await import('./glofox.js')
+    global.fetch.mockResolvedValueOnce(res(404, {}))
+    const creds = { branchId: 'b', apiKey: 'k', apiToken: 't' }
+    expect(await fetchMemberDetail(creds, 'gX')).toBeNull()
+    expect(global.fetch).toHaveBeenCalledTimes(1)
   })
 })
