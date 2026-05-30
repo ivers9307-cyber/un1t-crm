@@ -47,23 +47,42 @@ export function AuthProvider({ children }) {
   }, [])
 
   // Bootstrap on mount.
+  //
+  // BOOT-HANG FIX: the splash is shown while `loading` is true (the
+  // (auth)/(tabs) layouts render null until then). Previously we did
+  // `await refresh()` BEFORE setLoading(false) with no try/catch — so a
+  // cold-start /api/mobile/me that hung or threw left `loading` stuck
+  // true forever, freezing the app on the splash until a force-quit +
+  // reopen (warm session/network) got past it. Now: clear `loading` as
+  // soon as the SESSION is known (that's all the routing gates need),
+  // and load the profile in the BACKGROUND. A slow/failed profile fetch
+  // can no longer block boot. try/finally guarantees loading clears even
+  // if getSession itself throws.
   useEffect(() => {
     let mounted = true
     ;(async () => {
-      const { data } = await supabase.auth.getSession()
-      if (!mounted) return
-      setSession(data.session)
-      if (data.session) {
-        await refresh()
+      try {
+        const { data } = await supabase.auth.getSession()
+        if (!mounted) return
+        setSession(data.session)
+        if (data.session) {
+          // Fire-and-forget — don't block the splash on the network.
+          refresh().catch(() => {})
+        }
+      } catch {
+        // getSession failed (e.g. SecureStore read error on cold start) —
+        // fall through to the login gate rather than hang.
+        if (mounted) setSession(null)
+      } finally {
+        if (mounted) setLoading(false)
       }
-      setLoading(false)
     })()
 
     const { data: sub } = supabase.auth.onAuthStateChange(async (event, newSession) => {
       if (!mounted) return
       setSession(newSession)
       if (newSession) {
-        await refresh()
+        refresh().catch(() => {})
       } else {
         setProfile(null)
         setLocations([])
