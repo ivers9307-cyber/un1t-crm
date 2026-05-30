@@ -395,6 +395,30 @@ export function missingGlofoxCredentialsForLocation(creds) {
  * @param {RequestInit} options  Standard fetch options (method, body, headers)
  * @returns {Promise<Response>}
  */
+// GLOFOX-BACKOFF (2026-05-30) — transient-failure retry. The
+// glofox-detail-backfill cron fans out thousands of /members/:id
+// calls 5-at-a-time; without a retry on 429 (rate-limit) / 5xx
+// (upstream blip) those land as fetch_failed and only get retried a
+// whole tick later, slowing coverage. A bounded in-place retry that
+// honours Retry-After lets the call succeed within the same tick.
+const GLOFOX_MAX_RETRIES = 3
+
+/**
+ * Backoff delay (ms) for a transient Glofox response. Honours a
+ * numeric Retry-After (seconds, capped 30s) when present, else
+ * exponential 500ms·2^attempt capped at 8s plus jitter. Pure —
+ * exported for unit testing.
+ */
+export function computeGlofoxBackoffMs(attempt, retryAfterSeconds = null) {
+  if (Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0) {
+    return Math.min(30_000, retryAfterSeconds * 1000)
+  }
+  const base = Math.min(8000, 500 * 2 ** attempt)
+  return base + Math.floor(Math.random() * 250)
+}
+
+const _glofoxSleep = (ms) => new Promise((r) => setTimeout(r, ms))
+
 export async function glofoxFetch(creds, pathOrUrl, options = {}) {
   if (!creds || !creds.branchId || !creds.apiKey || !creds.apiToken) {
     throw new Error('Glofox API credentials missing (need branchId, apiKey, apiToken on the location)')
@@ -408,7 +432,18 @@ export async function glofoxFetch(creds, pathOrUrl, options = {}) {
     'x-glofox-api-token': creds.apiToken,
     ...(options.headers || {}),
   }
-  return fetch(url, { ...options, headers })
+  let res
+  for (let attempt = 0; ; attempt++) {
+    res = await fetch(url, { ...options, headers })
+    // Retry only transient statuses, and only while we have budget.
+    if ((res.status === 429 || res.status >= 500) && attempt < GLOFOX_MAX_RETRIES) {
+      const retryAfter = Number(res.headers?.get?.('retry-after'))
+      await _glofoxSleep(computeGlofoxBackoffMs(attempt, Number.isFinite(retryAfter) ? retryAfter : null))
+      continue
+    }
+    break
+  }
+  return res
 }
 
 // ─────────────────────────────────────────────────────────────
