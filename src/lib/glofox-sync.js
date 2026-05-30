@@ -644,6 +644,33 @@ export function extractMembershipPlan(member) {
 }
 
 /**
+ * Extract the FULL Glofox catalog plan name from
+ * member.membership.membership_name — the operator-facing label that
+ * carries promo/discount context ("The Monthly Membership (€99 FIRST
+ * MONTH)", "The 3 Month Membership - €100 Discount"). Strips only the
+ * "N) " sort-order prefix; keeps everything else.
+ *
+ * Companion to extractMembershipPlan (the clean canonical name). Stored
+ * separately so the profile can show both. Returns null when the
+ * catalog name is absent OR identical to the clean name (no extra info
+ * to surface).
+ *
+ * Pure function — input → output, no side effects.
+ */
+export function extractMembershipPlanFull(member) {
+  const m = member && typeof member === 'object' ? member.membership : null
+  if (!m || typeof m !== 'object') return null
+  const name = typeof m.membership_name === 'string' ? m.membership_name.trim() : ''
+  if (!name) return null
+  const cleaned = name.replace(/^\d+\)\s*/, '').trim()
+  if (!cleaned) return null
+  // Suppress when it adds nothing over the clean name.
+  const plain = extractMembershipPlan(member)
+  if (plain && cleaned === plain) return null
+  return cleaned
+}
+
+/**
  * Extract the membership's lifecycle state from
  * member.membership.status — ACTIVE / PAUSED / CANCELLED / EXPIRED.
  * Lowercased for consistency with glofox_membership_status. Returns
@@ -1349,7 +1376,7 @@ export async function buildCreditMemberContext(creds, member, membershipCache = 
 // (nightly glofox-sync) omits member.membership, so we GUARD every write on
 // its presence — the list-sync can never null out detail captured elsewhere.
 const GLOFOX_DETAIL_KEYS = [
-  'glofox_membership_plan', 'glofox_membership_state', 'glofox_membership_type',
+  'glofox_membership_plan', 'glofox_membership_plan_full', 'glofox_membership_state', 'glofox_membership_type',
   'glofox_membership_expiry', 'glofox_membership_price_cents', 'glofox_billing_interval',
   'glofox_payment_method', 'glofox_account_active', 'glofox_source', 'glofox_image_url',
   'gender', 'emergency_contact', 'glofox_signup_answers', 'glofox_roaming_enabled',
@@ -1388,8 +1415,9 @@ export async function previewMemberSync(db, locationId, member, opts = {}) {
   const hasMembershipDetail = !!(member && typeof member === 'object'
     && member.membership && typeof member.membership === 'object')
   if (hasMembershipDetail) {
-    mapped.glofox_membership_plan  = extractMembershipPlan(member)
-    mapped.glofox_membership_state = extractMembershipState(member)
+    mapped.glofox_membership_plan      = extractMembershipPlan(member)
+    mapped.glofox_membership_plan_full = extractMembershipPlanFull(member)
+    mapped.glofox_membership_state     = extractMembershipState(member)
     Object.assign(mapped, extractMemberProfile(member))
   }
 

@@ -678,9 +678,17 @@ function GlofoxProfileCard({ contact }) {
             )}
           </div>
 
-          {/* Current membership plan (CHURN-PREP.2) */}
+          {/* Current membership plan (CHURN-PREP.2). GLOFOX-PLANNAME.1 —
+              clean canonical name as the headline; the full Glofox catalog
+              name (promo/discount context) as a subtitle when it differs. */}
           {contact.glofox_membership_plan && (
-            <p className="text-sm font-medium text-un1t-text">{contact.glofox_membership_plan}</p>
+            <div>
+              <p className="text-sm font-medium text-un1t-text">{contact.glofox_membership_plan}</p>
+              {contact.glofox_membership_plan_full
+                && contact.glofox_membership_plan_full !== contact.glofox_membership_plan && (
+                <p className="text-xs text-un1t-subtle">{contact.glofox_membership_plan_full}</p>
+              )}
+            </div>
           )}
 
           {/* Billing + renewal (GLOFOX-PROFILE) */}
