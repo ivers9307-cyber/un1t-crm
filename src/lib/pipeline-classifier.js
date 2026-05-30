@@ -108,6 +108,11 @@ export function classifyContact(contact, now = Date.now()) {
   if (!contact || typeof contact !== 'object') return 'dormant'
 
   const status = contact.glofox_membership_status || null
+  // GLOFOX-CLASSIFY.1 — live Glofox membership lifecycle state
+  // (active / paused / locked). Authoritative when present;
+  // null for most contacts until the detail-backfill reaches
+  // them, so every use below is null-guarded.
+  const membershipState = contact.glofox_membership_state || null
   const credits = Number.isFinite(contact.trial_credits_remaining)
     ? contact.trial_credits_remaining
     : null
@@ -115,7 +120,6 @@ export function classifyContact(contact, now = Date.now()) {
   const daysSinceAttended = daysSince(contact.last_attended_at, now)
   const daysSincePaid     = daysSince(contact.last_payment_at, now)
   const daysSinceJoined   = daysSince(contact.joined_at, now)
-  const daysSinceCreated  = daysSince(contact.created_at, now)
   const attended7d  = Number.isFinite(contact.total_attended_7d)  ? contact.total_attended_7d  : 0
   // total_attended_30d is read separately by the active checks below
   // (via the recentlyAttended derived flag, which uses
@@ -170,6 +174,12 @@ export function classifyContact(contact, now = Date.now()) {
   // save the member proactively before they fully lapse.
   const isMemberStatus = status === 'member' || status === 'credit_member'
   if (isMemberStatus) {
+    // GLOFOX-CLASSIFY.1 — authoritative overdue override. Glofox
+    // 'locked' = membership frozen for non-payment: needs attention
+    // NOW, even if they attended yesterday. Beats the recency guess
+    // (which would call a just-attended overdue member active).
+    // Null-safe: absent state falls straight through to recency.
+    if (membershipState === 'locked') return 'at_risk_member'
     if (recentlyAttended || recentlyPaid) return 'active_member'
     if (daysSinceAttended !== null && daysSinceAttended <= PIPELINE_THRESHOLDS.AT_RISK_MAX_DAYS) {
       return 'at_risk_member'
@@ -186,10 +196,13 @@ export function classifyContact(contact, now = Date.now()) {
   // unmoved for ages and aren't actionable.
   const newLeadStatuses = new Set(['lead', 'cold', 'tour', 'no_sale_tour', null])
   if (newLeadStatuses.has(status)) {
-    const recentlyJoined = (
-      (daysSinceJoined !== null && daysSinceJoined <= PIPELINE_THRESHOLDS.NEW_LEAD_RECENT_DAYS)
-      || (daysSinceCreated !== null && daysSinceCreated <= PIPELINE_THRESHOLDS.NEW_LEAD_RECENT_DAYS)
-    )
+    // GLOFOX-CLASSIFY.1 — freshness keys off joined_at ONLY.
+    // created_at is the CRM bulk-import date (recent for the whole
+    // imported base), so it made ~93% of leads look fresh (audit
+    // 2026-05-30). joined_at is Glofox's real tenure date; this
+    // aligns the pipeline with Lead Radar, which already uses it.
+    const recentlyJoined =
+      daysSinceJoined !== null && daysSinceJoined <= PIPELINE_THRESHOLDS.NEW_LEAD_RECENT_DAYS
     if (recentlyJoined && !recentlyAttended) return 'new_lead'
   }
 

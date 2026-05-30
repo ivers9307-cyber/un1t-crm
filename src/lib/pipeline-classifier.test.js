@@ -231,6 +231,39 @@ describe('classifyContact — Active Member / At Risk', () => {
     }
     expect(classifyContact(c, NOW)).toBe('dormant')
   })
+
+  // GLOFOX-CLASSIFY.1 — live membership_state override
+  it('overdue member (state=locked) → at_risk_member even if they attended yesterday', () => {
+    expect(classifyContact({
+      glofox_membership_status: 'member',
+      glofox_membership_state: 'locked',
+      last_attended_at: daysAgo(1),
+    }, NOW)).toBe('at_risk_member')
+  })
+
+  it('overdue credit_member (state=locked) → at_risk_member despite credits + recent class', () => {
+    expect(classifyContact({
+      glofox_membership_status: 'credit_member',
+      glofox_membership_state: 'locked',
+      last_attended_at: daysAgo(1),
+      trial_credits_remaining: 5,
+    }, NOW)).toBe('at_risk_member')
+  })
+
+  it('state=active is NOT an override — member still classifies on engagement', () => {
+    expect(classifyContact({
+      glofox_membership_status: 'member',
+      glofox_membership_state: 'active',
+      last_attended_at: daysAgo(5),
+    }, NOW)).toBe('active_member')
+  })
+
+  it('null-safe: member with no membership_state falls through to recency logic', () => {
+    expect(classifyContact({
+      glofox_membership_status: 'member',
+      last_attended_at: daysAgo(5),
+    }, NOW)).toBe('active_member')
+  })
 })
 
 // ── New Lead ──────────────────────────────────────────────────
@@ -273,6 +306,24 @@ describe('classifyContact — New Lead', () => {
       last_attended_at: null,
     }
     expect(classifyContact(c, NOW)).toBe('dormant')
+  })
+
+  // GLOFOX-CLASSIFY.1 — created_at is the import date, not real freshness
+  it('lead with only a recent created_at (no joined_at) → dormant', () => {
+    expect(classifyContact({
+      glofox_membership_status: 'lead',
+      created_at: daysAgo(10),
+      last_attended_at: null,
+    }, NOW)).toBe('dormant')
+  })
+
+  it('recent created_at does NOT rescue an old joined_at lead', () => {
+    expect(classifyContact({
+      glofox_membership_status: 'lead',
+      joined_at: daysAgo(200),
+      created_at: daysAgo(5),
+      last_attended_at: null,
+    }, NOW)).toBe('dormant')
   })
 })
 
