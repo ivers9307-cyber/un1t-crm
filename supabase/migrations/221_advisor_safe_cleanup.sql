@@ -46,3 +46,11 @@ ALTER FUNCTION public.issues_touch_updated_at()                SET search_path =
 
 -- (c) close the RPC exposure on the trigger-only recompute helper
 REVOKE EXECUTE ON FUNCTION public.fte_expense_recompute_totals() FROM PUBLIC, anon, authenticated;
+
+-- (d) ADVISOR-PERF.3 — drop 4 exact-duplicate indexes (identical column
+-- set to a kept sibling, which is a UNIQUE constraint or equivalent).
+-- Pure redundant write cost; no query loses a usable index.
+DROP INDEX IF EXISTS public.invoices_queue_xero_bill_idx;
+DROP INDEX IF EXISTS public.xero_accounts_lookup_idx;
+DROP INDEX IF EXISTS public.xero_contacts_lookup_idx;
+DROP INDEX IF EXISTS public.xero_supplier_defaults_lookup_idx;
