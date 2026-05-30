@@ -28,6 +28,31 @@ function timingSafeEqualEdge(a, b) {
 export async function proxy(request) {
   const hostname = request.headers.get('host') || ''
 
+  // ── SERVER-TO-SERVER CALLBACKS — unconditional early bypass ──────
+  // Webhooks (Xero, Revolut), Vercel cron, and the public API are
+  // machine-to-machine: no cookies, no session, and they must work on
+  // every host regardless of brand routing. They are auth-gated by
+  // their own route handlers (signature / bearer / CRON_SECRET checks),
+  // never by this proxy. Returning early here — BEFORE brand resolution
+  // and the CRM auth gate — guarantees they can never be redirected to
+  // /login.
+  //
+  // WHY THIS EXISTS: after the 2026-05-29 middleware→proxy rename,
+  // /api/webhooks/ stopped being served as public at the edge and Xero
+  // webhook deliveries were redirected to /login (HTML), so Xero
+  // disabled the subscription after 24h of failures. This explicit
+  // top-of-function guard is immune to that class of regression.
+  {
+    const earlyPath = request.nextUrl.pathname
+    if (
+      earlyPath.startsWith('/api/webhooks/') ||
+      earlyPath.startsWith('/api/cron/') ||
+      earlyPath.startsWith('/api/public/')
+    ) {
+      return NextResponse.next()
+    }
+  }
+
   // ── Multi-brand routing (MULTIBRAND.1) ───────────────────────────
   // Tenant brands sharing this deployment (pay.ccfautos.com, the
   // un1tdublin.com marketing site, future partner studios, etc.)
