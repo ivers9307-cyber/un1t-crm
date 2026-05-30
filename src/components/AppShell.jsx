@@ -5,7 +5,15 @@ import { useState, useEffect } from 'react'
 import Sidebar from './Sidebar'
 import ImpersonationBanner from './ImpersonationBanner'
 
-const PUBLIC_PATHS = ['/login', '/reset-password', '/welcome', '/deposit', '/book', '/event', '/tv', '/studio-login']
+// Client-side public-route list. MUST stay in sync with the server
+// proxy's publicPaths (src/proxy.js) — if a route is public there but
+// missing here, the page server-renders fine for an anonymous visitor
+// but AppShell then client-redirects them to /login after hydration.
+// That's exactly how the public payment page (/event-pay) regressed:
+// it was added to the proxy but not here. Note '/event' also covers
+// '/event-pay' is FALSE (startsWith('/event/') wouldn't, and we match
+// p + '/'), so /event-pay needs its own entry.
+const PUBLIC_PATHS = ['/login', '/reset-password', '/welcome', '/deposit', '/book', '/event', '/event-pay', '/race', '/race-pay', '/tv', '/unsubscribe', '/preferences', '/studio-login']
 
 export default function AppShell({ user, children }) {
   const pathname = usePathname()
