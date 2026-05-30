@@ -168,6 +168,30 @@ export async function POST(request, props) {
     }, { status: 500 })
   }
 
+  // Duplicate-registration guard — keyed on the CAPTAIN'S EMAIL (via
+  // their contact), not the team name. A person who already registered
+  // for this race (under any team name) is blocked from registering
+  // again. We match active registrations only (pending_payment or
+  // confirmed) so a previously cancelled/refunded entry doesn't lock
+  // them out. The team-name unique constraint remains as a secondary
+  // backstop on the insert below.
+  {
+    const { data: existingReg } = await db
+      .from('race_registrations')
+      .select('id, status')
+      .eq('race_event_id', race.id)
+      .eq('contact_id', captainContactId)
+      .in('status', ['pending_payment', 'confirmed'])
+      .maybeSingle()
+    if (existingReg) {
+      return NextResponse.json({
+        success: false,
+        error: `${captainEmail} is already registered for this event.`,
+        code: 'already_registered',
+      }, { status: 409 })
+    }
+  }
+
   // CONSENT.4 — soft opt-in for marketing comms. Applies to the
   // captain (the only contact whose phone we collect and the
   // registrant of record). Helper short-circuits for ClassPass
@@ -336,7 +360,7 @@ export async function POST(request, props) {
     if (regErr.code === '23505' || /duplicate key|unique/i.test(regErr.message || '')) {
       return NextResponse.json({
         success: false,
-        error: `Team "${teamName}" is already registered for this race.`,
+        error: `A registration already exists for this event. If this is you, check your email for the confirmation/payment link.`,
         code: 'already_registered',
       }, { status: 409 })
     }
