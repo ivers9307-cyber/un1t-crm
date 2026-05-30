@@ -509,9 +509,15 @@ const GLOFOX_STATUS_META = {
 // frozen for non-payment, so the live state is how the operator spots
 // a misclassification. Glofox 'locked' = frozen on a failed payment.
 const GLOFOX_STATE_META = {
-  active: { label: 'Active',  cls: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30' },
-  paused: { label: 'Paused',  cls: 'bg-amber-500/20   text-amber-300   border-amber-500/30' },
-  locked: { label: 'Overdue', cls: 'bg-red-500/20     text-red-300     border-red-500/30' },
+  active: { label: 'Active',   cls: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30' },
+  paused: { label: 'Paused',   cls: 'bg-amber-500/20   text-amber-300   border-amber-500/30' },
+  locked: { label: 'Overdue',  cls: 'bg-red-500/20     text-red-300     border-red-500/30' },
+  // GLOFOX-CLASSIFY.2 — 'future' = a Glofox membership/trial that hasn't
+  // started yet. For a trial this means the account exists but the first
+  // class is unbooked (the trial only "starts" on first booking); for a
+  // paid membership it's a genuine upcoming start date. Surfaced so the
+  // operator can tell an unstarted signup from a live member.
+  future: { label: 'Upcoming', cls: 'bg-blue-500/20    text-blue-300    border-blue-500/30' },
 }
 
 function formatTenure(joinedAtIso) {
