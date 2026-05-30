@@ -249,12 +249,30 @@ export const getCurrentUser = cache(async function getCurrentUser() {
         .select('*')
         .eq('id', targetId)
         .single()
+      // Only treat this as a live impersonation if there's an OPEN
+      // impersonation_log row for this master+target. A leftover
+      // un1t_impersonate cookie (e.g. the browser kept it after a
+      // previous session was stopped server-side, or the stop cookie-
+      // clear didn't land) otherwise keeps resurrecting the banner with
+      // no real session behind it — which showed up as "Viewing as
+      // <yourself> · signed in as Master". Gating on the audit row makes
+      // the cookie inert once the session is closed.
       if (target) {
-        profile = target
-        impersonatingFrom = {
-          masterId: realProfile.id,
-          masterName: realProfile.full_name,
-          masterEmail: realProfile.email,
+        const { data: openRow } = await db
+          .from('impersonation_log')
+          .select('id')
+          .eq('master_user_id', realProfile.id)
+          .eq('target_user_id', targetId)
+          .is('ended_at', null)
+          .limit(1)
+          .maybeSingle()
+        if (openRow) {
+          profile = target
+          impersonatingFrom = {
+            masterId: realProfile.id,
+            masterName: realProfile.full_name,
+            masterEmail: realProfile.email,
+          }
         }
       }
     }
