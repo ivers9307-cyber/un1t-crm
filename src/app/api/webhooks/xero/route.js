@@ -37,6 +37,29 @@ import { verifyXeroSignature } from '@/lib/xero/webhooks'
 
 export const runtime = 'nodejs'
 
+// Xero returns dates in several shapes depending on the field/endpoint:
+//   • Microsoft JSON   "/Date(1612137600000+0000)/"   (Status/payment dates)
+//   • ISO 8601         "2026-05-29T00:00:00"
+//   • plain date       "2026-05-29"
+// new Date("/Date(...)/") is Invalid Date, and .toISOString() on an
+// Invalid Date throws `RangeError: Invalid time value` — which crashed
+// this webhook (HTTP 500) the moment a PAID invoice with a
+// FullyPaidOnDate arrived, so Xero saw non-2XX and disabled the hook.
+// Parse defensively and return null on anything unrecognised; callers
+// fall back to now() or null rather than throwing.
+function parseXeroDate(value) {
+  if (!value) return null
+  if (typeof value === 'string') {
+    const ms = value.match(/\/Date\((-?\d+)/)
+    if (ms) {
+      const d = new Date(Number(ms[1]))
+      return Number.isNaN(d.getTime()) ? null : d.toISOString()
+    }
+  }
+  const d = new Date(value)
+  return Number.isNaN(d.getTime()) ? null : d.toISOString()
+}
+
 // The webhook payload carries only IDs — fetch the live invoice so
 // Status / AmountPaid / AmountDue / FullyPaidOnDate are authoritative.
 // Returns null (not throws) so one bad event can't fail the batch:
@@ -57,9 +80,8 @@ async function fetchXeroInvoice(locationId, invoiceId) {
 async function applyToCar(db, car, invoice) {
   const updates = { xero_invoice_status: invoice.Status }
   if (invoice.Status === 'PAID' && !car.xero_invoice_paid_at) {
-    updates.xero_invoice_paid_at = invoice.FullyPaidOnDate
-      ? new Date(invoice.FullyPaidOnDate).toISOString()
-      : new Date().toISOString()
+    updates.xero_invoice_paid_at =
+      parseXeroDate(invoice.FullyPaidOnDate) || new Date().toISOString()
     updates.xero_invoice_amount_paid = invoice.AmountPaid != null
       ? Number(invoice.AmountPaid)
       : null
@@ -87,9 +109,8 @@ async function applyToBill(db, row, invoice) {
       // Keep the first paid date we saw; only (re)set it while paid.
       xero_bill_paid_at: paid
         ? (row.xero_bill_paid_at
-            || (invoice.FullyPaidOnDate
-              ? new Date(invoice.FullyPaidOnDate).toISOString()
-              : new Date().toISOString()))
+            || parseXeroDate(invoice.FullyPaidOnDate)
+            || new Date().toISOString())
         : null,
       xero_bill_status_synced_at: new Date().toISOString(),
     })
