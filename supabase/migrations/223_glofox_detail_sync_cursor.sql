@@ -1,4 +1,4 @@
--- 0216_glofox_detail_sync_cursor.sql
+-- 223_glofox_detail_sync_cursor.sql
 -- Glofox per-member DETAIL refresh cursor (GLOFOX4.1).
 --
 -- Problem: the nightly glofox-sync cron pulls only the lightweight

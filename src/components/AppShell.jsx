@@ -5,7 +5,12 @@ import { useState, useEffect } from 'react'
 import Sidebar from './Sidebar'
 import ImpersonationBanner from './ImpersonationBanner'
 
-const PUBLIC_PATHS = ['/login', '/reset-password', '/welcome', '/deposit', '/book', '/event', '/tv', '/studio-login']
+// NOTE: '/event-pay' must be listed SEPARATELY from '/event' — the matcher
+// is `pathname === p || startsWith(p + '/')`, so '/event' does NOT cover
+// '/event-pay/<id>' (the Revolut checkout page reached from "Book & pay").
+// Without it, a public buyer with no session gets bounced to /login after
+// clicking Pay Now. Mirrors the allowlist in proxy.js. Do not drop on refactor.
+const PUBLIC_PATHS = ['/login', '/reset-password', '/welcome', '/deposit', '/book', '/event', '/event-pay', '/tv', '/studio-login']
 
 export default function AppShell({ user, children }) {
   const pathname = usePathname()

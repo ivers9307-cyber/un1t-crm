@@ -43,7 +43,13 @@ const RegisterSchema = z.object({
   wave_id: z.string().uuid(),
   captain_name: z.string().trim().min(1).max(200),
   captain_email: z.string().email().max(320),
-  captain_phone: z.string().max(50).nullable().optional(),
+  // Phone REQUIRED (parity with /events register). >= 7 digits.
+  captain_phone: z
+    .string()
+    .trim()
+    .min(1, 'Phone number is required')
+    .max(50)
+    .refine((v) => v.replace(/\D/g, '').length >= 7, 'Enter a valid phone number'),
   members: z.array(z.object({
     name: z.string().trim().min(1).max(200),
     email: z.string().email().max(320).nullable().optional(),

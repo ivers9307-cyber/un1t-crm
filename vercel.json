@@ -61,6 +61,10 @@
       "schedule": "*/10 * * * *"
     },
     {
+      "path": "/api/cron/glofox-detail-backfill",
+      "schedule": "*/10 * * * *"
+    },
+    {
       "path": "/api/cron/pipeline-classify",
       "schedule": "30 3 * * *"
     },
