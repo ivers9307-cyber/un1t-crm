@@ -308,6 +308,8 @@ export default function RaceSignupWidget({ slug }) {
     if (!waveId) errors.wave_id = copy.showWavePicker ? 'Pick a wave' : 'No time slot available'
     if (!captainName.trim()) errors.captain_name = 'Your name is required'
     if (!validateEmail(captainEmail)) errors.captain_email = 'Valid email required'
+    if (!captainPhone.trim()) errors.captain_phone = 'Phone number is required'
+    else if (captainPhone.replace(/\D/g, '').length < 7) errors.captain_phone = 'Enter a valid phone number'
     members.forEach((m, i) => {
       if (!m.name.trim()) errors[`member_${i}_name`] = 'Name required'
       if (m.email && !validateEmail(m.email)) errors[`member_${i}_email`] = 'Invalid email'
@@ -347,7 +349,7 @@ export default function RaceSignupWidget({ slug }) {
         wave_id: waveId,
         captain_name: captainName.trim(),
         captain_email: captainEmail.trim().toLowerCase(),
-        captain_phone: captainPhone.trim() || null,
+        captain_phone: captainPhone.trim(),
         members: members.map((m) => ({
           name: m.name.trim(),
           email: m.email.trim() || null,
@@ -613,13 +615,17 @@ export default function RaceSignupWidget({ slug }) {
                     />
                     {fieldErrors.captain_email && <p className="text-[11px] text-red-600 mt-0.5">{fieldErrors.captain_email}</p>}
                   </div>
-                  <input
-                    type="tel"
-                    placeholder="Your phone (optional)"
-                    value={captainPhone}
-                    onChange={e => setCaptainPhone(e.target.value)}
-                    className="w-full border border-gray-300 focus:border-gray-500 rounded-md px-3 py-2 text-sm focus:outline-none"
-                  />
+                  <div>
+                    <input
+                      type="tel"
+                      required
+                      placeholder="Your phone *"
+                      value={captainPhone}
+                      onChange={e => setCaptainPhone(e.target.value)}
+                      className={`w-full border rounded-md px-3 py-2 text-sm focus:outline-none ${fieldErrors.captain_phone ? 'border-red-400' : 'border-gray-300 focus:border-gray-500'}`}
+                    />
+                    {fieldErrors.captain_phone && <p className="text-[11px] text-red-600 mt-0.5">{fieldErrors.captain_phone}</p>}
+                  </div>
                 </div>
               </div>
 
