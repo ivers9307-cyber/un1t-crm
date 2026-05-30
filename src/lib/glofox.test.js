@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createHmac } from 'node:crypto'
 import { verifyGlofoxSignature, parseGlofoxEvent, tagsForGlofoxEvent } from './glofox.js'
 
@@ -269,5 +269,63 @@ describe('tagsForGlofoxEvent', () => {
     expect(a).not.toBe(b)
     a.push('extra')
     expect(b).toEqual(['glofox_booking_created'])
+  })
+})
+
+describe('computeGlofoxBackoffMs', () => {
+  it('honours a numeric Retry-After (seconds -> ms, capped 30s)', async () => {
+    const { computeGlofoxBackoffMs } = await import('./glofox.js')
+    expect(computeGlofoxBackoffMs(0, 2)).toBe(2000)
+    expect(computeGlofoxBackoffMs(0, 120)).toBe(30_000) // capped
+  })
+
+  it('falls back to exponential backoff with jitter when no Retry-After', async () => {
+    const { computeGlofoxBackoffMs } = await import('./glofox.js')
+    const a0 = computeGlofoxBackoffMs(0, null)
+    const a2 = computeGlofoxBackoffMs(2, null)
+    expect(a0).toBeGreaterThanOrEqual(500)
+    expect(a0).toBeLessThan(750)
+    expect(a2).toBeGreaterThanOrEqual(2000) // 500 * 2^2
+    expect(a2).toBeLessThan(2250)
+  })
+})
+
+describe('glofoxFetch 429/5xx backoff (via fetchMemberResult)', () => {
+  beforeEach(() => vi.stubGlobal('fetch', vi.fn()))
+  afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks() })
+
+  const res = (status, body) => ({
+    ok: status >= 200 && status < 300,
+    status,
+    headers: { get: () => null },
+    json: async () => body,
+  })
+  const creds = { branchId: 'b', apiKey: 'k', apiToken: 't' }
+
+  it('retries a 429 then succeeds within the same call', async () => {
+    const { fetchMemberResult } = await import('./glofox.js')
+    global.fetch
+      .mockResolvedValueOnce(res(429, {}))
+      .mockResolvedValueOnce(res(200, { data: { _id: 'g1' } }))
+    const out = await fetchMemberResult(creds, 'g1')
+    expect(out).toMatchObject({ ok: true, member: { _id: 'g1' } })
+    expect(global.fetch).toHaveBeenCalledTimes(2)
+  })
+
+  it('retries 5xx up to the budget then gives up (ok:false)', async () => {
+    const { fetchMemberResult } = await import('./glofox.js')
+    global.fetch.mockResolvedValue(res(500, {}))
+    const out = await fetchMemberResult(creds, 'g1')
+    expect(out).toMatchObject({ ok: false, member: null })
+    // initial attempt + GLOFOX_MAX_RETRIES (3) = 4 calls
+    expect(global.fetch).toHaveBeenCalledTimes(4)
+  })
+
+  it('does not retry a 404 — returns immediately', async () => {
+    const { fetchMemberResult } = await import('./glofox.js')
+    global.fetch.mockResolvedValueOnce(res(404, {}))
+    const out = await fetchMemberResult(creds, 'gX')
+    expect(out).toMatchObject({ ok: false, member: null })
+    expect(global.fetch).toHaveBeenCalledTimes(1)
   })
 })
