@@ -19,6 +19,12 @@ function timingSafeEqualEdge(a, b) {
 // PROXY.1 — renamed from middleware → proxy for the Next.js 16 "proxy"
 // file convention (the old "middleware" name is deprecated and the
 // Vercel build pipeline now hard-fails on it). Behaviour is unchanged.
+// REDEPLOY 2026-05-30 — force a fresh middleware bundle. The edge
+// proxy chunk on production had gone stale: /event-pay/ (added to
+// publicPaths in #212) was still being gated to /login while older
+// entries like /studio-login resolved public, proving the deployed
+// middleware predated #212. Touching this file changes its content
+// hash so Next re-emits the middleware on the next build.
 export async function proxy(request) {
   const hostname = request.headers.get('host') || ''
 
