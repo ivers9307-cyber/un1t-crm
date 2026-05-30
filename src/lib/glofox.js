@@ -395,6 +395,29 @@ export function missingGlofoxCredentialsForLocation(creds) {
  * @param {RequestInit} options  Standard fetch options (method, body, headers)
  * @returns {Promise<Response>}
  */
+// GLOFOX4.1 — transient-failure backoff. The detail-refresh drainer
+// fans out thousands of /members/:id calls; without a retry on 429
+// (rate-limit) / 5xx (upstream blip) a single throttle response would
+// surface as a hard error and stall the backfill. Retries are capped
+// and honour a numeric Retry-After header when Glofox sends one.
+const GLOFOX_MAX_RETRIES = 3
+
+/**
+ * Backoff delay (ms) for a transient Glofox response. Honours a
+ * numeric Retry-After (seconds, capped 30s) when present, else
+ * exponential 500ms·2^attempt capped at 8s plus jitter. Pure —
+ * exported for unit testing.
+ */
+export function computeGlofoxBackoffMs(attempt, retryAfterSeconds = null) {
+  if (Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0) {
+    return Math.min(30_000, retryAfterSeconds * 1000)
+  }
+  const base = Math.min(8000, 500 * 2 ** attempt)
+  return base + Math.floor(Math.random() * 250)
+}
+
+const _glofoxSleep = (ms) => new Promise((r) => setTimeout(r, ms))
+
 export async function glofoxFetch(creds, pathOrUrl, options = {}) {
   if (!creds || !creds.branchId || !creds.apiKey || !creds.apiToken) {
     throw new Error('Glofox API credentials missing (need branchId, apiKey, apiToken on the location)')
@@ -408,7 +431,18 @@ export async function glofoxFetch(creds, pathOrUrl, options = {}) {
     'x-glofox-api-token': creds.apiToken,
     ...(options.headers || {}),
   }
-  return fetch(url, { ...options, headers })
+  let res
+  for (let attempt = 0; ; attempt++) {
+    res = await fetch(url, { ...options, headers })
+    // Retry only transient statuses, and only while we have budget.
+    if ((res.status === 429 || res.status >= 500) && attempt < GLOFOX_MAX_RETRIES) {
+      const retryAfter = Number(res.headers?.get?.('retry-after'))
+      await _glofoxSleep(computeGlofoxBackoffMs(attempt, Number.isFinite(retryAfter) ? retryAfter : null))
+      continue
+    }
+    break
+  }
+  return res
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -1041,16 +1075,20 @@ export async function fetchUserBookingsResult(creds, userId, opts = {}) {
  * @returns {Promise<{ ok: boolean, member: (object|null) }>}
  */
 export async function fetchMemberResult(creds, memberId) {
-  if (!creds || !memberId) return { ok: false, member: null }
+  if (!creds || !memberId) return { ok: false, member: null, status: 0 }
   try {
     const r = await glofoxFetch(creds, `/2.0/members/${encodeURIComponent(memberId)}`)
-    if (!r.ok) return { ok: false, member: null }
+    // status surfaced so callers can distinguish a permanent 404
+    // (member deleted in Glofox) from a transient failure that's
+    // worth retrying. Existing callers destructure { ok, member }
+    // only, so the extra field is non-breaking.
+    if (!r.ok) return { ok: false, member: null, status: r.status }
     const body = await r.json()
     // The single-member endpoint wraps the member under `data`;
     // tolerate an unwrapped body too.
     const member = body && typeof body === 'object' && body.data ? body.data : body
-    return { ok: true, member: (member && typeof member === 'object') ? member : null }
+    return { ok: true, member: (member && typeof member === 'object') ? member : null, status: r.status }
   } catch {
-    return { ok: false, member: null }
+    return { ok: false, member: null, status: 0 }
   }
 }

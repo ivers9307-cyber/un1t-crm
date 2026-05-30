@@ -12,7 +12,7 @@
 // applyMemberSync already persists all the detail fields (preserve-on-
 // null) and runs credit-member detection + deal placement, so this
 // module just feeds it the rich by-id record and stamps the cursor.
-import { fetchMemberDetail } from './glofox.js'
+import { fetchMemberResult } from './glofox.js'
 import { applyMemberSync } from './glofox-sync.js'
 
 // Option B cohort: everyone who has ever been a member / trial / pack
@@ -96,8 +96,28 @@ export async function refreshOneContact(db, contact, creds, opts = {}) {
   const locationId = contact?.location_id
   if (!memberId || !locationId) return 'skipped'
 
-  const member = await fetchMemberDetail(creds, memberId)
+  // fetchMemberResult returns { ok, member }:
+  //   ok:false           — transient fetch failure (after glofoxFetch's
+  //                        own 429/5xx backoff). DON'T stamp the cursor;
+  //                        leave the row to be retried on the next run.
+  //   ok:true, member:null — member no longer in Glofox (deleted). Stamp
+  //                        the cursor (so we stop re-pulling a dead id)
+  //                        but leave the existing CRM data untouched.
+  //   ok:true, member:{}   — got detail; run the canonical sync + stamp.
+  const { ok, member, status } = await fetchMemberResult(creds, memberId)
+  if (!ok) {
+    // 404 = member deleted in Glofox: stamp the cursor so we stop
+    // re-pulling a dead id (leaves existing CRM data untouched).
+    // Any other failure is transient (already retried inside
+    // glofoxFetch) — leave the cursor so the next run retries.
+    if (status === 404) {
+      await db.from('contacts').update({ glofox_detail_synced_at: now() }).eq('id', contact.id)
+      return 'gone'
+    }
+    return 'failed'
+  }
   if (!member) {
+    // 200 with an empty/non-object body — treat as gone, stamp.
     await db.from('contacts').update({ glofox_detail_synced_at: now() }).eq('id', contact.id)
     return 'gone'
   }

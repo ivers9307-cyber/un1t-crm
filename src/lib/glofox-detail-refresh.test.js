@@ -2,13 +2,13 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 // Mock the two external deps so the lib's logic is tested in isolation.
 vi.mock('./glofox.js', () => ({
-  fetchMemberDetail: vi.fn(),
+  fetchMemberResult: vi.fn(),
 }))
 vi.mock('./glofox-sync.js', () => ({
   applyMemberSync: vi.fn(async () => ({ action: 'update' })),
 }))
 
-import { fetchMemberDetail } from './glofox.js'
+import { fetchMemberResult } from './glofox.js'
 import { applyMemberSync } from './glofox-sync.js'
 import {
   DETAIL_COHORT_STATUSES,
@@ -106,7 +106,7 @@ describe('refreshOneContact', () => {
   }
 
   it('syncs detail and stamps the cursor when the member exists', async () => {
-    fetchMemberDetail.mockResolvedValueOnce({ _id: 'g1', membership_plan_name: '3 Month' })
+    fetchMemberResult.mockResolvedValueOnce({ ok: true, member: { _id: 'g1', membership_plan_name: '3 Month' }, status: 200 })
     const { db, update } = makeDb()
     const r = await refreshOneContact(db, { id: 'c1', glofox_member_id: 'g1', location_id: 'L' },
       { branchId: 'b' }, { now: () => 'NOW' })
@@ -115,8 +115,8 @@ describe('refreshOneContact', () => {
     expect(update).toHaveBeenCalledWith({ glofox_detail_synced_at: 'NOW' })
   })
 
-  it('stamps the cursor but does not sync when the member is gone (404)', async () => {
-    fetchMemberDetail.mockResolvedValueOnce(null)
+  it('stamps the cursor (gone) on a 404 — member deleted in Glofox', async () => {
+    fetchMemberResult.mockResolvedValueOnce({ ok: false, member: null, status: 404 })
     const { db, update } = makeDb()
     const r = await refreshOneContact(db, { id: 'c1', glofox_member_id: 'gX', location_id: 'L' }, {})
     expect(r).toBe('gone')
@@ -124,10 +124,28 @@ describe('refreshOneContact', () => {
     expect(update).toHaveBeenCalledOnce()
   })
 
+  it('stamps the cursor (gone) on a 200 with an empty body', async () => {
+    fetchMemberResult.mockResolvedValueOnce({ ok: true, member: null, status: 200 })
+    const { db, update } = makeDb()
+    const r = await refreshOneContact(db, { id: 'c1', glofox_member_id: 'gX', location_id: 'L' }, {})
+    expect(r).toBe('gone')
+    expect(applyMemberSync).not.toHaveBeenCalled()
+    expect(update).toHaveBeenCalledOnce()
+  })
+
+  it('does NOT stamp the cursor on a transient fetch failure (retry next run)', async () => {
+    fetchMemberResult.mockResolvedValueOnce({ ok: false, member: null, status: 500 })
+    const { db, update } = makeDb()
+    const r = await refreshOneContact(db, { id: 'c1', glofox_member_id: 'g1', location_id: 'L' }, {})
+    expect(r).toBe('failed')
+    expect(applyMemberSync).not.toHaveBeenCalled()
+    expect(update).not.toHaveBeenCalled()
+  })
+
   it('skips when memberId or locationId is missing', async () => {
     const { db } = makeDb()
     expect(await refreshOneContact(db, { id: 'c1', location_id: 'L' }, {})).toBe('skipped')
     expect(await refreshOneContact(db, { id: 'c1', glofox_member_id: 'g1' }, {})).toBe('skipped')
-    expect(fetchMemberDetail).not.toHaveBeenCalled()
+    expect(fetchMemberResult).not.toHaveBeenCalled()
   })
 })
