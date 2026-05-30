@@ -502,6 +502,18 @@ const GLOFOX_STATUS_META = {
   lead:           { label: 'Lead',                  cls: 'bg-gray-500/20    text-gray-300    border-gray-500/30' },
 }
 
+// GLOFOX-PLAN-BLOCK (Stage 1b) -- LIVE membership lifecycle state
+// (membership.status), distinct from the operator-facing lead_status
+// above. The "real member vs Glofox member" signal: Glofox keeps
+// lead_status='member' even when the subscription has lapsed or been
+// frozen for non-payment, so the live state is how the operator spots
+// a misclassification. Glofox 'locked' = frozen on a failed payment.
+const GLOFOX_STATE_META = {
+  active: { label: 'Active',  cls: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30' },
+  paused: { label: 'Paused',  cls: 'bg-amber-500/20   text-amber-300   border-amber-500/30' },
+  locked: { label: 'Overdue', cls: 'bg-red-500/20     text-red-300     border-red-500/30' },
+}
+
 function formatTenure(joinedAtIso) {
   if (!joinedAtIso) return null
   const ms = Date.now() - new Date(joinedAtIso).getTime()
@@ -579,6 +591,7 @@ function normaliseAnswer(raw) {
 function GlofoxProfileCard({ contact }) {
   const linked = Boolean(contact.glofox_member_id)
   const statusMeta = GLOFOX_STATUS_META[contact.glofox_membership_status] || null
+  const stateMeta = GLOFOX_STATE_META[contact.glofox_membership_state] || null
   const tenure = formatTenure(contact.joined_at)
   const lastAttended = relativeTime(contact.last_attended_at)
   const lastPayment = relativeTime(contact.last_payment_at)
@@ -644,6 +657,11 @@ function GlofoxProfileCard({ contact }) {
             ) : (
               <span className="text-xs px-2 py-0.5 rounded-full bg-gray-500/20 text-gray-300 border border-gray-500/30">
                 {contact.glofox_membership_status || 'Unknown'}
+              </span>
+            )}
+            {stateMeta && (
+              <span className={`text-xs px-2 py-0.5 rounded-full border ${stateMeta.cls}`}>
+                {stateMeta.label}
               </span>
             )}
             {credits != null && (
