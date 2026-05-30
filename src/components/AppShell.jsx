@@ -1,114 +1,68 @@
 'use client'
 
+import { usePathname, useRouter } from 'next/navigation'
 import { useState, useEffect } from 'react'
-import { usePathname } from 'next/navigation'
-import { Menu } from 'lucide-react'
 import Sidebar from './Sidebar'
-import AssistantBubble from './AssistantBubble'
 import ImpersonationBanner from './ImpersonationBanner'
-import PendingContractsAlert from './PendingContractsAlert'
-import { hasPermission } from '@/lib/permissions'
-// PERF.3 — Vercel scripts moved here from the root layout. Mounted
-// only inside the authenticated branch so /login + public booking
-// pages don't pay for two extra JS bundles before the user is in.
-import { SpeedInsights } from '@vercel/speed-insights/next'
-import { Analytics } from '@vercel/analytics/next'
 
-// Routes that should NOT show the CRM sidebar (i.e. anything a
-// non-CRM user might land on — public booking, unsubscribe, deposit
-// payment, etc.). Mirrors the auth allowlist in proxy.js.
-const publicPaths = ['/login', '/book/', '/event/', '/unsubscribe/', '/preferences/', '/deposit/', '/welcome']
+const PUBLIC_PATHS = ['/login', '/reset-password', '/welcome', '/deposit', '/book', '/event', '/tv', '/studio-login']
 
-export default function AppShell({ children, user }) {
+export default function AppShell({ user, children }) {
   const pathname = usePathname()
-  // The exact "/" path also counts as public — when un1tdublin.com or
-  // www.un1tdublin.com hit "/", middleware rewrites to /welcome
-  // server-side, but usePathname() returns the BROWSER URL which is
-  // still "/" (the rewrite is invisible to the client). Without this,
-  // visitors to un1tdublin.com saw the CRM sidebar wrapped around the
-  // welcome page (and the absolute-positioned hero header scrolled
-  // with the inner container instead of the page). On crm.un1tdublin
-  // .com, hitting "/" never renders this layout because src/app/page
-  // .js does a server-side redirect to /dashboard before AppShell
-  // mounts — so this is safe.
-  const isPublic = pathname === '/' || publicPaths.some(p => pathname.startsWith(p))
+  const router = useRouter()
+  // Hooks must run before any early return — keep them at the top so the
+  // hook order is stable across the public/protected branches below.
+  const [mobileOpen, setMobileOpen] = useState(false)
 
-  // Mobile sidebar drawer state. Desktop (>= md breakpoint, 768px)
-  // ignores this entirely and always shows the sidebar; mobile hides
-  // it offscreen and reveals via the hamburger top-left.
-  const [sidebarOpen, setSidebarOpen] = useState(false)
+  const isPublic = PUBLIC_PATHS.some(p => pathname === p || pathname.startsWith(p + '/'))
 
-  // Auto-close the drawer when the user navigates. expo-router on
-  // mobile uses native push, but here Link clicks update pathname
-  // without unmounting the shell — so we listen for pathname changes
-  // and shut the drawer if it was open.
+  // Protected route but no resolved user (expired/unresolved session, or
+  // a transient profile-fetch miss in getCurrentUser). Previously the
+  // chrome rendered anyway with user=null, producing a dead shell —
+  // default "UN1T" logo, "Lead Management" subtitle, "User" footer and
+  // an EMPTY nav (every permission check fails on a null user). Send them
+  // to login instead, preserving where they were headed.
   useEffect(() => {
-    setSidebarOpen(false)
-  }, [pathname])
+    if (!isPublic && !user) {
+      router.replace(`/login?redirect=${encodeURIComponent(pathname || '/')}`)
+    }
+  }, [isPublic, user, pathname, router])
 
+  // Public pages: render bare, no sidebar/chrome.
   if (isPublic) {
-    return children
+    return <>{children}</>
+  }
+
+  // Protected route without a user: render nothing while the redirect
+  // above runs, rather than flashing the empty authenticated shell.
+  if (!user) {
+    return null
   }
 
   return (
-    <div className="flex flex-col h-screen overflow-hidden">
-      {user?.impersonatingFrom && <ImpersonationBanner user={user} />}
-
-      {/* Mobile-only top bar with hamburger. Only renders below the
-          md breakpoint; desktop has the sidebar inline so this is
-          unnecessary. The branding text mirrors what the sidebar
-          shows so the user always knows what app + location they're
-          in even when the drawer is closed. */}
-      <header className="md:hidden sticky top-0 z-30 bg-un1t-surface border-b border-un1t-border flex items-center justify-between px-4 py-2.5">
+    <div className="flex h-screen overflow-hidden bg-un1t-bg">
+      {/* Mobile top bar */}
+      <div className="md:hidden fixed top-0 inset-x-0 z-40 flex items-center gap-3 px-4 h-14 bg-un1t-surface border-b border-un1t-border">
         <button
-          onClick={() => setSidebarOpen(true)}
+          onClick={() => setMobileOpen(true)}
           aria-label="Open menu"
-          className="p-2 -ml-2 text-un1t-subtle hover:text-un1t-text active:bg-un1t-border/40 rounded-md transition-colors"
+          className="p-1.5 -ml-1.5 text-un1t-text"
         >
-          <Menu size={22} />
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
         </button>
-        <span className="text-sm font-semibold tracking-wider text-un1t-text">
-          UN1T
-        </span>
-        {/* Right-side spacer to keep the title centred (matches the
-            48px button width on the left). */}
-        <span className="w-10" aria-hidden />
-      </header>
-
-      <div className="flex flex-1 overflow-hidden relative">
-        {/* Backdrop — only renders on mobile when open. Tapping it
-            closes the drawer. md:hidden so it never appears on
-            desktop even if state somehow gets set there (e.g. a
-            window resize). */}
-        {sidebarOpen && (
-          <button
-            onClick={() => setSidebarOpen(false)}
-            aria-label="Close menu"
-            className="md:hidden fixed inset-0 z-40 bg-black/50 transition-opacity"
-          />
-        )}
-
-        <Sidebar
-          user={user}
-          mobileOpen={sidebarOpen}
-          onMobileClose={() => setSidebarOpen(false)}
-        />
-
-        {/* Wrap main + the pending-contracts alert in their own
-            flex column so the banner sits above the scrollable
-            main content area without scrolling away with the page. */}
-        <div className="flex-1 flex flex-col overflow-hidden">
-          <PendingContractsAlert />
-          <main className="flex-1 overflow-auto">
-            {children}
-          </main>
-        </div>
-        {hasPermission(user, 'assistant') && <AssistantBubble user={user} />}
+        <span className="font-bold tracking-wider text-un1t-text">{user?.activeLocation?.name || 'UN1T'}</span>
       </div>
-      {/* PERF.3 — Speed Insights + Analytics only on authenticated
-          pages. Public surfaces never render this branch. */}
-      <SpeedInsights />
-      <Analytics />
+
+      {/* Sidebar */}
+      <Sidebar user={user} mobileOpen={mobileOpen} onMobileClose={() => setMobileOpen(false)} />
+
+      {/* Main content */}
+      <div className="flex-1 flex flex-col overflow-hidden">
+        <ImpersonationBanner user={user} />
+        <main className="flex-1 overflow-y-auto pt-14 md:pt-0">
+          {children}
+        </main>
+      </div>
     </div>
   )
 }
