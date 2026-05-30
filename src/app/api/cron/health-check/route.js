@@ -1,22 +1,29 @@
-// GET /api/cron/health-check
+// Cron health-check endpoint.
 //
-// Liveness probe for external uptime monitoring (BetterStack, etc.).
-// Returns 200 when the app can reach its database, 503 otherwise — so a
-// real DB outage trips the monitor even when the Next.js server is up.
+// Reads public.cron_health (mig 053) and returns:
+//   200 { success: true,  all_healthy: true,  checks: [...] }   if every cron is fresh
+//   503 { success: false, all_healthy: false, stale: [...], checks: [...] }   if any cron is stale
 //
-// Public (listed in proxy.js publicPaths under /api/cron/) so the
-// monitor doesn't need auth. No secrets exposed — just a count.
-// Deliberately does NOT require CRON_SECRET — read-only liveness check.
+// Designed for external uptime monitors (UptimeRobot, Better Stack, Pingdom,
+// etc.) — they ping this URL every few minutes with the CRON_SECRET as the
+// Authorization header, and alert on any 5xx response.
 //
-// RESILIENCE (2026-05-30): the original returned 503 on the FIRST DB
-// hiccup, so a single transient blip (Supabase pooler reconnect, a cold
-// serverless connection, a momentary network glitch — all of which
-// self-heal in well under a second) tripped BetterStack and paged the
-// whole team. That produced repeated false "service down" alerts while
-// the app was actually fine. A liveness probe feeding a pager must only
-// fail on a SUSTAINED problem, so we now: bound each attempt with a
-// timeout, and retry once after a short backoff before declaring 503.
-// A genuine outage still fails both attempts and trips the alert.
+// Auth-gated by CRON_SECRET so we don't expose cron names + timestamps to
+// the public internet (mild info disclosure, but no reason to allow it).
+//
+// This route does NOT stamp a heartbeat for itself — it's a status reader,
+// not a worker.
+//
+// RESILIENCE (2026-05-30): the read of cron_health used to 503 on the
+// FIRST DB error. A single transient blip — Supabase pooler reconnect,
+// a cold serverless connection, a momentary network glitch (all self-
+// healing in well under a second) — therefore tripped BetterStack and
+// paged the team even though every cron was actually fresh (~5/6 false
+// "service down" alerts in a day). A monitor that feeds a pager must
+// only 503 on a SUSTAINED problem, so the cron_health READ is now
+// bounded by a timeout and retried once before we give up. The
+// cron-staleness semantics are UNCHANGED: a genuinely stale cron still
+// returns 503 every time.
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
@@ -29,19 +36,20 @@ const RETRY_DELAY_MS = 400
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
-// One DB round-trip, bounded by a timeout. Resolves { ok, error }.
-async function probe() {
+// One bounded read of the cron_health view. Returns { ok, checks } on
+// success or { ok: false, error } on a transient/DB failure.
+async function readCronHealth() {
   const db = createServerClient()
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), ATTEMPT_TIMEOUT_MS)
   try {
-    // Cheapest possible round-trip: HEAD-style count on a tiny table.
-    const { error } = await db
-      .from('locations')
-      .select('id', { count: 'exact', head: true })
+    const { data, error } = await db
+      .from('cron_health')
+      .select('name, last_ok_at, stale_seconds, max_allowed_seconds, is_stale')
+      .order('name')
       .abortSignal(controller.signal)
     if (error) return { ok: false, error: error.message }
-    return { ok: true }
+    return { ok: true, checks: data || [] }
   } catch (e) {
     return { ok: false, error: e?.message || 'health check failed' }
   } finally {
@@ -49,16 +57,40 @@ async function probe() {
   }
 }
 
-export async function GET() {
-  // First attempt.
-  let result = await probe()
-  if (result.ok) return NextResponse.json({ ok: true })
+export async function GET(request) {
+  const cronSecret = process.env.CRON_SECRET
+  const authHeader = request.headers.get('authorization')
+  if (!cronSecret || authHeader !== `Bearer ${cronSecret}`) {
+    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+  }
 
-  // Transient blip? Back off briefly and try once more. Only a
-  // sustained failure (both attempts) returns 503 and trips the alert.
-  await sleep(RETRY_DELAY_MS)
-  result = await probe()
-  if (result.ok) return NextResponse.json({ ok: true, recovered: true })
+  // Read cron_health, tolerating a single transient blip. Only a
+  // SUSTAINED failure to read it (both attempts) is treated as a cron
+  // health failure worth a 503.
+  let result = await readCronHealth()
+  if (!result.ok) {
+    await sleep(RETRY_DELAY_MS)
+    result = await readCronHealth()
+  }
+  if (!result.ok) {
+    return NextResponse.json(
+      { success: false, error: result.error, all_healthy: false },
+      { status: 503 }
+    )
+  }
 
-  return NextResponse.json({ ok: false, error: result.error }, { status: 503 })
+  const checks = result.checks
+  const stale = checks.filter((c) => c.is_stale)
+  const allHealthy = stale.length === 0
+
+  return NextResponse.json(
+    {
+      success: allHealthy,
+      all_healthy: allHealthy,
+      stale: stale.map((c) => c.name),
+      checks,
+      checked_at: new Date().toISOString(),
+    },
+    { status: allHealthy ? 200 : 503 }
+  )
 }
