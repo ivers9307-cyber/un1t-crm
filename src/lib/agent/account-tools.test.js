@@ -3,13 +3,12 @@ import { describe, it, expect } from 'vitest'
 import {
   identityMatches,
   formatMembership,
-  formatNextClass,
   normEmail,
   ACCOUNT_TOOL_NAMES,
 } from './account-tools'
 
 describe('identityMatches', () => {
-  const contact = { email: 'Jo@Example.com', birthday: '1990-05-14', last_name: 'Murphy' }
+  const contact = { email: 'Jo@Example.com', dob: '1990-05-14', last_name: 'Murphy' }
 
   it('passes on matching email (case-insensitive)', () => {
     expect(identityMatches(contact, { email: 'jo@example.com' })).toBe(true)
@@ -18,8 +17,8 @@ describe('identityMatches', () => {
   it('passes on DOB + last name together', () => {
     expect(identityMatches(contact, { date_of_birth: '1990-05-14', last_name: 'murphy' })).toBe(true)
   })
-  it('handles a Date/ISO birthday value', () => {
-    const c = { ...contact, birthday: '1990-05-14T00:00:00.000Z' }
+  it('handles a Date/ISO dob value on the contact', () => {
+    const c = { ...contact, dob: '1990-05-14T00:00:00.000Z' }
     expect(identityMatches(c, { date_of_birth: '1990-05-14', last_name: 'Murphy' })).toBe(true)
   })
   it('fails on DOB alone or last name alone', () => {
@@ -35,54 +34,39 @@ describe('identityMatches', () => {
     expect(identityMatches(null, { email: 'jo@example.com' })).toBe(false)
   })
   it('does not match when the contact has no email but one is provided', () => {
-    expect(identityMatches({ birthday: '1990-05-14', last_name: 'Murphy' }, { email: 'jo@example.com' })).toBe(false)
+    expect(identityMatches({ dob: '1990-05-14', last_name: 'Murphy' }, { email: 'jo@example.com' })).toBe(false)
   })
 })
 
 describe('formatMembership', () => {
-  it('maps states to friendly labels', () => {
-    expect(formatMembership({ membership_state: 'member', membership_plan_name_full: 'Unlimited', membership_plan_price: '€89' }))
-      .toEqual({ found: true, status: 'active', raw_state: 'member', plan: 'Unlimited', price: '€89' })
-    expect(formatMembership({ membership_state: 'paused' }).status).toBe('paused')
-    expect(formatMembership({ membership_state: 'cancelled' }).status).toBe('cancelled')
+  it('maps state to a friendly label and exposes account_active', () => {
+    expect(formatMembership({ glofox_membership_state: 'active', glofox_account_active: true }))
+      .toEqual({ found: true, status: 'active', raw_state: 'active', account_active: true })
+    expect(formatMembership({ glofox_membership_state: 'paused', glofox_account_active: true }).status).toBe('paused')
+    expect(formatMembership({ glofox_membership_state: 'cancelled', glofox_account_active: false }).status).toBe('cancelled')
+    expect(formatMembership({ glofox_membership_state: 'future', glofox_account_active: false }).status).toMatch(/starting soon/)
   })
-  it('prefers full plan name, falls back to short', () => {
-    expect(formatMembership({ membership_state: 'member', membership_plan_name: 'Short' }).plan).toBe('Short')
+  it('falls back to account_active when state is absent', () => {
+    expect(formatMembership({ glofox_membership_state: null, glofox_account_active: true }).status).toBe('active')
+    expect(formatMembership({ glofox_membership_state: null, glofox_account_active: false }).status).toBe('not currently active')
   })
-  it('handles a missing contact', () => {
+  it('only includes a plan when one is present', () => {
+    expect(formatMembership({ glofox_membership_state: 'active', glofox_account_active: true }).plan).toBeUndefined()
+    expect(formatMembership({ glofox_membership_state: 'active', glofox_account_active: true, glofox_membership_plan_full: 'Unlimited' }).plan)
+      .toBe('Unlimited')
+  })
+  it('returns not-found for an empty / null record', () => {
     expect(formatMembership(null)).toEqual({ found: false })
-  })
-})
-
-describe('formatNextClass', () => {
-  const now = new Date('2026-06-01T12:00:00Z')
-  it('returns the soonest upcoming non-cancelled class', () => {
-    const rows = [
-      { class_name: 'Later', class_time: '2026-06-03T10:00:00Z', status: 'booked' },
-      { class_name: 'Soonest', class_time: '2026-06-01T18:00:00Z', status: 'booked' },
-      { class_name: 'Past', class_time: '2026-05-30T10:00:00Z', status: 'booked' },
-    ]
-    expect(formatNextClass(rows, now)).toEqual({ found: true, class_name: 'Soonest', class_time: '2026-06-01T18:00:00Z' })
-  })
-  it('skips cancelled classes', () => {
-    const rows = [
-      { class_name: 'Cancelled', class_time: '2026-06-01T18:00:00Z', status: 'cancelled' },
-      { class_name: 'Good', class_time: '2026-06-02T18:00:00Z', status: 'booked' },
-    ]
-    expect(formatNextClass(rows, now).class_name).toBe('Good')
-  })
-  it('returns not-found when nothing upcoming', () => {
-    expect(formatNextClass([], now)).toEqual({ found: false })
-    expect(formatNextClass([{ class_name: 'Past', class_time: '2026-05-01T10:00:00Z', status: 'booked' }], now))
-      .toEqual({ found: false })
+    expect(formatMembership({ glofox_membership_state: null, glofox_account_active: null })).toEqual({ found: false })
   })
 })
 
 describe('tool registry', () => {
-  it('exposes the three account tools', () => {
+  it('exposes verify_identity + get_my_membership and NOT next-class', () => {
     expect(ACCOUNT_TOOL_NAMES.has('verify_identity')).toBe(true)
     expect(ACCOUNT_TOOL_NAMES.has('get_my_membership')).toBe(true)
-    expect(ACCOUNT_TOOL_NAMES.has('get_my_next_class')).toBe(true)
+    expect(ACCOUNT_TOOL_NAMES.has('get_my_next_class')).toBe(false)
+    expect(ACCOUNT_TOOL_NAMES.size).toBe(2)
   })
   it('normEmail lowercases + trims', () => {
     expect(normEmail('  Foo@Bar.COM ')).toBe('foo@bar.com')
