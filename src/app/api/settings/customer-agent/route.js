@@ -41,9 +41,13 @@ export async function GET() {
   const locationId = user.activeLocation?.id
   if (!locationId) return NextResponse.json({ success: false, error: 'No active location' }, { status: 400 })
 
-  const { data: loc } = await db.from('locations').select('settings').eq('id', locationId).single()
+  const { data: loc } = await db.from('locations').select('name, settings').eq('id', locationId).single()
   const settings = { ...DEFAULTS, ...(loc?.settings?.customer_agent || {}) }
-  return NextResponse.json({ success: true, settings })
+  return NextResponse.json({
+    success: true,
+    settings,
+    location: { id: locationId, name: loc?.name || null },
+  })
 }
 
 export async function PUT(request) {

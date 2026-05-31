@@ -1,16 +1,18 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import ConnectionsSection from '@/components/customer-agent/ConnectionsSection'
 
 // RADAR-AGENT.0 — operator settings for the customer-facing WhatsApp /
-// Instagram agent. Manager+ only. Two parts: (1) behaviour settings
-// (on/off, test mode, tone, holding message, quiet hours) and (2) the
-// knowledge editor the agent answers from. Ships OFF by default.
+// Instagram agent. Manager+ only. Three parts: (1) per-location channel
+// Connections, (2) behaviour settings, (3) the knowledge editor the
+// agent answers from. Ships OFF by default.
 
 const CATEGORIES = ['sales', 'account', 'pause', 'cancellation', 'hours', 'general', 'faq']
 
 export default function CustomerAgentSettingsPage() {
   const [settings, setSettings] = useState(null)
+  const [location, setLocation] = useState(null)
   const [entries, setEntries] = useState([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -26,7 +28,7 @@ export default function CustomerAgentSettingsPage() {
           fetch('/api/agent/knowledge').then(r => r.json()),
         ])
         if (cancelled) return
-        if (sRes.success) setSettings(sRes.settings)
+        if (sRes.success) { setSettings(sRes.settings); setLocation(sRes.location || null) }
         if (kRes.success) setEntries(kRes.entries || [])
       } catch {
         if (!cancelled) setError('Failed to load')
@@ -92,10 +94,12 @@ export default function CustomerAgentSettingsPage() {
     <div className="max-w-3xl">
       <h1 className="text-xl font-bold text-un1t-text mb-1">Customer Agent</h1>
       <p className="text-sm text-un1t-muted mb-6">
-        The AI assistant that answers customers on WhatsApp (Instagram coming soon). It only
+        The AI assistant that answers customers on WhatsApp and Instagram. It only
         answers from the knowledge below and hands off to a human for anything it can&apos;t answer.
         Ships off by default — use Test mode to trial it on your own number first.
       </p>
+
+      {location?.id && <ConnectionsSection locationId={location.id} locationName={location.name} />}
 
       {/* ── Behaviour ─────────────────────────────────────── */}
       <section className="space-y-5 border border-un1t-border rounded-lg p-5 mb-6">
