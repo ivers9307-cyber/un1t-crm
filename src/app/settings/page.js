@@ -3,7 +3,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
-import { Users, MapPin, Shield, UserCog, LayoutGrid, Trophy, Cable, ChevronRight, Bell } from 'lucide-react'
+import { Users, MapPin, Shield, UserCog, LayoutGrid, Trophy, Cable, ChevronRight, Bell, KeyRound } from 'lucide-react'
 
 // SETTINGS.3/.4 — reorganized this page:
 //   - Master tools moved to TOP (was mid-page)
@@ -38,6 +38,10 @@ export default async function SettingsPage() {
     db.from('locations').select('*').order('created_at'),
   ])
   const locations = locationsRes.data || []
+
+  // Per-org API keys are sensitive (programmatic data access), so the
+  // settings card is master/owner only — same gate as the API + page.
+  const canManageApiKeys = ['master', 'owner'].includes(user.role)
 
   return (
     <div className="p-8 max-w-4xl">
@@ -216,6 +220,21 @@ export default async function SettingsPage() {
         </div>
 
         <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4 space-y-4">
+          {canManageApiKeys && (
+            <Link
+              href="/settings/api-keys"
+              className="flex items-center justify-between hover:bg-un1t-border/20 -m-4 p-4 rounded-lg transition-colors"
+            >
+              <div className="flex items-center gap-3">
+                <KeyRound size={16} className="text-un1t-subtle" />
+                <div>
+                  <p className="text-sm font-medium">API keys</p>
+                  <p className="text-xs text-un1t-subtle mt-0.5">Create and revoke keys for programmatic access (n8n and other integrations)</p>
+                </div>
+              </div>
+              <ChevronRight size={16} className="text-un1t-subtle" />
+            </Link>
+          )}
           <Link
             href="/account/access-history"
             className="flex items-center justify-between hover:bg-un1t-border/20 -m-4 p-4 rounded-lg transition-colors"
