@@ -71,7 +71,32 @@ export async function GET(_request, props) {
   if (error) {
     return NextResponse.json({ success: false, error: error.message }, { status: 500 })
   }
-  return NextResponse.json({ success: true, data: registrations || [] })
+
+  // RACE2.6 — attach each registration's latest payment (id, status,
+  // checkout url) so the manage UI can surface a "copy payment link"
+  // action for teams still awaiting payment.
+  const regs = registrations || []
+  const regIds = regs.map((r) => r.id)
+  if (regIds.length > 0) {
+    const { data: payments } = await db
+      .from('race_payments')
+      .select('id, race_registration_id, status, payment_checkout_url, created_at')
+      .in('race_registration_id', regIds)
+      .order('created_at', { ascending: false })
+    const byReg = {}
+    for (const pmt of payments || []) {
+      if (!byReg[pmt.race_registration_id]) {
+        byReg[pmt.race_registration_id] = {
+          id: pmt.id,
+          status: pmt.status,
+          checkout_url: pmt.payment_checkout_url || null,
+        }
+      }
+    }
+    for (const r of regs) r.payment = byReg[r.id] || null
+  }
+
+  return NextResponse.json({ success: true, data: regs })
 }
 
 export async function POST(request, props) {

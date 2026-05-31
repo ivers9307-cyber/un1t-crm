@@ -192,6 +192,36 @@ export async function POST(request, props) {
       .in('status', ['pending_payment', 'confirmed'])
       .maybeSingle()
     if (existingReg) {
+      // RACE2.6 — a pending_payment registration is recoverable, not a
+      // duplicate. Find their existing payment and send them to settle
+      // it (the signup widget redirects to /event-pay/<payment.id> when
+      // the response carries data.payment.id) instead of dead-ending on
+      // a 409. A confirmed registration is a genuine duplicate → 409.
+      if (existingReg.status === 'pending_payment') {
+        const { data: pend } = await db
+          .from('race_payments')
+          .select('id, status, payment_checkout_url')
+          .eq('race_registration_id', existingReg.id)
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle()
+        if (pend?.id) {
+          return NextResponse.json({
+            success: true,
+            code: 'linked_existing',
+            data: {
+              registration_id: existingReg.id,
+              payment: {
+                id: pend.id,
+                status: pend.status,
+                url: pend.payment_checkout_url || null,
+                free: false,
+              },
+            },
+            message: 'You already have a booking awaiting payment — continue to pay for it.',
+          })
+        }
+      }
       return NextResponse.json({
         success: false,
         error: `${captainEmail} is already registered for this event.`,
