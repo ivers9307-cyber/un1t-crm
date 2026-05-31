@@ -1,23 +1,23 @@
 // RADAR-AGENT Phase 1 — account-answer tools for the customer agent.
 //
-// Lets the agent confirm a member's OWN membership status — but only
+// Lets the agent answer a member's OWN account questions — but only
 // after the SERVER verifies their identity against the synced CRM
 // contact. The model never decides who is verified: verify_identity
-// does a real DB match and stamps the conversation; get_my_membership
-// refuses unless that stamp is present and only reads the verified
+// does a real DB match and stamps the conversation; the lookup tools
+// refuse unless that stamp is present and only read the verified
 // contact.
 //
-// SCOPE NOTE (data reality): the CRM's Glofox sync reliably carries
-// membership STATE (active / paused / cancelled / future) and an
-// account-active flag, but NOT plan name, price, payment standing, or
-// class bookings (those columns are effectively empty, and the
-// bookings table holds race/event entries, not Glofox classes). So the
-// agent can answer "is my membership active/paused" — and hands off for
-// "what plan / am I paid up / when's my next class". Expanding those
-// needs a Glofox sync expansion or a live read (a later phase).
+// SCOPE NOTE (data reality, verified against prod): the Glofox sync
+// carries membership STATE (active/paused/cancelled/future), an
+// account-active flag, plan name (glofox_membership_plan, widely
+// populated), and a full class-booking history in the `bookings` table
+// (class_name, class_starts_at, attended, status — 48k+ rows). It does
+// NOT carry price or a real payment-standing flag, so the agent hands
+// off for "am I paid up / what did I pay". Everything else — status,
+// plan, next class, recent attendance — it can answer after verifying.
 //
-// Pure helpers (identityMatches, formatMembership) are unit-tested;
-// the executor does the IO.
+// Pure helpers (identityMatches, formatMembership, formatNextClass,
+// formatRecentAttendance) are unit-tested; the executor does the IO.
 
 // ── Anthropic tool definitions ──────────────────────────────────────
 export const ACCOUNT_TOOLS = [
@@ -25,8 +25,8 @@ export const ACCOUNT_TOOLS = [
     name: 'verify_identity',
     description:
       "Verify the customer's identity before sharing any of their account details. " +
-      'Call this when the customer asks about THEIR OWN membership (e.g. "is my membership ' +
-      'active", "is my account paused") and they have not been verified yet this ' +
+      'Call this when the customer asks about THEIR OWN account (membership status, plan, ' +
+      'next class, recent attendance) and they have not been verified yet this ' +
       'conversation. Provide whatever identifying details the customer gives. Verification ' +
       'succeeds on a matching email on file, OR a matching date of birth together with a ' +
       'matching last name. If it fails, ask for the missing detail.',
@@ -42,11 +42,27 @@ export const ACCOUNT_TOOLS = [
   {
     name: 'get_my_membership',
     description:
-      "Get the verified customer's current membership status (active, paused, cancelled). " +
-      'Only works after verify_identity has succeeded this conversation. Use for ' +
-      '"is my membership active", "is my account paused". This returns STATUS ONLY — it ' +
-      'does NOT include the plan name, price, payment standing, or class bookings; for ' +
-      'those, hand off to a human.',
+      "Get the verified customer's current membership status (active, paused, cancelled) " +
+      'and plan name if on file. Only works after verify_identity has succeeded this ' +
+      'conversation. Use for "is my membership active", "is my account paused", "what plan ' +
+      'am I on". Does NOT include price or payment/billing standing — hand off for those.',
+    input_schema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'get_my_next_class',
+    description:
+      "Get the verified customer's next upcoming booked class (name + date/time). Only " +
+      'works after verify_identity has succeeded this conversation. Use for "when is my ' +
+      'next class", "what have I got booked".',
+    input_schema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'get_my_recent_attendance',
+    description:
+      "Get a short summary of the verified customer's recent class attendance (how many " +
+      'classes attended in the last 30 days, and when they last attended). Only works ' +
+      'after verify_identity has succeeded. Use for "how many classes have I done", "when ' +
+      'did I last come in".',
     input_schema: { type: 'object', properties: {} },
   },
 ]
@@ -92,9 +108,8 @@ export function identityMatches(contact, provided) {
 
 /**
  * Human-friendly membership summary for the agent to relay. Pure.
- * Reads only the reliably-synced Glofox columns: state + account-active.
- * Plan name is included ONLY if present (it almost never is); price,
- * payment standing and bookings are deliberately not reported here.
+ * Reads the reliably-synced Glofox columns: state + account-active +
+ * plan (when present). Price/payment standing are not reported here.
  */
 export function formatMembership(contact) {
   if (!contact) return { found: false }
@@ -109,8 +124,6 @@ export function formatMembership(contact) {
     future: 'starting soon (not active yet)',
     inactive: 'not currently active',
   }
-  // Derive a friendly status: prefer the explicit state; fall back to
-  // the account-active flag when state is absent.
   let status
   if (state && stateLabels[state]) status = stateLabels[state]
   else if (state) status = state
@@ -122,10 +135,38 @@ export function formatMembership(contact) {
     raw_state: state,
     account_active: acctActive == null ? null : !!acctActive,
   }
-  // Only surface a plan name if one actually exists on the record.
   const plan = contact.glofox_membership_plan_full || contact.glofox_membership_plan || null
   if (plan) out.plan = plan
   return out
+}
+
+/** Format the next upcoming class from booking rows. Pure. now injectable for tests. */
+export function formatNextClass(bookings, now = new Date()) {
+  const upcoming = (bookings || [])
+    .filter(b => b && b.class_starts_at && new Date(b.class_starts_at) > now && b.status !== 'cancelled')
+    .sort((a, b) => new Date(a.class_starts_at) - new Date(b.class_starts_at))
+  if (upcoming.length === 0) return { found: false }
+  const next = upcoming[0]
+  return { found: true, class_name: next.class_name || 'your class', class_time: next.class_starts_at }
+}
+
+/**
+ * Summarise recent attendance from booking rows. Pure. Counts classes
+ * marked attended in the trailing `days` window and the most recent
+ * attended date. now injectable for tests.
+ */
+export function formatRecentAttendance(bookings, now = new Date(), days = 30) {
+  const windowStart = new Date(now.getTime() - days * 24 * 60 * 60 * 1000)
+  const attended = (bookings || [])
+    .filter(b => b && b.attended === true && b.class_starts_at && new Date(b.class_starts_at) <= now)
+    .sort((a, b) => new Date(b.class_starts_at) - new Date(a.class_starts_at))
+  const inWindow = attended.filter(b => new Date(b.class_starts_at) >= windowStart)
+  return {
+    found: attended.length > 0,
+    attended_last_30d: inWindow.length,
+    last_attended: attended.length > 0 ? attended[0].class_starts_at : null,
+    window_days: days,
+  }
 }
 
 // ── executor (IO) ───────────────────────────────────────────────────
@@ -173,6 +214,29 @@ export async function executeAccountTool(toolName, input, ctx) {
       .eq('id', verifiedId)
       .maybeSingle()
     return formatMembership(data)
+  }
+
+  if (toolName === 'get_my_next_class') {
+    const { data } = await db.from('bookings')
+      .select('class_name, class_starts_at, status, attended')
+      .eq('contact_id', verifiedId)
+      .eq('booking_type', 'class')
+      .gte('class_starts_at', new Date().toISOString())
+      .order('class_starts_at', { ascending: true })
+      .limit(10)
+    return formatNextClass(data)
+  }
+
+  if (toolName === 'get_my_recent_attendance') {
+    const since = new Date(Date.now() - 45 * 24 * 60 * 60 * 1000).toISOString()
+    const { data } = await db.from('bookings')
+      .select('class_starts_at, attended, status')
+      .eq('contact_id', verifiedId)
+      .eq('booking_type', 'class')
+      .gte('class_starts_at', since)
+      .order('class_starts_at', { ascending: false })
+      .limit(100)
+    return formatRecentAttendance(data)
   }
 
   return { error: 'unknown_tool', tool: toolName }
