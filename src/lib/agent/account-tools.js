@@ -44,10 +44,12 @@ export const ACCOUNT_TOOLS = [
   {
     name: 'get_my_membership',
     description:
-      "Get the verified customer's current membership status (active, paused, cancelled) " +
-      'and plan name if on file. Only works after verify_identity has succeeded this ' +
-      'conversation. Use for "is my membership active", "is my account paused", "what plan ' +
-      'am I on". Does NOT include price or payment/billing standing — hand off for those.',
+      "Get the verified customer's current membership status (active, paused, cancelled), " +
+      'their plan name, and (when the plan is in the studio catalog) a short description ' +
+      'of what the plan includes — its pricing and commitment terms. Only works after ' +
+      'verify_identity has succeeded this conversation. Use for "is my membership active", ' +
+      '"what plan am I on", "what does my plan include". For live billing standing or ' +
+      'payment issues, hand off.',
     input_schema: { type: 'object', properties: {} },
   },
   {
@@ -174,6 +176,9 @@ export function formatMembership(contact) {
   }
   const plan = contact.glofox_membership_plan_full || contact.glofox_membership_plan || null
   if (plan) out.plan = plan
+  // plan_details = pricing + commitment terms from the studio catalog,
+  // resolved by the caller (executor) and attached as membership_description.
+  if (contact.membership_description) out.plan_details = contact.membership_description
   return out
 }
 
@@ -283,6 +288,25 @@ export async function executeAccountTool(toolName, input, ctx) {
       .select('glofox_membership_state, glofox_account_active, glofox_membership_plan, glofox_membership_plan_full')
       .eq('id', verifiedId)
       .maybeSingle()
+    // Resolve the plan's description (pricing + commitment terms) from the
+    // studio membership catalog by plan name — same lookup the contact
+    // profile uses. Current-catalog plans resolve; archived/promo plans
+    // Glofox no longer returns just fall back to the plan name.
+    if (data?.glofox_membership_plan && locationId) {
+      const { data: catalogRows } = await db.from('glofox_memberships')
+        .select('name_clean, plan_names, description')
+        .eq('location_id', locationId)
+      // Lazy import: glofox-catalog statically pulls @/lib/supabase (and
+      // thus next), which isn't available in the unit-test env. Importing
+      // here keeps account-tools.js test-loadable while reusing the shared
+      // matcher in the server runtime.
+      const { matchCatalogToPlan } = await import('@/lib/glofox-catalog')
+      const catMatch = matchCatalogToPlan(catalogRows || [], {
+        plan: data.glofox_membership_plan,
+        planFull: data.glofox_membership_plan_full,
+      })
+      if (catMatch?.description) data.membership_description = catMatch.description
+    }
     return formatMembership(data)
   }
 
