@@ -6,6 +6,7 @@ import { verifyMetaSignature, safeEqual } from '@/lib/webhook-auth'
 import { sendPush, sendPushToRolesAtLocation } from '@/lib/push'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { recordWebhookEvent, WEBHOOK_PROVIDERS } from '@/lib/webhook-events'
+import { maybeAutoReply } from '@/lib/agent/auto-reply'
 
 // Force Node.js runtime — we use node:crypto for HMAC verification.
 export const runtime = 'nodejs'
@@ -336,6 +337,22 @@ async function handleIncomingMessage(db, message, contacts, phoneNumberId) {
     }
   } catch (err) {
     console.error('[whatsapp webhook] push failed', err)
+  }
+
+  // RADAR-AGENT.0 — customer-agent auto-reply. Gated OFF by default
+  // (locations.settings.customer_agent) + test-mode allow-list; runs
+  // only on text messages and never throws out of the webhook.
+  try {
+    await maybeAutoReply(db, {
+      conversationId,
+      locationId,
+      senderPhone,
+      contactId: contact?.id || null,
+      messageType,
+      body,
+    })
+  } catch (err) {
+    console.error('[whatsapp webhook] agent auto-reply failed', err?.message)
   }
 }
 

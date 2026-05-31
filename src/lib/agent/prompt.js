@@ -1,0 +1,103 @@
+// RADAR-AGENT.0 — customer-facing agent prompt.
+//
+// This is the CUSTOMER agent (WhatsApp / Instagram), NOT the staff CRM
+// assistant (that lives in assistant-prompt.js). Different audience,
+// different rules, a deliberately smaller and safer surface: in Phase 0
+// it can only ANSWER from the operator-curated knowledge base, and must
+// hand off to a human for anything it can't answer or anything
+// sensitive. It has no tools and can take no account actions yet.
+//
+// Escalation convention (Phase 0): the model signals a handoff by
+// starting its reply with the HANDOFF_PREFIX sentinel followed by a
+// short internal reason. The orchestrator (auto-reply.js) detects this,
+// sends the customer a safe holding message instead, and flags the
+// thread for a human. Using a sentinel keeps escalation deterministic
+// and unit-testable without a tool-call round-trip.
+
+export const HANDOFF_PREFIX = '[[HANDOFF]]'
+
+export const CUSTOMER_AGENT_BASE_PROMPT = `You are the customer support assistant for UN1T, a boutique fitness studio. You reply to people who message the studio on WhatsApp and Instagram.
+
+## Who you help and how
+- You answer questions about membership and sales, classes and schedules, prices, and general studio info.
+- You are warm, concise, and human. Keep replies short — this is a chat, not an email. A sentence or two is usually right. Never use markdown headings or bullet-point dumps.
+- Write in plain language a member would use. Don't sound robotic or corporate.
+
+## Hard rules (never break these)
+- ONLY state facts (prices, offers, policies, hours, what's included) that appear in the KNOWLEDGE section below. If the answer isn't there, do NOT guess or invent it — hand off to a human instead.
+- Never confirm, promise, or claim to have made any change to someone's account, membership, payment, or booking. You cannot take account actions. You can explain how something works, then hand off.
+- Never share another person's personal or account details.
+- Don't give medical, injury, legal, or financial advice.
+
+## When to hand off to a human
+Hand off when ANY of these are true:
+- The question needs a fact you don't have in KNOWLEDGE.
+- The person wants to pause, cancel, freeze, change, or get a refund on their membership or payment.
+- The person asks about their own account specifics (what plan am I on, am I paid up, when's my next class) — you cannot look these up yet.
+- The message is a complaint, mentions an injury or medical issue, a dispute, or anything legal.
+- The person asks to speak to a human, or seems upset.
+- You are unsure.
+
+## How to hand off
+When you hand off, respond with EXACTLY this format and nothing else:
+${HANDOFF_PREFIX} <a short internal reason for the team, e.g. "wants to cancel membership">
+Do not write a customer-facing message when handing off — the studio system sends the customer a holding message automatically.`
+
+/**
+ * Format the knowledge entries into a prompt section. Pure.
+ * @param {Array<{category?:string,title?:string,content?:string,enabled?:boolean}>} entries
+ * @returns {string}
+ */
+export function buildKnowledgeBlock(entries) {
+  const usable = (entries || []).filter(e => e && e.enabled !== false && (e.content || '').trim())
+  if (usable.length === 0) {
+    return 'KNOWLEDGE\n(No knowledge has been added yet. You cannot answer factual questions — hand off to a human for anything beyond a friendly greeting.)'
+  }
+  const byCat = {}
+  for (const e of usable) {
+    const cat = e.category || 'general'
+    ;(byCat[cat] ||= []).push(e)
+  }
+  const order = ['sales', 'account', 'hours', 'pause', 'cancellation', 'faq', 'general']
+  const cats = Object.keys(byCat).sort((a, b) => {
+    const ia = order.indexOf(a); const ib = order.indexOf(b)
+    return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib)
+  })
+  const lines = ['KNOWLEDGE', '(Only use the facts below. If something is missing, hand off.)', '']
+  for (const cat of cats) {
+    lines.push(`## ${cat.toUpperCase()}`)
+    for (const e of byCat[cat]) {
+      lines.push(`- ${e.title ? e.title + ': ' : ''}${(e.content || '').trim()}`)
+    }
+    lines.push('')
+  }
+  return lines.join('\n').trim()
+}
+
+/**
+ * Assemble the full customer-agent system prompt. Pure.
+ * @param {object} opts
+ * @param {string} [opts.businessName]
+ * @param {string} [opts.locationName]
+ * @param {string} [opts.tone]        operator-set personality/voice notes
+ * @param {string} [opts.extraRules]  operator-set extra guardrails
+ * @param {Array}  [opts.knowledge]   agent_knowledge rows
+ * @param {string} [opts.today]       YYYY-MM-DD (for "today" awareness)
+ * @returns {string}
+ */
+export function buildCustomerSystemPrompt(opts = {}) {
+  const { businessName, locationName, tone, extraRules, knowledge, today } = opts
+  const parts = [CUSTOMER_AGENT_BASE_PROMPT]
+
+  const ctx = []
+  if (businessName) ctx.push(`- Business: ${businessName}`)
+  if (locationName) ctx.push(`- Studio: ${locationName}`)
+  if (today) ctx.push(`- Today's date: ${today}`)
+  if (ctx.length) parts.push('## Context\n' + ctx.join('\n'))
+
+  if (tone && tone.trim()) parts.push('## Tone & voice (from the studio)\n' + tone.trim())
+  if (extraRules && extraRules.trim()) parts.push('## Extra rules (from the studio)\n' + extraRules.trim())
+
+  parts.push(buildKnowledgeBlock(knowledge))
+  return parts.join('\n\n')
+}
