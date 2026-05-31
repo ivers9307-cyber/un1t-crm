@@ -198,6 +198,8 @@ export default function RaceEventForm({ race, locationId }) {
   // for all kinds.
   const [memberPricingEnabled, setMemberPricingEnabled] = useState(!!race?.member_pricing_enabled)
   const [membersOnly, setMembersOnly] = useState(!!race?.members_only)
+  // EVENTS-LOC.2: shared = event appears in every location's list.
+  const [shared, setShared] = useState(!!race?.shared)
   const [memberFee, setMemberFee] = useState(
     race?.member_fee_cents != null ? String(race.member_fee_cents / 100) : ''
   )
@@ -345,6 +347,7 @@ export default function RaceEventForm({ race, locationId }) {
       active,
       member_pricing_enabled: memberPricingEnabled,
       members_only: membersOnly,
+      shared,
       member_fee_cents: memberPricingEnabled ? memberFeeCents : null,
       non_member_fee_cents: nonMemberFeeCents,
       // TV logos: race-only. For non-race kinds we send an empty
@@ -754,6 +757,20 @@ export default function RaceEventForm({ race, locationId }) {
             className={`shrink-0 w-10 h-5 rounded-full ${membersOnly ? 'bg-amber-500' : 'bg-un1t-border'}`}
           >
             <div className={`w-4 h-4 rounded-full bg-white transition-transform ${membersOnly ? 'translate-x-5' : 'translate-x-0.5'}`} />
+          </button>
+        </div>
+
+        <div className="flex items-center justify-between gap-3 pt-2 border-t border-un1t-border">
+          <div>
+            <div className="text-sm text-un1t-text">Shared across all locations</div>
+            <div className="text-[11px] text-un1t-subtle">Show this {meta.value === 'race' ? 'race' : 'event'} in every studio&apos;s events list, not just its own location.</div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setShared(v => !v)}
+            className={`shrink-0 w-10 h-5 rounded-full ${shared ? 'bg-indigo-500' : 'bg-un1t-border'}`}
+          >
+            <div className={`w-4 h-4 rounded-full bg-white transition-transform ${shared ? 'translate-x-5' : 'translate-x-0.5'}`} />
           </button>
         </div>
       </div>

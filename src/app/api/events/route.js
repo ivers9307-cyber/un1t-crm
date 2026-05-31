@@ -55,6 +55,8 @@ const CreateSchema = z.object({
   // Member pricing (mig 084).
   member_pricing_enabled: z.boolean().optional(),
   members_only: z.boolean().optional(),
+  // EVENTS-LOC.2: when true, this event shows in every location's list.
+  shared: z.boolean().optional(),
   member_fee_cents: z.number().int().nonnegative().nullable().optional(),
   non_member_fee_cents: z.number().int().nonnegative().nullable().optional(),
   payment_currency: z.string().length(3).optional(),
@@ -98,7 +100,7 @@ export async function GET(request) {
       registration_opens_at, registration_closes_at,
       allowed_team_sizes, active, created_at, updated_at,
       member_pricing_enabled, member_fee_cents, non_member_fee_cents,
-      members_only, payment_currency,
+      members_only, payment_currency, shared,
       waves:race_waves ( id, start_time, capacity, label, display_order ),
       registrations:race_registrations ( id, status, race_started_at, race_finished_at, wave_id, team_composition )
     `)
@@ -153,6 +155,7 @@ export async function POST(request) {
       active: body.active ?? true,
       member_pricing_enabled: body.member_pricing_enabled ?? false,
       members_only: body.members_only ?? false,
+      shared: body.shared ?? false,
       // Only persist member_fee_cents when pricing is on — keeps the
       // table consistent ("if you see member_fee, member pricing is enabled").
       member_fee_cents: (body.member_pricing_enabled && body.member_fee_cents != null) ? body.member_fee_cents : null,

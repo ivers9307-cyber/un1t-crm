@@ -39,6 +39,8 @@ const UpdateSchema = z.object({
   // Member pricing (mig 084).
   member_pricing_enabled: z.boolean().optional(),
   members_only: z.boolean().optional(),
+  // EVENTS-LOC.2: shared = show this event in every location's list.
+  shared: z.boolean().optional(),
   member_fee_cents: z.number().int().nonnegative().nullable().optional(),
   non_member_fee_cents: z.number().int().nonnegative().nullable().optional(),
   payment_currency: z.string().length(3).optional(),
@@ -57,7 +59,7 @@ async function loadRace(db, id) {
       registration_opens_at, registration_closes_at,
       allowed_team_sizes, active, created_at, updated_at,
       member_pricing_enabled, member_fee_cents, non_member_fee_cents,
-      members_only, payment_currency, tv_logos,
+      members_only, payment_currency, tv_logos, shared,
       waves:race_waves ( id, start_time, capacity, label, display_order ),
       registrations:race_registrations (
         id, status, race_started_at, race_finished_at, registered_at, wave_id,
