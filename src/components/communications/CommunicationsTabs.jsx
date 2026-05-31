@@ -13,6 +13,7 @@ export default function CommunicationsTabs({ canEmail, canWhatsapp }) {
 
   const tabs = [
     canWhatsapp && { id: 'inbox',      label: 'Inbox',      href: '/communications/inbox' },
+    canWhatsapp && { id: 'instagram',  label: 'Instagram',  href: '/communications/instagram' },
     canEmail    && { id: 'sequences',  label: 'Sequences',  href: '/communications/sequences' },
     canEmail    && { id: 'campaigns',  label: 'Campaigns',  href: '/communications/campaigns' },
     canWhatsapp && { id: 'broadcasts', label: 'Broadcasts', href: '/communications/broadcasts' },
