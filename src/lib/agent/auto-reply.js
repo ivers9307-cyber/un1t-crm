@@ -1,10 +1,11 @@
 // RADAR-AGENT — customer-agent auto-reply orchestrator (IO).
 //
 // Channel-agnostic. The shared brain (settings gate, knowledge,
-// history, the Anthropic call, parse, handoff) lives in
+// history, the Anthropic tool-use loop, parse, handoff) lives in
 // runChannelAgent(); a per-channel ADAPTER supplies the table names,
 // the send function, the row shapes, and the notification labels. The
-// pure decisions/formatting are in core.js / prompt.js.
+// pure decisions/formatting are in core.js / prompt.js, and the
+// account-answer tools are in account-tools.js.
 //
 // Channels today:
 //   - WhatsApp: maybeAutoReply(), called from the WhatsApp webhook.
@@ -13,8 +14,10 @@
 // Both reuse the exact same runner — only the adapter differs.
 //
 // Safety posture: gated OFF by default (locations.settings
-// .customer_agent) + test-mode allow-list; no tools / no account
-// actions (answers from knowledge or hands off); never throws.
+// .customer_agent) + test-mode allow-list; the only actions are
+// READ-ONLY account lookups behind server-enforced identity
+// verification (account-tools.js). Answers from knowledge or hands off.
+// Never throws.
 
 import { sendTextMessage } from '@/lib/whatsapp'
 import { sendPushToRolesAtLocation } from '@/lib/push'
@@ -27,10 +30,12 @@ import {
   AGENT_MESSAGE_SOURCE,
   DEFAULT_HOLDING_MESSAGE,
 } from './core'
+import { ACCOUNT_TOOLS, executeAccountTool } from './account-tools'
 
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages'
 const AGENT_MODEL = 'claude-sonnet-4-20250514'
 const MAX_HISTORY = 20
+const MAX_TOOL_ITERATIONS = 4
 
 /**
  * Generic per-channel agent turn.
@@ -52,9 +57,9 @@ export async function runChannelAgent(db, adapter, ctx) {
     .single()
   const settings = loc?.settings?.customer_agent || null
 
-  // Per-conversation kill switch (human takeover / prior escalation).
+  // Conversation state: kill switch + linked contact + verification.
   const { data: conv } = await db.from(adapter.conversationsTable)
-    .select('agent_active')
+    .select('agent_active, contact_id, agent_verified_contact_id')
     .eq('id', conversationId)
     .single()
 
@@ -91,28 +96,78 @@ export async function runChannelAgent(db, adapter, ctx) {
   const messages = formatHistoryForClaude(history || [], { maxMessages: MAX_HISTORY })
   if (messages.length === 0) return { handled: false, reason: 'no_history' }
 
+  // Tool-execution context. verifiedContactId is mutable: verify_identity
+  // both stamps the DB and updates this so later tools in the same turn
+  // see the verification immediately.
+  const toolCtx = {
+    db,
+    conversationId,
+    conversationsTable: adapter.conversationsTable,
+    contactId: conv?.contact_id || contactId || null,
+    verifiedContactId: conv?.agent_verified_contact_id || null,
+    locationId,
+  }
+
   let modelText = ''
   try {
-    const res = await fetch(ANTHROPIC_API_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01',
-      },
-      body: JSON.stringify({
-        model: AGENT_MODEL,
-        max_tokens: 600,
-        system: systemPrompt,
-        messages,
-      }),
-    })
-    if (!res.ok) {
-      console.error('[radar-agent] Anthropic error', res.status, await res.text().catch(() => ''))
-      return { handled: false, reason: 'model_error' }
+    let iterations = MAX_TOOL_ITERATIONS
+    let done = false
+    while (iterations-- > 0 && !done) {
+      const res = await fetch(ANTHROPIC_API_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01',
+        },
+        body: JSON.stringify({
+          model: AGENT_MODEL,
+          max_tokens: 600,
+          system: systemPrompt,
+          messages,
+          tools: ACCOUNT_TOOLS,
+        }),
+      })
+      if (!res.ok) {
+        console.error('[radar-agent] Anthropic error', res.status, await res.text().catch(() => ''))
+        return { handled: false, reason: 'model_error' }
+      }
+      const data = await res.json()
+      const content = data.content || []
+
+      if (data.stop_reason === 'tool_use') {
+        messages.push({ role: 'assistant', content })
+        const toolResults = []
+        for (const block of content) {
+          if (block.type !== 'tool_use') continue
+          const result = await executeAccountTool(block.name, block.input || {}, toolCtx)
+          if (block.name === 'verify_identity' && result?.verified) {
+            // Re-read the contact id the server just stamped so the
+            // follow-up lookups in this same turn are authorised.
+            const { data: fresh } = await db.from(adapter.conversationsTable)
+              .select('agent_verified_contact_id')
+              .eq('id', conversationId)
+              .single()
+            toolCtx.verifiedContactId = fresh?.agent_verified_contact_id || toolCtx.verifiedContactId
+          }
+          toolResults.push({
+            type: 'tool_result',
+            tool_use_id: block.id,
+            content: JSON.stringify(result),
+          })
+        }
+        messages.push({ role: 'user', content: toolResults })
+        continue
+      }
+
+      // Final turn — collect text.
+      modelText = content.filter(b => b.type === 'text').map(b => b.text).join('\n')
+      done = true
     }
-    const data = await res.json()
-    modelText = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n')
+    if (!done) {
+      // Ran out of tool iterations without a final text turn — hand off.
+      modelText = ''
+    }
   } catch (err) {
     console.error('[radar-agent] model call failed', err?.message)
     return { handled: false, reason: 'model_exception' }
