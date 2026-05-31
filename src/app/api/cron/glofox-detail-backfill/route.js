@@ -160,7 +160,7 @@ async function backfillLocation(db, location, startedAt) {
           const { ok, member } = await fetchMemberResult(creds, c.glofox_member_id)
           if (!ok || !member) { summary.fetch_failed++; continue }
           const r = await applyMemberSync(db, location.id, member, {
-            creds, membershipCache, skipBookings: true, skipInteractions: true,
+            creds, membershipCache, skipBookings: true, skipInteractions: true, skipReclassify: true,
           })
           if (r?.error) summary.error++
           else summary[r.action] = (summary[r.action] || 0) + 1

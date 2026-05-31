@@ -1774,29 +1774,44 @@ export async function applyMemberSync(db, locationId, member, opts = {}) {
   // state); ensureDealForContact runs classifyContact internally.
   // Best-effort: a deal-write failure must not roll back the
   // contact write.
+  // PIPELINE-FLAP fix — only reclassify (move the deal) when this sync
+  // actually has the attendance signal the classifier needs. Callers
+  // that skip the booking fetch (opts.skipBookings — e.g. the detail-
+  // backfill cron, which only refreshes plan/membership detail) MUST
+  // pass opts.skipReclassify so they don't run classifyContact with
+  // attendance blanked to 0 and wrongly flip active members to dormant.
+  // The booking-aware paths (full glofox-sync, webhook re-fetch) leave
+  // it unset and remain the sole classifiers. Guarded on skipBookings
+  // too so a future skipBookings caller can't silently reintroduce the
+  // flap.
+  const reclassify = !opts.skipReclassify && !opts.skipBookings
   let dealResult = null
-  try {
-    const m = preview.mapped || {}
-    const contactSnapshot = {
-      glofox_membership_status: m.glofox_membership_status,
-      last_attended_at:    m.last_attended_at,
-      total_attended_7d:   m.total_attended_7d,
-      total_attended_30d:  m.total_attended_30d,
-      // last_payment_at + lifetime_transaction_count come from
-      // INVOICE_UPDATED webhooks (GLOFOX2.1.20) or the PIPELINE5.5
-      // backfill — applyMemberSync doesn't compute them, so we
-      // pull from the existing row when available.
-      last_payment_at:     m.last_payment_at  ?? (preview.existing?.last_payment_at ?? null),
-      joined_at:           m.joined_at,
-      created_at:          preview.existing?.created_at ?? null,
-      trial_credits_remaining: m.trial_credits_remaining,
+  if (reclassify) {
+    try {
+      const m = preview.mapped || {}
+      const contactSnapshot = {
+        glofox_membership_status: m.glofox_membership_status,
+        last_attended_at:    m.last_attended_at,
+        total_attended_7d:   m.total_attended_7d,
+        total_attended_30d:  m.total_attended_30d,
+        // last_payment_at + lifetime_transaction_count come from
+        // INVOICE_UPDATED webhooks (GLOFOX2.1.20) or the PIPELINE5.5
+        // backfill — applyMemberSync doesn't compute them, so we
+        // pull from the existing row when available.
+        last_payment_at:     m.last_payment_at  ?? (preview.existing?.last_payment_at ?? null),
+        joined_at:           m.joined_at,
+        created_at:          preview.existing?.created_at ?? null,
+        trial_credits_remaining: m.trial_credits_remaining,
+      }
+      dealResult = await ensureDealForContact(
+        db, locationId, contactId, contactSnapshot,
+        m.name || null,
+      )
+    } catch (e) {
+      dealResult = { action: 'error', error: e?.message || 'deal write threw' }
     }
-    dealResult = await ensureDealForContact(
-      db, locationId, contactId, contactSnapshot,
-      m.name || null,
-    )
-  } catch (e) {
-    dealResult = { action: 'error', error: e?.message || 'deal write threw' }
+  } else {
+    dealResult = { action: 'skipped', reason: 'reclassify skipped (no booking signal)' }
   }
 
   // GLOFOX2.1.15 — upsert Glofox interactions into CRM activity
