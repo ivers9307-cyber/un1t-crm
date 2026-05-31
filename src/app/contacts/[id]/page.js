@@ -1,4 +1,5 @@
 import { createServerClient } from '@/lib/supabase'
+import { matchCatalogToPlan } from '@/lib/glofox-catalog'
 import { notFound } from 'next/navigation'
 import Link from 'next/link'
 import { ArrowLeft, Mail, Phone, Calendar, MessageSquare, CheckSquare, Clock, BookOpen, ArrowRight, MessageCircle } from 'lucide-react'
@@ -63,6 +64,22 @@ export default async function ContactDetailPage(props) {
   if (!contactRes.data) notFound()
 
   const contact = contactRes.data
+
+  // GLOFOX-CATALOG — resolve the member's plan description (pricing +
+  // commitment terms) from the studio membership catalog by plan name.
+  // Current-catalog plans resolve; archived/promo plans Glofox no longer
+  // returns won't, and we just show the plan name without terms.
+  if (contact.glofox_membership_plan && contact.location_id) {
+    const { data: catalogRows } = await db.from('glofox_memberships')
+      .select('name_clean, plan_names, description')
+      .eq('location_id', contact.location_id)
+    const catMatch = matchCatalogToPlan(catalogRows || [], {
+      plan: contact.glofox_membership_plan,
+      planFull: contact.glofox_membership_plan_full,
+    })
+    if (catMatch?.description) contact.membership_description = catMatch.description
+  }
+
   const deals = dealsRes.data || []
   const notes = notesRes.data || []
   const activities = activitiesRes.data || []
@@ -687,6 +704,9 @@ function GlofoxProfileCard({ contact }) {
               {contact.glofox_membership_plan_full
                 && contact.glofox_membership_plan_full !== contact.glofox_membership_plan && (
                 <p className="text-xs text-un1t-subtle">{contact.glofox_membership_plan_full}</p>
+              )}
+              {contact.membership_description && (
+                <p className="text-xs text-un1t-muted whitespace-pre-line mt-1">{contact.membership_description}</p>
               )}
             </div>
           )}
