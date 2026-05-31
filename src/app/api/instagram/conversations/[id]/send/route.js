@@ -4,7 +4,7 @@ import { z } from 'zod'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { sendInstagramMessage } from '@/lib/agent/instagram'
-import { resolveChannelConnection, getDecryptedChannelToken } from '@/lib/agent/channels'
+import { resolveChannelConnection } from '@/lib/agent/channels'
 
 const SendSchema = z.object({
   text: z.string().trim().min(1).max(1000),
@@ -43,17 +43,13 @@ export async function POST(request, props) {
     return NextResponse.json({ success: false, error: 'No Instagram recipient for this conversation' }, { status: 400 })
   }
 
-  // Resolve the location's Instagram connection + decrypt the send token.
-  const { data: conn } = await resolveChannelConnection(db, conversation.location_id, 'instagram')
+  // Resolve the location's active Instagram connection. resolveChannelConnection
+  // returns the raw row (access_token intact — server-side use only) or null.
+  const conn = await resolveChannelConnection(conversation.location_id, 'instagram', db)
   if (!conn) {
     return NextResponse.json({ success: false, error: 'No active Instagram connection for this location' }, { status: 400 })
   }
-  let token
-  try {
-    token = await getDecryptedChannelToken(conn)
-  } catch {
-    return NextResponse.json({ success: false, error: 'Could not read the Instagram access token' }, { status: 500 })
-  }
+  const token = conn.access_token
   if (!token) {
     return NextResponse.json({ success: false, error: 'Instagram connection has no access token' }, { status: 400 })
   }
