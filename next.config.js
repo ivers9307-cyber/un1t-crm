@@ -34,6 +34,13 @@ const nextConfig = {
   //     benefit (not user-facing).
   async rewrites() {
     return [
+      // ─── Two-location marketing site (un1tdublin.com split) ───────
+      // Clean public URLs for each studio's landing page. The split
+      // chooser lives at /welcome; these map the pretty paths to the
+      // per-studio pages (resolved by landing_page_settings.public_path).
+      { source: '/stillorgan',    destination: '/welcome/stillorgan' },
+      { source: '/hatch-street',  destination: '/welcome/hatch-street' },
+
       // E2 back-compat: old Calendly templates URLs forever-aliased
       { source: '/events',           destination: '/bookings/event-types' },
       { source: '/events/new',       destination: '/bookings/event-types/new' },
