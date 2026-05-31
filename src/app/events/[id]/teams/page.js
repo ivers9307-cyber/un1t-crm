@@ -9,7 +9,6 @@ import Link from 'next/link'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
-import { MANAGER_ROLES } from '@/lib/schemas'
 import RaceTeamsManager from '@/components/RaceTeamsManager'
 import { ArrowLeft } from 'lucide-react'
 
@@ -19,7 +18,6 @@ export default async function RaceTeamsPage(props) {
   const params = await props.params;
   const user = await getCurrentUser()
   if (!user) redirect('/login')
-  if (!MANAGER_ROLES.includes(user.role)) redirect('/')
   if (!hasPermission(user, 'races')) redirect('/')
 
   const db = createServerClient()
