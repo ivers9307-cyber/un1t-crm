@@ -9,7 +9,6 @@ import { redirect } from 'next/navigation'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
-import { MANAGER_ROLES } from '@/lib/schemas'
 import { Plus, Flag, ExternalLink, Users } from 'lucide-react'
 import { getAppUrl } from '@/lib/app-url'
 
@@ -47,7 +46,6 @@ export default async function EventsIndexPage(props) {
   const searchParams = await props.searchParams;
   const user = await getCurrentUser()
   if (!user) redirect('/login')
-  if (!MANAGER_ROLES.includes(user.role)) redirect('/')
   // Permission key 'races' kept internally — it gates UI for the
   // entire multi-kind events feature (mig 092 audit; renaming the
   // key would cascade to every per-role default + every location's

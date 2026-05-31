@@ -6,9 +6,9 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
-import { MANAGER_ROLES } from '@/lib/schemas'
 import { findOrCreateRaceContact } from '@/lib/race-contact-linking'
 
 export const runtime = 'nodejs'
@@ -24,8 +24,8 @@ export async function POST(request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  if (!MANAGER_ROLES.includes(user.role)) {
-    return NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 })
+  if (!hasPermission(user, 'races')) {
+    return NextResponse.json({ success: false, error: 'Races feature not enabled for your account' }, { status: 403 })
   }
 
   const validation = await validateBody(request, Schema)

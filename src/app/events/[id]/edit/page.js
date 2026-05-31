@@ -2,7 +2,6 @@ import { redirect, notFound } from 'next/navigation'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
-import { MANAGER_ROLES } from '@/lib/schemas'
 import RaceEventForm from '@/components/RaceEventForm'
 
 export const dynamic = 'force-dynamic'
@@ -11,7 +10,6 @@ export default async function EditRacePage(props) {
   const params = await props.params;
   const user = await getCurrentUser()
   if (!user) redirect('/login')
-  if (!MANAGER_ROLES.includes(user.role)) redirect('/')
   if (!hasPermission(user, 'races')) redirect('/')
 
   const db = createServerClient()
