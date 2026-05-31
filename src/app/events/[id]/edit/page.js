@@ -37,7 +37,7 @@ export default async function EditRacePage(props) {
 
   return (
     <div className="p-8 max-w-2xl">
-      <h2 className="text-2xl font-bold mb-1">Edit race</h2>
+      <h2 className="text-2xl font-bold mb-1">Edit event</h2>
       <p className="text-sm text-un1t-subtle mb-6">{race.name}</p>
       <RaceEventForm race={race} locationId={race.location_id} />
     </div>

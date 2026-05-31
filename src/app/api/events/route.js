@@ -38,7 +38,7 @@ const CreateSchema = z.object({
   // Mig 122: discriminator. Defaults to 'race' so existing operator
   // muscle memory (where every event is a race) keeps working without
   // the form having to send the field.
-  kind: z.enum(['race', 'workshop', 'seminar', 'open_day', 'masterclass']).optional(),
+  kind: z.enum(['race', 'workshop', 'seminar', 'open_day', 'masterclass', 'lead_gen']).optional(),
   // Mig 125: staffing requirement for the studio overview demand
   // classifier. 0-50 (matches DB CHECK). Default 1 (matches DB DEFAULT).
   // Form pre-fills per kind (race=4, workshop=1, etc.) but operator
@@ -47,7 +47,9 @@ const CreateSchema = z.object({
   name: z.string().trim().min(1).max(200),
   slug: z.string().trim().min(1).max(120).regex(/^[a-z0-9]+(-[a-z0-9]+)*$/, 'lowercase kebab-case').optional(),
   description: z.string().max(4000).nullable().optional(),
-  race_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'YYYY-MM-DD'),
+  // race_date is required for every kind EXCEPT lead_gen (a no-date
+  // data-capture form). Enforced per-kind in the superRefine below.
+  race_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'YYYY-MM-DD').nullable().optional(),
   registration_opens_at: z.string().datetime().nullable().optional(),
   registration_closes_at: z.string().datetime().nullable().optional(),
   allowed_team_sizes: z.array(z.number().int().positive().max(50)).min(1).max(20).optional(),
@@ -67,7 +69,18 @@ const CreateSchema = z.object({
   // Waves (mig 083) — at least one required for a usable race.
   // Server normalises by start_time ascending; UNIQUE on
   // (race_event_id, start_time) catches duplicates from the DB side.
-  waves: z.array(WaveInputSchema).min(1, 'Add at least one wave.').max(50),
+  waves: z.array(WaveInputSchema).max(50).optional(),
+}).superRefine((val, ctx) => {
+  // Every kind except lead_gen needs a date AND at least one wave.
+  // lead_gen is a pure data-capture form: no date, no waves.
+  const kind = val.kind ?? 'race'
+  if (kind === 'lead_gen') return
+  if (!val.race_date) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['race_date'], message: 'Date is required.' })
+  }
+  if (!val.waves || val.waves.length < 1) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['waves'], message: 'Add at least one wave.' })
+  }
 })
 
 export async function GET(request) {
@@ -146,7 +159,7 @@ export async function POST(request) {
       name: body.name,
       slug,
       description: body.description ?? null,
-      race_date: body.race_date,
+      race_date: body.kind === 'lead_gen' ? null : body.race_date,
       registration_opens_at: body.registration_opens_at ?? null,
       registration_closes_at: body.registration_closes_at ?? null,
       allowed_team_sizes: body.allowed_team_sizes && body.allowed_team_sizes.length > 0
@@ -179,7 +192,11 @@ export async function POST(request) {
 
   // Insert the waves (mig 083). Sorted by start_time so display_order
   // defaults match temporal order if the operator didn't set them.
-  const sortedWaves = [...body.waves].sort((a, b) => (a.start_time || '').localeCompare(b.start_time || ''))
+  // lead_gen events have no waves — skip the whole block.
+  const sortedWaves = [...(body.waves || [])].sort((a, b) => (a.start_time || '').localeCompare(b.start_time || ''))
+  if (sortedWaves.length === 0) {
+    return NextResponse.json({ success: true, data: { ...data, waves: [] } }, { status: 201 })
+  }
   const waveRows = sortedWaves.map((w, i) => ({
     race_event_id: data.id,
     start_time: w.start_time,
