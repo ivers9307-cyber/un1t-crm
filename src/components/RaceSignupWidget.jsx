@@ -449,7 +449,7 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
           gets enough horizontal room that bullet items stay on a
           single line where reasonable. Form column still 540+px so
           inputs aren't crowded. */}
-      <div className="grid md:grid-cols-[520px_1fr] divide-y md:divide-y-0 md:divide-x divide-gray-200">
+      <div className={`grid ${isLeadGen ? 'md:grid-cols-2' : 'md:grid-cols-[520px_1fr]'} divide-y md:divide-y-0 md:divide-x divide-gray-200`}>
         {/* Event info sidebar */}
         <aside className="p-6">
           {location && (
@@ -466,7 +466,7 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
           <div className="space-y-2 text-sm text-gray-700">
             <div className="flex items-center gap-2">
               <Calendar size={14} className="text-gray-400" />
-              {new Date(race.race_date).toLocaleDateString('en-IE', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
+              {!isLeadGen && race.race_date ? new Date(race.race_date).toLocaleDateString('en-IE', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }) : null}
             </div>
             {wavesArr.length > 0 && (
               <div className="flex items-start gap-2">
