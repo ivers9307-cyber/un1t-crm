@@ -8,7 +8,7 @@
 // adjust without context-switching.
 
 import { useEffect, useState } from 'react'
-import { Plus, Trash2, Loader2, AlertCircle, Users, Check, X, Pencil, Star, BadgeCheck, Clock } from 'lucide-react'
+import { Plus, Trash2, Loader2, AlertCircle, Users, Check, X, Pencil, Star, BadgeCheck, Clock, Copy } from 'lucide-react'
 
 export default function RaceTeamsManager({ race }) {
   const [registrations, setRegistrations] = useState(null)
@@ -252,6 +252,7 @@ function TeamCard({ registration, waves, onChanged, onError }) {
   )
   const [showAddMember, setShowAddMember] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [copied, setCopied] = useState(false)
 
   async function moveWave(newWaveId) {
     if (newWaveId === registration.wave_id) return
@@ -269,6 +270,18 @@ function TeamCard({ registration, waves, onChanged, onError }) {
       onError(e.message || 'Network error')
     } finally {
       setBusy(false)
+    }
+  }
+
+  async function copyPaymentLink() {
+    const url = registration.payment?.checkout_url
+    if (!url) { onError('No payment link available for this team yet.'); return }
+    try {
+      await navigator.clipboard.writeText(url)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch {
+      onError(`Couldn't copy automatically. Link: ${url}`)
     }
   }
 
@@ -319,6 +332,17 @@ function TeamCard({ registration, waves, onChanged, onError }) {
               </option>
             ))}
           </select>
+          {registration.status === 'pending_payment' && registration.payment?.checkout_url && (
+            <button
+              type="button"
+              onClick={copyPaymentLink}
+              disabled={busy}
+              className="text-[11px] text-un1t-accent hover:underline inline-flex items-center gap-1 disabled:opacity-40"
+              title="Copy the payment link to send to the customer"
+            >
+              <Copy size={11} /> {copied ? 'Copied!' : 'Payment link'}
+            </button>
+          )}
           <button
             type="button"
             onClick={removeRegistration}
