@@ -7,7 +7,7 @@
 import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
+import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { Plus, Flag, ExternalLink, Users } from 'lucide-react'
@@ -60,17 +60,23 @@ export default async function EventsIndexPage(props) {
   const tab = rawTab === 'past' ? 'past' : 'upcoming'
 
   const db = createServerClient()
-  const locationIds = getUserLocationIds(user)
+  // EVENTS-LOC.2 — scope the list to the operator's ACTIVE location so
+  // each studio is independent (Hatch Street must not see Stillorgan's
+  // events), PLUS any event flagged `shared` (owned by one location but
+  // surfaced at every location). Master switches active location via the
+  // location switcher; non-master operators are pinned to theirs. No
+  // active location → empty list rather than leaking every location.
+  const activeLocationId = user.activeLocation?.id || null
   let races = []
-  if (locationIds.length > 0) {
+  if (activeLocationId) {
     const { data } = await db
       .from('race_events')
       .select(`
         id, name, slug, race_date, start_time, capacity, allowed_team_sizes,
-        active, kind, registration_opens_at, registration_closes_at,
+        active, kind, shared, location_id, registration_opens_at, registration_closes_at,
         registrations:race_registrations ( id, status )
       `)
-      .in('location_id', locationIds)
+      .or(`location_id.eq.${activeLocationId},shared.eq.true`)
       .order('race_date', { ascending: false })
     races = data || []
   }
@@ -186,6 +192,7 @@ export default async function EventsIndexPage(props) {
                     <tr key={r.id} className="hover:bg-un1t-border/20">
                       <td className="p-3">
                         <div className="font-medium text-un1t-text">{r.name}</div>
+                        {r.shared && <span className="inline-block mt-0.5 text-[10px] px-1.5 py-0.5 rounded-full bg-indigo-500/15 text-indigo-700">Shared</span>}
                         <div className="text-[11px] text-un1t-subtle font-mono mt-0.5">/{r.slug}</div>
                       </td>
                       <td className="p-3">
@@ -280,6 +287,7 @@ export default async function EventsIndexPage(props) {
                   <div className="flex items-start justify-between gap-2 mb-2">
                     <div className="min-w-0 flex-1">
                       <div className="font-semibold text-un1t-text">{r.name}</div>
+                      {r.shared && <span className="inline-block mt-0.5 text-[10px] px-1.5 py-0.5 rounded-full bg-indigo-500/15 text-indigo-700">Shared</span>}
                       <div className="text-[11px] text-un1t-subtle font-mono mt-0.5">/{r.slug}</div>
                     </div>
                     <div className="flex items-center gap-1.5 shrink-0">
