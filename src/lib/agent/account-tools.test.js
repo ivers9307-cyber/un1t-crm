@@ -7,6 +7,8 @@ import {
   formatRecentAttendance,
   normEmail,
   ACCOUNT_TOOL_NAMES,
+  buildPauseDetails,
+  buildCancellationDetails,
 } from './account-tools'
 
 describe('identityMatches', () => {
@@ -104,12 +106,48 @@ describe('formatRecentAttendance (rollup columns)', () => {
 })
 
 describe('tool registry', () => {
-  it('exposes all four tools', () => {
+  it('exposes all six tools (4 read + 2 request)', () => {
     expect([...ACCOUNT_TOOL_NAMES].sort()).toEqual(
-      ['get_my_membership', 'get_my_next_class', 'get_my_recent_attendance', 'verify_identity']
+      [
+        'get_my_membership', 'get_my_next_class', 'get_my_recent_attendance',
+        'request_cancellation', 'request_pause', 'verify_identity',
+      ].sort()
     )
   })
   it('normEmail lowercases + trims', () => {
     expect(normEmail('  Foo@Bar.COM ')).toBe('foo@bar.com')
+  })
+})
+
+
+// RADAR-AGENT Phase 2 — pause / cancellation request builders.
+describe('buildPauseDetails', () => {
+  it('captures + normalises dates and reason', () => {
+    expect(buildPauseDetails({ start_date: '2026-07-01', end_date: '2026-08-01T00:00:00Z', reason: '  travelling  ' }))
+      .toEqual({ start_date: '2026-07-01', end_date: '2026-08-01', reason: 'travelling' })
+  })
+  it('nulls missing / blank fields', () => {
+    expect(buildPauseDetails({})).toEqual({ start_date: null, end_date: null, reason: null })
+    expect(buildPauseDetails({ reason: '   ' }).reason).toBeNull()
+  })
+  it('ignores a non-date string', () => {
+    expect(buildPauseDetails({ start_date: 'next week' }).start_date).toBeNull()
+  })
+})
+
+describe('buildCancellationDetails', () => {
+  it('captures reason + desired date', () => {
+    expect(buildCancellationDetails({ reason: 'too expensive', desired_date: '2026-09-01' }))
+      .toEqual({ reason: 'too expensive', desired_date: '2026-09-01' })
+  })
+  it('nulls missing fields', () => {
+    expect(buildCancellationDetails({})).toEqual({ reason: null, desired_date: null })
+  })
+})
+
+describe('Phase 2 tool registry', () => {
+  it('exposes request_pause + request_cancellation', () => {
+    expect(ACCOUNT_TOOL_NAMES.has('request_pause')).toBe(true)
+    expect(ACCOUNT_TOOL_NAMES.has('request_cancellation')).toBe(true)
   })
 })

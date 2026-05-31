@@ -67,6 +67,41 @@ export const ACCOUNT_TOOLS = [
       'did I last come in".',
     input_schema: { type: 'object', properties: {} },
   },
+  {
+    name: 'request_pause',
+    description:
+      "Log a request to PAUSE the verified customer's membership for a human to approve. " +
+      'Only after verify_identity has succeeded. Gather what you can first: when they want ' +
+      'the pause to start and end (or how long), and the reason. You are NOT pausing it ' +
+      'yourself — this queues the request for the team. Tell the customer it has been ' +
+      'requested and the team will confirm; never say it is done.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        start_date: { type: 'string', description: 'Requested pause start, YYYY-MM-DD if given.' },
+        end_date: { type: 'string', description: 'Requested pause end / return date, YYYY-MM-DD if given.' },
+        reason: { type: 'string', description: "The customer's reason for pausing, in their words." },
+      },
+    },
+  },
+  {
+    name: 'request_cancellation',
+    description:
+      "Log a request to CANCEL the verified customer's membership for a human to approve. " +
+      'Only after verify_identity has succeeded. Per the studio flow, the assistant first ' +
+      'offers a pause as an alternative ONCE; call this tool when the customer still wants ' +
+      'to cancel (or declines the pause). Gather the reason and any desired cancellation ' +
+      'date. You are NOT cancelling it yourself — capture the request and queue it; the team ' +
+      'handles any further retention. Tell the customer it has been requested and the team ' +
+      'will be in touch; never say it is done.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        reason: { type: 'string', description: "The customer's reason for cancelling, in their words." },
+        desired_date: { type: 'string', description: 'Requested cancellation date, YYYY-MM-DD if given.' },
+      },
+    },
+  },
 ]
 
 export const ACCOUNT_TOOL_NAMES = new Set(ACCOUNT_TOOLS.map(t => t.name))
@@ -174,6 +209,36 @@ export function formatRecentAttendance(contact) {
   return { found: true, attended_last_30d: a30, attended_last_7d: a7, last_attended: last }
 }
 
+// ── pure request builders ───────────────────────────────────────────
+function cleanDate(d) {
+  if (!d) return null
+  const m = /^(\d{4}-\d{2}-\d{2})/.exec(String(d).trim())
+  return m ? m[1] : null
+}
+function cleanText(t, max = 1000) {
+  if (typeof t !== 'string') return null
+  const s = t.trim()
+  if (!s) return null
+  return s.length > max ? s.slice(0, max) : s
+}
+
+/** Build the details jsonb for a pause request. Pure. */
+export function buildPauseDetails(input = {}) {
+  return {
+    start_date: cleanDate(input.start_date),
+    end_date: cleanDate(input.end_date),
+    reason: cleanText(input.reason),
+  }
+}
+
+/** Build the details jsonb for a cancellation request. Pure. */
+export function buildCancellationDetails(input = {}) {
+  return {
+    reason: cleanText(input.reason),
+    desired_date: cleanDate(input.desired_date),
+  }
+}
+
 // ── executor (IO) ───────────────────────────────────────────────────
 // ctx: { db, conversationId, conversationsTable, contactId, verifiedContactId, locationId }
 export async function executeAccountTool(toolName, input, ctx) {
@@ -235,6 +300,26 @@ export async function executeAccountTool(toolName, input, ctx) {
       .eq('id', verifiedId)
       .maybeSingle()
     return formatRecentAttendance(data)
+  }
+
+  if (toolName === 'request_pause' || toolName === 'request_cancellation') {
+    const kind = toolName === 'request_pause' ? 'pause' : 'cancellation'
+    const details = kind === 'pause' ? buildPauseDetails(input) : buildCancellationDetails(input)
+    const { error } = await db.from('agent_membership_requests').insert({
+      location_id: locationId,
+      contact_id: verifiedId,
+      kind,
+      channel: ctx.channel || null,
+      conversation_id: conversationId || null,
+      details,
+      customer_note: details.reason || null,
+      status: 'pending',
+      // Cancellations are flagged for a retention attempt by default so a
+      // human can try a save before it's actioned.
+      retention_flagged: kind === 'cancellation',
+    })
+    if (error) return { error: 'queue_failed', message: error.message }
+    return { requested: true, kind }
   }
 
   return { error: 'unknown_tool', tool: toolName }
