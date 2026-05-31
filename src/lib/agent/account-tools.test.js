@@ -56,46 +56,50 @@ describe('formatMembership', () => {
   })
 })
 
-describe('formatNextClass', () => {
+describe('formatNextClass (recent_bookings jsonb shape)', () => {
   const now = new Date('2026-06-01T12:00:00Z')
+  const sec = (iso) => Math.floor(new Date(iso).getTime() / 1000)
   it('returns the soonest upcoming non-cancelled class', () => {
     const rows = [
-      { class_name: 'Later', class_starts_at: '2026-06-03T10:00:00Z', status: 'booked' },
-      { class_name: 'Soonest', class_starts_at: '2026-06-01T18:00:00Z', status: 'booked' },
-      { class_name: 'Past', class_starts_at: '2026-05-30T10:00:00Z', status: 'booked' },
+      { event_name: 'Later', time_start: sec('2026-06-03T10:00:00Z'), status: 'BOOKED' },
+      { event_name: 'Soonest', time_start: sec('2026-06-01T18:00:00Z'), status: 'BOOKED' },
+      { event_name: 'Past', time_start: sec('2026-05-30T10:00:00Z'), status: 'BOOKED' },
     ]
-    expect(formatNextClass(rows, now)).toEqual({ found: true, class_name: 'Soonest', class_time: '2026-06-01T18:00:00Z' })
+    const r = formatNextClass(rows, now)
+    expect(r.found).toBe(true)
+    expect(r.class_name).toBe('Soonest')
+    expect(r.class_time).toBe('2026-06-01T18:00:00.000Z')
+  })
+  it('falls back to model_name when event_name absent', () => {
+    const rows = [{ model_name: 'RALLY - CONDITIONING', time_start: sec('2026-06-02T18:00:00Z'), status: 'BOOKED' }]
+    expect(formatNextClass(rows, now).class_name).toBe('RALLY - CONDITIONING')
   })
   it('skips cancelled classes', () => {
     const rows = [
-      { class_name: 'Cancelled', class_starts_at: '2026-06-01T18:00:00Z', status: 'cancelled' },
-      { class_name: 'Good', class_starts_at: '2026-06-02T18:00:00Z', status: 'booked' },
+      { event_name: 'Cancelled', time_start: sec('2026-06-01T18:00:00Z'), status: 'CANCELLED' },
+      { event_name: 'Good', time_start: sec('2026-06-02T18:00:00Z'), status: 'BOOKED' },
     ]
     expect(formatNextClass(rows, now).class_name).toBe('Good')
   })
   it('returns not-found when nothing upcoming', () => {
     expect(formatNextClass([], now)).toEqual({ found: false })
-    expect(formatNextClass([{ class_name: 'Past', class_starts_at: '2026-05-01T10:00:00Z', status: 'booked' }], now)).toEqual({ found: false })
+    expect(formatNextClass([{ event_name: 'Past', time_start: sec('2026-05-01T10:00:00Z'), status: 'BOOKED' }], now)).toEqual({ found: false })
+    expect(formatNextClass(null, now)).toEqual({ found: false })
   })
 })
 
-describe('formatRecentAttendance', () => {
-  const now = new Date('2026-06-01T12:00:00Z')
-  it('counts attended classes in the last 30 days + last attended date', () => {
-    const rows = [
-      { class_starts_at: '2026-05-30T08:00:00Z', attended: true, status: 'booked' },
-      { class_starts_at: '2026-05-20T08:00:00Z', attended: true, status: 'booked' },
-      { class_starts_at: '2026-04-01T08:00:00Z', attended: true, status: 'booked' },  // outside 30d
-      { class_starts_at: '2026-05-28T08:00:00Z', attended: false, status: 'booked' },  // no-show, excluded
-    ]
-    const r = formatRecentAttendance(rows, now)
-    expect(r.found).toBe(true)
-    expect(r.attended_last_30d).toBe(2)
-    expect(r.last_attended).toBe('2026-05-30T08:00:00Z')
+describe('formatRecentAttendance (rollup columns)', () => {
+  it('reads the synced rollups off the contact row', () => {
+    const r = formatRecentAttendance({ total_attended_30d: 10, total_attended_7d: 2, last_attended_at: '2026-05-23T07:00:00Z' })
+    expect(r).toEqual({ found: true, attended_last_30d: 10, attended_last_7d: 2, last_attended: '2026-05-23T07:00:00Z' })
   })
-  it('returns found:false / zero when no attendance', () => {
-    expect(formatRecentAttendance([], now)).toEqual({ found: false, attended_last_30d: 0, last_attended: null, window_days: 30 })
-    expect(formatRecentAttendance([{ class_starts_at: '2026-05-30T08:00:00Z', attended: false }], now).found).toBe(false)
+  it('coerces missing counts to 0', () => {
+    const r = formatRecentAttendance({ total_attended_30d: null, total_attended_7d: null, last_attended_at: '2026-05-23T07:00:00Z' })
+    expect(r).toEqual({ found: true, attended_last_30d: 0, attended_last_7d: 0, last_attended: '2026-05-23T07:00:00Z' })
+  })
+  it('returns found:false when there is no attendance at all', () => {
+    expect(formatRecentAttendance({ total_attended_30d: 0, total_attended_7d: 0, last_attended_at: null })).toEqual({ found: false })
+    expect(formatRecentAttendance(null)).toEqual({ found: false })
   })
 })
 

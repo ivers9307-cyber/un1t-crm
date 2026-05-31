@@ -8,13 +8,15 @@
 // contact.
 //
 // SCOPE NOTE (data reality, verified against prod): the Glofox sync
-// carries membership STATE (active/paused/cancelled/future), an
-// account-active flag, plan name (glofox_membership_plan, widely
-// populated), and a full class-booking history in the `bookings` table
-// (class_name, class_starts_at, attended, status — 48k+ rows). It does
-// NOT carry price or a real payment-standing flag, so the agent hands
-// off for "am I paid up / what did I pay". Everything else — status,
-// plan, next class, recent attendance — it can answer after verifying.
+// denormalises class data onto the CONTACTS row (not a bookings table):
+//   - glofox_membership_state / glofox_account_active / glofox_membership_plan
+//   - last_attended_at, total_attended_30d, total_attended_7d (rollups)
+//   - recent_bookings (jsonb array; each {event_name, model_name,
+//     time_start unix-sec, attended, status, duration})
+// This is the exact source the contact profile's GLOFOX MEMBERSHIP card
+// renders. It does NOT carry price or a payment-standing flag, so the
+// agent hands off for "am I paid up / what did I pay". Everything else —
+// status, plan, next class, recent attendance — it answers after verifying.
 //
 // Pure helpers (identityMatches, formatMembership, formatNextClass,
 // formatRecentAttendance) are unit-tested; the executor does the IO.
@@ -140,33 +142,36 @@ export function formatMembership(contact) {
   return out
 }
 
-/** Format the next upcoming class from booking rows. Pure. now injectable for tests. */
-export function formatNextClass(bookings, now = new Date()) {
-  const upcoming = (bookings || [])
-    .filter(b => b && b.class_starts_at && new Date(b.class_starts_at) > now && b.status !== 'cancelled')
-    .sort((a, b) => new Date(a.class_starts_at) - new Date(b.class_starts_at))
+/**
+ * Format the next upcoming class from the contact's recent_bookings jsonb
+ * array (each row: { event_name, model_name, time_start unix-sec, status }).
+ * Pure. now injectable for tests.
+ */
+export function formatNextClass(recentBookings, now = new Date()) {
+  const nowSec = Math.floor(now.getTime() / 1000)
+  const upcoming = (recentBookings || [])
+    .filter(b => b && Number(b.time_start) > nowSec && String(b.status || '').toUpperCase() !== 'CANCELLED')
+    .sort((a, b) => Number(a.time_start) - Number(b.time_start))
   if (upcoming.length === 0) return { found: false }
   const next = upcoming[0]
-  return { found: true, class_name: next.class_name || 'your class', class_time: next.class_starts_at }
+  return {
+    found: true,
+    class_name: next.event_name || next.model_name || 'your class',
+    class_time: new Date(Number(next.time_start) * 1000).toISOString(),
+  }
 }
 
 /**
- * Summarise recent attendance from booking rows. Pure. Counts classes
- * marked attended in the trailing `days` window and the most recent
- * attended date. now injectable for tests.
+ * Summarise recent attendance from the contact's synced rollup columns
+ * (total_attended_30d, total_attended_7d, last_attended_at). Pure.
  */
-export function formatRecentAttendance(bookings, now = new Date(), days = 30) {
-  const windowStart = new Date(now.getTime() - days * 24 * 60 * 60 * 1000)
-  const attended = (bookings || [])
-    .filter(b => b && b.attended === true && b.class_starts_at && new Date(b.class_starts_at) <= now)
-    .sort((a, b) => new Date(b.class_starts_at) - new Date(a.class_starts_at))
-  const inWindow = attended.filter(b => new Date(b.class_starts_at) >= windowStart)
-  return {
-    found: attended.length > 0,
-    attended_last_30d: inWindow.length,
-    last_attended: attended.length > 0 ? attended[0].class_starts_at : null,
-    window_days: days,
-  }
+export function formatRecentAttendance(contact) {
+  if (!contact) return { found: false }
+  const a30 = Number(contact.total_attended_30d) || 0
+  const a7 = Number(contact.total_attended_7d) || 0
+  const last = contact.last_attended_at || null
+  if (!a30 && !a7 && !last) return { found: false }
+  return { found: true, attended_last_30d: a30, attended_last_7d: a7, last_attended: last }
 }
 
 // ── executor (IO) ───────────────────────────────────────────────────
@@ -217,25 +222,18 @@ export async function executeAccountTool(toolName, input, ctx) {
   }
 
   if (toolName === 'get_my_next_class') {
-    const { data } = await db.from('bookings')
-      .select('class_name, class_starts_at, status, attended')
-      .eq('contact_id', verifiedId)
-      .eq('booking_type', 'class')
-      .gte('class_starts_at', new Date().toISOString())
-      .order('class_starts_at', { ascending: true })
-      .limit(10)
-    return formatNextClass(data)
+    const { data } = await db.from('contacts')
+      .select('recent_bookings')
+      .eq('id', verifiedId)
+      .maybeSingle()
+    return formatNextClass(data?.recent_bookings)
   }
 
   if (toolName === 'get_my_recent_attendance') {
-    const since = new Date(Date.now() - 45 * 24 * 60 * 60 * 1000).toISOString()
-    const { data } = await db.from('bookings')
-      .select('class_starts_at, attended, status')
-      .eq('contact_id', verifiedId)
-      .eq('booking_type', 'class')
-      .gte('class_starts_at', since)
-      .order('class_starts_at', { ascending: false })
-      .limit(100)
+    const { data } = await db.from('contacts')
+      .select('total_attended_30d, total_attended_7d, last_attended_at')
+      .eq('id', verifiedId)
+      .maybeSingle()
     return formatRecentAttendance(data)
   }
 
