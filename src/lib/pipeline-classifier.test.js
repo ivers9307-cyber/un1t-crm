@@ -456,3 +456,35 @@ describe('classifyContact — real fixtures from the post-import audit', () => {
     expect(classifyContact(c, NOW)).toBe('dormant')
   })
 })
+
+// PIPELINE-FLAP regression — root cause of the Simon Goldsmith
+// "Active Member ⇄ Dormant" flapping (May 2026). A member's
+// classification diverges depending on whether attendance data is
+// present. The full sync supplies it (→ active_member); the detail-
+// backfill skips the booking fetch, leaving attendance null (→ dormant).
+// The fix is to NOT reclassify when there's no booking signal
+// (applyMemberSync opts.skipReclassify / skipBookings); these tests
+// pin the divergent classifier outputs that made the guard necessary.
+describe('PIPELINE-FLAP: member classification depends on attendance presence', () => {
+  const NOW = new Date('2026-05-31T03:30:00Z').getTime()
+  const recentlyAttendedMember = {
+    glofox_membership_status: 'member',
+    last_attended_at: '2026-05-23T07:00:00Z', // 8 days before NOW
+    total_attended_30d: 10,
+    total_attended_7d: 0,
+  }
+
+  it('classifies a recently-attended member as active_member (full-sync data)', () => {
+    expect(classifyContact(recentlyAttendedMember, NOW)).toBe('active_member')
+  })
+
+  it('drops the SAME member to dormant when attendance is blanked (backfill data)', () => {
+    const noAttendanceSignal = {
+      glofox_membership_status: 'member',
+      last_attended_at: null,        // skipBookings → never set
+      total_attended_30d: 0,
+      total_attended_7d: 0,
+    }
+    expect(classifyContact(noAttendanceSignal, NOW)).toBe('dormant')
+  })
+})
