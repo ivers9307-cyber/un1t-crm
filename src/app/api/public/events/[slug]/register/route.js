@@ -30,17 +30,20 @@ import { createRacePayment } from '@/lib/race-payments'
 import { sendRaceConfirmations } from '@/lib/race-confirmations'
 import { getAppUrl } from '@/lib/app-url'
 import { findOrCreateRaceContact } from '@/lib/race-contact-linking'
+import { writeContactTags } from '@/lib/contact-tags'
 import { triggerSequencesForRaceRegistered } from '@/lib/sequences'
 import { logWarn } from '@/lib/log'
 
 export const runtime = 'nodejs'
 
 const RegisterSchema = z.object({
-  team_name: z.string().trim().min(1).max(200),
-  team_size: z.number().int().positive().max(50),
-  // Wave selection (mig 083) — required since every race has at
-  // least one wave. Validated server-side against the parent race.
-  wave_id: z.string().uuid(),
+  // team_name / team_size / wave_id are required for race + the
+  // ticketed kinds, but NOT for lead_gen (a name/email/phone capture
+  // form with no team or wave). They're optional at the schema layer;
+  // the handler enforces them for non-lead_gen kinds.
+  team_name: z.string().trim().min(1).max(200).optional(),
+  team_size: z.number().int().positive().max(50).optional(),
+  wave_id: z.string().uuid().optional(),
   captain_name: z.string().trim().min(1).max(200),
   captain_email: z.string().email().max(320),
   // Phone is REQUIRED for event signups (operator follow-up / race-day
@@ -83,7 +86,7 @@ export async function POST(request, props) {
   const { data: race, error: raceErr } = await db
     .from('race_events')
     .select(`
-      id, location_id, name, slug, race_date, allowed_team_sizes,
+      id, location_id, name, slug, race_date, kind, allowed_team_sizes,
       registration_opens_at, registration_closes_at, active,
       member_pricing_enabled, member_fee_cents, non_member_fee_cents,
       members_only, payment_currency, create_in_glofox,
@@ -112,6 +115,106 @@ export async function POST(request, props) {
       error: 'Registration has closed for this race.',
       code: 'closed',
     }, { status: 409 })
+  }
+
+  // ─── lead_gen: pure data-capture form ───────────────────────────
+  // No team, no wave, no payment. Capture name+email+phone, create a
+  // confirmed 1-person registration (so it shows in the event roster +
+  // count), drop the contact into the sales funnel with a per-event
+  // slug tag + a generic 'lead_gen' tag, and return success.
+  if (race.kind === 'lead_gen') {
+    const leadName = (body.captain_name || '').trim()
+    const leadEmail = body.captain_email.toLowerCase().trim()
+    const leadPhone = (body.captain_phone || '').trim()
+
+    const contactId = await findOrCreateRaceContact({
+      db, locationId: race.location_id, email: leadEmail, name: leadName, phone: leadPhone,
+    })
+    if (!contactId) {
+      return NextResponse.json({ success: false, error: 'Could not capture your details. Please try again.' }, { status: 500 })
+    }
+
+    // Marketing consent (best-effort, same as the main path).
+    try {
+      const consent = body.marketing_consent !== false
+      const { applyFormMarketingConsent } = await import('@/lib/marketing-consent')
+      await applyFormMarketingConsent(db, { contactId, consent, source: 'event_form', ipAddress: ip })
+    } catch (e) { logWarn('lead-gen', 'marketing consent write error', { err: e }) }
+
+    // Funnel tags — per-event slug tag + generic lead_gen tag. Both
+    // idempotent; fire tag_added sequences exactly once.
+    try {
+      await writeContactTags(db, { contactId, locationId: race.location_id, tags: [`leadgen-${race.slug}`, 'lead_gen'] })
+    } catch (e) { logWarn('lead-gen', 'tag write failed', { err: e }) }
+
+    // Already captured for this form? Idempotent success (no dup row).
+    const { data: dupe } = await db
+      .from('race_registrations')
+      .select('id, registered_at')
+      .eq('race_event_id', race.id)
+      .eq('contact_id', contactId)
+      .eq('status', 'confirmed')
+      .maybeSingle()
+    if (dupe) {
+      return NextResponse.json({
+        success: true,
+        data: { registration_id: dupe.id, registered_at: dupe.registered_at, race: { id: race.id, name: race.name, slug: race.slug }, payment: { free: true } },
+        message: `You're already on the list for ${race.name}.`,
+      })
+    }
+
+    // Synthetic 1-person team (team_id is NOT NULL on the registration).
+    // Name includes the email so two leads with the same name don't
+    // collide on the (location_id, name) unique constraint.
+    const leadTeamName = `${leadName || 'Lead'} \u2014 ${leadEmail}`
+    let teamId
+    const { data: foundTeam } = await db.from('teams').select('id').eq('location_id', race.location_id).eq('name', leadTeamName).maybeSingle()
+    if (foundTeam) {
+      teamId = foundTeam.id
+      await db.from('teams').update({ size: 1, captain_contact_id: contactId }).eq('id', teamId)
+    } else {
+      const { data: ins, error: teamErr } = await db.from('teams').insert({ location_id: race.location_id, name: leadTeamName, size: 1, captain_contact_id: contactId }).select('id').single()
+      if (teamErr && teamErr.code === '23505') {
+        const { data: re } = await db.from('teams').select('id').eq('location_id', race.location_id).eq('name', leadTeamName).single()
+        teamId = re?.id
+      } else if (teamErr) {
+        return NextResponse.json({ success: false, error: 'Could not capture your details. Please try again.' }, { status: 500 })
+      } else { teamId = ins.id }
+    }
+
+    // Roster = just the lead.
+    await db.from('team_members').delete().eq('team_id', teamId)
+    await db.from('team_members').insert({
+      team_id: teamId, contact_id: contactId, name: leadName, email: leadEmail,
+      role: 'captain', is_member: false, member_validation_status: 'not_applicable',
+    })
+
+    const { data: reg, error: regErr } = await db.from('race_registrations').insert({
+      race_event_id: race.id, team_id: teamId, contact_id: contactId,
+      status: 'confirmed', wave_id: null, team_composition: 'all_non_members',
+    }).select('id, registered_at').single()
+    if (regErr) {
+      return NextResponse.json({ success: false, error: 'Could not capture your details. Please try again.' }, { status: 500 })
+    }
+
+    // Fire race_registered sequences (best-effort).
+    try { await triggerSequencesForRaceRegistered(reg.id) } catch (e) { logWarn('lead-gen', 'race_registered trigger failed', { err: e }) }
+
+    return NextResponse.json({
+      success: true,
+      data: {
+        registration_id: reg.id, registered_at: reg.registered_at, team_id: teamId,
+        race: { id: race.id, name: race.name, slug: race.slug },
+        payment: { free: true },
+      },
+      message: `Thanks${leadName ? ' ' + leadName : ''} \u2014 you're on the list.`,
+    })
+  }
+
+  // Non-lead_gen kinds require a team + wave (schema marks them
+  // optional only so the lead_gen body validates).
+  if (!body.team_name || !body.team_size || !body.wave_id) {
+    return NextResponse.json({ success: false, error: 'Missing registration details.' }, { status: 400 })
   }
 
   // Team size validation.

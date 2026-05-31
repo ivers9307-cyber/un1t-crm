@@ -137,6 +137,30 @@ const KIND_COPY = {
     membersOnlyBlock: (n) =>
       `This is a members-only masterclass. We couldn't verify membership for ${n} attendee(s). Make sure everyone uses the email on their UN1T account.`,
   },
+  // Lead Gen — a pure name/email/phone capture form. No team, no wave,
+  // no pricing. The size selector hides itself (allowed_team_sizes is
+  // [1]); team-name + wave picker are off; isLeadGen tells the submit
+  // handler to skip the wave requirement.
+  lead_gen: {
+    sidebarTimeOne: () => '',
+    sidebarTimeMany: () => '',
+    showWavePicker: false,
+    showTeamName: false,
+    isLeadGen: true,
+    headingTitle: 'Sign up',
+    headingSubtitle: "Pop your details in below and we'll be in touch.",
+    captainSectionLabel: 'Your details',
+    membersSectionLabel: '',
+    sizeLabel: '',
+    sizeButtonSuffix: '',
+    submitFreeLabel: 'Sign up',
+    submitPaidLabel: () => 'Sign up',
+    closedFull: 'This form is closed.',
+    closedNotYet: "This form isn't open yet.",
+    closedClosed: 'This form is closed.',
+    membersOnlyExtra: '',
+    membersOnlyBlock: () => '',
+  },
 }
 
 const copyFor = (k) => KIND_COPY[k] || KIND_COPY.race
@@ -305,7 +329,7 @@ export default function RaceSignupWidget({ slug }) {
     // a server-bound team_name from the captain so the team_id FK
     // stays satisfied.
     if (copy.showTeamName && !teamName.trim()) errors.team_name = 'Team name is required'
-    if (!waveId) errors.wave_id = copy.showWavePicker ? 'Pick a wave' : 'No time slot available'
+    if (!copy.isLeadGen && !waveId) errors.wave_id = copy.showWavePicker ? 'Pick a wave' : 'No time slot available'
     if (!captainName.trim()) errors.captain_name = 'Your name is required'
     if (!validateEmail(captainEmail)) errors.captain_email = 'Valid email required'
     if (!captainPhone.trim()) errors.captain_phone = 'Phone number is required'
@@ -346,7 +370,7 @@ export default function RaceSignupWidget({ slug }) {
       body: JSON.stringify({
         team_name: outboundTeamName,
         team_size: teamSize,
-        wave_id: waveId,
+        ...(waveId ? { wave_id: waveId } : {}),
         captain_name: captainName.trim(),
         captain_email: captainEmail.trim().toLowerCase(),
         captain_phone: captainPhone.trim(),

@@ -25,6 +25,7 @@ const KIND_BADGE = {
   seminar:     { label: 'Seminar',     cls: 'bg-indigo-500/15 text-indigo-700' },
   open_day:    { label: 'Open day',    cls: 'bg-amber-500/15 text-amber-700' },
   masterclass: { label: 'Masterclass', cls: 'bg-pink-500/15 text-pink-700' },
+  lead_gen:    { label: 'Lead Gen',    cls: 'bg-teal-500/15 text-teal-700' },
 }
 const kindBadge = (k) => KIND_BADGE[k] || KIND_BADGE.race
 

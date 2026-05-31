@@ -114,6 +114,26 @@ const KINDS = [
     showLogos: false,
     defaultStaffRequired: 1,
   },
+  {
+    value: 'lead_gen',
+    label: 'Lead Gen',
+    icon: UserPlus,
+    description: 'Signup form to capture name, email & phone. No date or time — drops contacts straight into the sales funnel.',
+    sectionLabel: 'Lead gen form details',
+    dateLabel: null,
+    timeLabel: null,
+    sizeLabel: null,
+    sizeHint: null,
+    submitLabel: 'Create form',
+    showWaves: false,
+    showLogos: false,
+    defaultStaffRequired: 0,
+    // Lead Gen is a pure data-capture form: no date/time/waves/team
+    // sizes/pricing. These flags collapse the form down to the
+    // essentials and tell the submit handler to skip date + wave
+    // synthesis entirely.
+    isLeadGen: true,
+  },
 ]
 
 const kindMeta = (k) => KINDS.find((x) => x.value === k) || KINDS[0]
@@ -276,14 +296,16 @@ export default function RaceEventForm({ race, locationId }) {
     setError(null)
 
     if (!name.trim()) { setError('Name is required.'); return }
-    if (!raceDate) { setError(`${meta.dateLabel} is required.`); return }
-    if (allowedTeamSizes.length === 0) { setError(`Pick at least one ${meta.value === 'race' ? 'team' : 'group'} size.`); return }
+    if (!meta.isLeadGen && !raceDate) { setError(`${meta.dateLabel} is required.`); return }
+    if (!meta.isLeadGen && allowedTeamSizes.length === 0) { setError(`Pick at least one ${meta.value === 'race' ? 'team' : 'group'} size.`); return }
 
     // Wave-shape validation depends on kind. Race uses the full waves
     // UI; non-race kinds use the single start_time + capacity inputs
     // and we synthesise a wave from them.
     let outboundWaves
-    if (meta.showWaves) {
+    if (meta.isLeadGen) {
+      outboundWaves = []
+    } else if (meta.showWaves) {
       if (waves.length === 0) { setError('Add at least one wave.'); return }
       const seenTimes = new Set()
       for (const w of waves) {
@@ -340,10 +362,10 @@ export default function RaceEventForm({ race, locationId }) {
       staff_required: staffReqNum,
       ...(isEditing ? {} : { slug: slug.trim() || undefined }),
       description: description.trim() || null,
-      race_date: raceDate,
+      ...(meta.isLeadGen ? {} : { race_date: raceDate }),
       registration_opens_at: registrationOpensAt ? new Date(registrationOpensAt).toISOString() : null,
       registration_closes_at: registrationClosesAt ? new Date(registrationClosesAt).toISOString() : null,
-      allowed_team_sizes: allowedTeamSizes,
+      allowed_team_sizes: meta.isLeadGen ? [1] : allowedTeamSizes,
       active,
       member_pricing_enabled: memberPricingEnabled,
       members_only: membersOnly,
@@ -358,13 +380,15 @@ export default function RaceEventForm({ race, locationId }) {
         : [],
       // GLOFOX3.3 — explicit boolean so toggling off persists.
       create_in_glofox: createInGlofox === true,
-      waves: outboundWaves.map((w, i) => ({
-        ...(w.id ? { id: w.id } : {}),
-        start_time: w.start_time,
-        capacity: w.capacity ? Number(w.capacity) : null,
-        label: w.label && w.label.trim ? (w.label.trim() || null) : (w.label || null),
-        display_order: i,
-      })),
+      ...(meta.isLeadGen ? {} : {
+        waves: outboundWaves.map((w, i) => ({
+          ...(w.id ? { id: w.id } : {}),
+          start_time: w.start_time,
+          capacity: w.capacity ? Number(w.capacity) : null,
+          label: w.label && w.label.trim ? (w.label.trim() || null) : (w.label || null),
+          display_order: i,
+        })),
+      }),
     }
 
     const url = isEditing ? `/api/events/${race.id}` : '/api/events'
@@ -496,6 +520,7 @@ export default function RaceEventForm({ race, locationId }) {
         </div>
       </div>
 
+      {!meta.isLeadGen && (
       <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5 space-y-4">
         <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle flex items-center gap-2">
           <Calendar size={14} /> {meta.dateLabel}
@@ -539,6 +564,7 @@ export default function RaceEventForm({ race, locationId }) {
           </div>
         )}
       </div>
+      )}
 
       {/* Waves — race only. Non-race kinds use the single
           start_time + capacity inputs above. */}
@@ -632,7 +658,9 @@ export default function RaceEventForm({ race, locationId }) {
 
       {/* Mig 125: staffing requirement for the studio overview demand
           classifier on /schedule. Pre-fills from the kind's default
-          when the operator hasn't manually edited it. */}
+          when the operator hasn't manually edited it. Hidden for
+          lead_gen — a data-capture form isn't a staffed occurrence. */}
+      {!meta.isLeadGen && (
       <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5 space-y-3">
         <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle flex items-center gap-2">
           <Users size={14} /> Staffing
@@ -657,7 +685,9 @@ export default function RaceEventForm({ race, locationId }) {
           </p>
         </div>
       </div>
+      )}
 
+      {!meta.isLeadGen && (
       <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5 space-y-3">
         <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle flex items-center gap-2">
           <Users size={14} /> {meta.sizeLabel}
@@ -687,7 +717,9 @@ export default function RaceEventForm({ race, locationId }) {
           })}
         </div>
       </div>
+      )}
 
+      {!meta.isLeadGen && (
       <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5 space-y-4">
         <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle flex items-center gap-2">
           <BadgeEuro size={14} /> Pricing
@@ -774,6 +806,7 @@ export default function RaceEventForm({ race, locationId }) {
           </button>
         </div>
       </div>
+      )}
 
       {/* TV-display logos. Race-only — non-race kinds don't have a
           TV display board. Within race, only shown after the event
