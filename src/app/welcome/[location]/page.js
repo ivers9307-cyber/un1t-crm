@@ -16,6 +16,7 @@ import { notFound } from 'next/navigation'
 import { createServerClient } from '@/lib/supabase'
 import { blocksOrDefault } from '@/lib/landing-page-blocks'
 import BlockRenderer, { SiteHeader, SiteFooter } from '@/components/landing-page/BlockRenderers'
+import EditModeOverlay from '@/components/landing-page/EditModeOverlay'
 
 export const dynamic = 'force-dynamic'
 
@@ -63,6 +64,7 @@ export async function generateMetadata(props) {
 
 export default async function StudioLandingPage(props) {
   const params = await props.params
+  const searchParams = await props.searchParams
   const row = await loadByPath(params.location)
   if (!row) notFound()
 
@@ -70,6 +72,21 @@ export default async function StudioLandingPage(props) {
   const logoUrl     = row.logo_url || null
   const logoAlt     = row.logo_alt || 'UN1T Dublin'
   const logoWidthPx = row.logo_width_px || 200
+
+  // Edit-mode preview (LP multi-page). The /settings/landing-page editor
+  // loads THIS studio's page with ?edit=1 in its preview iframe; mount
+  // the postMessage-driven overlay seeded from this studio's content so
+  // the preview reflects the studio being edited.
+  if (searchParams?.edit === '1') {
+    return (
+      <EditModeOverlay
+        initialBlocks={blocks}
+        initialLogoUrl={logoUrl}
+        initialLogoAlt={logoAlt}
+        initialLogoWidthPx={logoWidthPx}
+      />
+    )
+  }
 
   return (
     <div className="min-h-screen bg-black text-white antialiased">

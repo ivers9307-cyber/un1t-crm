@@ -47,7 +47,20 @@ import {
 // each other and ignore the noise from extensions / dev tools.
 const MESSAGE_NAMESPACE = 'lp-editor'
 
-export default function LandingPageSettingsForm({ locationId, initialSettings, availableBookingTypes }) {
+export default function LandingPageSettingsForm({ locationId, initialSettings, availableBookingTypes, pages = [], publicPath = null }) {
+  // LP multi-page: the preview iframe + "View live" links point at the
+  // SELECTED studio's public page when known (public_path from mig 227),
+  // falling back to the generic /welcome for a single-studio install.
+  const previewSrc = publicPath ? `/welcome/${publicPath}?edit=1` : '/welcome?edit=1'
+  const liveUrl = publicPath ? `/${publicPath}` : '/welcome'
+  // Switch which studio's page is being edited. Full navigation (not a
+  // client push) so the server re-fetches that studio's settings +
+  // booking types and the form remounts clean.
+  function switchStudio(id) {
+    if (id && id !== locationId) {
+      window.location.href = `/settings/landing-page?location_id=${id}`
+    }
+  }
   // Seed from saved blocks; if none, blocksOrDefault returns the
   // starter set so the form is never blank on first open.
   const [blocks, setBlocks] = useState(() => blocksOrDefault(initialSettings?.blocks))
@@ -325,11 +338,25 @@ export default function LandingPageSettingsForm({ locationId, initialSettings, a
         </div>
       )}
 
-      {/* Header — preview + status + collapse/expand all */}
+      {/* Header — studio picker (multi-page) + preview + collapse/expand */}
       <div className="flex items-center justify-between gap-3 pb-2">
         <div className="flex items-center gap-3">
+          {pages.length > 1 && (
+            <label className="inline-flex items-center gap-1.5 text-xs text-un1t-subtle">
+              <span className="uppercase tracking-wider">Studio</span>
+              <select
+                value={locationId}
+                onChange={(e) => switchStudio(e.target.value)}
+                className="bg-un1t-bg border border-un1t-border rounded-md px-2 py-1 text-xs text-un1t-text"
+              >
+                {pages.map((pg) => (
+                  <option key={pg.location_id} value={pg.location_id}>{pg.name}</option>
+                ))}
+              </select>
+            </label>
+          )}
           <a
-            href="/welcome"
+            href={liveUrl}
             target="_blank"
             rel="noopener noreferrer"
             className="inline-flex items-center gap-1.5 text-sm text-blue-400 hover:text-blue-300"
@@ -471,7 +498,7 @@ export default function LandingPageSettingsForm({ locationId, initialSettings, a
           under the form scroll, not the iframe). */}
       <div className="sticky bottom-4 flex items-center justify-end gap-2 bg-un1t-surface/80 backdrop-blur border border-un1t-border rounded-md p-3">
         <a
-          href="/welcome"
+          href={liveUrl}
           target="_blank"
           rel="noopener noreferrer"
           className="text-xs text-un1t-subtle hover:text-un1t-text inline-flex items-center gap-1.5"
@@ -512,7 +539,7 @@ export default function LandingPageSettingsForm({ locationId, initialSettings, a
           </div>
           <iframe
             ref={iframeRef}
-            src="/welcome?edit=1"
+            src={previewSrc}
             title="Welcome page live preview"
             className="w-full"
             style={{ height: 'calc(100vh - 200px)', minHeight: '600px' }}

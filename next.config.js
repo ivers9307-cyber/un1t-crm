@@ -41,6 +41,14 @@ const nextConfig = {
       { source: '/stillorgan',    destination: '/welcome/stillorgan' },
       { source: '/hatch-street',  destination: '/welcome/hatch-street' },
 
+      // Apex marketing domain: when someone lands on the bare
+      // un1tdublin.com root, serve the split chooser (/welcome) rather
+      // than the CRM app root (which redirects to /login). Host-scoped
+      // so crm.un1tdublin.com/ keeps serving the app. The www variant
+      // is covered too in case it's pointed at the project.
+      { source: '/', has: [{ type: 'host', value: 'un1tdublin.com' }],     destination: '/welcome' },
+      { source: '/', has: [{ type: 'host', value: 'www.un1tdublin.com' }], destination: '/welcome' },
+
       // E2 back-compat: old Calendly templates URLs forever-aliased
       { source: '/events',           destination: '/bookings/event-types' },
       { source: '/events/new',       destination: '/bookings/event-types/new' },
