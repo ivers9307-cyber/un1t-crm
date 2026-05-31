@@ -332,6 +332,7 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
 
   const kind = race?.kind || 'race'
   const copy = copyFor(kind)
+  const isLeadGen = kind === 'lead_gen'
 
   async function handleSubmit(e) {
     e.preventDefault()
