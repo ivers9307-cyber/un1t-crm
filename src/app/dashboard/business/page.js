@@ -9,6 +9,8 @@ import { fetchBusinessDashboardData } from '@shared/dashboard-data'
 import {
   KpiCard, KpiRow, SectionHeader, formatCurrency, formatPercent,
 } from '@/components/dashboard/Cards'
+import { MembershipPanel } from '@/components/dashboard/MembershipPanel'
+import { computeMembershipCounts, fetchMembershipTrend } from '@/lib/membership-snapshot'
 
 export const dynamic = 'force-dynamic'
 
@@ -27,6 +29,24 @@ export default async function BusinessDashboardPage() {
     wonValueMTD, wonCountMTD, lostCountMTD, winRatePercent,
     scheduledHoursThisWeek, scheduledLabourThisWeek,
   } = res.data
+
+  // DASH-MEMBERSHIP.2 — membership breakdown (live from contacts) +
+  // 12-month trend (from membership_snapshots). Best-effort: a failure
+  // here must not blank the whole board, so default to empties.
+  const locId = user.activeLocation?.id
+  let membershipLive = null
+  let membershipTrend = []
+  if (locId) {
+    try {
+      ;[membershipLive, membershipTrend] = await Promise.all([
+        computeMembershipCounts(db, locId),
+        fetchMembershipTrend(db, locId, 12),
+      ])
+    } catch {
+      membershipLive = null
+      membershipTrend = []
+    }
+  }
 
   return (
     <>
@@ -62,6 +82,8 @@ export default async function BusinessDashboardPage() {
           }
         />
       </KpiRow>
+
+      {membershipLive && <MembershipPanel live={membershipLive} trend={membershipTrend} />}
 
       <SectionHeader title="Scheduled labour" />
       <KpiRow>

@@ -95,3 +95,30 @@ export async function writeMembershipSnapshot(db, locationId, opts = {}) {
   if (error) throw new Error(`writeMembershipSnapshot: ${error.message}`)
   return { snapshot_date: snapshotDate, ...counts }
 }
+
+
+/**
+ * Read the last `months` monthly snapshots for a location, oldest →
+ * newest, for the business-board trend chart. Returns a plain array of
+ * { month: 'YYYY-MM', monthly_recurring, class_packs, payg,
+ *   total_members, active_recurring, dead_packs }.
+ */
+export async function fetchMembershipTrend(db, locationId, months = 12) {
+  const { data, error } = await db
+    .from('membership_snapshots')
+    .select('snapshot_date, monthly_recurring, class_packs, payg, total_members, active_recurring, dead_packs')
+    .eq('location_id', locationId)
+    .order('snapshot_date', { ascending: false })
+    .limit(months)
+  if (error) throw new Error(`fetchMembershipTrend: ${error.message}`)
+  const rows = (data || []).slice().reverse() // oldest → newest for the chart
+  return rows.map((r) => ({
+    month: typeof r.snapshot_date === 'string' ? r.snapshot_date.slice(0, 7) : r.snapshot_date,
+    monthly_recurring: r.monthly_recurring,
+    class_packs: r.class_packs,
+    payg: r.payg,
+    total_members: r.total_members,
+    active_recurring: r.active_recurring,
+    dead_packs: r.dead_packs,
+  }))
+}

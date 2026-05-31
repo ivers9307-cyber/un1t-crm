@@ -3,6 +3,7 @@ import {
   firstOfMonth,
   computeMembershipCounts,
   writeMembershipSnapshot,
+  fetchMembershipTrend,
 } from './membership-snapshot.js'
 
 describe('firstOfMonth', () => {
@@ -113,5 +114,53 @@ describe('writeMembershipSnapshot', () => {
     }
     await expect(writeMembershipSnapshot(erroring, 'loc-1', { snapshotDate: '2026-06-01' }))
       .rejects.toThrow(/boom/)
+  })
+})
+
+
+describe('fetchMembershipTrend', () => {
+  function trendDb(rows, errorObj = null) {
+    const calls = {}
+    const b = {
+      from: () => b,
+      select: () => b,
+      eq: (c, v) => { calls.eq = [c, v]; return b },
+      order: (c, o) => { calls.order = [c, o]; return b },
+      limit: (n) => { calls.limit = n; return Promise.resolve({ data: rows, error: errorObj }) },
+      _calls: calls,
+    }
+    return b
+  }
+
+  it('returns rows oldest→newest with a YYYY-MM month key', async () => {
+    // Supabase returns newest-first (we order desc); the reader reverses.
+    const db = trendDb([
+      { snapshot_date: '2026-07-01', monthly_recurring: 200, class_packs: 460, payg: 410, total_members: 1070, active_recurring: 170, dead_packs: 380 },
+      { snapshot_date: '2026-06-01', monthly_recurring: 191, class_packs: 470, payg: 418, total_members: 1079, active_recurring: 165, dead_packs: 392 },
+    ])
+    const out = await fetchMembershipTrend(db, 'loc-1')
+    expect(out).toHaveLength(2)
+    expect(out[0].month).toBe('2026-06') // oldest first after reverse
+    expect(out[1].month).toBe('2026-07')
+    expect(out[0].monthly_recurring).toBe(191)
+    expect(out[1].class_packs).toBe(460)
+  })
+
+  it('passes the months limit and location scope through', async () => {
+    const db = trendDb([])
+    await fetchMembershipTrend(db, 'loc-9', 6)
+    expect(db._calls.eq).toEqual(['location_id', 'loc-9'])
+    expect(db._calls.limit).toBe(6)
+    expect(db._calls.order).toEqual(['snapshot_date', { ascending: false }])
+  })
+
+  it('returns an empty array when there are no snapshots yet', async () => {
+    const db = trendDb(null)
+    expect(await fetchMembershipTrend(db, 'loc-1')).toEqual([])
+  })
+
+  it('throws on a db error', async () => {
+    const db = trendDb(null, { message: 'kaboom' })
+    await expect(fetchMembershipTrend(db, 'loc-1')).rejects.toThrow(/kaboom/)
   })
 })
