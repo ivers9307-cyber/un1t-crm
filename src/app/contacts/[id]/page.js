@@ -688,6 +688,9 @@ function GlofoxProfileCard({ contact }) {
                 && contact.glofox_membership_plan_full !== contact.glofox_membership_plan && (
                 <p className="text-xs text-un1t-subtle">{contact.glofox_membership_plan_full}</p>
               )}
+              {contact.membership_description && (
+                <p className="text-xs text-un1t-muted whitespace-pre-line mt-1">{contact.membership_description}</p>
+              )}
             </div>
           )}
 
