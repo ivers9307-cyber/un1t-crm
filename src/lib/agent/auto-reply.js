@@ -1,18 +1,16 @@
-// RADAR-AGENT — customer-agent auto-reply orchestrator (IO).
+// RADAR-AGENT.0 — customer-agent auto-reply orchestrator (IO).
 //
-// Channel-agnostic. The shared brain (settings gate, knowledge,
-// history, the Anthropic call, parse, handoff) lives in
-// runChannelAgent(); a per-channel ADAPTER supplies the table names,
-// the send function, the row shapes, and the notification labels. The
-// pure decisions/formatting are in core.js / prompt.js.
+// Called best-effort from the WhatsApp inbound webhook AFTER the inbound
+// message has been persisted. Owns the network + DB side; all decisions
+// and formatting are the pure helpers in core.js / prompt.js.
 //
-// Channels today: WhatsApp (maybeAutoReply) and Instagram
-// (maybeAutoReplyInstagram, wired from instagram.js). Both reuse the
-// exact same runner — only the adapter differs.
-//
-// Safety posture: gated OFF by default (locations.settings
-// .customer_agent) + test-mode allow-list; no tools / no account
-// actions (answers from knowledge or hands off); never throws.
+// Safety posture (Phase 0):
+//   - Gated OFF by default. Only runs if locations.settings.customer_agent
+//     enables it (globally) or test-mode allow-lists this number.
+//   - No tools, no account actions. Answers from knowledge or hands off.
+//   - On handoff: sends a holding message, flips the conversation's
+//     agent_active to false (so it stays with a human), notifies staff.
+//   - Never throws — the webhook wraps the call too, but we double up.
 
 import { sendTextMessage } from '@/lib/whatsapp'
 import { sendPushToRolesAtLocation } from '@/lib/push'
@@ -31,34 +29,31 @@ const AGENT_MODEL = 'claude-sonnet-4-20250514'
 const MAX_HISTORY = 20
 
 /**
- * Generic per-channel agent turn.
- *
  * @param {import('@supabase/supabase-js').SupabaseClient} db
- * @param {object} adapter  channel adapter (see whatsappAdapter / igAdapter)
  * @param {object} ctx
  * @param {string} ctx.conversationId
  * @param {string} ctx.locationId
- * @param {string} ctx.recipient        channel address (phone / IGSID)
+ * @param {string} ctx.senderPhone
  * @param {string|null} ctx.contactId
  * @param {string} ctx.messageType
  * @param {string} ctx.body
- * @param {object} [ctx.connection]     channel_connections row (IG)
  */
-export async function runChannelAgent(db, adapter, ctx) {
-  const { conversationId, locationId, recipient, contactId, messageType, body, connection } = ctx
+export async function maybeAutoReply(db, ctx) {
+  const { conversationId, locationId, senderPhone, contactId, messageType, body } = ctx
 
   const apiKey = process.env.ANTHROPIC_API_KEY
   if (!apiKey) return { handled: false, reason: 'no_api_key' }
   if (!conversationId || !locationId) return { handled: false, reason: 'missing_context' }
 
+  // Location settings + name.
   const { data: loc } = await db.from('locations')
     .select('name, settings')
     .eq('id', locationId)
     .single()
   const settings = loc?.settings?.customer_agent || null
 
-  // Per-conversation kill switch (human takeover / prior escalation).
-  const { data: conv } = await db.from(adapter.conversationsTable)
+  // Per-conversation kill switch.
+  const { data: conv } = await db.from('whatsapp_conversations')
     .select('agent_active')
     .eq('id', conversationId)
     .single()
@@ -67,18 +62,20 @@ export async function runChannelAgent(db, adapter, ctx) {
     settings,
     conversation: conv,
     message: { type: messageType, body },
-    senderPhone: recipient, // core treats this as the channel address
+    senderPhone,
     now: new Date(),
   })
   if (!decision.reply) return { handled: false, reason: decision.reason }
 
+  // Knowledge for this location.
   const { data: knowledge } = await db.from('agent_knowledge')
     .select('category, title, content, enabled, sort_order')
     .eq('location_id', locationId)
     .eq('enabled', true)
     .order('sort_order', { ascending: true })
 
-  const { data: history } = await db.from(adapter.messagesTable)
+  // Conversation history (ascending) — includes the just-saved inbound.
+  const { data: history } = await db.from('whatsapp_messages')
     .select('direction, body, message_type, created_at')
     .eq('conversation_id', conversationId)
     .order('created_at', { ascending: true })
@@ -96,6 +93,7 @@ export async function runChannelAgent(db, adapter, ctx) {
   const messages = formatHistoryForClaude(history || [], { maxMessages: MAX_HISTORY })
   if (messages.length === 0) return { handled: false, reason: 'no_history' }
 
+  // Call the model (buffered; no tools in Phase 0).
   let modelText = ''
   try {
     const res = await fetch(ANTHROPIC_API_URL, {
@@ -124,33 +122,45 @@ export async function runChannelAgent(db, adapter, ctx) {
   }
 
   const parsed = parseAgentResponse(modelText)
-  const common = { conversationId, locationId, recipient, contactId, connection }
 
   if (parsed.action === 'handoff') {
-    await handoff(db, adapter, { ...common, reason: parsed.reason, settings })
+    await handoff(db, { conversationId, locationId, senderPhone, contactId, reason: parsed.reason, settings })
     return { handled: true, action: 'handoff', reason: parsed.reason }
   }
 
-  await sendAndLog(db, adapter, { ...common, text: parsed.text })
+  await sendAndLog(db, {
+    conversationId, locationId, senderPhone, contactId,
+    text: parsed.text,
+  })
   return { handled: true, action: 'reply' }
 }
 
 // Send an agent reply + persist it + update the conversation.
-async function sendAndLog(db, adapter, { conversationId, locationId, recipient, contactId, connection, text }) {
-  let messageId = null
+async function sendAndLog(db, { conversationId, locationId, senderPhone, contactId, text }) {
+  let waMessageId = null
   try {
-    const r = await adapter.send(recipient, text, { locationId, connection })
-    messageId = r?.messageId || null
+    const r = await sendTextMessage(senderPhone, text, { locationId })
+    waMessageId = r?.messageId || null
   } catch (err) {
-    console.error(`[radar-agent] ${adapter.name} send failed`, err?.message)
+    console.error('[radar-agent] send failed', err?.message)
     return
   }
 
   const now = new Date().toISOString()
-  await db.from(adapter.messagesTable).insert(
-    adapter.outboundRow({ conversationId, locationId, contactId, messageId, text, now })
-  )
-  await db.from(adapter.conversationsTable).update({
+  await db.from('whatsapp_messages').insert({
+    conversation_id: conversationId,
+    contact_id: contactId || null,
+    location_id: locationId,
+    wa_message_id: waMessageId,
+    direction: 'outbound',
+    message_type: 'text',
+    body: text,
+    status: 'sent',
+    source: AGENT_MESSAGE_SOURCE,
+    sent_at: now,
+  })
+
+  await db.from('whatsapp_conversations').update({
     last_message_at: now,
     last_message_direction: 'outbound',
     last_message_preview: text.substring(0, 100),
@@ -158,61 +168,51 @@ async function sendAndLog(db, adapter, { conversationId, locationId, recipient, 
   }).eq('id', conversationId)
 }
 
-// Escalate: holding message, stop the agent on this thread, notify staff.
-async function handoff(db, adapter, { conversationId, locationId, recipient, contactId, connection, reason, settings }) {
+// Escalate: holding message to the customer, stop the agent on this
+// thread, notify staff.
+async function handoff(db, { conversationId, locationId, senderPhone, contactId, reason, settings }) {
   const holding = (settings?.holding_message || '').trim() || DEFAULT_HOLDING_MESSAGE
-  const now = new Date().toISOString()
 
-  await db.from(adapter.conversationsTable).update({
+  // Stop the agent on this conversation (durable; survives restarts).
+  const now = new Date().toISOString()
+  await db.from('whatsapp_conversations').update({
     agent_active: false,
     agent_handed_off_at: now,
   }).eq('id', conversationId)
 
+  // Send the customer a holding message (best-effort).
   try {
-    const r = await adapter.send(recipient, holding, { locationId, connection })
-    await db.from(adapter.messagesTable).insert(
-      adapter.outboundRow({ conversationId, locationId, contactId, messageId: r?.messageId || null, text: holding, now })
-    )
-    await db.from(adapter.conversationsTable).update({
+    const r = await sendTextMessage(senderPhone, holding, { locationId })
+    await db.from('whatsapp_messages').insert({
+      conversation_id: conversationId,
+      contact_id: contactId || null,
+      location_id: locationId,
+      wa_message_id: r?.messageId || null,
+      direction: 'outbound',
+      message_type: 'text',
+      body: holding,
+      status: 'sent',
+      source: AGENT_MESSAGE_SOURCE,
+      sent_at: now,
+    })
+    await db.from('whatsapp_conversations').update({
       last_message_at: now,
       last_message_direction: 'outbound',
       last_message_preview: holding.substring(0, 100),
     }).eq('id', conversationId)
   } catch (err) {
-    console.error(`[radar-agent] ${adapter.name} holding-message send failed`, err?.message)
+    console.error('[radar-agent] holding-message send failed', err?.message)
   }
 
+  // Notify staff that a thread needs a human.
   try {
     await sendPushToRolesAtLocation(locationId, MANAGER_ROLES, {
-      title: `${adapter.label} · needs a human`,
+      title: 'WhatsApp · needs a human',
       body: `Agent handed off: ${reason || 'see conversation'}`,
-      category: adapter.pushCategory,
-      data: { type: adapter.handoffType, conversation_id: conversationId },
+      category: 'whatsapp',
+      data: { type: 'whatsapp_agent_handoff', conversation_id: conversationId },
     })
   } catch (err) {
-    console.error(`[radar-agent] ${adapter.name} handoff push failed`, err?.message)
+    console.error('[radar-agent] handoff push failed', err?.message)
   }
-}
-
-// ── WhatsApp adapter ────────────────────────────────────────────────
-export const whatsappAdapter = {
-  name: 'whatsapp',
-  label: 'WhatsApp',
-  conversationsTable: 'whatsapp_conversations',
-  messagesTable: 'whatsapp_messages',
-  pushCategory: 'whatsapp',
-  handoffType: 'whatsapp_agent_handoff',
-  send: (recipient, text, { locationId }) => sendTextMessage(recipient, text, { locationId }),
-  outboundRow: ({ conversationId, locationId, contactId, messageId, text, now }) => ({
-    conversation_id: conversationId,
-    contact_id: contactId || null,
-    location_id: locationId,
-    wa_message_id: messageId,
-    direction: 'outbound',
-    message_type: 'text',
-    body: text,
-    status: 'sent',
-    source: AGENT_MESSAGE_SOURCE,
-    sent_at: now,
-  }),
 }
