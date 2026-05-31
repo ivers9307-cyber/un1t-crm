@@ -165,7 +165,21 @@ const KIND_COPY = {
 
 const copyFor = (k) => KIND_COPY[k] || KIND_COPY.race
 
-export default function RaceSignupWidget({ slug }) {
+export default function RaceSignupWidget({ slug, embedded = false }) {
+  // When embedded in a cross-site iframe, post-submit navigation must
+  // break OUT of the iframe (otherwise the confirmation / payment page
+  // renders trapped inside the embed). go() targets the top window when
+  // embedded, else uses the in-app router.
+  const go = (url) => {
+    // Embedded in a cross-site iframe: break OUT to the top window so
+    // the confirmation / payment page isn't trapped inside the host's
+    // frame. Use window.open(_top) rather than assigning location (the
+    // latter trips the react-hooks immutability lint).
+    if (embedded && typeof window !== 'undefined') {
+      try { window.open(url, '_top'); return } catch { /* fall through */ }
+    }
+    router.push(url)
+  }
   const router = useRouter()
   const [race, setRace] = useState(null)
   const [loadError, setLoadError] = useState(null)
@@ -392,11 +406,11 @@ export default function RaceSignupWidget({ slug }) {
 
     const payment = json.data?.payment
     if (payment?.free) {
-      router.push(`/event/${slug}/confirmed?registration=${json.data.registration_id}`)
+      go(`/event/${slug}/confirmed?registration=${json.data.registration_id}`)
     } else if (payment?.id) {
-      router.push(`/event-pay/${payment.id}`)
+      go(`/event-pay/${payment.id}`)
     } else {
-      router.push(`/event/${slug}/confirmed?registration=${json.data.registration_id}`)
+      go(`/event/${slug}/confirmed?registration=${json.data.registration_id}`)
     }
   }
 

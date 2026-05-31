@@ -11,6 +11,7 @@
 
 import Link from 'next/link'
 import BookingWidget from '@/components/BookingWidget'
+import RaceSignupWidget from '@/components/RaceSignupWidget'
 import { parseEmbed } from '@/lib/landing-page-embed'
 import EditableText from './EditableText'
 import EditableImage from './EditableImage'
@@ -49,6 +50,7 @@ export default function BlockRenderer({ block, onEdit, locationId }) {
     case 'booking':     return <BookingBlock     block={block} />
     case 'pillars':     return <PillarsBlock     block={block} {...editProps} />
     case 'gallery':     return <GalleryBlock     block={block} {...editProps} />
+    case 'event':       return <EventBlock       block={block} />
     case 'embed':       return <EmbedBlock       block={block} onEdit={localOnEdit} />
     case 'stats':       return <StatsBlock       block={block} onEdit={localOnEdit} />
     case 'testimonial': return <TestimonialBlock block={block} onEdit={localOnEdit} />
@@ -166,6 +168,28 @@ export function BookingBlock({ block }) {
         <p className="text-center text-xs text-white/50 mt-6">
           Or just walk in &mdash; we&apos;re at <span className="text-white/80">UN1T Stillorgan, Dublin</span>.
         </p>
+      </div>
+    </section>
+  )
+}
+
+export function EventBlock({ block }) {
+  // Inline event signup — the full RaceSignupWidget for a chosen event,
+  // rendered into the page. block.slug picks the event; unset shows a
+  // gentle placeholder so the public page never has a broken section.
+  return (
+    <section id={`event-${block.slug || 'signup'}`} className="bg-black pt-2 pb-20 md:pb-28">
+      <div className="max-w-3xl mx-auto px-6">
+        {block.title && (
+          <h2 className="text-2xl md:text-3xl font-extrabold text-white text-center mb-6">{block.title}</h2>
+        )}
+        <div className="flex justify-center">
+          {block.slug ? (
+            <RaceSignupWidget slug={block.slug} />
+          ) : (
+            <p className="text-white/50 text-sm">Event signup not configured.</p>
+          )}
+        </div>
       </div>
     </section>
   )

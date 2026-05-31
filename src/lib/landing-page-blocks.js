@@ -80,6 +80,13 @@ const EMBED_DEFAULT = () => ({
   caption: '',
 })
 
+const EVENT_DEFAULT = () => ({
+  id:    newBlockId(),
+  type:  'event',
+  slug:  '',
+  title: 'Sign up',
+})
+
 const STATS_DEFAULT = () => ({
   id:    newBlockId(),
   type:  'stats',
@@ -104,6 +111,7 @@ const TESTIMONIAL_DEFAULT = () => ({
 export const BLOCK_TYPES = [
   { type: 'hero',        label: 'Hero',         description: 'Headline + booking copy. Image or video background.', factory: HERO_DEFAULT },
   { type: 'booking',     label: 'Booking form', description: 'Embed the booking form for a chosen booking type.',    factory: BOOKING_DEFAULT },
+  { type: 'event',       label: 'Event signup', description: 'Embed the full signup form for a chosen event.',        factory: EVENT_DEFAULT },
   { type: 'pillars',     label: 'Pillars',      description: '3 value-prop tiles. Each can have a photo.',           factory: PILLARS_DEFAULT },
   { type: 'gallery',     label: 'Photo gallery',description: 'Grid of photos with optional captions.',                factory: GALLERY_DEFAULT },
   { type: 'embed',       label: 'Video embed',  description: 'YouTube or Instagram video embed.',                    factory: EMBED_DEFAULT },
