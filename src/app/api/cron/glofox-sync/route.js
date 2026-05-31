@@ -22,6 +22,7 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { glofoxCredentialsForLocation, fetchAllMembersPage } from '@/lib/glofox'
+import { syncMembershipCatalog } from '@/lib/glofox-catalog'
 import { applyMemberSync } from '@/lib/glofox-sync'
 
 export const runtime = 'nodejs'
@@ -140,6 +141,15 @@ async function syncOneLocation(db, location, filters, lookbackSec) {
     const creds = await glofoxCredentialsForLocation(db, location.id)
     if (!creds.branchId || !creds.apiKey || !creds.apiToken) {
       throw new Error('Glofox credentials missing on this location.')
+    }
+
+    // GLOFOX-CATALOG — refresh the studio's membership catalog once per
+    // location per run (~8 rows). Best-effort: a failure here must never
+    // abort the member sync below.
+    try {
+      await syncMembershipCatalog(db, location.id, creds)
+    } catch (e) {
+      console.warn(`[cron][glofox-sync] catalog refresh failed for ${location.id}: ${e?.message}`)
     }
 
     // Shared membership cache across the WHOLE LOCATION's pages.
