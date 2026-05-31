@@ -47,20 +47,12 @@ import {
 // each other and ignore the noise from extensions / dev tools.
 const MESSAGE_NAMESPACE = 'lp-editor'
 
-export default function LandingPageSettingsForm({ locationId, initialSettings, availableBookingTypes, pages = [], publicPath = null }) {
+export default function LandingPageSettingsForm({ locationId, initialSettings, availableBookingTypes, publicPath = null, availableEvents = [] }) {
   // LP multi-page: the preview iframe + "View live" links point at the
   // SELECTED studio's public page when known (public_path from mig 227),
   // falling back to the generic /welcome for a single-studio install.
   const previewSrc = publicPath ? `/welcome/${publicPath}?edit=1` : '/welcome?edit=1'
   const liveUrl = publicPath ? `/${publicPath}` : '/welcome'
-  // Switch which studio's page is being edited. Full navigation (not a
-  // client push) so the server re-fetches that studio's settings +
-  // booking types and the form remounts clean.
-  function switchStudio(id) {
-    if (id && id !== locationId) {
-      window.location.href = `/settings/landing-page?location_id=${id}`
-    }
-  }
   // Seed from saved blocks; if none, blocksOrDefault returns the
   // starter set so the form is never blank on first open.
   const [blocks, setBlocks] = useState(() => blocksOrDefault(initialSettings?.blocks))
@@ -341,20 +333,6 @@ export default function LandingPageSettingsForm({ locationId, initialSettings, a
       {/* Header — studio picker (multi-page) + preview + collapse/expand */}
       <div className="flex items-center justify-between gap-3 pb-2">
         <div className="flex items-center gap-3">
-          {pages.length > 1 && (
-            <label className="inline-flex items-center gap-1.5 text-xs text-un1t-subtle">
-              <span className="uppercase tracking-wider">Studio</span>
-              <select
-                value={locationId}
-                onChange={(e) => switchStudio(e.target.value)}
-                className="bg-un1t-bg border border-un1t-border rounded-md px-2 py-1 text-xs text-un1t-text"
-              >
-                {pages.map((pg) => (
-                  <option key={pg.location_id} value={pg.location_id}>{pg.name}</option>
-                ))}
-              </select>
-            </label>
-          )}
           <a
             href={liveUrl}
             target="_blank"
@@ -442,6 +420,7 @@ export default function LandingPageSettingsForm({ locationId, initialSettings, a
                   onRemove={() => removeBlock(block.id)}
                   onUpdate={(patch) => updateBlock(block.id, patch)}
                   availableBookingTypes={availableBookingTypes}
+                  availableEvents={availableEvents}
                   uploadMedia={uploadMedia}
                   uploading={uploading}
                   uploadErr={uploadErr}
@@ -557,7 +536,7 @@ export default function LandingPageSettingsForm({ locationId, initialSettings, a
 
 function SortableBlockCard({
   block, expanded, onToggleExpand, onRemove, onUpdate,
-  availableBookingTypes, uploadMedia, uploading, uploadErr,
+  availableBookingTypes, availableEvents, uploadMedia, uploading, uploadErr,
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: block.id })
   const style = {
@@ -611,6 +590,7 @@ function SortableBlockCard({
             block={block}
             onUpdate={onUpdate}
             availableBookingTypes={availableBookingTypes}
+            availableEvents={availableEvents}
             uploadMedia={uploadMedia}
             uploading={uploading}
             uploadErr={uploadErr}
@@ -629,6 +609,7 @@ function summaryFor(block) {
   switch (block.type) {
     case 'hero':        return block.headline || ''
     case 'booking':     return block.slug ? `slug: ${block.slug}` : ''
+    case 'event':       return block.slug ? `event: ${block.slug}` : 'no event'
     case 'pillars':     return `${(block.items || []).length} items`
     case 'gallery':     return `${(block.items || []).length} photo${(block.items || []).length === 1 ? '' : 's'}`
     case 'embed':       return block.url ? new URL(block.url).hostname.replace(/^www\./, '') : 'no URL'
@@ -646,6 +627,7 @@ function BlockEditPanel(props) {
   switch (props.block.type) {
     case 'hero':        return <HeroEdit        {...props} />
     case 'booking':     return <BookingEdit     {...props} />
+    case 'event':       return <EventEdit       {...props} />
     case 'pillars':     return <PillarsEdit     {...props} />
     case 'gallery':     return <GalleryEdit     {...props} />
     case 'embed':       return <EmbedEdit       {...props} />
@@ -720,6 +702,51 @@ function BookingEdit({ block, onUpdate, availableBookingTypes }) {
         <Input value={block.slug || ''} onChange={(v) => onUpdate({ slug: v })} maxLength={200} placeholder="consultation" />
       )}
     </Field>
+  )
+}
+
+function EventEdit({ block, onUpdate, availableEvents }) {
+  const events = availableEvents || []
+  const origin = (typeof window !== 'undefined' && window.location?.origin) || 'https://un1tdublin.com'
+  const snippet = block.slug
+    ? `<iframe src="${origin}/embed/event/${block.slug}" width="100%" height="900" style="border:0;max-width:760px" loading="lazy" title="UN1T event signup"></iframe>`
+    : ''
+  return (
+    <>
+      <Field label="Event" hint={events.length === 0 ? 'No active events at this studio. Create one under Events first.' : "Which event's signup form to embed on this page."}>
+        {events.length > 0 ? (
+          <select
+            value={block.slug || ''}
+            onChange={(e) => onUpdate({ slug: e.target.value })}
+            className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
+          >
+            <option value="">— Pick an event —</option>
+            {events.map((ev) => (
+              <option key={ev.slug} value={ev.slug}>{ev.name}</option>
+            ))}
+            {block.slug && !events.some((ev) => ev.slug === block.slug) && (
+              <option value={block.slug}>{block.slug} (no longer active)</option>
+            )}
+          </select>
+        ) : (
+          <Input value={block.slug || ''} onChange={(v) => onUpdate({ slug: v })} maxLength={200} placeholder="event-slug" />
+        )}
+      </Field>
+      <Field label="Heading" hint="Optional title shown above the signup form.">
+        <Input value={block.title || ''} onChange={(v) => onUpdate({ title: v })} maxLength={200} placeholder="Sign up" />
+      </Field>
+      {block.slug && (
+        <Field label="Embed on another website" hint="Paste this into any external site (WordPress, Squarespace, a partner page) to show this event's signup form there.">
+          <textarea
+            readOnly
+            value={snippet}
+            onFocus={(e) => e.target.select()}
+            rows={3}
+            className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-[11px] font-mono text-un1t-subtle"
+          />
+        </Field>
+      )}
+    </>
   )
 }
 
