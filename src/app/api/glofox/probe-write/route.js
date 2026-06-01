@@ -88,13 +88,24 @@ export async function POST(request) {
     ? { when: 'ON_DATE', local_date: today, reason: 'MEMBERSHIP_CANCELLATION_PRICE' }
     : { when: 'ON_DATE', local_date: today }
 
+  // The live pause probe showed pause REJECTS impersonation
+  // (IMPERSONATION_NOT_ALLOWED_FOR_THIS_ROUTE) — it's a staff/admin action
+  // authed by the API key/token alone. Cancel, by contrast, REQUIRES the
+  // impersonated-member-id header (member-initiated). So only attach that
+  // header when it's actually wanted: default by action, overridable with
+  // &impersonate=0 / &impersonate=1 for testing either way.
+  const memberId = url.searchParams.get('member_id') || ''
+  const impersonateParam = url.searchParams.get('impersonate')
+  const impersonate = impersonateParam != null
+    ? impersonateParam === '1' || impersonateParam === 'true'
+    : action === 'cancel' // default: cancel impersonates, pause does not
+  const reqHeaders = { 'Content-Type': 'application/json' }
+  if (impersonate && memberId) reqHeaders['x-glofox-impersonated-member-id'] = memberId
+
   try {
     const r = await glofoxFetch(creds, path, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-glofox-impersonated-member-id': url.searchParams.get('member_id') || '',
-      },
+      headers: reqHeaders,
       body: JSON.stringify(body),
     })
     let raw, parsed
@@ -104,6 +115,7 @@ export async function POST(request) {
       status: r.status,
       mode,
       action,
+      impersonated: impersonate && !!memberId,
       glofox_path: path,
       used_id: membershipId,
       response_body: parsed,
