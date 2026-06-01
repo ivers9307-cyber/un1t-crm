@@ -2,6 +2,8 @@
 import { describe, it, expect } from 'vitest'
 import {
   identityMatches,
+  surnameInName,
+  emailPathVerifies,
   formatMembership,
   formatNextClass,
   formatRecentAttendance,
@@ -34,6 +36,50 @@ describe('identityMatches', () => {
   it('fails on empty inputs / null contact', () => {
     expect(identityMatches(contact, {})).toBe(false)
     expect(identityMatches(null, { email: 'jo@example.com' })).toBe(false)
+  })
+})
+
+describe('surnameInName', () => {
+  it('matches a surname as a whole token, case-insensitively', () => {
+    expect(surnameInName('Jane Murphy', 'murphy')).toBe(true)
+    expect(surnameInName('jane MURPHY', 'Murphy')).toBe(true)
+    expect(surnameInName('Murphy', 'murphy')).toBe(true)
+  })
+  it('tolerates apostrophes / hyphens in either side', () => {
+    expect(surnameInName("Sean O'Brien", "O'Brien")).toBe(true)
+    expect(surnameInName('Mary Smith-Jones', 'smithjones')).toBe(true)
+  })
+  it('does NOT match a substring of a token', () => {
+    expect(surnameInName('Ashlee Doyle', 'Lee')).toBe(false)
+    expect(surnameInName('Bradley', 'Brad')).toBe(false)
+  })
+  it('rejects too-short surnames and empty/missing names', () => {
+    expect(surnameInName('Jane Ng', 'N')).toBe(false)
+    expect(surnameInName('', 'Murphy')).toBe(false)
+    expect(surnameInName(null, 'Murphy')).toBe(false)
+    expect(surnameInName('Jane Murphy', '')).toBe(false)
+  })
+})
+
+describe('emailPathVerifies', () => {
+  const contact = { email: 'Jo@Example.com', last_name: 'Murphy' }
+  it('requires BOTH a matching email AND the surname (email alone fails)', () => {
+    expect(emailPathVerifies(contact, { email: 'jo@example.com' })).toBe(false)
+    expect(emailPathVerifies(contact, { email: 'jo@example.com', last_name: 'Murphy' })).toBe(true)
+  })
+  it('accepts the surname from the channel display name (nameHint)', () => {
+    expect(emailPathVerifies(contact, { email: 'jo@example.com' }, { nameHint: 'Jo Murphy' })).toBe(true)
+    expect(emailPathVerifies(contact, { email: 'jo@example.com' }, { nameHint: 'jomurphy123' })).toBe(false)
+  })
+  it('fails on a wrong email even with the right surname', () => {
+    expect(emailPathVerifies(contact, { email: 'someone@else.com', last_name: 'Murphy' })).toBe(false)
+  })
+  it('fails when the contact has no surname on file (cannot satisfy the 2nd factor)', () => {
+    expect(emailPathVerifies({ email: 'jo@example.com', last_name: null }, { email: 'jo@example.com', last_name: 'Murphy' })).toBe(false)
+  })
+  it('handles null inputs', () => {
+    expect(emailPathVerifies(null, { email: 'jo@example.com' })).toBe(false)
+    expect(emailPathVerifies(contact, null)).toBe(false)
   })
 })
 

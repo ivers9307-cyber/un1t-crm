@@ -40,20 +40,18 @@ export async function POST(request) {
   const signature = request.headers.get('x-hub-signature-256')
   const appSecret = process.env.WHATSAPP_APP_SECRET
 
-  // If the App Secret is configured, enforce signature verification.
-  // If it's not yet configured, log loudly so the misconfiguration is visible
-  // but accept the request (rollout-safe — set the secret to activate enforcement).
-  if (appSecret) {
-    const result = verifyMetaSignature(rawBody, signature, appSecret)
-    if (!result.ok) {
-      console.warn(`WhatsApp webhook rejected: ${result.reason}`)
-      return NextResponse.json({ success: false, error: 'Invalid signature' }, { status: 403 })
-    }
-  } else {
-    console.warn(
-      '[security] WHATSAPP_APP_SECRET is not set — accepting WhatsApp webhook ' +
-      'without signature verification. Set the env var to enable enforcement.'
-    )
+  // Fail CLOSED: refuse if the App Secret isn't configured rather than
+  // accept spoofable inbound (the agent now acts on these messages). 500
+  // (not 403) so Meta retries for ~24h and recovery is just setting the
+  // env var — mirrors the Postmark webhook posture.
+  if (!appSecret) {
+    console.error('[security] WHATSAPP_APP_SECRET is not set — refusing WhatsApp webhook (fail closed).')
+    return NextResponse.json({ success: false, error: 'Server misconfigured' }, { status: 500 })
+  }
+  const result = verifyMetaSignature(rawBody, signature, appSecret)
+  if (!result.ok) {
+    console.warn(`WhatsApp webhook rejected: ${result.reason}`)
+    return NextResponse.json({ success: false, error: 'Invalid signature' }, { status: 403 })
   }
 
   let body

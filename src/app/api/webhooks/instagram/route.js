@@ -38,14 +38,18 @@ export async function POST(request) {
   const signature = request.headers.get('x-hub-signature-256')
   const appSecret = process.env.INSTAGRAM_APP_SECRET || process.env.WHATSAPP_APP_SECRET
 
-  if (appSecret) {
-    const result = verifyMetaSignature(rawBody, signature, appSecret)
-    if (!result.ok) {
-      console.warn(`Instagram webhook rejected: ${result.reason}`)
-      return NextResponse.json({ success: false, error: 'Invalid signature' }, { status: 403 })
-    }
-  } else {
-    console.warn('[security] No INSTAGRAM_APP_SECRET / WHATSAPP_APP_SECRET — accepting IG webhook unverified.')
+  // Fail CLOSED: a missing app secret means we cannot authenticate Meta,
+  // so refuse rather than accept spoofable inbound (which could drive the
+  // agent). 500 (not 403) so Meta retries for ~24h and recovery is just
+  // setting the env var — mirrors the Postmark webhook posture.
+  if (!appSecret) {
+    console.error('[security] No INSTAGRAM_APP_SECRET / WHATSAPP_APP_SECRET set — refusing IG webhook (fail closed).')
+    return NextResponse.json({ success: false, error: 'Server misconfigured' }, { status: 500 })
+  }
+  const result = verifyMetaSignature(rawBody, signature, appSecret)
+  if (!result.ok) {
+    console.warn(`Instagram webhook rejected: ${result.reason}`)
+    return NextResponse.json({ success: false, error: 'Invalid signature' }, { status: 403 })
   }
 
   let body

@@ -30,8 +30,9 @@ export const ACCOUNT_TOOLS = [
       'Call this when the customer asks about THEIR OWN account (membership status, plan, ' +
       'next class, recent attendance) and they have not been verified yet this ' +
       'conversation. Provide whatever identifying details the customer gives. Verification ' +
-      'succeeds on a matching email on file, OR a matching date of birth together with a ' +
-      'matching last name. If it fails, ask for the missing detail.',
+      'needs a matching email together with the surname on the account, OR a matching date ' +
+      'of birth together with the surname. A matching email on its own is NOT enough. If it ' +
+      'fails, ask for the missing detail — usually the surname.',
     input_schema: {
       type: 'object',
       properties: {
@@ -143,6 +144,45 @@ export function identityMatches(contact, provided) {
   if (pdob && cdob && pdob === cdob && pln && cln && pln === cln) return true
 
   return false
+}
+
+/**
+ * Does `surname` appear as a whole word in a free-text display name? Pure.
+ * Whitespace-tokenised, then each token is stripped of non-alphanumerics
+ * so "O'Brien" / "Smith-Jones" match a stored surname of the same.
+ * Substring matches are deliberately NOT accepted (no "Lee" inside
+ * "Ashlee"). Surnames under 2 chars never match.
+ */
+export function surnameInName(fullName, surname) {
+  const strip = s => normName(s).replace(/[^a-z0-9]/g, '')
+  const sd = strip(surname)
+  if (sd.length < 2) return false
+  const tokens = String(fullName || '').trim().split(/\s+/).filter(Boolean)
+  return tokens.some(t => strip(t) === sd)
+}
+
+/**
+ * Identity check for the EMAIL path — the unlinked-conversation case
+ * (Instagram always; WhatsApp only when the number isn't on a contact).
+ * Email alone is too weak here (emails aren't secret), so we additionally
+ * require the surname. The surname is satisfied either by what the
+ * customer supplies OR by their channel display name (nameHint) already
+ * showing it — so an Instagram member whose handle/name is "Jane Murphy"
+ * isn't made to retype "Murphy". Pure.
+ *
+ * @param {object|null} contact   { email, last_name }
+ * @param {object} provided       { email, last_name }
+ * @param {object} [opts]         { nameHint } channel display name
+ */
+export function emailPathVerifies(contact, provided, opts = {}) {
+  if (!contact || !provided) return false
+  const pe = normEmail(provided.email)
+  const ce = normEmail(contact.email)
+  if (!pe || !ce || pe !== ce) return false          // email must match
+  const cln = normName(contact.last_name)
+  if (!cln) return false                             // no surname on file → can't satisfy the 2nd factor
+  if (normName(provided.last_name) === cln) return true   // customer supplied the surname
+  return surnameInName(opts.nameHint, contact.last_name)  // surname evident from their channel name
 }
 
 /**
@@ -267,8 +307,17 @@ export async function executeAccountTool(toolName, input, ctx) {
       candidate = data || null
     }
 
-    if (!candidate || !identityMatches(candidate, input || {})) {
-      return { verified: false, hint: 'No match. Ask for the email on their account, or their date of birth together with their surname.' }
+    // Linked conversations (a phone-matched WhatsApp contact) keep the
+    // email-OR-DOB+surname rule — the channel is already a weak factor.
+    // Unlinked conversations (Instagram always; unknown WhatsApp numbers)
+    // go through the email PATH, which requires email + surname so that
+    // knowing only an email can't impersonate a member. The surname may
+    // come from the channel display name (nameHint).
+    const matched = contactId
+      ? identityMatches(candidate, input || {})
+      : emailPathVerifies(candidate, input || {}, { nameHint: ctx.nameHint })
+    if (!candidate || !matched) {
+      return { verified: false, hint: 'No match yet. Ask for the surname on the account together with the email, or their date of birth together with their surname. Never reveal which detail did or did not match.' }
     }
 
     await db.from(conversationsTable).update({

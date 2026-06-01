@@ -18,6 +18,7 @@ const DEFAULTS = {
   extra_rules: null,
   holding_message: null,
   quiet_hours: null,
+  limits: null,
 }
 
 const SettingsSchema = z.object({
@@ -31,6 +32,11 @@ const SettingsSchema = z.object({
     start: z.string().regex(/^\d{1,2}:\d{2}$/),
     end: z.string().regex(/^\d{1,2}:\d{2}$/),
     tz: z.string().max(64).optional().default('Europe/Dublin'),
+  }).nullable().optional(),
+  // Cost/abuse ceilings. Omitted → code defaults (20/conv/hr, 500/loc/day).
+  limits: z.object({
+    max_replies_per_conversation_per_hour: z.number().int().min(1).max(1000).optional(),
+    max_replies_per_location_per_day: z.number().int().min(1).max(100000).optional(),
   }).nullable().optional(),
 })
 
@@ -73,6 +79,7 @@ export async function PUT(request) {
     extra_rules: v.data.extra_rules?.trim() || null,
     holding_message: v.data.holding_message?.trim() || null,
     quiet_hours: v.data.quiet_hours || null,
+    limits: v.data.limits || null,
   }
 
   await db.from('locations').update({ settings }).eq('id', locationId).select('id').single()
