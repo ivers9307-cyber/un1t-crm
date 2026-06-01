@@ -31,6 +31,7 @@ import { validateBody } from '@/lib/validate'
 import { uuidLike, isoDate, MANAGER_ROLES } from '@/lib/schemas'
 import { projectPublishImpact } from '@/lib/roster-publish'
 import { sendOverBudgetApprovalEmail } from '@/lib/roster-email'
+import { notifyStaffOfPublish } from '@/lib/roster-notify'
 import { logWarn } from '@/lib/log'
 
 const PublishSchema = z.object({
@@ -184,18 +185,36 @@ export async function POST(request) {
       }, { status: 201 })
     }
 
-    // Flip legacy shifts.published=true so mobile + reports
-    // continue to see the roster as live. The mig 069 reverse
-    // trigger doesn't propagate the published flag, so we set
-    // it directly here. We don't go through the legacy
-    // /api/schedule/shifts/publish endpoint to avoid double
-    // notifications.
-    await db.from('shifts')
+    // Flip legacy shifts.published=true so mobile + reports continue to
+    // see the roster as live. The mig 069 reverse trigger doesn't
+    // propagate the published flag, so we set it directly here (rather
+    // than calling the legacy /api/schedule/shifts/publish endpoint).
+    // We capture the rows we just flipped so we can notify their coaches
+    // below — previously this path published silently: it skipped the
+    // legacy endpoint to "avoid double notifications" but then sent
+    // nothing, so an under-budget publish / owner self-publish told the
+    // rostered coaches NOTHING.
+    const { data: flippedShifts } = await db.from('shifts')
       .update({ published: true, published_at: nowIso })
       .eq('location_id', location_id)
       .gte('shift_date', period_start)
       .lte('shift_date', period_end)
       .eq('published', false)
+      .select('id, profile_id, location_id, shift_date')
+
+    // SCHEDULE-NOTIFY.1 — notify each coach their roster is live (one
+    // push per coach, summarising their shifts for the period). Reuses
+    // the same notifyStaffOfPublish() the approval + legacy publish
+    // paths already use. Best-effort; never fails the publish.
+    try {
+      await notifyStaffOfPublish(db, flippedShifts || [], {
+        startDate: period_start,
+        endDate: period_end,
+        locationId: location_id,
+      })
+    } catch (e) {
+      logWarn('rosters', 'publish notify failed', { err: e })
+    }
   } else {
     // status === 'draft' — manager publish over budget. Email
     // owners so they can approve. Best-effort; don't fail the
