@@ -30,6 +30,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike, MANAGER_ROLES } from '@/lib/schemas'
+import { timeRangesOverlap, fmtTime } from '@/lib/schedule-overlap'
 
 const AssignSchema = z.object({
   profile_id: uuidLike.optional(),
@@ -63,7 +64,7 @@ export async function POST(request, props) {
   // Block lookup — also our location-ownership gate.
   const { data: block, error: blockErr } = await db
     .from('shift_blocks')
-    .select('id, location_id, block_date, max_coaches, shift_assignments(count)')
+    .select('id, location_id, block_date, max_coaches, start_time, end_time, shift_assignments(count)')
     .eq('id', params.id)
     .single()
 
@@ -146,6 +147,34 @@ export async function POST(request, props) {
     assigned.push(ins)
     alreadyAssignedIds.add(profileId)
     runningCount += 1
+  }
+
+  // SCHEDULE-DOUBLE-BOOKING.1 — advisory: a coach can't be in two places
+  // at once. Warn (don't block, same posture as the time-off advisory)
+  // when a coach we just assigned already has an overlapping shift on the
+  // same date, at ANY location. Best-effort — never fails the assignment.
+  const assignedIds = assigned.map((a) => a.profile_id).filter(Boolean)
+  if (assignedIds.length > 0 && block.start_time && block.end_time) {
+    try {
+      const { data: clashes } = await db
+        .from('shift_assignments')
+        .select('profile_id, shift_blocks!inner(start_time, end_time, block_date, shift_templates(name), locations(name)), profiles:profile_id(full_name)')
+        .in('profile_id', assignedIds)
+        .eq('shift_blocks.block_date', block.block_date)
+        .neq('block_id', params.id)
+      for (const c of clashes || []) {
+        const ob = c.shift_blocks
+        if (ob && timeRangesOverlap(block.start_time, block.end_time, ob.start_time, ob.end_time)) {
+          const who = c.profiles?.full_name || 'This coach'
+          const tpl = ob.shift_templates?.name || 'another shift'
+          const loc = ob.locations?.name ? ` at ${ob.locations.name}` : ''
+          warnings.push(`${who} is already on ${tpl} ${fmtTime(ob.start_time)}–${fmtTime(ob.end_time)}${loc} that day — overlaps this shift.`)
+        }
+      }
+    } catch {
+      // Advisory only — a double-booking check failure must never block
+      // the assignment that already succeeded.
+    }
   }
 
   // Legacy single-coach response shape — preserve byte-for-byte so

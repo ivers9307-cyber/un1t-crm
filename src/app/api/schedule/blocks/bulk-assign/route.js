@@ -40,6 +40,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike, MANAGER_ROLES } from '@/lib/schemas'
+import { timeRangesOverlap, fmtTime } from '@/lib/schedule-overlap'
 
 const BulkAssignSchema = z.object({
   block_ids: z.array(uuidLike).min(1, 'At least one block_id is required').max(200, 'Max 200 blocks per request'),
@@ -165,6 +166,44 @@ export async function POST(request) {
         seen.add(line)
         return true
       })
+  }
+
+  // SCHEDULE-DOUBLE-BOOKING.1 — advisory: flag any of this coach's shifts
+  // that overlap each other on the assigned dates (existing + just-added,
+  // any location). Best-effort; aggregated + deduped like the time-off
+  // warnings above.
+  if (assigned.length > 0 && dateSet.size > 0) {
+    try {
+      const { data: coachBlocks } = await db
+        .from('shift_assignments')
+        .select('shift_blocks!inner(start_time, end_time, block_date, shift_templates(name), locations(name))')
+        .eq('profile_id', body.profile_id)
+        .in('shift_blocks.block_date', [...dateSet])
+      const byDate = {}
+      for (const a of coachBlocks || []) {
+        const b = a.shift_blocks
+        if (b?.start_time && b?.end_time) (byDate[b.block_date] ||= []).push(b)
+      }
+      const seenOverlap = new Set()
+      for (const date of Object.keys(byDate)) {
+        const dayBlocks = byDate[date]
+        for (let i = 0; i < dayBlocks.length; i++) {
+          for (let j = i + 1; j < dayBlocks.length; j++) {
+            const x = dayBlocks[i]
+            const y = dayBlocks[j]
+            if (!timeRangesOverlap(x.start_time, x.end_time, y.start_time, y.end_time)) continue
+            const line = `Overlapping shifts on ${date}: ${x.shift_templates?.name || 'shift'} ${fmtTime(x.start_time)}–${fmtTime(x.end_time)} and ${y.shift_templates?.name || 'shift'} ${fmtTime(y.start_time)}–${fmtTime(y.end_time)}.`
+            if (!seenOverlap.has(line)) {
+              seenOverlap.add(line)
+              warnings.push(line)
+            }
+          }
+        }
+      }
+    } catch {
+      // Advisory only — never let a double-booking check failure break a
+      // bulk assignment that already landed.
+    }
   }
 
   return NextResponse.json({
