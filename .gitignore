@@ -13,3 +13,6 @@ scripts/_*-commit.mjs
 
 # EAS Update code-signing private key (MOBILE-AUDIT.2) — never commit
 mobile/keys/
+
+# graphify knowledge-graph output — generated locally (~8MB), never source
+graphify-out/
