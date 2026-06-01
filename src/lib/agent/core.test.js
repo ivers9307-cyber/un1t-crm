@@ -8,6 +8,7 @@ import {
   shouldAgentReply,
   formatHistoryForClaude,
   parseAgentResponse,
+  isVerificationFresh,
   DEFAULT_HOLDING_MESSAGE,
 } from './core'
 import { HANDOFF_PREFIX } from './prompt'
@@ -70,13 +71,21 @@ describe('shouldAgentReply', () => {
     expect(shouldAgentReply({ ...base, conversation: { agent_active: false } }))
       .toEqual({ reply: false, reason: 'handed_off' })
   })
-  it('no reply for non-text messages', () => {
+  it('no reply for non-text messages — but flags onDuty for a soft handoff', () => {
     expect(shouldAgentReply({ ...base, message: { type: 'image', body: '' } }))
-      .toEqual({ reply: false, reason: 'unsupported_type' })
+      .toEqual({ reply: false, reason: 'unsupported_type', onDuty: true })
   })
   it('no reply for empty text', () => {
     expect(shouldAgentReply({ ...base, message: { type: 'text', body: '   ' } }))
-      .toEqual({ reply: false, reason: 'empty' })
+      .toEqual({ reply: false, reason: 'empty', onDuty: true })
+  })
+  it('does NOT flag onDuty for a non-text message when off-duty (disabled / quiet / off-allowlist)', () => {
+    // disabled — bails before the content gate, so no soft-handoff ack fires
+    expect(shouldAgentReply({ ...base, settings: { enabled: false }, message: { type: 'image', body: '' } }))
+      .toEqual({ reply: false, reason: 'disabled' })
+    // quiet hours wins over the non-text content gate
+    const quiet = { enabled: true, quiet_hours: { start: '00:00', end: '23:59', tz: 'UTC' } }
+    expect(shouldAgentReply({ ...base, settings: quiet, message: { type: 'image', body: '' } }).reason).toBe('quiet_hours')
   })
   it('test mode: replies only to allow-listed numbers', () => {
     const s = { enabled: false, test_mode: true, test_phones: ['+353871234567'] }
@@ -135,6 +144,13 @@ describe('parseAgentResponse', () => {
     const r = parseAgentResponse(`${HANDOFF_PREFIX} wants to cancel membership`)
     expect(r).toEqual({ action: 'handoff', text: '', reason: 'wants to cancel membership' })
   })
+  it('detects the sentinel even when the model emits text before it', () => {
+    const r = parseAgentResponse(`Sure, let me get someone. ${HANDOFF_PREFIX} billing question`)
+    // The raw sentinel must NOT leak to the customer (text is empty → holding message).
+    expect(r.action).toBe('handoff')
+    expect(r.text).toBe('')
+    expect(r.reason).toBe('billing question')
+  })
   it('treats normal text as a reply', () => {
     expect(parseAgentResponse('Sure! Classes run 6am–9pm.'))
       .toEqual({ action: 'reply', text: 'Sure! Classes run 6am–9pm.', reason: 'ok' })
@@ -144,5 +160,24 @@ describe('parseAgentResponse', () => {
   })
   it('exposes a default holding message', () => {
     expect(DEFAULT_HOLDING_MESSAGE).toMatch(/team/i)
+  })
+})
+
+describe('isVerificationFresh', () => {
+  const now = new Date('2026-06-01T12:00:00Z')
+  it('is fresh within the TTL window', () => {
+    expect(isVerificationFresh('2026-05-20T12:00:00Z', now)).toBe(true) // 12 days
+  })
+  it('is stale beyond the TTL window', () => {
+    expect(isVerificationFresh('2026-04-01T12:00:00Z', now)).toBe(false) // ~61 days
+  })
+  it('treats missing / unparseable timestamps as not verified', () => {
+    expect(isVerificationFresh(null, now)).toBe(false)
+    expect(isVerificationFresh(undefined, now)).toBe(false)
+    expect(isVerificationFresh('not-a-date', now)).toBe(false)
+  })
+  it('honours a custom ttl', () => {
+    expect(isVerificationFresh('2026-06-01T11:59:00Z', now, 60_000)).toBe(false) // 1 min old, 60s ttl
+    expect(isVerificationFresh('2026-06-01T11:59:40Z', now, 60_000)).toBe(true)  // 20s old
   })
 })

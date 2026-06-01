@@ -2,17 +2,19 @@
 //
 // This is the CUSTOMER agent (WhatsApp / Instagram), NOT the staff CRM
 // assistant (that lives in assistant-prompt.js). Different audience,
-// different rules, a deliberately smaller and safer surface: in Phase 0
-// it can only ANSWER from the operator-curated knowledge base, and must
-// hand off to a human for anything it can't answer or anything
-// sensitive. It has no tools and can take no account actions yet.
+// different rules, a deliberately smaller and safer surface: it answers
+// from the operator-curated knowledge base and, after server-enforced
+// identity verification, can answer a member's own account questions and
+// capture pause/cancellation REQUESTS (account-tools.js) — it never makes
+// account changes itself. It hands off to a human for anything it can't
+// answer or anything sensitive.
 //
-// Escalation convention (Phase 0): the model signals a handoff by
-// starting its reply with the HANDOFF_PREFIX sentinel followed by a
-// short internal reason. The orchestrator (auto-reply.js) detects this,
-// sends the customer a safe holding message instead, and flags the
-// thread for a human. Using a sentinel keeps escalation deterministic
-// and unit-testable without a tool-call round-trip.
+// Escalation convention: the model signals a handoff by emitting the
+// HANDOFF_PREFIX sentinel followed by a short internal reason. The
+// orchestrator (auto-reply.js) detects it (anywhere in the reply), sends
+// the customer a safe holding message instead, and flags the thread for a
+// human. Using a sentinel keeps escalation deterministic and
+// unit-testable without a tool-call round-trip.
 
 export const HANDOFF_PREFIX = '[[HANDOFF]]'
 

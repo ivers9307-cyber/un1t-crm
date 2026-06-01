@@ -99,11 +99,6 @@ export function shouldAgentReply({ settings, conversation, message, senderPhone,
     return { reply: false, reason: 'handed_off' }
   }
 
-  // Phase 0 only handles plain text. Anything else goes to a human.
-  const type = message?.type || 'text'
-  if (type !== 'text') return { reply: false, reason: 'unsupported_type' }
-  if (!String(message?.body || '').trim()) return { reply: false, reason: 'empty' }
-
   // Test mode (not globally enabled): only reply to allow-listed numbers.
   if (!enabled && testMode) {
     if (!phoneMatchesAllowlist(senderPhone, s.test_phones)) {
@@ -114,6 +109,14 @@ export function shouldAgentReply({ settings, conversation, message, senderPhone,
   if (isWithinQuietHours(now, s.quiet_hours)) {
     return { reply: false, reason: 'quiet_hours' }
   }
+
+  // The agent is on duty from here. Content gates carry onDuty:true so the
+  // caller can ACKNOWLEDGE a non-text message (soft handoff → a human)
+  // instead of silently dropping it. (Checked after the on-duty gates so
+  // we never acknowledge while disabled, off-allowlist, or in quiet hours.)
+  const type = message?.type || 'text'
+  if (type !== 'text') return { reply: false, reason: 'unsupported_type', onDuty: true }
+  if (!String(message?.body || '').trim()) return { reply: false, reason: 'empty', onDuty: true }
 
   return { reply: true, reason: 'ok' }
 }
@@ -162,9 +165,33 @@ export function formatHistoryForClaude(rows, opts = {}) {
  */
 export function parseAgentResponse(raw) {
   const text = String(raw || '').trim()
-  if (text.startsWith(HANDOFF_PREFIX)) {
-    return { action: 'handoff', text: '', reason: text.slice(HANDOFF_PREFIX.length).trim() || 'unspecified' }
+  // Detect the sentinel ANYWHERE, not just at the start — if the model
+  // emits a sentence before it (occasionally happens), we must still hand
+  // off rather than leak the raw "[[HANDOFF]] reason" to the customer.
+  const idx = text.indexOf(HANDOFF_PREFIX)
+  if (idx !== -1) {
+    return { action: 'handoff', text: '', reason: text.slice(idx + HANDOFF_PREFIX.length).trim() || 'unspecified' }
   }
   if (!text) return { action: 'handoff', text: '', reason: 'empty_model_response' }
   return { action: 'reply', text, reason: 'ok' }
+}
+
+// How long a successful identity verification stays valid on a thread.
+// After this, the customer must re-verify before any account lookup or
+// pause/cancel request — so a phone/IG handle changing hands doesn't
+// inherit a stale verification.
+export const VERIFY_TTL_MS = 30 * 24 * 60 * 60 * 1000
+
+/**
+ * Is a stored verification still fresh? Pure. Returns false when there's
+ * no timestamp or it's older than VERIFY_TTL_MS.
+ * @param {string|null} verifiedAt  ISO timestamp of agent_verified_at
+ * @param {Date} [now]
+ * @param {number} [ttlMs]
+ */
+export function isVerificationFresh(verifiedAt, now = new Date(), ttlMs = VERIFY_TTL_MS) {
+  if (!verifiedAt) return false
+  const t = new Date(verifiedAt).getTime()
+  if (Number.isNaN(t)) return false
+  return now.getTime() - t < ttlMs
 }

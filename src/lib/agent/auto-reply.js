@@ -27,13 +27,17 @@ import {
   shouldAgentReply,
   formatHistoryForClaude,
   parseAgentResponse,
+  isVerificationFresh,
   AGENT_MESSAGE_SOURCE,
   DEFAULT_HOLDING_MESSAGE,
 } from './core'
 import { ACCOUNT_TOOLS, executeAccountTool } from './account-tools'
 
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages'
-const AGENT_MODEL = 'claude-sonnet-4-20250514'
+const AGENT_MODEL = 'claude-sonnet-4-6'
+// Don't re-acknowledge a burst of non-text messages — one soft handoff
+// per minute is enough.
+const SOFT_NOTIFY_GAP_MS = 60_000
 const MAX_HISTORY = 20
 const MAX_TOOL_ITERATIONS = 4
 
@@ -121,7 +125,7 @@ export async function runChannelAgent(db, adapter, ctx) {
   // Conversation state: kill switch + linked contact + verification.
   const nameCol = adapter.nameColumn
   const { data: conv } = await db.from(adapter.conversationsTable)
-    .select(`agent_active, contact_id, agent_verified_contact_id${nameCol ? `, ${nameCol}` : ''}`)
+    .select(`agent_active, contact_id, agent_verified_contact_id, agent_verified_at, agent_last_reply_at${nameCol ? `, ${nameCol}` : ''}`)
     .eq('id', conversationId)
     .single()
 
@@ -132,7 +136,15 @@ export async function runChannelAgent(db, adapter, ctx) {
     senderPhone: recipient,
     now: new Date(),
   })
-  if (!decision.reply) return { handled: false, reason: decision.reason }
+  if (!decision.reply) {
+    // Non-text message while the agent is on duty — acknowledge the
+    // customer + flag a human rather than leave them hanging. Doesn't
+    // disable the agent; a follow-up text re-engages it.
+    if (decision.onDuty && decision.reason === 'unsupported_type') {
+      return await softHandoff(db, adapter, { conversationId, locationId, recipient, contactId, connection, settings, lastReplyAt: conv?.agent_last_reply_at })
+    }
+    return { handled: false, reason: decision.reason }
+  }
 
   // Concurrency claim — stop two near-simultaneous inbound messages from
   // both running a turn on this thread (double reply / double spend /
@@ -191,7 +203,9 @@ export async function runChannelAgent(db, adapter, ctx) {
       conversationId,
       conversationsTable: adapter.conversationsTable,
       contactId: conv?.contact_id || contactId || null,
-      verifiedContactId: conv?.agent_verified_contact_id || null,
+      // Only honour a prior verification if it's still fresh — a stale one
+      // (handle changed hands) forces the customer to re-verify.
+      verifiedContactId: isVerificationFresh(conv?.agent_verified_at) ? (conv?.agent_verified_contact_id || null) : null,
       locationId,
       channel: adapter.name,
       nameHint: (nameCol && conv?.[nameCol]) || null,
@@ -334,6 +348,43 @@ async function handoff(db, adapter, { conversationId, locationId, recipient, con
   } catch (err) {
     console.error(`[radar-agent] ${adapter.name} handoff push failed`, err?.message)
   }
+}
+
+// A non-text message the agent can't read (photo / voice / sticker).
+// Acknowledge the customer and flag a human, but DON'T disable the agent —
+// a follow-up text re-engages it. Debounced via agent_last_reply_at so a
+// burst of photos sends one ack, not a string of them.
+async function softHandoff(db, adapter, { conversationId, locationId, recipient, contactId, connection, settings, lastReplyAt }) {
+  if (lastReplyAt && Date.now() - new Date(lastReplyAt).getTime() < SOFT_NOTIFY_GAP_MS) {
+    return { handled: false, reason: 'soft_handoff_debounced' }
+  }
+  const holding = (settings?.holding_message || '').trim() || DEFAULT_HOLDING_MESSAGE
+  const now = new Date().toISOString()
+  try {
+    const r = await adapter.send(recipient, holding, { locationId, connection })
+    await db.from(adapter.messagesTable).insert(
+      adapter.outboundRow({ conversationId, locationId, contactId, messageId: r?.messageId || null, text: holding, now })
+    )
+    await db.from(adapter.conversationsTable).update({
+      last_message_at: now,
+      last_message_direction: 'outbound',
+      last_message_preview: holding.substring(0, 100),
+      agent_last_reply_at: now,
+    }).eq('id', conversationId)
+  } catch (err) {
+    console.error(`[radar-agent] ${adapter.name} soft-handoff send failed`, err?.message)
+  }
+  try {
+    await sendPushToRolesAtLocation(locationId, MANAGER_ROLES, {
+      title: `${adapter.label} · non-text message`,
+      body: "Customer sent a photo / voice / attachment the agent can't read — needs a human.",
+      category: adapter.pushCategory,
+      data: { type: adapter.handoffType, conversation_id: conversationId },
+    })
+  } catch (err) {
+    console.error(`[radar-agent] ${adapter.name} soft-handoff push failed`, err?.message)
+  }
+  return { handled: true, action: 'soft_handoff', reason: 'unsupported_type' }
 }
 
 // ── WhatsApp adapter ────────────────────────────────────────────────
