@@ -210,6 +210,10 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
   const [copying, setCopying] = useState(false)
   const [swapModal, setSwapModal] = useState(null) // legacy shift-shaped row to swap
   const [publishModal, setPublishModal] = useState(null) // { periodStart, periodEnd }
+  // SCHEDULE-PUBLISH-GUARD.1 — roster edits made since the last publish.
+  // Drives the "you have unpublished changes" exit guard below. Set by any
+  // edit (via refreshAfterMutation) and cleared on a successful publish.
+  const [hasUnpublishedChanges, setHasUnpublishedChanges] = useState(false)
   const [timeOff, setTimeOff] = useState([])
   const [holidays, setHolidays] = useState([])
   // Block detail modal — clicking on a block card opens a popout
@@ -345,12 +349,44 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
   // date change) — and the overview strip already refetches on those
   // via its own `range` dep, so an extra bump there would just cause
   // a redundant overview fetch.
-  const refreshAfterMutation = useCallback(async () => {
+  const refreshAfterMutation = useCallback(async (opts = {}) => {
     await fetchData()
     onDataChange?.()
+    // Every edit marks the roster dirty so the exit guard fires until the
+    // operator publishes. Publish opts out (markDirty: false) and clears it.
+    if (opts.markDirty !== false) setHasUnpublishedChanges(true)
   }, [fetchData, onDataChange])
 
   useEffect(() => { fetchData() }, [fetchData])
+
+  // SCHEDULE-PUBLISH-GUARD.1 — warn before leaving with unpublished roster
+  // changes. beforeunload covers tab close / refresh / external navigation;
+  // the capture-phase click handler covers in-app link clicks (App Router
+  // has no built-in route-change block).
+  useEffect(() => {
+    if (!hasUnpublishedChanges) return undefined
+    const onBeforeUnload = (e) => { e.preventDefault(); e.returnValue = '' }
+    const onClickCapture = (e) => {
+      if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return
+      const a = e.target?.closest?.('a[href]')
+      if (!a || a.target === '_blank' || a.hasAttribute('download')) return
+      const href = a.getAttribute('href')
+      if (!href || href.startsWith('#') || href.startsWith('mailto:') || href.startsWith('tel:')) return
+      let url
+      try { url = new URL(href, window.location.origin) } catch { return }
+      if (url.origin !== window.location.origin || url.pathname === window.location.pathname) return
+      if (!window.confirm('You have unpublished roster changes. Leave without publishing?')) {
+        e.preventDefault()
+        e.stopPropagation()
+      }
+    }
+    window.addEventListener('beforeunload', onBeforeUnload)
+    document.addEventListener('click', onClickCapture, true)
+    return () => {
+      window.removeEventListener('beforeunload', onBeforeUnload)
+      document.removeEventListener('click', onClickCapture, true)
+    }
+  }, [hasUnpublishedChanges])
 
   // Filter staff to those assigned to this location
   const locationStaff = staff.filter(s =>
@@ -535,7 +571,11 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
         })
       }
       setPublishModal(null)
-      refreshAfterMutation()
+      // Publish is the one mutation that should NOT re-arm the exit guard.
+      // A real publish clears it; a needs-approval draft stays dirty (it's
+      // still pending an owner's sign-off).
+      refreshAfterMutation({ markDirty: false })
+      if (!data.needs_approval) setHasUnpublishedChanges(false)
       return data.needs_approval
         ? { needsApproval: true }
         : { published: true, impact: data.impact }
