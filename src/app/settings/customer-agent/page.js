@@ -2,6 +2,8 @@
 
 import { useState, useEffect } from 'react'
 import ConnectionsSection from '@/components/customer-agent/ConnectionsSection'
+import Link from 'next/link'
+import { BarChart3 } from 'lucide-react'
 
 // RADAR-AGENT.0 — operator settings for the customer-facing WhatsApp /
 // Instagram agent. Manager+ only. Three parts: (1) per-location channel
@@ -98,6 +100,15 @@ export default function CustomerAgentSettingsPage() {
         answers from the knowledge below and hands off to a human for anything it can&apos;t answer.
         Ships off by default — use Test mode to trial it on your own number first.
       </p>
+
+      <Link
+        href="/settings/customer-agent/analytics"
+        className="inline-flex items-center gap-2 text-sm bg-un1t-surface border border-un1t-border rounded-lg px-4 py-2.5 mb-6 hover:border-un1t-subtle transition-colors"
+      >
+        <BarChart3 size={16} className="text-un1t-accent" />
+        <span className="text-un1t-text">View agent activity</span>
+        <span className="text-un1t-muted">— replies, escalations, what customers asked</span>
+      </Link>
 
       {location?.id && <ConnectionsSection locationId={location.id} locationName={location.name} />}
 
