@@ -41,6 +41,7 @@ import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike, MANAGER_ROLES } from '@/lib/schemas'
 import { timeRangesOverlap, fmtTime } from '@/lib/schedule-overlap'
+import { logRosterChange } from '@/lib/roster-change-log'
 
 const BulkAssignSchema = z.object({
   block_ids: z.array(uuidLike).min(1, 'At least one block_id is required').max(200, 'Max 200 blocks per request'),
@@ -70,6 +71,7 @@ export async function POST(request) {
     .from('shift_blocks')
     .select(`
       id, location_id, block_date, max_coaches,
+      roster_id, rosters:roster_id ( status ),
       shift_assignments ( id, profile_id, status )
     `)
     .in('id', body.block_ids)
@@ -203,6 +205,24 @@ export async function POST(request) {
     } catch {
       // Advisory only — never let a double-booking check failure break a
       // bulk assignment that already landed.
+    }
+  }
+
+  // SCHEDULE-CHANGE-LOG.1 — record assignments to blocks that belong to a
+  // published roster as post-publish changes, so the next re-publish
+  // re-notifies this coach. Best-effort.
+  for (const a of assigned) {
+    const block = blocksById.get(a.block_id)
+    if (block?.rosters?.status === 'published') {
+      await logRosterChange(db, {
+        isPublished: true,
+        locationId: block.location_id,
+        blockId: block.id,
+        blockDate: block.block_date,
+        actorId: user.id,
+        coachId: body.profile_id,
+        action: 'assigned',
+      })
     }
   }
 

@@ -31,6 +31,7 @@ import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike, MANAGER_ROLES } from '@/lib/schemas'
 import { timeRangesOverlap, fmtTime } from '@/lib/schedule-overlap'
+import { logRosterChange } from '@/lib/roster-change-log'
 
 const AssignSchema = z.object({
   profile_id: uuidLike.optional(),
@@ -64,7 +65,7 @@ export async function POST(request, props) {
   // Block lookup — also our location-ownership gate.
   const { data: block, error: blockErr } = await db
     .from('shift_blocks')
-    .select('id, location_id, block_date, max_coaches, start_time, end_time, shift_assignments(count)')
+    .select('id, location_id, block_date, max_coaches, start_time, end_time, roster_id, rosters:roster_id(status), shift_assignments(count)')
     .eq('id', params.id)
     .single()
 
@@ -174,6 +175,24 @@ export async function POST(request, props) {
     } catch {
       // Advisory only — a double-booking check failure must never block
       // the assignment that already succeeded.
+    }
+  }
+
+  // SCHEDULE-CHANGE-LOG.1 — if this block belongs to a published roster,
+  // record each new assignment as a post-publish change so the next
+  // re-publish re-notifies the affected coach. Best-effort (logRosterChange
+  // no-ops on a draft roster and never throws).
+  if (block.rosters?.status === 'published') {
+    for (const coachId of assignedIds) {
+      await logRosterChange(db, {
+        isPublished: true,
+        locationId: block.location_id,
+        blockId: block.id,
+        blockDate: block.block_date,
+        actorId: user.id,
+        coachId,
+        action: 'assigned',
+      })
     }
   }
 

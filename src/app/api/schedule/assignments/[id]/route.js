@@ -19,6 +19,7 @@ import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { MANAGER_ROLES, timeOfDay } from '@/lib/schemas'
 import { notifyUsers } from '@/lib/notify'
+import { logRosterChange } from '@/lib/roster-change-log'
 import { logWarn } from '@/lib/log'
 
 // All fields optional. To CLEAR an override, send null explicitly
@@ -50,7 +51,7 @@ export async function PUT(request, props) {
 
   const { data: assignment, error: fetchErr } = await db
     .from('shift_assignments')
-    .select('id, profile_id, block_id, shift_blocks!block_id(location_id, start_time, end_time, block_date)')
+    .select('id, profile_id, block_id, shift_blocks!block_id(location_id, start_time, end_time, block_date, roster_id, rosters:roster_id(status))')
     .eq('id', params.id)
     .single()
   if (fetchErr || !assignment) {
@@ -153,6 +154,24 @@ export async function PUT(request, props) {
     } catch (e) {
       logWarn('assignment-update', `notify failed for ${data.id}`, { err: e })
     }
+
+    // SCHEDULE-CHANGE-LOG.1 — record the time change on a published roster
+    // so the next re-publish re-notifies this coach. Best-effort.
+    if (assignment.shift_blocks?.rosters?.status === 'published') {
+      await logRosterChange(db, {
+        isPublished: true,
+        locationId: assignment.shift_blocks?.location_id,
+        blockId: assignment.block_id,
+        blockDate: data.shift_blocks?.block_date || assignment.shift_blocks?.block_date,
+        actorId: user.id,
+        coachId: data.profile_id,
+        action: 'time_changed',
+        details: {
+          start_time_override: data.start_time_override || null,
+          end_time_override: data.end_time_override || null,
+        },
+      })
+    }
   }
 
   return NextResponse.json({ success: true, data })
@@ -170,7 +189,7 @@ export async function DELETE(_request, props) {
   // Pull the assignment + parent block so we can authorise.
   const { data: assignment, error: fetchErr } = await db
     .from('shift_assignments')
-    .select('id, profile_id, block_id, shift_blocks!block_id(location_id)')
+    .select('id, profile_id, block_id, shift_blocks!block_id(location_id, block_date, roster_id, rosters:roster_id(status))')
     .eq('id', params.id)
     .single()
 
@@ -198,5 +217,21 @@ export async function DELETE(_request, props) {
   if (error) {
     return NextResponse.json({ success: false, error: error.message }, { status: 400 })
   }
+
+  // SCHEDULE-CHANGE-LOG.1 — record a manager removing a coach from a
+  // published roster (skip self-removal — the coach already knows) so the
+  // next re-publish re-notifies them. Best-effort.
+  if (!isSelf && assignment.shift_blocks?.rosters?.status === 'published') {
+    await logRosterChange(db, {
+      isPublished: true,
+      locationId: assignment.shift_blocks?.location_id,
+      blockId: assignment.block_id,
+      blockDate: assignment.shift_blocks?.block_date,
+      actorId: user.id,
+      coachId: assignment.profile_id,
+      action: 'unassigned',
+    })
+  }
+
   return NextResponse.json({ success: true })
 }
