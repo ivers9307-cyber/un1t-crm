@@ -37,6 +37,67 @@ const AGENT_MODEL = 'claude-sonnet-4-20250514'
 const MAX_HISTORY = 20
 const MAX_TOOL_ITERATIONS = 4
 
+// A claim older than this is treated as stale (e.g. a crashed turn) and
+// reclaimable, so a single failed run can't wedge a thread forever.
+const STALE_CLAIM_MS = 90_000
+// Cost/abuse ceilings (operator-overridable via settings.customer_agent.limits).
+const DEFAULT_LIMITS = { convHour: 20, locDay: 500 }
+
+function clampInt(v, fallback, min, max) {
+  const n = Number(v)
+  if (!Number.isFinite(n)) return fallback
+  return Math.max(min, Math.min(max, Math.round(n)))
+}
+
+function resolveLimits(settings) {
+  const l = (settings && settings.limits) || {}
+  return {
+    convHour: clampInt(l.max_replies_per_conversation_per_hour, DEFAULT_LIMITS.convHour, 1, 1000),
+    locDay: clampInt(l.max_replies_per_location_per_day, DEFAULT_LIMITS.locDay, 1, 100000),
+  }
+}
+
+function startOfUtcDayIso() {
+  const d = new Date()
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())).toISOString()
+}
+function hoursAgoIso(h) {
+  return new Date(Date.now() - h * 3600_000).toISOString()
+}
+
+// Optimistic per-conversation lock via agent_processing_at: claim only if
+// it's unset or stale. Concurrent claimers serialise on the row, so exactly
+// one wins. Returns true if this caller owns the turn.
+async function claimAgentTurn(db, adapter, conversationId) {
+  const nowIso = new Date().toISOString()
+  const staleIso = new Date(Date.now() - STALE_CLAIM_MS).toISOString()
+  const { data } = await db.from(adapter.conversationsTable)
+    .update({ agent_processing_at: nowIso })
+    .eq('id', conversationId)
+    .or(`agent_processing_at.is.null,agent_processing_at.lt.${staleIso}`)
+    .select('id')
+  return Array.isArray(data) && data.length > 0
+}
+
+async function releaseAgentTurn(db, adapter, conversationId) {
+  try {
+    await db.from(adapter.conversationsTable)
+      .update({ agent_processing_at: null })
+      .eq('id', conversationId)
+  } catch { /* best-effort — a stale claim self-expires after STALE_CLAIM_MS */ }
+}
+
+// Count agent-sent replies in a window for a cap check. Single-table head
+// count, so the PostgREST embedded-resource count bug doesn't apply.
+async function countAgentReplies(db, adapter, { field, value, sinceIso }) {
+  const { count } = await db.from(adapter.messagesTable)
+    .select('id', { count: 'exact', head: true })
+    .eq(field, value)
+    .eq('source', AGENT_MESSAGE_SOURCE)
+    .gte('created_at', sinceIso)
+  return count || 0
+}
+
 /**
  * Generic per-channel agent turn.
  *
@@ -58,8 +119,9 @@ export async function runChannelAgent(db, adapter, ctx) {
   const settings = loc?.settings?.customer_agent || null
 
   // Conversation state: kill switch + linked contact + verification.
+  const nameCol = adapter.nameColumn
   const { data: conv } = await db.from(adapter.conversationsTable)
-    .select('agent_active, contact_id, agent_verified_contact_id')
+    .select(`agent_active, contact_id, agent_verified_contact_id${nameCol ? `, ${nameCol}` : ''}`)
     .eq('id', conversationId)
     .single()
 
@@ -72,117 +134,147 @@ export async function runChannelAgent(db, adapter, ctx) {
   })
   if (!decision.reply) return { handled: false, reason: decision.reason }
 
-  const { data: knowledge } = await db.from('agent_knowledge')
-    .select('category, title, content, enabled, sort_order')
-    .eq('location_id', locationId)
-    .eq('enabled', true)
-    .order('sort_order', { ascending: true })
+  // Concurrency claim — stop two near-simultaneous inbound messages from
+  // both running a turn on this thread (double reply / double spend /
+  // verify race). The loser bails; the winner reads fresh history (which
+  // already includes the burst), so nothing is lost.
+  const claimed = await claimAgentTurn(db, adapter, conversationId)
+  if (!claimed) return { handled: false, reason: 'in_flight' }
 
-  const { data: history } = await db.from(adapter.messagesTable)
-    .select('direction, body, message_type, created_at')
-    .eq('conversation_id', conversationId)
-    .order('created_at', { ascending: true })
-    .limit(MAX_HISTORY * 2)
-
-  const systemPrompt = buildCustomerSystemPrompt({
-    businessName: 'UN1T',
-    locationName: loc?.name || null,
-    tone: settings?.tone || null,
-    extraRules: settings?.extra_rules || null,
-    knowledge: knowledge || [],
-    today: new Date().toISOString().slice(0, 10),
-  })
-
-  const messages = formatHistoryForClaude(history || [], { maxMessages: MAX_HISTORY })
-  if (messages.length === 0) return { handled: false, reason: 'no_history' }
-
-  // Tool-execution context. verifiedContactId is mutable: verify_identity
-  // both stamps the DB and updates this so later tools in the same turn
-  // see the verification immediately.
-  const toolCtx = {
-    db,
-    conversationId,
-    conversationsTable: adapter.conversationsTable,
-    contactId: conv?.contact_id || contactId || null,
-    verifiedContactId: conv?.agent_verified_contact_id || null,
-    locationId,
-  }
-
-  let modelText = ''
   try {
-    let iterations = MAX_TOOL_ITERATIONS
-    let done = false
-    while (iterations-- > 0 && !done) {
-      const res = await fetch(ANTHROPIC_API_URL, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': apiKey,
-          'anthropic-version': '2023-06-01',
-        },
-        body: JSON.stringify({
-          model: AGENT_MODEL,
-          max_tokens: 600,
-          system: systemPrompt,
-          messages,
-          tools: ACCOUNT_TOOLS,
-        }),
-      })
-      if (!res.ok) {
-        console.error('[radar-agent] Anthropic error', res.status, await res.text().catch(() => ''))
-        return { handled: false, reason: 'model_error' }
-      }
-      const data = await res.json()
-      const content = data.content || []
+    // Cost / abuse ceilings, cheapest check first. The per-location daily
+    // cap stops a runaway across all threads; the per-conversation hourly
+    // cap catches a single chatty/looping sender.
+    const limits = resolveLimits(settings)
+    const locReplies = await countAgentReplies(db, adapter, { field: 'location_id', value: locationId, sinceIso: startOfUtcDayIso() })
+    if (locReplies >= limits.locDay) return { handled: false, reason: 'location_daily_cap' }
 
-      if (data.stop_reason === 'tool_use') {
-        messages.push({ role: 'assistant', content })
-        const toolResults = []
-        for (const block of content) {
-          if (block.type !== 'tool_use') continue
-          const result = await executeAccountTool(block.name, block.input || {}, toolCtx)
-          if (block.name === 'verify_identity' && result?.verified) {
-            // Re-read the contact id the server just stamped so the
-            // follow-up lookups in this same turn are authorised.
-            const { data: fresh } = await db.from(adapter.conversationsTable)
-              .select('agent_verified_contact_id')
-              .eq('id', conversationId)
-              .single()
-            toolCtx.verifiedContactId = fresh?.agent_verified_contact_id || toolCtx.verifiedContactId
-          }
-          toolResults.push({
-            type: 'tool_result',
-            tool_use_id: block.id,
-            content: JSON.stringify(result),
-          })
+    const convReplies = await countAgentReplies(db, adapter, { field: 'conversation_id', value: conversationId, sinceIso: hoursAgoIso(1) })
+    if (convReplies >= limits.convHour) {
+      // Abnormal volume to one person in an hour — loop or abuse. Hand off
+      // to a human rather than keep burning the model.
+      await handoff(db, adapter, { conversationId, locationId, recipient, contactId, connection, reason: 'rate_limited: hourly agent-reply cap hit', settings })
+      return { handled: true, action: 'handoff', reason: 'rate_limited' }
+    }
+
+    const { data: knowledge } = await db.from('agent_knowledge')
+      .select('category, title, content, enabled, sort_order')
+      .eq('location_id', locationId)
+      .eq('enabled', true)
+      .order('sort_order', { ascending: true })
+
+    const { data: history } = await db.from(adapter.messagesTable)
+      .select('direction, body, message_type, created_at')
+      .eq('conversation_id', conversationId)
+      .order('created_at', { ascending: true })
+      .limit(MAX_HISTORY * 2)
+
+    const systemPrompt = buildCustomerSystemPrompt({
+      businessName: 'UN1T',
+      locationName: loc?.name || null,
+      tone: settings?.tone || null,
+      extraRules: settings?.extra_rules || null,
+      knowledge: knowledge || [],
+      today: new Date().toISOString().slice(0, 10),
+    })
+
+    const messages = formatHistoryForClaude(history || [], { maxMessages: MAX_HISTORY })
+    if (messages.length === 0) return { handled: false, reason: 'no_history' }
+
+    // Tool-execution context. verifiedContactId is mutable: verify_identity
+    // both stamps the DB and updates this so later tools in the same turn
+    // see the verification immediately. channel records which surface a
+    // pause/cancel request came from; nameHint lets the email-path identity
+    // check accept a surname already shown in the customer's channel name.
+    const toolCtx = {
+      db,
+      conversationId,
+      conversationsTable: adapter.conversationsTable,
+      contactId: conv?.contact_id || contactId || null,
+      verifiedContactId: conv?.agent_verified_contact_id || null,
+      locationId,
+      channel: adapter.name,
+      nameHint: (nameCol && conv?.[nameCol]) || null,
+    }
+
+    let modelText = ''
+    try {
+      let iterations = MAX_TOOL_ITERATIONS
+      let done = false
+      while (iterations-- > 0 && !done) {
+        const res = await fetch(ANTHROPIC_API_URL, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': apiKey,
+            'anthropic-version': '2023-06-01',
+          },
+          body: JSON.stringify({
+            model: AGENT_MODEL,
+            max_tokens: 600,
+            system: systemPrompt,
+            messages,
+            tools: ACCOUNT_TOOLS,
+          }),
+        })
+        if (!res.ok) {
+          console.error('[radar-agent] Anthropic error', res.status, await res.text().catch(() => ''))
+          return { handled: false, reason: 'model_error' }
         }
-        messages.push({ role: 'user', content: toolResults })
-        continue
+        const data = await res.json()
+        const content = data.content || []
+
+        if (data.stop_reason === 'tool_use') {
+          messages.push({ role: 'assistant', content })
+          const toolResults = []
+          for (const block of content) {
+            if (block.type !== 'tool_use') continue
+            const result = await executeAccountTool(block.name, block.input || {}, toolCtx)
+            if (block.name === 'verify_identity' && result?.verified) {
+              // Re-read the contact id the server just stamped so the
+              // follow-up lookups in this same turn are authorised.
+              const { data: fresh } = await db.from(adapter.conversationsTable)
+                .select('agent_verified_contact_id')
+                .eq('id', conversationId)
+                .single()
+              toolCtx.verifiedContactId = fresh?.agent_verified_contact_id || toolCtx.verifiedContactId
+            }
+            toolResults.push({
+              type: 'tool_result',
+              tool_use_id: block.id,
+              content: JSON.stringify(result),
+            })
+          }
+          messages.push({ role: 'user', content: toolResults })
+          continue
+        }
+
+        // Final turn — collect text.
+        modelText = content.filter(b => b.type === 'text').map(b => b.text).join('\n')
+        done = true
       }
-
-      // Final turn — collect text.
-      modelText = content.filter(b => b.type === 'text').map(b => b.text).join('\n')
-      done = true
+      if (!done) {
+        // Ran out of tool iterations without a final text turn — hand off.
+        modelText = ''
+      }
+    } catch (err) {
+      console.error('[radar-agent] model call failed', err?.message)
+      return { handled: false, reason: 'model_exception' }
     }
-    if (!done) {
-      // Ran out of tool iterations without a final text turn — hand off.
-      modelText = ''
+
+    const parsed = parseAgentResponse(modelText)
+    const common = { conversationId, locationId, recipient, contactId, connection }
+
+    if (parsed.action === 'handoff') {
+      await handoff(db, adapter, { ...common, reason: parsed.reason, settings })
+      return { handled: true, action: 'handoff', reason: parsed.reason }
     }
-  } catch (err) {
-    console.error('[radar-agent] model call failed', err?.message)
-    return { handled: false, reason: 'model_exception' }
+
+    await sendAndLog(db, adapter, { ...common, text: parsed.text })
+    return { handled: true, action: 'reply' }
+  } finally {
+    await releaseAgentTurn(db, adapter, conversationId)
   }
-
-  const parsed = parseAgentResponse(modelText)
-  const common = { conversationId, locationId, recipient, contactId, connection }
-
-  if (parsed.action === 'handoff') {
-    await handoff(db, adapter, { ...common, reason: parsed.reason, settings })
-    return { handled: true, action: 'handoff', reason: parsed.reason }
-  }
-
-  await sendAndLog(db, adapter, { ...common, text: parsed.text })
-  return { handled: true, action: 'reply' }
 }
 
 // Send an agent reply + persist it + update the conversation.
@@ -250,6 +342,7 @@ export const whatsappAdapter = {
   label: 'WhatsApp',
   conversationsTable: 'whatsapp_conversations',
   messagesTable: 'whatsapp_messages',
+  nameColumn: 'wa_profile_name',
   pushCategory: 'whatsapp',
   handoffType: 'whatsapp_agent_handoff',
   send: (recipient, text, { locationId }) => sendTextMessage(recipient, text, { locationId }),

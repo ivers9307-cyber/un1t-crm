@@ -77,12 +77,35 @@ export async function sendInstagramMessage(recipientIgsid, text, opts = {}) {
   return { messageId: result.message_id || null }
 }
 
+/**
+ * Best-effort fetch of a customer's IG display name + handle via the
+ * Graph API, using the location's page token. Captured once when a
+ * conversation is created so the agent can use the surname (if shown) as
+ * the second identity factor on the email-verification path. Returns null
+ * on any failure — verification just falls back to asking for the surname.
+ */
+export async function fetchInstagramProfile(igsid, connection) {
+  const token = connection?.access_token
+  if (!token || !igsid) return null
+  try {
+    const res = await fetch(
+      `${META_GRAPH_URL}/${encodeURIComponent(igsid)}?fields=name,username&access_token=${encodeURIComponent(token)}`
+    )
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok || data.error) return null
+    return { name: data.name || null, username: data.username || null }
+  } catch {
+    return null
+  }
+}
+
 // ── Instagram adapter for runChannelAgent ───────────────────────────
 export const instagramAdapter = {
   name: 'instagram',
   label: 'Instagram',
   conversationsTable: 'instagram_conversations',
   messagesTable: 'instagram_messages',
+  nameColumn: 'customer_name',
   pushCategory: 'instagram',
   handoffType: 'instagram_agent_handoff',
   send: (recipient, text, { connection }) => sendInstagramMessage(recipient, text, { connection }),
@@ -127,10 +150,15 @@ export async function handleInstagramInbound(db, event) {
   let conversationId = existingConv?.id
   const contactId = existingConv?.contact_id || null
   if (!conversationId) {
+    // Capture the customer's IG display name once, so the agent can use
+    // the surname as a verification factor without making them retype it.
+    const profile = await fetchInstagramProfile(event.senderId, connection)
     const { data: created } = await db.from('instagram_conversations').insert({
       location_id: locationId,
       channel_connection_id: connection?.id || null,
       ig_user_id: event.senderId,
+      ig_username: profile?.username || null,
+      customer_name: profile?.name || null,
       status: 'active',
     }).select('id').single()
     conversationId = created?.id
