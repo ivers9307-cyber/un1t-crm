@@ -4,6 +4,8 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike, isoDate , MANAGER_ROLES} from '@/lib/schemas'
+import { bulkUpsertShiftAssignments } from '@/lib/roster-write'
+import { fetchSourceShiftRows } from '@/lib/roster-read'
 
 const CopyWeekSchema = z.object({
   location_id: uuidLike,
@@ -35,16 +37,16 @@ export async function POST(request) {
   sourceEndDate.setDate(sourceEndDate.getDate() + 6)
   const sourceEnd = sourceEndDate.toISOString().split('T')[0]
 
-  // Fetch source shifts
-  const { data: sourceShifts, error: fetchError } = await db.from('shifts')
-    .select('*')
-    .eq('location_id', location_id)
-    .gte('shift_date', source_start)
-    .lte('shift_date', sourceEnd)
+  // Fetch source shifts from the Roster v2 model (blocks + assignments).
+  const { rows: sourceRows, error: fetchError } = await fetchSourceShiftRows(db, {
+    locationId: location_id,
+    startDate: source_start,
+    endDate: sourceEnd,
+  })
 
   if (fetchError) return NextResponse.json({ success: false, error: fetchError.message }, { status: 400 })
 
-  if (!sourceShifts || sourceShifts.length === 0) {
+  if (!sourceRows || sourceRows.length === 0) {
     return NextResponse.json({ success: false, error: 'No shifts found in the source week' }, { status: 404 })
   }
 
@@ -52,31 +54,30 @@ export async function POST(request) {
   const targetStartDate = new Date(target_start + 'T00:00:00')
   const dayOffset = Math.round((targetStartDate - sourceStartDate) / (1000 * 60 * 60 * 24))
 
-  // Create new shifts with adjusted dates
-  const newShifts = sourceShifts.map(s => {
-    const shiftDate = new Date(s.shift_date + 'T00:00:00')
+  // Re-date each source row into the target week.
+  const newRows = sourceRows.map((r) => {
+    const shiftDate = new Date(r.shiftDate + 'T00:00:00')
     shiftDate.setDate(shiftDate.getDate() + dayOffset)
-
     return {
-      location_id: s.location_id,
-      profile_id: s.profile_id,
-      shift_template_id: s.shift_template_id,
-      shift_date: shiftDate.toISOString().split('T')[0],
-      start_time_override: s.start_time_override,
-      end_time_override: s.end_time_override,
-      role_label: s.role_label,
-      notes: s.notes,
+      profileId: r.profileId,
+      shiftTemplateId: r.shiftTemplateId,
+      shiftDate: shiftDate.toISOString().split('T')[0],
+      startTimeOverride: r.startTimeOverride,
+      endTimeOverride: r.endTimeOverride,
+      notes: r.notes,
       status: 'scheduled',
-      published: false,
-      created_by: user.id,
     }
   })
 
-  // Upsert to avoid duplicates (if a shift already exists for that slot, update it)
-  const { data, error } = await db.from('shifts')
-    .upsert(newShifts, { onConflict: 'location_id,profile_id,shift_template_id,shift_date', ignoreDuplicates: false })
-    .select('*, shift_templates(*), profiles!profile_id(id, full_name, email, avatar_url, role)')
+  // Find-or-create blocks + upsert assignments (new model). Newly-created
+  // blocks carry no roster_id, so the copied shifts read as unpublished
+  // until the manager publishes — same as the legacy published:false.
+  const { count, error } = await bulkUpsertShiftAssignments(db, {
+    locationId: location_id,
+    actorId: user.id,
+    rows: newRows,
+  })
 
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
-  return NextResponse.json({ success: true, data, copied: newShifts.length }, { status: 201 })
+  return NextResponse.json({ success: true, copied: count }, { status: 201 })
 }

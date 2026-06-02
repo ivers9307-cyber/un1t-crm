@@ -101,3 +101,111 @@ export async function upsertShiftAssignment(db, input) {
 
   return { blockId, assignment, error: null }
 }
+
+/**
+ * Batch version of upsertShiftAssignment for the copy-week / copy-month
+ * routes (RETIRE-SHIFTS-MIRROR.5b). Replaces a single bulk
+ * `upsert into public.shifts` — find-or-create every needed block once,
+ * then upsert all assignments in one statement, instead of one
+ * round-trip trio per row.
+ *
+ * All rows must share a single locationId (the copy routes are
+ * per-location). Overrides ride on the assignment (mig 100); new blocks
+ * are created at template default times.
+ *
+ * @param {import('@supabase/supabase-js').SupabaseClient} db service-role client
+ * @param {object} opts
+ * @param {string} opts.locationId
+ * @param {string|null} [opts.actorId]
+ * @param {Array<{
+ *   profileId: string,
+ *   shiftTemplateId: string,
+ *   shiftDate: string,
+ *   startTimeOverride?: string|null,
+ *   endTimeOverride?: string|null,
+ *   notes?: string|null,
+ *   status?: string,
+ * }>} opts.rows
+ * @returns {Promise<{ count: number, error: object|null }>}
+ */
+export async function bulkUpsertShiftAssignments(db, { locationId, actorId = null, rows }) {
+  if (!locationId) return { count: 0, error: { message: 'locationId is required' } }
+  if (!Array.isArray(rows) || rows.length === 0) return { count: 0, error: null }
+
+  // 1. Template defaults for every distinct template referenced.
+  const templateIds = [...new Set(rows.map((r) => r.shiftTemplateId))]
+  const { data: templates, error: tErr } = await db
+    .from('shift_templates')
+    .select('id, start_time, end_time, max_coaches')
+    .in('id', templateIds)
+  if (tErr) return { count: 0, error: tErr }
+  const tplById = new Map((templates || []).map((t) => [t.id, t]))
+  const missing = templateIds.filter((id) => !tplById.has(id))
+  if (missing.length > 0) return { count: 0, error: { message: `shift_template not found: ${missing.join(', ')}` } }
+
+  // 2. Find existing blocks covering the needed (template, date) slots.
+  const dates = rows.map((r) => r.shiftDate)
+  const minDate = dates.reduce((a, b) => (a < b ? a : b))
+  const maxDate = dates.reduce((a, b) => (a > b ? a : b))
+  const { data: existingBlocks, error: bErr } = await db
+    .from('shift_blocks')
+    .select('id, template_id, block_date')
+    .eq('location_id', locationId)
+    .in('template_id', templateIds)
+    .gte('block_date', minDate)
+    .lte('block_date', maxDate)
+  if (bErr) return { count: 0, error: bErr }
+  const blockIdByKey = new Map((existingBlocks || []).map((b) => [`${b.template_id}|${b.block_date}`, b.id]))
+
+  // 3. Create blocks for the slots that don't exist yet (template defaults).
+  const neededKeys = new Set(rows.map((r) => `${r.shiftTemplateId}|${r.shiftDate}`))
+  const toCreate = []
+  for (const key of neededKeys) {
+    if (blockIdByKey.has(key)) continue
+    const [templateId, blockDate] = key.split('|')
+    const tpl = tplById.get(templateId)
+    toCreate.push({
+      location_id: locationId,
+      template_id: templateId,
+      block_date: blockDate,
+      start_time: tpl.start_time,
+      end_time: tpl.end_time,
+      max_coaches: tpl.max_coaches ?? 15,
+      created_by: actorId,
+    })
+  }
+  if (toCreate.length > 0) {
+    const { data: created, error: cErr } = await db
+      .from('shift_blocks')
+      .insert(toCreate)
+      .select('id, template_id, block_date')
+    if (cErr) return { count: 0, error: cErr }
+    for (const b of created || []) blockIdByKey.set(`${b.template_id}|${b.block_date}`, b.id)
+  }
+
+  // 4. Build assignment rows, dedup on (block, profile) so a single
+  //    upsert statement can't hit the same conflict key twice.
+  const assignmentByKey = new Map()
+  for (const r of rows) {
+    const blockId = blockIdByKey.get(`${r.shiftTemplateId}|${r.shiftDate}`)
+    if (!blockId) continue
+    assignmentByKey.set(`${blockId}|${r.profileId}`, {
+      block_id: blockId,
+      profile_id: r.profileId,
+      notes: r.notes ?? null,
+      status: r.status ?? 'scheduled',
+      start_time_override: r.startTimeOverride ?? null,
+      end_time_override: r.endTimeOverride ?? null,
+      assigned_by: actorId,
+    })
+  }
+  const assignmentRows = [...assignmentByKey.values()]
+  if (assignmentRows.length === 0) return { count: 0, error: null }
+
+  const { error: aErr } = await db
+    .from('shift_assignments')
+    .upsert(assignmentRows, { onConflict: 'block_id,profile_id' })
+  if (aErr) return { count: 0, error: aErr }
+
+  return { count: assignmentRows.length, error: null }
+}
