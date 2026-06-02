@@ -25,6 +25,7 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler'
 import { useEffect } from 'react'
 import * as Notifications from 'expo-notifications'
 import { AuthProvider, useAuth } from '../lib/auth-context'
+import RootErrorBoundary from '../components/RootErrorBoundary'
 
 // Keep the splash screen up until auth bootstrap finishes — avoids a
 // flash of the login screen for already-logged-in users.
@@ -88,6 +89,7 @@ function NotificationRouter() {
 export default function RootLayout() {
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
+      <RootErrorBoundary>
       <SafeAreaProvider>
         <AuthProvider>
           <StatusBar style="dark" />
@@ -102,6 +104,7 @@ export default function RootLayout() {
           </Stack>
         </AuthProvider>
       </SafeAreaProvider>
+      </RootErrorBoundary>
     </GestureHandlerRootView>
   )
 }

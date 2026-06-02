@@ -13,6 +13,7 @@ import { useRouter, useFocusEffect } from 'expo-router'
 import { useAuth } from '../../lib/auth-context'
 import { canMobile } from '../../lib/permissions'
 import { getOutstandingPolicyCount } from '../../lib/policies-api'
+import { buildSummary } from '../../lib/build-info'
 
 function Section({ title, children }) {
   return (
@@ -288,7 +289,7 @@ export default function More() {
       </Section>
 
       <Text className="text-xs text-un1t-muted text-center mt-4">
-        CF Studio · v1.0.0
+        CF Studio · {buildSummary()}
       </Text>
     </ScrollView>
   )
