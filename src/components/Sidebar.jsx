@@ -384,6 +384,16 @@ export default function Sidebar({ user, mobileOpen = false, onMobileClose }) {
     )
 
   async function handleLogout() {
+    // Close any active impersonation session first so its audit row gets
+    // a precise ended_at instead of dangling open until the reaper cron
+    // catches it. Best-effort — never block logout on it.
+    if (user?.impersonatingFrom) {
+      try {
+        await fetch('/api/impersonate/stop', { method: 'POST' })
+      } catch {
+        // ignore — the close-stale-impersonations cron is the backstop
+      }
+    }
     const supabase = createBrowserClient()
     await supabase.auth.signOut()
     router.push('/login')

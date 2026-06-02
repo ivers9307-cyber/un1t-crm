@@ -169,3 +169,99 @@ describe('startImpersonation — ASI regression (cookie store reuse)', () => {
     expect(setSpy).toHaveBeenCalledTimes(2)
   })
 })
+
+// ── Stale-session reaper (close-stale-impersonations cron) ──────
+// Rows only close on an explicit Stop / re-target, so a session that
+// ends by tab-close / logout / cookie expiry dangles open forever. The
+// reaper closes anything past the session max-age, stamping a TRUTHFUL
+// upper-bound ended_at (started_at + max-age), not `now`.
+
+const HOUR = 60 * 60 * 1000
+
+describe('planStaleImpersonationCloses (pure)', () => {
+  it('closes a row older than the max-age, stamping ended_at = started_at + max-age', async () => {
+    const { planStaleImpersonationCloses } = await import('./impersonation.js')
+    const now = Date.UTC(2026, 5, 2, 12, 0, 0)
+    const startedAt = new Date(now - 3 * HOUR).toISOString() // 3h ago
+    const plan = planStaleImpersonationCloses(
+      [{ id: 'a', started_at: startedAt }], now, 7200, // 2h
+    )
+    expect(plan).toHaveLength(1)
+    expect(plan[0].id).toBe('a')
+    // ended_at is the upper bound (start + 2h), NOT now (3h after start).
+    expect(plan[0].ended_at).toBe(new Date(now - 1 * HOUR).toISOString())
+  })
+
+  it('leaves a still-live row (younger than the max-age) alone', async () => {
+    const { planStaleImpersonationCloses } = await import('./impersonation.js')
+    const now = Date.UTC(2026, 5, 2, 12, 0, 0)
+    const startedAt = new Date(now - 1 * HOUR).toISOString() // 1h ago, < 2h
+    expect(planStaleImpersonationCloses([{ id: 'a', started_at: startedAt }], now, 7200)).toEqual([])
+  })
+
+  it('skips rows with a missing / unparseable started_at', async () => {
+    const { planStaleImpersonationCloses } = await import('./impersonation.js')
+    const now = Date.UTC(2026, 5, 2, 12, 0, 0)
+    const plan = planStaleImpersonationCloses(
+      [{ id: 'a', started_at: null }, { id: 'b', started_at: 'not-a-date' }], now, 7200,
+    )
+    expect(plan).toEqual([])
+  })
+
+  it('returns [] for empty / null input', async () => {
+    const { planStaleImpersonationCloses } = await import('./impersonation.js')
+    expect(planStaleImpersonationCloses([], Date.now(), 7200)).toEqual([])
+    expect(planStaleImpersonationCloses(null, Date.now(), 7200)).toEqual([])
+  })
+})
+
+describe('closeStaleImpersonations (IO)', () => {
+  // Minimal fake of the supabase builder: a fresh chain per from(), the
+  // select chain resolves to selectResult, the update chain records the
+  // write and resolves { error: null }.
+  function makeFakeDb({ selectResult, updates }) {
+    return {
+      from() {
+        const b = { _mode: null, _id: null, _payload: null }
+        b.select = () => { b._mode = 'select'; return b }
+        b.update = (payload) => { b._mode = 'update'; b._payload = payload; return b }
+        b.is = () => b
+        b.lt = () => b
+        b.eq = (_col, val) => { b._id = val; return b }
+        b.then = (resolve) => {
+          if (b._mode === 'select') return resolve(selectResult)
+          updates.push({ id: b._id, payload: b._payload })
+          return resolve({ error: null })
+        }
+        return b
+      },
+    }
+  }
+
+  it('closes every stale row with auto_closed=true and the upper-bound ended_at', async () => {
+    const { closeStaleImpersonations } = await import('./impersonation.js')
+    const now = Date.UTC(2026, 5, 2, 12, 0, 0)
+    const startedAt = new Date(now - 5 * HOUR).toISOString()
+    const updates = []
+    const db = makeFakeDb({
+      selectResult: { data: [{ id: 'row-1', started_at: startedAt }], error: null },
+      updates,
+    })
+    const res = await closeStaleImpersonations(db, now, 7200)
+    expect(res).toEqual({ ok: true, closed: 1, stale: 1 })
+    expect(updates).toHaveLength(1)
+    expect(updates[0].id).toBe('row-1')
+    expect(updates[0].payload.auto_closed).toBe(true)
+    expect(updates[0].payload.ended_at).toBe(new Date(now - 3 * HOUR).toISOString())
+  })
+
+  it('returns ok:false and writes nothing when the select errors', async () => {
+    const { closeStaleImpersonations } = await import('./impersonation.js')
+    const updates = []
+    const db = makeFakeDb({ selectResult: { data: null, error: { message: 'boom' } }, updates })
+    const res = await closeStaleImpersonations(db, Date.now(), 7200)
+    expect(res.ok).toBe(false)
+    expect(res.closed).toBe(0)
+    expect(updates).toHaveLength(0)
+  })
+})

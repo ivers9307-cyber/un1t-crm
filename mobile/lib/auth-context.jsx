@@ -103,6 +103,19 @@ export function AuthProvider({ children }) {
   }, [])
 
   const signOut = useCallback(async () => {
+    // If a "view as user" session is active, close it first so its audit
+    // row gets a precise ended_at + the local target is cleared, rather
+    // than dangling open until the close-stale-impersonations cron reaps
+    // it. Best-effort — never block logout on it.
+    try {
+      const imp = await readImpersonate()
+      if (imp?.targetId) {
+        await api('/api/mobile/impersonate/stop', { method: 'POST' })
+        await clearImpersonate()
+      }
+    } catch {
+      // ignore — the reaper cron is the backstop
+    }
     await supabase.auth.signOut()
   }, [])
 
