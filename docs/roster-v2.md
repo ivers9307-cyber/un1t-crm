@@ -77,3 +77,25 @@ A block exists once the template + date combination becomes a candidate week —
 - `shift_blocks` is the new source of truth for the schedule. Anything that today queries `shifts` (reports, mobile schedule view, Today tab) will be pointed at `shift_blocks` + `shift_assignments` joined back to profiles. Do this in phase 1 alongside the migration so there's never a moment where two readers disagree.
 - `over_budget_approval_by` on the roster row is the audit trail for the May 1-style "why did we spend €X over budget last month?" question. Keep it forever; never null-out.
 
+## Tier 1 enhancements (2026-06)
+
+Closing the "coaches are out of the loop" gap surfaced in the schedule review — the roster had been operator-facing only. All shipped; see `docs/CHANGELOG.md` #214–217.
+
+- **Notify coaches at publish** (#265) — `POST /api/schedule/rosters` calls the existing `notifyStaffOfPublish()` with the just-published shifts, so each coach gets one push summarising their shifts. Fixed a real gap: the common under-budget / owner-self-publish path flipped `shifts.published` but notified nobody.
+- **Double-booking advisory** (#266) — `src/lib/schedule-overlap.js#timeRangesOverlap`; warns (doesn't block, same posture as the time-off advisory) when an assignment overlaps another shift the coach is already on that day, at ANY location. Surfaced in the assign / bulk-assign `warnings` array.
+- **Post-publish change log + re-notify** (#268, mig 236) — `roster_change_log` audits edits to an already-published roster; a re-publish re-notifies ONLY the coaches who changed since the last publish (`notified_at` flag), not everyone. Helpers in `src/lib/roster-change-log.js`; logging hooked into single-assign, bulk-assign, unassign DELETE (manager removals only), and the time-override PUT.
+- **Unpublished-changes exit guard** (#269) — `ScheduleCalendar` warns before leaving with unpublished edits (`beforeunload` + capture-phase in-app link interception); the dirty flag is set by every edit and cleared on a successful publish.
+
+## Legacy `public.shifts` retirement (in progress)
+
+The original plan (Conventions above) was to point every `shifts` reader at the new tables in phase 1. Instead, the **mig 068/069 bidirectional mirror triggers** kept `public.shifts` in sync during cutover. The mirror is now being retired so the table + triggers can be dropped. Phased — the mirror stays live until the final step, so nothing breaks mid-migration:
+
+1. **Reports** — ✅ shipped (#270, RETIRE-SHIFTS-MIRROR.1). `src/lib/report-generator.js` reads `shift_assignments` + `shift_blocks` via `fetchScheduledShiftRows()`, normalised back to the legacy shift shape so report output is unchanged.
+2. **Dashboards** (`fetchPersonalDashboardData` / `fetchBusinessDashboardData` in `shared/dashboard-data.js`).
+3. **`GET /api/schedule/shifts` + mobile** (`mobile/lib/schedule-api.js`) + the assistant's `get_shifts_for_week` + its inline report tools (`src/app/api/assistant/chat/route.js`). Keep the API response shape identical so mobile needs no change.
+4. **Writers** — `POST /api/schedule/shifts`, `/[id]` PUT/DELETE, copy-week, copy-month, plus the assistant `create_shift`.
+5. **Publish route** (`shifts.published`) + **shift-swaps** + the `shift_swap_requests` FK (`requester_shift_id` / `target_shift_id` → `shifts`).
+6. **Drop** the mig 068/069 mirror triggers (+ the block-cleanup trigger) and `public.shifts` — after a grace period with nothing reading it.
+
+**Key unblock:** `shifts.published` / `published_at` have no equivalent on the new tables, but publishing is a roster concept — a shift's published state derives from `shift_blocks.roster_id → rosters.status === 'published'`. So **no new column and no architectural decision** are needed for any phase.
+
