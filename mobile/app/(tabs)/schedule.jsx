@@ -310,6 +310,12 @@ export default function Schedule() {
   }
 
   function requestSwapForShift(shift) {
+    // RETIRE-SHIFTS-MIRROR.5c — swaps now key off the shift_assignment id
+    // (stitched into the GET /shifts row), not the legacy shifts.id.
+    if (!shift.shift_assignment_id) {
+      Alert.alert('Can’t post', 'This shift can’t be swapped.')
+      return
+    }
     Alert.alert(
       'Request swap?',
       `Post ${shift.shift_templates?.name || 'this shift'} on ${shift.shift_date} for someone else to take?`,
@@ -319,7 +325,7 @@ export default function Schedule() {
           text: 'Post for swap',
           onPress: async () => {
             const res = await createSwapRequest({
-              requesterShiftId: shift.id,
+              requesterShiftId: shift.shift_assignment_id,
               locationId: activeLocation.id,
             })
             if (res.success) {

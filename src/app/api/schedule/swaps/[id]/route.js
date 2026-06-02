@@ -22,9 +22,10 @@ export async function PUT(request, props) {
   const body = validation.data
   const db = createServerClient()
 
-  // Fetch the swap request
+  // Fetch the swap request. requester_shift_id / target_shift_id are now
+  // shift_assignments.id (RETIRE-SHIFTS-MIRROR.5c).
   const { data: swap } = await db.from('shift_swap_requests')
-    .select('*, requester_shift:shifts!requester_shift_id(*), target_shift:shifts!target_shift_id(*)')
+    .select('*, requester_shift:shift_assignments!requester_shift_id(id, profile_id, block_id), target_shift:shift_assignments!target_shift_id(id, profile_id, block_id)')
     .eq('id', params.id)
     .single()
 
@@ -48,19 +49,22 @@ export async function PUT(request, props) {
     updates.reviewed_at = new Date().toISOString()
   }
 
-  // If approved, actually swap the shifts
+  // If approved, actually swap the assignments (RETIRE-SHIFTS-MIRROR.5c —
+  // the mig 068 forward trigger mirrors these writes back to public.shifts
+  // for the readers that haven't migrated yet, so the legacy table stays
+  // consistent through cutover).
   if (body.status === 'approved' && swap.target_shift_id) {
-    // Swap the profile_ids on both shifts
-    await db.from('shifts')
+    // Swap the profile_ids on both assignments.
+    await db.from('shift_assignments')
       .update({ profile_id: swap.target_shift.profile_id, status: 'swapped' })
       .eq('id', swap.requester_shift_id)
 
-    await db.from('shifts')
+    await db.from('shift_assignments')
       .update({ profile_id: swap.requester_shift.profile_id, status: 'swapped' })
       .eq('id', swap.target_shift_id)
   } else if (body.status === 'approved' && !swap.target_shift_id) {
-    // Just dropping the shift — cancel it
-    await db.from('shifts')
+    // Just dropping the shift — cancel the assignment.
+    await db.from('shift_assignments')
       .update({ status: 'cancelled' })
       .eq('id', swap.requester_shift_id)
   }

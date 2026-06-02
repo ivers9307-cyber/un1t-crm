@@ -14,9 +14,11 @@
 //   - Assign coach: POST /api/schedule/blocks/[id]/assignments
 //   - Remove coach: DELETE /api/schedule/assignments/[id]
 //   - Remove block: DELETE /api/schedule/blocks/[id]   (rare)
-// Copy-week / copy-month / publish still hit /api/schedule/shifts/*
-// which writes to public.shifts; the reverse trigger propagates
-// those writes back into shift_blocks/shift_assignments.
+// Copy-week / copy-month / publish hit /api/schedule/shifts/* — these
+// now write the block/assignment model directly (RETIRE-SHIFTS-MIRROR.5b);
+// public.shifts is kept in sync by the mig 068 forward trigger for the
+// readers that haven't migrated yet. Swap requests POST the
+// shift_assignment id as requester_shift_id (RETIRE-SHIFTS-MIRROR.5c).
 
 import { useState, useEffect, useCallback } from 'react'
 import { ChevronLeft, ChevronRight, Copy, Send, Plus, Users, User, Clock, X, ArrowLeftRight, CalendarOff, Palmtree, ThermometerSun, Ban, AlertTriangle, AlertCircle, CalendarDays, CalendarRange, Pencil, Check, Settings } from 'lucide-react'
@@ -408,7 +410,9 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
   })
 
   // Legacy-shape shifts for the payroll calculator + the swap-request
-  // modal (which still hits POST /api/schedule/swaps with a shift id).
+  // modal. flatShifts[].id is the shift_assignment id, which is exactly
+  // what POST /api/schedule/swaps now wants as requester_shift_id
+  // (RETIRE-SHIFTS-MIRROR.5c).
   const flatShifts = flattenBlocksToShifts(blocks)
 
   // Unstaffed-block count for the publish toolbar — surfaces "you
