@@ -558,22 +558,10 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
         alert(data.error || 'Publish failed')
         return { error: data.error }
       }
-      // Tell mobile + staff the roster is live, same as before.
-      // The legacy /api/schedule/shifts/publish route handled
-      // notifications; we trigger that here as a follow-up so
-      // the comm pattern stays consistent.
-      if (!data.needs_approval) {
-        await fetch('/api/schedule/shifts/publish', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            location_id: locationId,
-            start_date: periodStart,
-            end_date: periodEnd,
-            notify: true,
-          }),
-        })
-      }
+      // RETIRE-SHIFTS-MIRROR.6 — POST /rosters now notifies the rostered
+      // coaches itself (it knows which blocks were newly published), so the
+      // old follow-up call to /api/schedule/shifts/publish is gone. That
+      // endpoint was a redundant second flip + notify; it has been removed.
       setPublishModal(null)
       // Publish is the one mutation that should NOT re-arm the exit guard.
       // A real publish clears it; a needs-approval draft stays dirty (it's

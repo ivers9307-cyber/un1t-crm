@@ -3,12 +3,12 @@
 // An owner approves a draft roster that was created by a
 // non-owner over the location's monthly contractor budget.
 // Flips status='published', records the approval audit, tags
-// blocks with the roster_id, sets shifts.published=true.
+// blocks with the roster_id, and notifies the rostered coaches.
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
-import { notifyStaffOfPublish } from '@/lib/roster-notify'
+import { notifyStaffOfPublish, publishNotifyRowsForBlocks } from '@/lib/roster-notify'
 import { logWarn } from '@/lib/log'
 
 export async function POST(_request, props) {
@@ -75,7 +75,19 @@ export async function POST(_request, props) {
     return NextResponse.json({ success: false, error: updErr.message }, { status: 400 })
   }
 
-  // Tag blocks + flip legacy shifts.published.
+  // RETIRE-SHIFTS-MIRROR.6 — capture the blocks NEWLY being published
+  // (roster_id IS NULL) BEFORE tagging; their assignments are the notify
+  // set (new-model replacement for the old shifts.published flip).
+  const { data: newBlocks } = await db
+    .from('shift_blocks')
+    .select('id')
+    .eq('location_id', roster.location_id)
+    .gte('block_date', roster.period_start)
+    .lte('block_date', roster.period_end)
+    .is('roster_id', null)
+  const newBlockIds = (newBlocks || []).map((b) => b.id)
+
+  // Tag blocks with the roster.
   await db
     .from('shift_blocks')
     .update({ roster_id: roster.id })
@@ -83,18 +95,9 @@ export async function POST(_request, props) {
     .gte('block_date', roster.period_start)
     .lte('block_date', roster.period_end)
 
-  // Capture the just-flipped shifts so we can fire staff
-  // notifications (email + push) — same fan-out the normal
-  // publish path uses. Without this, an owner-approved draft
-  // would publish silently to staff.
-  const { data: flippedShifts } = await db
-    .from('shifts')
-    .update({ published: true, published_at: nowIso })
-    .eq('location_id', roster.location_id)
-    .gte('shift_date', roster.period_start)
-    .lte('shift_date', roster.period_end)
-    .eq('published', false)
-    .select('id, profile_id, location_id, shift_date')
+  // Coaches on the newly-published blocks. Without this, an owner-approved
+  // draft would publish silently to staff.
+  const flippedShifts = await publishNotifyRowsForBlocks(db, newBlockIds)
 
   // Best-effort notify — wrapped so a Postmark/push hiccup
   // doesn't roll back the approval.
