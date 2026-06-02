@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { fetchScheduledShiftRows } from '@/lib/report-generator'
+import { upsertShiftAssignment } from '@/lib/roster-write'
 import { SYSTEM_PROMPT, TOOLS } from '@/lib/assistant-prompt'
 import { getCurrentUser } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
@@ -97,17 +98,23 @@ async function executeTool(toolName, input, context) {
     }
 
     case 'create_shift': {
-      const { data, error } = await db.from('shifts').insert({
-        location_id: locationId,
-        profile_id: input.profile_id,
-        shift_template_id: input.shift_template_id,
-        shift_date: input.shift_date,
-        status: 'scheduled',
-        published: false,
-        created_by: context.userId,
-      }).select('*, shift_templates(name), profiles!profile_id(full_name)').single()
+      // RETIRE-SHIFTS-MIRROR.4 — writes the Roster v2 model (find-or-create
+      // block + upsert assignment) instead of the legacy shifts table; the
+      // mig 068 forward trigger keeps shifts in sync for remaining readers.
+      const { error } = await upsertShiftAssignment(db, {
+        locationId,
+        profileId: input.profile_id,
+        shiftTemplateId: input.shift_template_id,
+        shiftDate: input.shift_date,
+        actorId: context.userId,
+      })
       if (error) return { error: error.message }
-      return { success: true, shift: { date: data.shift_date, staff: data.profiles?.full_name, template: data.shift_templates?.name } }
+      // Friendly names for the response — same shape as before.
+      const [{ data: tpl }, { data: prof }] = await Promise.all([
+        db.from('shift_templates').select('name').eq('id', input.shift_template_id).maybeSingle(),
+        db.from('profiles').select('full_name').eq('id', input.profile_id).maybeSingle(),
+      ])
+      return { success: true, shift: { date: input.shift_date, staff: prof?.full_name, template: tpl?.name } }
     }
 
     case 'list_staff': {
