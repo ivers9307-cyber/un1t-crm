@@ -211,7 +211,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
   const [publishing, setPublishing] = useState(false)
   const [copying, setCopying] = useState(false)
   const [swapModal, setSwapModal] = useState(null) // legacy shift-shaped row to swap
-  const [publishModal, setPublishModal] = useState(null) // { periodStart, periodEnd }
+  const [publishModal, setPublishModal] = useState(null) // { week, month: {start,end,label}, defaultScope }
   // SCHEDULE-PUBLISH-GUARD.1 — roster edits made since the last publish.
   // Drives the "you have unpublished changes" exit guard below. Set by any
   // edit (via refreshAfterMutation) and cleared on a successful publish.
@@ -527,9 +527,25 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
   // submitPublish({ force_over_budget }). The modal handles the
   // owner-confirms-over-budget retry flow itself.
   function handlePublishClick() {
+    // Offer both scopes. Month uses the calendar-month bounds (1st → last
+    // day) — the same window the contractor budget is measured over — not
+    // the month-grid (which bleeds into adjacent months). In week view the
+    // "month" option targets the month the visible week falls in, mirroring
+    // the copy-last-month button.
+    const effMonthStart = viewType === 'month' ? monthStart : getMonthStart(weekStart)
+    const effMonthEnd = new Date(effMonthStart.getFullYear(), effMonthStart.getMonth() + 1, 0)
     setPublishModal({
-      periodStart: formatDate(weekStart),
-      periodEnd: formatDate(weekEnd),
+      week: {
+        start: formatDate(weekStart),
+        end: formatDate(weekEnd),
+        label: `${formatDate(weekStart)} – ${formatDate(weekEnd)}`,
+      },
+      month: {
+        start: formatDate(effMonthStart),
+        end: formatDate(effMonthEnd),
+        label: effMonthStart.toLocaleDateString('en-IE', { month: 'long', year: 'numeric' }),
+      },
+      defaultScope: viewType === 'month' ? 'month' : 'week',
     })
   }
 
@@ -580,9 +596,8 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
     const prevWeekStart = addDays(weekStart, -7)
     if (!confirm(`Copy last week's roster (${formatDate(prevWeekStart)}) to this week?`)) return
     setCopying(true)
-    // Legacy endpoint still writes to public.shifts; mig 069's
-    // reverse trigger propagates the writes back into
-    // shift_blocks + shift_assignments.
+    // copy-week writes shift_blocks + shift_assignments directly
+    // (RETIRE-SHIFTS-MIRROR.5b); the legacy public.shifts table is gone.
     const res = await fetch('/api/schedule/shifts/copy-week', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1489,12 +1504,21 @@ function CreateBlockModal({ date, templates, onCreate, onClose }) {
 //        with force=false → status='draft', modal shows
 //        approval-pending message, owner is emailed.
 function PublishRosterModal({ locationId, isOwner, period, onSubmit, onClose, publishing }) {
+  // Week / month scope toggle. The active range drives both the budget
+  // preview and the publish. Re-publishing a period only re-notifies the
+  // coaches whose shifts changed since the last publish (server-side
+  // change-log), so "month" doubles as "push my changes for the month".
+  const [scope, setScope] = useState(period.defaultScope || 'week')
+  const active = period[scope]
   const [impact, setImpact] = useState(null)
   const [loading, setLoading] = useState(true)
   const [submitResult, setSubmitResult] = useState(null)
 
   useEffect(() => {
     let cancelled = false
+    setLoading(true)
+    setImpact(null)
+    setSubmitResult(null)
     async function loadPreview() {
       try {
         const res = await fetch('/api/schedule/rosters', {
@@ -1502,8 +1526,8 @@ function PublishRosterModal({ locationId, isOwner, period, onSubmit, onClose, pu
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             location_id: locationId,
-            period_start: period.periodStart,
-            period_end: period.periodEnd,
+            period_start: active.start,
+            period_end: active.end,
             dry_run: true,
           }),
         })
@@ -1522,12 +1546,12 @@ function PublishRosterModal({ locationId, isOwner, period, onSubmit, onClose, pu
     }
     loadPreview()
     return () => { cancelled = true }
-  }, [locationId, period.periodStart, period.periodEnd])
+  }, [locationId, active.start, active.end])
 
   async function handleConfirm() {
     const result = await onSubmit({
-      periodStart: period.periodStart,
-      periodEnd: period.periodEnd,
+      periodStart: active.start,
+      periodEnd: active.end,
       forceOverBudget: true,
     })
     if (result?.needsApproval) {
@@ -1548,9 +1572,35 @@ function PublishRosterModal({ locationId, isOwner, period, onSubmit, onClose, pu
           <button onClick={onClose} className="text-un1t-subtle hover:text-un1t-text"><X size={18} /></button>
         </div>
 
-        <div className="bg-black/30 rounded-lg p-3 mb-4 text-sm">
-          <div className="text-un1t-subtle text-xs">Period</div>
-          <div className="font-medium">{period.periodStart} – {period.periodEnd}</div>
+        {/* Scope toggle — publish the visible week or the whole month. */}
+        <div className="mb-3">
+          <div className="text-un1t-subtle text-xs mb-1.5">Publish</div>
+          <div className="inline-flex rounded-lg border border-un1t-border p-0.5 bg-black/20">
+            {[
+              { key: 'week', label: 'This week' },
+              { key: 'month', label: 'This month' },
+            ].map(opt => (
+              <button
+                key={opt.key}
+                type="button"
+                onClick={() => setScope(opt.key)}
+                disabled={publishing}
+                className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors disabled:opacity-50 ${
+                  scope === opt.key
+                    ? 'bg-blue-600 text-white'
+                    : 'text-un1t-subtle hover:text-un1t-text'
+                }`}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+          <div className="text-xs text-un1t-subtle mt-1.5">{active.label}</div>
+          {scope === 'month' && (
+            <p className="text-[11px] text-un1t-subtle mt-1">
+              Already published this month? Only coaches whose shifts changed since the last publish are re-notified.
+            </p>
+          )}
         </div>
 
         {loading && (
