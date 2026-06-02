@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { Check, X } from 'lucide-react'
 import { createBrowserClient } from '@/lib/supabase'
@@ -21,6 +21,10 @@ export default function ResetPasswordPage() {
   // wording; an invitee sees slightly off but functional wording).
   const [flowType, setFlowType] = useState('recovery')
   const [branding, setBranding] = useState(null)
+  // The client that holds the recovery session must be reused by
+  // handleReset — a fresh createBrowserClient() instance would race the
+  // cookie write and updateUser() could see no session.
+  const supabaseRef = useRef(null)
   const router = useRouter()
 
   useEffect(() => {
@@ -46,23 +50,20 @@ export default function ResetPasswordPage() {
     // CRITICAL SECURITY BUG fixed 2026-05-13 (CVE-internal):
     //
     // If an operator opens a reset link in a browser tab where they're
-    // ALREADY signed in as a different user, the previous code path:
-    //   1. onAuthStateChange fires SIGNED_IN for the EXISTING (wrong)
-    //      session immediately on mount → setReady(true) → form unlocks
-    //   2. The operator submits supabase.auth.updateUser({ password })
-    //   3. That call targets the CURRENTLY authenticated user — i.e.
-    //      the WRONG account
-    //   4. The password of the existing session's user (master,
-    //      typically) gets rewritten with the value the operator
-    //      intended for the recovery-link target user.
+    // ALREADY signed in as a different user, updateUser() could target the
+    // CURRENTLY authenticated (wrong) account. Mitigation: ALWAYS sign out
+    // any existing session FIRST, then establish ONLY the recovery session
+    // from the link, so updateUser() can only ever hit the recovery user.
     //
-    // Reproduced on 2026-05-13: master account password got hijacked
-    // when a master clicked a reset link for a test user while still
-    // signed in.
-    //
-    // Mitigation: ALWAYS sign out any existing session before processing
-    // a recovery link. Force a clean slate so updateUser() can only ever
-    // target the user whose recovery code we're about to exchange.
+    // BUG fixed 2026-06: with the auto-detecting client (the @supabase/ssr
+    // default `detectSessionInUrl: true`), the client established the
+    // recovery session on mount and fired PASSWORD_RECOVERY → the form
+    // unlocked — and then the forced sign-out below DESTROYED that very
+    // session. Result: the button was enabled but there was no session, so
+    // updateUser() failed with "Auth session missing!". Fix: create the
+    // client with detectSessionInUrl:false and establish the session
+    // ourselves — sign out first, THEN deterministically verify the token,
+    // and only unlock the form once getSession() confirms a real session.
     // ──────────────────────────────────────────────────────────────────
     if (typeof window === 'undefined') return
 
@@ -72,56 +73,53 @@ export default function ResetPasswordPage() {
     if (t === 'invite') setFlowType('invite')
     else if (t === 'recovery') setFlowType('recovery')
 
-    const code = searchParams.get('code')
-    const hasHashToken = !!(hashParams.get('access_token') || hashParams.get('refresh_token'))
-    const isRecoveryLink = !!code || hasHashToken || t === 'recovery' || t === 'invite'
+    // Every token shape Supabase may put on a recovery / invite link:
+    //   PKCE query:   ?code=<one_time_code>
+    //   token_hash:   ?token_hash=<hash>&type=recovery   (device-independent)
+    //   implicit hash:#access_token=...&refresh_token=...&type=recovery
+    const code         = searchParams.get('code')
+    const tokenHash    = searchParams.get('token_hash') || hashParams.get('token_hash')
+    const accessToken  = hashParams.get('access_token')
+    const refreshToken = hashParams.get('refresh_token')
 
-    const supabase = createBrowserClient()
+    const supabase = createBrowserClient({ auth: { detectSessionInUrl: false } })
+    supabaseRef.current = supabase
     let cancelled = false
-
-    // Set up the auth listener BEFORE the sign-out. We only listen for
-    // PASSWORD_RECOVERY (true recovery flow) and SIGNED_IN (invite-magic
-    // flow). Both fire AFTER the sign-out + exchange below, so a stray
-    // pre-mount session can't trigger them.
-    const { data: sub } = supabase.auth.onAuthStateChange((event) => {
-      if (cancelled) return
-      if (event === 'PASSWORD_RECOVERY' || event === 'SIGNED_IN') {
-        setReady(true)
-      }
-    })
 
     ;(async () => {
       try {
-        // 1. Force sign-out of any existing session in the browser
-        //    BEFORE we process the recovery token. This is the heart of
-        //    the fix — without it, updateUser() can hit the wrong user.
-        //    Scope 'local' only clears this browser; it doesn't invalidate
-        //    the server-side session for a real user who's already logged
-        //    in on another device. The reset link itself is what gives
-        //    us authority to set the target user's password.
-        if (isRecoveryLink) {
-          try { await supabase.auth.signOut({ scope: 'local' }) } catch { /* ignore */ }
+        // 1. Clean slate — clear any existing browser session BEFORE we
+        //    establish the recovery one. Scope 'local' only affects this
+        //    browser; it doesn't sign the real user out elsewhere.
+        try { await supabase.auth.signOut({ scope: 'local' }) } catch { /* ignore */ }
+        if (cancelled) return
+
+        // 2. Establish the recovery session from the link's token.
+        if (code) {
+          const { error: exErr } = await supabase.auth.exchangeCodeForSession(code)
+          if (exErr) throw exErr
+        } else if (accessToken && refreshToken) {
+          const { error: ssErr } = await supabase.auth.setSession({
+            access_token: accessToken,
+            refresh_token: refreshToken,
+          })
+          if (ssErr) throw ssErr
+        } else if (tokenHash) {
+          const { error: otpErr } = await supabase.auth.verifyOtp({
+            token_hash: tokenHash,
+            type: t === 'invite' ? 'invite' : 'recovery',
+          })
+          if (otpErr) throw otpErr
+        } else {
+          throw new Error('this link is missing its verification token')
         }
         if (cancelled) return
 
-        // 2. Exchange the recovery code (PKCE path).
-        if (code) {
-          const { data, error: exchErr } = await supabase.auth.exchangeCodeForSession(code)
-          if (cancelled) return
-          if (exchErr) {
-            setError(`Reset link could not be verified: ${exchErr.message}. Request a fresh link from the login page.`)
-            return
-          }
-          if (data?.session) setReady(true)
-          return
-        }
-
-        // 3. Legacy hash-fragment path. After the sign-out above, the
-        //    Supabase client should re-parse the URL hash and establish
-        //    the recovery session. Confirm via getSession().
+        // 3. Only unlock the form once a real session is confirmed.
         const { data: sessData } = await supabase.auth.getSession()
         if (cancelled) return
         if (sessData?.session) setReady(true)
+        else throw new Error('no session was established')
       } catch (e) {
         if (!cancelled) {
           setError(`Reset link could not be verified: ${e?.message || 'unknown error'}. Request a fresh link from the login page.`)
@@ -129,10 +127,7 @@ export default function ResetPasswordPage() {
       }
     })()
 
-    return () => {
-      cancelled = true
-      sub?.subscription?.unsubscribe?.()
-    }
+    return () => { cancelled = true }
   }, [])
 
   async function handleReset(e) {
@@ -152,19 +147,16 @@ export default function ResetPasswordPage() {
 
     setLoading(true)
 
-    const supabase = createBrowserClient()
+    // Reuse the exact client that holds the recovery session (set up in
+    // useEffect) — a fresh instance could miss the just-written session.
+    const supabase = supabaseRef.current
 
-    // Defence-in-depth (CVE-internal 2026-05-13): refuse the update
-    // unless we're confident the active session was established by
-    // the recovery / invite flow we just processed in useEffect. The
-    // `ready` flag is set to true by either:
-    //   - exchangeCodeForSession() resolving successfully (PKCE path)
-    //   - PASSWORD_RECOVERY auth event (legacy hash path)
-    //   - SIGNED_IN event after the forced sign-out (invite path)
-    // All three only fire AFTER the existing-session sign-out, so a
-    // stale master session can't reach updateUser. Belt-and-braces:
-    // if !ready, refuse.
-    if (!ready) {
+    // Defence-in-depth (CVE-internal 2026-05-13): refuse the update unless
+    // the recovery session was established by the flow processed in
+    // useEffect. `ready` is only set true after getSession() confirms a
+    // real session that followed the forced sign-out, so a stale session
+    // can't reach updateUser.
+    if (!ready || !supabase) {
       setError('Reset link not verified yet. Wait a moment and try again, or request a fresh link.')
       setLoading(false)
       return
