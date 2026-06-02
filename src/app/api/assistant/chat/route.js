@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
+import { fetchScheduledShiftRows } from '@/lib/report-generator'
 import { SYSTEM_PROMPT, TOOLS } from '@/lib/assistant-prompt'
 import { getCurrentUser } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
@@ -129,14 +130,9 @@ async function executeTool(toolName, input, context) {
     case 'get_shifts_for_week': {
       const startDate = input.start_date
       const endDate = new Date(new Date(startDate + 'T00:00:00').getTime() + 6 * 86400000).toISOString().split('T')[0]
-      let query = db.from('shifts')
-        .select('shift_date, status, profile_id, profiles!profile_id(full_name), shift_templates(name, start_time, end_time)')
-        .eq('location_id', locationId)
-        .gte('shift_date', startDate)
-        .lte('shift_date', endDate)
-        .order('shift_date')
-
-      const { data } = await query
+      // RETIRE-SHIFTS-MIRROR.3 — reads shift_assignments+shift_blocks now.
+      const data = await fetchScheduledShiftRows(db, { locationId, periodStart: startDate, periodEnd: endDate })
+      data.sort((a, b) => String(a.shift_date).localeCompare(String(b.shift_date)))
       return {
         shifts: (data || []).map(s => ({
           date: s.shift_date,
@@ -230,12 +226,8 @@ async function executeTool(toolName, input, context) {
       const periodEnd = input.period_end
 
       if (reportType === 'staff_hours') {
-        const { data: shifts } = await db.from('shifts')
-          .select('shift_date, profile_id, profiles!profile_id(full_name), shift_templates(start_time, end_time)')
-          .eq('location_id', locationId)
-          .gte('shift_date', periodStart)
-          .lte('shift_date', periodEnd)
-          .order('shift_date')
+        // RETIRE-SHIFTS-MIRROR.3 — reads shift_assignments+shift_blocks now.
+        const shifts = await fetchScheduledShiftRows(db, { locationId, periodStart, periodEnd })
         const staffHours = {}
         for (const s of (shifts || [])) {
           const name = s.profiles?.full_name || 'Unknown'
@@ -256,11 +248,8 @@ async function executeTool(toolName, input, context) {
 
       if (reportType === 'staff_cost') {
         const { data: profiles } = await db.from('profiles').select('id, full_name, employment_type, annual_salary, hourly_rate, contracted_hours_per_week').eq('active', true)
-        const { data: shifts } = await db.from('shifts')
-          .select('shift_date, profile_id, shift_templates(start_time, end_time)')
-          .eq('location_id', locationId)
-          .gte('shift_date', periodStart)
-          .lte('shift_date', periodEnd)
+        // RETIRE-SHIFTS-MIRROR.3 — reads shift_assignments+shift_blocks now.
+        const shifts = await fetchScheduledShiftRows(db, { locationId, periodStart, periodEnd })
         const rateMap = {}
         for (const p of (profiles || [])) {
           let rate = 0
