@@ -71,6 +71,49 @@ export function hourlyRateFor(profile) {
   return 0
 }
 
+// RETIRE-SHIFTS-MIRROR.2 — read scheduled shifts from the Roster v2 source
+// of truth (shift_assignments + shift_blocks) instead of the legacy
+// public.shifts mirror, normalised back to the exact legacy shift shape the
+// dashboards already consume. `published` is derived from the block's roster
+// (publishing is a roster concept now: a shift is published iff its block
+// belongs to a published roster). Returns { data, error } so it drops into
+// the existing Promise.all destructuring unchanged. `id` is the assignment
+// id — used only as a display key here (the swap flow reads shift ids from
+// the schedule screen, not the dashboard).
+async function fetchDashboardShifts(supabase, { profileId, locationId, startDate, endDate, withProfiles = false }) {
+  const profileSelect = withProfiles
+    ? ', profiles:profile_id ( annual_salary, hourly_rate, contracted_hours_per_week, employment_type )'
+    : ''
+  let q = supabase
+    .from('shift_assignments')
+    .select(`
+      id, profile_id, start_time_override, end_time_override, status,
+      shift_blocks!inner ( block_date, location_id, roster_id, rosters:roster_id ( status ), shift_templates ( name, start_time, end_time ), locations:location_id ( id, name ) )${profileSelect}
+    `)
+    .gte('shift_blocks.block_date', startDate)
+    .lte('shift_blocks.block_date', endDate)
+  if (profileId) q = q.eq('profile_id', profileId)
+  if (locationId) q = q.eq('shift_blocks.location_id', locationId)
+  const { data, error } = await q
+  if (error) return { data: null, error }
+  const rows = (data || []).map((r) => {
+    const block = r.shift_blocks || {}
+    return {
+      id: r.id,
+      shift_date: block.block_date,
+      start_time_override: r.start_time_override,
+      end_time_override: r.end_time_override,
+      status: r.status,
+      published: block.rosters?.status === 'published',
+      location_id: block.location_id,
+      shift_templates: block.shift_templates,
+      locations: block.locations,
+      profiles: r.profiles,
+    }
+  })
+  return { data: rows, error: null }
+}
+
 // ============================================================
 // Personal — your shifts, your swaps, your inbox.
 // ============================================================
@@ -96,13 +139,9 @@ export async function fetchPersonalDashboardData(supabase, profileId, locationId
       // location staff see every shift they're assigned to, anywhere.
       // The locations() join lets the UI render a small chip on each
       // row so users can tell which gym a shift belongs to.
-      supabase
-        .from('shifts')
-        .select('id, shift_date, start_time_override, end_time_override, status, published, location_id, shift_templates(name, start_time, end_time), locations:location_id(id, name)')
-        .eq('profile_id', profileId)
-        .gte('shift_date', thisWeekStartIso)
-        .lte('shift_date', nextWeekEndIso)
-        .order('shift_date', { ascending: true }),
+      // RETIRE-SHIFTS-MIRROR.2 — reads shift_assignments+shift_blocks now;
+      // shape (incl. derived `published`) is unchanged. Re-sorted below.
+      fetchDashboardShifts(supabase, { profileId, startDate: thisWeekStartIso, endDate: nextWeekEndIso }),
 
       supabase
         .from('shift_swap_requests')
@@ -411,16 +450,9 @@ export async function fetchBusinessDashboardData(supabase, locationId) {
       .in('status', ['won', 'lost'])
       .gte('updated_at', monthStart),
 
-    supabase
-      .from('shifts')
-      .select(`
-        id, shift_date, start_time_override, end_time_override,
-        shift_templates(start_time, end_time),
-        profiles!profile_id(annual_salary, hourly_rate, contracted_hours_per_week, employment_type)
-      `)
-      .eq('location_id', locationId)
-      .gte('shift_date', weekStartIso)
-      .lte('shift_date', weekEndIso),
+    // RETIRE-SHIFTS-MIRROR.2 — reads shift_assignments+shift_blocks now;
+    // returns the same shape (with profiles for the labour estimate).
+    fetchDashboardShifts(supabase, { locationId, startDate: weekStartIso, endDate: weekEndIso, withProfiles: true }),
   ])
 
   if (openDeals.error) return { success: false, error: openDeals.error.message }
