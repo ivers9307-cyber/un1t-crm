@@ -7,13 +7,18 @@
 //
 // Shape: { targetId, startedAt }   stored as JSON
 //   - targetId: UUID of the user being impersonated
-//   - startedAt: ISO timestamp; used to auto-stop after 24h to mirror
-//     the web cookie's max-age.
+//   - startedAt: ISO timestamp; used to auto-stop after the session
+//     max-age to mirror the web cookie's max-age.
+//
+// Keep MAX_AGE_MS in sync with IMPERSONATE_SESSION_MAX_AGE_SECONDS in
+// src/lib/impersonation.js (currently 2h) — there's no shared import
+// across the web/native boundary, and the close-stale-impersonations
+// reaper closes the audit row at that same age.
 
 import * as SecureStore from 'expo-secure-store'
 
 const KEY = 'un1t_impersonate_v1'
-export const MAX_AGE_MS = 24 * 60 * 60 * 1000
+export const MAX_AGE_MS = 2 * 60 * 60 * 1000
 
 /**
  * Read the persisted impersonation state. Returns null when nothing
@@ -21,10 +26,10 @@ export const MAX_AGE_MS = 24 * 60 * 60 * 1000
  *
  * Note: this does NOT call the server stop endpoint when expiring —
  * we let the next /api/mobile/me round-trip naturally drop the
- * impersonation header, and a master can manually stop later. The
- * impersonation_log row stays open until manually stopped, which
- * matches the web's cookie behaviour (cookie expires, log stays open
- * until the next start/stop closes it).
+ * impersonation header. The open impersonation_log row is then closed
+ * by the hourly close-stale-impersonations reaper (it stamps ended_at
+ * at the session max-age), so an expired-without-Stop session no longer
+ * dangles open forever in the audit trail.
  */
 export async function readImpersonate() {
   try {

@@ -21,7 +21,17 @@ import { createServerClient } from './supabase'
 
 export const IMPERSONATE_COOKIE = 'un1t_impersonate'
 export const IMPERSONATE_HEADER = 'x-impersonate-target'
-const ONE_DAY_SECONDS = 24 * 60 * 60
+
+// Max wall-clock lifetime of an impersonation session, shared across
+// every surface so they can't drift: the web cookie max-age, the mobile
+// SecureStore expiry (mobile/lib/impersonate.js MAX_AGE_MS), and the
+// close-stale-impersonations reaper cutoff. Impersonation is a debugging
+// tool ("view as user"), not a working session — a tight window bounds
+// both the exposure of an abandoned session and the audit imprecision of
+// a reaped row. Renewing is one click/tap. Change here = change
+// everywhere (keep mobile MAX_AGE_MS in sync — there's no shared import
+// across the web/native boundary).
+export const IMPERSONATE_SESSION_MAX_AGE_SECONDS = 2 * 60 * 60
 
 /**
  * Read the impersonation cookie. Returns the target user's UUID
@@ -129,7 +139,7 @@ export async function startImpersonation({ masterProfile, targetUserId, reason, 
     httpOnly: true,
     sameSite: 'lax',
     secure: process.env.NODE_ENV === 'production',
-    maxAge: ONE_DAY_SECONDS,
+    maxAge: IMPERSONATE_SESSION_MAX_AGE_SECONDS,
     path: '/',
   })
 
@@ -170,4 +180,79 @@ export async function stopImpersonation({ masterUserId }) {
   // anyway via auth_is_master, so the worst case is "wrong default
   // pre-selected".)
   cookieStore.set('un1t_active_location', '', { maxAge: 0, path: '/' })
+}
+
+/**
+ * Pure planner — given the currently-open impersonation rows and a
+ * reference time, decide which are past the session max-age and what
+ * truthful ended_at to stamp on each.
+ *
+ * A session cannot outlive its max-age (the cookie/SecureStore both
+ * expire then), so any row older than that is provably dead. We stamp
+ * ended_at = started_at + max-age (the upper bound of when it could
+ * still have been active), NOT `now`, so a reaper that runs hours later
+ * doesn't inflate the recorded session duration.
+ *
+ * Pure: input → output, no IO. Tested in impersonation.test.js.
+ *
+ * @param {Array<{id:string, started_at:string}>} openRows
+ * @param {number} now  epoch ms
+ * @param {number} [maxAgeSeconds]
+ * @returns {Array<{id:string, ended_at:string}>}
+ */
+export function planStaleImpersonationCloses(
+  openRows,
+  now,
+  maxAgeSeconds = IMPERSONATE_SESSION_MAX_AGE_SECONDS,
+) {
+  const maxAgeMs = maxAgeSeconds * 1000
+  const out = []
+  for (const r of openRows || []) {
+    const startMs = r?.started_at ? new Date(r.started_at).getTime() : NaN
+    if (!Number.isFinite(startMs)) continue
+    if (now - startMs >= maxAgeMs) {
+      out.push({ id: r.id, ended_at: new Date(startMs + maxAgeMs).toISOString() })
+    }
+  }
+  return out
+}
+
+/**
+ * Reaper IO — close every impersonation_log row open past the session
+ * max-age, stamping a truthful upper-bound ended_at + auto_closed=true.
+ * Catches every session that ended without an explicit Stop (tab close,
+ * logout, cookie/SecureStore expiry). Called by the hourly
+ * /api/cron/close-stale-impersonations cron.
+ *
+ * @param {SupabaseClient} db   service-role client
+ * @param {number} [now]        epoch ms (injectable for tests)
+ * @param {number} [maxAgeSeconds]
+ * @returns {Promise<{ok:boolean, closed:number, stale:number, error?:string}>}
+ */
+export async function closeStaleImpersonations(
+  db,
+  now = Date.now(),
+  maxAgeSeconds = IMPERSONATE_SESSION_MAX_AGE_SECONDS,
+) {
+  const cutoffIso = new Date(now - maxAgeSeconds * 1000).toISOString()
+  const { data: openRows, error } = await db
+    .from('impersonation_log')
+    .select('id, started_at')
+    .is('ended_at', null)
+    .lt('started_at', cutoffIso)
+  if (error) return { ok: false, closed: 0, stale: 0, error: error.message }
+
+  const plan = planStaleImpersonationCloses(openRows, now, maxAgeSeconds)
+  let closed = 0
+  for (const p of plan) {
+    // Re-assert ended_at IS NULL so a concurrent explicit Stop wins the
+    // race and we don't overwrite a precise end with the upper bound.
+    const { error: uErr } = await db
+      .from('impersonation_log')
+      .update({ ended_at: p.ended_at, auto_closed: true })
+      .eq('id', p.id)
+      .is('ended_at', null)
+    if (!uErr) closed++
+  }
+  return { ok: true, closed, stale: plan.length }
 }
