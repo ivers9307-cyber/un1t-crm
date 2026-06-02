@@ -5,12 +5,16 @@
 //   profiles so we can show "performed by" as a name instead of a
 //   UUID. Append-only audit table — no PATCH/DELETE on this route.
 //
-// Any authenticated user can read consent history. The table itself
-// has no row-level filtering at the application layer because RLS on
-// consent_log already enforces the location-based view.
+// Access (H1, 2026-06 platform audit): this route uses
+// createServerClient() (service role) which BYPASSES RLS — the
+// location-scoped policy on consent_log only binds the `authenticated`
+// role, so it does NOT filter this query. We resolve the contact's
+// location_id and gate with assertLocationAccess(); without it any
+// authenticated user could read any contact's consent history (incl.
+// ip_address) by enumerating contact IDs.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 
 export const runtime = 'nodejs'
@@ -30,6 +34,24 @@ export async function GET(_request, props) {
   }
 
   const db = createServerClient()
+
+  // Resolve the contact's location and gate on it before returning any
+  // consent rows (H1). A non-existent contact and a contact in another
+  // tenant both look the same to the caller (404 / 403 respectively).
+  const { data: contact, error: contactErr } = await db
+    .from('contacts')
+    .select('location_id')
+    .eq('id', params.id)
+    .maybeSingle()
+  if (contactErr) {
+    return NextResponse.json({ success: false, error: contactErr.message }, { status: 500 })
+  }
+  if (!contact) {
+    return NextResponse.json({ success: false, error: 'Contact not found' }, { status: 404 })
+  }
+  const guard = assertLocationAccess(user, contact.location_id)
+  if (guard) return guard
+
   // Pull the rows + the acting profile name in one round-trip.
   // performed_by may be null (self-service preference centre, the
   // ClassPass auto-trigger, etc) — handle that in the UI rather

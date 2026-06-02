@@ -67,8 +67,15 @@ function checkToolPermission(toolName, role) {
   return false
 }
 
-// Execute a tool call against the CRM
-async function executeTool(toolName, input, context) {
+// Execute a tool call against the CRM.
+//
+// SECURITY (H2, 2026-06 platform audit): every tool runs through
+// createServerClient() (service role → BYPASSES RLS), so app-layer
+// scoping to context.locationId — the server-trusted active location,
+// never client input — is the only thing confining the assistant to the
+// caller's tenant. Tenant-data reads/writes below are scoped accordingly;
+// see route.test.js for the regression guards.
+export async function executeTool(toolName, input, context) {
   const db = createServerClient()
   const { locationId, role, userId } = context
 
@@ -79,19 +86,27 @@ async function executeTool(toolName, input, context) {
 
   switch (toolName) {
     case 'create_contact': {
+      // Stamp the active location; never trust an input-supplied one.
+      // Without a location this would insert a tenant-less orphan row.
+      if (!locationId) return { error: 'No active location — switch to a location before creating a contact.' }
       const { data, error } = await db.from('contacts').insert({
         name: input.name,
         email: input.email,
         phone: input.phone || null,
         lead_source: input.lead_source || 'other',
+        location_id: locationId,
       }).select().single()
       if (error) return { error: error.message }
       return { success: true, contact: { id: data.id, name: data.name, email: data.email } }
     }
 
     case 'search_contacts': {
+      // Scope to the active location — an unscoped search would match
+      // contacts in every tenant. No location → no unscoped read.
+      if (!locationId) return { contacts: [], count: 0 }
       const { data } = await db.from('contacts')
         .select('id, name, email, phone, pipeline_stage_slug, lead_source')
+        .eq('location_id', locationId)
         .or(`name.ilike.%${input.query}%,email.ilike.%${input.query}%`)
         .limit(10)
       return { contacts: data || [], count: (data || []).length }
@@ -118,8 +133,18 @@ async function executeTool(toolName, input, context) {
     }
 
     case 'list_staff': {
+      // Scope to staff sharing the active location (mirror the
+      // /api/staff list pattern) — an unscoped profiles read returns
+      // every tenant's staff.
+      if (!locationId) return { staff: [] }
+      const { data: links } = await db.from('profile_locations')
+        .select('profile_id')
+        .eq('location_id', locationId)
+      const profileIds = [...new Set((links || []).map(l => l.profile_id))]
+      if (profileIds.length === 0) return { staff: [] }
       const { data } = await db.from('profiles')
         .select('id, full_name, email, role, active')
+        .in('id', profileIds)
         .eq('active', true)
         .order('full_name')
       return { staff: (data || []).map(s => ({ id: s.id, name: s.full_name, role: s.role })) }
@@ -152,6 +177,15 @@ async function executeTool(toolName, input, context) {
     }
 
     case 'move_deal': {
+      if (!locationId) return { error: 'No active location for this action.' }
+      // Confirm the deal belongs to the caller's location BEFORE any
+      // write — otherwise the assistant could move another tenant's deal.
+      const { data: deal } = await db.from('deals')
+        .select('id')
+        .eq('id', input.deal_id)
+        .eq('location_id', locationId)
+        .maybeSingle()
+      if (!deal) return { error: 'Deal not found in your active location.' }
       const { data: stage } = await db.from('pipeline_stages').select('id').eq('slug', input.stage_slug).single()
       if (!stage) return { error: `Stage "${input.stage_slug}" not found` }
       const { data, error } = await db.from('deals')
@@ -164,10 +198,24 @@ async function executeTool(toolName, input, context) {
     }
 
     case 'create_activity': {
+      if (!locationId) return { error: 'No active location for this action.' }
+      // If linking to a contact, confirm it's in the caller's location
+      // BEFORE inserting — and always stamp the active location_id.
+      let contactId = null
+      if (input.contact_id) {
+        const { data: contact } = await db.from('contacts')
+          .select('id')
+          .eq('id', input.contact_id)
+          .eq('location_id', locationId)
+          .maybeSingle()
+        if (!contact) return { error: 'Contact not found in your active location.' }
+        contactId = contact.id
+      }
       const record = {
         subject: input.subject,
         type: input.type,
-        contact_id: input.contact_id || null,
+        contact_id: contactId,
+        location_id: locationId,
         due_date: input.due_date || null,
         note: input.note || null,
         done: false,

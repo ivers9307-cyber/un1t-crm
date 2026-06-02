@@ -23,7 +23,7 @@
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { getCurrentUser, getOwnerOrganizationIds } from '@/lib/auth'
 import { contractIssueSchema } from '@/lib/schemas'
 import {
   mergeVariables,
@@ -45,10 +45,19 @@ export async function GET() {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
 
-  // Visibility is enforced by RLS (recipient sees own; master sees
-  // all; owner sees org). We just SELECT and let the policy filter.
+  // C1 (2026-06 platform audit): this route uses createServerClient()
+  // (service role), which BYPASSES RLS — the policies in mig 106 only
+  // bind the `authenticated` role, so there is no DB-side filter here.
+  // We must replicate mig 106's visibility model in the app layer:
+  //   master  → every contract
+  //   else    → contracts they received (profile_id) OR that belong to
+  //             an organization they own (mig 051 owner role → mig 079
+  //             organization_id).
+  // Without this, any authenticated staff member could read every
+  // contract's variables_data (salary/comp), signature_value and
+  // signed_ip across all tenants.
   const db = createServerClient()
-  const { data, error } = await db
+  let query = db
     .from('contracts')
     .select(`
       id, template_id, profile_id, location_id, organization_id,
@@ -57,6 +66,19 @@ export async function GET() {
       template:contract_templates!template_id (name, employment_type)
     `)
     .order('issued_at', { ascending: false })
+
+  if (!user.isMaster) {
+    const ownerOrgIds = getOwnerOrganizationIds(user)
+    if (ownerOrgIds.length > 0) {
+      query = query.or(
+        `profile_id.eq.${user.id},organization_id.in.(${ownerOrgIds.join(',')})`
+      )
+    } else {
+      query = query.eq('profile_id', user.id)
+    }
+  }
+
+  const { data, error } = await query
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
   return NextResponse.json({ success: true, data })
 }
