@@ -70,7 +70,7 @@ export async function computeMonthlyContractorSpend({ db, locationId, referenceD
     .from('shift_blocks')
     .select(`
       id, location_id, block_date, start_time, end_time,
-      shift_template_id, max_coaches,
+      template_id, max_coaches,
       shift_assignments(profile_id, start_time_override, end_time_override, status),
       shift_templates(start_time, end_time)
     `)
