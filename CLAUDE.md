@@ -14,7 +14,7 @@ npm run test:watch               # Re-run tests on file change
 npm run check:mobile-parity      # Lint web/mobile feature parity (see "Extending")
 ```
 
-Tests live alongside source as `*.test.js` (Vitest). Covers the security-critical lib helpers in `src/lib/` — webhook signatures, audience-filter whitelist, Zod validation, rate limiting, schema invariants — plus the policy contracts that drive permissions, contact merge, sequence cooldowns, branch routing, and so on. **2590 tests as of mig 215** (REPORT-ISSUE.2 + CHECKLIST.3), run in ~14s, no DB required (lib helpers are pure).
+Tests live alongside source as `*.test.js` (Vitest). Covers the security-critical lib helpers in `src/lib/` — webhook signatures, audience-filter whitelist, Zod validation, rate limiting, schema invariants — plus the policy contracts that drive permissions, contact merge, sequence cooldowns, branch routing, and so on. **2849 tests as of mig 236** (RETIRE-SHIFTS-MIRROR.1), run in a few seconds, no DB required (lib helpers are pure).
 
 Migrations are run via Supabase MCP from this session, or manually in the Supabase SQL Editor.
 
