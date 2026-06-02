@@ -130,17 +130,6 @@ const StaffUpdate = StaffCreate.partial().omit({ email: true, password: true })
   .extend({ active: z.boolean().optional() })
   .openapi('StaffUpdate')
 
-const ShiftCreate = z.object({
-  location_id: uuidLike,
-  profile_id: uuidLike,
-  shift_template_id: uuidLike,
-  shift_date: isoDate,
-  start_time_override: timeOfDay.nullable().optional(),
-  end_time_override: timeOfDay.nullable().optional(),
-  role_label: z.string().max(50).nullable().optional(),
-  notes: z.string().max(2000).nullable().optional(),
-}).openapi('ShiftCreate')
-
 const TimeOffRequest = z.object({
   type: timeOffTypeSchema,
   start_date: isoDate,
@@ -341,26 +330,14 @@ registry.registerPath({
 
 // Schedule
 registry.registerPath({
-  method: 'post',
+  method: 'get',
   path: '/api/schedule/shifts',
   tags: ['Schedule'],
   security: [{ CookieAuth: [] }],
-  summary: 'Create one or more shifts (manager+)',
-  description: 'Accepts either a single shift body or { shifts: [...] } batch. Up to 500 shifts per call.',
-  request: {
-    body: {
-      content: {
-        'application/json': {
-          schema: z.union([
-            ShiftCreate,
-            z.object({ shifts: z.array(ShiftCreate).min(1).max(500) }),
-          ]),
-        },
-      },
-    },
-  },
+  summary: 'List scheduled shifts',
+  description: "Returns shifts for the caller's locations, optionally filtered by location_id, start_date, end_date, profile_id. (The legacy create / update / delete shift endpoints were retired — use the block-based assignment routes.)",
   responses: {
-    201: { description: 'Shifts created' },
+    200: { description: 'Shifts' },
     403: { description: 'Forbidden', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
