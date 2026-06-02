@@ -2,7 +2,7 @@
 // effectiveOverride (collapse block + assignment override vs template)
 // and fetchSourceShiftRows (new-model read, normalised rows).
 import { describe, it, expect } from 'vitest'
-import { effectiveOverride, fetchSourceShiftRows, swapShiftShape } from './roster-read'
+import { effectiveOverride, fetchSourceShiftRows, swapShiftShape, fetchApiShiftRows } from './roster-read'
 
 describe('effectiveOverride', () => {
   it('prefers the per-assignment override when set', () => {
@@ -28,6 +28,7 @@ function makeDb(result) {
   const builder = {
     select() { return this },
     eq() { return this },
+    in() { return this },
     gte() { return this },
     lte() { return this },
     then(resolve) { return Promise.resolve(result).then(resolve) },
@@ -138,5 +139,60 @@ describe('swapShiftShape', () => {
     })
     expect(shaped.start_time_override).toBe('07:30:00')
     expect(shaped.end_time_override).toBe('08:30:00')
+  })
+})
+
+describe('fetchApiShiftRows', () => {
+  it('returns empty (no query) when no location ids given', async () => {
+    const res = await fetchApiShiftRows(makeDb({ data: [], error: null }), { locationIds: [] })
+    expect(res).toEqual({ rows: [], error: null })
+  })
+
+  it('maps assignments to the legacy shift shape, sorted by date', async () => {
+    const db = makeDb({
+      data: [
+        {
+          id: 'a2', profile_id: 'p1', status: 'scheduled', notes: null, partial_reason: null,
+          start_time_override: null, end_time_override: null, assigned_by: 'mgr', updated_at: 't2',
+          shift_blocks: {
+            location_id: 'loc1', template_id: 't1', block_date: '2026-06-09', start_time: '09:00:00', end_time: '10:00:00', notes: 'blk',
+            shift_templates: { id: 't1', name: 'AM', start_time: '09:00:00', end_time: '10:00:00', role_label: 'Coach' },
+          },
+          profiles: { id: 'p1', full_name: 'Dana' },
+        },
+        {
+          id: 'a1', profile_id: 'p1', status: 'scheduled', notes: 'own note', partial_reason: 'late',
+          start_time_override: '08:00:00', end_time_override: null, assigned_by: 'mgr', updated_at: 't1',
+          shift_blocks: {
+            location_id: 'loc1', template_id: 't1', block_date: '2026-06-08', start_time: '09:00:00', end_time: '10:00:00', notes: 'blk',
+            shift_templates: { id: 't1', name: 'AM', start_time: '09:00:00', end_time: '10:00:00', role_label: 'Coach' },
+          },
+          profiles: { id: 'p1', full_name: 'Dana' },
+        },
+      ],
+      error: null,
+    })
+    const { rows, error } = await fetchApiShiftRows(db, { locationIds: ['loc1'], startDate: '2026-06-08', endDate: '2026-06-14' })
+    expect(error).toBeNull()
+    // sorted: a1 (06-08) before a2 (06-09)
+    expect(rows.map((r) => r.id)).toEqual(['a1', 'a2'])
+    expect(rows[0]).toMatchObject({
+      id: 'a1', shift_assignment_id: 'a1',
+      location_id: 'loc1', profile_id: 'p1', shift_template_id: 't1', shift_date: '2026-06-08',
+      start_time_override: '08:00:00', end_time_override: null,
+      role_label: 'Coach', notes: 'own note', status: 'scheduled', published: true,
+      partial_reason: 'late', created_by: 'mgr',
+    })
+    expect(rows[0].shift_templates.name).toBe('AM')
+    // block notes fall back when the assignment has none
+    expect(rows[1].notes).toBe('blk')
+    // no start_time / end_time columns (legacy shifts had none)
+    expect(rows[0].start_time).toBeUndefined()
+  })
+
+  it('passes query errors through', async () => {
+    const res = await fetchApiShiftRows(makeDb({ data: null, error: { message: 'nope' } }), { locationIds: ['l'] })
+    expect(res.error?.message).toBe('nope')
+    expect(res.rows).toEqual([])
   })
 })
