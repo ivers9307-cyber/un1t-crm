@@ -63,7 +63,12 @@ export default function AppShell({ user, children }) {
 
       {/* Main content */}
       <div className="flex-1 flex flex-col overflow-hidden">
-        <ImpersonationBanner user={user} />
+        {/* Only while a master is actually impersonating another user.
+            `impersonatingFrom` is null for a normal session (incl. a master
+            on their own profile) — auth.js only sets it for a genuine
+            cross-user impersonation backed by an open audit row. Rendering
+            unconditionally showed every user a "Viewing as <yourself>" bar. */}
+        {user?.impersonatingFrom && <ImpersonationBanner user={user} />}
         <main className="flex-1 overflow-y-auto pt-14 md:pt-0">
           {children}
         </main>
