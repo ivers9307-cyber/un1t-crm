@@ -313,6 +313,87 @@ describe('classifyContact — Active Member / At Risk', () => {
   })
 })
 
+// ── Live-membership floor (GLOFOX-CLASSIFY.3) ─────────────────
+// A future membership expiry = paid-up subscription. A paid-up
+// member is never silently dropped to lapsed/dormant — only the
+// active vs at_risk split applies. Fixes paid members buried in the
+// hidden dormant bucket because last_payment_at is barely synced.
+
+const daysFromNow = (d) => new Date(NOW + d * 86_400_000).toISOString()
+
+describe('classifyContact — live-membership floor', () => {
+  it('paid-up member, quiet (200d since attended, no payment) → at_risk_member, NOT dormant', () => {
+    expect(classifyContact({
+      glofox_membership_status: 'member',
+      glofox_membership_expiry: daysFromNow(20),
+      last_attended_at: daysAgo(200),
+    }, NOW)).toBe('at_risk_member')
+  })
+
+  it('paid-up member with NO attendance signal at all → at_risk_member, NOT dormant', () => {
+    expect(classifyContact({
+      glofox_membership_status: 'member',
+      glofox_membership_expiry: daysFromNow(5),
+      last_attended_at: null,
+      last_payment_at: null,
+    }, NOW)).toBe('at_risk_member')
+  })
+
+  it('paid-up member, recently attended → active_member', () => {
+    expect(classifyContact({
+      glofox_membership_status: 'member',
+      glofox_membership_expiry: daysFromNow(20),
+      last_attended_at: daysAgo(3),
+    }, NOW)).toBe('active_member')
+  })
+
+  it('paused-but-paid member who is still attending stays active_member (NOT demoted)', () => {
+    // The trap the floor avoids: a dedicated paused→at_risk branch
+    // would wrongly demote paused members who are still showing up.
+    expect(classifyContact({
+      glofox_membership_status: 'member',
+      glofox_membership_state: 'paused',
+      glofox_membership_expiry: daysFromNow(40),
+      last_attended_at: daysAgo(4),
+    }, NOW)).toBe('active_member')
+  })
+
+  it('paused-but-paid member who is quiet → at_risk_member (surfaced, not hidden)', () => {
+    expect(classifyContact({
+      glofox_membership_status: 'member',
+      glofox_membership_state: 'paused',
+      glofox_membership_expiry: daysFromNow(40),
+      last_attended_at: daysAgo(120),
+    }, NOW)).toBe('at_risk_member')
+  })
+
+  it('locked override beats the floor: paid-up but frozen → at_risk_member', () => {
+    expect(classifyContact({
+      glofox_membership_status: 'member',
+      glofox_membership_state: 'locked',
+      glofox_membership_expiry: daysFromNow(20),
+      last_attended_at: daysAgo(2),
+    }, NOW)).toBe('at_risk_member')
+  })
+
+  it('PAST expiry does NOT trigger the floor — falls to recency (lapsed)', () => {
+    expect(classifyContact({
+      glofox_membership_status: 'member',
+      glofox_membership_expiry: daysAgo(30),
+      last_attended_at: daysAgo(120),
+      last_payment_at: daysAgo(120),
+    }, NOW)).toBe('lapsed')
+  })
+
+  it('credit_member with a future expiry but quiet → at_risk_member', () => {
+    expect(classifyContact({
+      glofox_membership_status: 'credit_member',
+      glofox_membership_expiry: daysFromNow(15),
+      last_attended_at: daysAgo(200),
+    }, NOW)).toBe('at_risk_member')
+  })
+})
+
 // ── New Lead ──────────────────────────────────────────────────
 
 describe('classifyContact — New Lead', () => {
