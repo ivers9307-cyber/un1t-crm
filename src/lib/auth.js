@@ -472,6 +472,32 @@ export function getUserLocationIds(user) {
 }
 
 /**
+ * Returns the distinct organization IDs the caller is an *owner* of —
+ * derived from the locations where their per-location role is 'owner'
+ * (mig 051), mapped to each location's organization_id (mig 079).
+ *
+ * Use for org-scoped resources (e.g. contracts, mig 106) on service-role
+ * routes that must replicate the "owner sees their org" RLS model in the
+ * app layer because `createServerClient()` bypasses RLS. Master callers
+ * are handled separately by the caller (they see everything); this returns
+ * only the explicit owner-org set, so a non-owner gets `[]`.
+ *
+ * @param {{ rolesByLocation?: Record<string,string>, locations?: Array<{id: string, organization_id?: string}> } | null} user
+ * @returns {string[]}
+ */
+export function getOwnerOrganizationIds(user) {
+  if (!user) return []
+  const ownerLocationIds = Object.entries(user.rolesByLocation || {})
+    .filter(([, role]) => role === 'owner')
+    .map(([locationId]) => locationId)
+  const orgIds = (user.locations || [])
+    .filter(l => l && ownerLocationIds.includes(l.id))
+    .map(l => l.organization_id)
+    .filter(Boolean)
+  return Array.from(new Set(orgIds))
+}
+
+/**
  * Check that `locationId` is one of the locations the caller belongs to.
  * Use at the top of any session-auth route that takes a location_id from
  * user input (query string or request body) to prevent IDOR — a user

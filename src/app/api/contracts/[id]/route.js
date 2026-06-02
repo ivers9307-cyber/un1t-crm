@@ -1,8 +1,13 @@
 // /api/contracts/[id]
-//   GET  fetch one contract.
-//        - Recipient sees their own (RLS).
-//        - Master sees all (RLS).
-//        - Owner sees their org (RLS).
+//   GET  fetch one contract. Visibility (mig 106's model) is enforced
+//        in the APP LAYER here — this route uses createServerClient()
+//        (service role) which BYPASSES RLS, so the DB policies don't
+//        filter it (C1, 2026-06 platform audit):
+//        - Recipient sees their own.
+//        - Master sees all.
+//        - Owner sees their org.
+//        - Anyone else → 404 (we don't confirm the row exists to a
+//          caller with no right to see it).
 //        Side effect: when the recipient is the caller and the
 //        contract is still 'issued', flip it to 'viewed' + stamp
 //        viewed_at. This gives the issuer signal that the recipient
@@ -10,7 +15,7 @@
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { getCurrentUser, getOwnerOrganizationIds } from '@/lib/auth'
 import { canTransition } from '@/lib/contracts'
 
 export const runtime = 'nodejs'
@@ -38,6 +43,17 @@ export async function GET(_request, props) {
     .maybeSingle()
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
   if (!contract) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
+
+  // App-layer visibility gate (C1). Service-role read above bypassed
+  // RLS, so enforce mig 106's model here: recipient, master, or an
+  // owner of the contract's organization may read it. Everyone else
+  // gets 404 — same response as a missing row, so an unauthorised
+  // caller can't even confirm the contract exists by enumerating IDs.
+  const isRecipient = contract.profile_id === user.id
+  const isOrgOwner = getOwnerOrganizationIds(user).includes(contract.organization_id)
+  if (!isRecipient && !user.isMaster && !isOrgOwner) {
+    return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
+  }
 
   // First-view tick — only when the recipient is the caller and
   // the contract is still in 'issued'. Quietly best-effort: if
