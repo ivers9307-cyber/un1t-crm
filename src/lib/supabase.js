@@ -1,11 +1,18 @@
 import { createClient } from '@supabase/supabase-js'
 import { createBrowserClient as createSSRBrowserClient } from '@supabase/ssr'
 
-// Browser client (uses anon key, stores session in cookies via @supabase/ssr)
-export function createBrowserClient() {
+// Browser client (uses anon key, stores session in cookies via @supabase/ssr).
+//
+// `options` is passed straight through to @supabase/ssr's createBrowserClient.
+// Default callers pass nothing and get the standard auto-detecting client.
+// The /reset-password page passes `{ auth: { detectSessionInUrl: false } }` so
+// it can establish the recovery session from the URL token deterministically
+// (auto-detection races the page's forced sign-out — see that page's comment).
+export function createBrowserClient(options) {
   return createSSRBrowserClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+    options
   )
 }
 
