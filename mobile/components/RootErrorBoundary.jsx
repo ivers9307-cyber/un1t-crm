@@ -1,21 +1,22 @@
-// Catches render/runtime crashes in the app tree so a bad bundle shows
-// a real error screen instead of hanging forever on the splash.
+// Catches render/runtime crashes so a bad bundle shows a real error
+// screen instead of hanging on the splash.
 //
-// Why this exists: a bad EAS Update once threw during startup render —
-// the splash never handed off and the only "fix" users had was deleting
-// the app (which re-pulled the same broken OTA). With this boundary, a
-// startup crash now shows: the error, the running build/OTA identity
-// (so support can tell which bundle is bad), a "Try again" reset, and a
-// "Check for update" button that lets a *fixed* OTA self-heal the device
-// without a reinstall.
+// HARDENED (2026-06): no top-level expo-updates import. The first
+// version imported it at module top; a prod OTA carrying it crashed on
+// boot via expo-updates' error-recovery queue. expo-updates is now
+// lazy-require'd ONLY inside the "Check for update" handler (user-
+// initiated, well after launch), wrapped in try/catch. The boundary
+// itself no longer touches expo-updates at mount/import time — so even
+// if that module is unhappy, the boundary can still render.
 //
-// Note: a JS ErrorBoundary only catches JS render errors — which is
-// exactly the class of bug that bricked us. Native crashes still need a
-// new build. This is the right tool for the OTA-breakage case.
+// Caveat (unchanged): a JS ErrorBoundary only catches errors thrown
+// during React *render*. A throw at module-eval/import time crashes the
+// bundle before any render and CANNOT be caught here — which is exactly
+// why neither this file nor build-info.js imports expo-updates at the
+// top level anymore.
 
 import React from 'react'
 import { View, Text, Pressable, ScrollView } from 'react-native'
-import * as Updates from 'expo-updates'
 import * as SplashScreen from 'expo-splash-screen'
 import { buildSummary } from '../lib/build-info'
 
@@ -30,34 +31,30 @@ export default class RootErrorBoundary extends React.Component {
   }
 
   componentDidCatch(error, info) {
-    // CRITICAL: hide the splash. If the crash happened before SplashGate
-    // ran hideAsync(), the splash is still up and would cover this error
-    // screen — i.e. the app would *look* hung even though we caught it.
-    SplashScreen.hideAsync().catch(() => { /* already hidden / not mounted */ })
-    // Best-effort log; in production this surfaces in EAS/device logs.
-    console.error('[RootErrorBoundary] startup/render crash:', error?.message, info?.componentStack)
+    // CRITICAL: hide the splash, or this error screen renders UNDER it
+    // and the app still *looks* hung even though we caught the error.
+    try { SplashScreen.hideAsync().catch(() => {}) } catch { /* ignore */ }
+    console.error('[RootErrorBoundary] render crash:', error?.message, info?.componentStack)
   }
 
-  // Re-mount the tree — recovers from transient errors without a full
-  // app kill.
   handleRetry = () => {
     this.setState({ error: null })
   }
 
-  // Pull + apply a newer OTA bundle, then reload. This is the self-heal
-  // path: after a broken update is rolled back / republished, a user
-  // stuck on this screen can recover in-place instead of reinstalling.
+  // Pull + apply a newer OTA, then reload — the self-heal path. Lazy-
+  // requires expo-updates ONLY here (user tap, post-launch), fully
+  // guarded so a failure just resets the checking state.
   handleCheckForUpdate = async () => {
     this.setState({ checking: true })
     try {
+      // eslint-disable-next-line global-require
+      const Updates = require('expo-updates')
       const res = await Updates.checkForUpdateAsync()
-      if (res.isAvailable) {
+      if (res?.isAvailable) {
         await Updates.fetchUpdateAsync()
-        await Updates.reloadAsync() // boots the freshly-fetched bundle
+        await Updates.reloadAsync()
         return
       }
-      // Nothing newer on the server yet — just re-mount and hope the
-      // error was transient.
       this.setState({ checking: false, error: null })
     } catch (e) {
       console.error('[RootErrorBoundary] update check failed:', e?.message)
@@ -67,6 +64,9 @@ export default class RootErrorBoundary extends React.Component {
 
   render() {
     if (!this.state.error) return this.props.children
+
+    let summary = ''
+    try { summary = buildSummary() } catch { summary = 'build info unavailable' }
 
     return (
       <ScrollView
@@ -98,9 +98,7 @@ export default class RootErrorBoundary extends React.Component {
             </Text>
           </Pressable>
 
-          <Text style={{ fontSize: 12, color: '#9CA3AF', marginBottom: 4 }}>
-            {buildSummary()}
-          </Text>
+          <Text style={{ fontSize: 12, color: '#9CA3AF', marginBottom: 4 }}>{summary}</Text>
           <Text style={{ fontSize: 11, color: '#9CA3AF', fontFamily: 'Courier' }} numberOfLines={4}>
             {String(this.state.error?.message || this.state.error)}
           </Text>
