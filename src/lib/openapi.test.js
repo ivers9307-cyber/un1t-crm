@@ -50,7 +50,6 @@ describe('getOpenApiSpec', () => {
       'DealCreate', 'DealUpdate',
       'BookingCreate',
       'StaffCreate', 'StaffUpdate',
-      'ShiftCreate',
       'TimeOffRequest', 'TimeOffReview',
       'SwapCreate', 'SwapReview',
       'CampaignCreate',
