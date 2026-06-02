@@ -2,7 +2,7 @@
 // effectiveOverride (collapse block + assignment override vs template)
 // and fetchSourceShiftRows (new-model read, normalised rows).
 import { describe, it, expect } from 'vitest'
-import { effectiveOverride, fetchSourceShiftRows } from './roster-read'
+import { effectiveOverride, fetchSourceShiftRows, swapShiftShape } from './roster-read'
 
 describe('effectiveOverride', () => {
   it('prefers the per-assignment override when set', () => {
@@ -88,5 +88,55 @@ describe('fetchSourceShiftRows', () => {
     const res = await fetchSourceShiftRows(bad, { locationId: 'l', startDate: 'a', endDate: 'b' })
     expect(res.error?.message).toBe('boom')
     expect(res.rows).toEqual([])
+  })
+})
+
+describe('swapShiftShape', () => {
+  it('returns null for a null assignment (drop request has no target)', () => {
+    expect(swapShiftShape(null)).toBeNull()
+  })
+
+  it('flattens an embedded assignment into the legacy swap-shift shape', () => {
+    const shaped = swapShiftShape({
+      id: 'a1',
+      profile_id: 'p1',
+      status: 'scheduled',
+      notes: 'n',
+      start_time_override: null,
+      end_time_override: '11:00:00',
+      shift_blocks: {
+        block_date: '2026-06-08',
+        start_time: '09:00:00',
+        end_time: '10:00:00',
+        shift_templates: { name: 'AM HIIT', start_time: '09:00:00', end_time: '10:00:00', role_label: 'Coach' },
+      },
+      profiles: { id: 'p1', full_name: 'Dana' },
+    })
+    expect(shaped).toMatchObject({
+      id: 'a1',
+      profile_id: 'p1',
+      status: 'scheduled',
+      shift_date: '2026-06-08',
+      // block matches template → no start override; assignment carries the end override
+      start_time_override: null,
+      end_time_override: '11:00:00',
+      role_label: 'Coach',
+    })
+    expect(shaped.shift_templates.name).toBe('AM HIIT')
+    expect(shaped.profiles.full_name).toBe('Dana')
+  })
+
+  it('collapses a block-vs-template deviation onto the override', () => {
+    const shaped = swapShiftShape({
+      id: 'a2', profile_id: 'p2', status: 'scheduled', notes: null,
+      start_time_override: null, end_time_override: null,
+      shift_blocks: {
+        block_date: '2026-06-09', start_time: '07:30:00', end_time: '08:30:00',
+        shift_templates: { name: 'Early', start_time: '08:00:00', end_time: '09:00:00' },
+      },
+      profiles: null,
+    })
+    expect(shaped.start_time_override).toBe('07:30:00')
+    expect(shaped.end_time_override).toBe('08:30:00')
   })
 })

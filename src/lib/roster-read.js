@@ -35,6 +35,43 @@ export function effectiveOverride(assignmentOverride, blockTime, templateTime) {
 }
 
 /**
+ * Flatten a shift_assignment row embedded with its block + template into
+ * the legacy "shift"-shaped object the swap UIs read off
+ * `requester_shift` / `target_shift` (RETIRE-SHIFTS-MIRROR.5c). Keeps the
+ * GET /api/schedule/swaps response shape identical after the FK repointed
+ * from shifts(id) → shift_assignments(id), so no consumer (web approvals,
+ * SwapRequestsManager, web + mobile dashboards) needs to change.
+ *
+ * Expects the embed:
+ *   shift_assignments(
+ *     id, profile_id, status, notes, start_time_override, end_time_override,
+ *     shift_blocks!block_id ( block_date, start_time, end_time,
+ *       shift_templates ( name, start_time, end_time, role_label ) ),
+ *     profiles!profile_id ( ... )
+ *   )
+ *
+ * @param {object|null} a embedded shift_assignments row (or null)
+ * @returns {object|null}
+ */
+export function swapShiftShape(a) {
+  if (!a) return null
+  const b = a.shift_blocks || {}
+  const tpl = b.shift_templates || {}
+  return {
+    id: a.id,
+    profile_id: a.profile_id,
+    status: a.status,
+    notes: a.notes ?? null,
+    shift_date: b.block_date ?? null,
+    start_time_override: effectiveOverride(a.start_time_override, b.start_time, tpl.start_time),
+    end_time_override: effectiveOverride(a.end_time_override, b.end_time, tpl.end_time),
+    role_label: tpl.role_label ?? null,
+    shift_templates: tpl,
+    profiles: a.profiles ?? null,
+  }
+}
+
+/**
  * Fetch the per-coach scheduled rows in [startDate, endDate] for a
  * location from the Roster v2 model, normalised to the shape the copy
  * routes need. Each row is one coach assigned to one block:

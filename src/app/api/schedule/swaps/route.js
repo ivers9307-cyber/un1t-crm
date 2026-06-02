@@ -5,6 +5,7 @@ import { getCurrentUser, assertLocationAccess , getUserLocationIds} from '@/lib/
 import { validateBody } from '@/lib/validate'
 import { uuidLike, MANAGER_ROLES } from '@/lib/schemas'
 import { sendPush, sendPushToRolesAtLocation } from '@/lib/push'
+import { swapShiftShape } from '@/lib/roster-read'
 
 const SwapCreateSchema = z.object({
   requester_shift_id: uuidLike,
@@ -12,6 +13,20 @@ const SwapCreateSchema = z.object({
   target_id: uuidLike.nullable().optional(),
   reason: z.string().max(2000).nullable().optional(),
 })
+
+// RETIRE-SHIFTS-MIRROR.5c — swap rows now FK shift_assignments(id), not the
+// legacy shifts(id). The embedded assignment (+ its block + template) is
+// flattened back to the legacy shift shape via swapShiftShape() so the GET
+// response stays byte-identical for every consumer (web approvals,
+// SwapRequestsManager, web + mobile dashboards).
+const SWAP_SHIFT_EMBED = `
+  id, profile_id, status, notes, start_time_override, end_time_override,
+  shift_blocks!block_id (
+    block_date, start_time, end_time,
+    shift_templates ( name, start_time, end_time, role_label )
+  ),
+  profiles!profile_id ( id, full_name )
+`
 
 // GET /api/schedule/swaps?location_id=xxx&status=pending
 export async function GET(request) {
@@ -27,8 +42,8 @@ export async function GET(request) {
   let query = db.from('shift_swap_requests')
     .select(`
       *,
-      requester_shift:shifts!requester_shift_id(*, shift_templates(*), profiles!profile_id(id, full_name)),
-      target_shift:shifts!target_shift_id(*, shift_templates(*), profiles!profile_id(id, full_name)),
+      requester_shift:shift_assignments!requester_shift_id(${SWAP_SHIFT_EMBED}),
+      target_shift:shift_assignments!target_shift_id(${SWAP_SHIFT_EMBED}),
       requester:profiles!requester_id(id, full_name, avatar_url),
       target:profiles!target_id(id, full_name, avatar_url),
       reviewer:profiles!reviewed_by(id, full_name)
@@ -46,7 +61,15 @@ export async function GET(request) {
 
   const { data, error } = await query
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
-  return NextResponse.json({ success: true, data })
+
+  // Flatten the embedded assignment back to the legacy shift shape the
+  // consumers read (requester_shift.shift_date / .shift_templates / overrides).
+  const shaped = (data || []).map((row) => ({
+    ...row,
+    requester_shift: swapShiftShape(row.requester_shift),
+    target_shift: swapShiftShape(row.target_shift),
+  }))
+  return NextResponse.json({ success: true, data: shaped })
 }
 
 // POST /api/schedule/swaps — Create a swap request
@@ -59,19 +82,25 @@ export async function POST(request) {
   const body = validation.data
   const db = createServerClient()
 
-  // Verify the requester owns this shift
-  const { data: shift } = await db.from('shifts')
-    .select('*')
+  // Verify the requester owns this assignment (requester_shift_id is now a
+  // shift_assignments.id — RETIRE-SHIFTS-MIRROR.5c). Pull location_id off
+  // the assignment's block.
+  const { data: assignment } = await db.from('shift_assignments')
+    .select('id, profile_id, shift_blocks!block_id(location_id)')
     .eq('id', body.requester_shift_id)
     .eq('profile_id', user.id)
     .single()
 
-  if (!shift) {
+  if (!assignment) {
     return NextResponse.json({ success: false, error: 'Shift not found or not yours' }, { status: 404 })
+  }
+  const swapLocationId = assignment.shift_blocks?.location_id
+  if (!swapLocationId) {
+    return NextResponse.json({ success: false, error: 'Shift has no location' }, { status: 400 })
   }
 
   const { data, error } = await db.from('shift_swap_requests').insert({
-    location_id: shift.location_id,
+    location_id: swapLocationId,
     requester_shift_id: body.requester_shift_id,
     requester_id: user.id,
     target_shift_id: body.target_shift_id || null,
@@ -93,7 +122,7 @@ export async function POST(request) {
       data: { type: 'swap_inbound', swap_id: data.id },
     }).catch(err => console.error('[swaps] push to target failed', err))
   } else {
-    sendPushToRolesAtLocation(shift.location_id, MANAGER_ROLES, {
+    sendPushToRolesAtLocation(swapLocationId, MANAGER_ROLES, {
       title: 'Open swap request',
       body: `${user.full_name} posted a shift for swap. Tap to review.`,
       category: 'swap',
