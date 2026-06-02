@@ -1,51 +1,80 @@
-// Build + OTA-update identity, surfaced so anyone can answer
-// "what version / which OTA bundle is this device running?" at a glance.
+// Build + OTA-update identity for the More-screen footer and crash screen.
 //
-// Why this exists: a bad EAS Update once hung the app on the splash
-// screen with no way to tell whether a device had pulled the latest
-// OTA. This module reads the running update's identity from
-// expo-updates + the app version from expo-constants so the More
-// screen (and the crash screen) can display it. Pure reads — no
-// side effects, safe to call anywhere.
+// HARDENED (2026-06): the first version of this file did
+// `import * as Updates from 'expo-updates'` at the top. A production
+// OTA carrying it crashed on boot — the crash report's triggered queue
+// was `expo.controller.errorRecoveryQueue`, i.e. the failure was in the
+// expo-updates launch/error-recovery path. To take this module entirely
+// out of that startup interaction surface:
+//   - NO top-level expo-updates import (it's lazy-require'd inside a
+//     try/catch, evaluated only when a function is actually called —
+//     never at module-eval / app-launch time).
+//   - every Updates access is guarded; any throw degrades to 'unknown'
+//     instead of propagating.
+// expo-constants is safe (used app-wide already) so it stays a normal
+// import.
 
-import * as Updates from 'expo-updates'
 import Constants from 'expo-constants'
 
-// Short, human-comparable id for the running update. In Expo Go / dev
-// (or a build with no OTA applied) updateId is null — we show "embedded"
-// so it's clear the device is on the binary's bundled JS, not an OTA.
-export function shortUpdateId() {
-  const id = Updates.updateId
-  if (!id) return 'embedded'
-  return id.slice(0, 8)
+// Lazily + safely read the expo-updates module. Returns null if it
+// can't be loaded or evaluated for any reason. Never throws.
+function safeUpdates() {
+  try {
+    // eslint-disable-next-line global-require
+    return require('expo-updates')
+  } catch {
+    return null
+  }
 }
 
-// Where the JS came from: an applied OTA update vs the binary's
-// embedded bundle. Mirrors Updates.isEmbeddedLaunch when available.
+// Read a single field off expo-updates without ever throwing.
+function safeField(name, fallback = null) {
+  try {
+    const U = safeUpdates()
+    if (!U) return fallback
+    const v = U[name]
+    return v === undefined ? fallback : v
+  } catch {
+    return fallback
+  }
+}
+
+export function shortUpdateId() {
+  const id = safeField('updateId')
+  if (!id) return 'embedded'
+  try { return String(id).slice(0, 8) } catch { return 'unknown' }
+}
+
 export function updateSource() {
-  if (Updates.isEmbeddedLaunch === true) return 'embedded'
-  if (Updates.updateId) return 'OTA'
+  if (safeField('isEmbeddedLaunch') === true) return 'embedded'
+  if (safeField('updateId')) return 'OTA'
   return 'embedded'
 }
 
-// One-line summary for the footer, e.g. "v1.2.0 · OTA 4f230b74 · production".
+// One-line summary, e.g. "v1.2.0 · OTA 4f230b74 · production".
+// Fully defensive — returns a best-effort string, never throws.
 export function buildSummary() {
-  const version = Constants.expoConfig?.version || 'unknown'
-  const channel = Updates.channel || 'dev'
-  const src = updateSource()
-  const id = shortUpdateId()
-  const idPart = src === 'OTA' ? `OTA ${id}` : 'embedded'
+  let version = 'unknown'
+  try { version = Constants.expoConfig?.version || 'unknown' } catch { /* ignore */ }
+  const channel = safeField('channel') || 'dev'
+  const idPart = updateSource() === 'OTA' ? `OTA ${shortUpdateId()}` : 'embedded'
   return `v${version} · ${idPart} · ${channel}`
 }
 
-// Full structured detail for a diagnostics view / crash screen.
 export function buildDetails() {
+  let appVersion = 'unknown'
+  try { appVersion = Constants.expoConfig?.version || 'unknown' } catch { /* ignore */ }
+  let createdAt = null
+  try {
+    const c = safeField('createdAt')
+    createdAt = c ? new Date(c).toISOString() : null
+  } catch { /* ignore */ }
   return {
-    appVersion: Constants.expoConfig?.version || 'unknown',
-    runtimeVersion: Updates.runtimeVersion || 'unknown',
-    channel: Updates.channel || 'dev',
-    updateId: Updates.updateId || null,
+    appVersion,
+    runtimeVersion: safeField('runtimeVersion') || 'unknown',
+    channel: safeField('channel') || 'dev',
+    updateId: safeField('updateId') || null,
     source: updateSource(),
-    createdAt: Updates.createdAt ? new Date(Updates.createdAt).toISOString() : null,
+    createdAt,
   }
 }
