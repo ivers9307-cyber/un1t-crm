@@ -14,7 +14,7 @@ npm run test:watch               # Re-run tests on file change
 npm run check:mobile-parity      # Lint web/mobile feature parity (see "Extending")
 ```
 
-Tests live alongside source as `*.test.js` (Vitest). Covers the security-critical lib helpers in `src/lib/` — webhook signatures, audience-filter whitelist, Zod validation, rate limiting, schema invariants — plus the policy contracts that drive permissions, contact merge, sequence cooldowns, branch routing, and so on. **2849 tests as of mig 236** (RETIRE-SHIFTS-MIRROR.1), run in a few seconds, no DB required (lib helpers are pure).
+Tests live alongside source as `*.test.js` (Vitest). Covers the security-critical lib helpers in `src/lib/` — webhook signatures, audience-filter whitelist, Zod validation, rate limiting, schema invariants — plus the policy contracts that drive permissions, contact merge, sequence cooldowns, branch routing, and so on. **2876 tests as of mig 238** (RETIRE-SHIFTS-MIRROR.6 — `public.shifts` mirror fully retired), run in a few seconds, no DB required (lib helpers are pure).
 
 Migrations are run via Supabase MCP from this session, or manually in the Supabase SQL Editor.
 
@@ -293,7 +293,7 @@ Two streams: `broadcast` (marketing, GDPR headers) and `outbound` (transactional
 
 **WhatsApp:** `whatsapp_conversations`, `whatsapp_messages`, `whatsapp_templates`, `whatsapp_broadcasts`, `whatsapp_broadcast_recipients`.
 
-**Scheduling:** `shifts`, `shift_templates`, `shift_swap_requests`, `time_off_requests`, `staff_allowances`, `schedule_notifications`.
+**Scheduling (Roster v2):** `shift_templates` (demand windows) → `shift_blocks` (per-date instances) → `shift_assignments` (n:m coaches), `rosters` (draft/published), `shift_swap_requests` (FK → `shift_assignments`), `time_off_requests`, `staff_allowances`, `schedule_notifications`. The legacy `public.shifts` mirror was dropped in mig 238 (RETIRE-SHIFTS-MIRROR.6) — `shift_blocks` + `shift_assignments` are the sole source of truth.
 
 **Reporting:** `generated_reports`, `scheduled_reports`.
 
