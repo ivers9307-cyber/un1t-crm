@@ -18,6 +18,44 @@ import { sendPush } from './push'
 import { logWarn } from './log'
 
 /**
+ * RETIRE-SHIFTS-MIRROR.6 — build the notify-list for a publish from the
+ * Roster v2 model instead of the (now-dropped) public.shifts flip.
+ *
+ * The publish paths used to capture "which shifts flipped published
+ * false→true" to know who to notify. The new-model equivalent of "newly
+ * published" is: assignments on the blocks that were just attached to a
+ * roster (i.e. had roster_id IS NULL immediately before publish). Callers
+ * capture those block ids BEFORE tagging, then pass them here.
+ *
+ * Returns rows shaped for notifyStaffOfPublish: { id, profile_id,
+ * location_id, shift_date }. `id` is the assignment id (it becomes
+ * schedule_notifications.shift_id — no longer FK-constrained to shifts).
+ *
+ * @param {import('@supabase/supabase-js').SupabaseClient} db
+ * @param {string[]} blockIds  blocks newly attached to the roster
+ * @returns {Promise<object[]>}
+ */
+export async function publishNotifyRowsForBlocks(db, blockIds) {
+  if (!blockIds || blockIds.length === 0) return []
+  const { data, error } = await db
+    .from('shift_assignments')
+    .select('id, profile_id, shift_blocks!block_id(location_id, block_date)')
+    .in('block_id', blockIds)
+  if (error) {
+    logWarn('roster-notify', 'publishNotifyRowsForBlocks query failed', { err: error })
+    return []
+  }
+  return (data || [])
+    .filter((a) => a.shift_blocks)
+    .map((a) => ({
+      id: a.id,
+      profile_id: a.profile_id,
+      location_id: a.shift_blocks.location_id,
+      shift_date: a.shift_blocks.block_date,
+    }))
+}
+
+/**
  * Insert per-profile schedule_notifications rows + send push
  * notifications to staff whose shifts were just published.
  *
