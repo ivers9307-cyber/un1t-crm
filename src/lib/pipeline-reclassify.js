@@ -28,6 +28,7 @@ const SELECT_COLS = [
   'name',
   'email',
   'glofox_membership_status',
+  'glofox_membership_state',
   'last_attended_at',
   'total_attended_7d',
   'total_attended_30d',
@@ -215,6 +216,7 @@ export async function reclassifyAllContacts(db, args) {
   for (const c of contacts) {
     const targetSlug = classifyContact({
       glofox_membership_status: c.glofox_membership_status,
+      glofox_membership_state: c.glofox_membership_state,
       last_attended_at: c.last_attended_at,
       total_attended_7d: c.total_attended_7d,
       total_attended_30d: c.total_attended_30d,
