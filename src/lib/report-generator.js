@@ -2,6 +2,39 @@
 import { createServerClient } from '@/lib/supabase'
 import { computeWeeklyCost, implicitHourlyRate, mondayOf } from '@/lib/payroll'
 
+// RETIRE-SHIFTS-MIRROR.1 — reports now read the Roster v2 source of truth
+// (shift_assignments + shift_blocks) instead of the legacy public.shifts
+// mirror. This helper queries the new model and normalises each row back
+// to the exact legacy "shift" shape the report math already expects, so
+// every report's output is unchanged — only the data source moves.
+//
+// Field mapping: shift_date ← shift_blocks.block_date; the time overrides
+// live on shift_assignments (mig 100); the template (name + default times)
+// comes through the block. No status filter — matches the old behaviour of
+// counting every shift in range (the mirror was 1:1 with assignments).
+const SHIFT_ROW_SELECT = `
+  profile_id, start_time_override, end_time_override, status,
+  profiles:profile_id ( full_name, role, employment_type ),
+  shift_blocks!inner ( block_date, location_id, shift_templates ( name, start_time, end_time ) )
+`
+
+export async function fetchScheduledShiftRows(db, { locationId, periodStart, periodEnd }) {
+  const { data: rows } = await db.from('shift_assignments')
+    .select(SHIFT_ROW_SELECT)
+    .eq('shift_blocks.location_id', locationId)
+    .gte('shift_blocks.block_date', periodStart)
+    .lte('shift_blocks.block_date', periodEnd)
+  return (rows || []).map((r) => ({
+    shift_date: r.shift_blocks?.block_date,
+    profile_id: r.profile_id,
+    start_time_override: r.start_time_override,
+    end_time_override: r.end_time_override,
+    status: r.status,
+    profiles: r.profiles,
+    shift_templates: r.shift_blocks?.shift_templates,
+  }))
+}
+
 /**
  * Generate a report and save it to generated_reports.
  * @param {Object} opts
@@ -28,12 +61,7 @@ export async function generateReport({ report_type, period_start, period_end, lo
   switch (report_type) {
     case 'staff_hours': {
       reportName = 'Staff Hours Worked'
-      const { data: shifts } = await db.from('shifts')
-        .select('shift_date, profile_id, profiles!profile_id(full_name, role, employment_type), shift_templates(name, start_time, end_time)')
-        .eq('location_id', locId)
-        .gte('shift_date', period_start)
-        .lte('shift_date', period_end)
-        .order('shift_date')
+      const shifts = await fetchScheduledShiftRows(db, { locationId: locId, periodStart: period_start, periodEnd: period_end })
 
       const staffHours = {}
       let totalHours = 0
@@ -70,15 +98,11 @@ export async function generateReport({ report_type, period_start, period_end, lo
       // Profiles include overtime_rate so OT hours can be costed at the
       // explicit rate when present. Shifts include start/end overrides
       // so we honour the same hours the schedule UI shows.
-      const [{ data: profiles }, { data: shifts }] = await Promise.all([
+      const [{ data: profiles }, shifts] = await Promise.all([
         db.from('profiles')
           .select('id, full_name, role, employment_type, annual_salary, hourly_rate, contracted_hours_per_week, overtime_rate')
           .eq('active', true),
-        db.from('shifts')
-          .select('shift_date, profile_id, start_time_override, end_time_override, shift_templates(start_time, end_time)')
-          .eq('location_id', locId)
-          .gte('shift_date', period_start)
-          .lte('shift_date', period_end),
+        fetchScheduledShiftRows(db, { locationId: locId, periodStart: period_start, periodEnd: period_end }),
       ])
 
       const profileMap = {}
@@ -196,12 +220,8 @@ export async function generateReport({ report_type, period_start, period_end, lo
     case 'roster_coverage': {
       reportName = 'Roster Coverage'
       // shifts and approved time-off are independent — fetch in parallel.
-      const [{ data: shifts }, { data: timeOff }] = await Promise.all([
-        db.from('shifts')
-          .select('shift_date, profile_id, shift_templates(name)')
-          .eq('location_id', locId)
-          .gte('shift_date', period_start)
-          .lte('shift_date', period_end),
+      const [shifts, { data: timeOff }] = await Promise.all([
+        fetchScheduledShiftRows(db, { locationId: locId, periodStart: period_start, periodEnd: period_end }),
         db.from('time_off_requests')
           .select('start_date, end_date, profile_id, type, profiles!profile_id(full_name)')
           .eq('location_id', locId)
@@ -253,15 +273,11 @@ export async function generateReport({ report_type, period_start, period_end, lo
     case 'utilisation': {
       reportName = 'Staff Utilisation'
       // profiles + shifts are independent — fetch in parallel.
-      const [{ data: profiles }, { data: shifts }] = await Promise.all([
+      const [{ data: profiles }, shifts] = await Promise.all([
         db.from('profiles')
           .select('id, full_name, role, employment_type, contracted_hours_per_week')
           .eq('active', true),
-        db.from('shifts')
-          .select('shift_date, profile_id, shift_templates(start_time, end_time)')
-          .eq('location_id', locId)
-          .gte('shift_date', period_start)
-          .lte('shift_date', period_end),
+        fetchScheduledShiftRows(db, { locationId: locId, periodStart: period_start, periodEnd: period_end }),
       ])
 
       const periodStartD = new Date(period_start + 'T00:00:00')
