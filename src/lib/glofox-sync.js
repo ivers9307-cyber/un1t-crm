@@ -1478,6 +1478,8 @@ export async function previewMemberSync(db, locationId, member, opts = {}) {
   // because applyMemberSync doesn't compute them.
   const proposedStageSlug = classifyContact({
     glofox_membership_status: mapped.glofox_membership_status,
+    glofox_membership_state: mapped.glofox_membership_state ?? null,
+    glofox_membership_expiry: mapped.glofox_membership_expiry ?? null,
     last_attended_at: mapped.last_attended_at ?? null,
     total_attended_7d: mapped.total_attended_7d ?? 0,
     total_attended_30d: mapped.total_attended_30d ?? 0,
@@ -1791,6 +1793,8 @@ export async function applyMemberSync(db, locationId, member, opts = {}) {
       const m = preview.mapped || {}
       const contactSnapshot = {
         glofox_membership_status: m.glofox_membership_status,
+        glofox_membership_state:  m.glofox_membership_state ?? null,
+        glofox_membership_expiry: m.glofox_membership_expiry ?? null,
         last_attended_at:    m.last_attended_at,
         total_attended_7d:   m.total_attended_7d,
         total_attended_30d:  m.total_attended_30d,

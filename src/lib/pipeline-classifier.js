@@ -94,6 +94,8 @@ function daysSince(iso, now = Date.now()) {
  *
  * @param {object} contact
  * @param {string|null} contact.glofox_membership_status
+ * @param {string|null} contact.glofox_membership_state   active/paused/locked/future
+ * @param {string|null} contact.glofox_membership_expiry  ISO timestamp; future = paid up
  * @param {string|null} contact.last_attended_at      ISO timestamp
  * @param {number|null} contact.total_attended_7d
  * @param {number|null} contact.total_attended_30d
@@ -120,6 +122,17 @@ export function classifyContact(contact, now = Date.now()) {
   const daysSinceAttended = daysSince(contact.last_attended_at, now)
   const daysSincePaid     = daysSince(contact.last_payment_at, now)
   const daysSinceJoined   = daysSince(contact.joined_at, now)
+
+  // GLOFOX-CLASSIFY.3 — "live membership" signal. A membership expiry
+  // in the FUTURE means the subscription is paid up. This is far
+  // better populated than last_payment_at (synced for <6% of contacts
+  // — only via the invoice backfill, never the recurring sync) and is
+  // authoritative, so it's the floor for the member branch below: a
+  // paid-up member is never silently dropped to lapsed/dormant.
+  const expiryMs = contact.glofox_membership_expiry
+    ? new Date(contact.glofox_membership_expiry).getTime()
+    : null
+  const membershipLive = expiryMs !== null && Number.isFinite(expiryMs) && expiryMs > now
   const attended7d  = Number.isFinite(contact.total_attended_7d)  ? contact.total_attended_7d  : 0
   // total_attended_30d is read separately by the active checks below
   // (via the recentlyAttended derived flag, which uses
@@ -194,6 +207,22 @@ export function classifyContact(contact, now = Date.now()) {
     // (which would call a just-attended overdue member active).
     // Null-safe: absent state falls straight through to recency.
     if (membershipState === 'locked') return 'at_risk_member'
+
+    // GLOFOX-CLASSIFY.3 — live-membership floor. A future expiry means
+    // the subscription is paid up, so the member can only be active or
+    // at-risk — never lapsed/dormant while still paying. Engagement
+    // decides which: recently attended/paid → active; paid-up but quiet
+    // → at_risk (the highest-value save cohort). This also folds in
+    // 'paused' members (paused but paid): the ones still attending stay
+    // active rather than being demoted, and quiet ones surface as
+    // at_risk instead of vanishing into the hidden dormant bucket.
+    if (membershipLive) {
+      return (recentlyAttended || recentlyPaid) ? 'active_member' : 'at_risk_member'
+    }
+
+    // No live-expiry signal — fall back to recency. (Expiry is only
+    // ~46% populated today; until the detail backfill reaches everyone,
+    // members without it are still classified on attendance/payment.)
     if (recentlyAttended || recentlyPaid) return 'active_member'
     if (daysSinceAttended !== null && daysSinceAttended <= PIPELINE_THRESHOLDS.AT_RISK_MAX_DAYS) {
       return 'at_risk_member'
