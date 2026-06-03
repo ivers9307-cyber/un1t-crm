@@ -7,10 +7,15 @@ import Link from 'next/link'
 export function KpiCard({ label, value, sublabel, accent, href }) {
   const Wrap = href ? Link : 'div'
   const wrapProps = href ? { href } : {}
+  // Only signal "clickable" when the card actually links somewhere —
+  // a static KPI shouldn't get a hover cue it can't act on.
+  const interactive = href
+    ? 'hover:border-un1t-muted/50 hover:bg-un1t-border/10 transition-colors cursor-pointer'
+    : ''
   return (
     <Wrap
       {...wrapProps}
-      className="block flex-1 bg-un1t-surface border border-un1t-border rounded-2xl p-4 hover:border-un1t-muted/50 transition-colors"
+      className={`block flex-1 bg-un1t-surface border border-un1t-border rounded-2xl p-4 ${interactive}`}
     >
       <div className="text-xs uppercase tracking-wider text-un1t-subtle">{label}</div>
       <div className={`text-3xl font-bold mt-1 ${accent || 'text-un1t-text'}`}>
