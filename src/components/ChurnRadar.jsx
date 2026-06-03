@@ -143,6 +143,34 @@ export default function ChurnRadar() {
     }
   }
 
+  // RADAR-PAY.2 — re-pull one member straight from Glofox, then reload
+  // the lists so a now-resolved account drops off the column (and can't
+  // be dunned). Reuses the per-row `busy` lock so its spinner shows.
+  async function runRefresh(contactId) {
+    setBusy(contactId)
+    try {
+      const r = await fetch('/api/churn-radar/refresh-member', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ contact_id: contactId }),
+      })
+      const j = await r.json()
+      if (!r.ok || !j.success) throw new Error(j.error || 'Refresh failed')
+      showFlash(
+        j.data.still_flagged
+          ? 'Re-pulled from Glofox — still behind on payment.'
+          : 'Re-pulled from Glofox — account is clear, removing from the list.',
+      )
+      await loadRadar()
+      if (winback !== null) await loadWinback()
+      if (overdue !== null) await loadOverdue()
+    } catch (e) {
+      showFlash(e.message, false)
+    } finally {
+      setBusy(null)
+    }
+  }
+
   async function runQuarantine(decision) {
     const ids = [...selected]
     if (ids.length === 0) return
@@ -254,7 +282,7 @@ export default function ChurnRadar() {
 
       {tab === 'radar' && (
         <RadarList radar={radar?.radar || []} busy={busy} onAction={runAction}
-          snoozed={summary.snoozed} />
+          onRefresh={runRefresh} snoozed={summary.snoozed} />
       )}
 
       {tab === 'winback' && (
@@ -262,7 +290,7 @@ export default function ChurnRadar() {
       )}
 
       {tab === 'overdue' && (
-        <OverdueList data={overdue} busy={busy} onAction={runAction} />
+        <OverdueList data={overdue} busy={busy} onAction={runAction} onRefresh={runRefresh} />
       )}
 
       {tab === 'quarantine' && (
@@ -520,7 +548,7 @@ function Tab({ active, onClick, icon: Icon, label }) {
   )
 }
 
-function RadarList({ radar, busy, onAction, snoozed }) {
+function RadarList({ radar, busy, onAction, onRefresh, snoozed }) {
   if (radar.length === 0) {
     return (
       <div className="rounded-2xl border border-dashed border-un1t-border p-10 text-center">
@@ -537,12 +565,12 @@ function RadarList({ radar, busy, onAction, snoozed }) {
       {snoozed > 0 && (
         <p className="text-xs text-un1t-muted">{snoozed} member{snoozed === 1 ? '' : 's'} snoozed and hidden.</p>
       )}
-      {radar.map((m) => <RadarRow key={m.contactId} m={m} busy={busy} onAction={onAction} />)}
+      {radar.map((m) => <RadarRow key={m.contactId} m={m} busy={busy} onAction={onAction} onRefresh={onRefresh} />)}
     </div>
   )
 }
 
-function RadarRow({ m, busy, onAction }) {
+function RadarRow({ m, busy, onAction, onRefresh }) {
   const tier = TIER_STYLE[m.tier] || TIER_STYLE.low
   const isBusy = busy === m.contactId
   return (
@@ -596,6 +624,11 @@ function RadarRow({ m, busy, onAction }) {
           <ActionBtn icon={CreditCard} label="Send payment reminder" disabled={isBusy} primary
             onClick={() => onAction(m.contactId, 'payment_reminder')} />
         )}
+        {onRefresh && (
+          <ActionBtn icon={RotateCcw} label="Refresh from Glofox" disabled={isBusy}
+            title="Re-pull this member's Glofox status now"
+            onClick={() => onRefresh(m.contactId)} />
+        )}
         <ActionBtn icon={BellOff} label="Snooze" disabled={isBusy}
           onClick={() => onAction(m.contactId, 'snoozed')} />
       </div>
@@ -603,12 +636,13 @@ function RadarRow({ m, busy, onAction }) {
   )
 }
 
-function ActionBtn({ icon: Icon, label, onClick, disabled, primary }) {
+function ActionBtn({ icon: Icon, label, onClick, disabled, primary, title }) {
   return (
     <button
       type="button"
       onClick={onClick}
       disabled={disabled}
+      title={title}
       className={`inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-medium disabled:opacity-50 ${
         primary
           ? 'bg-indigo-600 text-white hover:bg-indigo-500'
@@ -744,7 +778,7 @@ function WinbackRow({ m, busy, onAction }) {
 
 // ── overdue ──────────────────────────────────────────────────────
 
-function OverdueList({ data, busy, onAction }) {
+function OverdueList({ data, busy, onAction, onRefresh }) {
   if (data === null) return <p className="text-sm text-un1t-subtle">Loading overdue…</p>
   const rows = data.overdue || []
   if (rows.length === 0) {
@@ -766,12 +800,12 @@ function OverdueList({ data, busy, onAction }) {
         hold a membership but owe money on it. Highest monthly value first; open a
         profile for their contact details.
       </p>
-      {rows.map((m) => <OverdueRow key={m.contactId} m={m} busy={busy} onAction={onAction} />)}
+      {rows.map((m) => <OverdueRow key={m.contactId} m={m} busy={busy} onAction={onAction} onRefresh={onRefresh} />)}
     </div>
   )
 }
 
-function OverdueRow({ m, busy, onAction }) {
+function OverdueRow({ m, busy, onAction, onRefresh }) {
   const isBusy = busy === m.contactId
   const attendLine = m.daysSinceAttended == null
     ? 'no class history'
@@ -814,6 +848,11 @@ function OverdueRow({ m, busy, onAction }) {
           onClick={() => onAction(m.contactId, 'payment_reminder')} />
         <RadarOutreachButton contactName={m.name} disabled={isBusy} busy={isBusy}
           onSelect={(tpl) => onAction(m.contactId, 'outreach_sent', { template_name: tpl })} />
+        {onRefresh && (
+          <ActionBtn icon={RotateCcw} label="Refresh from Glofox" disabled={isBusy}
+            title="Re-pull this member's Glofox status now — clears them if they've paid"
+            onClick={() => onRefresh(m.contactId)} />
+        )}
       </div>
     </div>
   )
