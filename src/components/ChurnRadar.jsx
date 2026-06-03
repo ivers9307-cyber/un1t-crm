@@ -828,15 +828,26 @@ function OverdueRow({ m, busy, onAction, onRefresh }) {
             {m.membershipPlan || m.membershipStatus}
             {m.monthlyValueCents > 0 && ` · ${formatMoney(m.monthlyValueCents)}/mo`}
             {` · ${attendLine}`}
+            {m.daysSincePayment != null && ` · last paid ${m.daysSincePayment}d ago`}
             {m.lastContacted && ` · contacted ${timeAgo(m.lastContacted.at)}`}
           </p>
         </div>
-        <span className="inline-flex items-center gap-1 rounded-md border border-red-200 bg-red-50 px-2 py-0.5 text-[11px] font-medium text-red-700">
-          <CreditCard size={12} />
-          {m.daysSincePayment == null
-            ? 'No payment on record'
-            : `Unpaid ${m.daysSincePayment}d`}
-        </span>
+        {/* OVERDUE.2 — real outstanding-invoice balance vs a stale Glofox lock. */}
+        {(m.outstandingInvoices || 0) > 0 ? (
+          <span className="inline-flex items-center gap-1 rounded-md border border-red-200 bg-red-50 px-2 py-0.5 text-[11px] font-medium text-red-700">
+            <CreditCard size={12} />
+            {m.outstandingInvoices} outstanding invoice{m.outstandingInvoices === 1 ? '' : 's'}
+            {m.outstandingCents > 0 && ` · ${formatMoney(m.outstandingCents)}`}
+          </span>
+        ) : (
+          <span
+            className="inline-flex items-center gap-1 rounded-md border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700"
+            title="Locked in Glofox but nothing outstanding — likely written off or paid. The lock should clear at the next Glofox billing sync; hit Refresh to re-check."
+          >
+            <Check size={12} />
+            No outstanding invoices
+          </span>
+        )}
       </div>
 
       <div className="mt-3 flex flex-wrap gap-2">
