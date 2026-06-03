@@ -18,10 +18,12 @@ The platform has grown fast — 240 migrations, 387 API routes, ~2,890 tests, a 
 |---|--------|-----|--------|
 | 1 | **Fix 3 cross-user data leaks** (contracts list+detail, consent-log, assistant tools) | Any authenticated staff member can read every employment contract (salaries, signatures) and every contact's consent/IP history across all tenants | ~½ day |
 | 2 | **Upgrade Supabase to Pro ($25/mo)** | A live system handling payments + PII + contracts currently has **no backups** and can auto-pause | 5 min |
-| 3 | **Enable leaked-password protection** + revoke 2 SECURITY DEFINER RPCs | Free Supabase Auth hardening + advisor WARNs | 15 min |
+| 3 | **Enable leaked-password protection** (HaveIBeenPwned toggle) | Free Supabase Auth hardening. NB: the 2 SECURITY DEFINER RPC WARNs are **verified intentional — do not revoke** (see §1) | 5 min |
 | 4 | **Add `cache_control` to the 3 Anthropic call sites** | ~50% input-cost cut on invoice OCR + assistant + auto-reply | ~30 lines |
 | 5 | **Route-level tests for `webhooks/revolut/*` + deposit pay flow** | Highest-consequence untested surface (idempotency/replay on money) | ~1 day |
 | 6 | **Cleanup migration**: drop deprecated columns + scrub stale comments | Zero-reader columns + ~14 misleading `public.shifts` comments | ~2 hrs |
+
+**Status (2026-06-02 eve):** #1 ✅ shipped ([PR #291](https://github.com/ivers9307-cyber/un1t-crm/pull/291)) · #2 ✅ done (org on Pro) · #3 reduced to the leaked-password toggle only — on investigation the 2 SECURITY DEFINER RPCs are legitimate signed-in **champ-app** customer calls (documented in `mig 216`) and must keep their grant; revoking would break the customer portal · #4–#6 open.
 
 ---
 
@@ -47,7 +49,7 @@ The common root cause: a route uses `createServerClient()` (service role — **b
 - **M1 — `contract_templates` not org-scoped** (`contract-templates/route.js:21-35`): owner of org A sees org B's templates. Low impact today (one master), but breaks the tenant isolation the org tier exists for.
 - **M2 — silent secret fallback** (`src/lib/studio-session.js:38-49`): `STUDIO_SESSION_SECRET || SUPABASE_SERVICE_ROLE_KEY` violates the "no silent env fallbacks" rule and couples the cookie-signing key to the service-role key. Fail closed instead.
 - **Supabase Auth — leaked-password protection is OFF** (advisor WARN): enable the HaveIBeenPwned check in the Auth dashboard (free, one toggle).
-- **2 SECURITY DEFINER RPCs callable by `authenticated`** (advisor WARN): `public.list_enabled_integrations()` and `public.scan_straps_for_contact()` are reachable via `/rest/v1/rpc/*`. Revoke EXECUTE from `authenticated` or switch to SECURITY INVOKER unless intentional.
+- **2 SECURITY DEFINER RPCs callable by `authenticated`** (advisor WARN) — **verified intentional, no action.** `public.list_enabled_integrations()` (returns only `provider` + `display_name`, never secrets) and `public.scan_straps_for_contact()` (gated internally by `private.auth_contact_id()`, returns ephemeral 30s strap-scan data) are deliberately called by signed-in **champ-app** customers (`account/integrations/page.jsx`, `account/devices/ScanForStraps.jsx`); `mig 216` already documents both as must-keep-grant. SECURITY DEFINER is required so customers can read this without direct table access. The advisor WARN is an accepted false-positive for these two — do **not** revoke (it would break the customer portal).
 
 ### 🟡 Low / informational
 - **11 tables: RLS enabled, no policy** (advisor INFO: `api_keys`, `pin_login_attempts`, `location_trusted_ips`, `studio_devices`, `issues`, `checklist_*`, `ac_*`, `membership_snapshots`). This is **deny-all to browser clients** (service role still works) — safe *if* these are service-role-only by design (they appear to be). Action: confirm none need an authenticated browser read; if one does, add an explicit policy.
@@ -168,7 +170,7 @@ Themed, synthesized from `docs/PLATFORM_ROADMAP.md` (19 opportunities), the CLAU
 
 ## 6. Suggested sequencing
 
-1. **First (safety):** fix C1/H1/H2 (PR + verify); upgrade Supabase to Pro; enable leaked-password protection + revoke the 2 RPCs. *Hard-to-reverse / outward-facing — do under direct supervision.*
+1. **First (safety):** fix C1/H1/H2 (PR + verify); upgrade Supabase to Pro; enable leaked-password protection. *(The 2 SECURITY DEFINER RPCs are intentional — see §1 — and were **not** revoked.)* *Hard-to-reverse / outward-facing — do under direct supervision.*
 2. **Next (hygiene, low-risk):** advisor cleanup migration (FK indexes + initplan + multi-permissive); drop deprecated columns; delete dead file + scrub stale comments; add Anthropic prompt caching.
 3. **Then (resilience):** route-level tests for webhooks/payments; Playwright smoke; refresh stale CLAUDE.md facts.
 4. **Then (value):** Churn Radar Phase 2 + win-back sequences; scope the Analytics/BI layer.
