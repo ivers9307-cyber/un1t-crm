@@ -58,6 +58,7 @@ EDGES & STRUCTURE RULES (these are validated — follow them exactly):
 - Every non-branch node has AT MOST ONE outgoing edge (a linear step). The last node in a path has none (the flow ends there).
 - A branch node has EXACTLY TWO outgoing edges, one labelled "yes" and one labelled "no". Put a real step in each path.
 - The flow must always move forward — NO cycles/loops.
+- Paths must NOT merge back together: NEVER point two edges at the same node. Each branch's yes and no paths run to their OWN independent end. The whole flow is a TREE (no diamonds) — this keeps it fully editable in the builder.
 - Node ids are short unique strings like n1, n2, ...
 
 TRIGGER + NAME: trigger types are ${TRIGGER_TYPES.join(', ')}. CHOOSE the trigger that best fits the request and set trigger.type (+ any trigger.config) accordingly — e.g. a welcome flow → booking_created or manual; a re-engagement flow → inactivity; a tag-driven flow → tag_added; a stage-based flow → pipeline_stage_change. Avoid "webhook" unless the user explicitly describes an inbound integration. Also set a short, descriptive "name" for the sequence.
@@ -65,6 +66,7 @@ TRIGGER + NAME: trigger types are ${TRIGGER_TYPES.join(', ')}. CHOOSE the trigge
 GUIDANCE:
 - Build a thoughtful, realistic nurture flow: open with a timely message, space messages with wait nodes (don't bunch them), and use a branch when the user describes a condition ("if they've booked / if they're a member / if tagged X").
 - Be concise — a handful of well-chosen steps beats a long flow.
+- Keep branching shallow — usually ONE branch is enough. Avoid nesting branches inside branches unless the request truly needs it.
 - Output ONLY by calling emit_sequence_graph. Do not explain.`
 }
 
