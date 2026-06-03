@@ -118,6 +118,12 @@ export default function SequenceFlowBuilder({ graph, sequence, isDraft }) {
   const editable = isPureTree(graph)
   const status = sequence?.status || 'draft'
   const writeSteps = [...new Set((graph?.nodes || []).map(n => WRITE_STEP_LABELS[n.type]).filter(Boolean))]
+  // FlowEditor seeds its tree from initialGraph once (useState initializer), so a
+  // changed prop alone won't re-seed it. Keying it on the graph content remounts
+  // it when a new graph arrives via router.refresh() (e.g. an AI-generated draft),
+  // so the canvas updates without a manual page refresh. Stable during normal
+  // editing (FlowEditor's own state changes don't re-render this parent).
+  const graphKey = JSON.stringify(graph)
 
   return (
     <div className="max-w-3xl mx-auto px-4 py-6">
@@ -147,7 +153,7 @@ export default function SequenceFlowBuilder({ graph, sequence, isDraft }) {
       )}
 
       {editable
-        ? <FlowEditor initialGraph={graph} sequence={sequence} />
+        ? <FlowEditor key={graphKey} initialGraph={graph} sequence={sequence} />
         : <ReadOnlyFlow graph={graph} />}
     </div>
   )
