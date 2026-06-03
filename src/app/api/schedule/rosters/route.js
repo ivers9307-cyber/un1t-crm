@@ -17,8 +17,9 @@
 // "Publish" means:
 //   1. Insert a `rosters` row capturing who/when/budget snapshot.
 //   2. Tag every block in the period with roster_id.
-//   3. Set the legacy public.shifts.published=true so mobile +
-//      reports see the roster as live.
+//   3. Notify the rostered coaches. (Publication derives from the
+//      roster_id tag in step 2 → rosters.status; the old
+//      public.shifts.published flag was dropped in mig 238.)
 //
 // GET: list rosters at a location. Used by the approvals queue
 // and by retros.

@@ -50,9 +50,8 @@ export async function PUT(request, props) {
   }
 
   // If approved, actually swap the assignments (RETIRE-SHIFTS-MIRROR.5c —
-  // the mig 068 forward trigger mirrors these writes back to public.shifts
-  // for the readers that haven't migrated yet, so the legacy table stays
-  // consistent through cutover).
+  // swaps operate directly on shift_assignments; the legacy public.shifts
+  // mirror was dropped in mig 238).
   if (body.status === 'approved' && swap.target_shift_id) {
     // Swap the profile_ids on both assignments.
     await db.from('shift_assignments')

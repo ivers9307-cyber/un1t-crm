@@ -6,9 +6,10 @@
 // come through as rows with assignments: [].
 //
 // Replaces the calendar's previous use of /api/schedule/shifts.
-// The legacy /shifts endpoint stays in place because mobile + the
-// report generator still consume that shape — the mig 068 trigger
-// keeps the legacy public.shifts table mirrored from new writes.
+// The legacy /shifts GET endpoint stays in place because mobile + the
+// report generator still consume that shape — but it now reads
+// shift_blocks + shift_assignments and normalises to the old shape
+// (the public.shifts mirror + its mig 068 trigger were dropped in mig 238).
 //
 // POST is for manual block creation (rare — most blocks are
 // auto-generated when a template's days_of_week is saved).

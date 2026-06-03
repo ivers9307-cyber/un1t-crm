@@ -1,8 +1,9 @@
 // /api/schedule/blocks/[id]/assignments — POST
 //
-// Assigns one or more coaches to a shift_block. The mig 068 trigger
-// mirrors each new assignment row into the legacy public.shifts table
-// so mobile + reports keep seeing the data.
+// Assigns one or more coaches to a shift_block. shift_blocks +
+// shift_assignments are the source of truth; mobile + reports read them
+// (normalised to the legacy shape). The old public.shifts mirror + its
+// mig 068 trigger were dropped in mig 238.
 //
 // Two modes, picked by which field the client sends:
 //   { profile_id }           — legacy single-coach mode. Response is
