@@ -6,7 +6,7 @@
 // Model: Sonnet 4.6, not Opus — emitting a structured graph from an ask is a
 // constrained generation task, and the validateGraph + self-correct loop is the
 // real quality gate, so Opus-tier reasoning isn't worth the ~2x token cost here.
-import { parseGraphShape, validateGraph } from '../graph/index.js'
+import { parseGraphShape, validateGraph, isPureTree } from '../graph/index.js'
 import { EMIT_TOOL, buildAgentSystemPrompt, buildAgentUserMessage, buildFixMessage } from './prompt.js'
 
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages'
@@ -59,16 +59,24 @@ export async function runFlowAgent({ apiKey, prompt, trigger }) {
     if (typeof toolUse.input?.name === 'string' && toolUse.input.name.trim()) lastName = toolUse.input.name.trim().slice(0, 200)
 
     const shape = parseGraphShape(toolUse.input)
-    if (shape.ok) {
+    let problems
+    if (!shape.ok) {
+      problems = [{ message: shape.error.message }]
+    } else {
       lastGraph = shape.data
       lastValidation = validateGraph(lastGraph)
-      if (lastValidation.ok) return { ok: true, graph: lastGraph, validation: lastValidation, name: lastName }
+      problems = [...lastValidation.errors]
+      // Require a pure tree so the result stays editable in the builder (the
+      // editor can't represent re-convergent "diamond" graphs).
+      if (!isPureTree(lastGraph)) {
+        problems.push({ message: 'Two paths merge into the same step — make each branch’s yes/no path end on its own so the whole flow is a tree (no merging back).' })
+      }
+      if (problems.length === 0) return { ok: true, graph: lastGraph, validation: lastValidation, name: lastName }
     }
 
-    // Feed the problem back and let it self-correct (shape error or semantic errors).
-    const feedback = shape.ok ? buildFixMessage(lastValidation.errors) : buildFixMessage([{ message: shape.error.message }])
+    // Feed the problems back and let it self-correct.
     messages.push({ role: 'assistant', content: data.content })
-    messages.push({ role: 'user', content: [{ type: 'tool_result', tool_use_id: toolUse.id, content: feedback }] })
+    messages.push({ role: 'user', content: [{ type: 'tool_result', tool_use_id: toolUse.id, content: buildFixMessage(problems) }] })
   }
 
   // Ran out of attempts. Hand back the last shape-valid draft (if any) + its
