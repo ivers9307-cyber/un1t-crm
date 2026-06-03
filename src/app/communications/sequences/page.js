@@ -7,7 +7,7 @@
 
 import Link from 'next/link'
 import { redirect } from 'next/navigation'
-import { Plus, Zap, Play, Pause, FileEdit, LayoutTemplate } from 'lucide-react'
+import { Plus, Zap, Play, Pause, FileEdit, LayoutTemplate, GitBranch } from 'lucide-react'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
@@ -130,6 +130,14 @@ export default async function SequencesListPage() {
                     <StatusIcon size={10} />
                     {config.label}
                   </span>
+                  <Link
+                    href={`/communications/sequences/${seq.id}`}
+                    className="flex items-center gap-1 text-xs text-un1t-subtle hover:text-un1t-text"
+                    title="Open in the new visual builder"
+                  >
+                    <GitBranch size={13} />
+                    <span className="hidden sm:inline">Builder</span>
+                  </Link>
                   <CloneSequenceButton sequenceId={seq.id} sequenceName={seq.name} />
                 </div>
               </div>
