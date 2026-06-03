@@ -1,17 +1,11 @@
-import { getCurrentUser } from '@/lib/auth'
 import { redirect } from 'next/navigation'
-import SequenceEditor from '@/components/SequenceEditor'
 
+// FLOW-GRAPH Phase 2 (PR3c-6) — the classic sequence editor is retired. The
+// "New sequence" flow now lives in the visual builder (NewSequenceButton on the
+// list creates a draft and opens /communications/sequences/[id]). This legacy
+// path just bounces to the list so old bookmarks keep working.
 export const dynamic = 'force-dynamic'
 
-export default async function NewSequencePage() {
-  const user = await getCurrentUser()
-  if (!user) redirect('/login')
-
-  return (
-    <SequenceEditor
-      locationId={user.activeLocation?.id}
-      userId={user.id}
-    />
-  )
+export default function LegacyNewSequenceRedirect() {
+  redirect('/communications/sequences')
 }

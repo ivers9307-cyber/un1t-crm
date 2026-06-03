@@ -7,7 +7,8 @@ import SequenceFlowBuilder from '@/components/sequences/SequenceFlowBuilder'
 // FLOW-GRAPH Phase 2 (PR2) — the canonical sequence detail route. Loads the
 // sequence + its steps, resolves the flow graph server-side (draft → published →
 // lazily decompiled from steps, so legacy sequences just work), and renders the
-// guided-rail builder. The classic editor still lives at /email/sequences/[id].
+// guided-rail builder — the one sequence editor (the classic editor is retired;
+// /email/sequences/[id] now redirects here).
 export const dynamic = 'force-dynamic'
 
 export default async function SequenceBuilderPage(props) {
