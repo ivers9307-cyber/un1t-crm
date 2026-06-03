@@ -21,7 +21,7 @@ The platform has grown fast — 240 migrations, 387 API routes, ~2,890 tests, a 
 | 3 | **Enable leaked-password protection** (HaveIBeenPwned toggle) | Free Supabase Auth hardening. NB: the 2 SECURITY DEFINER RPC WARNs are **verified intentional — do not revoke** (see §1) | 5 min |
 | 4 | **Add `cache_control` to the 3 Anthropic call sites** | ~50% input-cost cut on invoice OCR + assistant + auto-reply | ~30 lines |
 | 5 | **Route-level tests for `webhooks/revolut/*` + deposit pay flow** | Highest-consequence untested surface (idempotency/replay on money) | ~1 day |
-| 6 | **Cleanup migration**: drop deprecated columns + scrub stale comments | Zero-reader columns + ~14 misleading `public.shifts` comments | ~2 hrs |
+| 6 | **Cleanup migration**: drop deprecated columns + scrub stale comments | `event_types.reminder_*` (7 cols) dropped (mig 241); `profiles` comp cols NOT droppable — see §4. Stale `public.shifts` comment scrub still pending | ~2 hrs |
 
 **Status (2026-06-02 eve):** #1 ✅ shipped ([PR #291](https://github.com/ivers9307-cyber/un1t-crm/pull/291)) · #2 ✅ done (org on Pro) · #3 reduced to the leaked-password toggle only — on investigation the 2 SECURITY DEFINER RPCs are legitimate signed-in **champ-app** customer calls (documented in `mig 216`) and must keep their grant; revoking would break the customer portal · #4–#6 open.
 
@@ -124,7 +124,7 @@ Referral program · Member NPS/feedback/surveys · Reviews/reputation (Google) �
 **Codebase is in good health** — the CLAUDE.md lessons are genuinely internalized (pagination discipline real, the supabase-js `.catch` gotcha gone from query builders, console.log down to 7 justified instances, response shape consistent). What remains:
 
 **Simplify (high value / low effort):**
-- **Drop deprecated columns** — `event_types.reminder_*` (6 cols, zero readers) and `profiles` comp columns (`annual_salary`/`hourly_rate`/… migrated to `profile_compensation`, marked "drop in phase 3"). One migration; deprecation window elapsed.
+- **Drop deprecated columns** — `event_types.reminder_*` (actually **7** cols incl. `reminder_channel` + `reminder_whatsapp_template_id`, not 6): verified zero readers + no fn/view/trigger refs + zero live data → **dropped in mig 241** (CACHE-FREE win). **Correction:** the `profiles` comp columns (`annual_salary`/`hourly_rate`/`overtime_rate`/`contracted_hours_per_week`/`annual_leave_entitlement`) are **NOT droppable** — verification found 48–69 live refs each: `assistant/chat` (staff-cost tool), `contracts` (issuance), `invoices` (contractor rate), and `staff` route **dual-writes** to both `profiles` *and* `profile_compensation`. The migration to `profile_compensation` is an incomplete dual-write, not "phase 3 ready." Cutting the reads over to `profile_compensation` first is its own task before these can be dropped.
 - **Delete `src/lib/xero/files.js`** (dead, zero importers) and **scrub ~14 stale `public.shifts` / "mig 068 trigger" comments** (the table+triggers were dropped in mig 238 — comments now mislead).
 - **Pin device-key helpers** (triplicated verbatim across un1t-crm/champ-app/champ-bridge): don't package — add a shared golden-vector test fixture to all three suites to kill silent drift.
 
