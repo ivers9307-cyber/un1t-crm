@@ -272,6 +272,7 @@ export default function ChurnRadar() {
       )}
 
       <DigestSettings />
+      <DunningSettings />
     </div>
   )
 }
@@ -357,11 +358,113 @@ function DigestSettings() {
   )
 }
 
+// RADAR-PAY.1 — designate the dunning sequence the one-click "Send
+// payment reminder" action enrols slipping + locked members into.
+// Reads / writes locations.dunning_sequence_id via dunning-settings.
+function DunningSettings() {
+  const [state, setState] = useState(null)   // null = loading
+  const [sel, setSel] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
+  const [err, setErr] = useState(null)
+
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      try {
+        const r = await fetch('/api/churn-radar/dunning-settings', { cache: 'no-store' })
+        const j = await r.json()
+        if (!r.ok || !j.success) throw new Error(j.error || 'Failed to load dunning settings')
+        if (!cancelled) {
+          setState(j.data)
+          setSel(j.data.dunning_sequence_id || '')
+        }
+      } catch (e) {
+        if (!cancelled) { setErr(e.message); setState({ sequences: [] }) }
+      }
+    })()
+    return () => { cancelled = true }
+  }, [])
+
+  async function save() {
+    setSaving(true); setErr(null); setSaved(false)
+    try {
+      const r = await fetch('/api/churn-radar/dunning-settings', {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ dunning_sequence_id: sel || null }),
+      })
+      const j = await r.json()
+      if (!r.ok || !j.success) throw new Error(j.error || 'Save failed')
+      setSaved(true)
+      setTimeout(() => setSaved(false), 4000)
+    } catch (e) {
+      setErr(e.message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const sequences = state?.sequences || []
+  const chosen = sequences.find((s) => s.id === sel)
+
+  return (
+    <div className="mt-4 rounded-xl border border-un1t-border bg-un1t-surface p-4">
+      <div className="flex items-center gap-2">
+        <CreditCard size={15} className="text-un1t-subtle" />
+        <h3 className="text-sm font-medium text-un1t-text">Dunning sequence</h3>
+      </div>
+      <p className="mt-1 text-xs text-un1t-subtle">
+        Which sequence the one-click <span className="font-medium">Send payment reminder</span> enrols
+        payment-slipping and overdue members into. Build a manual email/SMS
+        sequence first, then pick it here. Leave unset to hide the button.
+      </p>
+      {state === null ? (
+        <p className="mt-3 text-sm text-un1t-subtle">Loading…</p>
+      ) : sequences.length === 0 ? (
+        <p className="mt-3 text-xs text-amber-600">
+          No manual sequences yet — create one under Sequences (trigger: manual),
+          add your payment-reminder steps, then come back to pick it here.
+        </p>
+      ) : (
+        <>
+          <select
+            value={sel}
+            onChange={(e) => setSel(e.target.value)}
+            className="mt-3 w-full rounded-lg border border-un1t-border bg-un1t-bg p-2 text-sm text-un1t-text"
+          >
+            <option value="">— None (dunning button hidden) —</option>
+            {sequences.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.name}{s.active ? '' : ' (paused)'}
+              </option>
+            ))}
+          </select>
+          {chosen && !chosen.active && (
+            <p className="mt-2 text-xs text-amber-600">
+              This sequence is paused — activate it under Sequences or reminders won&apos;t send.
+            </p>
+          )}
+          <div className="mt-2 flex items-center gap-3">
+            <button type="button" onClick={save} disabled={saving}
+              className="rounded-md bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-500 disabled:opacity-50">
+              {saving ? 'Saving…' : 'Save dunning sequence'}
+            </button>
+            {saved && <span className="text-xs text-green-600">Saved.</span>}
+            {err && <span className="text-xs text-red-600">{err}</span>}
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
 const ACTION_DONE = {
   contacted: 'Logged as contacted',
   task_assigned: 'Follow-up task created',
   winback_sent: 'Win-back message sent',
   outreach_sent: 'WhatsApp template sent',
+  payment_reminder: 'Enrolled in dunning sequence',
   snoozed: 'Snoozed for 14 days',
 }
 
@@ -489,6 +592,10 @@ function RadarRow({ m, busy, onAction }) {
           onClick={() => onAction(m.contactId, 'task_assigned')} />
         <RadarOutreachButton contactName={m.name} disabled={isBusy} busy={isBusy}
           onSelect={(tpl) => onAction(m.contactId, 'outreach_sent', { template_name: tpl })} />
+        {m.signals.some((s) => s.key === 'payment_slipping') && (
+          <ActionBtn icon={CreditCard} label="Send payment reminder" disabled={isBusy} primary
+            onClick={() => onAction(m.contactId, 'payment_reminder')} />
+        )}
         <ActionBtn icon={BellOff} label="Snooze" disabled={isBusy}
           onClick={() => onAction(m.contactId, 'snoozed')} />
       </div>
@@ -703,6 +810,8 @@ function OverdueRow({ m, busy, onAction }) {
           onClick={() => onAction(m.contactId, 'contacted')} />
         <ActionBtn icon={ClipboardList} label="Assign task" disabled={isBusy}
           onClick={() => onAction(m.contactId, 'task_assigned')} />
+        <ActionBtn icon={CreditCard} label="Send payment reminder" disabled={isBusy} primary
+          onClick={() => onAction(m.contactId, 'payment_reminder')} />
         <RadarOutreachButton contactName={m.name} disabled={isBusy} busy={isBusy}
           onSelect={(tpl) => onAction(m.contactId, 'outreach_sent', { template_name: tpl })} />
       </div>

@@ -344,6 +344,26 @@ export function scoreMember(contact, nowMs = Date.now()) {
 }
 
 /**
+ * Is this contact in payment trouble right now, and of which kind?
+ *   'overdue'  — Glofox has locked the membership (state = locked);
+ *                they're on the Overdue chase-list.
+ *   'slipping' — still active, but the recurring payment is past due
+ *                (detectPaymentSlipping fires) — the early-warning gap
+ *                before Glofox locks them.
+ *   null       — not behind on payment.
+ *
+ * The server-side guard for the one-click dunning action (RADAR-PAY.1):
+ * a "Send payment reminder" must only ever enrol a member who is
+ * genuinely behind, never a paying one.
+ */
+export function paymentTroubleKind(contact, nowMs = Date.now()) {
+  const cls = classifyContact(contact)
+  if (cls === 'overdue') return 'overdue'
+  if (cls === 'active' && detectPaymentSlipping(contact, nowMs)) return 'slipping'
+  return null
+}
+
+/**
  * Score a batch of contacts. Returns the at-risk list (members
  * tripping ≥1 signal), highest score first, then longest-quiet
  * first. Members with no signals — the healthy active base — are

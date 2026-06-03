@@ -9,6 +9,7 @@ import {
   buildRadar,
   radarSummary,
   buildOverdue,
+  paymentTroubleKind,
   monthlyValueCents,
   scoreWinbackContact,
   buildWinback,
@@ -255,6 +256,25 @@ describe('Payment-slipping signal', () => {
     expect(r.score).toBe(3)
     expect(r.tier).toBe('medium')
     expect(r.signals.length).toBe(1)
+  })
+})
+
+describe('paymentTroubleKind — dunning guard', () => {
+  it('flags a locked member as overdue', () => {
+    expect(paymentTroubleKind(healthy({ glofox_membership_state: 'locked' }), NOW)).toBe('overdue')
+  })
+  it('flags an active past-due sub as slipping', () => {
+    const c = healthy({ glofox_billing_interval: '1 month', last_payment_at: daysAgo(40) })
+    expect(paymentTroubleKind(c, NOW)).toBe('slipping')
+  })
+  it('returns null for a paying active member', () => {
+    expect(paymentTroubleKind(healthy({ glofox_billing_interval: '1 month', last_payment_at: daysAgo(5) }), NOW)).toBe(null)
+  })
+  it('returns null for a paused member (planned freeze, not behind)', () => {
+    expect(paymentTroubleKind(healthy({ glofox_membership_state: 'paused' }), NOW)).toBe(null)
+  })
+  it('returns null for a non-member', () => {
+    expect(paymentTroubleKind({ glofox_membership_status: 'lead' }, NOW)).toBe(null)
   })
 })
 

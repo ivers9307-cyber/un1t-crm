@@ -3,7 +3,8 @@
 // CHURN-RADAR.1 — per-member radar actions. Body:
 //   { contact_id, action, note?, message?, snooze_days? }
 //
-// action ∈ contacted | task_assigned | winback_sent | outreach_sent | snoozed
+// action ∈ contacted | task_assigned | winback_sent | outreach_sent |
+//          payment_reminder | snoozed
 //   contacted     — log only ("I've reached out").
 //   task_assigned — create a follow-up Task (activities, kind='task')
 //                   assigned to the caller, due in 2 days.
@@ -14,6 +15,13 @@
 //                   template delivers outside the 24h window — which is
 //                   the whole point, since the radar's population has
 //                   gone quiet.
+//   payment_reminder — RADAR-PAY.1: enrol a payment-slipping (early) or
+//                   locked (Overdue) member into the location's
+//                   designated dunning sequence. Re-derives that the
+//                   member is actually behind before enrolling;
+//                   idempotent (a member already mid-sequence is a
+//                   no-op). The dunning sequence is set in churn-radar
+//                   settings (locations.dunning_sequence_id).
 //   snoozed       — hide the member from the radar for snooze_days
 //                   (default 14).
 //
@@ -31,13 +39,22 @@ import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { sendTextMessage } from '@/lib/whatsapp'
 import { sendRadarOutreach } from '@/lib/radar-outreach'
+import { enrolContacts } from '@/lib/sequences'
+import { paymentTroubleKind } from '@/lib/churn-radar'
 import { invalidateRadar } from '@/lib/radar-cache'
 import { logWarn, logInfo } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-const RADAR_ACTIONS = ['contacted', 'task_assigned', 'winback_sent', 'outreach_sent', 'snoozed']
+const RADAR_ACTIONS = ['contacted', 'task_assigned', 'winback_sent', 'outreach_sent', 'payment_reminder', 'snoozed']
+
+// Membership columns paymentTroubleKind() needs to re-derive that a
+// member is genuinely behind before any dunning enrol.
+const TROUBLE_COLUMNS =
+  'glofox_membership_status, glofox_membership_type, glofox_membership_state, ' +
+  'glofox_billing_interval, last_payment_at, last_attended_at, last_booked_at, ' +
+  'trial_credits_remaining, glofox_membership_expiry'
 const SNOOZE_DEFAULT_DAYS = 14
 const TASK_DUE_DAYS = 2
 
@@ -139,6 +156,87 @@ export async function POST(request) {
       }, { status: 502 })
     }
     logRow.template_name = templateName
+  }
+
+  // ── payment_reminder — enrol into the dunning sequence ──────────
+  // RADAR-PAY.1: one-click dunning for both payment-slipping (early,
+  // still active) and locked (Overdue) members. Resolves the location's
+  // designated dunning sequence, re-derives that the member is actually
+  // behind (a reminder must never reach a paying member), then enrols
+  // them. enrolContacts is idempotent — a re-click on a member already
+  // mid-sequence is a no-op, not a double-send.
+  if (action === 'payment_reminder') {
+    const { data: loc } = await db
+      .from('locations')
+      .select('dunning_sequence_id')
+      .eq('id', locationId)
+      .maybeSingle()
+    const seqId = loc?.dunning_sequence_id
+    if (!seqId) {
+      return NextResponse.json({
+        success: false,
+        error: 'No dunning sequence is set up yet — pick one in the churn-radar settings first.',
+      }, { status: 400 })
+    }
+
+    // Re-derive the trouble state server-side; never trust the client
+    // that this member is behind.
+    const { data: full } = await db
+      .from('contacts')
+      .select(TROUBLE_COLUMNS)
+      .eq('id', contactId)
+      .maybeSingle()
+    const kind = paymentTroubleKind(full || {})
+    if (!kind) {
+      return NextResponse.json({
+        success: false,
+        error: "This member isn't behind on payment, so no reminder was sent.",
+      }, { status: 409 })
+    }
+
+    // The configured sequence must still be a live manual sequence at
+    // this location — a paused or deleted one can't actually send.
+    const { data: seq } = await db
+      .from('email_sequences')
+      .select('id, name, active, location_id, trigger_type')
+      .eq('id', seqId)
+      .maybeSingle()
+    if (!seq || seq.location_id !== locationId) {
+      return NextResponse.json({
+        success: false,
+        error: 'The configured dunning sequence is no longer available — re-pick it in settings.',
+      }, { status: 400 })
+    }
+    if (!seq.active) {
+      return NextResponse.json({
+        success: false,
+        error: `Your dunning sequence "${seq.name}" is paused — activate it before sending reminders.`,
+      }, { status: 400 })
+    }
+
+    let enrolled
+    try {
+      const res = await enrolContacts({
+        sequenceId: seqId,
+        contactIds: [contactId],
+        sourceType: 'churn_radar',
+        sourceRef: `payment_${kind}`,
+      })
+      enrolled = res?.enrolled || 0
+    } catch (e) {
+      logWarn('churn-radar', 'dunning enrol failed', { err: e, contactId })
+      return NextResponse.json({
+        success: false,
+        error: e.message || 'Could not start the dunning sequence.',
+      }, { status: 502 })
+    }
+
+    // Already mid-sequence — idempotent no-op, no new audit row.
+    if (enrolled === 0) {
+      invalidateRadar('churn', locationId)
+      return NextResponse.json({ success: true, data: { action, already_enrolled: true } })
+    }
+    logRow.note = note || `Dunning (${kind}) → ${seq.name}`
   }
 
   // ── snoozed — record the until-date ─────────────────────────────
