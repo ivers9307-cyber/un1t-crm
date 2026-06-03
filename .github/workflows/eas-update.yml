@@ -23,16 +23,35 @@
 
 name: EAS Update
 
-# Auto-publish on push is DISABLED (2026-06-03). Every OTA published onto the
-# App Store binary (v1.2.0 build 4) crashed on launch inside expo-updates'
-# error recovery — see mobile/docs/OTA_BOOT_CRASH_FINDINGS.md. Publishing every
-# push straight to the production channel also violates the hard-won rule that
-# an RN bundle must BOOT on a preview build before it reaches production. This
-# workflow is now manual-dispatch only. Before re-enabling auto-publish: ship a
-# fresh production build, boot-test an OTA on the `preview` channel, and add a
-# staged rollout %. (Triggering on `shared/**` meant a web-only change could
-# also brick the app — another reason to gate this behind a human.)
+# Auto-publish on push is ENABLED (re-enabled 2026-06-03, after OTA was proven
+# working end-to-end on v1.2.1 — a published update recovered the live binary
+# from a boot-crash). Publishes to branch `main`; the `production` channel is
+# mapped to `main` (`eas channel:edit`) so App Store builds receive it.
+# Path-filtered to mobile/** + shared/** — shared/* is imported by the mobile
+# bundle, so a shared change SHOULD republish to keep web + mobile in sync.
+# (The old "shared triggers could brick the app" caution was era-specific:
+# back then ANY OTA boot-crashed, so more triggers = more risk. That root
+# cause is fixed.)
+#
+# RESIDUAL RISK + recovery: this publishes STRAIGHT TO PRODUCTION — no
+# preview-channel boot-gate and no staged rollout, so a bad JS bundle reaches
+# all devices on next launch. The pipeline mitigates the boot-crash class
+# (pinned `npm ci` + eas-cli so OTA Hermes bytecode matches the binary;
+# runtimeVersion `sdkVersion` so only same-SDK builds get it). If a bad bundle
+# ever ships: `eas update:roll-back-to-embedded --channel production`
+# (instant), then publish a fix. Future hardening: publish to a `preview`
+# channel first + add `--rollout`. See mobile/docs/OTA_BOOT_CRASH_FINDINGS.md.
 on:
+  # Auto-publish a JS OTA when mobile/ or shared/ code lands on main.
+  # Path-filtered so web-only pushes (src/, supabase/, docs, CLAUDE.md)
+  # don't trigger a needless publish. PRs run web CI first, so by the
+  # time a change is on main it's already been checked.
+  push:
+    branches: [main]
+    paths:
+      - 'mobile/**'
+      - 'shared/**'
+  # Manual re-publish on demand stays available.
   workflow_dispatch: {}
 
 # Cancel any in-flight update if a newer push lands while this is
@@ -40,6 +59,13 @@ on:
 concurrency:
   group: eas-update-${{ github.ref }}
   cancel-in-progress: true
+
+# Run the marketplace actions (currently pinned to Node 20) on Node 24 —
+# GitHub's documented opt-in ahead of the 2026-06-16 forced cutover.
+# Lower-risk than a major-version bump of each action on a pipeline we
+# just got working.
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   update:
