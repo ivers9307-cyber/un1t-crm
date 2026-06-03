@@ -4,6 +4,7 @@ import { usePathname, useRouter } from 'next/navigation'
 import { useState, useEffect } from 'react'
 import Sidebar from './Sidebar'
 import ImpersonationBanner from './ImpersonationBanner'
+import CommandPalette from './CommandPalette'
 
 // NOTE: '/event-pay' must be listed SEPARATELY from '/event' — the matcher
 // is `pathname === p || startsWith(p + '/')`, so '/event' does NOT cover
@@ -57,6 +58,9 @@ export default function AppShell({ user, children }) {
         </button>
         <span className="font-bold tracking-wider text-un1t-text">{user?.activeLocation?.name || 'UN1T'}</span>
       </div>
+
+      {/* Global ⌘K command palette — search/jump/create from anywhere. */}
+      <CommandPalette user={user} />
 
       {/* Sidebar */}
       <Sidebar user={user} mobileOpen={mobileOpen} onMobileClose={() => setMobileOpen(false)} />
