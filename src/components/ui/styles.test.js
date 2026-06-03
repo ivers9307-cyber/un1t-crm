@@ -5,6 +5,8 @@ import {
   modalPanelClasses, MODAL_SIZES,
   fieldIds, fieldDescribedBy,
   tableState, cellValue,
+  emptyStateClasses, EMPTY_STATE_PADDING,
+  loadingClasses, spinnerSizeClass, SPINNER_SIZES,
 } from './styles.js'
 
 describe('buttonClasses', () => {
@@ -103,5 +105,54 @@ describe('cellValue', () => {
   })
   it('returns undefined for a column with neither accessor nor render', () => {
     expect(cellValue({ a: 1 }, {})).toBeUndefined()
+  })
+})
+
+describe('emptyStateClasses', () => {
+  it('includes the centred base layout', () => {
+    const c = emptyStateClasses()
+    expect(c).toContain('flex')
+    expect(c).toContain('items-center')
+    expect(c).toContain('text-center')
+  })
+  it('applies the named padding and falls back to md for unknown', () => {
+    expect(emptyStateClasses({ padding: 'sm' })).toContain(EMPTY_STATE_PADDING.sm)
+    expect(emptyStateClasses({ padding: 'lg' })).toContain(EMPTY_STATE_PADDING.lg)
+    expect(emptyStateClasses({ padding: 'nope' })).toContain(EMPTY_STATE_PADDING.md)
+  })
+  it("emits no padding class for padding='none'", () => {
+    // none → '' so only the base classes remain (no py-*/px-* from the map)
+    expect(emptyStateClasses({ padding: 'none' })).not.toMatch(/py-\d|px-\d/)
+  })
+  it('appends a caller className', () => {
+    expect(emptyStateClasses({ className: 'mt-4' })).toContain('mt-4')
+  })
+})
+
+describe('spinnerSizeClass', () => {
+  it('maps known sizes', () => {
+    expect(spinnerSizeClass('sm')).toBe(SPINNER_SIZES.sm)
+    expect(spinnerSizeClass('lg')).toBe(SPINNER_SIZES.lg)
+  })
+  it('falls back to md for unknown/absent', () => {
+    expect(spinnerSizeClass()).toBe(SPINNER_SIZES.md)
+    expect(spinnerSizeClass('huge')).toBe(SPINNER_SIZES.md)
+  })
+})
+
+describe('loadingClasses', () => {
+  it('defaults to a centred block layout', () => {
+    const c = loadingClasses()
+    expect(c).toContain('flex-col')
+    expect(c).toContain('justify-center')
+    expect(c).not.toContain('inline-flex')
+  })
+  it('switches to inline layout when inline=true', () => {
+    const c = loadingClasses({ inline: true })
+    expect(c).toContain('inline-flex')
+    expect(c).not.toContain('flex-col')
+  })
+  it('appends a caller className', () => {
+    expect(loadingClasses({ className: 'h-40' })).toContain('h-40')
   })
 })
