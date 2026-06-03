@@ -1,7 +1,12 @@
 // RETIRE-SHIFTS-MIRROR.1 — tests for the new-model shift fetcher that the
 // report generators use in place of the legacy public.shifts mirror.
 import { describe, it, expect } from 'vitest'
-import { fetchScheduledShiftRows } from './report-generator'
+import {
+  fetchScheduledShiftRows,
+  humanizeReportKey,
+  formatReportValue,
+  buildReportEmailHtml,
+} from './report-generator'
 
 // Minimal thenable mock of the supabase query builder: every filter method
 // returns the builder; awaiting it resolves to { data }.
@@ -63,5 +68,81 @@ describe('fetchScheduledShiftRows', () => {
   it('tolerates a row missing its block embed (no throw)', async () => {
     const out = await fetchScheduledShiftRows(mockDb([{ profile_id: 'p3', profiles: { full_name: 'Lee' } }]), { locationId: 'x', periodStart: 'a', periodEnd: 'b' })
     expect(out[0]).toMatchObject({ profile_id: 'p3', shift_date: undefined, shift_templates: undefined })
+  })
+})
+
+// ─── Scheduled-report email delivery ─────────────────────────────────────────
+
+describe('humanizeReportKey', () => {
+  it('title-cases snake_case keys', () => {
+    expect(humanizeReportKey('total_hours')).toBe('Total Hours')
+    expect(humanizeReportKey('avg_shifts_per_day')).toBe('Avg Shifts Per Day')
+    expect(humanizeReportKey('staff_count')).toBe('Staff Count')
+  })
+})
+
+describe('formatReportValue', () => {
+  it('formats money keys with the currency symbol + 2dp + thousands separators', () => {
+    expect(formatReportValue('total_cost', 1453.5, 'EUR')).toBe('€1,453.50')
+    expect(formatReportValue('total_regular_cost', 12000, 'EUR')).toBe('€12,000.00')
+    expect(formatReportValue('total_cost', 1453.5, 'GBP')).toBe('£1,453.50')
+  })
+
+  it('falls back to no symbol when currency is unknown/absent', () => {
+    expect(formatReportValue('total_cost', 99.9, undefined)).toBe('99.90')
+  })
+
+  it('formats plain counts/hours with thousands separators and ≤1dp', () => {
+    expect(formatReportValue('staff_count', 12)).toBe('12')
+    expect(formatReportValue('total_hours', 1234.56)).toBe('1,234.6')
+    expect(formatReportValue('total_days', 1000)).toBe('1,000')
+  })
+
+  it('passes through strings and renders nullish as a dash', () => {
+    expect(formatReportValue('currency', 'EUR')).toBe('EUR')
+    expect(formatReportValue('total_cost', null, 'EUR')).toBe('—')
+    expect(formatReportValue('x', undefined)).toBe('—')
+  })
+})
+
+describe('buildReportEmailHtml', () => {
+  const report = {
+    report_name: 'Staff Cost',
+    period_start: '2026-05-01',
+    period_end: '2026-05-31',
+    summary: { total_hours: 320.5, total_cost: 6400, staff_count: 8, currency: 'EUR' },
+  }
+
+  it('renders the report name, period range and each summary row', () => {
+    const html = buildReportEmailHtml(report, { appUrl: 'https://crm.un1tdublin.com' })
+    expect(html).toContain('Staff Cost')
+    expect(html).toContain('2026-05-01 → 2026-05-31')
+    expect(html).toContain('Total Hours')
+    expect(html).toContain('Total Cost')
+    expect(html).toContain('€6,400.00')
+    expect(html).toContain('Staff Count')
+  })
+
+  it('omits the raw currency key from the rendered rows', () => {
+    const html = buildReportEmailHtml(report, {})
+    // 'currency' as a metadata key shouldn't appear as a humanized row label
+    expect(html).not.toContain('>Currency<')
+  })
+
+  it('includes a Reporting CTA only when an appUrl is provided', () => {
+    expect(buildReportEmailHtml(report, { appUrl: 'https://x.test' }))
+      .toContain('https://x.test/schedule')
+    expect(buildReportEmailHtml(report, {})).not.toContain('Schedule → Reporting')
+  })
+
+  it('collapses an identical start/end into a single date', () => {
+    const html = buildReportEmailHtml({ ...report, period_end: '2026-05-01' }, {})
+    expect(html).toContain('2026-05-01')
+    expect(html).not.toContain('→')
+  })
+
+  it('shows an empty-state row when there is no summary data', () => {
+    const html = buildReportEmailHtml({ report_name: 'Empty', period_start: '2026-05-01', period_end: '2026-05-01', summary: {} }, {})
+    expect(html).toContain('No data for this period.')
   })
 })

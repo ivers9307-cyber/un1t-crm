@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
-import { generateReport, calculatePeriodForSchedule, calculateNextRun } from '@/lib/report-generator'
+import { generateReport, calculatePeriodForSchedule, calculateNextRun, buildReportEmailHtml } from '@/lib/report-generator'
+import { sendTransactionalEmail } from '@/lib/postmark'
+import { getAppUrl } from '@/lib/app-url'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 
 export const runtime = 'nodejs'
@@ -78,22 +80,53 @@ export async function GET(request) {
           .update(updateData)
           .eq('id', schedule.id)
 
-        results.push({
+        const resultEntry = {
           id: schedule.id,
           report_type: schedule.report_type,
           report_name: schedule.report_name,
           status: 'generated',
           period: `${period_start} to ${period_end}`,
           next_run: nextRun || 'none (one-time)',
-        })
+        }
+        results.push(resultEntry)
 
-        // If email delivery is enabled, send it
+        // If email delivery is enabled, send the summary to the recipient list.
+        // Best-effort: a Postmark failure must not fail the cron tick or undo
+        // the report we already generated — we stamp email_sent honestly
+        // (true only on a confirmed send) and surface the outcome in `results`.
         if (schedule.deliver_email && schedule.email_recipients?.length > 0) {
-          // TODO: integrate with Postmark to send report PDF via email
-          // For now, mark as pending email
+          let emailSent = false
+          let emailError = null
+          try {
+            // getAppUrl() throws if NEXT_PUBLIC_APP_URL is unset — the CTA link
+            // is optional, so fall back to a link-less email rather than erroring.
+            let appUrl = null
+            try { appUrl = getAppUrl() } catch { appUrl = null }
+
+            const periodLabel = period_start === period_end
+              ? period_start
+              : `${period_start} to ${period_end}`
+
+            await sendTransactionalEmail({
+              // Recipients are staff email addresses (not CRM contacts), so one
+              // transactional email to the comma-joined list — no contactId, so
+              // it isn't logged to email_sends (which is keyed to contacts).
+              to: schedule.email_recipients.join(', '),
+              subject: `${schedule.report_name || result.data.report_name} — ${periodLabel}`,
+              htmlBody: buildReportEmailHtml(result.data, { appUrl }),
+              tag: 'scheduled-report',
+            })
+            emailSent = true
+          } catch (e) {
+            emailError = e?.message || String(e)
+            console.error(`[run-scheduled-reports] email send failed for schedule ${schedule.id}: ${emailError}`)
+          }
+
           await db.from('generated_reports')
-            .update({ email_sent: false })
+            .update({ email_sent: emailSent })
             .eq('id', result.data.id)
+
+          resultEntry.email = emailSent ? 'sent' : `failed: ${emailError}`
         }
 
         // If notification delivery is enabled, create an in-app notification
