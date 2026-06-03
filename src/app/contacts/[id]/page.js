@@ -104,12 +104,29 @@ export default async function ContactDetailPage(props) {
       : { label: churnScored.tier === 'medium' ? 'At risk · Medium' : 'At risk', cls: 'bg-amber-50 text-amber-700 border-amber-200', title: sigs }
   }
 
-  const { data: activeSequences } = await db
-    .from('sequence_enrollments')
-    .select('id, next_step_at, email_sequences(name)')
-    .eq('contact_id', id)
-    .eq('status', 'active')
-    .order('next_step_at', { ascending: true })
+  const [seqRes, emailRes, smsRes] = await Promise.all([
+    db.from('sequence_enrollments')
+      .select('id, next_step_at, email_sequences(name)')
+      .eq('contact_id', id)
+      .eq('status', 'active')
+      .order('next_step_at', { ascending: true }),
+    // CONTACT-MSG.1 — email send history (campaigns + sequences) with
+    // Postmark delivery/engagement state, so "what have we emailed and
+    // did it land?" is answerable without leaving the contact page.
+    db.from('email_sends')
+      .select('id, created_at, source_type, subject, status, sent_at, delivered_at, opened_at, clicked_at, bounced_at, bounce_type, complained_at')
+      .eq('contact_id', id)
+      .order('sent_at', { ascending: false, nullsFirst: false })
+      .limit(8),
+    // SMS broadcast sends (ad-hoc / sequence SMS aren't logged per-contact).
+    db.from('sms_broadcast_recipients')
+      .select('id, status, sent_at, delivered_at, failed_at, undelivered_at, error_message, sms_broadcasts(name)')
+      .eq('contact_id', id)
+      .order('sent_at', { ascending: false, nullsFirst: false })
+      .limit(8),
+  ])
+  const activeSequences = seqRes.data || []
+  const messages = buildMessageHistory(emailRes.data || [], smsRes.data || [])
 
   // CONTACT-COMPOSER.1 — messaging context for the unified composer.
   const canWhatsApp = hasPermission(user, 'whatsapp')
@@ -327,6 +344,32 @@ export default async function ContactDetailPage(props) {
           {/* GLOFOX2.9 — Glofox bookings now live INSIDE the
               GlofoxProfileCard above, alongside the rest of the
               membership data. */}
+
+          {/* CONTACT-MSG.1 — Messages: what we've emailed / texted this
+              contact + whether it landed (delivered / opened / clicked /
+              bounced). Answers "what have we already tried?" without
+              leaving the page. */}
+          {messages.length > 0 && (
+            <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
+              <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle mb-3 flex items-center gap-1.5">
+                <Mail size={12} /> Messages
+              </h3>
+              {messages.map((m) => (
+                <div key={m.id} className="flex items-center justify-between gap-2 py-2 border-b border-un1t-border last:border-0">
+                  <div className="flex items-center gap-2 min-w-0">
+                    {m.channel === 'email'
+                      ? <Mail size={13} className="text-un1t-subtle shrink-0" />
+                      : <MessageSquare size={13} className="text-un1t-subtle shrink-0" />}
+                    <span className="text-sm truncate">{m.label}</span>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <span className={`px-2 py-0.5 rounded-full text-[11px] border ${m.status.cls}`}>{m.status.text}</span>
+                    <span className="text-xs text-un1t-muted whitespace-nowrap">{relativeTime(m.at)}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
 
           {/* WhatsApp Conversations */}
           {(waConversations.length > 0 || contact.wa_phone) && (
@@ -599,6 +642,39 @@ function formatTenure(joinedAtIso) {
   const years = Math.floor(months / 12)
   const remMonths = months % 12
   return `Joined ${years}y${remMonths ? ` ${remMonths}mo` : ''} ago`
+}
+
+// CONTACT-MSG.1 — collapse an email_sends row to its furthest-reached
+// engagement state (the most informative thing to show at a glance).
+function emailStatusPill(e) {
+  if (e.complained_at) return { text: 'Spam report', cls: 'bg-red-50 text-red-700 border-red-200' }
+  if (e.bounced_at) return { text: 'Bounced', cls: 'bg-red-50 text-red-700 border-red-200' }
+  if (e.clicked_at) return { text: 'Clicked', cls: 'bg-emerald-50 text-emerald-700 border-emerald-200' }
+  if (e.opened_at) return { text: 'Opened', cls: 'bg-blue-50 text-blue-700 border-blue-200' }
+  if (e.delivered_at) return { text: 'Delivered', cls: 'bg-un1t-bg text-un1t-subtle border-un1t-border' }
+  return { text: 'Sent', cls: 'bg-un1t-bg text-un1t-subtle border-un1t-border' }
+}
+
+function smsStatusPill(s) {
+  if (s.failed_at || s.undelivered_at) return { text: 'Failed', cls: 'bg-red-50 text-red-700 border-red-200' }
+  if (s.delivered_at) return { text: 'Delivered', cls: 'bg-emerald-50 text-emerald-700 border-emerald-200' }
+  return { text: 'Sent', cls: 'bg-un1t-bg text-un1t-subtle border-un1t-border' }
+}
+
+// Merge email + SMS sends into one "what we've sent + did it land"
+// list, newest first, capped.
+function buildMessageHistory(emails, smses) {
+  const out = []
+  for (const e of emails) {
+    out.push({ id: `e-${e.id}`, channel: 'email', label: e.subject || 'Email', at: e.sent_at || e.created_at, status: emailStatusPill(e) })
+  }
+  for (const s of smses) {
+    out.push({ id: `s-${s.id}`, channel: 'sms', label: s.sms_broadcasts?.name ? `SMS · ${s.sms_broadcasts.name}` : 'SMS broadcast', at: s.sent_at, status: smsStatusPill(s) })
+  }
+  return out
+    .filter((m) => m.at)
+    .sort((a, b) => new Date(b.at) - new Date(a.at))
+    .slice(0, 8)
 }
 
 function relativeTime(iso) {
