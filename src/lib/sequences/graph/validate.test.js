@@ -74,4 +74,15 @@ describe('validateGraph', () => {
     const err = validateGraph(g).errors.find(e => e.code === 'missing_config')
     expect(err.nodeId).toBe('n1')
   })
+
+  // Trigger-taxonomy reconciliation (PR3c-4): the runner fires these, so the
+  // graph schema must accept them. Previously schema.js had 'order_status' /
+  // 'achievement' (never the runner's names) and the builder couldn't load such
+  // sequences without a shape error.
+  it('accepts every trigger type the runner actually fires', () => {
+    for (const type of ['pipeline_stage_change', 'segment_added', 'segment_removed', 'order_completed', 'order_failed', 'order_abandoned', 'achievement_unlocked', 'first_booking']) {
+      const g = { ...base(), trigger: { type, config: {} } }
+      expect(validateGraph(g)).toEqual({ ok: true, errors: [] })
+    }
+  })
 })

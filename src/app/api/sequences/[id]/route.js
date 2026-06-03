@@ -17,6 +17,11 @@ const SequenceUpdateSchema = z.object({
     'race_registered', 'race_finished',
     'order_completed', 'order_failed', 'order_abandoned',
     'anniversary', 'inactivity',
+    // pipeline_stage_change is the live name (CLASSIFY.2 renamed status_change,
+    // kept as a legacy alias until the classic editor retires). segment_* and
+    // achievement_unlocked were missing — the runner (triggers.js) fires them
+    // but the API rejected them. Now aligned to the engine's trigger vocabulary.
+    'pipeline_stage_change', 'segment_added', 'segment_removed', 'achievement_unlocked',
     'webhook',
   ]).optional(),
   trigger_config: z.unknown().optional(),
