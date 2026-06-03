@@ -20,7 +20,7 @@ Fix those three and the islands get bridges. None of this is breakage — it's c
 
 ## Status — updated 2026-06-03 (post-implementation)
 
-All five quick wins **and** the three structural bigger bets shipped this session; the one real bug is fixed. Remaining: bet 4 (settings consolidation, low priority).
+All five quick wins, the three structural bigger bets, **and** bet 4 (settings consolidation) shipped this session; the one real bug is fixed. **The full audit backlog is complete.**
 
 | Item | Status | PR |
 |---|---|---|
@@ -33,7 +33,7 @@ All five quick wins **and** the three structural bigger bets shipped this sessio
 | Bet 1 — person action bar | ✅ Done (**rescoped** — pipeline cards only; radars already have richer actions) | [#324](https://github.com/ivers9307-cyber/un1t-crm/pull/324) |
 | Bet 2 — ⌘K command palette | ✅ Done | [#325](https://github.com/ivers9307-cyber/un1t-crm/pull/325) |
 | Bet 3 — shared EmptyState/Loading primitives | ✅ Done (first adoption; further migration opportunistic) | [#323](https://github.com/ivers9307-cyber/un1t-crm/pull/323) |
-| Bet 4 — settings consolidation | ⏳ Not started (low priority) | — |
+| Bet 4 — settings consolidation | ✅ Done (hub regroup + customer-agent surfaced; per-location page tabbed) | [#327](https://github.com/ivers9307-cyber/un1t-crm/pull/327) · [#328](https://github.com/ivers9307-cyber/un1t-crm/pull/328) |
 
 ---
 
@@ -104,14 +104,15 @@ Invoices / Approvals / Churn / Lead are sidebar-badged; **Issues, WhatsApp-unrea
 1. ✅ **A reusable "person action bar"** (Message / Task / Sequence). **Rescoped on build (PR #324):** the audit assumed this belonged on the radar rows *and* pipeline cards, but the churn + lead radars already carry richer, purpose-built action clusters (Mark contacted / Assign task / Outreach / Payment reminder / Snooze) — a generic bar there would be a downgrade. The genuine gap was the sparse **pipeline cards**, where `PersonActionBar` now lives (Message deep-links to the contact composer; Task; Sequence). The radars were left alone; the contact-header swap is optional follow-up. Still the highest-leverage cohesion move *where it was missing*.
 2. ✅ **Global command palette + quick-create** in the AppShell (PR #325) — ⌘K to jump to any contact, go to any destination, or quick-create a contact. (Deal/task quick-create deferred — no standalone create flow exists; they're contact-scoped.)
 3. ✅ **Incremental design-system adoption** (PR #323) — shipped the shared `EmptyState` + `Loading` primitives with a first adoption; module migration continues opportunistically. Biggest driver of the *visual* disjointedness.
-4. ⏳ **Consolidate settings** (13+ surfaces) — lower priority, not started.
+4. ✅ **Consolidate settings** (PRs #327 + #328) — reading the code showed it was in better shape than "13+ scattered" (integrations already tabbed in SETTINGS.1-3). The genuine gaps: the orphaned customer-agent page (now linked) + the long-scroll per-location page (now tabbed). The hub gained a Communications group.
 
 ### Suggested sequencing — ✅ executed (2026-06-03)
 1. **This sprint:** A + B → C → D + E. ✅ all shipped.
 2. **Next:** person action bar (bet 1) + shared EmptyState/Loading (bet 3). ✅ both shipped.
 3. **Then:** command palette (bet 2). ✅ shipped.
+4. **Then:** settings consolidation (bet 4). ✅ shipped.
 
-Only **bet 4 (settings consolidation)** remains.
+**The full audit backlog is complete.** Next horizon: the strategic bets in `docs/PLATFORM_ROADMAP.md`.
 
 ---
 
