@@ -3,7 +3,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
-import { Users, MapPin, Shield, UserCog, LayoutGrid, Trophy, Cable, ChevronRight, Bell, KeyRound } from 'lucide-react'
+import { Users, MapPin, Shield, UserCog, LayoutGrid, Trophy, Cable, ChevronRight, Bell, KeyRound, MessagesSquare, Bot } from 'lucide-react'
 
 // SETTINGS.3/.4 — reorganized this page:
 //   - Master tools moved to TOP (was mid-page)
@@ -46,7 +46,7 @@ export default async function SettingsPage() {
   return (
     <div className="p-8 max-w-4xl">
       <h2 className="text-2xl font-bold mb-1">Settings</h2>
-      <p className="text-sm text-un1t-subtle mb-8">Manage your team, locations, and permissions</p>
+      <p className="text-sm text-un1t-subtle mb-8">Manage your team, locations, communications, and permissions</p>
 
       {/* Master tools — platform-level admin links. Moved to the TOP
           of the settings page in SETTINGS.3 since this is the most
@@ -177,27 +177,53 @@ export default async function SettingsPage() {
         </div>
       </div>
 
-      {/* NOTIF.3 — Push Notifications registry. Read-only catalogue
-          of every notification type the CRM sends, with who fires it
-          and who receives it. Per-location lead-time config lives on
-          each location's edit page. */}
+      {/* Communications — comms-config surfaces grouped together
+          (SETTINGS.6). Two cards:
+            - Notification registry (NOTIF.3) — read-only catalogue of
+              every notification the CRM sends. Per-location lead-time
+              config still lives on each location's edit page.
+            - Customer agent (RADAR-AGENT.0) — the customer-facing
+              WhatsApp/Instagram AI agent. This page previously had NO
+              link from anywhere in the UI (reachable by direct URL
+              only); surfacing it here is the genuine discoverability
+              fix in the bet-4 settings pass. */}
       <div className="mb-10">
         <div className="flex items-center gap-2 mb-4">
-          <Bell size={18} className="text-un1t-subtle" />
-          <h3 className="text-lg font-semibold">Push Notifications</h3>
+          <MessagesSquare size={18} className="text-un1t-subtle" />
+          <h3 className="text-lg font-semibold">Communications</h3>
         </div>
-        <Link
-          href="/settings/notifications"
-          className="bg-un1t-surface border border-un1t-border hover:border-un1t-subtle rounded-lg p-4 flex items-center justify-between text-sm group transition-colors"
-        >
-          <div>
-            <div className="text-un1t-text">Notification registry</div>
-            <div className="text-xs text-un1t-subtle mt-0.5">
-              Every notification the CRM sends — who fires it, who receives it, lead-time config per category.
+        <div className="space-y-2">
+          <Link
+            href="/settings/notifications"
+            className="bg-un1t-surface border border-un1t-border hover:border-un1t-subtle rounded-lg p-4 flex items-center justify-between text-sm group transition-colors"
+          >
+            <div className="flex items-center gap-3">
+              <Bell size={16} className="text-un1t-subtle shrink-0" />
+              <div>
+                <div className="text-un1t-text">Notification registry</div>
+                <div className="text-xs text-un1t-subtle mt-0.5">
+                  Every notification the CRM sends — who fires it, who receives it, lead-time config per category.
+                </div>
+              </div>
             </div>
-          </div>
-          <ChevronRight size={16} className="text-un1t-subtle group-hover:text-un1t-text" />
-        </Link>
+            <ChevronRight size={16} className="text-un1t-subtle group-hover:text-un1t-text shrink-0" />
+          </Link>
+          <Link
+            href="/settings/customer-agent"
+            className="bg-un1t-surface border border-un1t-border hover:border-un1t-subtle rounded-lg p-4 flex items-center justify-between text-sm group transition-colors"
+          >
+            <div className="flex items-center gap-3">
+              <Bot size={16} className="text-un1t-subtle shrink-0" />
+              <div>
+                <div className="text-un1t-text">Customer agent</div>
+                <div className="text-xs text-un1t-subtle mt-0.5">
+                  The customer-facing WhatsApp / Instagram AI agent — channel connections, behaviour, and the knowledge it answers from. Off by default.
+                </div>
+              </div>
+            </div>
+            <ChevronRight size={16} className="text-un1t-subtle group-hover:text-un1t-text shrink-0" />
+          </Link>
+        </div>
       </div>
 
       {/* SETTINGS.3 — Shift Templates / Bank Holidays / Integrations /
