@@ -16,3 +16,4 @@ mobile/keys/
 
 # graphify knowledge-graph output — generated locally (~8MB), never source
 graphify-out/
+.superpowers/
