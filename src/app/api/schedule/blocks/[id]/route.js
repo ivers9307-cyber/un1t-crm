@@ -1,8 +1,8 @@
 // /api/schedule/blocks/[id] — DELETE
 //
 // Removes a shift_block. Cascades to shift_assignments via the FK
-// on delete, which the mig 068 trigger then mirrors out to the
-// legacy public.shifts table.
+// on delete. (The old public.shifts mirror that the mig 068 trigger
+// kept in sync was dropped in mig 238.)
 //
 // Only used for one-off "this slot doesn't apply this week"
 // removals. The default lifecycle is template days_of_week →

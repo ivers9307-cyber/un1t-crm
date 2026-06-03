@@ -6,19 +6,19 @@
 // card showing template + time + capacity badge + assigned coaches.
 // Empty future blocks get a red unstaffed flag.
 //
-// The legacy public.shifts table is still kept in sync via the
-// mig 068 + mig 069 bidirectional triggers, so mobile + reports
-// keep working unchanged.
+// (Historical: public.shifts was kept in sync via the mig 068/069
+// bidirectional triggers during cutover; the table + triggers were
+// dropped in mig 238 — every reader is on shift_blocks +
+// shift_assignments now.)
 //
 // Writes:
 //   - Assign coach: POST /api/schedule/blocks/[id]/assignments
 //   - Remove coach: DELETE /api/schedule/assignments/[id]
 //   - Remove block: DELETE /api/schedule/blocks/[id]   (rare)
 // Copy-week / copy-month / publish hit /api/schedule/shifts/* — these
-// now write the block/assignment model directly (RETIRE-SHIFTS-MIRROR.5b);
-// public.shifts is kept in sync by the mig 068 forward trigger for the
-// readers that haven't migrated yet. Swap requests POST the
-// shift_assignment id as requester_shift_id (RETIRE-SHIFTS-MIRROR.5c).
+// now write the block/assignment model directly (RETIRE-SHIFTS-MIRROR.5b).
+// Swap requests POST the shift_assignment id as requester_shift_id
+// (RETIRE-SHIFTS-MIRROR.5c). The legacy public.shifts mirror is gone (mig 238).
 
 import { useState, useEffect, useCallback } from 'react'
 import { ChevronLeft, ChevronRight, Copy, Send, Plus, Users, User, Clock, X, ArrowLeftRight, CalendarOff, Palmtree, ThermometerSun, Ban, AlertTriangle, AlertCircle, CalendarDays, CalendarRange, Pencil, Check, Settings } from 'lucide-react'

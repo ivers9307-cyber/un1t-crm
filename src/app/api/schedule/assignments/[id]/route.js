@@ -2,12 +2,12 @@
 //
 // PUT — partial-shift edits (mig 099/100). Operator can override the
 //       assignment's start/end times when they differ from the parent
-//       block, and add a free-text reason. Mirror trigger pushes the
-//       overrides into public.shifts.start_time_override which payroll
-//       already reads.
+//       block, and add a free-text reason. Overrides live on the
+//       assignment row; payroll + reports read them from
+//       shift_assignments (the public.shifts mirror was dropped in mig 238).
 //
-// DELETE — removes a coach from a shift_block. The mig 068 trigger
-//       then removes the corresponding legacy public.shifts row.
+// DELETE — removes a coach from a shift_block (deletes the
+//       shift_assignment row).
 //
 // Coaches can edit/remove themselves on assignments they own.
 // Managers can edit/remove anyone at a location they own.

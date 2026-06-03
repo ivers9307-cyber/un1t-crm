@@ -1,12 +1,13 @@
 // RETIRE-SHIFTS-MIRROR.4 — write the Roster v2 model directly instead of
 // the legacy public.shifts table.
 //
-// `upsertShiftAssignment` replicates the INSERT branch of the mig 069
-// reverse trigger (shifts → shift_blocks + shift_assignments): find-or-create
-// the block for (location, template, date), then upsert the assignment. With
-// the writers calling this, the mig 068 FORWARD trigger keeps public.shifts in
-// sync for the readers that haven't migrated yet (GET /shifts + mobile + swaps,
-// phase 5) — so nothing breaks mid-cutover.
+// `upsertShiftAssignment` replicates the INSERT branch of the (since-removed)
+// mig 069 reverse trigger (shifts → shift_blocks + shift_assignments):
+// find-or-create the block for (location, template, date), then upsert the
+// assignment. (Historical: during cutover the mig 068 forward trigger mirrored
+// these writes into public.shifts for not-yet-migrated readers; that mirror +
+// table were dropped in mig 238 — shift_blocks + shift_assignments are now the
+// sole source of truth.)
 //
 // Override note: unlike the old reverse trigger (which folded a shift's
 // start/end override onto the shared BLOCK), this puts overrides on the
