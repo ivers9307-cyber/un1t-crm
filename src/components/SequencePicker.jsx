@@ -24,6 +24,7 @@
 //     where status='active') so this is idempotent.
 
 import { useEffect, useState } from 'react'
+import Link from 'next/link'
 import { Mail, Calendar, MessageSquare, RefreshCw, Tag, Zap, AlertCircle, Check, ChevronLeft, Loader2 } from 'lucide-react'
 
 const TRIGGER_META = {
@@ -214,9 +215,9 @@ export default function SequencePicker({ contactIds, locationId, variant = 'popo
             <div className="text-xs text-un1t-subtle py-2">
               No active sequences at this location.
               <br />
-              <a href="/communications/sequences" className="text-blue-400 hover:underline">
+              <Link href="/communications/sequences" className="text-blue-400 hover:underline">
                 Create one →
-              </a>
+              </Link>
             </div>
           )}
 
