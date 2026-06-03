@@ -1,5 +1,5 @@
 // FLOW-GRAPH Phase 2 — small presentational bits shared by the editable
-// (LinearFlowEditor) and read-only (SequenceFlowBuilder rail) views.
+// (FlowEditor) and read-only (SequenceFlowBuilder rail) views.
 import { Zap } from 'lucide-react'
 import { describeTrigger } from '@/lib/sequences/graph/view'
 
