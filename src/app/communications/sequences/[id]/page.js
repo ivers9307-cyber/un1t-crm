@@ -28,5 +28,5 @@ export default async function SequenceBuilderPage(props) {
 
   const graph = resolveSequenceGraph(sequence)
 
-  return <SequenceFlowBuilder graph={graph} sequence={sequence} />
+  return <SequenceFlowBuilder graph={graph} sequence={sequence} isDraft={sequence.draft_graph != null} />
 }
