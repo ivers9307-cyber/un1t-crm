@@ -63,6 +63,7 @@ export default async function BusinessDashboardPage() {
           value={formatCurrency(wonValueMTD)}
           sublabel={`${wonCountMTD} deal${wonCountMTD === 1 ? '' : 's'}`}
           accent="text-green-500"
+          href="/pipeline"
         />
       </KpiRow>
       <KpiRow>
@@ -71,6 +72,7 @@ export default async function BusinessDashboardPage() {
           value={lostCountMTD}
           sublabel={lostCountMTD === 1 ? 'deal' : 'deals'}
           accent={lostCountMTD > 0 ? 'text-red-500' : 'text-un1t-muted'}
+          href="/pipeline"
         />
         <KpiCard
           label="Win rate"
@@ -80,6 +82,7 @@ export default async function BusinessDashboardPage() {
               ? 'no decided deals yet'
               : `${wonCountMTD} won / ${lostCountMTD} lost`
           }
+          href="/pipeline"
         />
       </KpiRow>
 
@@ -91,11 +94,13 @@ export default async function BusinessDashboardPage() {
           label="Hours this week"
           value={`${scheduledHoursThisWeek}h`}
           sublabel={`at ${user.activeLocation?.name || 'this location'}`}
+          href="/schedule"
         />
         <KpiCard
           label="Labour cost (est.)"
           value={formatCurrency(scheduledLabourThisWeek)}
           sublabel="excludes overtime premium"
+          href="/schedule"
         />
       </KpiRow>
       <p className="text-xs text-un1t-muted mt-1 px-1">

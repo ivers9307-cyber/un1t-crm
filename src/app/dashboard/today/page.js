@@ -238,7 +238,7 @@ export default async function PersonalDashboardPage() {
       </div>
 
       <KpiRow>
-        <KpiCard label="This week" value={`${hoursThisWeek}h`} sublabel={`${shiftsThisWeek} shift${shiftsThisWeek === 1 ? '' : 's'}`} />
+        <KpiCard label="This week" value={`${hoursThisWeek}h`} sublabel={`${shiftsThisWeek} shift${shiftsThisWeek === 1 ? '' : 's'}`} href="/schedule" />
         <KpiCard
           label="Inbox"
           value={unreadInbox}

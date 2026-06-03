@@ -17,7 +17,7 @@ const STATUS_LABEL = {
   new_lead: 'New leads',
   active_trial: 'On trial',
   trial_complete: 'Trial done',
-  member: 'Members',
+  active_member: 'Members',
   lapsed: 'Lapsed',
   lost: 'Lost',
   archived: 'Archived',
@@ -45,7 +45,10 @@ export default async function StudioDashboardPage() {
     totalUnreadWhatsapp,
   } = res.data
 
-  const headlineStatuses = ['new_lead', 'active_trial', 'member', 'lapsed']
+  // Funnel is keyed by pipeline_stage_slug — use the real member slug
+  // ('active_member'), not 'member' (which never matched, so the
+  // Members card silently rendered 0).
+  const headlineStatuses = ['new_lead', 'active_trial', 'active_member', 'lapsed']
   const headline = headlineStatuses.map(k => ({ key: k, count: funnel[k] || 0 }))
 
   return (
@@ -55,6 +58,7 @@ export default async function StudioDashboardPage() {
           label="New leads this week"
           value={newLeadsThisWeek}
           sublabel={newLeadsThisWeek === 1 ? 'contact added' : 'contacts added'}
+          href="/lead-radar"
         />
         <KpiCard
           label="WhatsApp unread"
@@ -67,12 +71,12 @@ export default async function StudioDashboardPage() {
 
       <SectionHeader title="Funnel" />
       <KpiRow>
-        <KpiCard label={pretty(headline[0].key)} value={headline[0].count} />
-        <KpiCard label={pretty(headline[1].key)} value={headline[1].count} />
+        <KpiCard label={pretty(headline[0].key)} value={headline[0].count} href={`/contacts?status=${headline[0].key}`} />
+        <KpiCard label={pretty(headline[1].key)} value={headline[1].count} href={`/contacts?status=${headline[1].key}`} />
       </KpiRow>
       <KpiRow>
-        <KpiCard label={pretty(headline[2].key)} value={headline[2].count} />
-        <KpiCard label={pretty(headline[3].key)} value={headline[3].count} />
+        <KpiCard label={pretty(headline[2].key)} value={headline[2].count} href={`/contacts?status=${headline[2].key}`} />
+        <KpiCard label={pretty(headline[3].key)} value={headline[3].count} href={`/contacts?status=${headline[3].key}`} />
       </KpiRow>
       <p className="text-xs text-un1t-muted mt-1 px-1">
         {totalContacts} total contacts at {user.activeLocation?.name || 'this location'}
