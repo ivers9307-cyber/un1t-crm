@@ -65,6 +65,15 @@ const RENEWAL_CLIFF_CRITICAL_DAYS = 14
 const PACK_LOW_CREDITS = 2
 const PACK_CRITICAL_CREDITS = 1
 
+// Payment-slipping (Churn Radar Phase 2 — RADAR-PAY.1). A recurring
+// member whose last payment is past due by more than the grace window,
+// measured against their own billing cycle. 30.44 ≈ mean days/month so
+// a 3-month plan isn't read as overdue at day 31. Grace covers normal
+// card-retry lag; past the critical mark a lock is imminent.
+const DAYS_PER_MONTH = 30.44
+const SLIP_GRACE_DAYS = 3
+const SLIP_CRITICAL_DAYS = 7
+
 // ── helpers ──────────────────────────────────────────────────────
 
 function daysSince(value, nowMs) {
@@ -254,9 +263,41 @@ function detectPackRunningLow(contact) {
   }
 }
 
+// RADAR-PAY.1 (Churn Radar Phase 2) — a subscription member whose
+// recurring payment is past due but whom Glofox HASN'T locked yet. By
+// the time state flips to 'locked' the member is already on the Overdue
+// chase-list (classifyContact → 'overdue', off the at-risk radar); this
+// fires in the gap before that — a missed/failed charge that Glofox is
+// still retrying — when a one-tap payment reminder still recovers them
+// quietly. Class packs (paid upfront) and PAYG (pay-per-visit) have no
+// recurring cycle to slip, so it only applies to interval-billed subs.
+// scoreMember only runs on 'active' members, so locked members never
+// reach here regardless of how late Glofox's lock lands.
+function detectPaymentSlipping(contact, nowMs) {
+  const type = typeof contact.glofox_membership_type === 'string'
+    ? contact.glofox_membership_type.toLowerCase()
+    : null
+  if (type === 'num_classes' || type === 'payg') return null
+  const cycleMonths = intervalMonths(contact.glofox_billing_interval)
+  if (!cycleMonths) return null
+  const sincePay = daysSince(contact.last_payment_at, nowMs)
+  if (sincePay == null) return null
+  const overdue = sincePay - cycleMonths * DAYS_PER_MONTH
+  if (overdue <= SLIP_GRACE_DAYS) return null
+  const days = Math.floor(overdue)
+  const critical = overdue >= SLIP_CRITICAL_DAYS
+  return {
+    key: 'payment_slipping',
+    label: 'Payment slipping',
+    detail: `Payment ${days} day${days === 1 ? '' : 's'} overdue — chase before lock`,
+    weight: 3,
+    severity: critical ? 'critical' : 'warning',
+  }
+}
+
 const DETECTORS = [
   detectGoneQuiet, detectDisengaging, detectNoShow, detectRenewalCliff,
-  detectPackRunningLow,
+  detectPackRunningLow, detectPaymentSlipping,
 ]
 
 // ── scoring ──────────────────────────────────────────────────────
@@ -300,6 +341,26 @@ export function scoreMember(contact, nowMs = Date.now()) {
       return d == null ? null : Math.max(0, Math.ceil(-d))
     })(),
   }
+}
+
+/**
+ * Is this contact in payment trouble right now, and of which kind?
+ *   'overdue'  — Glofox has locked the membership (state = locked);
+ *                they're on the Overdue chase-list.
+ *   'slipping' — still active, but the recurring payment is past due
+ *                (detectPaymentSlipping fires) — the early-warning gap
+ *                before Glofox locks them.
+ *   null       — not behind on payment.
+ *
+ * The server-side guard for the one-click dunning action (RADAR-PAY.1):
+ * a "Send payment reminder" must only ever enrol a member who is
+ * genuinely behind, never a paying one.
+ */
+export function paymentTroubleKind(contact, nowMs = Date.now()) {
+  const cls = classifyContact(contact)
+  if (cls === 'overdue') return 'overdue'
+  if (cls === 'active' && detectPaymentSlipping(contact, nowMs)) return 'slipping'
+  return null
 }
 
 /**

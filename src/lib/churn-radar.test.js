@@ -9,6 +9,7 @@ import {
   buildRadar,
   radarSummary,
   buildOverdue,
+  paymentTroubleKind,
   monthlyValueCents,
   scoreWinbackContact,
   buildWinback,
@@ -201,6 +202,79 @@ describe('No-show signal', () => {
   it('does not fire for a single no-show', () => {
     const r = scoreMember(healthy({ total_noshow_30d: 1 }), NOW)
     expect(r).toBe(null)
+  })
+})
+
+describe('Payment-slipping signal', () => {
+  // A recurring sub paid this many days ago, no other risk signals.
+  const slip = (over = {}) => healthy({
+    glofox_billing_interval: '1 month',
+    last_payment_at: daysAgo(40),
+    ...over,
+  })
+
+  it('fires critical for a monthly sub ~10 days past due', () => {
+    const r = scoreMember(slip({ last_payment_at: daysAgo(40) }), NOW)
+    const s = r.signals.find((x) => x.key === 'payment_slipping')
+    expect(s.weight).toBe(3)
+    expect(s.severity).toBe('critical')
+    expect(s.detail).toMatch(/overdue/)
+  })
+  it('fires warning just past the grace window (<critical)', () => {
+    // 34d − 30.44 ≈ 3.6d overdue: > grace (3), < critical (7)
+    const r = scoreMember(slip({ last_payment_at: daysAgo(34) }), NOW)
+    const s = r.signals.find((x) => x.key === 'payment_slipping')
+    expect(s.severity).toBe('warning')
+  })
+  it('does not fire inside the grace window', () => {
+    // 31d − 30.44 ≈ 0.6d overdue → within grace
+    expect(scoreMember(slip({ last_payment_at: daysAgo(31) }), NOW)).toBe(null)
+  })
+  it('does not fire for a member paid on cycle', () => {
+    expect(scoreMember(slip({ last_payment_at: daysAgo(5) }), NOW)).toBe(null)
+  })
+  it('does not fire without a last payment date', () => {
+    expect(scoreMember(slip({ last_payment_at: null }), NOW)).toBe(null)
+  })
+  it('does not fire without a billing interval', () => {
+    expect(scoreMember(slip({ glofox_billing_interval: null }), NOW)).toBe(null)
+  })
+  it('respects the billing cycle — a 3-month plan is not overdue at day 40', () => {
+    expect(scoreMember(slip({ glofox_billing_interval: '3 months', last_payment_at: daysAgo(40) }), NOW)).toBe(null)
+  })
+  it('does not apply to class packs (paid upfront)', () => {
+    // A pack with a stale "last payment" must not trip the sub signal.
+    const r = scoreMember(pack({ last_payment_at: daysAgo(120), glofox_billing_interval: '1 month' }), NOW)
+    expect((r?.signals || []).some((x) => x.key === 'payment_slipping')).toBe(false)
+  })
+  it('does not apply to PAYG', () => {
+    const c = slip({ glofox_membership_type: 'payg', last_payment_at: daysAgo(120) })
+    expect(scoreMember(c, NOW)).toBe(null)
+  })
+  it('tiers medium on its own (weight 3)', () => {
+    const r = scoreMember(slip({ last_payment_at: daysAgo(40) }), NOW)
+    expect(r.score).toBe(3)
+    expect(r.tier).toBe('medium')
+    expect(r.signals.length).toBe(1)
+  })
+})
+
+describe('paymentTroubleKind — dunning guard', () => {
+  it('flags a locked member as overdue', () => {
+    expect(paymentTroubleKind(healthy({ glofox_membership_state: 'locked' }), NOW)).toBe('overdue')
+  })
+  it('flags an active past-due sub as slipping', () => {
+    const c = healthy({ glofox_billing_interval: '1 month', last_payment_at: daysAgo(40) })
+    expect(paymentTroubleKind(c, NOW)).toBe('slipping')
+  })
+  it('returns null for a paying active member', () => {
+    expect(paymentTroubleKind(healthy({ glofox_billing_interval: '1 month', last_payment_at: daysAgo(5) }), NOW)).toBe(null)
+  })
+  it('returns null for a paused member (planned freeze, not behind)', () => {
+    expect(paymentTroubleKind(healthy({ glofox_membership_state: 'paused' }), NOW)).toBe(null)
+  })
+  it('returns null for a non-member', () => {
+    expect(paymentTroubleKind({ glofox_membership_status: 'lead' }, NOW)).toBe(null)
   })
 })
 
