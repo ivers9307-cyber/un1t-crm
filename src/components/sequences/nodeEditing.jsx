@@ -42,7 +42,7 @@ export function NodeCardHeader({ node, isFirst, isLast, expanded, onToggle, onMo
 }
 
 // Full step card (non-branch). Branch cards are assembled in FlowEditor.
-export function EditableNodeCard({ node, isFirst, isLast, expanded, errors, onToggle, onMove, onRemove, onPatch }) {
+export function EditableNodeCard({ node, isFirst, isLast, expanded, errors, onToggle, onMove, onRemove, onPatch, templates }) {
   const hasErr = errors.length > 0
   return (
     <div className={`w-full max-w-md mx-auto bg-un1t-surface border rounded-lg shadow-sm ${hasErr ? 'border-rose-500/40' : 'border-un1t-border'}`}>
@@ -50,7 +50,7 @@ export function EditableNodeCard({ node, isFirst, isLast, expanded, errors, onTo
       {hasErr && !expanded && <p className="px-4 pb-2 -mt-1 text-xs text-rose-700">{errors[0]}</p>}
       {expanded && (
         <div className="border-t border-un1t-border px-4 py-3 space-y-3">
-          <NodeConfig node={node} onPatch={onPatch} />
+          <NodeConfig node={node} onPatch={onPatch} templates={templates} />
           {hasErr && <ul className="text-xs text-rose-700 list-disc pl-4">{errors.map((e, i) => <li key={i}>{e}</li>)}</ul>}
         </div>
       )}
@@ -58,7 +58,18 @@ export function EditableNodeCard({ node, isFirst, isLast, expanded, errors, onTo
   )
 }
 
-export function NodeConfig({ node, onPatch }) {
+// Pull {{1}}, {{2}}… placeholders out of a WhatsApp template's BODY component so
+// we can render one input per variable (ported from the classic editor).
+export function whatsappBodyVariables(template) {
+  if (!template) return []
+  const body = (template.components || []).find(c => c.type === 'BODY')
+  if (!body?.text) return []
+  const matches = body.text.match(/\{\{\d+\}\}/g) || []
+  const set = new Set(matches.map(m => m.match(/\d+/)[0]))
+  return [...set].sort((a, b) => Number(a) - Number(b))
+}
+
+export function NodeConfig({ node, onPatch, templates }) {
   const c = node.config || {}
   switch (node.type) {
     case 'email':
@@ -70,12 +81,33 @@ export function NodeConfig({ node, onPatch }) {
           </Labeled>
         </>
       )
-    case 'whatsapp':
+    case 'whatsapp': {
+      const list = templates || []
+      const selected = list.find(t => t.id === c.template_id)
+      const vars = whatsappBodyVariables(selected)
+      const curVars = c.variables || {}
       return (
-        <Labeled label="Template ID" hint="Approved WhatsApp template. Manage variables in the classic editor.">
-          <Text value={c.template_id} onChange={v => onPatch({ template_id: v })} placeholder="template id" />
-        </Labeled>
+        <>
+          <Labeled label="Template" hint={list.length ? 'Approved WhatsApp templates at this location.' : 'No approved WhatsApp templates at this location yet.'}>
+            <select className={fieldCls} value={c.template_id || ''} onChange={e => onPatch({ template_id: e.target.value || null, variables: {} })}>
+              <option value="">Choose a template…</option>
+              {list.map(t => <option key={t.id} value={t.id}>{t.name}{t.language ? ` (${t.language})` : ''}</option>)}
+            </select>
+          </Labeled>
+          {selected && vars.length > 0 && (
+            <div className="space-y-2">
+              <p className="text-[11px] text-un1t-subtle">Map each variable to a contact field (first_name / name / email / phone) or a literal value.</p>
+              {vars.map(n => (
+                <Labeled key={n} label={`Variable {{${n}}}`}>
+                  <Text value={curVars[n]} onChange={v => onPatch({ variables: { ...curVars, [n]: v } })} placeholder="first_name or literal text" />
+                </Labeled>
+              ))}
+            </div>
+          )}
+          {selected && vars.length === 0 && <p className="text-[11px] text-un1t-subtle">This template has no variables.</p>}
+        </>
       )
+    }
     case 'sms':
       return (
         <Labeled label="Message" hint={`${(c.body || '').length} characters`}>
