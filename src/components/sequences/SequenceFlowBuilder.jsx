@@ -12,6 +12,7 @@ import { buildFlowLayout, describeNode, isPureTree } from '@/lib/sequences/graph
 import { styleForType } from './nodeStyles'
 import { TriggerCard, Connector } from './parts'
 import FlowEditor from './FlowEditor'
+import SequenceSettings from './SequenceSettings'
 
 const STATUS_BADGE = {
   draft: 'bg-un1t-border/40 text-un1t-subtle',
@@ -124,8 +125,10 @@ export default function SequenceFlowBuilder({ graph, sequence }) {
         </div>
       </div>
       <p className="text-xs text-un1t-subtle mb-5">
-        Visual flow builder — add steps, branch into yes/no paths, reorder, and publish. The rich email designer &amp; WhatsApp variable mapping live in the classic editor.
+        Visual flow builder — add steps, branch into yes/no paths, reorder, and publish. WhatsApp template variables &amp; the trigger live in the classic editor for now.
       </p>
+
+      <SequenceSettings sequence={sequence} />
 
       {editable
         ? <FlowEditor initialGraph={graph} sequence={sequence} />
