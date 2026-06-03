@@ -204,6 +204,60 @@ describe('No-show signal', () => {
   })
 })
 
+describe('Payment-slipping signal', () => {
+  // A recurring sub paid this many days ago, no other risk signals.
+  const slip = (over = {}) => healthy({
+    glofox_billing_interval: '1 month',
+    last_payment_at: daysAgo(40),
+    ...over,
+  })
+
+  it('fires critical for a monthly sub ~10 days past due', () => {
+    const r = scoreMember(slip({ last_payment_at: daysAgo(40) }), NOW)
+    const s = r.signals.find((x) => x.key === 'payment_slipping')
+    expect(s.weight).toBe(3)
+    expect(s.severity).toBe('critical')
+    expect(s.detail).toMatch(/overdue/)
+  })
+  it('fires warning just past the grace window (<critical)', () => {
+    // 34d − 30.44 ≈ 3.6d overdue: > grace (3), < critical (7)
+    const r = scoreMember(slip({ last_payment_at: daysAgo(34) }), NOW)
+    const s = r.signals.find((x) => x.key === 'payment_slipping')
+    expect(s.severity).toBe('warning')
+  })
+  it('does not fire inside the grace window', () => {
+    // 31d − 30.44 ≈ 0.6d overdue → within grace
+    expect(scoreMember(slip({ last_payment_at: daysAgo(31) }), NOW)).toBe(null)
+  })
+  it('does not fire for a member paid on cycle', () => {
+    expect(scoreMember(slip({ last_payment_at: daysAgo(5) }), NOW)).toBe(null)
+  })
+  it('does not fire without a last payment date', () => {
+    expect(scoreMember(slip({ last_payment_at: null }), NOW)).toBe(null)
+  })
+  it('does not fire without a billing interval', () => {
+    expect(scoreMember(slip({ glofox_billing_interval: null }), NOW)).toBe(null)
+  })
+  it('respects the billing cycle — a 3-month plan is not overdue at day 40', () => {
+    expect(scoreMember(slip({ glofox_billing_interval: '3 months', last_payment_at: daysAgo(40) }), NOW)).toBe(null)
+  })
+  it('does not apply to class packs (paid upfront)', () => {
+    // A pack with a stale "last payment" must not trip the sub signal.
+    const r = scoreMember(pack({ last_payment_at: daysAgo(120), glofox_billing_interval: '1 month' }), NOW)
+    expect((r?.signals || []).some((x) => x.key === 'payment_slipping')).toBe(false)
+  })
+  it('does not apply to PAYG', () => {
+    const c = slip({ glofox_membership_type: 'payg', last_payment_at: daysAgo(120) })
+    expect(scoreMember(c, NOW)).toBe(null)
+  })
+  it('tiers medium on its own (weight 3)', () => {
+    const r = scoreMember(slip({ last_payment_at: daysAgo(40) }), NOW)
+    expect(r.score).toBe(3)
+    expect(r.tier).toBe('medium')
+    expect(r.signals.length).toBe(1)
+  })
+})
+
 describe('scoreMember — combined score + tier', () => {
   it('sums weights across signals and tiers high', () => {
     // Gone quiet 35d (3, critical) + no-show heavy (3) = 6 → high
