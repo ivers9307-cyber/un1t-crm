@@ -415,3 +415,82 @@ export function calculateNextRun(frequency, dayOfWeek, dayOfMonth) {
 
   return null // 'once' — no next run
 }
+
+// ─── Email delivery ──────────────────────────────────────────────────────────
+// Render a generated report into a transactional HTML email. Pure (no IO) so
+// it's unit-testable; the cron route (`/api/cron/run-scheduled-reports`) calls
+// this then sends via Postmark's `outbound` stream. The email is a summary
+// teaser — the full per-row breakdown stays in the CRM under Schedule →
+// Reporting (the CTA links there when an app URL is available).
+
+const REPORT_CURRENCY_SYMBOLS = { EUR: '€', GBP: '£', USD: '$' }
+
+export function humanizeReportKey(key) {
+  return String(key)
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, c => c.toUpperCase())
+}
+
+// Deterministic thousands separator (no Intl/locale dependency so the unit
+// tests assert stable strings across Node ICU versions).
+function withThousands(intStr) {
+  return intStr.replace(/\B(?=(\d{3})+(?!\d))/g, ',')
+}
+
+export function formatReportValue(key, value, currency) {
+  if (value == null) return '—'
+  if (typeof value !== 'number') return String(value)
+  const isMoney = /cost|salary|pay\b/i.test(key)
+  if (isMoney) {
+    const sym = REPORT_CURRENCY_SYMBOLS[currency] || ''
+    const [int, frac = '00'] = value.toFixed(2).split('.')
+    return `${sym}${withThousands(int)}.${frac}`
+  }
+  // Plain count / hours — keep up to one decimal, add thousands separators.
+  const rounded = Math.round(value * 10) / 10
+  const [int, frac] = String(rounded).split('.')
+  return frac != null ? `${withThousands(int)}.${frac}` : withThousands(int)
+}
+
+export function buildReportEmailHtml(report, { appUrl } = {}) {
+  const { report_name, period_start, period_end, summary } = report || {}
+  const currency = summary?.currency
+
+  const periodLine = !period_start || period_start === period_end
+    ? (period_start || '')
+    : `${period_start} → ${period_end}`
+
+  const rows = Object.entries(summary || {})
+    .filter(([k]) => k !== 'currency')
+    .map(([k, v]) => `
+        <tr>
+          <td style="padding:8px 12px;border-bottom:1px solid #E2E5E9;color:#64748B;font-size:13px;">${humanizeReportKey(k)}</td>
+          <td style="padding:8px 12px;border-bottom:1px solid #E2E5E9;color:#111827;font-size:13px;font-weight:600;text-align:right;">${formatReportValue(k, v, currency)}</td>
+        </tr>`)
+    .join('')
+
+  const body = rows ||
+    `<tr><td style="padding:8px 12px;color:#64748B;font-size:13px;">No data for this period.</td></tr>`
+
+  const cta = appUrl
+    ? `<p style="margin:24px 0 0;font-size:13px;color:#64748B;">Full breakdown is in the CRM under <a href="${appUrl}/schedule" style="color:#1E293B;font-weight:600;">Schedule → Reporting</a>.</p>`
+    : ''
+
+  return `<!doctype html>
+<html>
+<body style="margin:0;padding:0;background:#F7F8FA;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+  <div style="max-width:560px;margin:0 auto;padding:32px 20px;">
+    <div style="background:#FFFFFF;border:1px solid #E2E5E9;border-radius:16px;padding:24px;">
+      <div style="font-size:11px;text-transform:uppercase;letter-spacing:0.08em;color:#94A3B8;">Scheduled report</div>
+      <h1 style="margin:4px 0 2px;font-size:20px;color:#111827;">${report_name || 'Report'}</h1>
+      <div style="font-size:13px;color:#64748B;">${periodLine}</div>
+      <table style="width:100%;border-collapse:collapse;margin-top:16px;">
+        ${body}
+      </table>
+      ${cta}
+    </div>
+    <p style="text-align:center;font-size:11px;color:#94A3B8;margin-top:16px;">UN1T CRM · automated report delivery</p>
+  </div>
+</body>
+</html>`
+}
