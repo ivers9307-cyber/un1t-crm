@@ -33,6 +33,40 @@ import { recordWebhookEvent, WEBHOOK_PROVIDERS } from '@/lib/webhook-events'
 
 export const runtime = 'nodejs'
 
+/**
+ * Pure: map a freshly-fetched Revolut order's state onto the cars-deposit
+ * column updates. Terminal states (completed / cancelled / failed) return an
+ * `updates` object; transient states (pending / processing / authorised)
+ * return `updates: null` so the caller 200s-and-skips without a write.
+ *
+ * IDEMPOTENCY CROWN-JEWEL: a re-delivered ORDER_COMPLETED must NEVER re-stamp
+ * `deposit_paid_at` — the `!car.deposit_paid_at` guard means the first
+ * completion wins and retries leave the original timestamp intact. Revolut
+ * amounts are minor units; converted back to majors here.
+ *
+ * @param {{ order: {state?: string, amount?: number}, car: {deposit_paid_at?: string|null}, now?: Date }} args
+ * @returns {{ state: string, updates: object|null }}
+ */
+export function depositUpdateForOrder({ order, car, now = new Date() }) {
+  const state = String(order?.state || '').toLowerCase()
+  const updates = {}
+  switch (state) {
+    case 'completed':
+      updates.deposit_status = 'paid'
+      if (!car?.deposit_paid_at) updates.deposit_paid_at = now.toISOString()
+      if (Number.isFinite(order?.amount)) updates.deposit_paid_amount = Number(order.amount) / 100
+      return { state, updates }
+    case 'cancelled':
+      updates.deposit_status = 'cancelled'
+      return { state, updates }
+    case 'failed':
+      updates.deposit_status = 'failed'
+      return { state, updates }
+    default:
+      return { state, updates: null }
+  }
+}
+
 export async function POST(request) {
   const rawBody = await request.text()
   const sig = request.headers.get('revolut-signature')
@@ -107,32 +141,12 @@ export async function POST(request) {
   // a NEW order with type=refund linked via related_order_id; the
   // original order's state stays 'completed'. Refund handling would
   // need a separate flow (not webhook-driven) if we ever build it.
-  const updates = {}
-  const state = String(order.state || '').toLowerCase()
-
-  switch (state) {
-    case 'completed':
-      updates.deposit_status = 'paid'
-      if (!car.deposit_paid_at) {
-        updates.deposit_paid_at = new Date().toISOString()
-      }
-      // Revolut amounts are minor units. Convert back to majors for
-      // display + accounting consistency with the rest of the app.
-      if (Number.isFinite(order.amount)) {
-        updates.deposit_paid_amount = Number(order.amount) / 100
-      }
-      break
-    case 'cancelled':
-      updates.deposit_status = 'cancelled'
-      break
-    case 'failed':
-      updates.deposit_status = 'failed'
-      break
-    // Transient states (pending / processing / authorised) — no change.
-    default:
-      return NextResponse.json({ success: true, ignored_state: state })
+  // Map the authoritative order state → cars-deposit updates (pure; see
+  // depositUpdateForOrder). Terminal states only; transient ones ignore-and-200.
+  const { state, updates } = depositUpdateForOrder({ order, car })
+  if (!updates) {
+    return NextResponse.json({ success: true, ignored_state: state })
   }
-
   if (Object.keys(updates).length > 0) {
     await db.from('cars').update(updates).eq('id', car.id)
   }
