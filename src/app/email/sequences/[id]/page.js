@@ -1,33 +1,11 @@
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
-import { redirect, notFound } from 'next/navigation'
-import SequenceEditor from '@/components/SequenceEditor'
+import { redirect } from 'next/navigation'
 
+// FLOW-GRAPH Phase 2 (PR3c-6) — the classic sequence editor is retired; the
+// visual builder at /communications/sequences/[id] is the one editor. This
+// legacy path permanently bounces there so old bookmarks keep working.
 export const dynamic = 'force-dynamic'
 
-export default async function EditSequencePage(props) {
-  const params = await props.params;
-  const user = await getCurrentUser()
-  if (!user) redirect('/login')
-
-  const db = createServerClient()
-  const { data: sequence } = await db.from('email_sequences')
-    .select('*, sequence_steps(*)')
-    .eq('id', params.id)
-    .single()
-
-  if (!sequence) notFound()
-
-  // Sort steps
-  if (sequence.sequence_steps) {
-    sequence.sequence_steps.sort((a, b) => a.step_order - b.step_order)
-  }
-
-  return (
-    <SequenceEditor
-      sequence={sequence}
-      locationId={user.activeLocation?.id}
-      userId={user.id}
-    />
-  )
+export default async function LegacySequenceRedirect(props) {
+  const params = await props.params
+  redirect(`/communications/sequences/${params.id}`)
 }

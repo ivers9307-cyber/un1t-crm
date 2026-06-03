@@ -1,9 +1,9 @@
 // /communications/sequences — drip-flow list. Was /email/sequences.
 //
 // Renders inside the Communications layout so the sub-tab nav is
-// visible. Detail / new pages still live at /email/sequences/[id]
-// and /email/sequences/new for now (Phase 1.5 will move them too,
-// for now the redirect stubs at the old paths cover bookmarks).
+// visible. The detail / new / create flows all live in the visual builder at
+// /communications/sequences/[id] now; the old /email/sequences/* paths are
+// redirect stubs so existing bookmarks keep working.
 
 import Link from 'next/link'
 import { redirect } from 'next/navigation'
@@ -120,14 +120,6 @@ export default async function SequencesListPage() {
                     <StatusIcon size={10} />
                     {config.label}
                   </span>
-                  <Link
-                    href={`/email/sequences/${seq.id}`}
-                    className="flex items-center gap-1 text-xs text-un1t-subtle hover:text-un1t-text"
-                    title="Open the classic editor"
-                  >
-                    <FileEdit size={13} />
-                    <span className="hidden sm:inline">Classic</span>
-                  </Link>
                   <CloneSequenceButton sequenceId={seq.id} sequenceName={seq.name} />
                 </div>
               </div>

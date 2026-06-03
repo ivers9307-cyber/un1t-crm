@@ -6,8 +6,7 @@
 //   - re-convergent (paths merge back) → the read-only guided rail with YES/NO
 //     lanes; edit those in the classic editor. Either way classic stays available.
 import Link from 'next/link'
-import { Pencil, CircleDot, CornerDownRight, GitBranch } from 'lucide-react'
-import { Button } from '@/components/ui'
+import { CircleDot, CornerDownRight, GitBranch } from 'lucide-react'
 import { buildFlowLayout, describeNode, isPureTree } from '@/lib/sequences/graph'
 import { styleForType } from './nodeStyles'
 import { TriggerCard, Connector } from './parts'
@@ -119,9 +118,6 @@ export default function SequenceFlowBuilder({ graph, sequence }) {
         </div>
         <div className="flex items-center gap-2 shrink-0">
           <span className={`text-xs px-2 py-0.5 rounded-full ${STATUS_BADGE[status] || STATUS_BADGE.draft}`}>{status}</span>
-          <Button as={Link} href={`/email/sequences/${sequence?.id}`} variant="secondary" size="sm" icon={Pencil}>
-            Classic editor
-          </Button>
         </div>
       </div>
       <p className="text-xs text-un1t-subtle mb-5">
