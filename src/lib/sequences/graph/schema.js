@@ -16,9 +16,10 @@ export const NODE_TYPES = [
 // The engine's trigger vocabulary (triggers.js + cron-triggers.js). Kept as a
 // flat list; trigger-specific config is validated per-type in validate.js.
 export const TRIGGER_TYPES = [
-  'manual', 'booking_created', 'pipeline_stage_change', 'tag_added', 'event_reminder',
-  'segment_added', 'segment_removed', 'anniversary', 'inactivity', 'webhook',
-  'race_registered', 'race_finished', 'order_status', 'first_booking', 'achievement',
+  'manual', 'booking_created', 'first_booking', 'pipeline_stage_change', 'tag_added',
+  'event_reminder', 'segment_added', 'segment_removed', 'anniversary', 'inactivity',
+  'race_registered', 'race_finished', 'order_completed', 'order_failed', 'order_abandoned',
+  'achievement_unlocked', 'webhook',
 ]
 
 export const TRIGGER_SOURCE_ID = 'trigger'
