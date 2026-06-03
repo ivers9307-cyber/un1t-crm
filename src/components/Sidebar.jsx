@@ -264,6 +264,18 @@ export default function Sidebar({ user, mobileOpen = false, onMobileClose }) {
     enabled: hasPerm('lead_radar'),
     url: '/api/lead-radar/count',
   })
+  // SIDEBAR-BADGES.1 — Issues badge: open + in_progress staff-reported
+  // issues awaiting a handler at the active location.
+  const issuesPendingCount = usePolledCount({
+    enabled: hasPerm('issues_inbox'),
+    url: '/api/issues/count',
+  })
+  // SIDEBAR-BADGES.1 — Communications badge: total unread WhatsApp
+  // messages at the active location (matches the Studio dashboard KPI).
+  const whatsappUnreadCount = usePolledCount({
+    enabled: hasPerm('whatsapp'),
+    url: '/api/whatsapp/unread-count',
+  })
   // Badge map by href. Add more entries here when another nav item
   // needs a notification dot.
   const badges = {
@@ -271,16 +283,21 @@ export default function Sidebar({ user, mobileOpen = false, onMobileClose }) {
     '/approvals': approvalsPendingCount,
     '/churn-radar': churnRadarCount,
     '/lead-radar': leadRadarCount,
+    '/issues': issuesPendingCount,
+    '/communications': whatsappUnreadCount,
   }
 
   // Browser tab title prefix — surfaces the combined pending count
   // even when the operator is on a different tab. Format:
-  // "(3) CF Studio · …". Combines INVOICES.2 + APPROVALS.1 so the
-  // operator sees one total rather than the prefix flickering
-  // between two values; the per-tab breakdown lives in the sidebar.
-  // Restores the original title on cleanup so a stale "(3)" doesn't
-  // survive a navigation that triggers a Sidebar unmount.
-  const titleBadgeCount = invoicesPendingCount + approvalsPendingCount
+  // "(3) CF Studio · …". Combines the operator-action queues
+  // (INVOICES.2 + APPROVALS.1 + Issues) so the operator sees one
+  // total rather than the prefix flickering between values; the
+  // per-tab breakdown lives in the sidebar. WhatsApp unread is
+  // deliberately excluded — it's a message inbox, not an action
+  // queue, and would keep the title perpetually badged. Restores the
+  // original title on cleanup so a stale "(3)" doesn't survive a
+  // navigation that triggers a Sidebar unmount.
+  const titleBadgeCount = invoicesPendingCount + approvalsPendingCount + issuesPendingCount
   useEffect(() => {
     if (typeof document === 'undefined') return
     const original = document.title.replace(/^\(\d+\+?\)\s+/, '')
