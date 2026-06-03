@@ -628,7 +628,7 @@ while (true) {
 }
 ```
 
-Reference implementations: `src/lib/pipeline-reclassify.js` (contacts + deals), `src/app/api/admin/glofox-invoice-backfill/route.js` (contact-id map). Don't re-roll — copy from one of those.
+Reference implementation: `src/lib/pipeline-reclassify.js` (contacts + deals). Don't re-roll — copy from there.
 
 **Light theme palette — text on light cards.** The codebase migrated to a light theme; `un1t-dark` (#F7F8FA) is a near-white card background, not the dark name suggests. Status text on these cards needs the **-700 ramp**, not -300. The dark-theme-tuned values (`text-amber-300`, `text-red-300`, `text-blue-100`) look washed-out and unreadable against the light surface.
 
