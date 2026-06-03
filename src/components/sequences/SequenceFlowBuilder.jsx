@@ -125,7 +125,7 @@ export default function SequenceFlowBuilder({ graph, sequence }) {
         </div>
       </div>
       <p className="text-xs text-un1t-subtle mb-5">
-        Visual flow builder — add steps, branch into yes/no paths, reorder, and publish. Editing the trigger still lives in the classic editor for now.
+        Visual flow builder — set the trigger, add steps, branch into yes/no paths, reorder, and publish.
       </p>
 
       <SequenceSettings sequence={sequence} />

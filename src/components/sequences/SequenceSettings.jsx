@@ -1,13 +1,11 @@
 'use client'
 
-// FLOW-GRAPH Phase 2 (PR3c) — sequence settings panel inside the builder, so
-// operators can rename / pause / set a goal / send-window / cooldown without the
-// classic editor. Saves via the existing PUT /api/sequences/[id]. Trigger editing
-// is intentionally NOT here yet — the trigger-type taxonomy is inconsistent across
-// the graph schema, the PUT route enum, and the runner, and needs reconciling
-// first; the trigger card stays read-only + the classic editor handles it for now.
-import { useState } from 'react'
-import { ChevronDown, ChevronRight, Save, Check, AlertTriangle, Settings as SettingsIcon } from 'lucide-react'
+// FLOW-GRAPH Phase 2 (PR3c-5) — sequence settings + TRIGGER editor inside the
+// builder, so operators never need the classic editor. Saves via the existing
+// PUT /api/sequences/[id]. trigger_config keys match exactly what the runner
+// reads (src/lib/sequences/triggers.js + cron-triggers.js) — verified per type.
+import { useEffect, useState } from 'react'
+import { ChevronDown, ChevronRight, Save, Check, AlertTriangle, Settings as SettingsIcon, RefreshCw, Copy } from 'lucide-react'
 import { Button } from '@/components/ui'
 import { Labeled, Text, Area, Num, Select } from './nodeEditing'
 
@@ -16,6 +14,31 @@ const PIPELINE_SLUGS = [
   'at_risk_member', 'classpass_active', 'lapsed', 'dormant', 'dormant_classpass',
 ]
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+
+// Friendly labels for the engine's trigger vocabulary (must stay in sync with
+// schema.js TRIGGER_TYPES / the PUT route enum / the runner).
+const TRIGGER_OPTIONS = [
+  ['manual', 'Manual — you enrol contacts yourself'],
+  ['booking_created', 'When a booking is created'],
+  ['first_booking', 'On a contact’s first booking'],
+  ['pipeline_stage_change', 'When the pipeline stage changes'],
+  ['tag_added', 'When a tag is added'],
+  ['event_reminder', 'Before a booking (reminder)'],
+  ['segment_added', 'When a contact enters a segment'],
+  ['segment_removed', 'When a contact leaves a segment'],
+  ['anniversary', 'On an anniversary date'],
+  ['inactivity', 'After a period of inactivity'],
+  ['race_registered', 'When a contact registers for a race'],
+  ['race_finished', 'When a contact finishes a race'],
+  ['order_completed', 'When an order completes'],
+  ['order_failed', 'When an order fails'],
+  ['order_abandoned', 'When an order is abandoned'],
+  ['achievement_unlocked', 'When an achievement is unlocked'],
+  ['webhook', 'When an inbound webhook fires'],
+]
+const ANNIV_FIELDS = [['lead_created_at', 'Lead created date'], ['last_emailed_at', 'Last emailed date']]
+const INACT_SIGNALS = [['last_emailed_at', 'Last emailed'], ['last_email_open_at', 'Last email open'], ['last_booking_at', 'Last booking']]
+const STAGE_OPTS = [['', 'Any stage'], ...PIPELINE_SLUGS.map(s => [s, s])]
 
 export default function SequenceSettings({ sequence }) {
   const [open, setOpen] = useState(false)
@@ -26,46 +49,80 @@ export default function SequenceSettings({ sequence }) {
   const [windowOn, setWindowOn] = useState(!!sequence?.send_window)
   const [win, setWin] = useState(sequence?.send_window || { start_hour: 9, end_hour: 20, skip_days: [] })
   const [cooldown, setCooldown] = useState(sequence?.re_enrolment_cooldown_days ?? 0)
+  const [triggerType, setTriggerType] = useState(sequence?.trigger_type || 'manual')
+  const [tcfg, setTcfg] = useState(sequence?.trigger_config || {})
+  const [webhookToken, setWebhookToken] = useState(sequence?.webhook_token || null)
+  const [webhookSecret, setWebhookSecret] = useState(sequence?.webhook_secret || '')
+  const [origin, setOrigin] = useState('')
+  const [segments, setSegments] = useState([])
   const [dirty, setDirty] = useState(false)
-  const [busy, setBusy] = useState(false)
+  const [busy, setBusy] = useState(null) // 'save' | 'rotate' | null
   const [feedback, setFeedback] = useState(null)
+
+  useEffect(() => { if (typeof window !== 'undefined') setOrigin(window.location.origin) }, [])
+  useEffect(() => {
+    const loc = sequence?.location_id
+    if (!loc) return
+    let active = true
+    fetch(`/api/contacts/segments?location_id=${loc}`)
+      .then(r => r.json())
+      .then(d => { if (active && d?.success && Array.isArray(d.segments)) setSegments(d.segments) })
+      .catch(() => {})
+    return () => { active = false }
+  }, [sequence?.location_id])
 
   const touch = () => { setDirty(true); setFeedback(null) }
   const goalType = goal?.type || ''
-  const setGoalType = (t) => {
-    setGoal(t === '' ? null : { type: t, ...(t === 'pipeline_stage' ? { value: PIPELINE_SLUGS[0] } : {}) })
-    touch()
-  }
+  const setGoalType = (t) => { setGoal(t === '' ? null : { type: t, ...(t === 'pipeline_stage' ? { value: PIPELINE_SLUGS[0] } : {}) }); touch() }
+  const setCfg = (patch) => { setTcfg(prev => ({ ...prev, ...patch })); touch() }
   const toggleSkipDay = (d) => {
     const cur = new Set(win.skip_days || [])
     cur.has(d) ? cur.delete(d) : cur.add(d)
     setWin({ ...win, skip_days: [...cur].sort((a, b) => a - b) }); touch()
   }
 
+  const buildPayload = () => ({
+    name: name || 'Untitled Sequence',
+    status,
+    description: description || null,
+    goal_config: goal,
+    send_window: windowOn ? win : null,
+    re_enrolment_cooldown_days: Math.max(0, Math.min(3650, parseInt(cooldown, 10) || 0)),
+    trigger_type: triggerType,
+    trigger_config: tcfg || {},
+    ...(triggerType === 'webhook' ? { webhook_secret: webhookSecret || null } : {}),
+  })
+
   const save = async () => {
-    setBusy(true)
+    setBusy('save')
     try {
-      const payload = {
-        name: name || 'Untitled Sequence',
-        status,
-        description: description || null,
-        goal_config: goal,
-        send_window: windowOn ? win : null,
-        re_enrolment_cooldown_days: Math.max(0, Math.min(3650, parseInt(cooldown, 10) || 0)),
-      }
-      const res = await fetch(`/api/sequences/${sequence.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
+      const res = await fetch(`/api/sequences/${sequence.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(buildPayload()) })
       const data = await res.json()
-      if (data.success) { setDirty(false); setFeedback({ ok: true, text: 'Settings saved' }) }
-      else setFeedback({ ok: false, text: data.error || 'Could not save settings' })
-    } catch { setFeedback({ ok: false, text: 'Network error saving settings' }) } finally { setBusy(false) }
+      if (data.success) {
+        setDirty(false); setFeedback({ ok: true, text: 'Settings saved' })
+        if (data.sequence?.webhook_token) setWebhookToken(data.sequence.webhook_token)
+      } else setFeedback({ ok: false, text: data.error || 'Could not save settings' })
+    } catch { setFeedback({ ok: false, text: 'Network error saving settings' }) } finally { setBusy(null) }
   }
+
+  const regenerateToken = async () => {
+    setBusy('rotate')
+    try {
+      const res = await fetch(`/api/sequences/${sequence.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ trigger_type: 'webhook', rotate_webhook_token: true }) })
+      const data = await res.json()
+      if (data.success && data.sequence?.webhook_token) { setWebhookToken(data.sequence.webhook_token); setFeedback({ ok: true, text: 'New webhook URL generated' }) }
+      else setFeedback({ ok: false, text: data.error || 'Could not regenerate' })
+    } catch { setFeedback({ ok: false, text: 'Network error' }) } finally { setBusy(null) }
+  }
+
+  const webhookUrl = webhookToken ? `${origin}/api/webhooks/sequence/${webhookToken}` : null
 
   return (
     <div className="max-w-md mx-auto mb-4 border border-un1t-border rounded-lg bg-un1t-surface">
       <button type="button" onClick={() => setOpen(o => !o)} className="w-full flex items-center gap-2 px-4 py-3 text-left">
         {open ? <ChevronDown size={15} className="text-un1t-subtle" /> : <ChevronRight size={15} className="text-un1t-subtle" />}
         <SettingsIcon size={15} className="text-un1t-subtle" />
-        <span className="text-sm font-medium text-un1t-text">Settings</span>
+        <span className="text-sm font-medium text-un1t-text">Settings &amp; trigger</span>
         <span className="ml-auto text-xs text-un1t-subtle capitalize">{status}{dirty ? ' • unsaved' : ''}</span>
       </button>
       {open && (
@@ -75,6 +132,72 @@ export default function SequenceSettings({ sequence }) {
             <Select value={status} onChange={v => { setStatus(v); touch() }} options={[['draft', 'Draft'], ['active', 'Active'], ['paused', 'Paused'], ['archived', 'Archived']]} />
           </Labeled>
 
+          {/* Trigger */}
+          <div className="rounded-lg border border-un1t-border/70 bg-un1t-bg/40 p-3 space-y-2">
+            <Labeled label="Trigger — what starts this flow">
+              <Select value={triggerType} onChange={v => { setTriggerType(v); touch() }} options={TRIGGER_OPTIONS} />
+            </Labeled>
+            {(triggerType === 'booking_created' || triggerType === 'first_booking') && (
+              <Labeled label="Event type ID" hint="Optional — blank means any event type."><Text value={tcfg.event_type_id} onChange={v => setCfg({ event_type_id: v || undefined })} placeholder="event type id (optional)" /></Labeled>
+            )}
+            {triggerType === 'pipeline_stage_change' && (
+              <div className="grid grid-cols-2 gap-2">
+                <Labeled label="From stage"><Select value={tcfg.from_status || ''} onChange={v => setCfg({ from_status: v || undefined })} options={STAGE_OPTS} /></Labeled>
+                <Labeled label="To stage"><Select value={tcfg.to_status || ''} onChange={v => setCfg({ to_status: v || undefined })} options={STAGE_OPTS} /></Labeled>
+              </div>
+            )}
+            {triggerType === 'tag_added' && (
+              <Labeled label="Tag" hint="Fires when this exact tag is added."><Text value={tcfg.tag} onChange={v => setCfg({ tag: v })} placeholder="e.g. trial_expired" /></Labeled>
+            )}
+            {triggerType === 'event_reminder' && (
+              <div className="grid grid-cols-2 gap-2">
+                <Labeled label="Hours before"><Num value={tcfg.hours_before ?? 24} onChange={v => setCfg({ hours_before: v })} max={2160} /></Labeled>
+                <Labeled label="Event type ID" hint="Optional"><Text value={tcfg.event_type_id} onChange={v => setCfg({ event_type_id: v || undefined })} placeholder="optional" /></Labeled>
+              </div>
+            )}
+            {(triggerType === 'segment_added' || triggerType === 'segment_removed') && (
+              <Labeled label="Segment" hint={segments.length ? 'A saved contact segment.' : 'No saved segments — create one on the Contacts page.'}>
+                <Select value={tcfg.segment_id || ''} onChange={v => setCfg({ segment_id: v || undefined })} options={[['', 'Choose a segment…'], ...segments.map(s => [s.id, s.name])]} />
+              </Labeled>
+            )}
+            {triggerType === 'anniversary' && (
+              <div className="grid grid-cols-2 gap-2">
+                <Labeled label="Anniversary of"><Select value={tcfg.from_field || 'lead_created_at'} onChange={v => setCfg({ from_field: v })} options={ANNIV_FIELDS} /></Labeled>
+                <Labeled label="Days after"><Num value={tcfg.days_after ?? 365} onChange={v => setCfg({ days_after: v })} max={3650} /></Labeled>
+              </div>
+            )}
+            {triggerType === 'inactivity' && (
+              <div className="grid grid-cols-2 gap-2">
+                <Labeled label="No activity on"><Select value={tcfg.signal || 'last_emailed_at'} onChange={v => setCfg({ signal: v })} options={INACT_SIGNALS} /></Labeled>
+                <Labeled label="Days inactive"><Num value={tcfg.days_inactive ?? 30} onChange={v => setCfg({ days_inactive: v })} max={3650} /></Labeled>
+              </div>
+            )}
+            {(triggerType === 'race_registered' || triggerType === 'race_finished') && (
+              <Labeled label="Race event ID" hint="Optional — blank means any race."><Text value={tcfg.race_event_id} onChange={v => setCfg({ race_event_id: v || undefined })} placeholder="optional" /></Labeled>
+            )}
+            {triggerType === 'achievement_unlocked' && (
+              <Labeled label="Achievement rule slug" hint="Optional — blank means any achievement."><Text value={tcfg.rule_slug} onChange={v => setCfg({ rule_slug: v || undefined })} placeholder="optional" /></Labeled>
+            )}
+            {triggerType === 'webhook' && (
+              <div className="space-y-2">
+                {webhookUrl ? (
+                  <div>
+                    <span className="block text-xs font-medium text-un1t-subtle mb-1">Inbound webhook URL</span>
+                    <div className="flex items-center gap-1">
+                      <code className="flex-1 text-[11px] bg-un1t-bg border border-un1t-border rounded px-2 py-1.5 text-un1t-text truncate">{webhookUrl}</code>
+                      <button type="button" title="Copy" onClick={() => navigator.clipboard?.writeText(webhookUrl)} className="w-7 h-7 rounded-md flex items-center justify-center text-un1t-subtle hover:text-un1t-text hover:bg-un1t-border/40"><Copy size={13} /></button>
+                      <button type="button" title="Regenerate (invalidates the old URL)" onClick={regenerateToken} disabled={busy !== null} className="w-7 h-7 rounded-md flex items-center justify-center text-un1t-subtle hover:text-un1t-text hover:bg-un1t-border/40 disabled:opacity-40"><RefreshCw size={13} className={busy === 'rotate' ? 'animate-spin' : ''} /></button>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="text-[11px] text-un1t-subtle">Save to generate the inbound webhook URL.</p>
+                )}
+                <Labeled label="Shared secret" hint="Optional — sent as the webhook signature; blank = token-in-URL only."><Text value={webhookSecret} onChange={v => { setWebhookSecret(v); touch() }} placeholder="optional secret" /></Labeled>
+              </div>
+            )}
+          </div>
+
+          {/* Goal */}
           <Labeled label="Goal — auto-exit when…" hint="The contact leaves the sequence early once this is met.">
             <Select value={goalType} onChange={setGoalType} options={[['', 'No goal'], ['pipeline_stage', 'Reaches a pipeline stage'], ['tag_added', 'Gets a tag'], ['booking_made', 'Books an event']]} />
           </Labeled>
@@ -85,6 +208,7 @@ export default function SequenceSettings({ sequence }) {
             <Labeled label="Tag"><Text value={goal.tag} onChange={v => { setGoal({ ...goal, tag: v }); touch() }} placeholder="e.g. race_completed" /></Labeled>
           )}
 
+          {/* Send window */}
           <div>
             <label className="flex items-center gap-2 text-xs font-medium text-un1t-subtle">
               <input type="checkbox" checked={windowOn} onChange={e => { setWindowOn(e.target.checked); touch() }} />
@@ -115,7 +239,7 @@ export default function SequenceSettings({ sequence }) {
           <Labeled label="Internal note"><Area value={description} onChange={v => { setDescription(v); touch() }} rows={2} placeholder="Optional memo for your team" /></Labeled>
 
           <div className="flex items-center gap-2 pt-1">
-            <Button onClick={save} variant="primary" size="sm" icon={Save} loading={busy} disabled={!dirty || busy}>Save settings</Button>
+            <Button onClick={save} variant="primary" size="sm" icon={Save} loading={busy === 'save'} disabled={!dirty || busy !== null}>Save settings</Button>
             {feedback && <span className={`text-xs flex items-center gap-1 ${feedback.ok ? 'text-emerald-700' : 'text-rose-700'}`}>{feedback.ok ? <Check size={13} /> : <AlertTriangle size={13} />}{feedback.text}</span>}
           </div>
         </div>
