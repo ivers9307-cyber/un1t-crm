@@ -40,6 +40,11 @@ export default ({ config }) => ({
   name: 'CF Studio',
   slug: 'un1t-crm-mobile',
   version: '1.2.1',
+  // We ship iOS + Android only. Without this, Expo defaults to
+  // ['ios','android','web'] and `eas update` exports for web too —
+  // which crashes the publish because react-native-web isn't installed.
+  // That export failure is why no OTA ever reached the binary.
+  platforms: ['ios', 'android'],
   // STUDIO-IPAD.1 — 'default' lets the OS decide based on the
   // device. iPhone is still pinned to portrait by per-screen
   // useScreenOptions calls (where they exist); iPad can rotate
