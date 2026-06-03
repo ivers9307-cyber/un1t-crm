@@ -5,6 +5,10 @@ export { decompileStepsToGraph } from './decompile.js'
 export { resolveSequenceGraph, compileForPublish } from './persist.js'
 export { buildFlowLayout, describeNode, describeTrigger } from './view.js'
 export {
+  linearOrder, isLinearGraph, toLinearGraph, rebuildLinearEdges,
+  nextNodeId, defaultConfigForType,
+} from './edit.js'
+export {
   NODE_TYPES, TRIGGER_TYPES, CHANNEL_NODE_TYPES, CONFIG_NODE_TYPES,
   TRIGGER_SOURCE_ID, isChannelNode, parseGraphShape,
 } from './schema.js'
