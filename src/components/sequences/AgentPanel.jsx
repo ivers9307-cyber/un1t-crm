@@ -45,7 +45,7 @@ export default function AgentPanel({ sequenceId }) {
             placeholder="e.g. A 3-day welcome flow: email straight away, wait a day then WhatsApp, and if they still haven’t booked, send an SMS nudge."
             className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text placeholder:text-un1t-subtle/60 focus:outline-none focus:ring-1 focus:ring-un1t-text/30 resize-y disabled:opacity-60"
           />
-          <p className="text-[11px] text-un1t-subtle">The AI drafts the flow for this sequence’s trigger. Nothing goes live until you review &amp; Publish. <strong>This replaces the current draft.</strong></p>
+          <p className="text-[11px] text-un1t-subtle">The AI picks a trigger, names the sequence, and builds the flow — review it all below. Nothing goes live until you Publish. <strong>This replaces the current draft + recommended settings.</strong></p>
           {error && <p className="text-xs text-rose-700 flex items-center gap-1"><AlertTriangle size={13} />{error}</p>}
           <Button onClick={generate} variant="primary" size="sm" icon={Sparkles} loading={busy} disabled={busy || !prompt.trim()}>
             {busy ? 'Drafting…' : 'Generate draft'}

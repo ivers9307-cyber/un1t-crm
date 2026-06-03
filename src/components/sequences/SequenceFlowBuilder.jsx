@@ -124,6 +124,14 @@ export default function SequenceFlowBuilder({ graph, sequence, isDraft }) {
   // so the canvas updates without a manual page refresh. Stable during normal
   // editing (FlowEditor's own state changes don't re-render this parent).
   const graphKey = JSON.stringify(graph)
+  // Same remount trick for the settings panel (it also seeds from `sequence`
+  // once) so an AI-recommended trigger + name show immediately after the agent
+  // saves and we router.refresh() — no manual page refresh.
+  const settingsKey = JSON.stringify({
+    n: sequence?.name, s: sequence?.status, tt: sequence?.trigger_type, tc: sequence?.trigger_config,
+    g: sequence?.goal_config, sw: sequence?.send_window, rc: sequence?.re_enrolment_cooldown_days,
+    wt: sequence?.webhook_token, ws: sequence?.webhook_secret, d: sequence?.description,
+  })
 
   return (
     <div className="max-w-3xl mx-auto px-4 py-6">
@@ -140,8 +148,8 @@ export default function SequenceFlowBuilder({ graph, sequence, isDraft }) {
         Visual flow builder — set the trigger, add steps, branch into yes/no paths, reorder, and publish.
       </p>
 
-      <SequenceSettings sequence={sequence} />
       <AgentPanel sequenceId={sequence?.id} />
+      <SequenceSettings key={settingsKey} sequence={sequence} />
 
       {isDraft && (
         <div className="max-w-md mx-auto mb-4 rounded-lg border border-amber-500/30 bg-amber-500/[0.05] px-3 py-2 text-xs text-amber-700">
