@@ -14,6 +14,7 @@ import { hasPermission } from '@/lib/permissions'
 import SequenceTemplatePicker from '@/components/SequenceTemplatePicker'
 import CloneSequenceButton from '@/components/CloneSequenceButton'
 import NewSequenceButton from '@/components/sequences/NewSequenceButton'
+import DeleteSequenceButton from '@/components/sequences/DeleteSequenceButton'
 
 export const dynamic = 'force-dynamic'
 
@@ -121,6 +122,7 @@ export default async function SequencesListPage() {
                     {config.label}
                   </span>
                   <CloneSequenceButton sequenceId={seq.id} sequenceName={seq.name} />
+                  <DeleteSequenceButton sequenceId={seq.id} sequenceName={seq.name} />
                 </div>
               </div>
             )
