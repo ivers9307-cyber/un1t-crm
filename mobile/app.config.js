@@ -39,7 +39,7 @@ export default ({ config }) => ({
   // can now PIN-login from the web shell at /studio-login.
   name: 'CF Studio',
   slug: 'un1t-crm-mobile',
-  version: '1.2.0',
+  version: '1.2.1',
   // STUDIO-IPAD.1 — 'default' lets the OS decide based on the
   // device. iPhone is still pinned to portrait by per-screen
   // useScreenOptions calls (where they exist); iPad can rotate
