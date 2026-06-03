@@ -10,16 +10,20 @@
 // presentation component. Recharts is the charting lib (DASH-MEMBERSHIP
 // recommendation — scales to the further board panels).
 
-import {
-  ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
-} from 'recharts'
+import dynamic from 'next/dynamic'
 import { KpiCard, KpiRow, SectionHeader } from './Cards'
 
-const SERIES = [
-  { key: 'monthly_recurring', label: 'Monthly recurring', color: '#10b981' },
-  { key: 'class_packs',       label: 'Class packs',       color: '#3b82f6' },
-  { key: 'payg',             label: 'Pay-as-you-go',      color: '#a78bfa' },
-]
+// Lazy-load the recharts trend chart so the ~150KB charting lib is only
+// fetched when the trend section renders, not on every dashboard load.
+// ssr:false — the chart is client-only and below the KPI cards anyway.
+const MembershipTrendChart = dynamic(() => import('./MembershipTrendChart'), {
+  ssr: false,
+  loading: () => (
+    <div style={{ height: 280 }} className="flex items-center justify-center">
+      <p className="text-sm text-un1t-muted">Loading chart…</p>
+    </div>
+  ),
+})
 
 export function MembershipPanel({ live, trend }) {
   const l = live || {}
@@ -59,32 +63,7 @@ export function MembershipPanel({ live, trend }) {
       <SectionHeader title="Membership trend (12 months)" />
       <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
         {hasTrend ? (
-          <div style={{ width: '100%', height: 280 }}>
-            <ResponsiveContainer>
-              <LineChart data={trend} margin={{ top: 8, right: 12, bottom: 4, left: -8 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#2a2f3a" vertical={false} />
-                <XAxis dataKey="month" stroke="#8b93a7" fontSize={12} tickLine={false} />
-                <YAxis stroke="#8b93a7" fontSize={12} tickLine={false} allowDecimals={false} width={40} />
-                <Tooltip
-                  contentStyle={{ background: '#171a21', border: '1px solid #2a2f3a', borderRadius: 8, fontSize: 12 }}
-                  labelStyle={{ color: '#e7e9ee' }}
-                />
-                <Legend wrapperStyle={{ fontSize: 12 }} />
-                {SERIES.map((s) => (
-                  <Line
-                    key={s.key}
-                    type="monotone"
-                    dataKey={s.key}
-                    name={s.label}
-                    stroke={s.color}
-                    strokeWidth={2}
-                    dot={{ r: 3 }}
-                    activeDot={{ r: 5 }}
-                  />
-                ))}
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
+          <MembershipTrendChart trend={trend} />
         ) : (
           <p className="text-sm text-un1t-muted py-8 text-center">
             Trend starts building from the first monthly snapshot. Check back next month
