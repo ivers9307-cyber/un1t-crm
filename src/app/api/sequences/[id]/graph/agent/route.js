@@ -18,7 +18,7 @@ export async function POST(request, props) {
 
   const db = createServerClient()
   const { data: sequence } = await db.from('email_sequences')
-    .select('location_id, trigger_type, trigger_config').eq('id', params.id).single()
+    .select('location_id, name, trigger_type, trigger_config').eq('id', params.id).single()
   if (!sequence) return NextResponse.json({ success: false, error: 'Sequence not found' }, { status: 404 })
   const guard = assertLocationAccess(user, sequence.location_id)
   if (guard) return guard
@@ -35,9 +35,22 @@ export async function POST(request, props) {
   const result = await runFlowAgent({ apiKey, prompt, trigger })
   if (!result.ok) return NextResponse.json({ success: false, error: result.error || 'The AI could not build a flow.' }, { status: 502 })
 
-  // Save as a draft only — never publish. The builder loads + reviews it.
-  const { error } = await db.from('email_sequences').update({ draft_graph: result.graph }).eq('id', params.id)
+  // Save the agent's draft + its RECOMMENDED trigger + name so the settings
+  // panel shows them. The graph goes to draft_graph (never published — the
+  // operator reviews + Publishes). The trigger is a recommendation persisted to
+  // the sequence's columns; if the agent picks the webhook trigger, the settings
+  // panel's Regenerate generates the token (none is created here).
+  const update = {
+    draft_graph: result.graph,
+    trigger_type: result.graph.trigger?.type || sequence.trigger_type,
+    trigger_config: result.graph.trigger?.config || {},
+  }
+  // Adopt the AI's name only while the sequence is still untitled — don't clobber a name the operator chose.
+  const isUntitled = !sequence.name || /^untitled/i.test(sequence.name)
+  if (result.name && isUntitled) update.name = result.name
+
+  const { error } = await db.from('email_sequences').update(update).eq('id', params.id)
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
 
-  return NextResponse.json({ success: true, graph: result.graph, validation: result.validation, exhausted: !!result.exhausted })
+  return NextResponse.json({ success: true, graph: result.graph, validation: result.validation, name: update.name || sequence.name, exhausted: !!result.exhausted })
 }

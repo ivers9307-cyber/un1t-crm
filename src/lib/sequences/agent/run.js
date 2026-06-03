@@ -43,6 +43,7 @@ export async function runFlowAgent({ apiKey, prompt, trigger }) {
   const messages = [{ role: 'user', content: buildAgentUserMessage(prompt, trigger) }]
   let lastGraph = null
   let lastValidation = null
+  let lastName = null
 
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     let data
@@ -55,11 +56,13 @@ export async function runFlowAgent({ apiKey, prompt, trigger }) {
     const toolUse = (data.content || []).find(b => b.type === 'tool_use' && b.name === EMIT_TOOL.name)
     if (!toolUse) return { ok: false, error: 'The AI did not return a flow.' }
 
+    if (typeof toolUse.input?.name === 'string' && toolUse.input.name.trim()) lastName = toolUse.input.name.trim().slice(0, 200)
+
     const shape = parseGraphShape(toolUse.input)
     if (shape.ok) {
       lastGraph = shape.data
       lastValidation = validateGraph(lastGraph)
-      if (lastValidation.ok) return { ok: true, graph: lastGraph, validation: lastValidation }
+      if (lastValidation.ok) return { ok: true, graph: lastGraph, validation: lastValidation, name: lastName }
     }
 
     // Feed the problem back and let it self-correct (shape error or semantic errors).
@@ -70,6 +73,6 @@ export async function runFlowAgent({ apiKey, prompt, trigger }) {
 
   // Ran out of attempts. Hand back the last shape-valid draft (if any) + its
   // validation so the operator can finish it in the builder; else hard fail.
-  if (lastGraph) return { ok: true, graph: lastGraph, validation: lastValidation, exhausted: true }
+  if (lastGraph) return { ok: true, graph: lastGraph, validation: lastValidation, name: lastName, exhausted: true }
   return { ok: false, error: 'The AI couldn’t produce a usable flow — try rephrasing.' }
 }

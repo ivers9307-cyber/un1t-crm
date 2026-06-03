@@ -14,6 +14,7 @@ export const EMIT_TOOL = {
     type: 'object',
     properties: {
       version: { type: 'integer' },
+      name: { type: 'string', description: 'A short, descriptive name for this sequence.' },
       trigger: { type: 'object', properties: { type: { type: 'string' }, config: { type: 'object' } }, required: ['type'] },
       nodes: {
         type: 'array',
@@ -59,7 +60,7 @@ EDGES & STRUCTURE RULES (these are validated — follow them exactly):
 - The flow must always move forward — NO cycles/loops.
 - Node ids are short unique strings like n1, n2, ...
 
-TRIGGER: trigger types are ${TRIGGER_TYPES.join(', ')}. The trigger is usually already chosen for this sequence — KEEP the trigger you are given unless the user explicitly asks to change it; focus on the steps.
+TRIGGER + NAME: trigger types are ${TRIGGER_TYPES.join(', ')}. CHOOSE the trigger that best fits the request and set trigger.type (+ any trigger.config) accordingly — e.g. a welcome flow → booking_created or manual; a re-engagement flow → inactivity; a tag-driven flow → tag_added; a stage-based flow → pipeline_stage_change. Avoid "webhook" unless the user explicitly describes an inbound integration. Also set a short, descriptive "name" for the sequence.
 
 GUIDANCE:
 - Build a thoughtful, realistic nurture flow: open with a timely message, space messages with wait nodes (don't bunch them), and use a branch when the user describes a condition ("if they've booked / if they're a member / if tagged X").
@@ -71,7 +72,7 @@ GUIDANCE:
 export function buildAgentUserMessage(prompt, trigger) {
   const t = trigger?.type || 'manual'
   const cfg = trigger?.config && Object.keys(trigger.config).length ? ` (config: ${JSON.stringify(trigger.config)})` : ''
-  return `The sequence trigger is "${t}"${cfg}. Build the flow for this request:\n\n${prompt}`
+  return `Design the whole sequence — pick the best trigger + a good name, then build the steps. The trigger is currently "${t}"${cfg} (change it if a different one fits the request better).\n\nRequest:\n${prompt}`
 }
 
 // The follow-up turn when the emitted graph failed validation — fed back so the

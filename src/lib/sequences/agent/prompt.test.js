@@ -18,6 +18,7 @@ describe('flow agent prompt', () => {
     expect(EMIT_TOOL.name).toBe('emit_sequence_graph')
     expect(EMIT_TOOL.input_schema.required).toEqual(expect.arrayContaining(['trigger', 'nodes', 'edges']))
     expect(EMIT_TOOL.input_schema.properties.edges.items.properties.label.enum).toEqual(['yes', 'no'])
+    expect(EMIT_TOOL.input_schema.properties.name).toBeDefined() // the agent also proposes a name
   })
 
   it('user message carries the trigger + the ask', () => {
