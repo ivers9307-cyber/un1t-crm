@@ -1,17 +1,17 @@
 'use client'
 
 // FLOW-GRAPH Phase 2 — the sequence builder. Dispatches on graph shape:
-//   - linear flow → LinearFlowEditor (editable: add/reorder/delete + config +
-//     save draft + publish, PR3)
-//   - has branches → the read-only guided rail with YES/NO lanes (PR2), until
-//     branch authoring lands. Either way the classic editor stays available.
+//   - pure tree (linear OR branched) → FlowEditor (editable: add / branch /
+//     reorder / delete + per-type config + save draft + publish)
+//   - re-convergent (paths merge back) → the read-only guided rail with YES/NO
+//     lanes; edit those in the classic editor. Either way classic stays available.
 import Link from 'next/link'
 import { Pencil, CircleDot, CornerDownRight, GitBranch } from 'lucide-react'
 import { Button } from '@/components/ui'
-import { buildFlowLayout, describeNode, isLinearGraph } from '@/lib/sequences/graph'
+import { buildFlowLayout, describeNode, isPureTree } from '@/lib/sequences/graph'
 import { styleForType } from './nodeStyles'
 import { TriggerCard, Connector } from './parts'
-import LinearFlowEditor from './LinearFlowEditor'
+import FlowEditor from './FlowEditor'
 
 const STATUS_BADGE = {
   draft: 'bg-un1t-border/40 text-un1t-subtle',
@@ -93,7 +93,7 @@ function ReadOnlyFlow({ graph }) {
     <>
       <div className="max-w-md mx-auto mb-4 rounded-lg border border-amber-500/30 bg-amber-500/[0.05] px-3 py-2 text-xs text-amber-700 flex items-center gap-2">
         <GitBranch size={14} className="shrink-0" />
-        This flow has branches. Visual branch editing is coming next — use the classic editor to change it for now.
+        This flow’s paths merge back together — a shape the visual editor can’t edit yet. Use the classic editor to change it.
       </div>
       <TriggerCard trigger={graph?.trigger} />
       {isEmpty ? (
@@ -106,7 +106,7 @@ function ReadOnlyFlow({ graph }) {
 }
 
 export default function SequenceFlowBuilder({ graph, sequence }) {
-  const editable = isLinearGraph(graph)
+  const editable = isPureTree(graph)
   const status = sequence?.status || 'draft'
 
   return (
@@ -124,11 +124,11 @@ export default function SequenceFlowBuilder({ graph, sequence }) {
         </div>
       </div>
       <p className="text-xs text-un1t-subtle mb-5">
-        Visual flow builder — add steps, reorder, and publish. Branch (yes/no) authoring &amp; the rich email designer live in the classic editor for now.
+        Visual flow builder — add steps, branch into yes/no paths, reorder, and publish. The rich email designer &amp; WhatsApp variable mapping live in the classic editor.
       </p>
 
       {editable
-        ? <LinearFlowEditor initialGraph={graph} sequence={sequence} />
+        ? <FlowEditor initialGraph={graph} sequence={sequence} />
         : <ReadOnlyFlow graph={graph} />}
     </div>
   )
