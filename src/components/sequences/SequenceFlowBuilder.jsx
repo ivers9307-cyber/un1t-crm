@@ -12,6 +12,15 @@ import { styleForType } from './nodeStyles'
 import { TriggerCard, Connector } from './parts'
 import FlowEditor from './FlowEditor'
 import SequenceSettings from './SequenceSettings'
+import AgentPanel from './AgentPanel'
+
+// Node types that write data or reach external services — surfaced in the draft
+// review banner so an operator double-checks them before publishing (esp. on an
+// AI-generated draft).
+const WRITE_STEP_LABELS = {
+  apply_tag: 'add a tag', update_field: 'update a contact field',
+  webhook: 'call an external webhook', move_pipeline_stage: 'move the pipeline stage',
+}
 
 const STATUS_BADGE = {
   draft: 'bg-un1t-border/40 text-un1t-subtle',
@@ -105,9 +114,10 @@ function ReadOnlyFlow({ graph }) {
   )
 }
 
-export default function SequenceFlowBuilder({ graph, sequence }) {
+export default function SequenceFlowBuilder({ graph, sequence, isDraft }) {
   const editable = isPureTree(graph)
   const status = sequence?.status || 'draft'
+  const writeSteps = [...new Set((graph?.nodes || []).map(n => WRITE_STEP_LABELS[n.type]).filter(Boolean))]
 
   return (
     <div className="max-w-3xl mx-auto px-4 py-6">
@@ -125,6 +135,16 @@ export default function SequenceFlowBuilder({ graph, sequence }) {
       </p>
 
       <SequenceSettings sequence={sequence} />
+      <AgentPanel sequenceId={sequence?.id} />
+
+      {isDraft && (
+        <div className="max-w-md mx-auto mb-4 rounded-lg border border-amber-500/30 bg-amber-500/[0.05] px-3 py-2 text-xs text-amber-700">
+          <p className="font-semibold">Unpublished draft — review, then Publish to make it live.</p>
+          {writeSteps.length > 0 && (
+            <p className="mt-1">Heads up: this draft will also {writeSteps.join(', ')}. Double-check those steps are right.</p>
+          )}
+        </div>
+      )}
 
       {editable
         ? <FlowEditor initialGraph={graph} sequence={sequence} />
