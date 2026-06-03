@@ -35,6 +35,19 @@ import { ACCOUNT_TOOLS, executeAccountTool } from './account-tools'
 
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages'
 const AGENT_MODEL = 'claude-sonnet-4-6'
+
+// Prompt caching (CACHE.1): ACCOUNT_TOOLS (~4k tokens) is byte-identical on
+// every inbound message and renders BEFORE the per-customer (dynamic) system
+// prompt — so the tool block is the one stable, cacheable prefix on this path.
+// Marking the LAST tool ephemeral caches the whole tool block (clears the
+// 2048-token minimum for claude-sonnet-4-6); the dynamic system + messages
+// after it stay uncached. Built once from the shared const so we never mutate
+// it. No anthropic-beta header needed — caching is GA on version 2023-06-01.
+const CACHED_ACCOUNT_TOOLS = ACCOUNT_TOOLS.map((tool, i) =>
+  i === ACCOUNT_TOOLS.length - 1
+    ? { ...tool, cache_control: { type: 'ephemeral' } }
+    : tool,
+)
 // Don't re-acknowledge a burst of non-text messages — one soft handoff
 // per minute is enough.
 const SOFT_NOTIFY_GAP_MS = 60_000
@@ -228,7 +241,7 @@ export async function runChannelAgent(db, adapter, ctx) {
             max_tokens: 600,
             system: systemPrompt,
             messages,
-            tools: ACCOUNT_TOOLS,
+            tools: CACHED_ACCOUNT_TOOLS,
           }),
         })
         if (!res.ok) {
