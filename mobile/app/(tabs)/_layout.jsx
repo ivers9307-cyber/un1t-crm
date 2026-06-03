@@ -117,7 +117,11 @@ export default function TabsLayout() {
           title: 'Bookings',
           href: showBookings ? '/(tabs)/bookings' : null,
           // MOB-UI.4 — reached from the More tab, not the bottom bar.
-          tabBarButton: () => null,
+          // Hide from the bar via tabBarItemStyle (NOT tabBarButton):
+          // expo-router 6 / SDK 54 hard-errors on `href` + `tabBarButton`
+          // together, so use the style to hide while keeping `href` for
+          // permission gating + navigability.
+          tabBarItemStyle: { display: 'none' },
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="calendar-clear-outline" size={size} color={color} />
           ),
@@ -129,7 +133,11 @@ export default function TabsLayout() {
           title: 'Pipeline',
           href: showPipeline ? '/(tabs)/pipeline' : null,
           // MOB-UI.4 — reached from the More tab, not the bottom bar.
-          tabBarButton: () => null,
+          // Hide from the bar via tabBarItemStyle (NOT tabBarButton):
+          // expo-router 6 / SDK 54 hard-errors on `href` + `tabBarButton`
+          // together, so use the style to hide while keeping `href` for
+          // permission gating + navigability.
+          tabBarItemStyle: { display: 'none' },
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="trending-up-outline" size={size} color={color} />
           ),
@@ -161,7 +169,11 @@ export default function TabsLayout() {
           title: 'Invoices',
           href: showInvoices ? '/(tabs)/invoices' : null,
           // MOB-UI.4 — reached from the More tab, not the bottom bar.
-          tabBarButton: () => null,
+          // Hide from the bar via tabBarItemStyle (NOT tabBarButton):
+          // expo-router 6 / SDK 54 hard-errors on `href` + `tabBarButton`
+          // together, so use the style to hide while keeping `href` for
+          // permission gating + navigability.
+          tabBarItemStyle: { display: 'none' },
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="receipt-outline" size={size} color={color} />
           ),
@@ -173,7 +185,11 @@ export default function TabsLayout() {
           title: 'Expenses',
           href: showExpenses ? '/(tabs)/expenses' : null,
           // MOB-UI.4 — reached from the More tab, not the bottom bar.
-          tabBarButton: () => null,
+          // Hide from the bar via tabBarItemStyle (NOT tabBarButton):
+          // expo-router 6 / SDK 54 hard-errors on `href` + `tabBarButton`
+          // together, so use the style to hide while keeping `href` for
+          // permission gating + navigability.
+          tabBarItemStyle: { display: 'none' },
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="wallet-outline" size={size} color={color} />
           ),
