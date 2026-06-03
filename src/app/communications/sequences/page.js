@@ -7,7 +7,7 @@
 
 import Link from 'next/link'
 import { redirect } from 'next/navigation'
-import { Plus, Zap, Play, Pause, FileEdit, LayoutTemplate, GitBranch } from 'lucide-react'
+import { Plus, Zap, Play, Pause, FileEdit, LayoutTemplate } from 'lucide-react'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
@@ -109,7 +109,7 @@ export default async function SequencesListPage() {
                 className="flex items-center justify-between px-5 py-4 hover:bg-un1t-border/20 transition-colors"
               >
                 <Link
-                  href={`/email/sequences/${seq.id}`}
+                  href={`/communications/sequences/${seq.id}`}
                   className="flex items-center gap-4 flex-1 min-w-0"
                 >
                   <div className="w-10 h-10 rounded-lg bg-un1t-border/30 flex items-center justify-center shrink-0">
@@ -131,12 +131,12 @@ export default async function SequencesListPage() {
                     {config.label}
                   </span>
                   <Link
-                    href={`/communications/sequences/${seq.id}`}
+                    href={`/email/sequences/${seq.id}`}
                     className="flex items-center gap-1 text-xs text-un1t-subtle hover:text-un1t-text"
-                    title="Open in the new visual builder"
+                    title="Open the classic editor"
                   >
-                    <GitBranch size={13} />
-                    <span className="hidden sm:inline">Builder</span>
+                    <FileEdit size={13} />
+                    <span className="hidden sm:inline">Classic</span>
                   </Link>
                   <CloneSequenceButton sequenceId={seq.id} sequenceName={seq.name} />
                 </div>
