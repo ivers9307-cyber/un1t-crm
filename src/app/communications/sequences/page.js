@@ -7,12 +7,13 @@
 
 import Link from 'next/link'
 import { redirect } from 'next/navigation'
-import { Plus, Zap, Play, Pause, FileEdit, LayoutTemplate } from 'lucide-react'
+import { Zap, Play, Pause, FileEdit, LayoutTemplate } from 'lucide-react'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import SequenceTemplatePicker from '@/components/SequenceTemplatePicker'
 import CloneSequenceButton from '@/components/CloneSequenceButton'
+import NewSequenceButton from '@/components/sequences/NewSequenceButton'
 
 export const dynamic = 'force-dynamic'
 
@@ -70,13 +71,7 @@ export default async function SequencesListPage() {
             Browse templates
           </Link>
           <SequenceTemplatePicker />
-          <Link
-            href="/email/sequences/new"
-            className="flex items-center gap-2 bg-un1t-text text-un1t-bg text-sm font-medium px-4 py-2 rounded-lg hover:bg-un1t-accent transition-colors"
-          >
-            <Plus size={16} />
-            New Sequence
-          </Link>
+          <NewSequenceButton className="flex items-center gap-2 bg-un1t-text text-un1t-bg text-sm font-medium px-4 py-2 rounded-lg hover:bg-un1t-accent transition-colors disabled:opacity-60" />
         </div>
       </div>
 
@@ -87,12 +82,7 @@ export default async function SequencesListPage() {
           <p className="text-sm text-un1t-subtle mb-4">
             Create automated email sequences that trigger on bookings, status changes, or tags.
           </p>
-          <Link
-            href="/email/sequences/new"
-            className="inline-flex items-center gap-2 bg-un1t-text text-un1t-bg text-sm font-medium px-4 py-2 rounded-lg hover:bg-un1t-accent transition-colors"
-          >
-            <Plus size={16} /> Create Sequence
-          </Link>
+          <NewSequenceButton label="Create Sequence" className="inline-flex items-center gap-2 bg-un1t-text text-un1t-bg text-sm font-medium px-4 py-2 rounded-lg hover:bg-un1t-accent transition-colors disabled:opacity-60" />
         </div>
       ) : (
         <div className="bg-un1t-surface border border-un1t-border rounded-2xl divide-y divide-un1t-border">
