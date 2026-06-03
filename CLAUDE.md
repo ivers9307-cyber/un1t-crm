@@ -14,7 +14,7 @@ npm run test:watch               # Re-run tests on file change
 npm run check:mobile-parity      # Lint web/mobile feature parity (see "Extending")
 ```
 
-Tests live alongside source as `*.test.js` (Vitest). Covers the security-critical lib helpers in `src/lib/` — webhook signatures, audience-filter whitelist, Zod validation, rate limiting, schema invariants — plus the policy contracts that drive permissions, contact merge, sequence cooldowns, branch routing, and so on. **2876 tests as of mig 238** (RETIRE-SHIFTS-MIRROR.6 — `public.shifts` mirror fully retired), run in a few seconds, no DB required (lib helpers are pure).
+Tests live alongside source as `*.test.js` (Vitest). Covers the security-critical lib helpers in `src/lib/` — webhook signatures, audience-filter whitelist, Zod validation, rate limiting, schema invariants — plus the policy contracts that drive permissions, contact merge, sequence cooldowns, branch routing, and so on. **~2950 tests as of mig 242** (now includes route-level idempotency tests for the Revolut money webhooks + deposit pay flow, TEST.1/.2), run in a few seconds, no DB required (lib helpers are pure).
 
 Migrations are run via Supabase MCP from this session, or manually in the Supabase SQL Editor.
 
@@ -138,7 +138,7 @@ When adding a new route or schema, register it in `src/lib/openapi.js` so the sp
 
 ## Architecture
 
-UN1T CRM is a Next.js 14 App Router application with Supabase (PostgreSQL) backend, built for gym lead management and operations across multiple locations.
+UN1T CRM is a Next.js 16 App Router application with Supabase (PostgreSQL) backend, built for gym lead management and operations across multiple locations.
 
 ### Companion projects (May 2026 onward)
 
@@ -168,7 +168,7 @@ Schema for the heart-rate work (mig 110 + `contact_devices` in mig 112, made pro
 
 ### Tech Stack
 
-React 18 + Next.js 14, Tailwind CSS 3.4, Supabase Auth (SSR cookies), Postmark (email), WhatsApp Cloud API (Meta v21.0), Zod (input validation), `@asteasolutions/zod-to-openapi` (spec generation), Vitest (testing), `@dnd-kit` (pipeline kanban), lucide-react icons, clsx.
+React 19 + Next.js 16, Tailwind CSS 3.4, Supabase Auth (SSR cookies), Postmark (email), WhatsApp Cloud API (Meta v21.0), Zod (input validation), `@asteasolutions/zod-to-openapi` (spec generation), Vitest (testing), `@dnd-kit` (pipeline kanban), lucide-react icons, clsx.
 
 ### Key Architectural Patterns
 
@@ -283,7 +283,7 @@ Two streams: `broadcast` (marketing, GDPR headers) and `outbound` (transactional
 
 ## Database
 
-22 migrations in `supabase/migrations/`. Key tables:
+~240 migrations (numbered to 242) in `supabase/migrations/`. Key tables:
 
 **Core:** `locations`, `profiles`, `profile_locations` (junction; `profiles.role` holds the role, NOT this junction), `contacts`, `deals` (linked to contacts + stages), `pipeline_stages`, `activities`, `notes`.
 
@@ -1123,7 +1123,7 @@ Audit ran in May 2026 captured several wins worth knowing about:
 Things to watch but NOT act on without measurement:
 
 - **WAInbox 60s heartbeat** — wait a few weeks of real Realtime data before deciding whether to drop the heartbeat. If nothing's missed, push to 5min or remove.
-- **`'use client'` audit** — 46 components marked client; some likely don't need it. Modest bundle wins, low ROI, no measurement yet.
+- **`'use client'` audit** — 172 components marked client; some likely don't need it. Modest bundle wins, low ROI, no measurement yet. (The `recharts` charting lib is now lazy-loaded via `next/dynamic` in `MembershipTrendChart.jsx` — TECH-DEBT.1 — so it's no longer in the main dashboard bundle.)
 
 ## Working from Cowork (Claude sandbox notes)
 
