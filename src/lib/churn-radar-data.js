@@ -194,50 +194,8 @@ export async function loadOverdue(db, locationId, nowMs = Date.now()) {
     ...r,
     lastContacted: lastContacted.get(r.contactId) || null,
   }))
-
-  // OVERDUE.2 — annotate each row with its actual unpaid-invoice count +
-  // total (PAST_DUE + in-flight PENDING/PENDING_INTENT). A Glofox
-  // membership stays 'locked' until Glofox's own billing job reconciles,
-  // so a member whose debt was written off / paid can sit here owing
-  // nothing. Showing the real balance lets the operator tell a genuine
-  // chase ("2 invoices · €418") from a stale lock ("no outstanding
-  // invoices") at a glance.
-  const owed = await fetchOutstandingInvoices(db, locationId, overdue.map((r) => r.contactId))
-  for (const r of overdue) {
-    const a = owed.get(r.contactId)
-    r.outstandingInvoices = a?.count || 0
-    r.outstandingCents = a?.cents || 0
-  }
-
   const totalValueCents = overdue.reduce((sum, r) => sum + (r.monthlyValueCents || 0), 0)
   return { overdue, summary: { total: overdue.length, totalValueCents } }
-}
-
-// Count + sum of unpaid Glofox invoices per contact, for the given
-// contact ids at this location. Returns a Map contactId → { count, cents }.
-// "Unpaid" = money we haven't received yet: PAST_DUE (failed / overdue)
-// + PENDING + PENDING_INTENT (in-flight, awaiting capture). All three are
-// genuinely owed. Excluded: FORGIVEN (written off), PAID / REFUNDED
-// (settled), ERROR (failed attempt, zero-amount record).
-const UNPAID_INVOICE_STATUSES = ['PAST_DUE', 'PENDING', 'PENDING_INTENT']
-
-async function fetchOutstandingInvoices(db, locationId, contactIds) {
-  const out = new Map()
-  if (!Array.isArray(contactIds) || contactIds.length === 0) return out
-  const { data, error } = await db
-    .from('glofox_invoices')
-    .select('contact_id, amount_cents')
-    .eq('location_id', locationId)
-    .in('status', UNPAID_INVOICE_STATUSES)
-    .in('contact_id', contactIds)
-  if (error || !Array.isArray(data)) return out
-  for (const row of data) {
-    const prev = out.get(row.contact_id) || { count: 0, cents: 0 }
-    prev.count += 1
-    prev.cents += Number(row.amount_cents) || 0
-    out.set(row.contact_id, prev)
-  }
-  return out
 }
 
 // WINBACK.1 — statuses a former member can carry. ex_member is in
