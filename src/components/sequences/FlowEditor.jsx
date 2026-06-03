@@ -6,7 +6,7 @@
 // compiles back to the graph (treeToGraph) and validates live with the same
 // validateGraph the publish endpoint gates on. Re-convergent graphs aren't trees
 // and stay read-only (SequenceFlowBuilder decides).
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Plus, Check, Save, Rocket, AlertTriangle, X } from 'lucide-react'
 import { Button } from '@/components/ui'
 import {
@@ -37,6 +37,19 @@ export default function FlowEditor({ initialGraph, sequence }) {
   const [busy, setBusy] = useState(null)
   const [feedback, setFeedback] = useState(null)
   const [issues, setIssues] = useState([])
+  const [templates, setTemplates] = useState([])
+
+  // Approved WhatsApp templates for this location, for the whatsapp-node picker.
+  useEffect(() => {
+    const loc = sequence?.location_id
+    if (!loc) return
+    let active = true
+    fetch(`/api/whatsapp/templates?location_id=${loc}&status=APPROVED`)
+      .then(r => r.json())
+      .then(d => { if (active && d?.success) setTemplates(d.templates || []) })
+      .catch(() => {})
+    return () => { active = false }
+  }, [sequence?.location_id])
 
   const graph = useMemo(() => treeToGraph(trigger, tree), [trigger, tree])
   const validation = useMemo(() => validateGraph(graph), [graph])
@@ -65,7 +78,7 @@ export default function FlowEditor({ initialGraph, sequence }) {
     })); touch()
   }
   const toggle = (id) => setExpandedId(prev => prev === id ? null : id)
-  const ctx = { expandedId, errorsByNode, add, patch, remove, move, toggle }
+  const ctx = { expandedId, errorsByNode, add, patch, remove, move, toggle, templates }
 
   const saveDraft = async () => {
     setBusy('save')
@@ -130,7 +143,8 @@ function LaneView({ lane, lanePath, ctx }) {
                   node={item} isFirst={i === 0} isLast={i === lane.length - 1 || nextIsBranch}
                   expanded={ctx.expandedId === item.id} errors={ctx.errorsByNode.get(item.id) || []}
                   onToggle={() => ctx.toggle(item.id)} onMove={(dir) => ctx.move(lanePath, i, dir)}
-                  onRemove={() => ctx.remove(lanePath, i)} onPatch={(p) => ctx.patch(lanePath, i, p)} />}
+                  onRemove={() => ctx.remove(lanePath, i)} onPatch={(p) => ctx.patch(lanePath, i, p)}
+                  templates={ctx.templates} />}
           </div>
         )
       })}
