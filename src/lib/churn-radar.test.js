@@ -69,12 +69,23 @@ describe('classifyContact', () => {
     expect(classifyContact(healthy({ last_attended_at: null, last_booked_at: null }))).toBe('quarantine')
     expect(classifyContact(pack({ last_attended_at: null, last_booked_at: null }))).toBe('quarantine')
   })
-  it('marks a locked (payment-failed) membership as overdue', () => {
+  it('marks a locked (payment-failed) subscription as overdue', () => {
     expect(classifyContact(healthy({ glofox_membership_state: 'locked' }))).toBe('overdue')
     // overdue is decided before the footprint check
     expect(classifyContact(healthy({
       glofox_membership_state: 'locked', last_attended_at: null, last_booked_at: null,
     }))).toBe('overdue')
+  })
+  it('does NOT mark a locked class pack as overdue — packs are prepaid', () => {
+    // A num_classes pack with credits left can't owe money, so a Glofox
+    // 'locked' flag on it is an admin state, not a debt. It stays an
+    // active member (it has an attendance footprint), off the Overdue tab.
+    expect(classifyContact(pack({ glofox_membership_state: 'locked', trial_credits_remaining: 41 }))).toBe('active')
+    // …and a locked pack with no footprint quarantines rather than going overdue.
+    expect(classifyContact(pack({
+      glofox_membership_state: 'locked', trial_credits_remaining: 41,
+      last_attended_at: null, last_booked_at: null,
+    }))).toBe('quarantine')
   })
 })
 

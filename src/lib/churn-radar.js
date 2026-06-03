@@ -164,10 +164,19 @@ export function classifyContact(contact) {
     return 'out'
   }
   if (!hasLiveMembership(contact)) return 'out'
+  const type = typeof contact.glofox_membership_type === 'string'
+    ? contact.glofox_membership_type.toLowerCase()
+    : null
   const state = typeof contact.glofox_membership_state === 'string'
     ? contact.glofox_membership_state.toLowerCase()
     : null
-  if (state === 'locked') return 'overdue'
+  // 'locked' = a failed recurring payment → they owe money on the
+  // subscription. Only subscriptions can be overdue: class packs
+  // (num_classes) and PAYG are paid upfront, so a Glofox 'locked' flag
+  // on a prepaid pack is an admin state, NOT a debt — don't put it on
+  // the Overdue chase-list. A locked pack with credits falls through to
+  // the normal active/quarantine split on its attendance footprint.
+  if (state === 'locked' && type !== 'num_classes' && type !== 'payg') return 'overdue'
   if (state === 'paused') return 'paused'
   const hasFootprint = Boolean(contact.last_attended_at) || Boolean(contact.last_booked_at)
   return hasFootprint ? 'active' : 'quarantine'
