@@ -152,16 +152,21 @@ export default ({ config }) => ({
     checkAutomatically: 'ON_LOAD',
     fallbackToCacheTimeout: 0,
   },
-  // OTA runtime-version policy: 'fingerprint' (was 'sdkVersion'). 'sdkVersion'
-  // resolves to "exposdk:54.0.0" on BOTH the binary and every update, so EAS
-  // serves an update even when the binary's native / JS-engine (Hermes) layer
-  // differs from the update's — which is how the 2026-06-03 OTA boot-crash
-  // shipped: an update built by a drifted publish toolchain was served onto
-  // build 4 and aborted at launch inside expo-updates' error recovery (see
-  // docs/OTA_BOOT_CRASH_FINDINGS.md). 'fingerprint' hashes the native layer, so
-  // a mismatched update is WITHHELD (device simply gets no update) instead of
-  // being served into a boot-crash. Takes effect from the next native build.
-  runtimeVersion: { policy: 'fingerprint' },
+  // OTA runtime-version policy. Kept at 'sdkVersion' for now.
+  //
+  // 'fingerprint' is the better long-term choice — it WITHHOLDS a native/ABI-
+  // mismatched update instead of serving it into a boot-crash. We tried it
+  // (PR #295) but it broke the iOS "Configure expo-updates" Xcode build phase:
+  // that phase recomputes the fingerprint in a restricted build sandbox and
+  // errors, so the production build failed (EAS build e02f3944). Reverted to
+  // unblock the recovery build.
+  //
+  // The actual boot-crash fix does NOT depend on this — it's the OTA publish
+  // pipeline now using `npm ci` + a pinned toolchain (.github/workflows/
+  // eas-update.yml) so over-the-air Hermes bytecode matches the binary. Re-
+  // attempt 'fingerprint' as a separate, debugged change. See
+  // docs/OTA_BOOT_CRASH_FINDINGS.md.
+  runtimeVersion: { policy: 'sdkVersion' },
   extra: {
     // Supabase URL + anon key are PUBLIC by design — the anon key is
     // protected by Row-Level Security on the database, not by secrecy
