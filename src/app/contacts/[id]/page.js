@@ -6,6 +6,7 @@ import { ArrowLeft, Mail, Phone, Calendar, MessageSquare, CheckSquare, Clock, Bo
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { MANAGER_ROLES } from '@/lib/schemas'
+import { classifyContact, scoreMember } from '@/lib/churn-radar'
 import ContactActions from '@/components/ContactActions'
 import ContactComposer from '@/components/ContactComposer'
 import { extractTemplateBody, isSendableUtilityTemplate } from '@/lib/radar-outreach'
@@ -85,6 +86,30 @@ export default async function ContactDetailPage(props) {
   const activities = activitiesRes.data || []
   const bookings = bookingsRes.data || []
   const waConversations = waConvRes.data || []
+
+  // CHURN-CONTACT.1 — make the contact page prospective, not just a
+  // retrospective timeline: surface the SAME at-risk signal the radar
+  // uses (so it follows the person), and what's queued to happen next.
+  // classifyContact / scoreMember are pure; contacts.* carries the
+  // attendance + membership fields they need.
+  const churnClass = classifyContact(contact)
+  const churnScored = churnClass === 'active' ? scoreMember(contact, Date.now()) : null
+  let risk = null
+  if (churnClass === 'overdue') {
+    risk = { label: 'Payment overdue', cls: 'bg-red-50 text-red-700 border-red-200', title: 'Membership locked in Glofox — on the Overdue chase-list.' }
+  } else if (churnScored) {
+    const sigs = churnScored.signals.map((s) => `${s.label}: ${s.detail}`).join(' · ')
+    risk = churnScored.tier === 'high'
+      ? { label: 'At risk · High', cls: 'bg-red-50 text-red-700 border-red-200', title: sigs }
+      : { label: churnScored.tier === 'medium' ? 'At risk · Medium' : 'At risk', cls: 'bg-amber-50 text-amber-700 border-amber-200', title: sigs }
+  }
+
+  const { data: activeSequences } = await db
+    .from('sequence_enrollments')
+    .select('id, next_step_at, email_sequences(name)')
+    .eq('contact_id', id)
+    .eq('status', 'active')
+    .order('next_step_at', { ascending: true })
 
   // CONTACT-COMPOSER.1 — messaging context for the unified composer.
   const canWhatsApp = hasPermission(user, 'whatsapp')
@@ -214,6 +239,12 @@ export default async function ContactDetailPage(props) {
           <span className={`px-3 py-1 rounded-full text-sm border ${statusColors[contact.pipeline_stage_slug] || 'bg-un1t-border text-un1t-subtle border-un1t-border'}`}>
             {contact.pipeline_stage_slug?.replaceAll('_', ' ')}
           </span>
+          {/* CHURN-CONTACT.1 — the radar's at-risk signal, on the person. */}
+          {risk && (
+            <span title={risk.title} className={`px-3 py-1 rounded-full text-sm border ${risk.cls}`}>
+              {risk.label}
+            </span>
+          )}
         </div>
       </div>
 
@@ -272,6 +303,26 @@ export default async function ContactDetailPage(props) {
               </div>
             ))}
           </div>
+
+          {/* CHURN-CONTACT.1 — Active sequences: what's queued to happen
+              next. The timeline below shows what already happened; this
+              shows what's coming, so you can see (and not double-enrol)
+              an automation already running for this contact. */}
+          {activeSequences && activeSequences.length > 0 && (
+            <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
+              <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle mb-3 flex items-center gap-1.5">
+                <Clock size={12} /> Active sequences
+              </h3>
+              {activeSequences.map((s) => (
+                <div key={s.id} className="flex items-center justify-between py-2 border-b border-un1t-border last:border-0">
+                  <span className="text-sm">{s.email_sequences?.name || 'Sequence'}</span>
+                  <span className="text-xs text-un1t-muted whitespace-nowrap">
+                    {s.next_step_at ? `next ${relativeTime(s.next_step_at)}` : 'queued'}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
 
           {/* GLOFOX2.9 — Glofox bookings now live INSIDE the
               GlofoxProfileCard above, alongside the rest of the
