@@ -143,3 +143,59 @@ export function cellValue(row, column) {
   if (typeof column.accessor === 'string') return row == null ? undefined : row[column.accessor]
   return undefined
 }
+
+// ─── EmptyState ──────────────────────────────────────────────────────
+// UI-FOUND.3 — shared empty-state + loading primitives. The biggest
+// driver of the visual disjointedness in the audit was every module
+// hand-rolling its own "nothing here" and "loading…" blocks. These
+// helpers standardise the layout; the .jsx shells stay thin.
+const EMPTY_STATE_BASE = 'flex flex-col items-center justify-center text-center gap-2'
+
+export const EMPTY_STATE_PADDING = Object.freeze({
+  none: '',
+  sm: 'py-6 px-4',
+  md: 'py-10 px-6',
+  lg: 'py-16 px-6',
+})
+
+/**
+ * Resolve the className for an EmptyState container. Unknown padding
+ * falls back to 'md'.
+ * @param {{padding?:string, className?:string}} [opts]
+ * @returns {string}
+ */
+export function emptyStateClasses({ padding = 'md', className } = {}) {
+  // `??` not `||` so padding='none' (a legitimate empty-string value)
+  // is respected rather than falling through to md — mirrors cardClasses.
+  const pad = EMPTY_STATE_PADDING[padding] ?? EMPTY_STATE_PADDING.md
+  return clsx(EMPTY_STATE_BASE, pad, className)
+}
+
+// ─── Loading ─────────────────────────────────────────────────────────
+export const SPINNER_SIZES = Object.freeze({
+  sm: 'h-4 w-4',
+  md: 'h-5 w-5',
+  lg: 'h-8 w-8',
+})
+
+/** Tailwind size class for the spinner icon. Unknown size → 'md'. */
+export function spinnerSizeClass(size = 'md') {
+  return SPINNER_SIZES[size] || SPINNER_SIZES.md
+}
+
+/**
+ * Resolve the className for a Loading container. `inline` lays the
+ * spinner + label out horizontally (for use mid-sentence / in a row);
+ * the default is a centred block with vertical padding.
+ * @param {{inline?:boolean, className?:string}} [opts]
+ * @returns {string}
+ */
+export function loadingClasses({ inline = false, className } = {}) {
+  return clsx(
+    'text-un1t-subtle',
+    inline
+      ? 'inline-flex items-center gap-2'
+      : 'flex flex-col items-center justify-center gap-2 py-16',
+    className,
+  )
+}

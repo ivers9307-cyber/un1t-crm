@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { Clock, Euro, CalendarOff, Users, TrendingUp, Play, Calendar, Plus, FileText, Bell, Mail, Repeat } from 'lucide-react'
+import { EmptyState, Loading } from '@/components/ui'
 
 const REPORT_TYPES = [
   { key: 'staff_hours',     label: 'Staff Hours Worked',    icon: Clock,       description: 'Total hours worked per staff member with daily breakdown' },
@@ -339,12 +340,12 @@ export default function ScheduleReporting({ user }) {
       {view === 'history' && (
         <div>
           {loadingHistory ? (
-            <div className="text-center py-16 text-un1t-subtle">Loading report history...</div>
+            <Loading label="Loading report history…" />
           ) : history.length === 0 ? (
-            <div className="text-center py-16">
-              <FileText size={40} className="mx-auto text-un1t-muted mb-3" />
-              <p className="text-un1t-subtle text-sm">No reports generated yet</p>
-            </div>
+            <EmptyState
+              icon={<FileText size={40} />}
+              title="No reports generated yet"
+            />
           ) : (
             <div className="space-y-2">
               {history.map(r => {
@@ -389,11 +390,11 @@ export default function ScheduleReporting({ user }) {
       {view === 'scheduled' && (
         <div>
           {scheduledReports.length === 0 ? (
-            <div className="text-center py-16">
-              <Repeat size={40} className="mx-auto text-un1t-muted mb-3" />
-              <p className="text-un1t-subtle text-sm">No scheduled reports</p>
-              <p className="text-xs text-un1t-muted mt-1">Schedule reports from the Generate Report tab</p>
-            </div>
+            <EmptyState
+              icon={<Repeat size={40} />}
+              title="No scheduled reports"
+              description="Schedule reports from the Generate Report tab"
+            />
           ) : (
             <div className="space-y-2">
               {scheduledReports.map(sr => {
