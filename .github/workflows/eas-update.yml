@@ -23,13 +23,17 @@
 
 name: EAS Update
 
+# Auto-publish on push is DISABLED (2026-06-03). Every OTA published onto the
+# App Store binary (v1.2.0 build 4) crashed on launch inside expo-updates'
+# error recovery — see mobile/docs/OTA_BOOT_CRASH_FINDINGS.md. Publishing every
+# push straight to the production channel also violates the hard-won rule that
+# an RN bundle must BOOT on a preview build before it reaches production. This
+# workflow is now manual-dispatch only. Before re-enabling auto-publish: ship a
+# fresh production build, boot-test an OTA on the `preview` channel, and add a
+# staged rollout %. (Triggering on `shared/**` meant a web-only change could
+# also brick the app — another reason to gate this behind a human.)
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'mobile/**'
-      - 'shared/**'
-      - '.github/workflows/eas-update.yml'
+  workflow_dispatch: {}
 
 # Cancel any in-flight update if a newer push lands while this is
 # running — only the latest commit's bundle should ever be live.
@@ -56,11 +60,19 @@ jobs:
       - name: Set up EAS CLI
         uses: expo/expo-github-action@v8
         with:
-          eas-version: latest
+          # Pinned (was `latest`). The OTA toolchain must be deterministic and
+          # match the version that builds the binary (eas.json cli.version).
+          eas-version: 18.9.1
           token: ${{ secrets.EXPO_TOKEN }}
 
       - name: Install dependencies
-        run: npm install --legacy-peer-deps
+        # `npm ci` (lockfile-exact), NOT `npm install`. `eas build` installs the
+        # binary's deps with `npm ci`; the OTA bundle must use the SAME tree so
+        # its Hermes bytecode is ABI-compatible with the engine in the binary.
+        # `npm install` can resolve a newer tree → mismatched bytecode → the
+        # 2026-06-03 boot-crash. `--legacy-peer-deps` preserves the prior peer
+        # resolution (there is no .npmrc in the repo).
+        run: npm ci --legacy-peer-deps
 
       # Pre-flight syntax check on every JSX/JS file. ~5 sec. Catches
       # the most damaging class of bug — a broken bundle being pushed

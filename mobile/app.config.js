@@ -152,7 +152,16 @@ export default ({ config }) => ({
     checkAutomatically: 'ON_LOAD',
     fallbackToCacheTimeout: 0,
   },
-  runtimeVersion: { policy: 'sdkVersion' },
+  // OTA runtime-version policy: 'fingerprint' (was 'sdkVersion'). 'sdkVersion'
+  // resolves to "exposdk:54.0.0" on BOTH the binary and every update, so EAS
+  // serves an update even when the binary's native / JS-engine (Hermes) layer
+  // differs from the update's — which is how the 2026-06-03 OTA boot-crash
+  // shipped: an update built by a drifted publish toolchain was served onto
+  // build 4 and aborted at launch inside expo-updates' error recovery (see
+  // docs/OTA_BOOT_CRASH_FINDINGS.md). 'fingerprint' hashes the native layer, so
+  // a mismatched update is WITHHELD (device simply gets no update) instead of
+  // being served into a boot-crash. Takes effect from the next native build.
+  runtimeVersion: { policy: 'fingerprint' },
   extra: {
     // Supabase URL + anon key are PUBLIC by design — the anon key is
     // protected by Row-Level Security on the database, not by secrecy
