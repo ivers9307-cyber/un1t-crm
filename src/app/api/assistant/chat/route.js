@@ -383,7 +383,18 @@ export async function POST(request) {
 - Today: ${new Date().toISOString().split('T')[0]}
 `
 
-  const systemPrompt = SYSTEM_PROMPT + contextBlock
+  // Prompt caching (CACHE.1): the static SYSTEM_PROMPT (~3.1k tokens) and the
+  // tool definitions (which render BEFORE system, so the breakpoint below
+  // covers them too) are re-sent on every turn of the tool loop and on every
+  // request. Mark the static block ephemeral so repeat turns/requests read it
+  // from cache (~0.1× input cost) instead of reprocessing it; only the small
+  // dynamic contextBlock after the breakpoint is billed at full rate. No
+  // anthropic-beta header needed — caching is GA on anthropic-version
+  // 2023-06-01. SYSTEM_PROMPT + tools clear the model's 1024-token minimum.
+  const systemPrompt = [
+    { type: 'text', text: SYSTEM_PROMPT, cache_control: { type: 'ephemeral' } },
+    { type: 'text', text: contextBlock },
+  ]
 
   // Filter tools to only those the user's role permits — using the
   // server-trusted role, not the client-supplied one.
