@@ -1,26 +1,23 @@
 'use client'
 
 // Pipeline kanban card. Click anywhere on the card body navigates to the
-// contact detail page; the 3-dots menu lets you do quick actions
-// (currently: Add to sequence) without leaving the kanban view.
+// contact detail page; the kebab menu (PersonActionBar) offers the
+// shared per-contact actions — Message / Task / Sequence — without
+// leaving the kanban view.
 //
 // Implementation note: we used to wrap the entire card in a <Link>, but
 // adding a menu button inside that link would make the menu also navigate
 // on click. Switched to programmatic navigation via useRouter so the
-// menu button can stop propagation cleanly.
+// menu button (PersonActionBar, which stops propagation internally) can
+// sit inside the clickable body cleanly.
+//
+// PERSON-ACTIONS.1 — the bespoke 3-dots menu + "Add to sequence" modal
+// that used to live here moved into the reusable PersonActionBar so the
+// pipeline card, contact header, etc. share one consistent affordance.
 
 import { useRouter } from 'next/navigation'
-import { useState, useRef, useEffect } from 'react'
-import { User, MoreVertical } from 'lucide-react'
-import dynamic from 'next/dynamic'
-
-// PERF.3 — SequencePicker is only rendered when the operator opens
-// the per-card actions menu and clicks "Add to sequence", which is
-// a tiny fraction of card interactions. Lazy-loading it via
-// next/dynamic keeps the picker out of the /pipeline initial JS
-// bundle (was ~30KB gzipped). ssr:false because the picker is
-// purely interactive — never appears on first server render.
-const SequencePicker = dynamic(() => import('./SequencePicker'), { ssr: false })
+import { User } from 'lucide-react'
+import PersonActionBar from './PersonActionBar'
 
 // Keyed on pipeline_stage_slug (PIPELINE5 + CLASSIFY.2).
 const statusColors = {
@@ -40,26 +37,6 @@ export default function DealCard({ deal, locationId }) {
   const contact = deal.contacts || {}
   const borderColor = statusColors[contact.pipeline_stage_slug] || 'border-l-blue-500'
 
-  const [menuOpen, setMenuOpen] = useState(false)
-  const [picker, setPicker] = useState(false)
-  // Two refs — the trigger button + the dropdown panel. The outside-click
-  // handler must skip closing if the click lands in either, otherwise
-  // mousedown closes the menu before the menu item's click can fire and
-  // setPicker(true) never runs (was the v1 bug).
-  const buttonRef = useRef(null)
-  const menuRef = useRef(null)
-
-  useEffect(() => {
-    if (!menuOpen) return
-    function onClick(e) {
-      if (buttonRef.current?.contains(e.target)) return
-      if (menuRef.current?.contains(e.target)) return
-      setMenuOpen(false)
-    }
-    document.addEventListener('mousedown', onClick)
-    return () => document.removeEventListener('mousedown', onClick)
-  }, [menuOpen])
-
   function navigateToContact() {
     if (!contact.id) return
     router.push(`/contacts/${contact.id}`)
@@ -74,14 +51,7 @@ export default function DealCard({ deal, locationId }) {
         <div className="flex items-start justify-between gap-2">
           <p className="text-sm font-medium truncate flex-1">{deal.title}</p>
           {contact.id && (
-            <button
-              ref={buttonRef}
-              onClick={(e) => { e.stopPropagation(); setMenuOpen(o => !o) }}
-              className="shrink-0 text-un1t-subtle hover:text-un1t-text p-0.5 -m-0.5 rounded"
-              title="Actions"
-            >
-              <MoreVertical size={14} />
-            </button>
+            <PersonActionBar contactId={contact.id} locationId={locationId} />
           )}
         </div>
         {contact.name && (
@@ -101,37 +71,6 @@ export default function DealCard({ deal, locationId }) {
           </span>
         )}
       </div>
-
-      {menuOpen && (
-        <div ref={menuRef} className="absolute right-1 top-8 z-20 bg-un1t-surface border border-un1t-border rounded-md shadow-lg py-1 min-w-[160px]">
-          <button
-            onClick={(e) => { e.stopPropagation(); setMenuOpen(false); setPicker(true) }}
-            className="w-full text-left px-3 py-1.5 text-xs text-un1t-text hover:bg-un1t-border/40"
-          >
-            Add to sequence
-          </button>
-        </div>
-      )}
-
-      {/* Modal-style picker — anchoring as a popover doesn't work because
-          the kanban columns are only 256px wide; a 320px popover spills
-          past the column edge and gets clipped by the sidebar. Fixed
-          centred overlay floats above everything regardless of layout. */}
-      {picker && contact.id && (
-        <div
-          className="fixed inset-0 z-50 bg-black/60 flex items-start justify-center pt-24 px-4"
-          onClick={() => setPicker(false)}
-        >
-          <div onClick={(e) => e.stopPropagation()}>
-            <SequencePicker
-              contactIds={[contact.id]}
-              locationId={locationId}
-              variant="modal"
-              onClose={() => setPicker(false)}
-            />
-          </div>
-        </div>
-      )}
     </div>
   )
 }

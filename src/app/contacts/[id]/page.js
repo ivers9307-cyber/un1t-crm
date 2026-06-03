@@ -498,6 +498,9 @@ export default async function ContactDetailPage(props) {
 
         {/* Right: Composer + Timeline */}
         <div className="col-span-2">
+          {/* #message anchor — PersonActionBar's "Message" action deep-links
+              here (/contacts/[id]#message) so it lands on the composer. */}
+          <div id="message" className="scroll-mt-4">
           <ContactComposer
             contactId={contact.id}
             contactName={contact.first_name || contact.name}
@@ -510,6 +513,7 @@ export default async function ContactDetailPage(props) {
             whatsappWindowExpiresAt={latestWaConversation?.window_expires_at || null}
             templates={composerTemplates}
           />
+          </div>
           <div className="bg-un1t-surface border border-un1t-border rounded-lg">
             <div className="flex items-center justify-between p-4 border-b border-un1t-border">
               <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle">Timeline</h3>
