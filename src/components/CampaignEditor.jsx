@@ -113,8 +113,11 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
         },
         mergeTags: [
           { name: 'First Name', value: '{{first_name}}' },
+          { name: 'Last Name', value: '{{last_name}}' },
           { name: 'Full Name', value: '{{name}}' },
           { name: 'Email', value: '{{email}}' },
+          { name: 'Phone', value: '{{phone}}' },
+          { name: 'Pipeline Stage', value: '{{pipeline_stage}}' },
           { name: 'Location', value: '{{location_name}}' },
           { name: 'Unsubscribe', value: '{{unsubscribe_url}}' },
           { name: 'Preferences', value: '{{preference_url}}' },

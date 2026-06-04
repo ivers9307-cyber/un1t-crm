@@ -18,6 +18,7 @@ export default async function SendPage() {
   const channels = []
   if (hasPermission(user, 'sms')) channels.push('sms')
   if (hasPermission(user, 'whatsapp')) channels.push('whatsapp')
+  if (hasPermission(user, 'email')) channels.push('email')
   if (channels.length === 0) redirect('/communications')
 
   const locationId = user.activeLocation?.id

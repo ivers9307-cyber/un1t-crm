@@ -6,13 +6,14 @@ import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
-import { MessageSquare, MessageCircle, Send } from 'lucide-react'
+import { MessageSquare, MessageCircle, Mail, Send } from 'lucide-react'
 
 export const dynamic = 'force-dynamic'
 
 const STATUS_STYLE = {
   draft: 'bg-un1t-border/40 text-un1t-subtle',
   scheduled: 'bg-blue-500/15 text-blue-700',
+  queued: 'bg-amber-500/15 text-amber-700',
   sending: 'bg-amber-500/15 text-amber-700',
   sent: 'bg-emerald-500/15 text-emerald-700',
   cancelled: 'bg-rose-500/15 text-rose-700',
@@ -30,7 +31,8 @@ export default async function SendsHistoryPage() {
   if (!user) redirect('/login')
   const canSms = hasPermission(user, 'sms')
   const canWa = hasPermission(user, 'whatsapp')
-  if (!canSms && !canWa) redirect('/communications')
+  const canEmail = hasPermission(user, 'email')
+  if (!canSms && !canWa && !canEmail) redirect('/communications')
 
   const locationId = user.activeLocation?.id
   const db = createServerClient()
@@ -45,6 +47,13 @@ export default async function SendsHistoryPage() {
     const { data } = await db.from('whatsapp_broadcasts').select(SELECT)
       .eq('location_id', locationId).order('created_at', { ascending: false }).limit(100)
     for (const b of data || []) rows.push({ ...b, channel: 'whatsapp', detail: `/whatsapp/broadcasts/${b.id}` })
+  }
+  if (canEmail && locationId) {
+    // campaigns has its own count columns (total_bounced, not total_failed).
+    const { data } = await db.from('campaigns')
+      .select('id, name, status, total_recipients, total_sent, total_bounced, created_at, scheduled_at, sent_at')
+      .eq('location_id', locationId).order('created_at', { ascending: false }).limit(100)
+    for (const c of data || []) rows.push({ ...c, channel: 'email', total_failed: c.total_bounced || 0, detail: `/email/campaigns/${c.id}` })
   }
   rows.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
 
@@ -79,7 +88,7 @@ export default async function SendsHistoryPage() {
             </thead>
             <tbody>
               {rows.map(r => {
-                const Icon = r.channel === 'sms' ? MessageSquare : MessageCircle
+                const Icon = r.channel === 'sms' ? MessageSquare : r.channel === 'email' ? Mail : MessageCircle
                 return (
                   <tr key={`${r.channel}-${r.id}`} className="border-t border-un1t-border hover:bg-un1t-bg/30">
                     <td className="px-4 py-3">

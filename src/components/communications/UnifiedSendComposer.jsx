@@ -7,7 +7,8 @@
 // libs + crons are untouched. Email joins in Phase 2.
 import { useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
-import { MessageSquare, MessageCircle, Send, Clock, Check, AlertTriangle, Users, Loader2 } from 'lucide-react'
+import { useRouter } from 'next/navigation'
+import { MessageSquare, MessageCircle, Mail, Send, Clock, Check, AlertTriangle, Users, Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui'
 import AudienceBuilder from '@/components/AudienceBuilder'
 import { smsSegmentInfo, SMS_MAX_LEN, SMS_MERGE_TAGS, waBodyVariables, WA_VARIABLE_FIELDS } from '@/lib/communications/compose'
@@ -18,12 +19,15 @@ const fieldCls =
   'w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text placeholder:text-un1t-subtle/60 focus:outline-none focus:ring-1 focus:ring-un1t-text/30'
 
 export default function UnifiedSendComposer({ locationId, channels = [], templates = [] }) {
+  const router = useRouter()
   const [channel, setChannel] = useState(channels[0] || 'sms')
   const [label, setLabel] = useState('')
   const [filter, setFilter] = useState(EMPTY_FILTER)
   // SMS
   const [body, setBody] = useState('')
   const bodyRef = useRef(null)
+  // Email
+  const [subject, setSubject] = useState('')
   // WhatsApp
   const [templateId, setTemplateId] = useState('')
   const [variables, setVariables] = useState({})
@@ -76,7 +80,7 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
   }
 
   const defaultLabel = () => {
-    const ch = channel === 'sms' ? 'SMS' : 'WhatsApp'
+    const ch = channel === 'sms' ? 'SMS' : channel === 'whatsapp' ? 'WhatsApp' : 'Email'
     return label.trim() || `${ch} — ${new Date().toLocaleString('en-IE', { dateStyle: 'medium', timeStyle: 'short' })}`
   }
 
@@ -85,7 +89,9 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
   const scheduleValid = scheduleMode === 'now' || (scheduledIso && new Date(scheduledIso).getTime() > Date.now())
   const composeValid = channel === 'sms'
     ? (body.trim().length > 0 && body.length <= SMS_MAX_LEN)
-    : !!templateId
+    : channel === 'whatsapp'
+      ? !!templateId
+      : true // email — audience is enough; subject + design happen in the editor
   const canSend = !busy && composeValid && scheduleValid && (count == null || count > 0)
 
   // ── submit ──────────────────────────────────────────────────────
@@ -118,13 +124,21 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
           const data = await postJson(`/api/sms/broadcasts/${broadcast.id}/send`, {})
           setResult({ channel, mode: 'sent', id: broadcast.id, detail: `/communications/sms/broadcasts/${broadcast.id}`, ...data })
         }
-      } else {
+      } else if (channel === 'whatsapp') {
         const { broadcast } = await postJson('/api/whatsapp/broadcasts', {
           name: defaultLabel(), template_id: templateId, variable_mapping: variables,
           audience_filter: filter, location_id: locationId,
         })
         const data = await postJson(`/api/whatsapp/broadcasts/${broadcast.id}/send`, {})
         setResult({ channel, mode: 'sent', id: broadcast.id, detail: `/whatsapp/broadcasts/${broadcast.id}`, ...data })
+      } else {
+        // Email — create a draft campaign + hand off to the proven Unlayer designer
+        // (audience pre-seeded). Design + schedule/send happen there.
+        const data = await postJson('/api/communications/email-draft', {
+          name: defaultLabel(), subject, audience_filter: filter, location_id: locationId,
+        })
+        router.push(`/email/campaigns/${data.id}?edit=1`)
+        return
       }
     } catch (e) {
       setError(e?.message || 'Something went wrong')
@@ -188,6 +202,9 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
           {channels.includes('whatsapp') && (
             <ChannelPill active={channel === 'whatsapp'} onClick={() => setChannel('whatsapp')} icon={MessageCircle} label="WhatsApp" />
           )}
+          {channels.includes('email') && (
+            <ChannelPill active={channel === 'email'} onClick={() => setChannel('email')} icon={Mail} label="Email" />
+          )}
         </div>
       )}
 
@@ -225,7 +242,7 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
               {seg.len}/{SMS_MAX_LEN} chars · {seg.segments} segment{seg.segments === 1 ? '' : 's'}
             </div>
           </>
-        ) : (
+        ) : channel === 'whatsapp' ? (
           <>
             <label className="block">
               <span className="block text-xs font-medium text-un1t-subtle mb-1">Approved template</span>
@@ -259,6 +276,14 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
               </div>
             )}
           </>
+        ) : (
+          <>
+            <label className="block">
+              <span className="block text-xs font-medium text-un1t-subtle mb-1">Subject <span className="text-un1t-subtle/60">(optional — set it in the designer too)</span></span>
+              <input className={fieldCls} value={subject} onChange={e => setSubject(e.target.value)} placeholder="Email subject" />
+            </label>
+            <p className="text-[11px] text-un1t-subtle mt-2">You’ll design the email in the visual builder — scheduling &amp; send happen there.</p>
+          </>
         )}
       </Section>
 
@@ -285,9 +310,10 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
       )}
 
       <div className="flex items-center gap-3">
-        <Button onClick={send} variant="primary" icon={scheduleMode === 'later' && channel === 'sms' ? Clock : Send}
+        <Button onClick={send} variant="primary"
+          icon={channel === 'email' ? Mail : (scheduleMode === 'later' && channel === 'sms' ? Clock : Send)}
           loading={busy} disabled={!canSend}>
-          {scheduleMode === 'later' && channel === 'sms' ? 'Schedule' : 'Send now'}
+          {channel === 'email' ? 'Open email designer' : (scheduleMode === 'later' && channel === 'sms' ? 'Schedule' : 'Send now')}
         </Button>
         {count === 0 && <span className="text-xs text-amber-700">No contacts match this filter.</span>}
       </div>
