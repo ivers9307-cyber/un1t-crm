@@ -45,7 +45,7 @@ export function NodeCardHeader({ node, isFirst, isLast, expanded, onToggle, onMo
 export function EditableNodeCard({ node, isFirst, isLast, expanded, errors, onToggle, onMove, onRemove, onPatch, templates }) {
   const hasErr = errors.length > 0
   return (
-    <div className={`w-full max-w-md mx-auto bg-un1t-surface border rounded-lg shadow-sm ${hasErr ? 'border-rose-500/40' : 'border-un1t-border'}`}>
+    <div className={`w-72 bg-un1t-surface border rounded-lg shadow-sm ${hasErr ? 'border-rose-500/40' : 'border-un1t-border'}`}>
       <NodeCardHeader node={node} isFirst={isFirst} isLast={isLast} expanded={expanded} onToggle={onToggle} onMove={onMove} onRemove={onRemove} />
       {hasErr && !expanded && <p className="px-4 pb-2 -mt-1 text-xs text-rose-700">{errors[0]}</p>}
       {expanded && (

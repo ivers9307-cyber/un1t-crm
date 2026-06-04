@@ -12,7 +12,7 @@ export function Connector() {
  *  editing stays on the classic editor (it owns the webhook-token lifecycle). */
 export function TriggerCard({ trigger }) {
   return (
-    <div className="w-full max-w-md mx-auto flex items-center gap-3 bg-un1t-text/[0.03] border border-un1t-border rounded-lg px-4 py-3">
+    <div className="w-72 flex items-center gap-3 bg-un1t-text/[0.03] border border-un1t-border rounded-lg px-4 py-3">
       <div className="w-9 h-9 rounded-lg bg-un1t-text/10 text-un1t-text flex items-center justify-center shrink-0">
         <Zap size={18} />
       </div>
