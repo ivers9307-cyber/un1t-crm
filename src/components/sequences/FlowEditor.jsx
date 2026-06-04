@@ -122,8 +122,12 @@ export default function FlowEditor({ initialGraph, sequence }) {
         </div>
       )}
 
-      <TriggerCard trigger={trigger} />
-      <LaneView lane={tree} lanePath={[]} ctx={ctx} />
+      <div className="overflow-x-auto pb-2">
+        <div className="w-max min-w-full mx-auto flex flex-col items-center">
+          <TriggerCard trigger={trigger} />
+          <LaneView lane={tree} lanePath={[]} ctx={ctx} />
+        </div>
+      </div>
     </div>
   )
 }
@@ -131,7 +135,7 @@ export default function FlowEditor({ initialGraph, sequence }) {
 function LaneView({ lane, lanePath, ctx }) {
   const endsInBranch = lane.length > 0 && lane[lane.length - 1].type === 'branch'
   return (
-    <div className="flex flex-col items-stretch">
+    <div className="flex flex-col items-center min-w-[18rem]">
       {lane.map((item, i) => {
         const nextIsBranch = lane[i + 1] && lane[i + 1].type === 'branch'
         return (
@@ -155,12 +159,12 @@ function LaneView({ lane, lanePath, ctx }) {
 
 function BranchBlock({ item, lanePath, index, ctx }) {
   return (
-    <div className="flex flex-col items-stretch">
+    <div className="flex flex-col items-center">
       <EditableNodeCard
         node={item} expanded={ctx.expandedId === item.id} errors={ctx.errorsByNode.get(item.id) || []}
         onToggle={() => ctx.toggle(item.id)} onRemove={() => ctx.remove(lanePath, index)} onPatch={(p) => ctx.patch(lanePath, index, p)} />
       <Connector />
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+      <div className="flex flex-row gap-4 items-start">
         <LaneFrame label="Yes" tone="yes"><LaneView lane={item.yes} lanePath={[...lanePath, { i: index, lane: 'yes' }]} ctx={ctx} /></LaneFrame>
         <LaneFrame label="No" tone="no"><LaneView lane={item.no} lanePath={[...lanePath, { i: index, lane: 'no' }]} ctx={ctx} /></LaneFrame>
       </div>
@@ -172,7 +176,7 @@ function LaneFrame({ label, tone, children }) {
   const toneClass = tone === 'yes' ? 'border-emerald-500/30 bg-emerald-500/[0.03]' : 'border-rose-500/30 bg-rose-500/[0.03]'
   const pillClass = tone === 'yes' ? 'bg-emerald-500/15 text-emerald-700' : 'bg-rose-500/15 text-rose-700'
   return (
-    <div className={`rounded-xl border border-dashed ${toneClass} p-3`}>
+    <div className={`shrink-0 rounded-xl border border-dashed ${toneClass} p-3`}>
       <div className="flex justify-center"><span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full ${pillClass}`}>{label}</span></div>
       {children}
     </div>
@@ -183,18 +187,18 @@ function AddAffordance({ lanePath, ctx }) {
   const [open, setOpen] = useState(false)
   if (!open) {
     return (
-      <button type="button" onClick={() => setOpen(true)} className="w-full max-w-md mx-auto flex items-center justify-center gap-1.5 py-2 rounded-lg border border-dashed border-un1t-border text-sm text-un1t-subtle hover:text-un1t-text hover:border-un1t-text/40 transition-colors">
+      <button type="button" onClick={() => setOpen(true)} className="w-72 flex items-center justify-center gap-1.5 py-2 rounded-lg border border-dashed border-un1t-border text-sm text-un1t-subtle hover:text-un1t-text hover:border-un1t-text/40 transition-colors">
         <Plus size={15} /> Add step
       </button>
     )
   }
   return (
-    <div className="w-full max-w-md mx-auto rounded-lg border border-un1t-border bg-un1t-surface p-3">
+    <div className="w-72 rounded-lg border border-un1t-border bg-un1t-surface p-3">
       <div className="flex items-center justify-between mb-2">
         <p className="text-xs font-semibold text-un1t-subtle uppercase tracking-wider">Add a step</p>
         <button type="button" onClick={() => setOpen(false)} className="text-un1t-subtle hover:text-un1t-text"><X size={14} /></button>
       </div>
-      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+      <div className="grid grid-cols-2 gap-2">
         {PALETTE.map(type => {
           const s = styleForType(type); const Icon = s.icon
           return (
