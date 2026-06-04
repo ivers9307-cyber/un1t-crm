@@ -12,7 +12,7 @@ import {
   View, Text, ScrollView, Pressable, RefreshControl,
   ActivityIndicator,
 } from 'react-native'
-import { useRouter } from 'expo-router'
+import { useRouter, useFocusEffect } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { useAuth } from '../../lib/auth-context'
 import { listStages, listDealsByStage } from '../../lib/pipeline-api'
@@ -117,6 +117,14 @@ export default function Pipeline() {
   useEffect(() => {
     if (selectedId) fetchDealsForStage()
   }, [selectedId, fetchDealsForStage])
+
+  // Re-fetch on tab focus so stage counts + the open-deal list reflect
+  // changes made elsewhere (web kanban, or a "View as user" switch) without
+  // a manual pull-to-refresh.
+  useFocusEffect(useCallback(() => {
+    fetchStages()
+    fetchDealsForStage()
+  }, [fetchStages, fetchDealsForStage]))
 
   async function onRefresh() {
     setRefreshing(true)
