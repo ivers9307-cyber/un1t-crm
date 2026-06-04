@@ -259,8 +259,7 @@ export const MOBILE_PERMISSIONS = Object.freeze([
   // view — today + tomorrow's bookings at the active location. New
   // bookings still get created on the web (Calendly hub).
   { key: 'bookings',           label: 'Bookings (today/tomorrow)', hint: "Operator view of today's and tomorrow's bookings",            webEquivalent: 'bookings' },
-  { key: 'time_off',           label: 'Time Off Requests',        hint: 'Submit and view leave requests',                                webEquivalent: 'schedule' },
-  { key: 'assistant',          label: 'AI Assistant',             hint: 'Use the in-app assistant from mobile',                          webEquivalent: 'assistant' },
+  { key: 'time_off',           label: 'Time Off Requests',        hint: 'Submit and view leave requests (the mobile Request-time-off button + form). Distinct from `schedule`, which only shows the roster.',  webEquivalent: 'schedule' },
   // MOBILE-RADAR — read-only glance mirrors of the web radars. The
   // full triage dashboards (scoring, win-back, quarantine/cleanup)
   // stay desktop-only; mobile gets a headline-numbers + weekly-trend
@@ -271,6 +270,19 @@ export const MOBILE_PERMISSIONS = Object.freeze([
   // for the parity linter.
   { key: 'churn_radar',        label: 'Churn Radar (glance)',     hint: 'Read-only at-risk member summary — counts + weekly trend. Triage stays on web.', webEquivalent: 'churn_radar' },
   { key: 'lead_radar',         label: 'Lead Radar (glance)',      hint: 'Read-only lead funnel summary — counts + weekly trend. Triage stays on web.',    webEquivalent: 'lead_radar' },
+  // MOBILE-PERMS — personal / self-service surfaces that previously had
+  // NO per-user toggle (gated only by employment_type, or universal-by-
+  // design). Each now has an admin toggle so a studio can hide it per
+  // user. All default ON for every role, so existing behaviour is
+  // unchanged until an admin opts a user out. mobileOnly — the web
+  // equivalents (invoices_inbox / issues_inbox / contracts admin) are
+  // the *approver/admin* surfaces, a different capability, so these
+  // don't map 1:1 to a web sidebar key.
+  { key: 'invoices',   label: 'Invoices (own submissions)',  hint: 'Contractor self-service — photograph + submit your own invoices. Only shown to contractor-type staff; this toggle can hide it per user. Default on.', mobileOnly: true },
+  { key: 'expenses',   label: 'Expenses (own receipts)',     hint: 'FTE self-service — capture + submit your own expense receipts. Only shown to FTE staff; this toggle can hide it per user. Default on.', mobileOnly: true },
+  { key: 'issues',     label: 'Report a Problem',            hint: 'Submit studio issues (broken kit, cleaning, safety) + view your own reports. Universal by default — turning this OFF removes a person’s ability to flag problems from the app, so leave on unless you have a reason.', mobileOnly: true },
+  { key: 'contracts',  label: 'Your Contracts',              hint: 'Browse + sign your own staff/contractor contracts. Default on. (A pending-contract signing prompt still appears regardless, so a required signature is never blocked.)', mobileOnly: true },
+  { key: 'policies',   label: 'Policies',                    hint: 'Read studio HR policies + acknowledge new ones. Default on.', mobileOnly: true },
   // Mig 093: door_unlock was promoted to a cross-platform key
   // named `studio_management` (lives in WEB_PERMISSIONS, top-level
   // on profiles.permissions — same shape as dashboard_*). Both
@@ -328,7 +340,8 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
   master: {
     schedule: true, pipeline: true, whatsapp: true,
     tasks: true, bookings: true,
-    time_off: true, assistant: true,
+    time_off: true,
+    invoices: true, expenses: true, issues: true, contracts: true, policies: true,
     churn_radar: true, lead_radar: true,
     push_notifications: true,
     notify_time_off: true, notify_schedule: true, notify_swap: true,
@@ -346,7 +359,8 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     // reminders by default — those are for the on-shift operator,
     // surfaced through the manager/head_coach defaults below.
     tasks: true, bookings: false,
-    time_off: true, assistant: false,
+    time_off: true,
+    invoices: true, expenses: true, issues: true, contracts: true, policies: true,
     churn_radar: false, lead_radar: false,  // retention/acquisition oversight — not a staff surface
     push_notifications: true,
     notify_time_off: true, notify_schedule: true, notify_swap: true,
@@ -365,7 +379,8 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
   head_coach: {
     schedule: true, pipeline: true, whatsapp: true,
     tasks: true, bookings: true,
-    time_off: true, assistant: true,
+    time_off: true,
+    invoices: true, expenses: true, issues: true, contracts: true, policies: true,
     churn_radar: true, lead_radar: true,    // head coaches own retention + conversion
     push_notifications: true,
     notify_time_off: true, notify_schedule: true, notify_swap: true,
@@ -384,7 +399,8 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
   manager: {
     schedule: true, pipeline: true, whatsapp: true,
     tasks: true, bookings: true,
-    time_off: true, assistant: true,
+    time_off: true,
+    invoices: true, expenses: true, issues: true, contracts: true, policies: true,
     churn_radar: false, lead_radar: false,  // owner + head_coach by default; grant per-user if needed
     push_notifications: true,
     notify_time_off: true, notify_schedule: true, notify_swap: true,
@@ -405,7 +421,8 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
   owner: {
     schedule: true, pipeline: true, whatsapp: true,
     tasks: true, bookings: true,
-    time_off: true, assistant: true,
+    time_off: true,
+    invoices: true, expenses: true, issues: true, contracts: true, policies: true,
     churn_radar: true, lead_radar: true,
     push_notifications: true,
     notify_time_off: true, notify_schedule: true, notify_swap: true,

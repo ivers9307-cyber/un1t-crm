@@ -139,6 +139,12 @@ const WEB_ONLY_OK = {
   // for the inbox itself — review with photo attachments wants the
   // wide screen.
   issues_inbox: 'Owner-side issues inbox (REPORT-ISSUE.2) — staff submit from mobile, owners triage from the desktop inbox at /issues plus the Issues tab inside /approvals. Mobile counterpart is the notify_issue_submitted push (in MOBILE_PERMISSIONS) that taps operators on the shoulder when a new issue lands; the inbox itself is desktop-only because review-with-photo-attachments wants screen real estate.',
+  // MOBILE-PERMS — the mobile `assistant` toggle was removed: there is
+  // no assistant screen in the iOS app yet, so the toggle controlled
+  // nothing. Re-add a MOBILE_PERMISSIONS entry with
+  // webEquivalent: 'assistant' (and drop this line) when a mobile
+  // assistant actually ships.
+  assistant: 'In-app AI assistant chat (web /assistant). No mobile assistant screen exists yet — the dead mobile toggle was removed (MOBILE-PERMS). Re-pair when a mobile assistant ships.',
 }
 
 const webDrift = []
