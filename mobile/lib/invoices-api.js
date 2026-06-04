@@ -51,6 +51,26 @@ export async function revokeInvoice(id) {
   return res.json().catch(() => ({ success: false, error: `Bad response (${res.status})` }))
 }
 
+// APPROVALS — owner/master approve or decline a submitted contractor invoice.
+// Decline requires a reason (the route 400s without it).
+export async function approveInvoice(id) {
+  const { data: { session } } = await supabase.auth.getSession()
+  const headers = { Accept: 'application/json' }
+  if (session?.access_token) headers.Authorization = `Bearer ${session.access_token}`
+  const res = await fetch(`${API_BASE}/api/invoices/${id}/approve`, { method: 'POST', headers })
+  return res.json().catch(() => ({ success: false, error: `Bad response (${res.status})` }))
+}
+
+export async function declineInvoice(id, reason) {
+  const { data: { session } } = await supabase.auth.getSession()
+  const headers = { Accept: 'application/json', 'Content-Type': 'application/json' }
+  if (session?.access_token) headers.Authorization = `Bearer ${session.access_token}`
+  const res = await fetch(`${API_BASE}/api/invoices/${id}/decline`, {
+    method: 'POST', headers, body: JSON.stringify({ reason }),
+  })
+  return res.json().catch(() => ({ success: false, error: `Bad response (${res.status})` }))
+}
+
 /**
  * Submit a new invoice. file = { uri, name, mimeType } from
  * expo-document-picker.
