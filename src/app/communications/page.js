@@ -87,13 +87,12 @@ export default async function CommunicationsHub() {
   // location-scoped view without scanning recipients. Recipient
   // counts (cross-location) would need a join via sms_broadcasts,
   // and that's expensive on the hub — keep the cheap path.
-  let smsSent = 0, smsDelivered = 0, smsFailed = 0, smsSent30d = 0, smsDraftBroadcasts = 0, smsScheduled = 0
+  let smsSent = 0, smsDelivered = 0, smsFailed = 0, smsSent30d = 0, smsScheduled = 0
   if (canSms && locationId) {
     const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
     const [
       { data: totals },
       { data: last30 },
-      { count: drafts },
       { count: scheduled },
     ] = await Promise.all([
       db.from('sms_broadcasts')
@@ -108,17 +107,12 @@ export default async function CommunicationsHub() {
       db.from('sms_broadcasts')
         .select('id', { count: 'exact', head: true })
         .eq('location_id', locationId)
-        .eq('status', 'draft'),
-      db.from('sms_broadcasts')
-        .select('id', { count: 'exact', head: true })
-        .eq('location_id', locationId)
         .eq('status', 'scheduled'),
     ])
     smsSent = (totals || []).reduce((acc, b) => acc + (b.total_sent || 0), 0)
     smsDelivered = (totals || []).reduce((acc, b) => acc + (b.total_delivered || 0), 0)
     smsFailed = (totals || []).reduce((acc, b) => acc + (b.total_failed || 0), 0)
     smsSent30d = (last30 || []).reduce((acc, b) => acc + (b.total_sent || 0), 0)
-    smsDraftBroadcasts = drafts || 0
     smsScheduled = scheduled || 0
   }
   // Delivery rate as a percentage of sent (mig 065 — only meaningful
@@ -211,28 +205,17 @@ export default async function CommunicationsHub() {
             desc="One-off email blasts"
           />
         )}
-        {canSms && (
+        {(canSms || canWhatsapp) && (
           <ActionCard
-            href="/communications/sms/broadcasts"
-            icon={MessageSquare}
+            href="/communications/sent"
+            icon={Megaphone}
             color="bg-cyan-500/20 text-cyan-400"
-            title="SMS broadcasts"
+            title="Sends"
             desc={
               smsScheduled > 0
-                ? `${smsScheduled} scheduled, ${smsDraftBroadcasts} draft${smsDraftBroadcasts === 1 ? '' : 's'}`
-                : smsDraftBroadcasts > 0
-                  ? `${smsDraftBroadcasts} draft${smsDraftBroadcasts === 1 ? '' : 's'} pending`
-                  : 'Freeform SMS to filtered audiences'
+                ? `${smsScheduled} scheduled · history of SMS & WhatsApp sends`
+                : 'History of one-off SMS & WhatsApp sends'
             }
-          />
-        )}
-        {canWhatsapp && (
-          <ActionCard
-            href="/communications/broadcasts"
-            icon={Megaphone}
-            color="bg-amber-500/20 text-amber-400"
-            title="Broadcasts"
-            desc="Approved-template messages to filtered audiences"
           />
         )}
         <ActionCard

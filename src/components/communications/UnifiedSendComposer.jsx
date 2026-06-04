@@ -124,7 +124,7 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
           audience_filter: filter, location_id: locationId,
         })
         const data = await postJson(`/api/whatsapp/broadcasts/${broadcast.id}/send`, {})
-        setResult({ channel, mode: 'sent', id: broadcast.id, detail: `/communications/broadcasts/${broadcast.id}`, ...data })
+        setResult({ channel, mode: 'sent', id: broadcast.id, detail: `/whatsapp/broadcasts/${broadcast.id}`, ...data })
       }
     } catch (e) {
       setError(e?.message || 'Something went wrong')
