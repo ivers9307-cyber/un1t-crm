@@ -12,7 +12,8 @@
     "lint": "eslint .",
     "test": "vitest run",
     "test:watch": "vitest",
-    "check:mobile-parity": "node scripts/check-mobile-parity.mjs"
+    "check:mobile-parity": "node scripts/check-mobile-parity.mjs",
+    "check:mobile-imports": "eslint --config eslint.mobile-imports.config.mjs 'mobile/**/*.{js,jsx}'"
   },
   "dependencies": {
     "@asteasolutions/zod-to-openapi": "^8.5.0",
@@ -39,6 +40,7 @@
     "autoprefixer": "^10.4.0",
     "eslint": "^9.39.4",
     "eslint-config-next": "^16.2.6",
+    "eslint-plugin-import": "^2.32.0",
     "postcss": "^8.4.0",
     "tailwindcss": "^3.4.0",
     "typescript": "^5.9.3",
