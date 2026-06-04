@@ -49,7 +49,7 @@ export default async function SendPage(props) {
       <div className="mb-5">
         <Link href="/communications" className="text-xs text-un1t-subtle hover:text-un1t-text">← Communications</Link>
         <h1 className="text-xl font-semibold text-un1t-text mt-1">Send a message</h1>
-        <p className="text-sm text-un1t-subtle">Pick who, write once, send now{channels.includes('sms') ? ' or schedule' : ''}.</p>
+        <p className="text-sm text-un1t-subtle">Pick who, write once, send now{(channels.includes('sms') || channels.includes('email')) ? ' or schedule' : ''}.</p>
       </div>
       <UnifiedSendComposer locationId={locationId} channels={channels} templates={templates} initialAudienceFilter={initialAudienceFilter} />
     </div>
