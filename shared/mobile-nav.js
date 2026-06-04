@@ -65,3 +65,43 @@ export const DEFAULT_MOBILE_LAYOUT = Object.freeze(
     })])
   )
 )
+
+const BAR_ELIGIBLE_SET = new Set(BAR_ELIGIBLE)
+
+/**
+ * Resolve the effective mobile layout for a user at a location.
+ * Pure — no IO. UI arrangement only.
+ *
+ * @param {object} args
+ * @param {string} args.role            profile.role (active-location role)
+ * @param {string|null} args.employmentType  'fte' | 'contractor' | null
+ * @param {string[]} args.enabledKeys   nav keys the user passes Layer-1 for
+ * @param {{bar?:string[], allowed?:string[]}|null} args.override  permissions.mobile.layout
+ * @returns {{ bar: string[], more: string[], allowed: string[] }}
+ */
+export function resolveMobileLayout({ role, employmentType, enabledKeys, override }) {
+  const enabled = new Set(enabledKeys || [])
+  const tmpl =
+    (DEFAULT_MOBILE_LAYOUT[role] && (DEFAULT_MOBILE_LAYOUT[role][employmentType] || DEFAULT_MOBILE_LAYOUT[role].fte)) ||
+    DEFAULT_MOBILE_LAYOUT.staff.fte
+
+  const base = override && Array.isArray(override.bar) ? override : tmpl
+
+  // Bar items are implicitly allowed; intersect with enabled + bar-eligible.
+  const allowed = [...new Set([...(base.allowed || []), ...(base.bar || [])])]
+    .filter(k => enabled.has(k) && BAR_ELIGIBLE_SET.has(k))
+  const allowedSet = new Set(allowed)
+
+  const bar = []
+  for (const k of (base.bar || [])) {
+    if (allowedSet.has(k) && !bar.includes(k)) bar.push(k)
+    if (bar.length === 3) break
+  }
+  const barSet = new Set(bar)
+
+  // Everything else enabled (incl. non-bar-eligible like tasks/radar),
+  // ordered by the canonical registry order.
+  const more = MOBILE_NAV_ORDER.filter(k => enabled.has(k) && !barSet.has(k))
+
+  return { bar, more, allowed }
+}
