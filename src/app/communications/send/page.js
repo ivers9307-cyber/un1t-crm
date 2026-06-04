@@ -11,7 +11,8 @@ import UnifiedSendComposer from '@/components/communications/UnifiedSendComposer
 
 export const dynamic = 'force-dynamic'
 
-export default async function SendPage() {
+export default async function SendPage(props) {
+  const searchParams = await props.searchParams
   const user = await getCurrentUser()
   if (!user) redirect('/login')
 
@@ -36,6 +37,13 @@ export default async function SendPage() {
     templates = data || []
   }
 
+  // ?segment=<tag> deep-link (from SegmentsGrid) — pre-seed the audience with
+  // that tag clause (same shape /email/campaigns/new uses).
+  const seg = searchParams?.segment
+  const initialAudienceFilter = seg
+    ? { logic: 'and', filters: [{ field: 'tag', op: 'eq', value: String(seg) }] }
+    : null
+
   return (
     <div>
       <div className="mb-5">
@@ -43,7 +51,7 @@ export default async function SendPage() {
         <h1 className="text-xl font-semibold text-un1t-text mt-1">Send a message</h1>
         <p className="text-sm text-un1t-subtle">Pick who, write once, send now{channels.includes('sms') ? ' or schedule' : ''}.</p>
       </div>
-      <UnifiedSendComposer locationId={locationId} channels={channels} templates={templates} />
+      <UnifiedSendComposer locationId={locationId} channels={channels} templates={templates} initialAudienceFilter={initialAudienceFilter} />
     </div>
   )
 }

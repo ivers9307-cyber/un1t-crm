@@ -3,16 +3,14 @@
 // SegmentsGrid — card grid of every known tag with active count
 // + per-channel deep-link broadcast hooks. Mig 085 / Phase 3.
 //
-// Each card has two channel-specific quick-broadcast links: Email
-// (jumps to /email/campaigns/new?segment=<tag>) and SMS (jumps to
-// /communications/sms/broadcasts/new?segment=<tag>). Both composer
-// pages read the ?segment param and pre-populate the AudienceBuilder
-// with `{ field: 'tag', op: 'eq', value: <tag> }` so the operator
-// doesn't have to re-pick it.
+// Each card has a "Send to these" link → /communications/send?segment=<tag>.
+// The unified composer reads ?segment and pre-populates the AudienceBuilder with
+// `{ field: 'tag', op: 'eq', value: <tag> }`, then the operator picks the channel
+// (SMS / WhatsApp / email) there — no need to re-pick the audience.
 
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
-import { Loader2, AlertCircle, Tag, Mail, MessageSquare, Users } from 'lucide-react'
+import { Loader2, AlertCircle, Tag, Send, Users } from 'lucide-react'
 
 export default function SegmentsGrid() {
   const [data, setData] = useState(null)
@@ -64,22 +62,13 @@ export default function SegmentsGrid() {
           </div>
           <p className="text-xs text-un1t-subtle flex-1">{s.description}</p>
           <div className="mt-3 pt-3 border-t border-un1t-border flex items-center justify-between gap-2">
-            <div className="flex items-center gap-3">
-              <Link
-                href={`/email/campaigns/new?segment=${encodeURIComponent(s.tag)}`}
-                className="text-xs text-un1t-text hover:text-un1t-accent inline-flex items-center gap-1"
-                title={`Start an email campaign targeting ${s.tag}`}
-              >
-                <Mail size={11} /> Email
-              </Link>
-              <Link
-                href={`/communications/sms/broadcasts/new?segment=${encodeURIComponent(s.tag)}`}
-                className="text-xs text-un1t-text hover:text-un1t-accent inline-flex items-center gap-1"
-                title={`Start an SMS broadcast targeting ${s.tag}`}
-              >
-                <MessageSquare size={11} /> SMS
-              </Link>
-            </div>
+            <Link
+              href={`/communications/send?segment=${encodeURIComponent(s.tag)}`}
+              className="text-xs text-un1t-text hover:text-un1t-accent inline-flex items-center gap-1"
+              title={`Send to ${s.tag} — pick SMS, WhatsApp or email`}
+            >
+              <Send size={11} /> Send to these
+            </Link>
             <Link
               href={`/contacts?tag=${encodeURIComponent(s.tag)}`}
               className="text-xs text-un1t-subtle hover:text-un1t-text"
