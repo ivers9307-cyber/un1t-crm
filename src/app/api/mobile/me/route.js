@@ -14,6 +14,7 @@
 
 import { NextResponse } from 'next/server'
 import { getCurrentUser } from '@/lib/auth'
+import { createServerClient } from '@/lib/supabase'
 
 export const runtime = 'nodejs'
 
@@ -62,6 +63,15 @@ export async function GET() {
   // the banner can show "Viewing as Bob (logged in as Richard)".
   const impersonatingFrom = user.impersonatingFrom || null
 
+  // Phase 2: the staff member's own bottom-bar arrangement per location.
+  const db = createServerClient()
+  const { data: barPrefRows } = await db
+    .from('mobile_bar_prefs')
+    .select('location_id, bar')
+    .eq('profile_id', user.id)
+  const staffBarByLocation = {}
+  for (const row of (barPrefRows || [])) staffBarByLocation[row.location_id] = row.bar || []
+
   return NextResponse.json({
     success: true,
     data: {
@@ -81,6 +91,9 @@ export async function GET() {
         // role default applies. Master users have empty here too
         // and short-circuit to true after the location gate.
         permissions: assignmentsByLocation[l.id]?.permissions || {},
+        // Phase 2: personal bottom-bar arrangement (mobile_bar_prefs).
+        // null = no saved pref, app uses its built-in default ordering.
+        staffBar: staffBarByLocation[l.id] || null,
       })),
       activeLocation: user.activeLocation
         ? {
@@ -90,6 +103,8 @@ export async function GET() {
             country: user.activeLocation.country || null,
             features: user.activeLocation.features || {},
             permissions: user.activeAssignment?.permissions || {},
+            // Phase 2: personal bottom-bar arrangement for the active location.
+            staffBar: staffBarByLocation[user.activeLocation.id] || null,
           }
         : null,
     },

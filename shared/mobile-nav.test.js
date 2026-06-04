@@ -122,3 +122,43 @@ describe('resolveMobileLayout', () => {
     expect(r.more).toContain('whatsapp')
   })
 })
+
+describe('resolveMobileLayout staffBar', () => {
+  const ALLOWED_MGR = ['schedule', 'whatsapp', 'studio', 'pipeline', 'bookings']
+  const base = { role: 'manager', employmentType: 'fte', enabledKeys: ALLOWED_MGR }
+
+  it('staffBar overrides the bar arrangement (within allowed)', () => {
+    const r = resolveMobileLayout({ ...base, override: null, staffBar: ['pipeline', 'schedule'] })
+    expect(r.bar).toEqual(['pipeline', 'schedule'])
+  })
+
+  it('staffBar is clamped to allowed (a non-allowed key is dropped)', () => {
+    const r = resolveMobileLayout({
+      role: 'staff', employmentType: 'fte', enabledKeys: ['schedule', 'bookings', 'expenses'],
+      override: null, staffBar: ['pipeline', 'schedule'], // staff allowed = schedule+bookings+expenses, NOT pipeline
+    })
+    expect(r.bar).toEqual(['schedule'])
+  })
+
+  it('staffBar is clamped to enabled', () => {
+    const r = resolveMobileLayout({ ...base, enabledKeys: ['schedule', 'studio'], override: null, staffBar: ['whatsapp', 'schedule'] })
+    expect(r.bar).toEqual(['schedule'])
+  })
+
+  it('empty/missing staffBar falls back to the admin/template bar', () => {
+    const r1 = resolveMobileLayout({ ...base, override: null, staffBar: [] })
+    const r2 = resolveMobileLayout({ ...base, override: null, staffBar: null })
+    expect(r1.bar).toEqual(['schedule', 'whatsapp', 'studio'])
+    expect(r2.bar).toEqual(['schedule', 'whatsapp', 'studio'])
+  })
+
+  it('staffBar is capped at 3', () => {
+    const r = resolveMobileLayout({ ...base, override: null, staffBar: ['pipeline', 'bookings', 'schedule', 'whatsapp'] })
+    expect(r.bar).toEqual(['pipeline', 'bookings', 'schedule'])
+  })
+
+  it('allowed still comes from the admin layer, not staffBar', () => {
+    const r = resolveMobileLayout({ ...base, override: null, staffBar: ['pipeline'] })
+    expect(r.allowed).toEqual(expect.arrayContaining(['schedule', 'whatsapp', 'studio', 'pipeline', 'bookings']))
+  })
+})
