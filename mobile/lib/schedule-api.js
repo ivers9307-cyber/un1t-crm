@@ -100,3 +100,52 @@ export function adjustShiftAssignment(assignmentId, { startTime, endTime, reason
     },
   })
 }
+
+// --- Manager "Manage" mode (MOBILE-SCHED-EDIT) ---------------------------
+
+// All shift blocks for the location/week, incl. empty ones, with capacity +
+// assigned coaches (names via the service-role route). MANAGER_ROLES-gated.
+export function getScheduleBlocks({ locationId, startDate, endDate }) {
+  const qs = new URLSearchParams()
+  if (locationId) qs.set('location_id', locationId)
+  if (startDate) qs.set('start_date', startDate)
+  if (endDate) qs.set('end_date', endDate)
+  return api(`/api/schedule/blocks?${qs.toString()}`, { locationId })
+}
+
+// Assign one coach to a block. On 409 "at capacity", the caller re-invokes
+// with allowOverCapacity:true. Response may carry warnings[] (advisories).
+export function assignCoachToBlock(blockId, { profileId, allowOverCapacity, locationId }) {
+  return api(`/api/schedule/blocks/${blockId}/assignments`, {
+    method: 'POST',
+    locationId,
+    body: { profile_id: profileId, allow_over_capacity: allowOverCapacity || undefined },
+  })
+}
+
+// Remove a coach from a shift (delete the assignment).
+export function removeAssignment(assignmentId, { locationId }) {
+  return api(`/api/schedule/assignments/${assignmentId}`, { method: 'DELETE', locationId })
+}
+
+// Location-wide pending time-off (managers). Staff get own-only server-side.
+export function getPendingTimeOff({ locationId }) {
+  const qs = new URLSearchParams()
+  if (locationId) qs.set('location_id', locationId)
+  qs.set('status', 'pending')
+  return api(`/api/schedule/time-off?${qs.toString()}`, { locationId })
+}
+
+// Approve / reject a time-off request (MANAGER_ROLES).
+export function respondToTimeOff(id, status, reviewNote, locationId) {
+  return api(`/api/schedule/time-off/${id}`, {
+    method: 'PUT',
+    locationId,
+    body: { status, review_note: reviewNote || null },
+  })
+}
+
+// Assignable staff at the active location (id + full_name + active + locations).
+export function getLocationStaff({ locationId }) {
+  return api('/api/staff', { locationId })
+}
