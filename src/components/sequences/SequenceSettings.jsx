@@ -26,6 +26,7 @@ const TRIGGER_OPTIONS = [
   ['event_reminder', 'Before a booking (reminder)'],
   ['segment_added', 'When a contact enters a segment'],
   ['segment_removed', 'When a contact leaves a segment'],
+  ['membership_state_change', 'When the membership state changes (active / paused / locked)'],
   ['anniversary', 'On an anniversary date'],
   ['inactivity', 'After a period of inactivity'],
   ['race_registered', 'When a contact registers for a race'],
@@ -39,6 +40,8 @@ const TRIGGER_OPTIONS = [
 const ANNIV_FIELDS = [['lead_created_at', 'Lead created date'], ['last_emailed_at', 'Last emailed date']]
 const INACT_SIGNALS = [['last_emailed_at', 'Last emailed'], ['last_email_open_at', 'Last email open'], ['last_booking_at', 'Last booking']]
 const STAGE_OPTS = [['', 'Any stage'], ...PIPELINE_SLUGS.map(s => [s, s])]
+// Glofox membership states (mig 195). 'locked' = payment arrears (churn radar's Overdue tab).
+const STATE_OPTS = [['', 'Any state'], ['active', 'active'], ['paused', 'paused'], ['locked', 'locked (arrears)']]
 
 export default function SequenceSettings({ sequence }) {
   const [open, setOpen] = useState(false)
@@ -159,6 +162,12 @@ export default function SequenceSettings({ sequence }) {
               <Labeled label="Segment" hint={segments.length ? 'A saved contact segment.' : 'No saved segments — create one on the Contacts page.'}>
                 <Select value={tcfg.segment_id || ''} onChange={v => setCfg({ segment_id: v || undefined })} options={[['', 'Choose a segment…'], ...segments.map(s => [s.id, s.name])]} />
               </Labeled>
+            )}
+            {triggerType === 'membership_state_change' && (
+              <div className="grid grid-cols-2 gap-2">
+                <Labeled label="From state"><Select value={tcfg.from_state || ''} onChange={v => setCfg({ from_state: v || undefined })} options={STATE_OPTS} /></Labeled>
+                <Labeled label="To state" hint="e.g. → locked starts a dunning flow."><Select value={tcfg.to_state || ''} onChange={v => setCfg({ to_state: v || undefined })} options={STATE_OPTS} /></Labeled>
+              </div>
             )}
             {triggerType === 'anniversary' && (
               <div className="grid grid-cols-2 gap-2">

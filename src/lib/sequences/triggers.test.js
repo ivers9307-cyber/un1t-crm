@@ -231,6 +231,83 @@ describe('triggerSequencesForPipelineStageChange', () => {
   })
 })
 
+// ── membership_state_change ─────────────────────────────────────
+
+describe('triggerSequencesForMembershipStateChange', () => {
+  it('no-ops when oldState === newState', async () => {
+    await triggers.triggerSequencesForMembershipStateChange('c1', 'active', 'active')
+    expect(createServerClient).not.toHaveBeenCalled()
+  })
+
+  it('skips a sequence whose trigger_config.to_state does not match newState', async () => {
+    createServerClient.mockReturnValue(mockDb({
+      contacts: { single: { id: 'c1', location_id: 'loc-1' } },
+      email_sequences: { list: [
+        { id: 's1', trigger_config: { to_state: 'locked' }, audience_filter: null },
+      ] },
+    }))
+    await triggers.triggerSequencesForMembershipStateChange('c1', 'active', 'paused')
+    expect(enrolContacts).not.toHaveBeenCalled()
+  })
+
+  it('skips when from_state does not match oldState', async () => {
+    createServerClient.mockReturnValue(mockDb({
+      contacts: { single: { id: 'c1', location_id: 'loc-1' } },
+      email_sequences: { list: [
+        { id: 's1', trigger_config: { from_state: 'paused' }, audience_filter: null },
+      ] },
+    }))
+    await triggers.triggerSequencesForMembershipStateChange('c1', 'active', 'locked')
+    expect(enrolContacts).not.toHaveBeenCalled()
+  })
+
+  it('enrols when to_state matches (the dunning case: → locked)', async () => {
+    createServerClient.mockReturnValue(mockDb({
+      contacts: { single: { id: 'c1', location_id: 'loc-1' } },
+      email_sequences: { list: [
+        { id: 's1', trigger_config: { to_state: 'locked' }, audience_filter: null },
+      ] },
+    }))
+    await triggers.triggerSequencesForMembershipStateChange('c1', 'active', 'locked')
+    expect(enrolContacts).toHaveBeenCalledWith(expect.objectContaining({
+      sequenceId: 's1',
+      contactIds: ['c1'],
+      sourceType: 'membership_state_change',
+      sourceRef: 'active→locked',
+    }))
+  })
+
+  it('enrols on any-state-change when trigger_config is empty', async () => {
+    createServerClient.mockReturnValue(mockDb({
+      contacts: { single: { id: 'c1', location_id: 'loc-1' } },
+      email_sequences: { list: [{ id: 's1', trigger_config: {}, audience_filter: null }] },
+    }))
+    await triggers.triggerSequencesForMembershipStateChange('c1', 'paused', 'active')
+    expect(enrolContacts).toHaveBeenCalledTimes(1)
+  })
+
+  it('formats sourceRef with null sentinel for missing oldState', async () => {
+    createServerClient.mockReturnValue(mockDb({
+      contacts: { single: { id: 'c1', location_id: 'loc-1' } },
+      email_sequences: { list: [{ id: 's1', trigger_config: {}, audience_filter: null }] },
+    }))
+    await triggers.triggerSequencesForMembershipStateChange('c1', null, 'locked')
+    expect(enrolContacts).toHaveBeenCalledWith(expect.objectContaining({
+      sourceRef: 'null→locked',
+    }))
+  })
+
+  it('skips when contactMatchesSequenceAudience returns false', async () => {
+    contactMatchesSequenceAudience.mockResolvedValue(false)
+    createServerClient.mockReturnValue(mockDb({
+      contacts: { single: { id: 'c1', location_id: 'loc-1' } },
+      email_sequences: { list: [{ id: 's1', trigger_config: {}, audience_filter: { filters: [] } }] },
+    }))
+    await triggers.triggerSequencesForMembershipStateChange('c1', 'active', 'locked')
+    expect(enrolContacts).not.toHaveBeenCalled()
+  })
+})
+
 // ── tag_added ───────────────────────────────────────────────────
 
 describe('triggerSequencesForTagsAdded', () => {

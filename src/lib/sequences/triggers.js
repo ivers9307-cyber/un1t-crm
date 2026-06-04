@@ -259,6 +259,63 @@ export async function triggerSequencesForPipelineStageChange(contactId, oldStage
   }
 }
 
+// ── membership_state_change ──────────────────────────────────────
+
+/**
+ * Called from the Glofox member-sync (applyMemberSync) when a contact's
+ * glofox_membership_state transitions — active / paused / locked, where
+ * 'locked' = payment arrears (the churn radar's Overdue tab). Mirrors
+ * pipeline_stage_change:
+ *   - cfg.to_state   (optional)  — only fire when state flipped TO this value
+ *   - cfg.from_state (optional)  — only fire when state flipped FROM this value
+ * Empty config = fire on any state change. The sequence's audience_filter
+ * (if set) is then evaluated against the contact — non-matches skip.
+ *
+ * The targeted use case is win-back / dunning: state → 'locked' starts a
+ * dunning sequence. Best-effort — errors swallowed so the Glofox sync isn't
+ * blocked by a sequence enrol failure.
+ *
+ * @param {string} contactId
+ * @param {string|null} oldState  glofox_membership_state before the change
+ * @param {string|null} newState  glofox_membership_state after the change
+ */
+export async function triggerSequencesForMembershipStateChange(contactId, oldState, newState) {
+  if (oldState === newState) return
+  const db = createServerClient()
+  try {
+    const { data: contact } = await db
+      .from('contacts')
+      .select('id, location_id')
+      .eq('id', contactId)
+      .single()
+    if (!contact) return
+
+    const { data: sequences } = await db
+      .from('email_sequences')
+      .select('id, trigger_config, audience_filter')
+      .eq('location_id', contact.location_id)
+      .eq('trigger_type', 'membership_state_change')
+      .eq('status', 'active')
+    if (!sequences || sequences.length === 0) return
+
+    for (const seq of sequences) {
+      const cfg = seq.trigger_config || {}
+      if (cfg.to_state && cfg.to_state !== newState) continue
+      if (cfg.from_state && cfg.from_state !== oldState) continue
+      const matches = await contactMatchesSequenceAudience(db, contactId, seq.audience_filter)
+      if (!matches) continue
+      await enrolContacts({
+        sequenceId: seq.id,
+        contactIds: [contactId],
+        sourceType: 'membership_state_change',
+        sourceRef: `${oldState || 'null'}→${newState || 'null'}`,
+      })
+    }
+  } catch (e) {
+    logWarn('sequences', `membership_state_change trigger failed for ${contactId}`, { err: e })
+  }
+}
+
 // ── tag_added ────────────────────────────────────────────────────
 
 /**
