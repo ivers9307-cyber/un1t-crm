@@ -7,12 +7,12 @@
 // the same list as the web AcControlPanel and the /ac screen. Replaces the old
 // single-Sensibo card so all AC units live here alongside Doors.
 
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import {
   View, Text, ScrollView, Pressable, RefreshControl,
   ActivityIndicator, Alert,
 } from 'react-native'
-import { useRouter } from 'expo-router'
+import { useRouter, useFocusEffect } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { useAuth } from '../../lib/auth-context'
 import { canMobile } from '../../lib/permissions'
@@ -49,6 +49,12 @@ export default function StudioManagementScreen() {
     setTimeout(() => setRefreshing(false), 600)
   }
 
+  // Remount the cards whenever the *effective identity* or location changes —
+  // not just on manual refresh. profile.id flips to the impersonated user when
+  // a "View as user" session starts (and back when it stops), so keying on it
+  // forces a fresh, correctly-scoped fetch the instant impersonation toggles.
+  const scopeKey = `${profile?.id || 'anon'}:${activeLocation?.id || 'none'}:${refreshKey}`
+
   return (
     <ScrollView
       className="flex-1 bg-un1t-bg"
@@ -64,11 +70,11 @@ export default function StudioManagementScreen() {
         <Ionicons name="snow-outline" size={18} color="#2563EB" />
         <Text className="text-xs font-bold text-un1t-text uppercase tracking-wider ml-2">Air conditioning</Text>
       </View>
-      <AcDeviceList key={`ac-${refreshKey}`} locationId={activeLocation?.id} />
+      <AcDeviceList key={`ac-${scopeKey}`} locationId={activeLocation?.id} />
 
       <View className="h-6" />
 
-      <DoorsCard key={`doors-${refreshKey}`} locationId={activeLocation?.id} />
+      <DoorsCard key={`doors-${scopeKey}`} locationId={activeLocation?.id} />
     </ScrollView>
   )
 }
@@ -80,7 +86,12 @@ function DoorsCard({ locationId }) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
 
-  useEffect(() => {
+  // The door list is server-scoped to whoever getCurrentUser() resolves to —
+  // during a "View as user" session that's the impersonated user, so it must
+  // re-fetch whenever the effective identity changes, not only on location
+  // change. (Previously a plain useEffect([locationId]) left a stale operator
+  // list on screen after impersonation started without a location switch.)
+  const load = useCallback(() => {
     if (!locationId) return
     setLoading(true)
     listDoors(locationId).then(r => {
@@ -91,10 +102,17 @@ function DoorsCard({ locationId }) {
         setError(r.error || 'Failed to load doors')
         setDoors([])
       } else {
+        setError(null)
         setDoors(r.data || [])
       }
     }).finally(() => setLoading(false))
   }, [locationId])
+
+  useEffect(() => { load() }, [load])
+  // Re-fetch on every tab focus — matches AcDeviceList and picks up an
+  // allowlist that changed while the user was on another screen (e.g. just
+  // started/stopped "View as user" from the More tab).
+  useFocusEffect(useCallback(() => { load() }, [load]))
 
   return (
     <Card>
