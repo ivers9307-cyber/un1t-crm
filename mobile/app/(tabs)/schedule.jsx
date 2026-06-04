@@ -28,6 +28,7 @@ import {
   getMyShifts, getMyTimeOff, createSwapRequest, adjustShiftAssignment,
 } from '../../lib/schedule-api'
 import { MANAGER_ROLES } from '../../../shared/permissions'
+import { canMobile } from '../../lib/permissions'
 import { useIsTablet } from '../../lib/use-is-tablet'
 
 const isManagerRole = (role) => MANAGER_ROLES.includes(role)
@@ -445,14 +446,19 @@ export default function Schedule() {
         )}
       </ScrollView>
 
-      {/* Floating Request Time Off button */}
-      <Pressable
-        onPress={() => router.push('/schedule/time-off-new')}
-        className="absolute bottom-6 right-6 bg-un1t-text rounded-full px-5 py-3.5 flex-row items-center shadow-lg active:opacity-80"
-      >
-        <Ionicons name="add" size={20} color="#FFFFFF" />
-        <Text className="text-un1t-bg font-semibold ml-1.5">Request time off</Text>
-      </Pressable>
+      {/* Floating Request Time Off button — MOBILE-PERMS: gated on the
+          `time_off` mobile toggle (distinct from `schedule`, which only
+          shows the roster). Default on for every role, so this stays
+          visible unless an admin turns time-off off for the user. */}
+      {canMobile(profile, 'time_off', activeLocation) && (
+        <Pressable
+          onPress={() => router.push('/schedule/time-off-new')}
+          className="absolute bottom-6 right-6 bg-un1t-text rounded-full px-5 py-3.5 flex-row items-center shadow-lg active:opacity-80"
+        >
+          <Ionicons name="add" size={20} color="#FFFFFF" />
+          <Text className="text-un1t-bg font-semibold ml-1.5">Request time off</Text>
+        </Pressable>
+      )}
 
       {/* Adjust modal — partial-shift override editor (mig 099/100). */}
       <AdjustSheet

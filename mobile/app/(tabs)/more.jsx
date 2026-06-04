@@ -88,8 +88,13 @@ export default function More() {
   // MOB-UI.4 — surfaces moved off the crowded bottom bar into More.
   const showBookings = profile && canMobile(profile, 'bookings', activeLocation)
   const showPipeline = profile && canMobile(profile, 'pipeline', activeLocation)
-  const showInvoices = profile?.employment_type === 'contractor'
-  const showExpenses = profile?.employment_type === 'fte'
+  const showInvoices = profile?.employment_type === 'contractor' && canMobile(profile, 'invoices', activeLocation)
+  const showExpenses = profile?.employment_type === 'fte' && canMobile(profile, 'expenses', activeLocation)
+  // MOBILE-PERMS — universal staff surfaces now gated by per-user toggles
+  // (default on): Report-a-problem (issues), Your contracts, Policies.
+  const showIssues = profile && canMobile(profile, 'issues', activeLocation)
+  const showContracts = profile && canMobile(profile, 'contracts', activeLocation)
+  const showPolicies = profile && canMobile(profile, 'policies', activeLocation)
 
   // POLICIES-VIEWS.1 — outstanding policies the user hasn't opened
   // yet. Re-fetched on each focus so opening a policy in the viewer
@@ -200,45 +205,55 @@ export default function More() {
         </Section>
       )}
 
-      {/* REPORT-ISSUE.1 — staff-submitted issue reports. Always
-          shown: any staff member at any location can flag something
-          broken / dirty / unsafe in the studio with a photo, and
-          the owners at that studio get the task. The list screen
-          shows their own submission history (open / in progress /
-          resolved). No permission gate by design — universal CTA. */}
-      <Section title="Report">
-        <Row
-          icon="alert-circle-outline"
-          label="Report a problem"
-          onPress={() => router.push('/issues/new')}
-        />
-        <Row
-          icon="list-outline"
-          label="My reports"
-          onPress={() => router.push('/issues')}
-          isLast
-        />
-      </Section>
+      {/* REPORT-ISSUE.1 — staff-submitted issue reports. Any staff member
+          can flag something broken / dirty / unsafe with a photo; the
+          owners at that studio get the task. MOBILE-PERMS — now gated on
+          the `issues` mobile toggle (default ON for every role, so this
+          stays universal unless an admin deliberately turns it off for
+          a user). */}
+      {showIssues && (
+        <Section title="Report">
+          <Row
+            icon="alert-circle-outline"
+            label="Report a problem"
+            onPress={() => router.push('/issues/new')}
+          />
+          <Row
+            icon="list-outline"
+            label="My reports"
+            onPress={() => router.push('/issues')}
+            isLast
+          />
+        </Section>
+      )}
 
-      {/* Documents — contracts and HR policies. Always shown (every
-          staff member is potentially a recipient of either); the
-          screens show empty-states if none are applicable.
-          POLICIES-VIEWS.1 — Policies row shows a "N new" badge when
-          the user has policies they haven't opened yet. */}
-      <Section title="Documents">
-        <Row
-          icon="document-text-outline"
-          label="Your contracts"
-          onPress={() => router.push('/contracts')}
-        />
-        <Row
-          icon="book-outline"
-          label="Policies"
-          value={outstandingPolicies > 0 ? `${outstandingPolicies} new` : undefined}
-          onPress={() => router.push('/policies')}
-          isLast
-        />
-      </Section>
+      {/* Documents — contracts and HR policies. MOBILE-PERMS — each row
+          now gated on its own mobile toggle (`contracts` / `policies`,
+          default ON). The pending-contract banner above the tabs still
+          shows regardless, so a required signature is never blocked.
+          POLICIES-VIEWS.1 — Policies row shows a "N new" badge when the
+          user has policies they haven't opened yet. */}
+      {(showContracts || showPolicies) && (
+        <Section title="Documents">
+          {showContracts && (
+            <Row
+              icon="document-text-outline"
+              label="Your contracts"
+              onPress={() => router.push('/contracts')}
+              isLast={!showPolicies}
+            />
+          )}
+          {showPolicies && (
+            <Row
+              icon="book-outline"
+              label="Policies"
+              value={outstandingPolicies > 0 ? `${outstandingPolicies} new` : undefined}
+              onPress={() => router.push('/policies')}
+              isLast
+            />
+          )}
+        </Section>
+      )}
 
       {/* Master-only: switch into another user's view (mig 035).
           Mirrors the web Settings → Impersonate entry point. The banner
