@@ -31,6 +31,7 @@ import { MANAGER_ROLES } from '../../../shared/permissions'
 import { canMobile } from '../../lib/permissions'
 import { useIsTablet } from '../../lib/use-is-tablet'
 import { effShiftStart, effShiftEnd, teamRosterForDay, initials } from '../../lib/schedule-team'
+import ManageMode from '../../components/schedule/ManageMode'
 
 const isManagerRole = (role) => MANAGER_ROLES.includes(role)
 
@@ -294,7 +295,8 @@ export default function Schedule() {
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState(null)
-  const [view, setView] = useState('me') // 'me' | 'team'
+  const [view, setView] = useState('me') // 'me' | 'team' | 'manage'
+  const [manageRefreshKey, setManageRefreshKey] = useState(0)
 
   const start = useMemo(() => isoDate(anchor), [anchor])
   const end = useMemo(() => isoDate(addDays(anchor, 6)), [anchor])
@@ -302,6 +304,7 @@ export default function Schedule() {
   const fetchWeek = useCallback(async () => {
     if (!profile || !activeLocation) return
     setError(null)
+    if (view === 'manage') return // ManageMode self-fetches the roster + approvals
     if (view === 'team') {
       // Team: the whole location's roster for the week (no profile_id). No
       // time-off in Team mode — it shows who's working, not who's off.
@@ -341,6 +344,13 @@ export default function Schedule() {
   // manager adjusting your shift on web, or a "View as user" switch) without
   // needing a manual pull-to-refresh. Silent — no loading spinner.
   useFocusEffect(useCallback(() => { fetchWeek() }, [fetchWeek]))
+
+  // If the effective role loses manager rights while in Manage mode (e.g. a
+  // master starts "View as user" on a staff member), drop back to Me so the
+  // manager-only UI/calls never render for a non-manager identity.
+  useEffect(() => {
+    if (view === 'manage' && !isManagerRole(profile?.role)) setView('me')
+  }, [profile?.role, view])
 
   async function onRefresh() {
     setRefreshing(true)
@@ -424,9 +434,12 @@ export default function Schedule() {
         contentContainerClassName="px-4 pt-4 pb-32"
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#111827" />}
       >
-        {/* Me / Team segmented control */}
+        {/* Me / Team [/ Manage] segmented control */}
         <View className="flex-row bg-un1t-surface border border-un1t-border rounded-xl p-1 mb-4">
-          {[['me', 'Me'], ['team', 'Team']].map(([val, label]) => {
+          {(isManagerRole(profile?.role)
+            ? [['me', 'Me'], ['team', 'Team'], ['manage', 'Manage']]
+            : [['me', 'Me'], ['team', 'Team']]
+          ).map(([val, label]) => {
             const active = view === val
             return (
               <Pressable
@@ -484,7 +497,17 @@ export default function Schedule() {
           </View>
         ) : null}
 
-        {loading ? (
+        {view === 'manage' ? (
+          <ManageMode
+            activeLocation={activeLocation}
+            weekStart={start}
+            weekEnd={end}
+            selectedIso={selectedIso}
+            selectedLabel={selected.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })}
+            refreshKey={manageRefreshKey}
+            onAdjust={setAdjustingShift}
+          />
+        ) : loading ? (
           <View className="py-12 items-center">
             <ActivityIndicator />
           </View>
@@ -569,7 +592,7 @@ export default function Schedule() {
       <AdjustSheet
         shift={adjustingShift}
         onClose={() => setAdjustingShift(null)}
-        onSaved={() => { setAdjustingShift(null); fetchWeek() }}
+        onSaved={() => { setAdjustingShift(null); fetchWeek(); setManageRefreshKey((k) => k + 1) }}
         locationId={activeLocation?.id}
       />
     </View>
