@@ -1857,11 +1857,30 @@ export async function applyMemberSync(db, locationId, member, opts = {}) {
     }
   }
 
+  // SEQ-TRIG (membership_state_change) — fire when the Glofox membership
+  // state (active / paused / locked) transitions. Drives win-back / dunning
+  // sequences (state → locked → dunning). Mirrors the trial-transition tags
+  // above: best-effort, never rolls back the contact write. preview.changes
+  // already carries { from, to } and is only populated on a real update with
+  // the single-member detail payload, so a create / no-op sync won't fire.
+  let membershipStateTriggerResult = null
+  const stateChange = preview.changes?.glofox_membership_state
+  if (stateChange && stateChange.from !== stateChange.to) {
+    try {
+      const { triggerSequencesForMembershipStateChange } = await import('./sequences/triggers.js')
+      await triggerSequencesForMembershipStateChange(contactId, stateChange.from ?? null, stateChange.to ?? null)
+      membershipStateTriggerResult = { fired: true, from: stateChange.from ?? null, to: stateChange.to ?? null }
+    } catch (e) {
+      membershipStateTriggerResult = { error: e?.message || 'membership_state trigger threw' }
+    }
+  }
+
   return {
     ...preview,
     contact_id: contactId,
     deal: dealResult,
     interactions: interactionsResult,
     transition_tags: transitionTagsResult,
+    membership_state_trigger: membershipStateTriggerResult,
   }
 }

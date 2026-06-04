@@ -17,7 +17,7 @@ export const NODE_TYPES = [
 // flat list; trigger-specific config is validated per-type in validate.js.
 export const TRIGGER_TYPES = [
   'manual', 'booking_created', 'first_booking', 'pipeline_stage_change', 'tag_added',
-  'event_reminder', 'segment_added', 'segment_removed', 'anniversary', 'inactivity',
+  'event_reminder', 'segment_added', 'segment_removed', 'membership_state_change', 'anniversary', 'inactivity',
   'race_registered', 'race_finished', 'order_completed', 'order_failed', 'order_abandoned',
   'achievement_unlocked', 'webhook',
 ]
