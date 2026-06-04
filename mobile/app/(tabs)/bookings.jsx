@@ -14,7 +14,7 @@ import {
   View, Text, ScrollView, Pressable, RefreshControl,
   ActivityIndicator, Linking,
 } from 'react-native'
-import { useRouter } from 'expo-router'
+import { useRouter, useFocusEffect } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { useAuth } from '../../lib/auth-context'
 import {
@@ -139,6 +139,11 @@ export default function Bookings() {
     setLoading(true)
     load().finally(() => setLoading(false))
   }, [load])
+
+  // Re-fetch on tab focus so today/tomorrow's bookings reflect changes made
+  // elsewhere (web calendar, or a "View as user" switch) without a manual
+  // pull-to-refresh.
+  useFocusEffect(useCallback(() => { load() }, [load]))
 
   async function onRefresh() {
     setRefreshing(true)

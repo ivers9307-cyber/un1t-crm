@@ -17,7 +17,7 @@ import {
   ActivityIndicator, Alert, Modal, TextInput, KeyboardAvoidingView,
   Platform,
 } from 'react-native'
-import { useRouter } from 'expo-router'
+import { useRouter, useFocusEffect } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { useAuth } from '../../lib/auth-context'
 import {
@@ -269,6 +269,11 @@ export default function Schedule() {
     setLoading(true)
     fetchWeek().finally(() => setLoading(false))
   }, [fetchWeek])
+
+  // Re-fetch on tab focus so the week reflects changes made elsewhere (a
+  // manager adjusting your shift on web, or a "View as user" switch) without
+  // needing a manual pull-to-refresh. Silent — no loading spinner.
+  useFocusEffect(useCallback(() => { fetchWeek() }, [fetchWeek]))
 
   async function onRefresh() {
     setRefreshing(true)

@@ -9,7 +9,7 @@
 import { View, Text, ActivityIndicator, Pressable } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { useState, useEffect, useCallback } from 'react'
-import { useRouter } from 'expo-router'
+import { useRouter, useFocusEffect } from 'expo-router'
 import { useAuth } from '../../lib/auth-context'
 import { fetchPersonalDashboard } from '../../lib/dashboard-api'
 import { pickLocationColor } from '../../../shared/location-colors'
@@ -195,6 +195,12 @@ export default function PersonalDashboard({ refreshKey }) {
     setLoading(true)
     load().finally(() => setLoading(false))
   }, [load, refreshKey])
+
+  // Re-fetch when the Home tab regains focus so the roster + KPIs reflect
+  // changes made elsewhere (or a "View as user" switch) without a manual
+  // pull-to-refresh. Silent — keeps the current data on screen until the
+  // new data lands.
+  useFocusEffect(useCallback(() => { load() }, [load]))
 
   if (loading) {
     return (

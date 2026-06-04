@@ -7,7 +7,7 @@
 
 import { View, Text, ActivityIndicator } from 'react-native'
 import { useState, useEffect, useCallback } from 'react'
-import { useRouter } from 'expo-router'
+import { useRouter, useFocusEffect } from 'expo-router'
 import { useAuth } from '../../lib/auth-context'
 import { fetchStudioDashboard } from '../../lib/dashboard-api'
 import {
@@ -51,6 +51,11 @@ export default function StudioDashboard({ refreshKey }) {
     setLoading(true)
     load().finally(() => setLoading(false))
   }, [load, refreshKey])
+
+  // Re-fetch when the Home tab regains focus so the funnel + pending counts
+  // reflect changes made elsewhere (or a "View as user" switch) without a
+  // manual pull-to-refresh.
+  useFocusEffect(useCallback(() => { load() }, [load]))
 
   if (loading || !data) {
     return (

@@ -6,6 +6,7 @@
 
 import { View, Text, ActivityIndicator } from 'react-native'
 import { useState, useEffect, useCallback } from 'react'
+import { useFocusEffect } from 'expo-router'
 import { useAuth } from '../../lib/auth-context'
 import { fetchBusinessDashboard } from '../../lib/dashboard-api'
 import {
@@ -27,6 +28,11 @@ export default function BusinessDashboard({ refreshKey }) {
     setLoading(true)
     load().finally(() => setLoading(false))
   }, [load, refreshKey])
+
+  // Re-fetch when the Home tab regains focus so the pipeline + revenue KPIs
+  // reflect changes made elsewhere (or a "View as user" switch) without a
+  // manual pull-to-refresh.
+  useFocusEffect(useCallback(() => { load() }, [load]))
 
   if (loading || !data) {
     return (
