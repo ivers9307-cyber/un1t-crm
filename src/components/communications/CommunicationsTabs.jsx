@@ -8,19 +8,20 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import clsx from 'clsx'
 
-export default function CommunicationsTabs({ canEmail, canWhatsapp }) {
+export default function CommunicationsTabs({ canSms, canEmail, canWhatsapp }) {
   const pathname = usePathname()
 
+  const canSend = canSms || canEmail || canWhatsapp
   const tabs = [
+    // PILLAR2: the unified audience-first send + its history replace the old
+    // per-channel Campaigns / Broadcasts tabs.
+    canSend     && { id: 'send',       label: 'Send',       href: '/communications/send' },
+    canSend     && { id: 'sent',       label: 'Sends',      href: '/communications/sent' },
     canWhatsapp && { id: 'inbox',      label: 'Inbox',      href: '/communications/inbox' },
     canWhatsapp && { id: 'instagram',  label: 'Instagram',  href: '/communications/instagram' },
     canEmail    && { id: 'sequences',  label: 'Sequences',  href: '/communications/sequences' },
-    canEmail    && { id: 'campaigns',  label: 'Campaigns',  href: '/communications/campaigns' },
-    canWhatsapp && { id: 'broadcasts', label: 'Broadcasts', href: '/communications/broadcasts' },
     (canEmail || canWhatsapp) && { id: 'templates', label: 'Templates', href: '/communications/templates' },
-    // Segments tab (mig 085, moved from top-level /segments). Same
-    // permission gate as the broadcast tabs since segments only
-    // matter when you can actually send to them.
+    // Segments tab (mig 085, moved from top-level /segments).
     (canEmail || canWhatsapp) && { id: 'segments',  label: 'Segments',  href: '/communications/segments' },
   ].filter(Boolean)
 
