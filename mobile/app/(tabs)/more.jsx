@@ -1,10 +1,14 @@
-// More tab. iOS-style settings list:
-//   - Account header
-//   - Active location with switcher
-//   - Sign out
+// More tab — tiled app-launcher grid (MOBILE-MORE-TILES). Each enabled
+// surface is a tile (icon + label) in a flat 3-across grid, so everything
+// fits on one screen with little/no scrolling. Replaces the older scrolling
+// sectioned list. The account + active location sit in a compact header on
+// top; Sign out is a clear row at the bottom.
 //
-// Future: notification preferences (read/write the per-category mobile
-// permission flags), dark mode toggle, "open web app", about screen.
+// Which tiles appear is driven by the SAME gates as before: the resolved
+// layout's `more` set (so a feature promoted into the bottom bar drops out
+// of here automatically) + `allowed` for the Customise-bar tile + the master
+// gate for View-as-user. ScrollView is kept as a safety net for the rare
+// many-tiles case; for typical users the grid fits without scrolling.
 
 import { useState, useCallback } from 'react'
 import { View, Text, ScrollView, Pressable, Alert } from 'react-native'
@@ -15,49 +19,27 @@ import { resolveLayoutForUser } from '../../lib/mobile-layout'
 import { getOutstandingPolicyCount } from '../../lib/policies-api'
 import { buildSummary } from '../../lib/build-info'
 
-function Section({ title, children }) {
+function Tile({ icon, label, badge, onPress }) {
   return (
-    <View className="mb-6">
-      {title && (
-        <Text className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle px-2 mb-2">
-          {title}
-        </Text>
-      )}
-      <View className="bg-un1t-surface border border-un1t-border rounded-2xl overflow-hidden">
-        {children}
-      </View>
-    </View>
-  )
-}
-
-function Row({ icon, label, value, onPress, isLast, destructive }) {
-  return (
-    <Pressable
-      onPress={onPress}
-      className={`flex-row items-center px-4 py-3.5 active:bg-un1t-border/40 ${
-        !isLast ? 'border-b border-un1t-border' : ''
-      }`}
-    >
-      {icon && (
-        <Ionicons
-          name={icon}
-          size={18}
-          color={destructive ? '#EF4444' : '#111827'}
-          style={{ marginRight: 12 }}
-        />
-      )}
-      <Text
-        className={`flex-1 text-base ${
-          destructive ? 'text-red-500' : 'text-un1t-text'
-        }`}
+    <View style={{ width: '33.333%' }} className="p-1.5">
+      <Pressable
+        onPress={onPress}
+        style={{ minHeight: 92 }}
+        className="bg-un1t-surface border border-un1t-border rounded-2xl py-4 px-2 items-center justify-center active:bg-un1t-border/40"
       >
-        {label}
-      </Text>
-      {value && <Text className="text-sm text-un1t-subtle mr-1">{value}</Text>}
-      {onPress && !destructive && (
-        <Ionicons name="chevron-forward" size={16} color="#94A3B8" />
-      )}
-    </Pressable>
+        <View>
+          <Ionicons name={icon} size={26} color="#111827" />
+          {badge ? (
+            <View className="absolute -top-2 -right-3.5 bg-green-500 rounded-full min-w-[18px] h-[18px] px-1 items-center justify-center">
+              <Text className="text-[10px] text-white font-bold">{badge}</Text>
+            </View>
+          ) : null}
+        </View>
+        <Text numberOfLines={2} className="text-xs text-un1t-text text-center mt-2 leading-tight">
+          {label}
+        </Text>
+      </Pressable>
+    </View>
   )
 }
 
@@ -77,23 +59,10 @@ export default function More() {
   const canImpersonate = profile?.role === 'master' || profile?.isMaster || !!impersonatingFrom
   const { more, allowed } = resolveLayoutForUser(profile, activeLocation)
   const inMore = new Set(more)
-  const showTasks     = inMore.has('tasks')
-  const showRadar     = inMore.has('radar')
-  const showBookings  = inMore.has('bookings')
-  const showPipeline  = inMore.has('pipeline')
-  const showInvoices  = inMore.has('invoices')
-  const showExpenses  = inMore.has('expenses')
-  const showIssues    = inMore.has('issues')
-  const showContracts = inMore.has('contracts')
-  const showPolicies  = inMore.has('policies')
-  const showSchedule  = inMore.has('schedule')
-  const showWhatsapp  = inMore.has('whatsapp')
-  const showStudio    = inMore.has('studio')
 
-  // POLICIES-VIEWS.1 — outstanding policies the user hasn't opened
-  // yet. Re-fetched on each focus so opening a policy in the viewer
-  // reflects here on the back-bounce. Negative sentinel (network
-  // error) hides the badge silently rather than showing "?".
+  // POLICIES-VIEWS.1 — outstanding policies the user hasn't opened yet.
+  // Re-fetched on each focus so opening a policy reflects here on the
+  // back-bounce. Negative sentinel (network error) hides the badge.
   const [outstandingPolicies, setOutstandingPolicies] = useState(0)
   useFocusEffect(useCallback(() => {
     let alive = true
@@ -107,196 +76,75 @@ export default function More() {
       Alert.alert('Locations', `You only have access to ${locations[0].name}.`)
       return
     }
-    Alert.alert(
-      'Switch location',
-      'Which location?',
-      [
-        ...locations.map(l => ({
-          text: l.name + (l.id === activeLocation?.id ? '  ✓' : ''),
-          onPress: () => setActiveLocationId(l.id),
-        })),
-        { text: 'Cancel', style: 'cancel' },
-      ]
-    )
+    Alert.alert('Switch location', 'Which location?', [
+      ...locations.map(l => ({
+        text: l.name + (l.id === activeLocation?.id ? '  ✓' : ''),
+        onPress: () => setActiveLocationId(l.id),
+      })),
+      { text: 'Cancel', style: 'cancel' },
+    ])
   }
 
   function confirmSignOut() {
-    Alert.alert(
-      'Sign out?',
-      'You can sign back in any time with your email and password.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Sign out', style: 'destructive', onPress: signOut },
-      ]
-    )
+    Alert.alert('Sign out?', 'You can sign back in any time with your email and password.', [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Sign out', style: 'destructive', onPress: signOut },
+    ])
   }
 
   if (!profile) return null
 
+  // Tile list — built from the same per-user gates as the old sectioned list.
+  const tiles = []
+  if (inMore.has('schedule'))  tiles.push({ key: 'schedule', icon: 'calendar-outline', label: 'Schedule', onPress: () => router.push('/schedule') })
+  if (inMore.has('whatsapp'))  tiles.push({ key: 'whatsapp', icon: 'chatbubble-outline', label: 'WhatsApp', onPress: () => router.push('/whatsapp') })
+  if (inMore.has('studio'))    tiles.push({ key: 'studio', icon: 'business-outline', label: 'Studio', onPress: () => router.push('/studio') })
+  if (inMore.has('tasks'))     tiles.push({ key: 'tasks', icon: 'checkbox-outline', label: 'Tasks', onPress: () => router.push('/tasks') })
+  if (inMore.has('bookings'))  tiles.push({ key: 'bookings', icon: 'calendar-clear-outline', label: 'Bookings', onPress: () => router.push('/bookings') })
+  if (inMore.has('pipeline'))  tiles.push({ key: 'pipeline', icon: 'trending-up-outline', label: 'Pipeline', onPress: () => router.push('/pipeline') })
+  if (inMore.has('invoices'))  tiles.push({ key: 'invoices', icon: 'receipt-outline', label: 'Invoices', onPress: () => router.push('/invoices') })
+  if (inMore.has('expenses'))  tiles.push({ key: 'expenses', icon: 'wallet-outline', label: 'Expenses', onPress: () => router.push('/expenses') })
+  if (inMore.has('radar'))     tiles.push({ key: 'radar', icon: 'pulse-outline', label: 'Radar', onPress: () => router.push('/radar') })
+  if (inMore.has('issues'))    tiles.push({ key: 'report', icon: 'alert-circle-outline', label: 'Report', onPress: () => router.push('/issues/new') })
+  if (inMore.has('issues'))    tiles.push({ key: 'myreports', icon: 'list-outline', label: 'My reports', onPress: () => router.push('/issues') })
+  if (inMore.has('contracts')) tiles.push({ key: 'contracts', icon: 'document-text-outline', label: 'Contracts', onPress: () => router.push('/contracts') })
+  if (inMore.has('policies'))  tiles.push({ key: 'policies', icon: 'book-outline', label: 'Policies', badge: outstandingPolicies > 0 ? String(outstandingPolicies) : null, onPress: () => router.push('/policies') })
+  if (allowed.length > 0)      tiles.push({ key: 'customise', icon: 'grid-outline', label: 'Customise bar', onPress: () => router.push('/customise-bar') })
+  if (canImpersonate)          tiles.push({ key: 'impersonate', icon: 'eye-outline', label: 'View as user', badge: impersonatingFrom ? '•' : null, onPress: () => router.push('/impersonate') })
+
   return (
-    <ScrollView className="flex-1 bg-un1t-bg" contentContainerClassName="p-4">
-      <Section title="Account">
-        <Row label={profile.full_name} value={profile.email} isLast />
-      </Section>
-
-      <Section title="Active location">
-        <Row
-          icon="location-outline"
-          label={activeLocation?.name || 'No location'}
-          value={locations.length > 1 ? 'Change' : undefined}
+    <ScrollView className="flex-1 bg-un1t-bg" contentContainerClassName="p-4 pb-8">
+      {/* Account + active location (compact header) */}
+      <View className="mb-5">
+        <Text className="text-2xl font-bold text-un1t-text">{profile.full_name || 'Account'}</Text>
+        {profile.email ? <Text className="text-sm text-un1t-subtle mt-0.5">{profile.email}</Text> : null}
+        <Pressable
           onPress={locations.length > 1 ? pickLocation : undefined}
-          isLast
-        />
-      </Section>
+          className="flex-row items-center mt-2 active:opacity-70"
+        >
+          <Ionicons name="location-outline" size={15} color="#64748B" />
+          <Text className="text-sm text-un1t-text ml-1.5">{activeLocation?.name || 'No location'}</Text>
+          {locations.length > 1 && <Text className="text-sm text-blue-600 ml-2">Change</Text>}
+        </Pressable>
+      </View>
 
-      {/* MOBILE-LAYOUT — primary features demoted from the bottom bar land
-          here so they stay reachable. Empty (and hidden) for the common
-          case where Schedule / WhatsApp / Studio sit in the bar. */}
-      {(showSchedule || showWhatsapp || showStudio) && (
-        <Section title="Features">
-          {showSchedule && (
-            <Row icon="calendar-outline" label="Schedule" onPress={() => router.push('/schedule')} isLast={!showWhatsapp && !showStudio} />
-          )}
-          {showWhatsapp && (
-            <Row icon="chatbubble-outline" label="WhatsApp" onPress={() => router.push('/whatsapp')} isLast={!showStudio} />
-          )}
-          {showStudio && (
-            <Row icon="business-outline" label="Studio" onPress={() => router.push('/studio')} isLast />
-          )}
-        </Section>
+      {/* Tile grid */}
+      {tiles.length > 0 ? (
+        <View className="flex-row flex-wrap -m-1.5">
+          {tiles.map(t => <Tile key={t.key} {...t} />)}
+        </View>
+      ) : (
+        <Text className="text-sm text-un1t-subtle">No quick links enabled for you yet.</Text>
       )}
 
-      {/* NOTIF.2 — Tasks. Surfaces tasks assigned to the signed-in
-          user. Hidden when the user's `tasks` mobile permission is
-          off (admin can disable per-user from StaffForm). */}
-      {showTasks && (
-        <Section title="Work">
-          <Row
-            icon="checkbox-outline"
-            label="Your tasks"
-            onPress={() => router.push('/tasks')}
-            isLast
-          />
-        </Section>
-      )}
-
-      {/* MOB-UI.4 — Operations + Finance surfaces relocated from the
-          bottom bar (kept the bar to Home/Schedule/WhatsApp/Studio). */}
-      {(showBookings || showPipeline) && (
-        <Section title="Operations">
-          {showBookings && (
-            <Row icon="calendar-clear-outline" label="Bookings" onPress={() => router.push('/bookings')} isLast={!showPipeline} />
-          )}
-          {showPipeline && (
-            <Row icon="trending-up-outline" label="Pipeline" onPress={() => router.push('/pipeline')} isLast />
-          )}
-        </Section>
-      )}
-      {(showInvoices || showExpenses) && (
-        <Section title="Finance">
-          {showInvoices && (
-            <Row icon="receipt-outline" label="Invoices" onPress={() => router.push('/invoices')} isLast />
-          )}
-          {showExpenses && (
-            <Row icon="wallet-outline" label="Expenses" onPress={() => router.push('/expenses')} isLast />
-          )}
-        </Section>
-      )}
-
-      {/* MOBILE-RADAR — read-only churn + lead radar glance. Oversight,
-          not personal work, so it gets its own section. */}
-      {showRadar && (
-        <Section title="Insights">
-          <Row
-            icon="pulse-outline"
-            label="Radar"
-            onPress={() => router.push('/radar')}
-            isLast
-          />
-        </Section>
-      )}
-
-      {/* REPORT-ISSUE.1 — staff-submitted issue reports. Any staff member
-          can flag something broken / dirty / unsafe with a photo; the
-          owners at that studio get the task. MOBILE-PERMS — now gated on
-          the `issues` mobile toggle (default ON for every role, so this
-          stays universal unless an admin deliberately turns it off for
-          a user). */}
-      {showIssues && (
-        <Section title="Report">
-          <Row
-            icon="alert-circle-outline"
-            label="Report a problem"
-            onPress={() => router.push('/issues/new')}
-          />
-          <Row
-            icon="list-outline"
-            label="My reports"
-            onPress={() => router.push('/issues')}
-            isLast
-          />
-        </Section>
-      )}
-
-      {/* Documents — contracts and HR policies. MOBILE-PERMS — each row
-          now gated on its own mobile toggle (`contracts` / `policies`,
-          default ON). The pending-contract banner above the tabs still
-          shows regardless, so a required signature is never blocked.
-          POLICIES-VIEWS.1 — Policies row shows a "N new" badge when the
-          user has policies they haven't opened yet. */}
-      {(showContracts || showPolicies) && (
-        <Section title="Documents">
-          {showContracts && (
-            <Row
-              icon="document-text-outline"
-              label="Your contracts"
-              onPress={() => router.push('/contracts')}
-              isLast={!showPolicies}
-            />
-          )}
-          {showPolicies && (
-            <Row
-              icon="book-outline"
-              label="Policies"
-              value={outstandingPolicies > 0 ? `${outstandingPolicies} new` : undefined}
-              onPress={() => router.push('/policies')}
-              isLast
-            />
-          )}
-        </Section>
-      )}
-
-      {allowed.length > 0 && (
-        <Section title="Personalise">
-          <Row icon="grid-outline" label="Customise bottom bar" onPress={() => router.push('/customise-bar')} isLast />
-        </Section>
-      )}
-
-      {/* Master-only: switch into another user's view (mig 035).
-          Mirrors the web Settings → Impersonate entry point. The banner
-          above the tabs already shows the active session + Stop button
-          when one's running. */}
-      {canImpersonate && (
-        <Section title="Master tools">
-          <Row
-            icon="eye-outline"
-            label="View as user"
-            value={impersonatingFrom ? 'Active' : undefined}
-            onPress={() => router.push('/impersonate')}
-            isLast
-          />
-        </Section>
-      )}
-
-      <Section>
-        <Row
-          icon="log-out-outline"
-          label="Sign out"
-          onPress={confirmSignOut}
-          destructive
-          isLast
-        />
-      </Section>
+      {/* Sign out */}
+      <Pressable
+        onPress={confirmSignOut}
+        className="mt-6 flex-row items-center justify-center py-3.5 rounded-2xl border border-un1t-border active:bg-un1t-border/40"
+      >
+        <Ionicons name="log-out-outline" size={18} color="#EF4444" />
+        <Text className="text-base text-red-500 ml-2 font-medium">Sign out</Text>
+      </Pressable>
 
       <Text className="text-xs text-un1t-muted text-center mt-4">
         CF Studio · {buildSummary()}
