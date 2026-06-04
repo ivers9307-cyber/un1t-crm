@@ -5,6 +5,7 @@ import { useAuth } from '../lib/auth-context'
 import { resolveLayoutForUser } from '../lib/mobile-layout'
 import { saveBarLayout } from '../lib/layout-api'
 import { MOBILE_NAV_FEATURES } from '../../shared/mobile-nav'
+import BackHeaderLeft from '../components/BackHeaderLeft'
 
 const LABEL = Object.fromEntries(MOBILE_NAV_FEATURES.map(f => [f.key, f.label]))
 
@@ -35,7 +36,7 @@ export default function CustomiseBar() {
 
   return (
     <View className="flex-1 bg-un1t-bg">
-      <Stack.Screen options={{ title: 'Customise bar' }} />
+      <Stack.Screen options={{ title: 'Customise bar', headerLeft: () => <BackHeaderLeft label="More" fallbackHref="/(tabs)/more" /> }} />
       <ScrollView contentContainerClassName="p-4">
         <Text className="text-sm text-un1t-subtle mb-4">
           Choose up to 3 features for your bottom bar, in order. Home and More always stay.

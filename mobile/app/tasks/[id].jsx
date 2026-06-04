@@ -167,14 +167,11 @@ export default function TaskDetail() {
               <Text className="text-sm text-un1t-text ml-2">#{task.project}</Text>
             </View>
           )}
-          {task.assignee && (
-            <View className="flex-row items-center">
-              <Ionicons name="person-outline" size={16} color="#94A3B8" />
-              <Text className="text-sm text-un1t-text ml-2">
-                {task.assignee.full_name}
-              </Text>
-            </View>
-          )}
+          {/* Assignee row removed: mobile tasks are always the signed-in
+              user's own (listMyTasks filters assignee_id = self), and the
+              `authenticated` role has no SELECT grant on profiles — so the
+              old `assignee:profiles` embed 500'd with "permission denied for
+              table profiles". The name added nothing here. */}
         </View>
 
         {task.note && (

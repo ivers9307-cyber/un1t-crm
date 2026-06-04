@@ -17,6 +17,7 @@ import { Ionicons } from '@expo/vector-icons'
 import { useRouter, Stack } from 'expo-router'
 import { useAuth } from '../../lib/auth-context'
 import { api } from '../../lib/api'
+import BackHeaderLeft from '../../components/BackHeaderLeft'
 
 export default function ImpersonatePicker() {
   const router = useRouter()
@@ -82,7 +83,7 @@ export default function ImpersonatePicker() {
   if (!isMaster) {
     return (
       <View className="flex-1 bg-un1t-bg items-center justify-center px-6">
-        <Stack.Screen options={{ title: 'View as user' }} />
+        <Stack.Screen options={{ title: 'View as user', headerLeft: () => <BackHeaderLeft label="More" fallbackHref="/(tabs)/more" /> }} />
         <Text className="text-base text-un1t-subtle text-center">
           Only master accounts can switch into another user's view.
         </Text>
@@ -95,7 +96,7 @@ export default function ImpersonatePicker() {
       style={{ flex: 1 }}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
-      <Stack.Screen options={{ title: 'View as user' }} />
+      <Stack.Screen options={{ title: 'View as user', headerLeft: () => <BackHeaderLeft label="More" fallbackHref="/(tabs)/more" /> }} />
       <View className="flex-1 bg-un1t-bg">
         {/* Search + reason field */}
         <View className="px-4 pt-3 pb-2 border-b border-un1t-border bg-un1t-surface">

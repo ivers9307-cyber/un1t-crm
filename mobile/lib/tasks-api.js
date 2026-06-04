@@ -14,11 +14,16 @@
 
 import { supabase } from './supabase'
 
+// Do NOT embed `assignee:profiles!...` here. The mobile app queries Supabase
+// with the authenticated (anon + JWT) client, and the `authenticated` role has
+// NO SELECT grant on public.profiles (service_role only — salary/comp privacy).
+// Any profiles embed makes the whole select 500 with "permission denied for
+// table profiles". The assignee is always the signed-in user on this surface
+// anyway (see listMyTasks), so the embed added nothing. contacts IS readable.
 const TASK_SELECT = `
   id, subject, note, status, priority, project,
   due_date, due_time, assignee_id, contact_id, location_id,
   created_at, updated_at, completed_at,
-  assignee:profiles!activities_assignee_id_fkey(id, full_name),
   contact:contacts(id, first_name, last_name, phone, email)
 `
 
