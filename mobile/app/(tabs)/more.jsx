@@ -17,6 +17,9 @@ import { useRouter, useFocusEffect } from 'expo-router'
 import { useAuth } from '../../lib/auth-context'
 import { resolveLayoutForUser } from '../../lib/mobile-layout'
 import { getOutstandingPolicyCount } from '../../lib/policies-api'
+import { canMobile } from '../../lib/permissions'
+import { getPendingApprovals } from '../../lib/approvals-api'
+import { approvalsBadgeCount } from '../../lib/approvals'
 import { buildSummary } from '../../lib/build-info'
 
 function Tile({ icon, label, badge, onPress }) {
@@ -70,6 +73,19 @@ export default function More() {
     return () => { alive = false }
   }, []))
 
+  // MOBILE-APPROVALS — pending-approvals badge for the Approvals tile. Gated on
+  // the `approvals` permission so non-managers never fetch. Counts only the four
+  // mobile categories so the badge matches the inbox.
+  const [outstandingApprovals, setOutstandingApprovals] = useState(0)
+  useFocusEffect(useCallback(() => {
+    if (!profile || !activeLocation?.id || !canMobile(profile, 'approvals', activeLocation)) return
+    let alive = true
+    getPendingApprovals({ locationId: activeLocation.id }).then((res) => {
+      if (alive && res.success) setOutstandingApprovals(approvalsBadgeCount(res.data?.providers || []))
+    })
+    return () => { alive = false }
+  }, [profile, activeLocation]))
+
   function pickLocation() {
     if (!locations.length) return
     if (locations.length === 1) {
@@ -109,6 +125,7 @@ export default function More() {
   if (inMore.has('issues'))    tiles.push({ key: 'myreports', icon: 'list-outline', label: 'My reports', onPress: () => router.push('/issues') })
   if (inMore.has('contracts')) tiles.push({ key: 'contracts', icon: 'document-text-outline', label: 'Contracts', onPress: () => router.push('/contracts') })
   if (inMore.has('policies'))  tiles.push({ key: 'policies', icon: 'book-outline', label: 'Policies', badge: outstandingPolicies > 0 ? String(outstandingPolicies) : null, onPress: () => router.push('/policies') })
+  if (canMobile(profile, 'approvals', activeLocation)) tiles.push({ key: 'approvals', icon: 'checkmark-done-outline', label: 'Approvals', badge: outstandingApprovals > 0 ? String(outstandingApprovals) : null, onPress: () => router.push('/approvals') })
   if (allowed.length > 0)      tiles.push({ key: 'customise', icon: 'grid-outline', label: 'Customise bar', onPress: () => router.push('/customise-bar') })
   if (canImpersonate)          tiles.push({ key: 'impersonate', icon: 'eye-outline', label: 'View as user', badge: impersonatingFrom ? '•' : null, onPress: () => router.push('/impersonate') })
 
