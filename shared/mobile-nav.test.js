@@ -109,4 +109,16 @@ describe('resolveMobileLayout', () => {
     const r = resolveMobileLayout({ role: 'nope', employmentType: null, enabledKeys: ['schedule'], override: null })
     expect(r.bar).toEqual(['schedule'])
   })
+
+  it('owner default puts WhatsApp in more (reachable via the More list)', () => {
+    const r = resolveMobileLayout({ role: 'owner', employmentType: 'fte', enabledKeys: ['schedule', 'whatsapp', 'studio'], override: null })
+    expect(r.bar).toEqual(['schedule', 'studio'])
+    expect(r.more).toContain('whatsapp')
+  })
+
+  it('master default resolves (inherits owner-style lean bar)', () => {
+    const r = resolveMobileLayout({ role: 'master', employmentType: 'fte', enabledKeys: ['schedule', 'studio', 'whatsapp'], override: null })
+    expect(r.bar).toEqual(['schedule', 'studio'])
+    expect(r.more).toContain('whatsapp')
+  })
 })

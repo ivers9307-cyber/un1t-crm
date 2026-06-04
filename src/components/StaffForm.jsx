@@ -190,7 +190,7 @@ export default function StaffForm({
       ...prev,
       assignments: prev.assignments.map(a =>
         a.location_id === selectedPermLocationId
-          ? { ...a, permissions: { ...a.permissions, mobile: perms } }
+          ? { ...a, permissions: { ...a.permissions, mobile: { ...(a.permissions?.mobile || {}), ...perms } } }
           : a
       ),
     }))

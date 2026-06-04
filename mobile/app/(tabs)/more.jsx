@@ -86,6 +86,9 @@ export default function More() {
   const showIssues    = inMore.has('issues')
   const showContracts = inMore.has('contracts')
   const showPolicies  = inMore.has('policies')
+  const showSchedule  = inMore.has('schedule')
+  const showWhatsapp  = inMore.has('whatsapp')
+  const showStudio    = inMore.has('studio')
 
   // POLICIES-VIEWS.1 — outstanding policies the user hasn't opened
   // yet. Re-fetched on each focus so opening a policy in the viewer
@@ -145,6 +148,23 @@ export default function More() {
           isLast
         />
       </Section>
+
+      {/* MOBILE-LAYOUT — primary features demoted from the bottom bar land
+          here so they stay reachable. Empty (and hidden) for the common
+          case where Schedule / WhatsApp / Studio sit in the bar. */}
+      {(showSchedule || showWhatsapp || showStudio) && (
+        <Section title="Features">
+          {showSchedule && (
+            <Row icon="calendar-outline" label="Schedule" onPress={() => router.push('/schedule')} isLast={!showWhatsapp && !showStudio} />
+          )}
+          {showWhatsapp && (
+            <Row icon="chatbubble-outline" label="WhatsApp" onPress={() => router.push('/whatsapp')} isLast={!showStudio} />
+          )}
+          {showStudio && (
+            <Row icon="business-outline" label="Studio" onPress={() => router.push('/studio')} isLast />
+          )}
+        </Section>
+      )}
 
       {/* NOTIF.2 — Tasks. Surfaces tasks assigned to the signed-in
           user. Hidden when the user's `tasks` mobile permission is
