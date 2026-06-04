@@ -7,6 +7,7 @@ import { ArrowLeft, Plus, Trash2, Crown, KeyRound, AlertCircle, Loader2, UserX, 
 import PasswordOverrideModal from './PasswordOverrideModal'
 import TestPushButton from './settings/TestPushButton'
 import LeadTimeOverrideRow from './settings/LeadTimeOverrideRow'
+import MobileBarPlanner from './MobileBarPlanner'
 import {
   OWNER_ASSIGNABLE_ROLES, MASTER_ASSIGNABLE_ROLES,
 } from '@/lib/schemas'
@@ -189,7 +190,7 @@ export default function StaffForm({
       ...prev,
       assignments: prev.assignments.map(a =>
         a.location_id === selectedPermLocationId
-          ? { ...a, permissions: { ...a.permissions, mobile: perms } }
+          ? { ...a, permissions: { ...a.permissions, mobile: { ...(a.permissions?.mobile || {}), ...perms } } }
           : a
       ),
     }))
@@ -964,6 +965,15 @@ export default function StaffForm({
             )
           })}
         </div>
+
+        {selectedPermLocationId && (
+          <MobileBarPlanner
+            role={selectedAssignment?.role || 'staff'}
+            employmentType={form.employment_type}
+            value={selectedMobilePerms.layout || null}
+            onChange={(layout) => patchSelectedMobilePerms({ layout })}
+          />
+        )}
       </div>
       )}
 

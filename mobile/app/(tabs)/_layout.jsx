@@ -17,6 +17,7 @@ import { useEffect, useRef } from 'react'
 import { useAuth } from '../../lib/auth-context'
 import { canMobile } from '../../lib/permissions'
 import { registerForPushNotifications } from '../../lib/push-register'
+import { resolveLayoutForUser } from '../../lib/mobile-layout'
 import ImpersonateBanner from '../../components/ImpersonateBanner'
 import PendingContractsBanner from '../../components/PendingContractsBanner'
 
@@ -42,29 +43,28 @@ export default function TabsLayout() {
 
   // Sensible defaults for users whose admin hasn't enabled anything yet:
   // Home + More remain visible so they can see their info and sign out.
-  // Location gate (mig 032) honoured via canMobile's third arg.
-  const showSchedule = canMobile(profile, 'schedule', activeLocation)
-  const showPipeline = canMobile(profile, 'pipeline', activeLocation)
-  const showWhatsapp = canMobile(profile, 'whatsapp', activeLocation)
-  // NOTIF.2 — Bookings tab. Sits between Schedule and Pipeline in the
-  // bottom bar. Tasks goes under More (less time-sensitive at the front
-  // desk than a customer who's about to walk in).
-  const showBookings = canMobile(profile, 'bookings', activeLocation)
-  // Invoices tab: contractor employment_type only. Owners/masters
-  // approve from the web; on mobile the tab would just be noise for
-  // them. (mig 101)
-  const showInvoices = profile?.employment_type === 'contractor' && canMobile(profile, 'invoices', activeLocation)
-  // FTE-EXPENSES.2 — Expenses tab: mirror of Invoices but for FTE
-  // staff. Same rationale (approvers use the web). Surfaces the
-  // monthly receipt-capture flow at the front desk so staff can
-  // photograph receipts as they collect them rather than batching
-  // at month-end.
-  const showExpenses = profile?.employment_type === 'fte' && canMobile(profile, 'expenses', activeLocation)
-  // Studio Management tab — same gate as web sidebar (mig 093 cross-
-  // platform key). Door unlock + AC control. Promoted from a More-tab
-  // row to a primary tab per operator request — managers running
-  // between studios want one-tap access.
-  const showStudio = canMobile(profile, 'studio_management', activeLocation)
+  // Location gate (mig 032) honoured via resolveLayoutForUser → canMobile.
+  const { bar, more } = resolveLayoutForUser(profile, activeLocation)
+  const barSet = new Set(bar)
+  const moreEligible = new Set(more)
+
+  // Render config for every bar-capable (tabs) route.
+  const TAB_META = {
+    schedule: { title: 'Schedule', icon: 'calendar-outline' },
+    whatsapp: { title: 'WhatsApp', icon: 'chatbubble-outline' },
+    studio:   { title: 'Studio',   icon: 'business-outline' },
+    pipeline: { title: 'Pipeline', icon: 'trending-up-outline' },
+    bookings: { title: 'Bookings', icon: 'calendar-clear-outline' },
+    invoices: { title: 'Invoices', icon: 'receipt-outline' },
+    expenses: { title: 'Expenses', icon: 'wallet-outline' },
+  }
+  const FEATURE_KEYS = ['schedule', 'whatsapp', 'studio', 'pipeline', 'bookings', 'invoices', 'expenses']
+  const hiddenKeys = FEATURE_KEYS.filter(k => !barSet.has(k))
+
+  function featureHref(key) {
+    if (barSet.has(key) || moreEligible.has(key)) return `/(tabs)/${key}`
+    return null // not enabled → not navigable
+  }
 
   return (
     // Wrap the navigator so the impersonation banner can pin above
@@ -77,134 +77,52 @@ export default function TabsLayout() {
           pending contract for the signed-in user. */}
       <PendingContractsBanner />
       <Tabs
-      screenOptions={{
-        headerShown: true,
-        headerTitleStyle: { fontWeight: '600' },
-        tabBarActiveTintColor: '#111827',
-        tabBarInactiveTintColor: '#94A3B8',
-        tabBarStyle: {
-          borderTopColor: '#E2E5E9',
-          backgroundColor: '#FFFFFF',
-        },
-      }}
-    >
-      <Tabs.Screen
-        name="index"
-        options={{
-          title: 'Home',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="home-outline" size={size} color={color} />
-          ),
+        screenOptions={{
+          headerShown: true,
+          headerTitleStyle: { fontWeight: '600' },
+          tabBarActiveTintColor: '#111827',
+          tabBarInactiveTintColor: '#94A3B8',
+          tabBarStyle: { borderTopColor: '#E2E5E9', backgroundColor: '#FFFFFF' },
         }}
-      />
-      <Tabs.Screen
-        name="schedule"
-        options={{
-          title: 'Schedule',
-          // expo-router's `href: null` removes the tab from the tab bar
-          // and disables direct navigation to the route. We use this
-          // instead of conditional <Tabs.Screen> rendering because the
-          // expo-router file-based tree must always declare every route.
-          href: showSchedule ? '/(tabs)/schedule' : null,
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="calendar-outline" size={size} color={color} />
-          ),
-        }}
-      />
-      <Tabs.Screen
-        name="bookings"
-        options={{
-          title: 'Bookings',
-          href: showBookings ? '/(tabs)/bookings' : null,
-          // MOB-UI.4 — reached from the More tab, not the bottom bar.
-          // Hide from the bar via tabBarItemStyle (NOT tabBarButton):
-          // expo-router 6 / SDK 54 hard-errors on `href` + `tabBarButton`
-          // together, so use the style to hide while keeping `href` for
-          // permission gating + navigability.
-          tabBarItemStyle: { display: 'none' },
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="calendar-clear-outline" size={size} color={color} />
-          ),
-        }}
-      />
-      <Tabs.Screen
-        name="pipeline"
-        options={{
-          title: 'Pipeline',
-          href: showPipeline ? '/(tabs)/pipeline' : null,
-          // MOB-UI.4 — reached from the More tab, not the bottom bar.
-          // Hide from the bar via tabBarItemStyle (NOT tabBarButton):
-          // expo-router 6 / SDK 54 hard-errors on `href` + `tabBarButton`
-          // together, so use the style to hide while keeping `href` for
-          // permission gating + navigability.
-          tabBarItemStyle: { display: 'none' },
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="trending-up-outline" size={size} color={color} />
-          ),
-        }}
-      />
-      <Tabs.Screen
-        name="whatsapp"
-        options={{
-          title: 'WhatsApp',
-          href: showWhatsapp ? '/(tabs)/whatsapp' : null,
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="chatbubble-outline" size={size} color={color} />
-          ),
-        }}
-      />
-      <Tabs.Screen
-        name="studio"
-        options={{
-          title: 'Studio',
-          href: showStudio ? '/(tabs)/studio' : null,
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="business-outline" size={size} color={color} />
-          ),
-        }}
-      />
-      <Tabs.Screen
-        name="invoices"
-        options={{
-          title: 'Invoices',
-          href: showInvoices ? '/(tabs)/invoices' : null,
-          // MOB-UI.4 — reached from the More tab, not the bottom bar.
-          // Hide from the bar via tabBarItemStyle (NOT tabBarButton):
-          // expo-router 6 / SDK 54 hard-errors on `href` + `tabBarButton`
-          // together, so use the style to hide while keeping `href` for
-          // permission gating + navigability.
-          tabBarItemStyle: { display: 'none' },
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="receipt-outline" size={size} color={color} />
-          ),
-        }}
-      />
-      <Tabs.Screen
-        name="expenses"
-        options={{
-          title: 'Expenses',
-          href: showExpenses ? '/(tabs)/expenses' : null,
-          // MOB-UI.4 — reached from the More tab, not the bottom bar.
-          // Hide from the bar via tabBarItemStyle (NOT tabBarButton):
-          // expo-router 6 / SDK 54 hard-errors on `href` + `tabBarButton`
-          // together, so use the style to hide while keeping `href` for
-          // permission gating + navigability.
-          tabBarItemStyle: { display: 'none' },
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="wallet-outline" size={size} color={color} />
-          ),
-        }}
-      />
-      <Tabs.Screen
-        name="more"
-        options={{
-          title: 'More',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="ellipsis-horizontal" size={size} color={color} />
-          ),
-        }}
-      />
-    </Tabs>
+      >
+        <Tabs.Screen
+          name="index"
+          options={{
+            title: 'Home',
+            tabBarIcon: ({ color, size }) => (<Ionicons name="home-outline" size={size} color={color} />),
+          }}
+        />
+        {bar.map(key => (
+          <Tabs.Screen
+            key={key}
+            name={key}
+            options={{
+              title: TAB_META[key].title,
+              href: `/(tabs)/${key}`,
+              tabBarIcon: ({ color, size }) => (<Ionicons name={TAB_META[key].icon} size={size} color={color} />),
+            }}
+          />
+        ))}
+        <Tabs.Screen
+          name="more"
+          options={{
+            title: 'More',
+            tabBarIcon: ({ color, size }) => (<Ionicons name="ellipsis-horizontal" size={size} color={color} />),
+          }}
+        />
+        {hiddenKeys.map(key => (
+          <Tabs.Screen
+            key={key}
+            name={key}
+            options={{
+              title: TAB_META[key].title,
+              href: featureHref(key),
+              tabBarItemStyle: { display: 'none' },
+              tabBarIcon: ({ color, size }) => (<Ionicons name={TAB_META[key].icon} size={size} color={color} />),
+            }}
+          />
+        ))}
+      </Tabs>
     </View>
   )
 }
