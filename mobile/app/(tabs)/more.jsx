@@ -11,7 +11,7 @@
 // many-tiles case; for typical users the grid fits without scrolling.
 
 import { useState, useCallback } from 'react'
-import { View, Text, ScrollView, Pressable, Alert } from 'react-native'
+import { View, Text, ScrollView, Pressable, Alert, Switch } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { useRouter, useFocusEffect } from 'expo-router'
 import { useAuth } from '../../lib/auth-context'
@@ -21,6 +21,7 @@ import { canMobile } from '../../lib/permissions'
 import { getPendingApprovals } from '../../lib/approvals-api'
 import { approvalsBadgeCount } from '../../lib/approvals'
 import { buildSummary } from '../../lib/build-info'
+import { useBiometricLock } from '../../lib/biometric-lock'
 
 function Tile({ icon, label, badge, onPress }) {
   return (
@@ -60,6 +61,16 @@ export default function More() {
   // target's, so also check impersonatingFrom (the underlying caller
   // is then implicitly a master).
   const canImpersonate = profile?.role === 'master' || profile?.isMaster || !!impersonatingFrom
+
+  // FACE-ID — biometric app-lock toggle (shown only when biometrics are
+  // available + enrolled). Enabling/disabling both re-auth first.
+  const biometric = useBiometricLock()
+  async function onToggleBiometric(next) {
+    const res = await biometric.setEnabled(next)
+    if (!res.success) {
+      Alert.alert('Couldn’t confirm', `${biometric.typeLabel} wasn’t confirmed, so the setting wasn’t changed.`)
+    }
+  }
   const { more, allowed } = resolveLayoutForUser(profile, activeLocation)
   const inMore = new Set(more)
 
@@ -152,6 +163,16 @@ export default function More() {
         </View>
       ) : (
         <Text className="text-sm text-un1t-subtle">No quick links enabled for you yet.</Text>
+      )}
+
+      {biometric.available && (
+        <View className="flex-row items-center justify-between mt-6 bg-un1t-surface border border-un1t-border rounded-2xl p-4">
+          <View className="flex-1 mr-3">
+            <Text className="text-base text-un1t-text">Require {biometric.typeLabel} to unlock</Text>
+            <Text className="text-xs text-un1t-subtle mt-0.5">Locks the app on open and after 5 min away.</Text>
+          </View>
+          <Switch value={biometric.enabled} onValueChange={onToggleBiometric} />
+        </View>
       )}
 
       {/* Sign out */}
