@@ -179,7 +179,13 @@ export default ({ config }) => ({
   // eas-update.yml) so over-the-air Hermes bytecode matches the binary. Re-
   // attempt 'fingerprint' as a separate, debugged change. See
   // docs/OTA_BOOT_CRASH_FINDINGS.md.
-  runtimeVersion: { policy: 'sdkVersion' },
+  // MOBILE-FACEID — switched from the `sdkVersion` policy to an EXPLICIT
+  // runtimeVersion because v1.3.0 adds a NATIVE module
+  // (expo-local-authentication). An explicit runtime isolates this build's OTA
+  // lane: old binaries (exposdk:54.0.0) no longer receive OTAs — frozen, NOT
+  // crashed — until users install the 1.3.0 binary that contains the module.
+  // Bump this string on every future native change.
+  runtimeVersion: '1.3.0',
   extra: {
     // Supabase URL + anon key are PUBLIC by design — the anon key is
     // protected by Row-Level Security on the database, not by secrecy
