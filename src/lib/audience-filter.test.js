@@ -37,6 +37,27 @@ describe('applyAudienceFilter', () => {
     expect(q.calls).toEqual([['eq', 'pipeline_stage_slug', 'active_member']])
   })
 
+  // PILLAR2 — explicit recipients via { field:'id', op:'in', value:[…] }
+  it('applies an id-in filter as .in(id, array) for explicit recipients', () => {
+    applyAudienceFilter(q.query, { filters: [{ field: 'id', op: 'in', value: ['a', 'b', 'c'] }] })
+    expect(q.calls).toEqual([['in', 'id', ['a', 'b', 'c']]])
+  })
+
+  it('forces an unsatisfiable predicate for an empty id-in array', () => {
+    applyAudienceFilter(q.query, { filters: [{ field: 'id', op: 'in', value: [] }] })
+    expect(q.calls).toEqual([['eq', 'id', '00000000-0000-0000-0000-000000000000']])
+  })
+
+  it('throws when an id-in value is not an array', () => {
+    expect(() => applyAudienceFilter(q.query, { filters: [{ field: 'id', op: 'in', value: 'x' }] }))
+      .toThrow(InvalidAudienceFilterError)
+  })
+
+  it('rejects a non-in operator on id (only "in" is whitelisted)', () => {
+    expect(() => applyAudienceFilter(q.query, { filters: [{ field: 'id', op: 'eq', value: 'x' }] }))
+      .toThrow(InvalidAudienceFilterError)
+  })
+
   it('applies a contains filter as ilike with %wrapping%', () => {
     applyAudienceFilter(q.query, { filters: [{ field: 'email', op: 'contains', value: 'gmail' }] })
     expect(q.calls).toEqual([['ilike', 'email', '%gmail%']])

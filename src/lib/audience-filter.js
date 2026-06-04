@@ -135,6 +135,13 @@ export const AUDIENCE_FIELDS = Object.freeze({
   // contact_ids and the caller injects them as an `id IN (…)`
   // constraint on the contacts query.
   tag:                       { type: 'tag',     ops: ['eq', 'neq'] },
+
+  // PILLAR2 — explicit recipients. Deliberately NOT in AudienceBuilder's
+  // FIELD_OPTIONS (operators don't filter on raw UUIDs): the unified send
+  // composer's "pick people" mode constructs `{ field:'id', op:'in',
+  // value:[contactId,…] }` directly. The send + count paths apply it on top of
+  // the consent/status gates, so opted-out / invalid contacts are still excluded.
+  id:                        { type: 'id',      ops: ['in'] },
 })
 
 // Ops whose value is a day-count number ("more/less than N days ago").
@@ -218,6 +225,17 @@ export function applyAudienceFilter(query, filter) {
       case 'neq':
         query = query.neq(field, v)
         break
+      case 'in': {
+        if (!Array.isArray(v)) {
+          throw new InvalidAudienceFilterError(`Filter "${field} in" requires an array value`)
+        }
+        // Empty selection → unsatisfiable predicate (count 0), mirroring the
+        // tag-filter zero-intersection guard.
+        query = v.length === 0
+          ? query.eq(field, '00000000-0000-0000-0000-000000000000')
+          : query.in(field, v)
+        break
+      }
       case 'gt':
         query = query.gt(field, v)
         break
