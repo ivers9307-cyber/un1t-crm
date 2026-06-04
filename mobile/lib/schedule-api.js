@@ -12,6 +12,19 @@ export function getMyShifts({ locationId, profileId, startDate, endDate }) {
   return api(`/api/schedule/shifts?${qs.toString()}`, { locationId })
 }
 
+export function getTeamShifts({ locationId, startDate, endDate }) {
+  // Same route as getMyShifts but WITHOUT profile_id → the whole location's
+  // roster for the date range. GET /api/schedule/shifts is service-role and
+  // already embeds profiles(full_name, role, avatar_url) per shift, so the
+  // names come back without a mobile-direct profiles embed (the authenticated
+  // client can't SELECT profiles — see CLAUDE.md "Lessons learned").
+  const qs = new URLSearchParams()
+  if (locationId) qs.set('location_id', locationId)
+  if (startDate) qs.set('start_date', startDate)
+  if (endDate) qs.set('end_date', endDate)
+  return api(`/api/schedule/shifts?${qs.toString()}`, { locationId })
+}
+
 export function getMyTimeOff({ locationId, profileId, status }) {
   const qs = new URLSearchParams()
   if (locationId) qs.set('location_id', locationId)

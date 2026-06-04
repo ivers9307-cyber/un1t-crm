@@ -15,7 +15,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react'
 import {
   View, Text, ScrollView, Pressable, RefreshControl,
   ActivityIndicator, Alert, Modal, TextInput, KeyboardAvoidingView,
-  Platform,
+  Platform, Image,
 } from 'react-native'
 import { useRouter, useFocusEffect } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
@@ -25,11 +25,12 @@ import {
   shortDate, timeRange, hoursBetween,
 } from '../../lib/dates'
 import {
-  getMyShifts, getMyTimeOff, createSwapRequest, adjustShiftAssignment,
+  getMyShifts, getTeamShifts, getMyTimeOff, createSwapRequest, adjustShiftAssignment,
 } from '../../lib/schedule-api'
 import { MANAGER_ROLES } from '../../../shared/permissions'
 import { canMobile } from '../../lib/permissions'
 import { useIsTablet } from '../../lib/use-is-tablet'
+import { effShiftStart, effShiftEnd, teamRosterForDay, initials } from '../../lib/schedule-team'
 
 const isManagerRole = (role) => MANAGER_ROLES.includes(role)
 
@@ -67,16 +68,10 @@ function WeekStrip({ anchor, selected, onSelect, byDate }) {
 // Same shift, same actions, just squeezed into a column-width card
 // instead of a full-width row. The iPhone ShiftRow below stays
 // untouched so phone users see no change.
-// Effective shift times. The base block times live on the joined
-// shift_template; the legacy `shifts` row only carries per-assignment
-// overrides (mig 099/100), so reading shift.start_time alone yields
-// null for un-adjusted shifts and renders "— · 0h". Mirror the
-// dashboard's resolution (override → row → template) so the Schedule
-// tab shows the same time + duration.
-const effShiftStart = (s) => s.start_time_override || s.start_time || s.shift_templates?.start_time || null
-const effShiftEnd = (s) => s.end_time_override || s.end_time || s.shift_templates?.end_time || null
+// effShiftStart / effShiftEnd now live in ../../lib/schedule-team (imported
+// above) — single definition shared with the Team sort helper.
 
-function ShiftCard({ shift, onPress, onLongPress }) {
+function ShiftCard({ shift, onPress, onLongPress, teamMode, selfId }) {
   const tpl = shift.shift_templates
   const effStart = effShiftStart(shift)
   const effEnd = effShiftEnd(shift)
@@ -88,7 +83,18 @@ function ShiftCard({ shift, onPress, onLongPress }) {
       delayLongPress={400}
       className="bg-un1t-surface border border-un1t-border rounded-xl p-2.5 mb-2 active:opacity-70"
     >
-      <Text className="text-sm font-semibold text-un1t-text" numberOfLines={1}>
+      {teamMode && (
+        <Text className="text-sm font-semibold text-un1t-text" numberOfLines={1}>
+          {shift.profiles?.full_name?.split(' ')[0] || 'Unknown'}
+          {shift.profile_id === selfId ? ' (You)' : ''}
+        </Text>
+      )}
+      <Text
+        className={teamMode
+          ? 'text-[11px] text-un1t-subtle mt-0.5'
+          : 'text-sm font-semibold text-un1t-text'}
+        numberOfLines={1}
+      >
         {tpl?.name || 'Shift'}
       </Text>
       <Text className="text-[11px] text-un1t-subtle mt-0.5">
@@ -124,14 +130,14 @@ function ShiftCard({ shift, onPress, onLongPress }) {
 // Per-column shift cards reuse the same onPress / onLongPress
 // handlers as the phone's ShiftRow, so adjust + swap flows work
 // identically.
-function WeekGridView({ anchor, shiftsByDate, timeOff, todayIso, canAdjust, openAdjust, requestSwap }) {
+function WeekGridView({ anchor, shiftsByDate, timeOff, todayIso, canAdjust, openAdjust, requestSwap, teamMode, selfId }) {
   const days = daysOfWeek(anchor)
   return (
     <View className="flex-row gap-2">
       {days.map((d, i) => {
         const iso = isoDate(d)
         const dayShifts = (shiftsByDate[iso] || []).slice().sort((a, b) =>
-          (a.start_time || '').localeCompare(b.start_time || ''))
+          (effShiftStart(a) || '').localeCompare(effShiftStart(b) || ''))
         const dayLeave = timeOff.filter(t =>
           t.start_date <= iso && t.end_date >= iso &&
           (t.status === 'approved' || t.status === 'pending'))
@@ -163,13 +169,59 @@ function WeekGridView({ anchor, shiftsByDate, timeOff, todayIso, canAdjust, open
               <ShiftCard
                 key={s.id}
                 shift={s}
-                onPress={canAdjust(s) ? () => openAdjust(s) : undefined}
-                onLongPress={() => requestSwap(s)}
+                teamMode={teamMode}
+                selfId={selfId}
+                onPress={teamMode ? undefined : (canAdjust(s) ? () => openAdjust(s) : undefined)}
+                onLongPress={teamMode ? undefined : () => requestSwap(s)}
               />
             ))}
           </View>
         )
       })}
+    </View>
+  )
+}
+
+// Team mode — one rostered colleague's shift for the selected day.
+// Read-only (no adjust / swap). Avatar with initials fallback, name with a
+// "You" chip for the signed-in user, shift name + time, role chip.
+function TeamShiftRow({ shift }) {
+  const tpl = shift.shift_templates
+  const p = shift.profiles || {}
+  const effStart = effShiftStart(shift)
+  const effEnd = effShiftEnd(shift)
+  const hours = hoursBetween(effStart, effEnd)
+  const role = (p.role || '').replace(/_/g, ' ')
+  return (
+    <View className="bg-un1t-surface border border-un1t-border rounded-2xl p-4 mb-2 flex-row items-center">
+      <View className="w-10 h-10 rounded-full bg-un1t-border items-center justify-center mr-3 overflow-hidden">
+        {p.avatar_url
+          ? <Image source={{ uri: p.avatar_url }} style={{ width: 40, height: 40 }} />
+          : <Text className="text-sm font-semibold text-un1t-text">{initials(p.full_name)}</Text>}
+      </View>
+      <View className="flex-1">
+        <View className="flex-row items-center">
+          <Text className="text-base font-semibold text-un1t-text" numberOfLines={1}>
+            {p.full_name || 'Unknown'}
+          </Text>
+          {shift.isSelf && (
+            <View className="ml-2 px-2 py-0.5 rounded-full bg-un1t-text">
+              <Text className="text-[10px] uppercase font-bold text-un1t-bg">You</Text>
+            </View>
+          )}
+        </View>
+        <View className="flex-row items-center mt-0.5">
+          <Ionicons name="time-outline" size={13} color="#64748B" />
+          <Text className="text-sm text-un1t-subtle ml-1" numberOfLines={1}>
+            {tpl?.name ? `${tpl.name} · ` : ''}{timeRange(effStart, effEnd)} · {hours}h
+          </Text>
+        </View>
+      </View>
+      {role ? (
+        <View className="ml-2 px-2 py-0.5 rounded-full bg-un1t-border">
+          <Text className="text-[10px] uppercase font-medium text-un1t-subtle">{role}</Text>
+        </View>
+      ) : null}
     </View>
   )
 }
@@ -242,6 +294,7 @@ export default function Schedule() {
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState(null)
+  const [view, setView] = useState('me') // 'me' | 'team'
 
   const start = useMemo(() => isoDate(anchor), [anchor])
   const end = useMemo(() => isoDate(addDays(anchor, 6)), [anchor])
@@ -249,6 +302,19 @@ export default function Schedule() {
   const fetchWeek = useCallback(async () => {
     if (!profile || !activeLocation) return
     setError(null)
+    if (view === 'team') {
+      // Team: the whole location's roster for the week (no profile_id). No
+      // time-off in Team mode — it shows who's working, not who's off.
+      const shiftsRes = await getTeamShifts({
+        locationId: activeLocation.id,
+        startDate: start,
+        endDate: end,
+      })
+      if (!shiftsRes.success) setError(shiftsRes.error || 'Failed to load roster')
+      setShifts(shiftsRes.success ? shiftsRes.data || [] : [])
+      setTimeOff([])
+      return
+    }
     const [shiftsRes, timeOffRes] = await Promise.all([
       getMyShifts({
         locationId: activeLocation.id,
@@ -264,7 +330,7 @@ export default function Schedule() {
     if (!shiftsRes.success) setError(shiftsRes.error || 'Failed to load shifts')
     setShifts(shiftsRes.success ? shiftsRes.data || [] : [])
     setTimeOff(timeOffRes.success ? timeOffRes.data || [] : [])
-  }, [profile, activeLocation, start, end])
+  }, [profile, activeLocation, start, end, view])
 
   useEffect(() => {
     setLoading(true)
@@ -296,6 +362,12 @@ export default function Schedule() {
   const selectedIso = isoDate(selected)
   const todays = (shiftsByDate[selectedIso] || []).slice().sort((a, b) =>
     (a.start_time || '').localeCompare(b.start_time || '')
+  )
+
+  // Team mode: everyone rostered on the selected day (sorted + self-marked).
+  const teamToday = useMemo(
+    () => (view === 'team' ? teamRosterForDay(shifts, selectedIso, profile?.id) : []),
+    [view, shifts, selectedIso, profile?.id]
   )
 
   // Time-off rows that touch the selected day. Useful in-context cue
@@ -352,6 +424,24 @@ export default function Schedule() {
         contentContainerClassName="px-4 pt-4 pb-32"
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#111827" />}
       >
+        {/* Me / Team segmented control */}
+        <View className="flex-row bg-un1t-surface border border-un1t-border rounded-xl p-1 mb-4">
+          {[['me', 'Me'], ['team', 'Team']].map(([val, label]) => {
+            const active = view === val
+            return (
+              <Pressable
+                key={val}
+                onPress={() => setView(val)}
+                className={`flex-1 items-center py-2 rounded-lg ${active ? 'bg-un1t-text' : ''}`}
+              >
+                <Text className={`text-sm font-semibold ${active ? 'text-un1t-bg' : 'text-un1t-subtle'}`}>
+                  {label}
+                </Text>
+              </Pressable>
+            )
+          })}
+        </View>
+
         {/* Week header */}
         <View className="flex-row items-center justify-between mb-3">
           <Pressable onPress={() => setAnchor(addDays(anchor, -7))} className="p-2 -ml-2">
@@ -403,13 +493,28 @@ export default function Schedule() {
             <WeekGridView
               anchor={anchor}
               shiftsByDate={shiftsByDate}
-              timeOff={timeOff}
+              timeOff={view === 'team' ? [] : timeOff}
               todayIso={isoDate(new Date())}
               canAdjust={canAdjust}
               openAdjust={setAdjustingShift}
               requestSwap={requestSwapForShift}
+              teamMode={view === 'team'}
+              selfId={profile?.id}
             />
           </View>
+        ) : view === 'team' ? (
+          <>
+            {teamToday.length === 0 ? (
+              <View className="py-10 items-center">
+                <Ionicons name="people-outline" size={28} color="#94A3B8" />
+                <Text className="text-sm text-un1t-subtle mt-2">
+                  No one’s rostered on {selected.toLocaleDateString(undefined, { weekday: 'long', day: 'numeric' })}.
+                </Text>
+              </View>
+            ) : (
+              teamToday.map(s => <TeamShiftRow key={s.id} shift={s} />)
+            )}
+          </>
         ) : (
           <>
             {todaysLeave.map(t => (
