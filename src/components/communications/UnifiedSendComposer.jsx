@@ -18,11 +18,11 @@ const EMPTY_FILTER = { logic: 'and', filters: [] }
 const fieldCls =
   'w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text placeholder:text-un1t-subtle/60 focus:outline-none focus:ring-1 focus:ring-un1t-text/30'
 
-export default function UnifiedSendComposer({ locationId, channels = [], templates = [] }) {
+export default function UnifiedSendComposer({ locationId, channels = [], templates = [], initialAudienceFilter = null }) {
   const router = useRouter()
   const [channel, setChannel] = useState(channels[0] || 'sms')
   const [label, setLabel] = useState('')
-  const [filter, setFilter] = useState(EMPTY_FILTER)
+  const [filter, setFilter] = useState(initialAudienceFilter || EMPTY_FILTER)
   // SMS
   const [body, setBody] = useState('')
   const bodyRef = useRef(null)
