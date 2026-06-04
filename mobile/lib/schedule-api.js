@@ -55,13 +55,6 @@ export function cancelTimeOffRequest(id, locationId) {
   })
 }
 
-export function getOpenSwaps({ locationId }) {
-  const qs = new URLSearchParams()
-  if (locationId) qs.set('location_id', locationId)
-  qs.set('status', 'pending')
-  return api(`/api/schedule/swaps?${qs.toString()}`, { locationId })
-}
-
 export function createSwapRequest({ requesterShiftId, targetShiftId, targetId, reason, locationId }) {
   return api('/api/schedule/swaps', {
     method: 'POST',
@@ -126,14 +119,6 @@ export function assignCoachToBlock(blockId, { profileId, allowOverCapacity, loca
 // Remove a coach from a shift (delete the assignment).
 export function removeAssignment(assignmentId, { locationId }) {
   return api(`/api/schedule/assignments/${assignmentId}`, { method: 'DELETE', locationId })
-}
-
-// Location-wide pending time-off (managers). Staff get own-only server-side.
-export function getPendingTimeOff({ locationId }) {
-  const qs = new URLSearchParams()
-  if (locationId) qs.set('location_id', locationId)
-  qs.set('status', 'pending')
-  return api(`/api/schedule/time-off?${qs.toString()}`, { locationId })
 }
 
 // Approve / reject a time-off request (MANAGER_ROLES).

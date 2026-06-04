@@ -8,22 +8,17 @@ import { View, Text, Pressable, ActivityIndicator, Alert } from 'react-native'
 import { useFocusEffect } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import {
-  getScheduleBlocks, getPendingTimeOff, getOpenSwaps, getLocationStaff,
-  assignCoachToBlock, removeAssignment, respondToTimeOff, respondToSwap,
+  getScheduleBlocks, getLocationStaff, assignCoachToBlock, removeAssignment,
 } from '../../lib/schedule-api'
 import { effShiftStart } from '../../lib/schedule-team'
-import ApprovalCard from './ApprovalCard'
 import BlockCard from './BlockCard'
 import CoachPickerSheet from './CoachPickerSheet'
 
 export default function ManageMode({ activeLocation, weekStart, weekEnd, selectedIso, selectedLabel, refreshKey, onAdjust }) {
   const locationId = activeLocation?.id
   const [blocks, setBlocks] = useState([])
-  const [timeOff, setTimeOff] = useState([])
-  const [swaps, setSwaps] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
-  const [approvalsOpen, setApprovalsOpen] = useState(true)
   const [busyId, setBusyId] = useState(null)
   const [staff, setStaff] = useState(null) // null = not loaded
   const [staffLoading, setStaffLoading] = useState(false)
@@ -32,15 +27,9 @@ export default function ManageMode({ activeLocation, weekStart, weekEnd, selecte
   const load = useCallback(async () => {
     if (!locationId) return
     setError(null)
-    const [b, t, s] = await Promise.all([
-      getScheduleBlocks({ locationId, startDate: weekStart, endDate: weekEnd }),
-      getPendingTimeOff({ locationId }),
-      getOpenSwaps({ locationId }),
-    ])
+    const b = await getScheduleBlocks({ locationId, startDate: weekStart, endDate: weekEnd })
     if (!b.success) setError(b.error || 'Failed to load roster')
     setBlocks(b.success ? b.data || [] : [])
-    setTimeOff(t.success ? t.data || [] : [])
-    setSwaps(s.success ? s.data || [] : [])
   }, [locationId, weekStart, weekEnd])
 
   useEffect(() => { setLoading(true); load().finally(() => setLoading(false)) }, [load, refreshKey])
@@ -49,22 +38,6 @@ export default function ManageMode({ activeLocation, weekStart, weekEnd, selecte
   const dayBlocks = blocks
     .filter((b) => b.block_date === selectedIso)
     .sort((a, b) => (effShiftStart(a) || a.start_time || '').localeCompare(effShiftStart(b) || b.start_time || ''))
-  const pendingCount = timeOff.length + swaps.length
-
-  function decideTimeOff(id, status) {
-    setBusyId(id)
-    respondToTimeOff(id, status, null, locationId).then((res) => {
-      setBusyId(null)
-      if (!res.success) Alert.alert('Could not update', res.error || 'Unknown error'); else load()
-    })
-  }
-  function decideSwap(id, status) {
-    setBusyId(id)
-    respondToSwap(id, status, null, locationId).then((res) => {
-      setBusyId(null)
-      if (!res.success) Alert.alert('Could not update', res.error || 'Unknown error'); else load()
-    })
-  }
 
   async function openPicker(block) {
     setPickerBlock(block)
@@ -143,28 +116,6 @@ export default function ManageMode({ activeLocation, weekStart, weekEnd, selecte
           <Text className="text-red-500 text-sm">{error}</Text>
         </View>
       ) : null}
-
-      {pendingCount > 0 && (
-        <View className="mb-4">
-          <Pressable onPress={() => setApprovalsOpen((o) => !o)}
-            className="flex-row items-center justify-between bg-un1t-surface border border-un1t-border rounded-xl px-4 py-3">
-            <Text className="text-sm font-semibold text-un1t-text">Pending approvals ({pendingCount})</Text>
-            <Ionicons name={approvalsOpen ? 'chevron-up' : 'chevron-down'} size={18} color="#64748B" />
-          </Pressable>
-          {approvalsOpen && (
-            <View className="mt-2">
-              {timeOff.map((t) => (
-                <ApprovalCard key={`to-${t.id}`} kind="timeoff" item={t} busy={busyId === t.id}
-                  onApprove={() => decideTimeOff(t.id, 'approved')} onReject={() => decideTimeOff(t.id, 'rejected')} />
-              ))}
-              {swaps.map((s) => (
-                <ApprovalCard key={`sw-${s.id}`} kind="swap" item={s} busy={busyId === s.id}
-                  onApprove={() => decideSwap(s.id, 'approved')} onReject={() => decideSwap(s.id, 'rejected')} />
-              ))}
-            </View>
-          )}
-        </View>
-      )}
 
       <Text className="text-xs uppercase tracking-wider text-un1t-subtle mb-2 px-1">{selectedLabel}</Text>
       {dayBlocks.length === 0 ? (
