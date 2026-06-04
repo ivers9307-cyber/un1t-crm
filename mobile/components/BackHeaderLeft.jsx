@@ -25,7 +25,7 @@ import { Pressable, Text } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { useRouter } from 'expo-router'
 
-export default function BackHeaderLeft({ label = 'Back', fallbackHref = '/' }) {
+export default function BackHeaderLeft({ label = 'Back', fallbackHref = '/', tint = '#111827' }) {
   const router = useRouter()
   return (
     <Pressable
@@ -38,8 +38,8 @@ export default function BackHeaderLeft({ label = 'Back', fallbackHref = '/' }) {
       accessibilityLabel={label}
       className="flex-row items-center -ml-1"
     >
-      <Ionicons name="chevron-back" size={26} color="#111827" />
-      <Text className="text-base text-un1t-text">{label}</Text>
+      <Ionicons name="chevron-back" size={26} color={tint} />
+      <Text className="text-base" style={{ color: tint }}>{label}</Text>
     </Pressable>
   )
 }
