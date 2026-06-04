@@ -11,7 +11,7 @@ import { View, Text, ScrollView, Pressable, Alert } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { useRouter, useFocusEffect } from 'expo-router'
 import { useAuth } from '../../lib/auth-context'
-import { canMobile } from '../../lib/permissions'
+import { resolveLayoutForUser } from '../../lib/mobile-layout'
 import { getOutstandingPolicyCount } from '../../lib/policies-api'
 import { buildSummary } from '../../lib/build-info'
 
@@ -75,26 +75,17 @@ export default function More() {
   // target's, so also check impersonatingFrom (the underlying caller
   // is then implicitly a master).
   const canImpersonate = profile?.role === 'master' || profile?.isMaster || !!impersonatingFrom
-  // NOTIF.2 — Tasks lives in More (less time-sensitive than Bookings,
-  // which is a bottom tab). Gate on the same key the back-end uses.
-  const showTasks = profile && canMobile(profile, 'tasks', activeLocation)
-  // MOBILE-RADAR — the read-only radar glance. Visible when the user
-  // has either mobile radar permission; the screen renders only the
-  // section(s) they're entitled to.
-  const showRadar = !!profile && (
-    canMobile(profile, 'churn_radar', activeLocation) ||
-    canMobile(profile, 'lead_radar', activeLocation)
-  )
-  // MOB-UI.4 — surfaces moved off the crowded bottom bar into More.
-  const showBookings = profile && canMobile(profile, 'bookings', activeLocation)
-  const showPipeline = profile && canMobile(profile, 'pipeline', activeLocation)
-  const showInvoices = profile?.employment_type === 'contractor' && canMobile(profile, 'invoices', activeLocation)
-  const showExpenses = profile?.employment_type === 'fte' && canMobile(profile, 'expenses', activeLocation)
-  // MOBILE-PERMS — universal staff surfaces now gated by per-user toggles
-  // (default on): Report-a-problem (issues), Your contracts, Policies.
-  const showIssues = profile && canMobile(profile, 'issues', activeLocation)
-  const showContracts = profile && canMobile(profile, 'contracts', activeLocation)
-  const showPolicies = profile && canMobile(profile, 'policies', activeLocation)
+  const { more } = resolveLayoutForUser(profile, activeLocation)
+  const inMore = new Set(more)
+  const showTasks     = inMore.has('tasks')
+  const showRadar     = inMore.has('radar')
+  const showBookings  = inMore.has('bookings')
+  const showPipeline  = inMore.has('pipeline')
+  const showInvoices  = inMore.has('invoices')
+  const showExpenses  = inMore.has('expenses')
+  const showIssues    = inMore.has('issues')
+  const showContracts = inMore.has('contracts')
+  const showPolicies  = inMore.has('policies')
 
   // POLICIES-VIEWS.1 — outstanding policies the user hasn't opened
   // yet. Re-fetched on each focus so opening a policy in the viewer
