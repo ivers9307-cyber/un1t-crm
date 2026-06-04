@@ -283,6 +283,12 @@ export const MOBILE_PERMISSIONS = Object.freeze([
   { key: 'issues',     label: 'Report a Problem',            hint: 'Submit studio issues (broken kit, cleaning, safety) + view your own reports. Universal by default — turning this OFF removes a person’s ability to flag problems from the app, so leave on unless you have a reason.', mobileOnly: true },
   { key: 'contracts',  label: 'Your Contracts',              hint: 'Browse + sign your own staff/contractor contracts. Default on. (A pending-contract signing prompt still appears regardless, so a required signature is never blocked.)', mobileOnly: true },
   { key: 'policies',   label: 'Policies',                    hint: 'Read studio HR policies + acknowledge new ones. Default on.', mobileOnly: true },
+  // MOBILE-APPROVALS — manager inbox mirroring the web /approvals dashboard.
+  // webEquivalent links it to the web approvals_inbox key for the parity linter
+  // (which lets us drop approvals_inbox from WEB_ONLY_OK). The tile is gated by
+  // this permission; per-category approve rights stay enforced by the routes
+  // (managers: time-off/swaps; owners/master: + expenses/invoices).
+  { key: 'approvals',  label: 'Approvals inbox',             hint: 'Manager queue — approve/decline pending time-off, swaps, FTE expenses and contractor invoices at the active location.', webEquivalent: 'approvals_inbox' },
   // Mig 093: door_unlock was promoted to a cross-platform key
   // named `studio_management` (lives in WEB_PERMISSIONS, top-level
   // on profiles.permissions — same shape as dashboard_*). Both
@@ -341,6 +347,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     schedule: true, pipeline: true, whatsapp: true,
     tasks: true, bookings: true,
     time_off: true,
+    approvals: true,
     invoices: true, expenses: true, issues: true, contracts: true, policies: true,
     churn_radar: true, lead_radar: true,
     push_notifications: true,
@@ -360,6 +367,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     // surfaced through the manager/head_coach defaults below.
     tasks: true, bookings: false,
     time_off: true,
+    approvals: false,
     invoices: true, expenses: true, issues: true, contracts: true, policies: true,
     churn_radar: false, lead_radar: false,  // retention/acquisition oversight — not a staff surface
     push_notifications: true,
@@ -380,6 +388,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     schedule: true, pipeline: true, whatsapp: true,
     tasks: true, bookings: true,
     time_off: true,
+    approvals: true,
     invoices: true, expenses: true, issues: true, contracts: true, policies: true,
     churn_radar: true, lead_radar: true,    // head coaches own retention + conversion
     push_notifications: true,
@@ -400,6 +409,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     schedule: true, pipeline: true, whatsapp: true,
     tasks: true, bookings: true,
     time_off: true,
+    approvals: true,
     invoices: true, expenses: true, issues: true, contracts: true, policies: true,
     churn_radar: false, lead_radar: false,  // owner + head_coach by default; grant per-user if needed
     push_notifications: true,
@@ -422,6 +432,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     schedule: true, pipeline: true, whatsapp: true,
     tasks: true, bookings: true,
     time_off: true,
+    approvals: true,
     invoices: true, expenses: true, issues: true, contracts: true, policies: true,
     churn_radar: true, lead_radar: true,
     push_notifications: true,
