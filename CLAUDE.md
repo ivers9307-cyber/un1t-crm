@@ -928,6 +928,8 @@ The sidebar badge, browser tab title, count endpoint, and `/approvals` tab all p
 
 ## Multi-vendor comms architecture
 
+> **Unified send surface (Pillar 2, 2026-06, PRs #355–#358).** One-off "message off the cuff" sends now go through **one audience-first surface at `/communications/send`** (`UnifiedSendComposer.jsx`): pick audience (`AudienceBuilder` + live `/api/communications/audience-count`) → pick channel (SMS / WhatsApp / Email) → compose → send-now or schedule (SMS). It's a **facade**: on send it creates the *existing* per-channel record (`sms_broadcasts` / `whatsapp_broadcasts` / `campaigns`) and fires the *existing* send routes + crons — **the send libs + crons in the tables below are untouched.** Email collects audience+subject then hands off to the proven Unlayer editor (`/email/campaigns/[id]?edit=1`) — Unlayer was NOT re-hosted (it's a `window.unlayer` global; a fresh embed is risky). Unified history at `/communications/sent`. The old per-channel **list + "new" pages are retired to redirect stubs** (campaigns / WA-broadcasts / SMS-broadcasts → the unified surfaces); the **detail `[id]` pages + editor components are kept** (history links to them; `/email/campaigns/new` kept for the segment deep-link). Don't add new compose UI to the retired pages — extend `UnifiedSendComposer`. Design + decisions: `docs/PILLAR2_UNIFIED_SEND_2026-06.md`.
+
 Three providers, each doing what it's best at — kept deliberately split rather than consolidated under one vendor:
 
 | Channel | Provider | Why this one |
