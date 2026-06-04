@@ -16,10 +16,12 @@ on:
     paths:
       - 'src/**'
       - 'shared/**'
+      - 'mobile/**'
       - 'package.json'
       - 'package-lock.json'
       - '.eslintrc.json'
       - 'eslint.config.mjs'
+      - 'eslint.mobile-imports.config.mjs'
       - 'vitest.config.js'
       - 'jsconfig.json'
       # scripts/** added because scripts/check-mobile-parity.mjs is
@@ -40,10 +42,12 @@ on:
     paths:
       - 'src/**'
       - 'shared/**'
+      - 'mobile/**'
       - 'package.json'
       - 'package-lock.json'
       - '.eslintrc.json'
       - 'eslint.config.mjs'
+      - 'eslint.mobile-imports.config.mjs'
       - 'vitest.config.js'
       - 'jsconfig.json'
       - 'scripts/**'
@@ -77,3 +81,9 @@ jobs:
 
       - name: Web/mobile parity
         run: npm run check:mobile-parity
+
+      # Catches the class of bug where a mobile file imports a name the target
+      # module doesn't export (resolves to `undefined` → crashes at runtime,
+      # invisible to vitest/eslint/expo-export). See the 2026-06 schedule crash.
+      - name: Mobile import resolution
+        run: npm run check:mobile-imports
