@@ -75,7 +75,7 @@ export default function More() {
   // target's, so also check impersonatingFrom (the underlying caller
   // is then implicitly a master).
   const canImpersonate = profile?.role === 'master' || profile?.isMaster || !!impersonatingFrom
-  const { more } = resolveLayoutForUser(profile, activeLocation)
+  const { more, allowed } = resolveLayoutForUser(profile, activeLocation)
   const inMore = new Set(more)
   const showTasks     = inMore.has('tasks')
   const showRadar     = inMore.has('radar')
@@ -263,6 +263,12 @@ export default function More() {
               isLast
             />
           )}
+        </Section>
+      )}
+
+      {allowed.length > 0 && (
+        <Section title="Personalise">
+          <Row icon="grid-outline" label="Customise bottom bar" onPress={() => router.push('/customise-bar')} isLast />
         </Section>
       )}
 
