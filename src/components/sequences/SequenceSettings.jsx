@@ -5,6 +5,7 @@
 // PUT /api/sequences/[id]. trigger_config keys match exactly what the runner
 // reads (src/lib/sequences/triggers.js + cron-triggers.js) — verified per type.
 import { useEffect, useState } from 'react'
+import Link from 'next/link'
 import { ChevronDown, ChevronRight, Save, Check, AlertTriangle, Settings as SettingsIcon, RefreshCw, Copy } from 'lucide-react'
 import { Button } from '@/components/ui'
 import { Labeled, Text, Area, Num, Select } from './nodeEditing'
@@ -167,7 +168,7 @@ export default function SequenceSettings({ sequence }) {
                   <Select value={tcfg.segment_id || ''} onChange={v => setCfg({ segment_id: v || undefined })} options={[['', 'Choose a segment…'], ...segments.map(s => [s.id, s.name])]} />
                 </Labeled>
                 {segments.length === 0 && (
-                  <p className="text-[11px] text-un1t-subtle/80 mt-1">No saved segments yet — <a href="/contacts" className="text-un1t-text underline hover:no-underline">create one on Contacts</a>, or gate by a contact attribute with the Audience conditions below.</p>
+                  <p className="text-[11px] text-un1t-subtle/80 mt-1">No saved segments yet — <Link href="/contacts" className="text-un1t-text underline hover:no-underline">create one on Contacts</Link>, or gate by a contact attribute with the Audience conditions below.</p>
                 )}
               </div>
             )}
