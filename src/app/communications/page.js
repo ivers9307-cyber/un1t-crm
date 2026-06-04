@@ -8,7 +8,7 @@ import Link from 'next/link'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
-import { Mail, MessageCircle, MessageSquare, Megaphone, Repeat, FileText, Inbox } from 'lucide-react'
+import { Mail, MessageCircle, MessageSquare, Megaphone, Repeat, FileText, Inbox, Send } from 'lucide-react'
 
 export const dynamic = 'force-dynamic'
 
@@ -175,6 +175,15 @@ export default async function CommunicationsHub() {
       {/* Quick actions */}
       <h3 className="text-sm font-semibold uppercase tracking-wider text-un1t-subtle mb-3">Jump in</h3>
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+        {(canSms || canWhatsapp) && (
+          <ActionCard
+            href="/communications/send"
+            icon={Send}
+            color="bg-un1t-text/10 text-un1t-text"
+            title="Send a message"
+            desc="Pick an audience, write once, send via SMS or WhatsApp"
+          />
+        )}
         {canWhatsapp && (
           <ActionCard
             href="/communications/inbox"
