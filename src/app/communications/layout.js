@@ -22,7 +22,8 @@ export default async function CommunicationsLayout({ children }) {
 
   const canEmail = hasPermission(user, 'email')
   const canWhatsapp = hasPermission(user, 'whatsapp')
-  if (!canEmail && !canWhatsapp) redirect('/')
+  const canSms = hasPermission(user, 'sms')
+  if (!canEmail && !canWhatsapp && !canSms) redirect('/')
 
   return (
     <div className="p-6 max-w-7xl mx-auto">
@@ -31,9 +32,10 @@ export default async function CommunicationsLayout({ children }) {
         {[
           canEmail && 'email',
           canWhatsapp && 'WhatsApp',
+          canSms && 'SMS',
         ].filter(Boolean).join(' + ')} for {user.activeLocation?.name || 'your studio'}
       </p>
-      <CommunicationsTabs canEmail={canEmail} canWhatsapp={canWhatsapp} />
+      <CommunicationsTabs canSms={canSms} canEmail={canEmail} canWhatsapp={canWhatsapp} />
       {children}
     </div>
   )

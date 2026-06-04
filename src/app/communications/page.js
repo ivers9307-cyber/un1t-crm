@@ -169,13 +169,13 @@ export default async function CommunicationsHub() {
       {/* Quick actions */}
       <h3 className="text-sm font-semibold uppercase tracking-wider text-un1t-subtle mb-3">Jump in</h3>
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-        {(canSms || canWhatsapp) && (
+        {(canSms || canWhatsapp || canEmail) && (
           <ActionCard
             href="/communications/send"
             icon={Send}
             color="bg-un1t-text/10 text-un1t-text"
             title="Send a message"
-            desc="Pick an audience, write once, send via SMS or WhatsApp"
+            desc="Pick an audience, write once, send via SMS, WhatsApp or email"
           />
         )}
         {canWhatsapp && (
@@ -196,16 +196,7 @@ export default async function CommunicationsHub() {
             desc={`${activeSequences} active drip flow${activeSequences === 1 ? '' : 's'}`}
           />
         )}
-        {canEmail && (
-          <ActionCard
-            href="/communications/campaigns"
-            icon={Mail}
-            color="bg-blue-500/20 text-blue-400"
-            title="Campaigns"
-            desc="One-off email blasts"
-          />
-        )}
-        {(canSms || canWhatsapp) && (
+        {(canSms || canWhatsapp || canEmail) && (
           <ActionCard
             href="/communications/sent"
             icon={Megaphone}
@@ -213,8 +204,8 @@ export default async function CommunicationsHub() {
             title="Sends"
             desc={
               smsScheduled > 0
-                ? `${smsScheduled} scheduled · history of SMS & WhatsApp sends`
-                : 'History of one-off SMS & WhatsApp sends'
+                ? `${smsScheduled} scheduled · history of one-off sends`
+                : 'History of one-off SMS, WhatsApp & email sends'
             }
           />
         )}
