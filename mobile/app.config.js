@@ -39,7 +39,7 @@ export default ({ config }) => ({
   // can now PIN-login from the web shell at /studio-login.
   name: 'CF Studio',
   slug: 'un1t-crm-mobile',
-  version: '1.2.1',
+  version: '1.3.0',
   // We ship iOS + Android only. Without this, Expo defaults to
   // ['ios','android','web'] and `eas update` exports for web too —
   // which crashes the publish because react-native-web isn't installed.
@@ -140,6 +140,14 @@ export default ({ config }) => ({
         icon: './assets/notification-icon.png',
         color: '#111827',
       },
+    ],
+    // FACE-ID — biometric app-lock. faceIDPermission writes
+    // NSFaceIDUsageDescription into Info.plist; without it iOS silently
+    // falls back to device passcode on Face ID devices. NATIVE change →
+    // requires a new EAS Build (not an OTA).
+    [
+      'expo-local-authentication',
+      { faceIDPermission: 'Unlock CF Studio with Face ID.' },
     ],
   ],
   experiments: {
