@@ -27,12 +27,18 @@ import {
 import {
   getMyShifts, getTeamShifts, getMyTimeOff, createSwapRequest, adjustShiftAssignment,
 } from '../../lib/schedule-api'
-import { MANAGER_ROLES } from '../../../shared/permissions'
 import { canMobile } from '../../lib/permissions'
 import { useIsTablet } from '../../lib/use-is-tablet'
 import { effShiftStart, effShiftEnd, teamRosterForDay, initials } from '../../lib/schedule-team'
 import ManageMode from '../../components/schedule/ManageMode'
 
+// Manager roles, mirrored from src/lib/schemas.js MANAGER_ROLES. Defined
+// locally because the mobile bundle can't import that web-side module, and
+// shared/permissions.js does NOT export MANAGER_ROLES — importing it from
+// there resolved to `undefined`, so isManagerRole() threw "Cannot read
+// property 'includes' of undefined" on every Schedule render once the Manage
+// segment (PR #375) started calling it unconditionally. (HOTFIX.)
+const MANAGER_ROLES = ['master', 'owner', 'manager', 'head_coach']
 const isManagerRole = (role) => MANAGER_ROLES.includes(role)
 
 function WeekStrip({ anchor, selected, onSelect, byDate }) {
