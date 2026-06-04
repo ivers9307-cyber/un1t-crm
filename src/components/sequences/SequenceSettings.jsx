@@ -5,9 +5,11 @@
 // PUT /api/sequences/[id]. trigger_config keys match exactly what the runner
 // reads (src/lib/sequences/triggers.js + cron-triggers.js) — verified per type.
 import { useEffect, useState } from 'react'
+import Link from 'next/link'
 import { ChevronDown, ChevronRight, Save, Check, AlertTriangle, Settings as SettingsIcon, RefreshCw, Copy } from 'lucide-react'
 import { Button } from '@/components/ui'
 import { Labeled, Text, Area, Num, Select } from './nodeEditing'
+import AudienceBuilder from '@/components/AudienceBuilder'
 
 const PIPELINE_SLUGS = [
   'new_lead', 'active_trial', 'hot_conversion', 'active_member',
@@ -54,6 +56,7 @@ export default function SequenceSettings({ sequence }) {
   const [cooldown, setCooldown] = useState(sequence?.re_enrolment_cooldown_days ?? 0)
   const [triggerType, setTriggerType] = useState(sequence?.trigger_type || 'manual')
   const [tcfg, setTcfg] = useState(sequence?.trigger_config || {})
+  const [audienceFilter, setAudienceFilter] = useState(sequence?.audience_filter || null)
   const [webhookToken, setWebhookToken] = useState(sequence?.webhook_token || null)
   const [webhookSecret, setWebhookSecret] = useState(sequence?.webhook_secret || '')
   const [origin, setOrigin] = useState('')
@@ -93,6 +96,7 @@ export default function SequenceSettings({ sequence }) {
     re_enrolment_cooldown_days: Math.max(0, Math.min(3650, parseInt(cooldown, 10) || 0)),
     trigger_type: triggerType,
     trigger_config: tcfg || {},
+    audience_filter: (audienceFilter?.filters?.length) ? audienceFilter : null,
     ...(triggerType === 'webhook' ? { webhook_secret: webhookSecret || null } : {}),
   })
 
@@ -159,9 +163,14 @@ export default function SequenceSettings({ sequence }) {
               </div>
             )}
             {(triggerType === 'segment_added' || triggerType === 'segment_removed') && (
-              <Labeled label="Segment" hint={segments.length ? 'A saved contact segment.' : 'No saved segments — create one on the Contacts page.'}>
-                <Select value={tcfg.segment_id || ''} onChange={v => setCfg({ segment_id: v || undefined })} options={[['', 'Choose a segment…'], ...segments.map(s => [s.id, s.name])]} />
-              </Labeled>
+              <div>
+                <Labeled label="Segment" hint={segments.length ? 'A saved contact segment.' : null}>
+                  <Select value={tcfg.segment_id || ''} onChange={v => setCfg({ segment_id: v || undefined })} options={[['', 'Choose a segment…'], ...segments.map(s => [s.id, s.name])]} />
+                </Labeled>
+                {segments.length === 0 && (
+                  <p className="text-[11px] text-un1t-subtle/80 mt-1">No saved segments yet — <Link href="/contacts" className="text-un1t-text underline hover:no-underline">create one on Contacts</Link>, or gate by a contact attribute with the Audience conditions below.</p>
+                )}
+              </div>
             )}
             {triggerType === 'membership_state_change' && (
               <div className="grid grid-cols-2 gap-2">
@@ -204,6 +213,15 @@ export default function SequenceSettings({ sequence }) {
                 <Labeled label="Shared secret" hint="Optional — sent as the webhook signature; blank = token-in-URL only."><Text value={webhookSecret} onChange={v => { setWebhookSecret(v); touch() }} placeholder="optional secret" /></Labeled>
               </div>
             )}
+          </div>
+
+          {/* Audience — who is eligible to enter */}
+          <div className="rounded-lg border border-un1t-border/70 bg-un1t-bg/40 p-3 space-y-2">
+            <div>
+              <span className="block text-xs font-medium text-un1t-subtle">Audience — who can enter</span>
+              <span className="block text-[11px] text-un1t-subtle/80">Only enrol contacts who match these conditions when the trigger fires. Leave empty to allow anyone.</span>
+            </div>
+            <AudienceBuilder filter={audienceFilter || { logic: 'and', filters: [] }} onChange={f => { setAudienceFilter(f); touch() }} />
           </div>
 
           {/* Goal */}
