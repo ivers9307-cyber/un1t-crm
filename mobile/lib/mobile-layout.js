@@ -27,5 +27,6 @@ export function resolveLayoutForUser(profile, activeLocation) {
     employmentType: profile.employment_type,
     enabledKeys,
     override,
+    staffBar: activeLocation?.staffBar || null,
   })
 }

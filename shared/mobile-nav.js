@@ -79,7 +79,7 @@ const BAR_ELIGIBLE_SET = new Set(BAR_ELIGIBLE)
  * @param {{bar?:string[], allowed?:string[]}|null} args.override  permissions.mobile.layout
  * @returns {{ bar: string[], more: string[], allowed: string[] }}
  */
-export function resolveMobileLayout({ role, employmentType, enabledKeys, override }) {
+export function resolveMobileLayout({ role, employmentType, enabledKeys, override, staffBar }) {
   const enabled = new Set(enabledKeys || [])
   const tmpl =
     (DEFAULT_MOBILE_LAYOUT[role] && (DEFAULT_MOBILE_LAYOUT[role][employmentType] || DEFAULT_MOBILE_LAYOUT[role].fte)) ||
@@ -87,20 +87,22 @@ export function resolveMobileLayout({ role, employmentType, enabledKeys, overrid
 
   const base = override && Array.isArray(override.bar) ? override : tmpl
 
-  // Bar items are implicitly allowed; intersect with enabled + bar-eligible.
+  // `allowed` always comes from the ADMIN layer (override/template) — never from
+  // the staff arrangement. Bar items are implicitly allowed.
   const allowed = [...new Set([...(base.allowed || []), ...(base.bar || [])])]
     .filter(k => enabled.has(k) && BAR_ELIGIBLE_SET.has(k))
   const allowedSet = new Set(allowed)
 
+  // Bar SOURCE: the staff member's own arrangement when set, else the admin
+  // default. Either way it's clamped to allowed ∩ enabled and capped at 3.
+  const barSource = (Array.isArray(staffBar) && staffBar.length) ? staffBar : (base.bar || [])
   const bar = []
-  for (const k of (base.bar || [])) {
+  for (const k of barSource) {
     if (allowedSet.has(k) && !bar.includes(k)) bar.push(k)
     if (bar.length === 3) break
   }
   const barSet = new Set(bar)
 
-  // Everything else enabled (incl. non-bar-eligible like tasks/radar),
-  // ordered by the canonical registry order.
   const more = MOBILE_NAV_ORDER.filter(k => enabled.has(k) && !barSet.has(k))
 
   return { bar, more, allowed }
