@@ -86,8 +86,25 @@ ad-hoc sends respect marketing consent for free (the send libs already gate on
   - Segment-trigger discoverability — link out to create a segment when none exist.
 - **Phase 1 — Pillar 2 core (SMS + WhatsApp).** The unified surface for the two
   simpler channels; retire those two editors.
-- **Phase 2 — Pillar 2 email.** Bring email in (lift + enhance Unlayer); retire the
-  campaign editor. Heaviest phase, isolated last.
+- **Phase 2 — Pillar 2 email (scoped 2026-06-04; approach revised after exploring Unlayer).**
+  **Finding:** the email visual builder is NOT `react-email-editor` — it's a hand-rolled
+  `window.unlayer` **global** from `editor.unlayer.com/embed.js` (single shared global →
+  multiple editors on one page collide; a 2.5s export-timeout band-aid; no SSR wrapper).
+  Re-hosting it fresh in the unified composer is risky + unverifiable without a browser.
+  **Decision (honours "maintain Unlayer & enhance"):** keep `CampaignEditor` (Unlayer's
+  home) as-is; unify the **entry** + **history** around it instead of re-hosting the editor.
+  - **PR 2a (additive):** Email channel in the unified composer — collect audience (+ subject),
+    then "Continue in the email designer" creates a draft `campaigns` row (session-authed
+    `POST /api/communications/email-draft`) and opens `/email/campaigns/[id]?edit=1` (the
+    proven Unlayer editor, pre-seeded with the audience). Email joins the `/communications/sent`
+    history. Enhance Unlayer: add the missing merge-tag chips (`{{pipeline_stage}}`,
+    `{{last_name}}`, `{{phone}}`).
+  - **PR 2b (retire):** campaign **list** → `/communications/sent`; **new** entry
+    (`/email/campaigns/new`) → `/communications/send`; hub "Campaigns" card folds in. The
+    campaign **editor** (`/email/campaigns/[id]`) STAYS — it hosts Unlayer.
+  Email scheduling + send stay in the editor (it already does both). A future option is the
+  full inline Unlayer embed (extract a `useUnlayerEditor` hook) — deferred as higher-risk;
+  this ships the unification safely now.
 
 ## Non-goals (for now)
 
