@@ -8,9 +8,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { MessageSquare, MessageCircle, Mail, Send, Clock, Check, AlertTriangle, Users, Loader2 } from 'lucide-react'
+import { MessageSquare, MessageCircle, Mail, Send, Clock, Check, AlertTriangle, Users, Loader2, Filter } from 'lucide-react'
 import { Button } from '@/components/ui'
 import AudienceBuilder from '@/components/AudienceBuilder'
+import ContactMultiSelect from './ContactMultiSelect'
 import { smsSegmentInfo, SMS_MAX_LEN, SMS_MERGE_TAGS, waBodyVariables, WA_VARIABLE_FIELDS } from '@/lib/communications/compose'
 
 const EMPTY_FILTER = { logic: 'and', filters: [] }
@@ -23,6 +24,9 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
   const [channel, setChannel] = useState(channels[0] || 'sms')
   const [label, setLabel] = useState('')
   const [filter, setFilter] = useState(initialAudienceFilter || EMPTY_FILTER)
+  // Explicit "pick people" mode (SMS / WhatsApp only)
+  const [audienceMode, setAudienceMode] = useState('filter') // 'filter' | 'people'
+  const [people, setPeople] = useState([]) // [{ id, name, email, phone }]
   // SMS
   const [body, setBody] = useState('')
   const bodyRef = useRef(null)
@@ -46,6 +50,15 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
   const waVars = useMemo(() => waBodyVariables(selectedTemplate), [selectedTemplate])
   const seg = smsSegmentInfo(body)
 
+  // Explicit "pick people" mode is SMS/WhatsApp only — email hands off to the
+  // campaign editor, whose AudienceBuilder can't represent an id-in filter yet.
+  const useExplicit = audienceMode === 'people' && channel !== 'email'
+  const effectiveFilter = useMemo(() => (
+    useExplicit
+      ? { logic: 'and', filters: [{ field: 'id', op: 'in', value: people.map(p => p.id) }] }
+      : filter
+  ), [useExplicit, people, filter])
+
   // Live "how many contacts match" — debounced, channel-agnostic (the real
   // per-channel consent/reachability gate applies at send; the result reports
   // the true recipient count).
@@ -57,7 +70,7 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
         const res = await fetch('/api/communications/audience-count', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ location_id: locationId, audience_filter: filter }),
+          body: JSON.stringify({ location_id: locationId, audience_filter: effectiveFilter }),
         })
         const data = await res.json()
         if (alive) setCount(data?.success ? data.count : null)
@@ -68,7 +81,7 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
       }
     }, 400)
     return () => { alive = false; clearTimeout(t) }
-  }, [locationId, filter])
+  }, [locationId, effectiveFilter])
 
   const insertTag = (tag) => {
     const el = bodyRef.current
@@ -92,7 +105,8 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
     : channel === 'whatsapp'
       ? !!templateId
       : true // email — audience is enough; subject + design happen in the editor
-  const canSend = !busy && composeValid && scheduleValid && (count == null || count > 0)
+  const audienceValid = !useExplicit || people.length > 0
+  const canSend = !busy && composeValid && scheduleValid && audienceValid && (count == null || count > 0)
 
   // ── submit ──────────────────────────────────────────────────────
   async function postJson(url, payload) {
@@ -109,7 +123,7 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
     try {
       if (channel === 'sms') {
         const { broadcast } = await postJson('/api/sms/broadcasts', {
-          name: defaultLabel(), body, audience_filter: filter, location_id: locationId,
+          name: defaultLabel(), body, audience_filter: effectiveFilter, location_id: locationId,
           ...(scheduleMode === 'later' ? { scheduled_at: scheduledIso } : {}),
         })
         if (scheduleMode === 'later') {
@@ -127,7 +141,7 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
       } else if (channel === 'whatsapp') {
         const { broadcast } = await postJson('/api/whatsapp/broadcasts', {
           name: defaultLabel(), template_id: templateId, variable_mapping: variables,
-          audience_filter: filter, location_id: locationId,
+          audience_filter: effectiveFilter, location_id: locationId,
         })
         const data = await postJson(`/api/whatsapp/broadcasts/${broadcast.id}/send`, {})
         setResult({ channel, mode: 'sent', id: broadcast.id, detail: `/whatsapp/broadcasts/${broadcast.id}`, ...data })
@@ -135,7 +149,7 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
         // Email — create a draft campaign + hand off to the proven Unlayer designer
         // (audience pre-seeded). Design + schedule/send happen there.
         const data = await postJson('/api/communications/email-draft', {
-          name: defaultLabel(), subject, audience_filter: filter, location_id: locationId,
+          name: defaultLabel(), subject, audience_filter: effectiveFilter, location_id: locationId,
         })
         router.push(`/email/campaigns/${data.id}?edit=1`)
         return
@@ -209,8 +223,16 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
       )}
 
       {/* Audience */}
-      <Section title="Who" sub="Pick a saved segment or build a filter. Marketing-consent + reachability are applied automatically when you send.">
-        <AudienceBuilder filter={filter} onChange={setFilter} />
+      <Section title="Who" sub="Build a filter / pick a saved segment, or choose specific people. Consent + reachability are applied automatically when you send.">
+        {channel !== 'email' && (
+          <div className="flex gap-2 mb-3">
+            <ChannelPill active={audienceMode === 'filter'} onClick={() => setAudienceMode('filter')} icon={Filter} label="Filter / segment" small />
+            <ChannelPill active={audienceMode === 'people'} onClick={() => setAudienceMode('people')} icon={Users} label="Pick people" small />
+          </div>
+        )}
+        {useExplicit
+          ? <ContactMultiSelect locationId={locationId} value={people} onChange={setPeople} />
+          : <AudienceBuilder filter={filter} onChange={setFilter} />}
         <div className="mt-2 flex items-center gap-1.5 text-xs text-un1t-subtle">
           <Users size={13} />
           {counting
