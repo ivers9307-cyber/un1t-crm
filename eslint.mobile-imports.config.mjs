@@ -21,7 +21,7 @@
 import importPlugin from 'eslint-plugin-import'
 import reactHooks from 'eslint-plugin-react-hooks'
 
-export default [
+const config = [
   {
     files: ['mobile/**/*.{js,jsx}'],
     ignores: ['mobile/node_modules/**', 'mobile/dist/**', 'mobile/.expo/**'],
@@ -50,3 +50,5 @@ export default [
     },
   },
 ]
+
+export default config
