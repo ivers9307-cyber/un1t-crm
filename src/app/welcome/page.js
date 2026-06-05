@@ -33,7 +33,8 @@ export const dynamic = 'force-dynamic'
 // from this set; the tile goes back to linking the exact same path.
 // (Set, not a DB flag, so it's a one-line revert with no migration.)
 const DISABLED_TILE_PATHS = new Set([
-  'hatch-street', // disabled 2026-06-02 — re-enable when Hatch Street opens
+  // (none) — Hatch Street re-enabled 2026-06-05; it now links /welcome/hatch-street
+  // like Stillorgan. Add a public_path back here to dim+disable a tile again.
 ])
 
 // Default left→right order when the operator hasn't set tile_order.
