@@ -2,20 +2,11 @@
 // Mirrors the shape of mobile/lib/expenses-api.js so the styling
 // patterns stay aligned.
 
-import { supabase } from './supabase'
+import { authHeaders } from './api'
 
 const API_BASE =
   process.env.EXPO_PUBLIC_API_BASE_URL ||
   'https://crm.un1tdublin.com'
-
-async function authHeaders() {
-  const { data: { session } } = await supabase.auth.getSession()
-  const headers = { Accept: 'application/json' }
-  if (session?.access_token) {
-    headers.Authorization = `Bearer ${session.access_token}`
-  }
-  return headers
-}
 
 /**
  * List the signed-in user's own issue submissions (newest first).
