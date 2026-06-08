@@ -153,6 +153,10 @@ export default function ContactsView({
     search: search || undefined,
     location_id: locationId,
     limit: 200,
+    // The contacts list shows crossover deal-holders (owned ∪ deal-at-
+    // this-studio); other callers of this route (e.g. the send people-
+    // picker) omit this and stay owned-only.
+    include_crossovers: true,
   }), [filterRowCount, filter, search, locationId])
 
   const fetchContacts = useCallback(async () => {
