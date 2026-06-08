@@ -139,7 +139,7 @@ export function HeroBlock({ block, onEdit, locationId }) {
             {(block.subhead || onEdit) && (
               <>
                 <br />
-                <span className="text-white/70">
+                <span className="text-white/70 text-[1.5rem] md:text-[2.5rem]">
                   <E value={block.subhead} onEdit={onEdit} path={['subhead']} />
                 </span>
               </>
@@ -525,9 +525,6 @@ export function SiteHeader({
         ) : (
           <div className="text-xl font-black tracking-widest">UN1T</div>
         )}
-        <nav className="hidden md:flex items-center gap-8 text-sm font-medium">
-          <a href="#book" className="text-white/70 hover:text-white transition-colors">Book</a>
-        </nav>
       </div>
     </header>
   )
