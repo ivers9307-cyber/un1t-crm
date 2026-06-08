@@ -391,15 +391,6 @@ export function StatsBlock({ block, onEdit }) {
             />
           ))}
         </div>
-        <div className="text-center mt-14">
-          <a
-            href="#book"
-            className="inline-flex items-center gap-2 bg-white text-black font-semibold text-sm md:text-base px-6 py-3 md:px-8 md:py-4 rounded-full hover:bg-white/90 transition-colors"
-          >
-            Book your free consultation
-            <span aria-hidden="true">↑</span>
-          </a>
-        </div>
       </div>
     </section>
   )
