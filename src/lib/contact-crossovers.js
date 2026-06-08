@@ -64,3 +64,35 @@ export async function fetchCrossoverContext(db, contacts, activeLocationId) {
     return {}
   }
 }
+
+// Authorisation gate for the contact DETAIL view. Returns true when the
+// caller may open this contact: they're master, they OWN it (its location
+// is one of theirs), or it's a crossover INTO one of their studios (the
+// contact has a deal there). The crossover branch is what keeps this in
+// step with the list's owned ∪ crossover visibility — gating the detail
+// page strictly by ownership would 404 every crossover row an operator
+// can see in the list and click. The owner/master branches are pure (no
+// query); only a genuine crossover candidate pays for the deal probe.
+//
+// Security-critical, so it FAILS CLOSED: a missing user/contact, no
+// location assignments, or a query error all deny. Reads via the
+// service-role client (RLS-bypassing), so this app-layer check IS the
+// boundary.
+export async function canViewContact(db, user, contact) {
+  if (!user || !contact) return false
+  if (user.isMaster) return true
+  const locIds = (user.locations || []).map((l) => l && l.id).filter(Boolean)
+  if (contact.location_id && locIds.includes(contact.location_id)) return true
+  if (locIds.length === 0 || !contact.id) return false
+  try {
+    const { data } = await db
+      .from('deals')
+      .select('id')
+      .eq('contact_id', contact.id)
+      .in('location_id', locIds)
+      .limit(1)
+    return Array.isArray(data) && data.length > 0
+  } catch {
+    return false
+  }
+}

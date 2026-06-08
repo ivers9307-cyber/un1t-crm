@@ -1,9 +1,10 @@
 import { createServerClient } from '@/lib/supabase'
 import { matchCatalogToPlan } from '@/lib/glofox-catalog'
-import { notFound } from 'next/navigation'
+import { notFound, redirect } from 'next/navigation'
 import Link from 'next/link'
 import { ArrowLeft, Mail, Phone, Calendar, MessageSquare, CheckSquare, Clock, BookOpen, ArrowRight, MessageCircle } from 'lucide-react'
 import { getCurrentUser } from '@/lib/auth'
+import { canViewContact } from '@/lib/contact-crossovers'
 import { hasPermission } from '@/lib/permissions'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { classifyContact, scoreMember } from '@/lib/churn-radar'
@@ -51,20 +52,30 @@ export default async function ContactDetailPage(props) {
   const params = await props.params;
   const db = createServerClient()
   const user = await getCurrentUser()
+  if (!user) redirect('/login')
   const { id } = params
 
-  const [contactRes, dealsRes, notesRes, activitiesRes, bookingsRes, waConvRes] = await Promise.all([
-    db.from('contacts').select('*').eq('id', id).single(),
+  // IDOR gate (2026-06 platform audit, same lineage as the consent-log /
+  // sms / whatsapp routes). This page renders via createServerClient()
+  // (service role — RLS does NOT bind it), so without an app-layer check
+  // any authenticated user could read any contact's full profile —
+  // membership, LTV, DOB, message history — by enumerating ids. Load the
+  // contact FIRST, authorise, and only THEN fetch its sub-resources, so a
+  // stranger's deals / notes / bookings / WhatsApp are never queried at
+  // all. canViewContact allows owned ∪ crossover (a deal at the caller's
+  // studio) ∪ master, mirroring the contacts list so crossover rows the
+  // operator can see stay openable.
+  const { data: contact } = await db.from('contacts').select('*').eq('id', id).single()
+  if (!contact) notFound()
+  if (!(await canViewContact(db, user, contact))) notFound()
+
+  const [dealsRes, notesRes, activitiesRes, bookingsRes, waConvRes] = await Promise.all([
     db.from('deals').select('*, pipeline_stages(name, color)').eq('contact_id', id).order('created_at', { ascending: false }),
     db.from('notes').select('*').eq('contact_id', id).order('created_at', { ascending: false }),
     db.from('activities').select('*').eq('contact_id', id).order('created_at', { ascending: false }),
     db.from('bookings').select('*, event_types(name, color)').eq('contact_id', id).order('booking_date', { ascending: true }),
     db.from('whatsapp_conversations').select('id, wa_phone, last_message_at, last_message_preview, last_message_direction, unread_count, status, window_expires_at').eq('contact_id', id).order('last_message_at', { ascending: false }),
   ])
-
-  if (!contactRes.data) notFound()
-
-  const contact = contactRes.data
 
   // GLOFOX-CATALOG — resolve the member's plan description (pricing +
   // commitment terms) from the studio membership catalog by plan name.
