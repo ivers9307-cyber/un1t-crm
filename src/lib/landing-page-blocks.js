@@ -116,6 +116,15 @@ const TESTIMONIAL_DEFAULT = () => ({
   author: 'Member, joined 2024',
 })
 
+const REVIEWS_DEFAULT = () => ({
+  id:             newBlockId(),
+  type:           'reviews',
+  title:          'What our members say',
+  min_rating:     4,        // 1–5; reviews below this are hidden
+  show_aggregate: true,     // "4.9 ★ · 127 Google reviews" header
+  speed:          'normal', // 'slow' | 'normal' | 'fast' marquee speed
+})
+
 // Registry — single source of truth for "what types exist". Used by:
 //   - Form's "+ Add section" picker
 //   - Renderer's type-dispatch
@@ -130,6 +139,7 @@ export const BLOCK_TYPES = [
   { type: 'embed',       label: 'Video embed',  description: 'YouTube or Instagram video embed.',                    factory: EMBED_DEFAULT },
   { type: 'stats',       label: 'Stats',        description: '3 big-number tiles for social proof.',                 factory: STATS_DEFAULT },
   { type: 'testimonial', label: 'Testimonial',  description: 'Single member quote + attribution.',                   factory: TESTIMONIAL_DEFAULT },
+  { type: 'reviews',     label: 'Google reviews', description: 'Auto-scrolling marquee of your Google reviews.',       factory: REVIEWS_DEFAULT },
 ]
 
 const TYPE_BY_NAME = new Map(BLOCK_TYPES.map((t) => [t.type, t]))

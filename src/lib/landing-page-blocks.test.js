@@ -185,3 +185,30 @@ describe('lead_form block type', () => {
     expect(BlocksArraySchema.safeParse([newBlockOfType('lead_form')]).success).toBe(true)
   })
 })
+
+describe('reviews block type', () => {
+  it('is registered in BLOCK_TYPES', () => {
+    const reviews = BLOCK_TYPES.find((t) => t.type === 'reviews')
+    expect(reviews).toBeTruthy()
+    expect(reviews.label).toBe('Google reviews')
+  })
+
+  it('newBlockOfType("reviews") returns the config defaults', () => {
+    const b = newBlockOfType('reviews')
+    expect(b.type).toBe('reviews')
+    expect(typeof b.id).toBe('string')
+    expect(b.min_rating).toBe(4)
+    expect(b.show_aggregate).toBe(true)
+    expect(b.speed).toBe('normal')
+    expect(b.title).toBe('What our members say')
+  })
+
+  it('blocksOrDefault keeps a saved reviews block (known type)', () => {
+    const saved = [{ id: 'x', type: 'reviews', min_rating: 5 }]
+    expect(blocksOrDefault(saved)).toHaveLength(1)
+  })
+
+  it('reviews is NOT in the default starter set', () => {
+    expect(defaultBlocks().some((b) => b.type === 'reviews')).toBe(false)
+  })
+})
