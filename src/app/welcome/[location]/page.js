@@ -76,6 +76,35 @@ export default async function StudioLandingPage(props) {
   if (!isEditPreview && !isPubliclyVisible(row.publish_state)) notFound()
 
   const blocks = blocksOrDefault(row.blocks)
+
+  // Reviews carousel data — only query when the page has a reviews block.
+  // One read for the page; the renderer filters/sizes in JS.
+  let reviewsData = null
+  const reviewsBlock = blocks.find((b) => b.type === 'reviews')
+  if (reviewsBlock && row.location_id) {
+    const db = createServerClient()
+    const minRating = Number.isFinite(reviewsBlock.min_rating) ? reviewsBlock.min_rating : 4
+    const [{ data: reviews }, { data: conn }] = await Promise.all([
+      db.from('google_reviews')
+        .select('id, google_review_id, rating, comment, author_name, author_photo_url, review_time, hidden')
+        .eq('location_id', row.location_id)
+        .eq('hidden', false)
+        .gte('rating', minRating)
+        .not('comment', 'is', null)
+        .order('review_time', { ascending: false })
+        .limit(30),
+      db.from('google_business_connections')
+        .select('average_rating, total_review_count')
+        .eq('location_id', row.location_id)
+        .maybeSingle(),
+    ])
+    reviewsData = {
+      reviews: reviews || [],
+      averageRating: conn?.average_rating ?? null,
+      totalCount: conn?.total_review_count ?? null,
+    }
+  }
+
   const logoUrl     = row.logo_url || null
   const logoAlt     = row.logo_alt || 'UN1T Dublin'
   const logoWidthPx = row.logo_width_px || 200
@@ -99,7 +128,7 @@ export default async function StudioLandingPage(props) {
     <div className="min-h-screen bg-black text-white antialiased">
       <SiteHeader logoUrl={logoUrl} logoAlt={logoAlt} logoWidthPx={logoWidthPx} />
       {blocks.map((block) => (
-        <BlockRenderer key={block.id} block={block} publicPath={params.location} />
+        <BlockRenderer key={block.id} block={block} publicPath={params.location} reviewsData={reviewsData} />
       ))}
       <SiteFooter />
     </div>
