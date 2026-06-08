@@ -9,9 +9,10 @@ import { z } from 'zod'
 export const DEFAULT_LEAD_TAG = 'hatch-founding-member'
 export const DEFAULT_LEAD_SOURCE = 'hatch_launch'
 
-// Public submission shape. NOT strict — extra fields (e.g. a stale
-// client sending more) are ignored rather than 400'd. `company` is a
-// honeypot the handler inspects; humans never fill it.
+// Public submission shape. NOT strict — extra fields are ignored rather
+// than 400'd. This intentionally tolerates a legacy `company` field from
+// a browser still running a cached pre-honeypot-removal build, so those
+// users validate fine instead of getting rejected.
 export const LeadSchema = z.object({
   first_name: z.string().trim().min(1, 'Your name is required').max(120),
   email: z.string().trim().email('Enter a valid email').max(320),
@@ -19,7 +20,6 @@ export const LeadSchema = z.object({
     .refine((v) => v.replace(/\D/g, '').length >= 7, 'Enter a valid phone number'),
   consent: z.boolean().refine((v) => v === true, { message: 'Please tick the consent box to continue' }),
   public_path: z.string().trim().min(1).max(120),
-  company: z.string().max(200).optional(),
 })
 
 // Normalise a validated body into the fields the handler stores.
