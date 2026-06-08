@@ -17,7 +17,6 @@ export async function crossoverContactIds(db, locationId) {
   const ids = new Set()
   let pageStart = 0
   try {
-    // eslint-disable-next-line no-constant-condition
     while (true) {
       const pageEnd = Math.min(pageStart + PAGE_SIZE - 1, HARD_LIMIT - 1)
       const { data, error } = await db
