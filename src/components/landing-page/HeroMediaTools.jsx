@@ -14,6 +14,7 @@
 // to be client-only and ship more JS to public visitors.
 
 import { useRef } from 'react'
+import { uploadLandingMedia } from '@/lib/landing-media-upload'
 
 export default function HeroMediaTools({
   imageUrl, videoUrl, locationId,
@@ -86,16 +87,8 @@ async function uploadAndApply(e, kind, locationId, onChange) {
   const file = e.target.files?.[0]
   e.target.value = ''
   if (!file || !locationId) return
-  try {
-    const fd = new FormData()
-    fd.append('file', file)
-    fd.append('location_id', locationId)
-    fd.append('kind', kind)
-    const r = await fetch('/api/landing-page-settings/media', { method: 'POST', body: fd })
-    const j = await r.json()
-    if (r.ok && j.success !== false && j.url) onChange?.(j.url)
-  } catch {
-    // Swallow — operator can retry. The form's upload UI surfaces
-    // detailed errors; in the iframe we keep the toolbar quiet.
-  }
+  const res = await uploadLandingMedia({ file, locationId, kind })
+  if (res.success && res.url) onChange?.(res.url)
+  // Errors stay quiet here — the form's upload UI surfaces detailed
+  // messages; the in-iframe toolbar stays calm and the operator retries.
 }
