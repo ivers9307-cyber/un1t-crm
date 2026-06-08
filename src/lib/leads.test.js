@@ -6,7 +6,7 @@ import {
 
 const valid = {
   first_name: '  Sarah ', email: 'Sarah@Example.com ', phone: '087 123 4567',
-  consent: true, public_path: 'hatch-street', company: '',
+  consent: true, public_path: 'hatch-street',
 }
 
 describe('LeadSchema', () => {
@@ -26,8 +26,8 @@ describe('LeadSchema', () => {
     expect(LeadSchema.safeParse({ ...valid, consent: false }).success).toBe(false)
     expect(LeadSchema.safeParse({ ...valid, consent: undefined }).success).toBe(false)
   })
-  it('allows the honeypot to be present (handler decides)', () => {
-    expect(LeadSchema.safeParse({ ...valid, company: 'bot' }).success).toBe(true)
+  it('ignores unknown/legacy fields (e.g. a cached pre-honeypot-removal build still sending company)', () => {
+    expect(LeadSchema.safeParse({ ...valid, company: 'whatever' }).success).toBe(true)
   })
 })
 

@@ -4,7 +4,8 @@
 // capture name+email+phone+consent, create the contact at the studio
 // (resolved server-side from public_path), record marketing consent,
 // stamp the nurture tag, and open a new_lead deal so it shows in the
-// pipeline. No auth; rate-limited + honeypot like the other public forms.
+// pipeline. No auth; rate-limited (honeypot removed — browser autofill of
+// the hidden field was silently dropping real signups; rate-limit suffices).
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
@@ -29,12 +30,6 @@ export async function POST(request) {
   const validation = await validateBody(request, LeadSchema)
   if (!validation.ok) return validation.response
   const body = validation.data
-
-  // Honeypot — bots fill `company`; humans never see it. Pretend success
-  // so the bot gets no signal, but write nothing.
-  if (body.company && body.company.trim().length > 0) {
-    return NextResponse.json({ success: true, data: { already_on_list: false } })
-  }
 
   const { firstName, email, phone, publicPath } = normaliseLead(body)
 

@@ -8,7 +8,7 @@
 import { useState } from 'react'
 
 export default function WaitlistWidget({ publicPath, buttonLabel, successMessage, consentLabel }) {
-  const [form, setForm] = useState({ first_name: '', email: '', phone: '', consent: false, company: '' })
+  const [form, setForm] = useState({ first_name: '', email: '', phone: '', consent: false })
   const [status, setStatus] = useState('idle') // idle | submitting | done | error
   const [error, setError] = useState(null)
 
@@ -52,13 +52,6 @@ export default function WaitlistWidget({ publicPath, buttonLabel, successMessage
 
   return (
     <form onSubmit={onSubmit} className="space-y-3 text-left">
-      {/* Honeypot — off-screen, not tab-focusable. Bots fill it; humans don't. */}
-      <div aria-hidden="true" style={{ position: 'absolute', left: '-9999px', width: '1px', height: '1px', overflow: 'hidden' }}>
-        <label>Company
-          <input type="text" tabIndex={-1} autoComplete="off" value={form.company} onChange={set('company')} />
-        </label>
-      </div>
-
       <input className={inputCls} type="text"  required placeholder="Your name" value={form.first_name} onChange={set('first_name')} maxLength={120} autoComplete="name" />
       <input className={inputCls} type="email" required placeholder="Email"     value={form.email}      onChange={set('email')}      maxLength={320} autoComplete="email" />
       <input className={inputCls} type="tel"   required placeholder="Phone"     value={form.phone}      onChange={set('phone')}      maxLength={50}  autoComplete="tel" />
