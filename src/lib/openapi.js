@@ -423,6 +423,88 @@ registry.registerPath({
   responses: { 201: { description: 'Schedule created' } },
 })
 
+// Google Business (operator-facing — cookie auth, owner/master gate)
+registry.registerPath({
+  method: 'get',
+  path: '/api/google-business/status',
+  tags: ['Google Business'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Get Google Business Profile connection status for a location',
+  request: {
+    query: z.object({ location_id: uuidLike }),
+  },
+  responses: { 200: { description: 'Connection status' } },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/google-business/select-location',
+  tags: ['Google Business'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Select a Google Business Profile listing for a location',
+  responses: {
+    200: { description: 'Listing selected' },
+    400: { description: 'Validation failed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/google-business/disconnect',
+  tags: ['Google Business'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Disconnect Google Business Profile for a location',
+  responses: { 200: { description: 'Disconnected' } },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/google-business/sync-now',
+  tags: ['Google Business'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Trigger an immediate sync of Google reviews for a location',
+  responses: { 200: { description: 'Sync triggered' } },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/google-business/locations',
+  tags: ['Google Business'],
+  security: [{ CookieAuth: [] }],
+  summary: 'List available Google Business Profile listings for a location',
+  request: {
+    query: z.object({ location_id: uuidLike }),
+  },
+  responses: { 200: { description: 'Listings' } },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/google-reviews',
+  tags: ['Google Business'],
+  security: [{ CookieAuth: [] }],
+  summary: 'List synced Google reviews for a location',
+  request: {
+    query: z.object({ location_id: uuidLike }),
+  },
+  responses: { 200: { description: 'Reviews' } },
+})
+
+registry.registerPath({
+  method: 'patch',
+  path: '/api/google-reviews/{id}',
+  tags: ['Google Business'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Update a Google review (e.g. toggle hidden)',
+  request: {
+    params: z.object({ id: uuidLike }),
+  },
+  responses: {
+    200: { description: 'Review updated' },
+    400: { description: 'Validation failed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // ============================================================================
 // Spec generator — build once and cache
 // ============================================================================

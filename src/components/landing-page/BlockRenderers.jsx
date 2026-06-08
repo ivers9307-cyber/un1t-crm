@@ -10,6 +10,7 @@
 // panel in LandingPageSettingsForm.jsx.
 
 import Link from 'next/link'
+import { filterVisibleReviews, marqueeDurationSeconds } from '@/lib/google-business/reviews'
 import BookingWidget from '@/components/BookingWidget'
 import RaceSignupWidget from '@/components/RaceSignupWidget'
 import WaitlistWidget from '@/components/WaitlistWidget'
@@ -35,7 +36,7 @@ function E({ value, onEdit, path, multiline }) {
   )
 }
 
-export default function BlockRenderer({ block, onEdit, locationId, publicPath }) {
+export default function BlockRenderer({ block, onEdit, locationId, publicPath, reviewsData }) {
   // onEdit is bound to this block: caller hands us a generic
   // (blockId, path, value) function and we curry the blockId so
   // each child renderer thinks in local field paths.
@@ -56,6 +57,7 @@ export default function BlockRenderer({ block, onEdit, locationId, publicPath })
     case 'embed':       return <EmbedBlock       block={block} onEdit={localOnEdit} />
     case 'stats':       return <StatsBlock       block={block} onEdit={localOnEdit} />
     case 'testimonial': return <TestimonialBlock block={block} onEdit={localOnEdit} />
+    case 'reviews':     return <ReviewsBlock     block={block} onEdit={localOnEdit} reviewsData={reviewsData} />
     default:            return null
   }
 }
@@ -419,6 +421,88 @@ export function TestimonialBlock({ block, onEdit }) {
         </blockquote>
       </div>
     </section>
+  )
+}
+
+// Reviews — continuous CSS marquee of Google reviews. Data is passed down
+// from the page (reviewsData = { reviews, averageRating, totalCount }); the
+// renderer does no fetching, so it stays pure + server-safe. Edit mode has no
+// live reviewsData — show a placeholder so the operator sees where it lands.
+export function ReviewsBlock({ block, onEdit, reviewsData }) {
+  const minRating = Number.isFinite(block.min_rating) ? block.min_rating : 4
+  const all = reviewsData?.reviews || []
+  const visible = filterVisibleReviews(all, minRating)
+
+  if (visible.length === 0) {
+    if (!onEdit) return null
+    return (
+      <section className="bg-black text-white py-20 md:py-28 border-t border-white/10">
+        <div className="max-w-6xl mx-auto px-6 text-center text-white/40 text-sm border border-dashed border-white/20 rounded py-10">
+          Google reviews appear here on the live page (connect Google Business in
+          Settings → Locations → Integrations, then sync).
+        </div>
+      </section>
+    )
+  }
+
+  const duration = marqueeDurationSeconds(block.speed, visible.length)
+  const track = [...visible, ...visible]
+
+  return (
+    <section className="bg-black text-white py-20 md:py-28 border-t border-white/10 overflow-hidden">
+      <div className="max-w-6xl mx-auto px-6">
+        {(block.title || block.show_aggregate) && (
+          <div className="text-center mb-10">
+            {block.title && (
+              <h2 className="text-2xl md:text-3xl font-black tracking-tight">{block.title}</h2>
+            )}
+            {block.show_aggregate && reviewsData?.averageRating != null && (
+              <p className="mt-2 text-sm text-white/60">
+                <span className="text-amber-400">★</span>{' '}
+                <span className="text-white/90 font-semibold">
+                  {Number(reviewsData.averageRating).toFixed(1)}
+                </span>
+                {reviewsData.totalCount != null && <> · {reviewsData.totalCount} Google reviews</>}
+              </p>
+            )}
+          </div>
+        )}
+      </div>
+      <div className="reviews-marquee-viewport relative">
+        <div
+          className="reviews-marquee-track gap-4 px-2"
+          style={{ animationDuration: `${duration}s` }}
+        >
+          {track.map((r, i) => (
+            <ReviewCard key={`${r.id || r.google_review_id || i}-${i}`} review={r} />
+          ))}
+        </div>
+        <div className="pointer-events-none absolute inset-y-0 left-0 w-16 bg-gradient-to-r from-black to-transparent" aria-hidden="true" />
+        <div className="pointer-events-none absolute inset-y-0 right-0 w-16 bg-gradient-to-l from-black to-transparent" aria-hidden="true" />
+      </div>
+    </section>
+  )
+}
+
+function ReviewCard({ review }) {
+  const stars = '★★★★★'.slice(0, Math.max(0, Math.min(5, review.rating || 0)))
+  return (
+    <figure className="w-72 shrink-0 bg-white/[0.04] border border-white/10 rounded-xl p-5">
+      <div className="text-amber-400 text-sm tracking-[0.15em]" aria-label={`${review.rating} out of 5`}>{stars}</div>
+      <blockquote className="mt-3 text-sm leading-relaxed text-white/85 line-clamp-5">
+        {review.comment}
+      </blockquote>
+      <figcaption className="mt-4 flex items-center gap-2 text-xs text-white/55">
+        {review.author_photo_url ? (
+
+          <img src={review.author_photo_url} alt="" className="w-6 h-6 rounded-full object-cover" loading="lazy" />
+        ) : null}
+        <span className="text-white/75 font-medium">{review.author_name || 'Google user'}</span>
+        <span className="ml-auto inline-flex items-center gap-1 text-white/40">
+          <span className="text-[#4285F4] font-bold">G</span> Google
+        </span>
+      </figcaption>
+    </figure>
   )
 }
 

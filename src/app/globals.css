@@ -11,3 +11,27 @@ body {
 ::-webkit-scrollbar-track { background: #F7F8FA; }
 ::-webkit-scrollbar-thumb { background: #CBD5E1; border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: #94A3B8; }
+
+/* Review carousel marquee — duplicated track translated -50% so it loops
+   seamlessly. Duration set inline per block. Pauses on hover; disabled for
+   reduced-motion users (track wraps to a static grid instead). */
+@keyframes reviews-marquee {
+  from { transform: translateX(0); }
+  to   { transform: translateX(-50%); }
+}
+.reviews-marquee-track {
+  display: flex;
+  width: max-content;
+  animation: reviews-marquee linear infinite;
+}
+.reviews-marquee-viewport:hover .reviews-marquee-track {
+  animation-play-state: paused;
+}
+@media (prefers-reduced-motion: reduce) {
+  .reviews-marquee-track {
+    animation: none;
+    flex-wrap: wrap;
+    width: 100%;
+    justify-content: center;
+  }
+}
