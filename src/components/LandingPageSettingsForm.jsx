@@ -604,6 +604,7 @@ function summaryFor(block) {
     case 'hero':        return block.headline || ''
     case 'booking':     return block.slug ? `slug: ${block.slug}` : ''
     case 'event':       return block.slug ? `event: ${block.slug}` : 'no event'
+    case 'lead_form':   return block.heading || 'Waitlist'
     case 'pillars':     return `${(block.items || []).length} items`
     case 'gallery':     return `${(block.items || []).length} photo${(block.items || []).length === 1 ? '' : 's'}`
     case 'embed':       return block.url ? new URL(block.url).hostname.replace(/^www\./, '') : 'no URL'
@@ -622,6 +623,7 @@ function BlockEditPanel(props) {
     case 'hero':        return <HeroEdit        {...props} />
     case 'booking':     return <BookingEdit     {...props} />
     case 'event':       return <EventEdit       {...props} />
+    case 'lead_form':   return <LeadFormEdit    {...props} />
     case 'pillars':     return <PillarsEdit     {...props} />
     case 'gallery':     return <GalleryEdit     {...props} />
     case 'embed':       return <EmbedEdit       {...props} />
@@ -740,6 +742,28 @@ function EventEdit({ block, onUpdate, availableEvents }) {
           />
         </Field>
       )}
+    </>
+  )
+}
+
+function LeadFormEdit({ block, onUpdate }) {
+  return (
+    <>
+      <Field label="Heading">
+        <Input value={block.heading || ''} onChange={(v) => onUpdate({ heading: v })} maxLength={200} placeholder="Join the founding members" />
+      </Field>
+      <Field label="Sub-copy" hint="Paragraph under the heading.">
+        <Textarea value={block.subtext || ''} onChange={(v) => onUpdate({ subtext: v })} maxLength={600} rows={3} />
+      </Field>
+      <Field label="Button label">
+        <Input value={block.button_label || ''} onChange={(v) => onUpdate({ button_label: v })} maxLength={60} placeholder="Join the waitlist" />
+      </Field>
+      <Field label="Success message" hint="Shown after a successful submit.">
+        <Textarea value={block.success_message || ''} onChange={(v) => onUpdate({ success_message: v })} maxLength={300} rows={2} />
+      </Field>
+      <Field label="Consent checkbox text" hint="Shown beside the opt-in checkbox. Keep it explicit for GDPR — name the channels (email/SMS/WhatsApp).">
+        <Textarea value={block.consent_label || ''} onChange={(v) => onUpdate({ consent_label: v })} maxLength={400} rows={3} />
+      </Field>
     </>
   )
 }
