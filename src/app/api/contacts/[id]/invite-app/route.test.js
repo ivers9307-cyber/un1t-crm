@@ -14,6 +14,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/lib/auth', () => ({
   getCurrentUser: vi.fn(),
+  // Mirror the real helper. The previous mock omitted it AND the user
+  // fixtures set a non-existent `locationIds` field, so the location
+  // guard was never actually exercised — it masked the production bug
+  // where the route read `user.locationIds` (undefined) instead of
+  // deriving ids from `user.locations`.
+  getUserLocationIds: (u) => (u?.locations || []).map((l) => l.id),
 }))
 
 vi.mock('@/lib/supabase', () => ({
@@ -68,13 +74,13 @@ describe('POST /api/contacts/[id]/invite-app', () => {
   })
 
   it('returns 403 when user is not master/owner/manager', async () => {
-    getCurrentUser.mockResolvedValue({ isMaster: false, role: 'coach', locationIds: ['loc-1'] })
+    getCurrentUser.mockResolvedValue({ isMaster: false, role: 'coach', locations: [{ id: 'loc-1' }] })
     const res = await POST(fakeRequest(), { params: { id: 'c1' } })
     expect(res.status).toBe(403)
   })
 
   it('returns 403 when manager is at a different location', async () => {
-    getCurrentUser.mockResolvedValue({ isMaster: false, role: 'manager', locationIds: ['loc-OTHER'] })
+    getCurrentUser.mockResolvedValue({ isMaster: false, role: 'manager', locations: [{ id: 'loc-OTHER' }] })
     createServerClient.mockReturnValue(mockDb({
       contact: { id: 'c1', name: 'Sarah', email: 'sarah@example.com', location_id: 'loc-1', user_id: null },
     }))
@@ -122,7 +128,7 @@ describe('POST /api/contacts/[id]/invite-app', () => {
   })
 
   it('manager at the right location can invite', async () => {
-    getCurrentUser.mockResolvedValue({ isMaster: false, role: 'manager', locationIds: ['loc-1'] })
+    getCurrentUser.mockResolvedValue({ isMaster: false, role: 'manager', locations: [{ id: 'loc-1' }] })
     createServerClient.mockReturnValue(mockDb({
       contact: { id: 'c1', name: 'Sarah', email: 'sarah@example.com', location_id: 'loc-1', user_id: null },
     }))

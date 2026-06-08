@@ -23,7 +23,7 @@
 // don't get to invite customers — keeps the surface tight.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser } from '@/lib/auth'
+import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { logInfo, logError } from '@/lib/log'
 
@@ -62,9 +62,12 @@ export async function POST(_request, props) {
   }
 
   // Soft-fail: if the contact is at a location the operator can't
-  // see, refuse. assertLocationAccess pattern from elsewhere.
+  // see, refuse. getUserLocationIds(user), not user.locationIds —
+  // getCurrentUser exposes no `locationIds` field, so the old guard
+  // was `[]` and failed closed for every non-master (owners/managers
+  // couldn't invite anyone).
   if (!user.isMaster) {
-    const allowed = (user.locationIds || []).includes(contact.location_id)
+    const allowed = getUserLocationIds(user).includes(contact.location_id)
     if (!allowed) {
       return NextResponse.json({ success: false, error: 'Location not in your scope' }, { status: 403 })
     }
