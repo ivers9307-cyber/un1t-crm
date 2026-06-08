@@ -439,7 +439,7 @@ function Pillar({ number, title, body, photoUrl, onEdit, locationId, itemIndex }
   return (
     <div className="bg-white p-8 md:p-10">
       {showPhotoRegion && (
-        <div className="aspect-[4/3] mb-6 overflow-hidden -mx-8 -mt-8 md:-mx-10 md:-mt-10 bg-black/5 relative">
+        <div className="aspect-[3/4] mb-6 overflow-hidden -mx-8 -mt-8 md:-mx-10 md:-mt-10 bg-black/5 relative">
           {onEdit ? (
             <EditableImage
               src={photoUrl || ''}
