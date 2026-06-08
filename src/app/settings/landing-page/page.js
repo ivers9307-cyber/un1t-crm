@@ -56,7 +56,7 @@ export default async function LandingPageSettingsPage(props) {
     const [chooserRes, tilesRes] = await Promise.all([
       db.from('chooser_settings').select('*').eq('id', 'default').maybeSingle(),
       db.from('landing_page_settings')
-        .select('location_id, public_path, chooser_label, chooser_cta_text, chooser_image_url, locations:location_id ( name )')
+        .select('location_id, public_path, chooser_label, chooser_cta_text, chooser_image_url, publish_state, locations:location_id ( name )')
         .not('public_path', 'is', null),
     ])
     const tiles = (tilesRes.data || []).map((t) => ({
@@ -66,6 +66,7 @@ export default async function LandingPageSettingsPage(props) {
       chooser_label: t.chooser_label,
       chooser_cta_text: t.chooser_cta_text,
       chooser_image_url: t.chooser_image_url,
+      publish_state: t.publish_state,
     }))
     return (
       <div className="p-6 max-w-[1800px]">
