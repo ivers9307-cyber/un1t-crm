@@ -5,7 +5,7 @@
 // summary stats from the session's hr_samples.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser } from '@/lib/auth'
+import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { endSession } from '@/lib/live-class'
 import { logInfo } from '@/lib/log'
@@ -35,7 +35,7 @@ export async function POST(_request, props) {
   if (!session) {
     return NextResponse.json({ ok: false, error: 'Session not found' }, { status: 404 })
   }
-  if (!user.isMaster && !(user.locationIds || []).includes(session.location_id)) {
+  if (!user.isMaster && !getUserLocationIds(user).includes(session.location_id)) {
     return NextResponse.json({ ok: false, error: 'Location not in your scope' }, { status: 403 })
   }
 

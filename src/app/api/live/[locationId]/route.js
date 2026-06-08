@@ -8,7 +8,7 @@
 // staff at other locations) get 403.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser } from '@/lib/auth'
+import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { getLiveSessions, getAvailableStraps } from '@/lib/live-class'
 
@@ -22,7 +22,7 @@ export async function GET(_request, props) {
     return NextResponse.json({ ok: false, error: 'Unauthorised' }, { status: 401 })
   }
   const locationId = params.locationId
-  if (!user.isMaster && !(user.locationIds || []).includes(locationId)) {
+  if (!user.isMaster && !getUserLocationIds(user).includes(locationId)) {
     return NextResponse.json({ ok: false, error: 'Location not in your scope' }, { status: 403 })
   }
 
