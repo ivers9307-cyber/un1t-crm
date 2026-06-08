@@ -12,6 +12,7 @@
 import Link from 'next/link'
 import BookingWidget from '@/components/BookingWidget'
 import RaceSignupWidget from '@/components/RaceSignupWidget'
+import WaitlistWidget from '@/components/WaitlistWidget'
 import { parseEmbed } from '@/lib/landing-page-embed'
 import EditableText from './EditableText'
 import EditableImage from './EditableImage'
@@ -34,7 +35,7 @@ function E({ value, onEdit, path, multiline }) {
   )
 }
 
-export default function BlockRenderer({ block, onEdit, locationId }) {
+export default function BlockRenderer({ block, onEdit, locationId, publicPath }) {
   // onEdit is bound to this block: caller hands us a generic
   // (blockId, path, value) function and we curry the blockId so
   // each child renderer thinks in local field paths.
@@ -51,6 +52,7 @@ export default function BlockRenderer({ block, onEdit, locationId }) {
     case 'pillars':     return <PillarsBlock     block={block} {...editProps} />
     case 'gallery':     return <GalleryBlock     block={block} {...editProps} />
     case 'event':       return <EventBlock       block={block} />
+    case 'lead_form':   return <LeadFormBlock    block={block} onEdit={localOnEdit} publicPath={publicPath} />
     case 'embed':       return <EmbedBlock       block={block} onEdit={localOnEdit} />
     case 'stats':       return <StatsBlock       block={block} onEdit={localOnEdit} />
     case 'testimonial': return <TestimonialBlock block={block} onEdit={localOnEdit} />
@@ -190,6 +192,31 @@ export function EventBlock({ block }) {
             <p className="text-white/50 text-sm">Event signup not configured.</p>
           )}
         </div>
+      </div>
+    </section>
+  )
+}
+
+export function LeadFormBlock({ block, onEdit, publicPath }) {
+  return (
+    <section id="waitlist" className="bg-black text-white py-20 md:py-28 border-t border-white/10">
+      <div className="max-w-xl mx-auto px-6 text-center">
+        {(block.heading || onEdit) && (
+          <h2 className="text-3xl md:text-4xl font-black tracking-tight mb-3">
+            <E value={block.heading} onEdit={onEdit} path={['heading']} />
+          </h2>
+        )}
+        {(block.subtext || onEdit) && (
+          <p className="text-white/70 leading-relaxed mb-8 max-w-md mx-auto">
+            <E value={block.subtext} onEdit={onEdit} path={['subtext']} multiline />
+          </p>
+        )}
+        <WaitlistWidget
+          publicPath={publicPath}
+          buttonLabel={block.button_label}
+          successMessage={block.success_message}
+          consentLabel={block.consent_label}
+        />
       </div>
     </section>
   )

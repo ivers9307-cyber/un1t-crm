@@ -99,7 +99,7 @@ export default async function StudioLandingPage(props) {
     <div className="min-h-screen bg-black text-white antialiased">
       <SiteHeader logoUrl={logoUrl} logoAlt={logoAlt} logoWidthPx={logoWidthPx} />
       {blocks.map((block) => (
-        <BlockRenderer key={block.id} block={block} />
+        <BlockRenderer key={block.id} block={block} publicPath={params.location} />
       ))}
       <SiteFooter />
     </div>
