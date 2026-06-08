@@ -17,6 +17,7 @@ import { createServerClient } from '@/lib/supabase'
 import { blocksOrDefault } from '@/lib/landing-page-blocks'
 import BlockRenderer, { SiteHeader, SiteFooter } from '@/components/landing-page/BlockRenderers'
 import EditModeOverlay from '@/components/landing-page/EditModeOverlay'
+import { isPubliclyVisible } from '@/lib/landing-page-visibility'
 
 export const dynamic = 'force-dynamic'
 
@@ -41,7 +42,7 @@ async function loadByPath(path) {
 export async function generateMetadata(props) {
   const params = await props.params
   const row = await loadByPath(params.location)
-  if (!row) return { title: 'UN1T Dublin' }
+  if (!row || !isPubliclyVisible(row.publish_state)) return { title: 'UN1T Dublin' }
   const blocks = blocksOrDefault(row.blocks)
   const hero = blocks.find((b) => b.type === 'hero')
   const heroImage = hero?.image_url || null
@@ -67,6 +68,12 @@ export default async function StudioLandingPage(props) {
   const searchParams = await props.searchParams
   const row = await loadByPath(params.location)
   if (!row) notFound()
+
+  // Public reachability gate. A page that isn't 'live' 404s for the public,
+  // but the editor's live-preview iframe (?edit=1) still renders so the
+  // operator can preview before publishing.
+  const isEditPreview = searchParams?.edit === '1'
+  if (!isEditPreview && !isPubliclyVisible(row.publish_state)) notFound()
 
   const blocks = blocksOrDefault(row.blocks)
   const logoUrl     = row.logo_url || null
