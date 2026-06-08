@@ -29,13 +29,14 @@ export const dynamic = 'force-dynamic'
 // public_path values listed here render as a dimmed, NON-clickable
 // "coming soon" panel (no link, no CTA button). The studio's page at
 // /welcome/<path> still exists and is untouched — only the chooser
-// tile's link is suppressed. To RE-ENABLE a studio, delete its entry
-// from this set; the tile goes back to linking the exact same path.
-// (Set, not a DB flag, so it's a one-line revert with no migration.)
-const DISABLED_TILE_PATHS = new Set([
-  'hatch-street', // re-hidden 2026-06-05 — keep Hatch Street under wraps; renders
-                  // as a dimmed, non-clickable "coming soon" tile (still visible).
-])
+// tile's link is suppressed. To DISABLE a studio, add its public_path
+// here; to RE-ENABLE, remove it. (Set, not a DB flag, so it's a
+// one-line change with no migration.)
+//
+// 2026-06-08: Hatch Street UNLOCKED — the tile is now live + clickable
+// ahead of the September opening (founding-members drive). Set is empty
+// again; nothing is currently suppressed.
+const DISABLED_TILE_PATHS = new Set([])
 
 // Default left→right order when the operator hasn't set tile_order.
 const TILE_ORDER = ['stillorgan', 'hatch-street']
