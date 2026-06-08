@@ -46,9 +46,10 @@ export default async function EditLocationPage(props) {
 
   if (!location) notFound()
 
-  // Pull the Xero connection row (if any) and a sample car for the
-  // BCA template preview. Both feed into LocationIntegrations.
-  const [{ data: xeroConnection }, { data: sampleBcaCar }] = await Promise.all([
+  // Pull the Xero connection row (if any), the Google Business connection
+  // row (if any), and a sample car for the BCA template preview.
+  // All three feed into LocationIntegrations.
+  const [{ data: xeroConnection }, { data: gbpConnection }, { data: sampleBcaCar }] = await Promise.all([
     db.from('xero_connections')
       .select(`
         location_id, tenant_id, tenant_name, tenant_type,
@@ -58,6 +59,10 @@ export default async function EditLocationPage(props) {
         accounts_sync_error, contacts_sync_error,
         car_sales_account_code
       `)
+      .eq('location_id', location.id)
+      .maybeSingle(),
+    db.from('google_business_connections')
+      .select('*')
       .eq('location_id', location.id)
       .maybeSingle(),
     location.features?.bca_submit === true
@@ -213,6 +218,7 @@ export default async function EditLocationPage(props) {
         <LocationIntegrations
           location={location}
           xeroConnection={xeroConnection || null}
+          gbpConnection={gbpConnection || null}
           user={user}
           sampleBcaCar={sampleBcaCar || null}
         />
