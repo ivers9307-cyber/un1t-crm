@@ -610,6 +610,7 @@ function summaryFor(block) {
     case 'embed':       return block.url ? new URL(block.url).hostname.replace(/^www\./, '') : 'no URL'
     case 'stats':       return `${(block.items || []).length} stats`
     case 'testimonial': return block.author || ''
+    case 'reviews':     return block.title || ''
     default:            return ''
   }
 }
@@ -629,6 +630,7 @@ function BlockEditPanel(props) {
     case 'embed':       return <EmbedEdit       {...props} />
     case 'stats':       return <StatsEdit       {...props} />
     case 'testimonial': return <TestimonialEdit {...props} />
+    case 'reviews':     return <ReviewsEdit     {...props} />
     default:            return <div className="text-xs text-red-700">Unknown block type: {props.block.type}</div>
   }
 }
@@ -956,6 +958,50 @@ function TestimonialEdit({ block, onUpdate }) {
       <Field label="Author" hint='How the quote is attributed.'>
         <Input value={block.author || ''} onChange={(v) => onUpdate({ author: v })} maxLength={200} placeholder="Member, joined 2024" />
       </Field>
+    </>
+  )
+}
+
+function ReviewsEdit({ block, onUpdate }) {
+  return (
+    <>
+      <Field label="Heading">
+        <Input value={block.title || ''} onChange={(v) => onUpdate({ title: v })} maxLength={200} placeholder="What our members say" />
+      </Field>
+      <Field label="Minimum star rating to show">
+        <select
+          value={block.min_rating ?? 4}
+          onChange={(e) => onUpdate({ min_rating: Number(e.target.value) })}
+          className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
+        >
+          {[5, 4, 3, 2, 1].map((n) => (
+            <option key={n} value={n}>{n}★ and up</option>
+          ))}
+        </select>
+      </Field>
+      <Field label="Marquee speed">
+        <select
+          value={block.speed || 'normal'}
+          onChange={(e) => onUpdate({ speed: e.target.value })}
+          className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
+        >
+          <option value="slow">Slow</option>
+          <option value="normal">Normal</option>
+          <option value="fast">Fast</option>
+        </select>
+      </Field>
+      <label className="flex items-center gap-2">
+        <input
+          type="checkbox"
+          checked={block.show_aggregate !== false}
+          onChange={(e) => onUpdate({ show_aggregate: e.target.checked })}
+        />
+        <span className="text-xs text-un1t-subtle">Show the &ldquo;4.9 ★ · N Google reviews&rdquo; header</span>
+      </label>
+      <p className="text-[11px] text-un1t-muted">
+        Reviews come from your Google Business listing. Connect it and hide
+        specific reviews in <strong>Settings → Locations → Integrations</strong>.
+      </p>
     </>
   )
 }
