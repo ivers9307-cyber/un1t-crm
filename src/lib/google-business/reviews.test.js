@@ -4,6 +4,7 @@ import {
   normalizeReview,
   filterVisibleReviews,
   marqueeDurationSeconds,
+  fullLocationResource,
 } from './reviews'
 
 describe('normalizeStarRating', () => {
@@ -72,5 +73,17 @@ describe('marqueeDurationSeconds', () => {
   })
   it('has a sane floor so a single card still scrolls', () => {
     expect(marqueeDurationSeconds('normal', 1)).toBe(12)
+  })
+})
+
+describe('fullLocationResource', () => {
+  it('joins a short-form location name under the account', () => {
+    expect(fullLocationResource('accounts/123', 'locations/456')).toBe('accounts/123/locations/456')
+  })
+  it('passes through an already-qualified name (no doubling)', () => {
+    expect(fullLocationResource('accounts/123', 'accounts/123/locations/456')).toBe('accounts/123/locations/456')
+  })
+  it('returns null for an empty name', () => {
+    expect(fullLocationResource('accounts/123', '')).toBeNull()
   })
 })

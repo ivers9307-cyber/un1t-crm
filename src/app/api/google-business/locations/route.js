@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { withFreshToken, listLocations } from '@/lib/google-business/client'
+import { fullLocationResource } from '@/lib/google-business/reviews'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -19,7 +20,7 @@ export async function GET(request) {
   try {
     const { conn, accessToken } = await withFreshToken(locationId)
     const locs = await listLocations(accessToken, conn.account_resource)
-    const data = locs.map((l) => ({ resource: `${conn.account_resource}/${l.name}`, title: l.title || l.name }))
+    const data = locs.map((l) => ({ resource: fullLocationResource(conn.account_resource, l.name), title: l.title || l.name }))
     return NextResponse.json({ success: true, data })
   } catch (e) {
     return NextResponse.json({ success: false, error: e?.message || String(e) }, { status: 500 })

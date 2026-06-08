@@ -62,7 +62,15 @@ export default async function EditLocationPage(props) {
       .eq('location_id', location.id)
       .maybeSingle(),
     db.from('google_business_connections')
-      .select('*')
+      // Safe column list — NEVER select('*') here: this row is passed as a
+      // prop into the GoogleReviewsCard client component, which serializes it
+      // into the browser RSC payload. access_token / refresh_token must not
+      // leave the server (mirrors the Xero query above).
+      .select(`
+        location_id, account_resource, location_resource, location_title,
+        average_rating, total_review_count, last_synced_at, sync_error,
+        connected_at
+      `)
       .eq('location_id', location.id)
       .maybeSingle(),
     location.features?.bca_submit === true

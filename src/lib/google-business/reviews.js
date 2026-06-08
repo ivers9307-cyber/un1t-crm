@@ -37,3 +37,13 @@ export function marqueeDurationSeconds(speed, count) {
   const per = SECONDS_PER_CARD[speed] || SECONDS_PER_CARD.normal
   return Math.max(per * 2, per * (count || 0))
 }
+
+// Compose the full v4 location resource "accounts/{a}/locations/{l}". The
+// Business Information API may return a location `name` either short
+// ("locations/456") or already-qualified ("accounts/123/locations/456");
+// handle both so the review-fetch path can never end up doubled.
+export function fullLocationResource(accountResource, name) {
+  if (!name) return null
+  if (name.startsWith('accounts/')) return name
+  return `${accountResource}/${name}`
+}

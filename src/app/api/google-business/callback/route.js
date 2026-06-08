@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { exchangeAuthorizationCode, listAccounts, listLocations, GoogleBusinessError } from '@/lib/google-business/client'
+import { fullLocationResource } from '@/lib/google-business/reviews'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -43,7 +44,7 @@ export async function GET(req) {
     let locationTitle = null
     const locs = await listLocations(tokens.access_token, account.name)
     if (locs.length === 1) {
-      locationResource = `${account.name}/${locs[0].name}`
+      locationResource = fullLocationResource(account.name, locs[0].name)
       locationTitle = locs[0].title || null
     }
 
