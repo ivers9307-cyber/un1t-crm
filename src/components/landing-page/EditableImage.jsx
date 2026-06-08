@@ -22,6 +22,7 @@
 //     first photo.
 
 import { useRef, useState } from 'react'
+import { uploadLandingMedia } from '@/lib/landing-media-upload'
 
 export default function EditableImage({
   src,
@@ -46,23 +47,10 @@ export default function EditableImage({
   async function handleFile(file) {
     if (!file || !locationId) return
     setUploading(true)
-    try {
-      const fd = new FormData()
-      fd.append('file', file)
-      fd.append('location_id', locationId)
-      fd.append('kind', kind)
-      const r = await fetch('/api/landing-page-settings/media', { method: 'POST', body: fd })
-      const j = await r.json()
-      if (!r.ok || j.success === false) {
-        onError?.(j.error || `Upload failed (${r.status})`)
-        return
-      }
-      onChange?.(j.url)
-    } catch (e) {
-      onError?.(e?.message || 'Upload failed')
-    } finally {
-      setUploading(false)
-    }
+    const res = await uploadLandingMedia({ file, locationId, kind })
+    if (!res.success) onError?.(res.error || 'Upload failed')
+    else onChange?.(res.url)
+    setUploading(false)
   }
 
   const accept = kind === 'video'

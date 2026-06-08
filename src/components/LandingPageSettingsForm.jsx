@@ -24,6 +24,7 @@
 // src/app/welcome/page.js. Three-file change.
 
 import { useState, useMemo, useRef, useEffect, useCallback } from 'react'
+import { uploadLandingMedia } from '@/lib/landing-media-upload'
 import {
   DndContext, KeyboardSensor, PointerSensor, useSensor, useSensors,
   closestCenter, DragOverlay,
@@ -266,20 +267,13 @@ export default function LandingPageSettingsForm({ locationId, initialSettings, a
   }
   async function uploadMedia({ file, kind, key }) {
     setUploadState(key, true, null)
-    try {
-      const fd = new FormData()
-      fd.append('file', file)
-      fd.append('location_id', locationId)
-      fd.append('kind', kind)
-      const r = await fetch('/api/landing-page-settings/media', { method: 'POST', body: fd })
-      const j = await r.json()
-      if (!r.ok || j.success === false) throw new Error(j.error || `Upload failed (${r.status})`)
-      setUploadState(key, false, null)
-      return j.url
-    } catch (e) {
-      setUploadState(key, false, e.message || 'Upload failed')
+    const res = await uploadLandingMedia({ file, locationId, kind })
+    if (!res.success) {
+      setUploadState(key, false, res.error || 'Upload failed')
       return null
     }
+    setUploadState(key, false, null)
+    return res.url
   }
 
   // ── Save ──────────────────────────────────────────────────
@@ -362,7 +356,7 @@ export default function LandingPageSettingsForm({ locationId, initialSettings, a
           <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle">Site header</h3>
           <p className="text-[11px] text-un1t-muted mt-1">Logo for the top nav. Renders on every page state regardless of section ordering. Leave the logo blank to fall back to the &ldquo;UN1T&rdquo; wordmark text.</p>
         </div>
-        <Field label="Logo image" hint="PNG / JPEG / WebP, ≤ 5MB. Transparent PNG works best on the dark nav background.">
+        <Field label="Logo image" hint="PNG / JPEG / WebP — large images are auto-optimized on upload. Transparent PNG works best on the dark nav background.">
           <MediaSlot
             url={logoUrl}
             onClear={() => setLogoUrl('')}
@@ -653,7 +647,7 @@ function HeroEdit({ block, onUpdate, uploadMedia, uploading, uploadErr }) {
       <Field label="Subtext" hint="Paragraph under the headline.">
         <Textarea value={block.subtext || ''} onChange={(v) => onUpdate({ subtext: v })} maxLength={2000} rows={3} />
       </Field>
-      <Field label="Background image" hint="PNG / JPEG / WebP, ≤ 5MB. Replaces the dark gradient. The video below takes precedence; the image then becomes its poster (still frame while video loads).">
+      <Field label="Background image" hint="PNG / JPEG / WebP — large images are auto-optimized on upload. Replaces the dark gradient. The video below takes precedence; the image then becomes its poster (still frame while video loads).">
         <MediaSlot
           url={block.image_url || ''}
           onClear={() => onUpdate({ image_url: null })}
@@ -829,7 +823,7 @@ function GalleryEdit({ block, onUpdate, uploadMedia, uploading, uploadErr }) {
       <Field label="Section heading">
         <Input value={block.title || ''} onChange={(v) => onUpdate({ title: v })} maxLength={200} placeholder="Inside the studio" />
       </Field>
-      <Field label={`Photos (${items.length}/24)`} hint="PNG/JPEG/WebP, ≤ 5MB each.">
+      <Field label={`Photos (${items.length}/24)`} hint="PNG/JPEG/WebP — auto-optimized on upload.">
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           {items.map((g, i) => (
             <div key={i} className="relative group border border-un1t-border rounded-md overflow-hidden bg-un1t-bg">

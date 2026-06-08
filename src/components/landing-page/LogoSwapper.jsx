@@ -20,6 +20,7 @@
 // parent which updates logoUrl in the form state.
 
 import { useRef, useState } from 'react'
+import { uploadLandingMedia } from '@/lib/landing-media-upload'
 
 export default function LogoSwapper({ src, alt, widthPx = 200, locationId, onChange }) {
   const inputRef = useRef(null)
@@ -29,20 +30,9 @@ export default function LogoSwapper({ src, alt, widthPx = 200, locationId, onCha
   async function handleFile(file) {
     if (!file || !locationId) return
     setUploading(true)
-    try {
-      const fd = new FormData()
-      fd.append('file', file)
-      fd.append('location_id', locationId)
-      fd.append('kind', 'image')
-      const r = await fetch('/api/landing-page-settings/media', { method: 'POST', body: fd })
-      const j = await r.json()
-      if (r.ok && j.success !== false && j.url) onChange?.(j.url)
-    } catch {
-      // Operator can retry; the form's upload UI surfaces detailed
-      // errors. Iframe stays quiet to avoid layout-shifting toast.
-    } finally {
-      setUploading(false)
-    }
+    const res = await uploadLandingMedia({ file, locationId, kind: 'image' })
+    if (res.success && res.url) onChange?.(res.url)
+    setUploading(false)
   }
 
   return (
