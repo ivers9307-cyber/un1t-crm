@@ -11,7 +11,13 @@ import CommandPalette from './CommandPalette'
 // '/event-pay/<id>' (the Revolut checkout page reached from "Book & pay").
 // Without it, a public buyer with no session gets bounced to /login after
 // clicking Pay Now. Mirrors the allowlist in proxy.js. Do not drop on refactor.
-const PUBLIC_PATHS = ['/login', '/reset-password', '/welcome', '/deposit', '/book', '/event', '/event-pay', '/tv', '/studio-login']
+// '/stillorgan' + '/hatch-street' are the studio pretty-paths: next.config
+// rewrites them to /welcome/<studio>, but the browser URL — and therefore
+// usePathname() here — stays the pretty path. Without them a logged-out
+// visitor to the public studio page is bounced to /login on hydration (the
+// server renders fine; this client gate is what redirects). Mirrors the
+// brand allowlist in src/lib/brands.js — add a new studio's path in BOTH.
+const PUBLIC_PATHS = ['/login', '/reset-password', '/welcome', '/stillorgan', '/hatch-street', '/deposit', '/book', '/event', '/event-pay', '/tv', '/studio-login']
 
 export default function AppShell({ user, children }) {
   const pathname = usePathname()
