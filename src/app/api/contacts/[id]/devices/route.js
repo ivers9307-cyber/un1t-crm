@@ -8,7 +8,7 @@
 // Validation lives in src/lib/contact-devices.js (validateDeviceInput).
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser } from '@/lib/auth'
+import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { validateDeviceInput, listForContact } from '@/lib/contact-devices'
 import { logInfo, logWarn } from '@/lib/log'
@@ -26,6 +26,25 @@ export async function GET(_request, props) {
   }
 
   const db = createServerClient()
+
+  // IDOR gate (2026-06 audit). Devices (chest-strap MAC addresses,
+  // labels) are studio-private and this route uses the service-role
+  // client (RLS bypassed), so confirm the contact is in one of the
+  // caller's locations before listing. Any role at the location may
+  // read (matches the read-vs-write split this route documents);
+  // master sees all.
+  const { data: contact, error: cErr } = await db
+    .from('contacts')
+    .select('id, location_id')
+    .eq('id', params.id)
+    .single()
+  if (cErr || !contact) {
+    return NextResponse.json({ ok: false, error: 'Contact not found' }, { status: 404 })
+  }
+  if (!user.isMaster && !getUserLocationIds(user).includes(contact.location_id)) {
+    return NextResponse.json({ ok: false, error: 'Location not in your scope' }, { status: 403 })
+  }
+
   const { devices, error } = await listForContact(db, params.id)
   if (error) {
     return NextResponse.json({ ok: false, error: error.message }, { status: 400 })
@@ -63,7 +82,11 @@ export async function POST(request, props) {
     return NextResponse.json({ ok: false, error: 'Contact not found' }, { status: 404 })
   }
   if (!user.isMaster) {
-    const allowed = (user.locationIds || []).includes(contact.location_id)
+    // getUserLocationIds(user), not user.locationIds — getCurrentUser
+    // exposes no `locationIds` field, so the old guard was `[]` and
+    // failed closed for every non-master (managers couldn't register
+    // a device). Use the canonical helper so the gate works as intended.
+    const allowed = getUserLocationIds(user).includes(contact.location_id)
     if (!allowed) {
       return NextResponse.json({ ok: false, error: 'Location not in your scope' }, { status: 403 })
     }
