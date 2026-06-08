@@ -7,16 +7,9 @@
 // file shape — exactly the same pattern as submitInvoice().
 
 import Constants from 'expo-constants'
-import { supabase } from './supabase'
+import { authHeaders } from './api'
 
 const API_BASE = Constants.expoConfig?.extra?.apiBaseUrl
-
-async function authHeaders() {
-  const { data: { session } } = await supabase.auth.getSession()
-  const headers = { Accept: 'application/json' }
-  if (session?.access_token) headers.Authorization = `Bearer ${session.access_token}`
-  return headers
-}
 
 // ────────────────────────────────────────────────────────────────
 // Claim CRUD

@@ -7,16 +7,9 @@
 // UA matches the mobile branch, so no extra header is needed.
 
 import Constants from 'expo-constants'
-import { supabase } from './supabase'
+import { authHeaders } from './api'
 
 const API_BASE = Constants.expoConfig?.extra?.apiBaseUrl
-
-async function authHeaders() {
-  const { data: { session } } = await supabase.auth.getSession()
-  const headers = { Accept: 'application/json', 'Content-Type': 'application/json' }
-  if (session?.access_token) headers.Authorization = `Bearer ${session.access_token}`
-  return headers
-}
 
 /** GET /api/policies — current versions + caller's view status. */
 export async function listPolicies() {
@@ -47,7 +40,7 @@ export async function startPolicyView(slug) {
  */
 export async function endPolicyView(slug, { viewId, totalDurationSeconds, sectionDwell }) {
   if (!viewId) return { success: false, error: 'view_id is required' }
-  const headers = await authHeaders()
+  const headers = await authHeaders({ json: true })
   const res = await fetch(`${API_BASE}/api/policies/${encodeURIComponent(slug)}/views`, {
     method: 'PATCH',
     headers,

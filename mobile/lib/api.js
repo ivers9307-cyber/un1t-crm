@@ -10,12 +10,52 @@
 import Constants from 'expo-constants'
 import { supabase } from './supabase'
 import { readImpersonate } from './impersonate'
+import { buildAuthHeaders } from './api-headers'
 
 const API_BASE = Constants.expoConfig?.extra?.apiBaseUrl
 
 if (!API_BASE) {
   // eslint-disable-next-line no-console
   console.error('[api] Missing EXPO_PUBLIC_API_BASE_URL.')
+}
+
+/**
+ * Resolve the standard auth headers for a call to /api/* — Bearer
+ * token, optional active-location override, and (critically) the
+ * x-impersonate-target header so "View as user" reaches the server.
+ *
+ * Every hand-rolled client wrapper (invoices, expenses, contracts,
+ * checklists, issues, policies) MUST build its headers through this
+ * helper rather than inlining `Authorization: Bearer …` — that's how
+ * the impersonation header gets dropped and View-as silently runs as
+ * the real master. Multipart callers pass no `json` so RN can set the
+ * FormData boundary itself.
+ *
+ * @param {object} [opts]
+ * @param {string} [opts.locationId] x-active-location override for this call
+ * @param {boolean} [opts.json]      include Content-Type: application/json
+ * @returns {Promise<Record<string,string>>}
+ */
+export async function authHeaders({ locationId, json = false } = {}) {
+  const { data: { session } } = await supabase.auth.getSession()
+
+  // Master impersonation (mig 035). Best-effort — never fail a call
+  // because the local impersonate blob couldn't be read. readImpersonate
+  // also auto-expires the target past the session max-age.
+  let impersonateTargetId = null
+  try {
+    const imp = await readImpersonate()
+    impersonateTargetId = imp?.targetId || null
+  } catch {
+    // leave impersonateTargetId null
+  }
+
+  return buildAuthHeaders({
+    token: session?.access_token,
+    impersonateTargetId,
+    locationId,
+    json,
+  })
 }
 
 /**
@@ -27,29 +67,7 @@ if (!API_BASE) {
  * @returns {Promise<{success: boolean, data?: any, error?: string, issues?: any[]}>}
  */
 export async function api(path, options = {}) {
-  const { data: { session } } = await supabase.auth.getSession()
-  const token = session?.access_token
-
-  const headers = {
-    'Content-Type': 'application/json',
-    Accept: 'application/json',
-  }
-  if (token) headers.Authorization = `Bearer ${token}`
-  if (options.locationId) headers['x-active-location'] = options.locationId
-
-  // Master impersonation (mig 035). When the user has an active
-  // "View as user" session stored locally, every authenticated
-  // request surfaces it via x-impersonate-target — same code path
-  // server-side as the web cookie. Auto-stop after 24h is enforced
-  // inside readImpersonate(). Any non-master JWT sending this
-  // header has the value silently ignored server-side.
-  try {
-    const imp = await readImpersonate()
-    if (imp?.targetId) headers['x-impersonate-target'] = imp.targetId
-  } catch {
-    // Best-effort — never fail an API call because the local
-    // impersonate blob couldn't be read.
-  }
+  const headers = await authHeaders({ locationId: options.locationId, json: true })
 
   let response
   try {

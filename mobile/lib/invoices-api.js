@@ -1,13 +1,16 @@
 // Mobile-side contractor invoices API. Wraps the same /api/invoices
-// routes the web Invoices manager uses. Auth + active-location
-// header are handled by api(); we just shape the calls.
+// routes the web Invoices manager uses. Headers — Bearer auth,
+// x-active-location, and the x-impersonate-target "View as user"
+// header — are built by the shared authHeaders() helper so they can't
+// drift; do NOT hand-roll them here (dropping x-impersonate-target is
+// what made View-as show the master's whole-location invoice queue).
 //
 // PDF upload — submitInvoice() builds a multipart FormData with the
 // PDF picked via expo-document-picker. The Next.js POST route
 // already handles multipart bodies.
 
 import Constants from 'expo-constants'
-import { supabase } from './supabase'
+import { authHeaders } from './api'
 
 const API_BASE = Constants.expoConfig?.extra?.apiBaseUrl
 
@@ -17,33 +20,25 @@ const API_BASE = Constants.expoConfig?.extra?.apiBaseUrl
  * the appropriate set automatically.
  */
 export async function listInvoices() {
-  const { data: { session } } = await supabase.auth.getSession()
-  const headers = { Accept: 'application/json' }
-  if (session?.access_token) headers.Authorization = `Bearer ${session.access_token}`
+  const headers = await authHeaders()
   const res = await fetch(`${API_BASE}/api/invoices`, { headers })
   return res.json().catch(() => ({ success: false, error: `Bad response (${res.status})` }))
 }
 
 export async function getInvoice(id) {
-  const { data: { session } } = await supabase.auth.getSession()
-  const headers = { Accept: 'application/json' }
-  if (session?.access_token) headers.Authorization = `Bearer ${session.access_token}`
+  const headers = await authHeaders()
   const res = await fetch(`${API_BASE}/api/invoices/${id}`, { headers })
   return res.json().catch(() => ({ success: false, error: `Bad response (${res.status})` }))
 }
 
 export async function getInvoicePdfUrl(id) {
-  const { data: { session } } = await supabase.auth.getSession()
-  const headers = { Accept: 'application/json' }
-  if (session?.access_token) headers.Authorization = `Bearer ${session.access_token}`
+  const headers = await authHeaders()
   const res = await fetch(`${API_BASE}/api/invoices/${id}/pdf`, { headers })
   return res.json().catch(() => ({ success: false, error: `Bad response (${res.status})` }))
 }
 
 export async function revokeInvoice(id) {
-  const { data: { session } } = await supabase.auth.getSession()
-  const headers = { Accept: 'application/json' }
-  if (session?.access_token) headers.Authorization = `Bearer ${session.access_token}`
+  const headers = await authHeaders()
   const res = await fetch(`${API_BASE}/api/invoices/${id}/revoke`, {
     method: 'POST',
     headers,
@@ -54,17 +49,13 @@ export async function revokeInvoice(id) {
 // APPROVALS — owner/master approve or decline a submitted contractor invoice.
 // Decline requires a reason (the route 400s without it).
 export async function approveInvoice(id) {
-  const { data: { session } } = await supabase.auth.getSession()
-  const headers = { Accept: 'application/json' }
-  if (session?.access_token) headers.Authorization = `Bearer ${session.access_token}`
+  const headers = await authHeaders()
   const res = await fetch(`${API_BASE}/api/invoices/${id}/approve`, { method: 'POST', headers })
   return res.json().catch(() => ({ success: false, error: `Bad response (${res.status})` }))
 }
 
 export async function declineInvoice(id, reason) {
-  const { data: { session } } = await supabase.auth.getSession()
-  const headers = { Accept: 'application/json', 'Content-Type': 'application/json' }
-  if (session?.access_token) headers.Authorization = `Bearer ${session.access_token}`
+  const headers = await authHeaders({ json: true })
   const res = await fetch(`${API_BASE}/api/invoices/${id}/decline`, {
     method: 'POST', headers, body: JSON.stringify({ reason }),
   })
@@ -78,10 +69,7 @@ export async function declineInvoice(id, reason) {
 export async function submitInvoice({
   monthKey, amount, invoiceNumber, notes, locationId, file,
 }) {
-  const { data: { session } } = await supabase.auth.getSession()
-  const headers = { Accept: 'application/json' }
-  if (session?.access_token) headers.Authorization = `Bearer ${session.access_token}`
-  if (locationId) headers['x-active-location'] = locationId
+  const headers = await authHeaders({ locationId })
 
   // React Native FormData — file must be a { uri, name, type } object.
   const fd = new FormData()
