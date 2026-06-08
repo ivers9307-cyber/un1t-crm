@@ -26,6 +26,9 @@ const UPLOAD_URL = '/api/landing-page-settings/media'
 const TARGET_MAX_BYTES = 3.8 * 1024 * 1024
 const MAX_EDGE = 2560 // px on the long side — ample for a full-bleed hero
 
+const VIDEO_TYPES = new Set(['video/mp4', 'video/webm'])
+const MAX_VIDEO_BYTES = 25 * 1024 * 1024 // matches the branding bucket (mig 248: 26MB) with margin
+
 /**
  * Upload one media file for the landing page. Images are downscaled +
  * re-encoded client-side first. Returns { success, url?, error? } and
@@ -36,6 +39,10 @@ const MAX_EDGE = 2560 // px on the long side — ample for a full-bleed hero
  */
 export async function uploadLandingMedia({ file, locationId, kind = 'image' }) {
   if (!file || !locationId) return { success: false, error: 'Missing file or location.' }
+
+  // Video → upload straight to Supabase Storage (bypasses the ~4.5MB
+  // Vercel function body cap; the bucket size limit is the real ceiling).
+  if (kind === 'video') return uploadVideoDirect({ file, locationId })
 
   let toSend = file
   if (kind !== 'video' && (file.type || '').startsWith('image/')) {
@@ -61,6 +68,52 @@ export async function uploadLandingMedia({ file, locationId, kind = 'image' }) {
     return { success: false, error: `Network error: ${e?.message || e}` }
   }
   return parseUploadResponse(res)
+}
+
+/**
+ * Direct-to-storage upload for video — the browser PUTs the bytes to
+ * Supabase via a server-minted signed URL, so the ~4.5MB Vercel
+ * function body cap never applies. The branding bucket's size + mime
+ * limits (mig 248) are the ceiling. Returns { success, url?, error? }.
+ */
+async function uploadVideoDirect({ file, locationId }) {
+  if (!VIDEO_TYPES.has(file.type || '')) {
+    return { success: false, error: 'Unsupported video type. Use MP4 or WebM.' }
+  }
+  if (file.size > MAX_VIDEO_BYTES) {
+    return { success: false, error: `Video is too large (${Math.round(file.size / 1024 / 1024)}MB). Max is 25MB — try 720p, 5–15s, ~3–5Mbps.` }
+  }
+
+  // 1. Mint a signed upload URL (auth + path are decided server-side).
+  let r
+  try {
+    r = await fetch('/api/landing-page-settings/media/signed-upload', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ location_id: locationId, kind: 'video', content_type: file.type }),
+    })
+  } catch (e) {
+    return { success: false, error: `Network error: ${e?.message || e}` }
+  }
+  let j
+  try { j = await r.json() } catch { return { success: false, error: 'Upload failed — invalid server response.' } }
+  if (!r.ok || j?.success === false || !j?.token) {
+    return { success: false, error: j?.error || `Upload failed (${r.status}).` }
+  }
+
+  // 2. PUT the bytes straight to Supabase Storage (no function in the path).
+  try {
+    const { createBrowserClient } = await import('./supabase')
+    const supabase = createBrowserClient()
+    const { error } = await supabase.storage
+      .from('branding')
+      .uploadToSignedUrl(j.path, j.token, file, { contentType: file.type })
+    if (error) return { success: false, error: `Video upload failed: ${error.message}` }
+  } catch (e) {
+    return { success: false, error: `Video upload failed: ${e?.message || e}` }
+  }
+
+  return { success: true, url: j.url }
 }
 
 /**
