@@ -165,3 +165,23 @@ describe('setByPath', () => {
     expect(out.id).toBe('h1')
   })
 })
+
+describe('lead_form block type', () => {
+  it('is registered in BLOCK_TYPES', () => {
+    expect(BLOCK_TYPES.some((t) => t.type === 'lead_form')).toBe(true)
+  })
+  it('factory produces the expected default shape', () => {
+    const b = newBlockOfType('lead_form')
+    expect(b.type).toBe('lead_form')
+    expect(typeof b.id).toBe('string')
+    for (const k of ['heading', 'subtext', 'button_label', 'success_message', 'consent_label', 'tag', 'lead_source']) {
+      expect(typeof b[k]).toBe('string')
+      expect(b[k].length).toBeGreaterThan(0)
+    }
+    expect(b.tag).toBe('hatch-founding-member')
+    expect(b.lead_source).toBe('hatch_launch')
+  })
+  it('validates through BlocksArraySchema', () => {
+    expect(BlocksArraySchema.safeParse([newBlockOfType('lead_form')]).success).toBe(true)
+  })
+})

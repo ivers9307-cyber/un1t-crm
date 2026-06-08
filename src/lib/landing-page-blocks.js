@@ -87,6 +87,18 @@ const EVENT_DEFAULT = () => ({
   title: 'Sign up',
 })
 
+const LEAD_FORM_DEFAULT = () => ({
+  id:              newBlockId(),
+  type:            'lead_form',
+  heading:         'Join the founding members',
+  subtext:         'Be first through the doors at UN1T Hatch Street. Leave your details and we’ll be in touch with founding-member offers before we open.',
+  button_label:    'Join the waitlist',
+  success_message: "You're on the list — we'll be in touch soon.",
+  consent_label:   'I’d like to hear from UN1T about the Hatch Street launch and offers by email, SMS and WhatsApp. I can opt out anytime.',
+  tag:             'hatch-founding-member',
+  lead_source:     'hatch_launch',
+})
+
 const STATS_DEFAULT = () => ({
   id:    newBlockId(),
   type:  'stats',
@@ -112,6 +124,7 @@ export const BLOCK_TYPES = [
   { type: 'hero',        label: 'Hero',         description: 'Headline + booking copy. Image or video background.', factory: HERO_DEFAULT },
   { type: 'booking',     label: 'Booking form', description: 'Embed the booking form for a chosen booking type.',    factory: BOOKING_DEFAULT },
   { type: 'event',       label: 'Event signup', description: 'Embed the full signup form for a chosen event.',        factory: EVENT_DEFAULT },
+  { type: 'lead_form',   label: 'Lead form',    description: 'Waitlist / interest capture — name, email, phone + consent.',  factory: LEAD_FORM_DEFAULT },
   { type: 'pillars',     label: 'Pillars',      description: '3 value-prop tiles. Each can have a photo.',           factory: PILLARS_DEFAULT },
   { type: 'gallery',     label: 'Photo gallery',description: 'Grid of photos with optional captions.',                factory: GALLERY_DEFAULT },
   { type: 'embed',       label: 'Video embed',  description: 'YouTube or Instagram video embed.',                    factory: EMBED_DEFAULT },
