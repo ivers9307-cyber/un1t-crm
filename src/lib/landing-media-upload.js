@@ -107,12 +107,17 @@ async function uploadVideoDirect({ file, locationId, onProgress, autoplay = true
   }
 
   // Compress in-browser when needed (fail-open: returns the original on error).
+  // Capture WHY compression didn't run so a downstream size / storage rejection
+  // can name the real cause instead of looking like a mystery limit.
   let toUpload
+  let compressionError = null
   try {
-    toUpload = await compressVideoIfNeeded(file, { onProgress })
-  } catch {
+    toUpload = await compressVideoIfNeeded(file, { onProgress, onError: (m) => { compressionError = m } })
+  } catch (e) {
     toUpload = file
+    compressionError = e?.message || String(e)
   }
+  const compressNote = compressionError ? ` (in-browser compression didn't run: ${compressionError})` : ''
 
   const maxOutput = videoOutputCap(autoplay)
   if (toUpload.size > maxOutput) {
@@ -121,7 +126,7 @@ async function uploadVideoDirect({ file, locationId, onProgress, autoplay = true
     const hint = autoplay
       ? 'Background videos autoplay on load, so they have to stay small.'
       : 'Trim the clip or export it at 720p, then re-upload.'
-    return { success: false, error: `That video is ${gotMb}MB — the maximum is ${capMb}MB. ${hint}` }
+    return { success: false, error: `That video is ${gotMb}MB — the maximum is ${capMb}MB. ${hint}${compressNote}` }
   }
 
   if (typeof onProgress === 'function') onProgress({ phase: 'upload', percent: 0 })
@@ -150,9 +155,9 @@ async function uploadVideoDirect({ file, locationId, onProgress, autoplay = true
     const { error } = await supabase.storage
       .from('branding')
       .uploadToSignedUrl(j.path, j.token, toUpload, { contentType: toUpload.type })
-    if (error) return { success: false, error: `Video upload failed: ${error.message}` }
+    if (error) return { success: false, error: `Video upload failed: ${error.message}${compressNote}` }
   } catch (e) {
-    return { success: false, error: `Video upload failed: ${e?.message || e}` }
+    return { success: false, error: `Video upload failed: ${e?.message || e}${compressNote}` }
   }
 
   return { success: true, url: j.url }
