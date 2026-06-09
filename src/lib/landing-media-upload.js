@@ -19,6 +19,8 @@
 // Browser-only (uses <canvas>) — import from client components. The DOM
 // APIs are referenced only inside functions, so SSR import is safe.
 
+import { compressVideoIfNeeded } from './video-compress'
+
 const UPLOAD_URL = '/api/landing-page-settings/media'
 
 // Stay comfortably under Vercel's ~4.5MB body cap after multipart
@@ -26,8 +28,10 @@ const UPLOAD_URL = '/api/landing-page-settings/media'
 const TARGET_MAX_BYTES = 3.8 * 1024 * 1024
 const MAX_EDGE = 2560 // px on the long side — ample for a full-bleed hero
 
-const VIDEO_TYPES = new Set(['video/mp4', 'video/webm'])
-const MAX_VIDEO_BYTES = 25 * 1024 * 1024 // matches the branding bucket (mig 248: 26MB) with margin
+// Input cap: a browser-memory sanity guard checked BEFORE transcoding.
+const MAX_VIDEO_INPUT_BYTES = 500 * 1024 * 1024 // 500MB
+// Output ceiling: matches the branding bucket file_size_limit (mig 250: 50MB).
+const MAX_VIDEO_OUTPUT_BYTES = 50 * 1024 * 1024 // 50MB
 
 /**
  * Upload one media file for the landing page. Images are downscaled +
@@ -37,12 +41,11 @@ const MAX_VIDEO_BYTES = 25 * 1024 * 1024 // matches the branding bucket (mig 248
  * @param {{ file: File, locationId: string, kind?: 'image'|'video' }} args
  * @returns {Promise<{success: boolean, url?: string, error?: string}>}
  */
-export async function uploadLandingMedia({ file, locationId, kind = 'image' }) {
+export async function uploadLandingMedia({ file, locationId, kind = 'image', onProgress }) {
   if (!file || !locationId) return { success: false, error: 'Missing file or location.' }
 
-  // Video → upload straight to Supabase Storage (bypasses the ~4.5MB
-  // Vercel function body cap; the bucket size limit is the real ceiling).
-  if (kind === 'video') return uploadVideoDirect({ file, locationId })
+  // Video → compress (if needed) then upload straight to Supabase Storage.
+  if (kind === 'video') return uploadVideoDirect({ file, locationId, onProgress })
 
   let toSend = file
   if (kind !== 'video' && (file.type || '').startsWith('image/')) {
@@ -71,26 +74,41 @@ export async function uploadLandingMedia({ file, locationId, kind = 'image' }) {
 }
 
 /**
- * Direct-to-storage upload for video — the browser PUTs the bytes to
- * Supabase via a server-minted signed URL, so the ~4.5MB Vercel
- * function body cap never applies. The branding bucket's size + mime
- * limits (mig 248) are the ceiling. Returns { success, url?, error? }.
+ * Compress (if needed) then direct-upload a video to Supabase Storage via
+ * a server-minted signed URL (so the ~4.5MB Vercel function body cap never
+ * applies). Accepts any video/* input (e.g. .mov from an iPhone) and
+ * transcodes non-MP4/WebM + oversized clips to a 720p MP4 before upload.
+ * Returns { success, url?, error? }.
  */
-async function uploadVideoDirect({ file, locationId }) {
-  if (!VIDEO_TYPES.has(file.type || '')) {
-    return { success: false, error: 'Unsupported video type. Use MP4 or WebM.' }
+async function uploadVideoDirect({ file, locationId, onProgress }) {
+  if (!(file.type || '').startsWith('video/')) {
+    return { success: false, error: 'Unsupported file. Please choose a video (MP4, WebM, or MOV).' }
   }
-  if (file.size > MAX_VIDEO_BYTES) {
-    return { success: false, error: `Video is too large (${Math.round(file.size / 1024 / 1024)}MB). Max is 25MB — try 720p, 5–15s, ~3–5Mbps.` }
+  if (file.size > MAX_VIDEO_INPUT_BYTES) {
+    return { success: false, error: `That video is very large (${Math.round(file.size / 1024 / 1024)}MB). Trim it or export at 720p, then re-upload.` }
   }
 
-  // 1. Mint a signed upload URL (auth + path are decided server-side).
+  // Compress in-browser when needed (fail-open: returns the original on error).
+  let toUpload
+  try {
+    toUpload = await compressVideoIfNeeded(file, { onProgress })
+  } catch {
+    toUpload = file
+  }
+
+  if (toUpload.size > MAX_VIDEO_OUTPUT_BYTES) {
+    return { success: false, error: `Video is still too large (${Math.round(toUpload.size / 1024 / 1024)}MB) after compression. Please upload a shorter clip.` }
+  }
+
+  if (typeof onProgress === 'function') onProgress({ phase: 'upload', percent: 0 })
+
+  // 1. Mint a signed upload URL (auth + path decided server-side).
   let r
   try {
     r = await fetch('/api/landing-page-settings/media/signed-upload', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ location_id: locationId, kind: 'video', content_type: file.type }),
+      body: JSON.stringify({ location_id: locationId, kind: 'video', content_type: toUpload.type }),
     })
   } catch (e) {
     return { success: false, error: `Network error: ${e?.message || e}` }
@@ -107,7 +125,7 @@ async function uploadVideoDirect({ file, locationId }) {
     const supabase = createBrowserClient()
     const { error } = await supabase.storage
       .from('branding')
-      .uploadToSignedUrl(j.path, j.token, file, { contentType: file.type })
+      .uploadToSignedUrl(j.path, j.token, toUpload, { contentType: toUpload.type })
     if (error) return { success: false, error: `Video upload failed: ${error.message}` }
   } catch (e) {
     return { success: false, error: `Video upload failed: ${e?.message || e}` }
