@@ -117,6 +117,68 @@ async function uploadVideoDirect({ file, locationId }) {
 }
 
 /**
+ * Capture the first frame of a LOCAL video File as a JPEG poster File.
+ * Reads the blob via an object URL (no CORS — the file isn't uploaded
+ * yet), seeks just past 0 to avoid an all-black opening frame, draws to
+ * a canvas at the video's natural size, and exports a JPEG. Browser-only
+ * (uses <video>/<canvas>). Resolves null on a non-video input or any
+ * decode/seek/encode failure so the caller can save the clip with no
+ * poster and degrade gracefully.
+ *
+ * @param {File|{type?:string}} file
+ * @returns {Promise<File|null>}
+ */
+export async function captureVideoPoster(file) {
+  if (!file || !(file.type || '').startsWith('video/')) return null
+  if (typeof document === 'undefined') return null
+  return new Promise((resolve) => {
+    let url = null
+    const video = document.createElement('video')
+    let done = false
+    const finish = (result) => {
+      if (done) return
+      done = true
+      try { if (url) URL.revokeObjectURL(url) } catch { /* ignore */ }
+      resolve(result)
+    }
+    try {
+      url = URL.createObjectURL(file)
+      video.muted = true
+      video.playsInline = true
+      // 'auto' (not 'metadata') so the first frame's pixels are actually
+      // decoded — 'metadata' can leave loadeddata/seeked from firing on
+      // some engines. It's a local blob, so this costs no network.
+      video.preload = 'auto'
+      video.onloadeddata = () => {
+        try {
+          const d = Number.isFinite(video.duration) ? video.duration : 1
+          video.currentTime = Math.min(0.1, d / 2)
+        } catch { finish(null) }
+      }
+      video.onseeked = () => {
+        try {
+          const w = video.videoWidth
+          const h = video.videoHeight
+          if (!w || !h) return finish(null)
+          const canvas = document.createElement('canvas')
+          canvas.width = w
+          canvas.height = h
+          const ctx = canvas.getContext('2d')
+          ctx.drawImage(video, 0, 0, w, h)
+          canvas.toBlob((blob) => {
+            if (!blob) return finish(null)
+            const base = (file.name || 'video').replace(/\.[^.]+$/, '')
+            finish(new File([blob], `${base}-poster.jpg`, { type: 'image/jpeg' }))
+          }, 'image/jpeg', 0.82)
+        } catch { finish(null) }
+      }
+      video.onerror = () => finish(null)
+      video.src = url
+    } catch { finish(null) }
+  })
+}
+
+/**
  * Turn an upload Response into { success, url?, error? } without ever
  * throwing. Exported + browser-free so it's unit-tested directly: a
  * non-JSON body (Vercel's plain-text 413) becomes a friendly message

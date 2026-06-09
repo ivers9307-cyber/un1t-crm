@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { parseUploadResponse } from './landing-media-upload'
+import { parseUploadResponse, captureVideoPoster } from './landing-media-upload'
 
 // Fake Response factory — just the bits parseUploadResponse touches.
 function res({ status = 200, contentType = 'application/json', body = null, text = '' }) {
@@ -50,5 +50,15 @@ describe('parseUploadResponse', () => {
     bad.json = async () => { throw new Error('boom') }
     const out = await parseUploadResponse(bad)
     expect(out.success).toBe(false)
+  })
+})
+
+describe('captureVideoPoster', () => {
+  it('resolves null for a non-video file without touching the DOM', async () => {
+    const notAVideo = { name: 'photo.jpg', type: 'image/jpeg' }
+    await expect(captureVideoPoster(notAVideo)).resolves.toBeNull()
+  })
+  it('resolves null for a missing file', async () => {
+    await expect(captureVideoPoster(null)).resolves.toBeNull()
   })
 })
