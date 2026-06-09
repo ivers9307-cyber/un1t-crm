@@ -1,7 +1,31 @@
 import { describe, it, expect } from 'vitest'
-import { shouldCompress, compressVideoIfNeeded, PASSTHROUGH_MAX_BYTES } from './video-compress.js'
+import { shouldCompress, compressVideoIfNeeded, PASSTHROUGH_MAX_BYTES, ffmpegAssetURLs } from './video-compress.js'
 
 const MB = 1024 * 1024
+
+describe('ffmpegAssetURLs', () => {
+  const FILE_BASE = 'file:///var/task/.next/server/chunks/abc.js' // Turbopack import.meta.url
+
+  it('builds origin-absolute URLs for worker + core + wasm', () => {
+    const u = ffmpegAssetURLs('https://crm.un1tdublin.com')
+    expect(u.classWorkerURL).toBe('https://crm.un1tdublin.com/ffmpeg/worker.js')
+    expect(u.coreURL).toBe('https://crm.un1tdublin.com/ffmpeg/ffmpeg-core.js')
+    expect(u.wasmURL).toBe('https://crm.un1tdublin.com/ffmpeg/ffmpeg-core.wasm')
+  })
+
+  it('survives ffmpeg\'s new URL(url, import.meta.url) against a file:// base — stays https', () => {
+    // This is the exact bug: ffmpeg does new URL(classWorkerURL, import.meta.url),
+    // and import.meta.url is file:// under Turbopack. An absolute URL ignores the base.
+    const u = ffmpegAssetURLs('https://crm.un1tdublin.com')
+    expect(new URL(u.classWorkerURL, FILE_BASE).href).toBe('https://crm.un1tdublin.com/ffmpeg/worker.js')
+  })
+
+  it('demonstrates why a ROOT-RELATIVE path was the prod bug (resolves to file://)', () => {
+    // Regression guard: the old '/ffmpeg/worker.js' resolved to a file:// worker,
+    // which the browser blocks from an https page.
+    expect(new URL('/ffmpeg/worker.js', FILE_BASE).href).toBe('file:///ffmpeg/worker.js')
+  })
+})
 
 describe('shouldCompress', () => {
   it('passes through a small mp4 (<= threshold)', () => {
