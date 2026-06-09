@@ -11,10 +11,24 @@ const out = join(root, 'public', 'ffmpeg')
 
 // [src in node_modules, dest filename]. Adjust the src paths to match
 // what Step 2 found if the installed version differs.
+// IMPORTANT: copy the ESM core (NOT umd). The @ffmpeg/ffmpeg worker runs as a
+// `type:"module"` worker and loads the core via `(await import(coreURL)).default`
+// (worker.js — importScripts throws in a module worker, so it falls to the
+// dynamic-import branch). The UMD build has NO `export default` (it assigns a
+// global, for importScripts), so the module worker gets `.default === undefined`
+// → ERROR_IMPORT_FAILURE → ffmpeg never loads and video uploads silently
+// fail-open. The ESM build has `export default createFFmpegCore`. worker.js is
+// the module worker itself.
 const assets = [
-  ['node_modules/@ffmpeg/core/dist/umd/ffmpeg-core.js',   'ffmpeg-core.js'],
-  ['node_modules/@ffmpeg/core/dist/umd/ffmpeg-core.wasm', 'ffmpeg-core.wasm'],
+  ['node_modules/@ffmpeg/core/dist/esm/ffmpeg-core.js',   'ffmpeg-core.js'],
+  ['node_modules/@ffmpeg/core/dist/esm/ffmpeg-core.wasm', 'ffmpeg-core.wasm'],
+  // worker.js is an ES module that imports its two leaf siblings; self-host
+  // all three so the worker's `import './const.js'` / `'./errors.js'` resolve
+  // (otherwise they 404 and the module worker never loads — before it ever
+  // reaches the core).
   ['node_modules/@ffmpeg/ffmpeg/dist/esm/worker.js',      'worker.js'],
+  ['node_modules/@ffmpeg/ffmpeg/dist/esm/const.js',       'const.js'],
+  ['node_modules/@ffmpeg/ffmpeg/dist/esm/errors.js',      'errors.js'],
 ]
 
 mkdirSync(out, { recursive: true })
