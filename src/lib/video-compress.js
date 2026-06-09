@@ -31,6 +31,28 @@ export function shouldCompress(file) {
   return !(size <= PASSTHROUGH_MAX_BYTES && PASSTHROUGH_TYPES.has(type))
 }
 
+/**
+ * Build the three self-hosted ffmpeg asset URLs as ORIGIN-ABSOLUTE.
+ *
+ * Why absolute and not '/ffmpeg/worker.js': ffmpeg.wasm resolves each url via
+ * `new URL(url, import.meta.url)` (node_modules/@ffmpeg/ffmpeg/dist/esm/classes.js
+ * line ~105). Under Next's Turbopack bundle `import.meta.url` is a `file://`
+ * path at runtime, so a ROOT-RELATIVE '/ffmpeg/worker.js' resolves to
+ * 'file:///ffmpeg/worker.js' — and the browser refuses to construct a file://
+ * Worker from an https page ("cannot be accessed from origin …"), so ffmpeg
+ * never loads and compression silently fails-open. An absolute https URL makes
+ * `new URL(absolute, file://base)` ignore the base and stay on-origin.
+ * @param {string} origin e.g. 'https://crm.un1tdublin.com'
+ */
+export function ffmpegAssetURLs(origin) {
+  const base = origin || ''
+  return {
+    classWorkerURL: `${base}/ffmpeg/worker.js`,
+    coreURL: `${base}/ffmpeg/ffmpeg-core.js`,
+    wasmURL: `${base}/ffmpeg/ffmpeg-core.wasm`,
+  }
+}
+
 // Module-level singleton so the ~25MB core loads at most once per session.
 let _ffmpegPromise = null
 async function getFfmpeg() {
@@ -38,11 +60,8 @@ async function getFfmpeg() {
   _ffmpegPromise = (async () => {
     const { FFmpeg } = await import('@ffmpeg/ffmpeg')
     const ff = new FFmpeg()
-    await ff.load({
-      classWorkerURL: '/ffmpeg/worker.js',
-      coreURL: '/ffmpeg/ffmpeg-core.js',
-      wasmURL: '/ffmpeg/ffmpeg-core.wasm',
-    })
+    const origin = (typeof window !== 'undefined' && window.location && window.location.origin) || ''
+    await ff.load(ffmpegAssetURLs(origin))
     return ff
   })().catch((e) => { _ffmpegPromise = null; throw e })
   return _ffmpegPromise
