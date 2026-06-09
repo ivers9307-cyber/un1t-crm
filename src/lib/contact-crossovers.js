@@ -7,34 +7,35 @@
 // deal at the new studio. These helpers let the destination studio's
 // contacts list surface those leads with their origin context.
 
-const PAGE_SIZE = 1000
-const HARD_LIMIT = 20_000
+// Cap on the crossover id list. The contacts list query builds an
+// `id.in.(...)` filter from these ids; PostgREST sends that as a GET URL, so
+// an unbounded list overruns Cloudflare's URI limit → 414. Genuine crossovers
+// are a small minority, so this is a safety backstop, not an expected ceiling.
+export const CROSSOVER_ID_CAP = 100
 
-// Distinct contact_ids that have ANY deal at this location. Paginated to
-// respect PostgREST's 1k cap. Best-effort — returns [] on error/missing args.
+// Contact ids that are GENUINE crossovers at this location: a contact with a
+// deal here but OWNED by a DIFFERENT studio. Computed by the
+// crossover_contact_ids RPC (mig 251) — a server-side join, so the location's
+// (possibly enormous: 8k+ at Stillorgan) OWN deal-holder set never travels
+// back as an id.in() URL. The location's own deal-holders are deliberately
+// excluded: the list query already matches them via location_id = L, so
+// including them in id.in() was pure redundancy AND the source of the 414.
+// Best-effort — returns [] on error/missing args (the list then falls back to
+// owned-only).
 export async function crossoverContactIds(db, locationId) {
   if (!db || !locationId) return []
-  const ids = new Set()
-  let pageStart = 0
   try {
-    while (true) {
-      const pageEnd = Math.min(pageStart + PAGE_SIZE - 1, HARD_LIMIT - 1)
-      const { data, error } = await db
-        .from('deals')
-        .select('contact_id')
-        .eq('location_id', locationId)
-        .not('contact_id', 'is', null)
-        .order('contact_id', { ascending: true })
-        .range(pageStart, pageEnd)
-      if (error || !Array.isArray(data) || data.length === 0) break
-      for (const r of data) if (r.contact_id) ids.add(r.contact_id)
-      if (data.length < PAGE_SIZE || ids.size >= HARD_LIMIT) break
-      pageStart += PAGE_SIZE
+    const { data, error } = await db.rpc('crossover_contact_ids', { loc: locationId })
+    if (error || !Array.isArray(data)) return []
+    const ids = data.map((r) => r && r.contact_id).filter(Boolean)
+    if (ids.length > CROSSOVER_ID_CAP) {
+      console.warn(`[crossovers] ${ids.length} crossover ids at ${locationId} exceeds cap ${CROSSOVER_ID_CAP} — truncating for URL-length safety`)
+      return ids.slice(0, CROSSOVER_ID_CAP)
     }
+    return ids
   } catch {
-    return [...ids]
+    return []
   }
-  return [...ids]
 }
 
 // For the crossover contacts within `contacts` (owned elsewhere than

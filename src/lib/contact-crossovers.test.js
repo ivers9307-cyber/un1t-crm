@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { crossoverContactIds, fetchCrossoverContext, canViewContact } from './contact-crossovers'
+import { crossoverContactIds, fetchCrossoverContext, canViewContact, CROSSOVER_ID_CAP } from './contact-crossovers'
 
 // Minimal chainable stub of the supabase builder. `result` is what the
 // awaited query resolves to ({ data } or { data, count }).
@@ -20,20 +20,30 @@ function stubFrom(handlers) {
       }
       return builder
     },
+    // Stub of db.rpc(fn, args) → resolves to { data, error } from the
+    // named handler (crossoverContactIds now calls an RPC, not .from()).
+    rpc(fn, args) {
+      return Promise.resolve(handlers[fn] ? handlers[fn](args) : { data: null, error: null })
+    },
   }
 }
 
 describe('crossoverContactIds', () => {
-  it('returns the distinct contact_ids with a deal at the location (one page)', async () => {
+  it('returns the contact_ids from the crossover_contact_ids RPC', async () => {
     const db = stubFrom({
-      deals: () => ({ data: [{ contact_id: 'a' }, { contact_id: 'b' }, { contact_id: 'a' }] }),
+      crossover_contact_ids: () => ({ data: [{ contact_id: 'a' }, { contact_id: 'b' }] }),
     })
     expect((await crossoverContactIds(db, 'loc1')).sort()).toEqual(['a', 'b'])
   })
-  it('returns [] for missing args / empty result', async () => {
+  it('returns [] for missing args / empty result / rpc error', async () => {
     expect(await crossoverContactIds(null, 'loc1')).toEqual([])
-    const db = stubFrom({ deals: () => ({ data: [] }) })
-    expect(await crossoverContactIds(db, 'loc1')).toEqual([])
+    expect(await crossoverContactIds(stubFrom({ crossover_contact_ids: () => ({ data: [] }) }), 'loc1')).toEqual([])
+    expect(await crossoverContactIds(stubFrom({ crossover_contact_ids: () => ({ data: null, error: { message: 'boom' } }) }), 'loc1')).toEqual([])
+  })
+  it('caps the list at CROSSOVER_ID_CAP so the id.in() URL can never blow up', async () => {
+    const many = Array.from({ length: CROSSOVER_ID_CAP + 50 }, (_, i) => ({ contact_id: `c${i}` }))
+    const db = stubFrom({ crossover_contact_ids: () => ({ data: many }) })
+    expect((await crossoverContactIds(db, 'loc1')).length).toBe(CROSSOVER_ID_CAP)
   })
 })
 
