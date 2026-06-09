@@ -52,10 +52,10 @@ async function getFfmpeg() {
  * Transcode `file` to a 720p H.264 MP4 if needed; otherwise return it
  * unchanged. FAIL-OPEN: returns the original file on any failure.
  * @param {File} file
- * @param {{ onProgress?: (p: { phase: 'compress', percent: number }) => void }} [opts]
+ * @param {{ onProgress?: (p: { phase: 'compress', percent: number }) => void, onError?: (reason: string) => void }} [opts]
  * @returns {Promise<File>}
  */
-export async function compressVideoIfNeeded(file, { onProgress } = {}) {
+export async function compressVideoIfNeeded(file, { onProgress, onError } = {}) {
   if (!shouldCompress(file)) return file
   if (typeof document === 'undefined') return file
   try {
@@ -103,7 +103,12 @@ export async function compressVideoIfNeeded(file, { onProgress } = {}) {
     if (blob.size >= file.size && PASSTHROUGH_TYPES.has(file.type || '')) return file
     return new File([blob], `${base}.mp4`, { type: 'video/mp4' })
   } catch (e) {
-    if (typeof console !== 'undefined') console.warn('[video-compress] transcode failed, uploading original:', e?.message || e)
+    const reason = e?.message || String(e)
+    if (typeof console !== 'undefined') console.warn('[video-compress] transcode failed, uploading original:', reason)
+    // Surface WHY to the caller so the UI can show it. Without this the
+    // fail-open is invisible and the operator only sees a downstream size /
+    // storage error with no clue that compression silently gave up.
+    if (typeof onError === 'function') { try { onError(reason) } catch { /* ignore */ } }
     return file
   }
 }
