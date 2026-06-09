@@ -78,6 +78,7 @@ export default function LandingPageSettingsForm({ locationId, initialSettings, a
   // multiple blocks can show their own status without trampling.
   const [uploading, setUploading] = useState({}) // { key: bool }
   const [uploadErr, setUploadErr] = useState({}) // { key: string }
+  const [progress, setProgress] = useState({}) // { key: { phase, percent } | null }
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
@@ -267,7 +268,14 @@ export default function LandingPageSettingsForm({ locationId, initialSettings, a
   }
   async function uploadMedia({ file, kind, key }) {
     setUploadState(key, true, null)
-    const res = await uploadLandingMedia({ file, locationId, kind })
+    setProgress((prev) => ({ ...prev, [key]: null }))
+    const res = await uploadLandingMedia({
+      file,
+      locationId,
+      kind,
+      onProgress: (p) => setProgress((prev) => ({ ...prev, [key]: p })),
+    })
+    setProgress((prev) => ({ ...prev, [key]: null }))
     if (!res.success) {
       setUploadState(key, false, res.error || 'Upload failed')
       return null
@@ -418,6 +426,7 @@ export default function LandingPageSettingsForm({ locationId, initialSettings, a
                   uploadMedia={uploadMedia}
                   uploading={uploading}
                   uploadErr={uploadErr}
+                  progress={progress}
                 />
               </div>
             ))}
@@ -530,7 +539,7 @@ export default function LandingPageSettingsForm({ locationId, initialSettings, a
 
 function SortableBlockCard({
   block, expanded, onToggleExpand, onRemove, onUpdate,
-  availableBookingTypes, availableEvents, uploadMedia, uploading, uploadErr,
+  availableBookingTypes, availableEvents, uploadMedia, uploading, uploadErr, progress,
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: block.id })
   const style = {
@@ -588,6 +597,7 @@ function SortableBlockCard({
             uploadMedia={uploadMedia}
             uploading={uploading}
             uploadErr={uploadErr}
+            progress={progress}
           />
         </div>
       )}
@@ -640,7 +650,7 @@ function BlockEditPanel(props) {
   }
 }
 
-function HeroEdit({ block, onUpdate, uploadMedia, uploading, uploadErr }) {
+function HeroEdit({ block, onUpdate, uploadMedia, uploading, uploadErr, progress }) {
   const k = (suffix) => `${block.id}-${suffix}`
   return (
     <>
@@ -678,6 +688,7 @@ function HeroEdit({ block, onUpdate, uploadMedia, uploading, uploadErr }) {
           accept="video/mp4,video/webm"
           label="Add video"
           kind="video"
+          progress={progress[k('video')]}
         />
       </Field>
     </>
@@ -833,7 +844,7 @@ function PillarsEdit({ block, onUpdate, uploadMedia, uploading, uploadErr }) {
   )
 }
 
-function VideoTestimonialsEdit({ block, onUpdate, uploadMedia, uploading, uploadErr }) {
+function VideoTestimonialsEdit({ block, onUpdate, uploadMedia, uploading, uploadErr, progress }) {
   const items = Array.isArray(block.items) ? block.items : []
   const setItem = (i, patch) => onUpdate({ items: items.map((x, j) => (j === i ? { ...x, ...patch } : x)) })
   const addItem = () => onUpdate({ items: [...items, { video_url: '', poster_url: '', name: '' }] })
@@ -887,6 +898,7 @@ function VideoTestimonialsEdit({ block, onUpdate, uploadMedia, uploading, upload
               accept="video/mp4,video/webm"
               label="Add video"
               kind="video"
+              progress={progress[videoKey]}
             />
             <Input value={it.name || ''} onChange={(v) => setItem(i, { name: v })} maxLength={120} placeholder="Member name (e.g. Sarah)" />
           </div>
@@ -1120,7 +1132,7 @@ function Textarea({ value, onChange, maxLength, rows, placeholder }) {
   )
 }
 
-function MediaSlot({ url, onClear, onUpload, uploading, error, accept, label, kind }) {
+function MediaSlot({ url, onClear, onUpload, uploading, error, accept, label, kind, progress }) {
   return (
     <div className="flex flex-col gap-1">
       {url ? (
@@ -1145,7 +1157,13 @@ function MediaSlot({ url, onClear, onUpload, uploading, error, accept, label, ki
           {uploading
             ? <Loader2 size={18} className="animate-spin" />
             : (kind === 'video' ? <Video size={18} /> : <ImagePlus size={18} />)}
-          <span className="text-[10px] mt-1">{uploading ? 'Uploading…' : label}</span>
+          <span className="text-[10px] mt-1 text-center px-1">
+            {progress?.phase === 'compress'
+              ? `Compressing… ${Math.round(progress.percent || 0)}%`
+              : progress?.phase === 'upload'
+                ? 'Uploading…'
+                : uploading ? 'Uploading…' : label}
+          </span>
           <input
             type="file"
             accept={accept}
