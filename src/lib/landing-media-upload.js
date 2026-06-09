@@ -30,22 +30,40 @@ const MAX_EDGE = 2560 // px on the long side — ample for a full-bleed hero
 
 // Input cap: a browser-memory sanity guard checked BEFORE transcoding.
 const MAX_VIDEO_INPUT_BYTES = 500 * 1024 * 1024 // 500MB
-// Output ceiling: matches the branding bucket file_size_limit (mig 250: 50MB).
-const MAX_VIDEO_OUTPUT_BYTES = 50 * 1024 * 1024 // 50MB
+// Output ceilings — the STORED-file cap, applied AFTER best-effort compression.
+// Two tiers, because the cost of a large stored clip depends on how it plays:
+//   • Autoplay hero backgrounds download on EVERY page view, so they must stay
+//     small — held to 50MB regardless of the bucket's higher ceiling.
+//   • Tap-to-play testimonials only download when a visitor taps one, so first
+//     paint (posters only) is unaffected by clip size — allowed up to the bucket
+//     ceiling (mig 252: 200MB). Compression still shrinks them when it can run;
+//     this higher cap just avoids a hard-reject when it can't (older Safari, low
+//     device memory) or can't get the clip below 50MB.
+const MAX_AUTOPLAY_VIDEO_BYTES = 50 * 1024 * 1024 // 50MB
+const MAX_VIDEO_OUTPUT_BYTES = 200 * 1024 * 1024 // 200MB — matches bucket (mig 252)
+
+// Stored-file cap for a video slot. Anything but an explicit `false`
+// (tap-to-play) is treated as an autoplay background and held to the small cap —
+// fail-safe toward smaller stored files for any future caller.
+export function videoOutputCap(autoplay) {
+  return autoplay === false ? MAX_VIDEO_OUTPUT_BYTES : MAX_AUTOPLAY_VIDEO_BYTES
+}
 
 /**
  * Upload one media file for the landing page. Images are downscaled +
  * re-encoded client-side first. Returns { success, url?, error? } and
  * never throws on an oversized / non-JSON response.
  *
- * @param {{ file: File, locationId: string, kind?: 'image'|'video' }} args
+ * @param {{ file: File, locationId: string, kind?: 'image'|'video', onProgress?: Function, autoplay?: boolean }} args
  * @returns {Promise<{success: boolean, url?: string, error?: string}>}
  */
-export async function uploadLandingMedia({ file, locationId, kind = 'image', onProgress }) {
+export async function uploadLandingMedia({ file, locationId, kind = 'image', onProgress, autoplay = true }) {
   if (!file || !locationId) return { success: false, error: 'Missing file or location.' }
 
   // Video → compress (if needed) then upload straight to Supabase Storage.
-  if (kind === 'video') return uploadVideoDirect({ file, locationId, onProgress })
+  // `autoplay` defaults true (the conservative, small-cap tier); callers that
+  // render the clip as tap-to-play (testimonials) pass `autoplay: false`.
+  if (kind === 'video') return uploadVideoDirect({ file, locationId, onProgress, autoplay })
 
   let toSend = file
   if (kind !== 'video' && (file.type || '').startsWith('image/')) {
@@ -80,7 +98,7 @@ export async function uploadLandingMedia({ file, locationId, kind = 'image', onP
  * transcodes non-MP4/WebM + oversized clips to a 720p MP4 before upload.
  * Returns { success, url?, error? }.
  */
-async function uploadVideoDirect({ file, locationId, onProgress }) {
+async function uploadVideoDirect({ file, locationId, onProgress, autoplay = true }) {
   if (!(file.type || '').startsWith('video/')) {
     return { success: false, error: 'Unsupported file. Please choose a video (MP4, WebM, or MOV).' }
   }
@@ -96,8 +114,14 @@ async function uploadVideoDirect({ file, locationId, onProgress }) {
     toUpload = file
   }
 
-  if (toUpload.size > MAX_VIDEO_OUTPUT_BYTES) {
-    return { success: false, error: `Video is still too large (${Math.round(toUpload.size / 1024 / 1024)}MB) after compression. Please upload a shorter clip.` }
+  const maxOutput = videoOutputCap(autoplay)
+  if (toUpload.size > maxOutput) {
+    const capMb = Math.round(maxOutput / 1024 / 1024)
+    const gotMb = Math.round(toUpload.size / 1024 / 1024)
+    const hint = autoplay
+      ? 'Background videos autoplay on load, so they have to stay small.'
+      : 'Trim the clip or export it at 720p, then re-upload.'
+    return { success: false, error: `That video is ${gotMb}MB — the maximum is ${capMb}MB. ${hint}` }
   }
 
   if (typeof onProgress === 'function') onProgress({ phase: 'upload', percent: 0 })

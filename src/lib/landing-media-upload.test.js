@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { parseUploadResponse, captureVideoPoster } from './landing-media-upload'
+import { parseUploadResponse, captureVideoPoster, videoOutputCap } from './landing-media-upload'
 
 // Fake Response factory — just the bits parseUploadResponse touches.
 function res({ status = 200, contentType = 'application/json', body = null, text = '' }) {
@@ -50,6 +50,19 @@ describe('parseUploadResponse', () => {
     bad.json = async () => { throw new Error('boom') }
     const out = await parseUploadResponse(bad)
     expect(out.success).toBe(false)
+  })
+})
+
+describe('videoOutputCap', () => {
+  it('holds autoplay backgrounds to 50MB (every visitor downloads them on load)', () => {
+    expect(videoOutputCap(true)).toBe(50 * 1024 * 1024)
+  })
+  it('allows tap-to-play clips up to the 200MB bucket ceiling', () => {
+    expect(videoOutputCap(false)).toBe(200 * 1024 * 1024)
+  })
+  it('fails safe to the small cap for any non-false argument (undefined/null)', () => {
+    expect(videoOutputCap(undefined)).toBe(50 * 1024 * 1024)
+    expect(videoOutputCap(null)).toBe(50 * 1024 * 1024)
   })
 })
 
