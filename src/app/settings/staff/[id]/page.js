@@ -13,17 +13,20 @@ export default async function EditStaffPage(props) {
 
   const db = createServerClient()
   const [profileRes, locationsRes] = await Promise.all([
-    // CRITICAL: include permissions on profile_locations. Bug fix —
-    // the previous SELECT narrowed to (location_id, role,
-    // unifi_door_access, unifi_user_id, is_default), silently
-    // dropping the permissions JSONB. The form fell back to role
-    // defaults, then on save POSTed the role-default values BACK to
-    // the row — making every per-user override look like it was
-    // wiped on refresh. mapProfileLocationToAssignment() now
-    // centralises the shape so a future SELECT change can't recur
-    // the same bug without breaking the helper's contract test.
+    // CRITICAL: select profile_locations(*) — EVERY column — so
+    // mapProfileLocationToAssignment() always receives the full row.
+    // History: a narrowed explicit column list silently dropped a
+    // per-assignment column TWICE — first `permissions` (mig 092),
+    // then `ac_device_ids` (STUDIO-AC-DEVICES.3, which added the column
+    // to the schema, PUT route AND the mapper but missed THIS hand-
+    // written list). Each time the form loaded empty/role-default
+    // values and on save POSTed them BACK over the operator's real
+    // selection, so the saved override looked wiped on refresh. `*`
+    // makes the mapper the single source of shape truth, so adding a
+    // future per-assignment column can never silently drop here again.
+    // (Service-role client — no RLS column concerns.)
     db.from('profiles')
-      .select('*, profile_locations(location_id, role, unifi_door_access, unifi_user_id, unifi_door_ids, protect_face_id, is_default, permissions)')
+      .select('*, profile_locations(*)')
       .eq('id', params.id)
       .single(),
     db.from('locations').select('*').eq('active', true).order('name'),
