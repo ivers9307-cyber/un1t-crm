@@ -212,3 +212,42 @@ describe('reviews block type', () => {
     expect(defaultBlocks().some((b) => b.type === 'reviews')).toBe(false)
   })
 })
+
+describe('video_testimonials block type', () => {
+  it('is registered in BLOCK_TYPES', () => {
+    const meta = BLOCK_TYPES.find((t) => t.type === 'video_testimonials')
+    expect(meta).toBeTruthy()
+    expect(meta.label).toBe('Video testimonials')
+  })
+
+  it('factory produces the expected default shape', () => {
+    const b = newBlockOfType('video_testimonials')
+    expect(b.type).toBe('video_testimonials')
+    expect(typeof b.id).toBe('string')
+    expect(b.id.length).toBeGreaterThan(0)
+    expect(typeof b.title).toBe('string')
+    expect(b.title.length).toBeGreaterThan(0)
+    expect(Array.isArray(b.items)).toBe(true)
+    expect(b.items).toHaveLength(0)
+  })
+
+  it('validates through BlocksArraySchema (empty + populated)', () => {
+    expect(BlocksArraySchema.safeParse([newBlockOfType('video_testimonials')]).success).toBe(true)
+    const populated = {
+      id: 'v1',
+      type: 'video_testimonials',
+      title: 'Hear from our members',
+      items: [{ video_url: 'https://x/v.mp4', poster_url: 'https://x/p.jpg', name: 'Sarah' }],
+    }
+    expect(BlocksArraySchema.safeParse([populated]).success).toBe(true)
+  })
+
+  it('is NOT in the default starter set (opt-in like gallery)', () => {
+    expect(defaultBlocks().some((b) => b.type === 'video_testimonials')).toBe(false)
+  })
+
+  it('blocksOrDefault keeps a saved video_testimonials block', () => {
+    const saved = [{ id: 'x', type: 'video_testimonials', items: [] }]
+    expect(blocksOrDefault(saved)).toHaveLength(1)
+  })
+})
