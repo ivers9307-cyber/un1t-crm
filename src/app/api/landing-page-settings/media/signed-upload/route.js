@@ -1,8 +1,8 @@
 // /api/landing-page-settings/media/signed-upload — mint a one-shot
 // Supabase Storage signed upload URL so the browser can PUT large
-// media (hero background video) STRAIGHT to storage, bypassing the
-// ~4.5MB Vercel serverless request-body cap that /media (which
-// streams the bytes through the function) is bound by.
+// media (hero background + testimonial videos) STRAIGHT to storage,
+// bypassing the ~4.5MB Vercel serverless request-body cap that /media
+// (which streams the bytes through the function) is bound by.
 //
 // Flow:
 //   1. client POSTs { location_id, kind, content_type } here (tiny JSON)
@@ -12,8 +12,8 @@
 //      supabase.storage.from('branding').uploadToSignedUrl(path, token, file)
 //   4. client stores the returned public `url` in the block payload
 //
-// The bucket's own allowed_mime_types + file_size_limit (mig 248:
-// + video/mp4 + video/webm, 26MB) are the real ceiling on the direct
+// The bucket's own allowed_mime_types + file_size_limit (mig 252:
+// + video/quicktime, 200MB) are the real ceiling on the direct
 // upload — we can't see the bytes here, so the bucket enforces size.
 //
 // Master OR owner at the location (same gate as /media).
@@ -28,7 +28,12 @@ import { uuidLike } from '@/lib/schemas'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-const VIDEO_EXT = { 'video/mp4': 'mp4', 'video/webm': 'webm' }
+// video/quicktime (.mov) is accepted as an UNCOMPRESSED fallback: the client
+// normally transcodes .mov → mp4 before upload, but when in-browser compression
+// can't run (older Safari, low device memory) the original .mov uploads as-is
+// rather than hard-rejecting the operator. Stored .mov (H.264/AAC) plays
+// natively in Safari and most Chromium builds.
+const VIDEO_EXT = { 'video/mp4': 'mp4', 'video/webm': 'webm', 'video/quicktime': 'mov' }
 const IMAGE_EXT = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp' }
 
 export async function POST(request) {
@@ -54,7 +59,7 @@ export async function POST(request) {
   if (!ext) {
     return NextResponse.json({
       success: false,
-      error: isVideo ? 'Unsupported video type. Use MP4 or WebM.' : 'Unsupported file type. Use PNG, JPEG, or WebP.',
+      error: isVideo ? 'Unsupported video type. Use MP4, WebM, or MOV.' : 'Unsupported file type. Use PNG, JPEG, or WebP.',
     }, { status: 400 })
   }
 

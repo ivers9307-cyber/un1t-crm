@@ -266,13 +266,14 @@ export default function LandingPageSettingsForm({ locationId, initialSettings, a
     setUploading((prev) => ({ ...prev, [key]: isUploading }))
     setUploadErr((prev) => ({ ...prev, [key]: err || null }))
   }
-  async function uploadMedia({ file, kind, key }) {
+  async function uploadMedia({ file, kind, key, autoplay = true }) {
     setUploadState(key, true, null)
     setProgress((prev) => ({ ...prev, [key]: null }))
     const res = await uploadLandingMedia({
       file,
       locationId,
       kind,
+      autoplay,
       onProgress: (p) => setProgress((prev) => ({ ...prev, [key]: p })),
     })
     setProgress((prev) => ({ ...prev, [key]: null }))
@@ -678,7 +679,7 @@ function HeroEdit({ block, onUpdate, uploadMedia, uploading, uploadErr, progress
           kind="image"
         />
       </Field>
-      <Field label="Background video" hint="MP4 / WebM, ≤ 25MB. Auto-plays muted on loop. Tip: 720p, 5-15 seconds, ~3-5Mbps.">
+      <Field label="Background video" hint="MP4 / WebM / MOV, ≤ 50MB — autoplays muted on loop, so keep it short (compressed automatically where supported). Tip: 720p, 5-15 seconds.">
         <MediaSlot
           url={block.video_url || ''}
           onClear={() => onUpdate({ video_url: null })}
@@ -867,7 +868,9 @@ function VideoTestimonialsEdit({ block, onUpdate, uploadMedia, uploading, upload
     if (posterFile) {
       poster_url = (await uploadMedia({ file: posterFile, kind: 'image', key: posterKey })) || ''
     }
-    const video_url = await uploadMedia({ file, kind: 'video', key: videoKey })
+    // Testimonial clips are tap-to-play (poster shown until tapped), so a larger
+    // stored file is fine — only the visitor who taps one downloads it.
+    const video_url = await uploadMedia({ file, kind: 'video', key: videoKey, autoplay: false })
     if (video_url) setItem(i, { video_url, poster_url })
   }
 
@@ -909,7 +912,7 @@ function VideoTestimonialsEdit({ block, onUpdate, uploadMedia, uploading, upload
           <Plus size={12} /> Add video
         </button>
       )}
-      <p className="text-[11px] text-un1t-muted">MP4 / WebM, ≤ 25MB each. Portrait clips work best. We grab the first frame as the still image automatically. Tip: 720p, 15–30 seconds.</p>
+      <p className="text-[11px] text-un1t-muted">MP4 / WebM / MOV, up to 200MB each — large clips are compressed automatically where your browser supports it. Portrait clips work best. We grab the first frame as the still image automatically. Tip: 720p, 15–30 seconds.</p>
     </>
   )
 }
