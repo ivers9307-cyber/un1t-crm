@@ -14,6 +14,7 @@ import { filterVisibleReviews, marqueeDurationSeconds } from '@/lib/google-busin
 import BookingWidget from '@/components/BookingWidget'
 import RaceSignupWidget from '@/components/RaceSignupWidget'
 import WaitlistWidget from '@/components/WaitlistWidget'
+import VideoTestimonials from './VideoTestimonials'
 import { parseEmbed } from '@/lib/landing-page-embed'
 import EditableText from './EditableText'
 import EditableImage from './EditableImage'
@@ -58,6 +59,7 @@ export default function BlockRenderer({ block, onEdit, locationId, publicPath, r
     case 'stats':       return <StatsBlock       block={block} onEdit={localOnEdit} />
     case 'testimonial': return <TestimonialBlock block={block} onEdit={localOnEdit} />
     case 'reviews':     return <ReviewsBlock     block={block} onEdit={localOnEdit} reviewsData={reviewsData} />
+    case 'video_testimonials': return <VideoTestimonialsBlock block={block} onEdit={localOnEdit} />
     default:            return null
   }
 }
@@ -479,6 +481,35 @@ export function ReviewsBlock({ block, onEdit, reviewsData }) {
         </div>
         <div className="pointer-events-none absolute inset-y-0 left-0 w-16 bg-gradient-to-r from-black to-transparent" aria-hidden="true" />
         <div className="pointer-events-none absolute inset-y-0 right-0 w-16 bg-gradient-to-l from-black to-transparent" aria-hidden="true" />
+      </div>
+    </section>
+  )
+}
+
+// Video testimonials — up to 3 portrait clips. The pure renderer draws
+// the section + (editable) heading; the interactive poster→tap-to-play
+// tiles live in the VideoTestimonials client island so first paint
+// ships zero video bytes. Hidden on the public page when no clip has a
+// video_url; in edit mode it stays visible with a hint so the operator
+// can find the section + edit the heading.
+export function VideoTestimonialsBlock({ block, onEdit }) {
+  const clips = (Array.isArray(block.items) ? block.items : []).filter((it) => it && it.video_url).slice(0, 3)
+  if (clips.length === 0 && !onEdit) return null
+  return (
+    <section className="bg-black text-white py-20 md:py-28 border-t border-white/10">
+      <div className="max-w-6xl mx-auto px-6">
+        {(block.title || onEdit) && (
+          <p className="text-xs uppercase tracking-[0.3em] text-white/50 mb-8 text-center">
+            <E value={block.title} onEdit={onEdit} path={['title']} />
+          </p>
+        )}
+        {clips.length > 0 ? (
+          <VideoTestimonials items={clips} />
+        ) : onEdit ? (
+          <div className="max-w-md mx-auto text-center text-white/40 text-sm border border-dashed border-white/20 rounded py-10">
+            Add up to 3 portrait videos in the &ldquo;Video testimonials&rdquo; panel on the left.
+          </div>
+        ) : null}
       </div>
     </section>
   )

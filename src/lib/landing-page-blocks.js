@@ -125,6 +125,14 @@ const REVIEWS_DEFAULT = () => ({
   speed:          'normal', // 'slow' | 'normal' | 'fast' marquee speed
 })
 
+const VIDEO_TESTIMONIALS_DEFAULT = () => ({
+  id:    newBlockId(),
+  type:  'video_testimonials',
+  title: 'Hear from our members',
+  // up to 3 × { video_url, poster_url, name } — added by the editor on upload
+  items: [],
+})
+
 // Registry — single source of truth for "what types exist". Used by:
 //   - Form's "+ Add section" picker
 //   - Renderer's type-dispatch
@@ -140,6 +148,7 @@ export const BLOCK_TYPES = [
   { type: 'stats',       label: 'Stats',        description: '3 big-number tiles for social proof.',                 factory: STATS_DEFAULT },
   { type: 'testimonial', label: 'Testimonial',  description: 'Single member quote + attribution.',                   factory: TESTIMONIAL_DEFAULT },
   { type: 'reviews',     label: 'Google reviews', description: 'Auto-scrolling marquee of your Google reviews.',       factory: REVIEWS_DEFAULT },
+  { type: 'video_testimonials', label: 'Video testimonials', description: 'Up to 3 portrait member videos. Poster image, tap to play.', factory: VIDEO_TESTIMONIALS_DEFAULT },
 ]
 
 const TYPE_BY_NAME = new Map(BLOCK_TYPES.map((t) => [t.type, t]))

@@ -24,7 +24,7 @@
 // src/app/welcome/page.js. Three-file change.
 
 import { useState, useMemo, useRef, useEffect, useCallback } from 'react'
-import { uploadLandingMedia } from '@/lib/landing-media-upload'
+import { uploadLandingMedia, captureVideoPoster } from '@/lib/landing-media-upload'
 import {
   DndContext, KeyboardSensor, PointerSensor, useSensor, useSensors,
   closestCenter, DragOverlay,
@@ -611,6 +611,10 @@ function summaryFor(block) {
     case 'stats':       return `${(block.items || []).length} stats`
     case 'testimonial': return block.author || ''
     case 'reviews':     return block.title || ''
+    case 'video_testimonials': {
+      const n = (block.items || []).filter((it) => it && it.video_url).length
+      return `${n} video${n === 1 ? '' : 's'}`
+    }
     default:            return ''
   }
 }
@@ -631,6 +635,7 @@ function BlockEditPanel(props) {
     case 'stats':       return <StatsEdit       {...props} />
     case 'testimonial': return <TestimonialEdit {...props} />
     case 'reviews':     return <ReviewsEdit     {...props} />
+    case 'video_testimonials': return <VideoTestimonialsEdit {...props} />
     default:            return <div className="text-xs text-red-700">Unknown block type: {props.block.type}</div>
   }
 }
@@ -824,6 +829,75 @@ function PillarsEdit({ block, onUpdate, uploadMedia, uploading, uploadErr }) {
           <Plus size={12} /> Add pillar
         </button>
       )}
+    </>
+  )
+}
+
+function VideoTestimonialsEdit({ block, onUpdate, uploadMedia, uploading, uploadErr }) {
+  const items = Array.isArray(block.items) ? block.items : []
+  const setItem = (i, patch) => onUpdate({ items: items.map((x, j) => (j === i ? { ...x, ...patch } : x)) })
+  const addItem = () => onUpdate({ items: [...items, { video_url: '', poster_url: '', name: '' }] })
+  const removeItem = (i) => onUpdate({ items: items.filter((_, j) => j !== i) })
+  const move = (i, dir) => {
+    const j = i + dir
+    if (j < 0 || j >= items.length) return
+    const next = [...items]
+    ;[next[i], next[j]] = [next[j], next[i]]
+    onUpdate({ items: next })
+  }
+
+  // On clip upload: capture the poster from the LOCAL file first (no
+  // CORS), upload it via the image path, then upload the video. Store
+  // both URLs on the item. A failed poster capture is non-fatal — the
+  // clip still saves and the tile falls back to a placeholder.
+  const onUploadClip = async (i, file, posterKey, videoKey) => {
+    const posterFile = await captureVideoPoster(file)
+    let poster_url = ''
+    if (posterFile) {
+      poster_url = (await uploadMedia({ file: posterFile, kind: 'image', key: posterKey })) || ''
+    }
+    const video_url = await uploadMedia({ file, kind: 'video', key: videoKey })
+    if (video_url) setItem(i, { video_url, poster_url })
+  }
+
+  return (
+    <>
+      <Field label="Section heading">
+        <Input value={block.title || ''} onChange={(v) => onUpdate({ title: v })} maxLength={200} placeholder="Hear from our members" />
+      </Field>
+      {items.slice(0, 3).map((it, i) => {
+        const posterKey = `${block.id}-vt-${i}-poster`
+        const videoKey = `${block.id}-vt-${i}-video`
+        return (
+          <div key={i} className="border border-un1t-border rounded-md p-3 space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="text-[11px] uppercase tracking-wider text-un1t-muted">Video {i + 1}</div>
+              <div className="flex items-center gap-1">
+                <button type="button" disabled={i === 0} onClick={() => move(i, -1)} className="p-1 text-un1t-muted hover:text-un1t-text disabled:opacity-30" title="Move up"><ArrowUp size={11} /></button>
+                <button type="button" disabled={i === items.length - 1} onClick={() => move(i, 1)} className="p-1 text-un1t-muted hover:text-un1t-text disabled:opacity-30" title="Move down"><ArrowDown size={11} /></button>
+                <button type="button" onClick={() => removeItem(i)} className="p-1 text-un1t-muted hover:text-red-400" title="Remove video"><Trash2 size={11} /></button>
+              </div>
+            </div>
+            <MediaSlot
+              url={it.video_url || ''}
+              onClear={() => setItem(i, { video_url: '', poster_url: '' })}
+              onUpload={(file) => onUploadClip(i, file, posterKey, videoKey)}
+              uploading={!!uploading[videoKey] || !!uploading[posterKey]}
+              error={uploadErr[videoKey] || uploadErr[posterKey]}
+              accept="video/mp4,video/webm"
+              label="Add video"
+              kind="video"
+            />
+            <Input value={it.name || ''} onChange={(v) => setItem(i, { name: v })} maxLength={120} placeholder="Member name (e.g. Sarah)" />
+          </div>
+        )
+      })}
+      {items.length < 3 && (
+        <button type="button" onClick={addItem} className="text-xs text-un1t-subtle hover:text-un1t-text inline-flex items-center gap-1.5">
+          <Plus size={12} /> Add video
+        </button>
+      )}
+      <p className="text-[11px] text-un1t-muted">MP4 / WebM, ≤ 25MB each. Portrait clips work best. We grab the first frame as the still image automatically. Tip: 720p, 15–30 seconds.</p>
     </>
   )
 }
