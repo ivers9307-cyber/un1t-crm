@@ -5,13 +5,14 @@ import { getCurrentUser } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import {
   employmentTypeSchema, money, hours, days, permissionsSchema,
-  assignmentSchema, OWNER_ASSIGNABLE_ROLES, MASTER_ASSIGNABLE_ROLES,
+  assignmentSchema,
 } from '@/lib/schemas'
 import {
   getLocationUnifiConfig, findOrCreateUnifiUser,
   syncUnifiUserPolicyForRole, revokeUnifiUserPolicies, UnifiError,
 } from '@/lib/unifi-access'
 import { canEditStaffMember } from '@/lib/staff-access'
+import { buildStaffProfilePatch, assertOwnerAssignmentScope, computeDesiredAssignments, computeProfileRole } from '@/lib/staff-write'
 import { getStaffForUser } from '@/lib/staff'
 import { upsertCompensationForProfile, splitCompFromProfilePatch } from '@/lib/profile-compensation'
 import { logAuditEvent } from '@/lib/audit'
@@ -162,48 +163,18 @@ export async function PUT(request, props) {
 
   // Owners can only edit users they share a location with — and even
   // then only the assignments at locations where the caller is owner.
-  if (!user.isMaster) {
-    const callerOwnerLocations = new Set(
-      Object.entries(user.rolesByLocation || {})
-        .filter(([, r]) => r === 'owner')
-        .map(([loc]) => loc)
-    )
-    const targetLocations = (targetBefore.profile_locations || []).map(l => l.location_id)
-    const overlap = targetLocations.some(l => callerOwnerLocations.has(l))
-    if (!overlap) {
-      return NextResponse.json({
-        success: false,
-        error: 'You can only edit staff assigned to a location where you are an owner.',
-      }, { status: 403 })
-    }
-    // Validate every assignment in the request body is at one of the
-    // caller's owner-locations (and uses an OWNER_ASSIGNABLE_ROLES role).
-    if (body.assignments) {
-      for (const a of body.assignments) {
-        if (!callerOwnerLocations.has(a.location_id)) {
-          return NextResponse.json({
-            success: false,
-            error: 'You can only manage assignments at locations where you are an owner.',
-          }, { status: 403 })
-        }
-        if (!OWNER_ASSIGNABLE_ROLES.includes(a.role)) {
-          return NextResponse.json({
-            success: false,
-            error: `Role '${a.role}' cannot be granted by an owner.`,
-          }, { status: 403 })
-        }
-      }
-    }
-  } else if (body.assignments) {
-    // Master path: still validate role values.
-    for (const a of body.assignments) {
-      if (!MASTER_ASSIGNABLE_ROLES.includes(a.role)) {
-        return NextResponse.json({
-          success: false,
-          error: `Role '${a.role}' is not a valid per-location role.`,
-        }, { status: 403 })
-      }
-    }
+  {
+    const callerOwnerLocationIds = Object.entries(user.rolesByLocation || {})
+      .filter(([, r]) => r === 'owner')
+      .map(([loc]) => loc)
+    const targetLocationIds = (targetBefore.profile_locations || []).map(l => l.location_id)
+    const scopeErr = assertOwnerAssignmentScope({
+      isMaster: user.isMaster,
+      callerOwnerLocationIds,
+      targetLocationIds,
+      assignments: body.assignments,
+    })
+    if (scopeErr) return NextResponse.json({ success: false, error: scopeErr.error }, { status: scopeErr.status })
   }
 
   // Apply profile-level updates (full_name, HR fields, master flag,
@@ -216,16 +187,7 @@ export async function PUT(request, props) {
   // on profiles, new restricted readers use the new table, and a
   // follow-up commit migrates the readers + drops the profiles
   // columns once verified.
-  const profileUpdates = {}
-  if (body.full_name !== undefined) profileUpdates.full_name = body.full_name
-  if (body.permissions !== undefined) profileUpdates.permissions = body.permissions
-  if (body.active !== undefined) profileUpdates.active = body.active
-  if (body.employment_type !== undefined) profileUpdates.employment_type = body.employment_type
-  if (body.annual_salary !== undefined) profileUpdates.annual_salary = body.annual_salary
-  if (body.hourly_rate !== undefined) profileUpdates.hourly_rate = body.hourly_rate
-  if (body.contracted_hours_per_week !== undefined) profileUpdates.contracted_hours_per_week = body.contracted_hours_per_week
-  if (body.annual_leave_entitlement !== undefined) profileUpdates.annual_leave_entitlement = body.annual_leave_entitlement
-  if (body.overtime_rate !== undefined) profileUpdates.overtime_rate = body.overtime_rate
+  const profileUpdates = buildStaffProfilePatch(body)
 
   if (Object.keys(profileUpdates).length > 0) {
     const { error } = await db.from('profiles').update(profileUpdates).eq('id', id)
@@ -267,60 +229,18 @@ export async function PUT(request, props) {
   //   3. Apply: delete-with-revoke / insert / update + UniFi sync
   let unifiErrors = []
   if (body.assignments !== undefined) {
-    const callerScope = user.isMaster
-      ? null
-      : new Set(
-          Object.entries(user.rolesByLocation || {})
-            .filter(([, r]) => r === 'owner')
-            .map(([loc]) => loc)
-        )
-
+    const callerOwnerLocationIds = user.isMaster
+      ? []
+      : Object.entries(user.rolesByLocation || {}).filter(([, r]) => r === 'owner').map(([loc]) => loc)
     const existingByLocation = Object.fromEntries(
       (targetBefore.profile_locations || []).map(l => [l.location_id, l])
     )
-
-    // Build the FULL desired list. Master replaces every row with the
-    // body. Owner replaces only their owned-locations subset and
-    // preserves rows at locations they don't own.
-    const desired = []
-    if (user.isMaster) {
-      for (const a of body.assignments) desired.push(a)
-    } else {
-      for (const a of body.assignments) {
-        if (callerScope.has(a.location_id)) desired.push(a)
-      }
-      for (const link of (targetBefore.profile_locations || [])) {
-        if (!callerScope.has(link.location_id)) {
-          // Preserve every field of locations the caller can't touch
-          // — role, is_default, door access, AND the existing
-          // permissions blob (mig 058). Without this preservation,
-          // an owner editing one location of a multi-location user
-          // would silently zero out per-location overrides set by
-          // someone else at other locations.
-          desired.push({
-            location_id: link.location_id,
-            role: link.role,
-            is_default: link.is_default,
-            unifi_door_access: link.unifi_door_access,
-            permissions: link.permissions || {},
-          })
-        }
-      }
-    }
-
-    // Promote one is_default if none set.
-    if (desired.length > 0 && !desired.some(a => a.is_default)) {
-      desired[0].is_default = true
-    }
-    // Ensure exactly one is_default.
-    let seenDefault = false
-    for (const a of desired) {
-      if (a.is_default) {
-        if (seenDefault) a.is_default = false
-        else seenDefault = true
-      }
-    }
-
+    const desired = computeDesiredAssignments({
+      isMaster: user.isMaster,
+      callerOwnerLocationIds,
+      assignments: body.assignments,
+      existingLinks: targetBefore.profile_locations || [],
+    })
     const desiredIds = new Set(desired.map(a => a.location_id))
 
     // 1. Revoke + delete rows that are no longer in the desired set.
@@ -458,11 +378,11 @@ export async function PUT(request, props) {
     .single()
 
   const currentMaster = body.is_master !== undefined ? body.is_master : refreshed.role === 'master'
-  const ROLE_PRECEDENCE = { owner: 1, manager: 2, head_coach: 3, staff: 4 }
-  const highest = (refreshed.profile_locations || [])
-    .map(l => l.role)
-    .sort((a, b) => (ROLE_PRECEDENCE[a] || 99) - (ROLE_PRECEDENCE[b] || 99))[0]
-  const newProfileRole = currentMaster ? 'master' : (highest || refreshed.role || 'staff')
+  const newProfileRole = computeProfileRole({
+    isMaster: currentMaster,
+    assignmentRoles: (refreshed.profile_locations || []).map(l => l.role),
+    fallbackRole: refreshed.role,
+  })
   if (newProfileRole !== refreshed.role) {
     await db.from('profiles').update({ role: newProfileRole }).eq('id', id)
   }
