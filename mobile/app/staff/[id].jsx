@@ -97,8 +97,18 @@ export default function StaffDetail() {
                     ))}
               </Card>
 
+              {canEdit && (
+                <View className="mt-4">
+                  <Button
+                    variant="secondary"
+                    label="Edit roles & access"
+                    onPress={() => router.push(`/staff/roles/${id}`)}
+                  />
+                </View>
+              )}
+
               {isAdmin && staff?.email && (
-                <View className="mt-6">
+                <View className="mt-4">
                   <Button
                     variant="secondary"
                     label={resetSent ? 'Reset email sent' : 'Send password reset'}
