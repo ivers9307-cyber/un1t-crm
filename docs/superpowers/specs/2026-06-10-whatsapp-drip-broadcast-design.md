@@ -49,7 +49,7 @@ Add to **`whatsapp_broadcasts`**:
 | `send_window_tz` | `text` | `'Europe/Dublin'` | IANA tz for the window. |
 | `paused_at` | `timestamptz` | `null` | Set when auto-paused (consecutive failures) or operator-paused. |
 
-`whatsapp_broadcast_recipients` is **unchanged** — it already has `sent_at` (the rolling-24h count source) + a unique `(broadcast_id, contact_id)` constraint (the dedup/resume key). Confirm that unique constraint exists; add it in the migration if missing.
+`whatsapp_broadcast_recipients` already has `sent_at` (the rolling-24h count source). It has **no** `(broadcast_id, contact_id)` unique constraint today — verified via `pg_constraint`, the only constraint is the `id` primary key. The blast `sendBroadcast` never resumed, so it never needed one. The drip **requires** it (it's the dedup/resume idempotency key), so the migration **adds** `UNIQUE (broadcast_id, contact_id)` after deduping any pre-existing duplicate rows.
 
 Status enum is reused: a drip broadcast sits in `'sending'` while in flight and flips to `'sent'` when the audience is exhausted.
 
@@ -61,7 +61,7 @@ New `sendDripChunk(db, broadcastId)` (or extend `sendBroadcast` with a `{ drip: 
 2. **Rolling-24h headroom:** `sent_last_24h = count(whatsapp_broadcast_recipients WHERE broadcast_id = :id AND status='sent' AND sent_at > now() - interval '24 hours')`. `headroom = max(0, daily_cap - sent_last_24h)`. If `headroom == 0` → return (no capacity this tick).
 3. **Select the next eligible contacts**, capped at `min(headroom, PER_TICK_MAX)` (PER_TICK_MAX ≈ 100, a tunable constant so the daily allowance drains over a few ticks each morning rather than one 500-burst):
    - Eligible = `buildWhatsAppAudience(filter, locationId)` (consent + opt-out + has wa_phone) **minus contacts already in `whatsapp_broadcast_recipients` for this broadcast**.
-   - ⚠️ **Use a server-side anti-join (an RPC: `whatsapp_drip_next_recipients(broadcast_id, limit)` doing `NOT EXISTS` against the recipients table)** — NOT a client-side `.not('id','in',(...))`. Once thousands are already-sent, a client-side NOT-IN blows past Cloudflare's URI limit (414) — the exact failure mode from the crossover-414 lesson. Order deterministically (e.g. `contacts.created_at, contacts.id`).
+   - ⚠️ **The real constraint is the 1000-row PostgREST cap, not the URL length.** `buildWhatsAppAudience(...)` awaited returns ≤1000 rows, and `.eq('broadcast_id',id).select('contact_id')` for the done-set is likewise capped — so a naive port (which the blast `sendBroadcast` is) silently only ever sees the first 1000 of a large lead list and would prematurely mark a drip `'sent'`. **Paginate both** the eligible audience and the done-set with the codebase's `.range()`+`.order('id')` >1k pattern (the `pipeline-reclassify.js` reference), then take the JS `Set` difference. A JS Set-difference (not a `.not('id','in',(...))` URL) is what sidesteps the Cloudflare 414 — so **no RPC is needed**, and crucially an RPC *couldn't* reuse `applyAudienceFilter` (the audience whitelist is JS-side, not SQL). Order deterministically by `contacts.id` so paging is stable.
 4. For each selected contact: `sendTemplateMessage(...)` → insert `whatsapp_broadcast_recipients` (`status='sent'`/`'failed'`) + `whatsapp_messages` row, exactly as the current `sendBroadcast` loop does. Keep the existing ~50/sec rate-limit delay. Idempotent at the recipient level (unique constraint) so cron retries never double-send.
 5. **Exhaustion:** if the eligible-minus-sent set is empty → update broadcast `status='sent'`, `sent_at=now()`. Otherwise leave `'sending'`.
 6. Recompute `total_recipients` (eligible count) + `total_sent`/`total_failed` from the recipients table.
@@ -91,7 +91,7 @@ New `sendDripChunk(db, broadcastId)` (or extend `sendBroadcast` with a `{ drip: 
 
 ## Guardrails
 
-- **Auto-pause** after K consecutive send failures within a tick (the SMS engine already does this) → set `paused_at`, surface on the detail page. Prevents a quality-collapse or token issue from draining the list into failures.
+- **Auto-pause** after K consecutive send failures within a tick (**NEW** — verified the SMS `sendBroadcast` does NOT actually do this; it records failed rows and keeps going. We add it here because an unattended drip runs for days, so a quality-collapse or expired-token must stop the bleed) → set `paused_at`, surface on the detail page.
 - **Consent + opt-out** enforced by `buildWhatsAppAudience` (`whatsapp_marketing=true`, `wa_status` not blocked/opted_out, has `wa_phone`).
 - **MARKETING template required + APPROVED** (existing broadcast guard).
 - Per-location WhatsApp config resolved once per tick (`getWhatsAppConfig`), as today.
