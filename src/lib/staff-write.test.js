@@ -409,3 +409,34 @@ describe('syncStaffAssignments', () => {
     expect(db.calls.updates).toHaveLength(1) // row still written
   })
 })
+
+describe('syncStaffAssignments — door-access safety paths (C2b.2b-ii review)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    unifi.getLocationUnifiConfig.mockReturnValue({ configured: true })
+    unifi.revokeUnifiUserPolicies.mockResolvedValue(undefined)
+  })
+
+  it('still deletes the row when the door-revoke throws (a revoke failure must NOT block removal)', async () => {
+    const db = syncDb()
+    unifi.revokeUnifiUserPolicies.mockRejectedValue(new unifi.UnifiError('controller down'))
+    const targetBefore = { id: 'p1', profile_locations: [
+      { location_id: 'gone', unifi_door_access: true, unifi_user_id: 'u9', locations: { name: 'Old' } },
+    ] }
+    const res = await syncStaffAssignments({ db, id: 'p1', targetBefore, desired: [], desiredIds: new Set(), existingByLocation: {} })
+    expect(res.unifiErrors.length).toBe(1)
+    expect(res.unifiErrors[0]).toMatch(/controller down/)
+    expect(db.calls.deletes).toEqual([['p1', 'gone']]) // removed despite the revoke failure
+  })
+
+  it('skips the revoke when UniFi is not configured for the deleted location', async () => {
+    const db = syncDb()
+    unifi.getLocationUnifiConfig.mockReturnValue({ configured: false })
+    const targetBefore = { id: 'p1', profile_locations: [
+      { location_id: 'gone', unifi_door_access: true, unifi_user_id: 'u9', locations: { name: 'Old' } },
+    ] }
+    await syncStaffAssignments({ db, id: 'p1', targetBefore, desired: [], desiredIds: new Set(), existingByLocation: {} })
+    expect(unifi.revokeUnifiUserPolicies).not.toHaveBeenCalled()
+    expect(db.calls.deletes).toEqual([['p1', 'gone']])
+  })
+})
