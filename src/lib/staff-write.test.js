@@ -226,7 +226,7 @@ describe('buildAssignmentRow', () => {
 
   it('permissions defaults to {} when null/absent', () => {
     expect(buildAssignmentRow({ ...common, assignment: { ...base, permissions: null } }).permissions).toEqual({})
-    const { permissions, ...noPerm } = base
+    const { permissions: _permissions, ...noPerm } = base
     expect(buildAssignmentRow({ ...common, assignment: noPerm }).permissions).toEqual({})
   })
 

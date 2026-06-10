@@ -12,7 +12,7 @@ import {
   syncUnifiUserPolicyForRole, revokeUnifiUserPolicies, UnifiError,
 } from '@/lib/unifi-access'
 import { canEditStaffMember } from '@/lib/staff-access'
-import { applyStaffProfileWrite, assertOwnerAssignmentScope, computeDesiredAssignments, computeProfileRole } from '@/lib/staff-write'
+import { applyStaffProfileWrite, assertOwnerAssignmentScope, buildAssignmentRow, computeDesiredAssignments, computeProfileRole } from '@/lib/staff-write'
 import { getStaffForUser } from '@/lib/staff'
 import { logAuditEvent } from '@/lib/audit'
 
@@ -291,41 +291,13 @@ export async function PUT(request, props) {
         // unifiUserId already holds the manual value above.
       }
 
-      const row = {
-        profile_id: id,
-        location_id: a.location_id,
-        role: a.role,
-        is_default: !!a.is_default,
-        unifi_door_access: wantsDoor,
-        unifi_synced_at: new Date().toISOString(),
-        unifi_user_id: unifiUserId,
-        // Per-location user overrides (mig 058). Default to {} when
-        // not provided so existing role-default behaviour kicks in.
-        permissions: a.permissions || {},
-        // P2.4 — Protect face link (mig 142). Same null/string/omit
-        // semantics as unifi_user_id: explicit null clears, string
-        // sets, omitting the key leaves DB value unchanged.
-        ...(Object.prototype.hasOwnProperty.call(a, 'protect_face_id')
-          ? { protect_face_id: a.protect_face_id || null }
-          : {}),
-        // UNIFI-DOORS-SCOPE (mig 182) — per-location door allowlist.
-        // null/undefined → leave unchanged (omit from row so the DB
-        // value isn't overwritten). Empty array → clear. Array of
-        // strings → set. Mirrors the unifi_user_id semantics so the
-        // staff form can patch this field alone without touching
-        // anything else.
-        ...(Object.prototype.hasOwnProperty.call(a, 'unifi_door_ids')
-          ? { unifi_door_ids: a.unifi_door_ids === null ? null : (a.unifi_door_ids || []) }
-          : {}),
-        // STUDIO-AC-DEVICES.1 (mig 210) — per-location AC device
-        // allowlist. Same null/empty/omit semantics as the doors
-        // allowlist: NULL clears; empty array = no devices visible;
-        // populated array = exactly those devices; omitting the key
-        // leaves the DB value alone.
-        ...(Object.prototype.hasOwnProperty.call(a, 'ac_device_ids')
-          ? { ac_device_ids: a.ac_device_ids === null ? null : (a.ac_device_ids || []) }
-          : {}),
-      }
+      const row = buildAssignmentRow({
+        id,
+        assignment: a,
+        wantsDoor,
+        unifiUserId,
+        syncedAt: new Date().toISOString(),
+      })
 
       if (existing) {
         await db.from('profile_locations')
