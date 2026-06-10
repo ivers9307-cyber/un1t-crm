@@ -1,0 +1,109 @@
+// Pure logic extracted from PUT /api/staff/[id] (Plan C2b.1). These
+// functions have NO DB or network access — they're the testable core
+// of the staff-update flow. The route still owns orchestration + the
+// UniFi/DB side-effects (extracted in C2b.2). Each function reproduces
+// the previously-inline behavior exactly; the characterization tests
+// pin it.
+
+import { OWNER_ASSIGNABLE_ROLES, MASTER_ASSIGNABLE_ROLES } from '@/lib/schemas'
+
+const PROFILE_PATCH_KEYS = [
+  'full_name', 'permissions', 'active', 'employment_type',
+  'annual_salary', 'hourly_rate', 'contracted_hours_per_week',
+  'annual_leave_entitlement', 'overtime_rate',
+]
+
+/** Build the profiles update patch from a validated body — only keys
+ * actually present (undefined keys are skipped; null/false are kept). */
+export function buildStaffProfilePatch(body) {
+  const patch = {}
+  for (const key of PROFILE_PATCH_KEYS) {
+    if (body[key] !== undefined) patch[key] = body[key]
+  }
+  return patch
+}
+
+const ROLE_PRECEDENCE = { owner: 1, manager: 2, head_coach: 3, staff: 4 }
+
+/** Recompute profiles.role: master flag wins, else the highest-
+ * precedence role across the current assignments, else the fallback. */
+export function computeProfileRole({ isMaster, assignmentRoles, fallbackRole }) {
+  if (isMaster) return 'master'
+  const highest = [...(assignmentRoles || [])]
+    .sort((a, b) => (ROLE_PRECEDENCE[a] || 99) - (ROLE_PRECEDENCE[b] || 99))[0]
+  return highest || fallbackRole || 'staff'
+}
+
+/** Owner/master assignment-scope authorization. Returns null when
+ * allowed, or { status, error } to return from the route. Pure mirror
+ * of the inline guard (route ~lines 165-207). */
+export function assertOwnerAssignmentScope({ isMaster, callerOwnerLocationIds, targetLocationIds, assignments }) {
+  if (!isMaster) {
+    const owned = new Set(callerOwnerLocationIds || [])
+    const overlap = (targetLocationIds || []).some(l => owned.has(l))
+    if (!overlap) {
+      return { status: 403, error: 'You can only edit staff assigned to a location where you are an owner.' }
+    }
+    if (assignments) {
+      for (const a of assignments) {
+        if (!owned.has(a.location_id)) {
+          return { status: 403, error: 'You can only manage assignments at locations where you are an owner.' }
+        }
+        if (!OWNER_ASSIGNABLE_ROLES.includes(a.role)) {
+          return { status: 403, error: `Role '${a.role}' cannot be granted by an owner.` }
+        }
+      }
+    }
+    return null
+  }
+  if (assignments) {
+    for (const a of assignments) {
+      if (!MASTER_ASSIGNABLE_ROLES.includes(a.role)) {
+        return { status: 403, error: `Role '${a.role}' is not a valid per-location role.` }
+      }
+    }
+  }
+  return null
+}
+
+/** Compute the FULL desired-state assignment list from the request.
+ * Master → the body verbatim. Owner → body rows at owned locations,
+ * plus every existing row at a NON-owned location preserved verbatim
+ * (role, is_default, door access, and the permissions blob — mig 058).
+ * Then normalise to exactly one is_default. Pure mirror of route lines
+ * 285-322. */
+export function computeDesiredAssignments({ isMaster, callerOwnerLocationIds, assignments, existingLinks }) {
+  const links = existingLinks || []
+  const desired = []
+  if (isMaster) {
+    for (const a of assignments) desired.push(a)
+  } else {
+    const owned = new Set(callerOwnerLocationIds || [])
+    for (const a of assignments) {
+      if (owned.has(a.location_id)) desired.push(a)
+    }
+    for (const link of links) {
+      if (!owned.has(link.location_id)) {
+        desired.push({
+          location_id: link.location_id,
+          role: link.role,
+          is_default: link.is_default,
+          unifi_door_access: link.unifi_door_access,
+          permissions: link.permissions || {},
+        })
+      }
+    }
+  }
+
+  if (desired.length > 0 && !desired.some(a => a.is_default)) {
+    desired[0].is_default = true
+  }
+  let seenDefault = false
+  for (const a of desired) {
+    if (a.is_default) {
+      if (seenDefault) a.is_default = false
+      else seenDefault = true
+    }
+  }
+  return desired
+}
