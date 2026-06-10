@@ -88,3 +88,34 @@ export async function unregisterPushNotifications(token) {
     body: { expo_push_token: token },
   })
 }
+
+// Derive this device's CURRENT Expo push token and delete its CRM
+// registration. Called from signOut — BEFORE supabase.auth.signOut(),
+// because the authed DELETE rides the still-valid JWT (the server
+// scopes the delete to the calling user_id). Every failure mode skips
+// silently: a device that never registered (simulator, permission
+// denied, no token) has nothing to delete, and sign-out must never
+// block on push bookkeeping. Without this, a shared/studio device
+// keeps receiving the previous user's notifications after sign-out —
+// the token stays valid, so the server's DeviceNotRegistered pruning
+// never fires for it.
+export async function unregisterCurrentDevicePush() {
+  try {
+    if (!Device.isDevice) return { skipped: true, reason: 'simulator' }
+
+    const { status } = await Notifications.getPermissionsAsync()
+    if (status !== 'granted') {
+      // Never granted ⇒ registerForPushNotifications never uploaded a
+      // token for this device ⇒ nothing to delete server-side.
+      return { skipped: true, reason: 'permission_not_granted' }
+    }
+
+    const projectId = Constants.expoConfig?.extra?.eas?.projectId
+    const result = await Notifications.getExpoPushTokenAsync(
+      projectId ? { projectId } : undefined
+    )
+    return await unregisterPushNotifications(result?.data)
+  } catch (err) {
+    return { skipped: true, reason: `unregister_error: ${err?.message || err}` }
+  }
+}

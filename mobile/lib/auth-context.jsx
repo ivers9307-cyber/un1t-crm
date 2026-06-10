@@ -18,6 +18,7 @@ import { createContext, useContext, useEffect, useState, useCallback } from 'rea
 import { supabase } from './supabase'
 import { api } from './api'
 import { readImpersonate, writeImpersonate, clearImpersonate } from './impersonate'
+import { unregisterCurrentDevicePush } from './push-register'
 
 const AuthContext = createContext(null)
 
@@ -115,6 +116,22 @@ export function AuthProvider({ children }) {
       }
     } catch {
       // ignore — the reaper cron is the backstop
+    }
+    // Delete this device's push-token registration while the JWT is
+    // still valid (the authed DELETE is scoped to user_id server-side,
+    // so it must run BEFORE supabase.auth.signOut clears the session).
+    // Runs AFTER the impersonation-stop above so the delete executes
+    // as the real signed-in user, not a View-as target. Best-effort: a
+    // network blip must never block sign-out — worst case the token
+    // stays registered until the next sign-in re-upserts it. Without
+    // this, a shared/studio device kept receiving the PREVIOUS user's
+    // notifications (lead alerts, WhatsApp — customer PII) after
+    // sign-out, because a still-valid token never triggers the
+    // server's DeviceNotRegistered pruning.
+    try {
+      await unregisterCurrentDevicePush()
+    } catch {
+      // ignore — next sign-in re-registers for the new user
     }
     await supabase.auth.signOut()
   }, [])
