@@ -2,11 +2,11 @@
 // via the SDK and shows their profile + per-studio assignments. No edit
 // controls (C2). Admin-gated like the list.
 import { useState, useEffect, useCallback } from 'react'
-import { View, Text, ScrollView, RefreshControl, ActivityIndicator } from 'react-native'
-import { Stack, useLocalSearchParams } from 'expo-router'
+import { View, Text, ScrollView, RefreshControl, ActivityIndicator, Pressable } from 'react-native'
+import { Stack, useLocalSearchParams, useRouter } from 'expo-router'
 import { useAuth } from '../../lib/auth-context'
 import { sdk } from '../../lib/sdk'
-import { Card } from '../../components/ui'
+import { Card, Button } from '../../components/ui'
 import BackHeaderLeft from '../../components/BackHeaderLeft'
 
 const ADMIN_ROLES = ['master', 'owner', 'manager']
@@ -20,6 +20,8 @@ function Row({ label, value }) {
   )
 }
 
+const OWNER_ROLES = ['master', 'owner']
+
 export default function StaffDetail() {
   const params = useLocalSearchParams()
   // useLocalSearchParams returns string | string[] — a deep-link or push
@@ -27,12 +29,16 @@ export default function StaffDetail() {
   // value so sdk.staff.get never receives an array (→ /api/staff/a,b → 404).
   const id = Array.isArray(params.id) ? params.id[0] : params.id
   const { profile } = useAuth()
+  const router = useRouter()
   const isAdmin = !!profile && ADMIN_ROLES.includes(profile.role)
+  const canEdit = !!profile && OWNER_ROLES.includes(profile.role)
 
   const [staff, setStaff] = useState(null)
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState(null)
+  const [resetting, setResetting] = useState(false)
+  const [resetSent, setResetSent] = useState(false)
 
   const load = useCallback(async () => {
     setError(null)
@@ -51,7 +57,7 @@ export default function StaffDetail() {
 
   return (
     <View className="flex-1 bg-un1t-bg">
-      <Stack.Screen options={{ title: staff?.full_name || 'Staff', headerLeft: () => <BackHeaderLeft label="Staff" fallbackHref="/staff" /> }} />
+      <Stack.Screen options={{ title: staff?.full_name || 'Staff', headerLeft: () => <BackHeaderLeft label="Staff" fallbackHref="/staff" />, headerRight: () => (canEdit && staff ? <Pressable onPress={() => router.push(`/staff/edit/${id}`)} hitSlop={8}><Text className="text-un1t-accent font-semibold">Edit</Text></Pressable> : null) }} />
 
       {!isAdmin ? (
         <View className="py-16 items-center px-6">
@@ -91,9 +97,25 @@ export default function StaffDetail() {
                     ))}
               </Card>
 
-              <Text className="text-xs text-un1t-muted text-center mt-4 px-4">
-                Read-only. Edit this staff member on the web.
-              </Text>
+              {isAdmin && staff?.email && (
+                <View className="mt-6">
+                  <Button
+                    variant="secondary"
+                    label={resetSent ? 'Reset email sent' : 'Send password reset'}
+                    disabled={resetSent || resetting}
+                    loading={resetting}
+                    onPress={async () => {
+                      if (resetting || resetSent) return
+                      setResetting(true)
+                      setError(null)
+                      const res = await sdk.staff.sendPasswordReset(id)
+                      setResetting(false)
+                      if (!res.success) setError(res.error || 'Could not send reset')
+                      else setResetSent(true)
+                    }}
+                  />
+                </View>
+              )}
             </>
           )}
         </ScrollView>
