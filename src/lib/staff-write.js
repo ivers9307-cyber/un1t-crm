@@ -7,6 +7,10 @@
 
 import { OWNER_ASSIGNABLE_ROLES, MASTER_ASSIGNABLE_ROLES } from '@/lib/schemas'
 import { splitCompFromProfilePatch, upsertCompensationForProfile } from '@/lib/profile-compensation'
+import {
+  getLocationUnifiConfig, findOrCreateUnifiUser,
+  syncUnifiUserPolicyForRole, revokeUnifiUserPolicies, UnifiError,
+} from '@/lib/unifi-access'
 
 const PROFILE_PATCH_KEYS = [
   'full_name', 'permissions', 'active', 'employment_type',
@@ -174,4 +178,149 @@ export async function applyStaffProfileWrite({ db, id, body, actorId }) {
     if (!compResult.ok) return { ok: false, error: `compensation: ${compResult.error}` }
   }
   return { ok: true }
+}
+
+/** Sync a staff member's profile_locations to the desired-state list:
+ * (1) revoke door policies + delete rows no longer desired, (2) insert
+ * new / update existing rows with per-row UniFi door sync. Returns the
+ * aggregated { unifiErrors } (the route surfaces them as a 502 without
+ * rolling back the DB writes — they're independent per-location). Pure
+ * mirror of the route's two inline loops. Uses applyDoorAccessChange +
+ * buildAssignmentRow (same module) and the @/lib/unifi-access helpers. */
+export async function syncStaffAssignments({ db, id, targetBefore, desired, desiredIds, existingByLocation }) {
+  const unifiErrors = []
+
+  // 1. Revoke + delete rows that are no longer in the desired set.
+  for (const link of (targetBefore.profile_locations || [])) {
+    if (desiredIds.has(link.location_id)) continue
+    if (link.unifi_door_access && link.unifi_user_id && link.locations) {
+      const cfg = getLocationUnifiConfig(link.locations)
+      if (cfg.configured) {
+        try {
+          await revokeUnifiUserPolicies(cfg, link.unifi_user_id)
+        } catch (e) {
+          const msg = e instanceof UnifiError ? e.message : `UniFi revoke failed: ${e.message || e}`
+          unifiErrors.push(`${link.locations.name}: ${msg}`)
+        }
+      }
+    }
+    await db.from('profile_locations')
+      .delete()
+      .eq('profile_id', id)
+      .eq('location_id', link.location_id)
+  }
+
+  // 2. Insert new rows + update existing rows. UniFi sync happens
+  //    as part of the iteration so we capture role + door-access
+  //    intent in one pass.
+  for (const a of desired) {
+    const existing = existingByLocation[a.location_id]
+    const wantsDoor = !!a.unifi_door_access
+
+    // Do the UniFi sync against THIS location with the role this
+    // user will have AT THIS location. Critically, the role is
+    // a.role (per-location) — not profiles.role.
+    let unifiUserId = existing?.unifi_user_id || null
+
+    // Manual UniFi user link (mig 120 attendance picker). If the
+    // assignment payload includes an explicit unifi_user_id key:
+    //   - string  → set the link to that id (overrides the existing
+    //               value AND skips findOrCreateUnifiUser, since the
+    //               operator picked exactly which UniFi user to use)
+    //   - null    → clear the link
+    //   - missing → leave behaviour unchanged (auto-create on toggle)
+    // This is what the staff edit page uses to attach a CRM profile
+    // to a pre-existing UniFi user that doesn't share the email
+    // findOrCreateUnifiUser would otherwise look up.
+    const manualLinkProvided = Object.prototype.hasOwnProperty.call(a, 'unifi_user_id')
+    if (manualLinkProvided) {
+      unifiUserId = a.unifi_user_id || null
+    }
+
+    const locationRow = existing?.locations
+    if (locationRow) {
+      try {
+        unifiUserId = await applyDoorAccessChange({
+          profile: targetBefore,
+          location: locationRow,
+          enable: wantsDoor,
+          role: a.role,
+          existingUnifiUserId: unifiUserId,
+          // When the operator manually picked a specific UniFi user,
+          // skip the find-or-create lookup — we want THIS user, not
+          // whoever happens to share the staff member's email.
+          skipFindOrCreate: manualLinkProvided && !!unifiUserId,
+        })
+      } catch (e) {
+        const msg = e instanceof UnifiError
+          ? e.message
+          : `UniFi sync failed at ${locationRow.name || 'location'}: ${e.message || e}`
+        unifiErrors.push(msg)
+        // Don't apply the door toggle change for this location, but
+        // DO still apply role + is_default change. The toggle stays
+        // at its previous state so UI / DB / UniFi don't diverge.
+      }
+    } else if (manualLinkProvided) {
+      // No location row joined (rare), but a manual link was set —
+      // honour it without doing any UniFi calls.
+      // unifiUserId already holds the manual value above.
+    }
+
+    const row = buildAssignmentRow({
+      id,
+      assignment: a,
+      wantsDoor,
+      unifiUserId,
+      syncedAt: new Date().toISOString(),
+    })
+
+    if (existing) {
+      await db.from('profile_locations')
+        .update(row)
+        .eq('profile_id', id)
+        .eq('location_id', a.location_id)
+    } else {
+      await db.from('profile_locations').insert(row)
+    }
+  }
+
+  return { unifiErrors }
+}
+
+// Apply a per-location door-access toggle. Returns the unifi_user_id
+// that should be persisted on the profile_locations row (or null if
+// nothing should change).
+//
+// Throws UnifiError on failure — the caller surfaces the message to
+// the API consumer without persisting the toggle change in
+// profile_locations, so the UI state stays consistent with reality.
+export async function applyDoorAccessChange({ profile, location, enable, role, existingUnifiUserId, skipFindOrCreate = false }) {
+  const cfg = getLocationUnifiConfig(location)
+
+  if (!enable) {
+    if (cfg.configured && existingUnifiUserId) {
+      await revokeUnifiUserPolicies(cfg, existingUnifiUserId)
+    }
+    return existingUnifiUserId || null
+  }
+
+  // Toggle ON requires a fully-configured UniFi instance for THIS location.
+  if (!cfg.configured) {
+    throw new UnifiError(
+      `UniFi Access is not configured for ${location.name || 'this location'}. ` +
+      `Add the host, API token and policy IDs in Location settings before ` +
+      `enabling door access here.`
+    )
+  }
+  // skipFindOrCreate=true → operator picked the UniFi user manually
+  // via the staff edit picker (mig 120). Use the id they chose without
+  // looking up by email or creating a new UniFi user. existingUnifiUserId
+  // is already the operator-picked value at this point.
+  const unifiUserId = existingUnifiUserId
+    || (skipFindOrCreate ? null : await findOrCreateUnifiUser(cfg, profile))
+  if (!unifiUserId) {
+    throw new UnifiError('No UniFi user id available to sync policies for — pick a UniFi user in the staff edit page or rely on the auto-create flow.')
+  }
+  await syncUnifiUserPolicyForRole(cfg, unifiUserId, role)
+  return unifiUserId
 }

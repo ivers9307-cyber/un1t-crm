@@ -255,3 +255,188 @@ describe('buildAssignmentRow', () => {
     expect('ac_device_ids' in buildAssignmentRow({ ...common, assignment: base })).toBe(false)
   })
 })
+
+import { applyDoorAccessChange } from './staff-write.js'
+import { syncStaffAssignments } from './staff-write.js'
+
+vi.mock('@/lib/unifi-access', () => {
+  class UnifiError extends Error {}
+  return {
+    UnifiError,
+    getLocationUnifiConfig: vi.fn(),
+    findOrCreateUnifiUser: vi.fn(),
+    syncUnifiUserPolicyForRole: vi.fn(),
+    revokeUnifiUserPolicies: vi.fn(),
+  }
+})
+import * as unifi from '@/lib/unifi-access'
+
+describe('applyDoorAccessChange', () => {
+  const location = { name: 'Hatch' }
+  beforeEach(() => {
+    vi.clearAllMocks()
+    unifi.getLocationUnifiConfig.mockReturnValue({ configured: true })
+    unifi.findOrCreateUnifiUser.mockResolvedValue('new-user')
+    unifi.syncUnifiUserPolicyForRole.mockResolvedValue(undefined)
+    unifi.revokeUnifiUserPolicies.mockResolvedValue(undefined)
+  })
+
+  it('disable + configured + existing id → revokes + returns the existing id', async () => {
+    const out = await applyDoorAccessChange({ profile: {}, location, enable: false, role: 'staff', existingUnifiUserId: 'u1' })
+    expect(unifi.revokeUnifiUserPolicies).toHaveBeenCalledWith({ configured: true }, 'u1')
+    expect(out).toBe('u1')
+  })
+
+  it('disable + not configured → no revoke, returns existing||null', async () => {
+    unifi.getLocationUnifiConfig.mockReturnValue({ configured: false })
+    expect(await applyDoorAccessChange({ profile: {}, location, enable: false, role: 'staff', existingUnifiUserId: 'u1' })).toBe('u1')
+    expect(await applyDoorAccessChange({ profile: {}, location, enable: false, role: 'staff', existingUnifiUserId: null })).toBeNull()
+    expect(unifi.revokeUnifiUserPolicies).not.toHaveBeenCalled()
+  })
+
+  it('enable + not configured → throws UnifiError', async () => {
+    unifi.getLocationUnifiConfig.mockReturnValue({ configured: false })
+    await expect(applyDoorAccessChange({ profile: {}, location, enable: true, role: 'staff', existingUnifiUserId: null }))
+      .rejects.toBeInstanceOf(unifi.UnifiError)
+  })
+
+  it('enable + configured + existing id → syncs policy, returns existing id (no find-or-create)', async () => {
+    const out = await applyDoorAccessChange({ profile: {}, location, enable: true, role: 'manager', existingUnifiUserId: 'u1' })
+    expect(unifi.findOrCreateUnifiUser).not.toHaveBeenCalled()
+    expect(unifi.syncUnifiUserPolicyForRole).toHaveBeenCalledWith({ configured: true }, 'u1', 'manager')
+    expect(out).toBe('u1')
+  })
+
+  it('enable + configured + no id + not skipping → find-or-create then sync, returns new id', async () => {
+    const out = await applyDoorAccessChange({ profile: { id: 'p' }, location, enable: true, role: 'staff', existingUnifiUserId: null })
+    expect(unifi.findOrCreateUnifiUser).toHaveBeenCalledWith({ configured: true }, { id: 'p' })
+    expect(unifi.syncUnifiUserPolicyForRole).toHaveBeenCalledWith({ configured: true }, 'new-user', 'staff')
+    expect(out).toBe('new-user')
+  })
+
+  it('enable + configured + no id + skipFindOrCreate → throws (no user id available)', async () => {
+    await expect(applyDoorAccessChange({ profile: {}, location, enable: true, role: 'staff', existingUnifiUserId: null, skipFindOrCreate: true }))
+      .rejects.toBeInstanceOf(unifi.UnifiError)
+    expect(unifi.findOrCreateUnifiUser).not.toHaveBeenCalled()
+  })
+})
+
+// A db mock for profile_locations delete/update/insert. Records calls.
+function syncDb() {
+  const calls = { deletes: [], updates: [], inserts: [] }
+  return {
+    calls,
+    from() {
+      return {
+        delete: () => ({ eq: (k1, v1) => ({ eq: (k2, v2) => { calls.deletes.push([v1, v2]); return Promise.resolve({ error: null }) } }) }),
+        update: (row) => ({ eq: (k1, v1) => ({ eq: (k2, v2) => { calls.updates.push({ row, where: [v1, v2] }); return Promise.resolve({ error: null }) } }) }),
+        insert: (row) => { calls.inserts.push(row); return Promise.resolve({ error: null }) },
+      }
+    },
+  }
+}
+
+describe('syncStaffAssignments', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    unifi.getLocationUnifiConfig.mockReturnValue({ configured: true })
+    unifi.revokeUnifiUserPolicies.mockResolvedValue(undefined)
+    unifi.syncUnifiUserPolicyForRole.mockResolvedValue(undefined)
+    unifi.findOrCreateUnifiUser.mockResolvedValue('new-user')
+  })
+
+  it('deletes an existing row not in the desired set (with revoke when door+user+configured)', async () => {
+    const db = syncDb()
+    const targetBefore = { id: 'p1', profile_locations: [
+      { location_id: 'gone', unifi_door_access: true, unifi_user_id: 'u9', locations: { name: 'Old' } },
+    ] }
+    const res = await syncStaffAssignments({
+      db, id: 'p1', targetBefore,
+      desired: [], desiredIds: new Set(), existingByLocation: {},
+    })
+    expect(unifi.revokeUnifiUserPolicies).toHaveBeenCalledWith({ configured: true }, 'u9')
+    expect(db.calls.deletes).toEqual([['p1', 'gone']])
+    expect(res.unifiErrors).toEqual([])
+  })
+
+  it('does NOT revoke when the deleted row had no door access', async () => {
+    const db = syncDb()
+    const targetBefore = { id: 'p1', profile_locations: [
+      { location_id: 'gone', unifi_door_access: false, unifi_user_id: 'u9', locations: { name: 'Old' } },
+    ] }
+    await syncStaffAssignments({ db, id: 'p1', targetBefore, desired: [], desiredIds: new Set(), existingByLocation: {} })
+    expect(unifi.revokeUnifiUserPolicies).not.toHaveBeenCalled()
+    expect(db.calls.deletes).toEqual([['p1', 'gone']])
+  })
+
+  it('inserts a brand-new desired row and runs the door sync', async () => {
+    const db = syncDb()
+    const desired = [{ location_id: 'loc-1', role: 'staff', is_default: true, unifi_door_access: true }]
+    const existing = { 'loc-1': { unifi_user_id: null, locations: { name: 'Hatch' } } }
+    await syncStaffAssignments({
+      db, id: 'p1', targetBefore: { id: 'p1', profile_locations: [] },
+      desired, desiredIds: new Set(['loc-1']),
+      existingByLocation: existing,
+    })
+    // existing row present → it's an UPDATE (existingByLocation has loc-1)
+    expect(db.calls.updates).toHaveLength(1)
+    expect(db.calls.updates[0].where).toEqual(['p1', 'loc-1'])
+    expect(unifi.syncUnifiUserPolicyForRole).toHaveBeenCalled()
+  })
+
+  it('inserts when there is no existing row for the location', async () => {
+    const db = syncDb()
+    const desired = [{ location_id: 'loc-new', role: 'staff', is_default: true, unifi_door_access: false }]
+    await syncStaffAssignments({
+      db, id: 'p1', targetBefore: { id: 'p1', profile_locations: [] },
+      desired, desiredIds: new Set(['loc-new']), existingByLocation: {},
+    })
+    expect(db.calls.inserts).toHaveLength(1)
+    expect(db.calls.inserts[0].location_id).toBe('loc-new')
+  })
+
+  it('aggregates a UniFi sync error and STILL writes the row (door toggle not applied, role still saved)', async () => {
+    const db = syncDb()
+    unifi.syncUnifiUserPolicyForRole.mockRejectedValue(new unifi.UnifiError('door offline'))
+    const desired = [{ location_id: 'loc-1', role: 'manager', is_default: true, unifi_door_access: true }]
+    const existing = { 'loc-1': { unifi_user_id: 'u1', locations: { name: 'Hatch' } } }
+    const res = await syncStaffAssignments({
+      db, id: 'p1', targetBefore: { id: 'p1', profile_locations: [] },
+      desired, desiredIds: new Set(['loc-1']), existingByLocation: existing,
+    })
+    expect(res.unifiErrors.length).toBe(1)
+    expect(res.unifiErrors[0]).toMatch(/door offline/)
+    expect(db.calls.updates).toHaveLength(1) // row still written
+  })
+})
+
+describe('syncStaffAssignments — door-access safety paths (C2b.2b-ii review)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    unifi.getLocationUnifiConfig.mockReturnValue({ configured: true })
+    unifi.revokeUnifiUserPolicies.mockResolvedValue(undefined)
+  })
+
+  it('still deletes the row when the door-revoke throws (a revoke failure must NOT block removal)', async () => {
+    const db = syncDb()
+    unifi.revokeUnifiUserPolicies.mockRejectedValue(new unifi.UnifiError('controller down'))
+    const targetBefore = { id: 'p1', profile_locations: [
+      { location_id: 'gone', unifi_door_access: true, unifi_user_id: 'u9', locations: { name: 'Old' } },
+    ] }
+    const res = await syncStaffAssignments({ db, id: 'p1', targetBefore, desired: [], desiredIds: new Set(), existingByLocation: {} })
+    expect(res.unifiErrors.length).toBe(1)
+    expect(res.unifiErrors[0]).toMatch(/controller down/)
+    expect(db.calls.deletes).toEqual([['p1', 'gone']]) // removed despite the revoke failure
+  })
+
+  it('skips the revoke when UniFi is not configured for the deleted location', async () => {
+    const db = syncDb()
+    unifi.getLocationUnifiConfig.mockReturnValue({ configured: false })
+    const targetBefore = { id: 'p1', profile_locations: [
+      { location_id: 'gone', unifi_door_access: true, unifi_user_id: 'u9', locations: { name: 'Old' } },
+    ] }
+    await syncStaffAssignments({ db, id: 'p1', targetBefore, desired: [], desiredIds: new Set(), existingByLocation: {} })
+    expect(unifi.revokeUnifiUserPolicies).not.toHaveBeenCalled()
+    expect(db.calls.deletes).toEqual([['p1', 'gone']])
+  })
+})
