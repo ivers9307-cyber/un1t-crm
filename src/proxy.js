@@ -90,7 +90,12 @@ export async function proxy(request) {
   // public CDN asset; behind the auth gate the worker's subresource
   // fetches get a 307→/login (HTML) instead of the binary and ffmpeg
   // fails to load. They're non-sensitive open-source binaries — public.
-  const publicPaths = ['/login', '/reset-password', '/book/', '/event/', '/event-pay/', '/tv/', '/api/public/', '/unsubscribe/', '/preferences/', '/api/unsubscribe/', '/api/preferences/', '/api/webhooks/', '/api/cron/', '/deposit/', '/welcome', '/studio-login', '/api/auth/pin-login', '/api/auth/studio-heartbeat', '/api/auth/studio-signout', '/ffmpeg/']
+  // /embed/ — the paste-anywhere iframe widgets (event signup). The
+  // whole point is third-party sites iframing them for anonymous
+  // visitors; without this entry the iframe showed a login redirect
+  // (found in the 2026-06-10 audit — the page itself documents the
+  // public-embed intent). Data access stays via /api/public/*.
+  const publicPaths = ['/login', '/reset-password', '/book/', '/event/', '/event-pay/', '/tv/', '/api/public/', '/unsubscribe/', '/preferences/', '/api/unsubscribe/', '/api/preferences/', '/api/webhooks/', '/api/cron/', '/deposit/', '/welcome', '/studio-login', '/api/auth/pin-login', '/api/auth/studio-heartbeat', '/api/auth/studio-signout', '/ffmpeg/', '/embed/']
   const isPublic = publicPaths.some(p => request.nextUrl.pathname.startsWith(p))
   if (isPublic) return NextResponse.next()
 
