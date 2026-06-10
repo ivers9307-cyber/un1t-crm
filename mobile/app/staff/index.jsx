@@ -8,9 +8,8 @@ import { Stack, useRouter } from 'expo-router'
 import { useAuth } from '../../lib/auth-context'
 import { sdk } from '../../lib/sdk'
 import { formatRole } from '../../lib/staff-format'
+import { canMobile } from '../../lib/permissions'
 import BackHeaderLeft from '../../components/BackHeaderLeft'
-
-const ADMIN_ROLES = ['master', 'owner', 'manager']
 
 function locationsLabel(staff) {
   const names = (staff.profile_locations || [])
@@ -20,9 +19,11 @@ function locationsLabel(staff) {
 }
 
 export default function StaffDirectory() {
-  const { profile } = useAuth()
+  const { profile, activeLocation } = useAuth()
   const router = useRouter()
-  const isAdmin = !!profile && ADMIN_ROLES.includes(profile.role)
+  // Surface visibility — gated by the staff_management mobile permission
+  // (STAFF-C3 parity inversion), defaulting to master/owner/manager.
+  const isAdmin = canMobile(profile, 'staff_management', activeLocation)
 
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(true)

@@ -84,7 +84,12 @@ const WEB_ONLY_OK = {
   // Web still owns creation; mobile is read+complete.
   email:          'Campaign editor is desktop-only.',
   sms:            'SMS broadcasts/sequences/automations + ad-hoc sends from the contact profile are web-only — alpha sender ID is configured per-location in Location Settings (mig 059). No mobile SMS UI by design.',
-  settings:       'Staff/branding/billing settings are managed on web.',
+  // STAFF-C3 (parity inversion): `settings` is no longer web-only — its
+  // staff-management half now has a mobile counterpart (the
+  // `staff_management` MOBILE_PERMISSIONS entry, webEquivalent: 'settings'),
+  // so it's matched via webEquivalent rather than exempted here. Branding /
+  // billing / integrations ride the same `settings` key and stay web-only,
+  // but the key as a whole now has a mobile surface so no exemption is needed.
   car_processing: 'Tesla import tracker (CCF Autos) — operations workflow with file uploads; not part of mobile gym workflows.',
   // Mig 092 — split out from `events` / `events|car_processing`.
   // Both are operator-side ops surfaces with no mobile equivalent
