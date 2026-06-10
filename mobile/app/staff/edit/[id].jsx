@@ -109,6 +109,7 @@ export default function StaffEdit() {
                     label={saving ? 'Saving…' : 'Save changes'}
                     onPress={submit}
                     disabled={saving}
+                    loading={saving}
                   />
                 </View>
               </>
