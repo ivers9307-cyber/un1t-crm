@@ -111,6 +111,7 @@
     {
       "path": "/api/cron/sync-google-reviews",
       "schedule": "0 4 * * *"
-    }
+    },
+    { "path": "/api/cron/run-whatsapp-broadcasts", "schedule": "*/15 * * * *" }
   ]
 }
