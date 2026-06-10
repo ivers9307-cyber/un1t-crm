@@ -99,9 +99,12 @@ const WEB_ONLY_OK = {
   // link, Xero invoice, document uploads, status changes) stay desktop,
   // but they're sub-features of the same key, not a separate permission.
   // Mig 092 — split out from `events` / `events|car_processing`.
-  // Race-day starts/finishes happen on the desktop control panel
-  // (RaceControlPanel.jsx) — no mobile equivalent by design.
-  races:          'Race event management + race-day control panel + TV display are desktop / studio-TV surfaces (mig 082 / 092). No mobile UI by design.',
+  // races (W3 parity inversion): the race-day CONTROL board (start / finish /
+  // reset runners, trackside) now ships on mobile via the `races`
+  // MOBILE_PERMISSIONS entry (webEquivalent: 'races'), so it's matched, not
+  // exempted. Race event AUTHORING (create/edit races + waves) and the TV
+  // display stay desktop / studio-TV, but they're sub-features of the same
+  // key, not separate permissions.
   // orders (W2 parity inversion): now matched by the `orders`
   // MOBILE_PERMISSIONS entry — a read-only revenue view (webEquivalent:
   // 'orders'). The refund + retry-chain drill-in stay desktop-only, but

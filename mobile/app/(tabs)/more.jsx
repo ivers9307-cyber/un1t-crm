@@ -159,6 +159,9 @@ export default function More() {
   // W2 — CCF Autos car-import tracker (read-only). Off by default; master
   // or per-user opt-in, and only where car_processing is on at the location.
   if (canMobile(profile, 'car_processing', activeLocation)) tiles.push({ key: 'cars', icon: 'car-sport-outline', label: 'Cars', onPress: () => router.push('/cars') })
+  // W3 — trackside race-day control (start/finish/reset). Manager+ default;
+  // only where races are enabled at the location.
+  if (canMobile(profile, 'races', activeLocation)) tiles.push({ key: 'races', icon: 'flag-outline', label: 'Race control', onPress: () => router.push('/races') })
   // W1 — per-location feature toggles (master only; matches the web
   // canEditLocationFeatures gate). Flip which features this studio shows.
   if (profile?.isMaster || profile?.role === 'master') tiles.push({ key: 'features', icon: 'options-outline', label: 'Location features', onPress: () => router.push('/location-features') })
