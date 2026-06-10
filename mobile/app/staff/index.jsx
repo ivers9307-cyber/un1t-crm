@@ -2,9 +2,9 @@
 // manager). Lists staff sharing a location with the caller via the SDK;
 // a row opens the detail (view + edit role/details). Compact two-line
 // rows: name + role on the first line, studios muted below.
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useCallback } from 'react'
 import { View, Text, ScrollView, RefreshControl, ActivityIndicator, Pressable } from 'react-native'
-import { Stack, useRouter } from 'expo-router'
+import { Stack, useRouter, useFocusEffect } from 'expo-router'
 import { useAuth } from '../../lib/auth-context'
 import { sdk } from '../../lib/sdk'
 import { formatRole } from '../../lib/staff-format'
@@ -24,6 +24,10 @@ export default function StaffDirectory() {
   // Surface visibility — gated by the staff_management mobile permission
   // (STAFF-C3 parity inversion), defaulting to master/owner/manager.
   const isAdmin = canMobile(profile, 'staff_management', activeLocation)
+  // Create is owner-at-active / master only (matches POST /api/staff) —
+  // narrower than the directory-view gate, so a manager sees the list but
+  // not the "Add" action.
+  const canCreate = !!profile && (profile.isMaster || profile.role === 'owner')
 
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(true)
@@ -37,15 +41,29 @@ export default function StaffDirectory() {
     setRows(res.data || [])
   }, [])
 
-  useEffect(() => {
-    if (!isAdmin) { setLoading(false); return }
-    setLoading(true)
-    load().finally(() => setLoading(false))
-  }, [isAdmin, load])
+  // Load on mount AND silently refetch on every focus, so a member just
+  // created (or edited) shows up when returning to the list. The spinner
+  // only appears on the first load while `loading` is still true; on
+  // re-focus `loading` is already false, so the current rows stay on
+  // screen until the fresh data lands (the fresh-on-focus convention).
+  useFocusEffect(
+    useCallback(() => {
+      if (!isAdmin) { setLoading(false); return }
+      load().finally(() => setLoading(false))
+    }, [isAdmin, load])
+  )
 
   return (
     <View className="flex-1 bg-un1t-bg">
-      <Stack.Screen options={{ title: 'Staff', headerLeft: () => <BackHeaderLeft label="More" fallbackHref="/(tabs)/more" /> }} />
+      <Stack.Screen
+        options={{
+          title: 'Staff',
+          headerLeft: () => <BackHeaderLeft label="More" fallbackHref="/(tabs)/more" />,
+          headerRight: () => (isAdmin && canCreate
+            ? <Pressable onPress={() => router.push('/staff/new')} hitSlop={8}><Text className="text-un1t-accent font-semibold">Add</Text></Pressable>
+            : null),
+        }}
+      />
 
       {!isAdmin ? (
         <View className="py-16 items-center px-6">
