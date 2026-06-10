@@ -1,12 +1,13 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
+import { getCurrentUser } from '@/lib/auth'
+import { listStaffForUser } from '@/lib/staff'
 import { validateBody } from '@/lib/validate'
 import { getAppUrl } from '@/lib/app-url'
 import {
   employmentTypeSchema, money, hours, days, permissionsSchema,
-  ADMIN_ROLES, assignmentSchema,
+  assignmentSchema,
   OWNER_ASSIGNABLE_ROLES, MASTER_ASSIGNABLE_ROLES,
 } from '@/lib/schemas'
 
@@ -38,50 +39,19 @@ const CreateStaffSchema = z.object({
   overtime_rate: money.nullable().optional(),
 })
 
-// Slim fields visible to non-admin staff. Includes employment_type and
-// contracted_hours_per_week so head_coach can see schedule capacity
-// warnings, but excludes salary / hourly_rate / overtime_rate (HR-sensitive).
-const STAFF_PUBLIC_FIELDS = 'id, full_name, email, role, avatar_url, active, employment_type, contracted_hours_per_week'
-
 // GET /api/staff — List staff in the caller's locations.
-//   - owner/manager: full profile + HR fields
-//   - head_coach/staff: slim public roster (no salary, employment type, etc.)
+//   - master/owner/manager: full profile + HR fields
+//   - head_coach/staff: slim public roster (no salary, etc.)
+// Read logic lives in src/lib/staff.js (shared with GET /api/staff/[id]
+// and consumed on mobile via the SDK).
 export async function GET() {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
 
   const db = createServerClient()
-  const userLocationIds = getUserLocationIds(user)
-  if (userLocationIds.length === 0) {
-    return NextResponse.json({ success: true, data: [] })
-  }
-
-  // Find profiles that share at least one location with the caller.
-  const { data: links, error: linksError } = await db
-    .from('profile_locations')
-    .select('profile_id')
-    .in('location_id', userLocationIds)
-  if (linksError) {
-    return NextResponse.json({ success: false, error: linksError.message }, { status: 400 })
-  }
-  const profileIds = [...new Set((links || []).map(l => l.profile_id))]
-  if (profileIds.length === 0) {
-    return NextResponse.json({ success: true, data: [] })
-  }
-
-  const isAdmin = ADMIN_ROLES.includes(user.role)
-  const selectClause = isAdmin
-    ? '*, profile_locations(*, locations(*))'
-    : `${STAFF_PUBLIC_FIELDS}, profile_locations(location_id, role, locations(id, name, slug))`
-
-  const { data, error } = await db
-    .from('profiles')
-    .select(selectClause)
-    .in('id', profileIds)
-    .order('full_name', { ascending: true })
-
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
-  return NextResponse.json({ success: true, data })
+  const result = await listStaffForUser({ db, user })
+  if (!result.ok) return NextResponse.json({ success: false, error: result.error }, { status: 400 })
+  return NextResponse.json({ success: true, data: result.data })
 }
 
 // POST /api/staff — Create a new staff member.
