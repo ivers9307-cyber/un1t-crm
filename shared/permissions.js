@@ -297,6 +297,11 @@ export const MOBILE_PERMISSIONS = Object.freeze([
   // owner/master-gated inside the editors, so manager defaults to a
   // read-only directory.
   { key: 'staff_management', label: 'Staff management',       hint: 'See the staff directory and member details. Editing roles, permissions and door access stays owner/master. Master + owner + manager by default.', webEquivalent: 'settings' },
+  // W1 — handler inbox for staff-reported issues (claim / resolve /
+  // close on the go). Mirrors the web issues_inbox (webEquivalent links
+  // them for the parity linter, so issues_inbox drops out of WEB_ONLY_OK).
+  // Master + owner only — matches the isHandler gate on every triage route.
+  { key: 'issue_triage', label: 'Issue inbox',                hint: 'Triage staff-reported issues at the studio — claim, resolve and close them. Master + owner only (the submit + own-history surface stays open to all staff).', webEquivalent: 'issues_inbox' },
   // Mig 093: door_unlock was promoted to a cross-platform key
   // named `studio_management` (lives in WEB_PERMISSIONS, top-level
   // on profiles.permissions — same shape as dashboard_*). Both
@@ -357,6 +362,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     time_off: true,
     approvals: true,
     staff_management: true,
+    issue_triage: true,
     invoices: true, expenses: true, issues: true, contracts: true, policies: true,
     churn_radar: true, lead_radar: true,
     push_notifications: true,
@@ -378,6 +384,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     time_off: true,
     approvals: false,
     staff_management: false,
+    issue_triage: false,
     invoices: true, expenses: true, issues: true, contracts: true, policies: true,
     churn_radar: false, lead_radar: false,  // retention/acquisition oversight — not a staff surface
     push_notifications: true,
@@ -400,6 +407,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     time_off: true,
     approvals: true,
     staff_management: false,
+    issue_triage: false,
     invoices: true, expenses: true, issues: true, contracts: true, policies: true,
     churn_radar: true, lead_radar: true,    // head coaches own retention + conversion
     push_notifications: true,
@@ -422,6 +430,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     time_off: true,
     approvals: true,
     staff_management: true,
+    issue_triage: false,
     invoices: true, expenses: true, issues: true, contracts: true, policies: true,
     churn_radar: false, lead_radar: false,  // owner + head_coach by default; grant per-user if needed
     push_notifications: true,
@@ -446,6 +455,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     time_off: true,
     approvals: true,
     staff_management: true,
+    issue_triage: true,
     invoices: true, expenses: true, issues: true, contracts: true, policies: true,
     churn_radar: true, lead_radar: true,
     push_notifications: true,

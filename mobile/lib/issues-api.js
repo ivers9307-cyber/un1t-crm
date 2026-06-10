@@ -65,6 +65,60 @@ export async function getIssueAttachmentUrl(issueId, attachmentId) {
 }
 
 // ────────────────────────────────────────────────────────────────
+// Handler inbox (W1 — issue triage). Owner/master only; every route is
+// gated by isHandler server-side and scoped to the active location.
+// ────────────────────────────────────────────────────────────────
+
+/**
+ * List issues at the active studio for triage. `status` is a comma-
+ * joined filter ('open,in_progress' is the server default for open work;
+ * pass 'resolved' or 'closed' for the history tabs).
+ */
+export async function listInboxIssues({ status } = {}) {
+  const headers = await authHeaders()
+  const qs = status ? `?status=${encodeURIComponent(status)}` : ''
+  const res = await fetch(`${API_BASE}/api/issues/inbox${qs}`, { headers })
+  return res.json().catch(() => ({ success: false, error: `Bad response (${res.status})` }))
+}
+
+/** Handler view of one issue (includes submitter + attachments). */
+export async function getInboxIssue(id) {
+  const headers = await authHeaders()
+  const res = await fetch(`${API_BASE}/api/issues/${id}/inbox`, { headers })
+  return res.json().catch(() => ({ success: false, error: `Bad response (${res.status})` }))
+}
+
+/** Claim an open issue → in_progress, stamps claimed_by/at. */
+export async function claimIssue(id) {
+  const headers = await authHeaders({ json: true })
+  const res = await fetch(`${API_BASE}/api/issues/${id}/claim`, { method: 'POST', headers })
+  return res.json().catch(() => ({ success: false, error: `Bad response (${res.status})` }))
+}
+
+/** Resolve an issue. `notes` is mandatory (the submitter gets pushed it). */
+export async function resolveIssue(id, notes) {
+  const headers = await authHeaders({ json: true })
+  const res = await fetch(`${API_BASE}/api/issues/${id}/resolve`, {
+    method: 'POST', headers, body: JSON.stringify({ notes }),
+  })
+  return res.json().catch(() => ({ success: false, error: `Bad response (${res.status})` }))
+}
+
+/** Close an issue → closed (no submitter notification). */
+export async function closeIssue(id) {
+  const headers = await authHeaders({ json: true })
+  const res = await fetch(`${API_BASE}/api/issues/${id}/close`, { method: 'POST', headers })
+  return res.json().catch(() => ({ success: false, error: `Bad response (${res.status})` }))
+}
+
+/** Signed URL for an attachment, via the handler-scoped route. */
+export async function getInboxAttachmentUrl(issueId, attachmentId) {
+  const headers = await authHeaders()
+  const res = await fetch(`${API_BASE}/api/issues/${issueId}/inbox/attachments/${attachmentId}`, { headers })
+  return res.json().catch(() => ({ success: false, error: `Bad response (${res.status})` }))
+}
+
+// ────────────────────────────────────────────────────────────────
 // Display helpers
 // ────────────────────────────────────────────────────────────────
 
