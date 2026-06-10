@@ -64,3 +64,36 @@ export function templateEventRow(field, value) {
       return null
   }
 }
+
+// IO: apply one template webhook event to the DB. Matches by meta_template_id,
+// idempotent (skip-when-unchanged → Meta retries are no-ops, no double-notify),
+// updates the row, writes the audit row, and returns the notification decision.
+// Best-effort caller (the webhook route) swallows errors.
+export async function applyTemplateEvent(db, field, value) {
+  const update = templateColumnUpdate(field, value)
+  if (!update) return { skipped: 'unknown_field' }
+
+  const metaId = String(value.message_template_id)
+  const { data: template } = await db.from('whatsapp_templates')
+    .select('id, location_id, name, status, quality_rating, category, rejection_reason')
+    .eq('meta_template_id', metaId)
+    .single()
+  if (!template) return { skipped: 'no_match' }
+
+  // Idempotent: if every target column already equals the new value, no-op.
+  const changed = Object.entries(update).some(([k, v]) => template[k] !== v)
+  if (!changed) return { skipped: 'unchanged', template }
+
+  await db.from('whatsapp_templates').update(update).eq('id', template.id)
+
+  const ev = templateEventRow(field, value)
+  if (ev) {
+    await db.from('whatsapp_template_events').insert({
+      template_id: template.id,
+      location_id: template.location_id,
+      ...ev,
+    })
+  }
+
+  return { template, notify: templateNotification(field, value, template.name) }
+}
