@@ -20,7 +20,9 @@ export default function SplitView({ master, detail, hasSelection = false }) {
   if (splitShowsBothPanes(isTablet)) {
     return (
       <View className="flex-1 flex-row">
-        <View className={masterPaneClasses()} style={{ width: MASTER_PANE_WIDTH_PT }}>{master}</View>
+        {/* shrink-0: pin the master pane at its fixed width so tall
+            detail content can't squeeze it under RN's flexbox. */}
+        <View className={`${masterPaneClasses()} shrink-0`} style={{ width: MASTER_PANE_WIDTH_PT }}>{master}</View>
         <View className="flex-1">{detail}</View>
       </View>
     )
