@@ -104,6 +104,13 @@ export default function RootLayout() {
               <Stack.Screen name="bookings" options={{ headerShown: false }} />
               <Stack.Screen name="radar" options={{ headerShown: false }} />
               <Stack.Screen name="staff" options={{ headerShown: false }} />
+              {/* Single-file routes have no folder _layout to host a header,
+                  so enable the native header here (each screen still supplies
+                  its own title + BackHeaderLeft). Without this they inherit
+                  the headerless root stack and render under the status bar —
+                  the same bug the folder sections fix via their _layout.jsx. */}
+              <Stack.Screen name="approvals" options={{ headerShown: true, headerStyle: { backgroundColor: '#FFFFFF' }, headerTitleStyle: { fontWeight: '600' }, headerTintColor: '#111827' }} />
+              <Stack.Screen name="customise-bar" options={{ headerShown: true, headerStyle: { backgroundColor: '#FFFFFF' }, headerTitleStyle: { fontWeight: '600' }, headerTintColor: '#111827' }} />
             </Stack>
           </BiometricLockProvider>
         </AuthProvider>
