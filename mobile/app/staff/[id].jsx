@@ -108,6 +108,16 @@ export default function StaffDetail() {
                 </View>
               )}
 
+              {canEdit && (
+                <View className="mt-3">
+                  <Button
+                    variant="secondary"
+                    label="Edit permissions"
+                    onPress={() => router.push(`/staff/permissions/${id}`)}
+                  />
+                </View>
+              )}
+
               {isAdmin && staff?.email && (
                 <View className="mt-4">
                   <Button
