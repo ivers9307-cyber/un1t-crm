@@ -55,3 +55,19 @@ export function cardClasses({ padding = 'md', className = '' } = {}) {
   return ['rounded-2xl border border-un1t-border bg-white', CARD_PADDING[padding] ?? CARD_PADDING.md, className]
     .filter(Boolean).join(' ')
 }
+
+// ── Modal ──────────────────────────────────────────────────────────
+// Responsive: bottom-sheet on phone, centered dialog on tablet. The
+// shell (components/ui/Modal.jsx) reads useIsTablet() and passes the
+// boolean here so the layout decision stays unit-testable.
+export function modalOverlayClasses() {
+  return 'flex-1 bg-black/50'
+}
+export function modalContainerClasses({ isTablet = false } = {}) {
+  return isTablet ? 'flex-1 items-center justify-center p-6' : 'flex-1 justify-end'
+}
+export function modalPanelClasses({ isTablet = false } = {}) {
+  return isTablet
+    ? 'w-full max-w-lg rounded-2xl bg-white p-5'
+    : 'w-full rounded-t-2xl bg-white p-5 pb-8'
+}

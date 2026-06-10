@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   buttonClasses, buttonTextClasses, cardClasses,
   BUTTON_VARIANTS, BUTTON_SIZES, CARD_PADDING,
+  modalOverlayClasses, modalContainerClasses, modalPanelClasses,
 } from './ui-styles.js'
 
 describe('buttonClasses', () => {
@@ -51,5 +52,28 @@ describe('cardClasses', () => {
   })
   it('appends caller className', () => {
     expect(cardClasses({ className: 'mt-4' })).toContain('mt-4')
+  })
+})
+
+describe('modal classes', () => {
+  it('overlay dims the full screen', () => {
+    expect(modalOverlayClasses()).toContain('bg-black/50')
+    expect(modalOverlayClasses()).toContain('flex-1')
+  })
+  it('tablet centers the panel; phone anchors it to the bottom', () => {
+    expect(modalContainerClasses({ isTablet: true })).toContain('justify-center')
+    expect(modalContainerClasses({ isTablet: false })).toContain('justify-end')
+  })
+  it('tablet panel is a rounded card with a max width; phone panel is a top-rounded sheet', () => {
+    const tablet = modalPanelClasses({ isTablet: true })
+    const phone = modalPanelClasses({ isTablet: false })
+    expect(tablet).toContain('rounded-2xl')
+    expect(tablet).toContain('max-w-lg')
+    expect(phone).toContain('rounded-t-2xl')
+    expect(phone).not.toContain('max-w-lg')
+  })
+  it('uses un1t tokens and never emits undefined', () => {
+    expect(modalPanelClasses({ isTablet: false })).not.toContain('undefined')
+    expect(modalPanelClasses()).toContain('bg-white')
   })
 })
