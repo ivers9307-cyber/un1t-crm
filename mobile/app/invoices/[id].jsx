@@ -6,16 +6,19 @@
 import { useState, useEffect, useCallback } from 'react'
 import {
   View, Text, ScrollView, Pressable, ActivityIndicator,
-  Alert, RefreshControl,
+  Alert, RefreshControl, TextInput,
 } from 'react-native'
 import { useLocalSearchParams, useRouter, Stack } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import * as WebBrowser from 'expo-web-browser'
-import { getInvoice, getInvoicePdfUrl, revokeInvoice, periodLabel } from '../../lib/invoices-api'
+import { getInvoice, getInvoicePdfUrl, revokeInvoice, approveInvoice, declineInvoice, periodLabel } from '../../lib/invoices-api'
 import BackHeaderLeft from '../../components/BackHeaderLeft'
 
 const STATUS_STYLE = {
   submitted: { label: 'Awaiting review', tint: '#D97706', bg: 'bg-amber-500/20', text: 'text-amber-700', icon: 'time-outline' },
+  // Owner-approved → awaiting the bookkeeper's Xero sign-off (web). From
+  // the owner/contractor view it reads as "Approved".
+  awaiting_accountant_review: { label: 'Approved', tint: '#059669', bg: 'bg-green-500/20', text: 'text-green-700', icon: 'checkmark-circle-outline' },
   approved:  { label: 'Approved',        tint: '#059669', bg: 'bg-green-500/20', text: 'text-green-700', icon: 'checkmark-circle-outline' },
   declined:  { label: 'Declined',        tint: '#DC2626', bg: 'bg-red-500/20',   text: 'text-red-700',   icon: 'close-circle-outline' },
   revoked:   { label: 'Revoked',         tint: '#64748B', bg: 'bg-slate-500/20', text: 'text-slate-700', icon: 'arrow-undo-outline' },
@@ -30,6 +33,9 @@ export default function InvoiceDetailScreen() {
   const [error, setError] = useState(null)
   const [busy, setBusy] = useState(null)
   const [pdfLoading, setPdfLoading] = useState(false)
+  const [declining, setDeclining] = useState(false)
+  const [reason, setReason] = useState('')
+  const [actionError, setActionError] = useState(null)
 
   const fetch = useCallback(async () => {
     setError(null)
@@ -86,6 +92,25 @@ export default function InvoiceDetailScreen() {
     } else {
       Alert.alert('Revoke failed', r.error || 'Unknown error')
     }
+  }
+
+  // Approver actions (owner/master). The routes enforce owner-at-location
+  // / master independently of this UI.
+  async function doApprove() {
+    setBusy('approve'); setActionError(null)
+    const r = await approveInvoice(id)
+    setBusy(null)
+    if (r.success === false) { setActionError(r.error || 'Could not approve'); return }
+    await fetch()
+  }
+  async function doDecline() {
+    if (!reason.trim()) { setActionError('Add a reason so the contractor can fix it.'); return }
+    setBusy('decline'); setActionError(null)
+    const r = await declineInvoice(id, reason.trim())
+    setBusy(null)
+    if (r.success === false) { setActionError(r.error || 'Could not decline'); return }
+    setDeclining(false); setReason('')
+    await fetch()
   }
 
   if (loading) {
@@ -181,6 +206,52 @@ export default function InvoiceDetailScreen() {
           <Ionicons name="open-outline" size={18} color="#64748B" />
         </Pressable>
 
+        {/* Approver actions — owner/master reviewing a submitted invoice.
+            The approve/decline routes enforce owner-at-location / master. */}
+        {(data.viewer_role === 'owner' || data.viewer_role === 'master') && data.status === 'submitted' && (
+          <View className="mb-4">
+            {data.contractor?.full_name && (
+              <Text className="text-xs text-un1t-subtle mb-2 px-1">Submitted by {data.contractor.full_name}</Text>
+            )}
+            {actionError && (
+              <View className="bg-red-500/10 border border-red-500/30 rounded-xl p-3 mb-3">
+                <Text className="text-red-500 text-sm">{actionError}</Text>
+              </View>
+            )}
+            {!declining ? (
+              <View className="flex-row gap-2">
+                <Pressable onPress={doApprove} disabled={!!busy} className="flex-1 bg-green-600 active:opacity-80 px-4 py-3 rounded-xl items-center flex-row justify-center">
+                  {busy === 'approve' ? <ActivityIndicator color="#FFFFFF" /> : <Ionicons name="checkmark" size={16} color="#FFFFFF" />}
+                  <Text className="text-sm font-semibold text-white ml-2">Approve</Text>
+                </Pressable>
+                <Pressable onPress={() => { setDeclining(true); setActionError(null) }} disabled={!!busy} className="flex-1 bg-red-500/15 border border-red-500/30 active:opacity-70 px-4 py-3 rounded-xl items-center flex-row justify-center">
+                  <Ionicons name="close" size={16} color="#DC2626" />
+                  <Text className="text-sm font-semibold text-red-700 ml-2">Decline</Text>
+                </Pressable>
+              </View>
+            ) : (
+              <View>
+                <TextInput
+                  value={reason}
+                  onChangeText={setReason}
+                  placeholder="Why is this declined? (sent to the contractor)"
+                  placeholderTextColor="#94A3B8"
+                  multiline
+                  className="rounded-xl border border-un1t-border bg-white px-3 py-2 text-un1t-text mb-2"
+                  style={{ minHeight: 64 }}
+                />
+                <Pressable onPress={doDecline} disabled={!!busy || !reason.trim()} className={`px-4 py-3 rounded-xl items-center flex-row justify-center ${!reason.trim() ? 'bg-red-500/30' : 'bg-red-600 active:opacity-80'}`}>
+                  {busy === 'decline' ? <ActivityIndicator color="#FFFFFF" /> : <Ionicons name="close-circle" size={16} color="#FFFFFF" />}
+                  <Text className="text-sm font-semibold text-white ml-2">Confirm decline</Text>
+                </Pressable>
+                <Pressable onPress={() => { setDeclining(false); setReason(''); setActionError(null) }} className="items-center mt-2" hitSlop={8}>
+                  <Text className="text-sm text-un1t-subtle">Cancel</Text>
+                </Pressable>
+              </View>
+            )}
+          </View>
+        )}
+
         {/* Audit timeline */}
         <View className="bg-un1t-surface border border-un1t-border rounded-2xl p-4 mb-4">
           <Text className="text-xs uppercase font-semibold text-un1t-subtle mb-3">Audit trail</Text>
@@ -219,7 +290,7 @@ function Timeline({ data }) {
   if (data.reviewed_at && data.status === 'declined') {
     events.push({ ts: data.reviewed_at, label: 'Declined', sub: data.reviewer?.full_name ? `by ${data.reviewer.full_name}` : null, tone: 'red' })
   }
-  if (data.reviewed_at && data.status === 'approved') {
+  if (data.reviewed_at && (data.status === 'approved' || data.status === 'awaiting_accountant_review')) {
     events.push({ ts: data.reviewed_at, label: 'Approved', sub: data.reviewer?.full_name ? `by ${data.reviewer.full_name}` : null, tone: 'green' })
   }
   if (data.xero_synced_at) events.push({ ts: data.xero_synced_at, label: 'Forwarded to accounts', tone: 'green' })
