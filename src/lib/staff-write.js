@@ -71,7 +71,13 @@ export function assertOwnerAssignmentScope({ isMaster, callerOwnerLocationIds, t
  * plus every existing row at a NON-owned location preserved verbatim
  * (role, is_default, door access, and the permissions blob — mig 058).
  * Then normalise to exactly one is_default. Pure mirror of route lines
- * 285-322. */
+ * 285-322.
+ *
+ * NOTE: in the master path the body `assignments` objects are pushed by
+ * reference, so the single-default normalisation below can mutate
+ * `assignments[i].is_default` in place (matching the original inline
+ * route behaviour). Callers should not reuse the input array afterward
+ * expecting it untouched. */
 export function computeDesiredAssignments({ isMaster, callerOwnerLocationIds, assignments, existingLinks }) {
   const links = existingLinks || []
   const desired = []

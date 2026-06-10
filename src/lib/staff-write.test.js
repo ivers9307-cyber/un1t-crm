@@ -106,3 +106,21 @@ describe('computeDesiredAssignments', () => {
     expect(out).toContainEqual({ location_id: 'loc-2', role: 'staff', is_default: true, unifi_door_access: false, permissions: {} })
   })
 })
+
+describe('staff-write — characterization completeness (C2b.1 review)', () => {
+  it('buildStaffProfilePatch skips a known key whose value is explicitly undefined', () => {
+    expect(buildStaffProfilePatch({ full_name: undefined, active: true })).toEqual({ active: true })
+  })
+  it('assertOwnerAssignmentScope returns null for master with no assignments', () => {
+    expect(assertOwnerAssignmentScope({ isMaster: true, callerOwnerLocationIds: [], targetLocationIds: ['x'], assignments: undefined })).toBeNull()
+  })
+  it('computeDesiredAssignments (owner) silently drops a body row at a non-owned location', () => {
+    const out = computeDesiredAssignments({
+      isMaster: false,
+      callerOwnerLocationIds: ['loc-1'],
+      assignments: [{ location_id: 'loc-9', role: 'staff', is_default: true }],
+      existingLinks: [],
+    })
+    expect(out.find(a => a.location_id === 'loc-9')).toBeUndefined()
+  })
+})
