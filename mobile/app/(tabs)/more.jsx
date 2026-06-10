@@ -156,6 +156,9 @@ export default function More() {
   if (canMobile(profile, 'invoices_inbox', activeLocation)) tiles.push({ key: 'invoicesinbox', icon: 'file-tray-full-outline', label: 'Invoices inbox', onPress: () => router.push('/invoices/inbox') })
   // W2 — revenue read view (race signups + car deposits). Manager+/owner/master.
   if (canMobile(profile, 'orders', activeLocation)) tiles.push({ key: 'orders', icon: 'cash-outline', label: 'Orders', onPress: () => router.push('/orders') })
+  // W2 — CCF Autos car-import tracker (read-only). Off by default; master
+  // or per-user opt-in, and only where car_processing is on at the location.
+  if (canMobile(profile, 'car_processing', activeLocation)) tiles.push({ key: 'cars', icon: 'car-sport-outline', label: 'Cars', onPress: () => router.push('/cars') })
   // W1 — per-location feature toggles (master only; matches the web
   // canEditLocationFeatures gate). Flip which features this studio shows.
   if (profile?.isMaster || profile?.role === 'master') tiles.push({ key: 'features', icon: 'options-outline', label: 'Location features', onPress: () => router.push('/location-features') })

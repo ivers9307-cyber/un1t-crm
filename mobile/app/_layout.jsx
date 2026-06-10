@@ -104,6 +104,7 @@ export default function RootLayout() {
               <Stack.Screen name="bookings" options={{ headerShown: false }} />
               <Stack.Screen name="radar" options={{ headerShown: false }} />
               <Stack.Screen name="staff" options={{ headerShown: false }} />
+              <Stack.Screen name="cars" options={{ headerShown: false }} />
               {/* Single-file routes have no folder _layout to host a header,
                   so enable the native header here (each screen still supplies
                   its own title + BackHeaderLeft). Without this they inherit
