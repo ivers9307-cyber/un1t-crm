@@ -154,6 +154,8 @@ export default function More() {
   if (canMobile(profile, 'issue_triage', activeLocation)) tiles.push({ key: 'issueinbox', icon: 'construct-outline', label: 'Issue inbox', onPress: () => router.push('/issues/inbox') })
   // W2 — invoice approver inbox (owner/master review + approve/decline).
   if (canMobile(profile, 'invoices_inbox', activeLocation)) tiles.push({ key: 'invoicesinbox', icon: 'file-tray-full-outline', label: 'Invoices inbox', onPress: () => router.push('/invoices/inbox') })
+  // W2 — revenue read view (race signups + car deposits). Manager+/owner/master.
+  if (canMobile(profile, 'orders', activeLocation)) tiles.push({ key: 'orders', icon: 'cash-outline', label: 'Orders', onPress: () => router.push('/orders') })
   // W1 — per-location feature toggles (master only; matches the web
   // canEditLocationFeatures gate). Flip which features this studio shows.
   if (profile?.isMaster || profile?.role === 'master') tiles.push({ key: 'features', icon: 'options-outline', label: 'Location features', onPress: () => router.push('/location-features') })
