@@ -142,3 +142,38 @@ describe('canMobile — cross-platform keys (studio_management)', () => {
     expect(canMobile({ role: 'master' }, 'studio_management', location)).toBe(true)
   })
 })
+
+describe('canMobile — staff_management default (STAFF-C3 parity inversion)', () => {
+  // The mobile staff-management surface (directory + role/permission
+  // editors) is gated by this key. Its role defaults MUST match the
+  // pre-C3 hardcoded gate (['master','owner','manager']) so the inversion
+  // changes who can be GRANTED/REVOKED the surface, not who sees it by
+  // default. A regression here silently shows or hides Staff for a role.
+  const roleDefaultLoc = { features: {}, permissions: { mobile: {} } }
+
+  it('defaults ON for master / owner / manager (matches the old role gate)', () => {
+    expect(canMobile({ role: 'master' }, 'staff_management', roleDefaultLoc)).toBe(true)
+    expect(canMobile({ role: 'owner' }, 'staff_management', roleDefaultLoc)).toBe(true)
+    expect(canMobile({ role: 'manager' }, 'staff_management', roleDefaultLoc)).toBe(true)
+  })
+
+  it('defaults OFF for head_coach / staff', () => {
+    expect(canMobile({ role: 'head_coach' }, 'staff_management', roleDefaultLoc)).toBe(false)
+    expect(canMobile({ role: 'staff' }, 'staff_management', roleDefaultLoc)).toBe(false)
+  })
+
+  it('is grantable per-user — a head_coach with an explicit override sees it', () => {
+    const loc = { features: {}, permissions: { mobile: { staff_management: true } } }
+    expect(canMobile({ role: 'head_coach' }, 'staff_management', loc)).toBe(true)
+  })
+
+  it('is revocable per-user — a manager with an explicit false loses it', () => {
+    const loc = { features: {}, permissions: { mobile: { staff_management: false } } }
+    expect(canMobile({ role: 'manager' }, 'staff_management', loc)).toBe(false)
+  })
+
+  it('honours the location feature gate (tier 1) when staff_management is disabled at the location', () => {
+    const loc = { features: { staff_management: false }, permissions: { mobile: { staff_management: true } } }
+    expect(canMobile({ role: 'owner' }, 'staff_management', loc)).toBe(false)
+  })
+})

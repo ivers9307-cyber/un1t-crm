@@ -8,9 +8,8 @@ import { useAuth } from '../../lib/auth-context'
 import { sdk } from '../../lib/sdk'
 import { formatRole, formatEmploymentType } from '../../lib/staff-format'
 import { Card, Button } from '../../components/ui'
+import { canMobile } from '../../lib/permissions'
 import BackHeaderLeft from '../../components/BackHeaderLeft'
-
-const ADMIN_ROLES = ['master', 'owner', 'manager']
 
 function Row({ label, value }) {
   return (
@@ -29,9 +28,11 @@ export default function StaffDetail() {
   // payload with a repeated param yields an array. Normalise to the first
   // value so sdk.staff.get never receives an array (→ /api/staff/a,b → 404).
   const id = Array.isArray(params.id) ? params.id[0] : params.id
-  const { profile } = useAuth()
+  const { profile, activeLocation } = useAuth()
   const router = useRouter()
-  const isAdmin = !!profile && ADMIN_ROLES.includes(profile.role)
+  // Surface visibility — gated by the staff_management mobile permission
+  // (STAFF-C3). Edit capability (canEdit) stays owner/master.
+  const isAdmin = canMobile(profile, 'staff_management', activeLocation)
   const canEdit = !!profile && OWNER_ROLES.includes(profile.role)
 
   const [staff, setStaff] = useState(null)
