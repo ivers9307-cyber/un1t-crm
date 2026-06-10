@@ -4,6 +4,7 @@ import {
   BUTTON_VARIANTS, BUTTON_SIZES, CARD_PADDING,
   modalOverlayClasses, modalContainerClasses, modalPanelClasses,
   dataTableMode, tableHeaderClasses, tableRowClasses, tableHeaderTextClasses, tableCellTextClasses, dataCardClasses, dataCardLabelClasses, dataCardValueClasses,
+  tabItemClasses, tabTextClasses,
 } from './ui-styles.js'
 
 describe('buttonClasses', () => {
@@ -80,6 +81,21 @@ describe('data table classes', () => {
     expect(dataCardLabelClasses()).toContain('un1t-subtle')
     expect(dataCardValueClasses()).toContain('un1t-text')
     expect(tableRowClasses({ pressable: true })).not.toContain('undefined')
+  })
+})
+
+describe('tabs classes', () => {
+  it('active tab is filled with the accent; inactive is bordered surface', () => {
+    expect(tabItemClasses({ active: true })).toContain('bg-un1t-accent')
+    expect(tabItemClasses({ active: false })).toContain('border-un1t-border')
+  })
+  it('active text is white; inactive text is muted', () => {
+    expect(tabTextClasses({ active: true })).toContain('text-white')
+    expect(tabTextClasses({ active: false })).toContain('un1t-subtle')
+  })
+  it('never emits undefined for default args', () => {
+    expect(tabItemClasses()).not.toContain('undefined')
+    expect(tabTextClasses()).not.toContain('undefined')
   })
 })
 

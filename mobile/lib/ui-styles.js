@@ -86,6 +86,18 @@ export function dataCardValueClasses() {
   return 'text-sm text-un1t-text'
 }
 
+// ── Tabs ───────────────────────────────────────────────────────────
+// Pill tabs. Active = filled accent; inactive = bordered surface. The
+// shell wraps the row in a horizontal ScrollView on phone (overflow)
+// and a plain row on tablet.
+export function tabItemClasses({ active = false } = {}) {
+  return ['rounded-full px-4 py-2', active ? 'bg-un1t-accent' : 'bg-un1t-surface border border-un1t-border']
+    .join(' ')
+}
+export function tabTextClasses({ active = false } = {}) {
+  return ['text-sm font-medium', active ? 'text-white' : 'text-un1t-subtle'].join(' ')
+}
+
 // ── Modal ──────────────────────────────────────────────────────────
 // Responsive: bottom-sheet on phone, centered dialog on tablet. The
 // shell (components/ui/Modal.jsx) reads useIsTablet() and passes the
