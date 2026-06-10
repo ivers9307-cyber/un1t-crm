@@ -54,6 +54,48 @@ export async function listMyTasks({ locationId, profileId, includeDone = false }
 }
 
 /**
+ * Create a task at a location, optionally assigned to a colleague.
+ *
+ * Mirrors the web TasksPage `addTask` insert shape exactly (kind=task,
+ * status=todo, source=manual) so it rides the same RLS path
+ * (activities_location_scoped) and the mig 159 status/done trigger. The
+ * returning select uses TASK_SELECT — NO profiles embed (the
+ * authenticated role can't SELECT profiles; see the note above).
+ *
+ * @param {object} p
+ * @param {string} p.locationId   the task's location (the active studio)
+ * @param {string} p.subject      required, 1..500 chars
+ * @param {string|null} [p.assigneeId]  profile id to assign to (null = unassigned)
+ * @param {string|null} [p.dueDate]     'YYYY-MM-DD'
+ * @param {string|null} [p.dueTime]     'HH:MM'
+ * @param {string|null} [p.priority]    'low'|'medium'|'high'|'urgent'
+ * @param {string|null} [p.note]
+ */
+export async function createTask({ locationId, subject, assigneeId = null, dueDate = null, dueTime = null, priority = null, note = null }) {
+  if (!locationId) return { success: false, error: 'locationId required' }
+  const trimmed = (subject || '').trim()
+  if (!trimmed) return { success: false, error: 'A task needs a subject' }
+  const insert = {
+    kind: 'task',
+    status: 'todo',
+    source: 'manual',
+    location_id: locationId,
+    subject: trimmed,
+    assignee_id: assigneeId || null,
+    due_date: dueDate || null,
+    due_time: dueTime || null,
+    priority: priority || null,
+    note: note || null,
+  }
+  const { data, error } = await supabase.from('activities')
+    .insert(insert)
+    .select(TASK_SELECT)
+    .single()
+  if (error) return { success: false, error: error.message }
+  return { success: true, data }
+}
+
+/**
  * Single task by id. Used by the detail screen — push notifications
  * carry the task_id and deep-link into here.
  */
