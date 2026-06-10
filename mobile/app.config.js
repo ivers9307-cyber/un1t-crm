@@ -39,7 +39,13 @@ export default ({ config }) => ({
   // can now PIN-login from the web shell at /studio-login.
   name: 'CF Studio',
   slug: 'un1t-crm-mobile',
-  version: '1.3.0',
+  // 1.3.1 — bakes the W1/W2/W3 mobile-parity wave into the embedded bundle:
+  // the full staff & access suite, tasks create/assign, issue inbox,
+  // contacts, location-feature toggles, invoices inbox, orders, cars, and
+  // trackside race-day control. JS-ONLY — every one already shipped as an OTA
+  // to the 1.3.0 runtime lane, so runtimeVersion stays '1.3.0' (no native
+  // change; the fresh binary + existing 1.3.0 installs share one OTA lane).
+  version: '1.3.1',
   // We ship iOS + Android only. Without this, Expo defaults to
   // ['ios','android','web'] and `eas update` exports for web too —
   // which crashes the publish because react-native-web isn't installed.
