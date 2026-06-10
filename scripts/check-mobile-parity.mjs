@@ -71,7 +71,10 @@ for (const m of MOBILE_PERMISSIONS) {
 // you ship a web feature that genuinely doesn't make sense on
 // mobile.
 const WEB_ONLY_OK = {
-  contacts:       'Searchable contact list lives only on web for now (mobile uses pipeline drill-in).',
+  // W1 (parity inversion): contacts now has a mobile read surface — a
+  // searchable directory + contact detail via the `contacts`
+  // MOBILE_PERMISSIONS entry (webEquivalent: 'contacts'), so it's matched,
+  // not exempted here. Create/edit stays on web for now.
   events:         'Booking-link / event-type management is admin-only and rare on mobile.',
   // MOBILE-RADAR: churn_radar + lead_radar now have a read-only mobile
   // glance (More tab → Radar). The full triage dashboards stay

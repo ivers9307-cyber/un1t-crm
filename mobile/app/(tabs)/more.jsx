@@ -129,6 +129,10 @@ export default function More() {
   if (inMore.has('tasks'))     tiles.push({ key: 'tasks', icon: 'checkbox-outline', label: 'Tasks', onPress: () => router.push('/tasks') })
   if (inMore.has('bookings'))  tiles.push({ key: 'bookings', icon: 'calendar-clear-outline', label: 'Bookings', onPress: () => router.push('/bookings') })
   if (inMore.has('pipeline'))  tiles.push({ key: 'pipeline', icon: 'trending-up-outline', label: 'Pipeline', onPress: () => router.push('/pipeline') })
+  // W1 — searchable contact directory (read). Gated directly by canMobile
+  // (contacts isn't a bar-eligible layout feature yet); defaults on for
+  // every role, like the web contacts list.
+  if (canMobile(profile, 'contacts', activeLocation)) tiles.push({ key: 'contacts', icon: 'people-circle-outline', label: 'Contacts', onPress: () => router.push('/contacts') })
   if (inMore.has('invoices'))  tiles.push({ key: 'invoices', icon: 'receipt-outline', label: 'Invoices', onPress: () => router.push('/invoices') })
   if (inMore.has('expenses'))  tiles.push({ key: 'expenses', icon: 'wallet-outline', label: 'Expenses', onPress: () => router.push('/expenses') })
   if (inMore.has('radar'))     tiles.push({ key: 'radar', icon: 'pulse-outline', label: 'Radar', onPress: () => router.push('/radar') })

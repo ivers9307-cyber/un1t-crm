@@ -249,6 +249,11 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
 export const MOBILE_PERMISSIONS = Object.freeze([
   { key: 'schedule',           label: 'Schedule',                 hint: 'View shifts, request time off, swap requests',                 webEquivalent: 'schedule' },
   { key: 'pipeline',           label: 'Pipeline & Deals',         hint: 'Move deals, log calls, see new leads',                          webEquivalent: 'pipeline' },
+  // W1 — searchable member directory + contact lookup on mobile (read).
+  // Mirrors the web contacts list (webEquivalent links them for the
+  // parity linter, dropping contacts from WEB_ONLY_OK). Defaults on for
+  // every role, same as web — front-of-house staff look members up too.
+  { key: 'contacts',           label: 'Contacts',                 hint: 'Search the member directory and open a contact to call / message them. Read-only on mobile; editing stays on web.', webEquivalent: 'contacts' },
   { key: 'whatsapp',           label: 'WhatsApp Inbox',           hint: 'Reply to inbound WhatsApp messages on the go',                  webEquivalent: 'whatsapp' },
   // NOTIF.2: mobile mirror of the web 'activities' feature (Tasks tab).
   // Different name from the web key because 'tasks' reads better on a
@@ -358,6 +363,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
   // also short-circuits true for master regardless of these values.
   master: {
     schedule: true, pipeline: true, whatsapp: true,
+    contacts: true,
     tasks: true, bookings: true,
     time_off: true,
     approvals: true,
@@ -377,6 +383,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
   },
   staff: {
     schedule: true, pipeline: false, whatsapp: false,
+    contacts: true,
     // Coaches see tasks (they get assigned them) but not booking
     // reminders by default — those are for the on-shift operator,
     // surfaced through the manager/head_coach defaults below.
@@ -403,6 +410,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
   },
   head_coach: {
     schedule: true, pipeline: true, whatsapp: true,
+    contacts: true,
     tasks: true, bookings: true,
     time_off: true,
     approvals: true,
@@ -426,6 +434,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
   },
   manager: {
     schedule: true, pipeline: true, whatsapp: true,
+    contacts: true,
     tasks: true, bookings: true,
     time_off: true,
     approvals: true,
@@ -451,6 +460,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
   },
   owner: {
     schedule: true, pipeline: true, whatsapp: true,
+    contacts: true,
     tasks: true, bookings: true,
     time_off: true,
     approvals: true,

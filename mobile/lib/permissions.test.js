@@ -195,3 +195,18 @@ describe('canMobile — issue_triage default (W1 parity inversion)', () => {
     expect(canMobile({ role: 'staff' }, 'issue_triage', roleDefaultLoc)).toBe(false)
   })
 })
+
+describe('canMobile — contacts default (W1 parity inversion)', () => {
+  const roleDefaultLoc = { features: {}, permissions: { mobile: {} } }
+
+  it('defaults ON for every role (mirrors the web contacts list)', () => {
+    for (const role of ['master', 'owner', 'manager', 'head_coach', 'staff']) {
+      expect(canMobile({ role }, 'contacts', roleDefaultLoc)).toBe(true)
+    }
+  })
+
+  it('respects a per-user revoke and the location feature gate', () => {
+    expect(canMobile({ role: 'staff' }, 'contacts', { features: {}, permissions: { mobile: { contacts: false } } })).toBe(false)
+    expect(canMobile({ role: 'owner' }, 'contacts', { features: { contacts: false }, permissions: { mobile: {} } })).toBe(false)
+  })
+})
