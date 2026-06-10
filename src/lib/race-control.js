@@ -7,123 +7,21 @@
 // channel) gets a team auto-created so the operator never sees an
 // "unteamed" row.
 
-/**
- * Format an elapsed-time number of seconds as HH:MM:SS.
- *
- *    0       -> "00:00"
- *    59      -> "00:59"
- *    60      -> "01:00"
- *    3599    -> "59:59"
- *    3600    -> "1:00:00"
- *    7200    -> "2:00:00"
- *    null    -> "—"
- *
- * No hour component shown for sub-60-min times — keeps the race UI
- * scannable. Hours-and-up shows H:MM:SS with no leading zero on hours
- * (a 25:00:00 race is valid display).
- *
- * @param {number|null|undefined} seconds
- * @returns {string}
- */
 import { logWarn } from './log'
 
-export function formatElapsed(seconds) {
-  if (seconds == null || !Number.isFinite(seconds) || seconds < 0) return '—'
-  const s = Math.floor(seconds)
-  const hh = Math.floor(s / 3600)
-  const mm = Math.floor((s % 3600) / 60)
-  const ss = s % 60
-  const pad = (n) => String(n).padStart(2, '0')
-  if (hh === 0) return `${pad(mm)}:${pad(ss)}`
-  return `${hh}:${pad(mm)}:${pad(ss)}`
-}
-
-/**
- * Classify a booking's race state into one of the four buckets the race
- * UI cares about. Pure — derives from booking + status.
- *
- *   'next_up'    — confirmed booking, no race_started_at yet
- *   'on_course'  — race_started_at set, race_finished_at not yet
- *   'completed'  — both timestamps set
- *   'no_show'    — booking status is 'no_show' OR 'cancelled'
- *
- * @param {object} booking
- * @returns {'next_up' | 'on_course' | 'completed' | 'no_show'}
- */
-export function classifyBookingState(booking) {
-  if (!booking) return 'next_up'
-  if (booking.status === 'no_show' || booking.status === 'cancelled') return 'no_show'
-  if (booking.race_finished_at) return 'completed'
-  if (booking.race_started_at) return 'on_course'
-  return 'next_up'
-}
-
-/**
- * Compute elapsed seconds between two ISO timestamps. Returns null if
- * either is missing. Negative results clamp to 0 (defensive — would
- * indicate clock skew or a reset-then-start race condition).
- *
- * @param {string|null|undefined} startIso
- * @param {string|null|undefined} endIso
- * @returns {number|null}
- */
-export function elapsedSecondsBetween(startIso, endIso) {
-  if (!startIso || !endIso) return null
-  const ms = Date.parse(endIso) - Date.parse(startIso)
-  if (!Number.isFinite(ms)) return null
-  return Math.max(0, Math.floor(ms / 1000))
-}
-
-/**
- * Sum a registration's penalties[] (mig 124). Operator-applied
- * adjustments are stored as one row per penalty so the audit
- * trail is preserved; the UI sums them to a single offset
- * applied to displayed elapsed time.
- *
- * Returns 0 (not null) for missing/empty arrays so the caller
- * can additively combine without null-checking. Coerces non-
- * numeric entries to 0 — defensive against malformed payloads.
- *
- *   penaltySumSeconds(undefined)              -> 0
- *   penaltySumSeconds([])                     -> 0
- *   penaltySumSeconds([{seconds: 30}])        -> 30
- *   penaltySumSeconds([{seconds: 30}, {seconds: -10}]) -> 20
- *
- * @param {Array<{seconds:number}>|null|undefined} penalties
- * @returns {number}
- */
-export function penaltySumSeconds(penalties) {
-  if (!Array.isArray(penalties) || penalties.length === 0) return 0
-  let total = 0
-  for (const p of penalties) {
-    const n = Number(p?.seconds)
-    if (Number.isFinite(n)) total += n
-  }
-  return total
-}
-
-/**
- * Adjusted elapsed time for a registration: base elapsed +
- * sum(penalties.seconds). Returns null if the base elapsed is
- * unknowable (no start, or no finish for completed view —
- * caller decides which timestamp to pass for endIso). Penalties
- * apply on top of whatever the caller passes; for live "on
- * course" rows pass nowIso as endIso so penalties show even
- * before the team finishes.
- *
- * Negative result clamps to 0 (a -60s credit on a 30s elapsed
- * shouldn't display as -30s; treat as a finish at zero).
- *
- * @param {string|null|undefined} startIso
- * @param {string|null|undefined} endIso
- * @param {Array<{seconds:number}>|null|undefined} penalties
- * @returns {number|null}
- */
-export function elapsedWithPenalties(startIso, endIso, penalties) {
-  const base = elapsedSecondsBetween(startIso, endIso)
-  if (base == null) return null
-  return Math.max(0, base + penaltySumSeconds(penalties))
-}
+// SHARED-CORE: the pure timing helpers (formatElapsed / classifyBookingState
+// / elapsedSecondsBetween / penaltySumSeconds / elapsedWithPenalties) moved
+// to shared/race-control.js so the mobile race-day control screen imports the
+// exact same source. Re-exported here so every web caller — and
+// race-control.test.js — keeps importing them from '@/lib/race-control'
+// unchanged. The IO helper ensureTeamForBooking stays web-only below.
+export {
+  formatElapsed,
+  classifyBookingState,
+  elapsedSecondsBetween,
+  penaltySumSeconds,
+  elapsedWithPenalties,
+} from '../../shared/race-control'
 
 /**
  * Find-or-create a team for the given booking. Used by the race API

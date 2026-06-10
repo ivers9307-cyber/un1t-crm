@@ -322,6 +322,12 @@ export const MOBILE_PERMISSIONS = Object.freeze([
   // same as the web car_processing. Heavy actions (deposit link, Xero,
   // uploads, status changes) stay desktop.
   { key: 'car_processing', label: 'Car processing',           hint: 'Tesla import tracker (CCF Autos) — read-only on mobile. Off by default; enable per user.', webEquivalent: 'car_processing' },
+  // W3 — trackside race-day control (start / finish / reset runners) on
+  // mobile/tablet, mirroring the web RaceControlPanel. Manager+ by default:
+  // the race LIST route (GET /api/races) is MANAGER_ROLES, and that's the
+  // mobile entry point. The board + actions re-check the races feature
+  // server-side. Race event authoring stays on the web.
+  { key: 'races', label: 'Race-day control',                  hint: 'Trackside race-day control (start / finish / reset runners) on mobile. Manager+ by default; race event authoring stays on the web.', webEquivalent: 'races' },
   // Mig 093: door_unlock was promoted to a cross-platform key
   // named `studio_management` (lives in WEB_PERMISSIONS, top-level
   // on profiles.permissions — same shape as dashboard_*). Both
@@ -387,6 +393,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     invoices_inbox: true,
     orders: true,
     car_processing: true,
+    races: true,
     invoices: true, expenses: true, issues: true, contracts: true, policies: true,
     churn_radar: true, lead_radar: true,
     push_notifications: true,
@@ -413,6 +420,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     invoices_inbox: false,
     orders: false,
     car_processing: false,
+    races: false,
     invoices: true, expenses: true, issues: true, contracts: true, policies: true,
     churn_radar: false, lead_radar: false,  // retention/acquisition oversight — not a staff surface
     push_notifications: true,
@@ -440,6 +448,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     invoices_inbox: false,
     orders: false,
     car_processing: false,
+    races: true,
     invoices: true, expenses: true, issues: true, contracts: true, policies: true,
     churn_radar: true, lead_radar: true,    // head coaches own retention + conversion
     push_notifications: true,
@@ -467,6 +476,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     invoices_inbox: false,
     orders: true,
     car_processing: false,
+    races: true,
     invoices: true, expenses: true, issues: true, contracts: true, policies: true,
     churn_radar: false, lead_radar: false,  // owner + head_coach by default; grant per-user if needed
     push_notifications: true,
@@ -496,6 +506,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     invoices_inbox: true,
     orders: true,
     car_processing: false,         // CCF Autos — per-user opt-in, matches web
+    races: true,
     invoices: true, expenses: true, issues: true, contracts: true, policies: true,
     churn_radar: true, lead_radar: true,
     push_notifications: true,

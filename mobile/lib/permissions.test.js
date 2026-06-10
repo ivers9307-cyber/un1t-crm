@@ -267,3 +267,26 @@ describe('canMobile — car_processing default (W2 parity inversion)', () => {
     expect(canMobile({ role: 'owner' }, 'car_processing', granted)).toBe(true)
   })
 })
+
+describe('canMobile — races default (W3 parity inversion)', () => {
+  // Race-day control's entry point is the manager-gated GET /api/races, so
+  // the mobile feature defaults to manager+ (master/owner/manager/head_coach),
+  // NOT staff — even though the web `races` permission is on for staff (they
+  // do race-day on the shared control screen, not their own device).
+  const loc = { features: {}, permissions: { mobile: {} } }
+
+  it('defaults ON for master / owner / manager / head_coach', () => {
+    expect(canMobile({ role: 'master' }, 'races', loc)).toBe(true)
+    expect(canMobile({ role: 'owner' }, 'races', loc)).toBe(true)
+    expect(canMobile({ role: 'manager' }, 'races', loc)).toBe(true)
+    expect(canMobile({ role: 'head_coach' }, 'races', loc)).toBe(true)
+  })
+
+  it('defaults OFF for staff', () => {
+    expect(canMobile({ role: 'staff' }, 'races', loc)).toBe(false)
+  })
+
+  it('honours the location feature gate (races off at this studio)', () => {
+    expect(canMobile({ role: 'manager' }, 'races', { features: { races: false }, permissions: { mobile: {} } })).toBe(false)
+  })
+})
