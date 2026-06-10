@@ -126,6 +126,10 @@ export default function More() {
   if (inMore.has('contracts')) tiles.push({ key: 'contracts', icon: 'document-text-outline', label: 'Contracts', onPress: () => router.push('/contracts') })
   if (inMore.has('policies'))  tiles.push({ key: 'policies', icon: 'book-outline', label: 'Policies', badge: outstandingPolicies > 0 ? String(outstandingPolicies) : null, onPress: () => router.push('/policies') })
   if (canMobile(profile, 'approvals', activeLocation)) tiles.push({ key: 'approvals', icon: 'checkmark-done-outline', label: 'Approvals', badge: outstandingApprovals > 0 ? String(outstandingApprovals) : null, onPress: () => router.push('/approvals') })
+  // Staff directory (STAFF-C1, read-only). Admin-role gated — there's no
+  // mobile `staff` permission yet (added with the editor in C3); the
+  // screen + the GET routes enforce scope server-side regardless.
+  if (['master', 'owner', 'manager'].includes(profile?.role)) tiles.push({ key: 'staff', icon: 'people-outline', label: 'Staff', onPress: () => router.push('/staff') })
   if (allowed.length > 0)      tiles.push({ key: 'customise', icon: 'grid-outline', label: 'Customise bar', onPress: () => router.push('/customise-bar') })
   if (canImpersonate)          tiles.push({ key: 'impersonate', icon: 'eye-outline', label: 'View as user', badge: impersonatingFrom ? '•' : null, onPress: () => router.push('/impersonate') })
 
