@@ -148,3 +148,72 @@ describe('hydratePermissions (C2c-ii)', () => {
     expect(out.contacts).toBeUndefined()
   })
 })
+
+describe('buildStaffAssignmentsPatch — add/remove assignments (C3-wizard.2)', () => {
+  it('master: removing a location OMITS it from the payload (the server deletes it)', () => {
+    const out = buildStaffAssignmentsPatch({
+      isMaster: true, ownedLocationIds: [], currentAssignments: current,
+      roleEdits: {}, removedLocationIds: ['loc-2'],
+    })
+    expect(out.map(a => a.location_id)).toEqual(['loc-1'])
+  })
+
+  it('owner: removing an OWNED location omits it; a non-owned one was never emitted (server preserves it)', () => {
+    const out = buildStaffAssignmentsPatch({
+      isMaster: false, ownedLocationIds: ['loc-1'], currentAssignments: current,
+      roleEdits: {}, removedLocationIds: ['loc-1'],
+    })
+    expect(out.length).toBe(0)
+  })
+
+  it('master: adding a studio appends a new assignment (role, default false, empty perms, door off)', () => {
+    const out = buildStaffAssignmentsPatch({
+      isMaster: true, ownedLocationIds: [], currentAssignments: current,
+      roleEdits: {}, addedAssignments: [{ location_id: 'loc-3', role: 'head_coach' }],
+    })
+    expect(out.find(a => a.location_id === 'loc-3')).toEqual({
+      location_id: 'loc-3', role: 'head_coach', is_default: false, permissions: {}, unifi_door_access: false,
+    })
+  })
+
+  it('owner: can add at an OWNED location but NOT a non-owned one (privilege boundary)', () => {
+    const out = buildStaffAssignmentsPatch({
+      isMaster: false, ownedLocationIds: ['loc-1', 'loc-9'], currentAssignments: current,
+      roleEdits: {}, addedAssignments: [
+        { location_id: 'loc-9', role: 'staff' },  // owned → added
+        { location_id: 'loc-8', role: 'owner' },  // NOT owned → skipped
+      ],
+    })
+    expect(out.some(a => a.location_id === 'loc-9')).toBe(true)
+    expect(out.some(a => a.location_id === 'loc-8')).toBe(false)
+  })
+
+  it('never duplicates an added location that is already assigned (keeps the existing row)', () => {
+    const out = buildStaffAssignmentsPatch({
+      isMaster: true, ownedLocationIds: [], currentAssignments: current,
+      roleEdits: {}, addedAssignments: [{ location_id: 'loc-1', role: 'manager' }],
+    })
+    expect(out.filter(a => a.location_id === 'loc-1').length).toBe(1)
+    expect(out.find(a => a.location_id === 'loc-1').role).toBe('staff') // existing row preserved, not the add
+  })
+
+  it('add + remove of the SAME location is a no-op (the location ends up removed)', () => {
+    const out = buildStaffAssignmentsPatch({
+      isMaster: true, ownedLocationIds: [], currentAssignments: current,
+      roleEdits: {}, removedLocationIds: ['loc-2'], addedAssignments: [{ location_id: 'loc-2', role: 'owner' }],
+    })
+    expect(out.some(a => a.location_id === 'loc-2')).toBe(false)
+  })
+
+  it('combines a role edit, a removal, and an addition in one payload', () => {
+    const out = buildStaffAssignmentsPatch({
+      isMaster: true, ownedLocationIds: [], currentAssignments: current,
+      roleEdits: { 'loc-1': 'manager' },
+      removedLocationIds: ['loc-2'],
+      addedAssignments: [{ location_id: 'loc-3', role: 'staff' }],
+    })
+    expect(out.map(a => a.location_id).sort()).toEqual(['loc-1', 'loc-3'])
+    expect(out.find(a => a.location_id === 'loc-1').role).toBe('manager')
+    expect(out.find(a => a.location_id === 'loc-3').role).toBe('staff')
+  })
+})
