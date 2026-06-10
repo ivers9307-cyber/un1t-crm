@@ -5,7 +5,7 @@
 // every ~2s and renders the live grid + available-straps panel.
 
 import { redirect, notFound } from 'next/navigation'
-import { getCurrentUser } from '@/lib/auth'
+import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import LiveClassClient from './LiveClassClient'
 
@@ -17,7 +17,7 @@ export default async function LiveClassPage(props) {
   if (!user) redirect('/login')
 
   const locationId = params.locationId
-  if (!user.isMaster && !(user.locationIds || []).includes(locationId)) {
+  if (!user.isMaster && !getUserLocationIds(user).includes(locationId)) {
     notFound()
   }
 

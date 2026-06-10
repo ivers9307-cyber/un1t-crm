@@ -7,6 +7,7 @@ import { sendPush, sendPushToRolesAtLocation } from '@/lib/push'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { recordWebhookEvent, WEBHOOK_PROVIDERS } from '@/lib/webhook-events'
 import { maybeAutoReply } from '@/lib/agent/auto-reply'
+import { applyTemplateEvent } from '@/lib/whatsapp-template-events'
 
 // Force Node.js runtime — we use node:crypto for HMAC verification.
 export const runtime = 'nodejs'
@@ -72,7 +73,17 @@ export async function POST(request) {
     for (const entry of entries) {
       const changes = entry.changes || []
 
+      const TEMPLATE_FIELDS = new Set([
+        'message_template_status_update',
+        'message_template_quality_update',
+        'template_category_update',
+      ])
+
       for (const change of changes) {
+        if (TEMPLATE_FIELDS.has(change.field)) {
+          await handleTemplateEvent(db, change.field, change.value)
+          continue
+        }
         if (change.field !== 'messages') continue
 
         const value = change.value
@@ -306,7 +317,7 @@ async function handleIncomingMessage(db, message, contacts, phoneNumberId) {
   // sendPush(). Best-effort — never throw out of the webhook handler.
   try {
     const { data: conv } = await db.from('whatsapp_conversations')
-      .select('assigned_to, location_id, contacts(name, first_name, wa_profile_name)')
+      .select('assigned_to, location_id, contacts!contact_id(name, first_name, wa_profile_name)')
       .eq('id', conversationId)
       .single()
     const senderLabel = conv?.contacts?.name
@@ -419,5 +430,23 @@ async function handleStatusUpdate(db, status) {
           .eq('id', msg.broadcast_id)
       }
     }
+  }
+}
+
+// WA-TMPL — apply a template status/quality/category webhook to the row + audit
+// trail, and push managers on meaningful transitions. Best-effort; never throws.
+async function handleTemplateEvent(db, field, value) {
+  try {
+    const { template, notify } = await applyTemplateEvent(db, field, value)
+    if (template && notify) {
+      await sendPushToRolesAtLocation(template.location_id, MANAGER_ROLES, {
+        title: notify.title,
+        body: notify.body,
+        category: 'whatsapp', // rides the existing notify_whatsapp opt-in
+        data: { type: 'template_status', template_id: template.id },
+      })
+    }
+  } catch (err) {
+    console.error('[wa-webhook] template event failed:', err?.message)
   }
 }

@@ -24,6 +24,7 @@
 // src/app/welcome/page.js. Three-file change.
 
 import { useState, useMemo, useRef, useEffect, useCallback } from 'react'
+import { uploadLandingMedia, captureVideoPoster } from '@/lib/landing-media-upload'
 import {
   DndContext, KeyboardSensor, PointerSensor, useSensor, useSensors,
   closestCenter, DragOverlay,
@@ -77,6 +78,7 @@ export default function LandingPageSettingsForm({ locationId, initialSettings, a
   // multiple blocks can show their own status without trampling.
   const [uploading, setUploading] = useState({}) // { key: bool }
   const [uploadErr, setUploadErr] = useState({}) // { key: string }
+  const [progress, setProgress] = useState({}) // { key: { phase, percent } | null }
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
@@ -264,22 +266,23 @@ export default function LandingPageSettingsForm({ locationId, initialSettings, a
     setUploading((prev) => ({ ...prev, [key]: isUploading }))
     setUploadErr((prev) => ({ ...prev, [key]: err || null }))
   }
-  async function uploadMedia({ file, kind, key }) {
+  async function uploadMedia({ file, kind, key, autoplay = true }) {
     setUploadState(key, true, null)
-    try {
-      const fd = new FormData()
-      fd.append('file', file)
-      fd.append('location_id', locationId)
-      fd.append('kind', kind)
-      const r = await fetch('/api/landing-page-settings/media', { method: 'POST', body: fd })
-      const j = await r.json()
-      if (!r.ok || j.success === false) throw new Error(j.error || `Upload failed (${r.status})`)
-      setUploadState(key, false, null)
-      return j.url
-    } catch (e) {
-      setUploadState(key, false, e.message || 'Upload failed')
+    setProgress((prev) => ({ ...prev, [key]: null }))
+    const res = await uploadLandingMedia({
+      file,
+      locationId,
+      kind,
+      autoplay,
+      onProgress: (p) => setProgress((prev) => ({ ...prev, [key]: p })),
+    })
+    setProgress((prev) => ({ ...prev, [key]: null }))
+    if (!res.success) {
+      setUploadState(key, false, res.error || 'Upload failed')
       return null
     }
+    setUploadState(key, false, null)
+    return res.url
   }
 
   // ── Save ──────────────────────────────────────────────────
@@ -362,7 +365,7 @@ export default function LandingPageSettingsForm({ locationId, initialSettings, a
           <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle">Site header</h3>
           <p className="text-[11px] text-un1t-muted mt-1">Logo for the top nav. Renders on every page state regardless of section ordering. Leave the logo blank to fall back to the &ldquo;UN1T&rdquo; wordmark text.</p>
         </div>
-        <Field label="Logo image" hint="PNG / JPEG / WebP, ≤ 5MB. Transparent PNG works best on the dark nav background.">
+        <Field label="Logo image" hint="PNG / JPEG / WebP — large images are auto-optimized on upload. Transparent PNG works best on the dark nav background.">
           <MediaSlot
             url={logoUrl}
             onClear={() => setLogoUrl('')}
@@ -424,6 +427,7 @@ export default function LandingPageSettingsForm({ locationId, initialSettings, a
                   uploadMedia={uploadMedia}
                   uploading={uploading}
                   uploadErr={uploadErr}
+                  progress={progress}
                 />
               </div>
             ))}
@@ -536,7 +540,7 @@ export default function LandingPageSettingsForm({ locationId, initialSettings, a
 
 function SortableBlockCard({
   block, expanded, onToggleExpand, onRemove, onUpdate,
-  availableBookingTypes, availableEvents, uploadMedia, uploading, uploadErr,
+  availableBookingTypes, availableEvents, uploadMedia, uploading, uploadErr, progress,
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: block.id })
   const style = {
@@ -594,6 +598,7 @@ function SortableBlockCard({
             uploadMedia={uploadMedia}
             uploading={uploading}
             uploadErr={uploadErr}
+            progress={progress}
           />
         </div>
       )}
@@ -610,11 +615,17 @@ function summaryFor(block) {
     case 'hero':        return block.headline || ''
     case 'booking':     return block.slug ? `slug: ${block.slug}` : ''
     case 'event':       return block.slug ? `event: ${block.slug}` : 'no event'
+    case 'lead_form':   return block.heading || 'Waitlist'
     case 'pillars':     return `${(block.items || []).length} items`
     case 'gallery':     return `${(block.items || []).length} photo${(block.items || []).length === 1 ? '' : 's'}`
     case 'embed':       return block.url ? new URL(block.url).hostname.replace(/^www\./, '') : 'no URL'
     case 'stats':       return `${(block.items || []).length} stats`
     case 'testimonial': return block.author || ''
+    case 'reviews':     return block.title || ''
+    case 'video_testimonials': {
+      const n = (block.items || []).filter((it) => it && it.video_url).length
+      return `${n} video${n === 1 ? '' : 's'}`
+    }
     default:            return ''
   }
 }
@@ -628,16 +639,19 @@ function BlockEditPanel(props) {
     case 'hero':        return <HeroEdit        {...props} />
     case 'booking':     return <BookingEdit     {...props} />
     case 'event':       return <EventEdit       {...props} />
+    case 'lead_form':   return <LeadFormEdit    {...props} />
     case 'pillars':     return <PillarsEdit     {...props} />
     case 'gallery':     return <GalleryEdit     {...props} />
     case 'embed':       return <EmbedEdit       {...props} />
     case 'stats':       return <StatsEdit       {...props} />
     case 'testimonial': return <TestimonialEdit {...props} />
+    case 'reviews':     return <ReviewsEdit     {...props} />
+    case 'video_testimonials': return <VideoTestimonialsEdit {...props} />
     default:            return <div className="text-xs text-red-700">Unknown block type: {props.block.type}</div>
   }
 }
 
-function HeroEdit({ block, onUpdate, uploadMedia, uploading, uploadErr }) {
+function HeroEdit({ block, onUpdate, uploadMedia, uploading, uploadErr, progress }) {
   const k = (suffix) => `${block.id}-${suffix}`
   return (
     <>
@@ -653,7 +667,7 @@ function HeroEdit({ block, onUpdate, uploadMedia, uploading, uploadErr }) {
       <Field label="Subtext" hint="Paragraph under the headline.">
         <Textarea value={block.subtext || ''} onChange={(v) => onUpdate({ subtext: v })} maxLength={2000} rows={3} />
       </Field>
-      <Field label="Background image" hint="PNG / JPEG / WebP, ≤ 5MB. Replaces the dark gradient. The video below takes precedence; the image then becomes its poster (still frame while video loads).">
+      <Field label="Background image" hint="PNG / JPEG / WebP — large images are auto-optimized on upload. Replaces the dark gradient. The video below takes precedence; the image then becomes its poster (still frame while video loads).">
         <MediaSlot
           url={block.image_url || ''}
           onClear={() => onUpdate({ image_url: null })}
@@ -665,7 +679,7 @@ function HeroEdit({ block, onUpdate, uploadMedia, uploading, uploadErr }) {
           kind="image"
         />
       </Field>
-      <Field label="Background video" hint="MP4 / WebM, ≤ 25MB. Auto-plays muted on loop. Tip: 720p, 5-15 seconds, ~3-5Mbps.">
+      <Field label="Background video" hint="MP4 / WebM / MOV, ≤ 50MB — autoplays muted on loop, so keep it short (compressed automatically where supported). Tip: 720p, 5-15 seconds.">
         <MediaSlot
           url={block.video_url || ''}
           onClear={() => onUpdate({ video_url: null })}
@@ -675,6 +689,7 @@ function HeroEdit({ block, onUpdate, uploadMedia, uploading, uploadErr }) {
           accept="video/mp4,video/webm"
           label="Add video"
           kind="video"
+          progress={progress[k('video')]}
         />
       </Field>
     </>
@@ -750,6 +765,28 @@ function EventEdit({ block, onUpdate, availableEvents }) {
   )
 }
 
+function LeadFormEdit({ block, onUpdate }) {
+  return (
+    <>
+      <Field label="Heading">
+        <Input value={block.heading || ''} onChange={(v) => onUpdate({ heading: v })} maxLength={200} placeholder="Join the founding members" />
+      </Field>
+      <Field label="Sub-copy" hint="Paragraph under the heading.">
+        <Textarea value={block.subtext || ''} onChange={(v) => onUpdate({ subtext: v })} maxLength={600} rows={3} />
+      </Field>
+      <Field label="Button label">
+        <Input value={block.button_label || ''} onChange={(v) => onUpdate({ button_label: v })} maxLength={60} placeholder="Join the waitlist" />
+      </Field>
+      <Field label="Success message" hint="Shown after a successful submit.">
+        <Textarea value={block.success_message || ''} onChange={(v) => onUpdate({ success_message: v })} maxLength={300} rows={2} />
+      </Field>
+      <Field label="Consent checkbox text" hint="Shown beside the opt-in checkbox. Keep it explicit for GDPR — name the channels (email/SMS/WhatsApp).">
+        <Textarea value={block.consent_label || ''} onChange={(v) => onUpdate({ consent_label: v })} maxLength={400} rows={3} />
+      </Field>
+    </>
+  )
+}
+
 function PillarsEdit({ block, onUpdate, uploadMedia, uploading, uploadErr }) {
   const items = Array.isArray(block.items) ? block.items : []
   const setItem = (i, patch) => onUpdate({ items: items.map((x, j) => j === i ? { ...x, ...patch } : x) })
@@ -808,6 +845,78 @@ function PillarsEdit({ block, onUpdate, uploadMedia, uploading, uploadErr }) {
   )
 }
 
+function VideoTestimonialsEdit({ block, onUpdate, uploadMedia, uploading, uploadErr, progress }) {
+  const items = Array.isArray(block.items) ? block.items : []
+  const setItem = (i, patch) => onUpdate({ items: items.map((x, j) => (j === i ? { ...x, ...patch } : x)) })
+  const addItem = () => onUpdate({ items: [...items, { video_url: '', poster_url: '', name: '' }] })
+  const removeItem = (i) => onUpdate({ items: items.filter((_, j) => j !== i) })
+  const move = (i, dir) => {
+    const j = i + dir
+    if (j < 0 || j >= items.length) return
+    const next = [...items]
+    ;[next[i], next[j]] = [next[j], next[i]]
+    onUpdate({ items: next })
+  }
+
+  // On clip upload: capture the poster from the LOCAL file first (no
+  // CORS), upload it via the image path, then upload the video. Store
+  // both URLs on the item. A failed poster capture is non-fatal — the
+  // clip still saves and the tile falls back to a placeholder.
+  const onUploadClip = async (i, file, posterKey, videoKey) => {
+    const posterFile = await captureVideoPoster(file)
+    let poster_url = ''
+    if (posterFile) {
+      poster_url = (await uploadMedia({ file: posterFile, kind: 'image', key: posterKey })) || ''
+    }
+    // Testimonial clips are tap-to-play (poster shown until tapped), so a larger
+    // stored file is fine — only the visitor who taps one downloads it.
+    const video_url = await uploadMedia({ file, kind: 'video', key: videoKey, autoplay: false })
+    if (video_url) setItem(i, { video_url, poster_url })
+  }
+
+  return (
+    <>
+      <Field label="Section heading">
+        <Input value={block.title || ''} onChange={(v) => onUpdate({ title: v })} maxLength={200} placeholder="Hear from our members" />
+      </Field>
+      {items.slice(0, 3).map((it, i) => {
+        const posterKey = `${block.id}-vt-${i}-poster`
+        const videoKey = `${block.id}-vt-${i}-video`
+        return (
+          <div key={i} className="border border-un1t-border rounded-md p-3 space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="text-[11px] uppercase tracking-wider text-un1t-muted">Video {i + 1}</div>
+              <div className="flex items-center gap-1">
+                <button type="button" disabled={i === 0} onClick={() => move(i, -1)} className="p-1 text-un1t-muted hover:text-un1t-text disabled:opacity-30" title="Move up"><ArrowUp size={11} /></button>
+                <button type="button" disabled={i === items.length - 1} onClick={() => move(i, 1)} className="p-1 text-un1t-muted hover:text-un1t-text disabled:opacity-30" title="Move down"><ArrowDown size={11} /></button>
+                <button type="button" onClick={() => removeItem(i)} className="p-1 text-un1t-muted hover:text-red-400" title="Remove video"><Trash2 size={11} /></button>
+              </div>
+            </div>
+            <MediaSlot
+              url={it.video_url || ''}
+              onClear={() => setItem(i, { video_url: '', poster_url: '' })}
+              onUpload={(file) => onUploadClip(i, file, posterKey, videoKey)}
+              uploading={!!uploading[videoKey] || !!uploading[posterKey]}
+              error={uploadErr[videoKey] || uploadErr[posterKey]}
+              accept="video/mp4,video/webm"
+              label="Add video"
+              kind="video"
+              progress={progress[videoKey]}
+            />
+            <Input value={it.name || ''} onChange={(v) => setItem(i, { name: v })} maxLength={120} placeholder="Member name (e.g. Sarah)" />
+          </div>
+        )
+      })}
+      {items.length < 3 && (
+        <button type="button" onClick={addItem} className="text-xs text-un1t-subtle hover:text-un1t-text inline-flex items-center gap-1.5">
+          <Plus size={12} /> Add video
+        </button>
+      )}
+      <p className="text-[11px] text-un1t-muted">MP4 / WebM / MOV, up to 200MB each — large clips are compressed automatically where your browser supports it. Portrait clips work best. We grab the first frame as the still image automatically. Tip: 720p, 15–30 seconds.</p>
+    </>
+  )
+}
+
 function GalleryEdit({ block, onUpdate, uploadMedia, uploading, uploadErr }) {
   const items = Array.isArray(block.items) ? block.items : []
   const setItem = (i, patch) => onUpdate({ items: items.map((x, j) => j === i ? { ...x, ...patch } : x) })
@@ -829,7 +938,7 @@ function GalleryEdit({ block, onUpdate, uploadMedia, uploading, uploadErr }) {
       <Field label="Section heading">
         <Input value={block.title || ''} onChange={(v) => onUpdate({ title: v })} maxLength={200} placeholder="Inside the studio" />
       </Field>
-      <Field label={`Photos (${items.length}/24)`} hint="PNG/JPEG/WebP, ≤ 5MB each.">
+      <Field label={`Photos (${items.length}/24)`} hint="PNG/JPEG/WebP — auto-optimized on upload.">
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           {items.map((g, i) => (
             <div key={i} className="relative group border border-un1t-border rounded-md overflow-hidden bg-un1t-bg">
@@ -942,6 +1051,50 @@ function TestimonialEdit({ block, onUpdate }) {
   )
 }
 
+function ReviewsEdit({ block, onUpdate }) {
+  return (
+    <>
+      <Field label="Heading">
+        <Input value={block.title || ''} onChange={(v) => onUpdate({ title: v })} maxLength={200} placeholder="What our members say" />
+      </Field>
+      <Field label="Minimum star rating to show">
+        <select
+          value={block.min_rating ?? 4}
+          onChange={(e) => onUpdate({ min_rating: Number(e.target.value) })}
+          className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
+        >
+          {[5, 4, 3, 2, 1].map((n) => (
+            <option key={n} value={n}>{n}★ and up</option>
+          ))}
+        </select>
+      </Field>
+      <Field label="Marquee speed">
+        <select
+          value={block.speed || 'normal'}
+          onChange={(e) => onUpdate({ speed: e.target.value })}
+          className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
+        >
+          <option value="slow">Slow</option>
+          <option value="normal">Normal</option>
+          <option value="fast">Fast</option>
+        </select>
+      </Field>
+      <label className="flex items-center gap-2">
+        <input
+          type="checkbox"
+          checked={block.show_aggregate !== false}
+          onChange={(e) => onUpdate({ show_aggregate: e.target.checked })}
+        />
+        <span className="text-xs text-un1t-subtle">Show the &ldquo;4.9 ★ · N Google reviews&rdquo; header</span>
+      </label>
+      <p className="text-[11px] text-un1t-muted">
+        Reviews come from your Google Business listing. Connect it and hide
+        specific reviews in <strong>Settings → Locations → Integrations</strong>.
+      </p>
+    </>
+  )
+}
+
 // ─────────────────────────────────────────────────────────────
 // Helpers — input primitives + uniform media-upload tile
 // ─────────────────────────────────────────────────────────────
@@ -982,7 +1135,7 @@ function Textarea({ value, onChange, maxLength, rows, placeholder }) {
   )
 }
 
-function MediaSlot({ url, onClear, onUpload, uploading, error, accept, label, kind }) {
+function MediaSlot({ url, onClear, onUpload, uploading, error, accept, label, kind, progress }) {
   return (
     <div className="flex flex-col gap-1">
       {url ? (
@@ -1007,7 +1160,13 @@ function MediaSlot({ url, onClear, onUpload, uploading, error, accept, label, ki
           {uploading
             ? <Loader2 size={18} className="animate-spin" />
             : (kind === 'video' ? <Video size={18} /> : <ImagePlus size={18} />)}
-          <span className="text-[10px] mt-1">{uploading ? 'Uploading…' : label}</span>
+          <span className="text-[10px] mt-1 text-center px-1">
+            {progress?.phase === 'compress'
+              ? `Compressing… ${Math.round(progress.percent || 0)}%`
+              : progress?.phase === 'upload'
+                ? 'Uploading…'
+                : uploading ? 'Uploading…' : label}
+          </span>
           <input
             type="file"
             accept={accept}

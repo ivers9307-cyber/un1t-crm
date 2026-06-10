@@ -17,3 +17,6 @@ mobile/keys/
 # graphify knowledge-graph output — generated locally (~8MB), never source
 graphify-out/
 .superpowers/
+
+# ffmpeg.wasm core/worker — self-hosted at install time (~25MB), never committed
+public/ffmpeg/

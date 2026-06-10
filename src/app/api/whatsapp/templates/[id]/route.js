@@ -40,7 +40,13 @@ export async function GET(request, props) {
   const guard = assertLocationAccess(user, data.location_id)
   if (guard) return guard
 
-  return NextResponse.json({ success: true, template: data })
+  const { data: events } = await db.from('whatsapp_template_events')
+    .select('kind, from_value, to_value, reason, created_at')
+    .eq('template_id', params.id)
+    .order('created_at', { ascending: false })
+    .limit(50)
+
+  return NextResponse.json({ success: true, template: data, events: events || [] })
 }
 
 // PUT /api/whatsapp/templates/[id] — update local record

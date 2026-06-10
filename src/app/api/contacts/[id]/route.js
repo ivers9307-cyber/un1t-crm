@@ -58,6 +58,20 @@ export async function PUT(request, props) {
     .eq('id', id)
     .single()
 
+  // SECURITY (audit 2026-06-10): the cookie path must be location-
+  // scoped. assertRowInOrg above only guards per-org API keys (it
+  // no-ops when orgId is null — the legacy-key and cookie paths), so
+  // without this check a manager at one studio could update any
+  // contact at any location/org by id. Mirrors the DELETE handler's
+  // guard below; 404 (not 403) so a cross-tenant probe can't confirm
+  // an id exists — same convention as assertRowInOrg.
+  if (auth.user && auth.user.role !== 'master') {
+    const userLocIds = (auth.user.locations || []).map((l) => l.id)
+    if (!oldRow || !userLocIds.includes(oldRow.location_id)) {
+      return NextResponse.json({ success: false, error: 'not_found' }, { status: 404 })
+    }
+  }
+
   // Only forward keys actually present (Zod with .optional() leaves undefined keys out).
   const updates = {}
   for (const [key, value] of Object.entries(body)) {

@@ -43,7 +43,26 @@ function formatStage(slug) {
   return slug ? slug.replaceAll('_', ' ') : '—'
 }
 
-export default function ContactsTable({ contacts, locationId, canMerge = false, canDelete = false }) {
+// Crossover marker — a home-studio pill + that contact's tags, shown when
+// the contact is owned by a different studio than the one being viewed.
+function CrossoverMarker({ ctx }) {
+  if (!ctx) return null
+  return (
+    <span className="inline-flex flex-wrap items-center gap-1 align-middle ml-2">
+      <span
+        className="text-[10px] px-1.5 py-0.5 rounded-full bg-purple-500/15 text-purple-700"
+        title={`Owned by ${ctx.homeStudio} — shown here because they have a deal at this studio`}
+      >
+        {ctx.homeStudio}
+      </span>
+      {(ctx.tags || []).slice(0, 6).map((t) => (
+        <span key={t} className="text-[10px] px-1.5 py-0.5 rounded bg-un1t-border text-un1t-subtle">{t}</span>
+      ))}
+    </span>
+  )
+}
+
+export default function ContactsTable({ contacts, locationId, crossoverContext = {}, canMerge = false, canDelete = false }) {
   // Set<contactId>. Set so toggle is O(1) and resilient to the contact
   // list changing under us (filter / search updates).
   const [selectedIds, setSelectedIds] = useState(() => new Set())
@@ -183,6 +202,7 @@ export default function ContactsTable({ contacts, locationId, canMerge = false, 
                   </td>
                   <td className="p-3">
                     <Link href={`/contacts/${c.id}`} className="font-medium hover:underline">{c.name}</Link>
+                    <CrossoverMarker ctx={crossoverContext[c.id]} />
                   </td>
                   <td className="p-3 text-un1t-subtle">{c.email}</td>
                   <td className="p-3 text-un1t-subtle">{c.phone}</td>
@@ -256,6 +276,7 @@ export default function ContactsTable({ contacts, locationId, canMerge = false, 
                         }`}>
                           {formatStage(c.pipeline_stage_slug)}
                         </span>
+                        <CrossoverMarker ctx={crossoverContext[c.id]} />
                       </div>
                       {(c.email || c.phone) && (
                         <div className="text-xs text-un1t-subtle truncate mt-0.5">

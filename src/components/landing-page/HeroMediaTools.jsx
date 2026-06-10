@@ -13,7 +13,8 @@
 // reaching for hooks here would force the whole renderer file
 // to be client-only and ship more JS to public visitors.
 
-import { useRef } from 'react'
+import { useRef, useState } from 'react'
+import { uploadLandingMedia } from '@/lib/landing-media-upload'
 
 export default function HeroMediaTools({
   imageUrl, videoUrl, locationId,
@@ -21,6 +22,9 @@ export default function HeroMediaTools({
 }) {
   const imgInput = useRef(null)
   const vidInput = useRef(null)
+  // Video uploads now transcode in-browser (can take ~1-2 min) — show
+  // the compress/upload status so the toolbar doesn't look frozen.
+  const [status, setStatus] = useState(null) // null | { phase, percent }
   return (
     <div
       className="absolute top-4 right-4 z-30 flex items-center gap-2 bg-black/70 backdrop-blur rounded-md p-1 text-xs text-white"
@@ -51,6 +55,13 @@ export default function HeroMediaTools({
           onClick={() => onChangeVideo?.(null)}
         />
       )}
+      {status && (
+        <span className="px-2 py-1 text-white/80 whitespace-nowrap">
+          {status.phase === 'compress'
+            ? `Compressing… ${Math.round(status.percent || 0)}%`
+            : 'Uploading…'}
+        </span>
+      )}
       <input
         ref={imgInput}
         type="file"
@@ -61,9 +72,9 @@ export default function HeroMediaTools({
       <input
         ref={vidInput}
         type="file"
-        accept="video/mp4,video/webm"
+        accept="video/*"
         className="hidden"
-        onChange={(e) => uploadAndApply(e, 'video', locationId, onChangeVideo)}
+        onChange={(e) => uploadAndApply(e, 'video', locationId, onChangeVideo, setStatus)}
       />
     </div>
   )
@@ -82,20 +93,20 @@ function ToolButton({ label, title, onClick }) {
   )
 }
 
-async function uploadAndApply(e, kind, locationId, onChange) {
+async function uploadAndApply(e, kind, locationId, onChange, setStatus) {
   const file = e.target.files?.[0]
   e.target.value = ''
   if (!file || !locationId) return
-  try {
-    const fd = new FormData()
-    fd.append('file', file)
-    fd.append('location_id', locationId)
-    fd.append('kind', kind)
-    const r = await fetch('/api/landing-page-settings/media', { method: 'POST', body: fd })
-    const j = await r.json()
-    if (r.ok && j.success !== false && j.url) onChange?.(j.url)
-  } catch {
-    // Swallow — operator can retry. The form's upload UI surfaces
-    // detailed errors; in the iframe we keep the toolbar quiet.
-  }
+  const isVideo = kind === 'video'
+  if (isVideo) setStatus?.({ phase: 'compress', percent: 0 })
+  const res = await uploadLandingMedia({
+    file,
+    locationId,
+    kind,
+    onProgress: isVideo ? (p) => setStatus?.(p) : undefined,
+  })
+  if (isVideo) setStatus?.(null)
+  if (res.success && res.url) onChange?.(res.url)
+  // Errors stay quiet here — the form's upload UI surfaces detailed
+  // messages; the in-iframe toolbar stays calm and the operator retries.
 }

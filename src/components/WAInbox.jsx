@@ -617,7 +617,11 @@ export default function WAInbox({ locationId, userId, initialConversationId }) {
                                 onClick={() => selectTemplate(t)}
                                 className="w-full text-left px-3 py-2 rounded-md hover:bg-un1t-border/30 transition-colors"
                               >
-                                <p className="text-sm font-medium">{t.name}</p>
+                                <p className="text-sm font-medium flex items-center gap-1.5">
+                                  {t.name}
+                                  {t.quality_rating === 'RED' && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-red-500/15 text-red-700">RED</span>}
+                                  {t.quality_rating === 'YELLOW' && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-700">YELLOW</span>}
+                                </p>
                                 <p className="text-xs text-un1t-muted truncate mt-0.5">
                                   {bodyComp?.text || 'No body text'}
                                 </p>

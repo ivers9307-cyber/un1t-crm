@@ -5,14 +5,14 @@ import { getCurrentUser } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import {
   employmentTypeSchema, money, hours, days, permissionsSchema,
-  assignmentSchema, OWNER_ASSIGNABLE_ROLES, MASTER_ASSIGNABLE_ROLES,
+  assignmentSchema,
 } from '@/lib/schemas'
 import {
-  getLocationUnifiConfig, findOrCreateUnifiUser,
-  syncUnifiUserPolicyForRole, revokeUnifiUserPolicies, UnifiError,
+  getLocationUnifiConfig, revokeUnifiUserPolicies, UnifiError,
 } from '@/lib/unifi-access'
 import { canEditStaffMember } from '@/lib/staff-access'
-import { upsertCompensationForProfile, splitCompFromProfilePatch } from '@/lib/profile-compensation'
+import { applyStaffProfileWrite, assertOwnerAssignmentScope, computeDesiredAssignments, computeProfileRole, syncStaffAssignments } from '@/lib/staff-write'
+import { getStaffForUser } from '@/lib/staff'
 import { logAuditEvent } from '@/lib/audit'
 
 export const runtime = 'nodejs'
@@ -37,42 +37,21 @@ const UpdateStaffSchema = z.object({
   overtime_rate: money.nullable().optional(),
 })
 
-// Apply a per-location door-access toggle. Returns the unifi_user_id
-// that should be persisted on the profile_locations row (or null if
-// nothing should change).
-//
-// Throws UnifiError on failure — the caller surfaces the message to
-// the API consumer without persisting the toggle change in
-// profile_locations, so the UI state stays consistent with reality.
-async function applyDoorAccessChange({ profile, location, enable, role, existingUnifiUserId, skipFindOrCreate = false }) {
-  const cfg = getLocationUnifiConfig(location)
+// GET /api/staff/[id] — fetch one staff member (scoped to the caller's
+// locations; admins see HR fields). New in C1: the web edit page reads
+// the DB directly, so this route exists for the mobile staff directory
+// + any SDK consumer. Read logic lives in src/lib/staff.js.
+export async function GET(request, props) {
+  const params = await props.params
+  const user = await getCurrentUser()
+  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
 
-  if (!enable) {
-    if (cfg.configured && existingUnifiUserId) {
-      await revokeUnifiUserPolicies(cfg, existingUnifiUserId)
-    }
-    return existingUnifiUserId || null
+  const db = createServerClient()
+  const result = await getStaffForUser({ db, user, id: params.id })
+  if (!result.ok) {
+    return NextResponse.json({ success: false, error: result.error }, { status: result.status || 400 })
   }
-
-  // Toggle ON requires a fully-configured UniFi instance for THIS location.
-  if (!cfg.configured) {
-    throw new UnifiError(
-      `UniFi Access is not configured for ${location.name || 'this location'}. ` +
-      `Add the host, API token and policy IDs in Location settings before ` +
-      `enabling door access here.`
-    )
-  }
-  // skipFindOrCreate=true → operator picked the UniFi user manually
-  // via the staff edit picker (mig 120). Use the id they chose without
-  // looking up by email or creating a new UniFi user. existingUnifiUserId
-  // is already the operator-picked value at this point.
-  const unifiUserId = existingUnifiUserId
-    || (skipFindOrCreate ? null : await findOrCreateUnifiUser(cfg, profile))
-  if (!unifiUserId) {
-    throw new UnifiError('No UniFi user id available to sync policies for — pick a UniFi user in the staff edit page or rely on the auto-create flow.')
-  }
-  await syncUnifiUserPolicyForRole(cfg, unifiUserId, role)
-  return unifiUserId
+  return NextResponse.json({ success: true, data: result.data })
 }
 
 // PUT /api/staff/[id] — Update a staff member.
@@ -144,94 +123,28 @@ export async function PUT(request, props) {
 
   // Owners can only edit users they share a location with — and even
   // then only the assignments at locations where the caller is owner.
-  if (!user.isMaster) {
-    const callerOwnerLocations = new Set(
-      Object.entries(user.rolesByLocation || {})
-        .filter(([, r]) => r === 'owner')
-        .map(([loc]) => loc)
-    )
-    const targetLocations = (targetBefore.profile_locations || []).map(l => l.location_id)
-    const overlap = targetLocations.some(l => callerOwnerLocations.has(l))
-    if (!overlap) {
-      return NextResponse.json({
-        success: false,
-        error: 'You can only edit staff assigned to a location where you are an owner.',
-      }, { status: 403 })
-    }
-    // Validate every assignment in the request body is at one of the
-    // caller's owner-locations (and uses an OWNER_ASSIGNABLE_ROLES role).
-    if (body.assignments) {
-      for (const a of body.assignments) {
-        if (!callerOwnerLocations.has(a.location_id)) {
-          return NextResponse.json({
-            success: false,
-            error: 'You can only manage assignments at locations where you are an owner.',
-          }, { status: 403 })
-        }
-        if (!OWNER_ASSIGNABLE_ROLES.includes(a.role)) {
-          return NextResponse.json({
-            success: false,
-            error: `Role '${a.role}' cannot be granted by an owner.`,
-          }, { status: 403 })
-        }
-      }
-    }
-  } else if (body.assignments) {
-    // Master path: still validate role values.
-    for (const a of body.assignments) {
-      if (!MASTER_ASSIGNABLE_ROLES.includes(a.role)) {
-        return NextResponse.json({
-          success: false,
-          error: `Role '${a.role}' is not a valid per-location role.`,
-        }, { status: 403 })
-      }
-    }
+  {
+    const callerOwnerLocationIds = Object.entries(user.rolesByLocation || {})
+      .filter(([, r]) => r === 'owner')
+      .map(([loc]) => loc)
+    const targetLocationIds = (targetBefore.profile_locations || []).map(l => l.location_id)
+    const scopeErr = assertOwnerAssignmentScope({
+      isMaster: user.isMaster,
+      callerOwnerLocationIds,
+      targetLocationIds,
+      assignments: body.assignments,
+    })
+    if (scopeErr) return NextResponse.json({ success: false, error: scopeErr.error }, { status: scopeErr.status })
   }
 
   // Apply profile-level updates (full_name, HR fields, master flag,
-  // permissions, active). profiles.role is recomputed AFTER assignment
-  // updates so it reflects the final state.
-  //
-  // SECURITY.1 (mig 152): the 5 comp fields ALSO write to
-  // profile_compensation via the helper below. Dual-write during the
-  // transition window — existing readers continue to see the values
-  // on profiles, new restricted readers use the new table, and a
-  // follow-up commit migrates the readers + drops the profiles
-  // columns once verified.
-  const profileUpdates = {}
-  if (body.full_name !== undefined) profileUpdates.full_name = body.full_name
-  if (body.permissions !== undefined) profileUpdates.permissions = body.permissions
-  if (body.active !== undefined) profileUpdates.active = body.active
-  if (body.employment_type !== undefined) profileUpdates.employment_type = body.employment_type
-  if (body.annual_salary !== undefined) profileUpdates.annual_salary = body.annual_salary
-  if (body.hourly_rate !== undefined) profileUpdates.hourly_rate = body.hourly_rate
-  if (body.contracted_hours_per_week !== undefined) profileUpdates.contracted_hours_per_week = body.contracted_hours_per_week
-  if (body.annual_leave_entitlement !== undefined) profileUpdates.annual_leave_entitlement = body.annual_leave_entitlement
-  if (body.overtime_rate !== undefined) profileUpdates.overtime_rate = body.overtime_rate
-
-  if (Object.keys(profileUpdates).length > 0) {
-    const { error } = await db.from('profiles').update(profileUpdates).eq('id', id)
-    if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
-  }
-
-  // SECURITY.1 — second leg of the dual-write: persist comp fields
-  // to profile_compensation. Helper diffs vs current, undefined keys
-  // are skipped, null clears.
-  const { compFields } = splitCompFromProfilePatch({
-    annual_salary:             body.annual_salary,
-    hourly_rate:               body.hourly_rate,
-    contracted_hours_per_week: body.contracted_hours_per_week,
-    annual_leave_entitlement:  body.annual_leave_entitlement,
-    overtime_rate:             body.overtime_rate,
-  })
-  const cleanComp = Object.fromEntries(
-    Object.entries(compFields).filter(([, v]) => v !== undefined)
-  )
-  if (Object.keys(cleanComp).length > 0) {
-    const compResult = await upsertCompensationForProfile(db, id, cleanComp, { actorId: user.id })
-    if (!compResult.ok) {
-      return NextResponse.json({ success: false, error: `compensation: ${compResult.error}` }, { status: 400 })
-    }
+  // permissions, active) + the SECURITY.1 comp dual-write.
+  // Delegated to applyStaffProfileWrite (C2b.2a) — pure mirror of
+  // the previous inline block; profiles.role is recomputed AFTER
+  // assignment updates so it reflects the final state.
+  const profileWrite = await applyStaffProfileWrite({ db, id, body, actorId: user.id })
+  if (!profileWrite.ok) {
+    return NextResponse.json({ success: false, error: profileWrite.error }, { status: 400 })
   }
 
   // ----- Assignment diff -----
@@ -249,183 +162,24 @@ export async function PUT(request, props) {
   //   3. Apply: delete-with-revoke / insert / update + UniFi sync
   let unifiErrors = []
   if (body.assignments !== undefined) {
-    const callerScope = user.isMaster
-      ? null
-      : new Set(
-          Object.entries(user.rolesByLocation || {})
-            .filter(([, r]) => r === 'owner')
-            .map(([loc]) => loc)
-        )
-
+    const callerOwnerLocationIds = user.isMaster
+      ? []
+      : Object.entries(user.rolesByLocation || {}).filter(([, r]) => r === 'owner').map(([loc]) => loc)
     const existingByLocation = Object.fromEntries(
       (targetBefore.profile_locations || []).map(l => [l.location_id, l])
     )
-
-    // Build the FULL desired list. Master replaces every row with the
-    // body. Owner replaces only their owned-locations subset and
-    // preserves rows at locations they don't own.
-    const desired = []
-    if (user.isMaster) {
-      for (const a of body.assignments) desired.push(a)
-    } else {
-      for (const a of body.assignments) {
-        if (callerScope.has(a.location_id)) desired.push(a)
-      }
-      for (const link of (targetBefore.profile_locations || [])) {
-        if (!callerScope.has(link.location_id)) {
-          // Preserve every field of locations the caller can't touch
-          // — role, is_default, door access, AND the existing
-          // permissions blob (mig 058). Without this preservation,
-          // an owner editing one location of a multi-location user
-          // would silently zero out per-location overrides set by
-          // someone else at other locations.
-          desired.push({
-            location_id: link.location_id,
-            role: link.role,
-            is_default: link.is_default,
-            unifi_door_access: link.unifi_door_access,
-            permissions: link.permissions || {},
-          })
-        }
-      }
-    }
-
-    // Promote one is_default if none set.
-    if (desired.length > 0 && !desired.some(a => a.is_default)) {
-      desired[0].is_default = true
-    }
-    // Ensure exactly one is_default.
-    let seenDefault = false
-    for (const a of desired) {
-      if (a.is_default) {
-        if (seenDefault) a.is_default = false
-        else seenDefault = true
-      }
-    }
-
+    const desired = computeDesiredAssignments({
+      isMaster: user.isMaster,
+      callerOwnerLocationIds,
+      assignments: body.assignments,
+      existingLinks: targetBefore.profile_locations || [],
+    })
     const desiredIds = new Set(desired.map(a => a.location_id))
 
-    // 1. Revoke + delete rows that are no longer in the desired set.
-    for (const link of (targetBefore.profile_locations || [])) {
-      if (desiredIds.has(link.location_id)) continue
-      if (link.unifi_door_access && link.unifi_user_id && link.locations) {
-        const cfg = getLocationUnifiConfig(link.locations)
-        if (cfg.configured) {
-          try {
-            await revokeUnifiUserPolicies(cfg, link.unifi_user_id)
-          } catch (e) {
-            const msg = e instanceof UnifiError ? e.message : `UniFi revoke failed: ${e.message || e}`
-            unifiErrors.push(`${link.locations.name}: ${msg}`)
-          }
-        }
-      }
-      await db.from('profile_locations')
-        .delete()
-        .eq('profile_id', id)
-        .eq('location_id', link.location_id)
-    }
-
-    // 2. Insert new rows + update existing rows. UniFi sync happens
-    //    as part of the iteration so we capture role + door-access
-    //    intent in one pass.
-    for (const a of desired) {
-      const existing = existingByLocation[a.location_id]
-      const wantsDoor = !!a.unifi_door_access
-
-      // Do the UniFi sync against THIS location with the role this
-      // user will have AT THIS location. Critically, the role is
-      // a.role (per-location) — not profiles.role.
-      let unifiUserId = existing?.unifi_user_id || null
-
-      // Manual UniFi user link (mig 120 attendance picker). If the
-      // assignment payload includes an explicit unifi_user_id key:
-      //   - string  → set the link to that id (overrides the existing
-      //               value AND skips findOrCreateUnifiUser, since the
-      //               operator picked exactly which UniFi user to use)
-      //   - null    → clear the link
-      //   - missing → leave behaviour unchanged (auto-create on toggle)
-      // This is what the staff edit page uses to attach a CRM profile
-      // to a pre-existing UniFi user that doesn't share the email
-      // findOrCreateUnifiUser would otherwise look up.
-      const manualLinkProvided = Object.prototype.hasOwnProperty.call(a, 'unifi_user_id')
-      if (manualLinkProvided) {
-        unifiUserId = a.unifi_user_id || null
-      }
-
-      const locationRow = existing?.locations
-      if (locationRow) {
-        try {
-          unifiUserId = await applyDoorAccessChange({
-            profile: targetBefore,
-            location: locationRow,
-            enable: wantsDoor,
-            role: a.role,
-            existingUnifiUserId: unifiUserId,
-            // When the operator manually picked a specific UniFi user,
-            // skip the find-or-create lookup — we want THIS user, not
-            // whoever happens to share the staff member's email.
-            skipFindOrCreate: manualLinkProvided && !!unifiUserId,
-          })
-        } catch (e) {
-          const msg = e instanceof UnifiError
-            ? e.message
-            : `UniFi sync failed at ${locationRow.name || 'location'}: ${e.message || e}`
-          unifiErrors.push(msg)
-          // Don't apply the door toggle change for this location, but
-          // DO still apply role + is_default change. The toggle stays
-          // at its previous state so UI / DB / UniFi don't diverge.
-        }
-      } else if (manualLinkProvided) {
-        // No location row joined (rare), but a manual link was set —
-        // honour it without doing any UniFi calls.
-        // unifiUserId already holds the manual value above.
-      }
-
-      const row = {
-        profile_id: id,
-        location_id: a.location_id,
-        role: a.role,
-        is_default: !!a.is_default,
-        unifi_door_access: wantsDoor,
-        unifi_synced_at: new Date().toISOString(),
-        unifi_user_id: unifiUserId,
-        // Per-location user overrides (mig 058). Default to {} when
-        // not provided so existing role-default behaviour kicks in.
-        permissions: a.permissions || {},
-        // P2.4 — Protect face link (mig 142). Same null/string/omit
-        // semantics as unifi_user_id: explicit null clears, string
-        // sets, omitting the key leaves DB value unchanged.
-        ...(Object.prototype.hasOwnProperty.call(a, 'protect_face_id')
-          ? { protect_face_id: a.protect_face_id || null }
-          : {}),
-        // UNIFI-DOORS-SCOPE (mig 182) — per-location door allowlist.
-        // null/undefined → leave unchanged (omit from row so the DB
-        // value isn't overwritten). Empty array → clear. Array of
-        // strings → set. Mirrors the unifi_user_id semantics so the
-        // staff form can patch this field alone without touching
-        // anything else.
-        ...(Object.prototype.hasOwnProperty.call(a, 'unifi_door_ids')
-          ? { unifi_door_ids: a.unifi_door_ids === null ? null : (a.unifi_door_ids || []) }
-          : {}),
-        // STUDIO-AC-DEVICES.1 (mig 210) — per-location AC device
-        // allowlist. Same null/empty/omit semantics as the doors
-        // allowlist: NULL clears; empty array = no devices visible;
-        // populated array = exactly those devices; omitting the key
-        // leaves the DB value alone.
-        ...(Object.prototype.hasOwnProperty.call(a, 'ac_device_ids')
-          ? { ac_device_ids: a.ac_device_ids === null ? null : (a.ac_device_ids || []) }
-          : {}),
-      }
-
-      if (existing) {
-        await db.from('profile_locations')
-          .update(row)
-          .eq('profile_id', id)
-          .eq('location_id', a.location_id)
-      } else {
-        await db.from('profile_locations').insert(row)
-      }
-    }
+    const syncResult = await syncStaffAssignments({
+      db, id, targetBefore, desired, desiredIds, existingByLocation,
+    })
+    unifiErrors = syncResult.unifiErrors
   }
 
   // ----- Recompute profiles.role + master flag -----
@@ -440,11 +194,11 @@ export async function PUT(request, props) {
     .single()
 
   const currentMaster = body.is_master !== undefined ? body.is_master : refreshed.role === 'master'
-  const ROLE_PRECEDENCE = { owner: 1, manager: 2, head_coach: 3, staff: 4 }
-  const highest = (refreshed.profile_locations || [])
-    .map(l => l.role)
-    .sort((a, b) => (ROLE_PRECEDENCE[a] || 99) - (ROLE_PRECEDENCE[b] || 99))[0]
-  const newProfileRole = currentMaster ? 'master' : (highest || refreshed.role || 'staff')
+  const newProfileRole = computeProfileRole({
+    isMaster: currentMaster,
+    assignmentRoles: (refreshed.profile_locations || []).map(l => l.role),
+    fallbackRole: refreshed.role,
+  })
   if (newProfileRole !== refreshed.role) {
     await db.from('profiles').update({ role: newProfileRole }).eq('id', id)
   }

@@ -10,8 +10,11 @@
 // panel in LandingPageSettingsForm.jsx.
 
 import Link from 'next/link'
+import { filterVisibleReviews, marqueeDurationSeconds } from '@/lib/google-business/reviews'
 import BookingWidget from '@/components/BookingWidget'
 import RaceSignupWidget from '@/components/RaceSignupWidget'
+import WaitlistWidget from '@/components/WaitlistWidget'
+import VideoTestimonials from './VideoTestimonials'
 import { parseEmbed } from '@/lib/landing-page-embed'
 import EditableText from './EditableText'
 import EditableImage from './EditableImage'
@@ -34,7 +37,7 @@ function E({ value, onEdit, path, multiline }) {
   )
 }
 
-export default function BlockRenderer({ block, onEdit, locationId }) {
+export default function BlockRenderer({ block, onEdit, locationId, publicPath, reviewsData }) {
   // onEdit is bound to this block: caller hands us a generic
   // (blockId, path, value) function and we curry the blockId so
   // each child renderer thinks in local field paths.
@@ -51,9 +54,12 @@ export default function BlockRenderer({ block, onEdit, locationId }) {
     case 'pillars':     return <PillarsBlock     block={block} {...editProps} />
     case 'gallery':     return <GalleryBlock     block={block} {...editProps} />
     case 'event':       return <EventBlock       block={block} />
+    case 'lead_form':   return <LeadFormBlock    block={block} onEdit={localOnEdit} publicPath={publicPath} />
     case 'embed':       return <EmbedBlock       block={block} onEdit={localOnEdit} />
     case 'stats':       return <StatsBlock       block={block} onEdit={localOnEdit} />
     case 'testimonial': return <TestimonialBlock block={block} onEdit={localOnEdit} />
+    case 'reviews':     return <ReviewsBlock     block={block} onEdit={localOnEdit} reviewsData={reviewsData} />
+    case 'video_testimonials': return <VideoTestimonialsBlock block={block} onEdit={localOnEdit} />
     default:            return null
   }
 }
@@ -137,7 +143,7 @@ export function HeroBlock({ block, onEdit, locationId }) {
             {(block.subhead || onEdit) && (
               <>
                 <br />
-                <span className="text-white/70">
+                <span className="text-white/70 text-[1.5rem] md:text-[2.5rem]">
                   <E value={block.subhead} onEdit={onEdit} path={['subhead']} />
                 </span>
               </>
@@ -190,6 +196,31 @@ export function EventBlock({ block }) {
             <p className="text-white/50 text-sm">Event signup not configured.</p>
           )}
         </div>
+      </div>
+    </section>
+  )
+}
+
+export function LeadFormBlock({ block, onEdit, publicPath }) {
+  return (
+    <section id="waitlist" className="bg-black text-white py-20 md:py-28 border-t border-white/10">
+      <div className="max-w-xl mx-auto px-6 text-center">
+        {(block.heading || onEdit) && (
+          <h2 className="text-3xl md:text-4xl font-black tracking-tight mb-3">
+            <E value={block.heading} onEdit={onEdit} path={['heading']} />
+          </h2>
+        )}
+        {(block.subtext || onEdit) && (
+          <p className="text-white/70 leading-relaxed mb-8 max-w-md mx-auto">
+            <E value={block.subtext} onEdit={onEdit} path={['subtext']} multiline />
+          </p>
+        )}
+        <WaitlistWidget
+          publicPath={publicPath}
+          buttonLabel={block.button_label}
+          successMessage={block.success_message}
+          consentLabel={block.consent_label}
+        />
       </div>
     </section>
   )
@@ -364,15 +395,6 @@ export function StatsBlock({ block, onEdit }) {
             />
           ))}
         </div>
-        <div className="text-center mt-14">
-          <a
-            href="#book"
-            className="inline-flex items-center gap-2 bg-white text-black font-semibold text-sm md:text-base px-6 py-3 md:px-8 md:py-4 rounded-full hover:bg-white/90 transition-colors"
-          >
-            Book your free consultation
-            <span aria-hidden="true">↑</span>
-          </a>
-        </div>
       </div>
     </section>
   )
@@ -404,6 +426,117 @@ export function TestimonialBlock({ block, onEdit }) {
   )
 }
 
+// Reviews — continuous CSS marquee of Google reviews. Data is passed down
+// from the page (reviewsData = { reviews, averageRating, totalCount }); the
+// renderer does no fetching, so it stays pure + server-safe. Edit mode has no
+// live reviewsData — show a placeholder so the operator sees where it lands.
+export function ReviewsBlock({ block, onEdit, reviewsData }) {
+  const minRating = Number.isFinite(block.min_rating) ? block.min_rating : 4
+  const all = reviewsData?.reviews || []
+  const visible = filterVisibleReviews(all, minRating)
+
+  if (visible.length === 0) {
+    if (!onEdit) return null
+    return (
+      <section className="bg-black text-white py-20 md:py-28 border-t border-white/10">
+        <div className="max-w-6xl mx-auto px-6 text-center text-white/40 text-sm border border-dashed border-white/20 rounded py-10">
+          Google reviews appear here on the live page (connect Google Business in
+          Settings → Locations → Integrations, then sync).
+        </div>
+      </section>
+    )
+  }
+
+  const duration = marqueeDurationSeconds(block.speed, visible.length)
+  const track = [...visible, ...visible]
+
+  return (
+    <section className="bg-black text-white py-20 md:py-28 border-t border-white/10 overflow-hidden">
+      <div className="max-w-6xl mx-auto px-6">
+        {(block.title || block.show_aggregate) && (
+          <div className="text-center mb-10">
+            {block.title && (
+              <h2 className="text-2xl md:text-3xl font-black tracking-tight">{block.title}</h2>
+            )}
+            {block.show_aggregate && reviewsData?.averageRating != null && (
+              <p className="mt-2 text-sm text-white/60">
+                <span className="text-amber-400">★</span>{' '}
+                <span className="text-white/90 font-semibold">
+                  {Number(reviewsData.averageRating).toFixed(1)}
+                </span>
+                {reviewsData.totalCount != null && <> · {reviewsData.totalCount} Google reviews</>}
+              </p>
+            )}
+          </div>
+        )}
+      </div>
+      <div className="reviews-marquee-viewport relative">
+        <div
+          className="reviews-marquee-track gap-4 px-2"
+          style={{ animationDuration: `${duration}s` }}
+        >
+          {track.map((r, i) => (
+            <ReviewCard key={`${r.id || r.google_review_id || i}-${i}`} review={r} />
+          ))}
+        </div>
+        <div className="pointer-events-none absolute inset-y-0 left-0 w-16 bg-gradient-to-r from-black to-transparent" aria-hidden="true" />
+        <div className="pointer-events-none absolute inset-y-0 right-0 w-16 bg-gradient-to-l from-black to-transparent" aria-hidden="true" />
+      </div>
+    </section>
+  )
+}
+
+// Video testimonials — up to 3 portrait clips. The pure renderer draws
+// the section + (editable) heading; the interactive poster→tap-to-play
+// tiles live in the VideoTestimonials client island so first paint
+// ships zero video bytes. Hidden on the public page when no clip has a
+// video_url; in edit mode it stays visible with a hint so the operator
+// can find the section + edit the heading.
+export function VideoTestimonialsBlock({ block, onEdit }) {
+  const clips = (Array.isArray(block.items) ? block.items : []).filter((it) => it && it.video_url).slice(0, 3)
+  if (clips.length === 0 && !onEdit) return null
+  return (
+    <section className="bg-black text-white py-20 md:py-28 border-t border-white/10">
+      <div className="max-w-6xl mx-auto px-6">
+        {(block.title || onEdit) && (
+          <p className="text-xs uppercase tracking-[0.3em] text-white/50 mb-8 text-center">
+            <E value={block.title} onEdit={onEdit} path={['title']} />
+          </p>
+        )}
+        {clips.length > 0 ? (
+          <VideoTestimonials items={clips} />
+        ) : onEdit ? (
+          <div className="max-w-md mx-auto text-center text-white/40 text-sm border border-dashed border-white/20 rounded py-10">
+            Add up to 3 portrait videos in the &ldquo;Video testimonials&rdquo; panel on the left.
+          </div>
+        ) : null}
+      </div>
+    </section>
+  )
+}
+
+function ReviewCard({ review }) {
+  const stars = '★★★★★'.slice(0, Math.max(0, Math.min(5, review.rating || 0)))
+  return (
+    <figure className="w-72 shrink-0 bg-white/[0.04] border border-white/10 rounded-xl p-5">
+      <div className="text-amber-400 text-sm tracking-[0.15em]" aria-label={`${review.rating} out of 5`}>{stars}</div>
+      <blockquote className="mt-3 text-sm leading-relaxed text-white/85 line-clamp-5">
+        {review.comment}
+      </blockquote>
+      <figcaption className="mt-4 flex items-center gap-2 text-xs text-white/55">
+        {review.author_photo_url ? (
+
+          <img src={review.author_photo_url} alt="" className="w-6 h-6 rounded-full object-cover" loading="lazy" />
+        ) : null}
+        <span className="text-white/75 font-medium">{review.author_name || 'Google user'}</span>
+        <span className="ml-auto inline-flex items-center gap-1 text-white/40">
+          <span className="text-[#4285F4] font-bold">G</span> Google
+        </span>
+      </figcaption>
+    </figure>
+  )
+}
+
 function Pillar({ number, title, body, photoUrl, onEdit, locationId, itemIndex }) {
   // Show the photo region if there IS a photo OR we're in edit mode
   // (so the operator has somewhere to drop one). Same -mx/-mt as
@@ -412,7 +545,7 @@ function Pillar({ number, title, body, photoUrl, onEdit, locationId, itemIndex }
   return (
     <div className="bg-white p-8 md:p-10">
       {showPhotoRegion && (
-        <div className="aspect-[4/3] mb-6 overflow-hidden -mx-8 -mt-8 md:-mx-10 md:-mt-10 bg-black/5 relative">
+        <div className="aspect-[3/4] mb-6 overflow-hidden -mx-8 -mt-8 md:-mx-10 md:-mt-10 bg-black/5 relative">
           {onEdit ? (
             <EditableImage
               src={photoUrl || ''}
@@ -498,9 +631,6 @@ export function SiteHeader({
         ) : (
           <div className="text-xl font-black tracking-widest">UN1T</div>
         )}
-        <nav className="hidden md:flex items-center gap-8 text-sm font-medium">
-          <a href="#book" className="text-white/70 hover:text-white transition-colors">Book</a>
-        </nav>
       </div>
     </header>
   )

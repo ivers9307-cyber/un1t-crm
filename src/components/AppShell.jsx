@@ -5,13 +5,27 @@ import { useState, useEffect } from 'react'
 import Sidebar from './Sidebar'
 import ImpersonationBanner from './ImpersonationBanner'
 import CommandPalette from './CommandPalette'
+import AssistantBubble from './AssistantBubble'
+import { hasPermission } from '@/lib/permissions'
+// PERF.3 — Vercel SpeedInsights + Analytics mount in the authenticated
+// branch below (NOT the root layout) so /login and the public booking/
+// payment surfaces don't pay for the two analytics bundles pre-auth.
+// The root layout's PERF.3 comment points here — keep them in sync.
+import { SpeedInsights } from '@vercel/speed-insights/next'
+import { Analytics } from '@vercel/analytics/next'
 
 // NOTE: '/event-pay' must be listed SEPARATELY from '/event' — the matcher
 // is `pathname === p || startsWith(p + '/')`, so '/event' does NOT cover
 // '/event-pay/<id>' (the Revolut checkout page reached from "Book & pay").
 // Without it, a public buyer with no session gets bounced to /login after
 // clicking Pay Now. Mirrors the allowlist in proxy.js. Do not drop on refactor.
-const PUBLIC_PATHS = ['/login', '/reset-password', '/welcome', '/deposit', '/book', '/event', '/event-pay', '/tv', '/studio-login']
+// '/stillorgan' + '/hatch-street' are the studio pretty-paths: next.config
+// rewrites them to /welcome/<studio>, but the browser URL — and therefore
+// usePathname() here — stays the pretty path. Without them a logged-out
+// visitor to the public studio page is bounced to /login on hydration (the
+// server renders fine; this client gate is what redirects). Mirrors the
+// brand allowlist in src/lib/brands.js — add a new studio's path in BOTH.
+const PUBLIC_PATHS = ['/login', '/reset-password', '/welcome', '/stillorgan', '/hatch-street', '/deposit', '/book', '/event', '/event-pay', '/tv', '/studio-login']
 
 export default function AppShell({ user, children }) {
   const pathname = usePathname()
@@ -77,6 +91,20 @@ export default function AppShell({ user, children }) {
           {children}
         </main>
       </div>
+
+      {/* Permission-gated AI assistant chat bubble (fixed bottom-right,
+          viewport-anchored). `user` is guaranteed non-null here — the
+          !user early-return above is the d184209 redirect fix, so this
+          mount can never resurrect the null-user dead-shell bug. Both
+          this mount and the two Vercel scripts below were accidental
+          casualties of the d184209 AppShell rewrite (restored 2026-06,
+          platform audit). */}
+      {hasPermission(user, 'assistant') && <AssistantBubble user={user} />}
+
+      {/* PERF.3 — Speed Insights + Analytics only on authenticated
+          pages. Public surfaces return before this branch. */}
+      <SpeedInsights />
+      <Analytics />
     </div>
   )
 }

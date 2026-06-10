@@ -30,8 +30,9 @@ import AcDevicesIntegrationTab from './integrations/AcDevicesIntegrationTab'
 import BcaIntegrationTab from './integrations/BcaIntegrationTab'
 import TwilioIntegrationTab from './integrations/TwilioIntegrationTab'
 import WhatsAppIntegrationTab from './integrations/WhatsAppIntegrationTab'
+import GoogleReviewsTab from './integrations/GoogleReviewsTab'
 
-export default function LocationIntegrations({ location, xeroConnection, user, sampleBcaCar }) {
+export default function LocationIntegrations({ location, xeroConnection, gbpConnection, user, sampleBcaCar }) {
   const router = useRouter()
   const searchParams = useSearchParams()
 
@@ -57,6 +58,14 @@ export default function LocationIntegrations({ location, xeroConnection, user, s
       label: 'Xero',
       Icon: Plug,
       status: xeroConnection?.tenant_id ? 'connected' : 'not-configured',
+    })
+  }
+  if (isOwnerOrMaster) {
+    tabs.push({
+      key: 'google-reviews',
+      label: 'Google Reviews',
+      Icon: Plug,
+      status: gbpConnection?.location_resource ? 'connected' : 'not-configured',
     })
   }
   if (location.settings?.glofox || features.bookings || features.contacts) {
@@ -169,6 +178,9 @@ export default function LocationIntegrations({ location, xeroConnection, user, s
         <div className="p-5">
           {activeKey === 'xero' && (
             <XeroIntegrationTab location={location} connection={xeroConnection} />
+          )}
+          {activeKey === 'google-reviews' && (
+            <GoogleReviewsTab location={location} connection={gbpConnection || null} />
           )}
           {activeKey === 'glofox' && (
             <GlofoxIntegrationTab location={location} canEdit={isOwnerOrMaster} />

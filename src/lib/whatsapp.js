@@ -1,6 +1,10 @@
 import { createServerClient } from './supabase'
 import { applyAudienceFilter } from './audience-filter'
 import { getWhatsAppConfig, META_API_URL } from './whatsapp-config'
+import {
+  PER_TICK_MAX, AUTO_PAUSE_CONSECUTIVE_FAILURES,
+  rollingHeadroom, selectDripRecipients, dripOutcome,
+} from './whatsapp-drip.js'
 
 // WA-MULTI.1 — config is now per-location. Resolution helper +
 // env fallback live in whatsapp-config.js; the META_API_URL +
@@ -315,6 +319,34 @@ export async function deleteTemplate(templateName, opts = {}) {
   return { success: true }
 }
 
+/**
+ * Edit an existing template and resubmit it for review (WA-TMPL). Meta's edit
+ * endpoint is POST /{template_id} with category + components — name and language
+ * are immutable on edit. Allowed for REJECTED/PAUSED templates (the caller gates
+ * this). On success Meta puts the template back into review (status → PENDING),
+ * which arrives via the message_template_status_update webhook.
+ */
+export async function editTemplate(metaTemplateId, { category, components }, opts = {}) {
+  const config = await resolveConfig(opts)
+
+  const response = await fetch(`${META_API_URL}/${metaTemplateId}`, {
+    method: 'POST',
+    headers: headersFor(config),
+    body: JSON.stringify({
+      ...(category ? { category } : {}),
+      components: components || [],
+    }),
+  })
+
+  const result = await response.json()
+  if (result.error) {
+    console.error('Template edit error:', result.error)
+    throw new Error(result.error.message || 'Failed to edit template')
+  }
+
+  return { success: result.success !== false }
+}
+
 // ============================================================
 // AUDIENCE & BROADCAST
 // ============================================================
@@ -336,6 +368,57 @@ export function buildWhatsAppAudience(db, filter, locationId) {
   // Apply user-supplied filters via the whitelisted helper. Throws
   // InvalidAudienceFilterError on unknown field or unsupported op.
   return applyAudienceFilter(query, filter)
+}
+
+// Paginate the full WhatsApp-eligible audience (consent + opt-out + wa_phone + the
+// operator's audience_filter). buildWhatsAppAudience awaited is capped at the
+// project's 1000-row PostgREST limit, so a drip over a large lead list MUST page —
+// the >1k pattern from pipeline-reclassify.js. Deterministic order by id so paging
+// is stable. Rebuilds the query per page (builders are single-use).
+export async function fetchAllWhatsAppAudience(db, filter, locationId) {
+  const PAGE = 1000
+  const HARD_LIMIT = 50_000
+  const rows = []
+  let start = 0
+  while (true) {
+    const end = Math.min(start + PAGE - 1, HARD_LIMIT - 1)
+    const { data: page, error } = await buildWhatsAppAudience(db, filter, locationId)
+      .order('id', { ascending: true })
+      .range(start, end)
+    if (error) throw new Error(`Audience query failed: ${error.message}`)
+    if (!Array.isArray(page) || page.length === 0) break
+    rows.push(...page)
+    if (page.length < PAGE) break
+    if (rows.length >= HARD_LIMIT) break
+    start += PAGE
+  }
+  return rows
+}
+
+// Paginate the already-processed contact_ids for one broadcast (sent OR failed —
+// both insert a recipients row, so both are skipped on resume). Also >1k-safe: a
+// long-running drip accumulates thousands of recipient rows.
+export async function fetchDripDoneContactIds(db, broadcastId) {
+  const PAGE = 1000
+  const HARD_LIMIT = 200_000
+  const ids = []
+  let start = 0
+  while (true) {
+    const end = Math.min(start + PAGE - 1, HARD_LIMIT - 1)
+    const { data: page, error } = await db
+      .from('whatsapp_broadcast_recipients')
+      .select('contact_id')
+      .eq('broadcast_id', broadcastId)
+      .order('contact_id', { ascending: true })
+      .range(start, end)
+    if (error) throw new Error(`Recipients query failed: ${error.message}`)
+    if (!Array.isArray(page) || page.length === 0) break
+    for (const r of page) if (r.contact_id) ids.push(r.contact_id)
+    if (page.length < PAGE) break
+    if (ids.length >= HARD_LIMIT) break
+    start += PAGE
+  }
+  return ids
 }
 
 /**
@@ -456,6 +539,134 @@ export async function sendBroadcast(broadcastId) {
   }).eq('id', template.id)
 
   return { sent: sentCount, failed: failedCount, total: contacts.length }
+}
+
+/**
+ * Send one cron tick's worth of a paced WhatsApp broadcast (WA-DRIP).
+ *
+ * Mirrors the blast sendBroadcast send loop but: (1) caps the tick to the rolling
+ * -24h headroom and PER_TICK_MAX, (2) resumes via the recipients table, (3) auto-
+ * pauses on a run of failures, (4) leaves the row 'sending' until the audience is
+ * exhausted. The run-whatsapp-broadcasts cron gates the send window and only calls
+ * this for delivery_mode='drip', status='sending', paused_at IS NULL.
+ *
+ * Concurrency: the 15-min cadence + a fast tick (<=100 sends) means two ticks for
+ * the same drip never overlap, so pre-filtering done-ids is sufficient; the unique
+ * (broadcast_id, contact_id) constraint is the belt-and-braces backstop.
+ *
+ * @param {string} broadcastId
+ * @param {object} [opts]
+ * @param {number} [opts.perTickMax=PER_TICK_MAX]
+ * @returns {Promise<{status:string, sent:number, failed:number, recipients?:number, paused?:boolean, skipped?:string}>}
+ */
+export async function sendDripChunk(broadcastId, { perTickMax = PER_TICK_MAX } = {}) {
+  const db = createServerClient()
+
+  const { data: broadcast, error: bErr } = await db.from('whatsapp_broadcasts')
+    .select('*, whatsapp_templates(*)')
+    .eq('id', broadcastId)
+    .single()
+  if (bErr || !broadcast) throw new Error('Broadcast not found')
+  if (broadcast.delivery_mode !== 'drip') throw new Error('Not a drip broadcast')
+  if (broadcast.status !== 'sending') return { status: broadcast.status, skipped: 'not_sending', sent: 0, failed: 0 }
+  if (broadcast.paused_at) return { status: 'sending', skipped: 'paused', sent: 0, failed: 0 }
+
+  // Template gate — also covers Meta disabling a template mid-drip: auto-pause so
+  // the operator notices rather than the list draining into template errors.
+  const template = broadcast.whatsapp_templates
+  if (!template || template.status !== 'APPROVED') {
+    await db.from('whatsapp_broadcasts')
+      .update({ paused_at: new Date().toISOString() })
+      .eq('id', broadcastId)
+    return { status: 'sending', skipped: 'template_not_approved', paused: true, sent: 0, failed: 0 }
+  }
+
+  // Rolling-24h headroom. head:true count — the .select() is the first one off
+  // .from() so it reads the count option (see CLAUDE.md postgrest two-overload lesson).
+  const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
+  const { count: sentLast24h } = await db.from('whatsapp_broadcast_recipients')
+    .select('id', { count: 'exact', head: true })
+    .eq('broadcast_id', broadcastId)
+    .eq('status', 'sent')
+    .gt('sent_at', since)
+  const headroom = rollingHeadroom(broadcast.daily_cap, sentLast24h || 0)
+  if (headroom <= 0) return { status: 'sending', skipped: 'no_headroom', headroom: 0, sent: 0, failed: 0 }
+
+  // Eligible audience (paginated) minus already-processed, capped to this tick.
+  const audience = await fetchAllWhatsAppAudience(db, broadcast.audience_filter, broadcast.location_id)
+  if (audience.length === 0) {
+    await db.from('whatsapp_broadcasts').update({
+      status: 'sent', sent_at: new Date().toISOString(), total_recipients: 0,
+    }).eq('id', broadcastId)
+    return { status: 'sent', sent: 0, failed: 0, recipients: 0 }
+  }
+  const doneIds = await fetchDripDoneContactIds(db, broadcastId)
+  const { toSend, exhausted } = selectDripRecipients({ audience, doneIds, headroom, perTickMax })
+
+  if (toSend.length === 0) {
+    if (exhausted) {
+      await db.from('whatsapp_broadcasts').update({
+        status: 'sent', sent_at: new Date().toISOString(), total_recipients: audience.length,
+      }).eq('id', broadcastId)
+      return { status: 'sent', sent: 0, failed: 0, recipients: audience.length }
+    }
+    return { status: 'sending', skipped: 'no_capacity', sent: 0, failed: 0 }
+  }
+
+  // Resolve the location's WA config once for the whole tick (as the blast does).
+  const config = await getWhatsAppConfig(broadcast.location_id)
+  const variableMapping = broadcast.variable_mapping || {}
+  let sent = 0, failed = 0, consecutiveFailures = 0, autoPaused = false
+
+  for (const contact of toSend) {
+    try {
+      const components = buildTemplateComponents(template, contact, variableMapping, broadcast.header_media_url)
+      const result = await sendTemplateMessage(contact.wa_phone, template.name, template.language, components, { config })
+
+      await db.from('whatsapp_broadcast_recipients').insert({
+        broadcast_id: broadcastId, contact_id: contact.id,
+        wa_message_id: result.messageId, status: 'sent', sent_at: new Date().toISOString(),
+      })
+      await db.from('whatsapp_messages').insert({
+        conversation_id: await getOrCreateConversation(db, contact, broadcast.location_id),
+        contact_id: contact.id, location_id: broadcast.location_id,
+        wa_message_id: result.messageId, direction: 'outbound', message_type: 'template',
+        template_name: template.name, template_variables: variableMapping,
+        status: 'sent', broadcast_id: broadcastId, sent_at: new Date().toISOString(),
+      })
+      sent++; consecutiveFailures = 0
+    } catch (err) {
+      console.error(`[drip ${broadcastId}] send to ${contact.wa_phone} failed:`, err.message)
+      await db.from('whatsapp_broadcast_recipients').insert({
+        broadcast_id: broadcastId, contact_id: contact.id,
+        status: 'failed', error_message: err.message, failed_at: new Date().toISOString(),
+      })
+      failed++; consecutiveFailures++
+      if (consecutiveFailures >= AUTO_PAUSE_CONSECUTIVE_FAILURES) { autoPaused = true; break }
+    }
+    // Same conservative rate-limit as the blast sender (~50/sec ceiling).
+    if (sent % 50 === 0 && sent > 0) await new Promise(r => setTimeout(r, 1000))
+  }
+
+  // Cumulative totals from the recipients table.
+  const { count: totalSent } = await db.from('whatsapp_broadcast_recipients')
+    .select('id', { count: 'exact', head: true }).eq('broadcast_id', broadcastId).eq('status', 'sent')
+  const { count: totalFailed } = await db.from('whatsapp_broadcast_recipients')
+    .select('id', { count: 'exact', head: true }).eq('broadcast_id', broadcastId).eq('status', 'failed')
+
+  // We truly exhausted the audience only if we sent the last batch WITHOUT auto-
+  // pausing partway (a pause leaves unsent contacts for the resume).
+  const reallyExhausted = exhausted && !autoPaused && (sent + failed) >= toSend.length
+  const outcome = dripOutcome({ autoPaused, exhausted: reallyExhausted }, new Date().toISOString())
+
+  await db.from('whatsapp_broadcasts').update({
+    ...outcome,
+    total_recipients: audience.length,
+    total_sent: totalSent || 0,
+    total_failed: totalFailed || 0,
+  }).eq('id', broadcastId)
+
+  return { status: outcome.status, paused: !!outcome.paused_at, sent, failed, recipients: audience.length }
 }
 
 /**

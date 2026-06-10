@@ -82,6 +82,7 @@ export default function ChooserEditorForm({ initialChooser, initialTiles }) {
             public_path: t.public_path,
             chooser_label: (t.chooser_label || '').trim() || null,
             chooser_cta_text: (t.chooser_cta_text || '').trim() || null,
+            publish_state: t.publish_state || 'hidden',
           })),
         }),
       })
@@ -151,6 +152,33 @@ export default function ChooserEditorForm({ initialChooser, initialTiles }) {
                   <ArrowDown size={14} />
                 </button>
               </div>
+            </div>
+
+            {/* Visibility — Live / Coming soon / Hidden (publish_state). */}
+            <div className="mb-3">
+              <label className="block text-xs text-un1t-subtle mb-1">Visibility</label>
+              <div className="inline-flex rounded-md border border-un1t-border overflow-hidden">
+                {[
+                  { v: 'live', label: 'Live' },
+                  { v: 'coming_soon', label: 'Coming soon' },
+                  { v: 'hidden', label: 'Hidden' },
+                ].map((opt) => {
+                  const active = (t.publish_state || 'hidden') === opt.v
+                  return (
+                    <button
+                      key={opt.v}
+                      type="button"
+                      onClick={() => patchTile(t.location_id, { publish_state: opt.v })}
+                      className={`px-3 py-1.5 text-xs font-medium border-r border-un1t-border last:border-r-0 ${active ? 'bg-un1t-text text-un1t-bg' : 'bg-un1t-bg text-un1t-subtle hover:text-un1t-text'}`}
+                    >
+                      {opt.label}
+                    </button>
+                  )
+                })}
+              </div>
+              <p className="text-[11px] text-un1t-muted mt-1">
+                Live = clickable tile + page reachable. Coming soon = dimmed teaser tile, page not reachable. Hidden = removed from the front page.
+              </p>
             </div>
 
             <div className="grid sm:grid-cols-2 gap-3">

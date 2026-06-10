@@ -22,19 +22,9 @@ import Link from 'next/link'
 import { createServerClient } from '@/lib/supabase'
 import { blocksOrDefault } from '@/lib/landing-page-blocks'
 import EditModeOverlay from '@/components/landing-page/EditModeOverlay'
+import { tileModeFor } from '@/lib/landing-page-visibility'
 
 export const dynamic = 'force-dynamic'
-
-// ─── Temporarily disabled tiles ────────────────────────────────────
-// public_path values listed here render as a dimmed, NON-clickable
-// "coming soon" panel (no link, no CTA button). The studio's page at
-// /welcome/<path> still exists and is untouched — only the chooser
-// tile's link is suppressed. To RE-ENABLE a studio, delete its entry
-// from this set; the tile goes back to linking the exact same path.
-// (Set, not a DB flag, so it's a one-line revert with no migration.)
-const DISABLED_TILE_PATHS = new Set([
-  'hatch-street', // disabled 2026-06-02 — re-enable when Hatch Street opens
-])
 
 // Default left→right order when the operator hasn't set tile_order.
 const TILE_ORDER = ['stillorgan', 'hatch-street']
@@ -70,7 +60,7 @@ async function loadFrontPage() {
         .eq('id', 'default')
         .maybeSingle(),
       db.from('landing_page_settings')
-        .select('public_path, chooser_label, chooser_cta_text, chooser_image_url, blocks, locations:location_id ( name )')
+        .select('public_path, chooser_label, chooser_cta_text, chooser_image_url, blocks, publish_state, locations:location_id ( name )')
         .not('public_path', 'is', null),
     ])
 
@@ -85,6 +75,7 @@ async function loadFrontPage() {
       .filter(Boolean)
       .map((r) => {
         const hero = blocksOrDefault(r.blocks).find((b) => b.type === 'hero')
+        const mode = tileModeFor(r.publish_state)   // 'active' | 'coming_soon' | 'hidden'
         return {
           path: r.public_path,
           // Operator label wins over the location name; fall back to path.
@@ -93,9 +84,13 @@ async function loadFrontPage() {
             || r.public_path,
           cta: (r.chooser_cta_text && r.chooser_cta_text.trim()) || 'Enter',
           cover: r.chooser_image_url || hero?.image_url || null,
-          disabled: DISABLED_TILE_PATHS.has(r.public_path),
+          mode,
+          // coming_soon tiles render dimmed + non-clickable (the old
+          // DISABLED_TILE_PATHS behaviour); hidden tiles are removed below.
+          disabled: mode === 'coming_soon',
         }
       })
+      .filter((t) => t.mode !== 'hidden')
 
     return {
       headline: (chooser.headline && chooser.headline.trim()) || null,
@@ -138,6 +133,11 @@ function TileBody({ s }) {
       <div className={`absolute inset-0 transition-colors duration-500 ${s.disabled ? 'bg-black/70' : 'bg-black/50 group-hover:bg-black/30'}`} />
       <div className="relative z-10 text-center px-6">
         <div className="text-[11px] uppercase tracking-[0.3em] text-white/60 mb-3">UN1T Dublin</div>
+        {s.disabled && (
+          <div className="mb-3 inline-block rounded-full border border-white/40 px-3 py-1 text-[10px] uppercase tracking-[0.25em] text-white/80">
+            Coming soon
+          </div>
+        )}
         <h2 className={`text-3xl md:text-5xl font-extrabold tracking-tight ${s.disabled ? 'text-white/70' : ''}`}>{s.name}</h2>
         {/* CTA only on active tiles. Disabled tiles show the label alone. */}
         {!s.disabled && (

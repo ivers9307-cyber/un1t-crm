@@ -7,7 +7,7 @@
 // Auth: any coach role at the location.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser } from '@/lib/auth'
+import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { endAllAtLocation } from '@/lib/live-class'
 import { logInfo } from '@/lib/log'
@@ -27,7 +27,7 @@ export async function POST(_request, props) {
   if (!user.isMaster && !ALLOWED_ROLES.includes(user.role)) {
     return NextResponse.json({ ok: false, error: 'Coach only' }, { status: 403 })
   }
-  if (!user.isMaster && !(user.locationIds || []).includes(locationId)) {
+  if (!user.isMaster && !getUserLocationIds(user).includes(locationId)) {
     return NextResponse.json({ ok: false, error: 'Location not in your scope' }, { status: 403 })
   }
 

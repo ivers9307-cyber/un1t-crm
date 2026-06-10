@@ -4,6 +4,7 @@ import { redirect } from 'next/navigation'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import ContactsView from '@/components/ContactsView'
 import ContactsHeaderActions from '@/components/ContactsHeaderActions'
+import { crossoverContactIds, fetchCrossoverContext } from '@/lib/contact-crossovers'
 
 export const dynamic = 'force-dynamic'
 
@@ -27,8 +28,13 @@ export default async function ContactsPage(props) {
   // client. If a downstream component needs more columns, add them
   // here AND in the /api/contacts/search route so both paths return
   // the same shape.
-  const CONTACT_LIST_FIELDS = 'id, name, email, phone, lead_source, pipeline_stage_slug, trial_credits_remaining, created_at'
-  let query = db.from('contacts').select(CONTACT_LIST_FIELDS).eq('location_id', locationId).order('created_at', { ascending: false }).limit(200)
+  const CONTACT_LIST_FIELDS = 'id, name, email, phone, lead_source, pipeline_stage_slug, trial_credits_remaining, created_at, location_id'
+  const crossIds = await crossoverContactIds(db, locationId)
+  let query = db.from('contacts').select(CONTACT_LIST_FIELDS)
+  query = crossIds.length > 0
+    ? query.or(`location_id.eq.${locationId},id.in.(${crossIds.join(',')})`)
+    : query.eq('location_id', locationId)
+  query = query.order('created_at', { ascending: false }).limit(200)
   if (status) query = query.eq('pipeline_stage_slug', status)
   // Active-trial chip excludes ClassPass PAYG by default — they
   // share the active_trial stage slug but aren't real trialists.
@@ -53,6 +59,7 @@ export default async function ContactsPage(props) {
   }
 
   const { data: contacts } = await query
+  const crossoverContext = await fetchCrossoverContext(db, contacts || [], locationId)
 
   const canCreate = MANAGER_ROLES.includes(user.role)
   // Delete + bulk-delete: head_coach / manager / owner / master
@@ -85,6 +92,7 @@ export default async function ContactsPage(props) {
       <ContactsView
         initialContacts={contacts || []}
         locationId={locationId}
+        crossoverContext={crossoverContext}
         initialStatus={status}
         initialSearch={search}
         canMerge={canMerge}

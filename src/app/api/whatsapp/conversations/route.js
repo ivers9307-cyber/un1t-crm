@@ -14,7 +14,7 @@ export async function GET(request) {
 
   const db = createServerClient()
   let query = db.from('whatsapp_conversations')
-    .select('*, contacts(id, name, first_name, phone, wa_phone, pipeline_stage_slug)')
+    .select('*, contacts!contact_id(id, name, first_name, phone, wa_phone, pipeline_stage_slug)')
     .order('last_message_at', { ascending: false, nullsFirst: false })
     .limit(50)
 

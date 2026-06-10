@@ -87,6 +87,18 @@ const EVENT_DEFAULT = () => ({
   title: 'Sign up',
 })
 
+const LEAD_FORM_DEFAULT = () => ({
+  id:              newBlockId(),
+  type:            'lead_form',
+  heading:         'Join the founding members',
+  subtext:         'Be first through the doors at UN1T Hatch Street. Leave your details and we’ll be in touch with founding-member offers before we open.',
+  button_label:    'Join the waitlist',
+  success_message: "You're on the list — we'll be in touch soon.",
+  consent_label:   'I’d like to hear from UN1T about the Hatch Street launch and offers by email, SMS and WhatsApp. I can opt out anytime.',
+  tag:             'hatch-founding-member',
+  lead_source:     'hatch_launch',
+})
+
 const STATS_DEFAULT = () => ({
   id:    newBlockId(),
   type:  'stats',
@@ -104,6 +116,23 @@ const TESTIMONIAL_DEFAULT = () => ({
   author: 'Member, joined 2024',
 })
 
+const REVIEWS_DEFAULT = () => ({
+  id:             newBlockId(),
+  type:           'reviews',
+  title:          'What our members say',
+  min_rating:     4,        // 1–5; reviews below this are hidden
+  show_aggregate: true,     // "4.9 ★ · 127 Google reviews" header
+  speed:          'normal', // 'slow' | 'normal' | 'fast' marquee speed
+})
+
+const VIDEO_TESTIMONIALS_DEFAULT = () => ({
+  id:    newBlockId(),
+  type:  'video_testimonials',
+  title: 'Hear from our members',
+  // up to 3 × { video_url, poster_url, name } — added by the editor on upload
+  items: [],
+})
+
 // Registry — single source of truth for "what types exist". Used by:
 //   - Form's "+ Add section" picker
 //   - Renderer's type-dispatch
@@ -112,11 +141,14 @@ export const BLOCK_TYPES = [
   { type: 'hero',        label: 'Hero',         description: 'Headline + booking copy. Image or video background.', factory: HERO_DEFAULT },
   { type: 'booking',     label: 'Booking form', description: 'Embed the booking form for a chosen booking type.',    factory: BOOKING_DEFAULT },
   { type: 'event',       label: 'Event signup', description: 'Embed the full signup form for a chosen event.',        factory: EVENT_DEFAULT },
+  { type: 'lead_form',   label: 'Lead form',    description: 'Waitlist / interest capture — name, email, phone + consent.',  factory: LEAD_FORM_DEFAULT },
   { type: 'pillars',     label: 'Pillars',      description: '3 value-prop tiles. Each can have a photo.',           factory: PILLARS_DEFAULT },
   { type: 'gallery',     label: 'Photo gallery',description: 'Grid of photos with optional captions.',                factory: GALLERY_DEFAULT },
   { type: 'embed',       label: 'Video embed',  description: 'YouTube or Instagram video embed.',                    factory: EMBED_DEFAULT },
   { type: 'stats',       label: 'Stats',        description: '3 big-number tiles for social proof.',                 factory: STATS_DEFAULT },
   { type: 'testimonial', label: 'Testimonial',  description: 'Single member quote + attribution.',                   factory: TESTIMONIAL_DEFAULT },
+  { type: 'reviews',     label: 'Google reviews', description: 'Auto-scrolling marquee of your Google reviews.',       factory: REVIEWS_DEFAULT },
+  { type: 'video_testimonials', label: 'Video testimonials', description: 'Up to 3 portrait member videos. Poster image, tap to play.', factory: VIDEO_TESTIMONIALS_DEFAULT },
 ]
 
 const TYPE_BY_NAME = new Map(BLOCK_TYPES.map((t) => [t.type, t]))

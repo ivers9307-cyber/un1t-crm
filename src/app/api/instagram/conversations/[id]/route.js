@@ -14,7 +14,7 @@ export async function GET(request, props) {
   const limit = parseInt(searchParams.get('limit') || '50')
 
   const { data: conversation, error } = await db.from('instagram_conversations')
-    .select('*, contacts(id, name, first_name, email, pipeline_stage_slug)')
+    .select('*, contacts!contact_id(id, name, first_name, email, pipeline_stage_slug)')
     .eq('id', params.id)
     .single()
 

@@ -92,6 +92,50 @@ const nextConfig = {
       { source: '/api/public/race-payments/:id',                destination: '/api/public/event-payments/:id' },
     ]
   },
+
+  // Don't advertise the framework in every response.
+  poweredByHeader: false,
+
+  // ─── Security headers (AUDIT-JUN10.2) ────────────────────────────
+  //
+  // Baseline hardening for an app that serves authenticated CRM pages
+  // AND public payment pages (deposit, event-pay) on custom domains.
+  // Deliberately conservative — no CSP yet (that needs a report-only
+  // soak first; see docs/PLATFORM_AUDIT_2026-06.md), no COOP/COEP
+  // (nothing needs cross-origin isolation — ffmpeg.wasm runs the
+  // single-threaded core).
+  //
+  // Frame-blocking exclusions: /embed/* exists precisely to be
+  // iframed by third-party sites (event signup widget), and /book/*
+  // may be iframed by gym marketing sites — both stay frameable.
+  // Everything else (login, payment pages, the whole CRM) refuses
+  // cross-origin framing (clickjacking protection).
+  //
+  // Mechanism: X-Frame-Options ships globally, then the two
+  // embeddable subtrees get `CSP: frame-ancestors *`, which
+  // supersedes X-Frame-Options in every modern browser (the
+  // spec-defined override). Path-to-regexp lookaheads with anchors
+  // are NOT used — verified to mis-match (`/bookings` lost the
+  // header when `/book` was excluded via lookahead).
+  async headers() {
+    const frameable = [
+      { key: 'Content-Security-Policy', value: 'frame-ancestors *' },
+    ]
+    return [
+      {
+        source: '/(.*)',
+        headers: [
+          { key: 'X-Content-Type-Options', value: 'nosniff' },
+          { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
+          { key: 'Strict-Transport-Security', value: 'max-age=63072000; includeSubDomains' },
+          { key: 'Permissions-Policy', value: 'camera=(), microphone=(), geolocation=()' },
+          { key: 'X-Frame-Options', value: 'SAMEORIGIN' },
+        ],
+      },
+      { source: '/embed/:path*', headers: frameable },
+      { source: '/book/:path*', headers: frameable },
+    ]
+  },
 }
 
 module.exports = nextConfig

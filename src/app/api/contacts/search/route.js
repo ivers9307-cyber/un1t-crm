@@ -5,6 +5,7 @@ import { authenticateApiKey, scopeQueryToOrg } from '@/lib/api-auth'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { applyAudienceFilterAsync, InvalidAudienceFilterError } from '@/lib/audience-filter'
 import { audienceFilterSchema } from '@/lib/schemas'
+import { crossoverContactIds, fetchCrossoverContext } from '@/lib/contact-crossovers'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -82,6 +83,14 @@ const SearchBody = z.object({
   location_id: z.string().nullable().optional(),
   limit: z.number().int().min(1).max(500).optional(),
   offset: z.number().int().min(0).optional(),
+  // Opt-in: fold in "crossover" deal-holders (contacts owned by another
+  // studio that have a deal at this one). Only the /contacts list wants
+  // them — the unified-send people-picker (ContactMultiSelect) shares
+  // this route and must stay strictly owned-only, so the union is OFF by
+  // default and the list opts in explicitly. Send safety doesn't depend
+  // on this (the send path re-scopes by location_id) — this just keeps
+  // crossovers from appearing in the picker's type-ahead.
+  include_crossovers: z.boolean().optional(),
 })
 
 export async function POST(request) {
@@ -128,13 +137,16 @@ export async function POST(request) {
   // ContactsView gets a stable shape whichever code path it took.
   // Keep this list in lock-step with `CONTACT_LIST_FIELDS` in
   // src/app/contacts/page.js.
-  const CONTACT_LIST_FIELDS = 'id, name, email, phone, lead_source, pipeline_stage_slug, trial_credits_remaining, created_at'
-  let listQuery = db.from('contacts')
-    .select(CONTACT_LIST_FIELDS)
-    .eq('location_id', locationId)
-  let countQuery = db.from('contacts')
-    .select('id', { count: 'exact', head: true })
-    .eq('location_id', locationId)
+  const CONTACT_LIST_FIELDS = 'id, name, email, phone, lead_source, pipeline_stage_slug, trial_credits_remaining, created_at, location_id'
+  // Crossovers are opt-in (see schema) — default OFF so shared callers
+  // such as the send people-picker stay owned-only.
+  const wantCrossovers = parsed.data.include_crossovers === true
+  const crossIds = wantCrossovers ? await crossoverContactIds(db, locationId) : []
+  const applyLoc = (q) => crossIds.length > 0
+    ? q.or(`location_id.eq.${locationId},id.in.(${crossIds.join(',')})`)
+    : q.eq('location_id', locationId)
+  let listQuery = applyLoc(db.from('contacts').select(CONTACT_LIST_FIELDS))
+  let countQuery = applyLoc(db.from('contacts').select('id', { count: 'exact', head: true }))
 
   // Free-text search applies on top of the audience filter — separate
   // substring match, not part of the filter schema. Both queries get it.
@@ -202,9 +214,13 @@ export async function POST(request) {
     return NextResponse.json({ success: false, error: countRes.error.message }, { status: 500 })
   }
 
+  const crossoverContext = wantCrossovers
+    ? await fetchCrossoverContext(db, listRes.data || [], locationId)
+    : {}
   return NextResponse.json({
     success: true,
     contacts: listRes.data || [],
+    crossoverContext,
     count: countRes.count ?? 0,
     limit,
     offset,

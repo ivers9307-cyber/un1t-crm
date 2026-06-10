@@ -31,7 +31,7 @@ export async function POST(request, props) {
 
   // Get conversation
   const { data: conversation, error } = await db.from('whatsapp_conversations')
-    .select('*, contacts(id, name, wa_phone, location_id)')
+    .select('*, contacts!contact_id(id, name, wa_phone, location_id)')
     .eq('id', params.id)
     .single()
 

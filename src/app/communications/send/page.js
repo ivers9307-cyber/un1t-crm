@@ -30,7 +30,7 @@ export default async function SendPage(props) {
   if (channels.includes('whatsapp')) {
     const db = createServerClient()
     const { data } = await db.from('whatsapp_templates')
-      .select('id, name, language, category, components, status')
+      .select('id, name, language, category, components, status, quality_rating')
       .eq('location_id', locationId)
       .eq('status', 'APPROVED')
       .order('name')

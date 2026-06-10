@@ -26,15 +26,18 @@ const HEADER_FORMATS = [
   { value: 'DOCUMENT', label: 'Document' },
 ]
 
-export default function WATemplateEditor({ template, locationId, userId }) {
+export default function WATemplateEditor({ template, locationId, userId, events = [] }) {
   const router = useRouter()
   const isEditing = !!template
   const isSubmitted = template?.status && template.status !== 'draft'
+  const canResubmit = ['REJECTED', 'PAUSED'].includes(template?.status)
+  const MANAGER_URL = 'https://business.facebook.com/wa/manage/message-templates/'
 
   const [name, setName] = useState(template?.name || '')
   const [category, setCategory] = useState(template?.category || 'MARKETING')
   const [language, setLanguage] = useState(template?.language || 'en')
   const [saving, setSaving] = useState(false)
+  const [resubmitting, setResubmitting] = useState(false)
   const [error, setError] = useState(null)
 
   // Component state
@@ -194,6 +197,25 @@ export default function WATemplateEditor({ template, locationId, userId }) {
     }
   }
 
+  async function handleResubmit() {
+    setResubmitting(true)
+    setError(null)
+    try {
+      const result = await fetch(`/api/whatsapp/templates/${template.id}/resubmit`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ category, components: buildComponents() }),
+      }).then(r => r.json())
+      if (!result.success) throw new Error(result.error)
+      router.push('/communications/templates?channel=whatsapp')
+      router.refresh()
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setResubmitting(false)
+    }
+  }
+
   function addButton(type) {
     if (buttons.length >= 3) return
     const newButton = type === 'URL'
@@ -268,6 +290,40 @@ export default function WATemplateEditor({ template, locationId, userId }) {
         <div className="flex gap-6 p-6 max-w-6xl">
           {/* Left: Form */}
           <div className="flex-1 space-y-5">
+            {template && (canResubmit || events.length > 0) && (
+              <div className="mb-4 rounded-lg border border-un1t-border bg-un1t-surface p-4 space-y-3">
+                {canResubmit && (
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="text-sm">
+                      <span className="font-medium text-amber-700">{template.status}</span>
+                      {template.rejection_reason ? <span className="text-un1t-subtle"> — {template.rejection_reason}</span> : null}
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <button type="button" onClick={handleResubmit} disabled={resubmitting}
+                        className="text-sm bg-green-600 text-white px-3 py-1.5 rounded-md hover:bg-green-700 disabled:opacity-50">
+                        {resubmitting ? 'Resubmitting…' : 'Edit & resubmit'}
+                      </button>
+                      <a href={MANAGER_URL} target="_blank" rel="noopener noreferrer"
+                        className="text-sm text-un1t-subtle hover:text-un1t-text underline">Appeal in WhatsApp Manager ↗</a>
+                    </div>
+                  </div>
+                )}
+                {events.length > 0 && (
+                  <div>
+                    <p className="text-[11px] uppercase tracking-wider text-un1t-subtle mb-1">History</p>
+                    <ul className="space-y-1">
+                      {events.map((e, i) => (
+                        <li key={i} className="text-xs text-un1t-subtle">
+                          <span className="text-un1t-text">{e.kind === 'status' ? e.to_value : `${e.kind} ${e.from_value || '?'}→${e.to_value}`}</span>
+                          {e.reason ? ` — ${e.reason}` : ''}
+                          <span className="text-un1t-muted"> · {new Date(e.created_at).toLocaleString('en-IE', { dateStyle: 'medium', timeStyle: 'short' })}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            )}
             {/* Name & Category */}
             <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5 space-y-4">
               <div>
@@ -277,7 +333,7 @@ export default function WATemplateEditor({ template, locationId, userId }) {
                   value={name}
                   onChange={e => setName(e.target.value)}
                   placeholder="e.g. welcome_new_member"
-                  disabled={isSubmitted}
+                  disabled={(isSubmitted && !canResubmit)}
                   className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted disabled:opacity-50"
                 />
                 <p className="text-xs text-un1t-muted mt-1">Lowercase letters, numbers, and underscores only</p>
@@ -289,7 +345,7 @@ export default function WATemplateEditor({ template, locationId, userId }) {
                   <select
                     value={category}
                     onChange={e => setCategory(e.target.value)}
-                    disabled={isSubmitted}
+                    disabled={(isSubmitted && !canResubmit)}
                     className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted disabled:opacity-50"
                   >
                     {CATEGORIES.map(c => (
@@ -302,7 +358,7 @@ export default function WATemplateEditor({ template, locationId, userId }) {
                   <select
                     value={language}
                     onChange={e => setLanguage(e.target.value)}
-                    disabled={isSubmitted}
+                    disabled={(isSubmitted && !canResubmit)}
                     className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted disabled:opacity-50"
                   >
                     <option value="en">English</option>
@@ -319,7 +375,7 @@ export default function WATemplateEditor({ template, locationId, userId }) {
               <select
                 value={headerFormat}
                 onChange={e => setHeaderFormat(e.target.value)}
-                disabled={isSubmitted}
+                disabled={(isSubmitted && !canResubmit)}
                 className="bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted disabled:opacity-50"
               >
                 {HEADER_FORMATS.map(h => (
@@ -334,7 +390,7 @@ export default function WATemplateEditor({ template, locationId, userId }) {
                   onChange={e => setHeaderText(e.target.value)}
                   placeholder="Header text (max 60 chars)"
                   maxLength={60}
-                  disabled={isSubmitted}
+                  disabled={(isSubmitted && !canResubmit)}
                   className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted disabled:opacity-50"
                 />
               )}
@@ -353,13 +409,13 @@ export default function WATemplateEditor({ template, locationId, userId }) {
                         type="file"
                         accept={MEDIA_LIMITS[headerFormat].accept}
                         onChange={handleMediaUpload}
-                        disabled={isSubmitted || uploading}
+                        disabled={(isSubmitted && !canResubmit) || uploading}
                         className="hidden"
                       />
                       <button
                         type="button"
                         onClick={() => fileInputRef.current?.click()}
-                        disabled={isSubmitted || uploading}
+                        disabled={(isSubmitted && !canResubmit) || uploading}
                         className="inline-flex items-center gap-2 text-sm bg-un1t-bg border border-un1t-border hover:border-un1t-muted text-un1t-text px-3 py-2 rounded-md transition-colors disabled:opacity-50"
                       >
                         <Upload size={14} />
@@ -386,7 +442,7 @@ export default function WATemplateEditor({ template, locationId, userId }) {
                           {mediaHandle ? 'Ready for Meta approval' : 'Uploaded — Meta handle missing, retry needed'}
                         </div>
                       </div>
-                      {!isSubmitted && (
+                      {!(isSubmitted && !canResubmit) && (
                         <button
                           type="button"
                           onClick={clearMedia}
@@ -415,7 +471,7 @@ export default function WATemplateEditor({ template, locationId, userId }) {
                 placeholder="Hello {{1}}, welcome to {{2}}! Your trial starts today."
                 rows={5}
                 maxLength={1024}
-                disabled={isSubmitted}
+                disabled={(isSubmitted && !canResubmit)}
                 className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted resize-y disabled:opacity-50"
               />
               <p className="text-xs text-un1t-muted">
@@ -433,7 +489,7 @@ export default function WATemplateEditor({ template, locationId, userId }) {
                 onChange={e => setFooterText(e.target.value)}
                 placeholder="e.g. Reply STOP to unsubscribe"
                 maxLength={60}
-                disabled={isSubmitted}
+                disabled={(isSubmitted && !canResubmit)}
                 className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted disabled:opacity-50"
               />
             </div>
@@ -449,7 +505,7 @@ export default function WATemplateEditor({ template, locationId, userId }) {
                       <select
                         value={btn.type}
                         onChange={e => updateButton(i, { type: e.target.value })}
-                        disabled={isSubmitted}
+                        disabled={(isSubmitted && !canResubmit)}
                         className="bg-un1t-surface border border-un1t-border rounded-md px-2 py-1.5 text-xs text-un1t-text focus:outline-none disabled:opacity-50"
                       >
                         <option value="QUICK_REPLY">Quick Reply</option>
@@ -462,7 +518,7 @@ export default function WATemplateEditor({ template, locationId, userId }) {
                         onChange={e => updateButton(i, { text: e.target.value })}
                         placeholder="Button text"
                         maxLength={25}
-                        disabled={isSubmitted}
+                        disabled={(isSubmitted && !canResubmit)}
                         className="flex-1 bg-un1t-surface border border-un1t-border rounded-md px-2 py-1.5 text-xs text-un1t-text placeholder:text-un1t-muted focus:outline-none disabled:opacity-50"
                       />
                     </div>
@@ -472,7 +528,7 @@ export default function WATemplateEditor({ template, locationId, userId }) {
                         value={btn.url || ''}
                         onChange={e => updateButton(i, { url: e.target.value })}
                         placeholder="https://..."
-                        disabled={isSubmitted}
+                        disabled={(isSubmitted && !canResubmit)}
                         className="w-full bg-un1t-surface border border-un1t-border rounded-md px-2 py-1.5 text-xs text-un1t-text placeholder:text-un1t-muted focus:outline-none disabled:opacity-50"
                       />
                     )}
@@ -482,12 +538,12 @@ export default function WATemplateEditor({ template, locationId, userId }) {
                         value={btn.phone_number || ''}
                         onChange={e => updateButton(i, { phone_number: e.target.value })}
                         placeholder="+353..."
-                        disabled={isSubmitted}
+                        disabled={(isSubmitted && !canResubmit)}
                         className="w-full bg-un1t-surface border border-un1t-border rounded-md px-2 py-1.5 text-xs text-un1t-text placeholder:text-un1t-muted focus:outline-none disabled:opacity-50"
                       />
                     )}
                   </div>
-                  {!isSubmitted && (
+                  {!(isSubmitted && !canResubmit) && (
                     <button onClick={() => removeButton(i)} className="p-1 text-un1t-muted hover:text-red-400">
                       <Trash2 size={14} />
                     </button>
@@ -495,7 +551,7 @@ export default function WATemplateEditor({ template, locationId, userId }) {
                 </div>
               ))}
 
-              {buttons.length < 3 && !isSubmitted && (
+              {buttons.length < 3 && !(isSubmitted && !canResubmit) && (
                 <div className="flex gap-2">
                   <button onClick={() => addButton('QUICK_REPLY')} className="text-xs text-un1t-subtle hover:text-un1t-text border border-un1t-border px-3 py-1.5 rounded-md transition-colors">
                     + Quick Reply

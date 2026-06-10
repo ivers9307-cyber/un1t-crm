@@ -85,7 +85,17 @@ export async function proxy(request) {
   // display moves here too). TV browsers don't have CRM accounts
   // and shouldn't need them; the API endpoints under /api/public/
   // expose only display-safe data.
-  const publicPaths = ['/login', '/reset-password', '/book/', '/event/', '/event-pay/', '/tv/', '/api/public/', '/unsubscribe/', '/preferences/', '/api/unsubscribe/', '/api/preferences/', '/api/webhooks/', '/api/cron/', '/deposit/', '/welcome', '/studio-login', '/api/auth/pin-login', '/api/auth/studio-heartbeat', '/api/auth/studio-signout']
+  // /ffmpeg/ — the self-hosted ffmpeg.wasm worker + core/wasm (landing-
+  // page in-browser video compression). ffmpeg fetches these like a
+  // public CDN asset; behind the auth gate the worker's subresource
+  // fetches get a 307→/login (HTML) instead of the binary and ffmpeg
+  // fails to load. They're non-sensitive open-source binaries — public.
+  // /embed/ — the paste-anywhere iframe widgets (event signup). The
+  // whole point is third-party sites iframing them for anonymous
+  // visitors; without this entry the iframe showed a login redirect
+  // (found in the 2026-06-10 audit — the page itself documents the
+  // public-embed intent). Data access stays via /api/public/*.
+  const publicPaths = ['/login', '/reset-password', '/book/', '/event/', '/event-pay/', '/tv/', '/api/public/', '/unsubscribe/', '/preferences/', '/api/unsubscribe/', '/api/preferences/', '/api/webhooks/', '/api/cron/', '/deposit/', '/welcome', '/studio-login', '/api/auth/pin-login', '/api/auth/studio-heartbeat', '/api/auth/studio-signout', '/ffmpeg/', '/embed/']
   const isPublic = publicPaths.some(p => request.nextUrl.pathname.startsWith(p))
   if (isPublic) return NextResponse.next()
 

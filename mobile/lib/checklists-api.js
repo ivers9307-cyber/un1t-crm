@@ -1,20 +1,11 @@
 // CHECKLIST.2 — mobile API client for the coach's checklist.
 // GETs today's instance(s) and ticks individual items.
 
-import { supabase } from './supabase'
+import { authHeaders } from './api'
 
 const API_BASE =
   process.env.EXPO_PUBLIC_API_BASE_URL ||
   'https://crm.un1tdublin.com'
-
-async function authHeaders() {
-  const { data: { session } } = await supabase.auth.getSession()
-  const headers = { Accept: 'application/json' }
-  if (session?.access_token) {
-    headers.Authorization = `Bearer ${session.access_token}`
-  }
-  return headers
-}
 
 /**
  * Resolve (and lazily create) today's checklist instance(s) for

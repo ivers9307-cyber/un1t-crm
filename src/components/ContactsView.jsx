@@ -28,6 +28,7 @@ const STATUSES = ['', 'active_trial', 'member', 'cold', 'lost_member', 'returnin
 export default function ContactsView({
   initialContacts,
   locationId,
+  crossoverContext = {},
   initialStatus = '',
   initialSearch = '',
   canMerge = false,
@@ -44,6 +45,7 @@ export default function ContactsView({
   // null means "use initialContacts from the server"; an array means
   // "we have the API result, show it".
   const [clientContacts, setClientContacts] = useState(null)
+  const [clientCrossoverContext, setClientCrossoverContext] = useState({})
   const [count, setCount] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
@@ -151,6 +153,10 @@ export default function ContactsView({
     search: search || undefined,
     location_id: locationId,
     limit: 200,
+    // The contacts list shows crossover deal-holders (owned ∪ deal-at-
+    // this-studio); other callers of this route (e.g. the send people-
+    // picker) omit this and stay owned-only.
+    include_crossovers: true,
   }), [filterRowCount, filter, search, locationId])
 
   const fetchContacts = useCallback(async () => {
@@ -175,6 +181,7 @@ export default function ContactsView({
         ? (json.contacts || []).filter(c => c.pipeline_stage_slug === status)
         : (json.contacts || [])
       setClientContacts(filtered)
+      setClientCrossoverContext(json.crossoverContext || {})
       setCount(json.count)
     } catch (e) {
       setError(e.message || 'Network error')
@@ -241,6 +248,11 @@ export default function ContactsView({
     setFilter(next)
     setActiveSegmentId(null)
   }
+
+  // Use the client-path context when the API result is showing, else the
+  // server-rendered initial context. Mirrors the clientContacts vs
+  // initialContacts choice in visibleContacts.
+  const activeCrossoverContext = clientContacts !== null ? clientCrossoverContext : crossoverContext
 
   return (
     <div>
@@ -411,7 +423,7 @@ export default function ContactsView({
         <div className="mb-3 text-xs text-un1t-subtle">Loading…</div>
       )}
 
-      <ContactsTable contacts={visibleContacts} locationId={locationId} canMerge={canMerge} canDelete={canDelete} />
+      <ContactsTable contacts={visibleContacts} locationId={locationId} crossoverContext={activeCrossoverContext} canMerge={canMerge} canDelete={canDelete} />
     </div>
   )
 }

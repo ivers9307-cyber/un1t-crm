@@ -70,6 +70,8 @@ export const BRANDS = [
       .split(',').map((s) => s.trim()).filter(Boolean),
     allowedPaths: [
       '/welcome',
+      '/stillorgan',    // pretty path → next.config rewrites to /welcome/stillorgan
+      '/hatch-street',  // pretty path → next.config rewrites to /welcome/hatch-street
       '/book/',         // public Calendly-style booking pages
       '/event/',        // public race / workshop / etc. signup pages
       '/race/',         // race kiosk + signup

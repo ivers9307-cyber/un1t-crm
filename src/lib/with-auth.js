@@ -40,6 +40,11 @@
 //                      this is rarely needed — used for routes
 //                      where role-based gating is stricter than
 //                      what the permissions matrix expresses.
+//   schema             optional Zod schema. When set, the request
+//                      body is parsed and validated before the
+//                      handler is called; the parsed data is
+//                      available as ctx.input (400 with issues on
+//                      failure). When omitted, ctx.input is absent.
 //
 // Migration strategy
 //   Both the legacy 5-line preamble and the wrapper produce the
@@ -52,6 +57,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { WEB_PERMISSION_KEYS } from '@shared/permissions'
+import { validateBody } from '@/lib/validate'
 
 const VALID_PERMISSION_KEYS = new Set(WEB_PERMISSION_KEYS)
 
@@ -85,9 +91,13 @@ function humanise(key) {
  * @param {string} options.permission   one of WEB_PERMISSION_KEYS
  * @param {boolean} [options.location]  default true; require active location
  * @param {string[]} [options.roles]    optional role whitelist
+ * @param {import('zod').ZodType} [options.schema]  optional Zod schema; when set,
+ *   the request body is validated and the parsed result is passed to the handler
+ *   as ctx.input (400 with issues on failure)
  * @param {(ctx: object) => Promise<Response>} handler
  *   handler receives { user, db, locationId, request, params } where
  *   `params` is the second arg passed to a Next.js dynamic-route handler.
+ *   When `schema` is set, `ctx.input` also contains the parsed request body.
  * @returns {(request: Request, ctx?: { params?: object }) => Promise<Response>}
  */
 export function withAuth(options, handler) {
@@ -97,7 +107,7 @@ export function withAuth(options, handler) {
   if (typeof handler !== 'function') {
     throw new TypeError('withAuth(options, handler): handler must be a function')
   }
-  const { permission, location: requireLocation = true, roles = null } = options
+  const { permission, location: requireLocation = true, roles = null, schema = null } = options
   // Fail-fast at module load: a typo in the permission key here
   // means nobody could ever pass the gate. Better to error loudly
   // at import time than to silently 403 every request. Accepts
@@ -139,12 +149,12 @@ export function withAuth(options, handler) {
     // to actually use params, and the picker on StaffForm got a
     // 'Location id required' from the route below.
     const params = ctx?.params ? await ctx.params : undefined
-    return handler({
-      user,
-      db,
-      locationId,
-      request,
-      params,
-    })
+    const handlerCtx = { user, db, locationId, request, params }
+    if (schema) {
+      const parsed = await validateBody(request, schema)
+      if (!parsed.ok) return parsed.response
+      handlerCtx.input = parsed.data
+    }
+    return handler(handlerCtx)
   }
 }
