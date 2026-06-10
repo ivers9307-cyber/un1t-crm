@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { createTransport } from './create-sdk.js'
+import { createSdk } from './index.js'
 
 function okResponse(body, status = 200) {
   return { ok: status >= 200 && status < 300, status, json: async () => body }
@@ -50,5 +51,15 @@ describe('createTransport', () => {
 
   it('throws if no fetch implementation is available', () => {
     expect(() => createTransport({ getAuthHeaders: () => ({}), fetchImpl: null })).toThrow(/fetch/)
+  })
+})
+
+describe('createSdk + me domain', () => {
+  it('me.get() calls GET /api/mobile/me through the transport', async () => {
+    const fetchImpl = vi.fn(async () => okResponse({ success: true, data: { profile: { id: 'u1' } } }))
+    const sdk = createSdk({ baseUrl: 'https://api.test', getAuthHeaders: () => ({}), fetchImpl })
+    const out = await sdk.me.get()
+    expect(fetchImpl).toHaveBeenCalledWith('https://api.test/api/mobile/me', expect.objectContaining({ method: 'GET' }))
+    expect(out.data.profile.id).toBe('u1')
   })
 })
