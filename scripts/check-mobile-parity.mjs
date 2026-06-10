@@ -95,12 +95,13 @@ const WEB_ONLY_OK = {
   // but the key as a whole now has a mobile surface so no exemption is needed.
   car_processing: 'Tesla import tracker (CCF Autos) — operations workflow with file uploads; not part of mobile gym workflows.',
   // Mig 092 — split out from `events` / `events|car_processing`.
-  // Both are operator-side ops surfaces with no mobile equivalent
-  // today. Race-day starts/finishes happen on the desktop control
-  // panel (RaceControlPanel.jsx); orders + refunds are
-  // admin-on-laptop work.
+  // Race-day starts/finishes happen on the desktop control panel
+  // (RaceControlPanel.jsx) — no mobile equivalent by design.
   races:          'Race event management + race-day control panel + TV display are desktop / studio-TV surfaces (mig 082 / 092). No mobile UI by design.',
-  orders:         'Orders list + refund flow + retry-chain drill-in are desktop-only (mig 085 / 092). Mobile users with revenue questions see the contact profile timeline.',
+  // orders (W2 parity inversion): now matched by the `orders`
+  // MOBILE_PERMISSIONS entry — a read-only revenue view (webEquivalent:
+  // 'orders'). The refund + retry-chain drill-in stay desktop-only, but
+  // that's a sub-feature of the same key, not a separate permission.
   // Mig 120 — auto-stamped from UniFi Access door unlocks. Owner /
   // manager / master only — operator monitoring view that lives
   // inside the Schedule hub (folded under the Schedule tab strip in

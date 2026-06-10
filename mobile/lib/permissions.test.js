@@ -227,3 +227,21 @@ describe('canMobile — invoices_inbox default (W2 parity inversion)', () => {
     expect(canMobile({ role: 'staff' }, 'invoices_inbox', loc)).toBe(false)
   })
 })
+
+describe('canMobile — orders default (W2 parity inversion)', () => {
+  // Read-only revenue view. Defaults match the web orders gate
+  // (MANAGER_ROLES + hasPermission('orders')): master/owner/manager on,
+  // head_coach/staff off.
+  const loc = { features: {}, permissions: { mobile: {} } }
+
+  it('defaults ON for master / owner / manager', () => {
+    expect(canMobile({ role: 'master' }, 'orders', loc)).toBe(true)
+    expect(canMobile({ role: 'owner' }, 'orders', loc)).toBe(true)
+    expect(canMobile({ role: 'manager' }, 'orders', loc)).toBe(true)
+  })
+
+  it('defaults OFF for head_coach / staff', () => {
+    expect(canMobile({ role: 'head_coach' }, 'orders', loc)).toBe(false)
+    expect(canMobile({ role: 'staff' }, 'orders', loc)).toBe(false)
+  })
+})
