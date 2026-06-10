@@ -36,4 +36,21 @@ describe('sdk.staff', () => {
     await sdk.staff.sendPasswordReset('p1')
     expect(fetchImpl).toHaveBeenCalledWith('/api/staff/p1/send-password-reset', expect.objectContaining({ method: 'POST' }))
   })
+
+  it('create(payload) POSTs /api/staff with the payload body', async () => {
+    const fetchImpl = vi.fn(async () => okResponse({ success: true, data: { id: 'new1' } }))
+    const sdk = createSdk({ baseUrl: '', getAuthHeaders: () => ({}), fetchImpl })
+    const payload = {
+      email: 'ada@test.io',
+      full_name: 'Ada Lovelace',
+      employment_type: 'fte',
+      assignments: [{ location_id: 'loc-1', role: 'staff', is_default: true }],
+    }
+    const out = await sdk.staff.create(payload)
+    const [url, opts] = fetchImpl.mock.calls[0]
+    expect(url).toBe('/api/staff')
+    expect(opts.method).toBe('POST')
+    expect(opts.body).toBe(JSON.stringify(payload))
+    expect(out.data.id).toBe('new1')
+  })
 })

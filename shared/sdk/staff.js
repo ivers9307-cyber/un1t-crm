@@ -1,11 +1,15 @@
-// `staff` domain — the staff directory (read). list() + get(id) hit the
-// neutral /api/staff routes (resolved by getCurrentUser → cookie on web,
-// Bearer on mobile), backed by src/lib/staff.js. Create/update land in
-// C2; this is the read slice.
+// `staff` domain — the staff directory (read) + write actions. list() +
+// get(id) hit the neutral /api/staff routes (resolved by getCurrentUser →
+// cookie on web, Bearer on mobile), backed by src/lib/staff.js.
 export function staffDomain(request) {
   return {
     list: () => request('/api/staff', { method: 'GET' }),
     get: (id) => request(`/api/staff/${id}`, { method: 'GET' }),
+    // Create — C3 wizard. POSTs a new staff member; the route invites
+    // them by email (Supabase magic link → /reset-password) and creates
+    // their initial assignment(s). The route enforces owner-at-location /
+    // master and validates every assignment's role against the caller.
+    create: (payload) => request('/api/staff', { method: 'POST', body: payload }),
     // Write — C2a. update() only ever carries safe profile fields
     // (full_name, employment_type) from the mobile editor; it never
     // sends `assignments`, so the PUT's UniFi/door/assignment branch
