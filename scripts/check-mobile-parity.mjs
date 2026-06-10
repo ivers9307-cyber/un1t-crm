@@ -93,7 +93,11 @@ const WEB_ONLY_OK = {
   // so it's matched via webEquivalent rather than exempted here. Branding /
   // billing / integrations ride the same `settings` key and stay web-only,
   // but the key as a whole now has a mobile surface so no exemption is needed.
-  car_processing: 'Tesla import tracker (CCF Autos) — operations workflow with file uploads; not part of mobile gym workflows.',
+  // car_processing (W2 parity inversion): now matched by the
+  // `car_processing` MOBILE_PERMISSIONS entry — a read-only car-import
+  // tracker (webEquivalent: 'car_processing'). The heavy actions (deposit
+  // link, Xero invoice, document uploads, status changes) stay desktop,
+  // but they're sub-features of the same key, not a separate permission.
   // Mig 092 — split out from `events` / `events|car_processing`.
   // Race-day starts/finishes happen on the desktop control panel
   // (RaceControlPanel.jsx) — no mobile equivalent by design.

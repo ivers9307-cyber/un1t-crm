@@ -245,3 +245,25 @@ describe('canMobile — orders default (W2 parity inversion)', () => {
     expect(canMobile({ role: 'staff' }, 'orders', loc)).toBe(false)
   })
 })
+
+describe('canMobile — car_processing default (W2 parity inversion)', () => {
+  // CCF Autos tracker — master only by default; per-user opt-in for
+  // everyone else, matching the web car_processing key.
+  const loc = { features: {}, permissions: { mobile: {} } }
+
+  it('defaults ON for master only', () => {
+    expect(canMobile({ role: 'master' }, 'car_processing', loc)).toBe(true)
+  })
+
+  it('defaults OFF for owner / manager / head_coach / staff', () => {
+    expect(canMobile({ role: 'owner' }, 'car_processing', loc)).toBe(false)
+    expect(canMobile({ role: 'manager' }, 'car_processing', loc)).toBe(false)
+    expect(canMobile({ role: 'head_coach' }, 'car_processing', loc)).toBe(false)
+    expect(canMobile({ role: 'staff' }, 'car_processing', loc)).toBe(false)
+  })
+
+  it('is grantable per-user — an owner with an explicit override sees it', () => {
+    const granted = { features: {}, permissions: { mobile: { car_processing: true } } }
+    expect(canMobile({ role: 'owner' }, 'car_processing', granted)).toBe(true)
+  })
+})
