@@ -342,7 +342,14 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
             )}
             {selectedTemplate && (
               <div className="mt-3 rounded-lg border border-un1t-border bg-un1t-bg/40 p-3">
-                <p className="text-[11px] uppercase tracking-wider text-un1t-subtle mb-1">Preview</p>
+                <div className="flex items-center justify-between mb-1">
+                  <p className="text-[11px] uppercase tracking-wider text-un1t-subtle">Preview</p>
+                  {['YELLOW', 'RED'].includes(selectedTemplate.quality_rating) && (
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${selectedTemplate.quality_rating === 'RED' ? 'bg-red-500/15 text-red-700' : 'bg-amber-500/15 text-amber-700'}`}>
+                      Quality {selectedTemplate.quality_rating}
+                    </span>
+                  )}
+                </div>
                 <p className="text-sm text-un1t-text whitespace-pre-wrap">{(selectedTemplate.components || []).find(c => c.type === 'BODY')?.text || '—'}</p>
               </div>
             )}

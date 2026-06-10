@@ -11,6 +11,7 @@ import { Plus, FileText, Mail, MessageCircle } from 'lucide-react'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
+import WhatsappTemplatesList from '@/components/WhatsappTemplatesList'
 
 export const dynamic = 'force-dynamic'
 
@@ -32,12 +33,9 @@ export default async function TemplatesListPage(props) {
   const db = createServerClient()
   const locationId = user.activeLocation?.id
 
-  const [emailRes, waRes] = await Promise.all([
+  const [emailRes] = await Promise.all([
     canEmail && (channel === 'all' || channel === 'email')
       ? db.from('email_templates').select('id, name, subject, updated_at').eq('location_id', locationId).order('updated_at', { ascending: false })
-      : Promise.resolve({ data: [] }),
-    canWhatsapp && (channel === 'all' || channel === 'whatsapp')
-      ? db.from('whatsapp_templates').select('id, name, category, language, status, updated_at').eq('location_id', locationId).order('updated_at', { ascending: false })
       : Promise.resolve({ data: [] }),
   ])
 
@@ -122,39 +120,20 @@ export default async function TemplatesListPage(props) {
         </section>
       )}
 
-      {(channel === 'all' || channel === 'whatsapp') && (waRes.data?.length ?? 0) > 0 && (
+      {(channel === 'all' || channel === 'whatsapp') && canWhatsapp && (
         <section className="mb-6">
           {channel === 'all' && (
             <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle mb-2 inline-flex items-center gap-2">
               <MessageCircle size={12} /> WhatsApp
             </h3>
           )}
-          <div className="bg-un1t-surface border border-un1t-border rounded-2xl divide-y divide-un1t-border">
-            {waRes.data.map(t => (
-              <Link
-                key={`w-${t.id}`}
-                href={`/whatsapp/templates/${t.id}`}
-                className="flex items-center justify-between px-5 py-3 hover:bg-un1t-border/20"
-              >
-                <div className="flex items-center gap-4 min-w-0">
-                  <div className="w-9 h-9 rounded-lg bg-green-500/15 flex items-center justify-center shrink-0">
-                    <MessageCircle size={16} className="text-green-400" />
-                  </div>
-                  <div className="min-w-0">
-                    <p className="text-sm font-medium truncate">{t.name}</p>
-                    <p className="text-xs text-un1t-subtle truncate">
-                      {t.category} · {t.language} · <span className={t.status === 'APPROVED' ? 'text-green-500' : 'text-un1t-muted'}>{t.status}</span>
-                    </p>
-                  </div>
-                </div>
-                <span className="text-[11px] text-un1t-muted">{new Date(t.updated_at).toLocaleDateString()}</span>
-              </Link>
-            ))}
+          <div className="bg-un1t-surface border border-un1t-border rounded-2xl">
+            <WhatsappTemplatesList locationId={locationId} />
           </div>
         </section>
       )}
 
-      {((emailRes.data?.length ?? 0) === 0) && ((waRes.data?.length ?? 0) === 0) && (
+      {((emailRes.data?.length ?? 0) === 0) && !canWhatsapp && (
         <div className="bg-un1t-surface border border-un1t-border rounded-2xl p-10 text-center">
           <FileText size={32} className="mx-auto mb-3 text-un1t-subtle" />
           <h3 className="text-base font-semibold mb-2">No templates yet</h3>

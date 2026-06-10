@@ -18,11 +18,18 @@ export default async function EditWATemplatePage(props) {
 
   if (!template) notFound()
 
+  const { data: events } = await db.from('whatsapp_template_events')
+    .select('kind, from_value, to_value, reason, created_at')
+    .eq('template_id', params.id)
+    .order('created_at', { ascending: false })
+    .limit(50)
+
   return (
     <WATemplateEditor
       template={template}
       locationId={user.activeLocation?.id}
       userId={user.id}
+      events={events || []}
     />
   )
 }
