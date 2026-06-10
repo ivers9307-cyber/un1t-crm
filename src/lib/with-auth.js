@@ -52,6 +52,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { WEB_PERMISSION_KEYS } from '@shared/permissions'
+import { validateBody } from '@/lib/validate'
 
 const VALID_PERMISSION_KEYS = new Set(WEB_PERMISSION_KEYS)
 
@@ -97,7 +98,7 @@ export function withAuth(options, handler) {
   if (typeof handler !== 'function') {
     throw new TypeError('withAuth(options, handler): handler must be a function')
   }
-  const { permission, location: requireLocation = true, roles = null } = options
+  const { permission, location: requireLocation = true, roles = null, schema = null } = options
   // Fail-fast at module load: a typo in the permission key here
   // means nobody could ever pass the gate. Better to error loudly
   // at import time than to silently 403 every request. Accepts
@@ -139,12 +140,19 @@ export function withAuth(options, handler) {
     // to actually use params, and the picker on StaffForm got a
     // 'Location id required' from the route below.
     const params = ctx?.params ? await ctx.params : undefined
+    let input
+    if (schema) {
+      const parsed = await validateBody(request, schema)
+      if (!parsed.ok) return parsed.response
+      input = parsed.data
+    }
     return handler({
       user,
       db,
       locationId,
       request,
       params,
+      input,
     })
   }
 }

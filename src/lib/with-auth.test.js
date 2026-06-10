@@ -5,6 +5,7 @@
 // alarm). Pin both directions.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { z } from 'zod'
 
 vi.mock('@/lib/auth', () => ({ getCurrentUser: vi.fn() }))
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn(() => ({ __client: true })) }))
@@ -178,5 +179,66 @@ describe('AUTH_ERRORS shapes', () => {
     expect(r.status).toBe(403)
     const body = await r.json()
     expect(body.error).toBe('Studio management is not enabled for your role at this location.')
+  })
+})
+
+describe('withAuth body validation (schema option)', () => {
+  beforeEach(() => {
+    getCurrentUser.mockResolvedValue({
+      role: 'manager',
+      activeLocation: { id: 'loc-1' },
+      locations: [{ id: 'loc-1' }],
+    })
+  })
+
+  const Schema = z.object({ name: z.string().min(1) })
+
+  function jsonReq(body) {
+    return new Request('http://localhost/api/x', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+  }
+
+  it('passes parsed input to the handler when the body is valid', async () => {
+    const handler = vi.fn(async ({ input }) =>
+      new Response(JSON.stringify({ success: true, got: input }), { status: 200 })
+    )
+    const route = withAuth({ permission: 'schedule', schema: Schema }, handler)
+    const res = await route(jsonReq({ name: 'Ada' }))
+    expect(res.status).toBe(200)
+    expect(handler).toHaveBeenCalledTimes(1)
+    expect(handler.mock.calls[0][0].input).toEqual({ name: 'Ada' })
+  })
+
+  it('returns 400 with issues and never calls the handler on invalid body', async () => {
+    const handler = vi.fn()
+    const route = withAuth({ permission: 'schedule', schema: Schema }, handler)
+    const res = await route(jsonReq({ name: '' }))
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.success).toBe(false)
+    expect(Array.isArray(body.issues)).toBe(true)
+    expect(handler).not.toHaveBeenCalled()
+  })
+
+  it('runs the auth gate BEFORE validation (401 wins over a bad body)', async () => {
+    getCurrentUser.mockResolvedValue(null)
+    const handler = vi.fn()
+    const route = withAuth({ permission: 'schedule', schema: Schema }, handler)
+    const res = await route(jsonReq({ name: '' }))
+    expect(res.status).toBe(401)
+    expect(handler).not.toHaveBeenCalled()
+  })
+
+  it('omits input when no schema is given (back-compat)', async () => {
+    const handler = vi.fn(async ({ input }) =>
+      new Response(JSON.stringify({ success: true, hasInput: input !== undefined }), { status: 200 })
+    )
+    const route = withAuth({ permission: 'schedule' }, handler)
+    const res = await route(new Request('http://localhost/api/x', { method: 'GET' }))
+    const body = await res.json()
+    expect(body.hasInput).toBe(false)
   })
 })
