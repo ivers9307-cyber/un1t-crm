@@ -49,3 +49,20 @@ describe('buildStaffAssignmentsPatch', () => {
     expect(buildStaffAssignmentsPatch({ isMaster: true, ownedLocationIds: [], currentAssignments: [], roleEdits: {} })).toEqual([])
   })
 })
+
+describe('buildStaffAssignmentsPatch — owner privilege boundary (C2c-i.1 review)', () => {
+  it('owner does NOT emit a non-owned location even when roleEdits names it', () => {
+    const current = [
+      { location_id: 'loc-1', role: 'staff', is_default: true, permissions: {}, unifi_door_access: false },
+      { location_id: 'loc-2', role: 'manager', is_default: false, permissions: {}, unifi_door_access: false },
+    ]
+    const out = buildStaffAssignmentsPatch({
+      isMaster: false,
+      ownedLocationIds: ['loc-1'],
+      currentAssignments: current,
+      roleEdits: { 'loc-2': 'head_coach' }, // attempt to edit a non-owned location
+    })
+    expect(out.some(a => a.location_id === 'loc-2')).toBe(false)
+    expect(out.map(a => a.location_id)).toEqual(['loc-1'])
+  })
+})
