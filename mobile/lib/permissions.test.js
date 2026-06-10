@@ -210,3 +210,20 @@ describe('canMobile — contacts default (W1 parity inversion)', () => {
     expect(canMobile({ role: 'owner' }, 'contacts', { features: { contacts: false }, permissions: { mobile: {} } })).toBe(false)
   })
 })
+
+describe('canMobile — invoices_inbox default (W2 parity inversion)', () => {
+  // Approver inbox — owner/master only, matching the approve/decline
+  // route gate (owner-at-location / master).
+  const loc = { features: {}, permissions: { mobile: {} } }
+
+  it('defaults ON for master / owner', () => {
+    expect(canMobile({ role: 'master' }, 'invoices_inbox', loc)).toBe(true)
+    expect(canMobile({ role: 'owner' }, 'invoices_inbox', loc)).toBe(true)
+  })
+
+  it('defaults OFF for manager / head_coach / staff', () => {
+    expect(canMobile({ role: 'manager' }, 'invoices_inbox', loc)).toBe(false)
+    expect(canMobile({ role: 'head_coach' }, 'invoices_inbox', loc)).toBe(false)
+    expect(canMobile({ role: 'staff' }, 'invoices_inbox', loc)).toBe(false)
+  })
+})

@@ -152,6 +152,8 @@ export default function More() {
   // staff-reported issues. Gated by issue_triage (parity inversion of the
   // web issues_inbox); the routes also enforce isHandler server-side.
   if (canMobile(profile, 'issue_triage', activeLocation)) tiles.push({ key: 'issueinbox', icon: 'construct-outline', label: 'Issue inbox', onPress: () => router.push('/issues/inbox') })
+  // W2 — invoice approver inbox (owner/master review + approve/decline).
+  if (canMobile(profile, 'invoices_inbox', activeLocation)) tiles.push({ key: 'invoicesinbox', icon: 'file-tray-full-outline', label: 'Invoices inbox', onPress: () => router.push('/invoices/inbox') })
   // W1 — per-location feature toggles (master only; matches the web
   // canEditLocationFeatures gate). Flip which features this studio shows.
   if (profile?.isMaster || profile?.role === 'master') tiles.push({ key: 'features', icon: 'options-outline', label: 'Location features', onPress: () => router.push('/location-features') })
