@@ -22,8 +22,10 @@ export default function DataTable({ columns, data, keyExtractor, onRowPress, emp
   const isTablet = useIsTablet()
   const mode = dataTableMode(isTablet)
 
-  function cell(col, row) {
-    return col.render ? col.render(row) : <Text className={tableCellTextClasses()}>{String(row[col.key] ?? '')}</Text>
+  // Default cell text class differs by mode: table cells vs the value
+  // side of a phone card (a custom col.render always wins).
+  function cell(col, row, textClass = tableCellTextClasses()) {
+    return col.render ? col.render(row) : <Text className={textClass}>{String(row[col.key] ?? '')}</Text>
   }
 
   if (mode === 'table') {
@@ -62,7 +64,7 @@ export default function DataTable({ columns, data, keyExtractor, onRowPress, emp
         const body = columns.map(col => (
           <View key={col.key} className="mb-1 flex-row justify-between">
             <Text className={dataCardLabelClasses()}>{col.label}</Text>
-            <View className="ml-2 flex-1 items-end">{cell(col, item)}</View>
+            <View className="ml-2 flex-1 items-end">{cell(col, item, dataCardValueClasses())}</View>
           </View>
         ))
         return onRowPress
