@@ -2,6 +2,10 @@ import { describe, it, expect } from 'vitest'
 import {
   buttonClasses, buttonTextClasses, cardClasses,
   BUTTON_VARIANTS, BUTTON_SIZES, CARD_PADDING,
+  modalOverlayClasses, modalContainerClasses, modalPanelClasses,
+  dataTableMode, tableHeaderClasses, tableRowClasses, tableHeaderTextClasses, tableCellTextClasses, dataCardClasses, dataCardLabelClasses, dataCardValueClasses,
+  tabItemClasses, tabTextClasses,
+  splitShowsBothPanes, splitPhonePane, masterPaneClasses,
 } from './ui-styles.js'
 
 describe('buttonClasses', () => {
@@ -51,5 +55,85 @@ describe('cardClasses', () => {
   })
   it('appends caller className', () => {
     expect(cardClasses({ className: 'mt-4' })).toContain('mt-4')
+  })
+})
+
+describe('data table classes', () => {
+  it('mode is table on tablet, cards on phone', () => {
+    expect(dataTableMode(true)).toBe('table')
+    expect(dataTableMode(false)).toBe('cards')
+  })
+  it('header + rows use un1t tokens and a bottom border', () => {
+    expect(tableHeaderClasses()).toContain('border-b')
+    expect(tableHeaderClasses()).toContain('border-un1t-border')
+    expect(tableRowClasses()).toContain('border-un1t-border')
+  })
+  it('pressable rows get an active background; non-pressable do not', () => {
+    expect(tableRowClasses({ pressable: true })).toContain('active:bg-un1t-surface')
+    expect(tableRowClasses({ pressable: false })).not.toContain('active:bg-un1t-surface')
+  })
+  it('header text is uppercase muted; cell text is normal', () => {
+    expect(tableHeaderTextClasses()).toContain('uppercase')
+    expect(tableHeaderTextClasses()).toContain('un1t-subtle')
+    expect(tableCellTextClasses()).toContain('un1t-text')
+  })
+  it('phone card has label + value styles and no undefined', () => {
+    expect(dataCardClasses()).toContain('rounded-2xl')
+    expect(dataCardLabelClasses()).toContain('un1t-subtle')
+    expect(dataCardValueClasses()).toContain('un1t-text')
+    expect(tableRowClasses({ pressable: true })).not.toContain('undefined')
+  })
+})
+
+describe('tabs classes', () => {
+  it('active tab is filled with the accent; inactive is bordered surface', () => {
+    expect(tabItemClasses({ active: true })).toContain('bg-un1t-accent')
+    expect(tabItemClasses({ active: false })).toContain('border-un1t-border')
+  })
+  it('active text is white; inactive text is muted', () => {
+    expect(tabTextClasses({ active: true })).toContain('text-white')
+    expect(tabTextClasses({ active: false })).toContain('un1t-subtle')
+  })
+  it('never emits undefined for default args', () => {
+    expect(tabItemClasses()).not.toContain('undefined')
+    expect(tabTextClasses()).not.toContain('undefined')
+  })
+})
+
+describe('split view layout', () => {
+  it('shows both panes only on tablet', () => {
+    expect(splitShowsBothPanes(true)).toBe(true)
+    expect(splitShowsBothPanes(false)).toBe(false)
+  })
+  it('phone shows detail when a row is selected, else master', () => {
+    expect(splitPhonePane(true)).toBe('detail')
+    expect(splitPhonePane(false)).toBe('master')
+  })
+  it('master pane has a right divider', () => {
+    expect(masterPaneClasses()).toContain('border-r')
+    expect(masterPaneClasses()).toContain('border-un1t-border')
+  })
+})
+
+describe('modal classes', () => {
+  it('overlay dims the full screen', () => {
+    expect(modalOverlayClasses()).toContain('bg-black/50')
+    expect(modalOverlayClasses()).toContain('flex-1')
+  })
+  it('tablet centers the panel; phone anchors it to the bottom', () => {
+    expect(modalContainerClasses({ isTablet: true })).toContain('justify-center')
+    expect(modalContainerClasses({ isTablet: false })).toContain('justify-end')
+  })
+  it('tablet panel is a rounded card with a max width; phone panel is a top-rounded sheet', () => {
+    const tablet = modalPanelClasses({ isTablet: true })
+    const phone = modalPanelClasses({ isTablet: false })
+    expect(tablet).toContain('rounded-2xl')
+    expect(tablet).toContain('max-w-lg')
+    expect(phone).toContain('rounded-t-2xl')
+    expect(phone).not.toContain('max-w-lg')
+  })
+  it('uses un1t tokens and never emits undefined', () => {
+    expect(modalPanelClasses({ isTablet: false })).not.toContain('undefined')
+    expect(modalPanelClasses()).toContain('bg-white')
   })
 })
