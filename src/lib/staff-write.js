@@ -115,6 +115,37 @@ export function computeDesiredAssignments({ isMaster, callerOwnerLocationIds, as
   return desired
 }
 
+/** Build the profile_locations row for one desired assignment. PURE —
+ * the synced-at timestamp + the per-location UniFi user id are injected
+ * (the route does the UniFi sync, this just shapes the DB row). Pure
+ * mirror of route lines ~294-328.
+ *
+ * Optional-key semantics (all mirror unifi_user_id's null/string/omit):
+ *   - protect_face_id (mig 142): string sets, null clears, omit leaves
+ *     the DB value unchanged (key omitted from the row).
+ *   - unifi_door_ids (mig 182) / ac_device_ids (mig 210): null clears,
+ *     [] = empty allowlist, array = exactly those, omit leaves the DB
+ *     value unchanged (key omitted). */
+export function buildAssignmentRow({ id, assignment, wantsDoor, unifiUserId, syncedAt }) {
+  const a = assignment
+  return {
+    profile_id: id,
+    location_id: a.location_id,
+    role: a.role,
+    is_default: !!a.is_default,
+    unifi_door_access: wantsDoor,
+    unifi_synced_at: syncedAt,
+    unifi_user_id: unifiUserId,
+    permissions: a.permissions || {},
+    ...(Object.prototype.hasOwnProperty.call(a, 'protect_face_id')
+      ? { protect_face_id: a.protect_face_id || null } : {}),
+    ...(Object.prototype.hasOwnProperty.call(a, 'unifi_door_ids')
+      ? { unifi_door_ids: a.unifi_door_ids === null ? null : (a.unifi_door_ids || []) } : {}),
+    ...(Object.prototype.hasOwnProperty.call(a, 'ac_device_ids')
+      ? { ac_device_ids: a.ac_device_ids === null ? null : (a.ac_device_ids || []) } : {}),
+  }
+}
+
 /** Apply the profile-level update + the compensation dual-write
  * (SECURITY.1 / mig 152) for a staff PUT. Writes buildStaffProfilePatch(body)
  * to `profiles`, then the 5 comp fields to `profile_compensation`

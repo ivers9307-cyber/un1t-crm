@@ -200,3 +200,58 @@ describe('applyStaffProfileWrite — ordering guarantee (C2b.2a review)', () => 
     expect(upsertCompensationForProfile).not.toHaveBeenCalled()
   })
 })
+
+import { buildAssignmentRow } from './staff-write.js'
+
+describe('buildAssignmentRow', () => {
+  const base = { location_id: 'loc-1', role: 'staff', is_default: 1, permissions: { x: 1 } }
+  const common = { id: 'p1', wantsDoor: true, unifiUserId: 'u9', syncedAt: '2026-01-01T00:00:00.000Z' }
+
+  it('builds the base row with no optional keys present', () => {
+    const row = buildAssignmentRow({ ...common, assignment: base })
+    expect(row).toEqual({
+      profile_id: 'p1',
+      location_id: 'loc-1',
+      role: 'staff',
+      is_default: true, // coerced from 1
+      unifi_door_access: true,
+      unifi_synced_at: '2026-01-01T00:00:00.000Z',
+      unifi_user_id: 'u9',
+      permissions: { x: 1 },
+    })
+    expect('protect_face_id' in row).toBe(false)
+    expect('unifi_door_ids' in row).toBe(false)
+    expect('ac_device_ids' in row).toBe(false)
+  })
+
+  it('permissions defaults to {} when null/absent', () => {
+    expect(buildAssignmentRow({ ...common, assignment: { ...base, permissions: null } }).permissions).toEqual({})
+    const { permissions, ...noPerm } = base
+    expect(buildAssignmentRow({ ...common, assignment: noPerm }).permissions).toEqual({})
+  })
+
+  it('is_default coerces to a real boolean', () => {
+    expect(buildAssignmentRow({ ...common, assignment: { ...base, is_default: 0 } }).is_default).toBe(false)
+    expect(buildAssignmentRow({ ...common, assignment: { ...base, is_default: undefined } }).is_default).toBe(false)
+  })
+
+  it('protect_face_id: string sets, null clears, omitting the key leaves it absent', () => {
+    expect(buildAssignmentRow({ ...common, assignment: { ...base, protect_face_id: 'face1' } }).protect_face_id).toBe('face1')
+    expect(buildAssignmentRow({ ...common, assignment: { ...base, protect_face_id: null } }).protect_face_id).toBeNull()
+    expect('protect_face_id' in buildAssignmentRow({ ...common, assignment: base })).toBe(false)
+  })
+
+  it('unifi_door_ids: null→null, array→array, []→[], omit→absent', () => {
+    expect(buildAssignmentRow({ ...common, assignment: { ...base, unifi_door_ids: null } }).unifi_door_ids).toBeNull()
+    expect(buildAssignmentRow({ ...common, assignment: { ...base, unifi_door_ids: ['d1'] } }).unifi_door_ids).toEqual(['d1'])
+    expect(buildAssignmentRow({ ...common, assignment: { ...base, unifi_door_ids: [] } }).unifi_door_ids).toEqual([])
+    expect('unifi_door_ids' in buildAssignmentRow({ ...common, assignment: base })).toBe(false)
+  })
+
+  it('ac_device_ids: null→null, array→array, []→[], omit→absent', () => {
+    expect(buildAssignmentRow({ ...common, assignment: { ...base, ac_device_ids: null } }).ac_device_ids).toBeNull()
+    expect(buildAssignmentRow({ ...common, assignment: { ...base, ac_device_ids: ['a1'] } }).ac_device_ids).toEqual(['a1'])
+    expect(buildAssignmentRow({ ...common, assignment: { ...base, ac_device_ids: [] } }).ac_device_ids).toEqual([])
+    expect('ac_device_ids' in buildAssignmentRow({ ...common, assignment: base })).toBe(false)
+  })
+})
