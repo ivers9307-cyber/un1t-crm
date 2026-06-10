@@ -56,10 +56,6 @@ export function cardClasses({ padding = 'md', className = '' } = {}) {
     .filter(Boolean).join(' ')
 }
 
-// ── Modal ──────────────────────────────────────────────────────────
-// Responsive: bottom-sheet on phone, centered dialog on tablet. The
-// shell (components/ui/Modal.jsx) reads useIsTablet() and passes the
-// boolean here so the layout decision stays unit-testable.
 // ── DataTable ──────────────────────────────────────────────────────
 // Responsive: columnar table on tablet, stacked label/value cards on
 // phone. dataTableMode() is the decision; the rest are className
@@ -90,6 +86,10 @@ export function dataCardValueClasses() {
   return 'text-sm text-un1t-text'
 }
 
+// ── Modal ──────────────────────────────────────────────────────────
+// Responsive: bottom-sheet on phone, centered dialog on tablet. The
+// shell (components/ui/Modal.jsx) reads useIsTablet() and passes the
+// boolean here so the layout decision stays unit-testable.
 export function modalOverlayClasses() {
   return 'flex-1 bg-black/50'
 }

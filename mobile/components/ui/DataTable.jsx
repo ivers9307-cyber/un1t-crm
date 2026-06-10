@@ -40,13 +40,14 @@ export default function DataTable({ columns, data, keyExtractor, onRowPress, emp
           data={data}
           keyExtractor={keyExtractor}
           ListEmptyComponent={empty}
-          renderItem={({ item }) => (
-            <Pressable className={tableRowClasses({ pressable: !!onRowPress })} onPress={() => onRowPress?.(item)}>
-              {columns.map(col => (
-                <View key={col.key} style={{ flex: col.flex ?? 1 }}>{cell(col, item)}</View>
-              ))}
-            </Pressable>
-          )}
+          renderItem={({ item }) => {
+            const cells = columns.map(col => (
+              <View key={col.key} style={{ flex: col.flex ?? 1 }}>{cell(col, item)}</View>
+            ))
+            return onRowPress
+              ? <Pressable className={tableRowClasses({ pressable: true })} onPress={() => onRowPress(item)}>{cells}</Pressable>
+              : <View className={tableRowClasses({ pressable: false })}>{cells}</View>
+          }}
         />
       </View>
     )
@@ -57,16 +58,17 @@ export default function DataTable({ columns, data, keyExtractor, onRowPress, emp
       data={data}
       keyExtractor={keyExtractor}
       ListEmptyComponent={empty}
-      renderItem={({ item }) => (
-        <Pressable className={dataCardClasses()} onPress={() => onRowPress?.(item)}>
-          {columns.map(col => (
-            <View key={col.key} className="mb-1 flex-row justify-between">
-              <Text className={dataCardLabelClasses()}>{col.label}</Text>
-              <View className="ml-2 flex-1 items-end">{cell(col, item)}</View>
-            </View>
-          ))}
-        </Pressable>
-      )}
+      renderItem={({ item }) => {
+        const body = columns.map(col => (
+          <View key={col.key} className="mb-1 flex-row justify-between">
+            <Text className={dataCardLabelClasses()}>{col.label}</Text>
+            <View className="ml-2 flex-1 items-end">{cell(col, item)}</View>
+          </View>
+        ))
+        return onRowPress
+          ? <Pressable className={dataCardClasses()} onPress={() => onRowPress(item)}>{body}</Pressable>
+          : <View className={dataCardClasses()}>{body}</View>
+      }}
     />
   )
 }
