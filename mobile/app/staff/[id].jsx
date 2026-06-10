@@ -21,7 +21,11 @@ function Row({ label, value }) {
 }
 
 export default function StaffDetail() {
-  const { id } = useLocalSearchParams()
+  const params = useLocalSearchParams()
+  // useLocalSearchParams returns string | string[] — a deep-link or push
+  // payload with a repeated param yields an array. Normalise to the first
+  // value so sdk.staff.get never receives an array (→ /api/staff/a,b → 404).
+  const id = Array.isArray(params.id) ? params.id[0] : params.id
   const { profile } = useAuth()
   const isAdmin = !!profile && ADMIN_ROLES.includes(profile.role)
 
