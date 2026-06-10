@@ -39,7 +39,7 @@ export default ({ config }) => ({
   // can now PIN-login from the web shell at /studio-login.
   name: 'CF Studio',
   slug: 'un1t-crm-mobile',
-  version: '1.2.1',
+  version: '1.3.0',
   // We ship iOS + Android only. Without this, Expo defaults to
   // ['ios','android','web'] and `eas update` exports for web too —
   // which crashes the publish because react-native-web isn't installed.
@@ -141,6 +141,14 @@ export default ({ config }) => ({
         color: '#111827',
       },
     ],
+    // FACE-ID — biometric app-lock. faceIDPermission writes
+    // NSFaceIDUsageDescription into Info.plist; without it iOS silently
+    // falls back to device passcode on Face ID devices. NATIVE change →
+    // requires a new EAS Build (not an OTA).
+    [
+      'expo-local-authentication',
+      { faceIDPermission: 'Unlock CF Studio with Face ID.' },
+    ],
   ],
   experiments: {
     typedRoutes: true,
@@ -171,7 +179,13 @@ export default ({ config }) => ({
   // eas-update.yml) so over-the-air Hermes bytecode matches the binary. Re-
   // attempt 'fingerprint' as a separate, debugged change. See
   // docs/OTA_BOOT_CRASH_FINDINGS.md.
-  runtimeVersion: { policy: 'sdkVersion' },
+  // MOBILE-FACEID — switched from the `sdkVersion` policy to an EXPLICIT
+  // runtimeVersion because v1.3.0 adds a NATIVE module
+  // (expo-local-authentication). An explicit runtime isolates this build's OTA
+  // lane: old binaries (exposdk:54.0.0) no longer receive OTAs — frozen, NOT
+  // crashed — until users install the 1.3.0 binary that contains the module.
+  // Bump this string on every future native change.
+  runtimeVersion: '1.3.0',
   extra: {
     // Supabase URL + anon key are PUBLIC by design — the anon key is
     // protected by Row-Level Security on the database, not by secrecy

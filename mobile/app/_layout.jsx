@@ -25,6 +25,7 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler'
 import { useEffect } from 'react'
 import * as Notifications from 'expo-notifications'
 import { AuthProvider, useAuth } from '../lib/auth-context'
+import { BiometricLockProvider } from '../lib/biometric-lock'
 import RootErrorBoundary from '../components/RootErrorBoundary'
 
 // Keep the splash screen up until auth bootstrap finishes — avoids a
@@ -92,16 +93,18 @@ export default function RootLayout() {
       <RootErrorBoundary>
       <SafeAreaProvider>
         <AuthProvider>
-          <StatusBar style="dark" />
-          <SplashGate />
-          <NotificationRouter />
-          <Stack screenOptions={{ headerShown: false }}>
-            <Stack.Screen name="(auth)" options={{ headerShown: false }} />
-            <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-            <Stack.Screen name="tasks" options={{ headerShown: false }} />
-            <Stack.Screen name="bookings" options={{ headerShown: false }} />
-            <Stack.Screen name="radar" options={{ headerShown: false }} />
-          </Stack>
+          <BiometricLockProvider>
+            <StatusBar style="dark" />
+            <SplashGate />
+            <NotificationRouter />
+            <Stack screenOptions={{ headerShown: false }}>
+              <Stack.Screen name="(auth)" options={{ headerShown: false }} />
+              <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+              <Stack.Screen name="tasks" options={{ headerShown: false }} />
+              <Stack.Screen name="bookings" options={{ headerShown: false }} />
+              <Stack.Screen name="radar" options={{ headerShown: false }} />
+            </Stack>
+          </BiometricLockProvider>
         </AuthProvider>
       </SafeAreaProvider>
       </RootErrorBoundary>
