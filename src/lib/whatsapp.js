@@ -352,7 +352,6 @@ export async function fetchAllWhatsAppAudience(db, filter, locationId) {
   const HARD_LIMIT = 50_000
   const rows = []
   let start = 0
-  // eslint-disable-next-line no-constant-condition
   while (true) {
     const end = Math.min(start + PAGE - 1, HARD_LIMIT - 1)
     const { data: page, error } = await buildWhatsAppAudience(db, filter, locationId)
@@ -376,7 +375,6 @@ export async function fetchDripDoneContactIds(db, broadcastId) {
   const HARD_LIMIT = 200_000
   const ids = []
   let start = 0
-  // eslint-disable-next-line no-constant-condition
   while (true) {
     const end = Math.min(start + PAGE - 1, HARD_LIMIT - 1)
     const { data: page, error } = await db
