@@ -37,6 +37,8 @@ export default function StaffDetail() {
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState(null)
+  const [resetting, setResetting] = useState(false)
+  const [resetSent, setResetSent] = useState(false)
 
   const load = useCallback(async () => {
     setError(null)
@@ -99,11 +101,17 @@ export default function StaffDetail() {
                 <View className="mt-6">
                   <Button
                     variant="secondary"
-                    label="Send password reset"
+                    label={resetSent ? 'Reset email sent' : 'Send password reset'}
+                    disabled={resetSent || resetting}
+                    loading={resetting}
                     onPress={async () => {
+                      if (resetting || resetSent) return
+                      setResetting(true)
                       setError(null)
                       const res = await sdk.staff.sendPasswordReset(id)
+                      setResetting(false)
                       if (!res.success) setError(res.error || 'Could not send reset')
+                      else setResetSent(true)
                     }}
                   />
                 </View>
