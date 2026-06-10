@@ -255,3 +255,67 @@ describe('buildAssignmentRow', () => {
     expect('ac_device_ids' in buildAssignmentRow({ ...common, assignment: base })).toBe(false)
   })
 })
+
+import { applyDoorAccessChange } from './staff-write.js'
+
+vi.mock('@/lib/unifi-access', () => {
+  class UnifiError extends Error {}
+  return {
+    UnifiError,
+    getLocationUnifiConfig: vi.fn(),
+    findOrCreateUnifiUser: vi.fn(),
+    syncUnifiUserPolicyForRole: vi.fn(),
+    revokeUnifiUserPolicies: vi.fn(),
+  }
+})
+import * as unifi from '@/lib/unifi-access'
+
+describe('applyDoorAccessChange', () => {
+  const location = { name: 'Hatch' }
+  beforeEach(() => {
+    vi.clearAllMocks()
+    unifi.getLocationUnifiConfig.mockReturnValue({ configured: true })
+    unifi.findOrCreateUnifiUser.mockResolvedValue('new-user')
+    unifi.syncUnifiUserPolicyForRole.mockResolvedValue(undefined)
+    unifi.revokeUnifiUserPolicies.mockResolvedValue(undefined)
+  })
+
+  it('disable + configured + existing id → revokes + returns the existing id', async () => {
+    const out = await applyDoorAccessChange({ profile: {}, location, enable: false, role: 'staff', existingUnifiUserId: 'u1' })
+    expect(unifi.revokeUnifiUserPolicies).toHaveBeenCalledWith({ configured: true }, 'u1')
+    expect(out).toBe('u1')
+  })
+
+  it('disable + not configured → no revoke, returns existing||null', async () => {
+    unifi.getLocationUnifiConfig.mockReturnValue({ configured: false })
+    expect(await applyDoorAccessChange({ profile: {}, location, enable: false, role: 'staff', existingUnifiUserId: 'u1' })).toBe('u1')
+    expect(await applyDoorAccessChange({ profile: {}, location, enable: false, role: 'staff', existingUnifiUserId: null })).toBeNull()
+    expect(unifi.revokeUnifiUserPolicies).not.toHaveBeenCalled()
+  })
+
+  it('enable + not configured → throws UnifiError', async () => {
+    unifi.getLocationUnifiConfig.mockReturnValue({ configured: false })
+    await expect(applyDoorAccessChange({ profile: {}, location, enable: true, role: 'staff', existingUnifiUserId: null }))
+      .rejects.toBeInstanceOf(unifi.UnifiError)
+  })
+
+  it('enable + configured + existing id → syncs policy, returns existing id (no find-or-create)', async () => {
+    const out = await applyDoorAccessChange({ profile: {}, location, enable: true, role: 'manager', existingUnifiUserId: 'u1' })
+    expect(unifi.findOrCreateUnifiUser).not.toHaveBeenCalled()
+    expect(unifi.syncUnifiUserPolicyForRole).toHaveBeenCalledWith({ configured: true }, 'u1', 'manager')
+    expect(out).toBe('u1')
+  })
+
+  it('enable + configured + no id + not skipping → find-or-create then sync, returns new id', async () => {
+    const out = await applyDoorAccessChange({ profile: { id: 'p' }, location, enable: true, role: 'staff', existingUnifiUserId: null })
+    expect(unifi.findOrCreateUnifiUser).toHaveBeenCalledWith({ configured: true }, { id: 'p' })
+    expect(unifi.syncUnifiUserPolicyForRole).toHaveBeenCalledWith({ configured: true }, 'new-user', 'staff')
+    expect(out).toBe('new-user')
+  })
+
+  it('enable + configured + no id + skipFindOrCreate → throws (no user id available)', async () => {
+    await expect(applyDoorAccessChange({ profile: {}, location, enable: true, role: 'staff', existingUnifiUserId: null, skipFindOrCreate: true }))
+      .rejects.toBeInstanceOf(unifi.UnifiError)
+    expect(unifi.findOrCreateUnifiUser).not.toHaveBeenCalled()
+  })
+})

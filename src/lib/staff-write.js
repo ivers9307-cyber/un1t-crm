@@ -7,6 +7,10 @@
 
 import { OWNER_ASSIGNABLE_ROLES, MASTER_ASSIGNABLE_ROLES } from '@/lib/schemas'
 import { splitCompFromProfilePatch, upsertCompensationForProfile } from '@/lib/profile-compensation'
+import {
+  getLocationUnifiConfig, findOrCreateUnifiUser,
+  syncUnifiUserPolicyForRole, revokeUnifiUserPolicies, UnifiError,
+} from '@/lib/unifi-access'
 
 const PROFILE_PATCH_KEYS = [
   'full_name', 'permissions', 'active', 'employment_type',
@@ -174,4 +178,42 @@ export async function applyStaffProfileWrite({ db, id, body, actorId }) {
     if (!compResult.ok) return { ok: false, error: `compensation: ${compResult.error}` }
   }
   return { ok: true }
+}
+
+// Apply a per-location door-access toggle. Returns the unifi_user_id
+// that should be persisted on the profile_locations row (or null if
+// nothing should change).
+//
+// Throws UnifiError on failure — the caller surfaces the message to
+// the API consumer without persisting the toggle change in
+// profile_locations, so the UI state stays consistent with reality.
+export async function applyDoorAccessChange({ profile, location, enable, role, existingUnifiUserId, skipFindOrCreate = false }) {
+  const cfg = getLocationUnifiConfig(location)
+
+  if (!enable) {
+    if (cfg.configured && existingUnifiUserId) {
+      await revokeUnifiUserPolicies(cfg, existingUnifiUserId)
+    }
+    return existingUnifiUserId || null
+  }
+
+  // Toggle ON requires a fully-configured UniFi instance for THIS location.
+  if (!cfg.configured) {
+    throw new UnifiError(
+      `UniFi Access is not configured for ${location.name || 'this location'}. ` +
+      `Add the host, API token and policy IDs in Location settings before ` +
+      `enabling door access here.`
+    )
+  }
+  // skipFindOrCreate=true → operator picked the UniFi user manually
+  // via the staff edit picker (mig 120). Use the id they chose without
+  // looking up by email or creating a new UniFi user. existingUnifiUserId
+  // is already the operator-picked value at this point.
+  const unifiUserId = existingUnifiUserId
+    || (skipFindOrCreate ? null : await findOrCreateUnifiUser(cfg, profile))
+  if (!unifiUserId) {
+    throw new UnifiError('No UniFi user id available to sync policies for — pick a UniFi user in the staff edit page or rely on the auto-create flow.')
+  }
+  await syncUnifiUserPolicyForRole(cfg, unifiUserId, role)
+  return unifiUserId
 }
