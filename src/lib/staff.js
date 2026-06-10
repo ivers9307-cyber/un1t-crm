@@ -57,6 +57,10 @@ export async function getStaffForUser({ db, user, id }) {
     .select(selectClause(isAdmin))
     .eq('id', id)
     .single()
-  if (error) return { ok: false, status: 404, error: error.message }
+  // The cross-tenant guard above already 404s a missing / out-of-scope
+  // target, so an error here means the row exists but the fetch failed
+  // (a real DB error) — surface 500 rather than masking it as 404 and
+  // sending the caller into a silent retry loop.
+  if (error) return { ok: false, status: 500, error: error.message }
   return { ok: true, data }
 }
