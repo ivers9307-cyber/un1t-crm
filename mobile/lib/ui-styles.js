@@ -60,6 +60,36 @@ export function cardClasses({ padding = 'md', className = '' } = {}) {
 // Responsive: bottom-sheet on phone, centered dialog on tablet. The
 // shell (components/ui/Modal.jsx) reads useIsTablet() and passes the
 // boolean here so the layout decision stays unit-testable.
+// ── DataTable ──────────────────────────────────────────────────────
+// Responsive: columnar table on tablet, stacked label/value cards on
+// phone. dataTableMode() is the decision; the rest are className
+// builders. The shell renders a FlatList either way.
+export function dataTableMode(isTablet) {
+  return isTablet ? 'table' : 'cards'
+}
+export function tableHeaderClasses() {
+  return 'flex-row border-b border-un1t-border bg-un1t-surface px-3 py-2'
+}
+export function tableRowClasses({ pressable = false } = {}) {
+  return ['flex-row items-center border-b border-un1t-border px-3 py-3', pressable ? 'active:bg-un1t-surface' : '']
+    .filter(Boolean).join(' ')
+}
+export function tableHeaderTextClasses() {
+  return 'text-xs font-semibold uppercase text-un1t-subtle'
+}
+export function tableCellTextClasses() {
+  return 'text-sm text-un1t-text'
+}
+export function dataCardClasses() {
+  return 'mb-2 rounded-2xl border border-un1t-border bg-white p-4'
+}
+export function dataCardLabelClasses() {
+  return 'text-xs text-un1t-subtle'
+}
+export function dataCardValueClasses() {
+  return 'text-sm text-un1t-text'
+}
+
 export function modalOverlayClasses() {
   return 'flex-1 bg-black/50'
 }

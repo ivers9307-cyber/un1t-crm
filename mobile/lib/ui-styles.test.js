@@ -3,6 +3,7 @@ import {
   buttonClasses, buttonTextClasses, cardClasses,
   BUTTON_VARIANTS, BUTTON_SIZES, CARD_PADDING,
   modalOverlayClasses, modalContainerClasses, modalPanelClasses,
+  dataTableMode, tableHeaderClasses, tableRowClasses, tableHeaderTextClasses, tableCellTextClasses, dataCardClasses, dataCardLabelClasses, dataCardValueClasses,
 } from './ui-styles.js'
 
 describe('buttonClasses', () => {
@@ -52,6 +53,33 @@ describe('cardClasses', () => {
   })
   it('appends caller className', () => {
     expect(cardClasses({ className: 'mt-4' })).toContain('mt-4')
+  })
+})
+
+describe('data table classes', () => {
+  it('mode is table on tablet, cards on phone', () => {
+    expect(dataTableMode(true)).toBe('table')
+    expect(dataTableMode(false)).toBe('cards')
+  })
+  it('header + rows use un1t tokens and a bottom border', () => {
+    expect(tableHeaderClasses()).toContain('border-b')
+    expect(tableHeaderClasses()).toContain('border-un1t-border')
+    expect(tableRowClasses()).toContain('border-un1t-border')
+  })
+  it('pressable rows get an active background; non-pressable do not', () => {
+    expect(tableRowClasses({ pressable: true })).toContain('active:bg-un1t-surface')
+    expect(tableRowClasses({ pressable: false })).not.toContain('active:bg-un1t-surface')
+  })
+  it('header text is uppercase muted; cell text is normal', () => {
+    expect(tableHeaderTextClasses()).toContain('uppercase')
+    expect(tableHeaderTextClasses()).toContain('un1t-subtle')
+    expect(tableCellTextClasses()).toContain('un1t-text')
+  })
+  it('phone card has label + value styles and no undefined', () => {
+    expect(dataCardClasses()).toContain('rounded-2xl')
+    expect(dataCardLabelClasses()).toContain('un1t-subtle')
+    expect(dataCardValueClasses()).toContain('un1t-text')
+    expect(tableRowClasses({ pressable: true })).not.toContain('undefined')
   })
 })
 
