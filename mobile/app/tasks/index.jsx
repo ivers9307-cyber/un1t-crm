@@ -7,11 +7,11 @@
 // Sort: due date asc (overdue floats to the top because today
 // > yesterday by string-compare on ISO dates), then priority asc.
 
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useCallback, useMemo } from 'react'
 import {
   View, Text, ScrollView, Pressable, RefreshControl, ActivityIndicator,
 } from 'react-native'
-import { useRouter, Stack } from 'expo-router'
+import { useRouter, Stack, useFocusEffect } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { useAuth } from '../../lib/auth-context'
 import { listMyTasks, statusLabel } from '../../lib/tasks-api'
@@ -109,10 +109,14 @@ export default function TasksIndex() {
     setTasks(res.success ? res.data : [])
   }, [activeLocation, profile, filter])
 
-  useEffect(() => {
-    setLoading(true)
-    load().finally(() => setLoading(false))
-  }, [load])
+  // Refetch on focus so a task just created (and self-assigned) shows up
+  // on return. Silent on re-focus — the spinner only shows on first load
+  // while `loading` is still true.
+  useFocusEffect(
+    useCallback(() => {
+      load().finally(() => setLoading(false))
+    }, [load])
+  )
 
   async function onRefresh() {
     setRefreshing(true)
@@ -133,6 +137,11 @@ export default function TasksIndex() {
         options={{
           title: 'Your tasks',
           headerLeft: () => <BackHeaderLeft label="More" fallbackHref="/(tabs)/more" />,
+          headerRight: () => (
+            <Pressable onPress={() => router.push('/tasks/new')} hitSlop={8} accessibilityRole="button" accessibilityLabel="New task">
+              <Ionicons name="add" size={26} color="#1E293B" />
+            </Pressable>
+          ),
         }}
       />
       <View className="flex-row gap-2 px-4 pt-3 pb-2">
@@ -185,7 +194,7 @@ export default function TasksIndex() {
               {filter === 'open' ? 'No open tasks' : 'No tasks'}
             </Text>
             <Text className="text-xs text-un1t-subtle text-center mt-1">
-              New tasks are created on the web. Pull down to refresh.
+              Tap + to create a task, or pull down to refresh.
             </Text>
           </View>
         ) : (
