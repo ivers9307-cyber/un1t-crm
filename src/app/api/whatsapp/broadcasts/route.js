@@ -3,7 +3,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { getCurrentUser, assertLocationAccess , getUserLocationIds} from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
-import { uuidLike, audienceFilterSchema, url } from '@/lib/schemas'
+import { uuidLike, audienceFilterSchema, url, timeOfDay } from '@/lib/schemas'
 
 const BroadcastCreateSchema = z.object({
   name: z.string().min(1).max(200),
@@ -12,6 +12,12 @@ const BroadcastCreateSchema = z.object({
   header_media_url: url.nullable().optional(),
   audience_filter: audienceFilterSchema,
   location_id: uuidLike.optional(),
+  // WA-DRIP — paced delivery. Defaults keep the blast path identical.
+  delivery_mode: z.enum(['blast', 'drip']).optional().default('blast'),
+  daily_cap: z.number().int().positive().max(100000).optional(),
+  send_window_start: timeOfDay.optional(),
+  send_window_end: timeOfDay.optional(),
+  send_window_tz: z.string().max(64).optional(),
 })
 
 // GET /api/whatsapp/broadcasts
@@ -56,13 +62,23 @@ export async function POST(request) {
   if (guard) return guard
 
   const db = createServerClient()
+  const isDrip = body.delivery_mode === 'drip'
   const { data, error } = await db.from('whatsapp_broadcasts').insert({
     name: body.name || 'Untitled Broadcast',
     template_id: body.template_id,
     variable_mapping: body.variable_mapping || {},
     header_media_url: body.header_media_url || null,
     audience_filter: body.audience_filter || { filters: [], logic: 'and' },
-    status: 'draft',
+    // A drip starts immediately — the run-whatsapp-broadcasts cron drives it during
+    // the send window. A blast stays 'draft' until the operator fires /send.
+    status: isDrip ? 'sending' : 'draft',
+    delivery_mode: body.delivery_mode || 'blast',
+    ...(isDrip ? {
+      daily_cap: body.daily_cap ?? 500,
+      send_window_start: body.send_window_start || '09:00',
+      send_window_end: body.send_window_end || '20:00',
+      send_window_tz: body.send_window_tz || 'Europe/Dublin',
+    } : {}),
     location_id: locationId,
     created_by: user.id,
   }).select().single()

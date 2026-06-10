@@ -5,10 +5,12 @@ import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { ArrowLeft, Save, Send, Users, CheckCircle2, XCircle } from 'lucide-react'
 import AudienceBuilder from './AudienceBuilder'
+import { estimateDripDays } from '@/lib/whatsapp-drip'
 
 export default function WABroadcastEditor({ broadcast, templates, locationId, userId }) {
   const router = useRouter()
   const isSent = broadcast?.status === 'sent'
+  const isDripInFlight = broadcast?.delivery_mode === 'drip' && broadcast?.status === 'sending'
 
   const [name, setName] = useState(broadcast?.name || '')
   const [templateId, setTemplateId] = useState(broadcast?.template_id || '')
@@ -20,6 +22,7 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, us
   const [broadcastId, setBroadcastId] = useState(broadcast?.id || null)
   const [saving, setSaving] = useState(false)
   const [sending, setSending] = useState(false)
+  const [pausing, setPausing] = useState(false)
   const [error, setError] = useState(null)
   const [tab, setTab] = useState(isSent ? 'results' : 'setup')
 
@@ -108,6 +111,25 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, us
     }
   }
 
+  async function handlePauseToggle() {
+    setPausing(true)
+    setError(null)
+    try {
+      const paused = !broadcast.paused_at
+      const res = await fetch(`/api/whatsapp/broadcasts/${broadcastId}/pause`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ paused }),
+      }).then(r => r.json())
+      if (!res.success) throw new Error(res.error)
+      router.refresh()
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setPausing(false)
+    }
+  }
+
   const recipients = broadcast?.whatsapp_broadcast_recipients || []
 
   return (
@@ -135,7 +157,7 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, us
           )}
         </div>
 
-        {!isSent && (
+        {!isSent && !isDripInFlight && (
           <div className="flex items-center gap-2">
             <button
               onClick={handleSave}
@@ -254,7 +276,52 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, us
           </div>
         )}
 
-        {!isSent && (
+        {isDripInFlight && (
+          <div className="max-w-2xl space-y-4">
+            {broadcast.paused_at && (
+              <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 text-amber-700 text-sm px-4 py-2">
+                Paused — resume to continue sending.
+              </div>
+            )}
+            <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5 space-y-4">
+              <div className="flex items-center justify-between">
+                <h3 className="font-semibold text-sm text-un1t-subtle uppercase tracking-wider">Drip in progress</h3>
+                <button
+                  onClick={handlePauseToggle}
+                  disabled={pausing}
+                  className="text-sm border border-un1t-border px-3 py-1.5 rounded-md hover:border-un1t-text/30 transition-colors disabled:opacity-50"
+                >
+                  {pausing ? '…' : broadcast.paused_at ? 'Resume' : 'Pause'}
+                </button>
+              </div>
+              {(() => {
+                const total = broadcast.total_recipients || 0
+                const done = (broadcast.total_sent || 0) + (broadcast.total_failed || 0)
+                const remaining = Math.max(0, total - done)
+                const pct = total > 0 ? Math.round((done / total) * 100) : 0
+                const days = estimateDripDays(remaining, broadcast.daily_cap || 500)
+                return (
+                  <>
+                    <div className="h-2 bg-un1t-border/40 rounded-full overflow-hidden">
+                      <div className="h-full bg-green-500 transition-all" style={{ width: `${pct}%` }} />
+                    </div>
+                    <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 text-center">
+                      <DripStat label="Sent" value={broadcast.total_sent || 0} />
+                      <DripStat label="Failed" value={broadcast.total_failed || 0} />
+                      <DripStat label="Remaining" value={remaining} />
+                      <DripStat label="Est. days left" value={remaining === 0 ? '0' : `~${days}`} />
+                    </div>
+                    <p className="text-xs text-un1t-muted">
+                      Up to {broadcast.daily_cap || 500}/day · {String(broadcast.send_window_start).slice(0, 5)}–{String(broadcast.send_window_end).slice(0, 5)} {broadcast.send_window_tz}
+                    </p>
+                  </>
+                )
+              })()}
+            </div>
+          </div>
+        )}
+
+        {!isSent && !isDripInFlight && (
           <div className="max-w-3xl space-y-6">
             {/* Template selection */}
             <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5 space-y-4">
@@ -350,6 +417,15 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, us
           </div>
         )}
       </div>
+    </div>
+  )
+}
+
+function DripStat({ label, value }) {
+  return (
+    <div className="bg-un1t-bg border border-un1t-border rounded-lg p-3">
+      <p className="text-xs text-un1t-subtle uppercase">{label}</p>
+      <p className="text-xl font-bold mt-1">{value}</p>
     </div>
   )
 }

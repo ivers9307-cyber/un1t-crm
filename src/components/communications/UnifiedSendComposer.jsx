@@ -36,6 +36,11 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
   // WhatsApp
   const [templateId, setTemplateId] = useState('')
   const [variables, setVariables] = useState({})
+  // WhatsApp pacing (WA-DRIP)
+  const [waMode, setWaMode] = useState('blast') // 'blast' | 'drip'
+  const [dailyCap, setDailyCap] = useState(500)
+  const [windowStart, setWindowStart] = useState('09:00')
+  const [windowEnd, setWindowEnd] = useState('20:00')
   // Schedule (SMS only)
   const [scheduleMode, setScheduleMode] = useState('now') // 'now' | 'later'
   const [scheduledAtLocal, setScheduledAtLocal] = useState('')
@@ -112,6 +117,7 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
       : subject.trim().length > 0 // email — needs a subject (design is inline)
   const audienceValid = !useExplicit || people.length > 0
   const isSchedule = scheduleMode === 'later' && (channel === 'sms' || channel === 'email')
+  const isDrip = channel === 'whatsapp' && waMode === 'drip'
   const canSend = !busy && composeValid && scheduleValid && audienceValid && (count == null || count > 0)
 
   // ── submit ──────────────────────────────────────────────────────
@@ -145,12 +151,26 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
           setResult({ channel, mode: 'sent', id: broadcast.id, detail: `/communications/sms/broadcasts/${broadcast.id}`, ...data })
         }
       } else if (channel === 'whatsapp') {
+        const drip = waMode === 'drip'
         const { broadcast } = await postJson('/api/whatsapp/broadcasts', {
           name: defaultLabel(), template_id: templateId, variable_mapping: variables,
           audience_filter: effectiveFilter, location_id: locationId,
+          delivery_mode: waMode,
+          ...(drip ? {
+            daily_cap: Number(dailyCap) || 500,
+            send_window_start: windowStart, send_window_end: windowEnd,
+            send_window_tz: 'Europe/Dublin',
+          } : {}),
         })
-        const data = await postJson(`/api/whatsapp/broadcasts/${broadcast.id}/send`, {})
-        setResult({ channel, mode: 'sent', id: broadcast.id, detail: `/whatsapp/broadcasts/${broadcast.id}`, ...data })
+        if (drip) {
+          // Create set status='sending'; the run-whatsapp-broadcasts cron drives
+          // it during the window. No /send call for a drip.
+          setResult({ channel, mode: 'drip', id: broadcast.id, detail: `/whatsapp/broadcasts/${broadcast.id}`,
+            dailyCap: Number(dailyCap) || 500, windowStart, windowEnd })
+        } else {
+          const data = await postJson(`/api/whatsapp/broadcasts/${broadcast.id}/send`, {})
+          setResult({ channel, mode: 'sent', id: broadcast.id, detail: `/whatsapp/broadcasts/${broadcast.id}`, ...data })
+        }
       } else {
         // Email — design inline with Unlayer, create the campaign, then queue
         // (send-now) or schedule it. The run-campaigns cron does the actual send
@@ -191,6 +211,7 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
   function reset() {
     setResult(null); setError(null); setBody(''); setTemplateId(''); setVariables({})
     setLabel(''); setFilter(EMPTY_FILTER); setScheduleMode('now'); setScheduledAtLocal('')
+    setWaMode('blast'); setDailyCap(500); setWindowStart('09:00'); setWindowEnd('20:00')
   }
 
   // ── result screen ───────────────────────────────────────────────
@@ -198,9 +219,17 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
     return (
       <div className="max-w-xl mx-auto mt-6 rounded-2xl border border-emerald-500/30 bg-emerald-500/[0.05] p-6 text-center">
         <div className="w-12 h-12 rounded-full bg-emerald-500/15 text-emerald-700 flex items-center justify-center mx-auto mb-3">
-          {result.mode === 'scheduled' ? <Clock size={22} /> : <Check size={22} />}
+          {result.mode === 'scheduled' || result.mode === 'drip' ? <Clock size={22} /> : <Check size={22} />}
         </div>
-        {result.mode === 'scheduled' ? (
+        {result.mode === 'drip' ? (
+          <>
+            <h2 className="text-lg font-semibold text-un1t-text">Drip started</h2>
+            <p className="text-sm text-un1t-subtle mt-1">
+              Up to {result.dailyCap}/day will go out between {result.windowStart} and {result.windowEnd} (Europe/Dublin)
+              until everyone&apos;s been messaged. Pause or track progress on the details page.
+            </p>
+          </>
+        ) : result.mode === 'scheduled' ? (
           <>
             <h2 className="text-lg font-semibold text-un1t-text">Scheduled</h2>
             <p className="text-sm text-un1t-subtle mt-1">
@@ -349,6 +378,36 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
         )}
       </Section>
 
+      {/* Pacing — WhatsApp only (WA-DRIP) */}
+      {channel === 'whatsapp' && (
+        <Section title="Pacing" sub="Send all at once, or drip a capped number per day until everyone's been messaged — the safe way to work a large list without tripping WhatsApp's per-day limits.">
+          <div className="flex gap-2 mb-3">
+            <ChannelPill active={waMode === 'blast'} onClick={() => setWaMode('blast')} icon={Send} label="Send now" small />
+            <ChannelPill active={waMode === 'drip'} onClick={() => setWaMode('drip')} icon={Clock} label="Drip" small />
+          </div>
+          {waMode === 'drip' && (
+            <div className="space-y-3">
+              <label className="block">
+                <span className="block text-xs font-medium text-un1t-subtle mb-1">Daily limit (messages per 24h)</span>
+                <input type="number" min={1} max={100000} className={fieldCls}
+                  value={dailyCap} onChange={e => setDailyCap(e.target.value)} />
+              </label>
+              <div className="flex gap-3">
+                <label className="block flex-1">
+                  <span className="block text-xs font-medium text-un1t-subtle mb-1">Send from</span>
+                  <input type="time" className={fieldCls} value={windowStart} onChange={e => setWindowStart(e.target.value)} />
+                </label>
+                <label className="block flex-1">
+                  <span className="block text-xs font-medium text-un1t-subtle mb-1">Send until</span>
+                  <input type="time" className={fieldCls} value={windowEnd} onChange={e => setWindowEnd(e.target.value)} />
+                </label>
+              </div>
+              <p className="text-[11px] text-un1t-subtle">Europe/Dublin time. The drip pauses overnight and resumes each morning.</p>
+            </div>
+          )}
+        </Section>
+      )}
+
       {/* When — SMS + email support scheduling; WhatsApp sends immediately. */}
       {(channel === 'sms' || channel === 'email') && (
         <Section title="When">
@@ -374,7 +433,7 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
       <div className="flex items-center gap-3">
         <Button onClick={send} variant="primary" icon={isSchedule ? Clock : Send}
           loading={busy} disabled={!canSend}>
-          {isSchedule ? 'Schedule' : 'Send now'}
+          {isSchedule ? 'Schedule' : isDrip ? 'Start drip' : 'Send now'}
         </Button>
         {count === 0 && <span className="text-xs text-amber-700">No contacts match this filter.</span>}
       </div>
