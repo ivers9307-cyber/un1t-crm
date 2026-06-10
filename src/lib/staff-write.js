@@ -6,6 +6,7 @@
 // pin it.
 
 import { OWNER_ASSIGNABLE_ROLES, MASTER_ASSIGNABLE_ROLES } from '@/lib/schemas'
+import { splitCompFromProfilePatch, upsertCompensationForProfile } from '@/lib/profile-compensation'
 
 const PROFILE_PATCH_KEYS = [
   'full_name', 'permissions', 'active', 'employment_type',
@@ -112,4 +113,34 @@ export function computeDesiredAssignments({ isMaster, callerOwnerLocationIds, as
     }
   }
   return desired
+}
+
+/** Apply the profile-level update + the compensation dual-write
+ * (SECURITY.1 / mig 152) for a staff PUT. Writes buildStaffProfilePatch(body)
+ * to `profiles`, then the 5 comp fields to `profile_compensation`
+ * (undefined skipped, null clears). Pure mirror of route lines ~190-215.
+ * Returns { ok:true } or { ok:false, error } — the route maps a failure
+ * to a 400. NO UniFi/door-access here (that's a later increment). */
+export async function applyStaffProfileWrite({ db, id, body, actorId }) {
+  const profileUpdates = buildStaffProfilePatch(body)
+  if (Object.keys(profileUpdates).length > 0) {
+    const { error } = await db.from('profiles').update(profileUpdates).eq('id', id)
+    if (error) return { ok: false, error: error.message }
+  }
+
+  const { compFields } = splitCompFromProfilePatch({
+    annual_salary:             body.annual_salary,
+    hourly_rate:               body.hourly_rate,
+    contracted_hours_per_week: body.contracted_hours_per_week,
+    annual_leave_entitlement:  body.annual_leave_entitlement,
+    overtime_rate:             body.overtime_rate,
+  })
+  const cleanComp = Object.fromEntries(
+    Object.entries(compFields).filter(([, v]) => v !== undefined)
+  )
+  if (Object.keys(cleanComp).length > 0) {
+    const compResult = await upsertCompensationForProfile(db, id, cleanComp, { actorId })
+    if (!compResult.ok) return { ok: false, error: `compensation: ${compResult.error}` }
+  }
+  return { ok: true }
 }

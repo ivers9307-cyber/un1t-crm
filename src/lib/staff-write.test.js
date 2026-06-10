@@ -107,6 +107,69 @@ describe('computeDesiredAssignments', () => {
   })
 })
 
+import { applyStaffProfileWrite } from './staff-write.js'
+import { vi, beforeEach } from 'vitest'
+
+// Mock the compensation helpers so we can assert the dual-write.
+vi.mock('@/lib/profile-compensation', () => ({
+  splitCompFromProfilePatch: vi.fn((p) => ({ compFields: p })),
+  upsertCompensationForProfile: vi.fn(async () => ({ ok: true })),
+}))
+import { splitCompFromProfilePatch, upsertCompensationForProfile } from '@/lib/profile-compensation'
+
+function mockDb({ updateError = null } = {}) {
+  const eq = vi.fn(async () => ({ error: updateError }))
+  const update = vi.fn(() => ({ eq }))
+  return { update, from: vi.fn(() => ({ update })) }
+}
+
+describe('applyStaffProfileWrite', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    splitCompFromProfilePatch.mockImplementation((p) => ({ compFields: p }))
+    upsertCompensationForProfile.mockResolvedValue({ ok: true })
+  })
+
+  it('updates profiles with the patch when body has profile fields', async () => {
+    const db = mockDb()
+    const res = await applyStaffProfileWrite({ db, id: 'p1', body: { full_name: 'Ada' }, actorId: 'u1' })
+    expect(db.from).toHaveBeenCalledWith('profiles')
+    expect(db.update).toHaveBeenCalledWith({ full_name: 'Ada' })
+    expect(res).toEqual({ ok: true })
+  })
+
+  it('does not touch profiles when the body has no profile fields', async () => {
+    const db = mockDb()
+    await applyStaffProfileWrite({ db, id: 'p1', body: { assignments: [] }, actorId: 'u1' })
+    expect(db.update).not.toHaveBeenCalled()
+  })
+
+  it('returns ok:false with the db error message on a profiles update failure', async () => {
+    const db = mockDb({ updateError: { message: 'boom' } })
+    const res = await applyStaffProfileWrite({ db, id: 'p1', body: { full_name: 'X' }, actorId: 'u1' })
+    expect(res).toEqual({ ok: false, error: 'boom' })
+  })
+
+  it('upserts compensation with only the defined comp fields', async () => {
+    const db = mockDb()
+    await applyStaffProfileWrite({ db, id: 'p1', body: { hourly_rate: 12, annual_salary: undefined }, actorId: 'u1' })
+    expect(upsertCompensationForProfile).toHaveBeenCalledWith(db, 'p1', { hourly_rate: 12 }, { actorId: 'u1' })
+  })
+
+  it('skips the comp upsert when no comp fields are present', async () => {
+    const db = mockDb()
+    await applyStaffProfileWrite({ db, id: 'p1', body: { full_name: 'Ada' }, actorId: 'u1' })
+    expect(upsertCompensationForProfile).not.toHaveBeenCalled()
+  })
+
+  it('returns ok:false with a compensation-prefixed error when the upsert fails', async () => {
+    upsertCompensationForProfile.mockResolvedValue({ ok: false, error: 'locked' })
+    const db = mockDb()
+    const res = await applyStaffProfileWrite({ db, id: 'p1', body: { hourly_rate: 9 }, actorId: 'u1' })
+    expect(res).toEqual({ ok: false, error: 'compensation: locked' })
+  })
+})
+
 describe('staff-write — characterization completeness (C2b.1 review)', () => {
   it('buildStaffProfilePatch skips a known key whose value is explicitly undefined', () => {
     expect(buildStaffProfilePatch({ full_name: undefined, active: true })).toEqual({ active: true })
