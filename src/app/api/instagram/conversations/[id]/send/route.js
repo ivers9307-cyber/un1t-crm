@@ -28,7 +28,7 @@ export async function POST(request, props) {
 
   const db = createServerClient()
   const { data: conversation, error } = await db.from('instagram_conversations')
-    .select('*, contacts(id, name, first_name)')
+    .select('*, contacts!contact_id(id, name, first_name)')
     .eq('id', params.id)
     .single()
 
