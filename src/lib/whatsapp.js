@@ -319,6 +319,34 @@ export async function deleteTemplate(templateName, opts = {}) {
   return { success: true }
 }
 
+/**
+ * Edit an existing template and resubmit it for review (WA-TMPL). Meta's edit
+ * endpoint is POST /{template_id} with category + components — name and language
+ * are immutable on edit. Allowed for REJECTED/PAUSED templates (the caller gates
+ * this). On success Meta puts the template back into review (status → PENDING),
+ * which arrives via the message_template_status_update webhook.
+ */
+export async function editTemplate(metaTemplateId, { category, components }, opts = {}) {
+  const config = await resolveConfig(opts)
+
+  const response = await fetch(`${META_API_URL}/${metaTemplateId}`, {
+    method: 'POST',
+    headers: headersFor(config),
+    body: JSON.stringify({
+      ...(category ? { category } : {}),
+      components: components || [],
+    }),
+  })
+
+  const result = await response.json()
+  if (result.error) {
+    console.error('Template edit error:', result.error)
+    throw new Error(result.error.message || 'Failed to edit template')
+  }
+
+  return { success: result.success !== false }
+}
+
 // ============================================================
 // AUDIENCE & BROADCAST
 // ============================================================
