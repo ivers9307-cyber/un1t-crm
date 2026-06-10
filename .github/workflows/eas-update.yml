@@ -161,6 +161,27 @@ jobs:
           node parse-check.mjs
           rm -f parse-check.mjs
 
+      # ── Full CI mirror before anything ships to production phones ──
+      # (AUDIT-JUN10.3) The Babel parse above only proves the files
+      # PARSE — the 2026-06 schedule crash shipped a bundle that parsed
+      # fine but imported a name its target module didn't export. Web CI
+      # runs these gates on PRs, but on a main push it's a PARALLEL
+      # workflow: a red Web CI has never blocked this publish, and a
+      # direct-to-main push skips PR checks entirely. Running the gates
+      # inline closes both holes: vitest (includes mobile/lib tests),
+      # mobile-import resolution (the guard built for exactly that
+      # crash class), and web↔mobile permission parity.
+      - name: Install root dependencies (for CI-mirror gates)
+        working-directory: .
+        run: npm ci --legacy-peer-deps
+
+      - name: Gate — vitest + mobile-imports + mobile-parity
+        working-directory: .
+        run: |
+          npm test
+          npm run check:mobile-imports
+          npm run check:mobile-parity
+
       # Use the commit message as the EAS update note so you can see
       # at a glance which commit a given update came from in the EAS
       # dashboard. Squash newlines to keep the eas-update CLI happy.
