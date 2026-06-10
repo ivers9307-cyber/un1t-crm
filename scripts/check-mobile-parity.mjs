@@ -128,15 +128,10 @@ const WEB_ONLY_OK = {
   // in /approvals. Both surfaces are desktop-only (PDF preview +
   // bulk analyse + multi-row review), so the permission is too.
   bookkeeper: 'Bookkeeper sign-off flag (INVOICES-QUEUE.1) — gates the analyse + send-to-Xero actions inside /invoices and the Bookkeeper queue tab inside /approvals. Both surfaces are desktop-only by design.',
-  // REPORT-ISSUE.2 — staff submit issues from mobile (Report a
-  // Problem flow) and owners triage them at /issues + as an
-  // /approvals tab on web. The handler-side inbox + claim / resolve
-  // / close flow is the desktop side; the mobile counterpart is the
-  // existing notify_issue_submitted push that fires when a new
-  // issue lands (operators react from the laptop). No mobile UI
-  // for the inbox itself — review with photo attachments wants the
-  // wide screen.
-  issues_inbox: 'Owner-side issues inbox (REPORT-ISSUE.2) — staff submit from mobile, owners triage from the desktop inbox at /issues plus the Issues tab inside /approvals. Mobile counterpart is the notify_issue_submitted push (in MOBILE_PERMISSIONS) that taps operators on the shoulder when a new issue lands; the inbox itself is desktop-only because review-with-photo-attachments wants screen real estate.',
+  // W1 (parity inversion): issues_inbox is no longer web-only — the
+  // handler inbox (claim / resolve / close, with photos) now ships on
+  // mobile via the `issue_triage` MOBILE_PERMISSIONS entry
+  // (webEquivalent: 'issues_inbox'), so it's matched, not exempted here.
   // MOBILE-PERMS — the mobile `assistant` toggle was removed: there is
   // no assistant screen in the iOS app yet, so the toggle controlled
   // nothing. Re-add a MOBILE_PERMISSIONS entry with

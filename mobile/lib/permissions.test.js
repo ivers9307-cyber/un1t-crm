@@ -177,3 +177,21 @@ describe('canMobile — staff_management default (STAFF-C3 parity inversion)', (
     expect(canMobile({ role: 'owner' }, 'staff_management', loc)).toBe(false)
   })
 })
+
+describe('canMobile — issue_triage default (W1 parity inversion)', () => {
+  // The handler inbox is gated by this key. Defaults must be owner/master
+  // only — matching the isHandler gate on every triage route, so granting
+  // it to a non-handler role wouldn't actually let them act.
+  const roleDefaultLoc = { features: {}, permissions: { mobile: {} } }
+
+  it('defaults ON for master / owner', () => {
+    expect(canMobile({ role: 'master' }, 'issue_triage', roleDefaultLoc)).toBe(true)
+    expect(canMobile({ role: 'owner' }, 'issue_triage', roleDefaultLoc)).toBe(true)
+  })
+
+  it('defaults OFF for manager / head_coach / staff (not handlers)', () => {
+    expect(canMobile({ role: 'manager' }, 'issue_triage', roleDefaultLoc)).toBe(false)
+    expect(canMobile({ role: 'head_coach' }, 'issue_triage', roleDefaultLoc)).toBe(false)
+    expect(canMobile({ role: 'staff' }, 'issue_triage', roleDefaultLoc)).toBe(false)
+  })
+})

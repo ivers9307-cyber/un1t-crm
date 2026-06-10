@@ -144,6 +144,10 @@ export default function More() {
   // capability inside the screens stays owner/master; the GET routes
   // enforce scope server-side regardless.
   if (canMobile(profile, 'staff_management', activeLocation)) tiles.push({ key: 'staff', icon: 'people-outline', label: 'Staff', onPress: () => router.push('/staff') })
+  // Issue triage handler inbox (W1) — owner/master claim/resolve/close
+  // staff-reported issues. Gated by issue_triage (parity inversion of the
+  // web issues_inbox); the routes also enforce isHandler server-side.
+  if (canMobile(profile, 'issue_triage', activeLocation)) tiles.push({ key: 'issueinbox', icon: 'construct-outline', label: 'Issue inbox', onPress: () => router.push('/issues/inbox') })
   if (allowed.length > 0)      tiles.push({ key: 'customise', icon: 'grid-outline', label: 'Customise bar', onPress: () => router.push('/customise-bar') })
   if (canImpersonate)          tiles.push({ key: 'impersonate', icon: 'eye-outline', label: 'View as user', badge: impersonatingFrom ? '•' : null, onPress: () => router.push('/impersonate') })
 
