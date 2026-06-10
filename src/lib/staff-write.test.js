@@ -187,3 +187,16 @@ describe('staff-write — characterization completeness (C2b.1 review)', () => {
     expect(out.find(a => a.location_id === 'loc-9')).toBeUndefined()
   })
 })
+
+describe('applyStaffProfileWrite — ordering guarantee (C2b.2a review)', () => {
+  it('does NOT attempt the comp upsert when the profiles update fails (early return)', async () => {
+    vi.clearAllMocks() // this describe has no beforeEach; start from a clean call count
+    upsertCompensationForProfile.mockResolvedValue({ ok: true })
+    const eq = vi.fn(async () => ({ error: { message: 'boom' } }))
+    const update = vi.fn(() => ({ eq }))
+    const db = { update, from: vi.fn(() => ({ update })) }
+    const res = await applyStaffProfileWrite({ db, id: 'p1', body: { full_name: 'X', hourly_rate: 9 }, actorId: 'u1' })
+    expect(res).toEqual({ ok: false, error: 'boom' })
+    expect(upsertCompensationForProfile).not.toHaveBeenCalled()
+  })
+})
