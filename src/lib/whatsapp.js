@@ -338,6 +338,59 @@ export function buildWhatsAppAudience(db, filter, locationId) {
   return applyAudienceFilter(query, filter)
 }
 
+// Paginate the full WhatsApp-eligible audience (consent + opt-out + wa_phone + the
+// operator's audience_filter). buildWhatsAppAudience awaited is capped at the
+// project's 1000-row PostgREST limit, so a drip over a large lead list MUST page —
+// the >1k pattern from pipeline-reclassify.js. Deterministic order by id so paging
+// is stable. Rebuilds the query per page (builders are single-use).
+export async function fetchAllWhatsAppAudience(db, filter, locationId) {
+  const PAGE = 1000
+  const HARD_LIMIT = 50_000
+  const rows = []
+  let start = 0
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const end = Math.min(start + PAGE - 1, HARD_LIMIT - 1)
+    const { data: page, error } = await buildWhatsAppAudience(db, filter, locationId)
+      .order('id', { ascending: true })
+      .range(start, end)
+    if (error) throw new Error(`Audience query failed: ${error.message}`)
+    if (!Array.isArray(page) || page.length === 0) break
+    rows.push(...page)
+    if (page.length < PAGE) break
+    if (rows.length >= HARD_LIMIT) break
+    start += PAGE
+  }
+  return rows
+}
+
+// Paginate the already-processed contact_ids for one broadcast (sent OR failed —
+// both insert a recipients row, so both are skipped on resume). Also >1k-safe: a
+// long-running drip accumulates thousands of recipient rows.
+export async function fetchDripDoneContactIds(db, broadcastId) {
+  const PAGE = 1000
+  const HARD_LIMIT = 200_000
+  const ids = []
+  let start = 0
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const end = Math.min(start + PAGE - 1, HARD_LIMIT - 1)
+    const { data: page, error } = await db
+      .from('whatsapp_broadcast_recipients')
+      .select('contact_id')
+      .eq('broadcast_id', broadcastId)
+      .order('contact_id', { ascending: true })
+      .range(start, end)
+    if (error) throw new Error(`Recipients query failed: ${error.message}`)
+    if (!Array.isArray(page) || page.length === 0) break
+    for (const r of page) if (r.contact_id) ids.push(r.contact_id)
+    if (page.length < PAGE) break
+    if (ids.length >= HARD_LIMIT) break
+    start += PAGE
+  }
+  return ids
+}
+
 /**
  * Send a broadcast — template message to filtered audience
  */
