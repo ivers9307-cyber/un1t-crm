@@ -12,9 +12,8 @@ import {
   syncUnifiUserPolicyForRole, revokeUnifiUserPolicies, UnifiError,
 } from '@/lib/unifi-access'
 import { canEditStaffMember } from '@/lib/staff-access'
-import { buildStaffProfilePatch, assertOwnerAssignmentScope, computeDesiredAssignments, computeProfileRole } from '@/lib/staff-write'
+import { applyStaffProfileWrite, assertOwnerAssignmentScope, computeDesiredAssignments, computeProfileRole } from '@/lib/staff-write'
 import { getStaffForUser } from '@/lib/staff'
-import { upsertCompensationForProfile, splitCompFromProfilePatch } from '@/lib/profile-compensation'
 import { logAuditEvent } from '@/lib/audit'
 
 export const runtime = 'nodejs'
@@ -178,40 +177,13 @@ export async function PUT(request, props) {
   }
 
   // Apply profile-level updates (full_name, HR fields, master flag,
-  // permissions, active). profiles.role is recomputed AFTER assignment
-  // updates so it reflects the final state.
-  //
-  // SECURITY.1 (mig 152): the 5 comp fields ALSO write to
-  // profile_compensation via the helper below. Dual-write during the
-  // transition window — existing readers continue to see the values
-  // on profiles, new restricted readers use the new table, and a
-  // follow-up commit migrates the readers + drops the profiles
-  // columns once verified.
-  const profileUpdates = buildStaffProfilePatch(body)
-
-  if (Object.keys(profileUpdates).length > 0) {
-    const { error } = await db.from('profiles').update(profileUpdates).eq('id', id)
-    if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
-  }
-
-  // SECURITY.1 — second leg of the dual-write: persist comp fields
-  // to profile_compensation. Helper diffs vs current, undefined keys
-  // are skipped, null clears.
-  const { compFields } = splitCompFromProfilePatch({
-    annual_salary:             body.annual_salary,
-    hourly_rate:               body.hourly_rate,
-    contracted_hours_per_week: body.contracted_hours_per_week,
-    annual_leave_entitlement:  body.annual_leave_entitlement,
-    overtime_rate:             body.overtime_rate,
-  })
-  const cleanComp = Object.fromEntries(
-    Object.entries(compFields).filter(([, v]) => v !== undefined)
-  )
-  if (Object.keys(cleanComp).length > 0) {
-    const compResult = await upsertCompensationForProfile(db, id, cleanComp, { actorId: user.id })
-    if (!compResult.ok) {
-      return NextResponse.json({ success: false, error: `compensation: ${compResult.error}` }, { status: 400 })
-    }
+  // permissions, active) + the SECURITY.1 comp dual-write.
+  // Delegated to applyStaffProfileWrite (C2b.2a) — pure mirror of
+  // the previous inline block; profiles.role is recomputed AFTER
+  // assignment updates so it reflects the final state.
+  const profileWrite = await applyStaffProfileWrite({ db, id, body, actorId: user.id })
+  if (!profileWrite.ok) {
+    return NextResponse.json({ success: false, error: profileWrite.error }, { status: 400 })
   }
 
   // ----- Assignment diff -----
