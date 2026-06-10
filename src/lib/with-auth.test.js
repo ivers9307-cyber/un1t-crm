@@ -232,13 +232,23 @@ describe('withAuth body validation (schema option)', () => {
     expect(handler).not.toHaveBeenCalled()
   })
 
+  it('returns 400 when the body is not JSON', async () => {
+    const route = withAuth({ permission: 'schedule', schema: Schema }, vi.fn())
+    const res = await route(new Request('http://localhost/api/x', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: 'not-json',
+    }))
+    expect(res.status).toBe(400)
+  })
+
   it('omits input when no schema is given (back-compat)', async () => {
-    const handler = vi.fn(async ({ input }) =>
-      new Response(JSON.stringify({ success: true, hasInput: input !== undefined }), { status: 200 })
+    const handler = vi.fn(async (ctx) =>
+      new Response(JSON.stringify({ success: true, hasInputKey: 'input' in ctx }), { status: 200 })
     )
     const route = withAuth({ permission: 'schedule' }, handler)
     const res = await route(new Request('http://localhost/api/x', { method: 'GET' }))
     const body = await res.json()
-    expect(body.hasInput).toBe(false)
+    expect(body.hasInputKey).toBe(false)
   })
 })
