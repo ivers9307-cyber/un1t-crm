@@ -5,6 +5,7 @@ import {
   modalOverlayClasses, modalContainerClasses, modalPanelClasses,
   dataTableMode, tableHeaderClasses, tableRowClasses, tableHeaderTextClasses, tableCellTextClasses, dataCardClasses, dataCardLabelClasses, dataCardValueClasses,
   tabItemClasses, tabTextClasses,
+  splitShowsBothPanes, splitPhonePane, masterPaneClasses,
 } from './ui-styles.js'
 
 describe('buttonClasses', () => {
@@ -96,6 +97,21 @@ describe('tabs classes', () => {
   it('never emits undefined for default args', () => {
     expect(tabItemClasses()).not.toContain('undefined')
     expect(tabTextClasses()).not.toContain('undefined')
+  })
+})
+
+describe('split view layout', () => {
+  it('shows both panes only on tablet', () => {
+    expect(splitShowsBothPanes(true)).toBe(true)
+    expect(splitShowsBothPanes(false)).toBe(false)
+  })
+  it('phone shows detail when a row is selected, else master', () => {
+    expect(splitPhonePane(true)).toBe('detail')
+    expect(splitPhonePane(false)).toBe('master')
+  })
+  it('master pane has a right divider', () => {
+    expect(masterPaneClasses()).toContain('border-r')
+    expect(masterPaneClasses()).toContain('border-un1t-border')
   })
 })
 

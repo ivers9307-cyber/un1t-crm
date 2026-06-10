@@ -113,3 +113,17 @@ export function modalPanelClasses({ isTablet = false } = {}) {
     ? 'w-full max-w-lg rounded-2xl bg-white p-5'
     : 'w-full rounded-t-2xl bg-white p-5 pb-8'
 }
+
+// ── SplitView (master-detail) ──────────────────────────────────────
+// Tablet shows both panes side-by-side (master fixed-width via
+// MASTER_PANE_WIDTH_PT in the shell, detail flexes). Phone shows one
+// pane: detail when a row is selected, otherwise the master list.
+export function splitShowsBothPanes(isTablet) {
+  return Boolean(isTablet)
+}
+export function splitPhonePane(hasSelection) {
+  return hasSelection ? 'detail' : 'master'
+}
+export function masterPaneClasses() {
+  return 'border-r border-un1t-border'
+}
