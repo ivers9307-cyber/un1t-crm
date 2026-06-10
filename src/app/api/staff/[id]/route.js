@@ -12,6 +12,7 @@ import {
   syncUnifiUserPolicyForRole, revokeUnifiUserPolicies, UnifiError,
 } from '@/lib/unifi-access'
 import { canEditStaffMember } from '@/lib/staff-access'
+import { getStaffForUser } from '@/lib/staff'
 import { upsertCompensationForProfile, splitCompFromProfilePatch } from '@/lib/profile-compensation'
 import { logAuditEvent } from '@/lib/audit'
 
@@ -73,6 +74,23 @@ async function applyDoorAccessChange({ profile, location, enable, role, existing
   }
   await syncUnifiUserPolicyForRole(cfg, unifiUserId, role)
   return unifiUserId
+}
+
+// GET /api/staff/[id] — fetch one staff member (scoped to the caller's
+// locations; admins see HR fields). New in C1: the web edit page reads
+// the DB directly, so this route exists for the mobile staff directory
+// + any SDK consumer. Read logic lives in src/lib/staff.js.
+export async function GET(request, props) {
+  const params = await props.params
+  const user = await getCurrentUser()
+  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+
+  const db = createServerClient()
+  const result = await getStaffForUser({ db, user, id: params.id })
+  if (!result.ok) {
+    return NextResponse.json({ success: false, error: result.error }, { status: result.status || 400 })
+  }
+  return NextResponse.json({ success: true, data: result.data })
 }
 
 // PUT /api/staff/[id] — Update a staff member.
