@@ -17,7 +17,7 @@ export async function GET(request) {
 
   const db = createServerClient()
   let query = db.from('instagram_conversations')
-    .select('*, contacts(id, name, first_name, email, pipeline_stage_slug)')
+    .select('*, contacts!contact_id(id, name, first_name, email, pipeline_stage_slug)')
     .order('last_message_at', { ascending: false, nullsFirst: false })
     .limit(50)
 

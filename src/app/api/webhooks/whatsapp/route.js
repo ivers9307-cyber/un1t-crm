@@ -306,7 +306,7 @@ async function handleIncomingMessage(db, message, contacts, phoneNumberId) {
   // sendPush(). Best-effort — never throw out of the webhook handler.
   try {
     const { data: conv } = await db.from('whatsapp_conversations')
-      .select('assigned_to, location_id, contacts(name, first_name, wa_profile_name)')
+      .select('assigned_to, location_id, contacts!contact_id(name, first_name, wa_profile_name)')
       .eq('id', conversationId)
       .single()
     const senderLabel = conv?.contacts?.name
