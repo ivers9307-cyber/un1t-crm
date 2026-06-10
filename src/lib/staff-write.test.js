@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildStaffProfilePatch, computeProfileRole } from './staff-write.js'
+import { buildStaffProfilePatch, computeProfileRole, assertOwnerAssignmentScope } from './staff-write.js'
 
 describe('buildStaffProfilePatch', () => {
   it('includes only the profile keys present in the body', () => {
@@ -30,5 +30,40 @@ describe('computeProfileRole', () => {
   it('falls back when there are no assignments', () => {
     expect(computeProfileRole({ isMaster: false, assignmentRoles: [], fallbackRole: 'manager' })).toBe('manager')
     expect(computeProfileRole({ isMaster: false, assignmentRoles: [], fallbackRole: null })).toBe('staff')
+  })
+})
+
+describe('assertOwnerAssignmentScope', () => {
+  const ownerLocs = ['loc-1', 'loc-2']
+
+  it('master bypasses owner-overlap but still rejects an invalid role', () => {
+    expect(assertOwnerAssignmentScope({ isMaster: true, callerOwnerLocationIds: [], targetLocationIds: ['x'], assignments: [{ location_id: 'x', role: 'staff' }] })).toBeNull()
+    const bad = assertOwnerAssignmentScope({ isMaster: true, callerOwnerLocationIds: [], targetLocationIds: ['x'], assignments: [{ location_id: 'x', role: 'master' }] })
+    expect(bad?.status).toBe(403)
+  })
+
+  it('owner with no location overlap is rejected', () => {
+    const r = assertOwnerAssignmentScope({ isMaster: false, callerOwnerLocationIds: ownerLocs, targetLocationIds: ['loc-9'], assignments: undefined })
+    expect(r?.status).toBe(403)
+    expect(r.error).toMatch(/owner/i)
+  })
+
+  it('owner with overlap and no assignments passes', () => {
+    expect(assertOwnerAssignmentScope({ isMaster: false, callerOwnerLocationIds: ownerLocs, targetLocationIds: ['loc-1'], assignments: undefined })).toBeNull()
+  })
+
+  it('owner cannot assign at a non-owned location', () => {
+    const r = assertOwnerAssignmentScope({ isMaster: false, callerOwnerLocationIds: ownerLocs, targetLocationIds: ['loc-1'], assignments: [{ location_id: 'loc-9', role: 'staff' }] })
+    expect(r?.status).toBe(403)
+    expect(r.error).toMatch(/where you are an owner/i)
+  })
+
+  it('owner cannot grant a role outside OWNER_ASSIGNABLE_ROLES', () => {
+    const r = assertOwnerAssignmentScope({ isMaster: false, callerOwnerLocationIds: ownerLocs, targetLocationIds: ['loc-1'], assignments: [{ location_id: 'loc-1', role: 'master' }] })
+    expect(r?.status).toBe(403)
+  })
+
+  it('owner assigning a valid role at an owned location passes', () => {
+    expect(assertOwnerAssignmentScope({ isMaster: false, callerOwnerLocationIds: ownerLocs, targetLocationIds: ['loc-1'], assignments: [{ location_id: 'loc-1', role: 'manager' }] })).toBeNull()
   })
 })
