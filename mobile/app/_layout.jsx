@@ -103,6 +103,7 @@ export default function RootLayout() {
               <Stack.Screen name="tasks" options={{ headerShown: false }} />
               <Stack.Screen name="bookings" options={{ headerShown: false }} />
               <Stack.Screen name="radar" options={{ headerShown: false }} />
+              <Stack.Screen name="staff" options={{ headerShown: false }} />
             </Stack>
           </BiometricLockProvider>
         </AuthProvider>

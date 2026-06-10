@@ -1,14 +1,13 @@
 // STAFF-C1 — mobile staff directory (read). Admin-gated (master/owner/
-// manager). Lists staff sharing a location with the caller via the SDK,
-// rendered through the responsive DataTable primitive; a row opens the
-// read-only detail. Management (edit/permissions/door access) stays on
-// web until C2/C3.
+// manager). Lists staff sharing a location with the caller via the SDK;
+// a row opens the detail (view + edit role/details). Compact two-line
+// rows: name + role on the first line, studios muted below.
 import { useState, useEffect, useCallback } from 'react'
-import { View, Text, ScrollView, RefreshControl, ActivityIndicator } from 'react-native'
+import { View, Text, ScrollView, RefreshControl, ActivityIndicator, Pressable } from 'react-native'
 import { Stack, useRouter } from 'expo-router'
 import { useAuth } from '../../lib/auth-context'
 import { sdk } from '../../lib/sdk'
-import { DataTable } from '../../components/ui'
+import { formatRole } from '../../lib/staff-format'
 import BackHeaderLeft from '../../components/BackHeaderLeft'
 
 const ADMIN_ROLES = ['master', 'owner', 'manager']
@@ -43,12 +42,6 @@ export default function StaffDirectory() {
     load().finally(() => setLoading(false))
   }, [isAdmin, load])
 
-  const columns = [
-    { key: 'full_name', label: 'Name', flex: 2 },
-    { key: 'role', label: 'Role', flex: 1 },
-    { key: 'locations', label: 'Studios', flex: 2, render: (r) => <Text className="text-sm text-un1t-text">{locationsLabel(r)}</Text> },
-  ]
-
   return (
     <View className="flex-1 bg-un1t-bg">
       <Stack.Screen options={{ title: 'Staff', headerLeft: () => <BackHeaderLeft label="More" fallbackHref="/(tabs)/more" /> }} />
@@ -70,15 +63,25 @@ export default function StaffDirectory() {
               <Text className="text-red-500 text-sm">{error}</Text>
             </View>
           )}
-          <DataTable
-            columns={columns}
-            data={rows}
-            keyExtractor={(r) => r.id}
-            onRowPress={(r) => router.push(`/staff/${r.id}`)}
-            empty={<Text className="text-center text-un1t-subtle py-8">No staff at your studios yet.</Text>}
-          />
+          {rows.length === 0 ? (
+            <Text className="text-center text-un1t-subtle py-8">No staff at your studios yet.</Text>
+          ) : (
+            rows.map((staff) => (
+              <Pressable
+                key={staff.id}
+                onPress={() => router.push(`/staff/${staff.id}`)}
+                className="rounded-2xl border border-un1t-border bg-white px-4 py-3 mb-2 active:bg-un1t-surface"
+              >
+                <View className="flex-row items-center justify-between">
+                  <Text className="text-base font-semibold text-un1t-text flex-1" numberOfLines={1}>{staff.full_name}</Text>
+                  <Text className="text-xs text-un1t-subtle ml-2">{formatRole(staff.role)}</Text>
+                </View>
+                <Text className="text-xs text-un1t-subtle mt-0.5" numberOfLines={1}>{locationsLabel(staff)}</Text>
+              </Pressable>
+            ))
+          )}
           <Text className="text-xs text-un1t-muted text-center mt-4 px-4">
-            Read-only directory. Edit staff, roles, permissions and door access on the web for now.
+            Tap a staff member to view their details, edit roles, or send a password reset.
           </Text>
         </ScrollView>
       )}

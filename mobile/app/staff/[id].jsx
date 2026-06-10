@@ -6,6 +6,7 @@ import { View, Text, ScrollView, RefreshControl, ActivityIndicator, Pressable } 
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router'
 import { useAuth } from '../../lib/auth-context'
 import { sdk } from '../../lib/sdk'
+import { formatRole, formatEmploymentType } from '../../lib/staff-format'
 import { Card, Button } from '../../components/ui'
 import BackHeaderLeft from '../../components/BackHeaderLeft'
 
@@ -80,9 +81,9 @@ export default function StaffDetail() {
               <Card padding="none" className="overflow-hidden mb-4">
                 <Row label="Name" value={staff.full_name} />
                 <Row label="Email" value={staff.email} />
-                <Row label="Role" value={staff.role} />
+                <Row label="Role" value={formatRole(staff.role)} />
                 <Row label="Status" value={staff.active ? 'Active' : 'Inactive'} />
-                <Row label="Employment" value={staff.employment_type} />
+                <Row label="Employment" value={formatEmploymentType(staff.employment_type)} />
               </Card>
 
               <Text className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle px-1 mb-2">Studio assignments</Text>
@@ -92,7 +93,7 @@ export default function StaffDetail() {
                   : assignments.map((pl, i) => (
                       <View key={pl.location_id || i} className={`px-4 py-3 ${i < assignments.length - 1 ? 'border-b border-un1t-border' : ''}`}>
                         <Text className="text-sm text-un1t-text">{pl.locations?.name || pl.location_id}</Text>
-                        <Text className="text-xs text-un1t-subtle mt-0.5">{pl.role}{pl.is_default ? ' · default' : ''}</Text>
+                        <Text className="text-xs text-un1t-subtle mt-0.5">{formatRole(pl.role)}{pl.is_default ? ' · default' : ''}</Text>
                       </View>
                     ))}
               </Card>
