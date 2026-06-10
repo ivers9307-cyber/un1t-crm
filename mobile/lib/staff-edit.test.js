@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest'
-import { buildStaffAssignmentsPatch } from './staff-edit.js'
+import { buildStaffAssignmentsPatch, hydratePermissions } from './staff-edit.js'
+import {
+  DEFAULT_WEB_PERMISSIONS_BY_ROLE,
+  DEFAULT_MOBILE_PERMISSIONS_BY_ROLE,
+} from '../../shared/permissions.js'
 
 const current = [
   { location_id: 'loc-1', role: 'staff', is_default: true, permissions: { pipeline: true }, unifi_door_access: true, unifi_user_id: 'u1', unifi_door_ids: ['d1'] },
@@ -64,5 +68,83 @@ describe('buildStaffAssignmentsPatch — owner privilege boundary (C2c-i.1 revie
     })
     expect(out.some(a => a.location_id === 'loc-2')).toBe(false)
     expect(out.map(a => a.location_id)).toEqual(['loc-1'])
+  })
+})
+
+describe('buildStaffAssignmentsPatch — permission edits (C2c-ii)', () => {
+  it('applies a full permission blob to the named location, echoing raw permissions elsewhere', () => {
+    const edited = { pipeline: false, contacts: true, mobile: { schedule: true } }
+    const out = buildStaffAssignmentsPatch({
+      isMaster: true, ownedLocationIds: [], currentAssignments: current,
+      roleEdits: {}, permissionEdits: { 'loc-1': edited },
+    })
+    expect(out.find(a => a.location_id === 'loc-1').permissions).toEqual(edited)
+    // loc-2 was not touched → its raw blob is echoed unchanged (no freeze).
+    expect(out.find(a => a.location_id === 'loc-2').permissions).toEqual({ sms: true })
+  })
+
+  it('preserves role + door + is_default when only permissions are edited', () => {
+    const out = buildStaffAssignmentsPatch({
+      isMaster: true, ownedLocationIds: [], currentAssignments: current,
+      roleEdits: {}, permissionEdits: { 'loc-1': { pipeline: false } },
+    })
+    const a1 = out.find(a => a.location_id === 'loc-1')
+    expect(a1.role).toBe('staff')            // role untouched
+    expect(a1.unifi_door_access).toBe(true)   // door untouched
+    expect(a1.is_default).toBe(true)          // default untouched
+  })
+
+  it('combines a role edit and a permission edit on the same location', () => {
+    const out = buildStaffAssignmentsPatch({
+      isMaster: true, ownedLocationIds: [], currentAssignments: current,
+      roleEdits: { 'loc-1': 'manager' }, permissionEdits: { 'loc-1': { pipeline: true } },
+    })
+    const a1 = out.find(a => a.location_id === 'loc-1')
+    expect(a1.role).toBe('manager')
+    expect(a1.permissions).toEqual({ pipeline: true })
+  })
+
+  it('owner does NOT emit a permission edit for a non-owned location (privilege boundary)', () => {
+    const out = buildStaffAssignmentsPatch({
+      isMaster: false, ownedLocationIds: ['loc-1'], currentAssignments: current,
+      roleEdits: {}, permissionEdits: { 'loc-2': { pipeline: true } },
+    })
+    expect(out.some(a => a.location_id === 'loc-2')).toBe(false)
+    expect(out.map(a => a.location_id)).toEqual(['loc-1'])
+  })
+})
+
+describe('hydratePermissions (C2c-ii)', () => {
+  it('empty blob → the role full web+mobile default blob', () => {
+    expect(hydratePermissions({}, 'staff')).toEqual({
+      ...DEFAULT_WEB_PERMISSIONS_BY_ROLE.staff,
+      mobile: { ...DEFAULT_MOBILE_PERMISSIONS_BY_ROLE.staff },
+    })
+  })
+
+  it('null / undefined → role defaults', () => {
+    const expected = {
+      ...DEFAULT_WEB_PERMISSIONS_BY_ROLE.manager,
+      mobile: { ...DEFAULT_MOBILE_PERMISSIONS_BY_ROLE.manager },
+    }
+    expect(hydratePermissions(null, 'manager')).toEqual(expected)
+    expect(hydratePermissions(undefined, 'manager')).toEqual(expected)
+  })
+
+  it('non-empty blob is used as-is, with .mobile hydrated from role defaults when absent', () => {
+    const out = hydratePermissions({ pipeline: false, contacts: true }, 'staff')
+    expect(out.pipeline).toBe(false)
+    expect(out.contacts).toBe(true)
+    expect(out.mobile).toEqual(DEFAULT_MOBILE_PERMISSIONS_BY_ROLE.staff)
+  })
+
+  it('preserves an explicit .mobile sub-object (does not overwrite with defaults)', () => {
+    const out = hydratePermissions({ pipeline: true, mobile: { schedule: false } }, 'staff')
+    expect(out.mobile).toEqual({ schedule: false })
+  })
+
+  it('does NOT back-fill sparse web keys (mirrors web — no over-hydration)', () => {
+    const out = hydratePermissions({ pipeline: true, mobile: { schedule: true } }, 'staff')
+    expect(out.contacts).toBeUndefined()
   })
 })
