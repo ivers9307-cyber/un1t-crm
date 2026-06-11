@@ -23,20 +23,32 @@ their bookings (consultation + Glofox class) without leaving the page.
 - Polish: unified WA+IG unread count, opted-out "service replies
   only" thread banner, this notes update — (same PR as this edit)
 
+**Probe results (operator-run 2026-06-11):**
+- `events_discovery`: **`GET /2.0/events?start=<unix-secs>&end=<unix-secs>&limit=N` VERIFIED** —
+  200 with `{ object:'list', page, limit, has_more, total_count, data }`;
+  the time window is honoured (windowed vs unwindowed return different
+  first items). Event fields seen live: `_id, name, description,
+  time_start, duration, size, booked, waiting, trainers, active,
+  private, booking_status, program_obj…`. `/2.0/branches/{id}/events`
+  returns the same data; `/2.0/calendar` does NOT exist (WRONG_URL);
+  `GET /2.0/bookings` lists (200, empty).
+- `booking_dryrun` (round 1): POST /2.0/bookings **resolves** (no
+  WRONG_URL — bookings exist on this tier) but `{user_id, event_id}`
+  fails validation with *"The model field is required., The model id
+  field is required."* — and `user_id` was NOT flagged. Real shape:
+  **`{ user_id, model, model_id }`** (polymorphic). The exact `model`
+  token is pinned by probe v2 (shipped in the P3b PR — re-click
+  `?check=booking_dryrun`; it now tries 'Event'/'event'/'events' in
+  one pass). `GLOFOX_BOOKING_MODEL` in src/lib/glofox.js currently
+  'Event' — adjust if v2 shows a different spelling wins.
+
 **Remaining:**
-- **P3b Glofox classes — BLOCKED on the operator** running the two
-  probe URLs as a logged-in master and pasting the JSON:
-  - `https://crm.un1tdublin.com/api/glofox/probe?check=events_discovery`
-    → result: _pending_
-  - `https://crm.un1tdublin.com/api/glofox/probe?check=booking_dryrun`
-    → result: _pending_
-  Then: `fetchUpcomingEvents()` against the verified endpoint +
-  existing `createBooking`/`cancelBooking` into the Book panel.
-  Live E2E test = book the operator's own member record into a real
-  class, verify in Glofox, then `cancelBooking`.
-- Auth-gated visual click-test of the whole unified inbox (none of
-  P1–P3a has been visually verified — code-reviewed + build-verified
-  only).
+- Operator: re-click `?check=booking_dryrun` (v2) → confirm/correct
+  `GLOFOX_BOOKING_MODEL` → **live E2E**: in the inbox Book tab, book
+  the operator's own member record into a real class, verify it in
+  Glofox, then click Undo (cancelBooking).
+- Auth-gated visual click-test of the whole unified inbox (P1–P3
+  code-reviewed + build-verified only).
 
 ## Approved shape (three panes)
 
