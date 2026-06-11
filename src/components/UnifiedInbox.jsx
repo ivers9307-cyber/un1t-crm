@@ -15,6 +15,7 @@ import {
 } from 'lucide-react'
 import WAInbox from '@/components/WAInbox'
 import IGInbox from '@/components/IGInbox'
+import CommandCentre from '@/components/CommandCentre'
 
 function formatTime(dateStr) {
   if (!dateStr) return ''
@@ -48,7 +49,7 @@ const CHANNELS = [
   ['ig', 'Instagram'],
 ]
 
-export default function UnifiedInbox({ locationId, userId, initialConversationId, initialChannel }) {
+export default function UnifiedInbox({ locationId, userId, initialConversationId, initialChannel, canEditConsent = false }) {
   const [waConvs, setWaConvs] = useState([])
   const [igConvs, setIgConvs] = useState([])
   const [loading, setLoading] = useState(true)
@@ -91,6 +92,15 @@ export default function UnifiedInbox({ locationId, userId, initialConversationId
   const channelMatched = channelFilter === 'all' ? merged : merged.filter(c => c._ch === channelFilter)
   const visible = queueFilter === 'all' ? channelMatched : channelMatched.filter(needsReply)
   const needsReplyCount = merged.filter(needsReply).length
+
+  // UIX-P2 — the command centre needs the selected thread's linked
+  // contact. The queue rows already embed contacts!contact_id, so no
+  // extra lookup: resolve from the merged list (null until the list
+  // has loaded on a cold deep link — the pane shows a stub meanwhile).
+  const selectedConv = selected
+    ? merged.find(c => c._ch === selected.ch && c.id === selected.id)
+    : null
+  const selectedContactId = selectedConv?.contacts?.id || null
 
   // When the operator resolves/replies inside the embedded thread, the
   // unified queue refreshes on the next poll tick; the refresh button
@@ -239,6 +249,24 @@ export default function UnifiedInbox({ locationId, userId, initialConversationId
           </>
         )}
       </div>
+
+      {/* ── Contact command centre (UIX-P2, desktop) ── */}
+      {selected && (
+        <div className="hidden xl:flex flex-col w-80 border-l border-un1t-border bg-un1t-surface shrink-0">
+          {selectedContactId ? (
+            <CommandCentre
+              key={selectedContactId}
+              contactId={selectedContactId}
+              locationId={locationId}
+              canEditConsent={canEditConsent}
+            />
+          ) : (
+            <div className="flex-1 flex items-center justify-center p-6 text-center text-xs text-un1t-subtle">
+              No linked contact yet — use “Add to Contacts” in the thread header.
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }
