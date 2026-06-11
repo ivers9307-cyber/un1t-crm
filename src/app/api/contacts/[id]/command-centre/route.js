@@ -43,15 +43,30 @@ export async function GET(_request, props) {
     return NextResponse.json({ success: false, error: 'Contact not found' }, { status: 404 })
   }
 
-  const { data: activities, error: actErr } = await db
-    .from('activities')
-    .select('*')
-    .eq('contact_id', params.id)
-    .order('created_at', { ascending: false })
-    .limit(MAX_ACTIVITIES)
-  if (actErr) {
-    return NextResponse.json({ success: false, error: actErr.message }, { status: 500 })
+  // Activities + bookable event types in one parallel pass. The
+  // event-types list powers the Book tab (UIX-P3a) — the existing
+  // /api/bookings/event-types list route is API-key-only (n8n), so
+  // the session-authed bundle carries it instead.
+  const [actRes, etRes] = await Promise.all([
+    db.from('activities')
+      .select('*')
+      .eq('contact_id', params.id)
+      .order('created_at', { ascending: false })
+      .limit(MAX_ACTIVITIES),
+    db.from('event_types')
+      .select('id, name, slug, duration_minutes, availability, active')
+      .eq('location_id', contact.location_id)
+      .eq('active', true)
+      .order('name', { ascending: true }),
+  ])
+  if (actRes.error) {
+    return NextResponse.json({ success: false, error: actRes.error.message }, { status: 500 })
   }
 
-  return NextResponse.json({ success: true, contact, activities: activities || [] })
+  return NextResponse.json({
+    success: true,
+    contact,
+    activities: actRes.data || [],
+    event_types: etRes.data || [],
+  })
 }

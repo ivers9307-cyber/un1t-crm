@@ -12,7 +12,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
 import {
-  User, ListTodo, CalendarPlus, ExternalLink, Send, ShieldCheck,
+  User, ListTodo, ExternalLink, Send, ShieldCheck,
   CircleDot, RefreshCw,
 } from 'lucide-react'
 import ContactMarketingPreferencesCard from '@/components/ContactMarketingPreferencesCard'
@@ -41,11 +41,15 @@ const TABS = [
   ['book', 'Book'],
 ]
 
-export default function CommandCentre({ contactId, locationId, canEditConsent }) {
+// `channel` + `conversationId` identify the thread this pane sits
+// beside, so a booking confirmation can be dropped straight into the
+// conversation (best-effort — a closed WA window just skips it).
+export default function CommandCentre({ contactId, locationId, canEditConsent, channel, conversationId }) {
   const [tab, setTab] = useState('profile')
   const [contact, setContact] = useState(null)
   const [activities, setActivities] = useState([])
   const [consentLog, setConsentLog] = useState([])
+  const [eventTypes, setEventTypes] = useState([])
   const [loading, setLoading] = useState(true)
   const [showSequencePicker, setShowSequencePicker] = useState(false)
 
@@ -59,6 +63,7 @@ export default function CommandCentre({ contactId, locationId, canEditConsent })
     if (bundle?.success) {
       setContact(bundle.contact)
       setActivities(bundle.activities || [])
+      setEventTypes(bundle.event_types || [])
     }
     if (log?.success) setConsentLog(log.rows || [])
     setLoading(false)
@@ -68,6 +73,7 @@ export default function CommandCentre({ contactId, locationId, canEditConsent })
     setContact(null)
     setActivities([])
     setConsentLog([])
+    setEventTypes([])
     setShowSequencePicker(false)
     load()
   }, [load])
@@ -141,18 +147,14 @@ export default function CommandCentre({ contactId, locationId, canEditConsent })
         {TABS.map(([key, label]) => (
           <button
             key={key}
-            onClick={() => key !== 'book' && setTab(key)}
-            disabled={key === 'book'}
+            onClick={() => setTab(key)}
             className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${
               tab === key
                 ? 'bg-un1t-text text-un1t-black border-transparent'
-                : key === 'book'
-                  ? 'border-un1t-border text-un1t-muted cursor-not-allowed'
-                  : 'border-un1t-border text-un1t-subtle hover:text-un1t-text'
+                : 'border-un1t-border text-un1t-subtle hover:text-un1t-text'
             }`}
           >
             {label}
-            {key === 'book' && <span className="ml-1 text-[9px]">soon</span>}
           </button>
         ))}
       </div>
@@ -224,12 +226,221 @@ export default function CommandCentre({ contactId, locationId, canEditConsent })
         )}
 
         {tab === 'book' && (
-          <div className="text-center py-6 text-xs text-un1t-subtle">
-            <CalendarPlus size={20} className="mx-auto mb-2 opacity-40" />
-            Consultation + Glofox class booking lands in the next phase.
-          </div>
+          <BookPanel
+            contactId={contactId}
+            eventTypes={eventTypes}
+            channel={channel}
+            conversationId={conversationId}
+            onBooked={load}
+          />
         )}
       </div>
+    </div>
+  )
+}
+
+// ── Book tab (UIX-P3a) — consultation booking against the existing
+// availability engine: pick event type → day chip → slot → book via
+// the staff route → optionally drop a confirmation into the thread.
+// Glofox class booking joins this panel in P3b once the probe
+// results pin the event-listing endpoint.
+
+function fmtDay(d) {
+  return d.toLocaleDateString('en-IE', { weekday: 'short', day: 'numeric', month: 'short' })
+}
+
+function fmtSlot(time) {
+  const [h, m] = time.split(':').map(Number)
+  const ampm = h >= 12 ? 'pm' : 'am'
+  const h12 = h % 12 || 12
+  return `${h12}:${String(m).padStart(2, '0')}${ampm}`
+}
+
+// Format a YYYY-MM-DD + HH:MM as Dublin wall-clock copy — no Date
+// composition with Z suffixes (the BOOKING.2 lesson).
+function fmtBookingLine(eventName, dateStr, time) {
+  const [y, mo, d] = dateStr.split('-').map(Number)
+  const label = new Date(Date.UTC(y, mo - 1, d, 12)).toLocaleDateString('en-IE', {
+    weekday: 'long', day: 'numeric', month: 'long',
+  })
+  return `✅ Booked: ${eventName} — ${label} at ${fmtSlot(time)}`
+}
+
+const DAY_KEYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat']
+
+function BookPanel({ contactId, eventTypes, channel, conversationId, onBooked }) {
+  const [eventId, setEventId] = useState('')
+  const [dateStr, setDateStr] = useState(null)
+  const [slots, setSlots] = useState(null)
+  const [slotsLoading, setSlotsLoading] = useState(false)
+  const [booking, setBooking] = useState(false)
+  const [result, setResult] = useState(null)
+  const [dropInThread, setDropInThread] = useState(true)
+
+  const event = eventTypes.find(e => e.id === eventId) || null
+
+  // Next 14 days, filtered to the event's available weekdays.
+  const days = []
+  if (event) {
+    for (let i = 0; i < 14; i++) {
+      const d = new Date()
+      d.setDate(d.getDate() + i)
+      if (event.availability?.[DAY_KEYS[d.getDay()]]) {
+        const ds = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+        days.push({ d, ds })
+      }
+    }
+  }
+
+  useEffect(() => {
+    setSlots(null)
+    setResult(null)
+    if (!event?.slug || !dateStr) return
+    let cancelled = false
+    setSlotsLoading(true)
+    fetch(`/api/public/bookings/${event.slug}/slots?date=${dateStr}`)
+      .then(r => r.json())
+      .then(d => { if (!cancelled) setSlots(d.success ? d.data?.slots || [] : []) },
+            () => { if (!cancelled) setSlots([]) })
+      .finally(() => { if (!cancelled) setSlotsLoading(false) })
+    return () => { cancelled = true }
+  }, [event?.slug, dateStr])
+
+  async function book(time) {
+    if (booking) return
+    setBooking(true)
+    setResult(null)
+    try {
+      const res = await fetch('/api/bookings/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          event_type_id: eventId,
+          contact_id: contactId,
+          booking_date: dateStr,
+          start_time: time,
+        }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!data.success) {
+        setResult({ ok: false, message: data.error || 'Booking failed' })
+        return
+      }
+
+      // Drop the confirmation into the open thread — best-effort; a
+      // closed WA window just records the skip.
+      let threadNote = null
+      if (dropInThread && channel && conversationId) {
+        const sendUrl = channel === 'ig'
+          ? `/api/instagram/conversations/${conversationId}/send`
+          : `/api/whatsapp/conversations/${conversationId}/send`
+        try {
+          const sendRes = await fetch(sendUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text: fmtBookingLine(event.name, dateStr, time) }),
+          })
+          const sendData = await sendRes.json().catch(() => ({}))
+          threadNote = sendData.success
+            ? 'Confirmation sent in the chat.'
+            : `Booked, but the chat message didn't send (${sendData.error || 'window closed — templates only'}).`
+        } catch {
+          threadNote = 'Booked, but the chat message didn\'t send.'
+        }
+      }
+
+      const channels = data.confirmation?.channels_sent?.length
+        ? ` Confirmation ${data.confirmation.channels_sent.join(' + ')} sent.`
+        : ''
+      setResult({ ok: true, message: `Booked for ${fmtSlot(time)}.${channels}${threadNote ? ` ${threadNote}` : ''}` })
+      setSlots(null)
+      setDateStr(null)
+      onBooked?.()
+    } finally {
+      setBooking(false)
+    }
+  }
+
+  if (eventTypes.length === 0) {
+    return (
+      <p className="text-xs text-un1t-subtle text-center py-6">
+        No active bookable events at this studio yet.
+      </p>
+    )
+  }
+
+  return (
+    <div className="space-y-3">
+      <select
+        value={eventId}
+        onChange={e => { setEventId(e.target.value); setDateStr(null); setResult(null) }}
+        className="w-full bg-un1t-bg border border-un1t-border rounded-lg px-2.5 py-2 text-xs focus:outline-none focus:border-un1t-muted"
+      >
+        <option value="">Choose a session type…</option>
+        {eventTypes.map(et => (
+          <option key={et.id} value={et.id}>{et.name} ({et.duration_minutes}m)</option>
+        ))}
+      </select>
+
+      {event && (
+        <div className="flex flex-wrap gap-1.5">
+          {days.length === 0 && (
+            <p className="text-xs text-un1t-subtle">No available days in the next two weeks.</p>
+          )}
+          {days.map(({ d, ds }) => (
+            <button
+              key={ds}
+              onClick={() => setDateStr(ds)}
+              className={`text-[11px] px-2 py-1 rounded-md border transition-colors ${
+                dateStr === ds
+                  ? 'bg-un1t-text text-un1t-black border-transparent'
+                  : 'border-un1t-border text-un1t-subtle hover:text-un1t-text'
+              }`}
+            >
+              {fmtDay(d)}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {dateStr && (
+        slotsLoading ? (
+          <p className="text-xs text-un1t-subtle">Loading slots…</p>
+        ) : slots && slots.length === 0 ? (
+          <p className="text-xs text-un1t-subtle">No free slots that day.</p>
+        ) : slots && (
+          <div className="grid grid-cols-3 gap-1.5">
+            {slots.map(s => (
+              <button
+                key={s.start}
+                disabled={booking}
+                onClick={() => book(s.start)}
+                className="text-[11px] px-2 py-1.5 rounded-md border border-un1t-border text-un1t-text hover:bg-green-600 hover:text-white hover:border-transparent transition-colors disabled:opacity-50"
+              >
+                {fmtSlot(s.start)}
+              </button>
+            ))}
+          </div>
+        )
+      )}
+
+      {conversationId && (
+        <label className="flex items-center gap-2 text-[11px] text-un1t-subtle">
+          <input
+            type="checkbox"
+            checked={dropInThread}
+            onChange={e => setDropInThread(e.target.checked)}
+            className="rounded border-un1t-border"
+          />
+          Send confirmation in the chat
+        </label>
+      )}
+
+      {result && (
+        <p className={`text-xs ${result.ok ? 'text-emerald-700' : 'text-red-700'}`}>
+          {result.message}
+        </p>
+      )}
     </div>
   )
 }
