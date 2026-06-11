@@ -521,6 +521,16 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
               </div>
             </div>
 
+            {/* UIX-P1 composer state — opted-out contact. STOP flipped
+                wa_status to opted_out (#455/#456); marketing sends are
+                blocked elsewhere, this banner tells the operator that
+                only service replies belong in this thread. */}
+            {conversation?.contacts?.wa_status === 'opted_out' && (
+              <div className="shrink-0 px-5 py-2 bg-amber-500/10 border-b border-un1t-border text-xs text-amber-700">
+                This contact replied STOP — unsubscribed from WhatsApp marketing. Service replies only.
+              </div>
+            )}
+
             {/* Add to Contacts form — slides in below header */}
             {showAddContact && isUnknown && (
               <div className="border-b border-un1t-border bg-un1t-surface/80 px-5 py-4 shrink-0">

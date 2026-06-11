@@ -8,12 +8,35 @@ their bookings (consultation + Glofox class) without leaving the page.
 
 ## Resume notes
 
-- **UIX-0 (this PR):** probe checks shipped on `/api/glofox/probe`
-  (`?check=events_discovery`, `?check=booking_dryrun`) — run both as a
-  logged-in master and record results below before building P3.
-  - events_discovery result: _pending_
-  - booking_dryrun result: _pending_
-- P1 → P2 → P3 ship as independent PRs; each is usable on its own.
+**Shipped (2026-06-11):**
+- UIX-0 probe checks — #457
+- P1a resolve queue (mig 255 `resolved_at`, PATCH resolve, webhook
+  auto-unresolve, Needs-reply/Everything chips in both inboxes) — #458
+- P1b unified queue (`UnifiedInbox.jsx`; WAInbox/IGInbox `embedded`
+  mode; `/communications/instagram` → redirect; one Inbox tab) — #459
+- P2 command centre (`CommandCentre.jsx`: Profile w/ consent card +
+  SequencePicker, Activity timeline; `GET
+  /api/contacts/[id]/command-centre` bundle) — #460
+- P3a consultation booking (Book tab: day chips → slot grid →
+  `POST /api/bookings/create` → optional confirmation into the
+  thread) — #461
+- Polish: unified WA+IG unread count, opted-out "service replies
+  only" thread banner, this notes update — (same PR as this edit)
+
+**Remaining:**
+- **P3b Glofox classes — BLOCKED on the operator** running the two
+  probe URLs as a logged-in master and pasting the JSON:
+  - `https://crm.un1tdublin.com/api/glofox/probe?check=events_discovery`
+    → result: _pending_
+  - `https://crm.un1tdublin.com/api/glofox/probe?check=booking_dryrun`
+    → result: _pending_
+  Then: `fetchUpcomingEvents()` against the verified endpoint +
+  existing `createBooking`/`cancelBooking` into the Book panel.
+  Live E2E test = book the operator's own member record into a real
+  class, verify in Glofox, then `cancelBooking`.
+- Auth-gated visual click-test of the whole unified inbox (none of
+  P1–P3a has been visually verified — code-reviewed + build-verified
+  only).
 
 ## Approved shape (three panes)
 
