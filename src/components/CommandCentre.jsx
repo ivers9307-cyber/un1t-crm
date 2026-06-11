@@ -150,7 +150,7 @@ export default function CommandCentre({ contactId, locationId, canEditConsent, c
             onClick={() => setTab(key)}
             className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${
               tab === key
-                ? 'bg-un1t-text text-un1t-black border-transparent'
+                ? 'bg-un1t-text text-un1t-bg border-transparent'
                 : 'border-un1t-border text-un1t-subtle hover:text-un1t-text'
             }`}
           >
@@ -472,7 +472,7 @@ function BookPanel({ contactId, locationId, glofoxMemberId, eventTypes, channel,
               onClick={() => setDateStr(ds)}
               className={`text-[11px] px-2 py-1 rounded-md border transition-colors ${
                 dateStr === ds
-                  ? 'bg-un1t-text text-un1t-black border-transparent'
+                  ? 'bg-un1t-text text-un1t-bg border-transparent'
                   : 'border-un1t-border text-un1t-subtle hover:text-un1t-text'
               }`}
             >
