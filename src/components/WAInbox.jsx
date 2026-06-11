@@ -53,7 +53,10 @@ function isUnknownSender(conv) {
   return !conv.contact_id && !conv.contacts
 }
 
-export default function WAInbox({ locationId, userId, initialConversationId }) {
+// `embedded` (UIX-P1b): thread-pane-only mode for the unified inbox —
+// the internal conversation list is hidden and selection is driven by
+// the `initialConversationId` prop (synced on change, not just mount).
+export default function WAInbox({ locationId, userId, initialConversationId, embedded = false }) {
   const [conversations, setConversations] = useState([])
   const [selectedId, setSelectedId] = useState(initialConversationId || null)
   const [messages, setMessages] = useState([])
@@ -182,6 +185,11 @@ export default function WAInbox({ locationId, userId, initialConversationId }) {
       setShowAddContact(false)
     }
   }, [selectedId])
+
+  // Embedded mode — the unified inbox owns the queue; follow its selection.
+  useEffect(() => {
+    if (embedded) setSelectedId(initialConversationId || null)
+  }, [embedded, initialConversationId])
 
   // Scroll to bottom on new messages
   useEffect(() => {
@@ -335,9 +343,9 @@ export default function WAInbox({ locationId, userId, initialConversationId }) {
   const isUnknown = conversation && !conversation.contact_id
 
   return (
-    <div className="flex h-screen">
-      {/* Conversation list */}
-      <div className="w-80 border-r border-un1t-border flex flex-col shrink-0 bg-un1t-surface">
+    <div className={`flex ${embedded ? 'h-full' : 'h-screen'}`}>
+      {/* Conversation list (hidden in embedded mode — the unified queue replaces it) */}
+      <div className={`${embedded ? 'hidden' : 'flex'} w-80 border-r border-un1t-border flex-col shrink-0 bg-un1t-surface`}>
         <div className="p-4 border-b border-un1t-border flex items-center justify-between">
           <div className="flex items-center gap-3">
             <Link href="/whatsapp" className="text-un1t-subtle hover:text-un1t-text transition-colors">

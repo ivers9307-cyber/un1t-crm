@@ -26,8 +26,9 @@ export default function CommunicationsTabs({ canSms, canEmail, canWhatsapp }) {
     // per-channel Campaigns / Broadcasts tabs.
     canSend     && { id: 'send',       label: 'Send',       href: '/communications/send' },
     canSend     && { id: 'sent',       label: 'Sends',      href: '/communications/sent' },
+    // UIX-P1b: one unified WhatsApp + Instagram queue — the separate
+    // Instagram tab retired (/communications/instagram redirects here).
     canWhatsapp && { id: 'inbox',      label: 'Inbox',      href: '/communications/inbox' },
-    canWhatsapp && { id: 'instagram',  label: 'Instagram',  href: '/communications/instagram' },
     canEmail    && { id: 'sequences',  label: 'Sequences',  href: '/communications/sequences' },
     (canEmail || canWhatsapp) && { id: 'templates', label: 'Templates', href: '/communications/templates' },
     // Segments tab (mig 085, moved from top-level /segments).
