@@ -6,6 +6,7 @@
 import { redirect } from 'next/navigation'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
+import { ADMIN_ROLES } from '@/lib/schemas'
 import UnifiedInbox from '@/components/UnifiedInbox'
 
 export const dynamic = 'force-dynamic'
@@ -22,6 +23,7 @@ export default async function InboxPage(props) {
       userId={user.id}
       initialConversationId={searchParams?.c || null}
       initialChannel={searchParams?.ch === 'ig' ? 'ig' : 'wa'}
+      canEditConsent={ADMIN_ROLES.includes(user.role)}
     />
   )
 }
