@@ -119,22 +119,33 @@ export async function GET(request) {
     return NextResponse.json({ ok: true, check, location_id: locationId, results })
   }
 
-  // ── UIX-0 check: booking_dryrun ───────────────────────────────
-  // Proves POST /2.0/bookings RESOLVES and accepts the BookingRequest
-  // shape WITHOUT creating anything: the ids are syntactically valid
-  // 24-hex ObjectIds that don't exist, so Glofox must answer with a
-  // structured error (message_code) rather than a booking. Same
-  // technique that proved the undocumented pause endpoint exists.
+  // ── UIX-0/P3b check: booking_dryrun (v2 — model variants) ─────
+  // Round 1 (2026-06-11) proved POST /2.0/bookings resolves and that
+  // the body wants `model` + `model id` fields ({user_id, event_id}
+  // failed validation; user_id was NOT flagged). v2 tries the model-
+  // token spellings in one click — the variant whose errors move
+  // PAST "model field is required" (e.g. to a member/event-not-found
+  // error) is the real shape. Ids stay syntactically-valid fakes so
+  // nothing can actually be created.
   if (check === 'booking_dryrun') {
     const fakeId = '0123456789abcdef01234567'
-    const result = await createBooking(creds, { user_id: fakeId, event_id: fakeId })
+    const variants = [
+      { user_id: fakeId, model: 'Event',  model_id: fakeId },
+      { user_id: fakeId, model: 'event',  model_id: fakeId },
+      { user_id: fakeId, model: 'events', model_id: fakeId },
+      { user_id: fakeId, event_id: fakeId },  // round-1 control
+    ]
+    const results = []
+    for (const sent of variants) {
+      const r = await createBooking(creds, sent)
+      results.push({ sent, status: r.status, body: r.body })
+    }
     return NextResponse.json({
       ok: true,
       check,
       location_id: locationId,
-      interpretation: 'A structured Glofox error (message_code / validation) proves the endpoint resolves; WRONG_URL means it does not exist on this account tier.',
-      glofox_status: result.status,
-      glofox_body: result.body,
+      interpretation: 'The variant whose errors move past "model field is required" reveals the real BookingRequest shape; an error naming the member/event (not the fields) means that shape is fully correct.',
+      results,
     })
   }
 

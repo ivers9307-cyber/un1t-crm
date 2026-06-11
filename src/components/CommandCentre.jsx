@@ -228,6 +228,8 @@ export default function CommandCentre({ contactId, locationId, canEditConsent, c
         {tab === 'book' && (
           <BookPanel
             contactId={contactId}
+            locationId={locationId}
+            glofoxMemberId={contact?.glofox_member_id || null}
             eventTypes={eventTypes}
             channel={channel}
             conversationId={conversationId}
@@ -268,7 +270,13 @@ function fmtBookingLine(eventName, dateStr, time) {
 
 const DAY_KEYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat']
 
-function BookPanel({ contactId, eventTypes, channel, conversationId, onBooked }) {
+function fmtClassTime(ms) {
+  if (!ms) return ''
+  return new Date(ms).toLocaleDateString('en-IE', { weekday: 'short', day: 'numeric', month: 'short' })
+    + ' ' + new Date(ms).toLocaleTimeString('en-IE', { hour: '2-digit', minute: '2-digit' })
+}
+
+function BookPanel({ contactId, locationId, glofoxMemberId, eventTypes, channel, conversationId, onBooked }) {
   const [eventId, setEventId] = useState('')
   const [dateStr, setDateStr] = useState(null)
   const [slots, setSlots] = useState(null)
@@ -276,6 +284,24 @@ function BookPanel({ contactId, eventTypes, channel, conversationId, onBooked })
   const [booking, setBooking] = useState(false)
   const [result, setResult] = useState(null)
   const [dropInThread, setDropInThread] = useState(true)
+
+  // Glofox classes (UIX-P3b) — fetched once when the Book tab opens.
+  const [classes, setClasses] = useState(null)
+  const [classesError, setClassesError] = useState(null)
+  const [classResult, setClassResult] = useState(null)
+
+  useEffect(() => {
+    let cancelled = false
+    const qs = locationId ? `?location_id=${encodeURIComponent(locationId)}` : ''
+    fetch(`/api/glofox/classes${qs}`)
+      .then(r => r.json())
+      .then(d => {
+        if (cancelled) return
+        if (d.success) setClasses(d.configured === false ? [] : d.classes || [])
+        else { setClasses([]); setClassesError(d.error || 'Could not load classes') }
+      }, () => { if (!cancelled) { setClasses([]); setClassesError('Could not load classes') } })
+    return () => { cancelled = true }
+  }, [locationId])
 
   const event = eventTypes.find(e => e.id === eventId) || null
 
@@ -306,6 +332,29 @@ function BookPanel({ contactId, eventTypes, channel, conversationId, onBooked })
     return () => { cancelled = true }
   }, [event?.slug, dateStr])
 
+  // Best-effort drop into the open WA/IG thread. Returns a status
+  // note for the result line; a closed WA window reports the skip
+  // rather than failing the booking.
+  async function sendThreadText(text) {
+    if (!dropInThread || !channel || !conversationId) return null
+    const sendUrl = channel === 'ig'
+      ? `/api/instagram/conversations/${conversationId}/send`
+      : `/api/whatsapp/conversations/${conversationId}/send`
+    try {
+      const sendRes = await fetch(sendUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text }),
+      })
+      const sendData = await sendRes.json().catch(() => ({}))
+      return sendData.success
+        ? 'Confirmation sent in the chat.'
+        : `Booked, but the chat message didn't send (${sendData.error || 'window closed — templates only'}).`
+    } catch {
+      return 'Booked, but the chat message didn\'t send.'
+    }
+  }
+
   async function book(time) {
     if (booking) return
     setBooking(true)
@@ -327,28 +376,7 @@ function BookPanel({ contactId, eventTypes, channel, conversationId, onBooked })
         return
       }
 
-      // Drop the confirmation into the open thread — best-effort; a
-      // closed WA window just records the skip.
-      let threadNote = null
-      if (dropInThread && channel && conversationId) {
-        const sendUrl = channel === 'ig'
-          ? `/api/instagram/conversations/${conversationId}/send`
-          : `/api/whatsapp/conversations/${conversationId}/send`
-        try {
-          const sendRes = await fetch(sendUrl, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ text: fmtBookingLine(event.name, dateStr, time) }),
-          })
-          const sendData = await sendRes.json().catch(() => ({}))
-          threadNote = sendData.success
-            ? 'Confirmation sent in the chat.'
-            : `Booked, but the chat message didn't send (${sendData.error || 'window closed — templates only'}).`
-        } catch {
-          threadNote = 'Booked, but the chat message didn\'t send.'
-        }
-      }
-
+      const threadNote = await sendThreadText(fmtBookingLine(event.name, dateStr, time))
       const channels = data.confirmation?.channels_sent?.length
         ? ` Confirmation ${data.confirmation.channels_sent.join(' + ')} sent.`
         : ''
@@ -356,6 +384,57 @@ function BookPanel({ contactId, eventTypes, channel, conversationId, onBooked })
       setSlots(null)
       setDateStr(null)
       onBooked?.()
+    } finally {
+      setBooking(false)
+    }
+  }
+
+  // UIX-P3b — book the linked Glofox member into a class. Glofox
+  // enforces capacity/double-booking; its message_code comes back
+  // verbatim. A successful booking keeps the returned booking id so
+  // the operator gets a one-click Undo (also the E2E cancel leg).
+  async function bookClass(cls) {
+    if (booking) return
+    setBooking(true)
+    setClassResult(null)
+    try {
+      const res = await fetch('/api/glofox/classes/book', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contact_id: contactId, event_id: cls.id }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!data.success) {
+        setClassResult({ ok: false, message: data.error || 'Glofox booking failed' })
+        return
+      }
+      const threadNote = await sendThreadText(
+        `✅ Booked into ${cls.name}${cls.time_start_ms ? ` — ${fmtClassTime(cls.time_start_ms)}` : ''}`
+      )
+      setClassResult({
+        ok: true,
+        message: `Booked into ${cls.name}.${threadNote ? ` ${threadNote}` : ''}`,
+        bookingId: data.glofox_booking_id || null,
+      })
+      onBooked?.()
+    } finally {
+      setBooking(false)
+    }
+  }
+
+  async function undoClassBooking(bookingId) {
+    if (booking || !bookingId) return
+    setBooking(true)
+    try {
+      const res = await fetch('/api/glofox/classes/cancel', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contact_id: contactId, booking_id: bookingId }),
+      })
+      const data = await res.json().catch(() => ({}))
+      setClassResult(data.success
+        ? { ok: true, message: 'Booking cancelled in Glofox.' }
+        : { ok: false, message: data.error || 'Cancel failed' })
     } finally {
       setBooking(false)
     }
@@ -424,6 +503,71 @@ function BookPanel({ contactId, eventTypes, channel, conversationId, onBooked })
         )
       )}
 
+      {result && (
+        <p className={`text-xs ${result.ok ? 'text-emerald-700' : 'text-red-700'}`}>
+          {result.message}
+        </p>
+      )}
+
+      {/* ── Glofox classes (UIX-P3b) ── */}
+      <div className="pt-3 border-t border-un1t-border">
+        <p className="text-[11px] font-semibold text-un1t-subtle mb-2">Glofox classes — next 7 days</p>
+
+        {classes === null && <p className="text-xs text-un1t-subtle">Loading classes…</p>}
+        {classesError && <p className="text-xs text-red-700">{classesError}</p>}
+        {classes && classes.length === 0 && !classesError && (
+          <p className="text-xs text-un1t-subtle">No upcoming classes found.</p>
+        )}
+
+        {!glofoxMemberId && classes && classes.length > 0 && (
+          <p className="text-xs text-amber-700 mb-2">
+            Not linked to a Glofox member — booking is disabled for this contact.
+          </p>
+        )}
+
+        {classes && classes.length > 0 && (
+          <div className="space-y-1.5 max-h-72 overflow-y-auto pr-0.5">
+            {classes.map(cls => {
+              const full = cls.spots_left === 0
+              return (
+                <div key={cls.id} className="flex items-center justify-between gap-2 border border-un1t-border rounded-lg px-2.5 py-1.5">
+                  <div className="min-w-0">
+                    <p className="text-xs font-medium truncate">{cls.name}</p>
+                    <p className="text-[10px] text-un1t-muted truncate">
+                      {fmtClassTime(cls.time_start_ms)}
+                      {cls.trainers?.length ? ` · ${cls.trainers[0]}` : ''}
+                      {cls.spots_left != null ? ` · ${full ? 'Full' : `${cls.spots_left} spots`}` : ''}
+                    </p>
+                  </div>
+                  <button
+                    disabled={booking || !glofoxMemberId || full}
+                    onClick={() => bookClass(cls)}
+                    className="shrink-0 text-[11px] px-2.5 py-1 rounded-md bg-green-600 text-white hover:bg-green-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    {full ? 'Full' : 'Book'}
+                  </button>
+                </div>
+              )
+            })}
+          </div>
+        )}
+
+        {classResult && (
+          <p className={`text-xs mt-2 ${classResult.ok ? 'text-emerald-700' : 'text-red-700'}`}>
+            {classResult.message}
+            {classResult.bookingId && (
+              <button
+                onClick={() => undoClassBooking(classResult.bookingId)}
+                disabled={booking}
+                className="ml-2 underline text-un1t-subtle hover:text-un1t-text disabled:opacity-50"
+              >
+                Undo
+              </button>
+            )}
+          </p>
+        )}
+      </div>
+
       {conversationId && (
         <label className="flex items-center gap-2 text-[11px] text-un1t-subtle">
           <input
@@ -434,12 +578,6 @@ function BookPanel({ contactId, eventTypes, channel, conversationId, onBooked })
           />
           Send confirmation in the chat
         </label>
-      )}
-
-      {result && (
-        <p className={`text-xs ${result.ok ? 'text-emerald-700' : 'text-red-700'}`}>
-          {result.message}
-        </p>
       )}
     </div>
   )

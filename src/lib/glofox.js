@@ -913,12 +913,26 @@ export function generateGlofoxPasscode() {
 }
 
 /**
+ * UIX-P3b — the BookingRequest model value for booking a member into
+ * a class. LIVE-PROBED 2026-06-11 (booking_dryrun): POST /2.0/bookings
+ * with { user_id, event_id } resolved (no WRONG_URL — bookings exist
+ * on this tier) but validation answered "The model field is required.,
+ * The model id field is required." and did NOT flag user_id — so the
+ * real shape is { user_id, model, model_id } (polymorphic target).
+ * The exact model token is pinned by the variant dry-run (probe v2);
+ * adjust this constant if the probe shows a different casing wins.
+ */
+export const GLOFOX_BOOKING_MODEL = 'Event'
+
+/**
  * Create a booking on behalf of a member via /2.0/bookings.
  *
- * Per the spec the request body is a BookingRequest. Real-world
- * minimum: { user_id, event_id }. Glofox enforces capacity, double-
- * book prevention, and waitlist behaviour server-side — error
- * responses include a message_code (e.g. YOU_HAVE_BOOKED_FOR_THIS_EVENT,
+ * Body is passed through verbatim — per the 2026-06-11 dry-run the
+ * accepted shape is { user_id, model, model_id } (see
+ * GLOFOX_BOOKING_MODEL above; the old { user_id, event_id } guess
+ * fails validation). Glofox enforces capacity, double-book
+ * prevention, and waitlist behaviour server-side — error responses
+ * include a message_code (e.g. YOU_HAVE_BOOKED_FOR_THIS_EVENT,
  * EVENT_HAS_BEEN_CANCELLED) so the caller can surface what went wrong.
  *
  * Returns the parsed JSON response. status + ok hoisted onto the
@@ -929,6 +943,7 @@ export async function createBooking(creds, bookingRequest) {
   try {
     const r = await glofoxFetch(creds, '/2.0/bookings', {
       method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(bookingRequest),
     })
     let body
@@ -936,6 +951,40 @@ export async function createBooking(creds, bookingRequest) {
     return { ok: r.ok, status: r.status, body }
   } catch (e) {
     return { ok: false, status: 0, body: { error: e?.message || 'network error' } }
+  }
+}
+
+/**
+ * UIX-P3b — upcoming classes for the unified inbox's Book tab.
+ *
+ * VERIFIED against the live Stillorgan branch
+ * (/api/glofox/probe?check=events_discovery, 2026-06-11):
+ * GET /2.0/events?start=<unix-secs>&end=<unix-secs>&limit=N → 200 with
+ * { object:'list', page, limit, has_more, total_count, data:[event] };
+ * the time window is honoured (windowed and unwindowed calls return
+ * different first items). Event fields seen live: _id, name,
+ * description, time_start, duration, size, booked, waiting, trainers,
+ * active, private, booking_status, program_obj, …
+ * (/2.0/calendar does NOT exist on this tier — WRONG_URL.)
+ *
+ * Returns { ok, status, body, events } — events is body.data or [].
+ */
+export async function fetchUpcomingEvents(creds, { start, end, limit = 100 } = {}) {
+  if (!creds) return { ok: false, status: 400, body: { error: 'missing creds' }, events: [] }
+  const now = Math.floor(Date.now() / 1000)
+  const qs = new URLSearchParams({
+    start: String(start ?? now),
+    end:   String(end ?? now + 7 * 86400),
+    limit: String(limit),
+  })
+  try {
+    const r = await glofoxFetch(creds, `/2.0/events?${qs.toString()}`)
+    let body
+    try { body = await r.json() } catch { body = null }
+    const events = Array.isArray(body?.data) ? body.data : []
+    return { ok: r.ok, status: r.status, body, events }
+  } catch (e) {
+    return { ok: false, status: 0, body: { error: e?.message || 'network error' }, events: [] }
   }
 }
 
