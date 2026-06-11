@@ -13,7 +13,7 @@ import { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
 import {
   User, ListTodo, ExternalLink, Send, ShieldCheck,
-  CircleDot, RefreshCw,
+  CircleDot, RefreshCw, ChevronDown, ChevronRight,
 } from 'lucide-react'
 import ContactMarketingPreferencesCard from '@/components/ContactMarketingPreferencesCard'
 import SequencePicker from '@/components/SequencePicker'
@@ -319,6 +319,9 @@ function BookPanel({ contactId, locationId, glofoxMemberId, eventTypes, channel,
   const [classes, setClasses] = useState(null)
   const [classesError, setClassesError] = useState(null)
   const [classResult, setClassResult] = useState(null)
+  // Collapsible day groups — null means the default (only the first
+  // day open); after the first toggle the Set is authoritative.
+  const [openDays, setOpenDays] = useState(null)
 
   useEffect(() => {
     let cancelled = false
@@ -556,44 +559,68 @@ function BookPanel({ contactId, locationId, glofoxMemberId, eventTypes, channel,
         )}
 
         {classes && classes.length > 0 && (
-          <div className="space-y-2.5 max-h-80 overflow-y-auto pr-0.5">
-            {groupClassesByDay(classes).map(group => (
-              <div key={group.label}>
-                <p className="text-[10px] font-semibold uppercase tracking-wide text-un1t-muted mb-1">
-                  {group.label}
-                </p>
-                <div className="space-y-1.5">
-                  {group.items.map(cls => {
-                    const full = cls.spots_left === 0
-                    return (
-                      <div key={cls.id} className="flex items-center justify-between gap-2 border border-un1t-border rounded-lg px-2.5 py-1.5">
-                        <div className="min-w-0">
-                          <p className="text-xs font-medium truncate">{cls.name}</p>
-                          <p className="text-[10px] text-un1t-muted truncate">
-                            {fmtClockTime(cls.time_start_ms)}
-                            {cls.trainers?.length ? ` · ${cls.trainers[0]}` : ''}
-                            {cls.spots_left != null
-                              ? ` · ${full ? 'Full' : `${cls.spots_left} of ${cls.size} spots`}`
-                              : ''}
-                          </p>
-                        </div>
-                        <button
-                          disabled={booking || !glofoxMemberId || full}
-                          onClick={() => bookClass(cls)}
-                          className={`shrink-0 text-[11px] px-2.5 py-1 rounded-md transition-colors ${
-                            full
-                              ? 'bg-un1t-border text-un1t-muted cursor-not-allowed'
-                              : 'bg-green-600 text-white hover:bg-green-700 disabled:opacity-40 disabled:cursor-not-allowed'
-                          }`}
-                        >
-                          {full ? 'Full' : 'Book'}
-                        </button>
-                      </div>
-                    )
-                  })}
+          <div className="space-y-1.5 max-h-80 overflow-y-auto pr-0.5">
+            {groupClassesByDay(classes).map((group, idx) => {
+              const isOpen = openDays ? openDays.has(group.label) : idx === 0
+              const toggle = () => {
+                const groups = groupClassesByDay(classes)
+                const next = new Set(
+                  openDays ?? groups.filter((g, i) => i === 0).map(g => g.label)
+                )
+                if (next.has(group.label)) next.delete(group.label)
+                else next.add(group.label)
+                setOpenDays(next)
+              }
+              return (
+                <div key={group.label}>
+                  <button
+                    type="button"
+                    onClick={toggle}
+                    className="w-full flex items-center justify-between gap-2 bg-un1t-surface border border-un1t-border rounded-md px-2.5 py-1.5 hover:border-un1t-muted transition-colors"
+                  >
+                    <span className="flex items-center gap-1.5 text-[11px] font-bold text-un1t-text uppercase tracking-wide">
+                      {isOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                      {group.label}
+                    </span>
+                    <span className="text-[10px] text-un1t-muted">
+                      {group.items.length} {group.items.length === 1 ? 'class' : 'classes'}
+                    </span>
+                  </button>
+                  {isOpen && (
+                    <div className="space-y-1.5 mt-1.5 mb-1">
+                      {group.items.map(cls => {
+                        const full = cls.spots_left === 0
+                        return (
+                          <div key={cls.id} className="flex items-center justify-between gap-2 border border-un1t-border rounded-lg px-2.5 py-1.5">
+                            <div className="min-w-0">
+                              <p className="text-xs font-medium truncate">{cls.name}</p>
+                              <p className="text-[10px] text-un1t-muted truncate">
+                                {fmtClockTime(cls.time_start_ms)}
+                                {cls.trainers?.length ? ` · ${cls.trainers[0]}` : ''}
+                                {cls.spots_left != null
+                                  ? ` · ${full ? 'Full' : `${cls.spots_left} of ${cls.size} spots`}`
+                                  : ''}
+                              </p>
+                            </div>
+                            <button
+                              disabled={booking || !glofoxMemberId || full}
+                              onClick={() => bookClass(cls)}
+                              className={`shrink-0 text-[11px] px-2.5 py-1 rounded-md transition-colors ${
+                                full
+                                  ? 'bg-un1t-border text-un1t-muted cursor-not-allowed'
+                                  : 'bg-green-600 text-white hover:bg-green-700 disabled:opacity-40 disabled:cursor-not-allowed'
+                              }`}
+                            >
+                              {full ? 'Full' : 'Book'}
+                            </button>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
                 </div>
-              </div>
-            ))}
+              )
+            })}
           </div>
         )}
 
