@@ -95,6 +95,30 @@ export default function WAInbox({ locationId, userId, initialConversationId }) {
     }
   }, [locationId])
 
+  // UIX-P1 — the queue defaults to "Needs reply": last message inbound
+  // and nobody has resolved the thread. Resolve stamps resolved_at via
+  // PATCH (mig 255); a fresh inbound auto-clears it webhook-side so
+  // replied-to threads come back to the queue.
+  const [queueFilter, setQueueFilter] = useState('needs_reply')
+  const needsReply = (c) => !c.resolved_at && c.last_message_direction === 'inbound'
+  const visibleConversations = queueFilter === 'all' ? conversations : conversations.filter(needsReply)
+
+  async function toggleResolved(conv) {
+    const next = !conv.resolved_at
+    try {
+      const res = await fetch(`/api/whatsapp/conversations/${conv.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ resolved: next }),
+      })
+      const j = await res.json().catch(() => ({}))
+      if (!j.success) return
+      const stamp = next ? new Date().toISOString() : null
+      setConversations(prev => prev.map(c => c.id === conv.id ? { ...c, resolved_at: stamp } : c))
+      setConversation(prev => prev && prev.id === conv.id ? { ...prev, resolved_at: stamp } : prev)
+    } catch { /* leave state as-is */ }
+  }
+
   const fetchTemplates = useCallback(async () => {
     try {
       const res = await fetch(`/api/whatsapp/templates?location_id=${locationId}&status=APPROVED`)
@@ -326,6 +350,26 @@ export default function WAInbox({ locationId, userId, initialConversationId }) {
           </button>
         </div>
 
+        {/* UIX-P1 — queue split */}
+        <div className="flex gap-1.5 px-3 py-2 border-b border-un1t-border">
+          {[['needs_reply', 'Needs reply'], ['all', 'Everything']].map(([key, label]) => (
+            <button
+              key={key}
+              onClick={() => setQueueFilter(key)}
+              className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${
+                queueFilter === key
+                  ? 'bg-un1t-text text-un1t-black border-transparent'
+                  : 'border-un1t-border text-un1t-subtle hover:text-un1t-text'
+              }`}
+            >
+              {label}
+              {key === 'needs_reply' && conversations.filter(needsReply).length > 0 && (
+                <span className="ml-1">· {conversations.filter(needsReply).length}</span>
+              )}
+            </button>
+          ))}
+        </div>
+
         <div className="flex-1 overflow-auto">
           {loading && (
             <p className="text-sm text-un1t-subtle p-4 text-center">Loading...</p>
@@ -339,7 +383,13 @@ export default function WAInbox({ locationId, userId, initialConversationId }) {
             </div>
           )}
 
-          {conversations.map(conv => {
+          {!loading && conversations.length > 0 && visibleConversations.length === 0 && (
+            <p className="text-xs text-un1t-subtle p-4 text-center">
+              Queue clear — nothing needs a reply. 🎉
+            </p>
+          )}
+
+          {visibleConversations.map(conv => {
             const isSelected = selectedId === conv.id
             const displayName = getDisplayName(conv)
             const unknown = isUnknownSender(conv)
@@ -362,6 +412,9 @@ export default function WAInbox({ locationId, userId, initialConversationId }) {
                         <span className="bg-orange-500/20 text-orange-400 text-[9px] font-bold px-1.5 py-0.5 rounded shrink-0">
                           NEW
                         </span>
+                      )}
+                      {conv.resolved_at && (
+                        <Check size={12} className="text-green-600 shrink-0" />
                       )}
                       {conv.unread_count > 0 && (
                         <span className="bg-green-500 text-white text-[10px] font-bold w-5 h-5 rounded-full flex items-center justify-center shrink-0">
@@ -426,6 +479,19 @@ export default function WAInbox({ locationId, userId, initialConversationId }) {
                     <Clock size={10} className="inline mr-1" />
                     Window closed — templates only
                   </span>
+                )}
+                {conversation && (
+                  <button
+                    onClick={() => toggleResolved(conversation)}
+                    className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md border transition-colors ${
+                      conversation.resolved_at
+                        ? 'border-un1t-border text-un1t-subtle hover:text-un1t-text'
+                        : 'bg-green-600 border-transparent text-white hover:bg-green-700'
+                    }`}
+                  >
+                    <Check size={12} />
+                    {conversation.resolved_at ? 'Reopen' : 'Resolve'}
+                  </button>
                 )}
                 {isUnknown ? (
                   <button

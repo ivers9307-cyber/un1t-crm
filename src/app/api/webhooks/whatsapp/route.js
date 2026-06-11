@@ -309,6 +309,7 @@ async function handleIncomingMessage(db, message, contacts, phoneNumberId) {
     last_message_direction: 'inbound',
     last_message_preview: body?.substring(0, 100) || `[${messageType}]`,
     unread_count: (currentConv?.unread_count || 0) + 1,
+    resolved_at: null,
   }).eq('id', conversationId)
 
   // Consent keywords — the broadcast footer promises "Reply STOP to

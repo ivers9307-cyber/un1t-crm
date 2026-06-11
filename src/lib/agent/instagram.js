@@ -187,6 +187,7 @@ export async function handleInstagramInbound(db, event) {
   await db.from('instagram_conversations').update({
     last_message_at: ts,
     last_message_direction: 'inbound',
+    resolved_at: null,
     last_message_preview: body.substring(0, 100),
     unread_count: (convNow?.unread_count || 0) + 1,
   }).eq('id', conversationId)
