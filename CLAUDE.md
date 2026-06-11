@@ -20,10 +20,10 @@ Migrations are run via Supabase MCP from this session, or manually in the Supaba
 
 ### Before pushing — run the full CI mirror locally
 
-The Web CI workflow (`.github/workflows/web-ci.yml`) runs four steps in order: vitest, ESLint, mobile-parity, and **mobile-import-resolution** (`check:mobile-imports` — flags a mobile file importing a name its target module doesn't export; see Lessons learned). Web CI now also triggers on `mobile/**` changes — it didn't before, which is half of how the 2026-06 schedule crash reached production. Push hygiene = run all four before `git push`:
+The Web CI workflow (`.github/workflows/web-ci.yml`) runs five steps in order: vitest, ESLint, mobile-parity, **mobile-import-resolution** (`check:mobile-imports` — flags a mobile file importing a name its target module doesn't export; see Lessons learned), and **route-guard presence** (`check:route-guards` — fails if an `/api` route ships with no detectable auth guard; the #408 class of bug. Session routes need `getCurrentUser`/`withAuth`/an `api-auth` helper or a VERIFIED delegated helper listed in `scripts/check-route-guards.mjs` `SESSION_GUARDS`; webhooks need a `verify*()`; cron needs `CRON_SECRET`; genuinely-public capability-token routes go in its `EXEMPT` map with a reason). Web CI now also triggers on `mobile/**` changes — it didn't before, which is half of how the 2026-06 schedule crash reached production. Push hygiene = run all five before `git push`:
 
 ```bash
-npm test && npm run lint && npm run check:mobile-parity && npm run check:mobile-imports
+npm test && npm run lint && npm run check:mobile-parity && npm run check:mobile-imports && npm run check:route-guards
 ```
 
 > **⚠️ The CI mirror does NOT include `next build` — and green vitest+eslint does NOT mean the production build passes.** This has bitten repeatedly. Tests run on mocked imports, so a **missing/renamed export or an unresolvable `import`** (a route importing a function that doesn't exist) sails through vitest + eslint and only fails in Vercel's Turbopack build. Real example (2026-06): an IG inbox send-route imported a non-existent `getDecryptedChannelToken` — 2,800 tests green, lint clean, **Vercel build red**. There is no import-resolution lint rule. **For any change that adds an import or a new route/page, run a real production build before pushing:**
