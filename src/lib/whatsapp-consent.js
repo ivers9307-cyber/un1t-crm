@@ -31,12 +31,16 @@ const ACK_START =
  * @param {object} args
  * @param {object} args.db            service-role client
  * @param {{id: string, wa_phone?: string}} args.contact  must have id
+ * @param {string|null} [args.waPhone]  the sender's number — pass this
+ *   explicitly from the webhook (its contact lookup is a minimal
+ *   `select('id, location_id')`, so contact.wa_phone is usually absent;
+ *   relying on it silently skipped the ack on the first live STOP).
  * @param {string|null} args.locationId
  * @param {string|null} args.conversationId  thread to attribute the ack to
  * @param {'stop'|'start'} args.keyword
  * @returns {Promise<{applied: boolean, action?: string}>}
  */
-export async function applyWhatsappConsentKeyword({ db, contact, locationId, conversationId, keyword }) {
+export async function applyWhatsappConsentKeyword({ db, contact, waPhone, locationId, conversationId, keyword }) {
   if (!contact?.id || !['stop', 'start'].includes(keyword)) return { applied: false }
 
   const optingOut = keyword === 'stop'
@@ -72,7 +76,10 @@ export async function applyWhatsappConsentKeyword({ db, contact, locationId, con
   //    window, so a plain text send is permitted.
   try {
     const ack = optingOut ? ACK_STOP : ACK_START
-    const to = contact.wa_phone
+    const to = waPhone || contact.wa_phone
+    if (!to) {
+      console.warn(`[wa-consent] no phone for contact ${contact.id} — consent applied but ack skipped`)
+    }
     if (to) {
       const result = await sendTextMessage(to, ack, { locationId })
       if (conversationId) {

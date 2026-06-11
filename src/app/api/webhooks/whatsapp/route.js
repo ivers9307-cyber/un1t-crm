@@ -322,6 +322,10 @@ async function handleIncomingMessage(db, message, contacts, phoneNumberId) {
       await applyWhatsappConsentKeyword({
         db,
         contact,
+        // The contact lookup above is a minimal select (no wa_phone) —
+        // pass the sender's number from the webhook payload so the ack
+        // can actually send.
+        waPhone: phoneWithout,
         locationId,
         conversationId,
         keyword,
