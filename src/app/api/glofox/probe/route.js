@@ -29,6 +29,7 @@ import {
   glofoxFetch,
   glofoxCredentialsForLocation,
   missingGlofoxCredentialsForLocation,
+  createBooking,
 } from '@/lib/glofox'
 
 export const runtime = 'nodejs'
@@ -49,9 +50,14 @@ export async function GET(request) {
       error: 'Provide ?location_id=<uuid> or set an active location',
     }, { status: 400 })
   }
-  // 'path' is required — without it we have nothing to probe.
+  // UIX-0 (unified inbox): named multi-step checks that can't be
+  // expressed through the single-GET ?path= proxy. Whitelisted —
+  // NOT an arbitrary-request surface.
+  const check = url.searchParams.get('check')
+
+  // 'path' is required in proxy mode — without it we have nothing to probe.
   const rawPath = url.searchParams.get('path')
-  if (!rawPath) {
+  if (!rawPath && !check) {
     return NextResponse.json({
       ok: false,
       error: 'Provide ?path=<glofox-path> (e.g., /2.0/credits?user_id=XXX)',
@@ -62,8 +68,8 @@ export async function GET(request) {
       ],
     }, { status: 400 })
   }
-  // Normalise: ensure leading slash.
-  const glofoxPath = rawPath.startsWith('/') ? rawPath : `/${rawPath}`
+  // Normalise: ensure leading slash (proxy mode only).
+  const glofoxPath = rawPath ? (rawPath.startsWith('/') ? rawPath : `/${rawPath}`) : null
 
   const db = createServerClient()
   const creds = await glofoxCredentialsForLocation(db, locationId)
@@ -73,6 +79,67 @@ export async function GET(request) {
       ok: false, configured: false, location_id: locationId, missing,
       hint: 'Open Settings → Locations → this location → Glofox Integration and fill in the missing fields.',
     })
+  }
+
+  // ── UIX-0 check: events_discovery ─────────────────────────────
+  // The unified inbox's class-booking panel needs an "upcoming
+  // classes" listing, and no event-list endpoint is verified yet
+  // (the lesson: absence from docs ≠ absence — probe live). Try
+  // the candidate GET paths in one pass and report each status +
+  // shape so we can wire fetchUpcomingEvents against the real one.
+  if (check === 'events_discovery') {
+    const now = Math.floor(Date.now() / 1000)
+    const week = now + 7 * 86400
+    const candidates = [
+      `/2.0/events?limit=3`,
+      `/2.0/events?start=${now}&end=${week}&limit=3`,
+      `/2.0/branches/${creds.branchId}/events?limit=3`,
+      `/2.0/calendar?start=${now}&end=${week}`,
+      `/2.0/bookings?limit=3`,
+    ]
+    const results = []
+    for (const path of candidates) {
+      try {
+        const r = await glofoxFetch(creds, path)
+        let body = null
+        try { body = JSON.parse(await r.text()) } catch { body = null }
+        const arr = Array.isArray(body) ? body : Array.isArray(body?.data) ? body.data : null
+        results.push({
+          path,
+          status: r.status,
+          top_keys: body && !Array.isArray(body) ? Object.keys(body).slice(0, 12) : (Array.isArray(body) ? ['_array'] : null),
+          items: arr ? arr.length : null,
+          first_item_keys: arr?.[0] ? Object.keys(arr[0]).slice(0, 20) : null,
+          sample: arr?.[0] ? JSON.stringify(arr[0]).slice(0, 500) : (body ? JSON.stringify(body).slice(0, 300) : null),
+        })
+      } catch (e) {
+        results.push({ path, status: 0, error: e?.message || String(e) })
+      }
+    }
+    return NextResponse.json({ ok: true, check, location_id: locationId, results })
+  }
+
+  // ── UIX-0 check: booking_dryrun ───────────────────────────────
+  // Proves POST /2.0/bookings RESOLVES and accepts the BookingRequest
+  // shape WITHOUT creating anything: the ids are syntactically valid
+  // 24-hex ObjectIds that don't exist, so Glofox must answer with a
+  // structured error (message_code) rather than a booking. Same
+  // technique that proved the undocumented pause endpoint exists.
+  if (check === 'booking_dryrun') {
+    const fakeId = '0123456789abcdef01234567'
+    const result = await createBooking(creds, { user_id: fakeId, event_id: fakeId })
+    return NextResponse.json({
+      ok: true,
+      check,
+      location_id: locationId,
+      interpretation: 'A structured Glofox error (message_code / validation) proves the endpoint resolves; WRONG_URL means it does not exist on this account tier.',
+      glofox_status: result.status,
+      glofox_body: result.body,
+    })
+  }
+
+  if (check) {
+    return NextResponse.json({ ok: false, error: `Unknown check '${check}'. Available: events_discovery, booking_dryrun.` }, { status: 400 })
   }
 
   try {
