@@ -11,6 +11,7 @@ import {
   defaultMonthKey,
   periodLabel,
   buildPdfPath,
+  isContractorPdfPath,
 } from './contractor-invoices'
 
 describe('periodForMonth', () => {
@@ -91,5 +92,24 @@ describe('buildPdfPath', () => {
       originalFilename: null,
     })
     expect(p).toMatch(/^x\/2026-05-01-[a-z0-9]{6}-invoice\.pdf$/)
+  })
+})
+
+describe('isContractorPdfPath', () => {
+  const me = '0c5a1f0e-2d3b-4c5d-8e9f-a0b1c2d3e4f5'
+  const other = '9b2e7c4a-1111-2222-3333-444455556666'
+
+  it('accepts a buildPdfPath-shaped key in the contractor own folder', () => {
+    const p = buildPdfPath({ contractorId: me, periodStart: '2026-05-01', originalFilename: 'May Invoice.pdf' })
+    expect(isContractorPdfPath(p, me)).toBe(true)
+  })
+
+  it('rejects another contractor folder, traversal, nesting, and junk', () => {
+    expect(isContractorPdfPath(`${other}/2026-05-01-abc123-invoice.pdf`, me)).toBe(false)
+    expect(isContractorPdfPath(`${me}/../${other}/x.pdf`, me)).toBe(false)
+    expect(isContractorPdfPath(`${me}/a/b.pdf`, me)).toBe(false)
+    expect(isContractorPdfPath('', me)).toBe(false)
+    expect(isContractorPdfPath(`${me}/`, me)).toBe(false)
+    expect(isContractorPdfPath(`${me}/file with spaces.pdf`, me)).toBe(false)
   })
 })

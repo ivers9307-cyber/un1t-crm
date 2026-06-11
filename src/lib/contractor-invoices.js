@@ -177,3 +177,17 @@ export function buildPdfPath({ contractorId, periodStart, originalFilename }) {
   const suffix = Math.random().toString(36).slice(2, 8)
   return `${contractorId}/${periodStart}-${suffix}-${safeName}`
 }
+
+/**
+ * True when `path` is a contractor-invoice storage key owned by
+ * `contractorId` — i.e. shaped like buildPdfPath's output and inside
+ * that contractor's own folder. The JSON submit mode accepts a
+ * client-supplied pdf_path (minted by /api/invoices/upload-sign), so
+ * the route must refuse paths pointing at other contractors' objects
+ * or anywhere else in the bucket.
+ */
+export function isContractorPdfPath(path, contractorId) {
+  const s = String(path || '')
+  if (!contractorId || !s.startsWith(`${contractorId}/`)) return false
+  return /^[0-9a-fA-F-]{32,36}\/[A-Za-z0-9._-]{1,160}$/.test(s)
+}
