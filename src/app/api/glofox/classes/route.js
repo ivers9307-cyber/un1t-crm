@@ -62,11 +62,22 @@ export async function GET(request) {
     }, { status: 502 })
   }
 
+  // Capacity fields arrive in vendor-flexible shapes — the operator's
+  // live list showed spots missing, so parse defensively: numbers,
+  // arrays (of member ids → count = length), or objects ({limit}).
+  const countOf = v => (Array.isArray(v) ? v.length : Number(v) || 0)
+  const capOf = v => {
+    if (v && typeof v === 'object' && !Array.isArray(v)) {
+      return Number(v.limit ?? v.max ?? v.total ?? v.size) || 0
+    }
+    return Number(v) || 0
+  }
+
   const classes = result.events
     .filter(e => e.active !== false && e.private !== true)
     .map(e => {
-      const size = Number(e.size) || 0
-      const booked = Number(e.booked) || 0
+      const size = capOf(e.size)
+      const booked = countOf(e.booked)
       return {
         id: e._id,
         name: e.name,
@@ -75,7 +86,7 @@ export async function GET(request) {
         size,
         booked,
         spots_left: size > 0 ? Math.max(0, size - booked) : null,
-        waiting: Number(e.waiting) || 0,
+        waiting: countOf(e.waiting),
         // E2E screenshot showed trainers arrive as raw 24-hex member
         // ids — display-worthless, so drop hex ids and keep only
         // human-readable names (object shapes or real name strings).

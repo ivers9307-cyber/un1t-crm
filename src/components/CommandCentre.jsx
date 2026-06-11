@@ -276,6 +276,36 @@ function fmtClassTime(ms) {
     + ' ' + new Date(ms).toLocaleTimeString('en-IE', { hour: '2-digit', minute: '2-digit' })
 }
 
+function fmtClockTime(ms) {
+  if (!ms) return ''
+  return new Date(ms).toLocaleTimeString('en-IE', { hour: '2-digit', minute: '2-digit' })
+}
+
+// Group an already-time-sorted class list into per-day sections with
+// friendly headers (Today / Tomorrow / "Sat 13 Jun").
+function groupClassesByDay(classes) {
+  const dayLabel = (ms) => {
+    if (!ms) return 'Unscheduled'
+    const d = new Date(ms)
+    const today = new Date()
+    const tomorrow = new Date()
+    tomorrow.setDate(today.getDate() + 1)
+    const same = (a, b) =>
+      a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate()
+    if (same(d, today)) return 'Today'
+    if (same(d, tomorrow)) return 'Tomorrow'
+    return d.toLocaleDateString('en-IE', { weekday: 'short', day: 'numeric', month: 'short' })
+  }
+  const groups = []
+  for (const cls of classes) {
+    const label = dayLabel(cls.time_start_ms)
+    const last = groups[groups.length - 1]
+    if (last && last.label === label) last.items.push(cls)
+    else groups.push({ label, items: [cls] })
+  }
+  return groups
+}
+
 function BookPanel({ contactId, locationId, glofoxMemberId, eventTypes, channel, conversationId, onBooked }) {
   const [eventId, setEventId] = useState('')
   const [dateStr, setDateStr] = useState(null)
@@ -509,7 +539,7 @@ function BookPanel({ contactId, locationId, glofoxMemberId, eventTypes, channel,
         </p>
       )}
 
-      {/* ── Glofox classes (UIX-P3b) ── */}
+      {/* ── Glofox classes (UIX-P3b) — grouped by day ── */}
       <div className="pt-3 border-t border-un1t-border">
         <p className="text-[11px] font-semibold text-un1t-subtle mb-2">Glofox classes — next 7 days</p>
 
@@ -526,29 +556,44 @@ function BookPanel({ contactId, locationId, glofoxMemberId, eventTypes, channel,
         )}
 
         {classes && classes.length > 0 && (
-          <div className="space-y-1.5 max-h-72 overflow-y-auto pr-0.5">
-            {classes.map(cls => {
-              const full = cls.spots_left === 0
-              return (
-                <div key={cls.id} className="flex items-center justify-between gap-2 border border-un1t-border rounded-lg px-2.5 py-1.5">
-                  <div className="min-w-0">
-                    <p className="text-xs font-medium truncate">{cls.name}</p>
-                    <p className="text-[10px] text-un1t-muted truncate">
-                      {fmtClassTime(cls.time_start_ms)}
-                      {cls.trainers?.length ? ` · ${cls.trainers[0]}` : ''}
-                      {cls.spots_left != null ? ` · ${full ? 'Full' : `${cls.spots_left} spots`}` : ''}
-                    </p>
-                  </div>
-                  <button
-                    disabled={booking || !glofoxMemberId || full}
-                    onClick={() => bookClass(cls)}
-                    className="shrink-0 text-[11px] px-2.5 py-1 rounded-md bg-green-600 text-white hover:bg-green-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                  >
-                    {full ? 'Full' : 'Book'}
-                  </button>
+          <div className="space-y-2.5 max-h-80 overflow-y-auto pr-0.5">
+            {groupClassesByDay(classes).map(group => (
+              <div key={group.label}>
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-un1t-muted mb-1">
+                  {group.label}
+                </p>
+                <div className="space-y-1.5">
+                  {group.items.map(cls => {
+                    const full = cls.spots_left === 0
+                    return (
+                      <div key={cls.id} className="flex items-center justify-between gap-2 border border-un1t-border rounded-lg px-2.5 py-1.5">
+                        <div className="min-w-0">
+                          <p className="text-xs font-medium truncate">{cls.name}</p>
+                          <p className="text-[10px] text-un1t-muted truncate">
+                            {fmtClockTime(cls.time_start_ms)}
+                            {cls.trainers?.length ? ` · ${cls.trainers[0]}` : ''}
+                            {cls.spots_left != null
+                              ? ` · ${full ? 'Full' : `${cls.spots_left} of ${cls.size} spots`}`
+                              : ''}
+                          </p>
+                        </div>
+                        <button
+                          disabled={booking || !glofoxMemberId || full}
+                          onClick={() => bookClass(cls)}
+                          className={`shrink-0 text-[11px] px-2.5 py-1 rounded-md transition-colors ${
+                            full
+                              ? 'bg-un1t-border text-un1t-muted cursor-not-allowed'
+                              : 'bg-green-600 text-white hover:bg-green-700 disabled:opacity-40 disabled:cursor-not-allowed'
+                          }`}
+                        >
+                          {full ? 'Full' : 'Book'}
+                        </button>
+                      </div>
+                    )
+                  })}
                 </div>
-              )
-            })}
+              </div>
+            ))}
           </div>
         )}
 

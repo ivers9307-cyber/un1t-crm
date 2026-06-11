@@ -7,6 +7,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react'
 import Link from 'next/link'
+import { createBrowserClient } from '@/lib/supabase'
 import {
   ArrowLeft, Send, MessageCircle, Clock, Check, AlertCircle,
   RefreshCw, Bot, UserCheck, Instagram,
@@ -97,12 +98,46 @@ export default function IGInbox({ locationId, initialConversationId, embedded = 
     }
   }, [])
 
+  // Realtime needs the current selection without re-subscribing per
+  // click — same ref pattern as WAInbox.
+  const selectedIdRef = useRef(initialConversationId || null)
+  useEffect(() => { selectedIdRef.current = selectedId }, [selectedId])
+
   useEffect(() => { loadConversations() }, [loadConversations])
   useEffect(() => {
     if (embedded) setSelectedId(initialConversationId || null)
   }, [embedded, initialConversationId])
+
+  // UIX-POLISH.3 — Realtime push (mig 256 published the Instagram
+  // tables). New messages in the OPEN thread appear instantly; the
+  // poll drops to a 60s safety net.
   useEffect(() => {
-    const t = setInterval(loadConversations, 15000)
+    if (!locationId) return
+    const supabase = createBrowserClient()
+    const channel = supabase
+      .channel(`ig-inbox-${locationId}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'instagram_conversations' },
+        () => { loadConversations() }
+      )
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'instagram_messages' },
+        (payload) => {
+          loadConversations()
+          const convId = payload?.new?.conversation_id
+          if (convId && convId === selectedIdRef.current) {
+            loadThread(convId)
+          }
+        }
+      )
+      .subscribe()
+    return () => { supabase.removeChannel(channel) }
+  }, [locationId, loadConversations, loadThread])
+
+  useEffect(() => {
+    const t = setInterval(loadConversations, 60000)
     return () => clearInterval(t)
   }, [loadConversations])
   useEffect(() => { if (selectedId) loadThread(selectedId) }, [selectedId, loadThread])

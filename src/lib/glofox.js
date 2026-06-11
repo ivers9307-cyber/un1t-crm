@@ -919,10 +919,16 @@ export function generateGlofoxPasscode() {
  * on this tier) but validation answered "The model field is required.,
  * The model id field is required." and did NOT flag user_id — so the
  * real shape is { user_id, model, model_id } (polymorphic target).
- * The exact model token is pinned by the variant dry-run (probe v2);
- * adjust this constant if the probe shows a different casing wins.
+ * LIVE-CONFIRMED 2026-06-11: the operator's real class booking
+ * SUCCEEDED via the book route's self-discovery sweep after 'Event'
+ * failed the enum ("The selected model is invalid") — so the
+ * accepted token is one of the lowercase candidates. 'event' is the
+ * sweep's preferred event-family value; if Glofox's enum actually
+ * uses a different spelling the self-discovery fallback in
+ * /api/glofox/classes/book still corrects it at runtime (one ~4s
+ * sweep), so a wrong constant degrades to slow, never broken.
  */
-export const GLOFOX_BOOKING_MODEL = 'Event'
+export const GLOFOX_BOOKING_MODEL = 'event'
 
 /**
  * Create a booking on behalf of a member via /2.0/bookings.
