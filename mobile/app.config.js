@@ -121,6 +121,12 @@ export default ({ config }) => ({
     // consistency, even though Android doesn't have Apple's reuse
     // restriction. One namespace, one app, both stores.
     package: 'com.un1tdublin.crm',
+    // MOBILE-AUDIT.2 — expo-image-picker adds RECORD_AUDIO by default
+    // (for video capture); the app only picks/captures photos for
+    // invoices and issue reports, never audio/video. Blocking it keeps
+    // the Play data-safety declaration honest. Takes effect at the
+    // next native build (manifest-level — not OTA-able).
+    blockedPermissions: ['android.permission.RECORD_AUDIO'],
     adaptiveIcon: {
       foregroundImage: './assets/adaptive-icon.png',
       // Android adaptive icon background — CF Studio identity is black/white
@@ -170,6 +176,19 @@ export default ({ config }) => ({
     enabled: true,
     checkAutomatically: 'ON_LOAD',
     fallbackToCacheTimeout: 0,
+    // MOBILE-AUDIT.2 — OTA code signing. The certificate is PUBLIC and
+    // ships in the binary; from the first build that embeds it (1.3.2+)
+    // the device rejects any update not signed by the matching private
+    // key. The private key is NEVER in the repo: mobile/keys/ is
+    // gitignored, CI signs via the EXPO_UPDATES_PRIVATE_KEY GitHub
+    // secret (see .github/workflows/eas-update.yml). Older unsigned
+    // binaries (≤1.3.1) ignore the signature, so signed publishes serve
+    // the whole fleet. Runbook: mobile/docs/eas-update-code-signing.md
+    codeSigningCertificate: './certs/certificate.pem',
+    codeSigningMetadata: {
+      keyid: 'main',
+      alg: 'rsa-v1_5-sha256',
+    },
   },
   // OTA runtime-version policy. Kept at 'sdkVersion' for now.
   //
