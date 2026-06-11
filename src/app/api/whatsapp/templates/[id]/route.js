@@ -13,7 +13,10 @@ const TemplateUpdateSchema = z.object({
   status: z.enum(['PENDING', 'APPROVED', 'REJECTED', 'PAUSED']).optional(),
   // Media-header upload fields (mig 045) — see notes on the create
   // route for what these are.
-  header_media_handle: z.string().max(500).nullable().optional(),
+  // Meta's resumable-upload handles are opaque and can exceed 500 chars
+  // for VIDEO assets (bit a real template 2026-06-11) — the DB column is
+  // TEXT, so this is just a sanity bound. Keep it generous.
+  header_media_handle: z.string().max(4000).nullable().optional(),
   header_media_url: z.string().url().max(2000).nullable().optional(),
   header_media_path: z.string().max(500).nullable().optional(),
 })
