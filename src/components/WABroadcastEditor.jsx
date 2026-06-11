@@ -259,6 +259,13 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, us
                         {r.status === 'failed' ? <XCircle size={12} /> : <CheckCircle2 size={12} />}
                         {r.status}
                       </span>
+                      {/* The send loop stores Meta's per-recipient error —
+                          without rendering it, a failure is undebuggable
+                          from the UI (bit on the first video-header
+                          broadcast: #132012 looked like a mystery). */}
+                      {r.status === 'failed' && r.error_message && (
+                        <p className="text-[11px] text-red-700 mt-1 max-w-[360px]">{r.error_message}</p>
+                      )}
                     </td>
                     <td className="px-4 py-3 text-xs text-un1t-subtle">
                       {r.sent_at ? new Date(r.sent_at).toLocaleString('en-IE', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—'}
