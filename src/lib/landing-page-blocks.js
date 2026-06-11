@@ -203,6 +203,35 @@ const BlockBaseSchema = z.object({
 export const BlocksArraySchema = z.array(BlockBaseSchema).max(40)
 
 // ─────────────────────────────────────────────────────────────
+// Primary conversion target — derived from a page's own blocks.
+// Priority: explicit lead capture > booking > event signup.
+// Returns { href, label } or null when the page has no funnel
+// block (the header/hero then render no CTA rather than a dead
+// anchor). Used by the public studio page + the dev preview.
+// ─────────────────────────────────────────────────────────────
+export function primaryCta(blocks) {
+  const list = Array.isArray(blocks) ? blocks : []
+  const leadForm = list.find((b) => b && b.type === 'lead_form')
+  if (leadForm) {
+    return {
+      href: '#waitlist',
+      label: (leadForm.button_label && leadForm.button_label.trim()) || 'Join the waitlist',
+    }
+  }
+  if (list.some((b) => b && b.type === 'booking')) {
+    return { href: '#book', label: 'Book a free consult' }
+  }
+  const event = list.find((b) => b && b.type === 'event')
+  if (event) {
+    return {
+      href: `#event-${event.slug || 'signup'}`,
+      label: (event.title && event.title.trim()) || 'Sign up',
+    }
+  }
+  return null
+}
+
+// ─────────────────────────────────────────────────────────────
 // Path-based immutable update — used by the LP3c.2 inline editor
 // to apply edits like ['items', 2, 'title'] to a block.
 //

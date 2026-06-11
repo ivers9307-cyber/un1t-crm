@@ -35,3 +35,182 @@ body {
     justify-content: center;
   }
 }
+
+/* ───────────────────────────────────────────────────────────────────
+   Marketing site (/welcome) — "lp-" design system
+   WEBSITE-REDESIGN 2026-06. Everything below is scoped to lp-*
+   classes used only by the public landing pages + their edit-mode
+   preview; the CRM app never references these.
+   ─────────────────────────────────────────────────────────────────── */
+
+:root {
+  --lp-ease: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* ── Scroll-reveal system ──────────────────────────────────────────
+   A tiny inline script on the PUBLIC pages adds `lp-armed` to #lp-shell
+   during parse (before first paint), so elements start hidden with no
+   flash. The RevealManager island then adds `lp-io-live` on mount and
+   flips each element to `.lp-in` as it enters the viewport.
+   Failure modes all degrade to visible content:
+     · No JS            → shell never armed → everything visible.
+     · Armed, island died → CSS failsafe animation reveals at 2.4s.
+     · Reduced motion   → never armed (script checks the media query).
+   Edit-mode iframe never arms, so the operator edits static blocks. */
+#lp-shell.lp-armed .lp-reveal {
+  opacity: 0;
+  transform: translateY(26px);
+  transition:
+    opacity 0.9s var(--lp-ease),
+    transform 0.9s var(--lp-ease);
+}
+#lp-shell.lp-armed:not(.lp-io-live) .lp-reveal {
+  animation: lp-failsafe 0.7s var(--lp-ease) 2.4s forwards;
+}
+#lp-shell.lp-armed .lp-reveal.lp-in {
+  opacity: 1;
+  transform: none;
+  animation: none;
+}
+.lp-reveal.lp-d1 { transition-delay: 0.1s; }
+.lp-reveal.lp-d2 { transition-delay: 0.2s; }
+.lp-reveal.lp-d3 { transition-delay: 0.3s; }
+@keyframes lp-failsafe {
+  to { opacity: 1; transform: none; }
+}
+
+/* ── Hero entrance — staggered rise on load (one-shot, CSS only) ── */
+@keyframes lp-rise {
+  from { opacity: 0; transform: translateY(34px); }
+  to   { opacity: 1; transform: none; }
+}
+.lp-hero-stagger > * { animation: lp-rise 0.95s var(--lp-ease) both; }
+.lp-hero-stagger > *:nth-child(1) { animation-delay: 0.05s; }
+.lp-hero-stagger > *:nth-child(2) { animation-delay: 0.16s; }
+.lp-hero-stagger > *:nth-child(3) { animation-delay: 0.27s; }
+.lp-hero-stagger > *:nth-child(4) { animation-delay: 0.38s; }
+.lp-hero-stagger > *:nth-child(5) { animation-delay: 0.49s; }
+
+/* Slow push-in on hero media. `both` holds the end frame. */
+@keyframes lp-kenburns {
+  from { transform: scale(1); }
+  to   { transform: scale(1.07); }
+}
+.lp-kenburns { animation: lp-kenburns 16s ease-out both; }
+
+/* ── Film-grain texture overlay (inline SVG noise, no asset) ────── */
+.lp-grain::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1;
+  opacity: 0.16;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.6'/%3E%3C/svg%3E");
+}
+
+/* ── Brand marquee strip (hero bottom edge) ───────────────────────── */
+@keyframes lp-marquee {
+  from { transform: translateX(0); }
+  to   { transform: translateX(-50%); }
+}
+.lp-marquee-track {
+  display: flex;
+  width: max-content;
+  animation: lp-marquee 30s linear infinite;
+}
+
+/* ── Outlined display text (watermarks / hero fallback) ──────────── */
+.lp-outline {
+  -webkit-text-stroke: 1.5px rgba(255, 255, 255, 0.13);
+  color: transparent;
+}
+
+/* ── Buttons ──────────────────────────────────────────────────────
+   One primary object across the whole site: the white pill. */
+.lp-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  background: #fff;
+  color: #000;
+  font-weight: 600;
+  border-radius: 9999px;
+  padding: 0.95rem 2rem;
+  font-size: 0.95rem;
+  letter-spacing: 0.01em;
+  transition: transform 0.35s var(--lp-ease), box-shadow 0.35s var(--lp-ease), background 0.2s;
+}
+.lp-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 16px 40px -12px rgba(255, 255, 255, 0.35);
+}
+.lp-btn:active { transform: translateY(0) scale(0.98); }
+.lp-btn .lp-btn-arrow { transition: transform 0.35s var(--lp-ease); }
+.lp-btn:hover .lp-btn-arrow { transform: translateX(4px); }
+.lp-btn-ghost {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  color: rgba(255, 255, 255, 0.9);
+  border-radius: 9999px;
+  padding: 0.95rem 2rem;
+  font-size: 0.95rem;
+  font-weight: 500;
+  transition: border-color 0.25s, background 0.25s, transform 0.35s var(--lp-ease);
+}
+.lp-btn-ghost:hover {
+  border-color: rgba(255, 255, 255, 0.7);
+  background: rgba(255, 255, 255, 0.06);
+  transform: translateY(-2px);
+}
+.lp-btn:focus-visible,
+.lp-btn-ghost:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 3px;
+}
+
+/* ── Elevated form card glow (lead capture) ───────────────────────── */
+.lp-card-glow {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.02),
+    0 30px 90px -30px rgba(255, 255, 255, 0.14),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+/* ── Success check draw (lead form done state) ────────────────────── */
+.lp-check-path {
+  stroke-dasharray: 48;
+  stroke-dashoffset: 48;
+  animation: lp-check-draw 0.6s var(--lp-ease) 0.15s forwards;
+}
+@keyframes lp-check-draw {
+  to { stroke-dashoffset: 0; }
+}
+
+/* ── Scroll cue ───────────────────────────────────────────────────── */
+@keyframes lp-cue {
+  0%, 100% { transform: translateY(0); opacity: 0.5; }
+  50%      { transform: translateY(8px); opacity: 1; }
+}
+.lp-cue { animation: lp-cue 2.2s ease-in-out infinite; }
+
+/* ── Gallery mosaic — first tile spans 2×2 (pure CSS, no data) ───── */
+@media (min-width: 768px) {
+  .lp-mosaic > figure:first-child { grid-column: span 2; grid-row: span 2; }
+}
+
+/* ── Reduced motion: kill every lp animation, show everything ────── */
+@media (prefers-reduced-motion: reduce) {
+  #lp-shell.lp-armed .lp-reveal { opacity: 1; transform: none; transition: none; animation: none; }
+  .lp-hero-stagger > * { animation: none; }
+  .lp-kenburns { animation: none; }
+  .lp-marquee-track { animation: none; flex-wrap: wrap; width: 100%; justify-content: center; }
+  .lp-cue { animation: none; }
+  .lp-check-path { animation: none; stroke-dashoffset: 0; }
+}

@@ -7,6 +7,15 @@ module.exports = {
   content: ['./src/**/*.{js,jsx}', './shared/**/*.{js,jsx}'],
   theme: {
     extend: {
+      // Marketing-site type pairing (WEBSITE-REDESIGN 2026-06). The CSS
+      // variables are set by src/app/welcome/layout.js via next/font, so
+      // these families only resolve inside the /welcome segment — the CRM
+      // app keeps the default stack. Fallbacks approximate the metrics
+      // (Anton ≈ Impact-class condensed; Poppins ≈ geometric sans).
+      fontFamily: {
+        display: ['var(--font-display)', 'Impact', 'Haettenschweiler', 'sans-serif'],
+        body: ['var(--font-body)', 'ui-sans-serif', 'system-ui', 'sans-serif'],
+      },
       colors: {
         un1t: {
           // Intent-based tokens (UI-FOUND.1). Names previously meant

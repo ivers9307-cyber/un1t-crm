@@ -26,7 +26,7 @@ export default function VideoTestimonials({ items = [] }) {
 function VideoTile({ clip }) {
   const [playing, setPlaying] = useState(false)
   return (
-    <figure className="relative aspect-[9/16] overflow-hidden rounded-xl bg-white/5 border border-white/10">
+    <figure className="relative aspect-[9/16] overflow-hidden rounded-2xl bg-white/5 border border-white/10 transition-all duration-300 hover:border-white/30 hover:shadow-[0_20px_60px_-20px_rgba(255,255,255,0.15)]">
       {playing ? (
         <video
           src={clip.video_url}
