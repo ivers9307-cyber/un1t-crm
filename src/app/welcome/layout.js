@@ -1,31 +1,25 @@
 // /welcome segment layout — marketing-site typography.
 //
-// Loads the two brand fonts via next/font (self-hosted at build time:
-// zero external requests, zero layout shift) and exposes them as CSS
-// variables consumed by the `font-display` / `font-body` Tailwind
+// Loads the brand font via next/font (self-hosted at build time: zero
+// external requests, zero layout shift) and exposes it as a CSS
+// variable consumed by the `font-display` / `font-body` Tailwind
 // families (tailwind.config.js). Scoped HERE rather than the root
 // layout so the CRM app never pays the font bytes and keeps its
 // default stack.
 //
-// Anton    — display. Ultra-bold condensed; the gym-poster voice.
-// Poppins  — body/UI. The repo's documented SIL stand-in for the
-//            brand font NEXA (see CLAUDE.md, app-icon section).
+// Poppins ONLY (operator decision 2026-06-11) — the repo's documented
+// SIL stand-in for the brand font NEXA. Display type is Poppins at
+// heavy weights (700–800) rather than a second family; both Tailwind
+// families resolve to this one variable.
 //
 // Everything under /welcome inherits this: the split chooser, the
 // per-studio pages, the edit-mode preview iframe (?edit=1) and the
 // dev preview harness — so the editor previews exactly what ships.
 
-import { Anton, Poppins } from 'next/font/google'
-
-const anton = Anton({
-  weight: '400',
-  subsets: ['latin'],
-  variable: '--font-display',
-  display: 'swap',
-})
+import { Poppins } from 'next/font/google'
 
 const poppins = Poppins({
-  weight: ['400', '500', '600', '700'],
+  weight: ['400', '500', '600', '700', '800'],
   subsets: ['latin'],
   variable: '--font-body',
   display: 'swap',
@@ -41,7 +35,7 @@ export default function WelcomeLayout({ children }) {
     <div
       id="lp-shell"
       suppressHydrationWarning
-      className={`${anton.variable} ${poppins.variable} font-body`}
+      className={`${poppins.variable} font-body`}
     >
       {children}
     </div>

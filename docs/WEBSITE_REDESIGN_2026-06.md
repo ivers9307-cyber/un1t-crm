@@ -44,11 +44,14 @@ Street) — while staying 100% operator-editable from the CRM at
 
 ## Design language — "industrial athletic editorial"
 
-- **Typography**: `Anton` for display (ultra-bold condensed, uppercase,
-  tight leading — gym-poster energy), `Poppins` for body/UI (the repo's
-  documented SIL stand-in for brand font NEXA). Loaded once in
-  `welcome/layout.js`, exposed as `--font-display` / `--font-body` and
-  Tailwind families `font-display` / `font-body`.
+- **Typography**: `Poppins` ONLY (operator decision 2026-06-11 — the
+  repo's documented SIL stand-in for brand font NEXA). Display text is
+  Poppins at heavy weights (700–900) + uppercase + tracking; body/UI at
+  400–600. Loaded once in `welcome/layout.js`; both Tailwind families
+  (`font-display` / `font-body`) resolve to it, kept separate so the
+  markup stays semantic and a future display face is a one-line swap.
+  (v1 of this PR paired Anton for display; dropped same day for the
+  single-family brand look.)
 - **Colour**: stays monochrome black/white (brand-true). Energy comes from
   photography, scale and motion, not an accent colour. CTAs are solid
   white pills — highest contrast object on every screen.

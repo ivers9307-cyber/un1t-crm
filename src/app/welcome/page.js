@@ -142,7 +142,7 @@ function TileBody({ s }) {
             Coming soon
           </div>
         )}
-        <h2 className={`font-display uppercase text-4xl md:text-6xl tracking-tight leading-[0.98] ${s.disabled ? 'text-white/70' : 'text-white'}`}>
+        <h2 className={`font-display font-extrabold uppercase text-3xl md:text-5xl tracking-tight leading-[1.04] ${s.disabled ? 'text-white/70' : 'text-white'}`}>
           {s.name}
         </h2>
         {/* CTA only on active tiles. Disabled tiles show the label alone. */}
@@ -184,11 +184,11 @@ export default async function WelcomePage(props) {
           split. Overlay is click-through (pointer-events-none) so it
           never blocks a tile. */}
       <div className="pointer-events-none absolute top-0 inset-x-0 z-20 pt-8 md:pt-10 px-6 text-center lp-hero-stagger">
-        <div className="font-display text-xl md:text-2xl tracking-[0.3em] text-white drop-shadow">
+        <div className="font-display font-extrabold text-xl md:text-2xl tracking-[0.3em] text-white drop-shadow">
           UN1T <span className="text-white/55">DUBLIN</span>
         </div>
         {headline && (
-          <h1 className="mt-4 font-display uppercase text-2xl md:text-4xl tracking-tight drop-shadow">{headline}</h1>
+          <h1 className="mt-4 font-display font-extrabold uppercase text-2xl md:text-3xl tracking-tight drop-shadow">{headline}</h1>
         )}
         {intro && (
           <p className="mt-2 text-sm md:text-base text-white/75 drop-shadow max-w-xl mx-auto">{intro}</p>

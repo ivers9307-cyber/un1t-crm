@@ -12,8 +12,9 @@
 // panel in LandingPageSettingsForm.jsx.
 //
 // WEBSITE-REDESIGN 2026-06 — "industrial athletic editorial":
-// Anton display type (font-display) + Poppins body (font-body, set by
-// src/app/welcome/layout.js), monochrome black/white, film-grain +
+// Poppins-only typography (set by src/app/welcome/layout.js) — display
+// text is Poppins 700–800 + uppercase + tracking via the font-display
+// utility — monochrome black/white, film-grain +
 // outlined-watermark texture, scroll reveals (.lp-reveal, armed only
 // on the public pages — see RevealManager). Every block keeps its
 // exact data shape and EditableText/EditableImage field paths, so the
@@ -109,7 +110,7 @@ function HeroMarquee() {
         {items.map((w, i) => (
           <span
             key={i}
-            className="font-display uppercase text-sm md:text-base tracking-[0.25em] text-white/35 whitespace-nowrap flex items-center"
+            className="font-display font-bold uppercase text-sm md:text-base tracking-[0.25em] text-white/35 whitespace-nowrap flex items-center"
           >
             <span className="px-6">{w}</span>
             <span className="text-white/20">✦</span>
@@ -182,7 +183,7 @@ export function HeroBlock({ block, onEdit, locationId, ctaHref, ctaLabel }) {
             }}
           />
           <div className="absolute inset-0 flex items-center justify-center overflow-hidden">
-            <span className="lp-outline font-display leading-none select-none text-[42vw] md:text-[34vw]">
+            <span className="lp-outline font-display font-extrabold leading-none select-none text-[34vw] md:text-[26vw]">
               UN1T
             </span>
           </div>
@@ -211,10 +212,10 @@ export function HeroBlock({ block, onEdit, locationId, ctaHref, ctaLabel }) {
             </p>
           )}
           {(block.headline || block.subhead || onEdit) && (
-            <h1 className="font-display uppercase text-[clamp(2.9rem,9vw,7.5rem)] leading-[0.95] tracking-tight text-white">
+            <h1 className="font-display font-extrabold uppercase text-[clamp(2.25rem,6.5vw,5.5rem)] leading-[1.02] tracking-tight text-white">
               <E value={block.headline} onEdit={onEdit} path={['headline']} />
               {(block.subhead || onEdit) && (
-                <span className="block mt-3 text-[clamp(1.2rem,3vw,2.4rem)] leading-[1.1] text-white/65">
+                <span className="block mt-3 text-[clamp(1.05rem,2.2vw,1.8rem)] leading-[1.2] text-white/65">
                   <E value={block.subhead} onEdit={onEdit} path={['subhead']} />
                 </span>
               )}
@@ -255,7 +256,7 @@ export function BookingBlock({ block }) {
       <div className="max-w-6xl mx-auto px-6">
         <Eyebrow>Your first step</Eyebrow>
         <div className="lp-reveal text-center mb-4">
-          <h2 className="font-display uppercase text-4xl md:text-6xl tracking-tight text-white">
+          <h2 className="font-display font-extrabold uppercase text-3xl md:text-5xl tracking-tight text-white">
             Start here
           </h2>
         </div>
@@ -296,7 +297,7 @@ export function EventBlock({ block }) {
     <section id={`event-${block.slug || 'signup'}`} className="scroll-mt-20 bg-black pt-20 pb-24 md:pt-28 md:pb-32 border-t border-white/10">
       <div className="max-w-3xl mx-auto px-6">
         {block.title && (
-          <h2 className="lp-reveal font-display uppercase text-3xl md:text-5xl tracking-tight text-white text-center mb-10">
+          <h2 className="lp-reveal font-display font-extrabold uppercase text-3xl md:text-4xl tracking-tight text-white text-center mb-10">
             {block.title}
           </h2>
         )}
@@ -320,13 +321,13 @@ export function LeadFormBlock({ block, onEdit, publicPath }) {
       {/* Faint outlined watermark drifting behind the form — depth
           without noise. */}
       <div className="absolute inset-y-0 -right-10 hidden lg:flex items-center pointer-events-none" aria-hidden="true">
-        <span className="lp-outline font-display leading-none text-[18rem]">UN1T</span>
+        <span className="lp-outline font-display font-extrabold leading-none text-[13rem]">UN1T</span>
       </div>
       <div className="relative max-w-6xl mx-auto px-6 grid lg:grid-cols-2 gap-12 lg:gap-20 items-center">
         <div>
           <Eyebrow>Join us</Eyebrow>
           {(block.heading || onEdit) && (
-            <h2 className="lp-reveal font-display uppercase text-4xl md:text-6xl leading-[0.98] tracking-tight mb-5">
+            <h2 className="lp-reveal font-display font-extrabold uppercase text-3xl md:text-5xl leading-[1.04] tracking-tight mb-5">
               <E value={block.heading} onEdit={onEdit} path={['heading']} />
             </h2>
           )}
@@ -547,7 +548,7 @@ export function TestimonialBlock({ block, onEdit }) {
   return (
     <section className="relative bg-black text-white py-24 md:py-32 border-t border-white/10 overflow-hidden">
       <div
-        className="absolute top-10 left-1/2 -translate-x-1/2 font-display text-[14rem] leading-none text-white/[0.06] select-none pointer-events-none"
+        className="absolute top-10 left-1/2 -translate-x-1/2 font-display font-extrabold text-[12rem] leading-none text-white/[0.06] select-none pointer-events-none"
         aria-hidden="true"
       >
         &ldquo;
@@ -610,11 +611,11 @@ export function ReviewsBlock({ block, onEdit, reviewsData }) {
         {(block.title || block.show_aggregate) && (
           <div className="lp-reveal text-center mb-12">
             {block.title && (
-              <h2 className="font-display uppercase text-3xl md:text-5xl tracking-tight">{block.title}</h2>
+              <h2 className="font-display font-extrabold uppercase text-3xl md:text-4xl tracking-tight">{block.title}</h2>
             )}
             {block.show_aggregate && reviewsData?.averageRating != null && (
               <div className="mt-5 flex items-baseline justify-center gap-3">
-                <span className="font-display text-4xl md:text-5xl">
+                <span className="font-display font-extrabold text-4xl md:text-5xl">
                   {Number(reviewsData.averageRating).toFixed(1)}
                 </span>
                 <span className="text-amber-400 tracking-[0.2em] text-sm">★★★★★</span>
@@ -655,7 +656,7 @@ export function VideoTestimonialsBlock({ block, onEdit }) {
     <section className="bg-black text-white py-24 md:py-32 border-t border-white/10">
       <div className="max-w-6xl mx-auto px-6">
         {(block.title || onEdit) && (
-          <h2 className="lp-reveal font-display uppercase text-3xl md:text-5xl tracking-tight text-center mb-12">
+          <h2 className="lp-reveal font-display font-extrabold uppercase text-3xl md:text-4xl tracking-tight text-center mb-12">
             <E value={block.title} onEdit={onEdit} path={['title']} />
           </h2>
         )}
@@ -724,12 +725,12 @@ function Pillar({ number, title, body, photoUrl, onEdit, locationId, itemIndex, 
         </div>
       )}
       <div className="mt-6 flex items-baseline gap-4">
-        <span className="font-display text-xl text-black/25 tracking-wide">
+        <span className="font-display font-bold text-xl text-black/25 tracking-wide">
           <E value={number} onEdit={onEdit} path={['items', itemIndex, 'number']} />
         </span>
         <span className="h-px flex-1 bg-black/10" aria-hidden="true" />
       </div>
-      <h3 className="mt-3 font-display uppercase text-[1.6rem] leading-tight tracking-wide">
+      <h3 className="mt-3 font-display font-extrabold uppercase text-[1.3rem] leading-snug tracking-wide">
         <E value={title} onEdit={onEdit} path={['items', itemIndex, 'title']} />
       </h3>
       <p className="mt-3 text-black/65 leading-relaxed">
@@ -742,7 +743,7 @@ function Pillar({ number, title, body, photoUrl, onEdit, locationId, itemIndex, 
 function Stat({ number, label, onEdit, itemIndex, delayClass = '' }) {
   return (
     <div className={`lp-reveal ${delayClass} px-6 py-8 md:py-4`}>
-      <div className="font-display text-[clamp(3.5rem,7vw,5.5rem)] leading-none tracking-tight">
+      <div className="font-display font-extrabold text-[clamp(2.75rem,5.5vw,4.5rem)] leading-none tracking-tight">
         {onEdit ? (
           <E value={number} onEdit={onEdit} path={['items', itemIndex, 'number']} />
         ) : (
@@ -800,7 +801,7 @@ export function SiteHeader({
             className="object-contain"
           />
         ) : (
-          <div className="font-display text-2xl tracking-widest text-white">UN1T</div>
+          <div className="font-display font-extrabold text-2xl tracking-widest text-white">UN1T</div>
         )}
         {sticky && ctaHref && (
           <a href={ctaHref} className="lp-btn !px-5 !py-2.5 !text-sm shrink-0">
@@ -837,7 +838,7 @@ export function SiteFooter({ ctaHref = '#book', ctaLabel = 'Book a free consult'
           is the brand promise and one more way in. */}
       <div className="max-w-6xl mx-auto px-6 pt-20 pb-14 md:pt-28 md:pb-20">
         <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-8 pb-14 md:pb-20 border-b border-white/10">
-          <h2 className="font-display uppercase text-[clamp(2.6rem,7vw,5.5rem)] leading-[0.95] tracking-tight max-w-3xl">
+          <h2 className="font-display font-extrabold uppercase text-[clamp(1.9rem,5vw,4rem)] leading-[1.05] tracking-tight max-w-3xl">
             Ready when
             <br />
             you are.
@@ -850,7 +851,7 @@ export function SiteFooter({ ctaHref = '#book', ctaLabel = 'Book a free consult'
 
         <div className="grid md:grid-cols-3 gap-10 text-sm pt-14">
           <div>
-            <div className="font-display text-xl tracking-widest mb-4">UN1T DUBLIN</div>
+            <div className="font-display font-extrabold text-xl tracking-widest mb-4">UN1T DUBLIN</div>
             <p className="text-white/55 leading-relaxed max-w-xs">
               Coach-led strength &amp; conditioning. Built for racing.
               We train as one.

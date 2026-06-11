@@ -51,7 +51,7 @@ export default function WaitlistWidget({ publicPath, buttonLabel, successMessage
             <path className="lp-check-path" d="M20 6L9 17l-5-5" />
           </svg>
         </span>
-        <p className="font-display uppercase tracking-wide text-2xl text-white mb-2">You&apos;re in</p>
+        <p className="font-display font-extrabold uppercase tracking-wide text-2xl text-white mb-2">You&apos;re in</p>
         <p className="text-white/70 text-sm leading-relaxed max-w-xs mx-auto">
           {successMessage || "You're on the list — we'll be in touch soon."}
         </p>
