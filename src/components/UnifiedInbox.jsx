@@ -259,6 +259,8 @@ export default function UnifiedInbox({ locationId, userId, initialConversationId
               contactId={selectedContactId}
               locationId={locationId}
               canEditConsent={canEditConsent}
+              channel={selected.ch}
+              conversationId={selected.id}
             />
           ) : (
             <div className="flex-1 flex items-center justify-center p-6 text-center text-xs text-un1t-subtle">
