@@ -20,6 +20,17 @@ async function readJson(res) {
   }
 }
 
+// validateBody() failures return { error: 'Invalid request body',
+// issues: [{ path, message }] } — without the issues, the operator sees
+// a generic banner with no clue which field to fix. Fold them in.
+function errorMessageFrom(result, fallback) {
+  const base = result?.error || fallback
+  const issues = Array.isArray(result?.issues) ? result.issues : []
+  if (issues.length === 0) return base
+  const detail = issues.map((i) => `${i.path || 'body'}: ${i.message}`).join('; ')
+  return `${base} — ${detail}`
+}
+
 // Meta's published caps (May 2026). Same for every template category.
 const MEDIA_LIMITS = {
   IMAGE:    { mimes: 'image/jpeg,image/png',          accept: '.jpg,.jpeg,.png',  maxMb: 5,   label: 'JPG or PNG, max 5 MB' },
@@ -247,9 +258,9 @@ export default function WATemplateEditor({ template, locationId, userId, events 
         method,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
-      }).then(r => r.json())
+      }).then(readJson)
 
-      if (!result.success) throw new Error(result.error)
+      if (!result.success) throw new Error(errorMessageFrom(result, 'Save failed'))
 
       router.push('/whatsapp/templates')
       router.refresh()
@@ -268,8 +279,8 @@ export default function WATemplateEditor({ template, locationId, userId, events 
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ category, components: buildComponents() }),
-      }).then(r => r.json())
-      if (!result.success) throw new Error(result.error)
+      }).then(readJson)
+      if (!result.success) throw new Error(errorMessageFrom(result, 'Resubmit failed'))
       router.push('/communications/templates?channel=whatsapp')
       router.refresh()
     } catch (err) {
