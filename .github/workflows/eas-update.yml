@@ -182,25 +182,14 @@ jobs:
           npm run check:mobile-imports
           npm run check:mobile-parity
 
-      # MOBILE-AUDIT.2 — OTA code signing. app.config.js declares
-      # updates.codeSigningCertificate, so binaries from 1.3.2 onward
-      # REJECT unsigned updates: every publish must sign. The private
-      # key exists only in the EXPO_UPDATES_PRIVATE_KEY GitHub secret
-      # (never in the repo — mobile/keys/ is gitignored); we materialise
-      # it just for the publish. Fail loudly if the secret is missing
-      # rather than publishing an update signed-binary devices would
-      # refuse. Older unsigned binaries (≤1.3.1) ignore the signature.
-      - name: Materialise update signing key
-        env:
-          EXPO_UPDATES_PRIVATE_KEY: ${{ secrets.EXPO_UPDATES_PRIVATE_KEY }}
-        run: |
-          if [ -z "$EXPO_UPDATES_PRIVATE_KEY" ]; then
-            echo "::error::EXPO_UPDATES_PRIVATE_KEY secret is not set — refusing to publish (signed binaries would reject an unsigned update). See mobile/docs/eas-update-code-signing.md."
-            exit 1
-          fi
-          mkdir -p keys
-          printf '%s\n' "$EXPO_UPDATES_PRIVATE_KEY" > keys/private-key.pem
-
+      # NOTE (MOBILE-AUDIT.2): a signed-publish step lived here briefly
+      # (#446) and was reverted — EAS Update code signing is Enterprise-
+      # plan-only and Expo's server rejects signed publishes on Starter
+      # (live failure 2026-06-11). Re-add the "materialise key +
+      # --private-key-path" wiring ONLY after upgrading the Expo plan;
+      # the key material is retained (EXPO_UPDATES_PRIVATE_KEY secret +
+      # mobile/keys/). See mobile/docs/eas-update-code-signing.md.
+      #
       # Use the commit message as the EAS update note so you can see
       # at a glance which commit a given update came from in the EAS
       # dashboard. Squash newlines to keep the eas-update CLI happy.
@@ -210,5 +199,4 @@ jobs:
           eas update \
             --branch main \
             --message "$MSG" \
-            --private-key-path keys/private-key.pem \
             --non-interactive
