@@ -39,13 +39,20 @@ export default ({ config }) => ({
   // can now PIN-login from the web shell at /studio-login.
   name: 'CF Studio',
   slug: 'un1t-crm-mobile',
+  // 1.3.2 — Android-manifest fix: blockedPermissions drops the unused
+  // RECORD_AUDIO that expo-image-picker adds by default (2026-06-10 audit).
+  // Manifest-level → needs this native build; no JS/native API change, so
+  // runtimeVersion stays '1.3.0' (same OTA lane as 1.3.0/1.3.1 installs).
+  // OTA code signing was intended for this build but is Enterprise-plan-
+  // only — reverted, see the updates block below.
+  //
   // 1.3.1 — bakes the W1/W2/W3 mobile-parity wave into the embedded bundle:
   // the full staff & access suite, tasks create/assign, issue inbox,
   // contacts, location-feature toggles, invoices inbox, orders, cars, and
   // trackside race-day control. JS-ONLY — every one already shipped as an OTA
   // to the 1.3.0 runtime lane, so runtimeVersion stays '1.3.0' (no native
   // change; the fresh binary + existing 1.3.0 installs share one OTA lane).
-  version: '1.3.1',
+  version: '1.3.2',
   // We ship iOS + Android only. Without this, Expo defaults to
   // ['ios','android','web'] and `eas update` exports for web too —
   // which crashes the publish because react-native-web isn't installed.
@@ -176,19 +183,16 @@ export default ({ config }) => ({
     enabled: true,
     checkAutomatically: 'ON_LOAD',
     fallbackToCacheTimeout: 0,
-    // MOBILE-AUDIT.2 — OTA code signing. The certificate is PUBLIC and
-    // ships in the binary; from the first build that embeds it (1.3.2+)
-    // the device rejects any update not signed by the matching private
-    // key. The private key is NEVER in the repo: mobile/keys/ is
-    // gitignored, CI signs via the EXPO_UPDATES_PRIVATE_KEY GitHub
-    // secret (see .github/workflows/eas-update.yml). Older unsigned
-    // binaries (≤1.3.1) ignore the signature, so signed publishes serve
-    // the whole fleet. Runbook: mobile/docs/eas-update-code-signing.md
-    codeSigningCertificate: './certs/certificate.pem',
-    codeSigningMetadata: {
-      keyid: 'main',
-      alg: 'rsa-v1_5-sha256',
-    },
+    // MOBILE-AUDIT.2 — OTA code signing was wired here (#446) and then
+    // REVERTED: Expo rejects signed publishes on our Starter plan
+    // ("EAS Update code signing requires a subscription to the EAS
+    // Enterprise plan", live failure 2026-06-11). A cert-embedding
+    // binary on a plan that can't sign would never receive OTAs again,
+    // so the cert MUST stay out of the config until the account is on
+    // Enterprise. The key material is ready for that day: cert at
+    // certs/certificate.pem (committed), private key in mobile/keys/
+    // (gitignored) + the EXPO_UPDATES_PRIVATE_KEY GitHub secret.
+    // Runbook (incl. the plan gotcha): mobile/docs/eas-update-code-signing.md
   },
   // OTA runtime-version policy. Kept at 'sdkVersion' for now.
   //
