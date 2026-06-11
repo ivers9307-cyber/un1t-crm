@@ -87,3 +87,11 @@ jobs:
       # invisible to vitest/eslint/expo-export). See the 2026-06 schedule crash.
       - name: Mobile import resolution
         run: npm run check:mobile-imports
+
+      # Catches the #408 class of bug — an /api route shipping with NO auth
+      # guard at all (middleware only proves a valid JWT exists; champ-app
+      # customers hold valid JWTs on the same Supabase project). Audit
+      # follow-up (2026-06-10): every non-public route must resolve +
+      # authorize the caller itself. See scripts/check-route-guards.mjs.
+      - name: Route guard presence
+        run: npm run check:route-guards
