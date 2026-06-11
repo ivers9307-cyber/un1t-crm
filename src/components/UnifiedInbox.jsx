@@ -133,7 +133,7 @@ export default function UnifiedInbox({ locationId, userId, initialConversationId
               onClick={() => setChannelFilter(key)}
               className={`flex items-center gap-1 text-xs px-2.5 py-1 rounded-full border transition-colors ${
                 channelFilter === key
-                  ? 'bg-un1t-text text-un1t-black border-transparent'
+                  ? 'bg-un1t-text text-un1t-bg border-transparent'
                   : 'border-un1t-border text-un1t-subtle hover:text-un1t-text'
               }`}
             >
@@ -152,7 +152,7 @@ export default function UnifiedInbox({ locationId, userId, initialConversationId
               onClick={() => setQueueFilter(key)}
               className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${
                 queueFilter === key
-                  ? 'bg-un1t-text text-un1t-black border-transparent'
+                  ? 'bg-un1t-text text-un1t-bg border-transparent'
                   : 'border-un1t-border text-un1t-subtle hover:text-un1t-text'
               }`}
             >
