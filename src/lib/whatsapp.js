@@ -497,6 +497,7 @@ export async function sendBroadcast(broadcastId) {
         message_type: 'template',
         template_name: template.name,
         template_variables: variableMapping,
+        body: renderTemplateBody(template, contact, variableMapping),
         status: 'sent',
         broadcast_id: broadcastId,
         sent_at: new Date().toISOString(),
@@ -632,6 +633,7 @@ export async function sendDripChunk(broadcastId, { perTickMax = PER_TICK_MAX } =
         contact_id: contact.id, location_id: broadcast.location_id,
         wa_message_id: result.messageId, direction: 'outbound', message_type: 'template',
         template_name: template.name, template_variables: variableMapping,
+        body: renderTemplateBody(template, contact, variableMapping),
         status: 'sent', broadcast_id: broadcastId, sent_at: new Date().toISOString(),
       })
       sent++; consecutiveFailures = 0
@@ -703,29 +705,75 @@ export function buildTemplateComponents(template, contact, variableMapping, head
   // Check if template has body variables
   const bodyComp = templateComponents.find(c => c.type === 'BODY')
   if (bodyComp && bodyComp.text) {
-    // Count {{1}}, {{2}} etc in body text
-    const varMatches = bodyComp.text.match(/\{\{\d+\}\}/g) || []
-    if (varMatches.length > 0) {
-      const parameters = varMatches.map((_, i) => {
-        const fieldName = variableMapping[String(i + 1)]
-        let value = ''
-
-        if (fieldName === 'first_name') value = contact.first_name || contact.name?.split(' ')[0] || ''
-        else if (fieldName === 'name') value = contact.name || ''
-        else if (fieldName === 'email') value = contact.email || ''
-        else if (fieldName === 'phone') value = contact.phone || contact.wa_phone || ''
-        else if (fieldName === 'location_name') value = 'UN1T'
-        else if (fieldName) value = contact[fieldName] || fieldName  // Use as literal if not a field
-        else value = ''
-
-        return { type: 'text', text: value || ' ' }  // Meta rejects empty strings
+    const values = resolveTemplateVariableValues(template, contact, variableMapping)
+    if (values.length > 0) {
+      components.push({
+        type: 'body',
+        // Meta rejects empty strings — ' ' placeholder for blanks.
+        parameters: values.map((v) => ({ type: 'text', text: v || ' ' })),
       })
-
-      components.push({ type: 'body', parameters })
     }
   }
 
   return components
+}
+
+/**
+ * Resolve a template's {{1}}..{{n}} body variables to concrete values
+ * for one contact. Extracted from buildTemplateComponents so the same
+ * resolution drives BOTH the send-time parameters and the rendered
+ * body text we persist on whatsapp_messages (the inbox thread shows
+ * what was actually sent instead of a "[template]" placeholder).
+ */
+export function resolveTemplateVariableValues(template, contact, variableMapping) {
+  const bodyComp = (template.components || []).find(c => c.type === 'BODY')
+  const varMatches = bodyComp?.text?.match(/\{\{\d+\}\}/g) || []
+  return varMatches.map((_, i) => {
+    const fieldName = (variableMapping || {})[String(i + 1)]
+    let value = ''
+    if (fieldName === 'first_name') value = contact.first_name || contact.name?.split(' ')[0] || ''
+    else if (fieldName === 'name') value = contact.name || ''
+    else if (fieldName === 'email') value = contact.email || ''
+    else if (fieldName === 'phone') value = contact.phone || contact.wa_phone || ''
+    else if (fieldName === 'location_name') value = 'UN1T'
+    else if (fieldName) value = contact[fieldName] || fieldName  // Use as literal if not a field
+    return value
+  })
+}
+
+/** Positionally substitute {{n}} placeholders with resolved values. */
+export function substituteTemplateBody(bodyText, values) {
+  if (!bodyText) return null
+  let i = 0
+  return bodyText.replace(/\{\{\d+\}\}/g, () => {
+    const v = values?.[i++]
+    return v == null ? '' : String(v)
+  })
+}
+
+/**
+ * The human-readable text a template send produces for a contact —
+ * persisted as whatsapp_messages.body so threads show real content.
+ * Returns null when the template has no BODY text.
+ */
+export function renderTemplateBody(template, contact, variableMapping) {
+  const bodyComp = (template.components || []).find(c => c.type === 'BODY')
+  if (!bodyComp?.text) return null
+  return substituteTemplateBody(bodyComp.text, resolveTemplateVariableValues(template, contact, variableMapping))
+}
+
+/**
+ * Inbound consent keywords. The broadcast footer promises "Reply STOP
+ * to Unsubscribe" — the webhook honours it via this parser. Twilio's
+ * standard keyword set for stop; START/UNSTOP to opt back in. Only an
+ * exact (trimmed, case-insensitive) match counts — "please stop
+ * texting" is a conversation, not a command.
+ */
+export function parseConsentKeyword(text) {
+  const t = String(text || '').trim().toLowerCase()
+  if (['stop', 'stopall', 'stop all', 'unsubscribe', 'cancel', 'end', 'quit'].includes(t)) return 'stop'
+  if (['start', 'unstop', 'subscribe'].includes(t)) return 'start'
+  return null
 }
 
 /**

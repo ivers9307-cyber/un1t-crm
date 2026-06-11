@@ -1,6 +1,7 @@
 import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
-import { refreshWindow } from '@/lib/whatsapp'
+import { refreshWindow, parseConsentKeyword } from '@/lib/whatsapp'
+import { applyWhatsappConsentKeyword } from '@/lib/whatsapp-consent'
 import { resolveWhatsAppNumberByPhoneNumberId } from '@/lib/whatsapp-config'
 import { verifyMetaSignature, safeEqual } from '@/lib/webhook-auth'
 import { sendPush, sendPushToRolesAtLocation } from '@/lib/push'
@@ -309,6 +310,24 @@ async function handleIncomingMessage(db, message, contacts, phoneNumberId) {
     last_message_preview: body?.substring(0, 100) || `[${messageType}]`,
     unread_count: (currentConv?.unread_count || 0) + 1,
   }).eq('id', conversationId)
+
+  // Consent keywords — the broadcast footer promises "Reply STOP to
+  // Unsubscribe", so honour an exact STOP/START text reply: flip
+  // whatsapp_marketing + wa_status, write the consent_log audit row,
+  // and acknowledge in-thread. Best-effort (the helper never throws);
+  // unknown senders (no contact row) are skipped.
+  if (messageType === 'text' && contact?.id) {
+    const keyword = parseConsentKeyword(body)
+    if (keyword) {
+      await applyWhatsappConsentKeyword({
+        db,
+        contact,
+        locationId,
+        conversationId,
+        keyword,
+      })
+    }
+  }
 
   // Push notification fan-out for inbound WhatsApp.
   //   - If the conversation is assigned to a specific user, push to them.

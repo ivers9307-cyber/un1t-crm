@@ -34,6 +34,7 @@ import {
   sendTemplateMessage,
   buildTemplateComponents,
   getOrCreateConversation,
+  renderTemplateBody,
 } from '@/lib/whatsapp'
 import { sendLocationSms, TwilioError } from '@/lib/twilio'
 
@@ -159,6 +160,7 @@ export async function sendWhatsappStep(db, { step, sequence, contact }) {
       message_type: 'template',
       template_name: template.name,
       template_variables: variableMapping,
+      body: renderTemplateBody(template, contact, variableMapping),
       status: 'sent',
       sent_at: new Date().toISOString(),
     })
