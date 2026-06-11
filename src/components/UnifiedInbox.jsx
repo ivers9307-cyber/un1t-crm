@@ -9,6 +9,7 @@
 // so nothing about sending changed here.
 
 import { useState, useEffect, useCallback } from 'react'
+import { createBrowserClient } from '@/lib/supabase'
 import {
   MessageCircle, Instagram, RefreshCw, Check, Inbox as InboxIcon,
   ArrowLeft,
@@ -79,10 +80,53 @@ export default function UnifiedInbox({ locationId, userId, initialConversationId
   }, [locationId])
 
   useEffect(() => { loadConversations() }, [loadConversations])
+
+  // UIX-POLISH.3 — Realtime push for the queue. The WA tables have
+  // been published since mig 042; mig 256 added the Instagram tables,
+  // so every inbound/outbound/resolve change now refreshes the list
+  // instantly. The poll below drops to a 60s safety net (same shape
+  // as WAInbox's heartbeat).
   useEffect(() => {
-    const t = setInterval(loadConversations, 15000)
+    if (!locationId) return
+    const supabase = createBrowserClient()
+    const channel = supabase.channel(`unified-inbox-${locationId}`)
+    for (const table of [
+      'whatsapp_conversations', 'whatsapp_messages',
+      'instagram_conversations', 'instagram_messages',
+    ]) {
+      channel.on('postgres_changes', { event: '*', schema: 'public', table }, () => {
+        loadConversations()
+      })
+    }
+    channel.subscribe()
+    return () => { supabase.removeChannel(channel) }
+  }, [locationId, loadConversations])
+
+  useEffect(() => {
+    const t = setInterval(loadConversations, 60000)
     return () => clearInterval(t)
   }, [loadConversations])
+
+  // Quick-resolve from the queue (no need to open the thread) — for
+  // messages that don't need a reply, e.g. a plain acknowledgement.
+  async function quickResolve(conv) {
+    const url = conv._ch === 'ig'
+      ? `/api/instagram/conversations/${conv.id}`
+      : `/api/whatsapp/conversations/${conv.id}`
+    try {
+      const res = await fetch(url, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ resolved: true }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!data.success) return
+      const stamp = new Date().toISOString()
+      const apply = prev => prev.map(c => (c.id === conv.id ? { ...c, resolved_at: stamp } : c))
+      if (conv._ch === 'ig') setIgConvs(apply)
+      else setWaConvs(apply)
+    } catch { /* leave state as-is */ }
+  }
 
   const merged = [
     ...waConvs.map(c => ({ ...c, _ch: 'wa' })),
@@ -200,11 +244,25 @@ export default function UnifiedInbox({ locationId, userId, initialConversationId
                 </div>
                 <div className="flex items-center justify-between gap-2 mt-0.5 pl-[19px]">
                   <span className="text-xs text-un1t-subtle truncate">{conv.last_message_preview || '—'}</span>
-                  {conv.unread_count > 0 && (
-                    <span className="bg-green-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full shrink-0">
-                      {conv.unread_count}
-                    </span>
-                  )}
+                  <span className="flex items-center gap-1.5 shrink-0">
+                    {conv.unread_count > 0 && (
+                      <span className="bg-green-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full">
+                        {conv.unread_count}
+                      </span>
+                    )}
+                    {needsReply(conv) && (
+                      <span
+                        role="button"
+                        tabIndex={0}
+                        title="Mark handled — no reply needed"
+                        onClick={e => { e.stopPropagation(); quickResolve(conv) }}
+                        onKeyDown={e => { if (e.key === 'Enter') { e.stopPropagation(); quickResolve(conv) } }}
+                        className="p-1 rounded-md border border-un1t-border text-un1t-muted hover:text-emerald-700 hover:border-emerald-600 transition-colors"
+                      >
+                        <Check size={11} />
+                      </span>
+                    )}
+                  </span>
                 </div>
               </button>
             )
