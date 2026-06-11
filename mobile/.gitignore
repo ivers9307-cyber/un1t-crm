@@ -3,7 +3,14 @@ node_modules/
 dist/
 web-build/
 *.log
+# Block all PEMs by default (belt-and-braces so the OTA signing PRIVATE
+# key can never be committed) — then re-include ONLY the public update
+# code-signing certificate, which MUST ship in the repo (it's embedded
+# in the binary so devices can verify update signatures). The private
+# key lives in mobile/keys/ (ignored at the repo root) + the GitHub
+# secret EXPO_UPDATES_PRIVATE_KEY.
 *.pem
+!certs/certificate.pem
 .env
 .env.local
 .DS_Store
