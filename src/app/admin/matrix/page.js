@@ -15,6 +15,8 @@
 // are client components for the interactive bits.
 
 import { redirect } from 'next/navigation'
+import Link from 'next/link'
+import { Building2 } from 'lucide-react'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import AdminFeatureMatrix from '@/components/AdminFeatureMatrix'
@@ -58,6 +60,13 @@ export default async function AdminMatrixPage() {
     }
   }
 
+  // Organizations with no locations are skipped by both matrices (their
+  // rows/columns are location-driven), which makes a freshly created org
+  // look like the creation silently failed — and users can't be assigned
+  // to it because assignments attach to locations, not orgs. Surface
+  // them explicitly with the next step instead of hiding them.
+  const emptyOrgs = organizations.filter((org) => (locationsByOrg[org.id] || []).length === 0)
+
   return (
     <div className="p-8 max-w-7xl">
       <div className="flex items-start justify-between gap-4 mb-2">
@@ -68,6 +77,29 @@ export default async function AdminMatrixPage() {
         Master-only view across every organization, location, and user. Feature toggles edit
         inline; user assignments are managed via the access matrix.
       </p>
+
+      {emptyOrgs.length > 0 && (
+        <div className="mb-8 flex items-start gap-3 rounded-lg border border-amber-300 bg-amber-500/10 px-4 py-3 text-sm">
+          <Building2 size={16} className="mt-0.5 shrink-0 text-amber-600" />
+          <div>
+            <p className="font-semibold text-amber-800">
+              {emptyOrgs.map((o) => o.name).join(', ')}{' '}
+              {emptyOrgs.length === 1 ? 'has' : 'have'} no locations yet
+            </p>
+            <p className="mt-0.5 text-amber-700">
+              An organisation appears in the matrices below once it has a location — and users
+              are assigned to locations, not organisations.{' '}
+              <Link
+                href="/settings/locations/new"
+                className="font-medium underline hover:no-underline"
+              >
+                Add the first location
+              </Link>{' '}
+              to start assigning users and configuring features.
+            </p>
+          </div>
+        </div>
+      )}
 
       <section className="mb-12">
         <h3 className="text-lg font-semibold mb-1">Feature matrix</h3>
