@@ -34,7 +34,15 @@ export default function AppShell({ user, children }) {
   // hook order is stable across the public/protected branches below.
   const [mobileOpen, setMobileOpen] = useState(false)
 
-  const isPublic = PUBLIC_PATHS.some(p => pathname === p || pathname.startsWith(p + '/'))
+  // '/' is the marketing site's front door: on un1tdublin.com the proxy
+  // rewrites the bare root to /welcome (the split chooser) while the
+  // browser URL — and therefore usePathname() — stays '/'. Without this
+  // exact-match, the null-user redirect below bounced every logged-out
+  // visitor of the bare domain to /login on hydration (latent since
+  // d184209; surfaced during the 2026-06 redesign verification). The
+  // CRM host is unaffected: src/app/page.js already server-redirects
+  // '/' to /login or the dashboard before this client gate ever runs.
+  const isPublic = pathname === '/' || PUBLIC_PATHS.some(p => pathname === p || pathname.startsWith(p + '/'))
 
   // Protected route but no resolved user (expired/unresolved session, or
   // a transient profile-fetch miss in getCurrentUser). Previously the
