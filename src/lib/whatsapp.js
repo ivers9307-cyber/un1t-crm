@@ -678,14 +678,24 @@ export function buildTemplateComponents(template, contact, variableMapping, head
   const components = []
   const templateComponents = template.components || []
 
-  // Check if template has a header with media
+  // Check if template has a header with media. A media-header template
+  // MUST be sent with a matching header parameter or Meta rejects the
+  // send with (#132012) "Parameter format does not match format in the
+  // created template" — so when the caller has no per-send override
+  // (broadcast.header_media_url / step.whatsapp_header_media_url are
+  // optional and usually null), fall back to the URL persisted on the
+  // template row at upload time. This bit the first video-header
+  // broadcast (2026-06-11): the template was APPROVED but the broadcast
+  // carried no URL, the header param was silently omitted, and every
+  // recipient failed.
   const headerComp = templateComponents.find(c => c.type === 'HEADER')
-  if (headerComp && ['IMAGE', 'VIDEO', 'DOCUMENT'].includes(headerComp.format) && headerMediaUrl) {
+  const mediaUrl = headerMediaUrl || template.header_media_url || null
+  if (headerComp && ['IMAGE', 'VIDEO', 'DOCUMENT'].includes(headerComp.format) && mediaUrl) {
     components.push({
       type: 'header',
       parameters: [{
         type: headerComp.format.toLowerCase(),
-        [headerComp.format.toLowerCase()]: { link: headerMediaUrl },
+        [headerComp.format.toLowerCase()]: { link: mediaUrl },
       }],
     })
   }
