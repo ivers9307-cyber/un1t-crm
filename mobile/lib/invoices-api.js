@@ -11,6 +11,7 @@
 
 import Constants from 'expo-constants'
 import { authHeaders } from './api'
+import { supabase } from './supabase'
 
 const API_BASE = Constants.expoConfig?.extra?.apiBaseUrl
 
@@ -63,34 +64,75 @@ export async function declineInvoice(id, reason) {
 }
 
 /**
- * Submit a new invoice. file = { uri, name, mimeType } from
+ * Submit a new invoice. file = { uri, name, mimeType, size? } from
  * expo-document-picker.
+ *
+ * INVOICE-UPLOAD.1 — three-step direct-to-storage flow. The old version
+ * POSTed the PDF as multipart through /api/invoices, but Vercel caps
+ * serverless request bodies at ~4.5 MB, so the advertised 10 MB limit
+ * 413'd for bigger files (same bug class as the WA template video fix).
+ * Now the bytes go straight from the device to Supabase Storage:
+ *   1. /api/invoices/upload-sign mints a path + signed-upload token.
+ *   2. The PDF uploads directly to the private contractor-invoices
+ *      bucket (uploadToSignedUrl — the token is the authz).
+ *   3. /api/invoices (JSON mode) verifies the object and inserts.
+ * The server keeps multipart back-compat, so older app builds still
+ * work while this rolls out via OTA.
  */
 export async function submitInvoice({
   monthKey, amount, invoiceNumber, notes, locationId, file,
 }) {
-  const headers = await authHeaders({ locationId })
+  const fileName = file.name || 'invoice.pdf'
 
-  // React Native FormData — file must be a { uri, name, type } object.
-  const fd = new FormData()
-  fd.append('month', monthKey)
-  fd.append('amount', String(amount))
-  if (invoiceNumber) fd.append('invoice_number', invoiceNumber)
-  if (notes) fd.append('notes', notes)
-  if (locationId) fd.append('location_id', locationId)
-  fd.append('pdf', {
-    uri: file.uri,
-    name: file.name || 'invoice.pdf',
-    type: file.mimeType || 'application/pdf',
+  // Read the picked document into a Blob. RN's fetch handles file://
+  // (and expo-document-picker cache) URIs; the blob carries the real
+  // byte size for the sign-time validation.
+  let blob
+  try {
+    blob = await (await fetch(file.uri)).blob()
+  } catch (err) {
+    return { success: false, error: `Could not read the selected file: ${err.message || err}` }
+  }
+
+  // 1. Mint the signed direct-to-storage upload slot (tiny JSON).
+  const signHeaders = await authHeaders({ locationId, json: true })
+  const signRes = await fetch(`${API_BASE}/api/invoices/upload-sign`, {
+    method: 'POST',
+    headers: signHeaders,
+    body: JSON.stringify({
+      month: monthKey,
+      size: blob.size,
+      mime: 'application/pdf',
+      file_name: fileName,
+    }),
   })
+  const sign = await signRes.json().catch(() => ({ success: false, error: `Bad response (${signRes.status})` }))
+  if (sign.success === false || !sign.token) {
+    return { success: false, error: sign.error || 'Could not start the upload.' }
+  }
 
-  // NB: do NOT set 'Content-Type' manually — RN's fetch sets the
-  // multipart boundary automatically when body is FormData. Setting
-  // it explicitly here breaks the request.
+  // 2. Device → Supabase Storage directly (bypasses the API size cap).
+  const { error: upErr } = await supabase.storage
+    .from('contractor-invoices')
+    .uploadToSignedUrl(sign.path, sign.token, blob, { contentType: 'application/pdf' })
+  if (upErr) {
+    return { success: false, error: `Upload failed: ${upErr.message}` }
+  }
+
+  // 3. Finalise — the server verifies the stored PDF and inserts the row.
+  const headers = await authHeaders({ locationId, json: true })
   const res = await fetch(`${API_BASE}/api/invoices`, {
     method: 'POST',
     headers,
-    body: fd,
+    body: JSON.stringify({
+      month: monthKey,
+      amount: Number(amount),
+      invoice_number: invoiceNumber || null,
+      notes: notes || null,
+      location_id: locationId || null,
+      pdf_path: sign.path,
+      pdf_name: fileName,
+    }),
   })
   return res.json().catch(() => ({ success: false, error: `Bad response (${res.status})` }))
 }
