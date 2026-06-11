@@ -1,7 +1,7 @@
 import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { sendTextMessage, sendTemplateMessage, sendMediaMessage, isWindowOpen } from '@/lib/whatsapp'
+import { sendTextMessage, sendTemplateMessage, sendMediaMessage, isWindowOpen, substituteTemplateBody } from '@/lib/whatsapp'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { url } from '@/lib/schemas'
@@ -65,7 +65,25 @@ export async function POST(request, props) {
         body.template_components || []
       )
       templateName = body.template_name
+      // Render the actual text the contact received so the thread shows
+      // real content instead of a "[template]" placeholder: look up the
+      // template's BODY text and substitute the param values the client
+      // sent. Falls back to the placeholder if the template row or body
+      // text can't be found.
       messageBody = `[Template: ${body.template_name}]`
+      try {
+        const { data: tplRow } = await db
+          .from('whatsapp_templates')
+          .select('components')
+          .eq('name', body.template_name)
+          .eq('location_id', conversation.location_id)
+          .maybeSingle()
+        const bodyText = (tplRow?.components || []).find((c) => c.type === 'BODY')?.text
+        const values = ((body.template_components || []).find((c) => c.type === 'body')?.parameters || [])
+          .map((p) => p?.text ?? '')
+        const rendered = substituteTemplateBody(bodyText, values)
+        if (rendered) messageBody = rendered
+      } catch { /* keep placeholder */ }
     } else if (['image', 'video', 'document', 'audio'].includes(messageType)) {
       // Media message — 24h window only
       if (!isWindowOpen(conversation)) {

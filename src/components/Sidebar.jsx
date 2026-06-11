@@ -9,6 +9,7 @@ import LocationSwitcher from './LocationSwitcher'
 import ImpersonatePicker from './ImpersonatePicker'
 import clsx from 'clsx'
 import { hasPermission } from '@/lib/permissions'
+import { usePolledCount } from './use-polled-count'
 
 const roleLabels = {
   master: 'Master',
@@ -169,41 +170,10 @@ const NAV_SECTIONS = [
   { id: 'account', label: 'Account' },
 ]
 
-// Sidebar badge polling. Drives the red circles next to nav items
-// that surface pending counts (INVOICES.2: /invoices,
-// APPROVALS.1: /approvals). Polls every 60s and refreshes on tab
-// refocus so the count drops promptly after an action elsewhere.
-//
-// Generic shape — pass a URL + a "selector" that extracts the
-// numeric count from the JSON envelope. Both endpoints follow the
-// same { success, data: { count } } convention.
-const POLL_INTERVAL_MS = 60_000
-
-function usePolledCount({ enabled, url }) {
-  const [count, setCount] = useState(0)
-  useEffect(() => {
-    if (!enabled) { setCount(0); return }
-    let cancelled = false
-    async function load() {
-      try {
-        const r = await fetch(url, { cache: 'no-store' })
-        if (!r.ok) return
-        const j = await r.json()
-        if (!cancelled && j?.success) setCount(j.data?.count || 0)
-      } catch { /* network blip — keep last good count */ }
-    }
-    load()
-    const id = setInterval(load, POLL_INTERVAL_MS)
-    const onFocus = () => load()
-    window.addEventListener('focus', onFocus)
-    return () => {
-      cancelled = true
-      clearInterval(id)
-      window.removeEventListener('focus', onFocus)
-    }
-  }, [enabled, url])
-  return count
-}
+// Sidebar badge polling lives in use-polled-count.js (extracted so the
+// Communications tab strip shares the exact same poller for its Inbox
+// badge). Drives the red circles next to nav items that surface
+// pending counts; polls every 60s and refreshes on tab refocus.
 
 export default function Sidebar({ user, mobileOpen = false, onMobileClose }) {
   const pathname = usePathname()

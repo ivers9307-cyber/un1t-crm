@@ -63,3 +63,46 @@ describe('buildTemplateComponents — media headers', () => {
     expect(comps[0].parameters[0]).toEqual({ type: 'image', image: { link: 'https://example.com/pic.jpg' } })
   })
 })
+
+import { renderTemplateBody, substituteTemplateBody, parseConsentKeyword } from './whatsapp.js'
+
+describe('renderTemplateBody / substituteTemplateBody', () => {
+  it('renders the body text a contact actually receives', () => {
+    expect(renderTemplateBody(VIDEO_TEMPLATE, contact, { 1: 'first_name' }))
+      .toBe('Hey Richard, welcome!')
+  })
+
+  it('uses unmapped variables as literals and missing maps as blanks', () => {
+    const tpl = { components: [{ type: 'BODY', text: 'Hi {{1}}, code {{2}}' }] }
+    expect(renderTemplateBody(tpl, contact, { 1: 'first_name', 2: 'GYM20' }))
+      .toBe('Hi Richard, code GYM20')
+    expect(renderTemplateBody(tpl, contact, {})).toBe('Hi , code ')
+  })
+
+  it('returns null when the template has no BODY text', () => {
+    expect(renderTemplateBody({ components: [] }, contact, {})).toBeNull()
+    expect(substituteTemplateBody(null, ['x'])).toBeNull()
+  })
+
+  it('substitutes positionally and tolerates short value arrays', () => {
+    expect(substituteTemplateBody('A {{1}} B {{2}}', ['one'])).toBe('A one B ')
+  })
+})
+
+describe('parseConsentKeyword', () => {
+  it('matches stop keywords case/whitespace-insensitively', () => {
+    for (const t of ['STOP', ' stop ', 'Unsubscribe', 'stopall', 'STOP ALL', 'cancel', 'end', 'quit']) {
+      expect(parseConsentKeyword(t)).toBe('stop')
+    }
+  })
+  it('matches start keywords', () => {
+    for (const t of ['START', ' start', 'unstop', 'Subscribe']) {
+      expect(parseConsentKeyword(t)).toBe('start')
+    }
+  })
+  it('ignores conversational mentions and non-text', () => {
+    for (const t of ['please stop texting me', 'stop it', 'can I unsubscribe?', '', null, undefined]) {
+      expect(parseConsentKeyword(t)).toBeNull()
+    }
+  })
+})
