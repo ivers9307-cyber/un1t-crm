@@ -7,16 +7,27 @@
 // row, resolved here by `public_path` (mig 227) so the public URL is
 // decoupled from internal location slugs.
 //
-// Renders identically to the original single-studio /welcome page —
-// same SiteHeader → ordered blocks → SiteFooter via the shared
-// BlockRenderers. Editing happens in /settings/landing-page (per
-// active location); the live-preview iframe still uses /welcome?edit=1.
+// Renders the same SiteHeader → ordered blocks → SiteFooter via the
+// shared BlockRenderers. Editing happens in /settings/landing-page
+// (per active location); the live-preview iframe still uses ?edit=1.
+//
+// WEBSITE-REDESIGN 2026-06 additions (public render only):
+//   · Sticky glass header with a CTA computed from the page's OWN
+//     funnel blocks (lead_form → #waitlist, booking → #book, event →
+//     its anchor) — the conversion action is always one tap away.
+//   · Scroll-reveal arming script + RevealManager island (see
+//     reveal-arm.js for the degradation table). Edit mode never
+//     mounts either, so the editor previews static blocks.
+//   · JSON-LD (Gym) via the JsonLd island for richer search results.
 
 import { notFound } from 'next/navigation'
 import { createServerClient } from '@/lib/supabase'
-import { blocksOrDefault } from '@/lib/landing-page-blocks'
+import { blocksOrDefault, primaryCta } from '@/lib/landing-page-blocks'
 import BlockRenderer, { SiteHeader, SiteFooter } from '@/components/landing-page/BlockRenderers'
 import EditModeOverlay from '@/components/landing-page/EditModeOverlay'
+import RevealManager from '@/components/landing-page/RevealManager'
+import JsonLd from '@/components/landing-page/JsonLd'
+import { RevealArmScript } from '@/components/landing-page/reveal-arm'
 import { isPubliclyVisible } from '@/lib/landing-page-visibility'
 
 export const dynamic = 'force-dynamic'
@@ -124,13 +135,54 @@ export default async function StudioLandingPage(props) {
     )
   }
 
+  const cta = primaryCta(blocks)
+  const studioName = row.locations?.name || 'UN1T Dublin'
+  const hero = blocks.find((b) => b.type === 'hero')
+
+  // Gym structured data — name, url, hero image; aggregate rating only
+  // when a synced Google Business connection has one (never invented).
+  const jsonLd = {
+    '@context': 'https://schema.org',
+    '@type': 'Gym',
+    name: studioName,
+    url: `https://un1tdublin.com/${params.location}`,
+    ...(hero?.image_url ? { image: hero.image_url } : {}),
+    ...(logoUrl ? { logo: logoUrl } : {}),
+    ...(reviewsData?.averageRating != null && reviewsData?.totalCount
+      ? {
+          aggregateRating: {
+            '@type': 'AggregateRating',
+            ratingValue: Number(reviewsData.averageRating).toFixed(1),
+            reviewCount: reviewsData.totalCount,
+          },
+        }
+      : {}),
+  }
+
   return (
     <div className="min-h-screen bg-black text-white antialiased">
-      <SiteHeader logoUrl={logoUrl} logoAlt={logoAlt} logoWidthPx={logoWidthPx} />
+      <RevealArmScript />
+      <RevealManager />
+      <JsonLd data={jsonLd} />
+      <SiteHeader
+        logoUrl={logoUrl}
+        logoAlt={logoAlt}
+        logoWidthPx={logoWidthPx}
+        sticky
+        ctaHref={cta?.href || null}
+        ctaLabel={cta?.label}
+      />
       {blocks.map((block) => (
-        <BlockRenderer key={block.id} block={block} publicPath={params.location} reviewsData={reviewsData} />
+        <BlockRenderer
+          key={block.id}
+          block={block}
+          publicPath={params.location}
+          reviewsData={reviewsData}
+          ctaHref={cta?.href || null}
+          ctaLabel={cta?.label}
+        />
       ))}
-      <SiteFooter />
+      <SiteFooter ctaHref={cta?.href || '#book'} ctaLabel={cta?.label || 'Book a free consult'} />
     </div>
   )
 }

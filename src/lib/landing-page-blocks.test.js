@@ -7,6 +7,7 @@ import {
   BLOCK_TYPES,
   BlocksArraySchema,
   setByPath,
+  primaryCta,
 } from './landing-page-blocks.js'
 
 describe('newBlockId', () => {
@@ -249,5 +250,42 @@ describe('video_testimonials block type', () => {
   it('blocksOrDefault keeps a saved video_testimonials block', () => {
     const saved = [{ id: 'x', type: 'video_testimonials', items: [] }]
     expect(blocksOrDefault(saved)).toHaveLength(1)
+  })
+})
+
+describe('primaryCta (WEBSITE-REDESIGN 2026-06)', () => {
+  it('prefers lead_form over booking and event, using its button_label', () => {
+    const blocks = [
+      { id: 'b', type: 'booking', slug: 'consult' },
+      { id: 'l', type: 'lead_form', button_label: 'Join the waitlist' },
+      { id: 'e', type: 'event', slug: 'race' },
+    ]
+    expect(primaryCta(blocks)).toEqual({ href: '#waitlist', label: 'Join the waitlist' })
+  })
+
+  it('falls back to the default waitlist label when button_label is blank', () => {
+    expect(primaryCta([{ id: 'l', type: 'lead_form', button_label: '   ' }]).label).toBe('Join the waitlist')
+  })
+
+  it('uses booking when no lead_form exists', () => {
+    expect(primaryCta([{ id: 'b', type: 'booking', slug: 'x' }])).toEqual({
+      href: '#book',
+      label: 'Book a free consult',
+    })
+  })
+
+  it('uses the event anchor + title when only an event block exists', () => {
+    expect(primaryCta([{ id: 'e', type: 'event', slug: 'spring-race', title: 'Sign up' }])).toEqual({
+      href: '#event-spring-race',
+      label: 'Sign up',
+    })
+    // Slugless event still gets a stable anchor (matches the renderer id).
+    expect(primaryCta([{ id: 'e', type: 'event' }]).href).toBe('#event-signup')
+  })
+
+  it('returns null when the page has no funnel block (no dead anchors)', () => {
+    expect(primaryCta([{ id: 'h', type: 'hero' }, { id: 's', type: 'stats', items: [] }])).toBeNull()
+    expect(primaryCta([])).toBeNull()
+    expect(primaryCta(null)).toBeNull()
   })
 })

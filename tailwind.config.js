@@ -7,6 +7,18 @@ module.exports = {
   content: ['./src/**/*.{js,jsx}', './shared/**/*.{js,jsx}'],
   theme: {
     extend: {
+      // Marketing-site typography (WEBSITE-REDESIGN 2026-06). The CSS
+      // variable is set by src/app/welcome/layout.js via next/font, so
+      // these families only resolve inside the /welcome segment — the CRM
+      // app keeps the default stack. Poppins-only brand decision
+      // (2026-06-11): `display` is the same family — display text gets
+      // its voice from weight (700–900) + uppercase + tracking, kept as
+      // a separate utility so the markup stays semantic and a future
+      // display face is a one-line swap here.
+      fontFamily: {
+        display: ['var(--font-body)', 'ui-sans-serif', 'system-ui', 'sans-serif'],
+        body: ['var(--font-body)', 'ui-sans-serif', 'system-ui', 'sans-serif'],
+      },
       colors: {
         un1t: {
           // Intent-based tokens (UI-FOUND.1). Names previously meant

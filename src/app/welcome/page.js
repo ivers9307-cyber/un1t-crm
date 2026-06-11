@@ -17,6 +17,10 @@
 // for the live-preview iframe inside /settings/landing-page, which
 // drives the overlay via postMessage. The editor branch runs BEFORE
 // the chooser render, so the editor keeps working exactly as before.
+//
+// WEBSITE-REDESIGN 2026-06: display typography (font-display, set by
+// the /welcome layout), staggered entrance, film grain, ENTER pill
+// that lifts on hover. Tile data + visibility logic untouched.
 
 import Link from 'next/link'
 import { createServerClient } from '@/lib/supabase'
@@ -122,26 +126,28 @@ function TileBody({ s }) {
           the gradient placeholder below shows through. */}
       {s.cover ? (
         <div
-          className={`absolute inset-0 bg-cover bg-center transition-transform duration-700 ease-out ${s.disabled ? '' : 'group-hover:scale-105'}`}
+          className={`absolute inset-0 bg-cover bg-center transition-transform duration-[1200ms] ease-out ${s.disabled ? '' : 'group-hover:scale-[1.06]'}`}
           style={{ backgroundImage: `url(${s.cover})` }}
         />
       ) : (
-        <div className={`absolute inset-0 bg-gradient-to-br from-neutral-800 via-neutral-900 to-black transition-transform duration-700 ease-out ${s.disabled ? '' : 'group-hover:scale-105'}`} />
+        <div className={`absolute inset-0 bg-gradient-to-br from-neutral-800 via-neutral-900 to-black transition-transform duration-[1200ms] ease-out ${s.disabled ? '' : 'group-hover:scale-[1.06]'}`} />
       )}
       {/* Dark scrim — deeper on a disabled tile so it reads as inactive;
           on active tiles it lightens on hover to read as "selected". */}
-      <div className={`absolute inset-0 transition-colors duration-500 ${s.disabled ? 'bg-black/70' : 'bg-black/50 group-hover:bg-black/30'}`} />
+      <div className={`absolute inset-0 transition-colors duration-500 ${s.disabled ? 'bg-black/70' : 'bg-black/55 group-hover:bg-black/35'}`} />
       <div className="relative z-10 text-center px-6">
-        <div className="text-[11px] uppercase tracking-[0.3em] text-white/60 mb-3">UN1T Dublin</div>
+        <div className="text-[10px] uppercase tracking-[0.45em] text-white/55 mb-4 font-semibold">UN1T Dublin</div>
         {s.disabled && (
-          <div className="mb-3 inline-block rounded-full border border-white/40 px-3 py-1 text-[10px] uppercase tracking-[0.25em] text-white/80">
+          <div className="mb-4 inline-block rounded-full border border-white/40 px-3.5 py-1 text-[10px] uppercase tracking-[0.25em] text-white/80">
             Coming soon
           </div>
         )}
-        <h2 className={`text-3xl md:text-5xl font-extrabold tracking-tight ${s.disabled ? 'text-white/70' : ''}`}>{s.name}</h2>
+        <h2 className={`font-display font-extrabold uppercase text-3xl md:text-5xl tracking-tight leading-[1.04] ${s.disabled ? 'text-white/70' : 'text-white'}`}>
+          {s.name}
+        </h2>
         {/* CTA only on active tiles. Disabled tiles show the label alone. */}
         {!s.disabled && (
-          <div className="mt-5 inline-flex items-center gap-2 text-sm uppercase tracking-wider text-white/80 group-hover:text-white transition-colors">
+          <div className="mt-7 inline-flex items-center gap-2.5 rounded-full border border-white/35 px-6 py-2.5 text-xs uppercase tracking-[0.25em] font-semibold text-white/85 transition-all duration-300 group-hover:bg-white group-hover:text-black group-hover:border-white">
             {s.cta}
             <span aria-hidden className="transition-transform duration-300 group-hover:translate-x-1">→</span>
           </div>
@@ -170,22 +176,24 @@ export default async function WelcomePage(props) {
 
   const { headline, intro, tiles } = await loadFrontPage()
 
-  const tileWrapClasses = 'group relative flex-1 min-h-[50vh] md:min-h-screen overflow-hidden flex items-center justify-center border-b border-white/10 md:border-b-0 md:border-r last:border-0'
+  const tileWrapClasses = 'group relative flex-1 min-h-[50svh] md:min-h-screen overflow-hidden flex items-center justify-center border-b border-white/10 md:border-b-0 md:border-r last:border-0'
 
   return (
-    <main className="relative min-h-screen bg-black text-white antialiased flex flex-col md:flex-row">
-      {/* Operator headline / intro, centred across the split. Overlay is
-          click-through (pointer-events-none) so it never blocks a tile. */}
-      {(headline || intro) && (
-        <div className="pointer-events-none absolute top-0 inset-x-0 z-20 pt-8 md:pt-10 px-6 text-center">
-          {headline && (
-            <h1 className="text-xl md:text-3xl font-extrabold tracking-tight drop-shadow">{headline}</h1>
-          )}
-          {intro && (
-            <p className="mt-2 text-sm md:text-base text-white/80 drop-shadow">{intro}</p>
-          )}
+    <main className="relative min-h-screen bg-black text-white antialiased flex flex-col md:flex-row lp-grain">
+      {/* Brand bar + operator headline / intro, centred across the
+          split. Overlay is click-through (pointer-events-none) so it
+          never blocks a tile. */}
+      <div className="pointer-events-none absolute top-0 inset-x-0 z-20 pt-8 md:pt-10 px-6 text-center lp-hero-stagger">
+        <div className="font-display font-extrabold text-xl md:text-2xl tracking-[0.3em] text-white drop-shadow">
+          UN1T <span className="text-white/55">DUBLIN</span>
         </div>
-      )}
+        {headline && (
+          <h1 className="mt-4 font-display font-extrabold uppercase text-2xl md:text-3xl tracking-tight drop-shadow">{headline}</h1>
+        )}
+        {intro && (
+          <p className="mt-2 text-sm md:text-base text-white/75 drop-shadow max-w-xl mx-auto">{intro}</p>
+        )}
+      </div>
 
       {tiles.map((s) =>
         s.disabled ? (
