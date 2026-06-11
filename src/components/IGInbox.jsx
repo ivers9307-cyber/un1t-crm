@@ -31,7 +31,9 @@ function displayName(conv) {
   return 'Instagram user'
 }
 
-export default function IGInbox({ locationId, initialConversationId }) {
+// `embedded` (UIX-P1b): thread-pane-only mode for the unified inbox —
+// the internal list is hidden and selection follows initialConversationId.
+export default function IGInbox({ locationId, initialConversationId, embedded = false }) {
   const [conversations, setConversations] = useState([])
   const [selectedId, setSelectedId] = useState(initialConversationId || null)
   const [conversation, setConversation] = useState(null)
@@ -97,6 +99,9 @@ export default function IGInbox({ locationId, initialConversationId }) {
 
   useEffect(() => { loadConversations() }, [loadConversations])
   useEffect(() => {
+    if (embedded) setSelectedId(initialConversationId || null)
+  }, [embedded, initialConversationId])
+  useEffect(() => {
     const t = setInterval(loadConversations, 15000)
     return () => clearInterval(t)
   }, [loadConversations])
@@ -145,9 +150,9 @@ export default function IGInbox({ locationId, initialConversationId }) {
   const agentActive = conversation?.agent_active !== false
 
   return (
-    <div className="flex h-[calc(100vh-4rem)] bg-un1t-bg">
-      {/* Conversation list */}
-      <div className={`${selectedId ? 'hidden md:flex' : 'flex'} flex-col w-full md:w-80 border-r border-un1t-border`}>
+    <div className={`flex ${embedded ? 'h-full' : 'h-[calc(100vh-4rem)]'} bg-un1t-bg`}>
+      {/* Conversation list (hidden in embedded mode — the unified queue replaces it) */}
+      <div className={`${embedded ? 'hidden' : selectedId ? 'hidden md:flex' : 'flex'} flex-col w-full md:w-80 border-r border-un1t-border`}>
         <div className="flex items-center justify-between p-4 border-b border-un1t-border">
           <div className="flex items-center gap-2">
             <Instagram size={18} className="text-un1t-accent" />
@@ -230,7 +235,7 @@ export default function IGInbox({ locationId, initialConversationId }) {
           <>
             <div className="flex items-center justify-between gap-3 p-4 border-b border-un1t-border">
               <div className="flex items-center gap-2 min-w-0">
-                <button onClick={() => setSelectedId(null)} className="md:hidden text-un1t-subtle" aria-label="Back">
+                <button onClick={() => setSelectedId(null)} className={embedded ? 'hidden' : 'md:hidden text-un1t-subtle'} aria-label="Back">
                   <ArrowLeft size={18} />
                 </button>
                 <div className="min-w-0">

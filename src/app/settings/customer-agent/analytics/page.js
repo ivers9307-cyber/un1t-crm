@@ -121,7 +121,7 @@ export default function AgentAnalyticsPage() {
                 <div className="space-y-1.5">
                   {data.escalations.map(e => {
                     const href = e.channel === 'instagram'
-                      ? `/communications/instagram?c=${e.id}`
+                      ? `/communications/inbox?c=${e.id}&ch=ig`
                       : `/communications/inbox?c=${e.id}`
                     return (
                       <Link
