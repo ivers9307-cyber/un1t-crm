@@ -128,23 +128,35 @@ export async function GET(request) {
   // error) is the real shape. Ids stay syntactically-valid fakes so
   // nothing can actually be created.
   if (check === 'booking_dryrun') {
+    // Round 3 (operator E2E 2026-06-11): model:'Event' got past the
+    // required-field stage but failed the enum — "The selected model
+    // is invalid." Widen the candidate sweep so ONE click pins the
+    // accepted value (Glofox's data model suggests event / course /
+    // appointment / facility families; casing unknown).
     const fakeId = '0123456789abcdef01234567'
-    const variants = [
-      { user_id: fakeId, model: 'Event',  model_id: fakeId },
-      { user_id: fakeId, model: 'event',  model_id: fakeId },
-      { user_id: fakeId, model: 'events', model_id: fakeId },
-      { user_id: fakeId, event_id: fakeId },  // round-1 control
+    const candidates = [
+      'event', 'events', 'Event', 'EVENT',
+      'class', 'classes', 'Class',
+      'course', 'courses', 'Course',
+      'appointment', 'facility', 'booking', 'program',
     ]
     const results = []
-    for (const sent of variants) {
-      const r = await createBooking(creds, sent)
-      results.push({ sent, status: r.status, body: r.body })
+    for (const model of candidates) {
+      const r = await createBooking(creds, { user_id: fakeId, model, model_id: fakeId })
+      const msg = r.body?.message || r.body?.message_code || null
+      results.push({
+        model,
+        status: r.status,
+        message: msg,
+        // The winner: anything that is NOT the enum rejection.
+        past_enum: msg ? !/selected model is invalid/i.test(msg) : null,
+      })
     }
     return NextResponse.json({
       ok: true,
       check,
       location_id: locationId,
-      interpretation: 'The variant whose errors move past "model field is required" reveals the real BookingRequest shape; an error naming the member/event (not the fields) means that shape is fully correct.',
+      interpretation: 'past_enum=true marks model values Glofox ACCEPTS (the error moves on to the fake member/event ids). Those are the real enum; set GLOFOX_BOOKING_MODEL to the event-family winner.',
       results,
     })
   }

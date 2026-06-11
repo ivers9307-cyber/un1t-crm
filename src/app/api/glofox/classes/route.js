@@ -76,8 +76,13 @@ export async function GET(request) {
         booked,
         spots_left: size > 0 ? Math.max(0, size - booked) : null,
         waiting: Number(e.waiting) || 0,
+        // E2E screenshot showed trainers arrive as raw 24-hex member
+        // ids — display-worthless, so drop hex ids and keep only
+        // human-readable names (object shapes or real name strings).
         trainers: Array.isArray(e.trainers)
-          ? e.trainers.map(t => (typeof t === 'string' ? t : t?.name || t?.first_name || null)).filter(Boolean)
+          ? e.trainers
+              .map(t => (typeof t === 'string' ? t : t?.name || t?.first_name || null))
+              .filter(t => t && !/^[0-9a-f]{24}$/i.test(t))
           : [],
         booking_status: e.booking_status ?? null,
       }
