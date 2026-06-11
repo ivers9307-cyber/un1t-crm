@@ -1,104 +1,120 @@
 // POST /api/whatsapp/templates/upload-media
 //
-// Uploads a media asset destined for a WhatsApp template's IMAGE /
-// VIDEO / DOCUMENT header. Two things happen in one round trip:
+// Step 2 of the template-media upload flow. The browser has ALREADY
+// uploaded the bytes directly to the public 'whatsapp-templates' bucket
+// via the signed URL from ./sign (step 1) — this route receives only a
+// small JSON pointer, downloads the object server-side, and pushes the
+// bytes through Meta's Resumable Upload API to obtain the
+// 'header_handle' required for template approval.
 //
-//   1. The file is stored in the public 'whatsapp-templates' bucket.
-//      The returned URL is what we'll feed Meta at SEND time (the
-//      messaging API fetches the asset from this URL).
-//   2. The bytes are also pushed through Meta's Resumable Upload API
-//      to obtain a 'header_handle'. This handle is what gets put into
-//      components.example.header_handle when the template is submitted
-//      for approval. Without it, Meta rejects media-header templates.
+// WHY the two-step shape: the previous version received the file as
+// multipart through this route, but Vercel hard-caps serverless request
+// bodies at ~4.5 MB — every real VIDEO (Meta cap 16 MB) and most
+// DOCUMENTs died with a platform-level 413 ("Request Entity Too
+// Large"), which the client's res.json() rendered as the cryptic
+// `Unexpected token 'R'`. Bytes must never transit Vercel. See
+// src/lib/template-media.js for the full flow + shared limits.
 //
 // Caller (WATemplateEditor) gets back { handle, url, path } and writes
 // those into the form state; on save, the handle goes into the
 // template payload and the URL gets persisted to whatsapp_templates
-// for runtime use.
-//
-// Validation: type allowlist + size cap per format. Limits match
-// Meta's published caps (May 2026):
-//   IMAGE:    5 MB  — image/jpeg, image/png
-//   VIDEO:   16 MB  — video/mp4, video/3gpp
-//   DOCUMENT: 100 MB — application/pdf
+// for runtime use. If the Meta push fails we still return the storage
+// URL so the operator can retry without re-uploading.
 
+import { z } from 'zod'
 import { NextResponse } from 'next/server'
-import { randomUUID } from 'node:crypto'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
+import { validateBody } from '@/lib/validate'
+import { uuidLike } from '@/lib/schemas'
+import { validateTemplateMedia, isMintedMediaPath } from '@/lib/template-media'
 import { uploadMediaForTemplate } from '@/lib/whatsapp'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
+// A 16 MB video (or larger document) can take a while to round-trip
+// through Meta's resumable upload — give the route headroom.
+export const maxDuration = 300
 
-const LIMITS = {
-  IMAGE:    { mimes: ['image/jpeg', 'image/png'],            maxBytes: 5  * 1024 * 1024,  exts: ['.jpg', '.jpeg', '.png'] },
-  VIDEO:    { mimes: ['video/mp4', 'video/3gpp'],            maxBytes: 16 * 1024 * 1024,  exts: ['.mp4', '.3gp']           },
-  DOCUMENT: { mimes: ['application/pdf'],                    maxBytes: 100 * 1024 * 1024, exts: ['.pdf']                    },
-}
+const FinaliseSchema = z.object({
+  path: z.string().min(1).max(300),
+  format: z.string().min(1),
+  mime: z.string().min(1),
+  file_name: z.string().min(1).max(300),
+  location_id: uuidLike.optional(),
+})
 
 export async function POST(request) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
 
-  const form = await request.formData().catch(() => null)
-  if (!form) return NextResponse.json({ success: false, error: 'Expected multipart/form-data' }, { status: 400 })
-
-  const file = form.get('file')
-  const format = String(form.get('format') || '').toUpperCase()
-  const locationId = form.get('location_id') || user.activeLocation?.id
-
-  if (!(file instanceof File)) {
-    return NextResponse.json({ success: false, error: 'No file provided' }, { status: 400 })
-  }
-  const limits = LIMITS[format]
-  if (!limits) {
-    return NextResponse.json({ success: false, error: 'format must be IMAGE, VIDEO, or DOCUMENT' }, { status: 400 })
-  }
-  if (!limits.mimes.includes(file.type)) {
+  // Stale-tab guard: the pre-fix client posted the file itself as
+  // multipart. Give those tabs a clear instruction instead of a Zod error.
+  const contentType = request.headers.get('content-type') || ''
+  if (contentType.includes('multipart/form-data')) {
     return NextResponse.json({
       success: false,
-      error: `${format} requires one of: ${limits.mimes.join(', ')}. Got: ${file.type || 'unknown'}.`,
-    }, { status: 400 })
-  }
-  if (file.size > limits.maxBytes) {
-    const mb = (limits.maxBytes / 1024 / 1024).toFixed(0)
-    return NextResponse.json({
-      success: false,
-      error: `${format} files must be ≤ ${mb} MB. This file is ${(file.size / 1024 / 1024).toFixed(1)} MB.`,
+      error: 'The uploader changed — refresh the page and try the upload again.',
     }, { status: 400 })
   }
 
+  const validation = await validateBody(request, FinaliseSchema)
+  if (!validation.ok) return validation.response
+  const body = validation.data
+
+  const locationId = body.location_id || user.activeLocation?.id
   const guard = locationId ? assertLocationAccess(user, locationId) : null
   if (guard) return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
 
-  // Read bytes once, use for both Storage upload and Meta upload.
-  const bytes = Buffer.from(await file.arrayBuffer())
-
-  // 1. Storage upload — UUID-based path so the public URL is
-  //    effectively unguessable. Folder per location for cleanup.
-  const ext = (file.name.match(/\.[a-z0-9]+$/i) || ['.bin'])[0].toLowerCase()
-  const storagePath = `${locationId || 'global'}/${randomUUID()}${ext}`
-  const db = createServerClient()
-  const { error: storageErr } = await db.storage
-    .from('whatsapp-templates')
-    .upload(storagePath, bytes, {
-      contentType: file.type,
-      upsert: false,
-    })
-  if (storageErr) {
-    return NextResponse.json({ success: false, error: `Storage upload failed: ${storageErr.message}` }, { status: 500 })
+  // Only paths minted by ./sign are accepted, and only within this
+  // caller's own folder (or 'global') — no pointing at other objects.
+  if (!isMintedMediaPath(body.path)) {
+    return NextResponse.json({ success: false, error: 'Invalid media path' }, { status: 400 })
   }
-  const { data: pub } = db.storage.from('whatsapp-templates').getPublicUrl(storagePath)
+  const folder = body.path.split('/')[0]
+  if (folder !== 'global' && folder !== String(locationId)) {
+    return NextResponse.json({ success: false, error: 'Invalid media path' }, { status: 400 })
+  }
+
+  const db = createServerClient()
+
+  // Pull the bytes the browser placed in storage. A missing object means
+  // the direct upload didn't complete — tell the operator to retry.
+  const { data: blob, error: dlErr } = await db.storage
+    .from('whatsapp-templates')
+    .download(body.path)
+  if (dlErr || !blob) {
+    return NextResponse.json({
+      success: false,
+      error: `Uploaded file not found in storage (${dlErr?.message || 'empty'}) — try the upload again.`,
+    }, { status: 404 })
+  }
+  const bytes = Buffer.from(await blob.arrayBuffer())
+
+  // Re-validate server-side now that we can see the real size — the
+  // signed-URL upload bypassed this route, so this is the actual gate.
+  const check = validateTemplateMedia({
+    format: body.format,
+    mime: body.mime,
+    size: bytes.length,
+    fileName: body.file_name,
+  })
+  if (!check.ok) {
+    // Remove the over-limit/wrong-type object so the public bucket
+    // doesn't accumulate unusable files. Best-effort (builders are
+    // thenables with no .catch — use the two-arg .then form).
+    await db.storage.from('whatsapp-templates').remove([body.path]).then(() => {}, () => {})
+    return NextResponse.json({ success: false, error: check.error }, { status: 400 })
+  }
+
+  const { data: pub } = db.storage.from('whatsapp-templates').getPublicUrl(body.path)
   const publicUrl = pub?.publicUrl
 
-  // 2. Meta resumable upload → header handle for template approval.
-  //    If this fails, we still return the storage URL so the operator
-  //    isn't blocked from re-trying without re-uploading.
+  // Meta resumable upload → header handle for template approval.
   let handle = null
   let metaError = null
   try {
-    handle = await uploadMediaForTemplate(bytes, file.type)
+    handle = await uploadMediaForTemplate(bytes, body.mime)
   } catch (e) {
     metaError = e.message || String(e)
     console.warn(`[wa-template upload] Meta resumable upload failed: ${metaError}`)
@@ -108,9 +124,9 @@ export async function POST(request) {
     success: true,
     handle,
     url: publicUrl,
-    path: storagePath,
-    file_name: file.name,
-    file_size: file.size,
+    path: body.path,
+    file_name: body.file_name,
+    file_size: bytes.length,
     meta_error: metaError,  // present when handle is null — surface to UI for retry
   })
 }

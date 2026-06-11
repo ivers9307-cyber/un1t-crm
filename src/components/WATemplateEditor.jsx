@@ -4,6 +4,21 @@ import { useState, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { ArrowLeft, Save, Send, Trash2, Upload, FileText, Video, X } from 'lucide-react'
+import { createBrowserClient } from '@/lib/supabase'
+import { validateTemplateMedia } from '@/lib/template-media'
+
+// Parse a route response defensively. Infra layers answer in plain text
+// (Vercel's ~4.5 MB body cap returns a literal "Request Entity Too
+// Large" page) — blind res.json() on that produced the old
+// `Unexpected token 'R'` mystery error.
+async function readJson(res) {
+  const text = await res.text()
+  try {
+    return JSON.parse(text)
+  } catch {
+    return { success: false, error: `Upload failed (HTTP ${res.status}): ${text.slice(0, 80)}` }
+  }
+}
 
 // Meta's published caps (May 2026). Same for every template category.
 const MEDIA_LIMITS = {
@@ -64,18 +79,66 @@ export default function WATemplateEditor({ template, locationId, userId, events 
   const [uploadError, setUploadError] = useState(null)
   const fileInputRef = useRef(null)
 
+  // Three-step upload: the file bytes go DIRECTLY from the browser to
+  // Supabase Storage (signed URL) and never transit our API — Vercel
+  // caps serverless request bodies at ~4.5 MB, which 413'd every real
+  // video (Meta's video cap is 16 MB). See src/lib/template-media.js.
   async function handleMediaUpload(e) {
     const file = e.target.files?.[0]
     if (!file) return
     setUploading(true)
     setUploadError(null)
     try {
-      const fd = new FormData()
-      fd.append('file', file)
-      fd.append('format', headerFormat)
-      if (locationId) fd.append('location_id', locationId)
-      const res = await fetch('/api/whatsapp/templates/upload-media', { method: 'POST', body: fd })
-      const j = await res.json()
+      // Instant pre-check against Meta's caps — same validator the
+      // server enforces; saves uploading a doomed file.
+      const pre = validateTemplateMedia({ format: headerFormat, mime: file.type, size: file.size, fileName: file.name })
+      if (!pre.ok) {
+        setUploadError(pre.error)
+        return
+      }
+
+      // 1. Mint a signed direct-to-storage upload slot (tiny JSON).
+      const signRes = await fetch('/api/whatsapp/templates/upload-media/sign', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          format: headerFormat,
+          mime: file.type,
+          size: file.size,
+          file_name: file.name,
+          location_id: locationId || undefined,
+        }),
+      })
+      const sign = await readJson(signRes)
+      if (!sign.success) {
+        setUploadError(sign.error || 'Could not start the upload')
+        return
+      }
+
+      // 2. Browser → Supabase Storage directly (bypasses Vercel).
+      const supabase = createBrowserClient()
+      const { error: upErr } = await supabase.storage
+        .from('whatsapp-templates')
+        .uploadToSignedUrl(sign.path, sign.token, file, { contentType: file.type })
+      if (upErr) {
+        setUploadError(`Storage upload failed: ${upErr.message}`)
+        return
+      }
+
+      // 3. Finalise — the server pulls the object and pushes it through
+      //    Meta's resumable upload for the approval handle.
+      const res = await fetch('/api/whatsapp/templates/upload-media', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          path: sign.path,
+          format: headerFormat,
+          mime: file.type,
+          file_name: file.name,
+          location_id: locationId || undefined,
+        }),
+      })
+      const j = await readJson(res)
       if (!j.success) {
         setUploadError(j.error || 'Upload failed')
         return
