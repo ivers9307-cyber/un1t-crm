@@ -39,7 +39,9 @@ export async function sendAgentThreadMessage(db, { channel, conversationId, text
       if (!isWindowOpen(conversation)) return { sent: false, reason: 'window_closed' }
 
       const result = await sendTextMessage(phone, text, { locationId: conversation.location_id })
-      await db.from('whatsapp_messages').insert({
+      // source='agent' (allowed since mig 259) so the agent sees this
+      // confirmation in its own history and it counts toward the caps.
+      const { error: insertError } = await db.from('whatsapp_messages').insert({
         conversation_id: conversationId,
         contact_id: conversation.contact_id || null,
         location_id: conversation.location_id,
@@ -48,8 +50,10 @@ export async function sendAgentThreadMessage(db, { channel, conversationId, text
         message_type: 'text',
         body: text,
         status: 'sent',
+        source: 'agent',
         sent_at: new Date().toISOString(),
       })
+      if (insertError) console.error('[agent][notify] failed to record WhatsApp confirmation (history will be incomplete):', insertError.message)
       return { sent: true }
     }
 
@@ -69,7 +73,7 @@ export async function sendAgentThreadMessage(db, { channel, conversationId, text
       const result = await sendInstagramMessage(conversation.ig_user_id, text, {
         connection: { access_token: conn.access_token },
       })
-      await db.from('instagram_messages').insert({
+      const { error: insertError } = await db.from('instagram_messages').insert({
         conversation_id: conversationId,
         contact_id: conversation.contact_id || null,
         location_id: conversation.location_id,
@@ -81,6 +85,7 @@ export async function sendAgentThreadMessage(db, { channel, conversationId, text
         source: 'agent',
         sent_at: new Date().toISOString(),
       })
+      if (insertError) console.error('[agent][notify] failed to record Instagram confirmation (history will be incomplete):', insertError.message)
       return { sent: true }
     }
 

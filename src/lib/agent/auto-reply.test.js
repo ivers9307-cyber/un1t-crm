@@ -51,4 +51,31 @@ describe('sendAndLog', () => {
     const update = calls.find(c => c.op === 'update')
     expect(update?.patch?.agent_last_reply_at).toBeTruthy()
   })
+
+  // The 2026-06-12 amnesia incident: whatsapp_messages had a CHECK
+  // constraint (source IN api/app_echo/history_sync) that rejected the
+  // agent's source='agent' rows, so every reply INSERT failed SILENTLY
+  // (supabase-js returns { error }, it doesn't throw). The agent sent
+  // fine but never saw its own replies in history — repeated questions,
+  // restarted conversations, dead cost caps. Mig 259 widens the
+  // constraint; this pins that a rejected insert is at least loud.
+  it('logs an error when the message insert is rejected', async () => {
+    const db = {
+      from() {
+        return {
+          insert: async () => ({ error: { message: 'violates check constraint "whatsapp_messages_source_check"' } }),
+          update: () => ({ eq: async () => ({}) }),
+        }
+      },
+    }
+    const adapter = { ...whatsappAdapter, send: vi.fn().mockResolvedValue({ messageId: 'wamid.2' }) }
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const ok = await sendAndLog(db, adapter, baseArgs)
+    expect(ok).toBe(true) // the customer DID get the message — still a delivered reply
+    expect(errSpy).toHaveBeenCalledWith(
+      expect.stringContaining('failed to record reply'),
+      expect.stringContaining('whatsapp_messages_source_check')
+    )
+    errSpy.mockRestore()
+  })
 })

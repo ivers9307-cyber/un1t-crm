@@ -348,7 +348,7 @@ export async function sendAndLog(db, adapter, { conversationId, locationId, reci
   }
 
   const now = new Date().toISOString()
-  await db.from(adapter.messagesTable).insert(
+  await recordAgentMessage(db, adapter,
     adapter.outboundRow({ conversationId, locationId, contactId, messageId, text, now })
   )
   await db.from(adapter.conversationsTable).update({
@@ -358,6 +358,21 @@ export async function sendAndLog(db, adapter, { conversationId, locationId, reci
     agent_last_reply_at: now,
   }).eq('id', conversationId)
   return true
+}
+
+// Persist an agent message row LOUDLY. A rejected insert here is how the
+// 2026-06-12 amnesia incident stayed invisible: whatsapp_messages' source
+// CHECK constraint refused source='agent', supabase-js returned { error }
+// without throwing, and the agent — which rebuilds its view of the
+// conversation from this table every turn — never saw its own replies. It
+// repeated questions and restarted mid-flow while every send succeeded.
+// Mig 259 widened the constraint; this keeps any future persist failure
+// out of the silent class.
+async function recordAgentMessage(db, adapter, row) {
+  const { error } = await db.from(adapter.messagesTable).insert(row)
+  if (error) {
+    console.error(`[radar-agent] ${adapter.name} failed to record reply (agent history will be incomplete):`, error.message)
+  }
 }
 
 // Escalate: holding message, stop the agent on this thread, notify staff.
@@ -372,7 +387,7 @@ async function handoff(db, adapter, { conversationId, locationId, recipient, con
 
   try {
     const r = await adapter.send(recipient, holding, { locationId, connection })
-    await db.from(adapter.messagesTable).insert(
+    await recordAgentMessage(db, adapter,
       adapter.outboundRow({ conversationId, locationId, contactId, messageId: r?.messageId || null, text: holding, now })
     )
     await db.from(adapter.conversationsTable).update({
@@ -408,7 +423,7 @@ async function softHandoff(db, adapter, { conversationId, locationId, recipient,
   const now = new Date().toISOString()
   try {
     const r = await adapter.send(recipient, holding, { locationId, connection })
-    await db.from(adapter.messagesTable).insert(
+    await recordAgentMessage(db, adapter,
       adapter.outboundRow({ conversationId, locationId, contactId, messageId: r?.messageId || null, text: holding, now })
     )
     await db.from(adapter.conversationsTable).update({
