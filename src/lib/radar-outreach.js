@@ -16,7 +16,7 @@
 // The pure helpers (extract / sendable / components) are split out for
 // unit testing; sendRadarOutreach does the DB lookup + the send.
 
-import { sendTemplateMessage } from '@/lib/whatsapp'
+import { headerComponentFor, sendTemplateMessage } from '@/lib/whatsapp'
 
 /**
  * Pull the body text + variable shape out of a whatsapp_templates
@@ -120,7 +120,7 @@ export async function sendRadarOutreach({ db, contact, templateName, locationId 
   // the most recent. maybeSingle() would throw on >1, so limit(1).
   const { data: rows, error } = await db
     .from('whatsapp_templates')
-    .select('name, language, category, status, components')
+    .select('name, language, category, status, components, header_media_url')
     .eq('location_id', locationId)
     .eq('name', templateName)
     .order('created_at', { ascending: false })
@@ -134,6 +134,10 @@ export async function sendRadarOutreach({ db, contact, templateName, locationId 
 
   const { varCount } = extractTemplateBody(template.components)
   const components = buildBodyComponents(varCount, firstNameOf(contact))
+  // WA-TMPL-SEND.1 — a media-header template needs its header param on
+  // every send; use the URL stored at template upload.
+  const headerComponent = headerComponentFor(template.components, template.header_media_url)
+  if (headerComponent) components.unshift(headerComponent)
 
   const res = await sendTemplateMessage(
     to,
