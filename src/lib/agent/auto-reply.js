@@ -34,6 +34,7 @@ import {
 } from './core'
 import { ACCOUNT_TOOLS, ACCOUNT_TOOL_NAMES, executeAccountTool } from './account-tools'
 import { BOOKING_TOOLS, executeBookingTool } from './booking-tools'
+import { EVENT_TOOLS, EVENT_TOOL_NAMES, executeEventTool } from './event-tools'
 
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages'
 const AGENT_MODEL = 'claude-sonnet-4-6'
@@ -48,7 +49,7 @@ const AGENT_MODEL = 'claude-sonnet-4-6'
 // AGENT-HANDS.1 — the booking tools join the cached block. Still one
 // byte-identical stable prefix; the ephemeral marker moves to the last
 // tool of the COMBINED array so the whole block caches.
-const ALL_AGENT_TOOLS = [...ACCOUNT_TOOLS, ...BOOKING_TOOLS]
+const ALL_AGENT_TOOLS = [...ACCOUNT_TOOLS, ...BOOKING_TOOLS, ...EVENT_TOOLS]
 const CACHED_ACCOUNT_TOOLS = ALL_AGENT_TOOLS.map((tool, i) =>
   i === ALL_AGENT_TOOLS.length - 1
     ? { ...tool, cache_control: { type: 'ephemeral' } }
@@ -330,7 +331,9 @@ async function runChannelAgentInner(db, adapter, ctx) {
             if (block.type !== 'tool_use') continue
             const result = ACCOUNT_TOOL_NAMES.has(block.name)
               ? await executeAccountTool(block.name, block.input || {}, toolCtx)
-              : await executeBookingTool(block.name, block.input || {}, toolCtx)
+              : EVENT_TOOL_NAMES.has(block.name)
+                ? await executeEventTool(block.name, block.input || {}, toolCtx)
+                : await executeBookingTool(block.name, block.input || {}, toolCtx)
             if (block.name === 'verify_identity' && result?.verified) {
               // Re-read the contact id the server just stamped so the
               // follow-up lookups in this same turn are authorised.
