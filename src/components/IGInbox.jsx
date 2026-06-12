@@ -40,6 +40,25 @@ export default function IGInbox({ locationId, initialConversationId, embedded = 
   const [conversation, setConversation] = useState(null)
   const [messages, setMessages] = useState([])
   const [newMessage, setNewMessage] = useState('')
+  // AGENT-QA.1 — see WAInbox twin.
+  const [agentFeedback, setAgentFeedback] = useState({})
+  async function rateAgentMessage(msg, rating) {
+    let note = null
+    if (rating === 'down') {
+      note = window.prompt("What was wrong with this reply? (optional — helps improve the agent)") || null
+    }
+    setAgentFeedback(f => ({ ...f, [msg.id]: rating }))
+    try {
+      const r = await fetch('/api/agent/feedback', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ channel: 'instagram', message_id: msg.id, rating, note }),
+      })
+      if (!r.ok) setAgentFeedback(f => ({ ...f, [msg.id]: undefined }))
+    } catch {
+      setAgentFeedback(f => ({ ...f, [msg.id]: undefined }))
+    }
+  }
   const [sending, setSending] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
@@ -321,6 +340,16 @@ export default function IGInbox({ locationId, initialConversationId, embedded = 
                     <div className={`max-w-[75%] rounded-lg px-3 py-2 text-sm ${outbound ? 'bg-un1t-accent text-un1t-bg' : 'bg-un1t-surface text-un1t-text'}`}>
                       {m.body}
                       <div className={`flex items-center gap-1 mt-1 text-[10px] ${outbound ? 'text-un1t-bg/70' : 'text-un1t-muted'}`}>
+                        {m.source === 'agent' && (
+                          <span className="flex items-center gap-1">
+                            <button type="button" onClick={() => rateAgentMessage(m, 'up')}
+                              className={`text-[11px] leading-none ${agentFeedback[m.id] === 'up' ? 'opacity-100' : 'opacity-40 hover:opacity-90'}`}
+                              title="Good reply">👍</button>
+                            <button type="button" onClick={() => rateAgentMessage(m, 'down')}
+                              className={`text-[11px] leading-none ${agentFeedback[m.id] === 'down' ? 'opacity-100' : 'opacity-40 hover:opacity-90'}`}
+                              title="Bad reply — add a note">👎</button>
+                          </span>
+                        )}
                         {fromAgent && <Bot size={10} />}
                         {outbound && !fromAgent && <span>Staff</span>}
                         <span>{formatTime(m.sent_at || m.created_at)}</span>

@@ -101,6 +101,35 @@ export default function AgentAnalyticsPage() {
             </>
           )}
 
+          {/* AGENT-QA.1 — inbox thumbs feedback */}
+          {data.feedback && (data.feedback.up + data.feedback.down > 0) && (
+            <section className="mb-8">
+              <h3 className="text-sm font-semibold text-un1t-text mb-2">
+                Quality feedback <span className="text-un1t-muted font-normal">— 👍 {data.feedback.up} · 👎 {data.feedback.down}</span>
+              </h3>
+              {data.feedback.recent_downs.length === 0 ? (
+                <p className="text-sm text-un1t-muted">No negative feedback in this window. 🎉</p>
+              ) : (
+                <ul className="space-y-1.5">
+                  {data.feedback.recent_downs.map((f, i) => (
+                    <li key={i} className="text-sm text-un1t-text flex items-start gap-2">
+                      <span className="shrink-0">👎</span>
+                      <span className="flex-1">
+                        {f.note || <span className="text-un1t-muted italic">no note</span>}
+                        <span className="text-xs text-un1t-subtle ml-2">
+                          {f.channel} · {new Date(f.created_at).toLocaleDateString('en-IE')}
+                        </span>
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <p className="text-xs text-un1t-subtle mt-2">
+                Turn recurring complaints into Knowledge entries or Extra rules in agent settings.
+              </p>
+            </section>
+          )}
+
           <div className="grid md:grid-cols-2 gap-6">
             {/* Most-asked topics */}
             <section>

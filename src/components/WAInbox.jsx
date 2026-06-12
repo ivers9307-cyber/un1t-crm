@@ -62,6 +62,26 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
   const [messages, setMessages] = useState([])
   const [conversation, setConversation] = useState(null)
   const [newMessage, setNewMessage] = useState('')
+  // AGENT-QA.1 — local rating state (id → 'up'|'down'); persisted via
+  // /api/agent/feedback (upsert per rater, server re-checks the message).
+  const [agentFeedback, setAgentFeedback] = useState({})
+  async function rateAgentMessage(msg, rating) {
+    let note = null
+    if (rating === 'down') {
+      note = window.prompt("What was wrong with this reply? (optional — helps improve the agent)") || null
+    }
+    setAgentFeedback(f => ({ ...f, [msg.id]: rating }))
+    try {
+      const r = await fetch('/api/agent/feedback', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ channel: 'whatsapp', message_id: msg.id, rating, note }),
+      })
+      if (!r.ok) setAgentFeedback(f => ({ ...f, [msg.id]: undefined }))
+    } catch {
+      setAgentFeedback(f => ({ ...f, [msg.id]: undefined }))
+    }
+  }
   const [sending, setSending] = useState(false)
   const [loading, setLoading] = useState(true)
   const [showAddContact, setShowAddContact] = useState(false)
@@ -629,6 +649,23 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
                     <MessageTypeIcon type={msg.message_type} />
                     <p className="text-sm whitespace-pre-wrap">{msg.body || `[${msg.message_type}]`}</p>
                     <div className="flex items-center justify-end gap-1 mt-0.5">
+                      {/* AGENT-QA.1 — rate Mia's replies; feeds the analytics quality list */}
+                      {msg.source === 'agent' && (
+                        <span className="flex items-center gap-1 mr-auto">
+                          <button
+                            type="button"
+                            onClick={() => rateAgentMessage(msg, 'up')}
+                            className={`text-[11px] leading-none ${agentFeedback[msg.id] === 'up' ? 'opacity-100' : 'opacity-40 hover:opacity-90'}`}
+                            title="Good reply"
+                          >👍</button>
+                          <button
+                            type="button"
+                            onClick={() => rateAgentMessage(msg, 'down')}
+                            className={`text-[11px] leading-none ${agentFeedback[msg.id] === 'down' ? 'opacity-100' : 'opacity-40 hover:opacity-90'}`}
+                            title="Bad reply — add a note"
+                          >👎</button>
+                        </span>
+                      )}
                       <span className="text-[10px] text-un1t-text/50">
                         {new Date(msg.sent_at || msg.created_at).toLocaleTimeString('en-IE', { hour: '2-digit', minute: '2-digit' })}
                       </span>

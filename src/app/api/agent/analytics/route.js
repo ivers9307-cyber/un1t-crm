@@ -78,6 +78,22 @@ export async function GET(request) {
     checkins_sent: checkinsSent || 0,
   }
 
+  // AGENT-QA.1 — quality feedback from the inbox thumbs.
+  const { data: feedbackRows } = await db.from('agent_message_feedback')
+    .select('rating, note, channel, conversation_id, created_at')
+    .eq('location_id', locationId)
+    .gte('created_at', since)
+    .order('created_at', { ascending: false })
+    .limit(200)
+  const feedback = {
+    up: (feedbackRows || []).filter(f => f.rating === 'up').length,
+    down: (feedbackRows || []).filter(f => f.rating === 'down').length,
+    recent_downs: (feedbackRows || [])
+      .filter(f => f.rating === 'down')
+      .slice(0, 10)
+      .map(f => ({ note: f.note, channel: f.channel, conversation_id: f.conversation_id, created_at: f.created_at })),
+  }
+
   // Escalated conversations to review — newest first, capped. Each side
   // links back to its own inbox thread.
   const escalations = [
@@ -92,6 +108,7 @@ export async function GET(request) {
     by_channel: { whatsapp: wa.summary, instagram: ig.summary },
     containment_rate: containmentRate(combined),
     actions,
+    feedback,
     topics: rankTopics(combined.topics),
     escalations,
   })
