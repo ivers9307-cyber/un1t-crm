@@ -1,11 +1,18 @@
 // /dashboard/today — Personal dashboard. Web mirror of the mobile
 // PersonalDashboard. Same data fetched from shared/dashboard-data.js.
 //
+// TODAY-FEED.1 made this the gym's front door: a permission-filtered
+// "Needs attention" triage feed (approvals / issues / invoices /
+// unread WhatsApp / today's bookings / churn risks / tasks due /
+// low-fill classes) renders above the personal roster, each row
+// deep-linking into its full surface. A coach with none of the queue
+// permissions sees exactly what they saw before.
+//
 // Permission: dashboard_personal (cross-platform).
 
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
-import { Calendar, ArrowLeftRight, AlertCircle, AlertTriangle, ClipboardCheck } from 'lucide-react'
+import { Calendar, ArrowLeftRight, AlertCircle, AlertTriangle, ClipboardCheck, Inbox, MessagesSquare, Radar, CheckSquare, Flag } from 'lucide-react'
 import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
@@ -17,9 +24,31 @@ import {
 } from '@shared/dashboard-data'
 import { pickLocationColor } from '@shared/location-colors'
 import { MANAGER_ROLES } from '@/lib/schemas'
+import { fetchTodayFeed } from '@/lib/today-feed-data'
 import {
   KpiCard, KpiRow, SectionHeader, ListCard, PendingRow,
 } from '@/components/dashboard/Cards'
+
+// Icon per triage row id (assembleTodayFeed in shared/today-feed.js
+// owns the ids). Kept here — icons are a web rendering concern.
+const FEED_ICONS = {
+  approvals: <ClipboardCheck size={16} />,
+  issues: <AlertCircle size={16} />,
+  invoices: <Inbox size={16} />,
+  whatsapp: <MessagesSquare size={16} />,
+  bookings: <Calendar size={16} />,
+  churn: <Radar size={16} />,
+  tasks: <CheckSquare size={16} />,
+  lowfill: <Flag size={16} />,
+}
+
+// One line of context under a feed row: the detail string (e.g. the
+// churn delta) followed by up to three item labels.
+function feedSubtitle(row) {
+  const items = (row.items || []).map((it) =>
+    it.sublabel ? `${it.label} (${it.sublabel})` : it.label)
+  return [row.detail, ...items].filter(Boolean).join(' · ') || undefined
+}
 
 export const dynamic = 'force-dynamic'
 
@@ -167,7 +196,12 @@ export default async function PersonalDashboardPage() {
   if (!hasPermission(user, 'dashboard_personal')) redirect('/dashboard')
 
   const db = createServerClient()
-  const res = await fetchPersonalDashboardData(db, user.id, user.activeLocation?.id)
+  // TODAY-FEED.1 — the triage feed fetches in parallel with the
+  // personal data; it gates per-source internally and never throws.
+  const [res, feedRows] = await Promise.all([
+    fetchPersonalDashboardData(db, user.id, user.activeLocation?.id),
+    fetchTodayFeed(db, user, user.activeLocation?.id),
+  ])
   if (!res.success) {
     return (
       <p className="text-sm text-red-500">Failed to load dashboard: {res.error}</p>
@@ -218,6 +252,30 @@ export default async function PersonalDashboardPage() {
 
   return (
     <>
+      {/* TODAY-FEED.1 — the triage feed. First thing on the page:
+          everything across the gym that needs the viewer, one row per
+          queue, deep-linking into the full surface. Renders nothing
+          when the viewer has no queue permissions or nothing is
+          pending — staff see their roster exactly as before. */}
+      {feedRows.length > 0 && (
+        <div className="mb-4 max-w-5xl">
+          <SectionHeader title="Needs attention" count={feedRows.length} />
+          <ListCard>
+            {feedRows.map((row, i) => (
+              <PendingRow
+                key={row.id}
+                icon={FEED_ICONS[row.id]}
+                title={row.label}
+                subtitle={feedSubtitle(row)}
+                time={String(row.count)}
+                href={row.href}
+                isLast={i === feedRows.length - 1}
+              />
+            ))}
+          </ListCard>
+        </div>
+      )}
+
       {/* Roster — current + next week, side-by-side on md+ screens,
           stacked below md so the rows stay readable on narrow web. */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4 max-w-5xl">
