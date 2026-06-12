@@ -282,20 +282,6 @@ async function handleIncomingMessage(db, message, contacts, phoneNumberId) {
       body = `[${messageType} message]`
   }
 
-  // AGENT-VOICE.1 — transcribe voice notes inline (best-effort, only
-  // when OPENAI_API_KEY is set) so the stored message, the inbox
-  // preview and the customer agent all see what was said. Failure or
-  // no key ⇒ body stays empty and the agent soft-hands-off as before.
-  if (messageType === 'audio' && mediaUrl) {
-    try {
-      const { transcribeWhatsAppAudio, voiceBodyFromTranscript } = await import('@/lib/voice-transcribe')
-      const transcript = await transcribeWhatsAppAudio({ mediaId: mediaUrl, locationId, mime: mediaMime })
-      body = voiceBodyFromTranscript(transcript) || body
-    } catch (e) {
-      console.warn('[whatsapp webhook] voice transcription failed:', e?.message || e)
-    }
-  }
-
   // Save message (contact_id is null for unknown senders)
   await db.from('whatsapp_messages').insert({
     conversation_id: conversationId,
