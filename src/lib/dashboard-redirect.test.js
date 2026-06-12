@@ -66,11 +66,45 @@ describe('resolveDashboardTarget', () => {
     }))).toBe('/dashboard/today')
   })
 
-  it('returns null when the user has no dashboard permissions', () => {
+  it('returns null when the user has no dashboard or radar permissions', () => {
     const u = user({
-      role: 'owner',  // even owners can be stripped of every dashboard
-      perms: { dashboard_personal: false, dashboard_studio: false, dashboard_business: false },
+      role: 'owner',  // even owners can be stripped of every dashboard.
+      // Radar keys must be explicitly revoked here — they default ON
+      // for owners, and SIDEBAR-IA.1 made them landing fallbacks.
+      perms: {
+        dashboard_personal: false, dashboard_studio: false, dashboard_business: false,
+        churn_radar: false, lead_radar: false,
+      },
     })
     expect(resolveDashboardTarget(u)).toBe(null)
+  })
+
+  // SIDEBAR-IA.1 — the radars live under the dashboard tab strip now,
+  // so a user holding ONLY a radar permission must still land somewhere
+  // useful when they hit / or /dashboard.
+  describe('radar fallbacks', () => {
+    const noDashboards = {
+      dashboard_personal: false, dashboard_studio: false, dashboard_business: false,
+    }
+
+    it('falls back to the churn radar for a churn-radar-only user', () => {
+      const u = user({ perms: { ...noDashboards, churn_radar: true, lead_radar: false } })
+      expect(resolveDashboardTarget(u)).toBe('/dashboard/churn-radar')
+    })
+
+    it('falls back to the lead radar when churn radar is also revoked', () => {
+      const u = user({ perms: { ...noDashboards, churn_radar: false, lead_radar: true } })
+      expect(resolveDashboardTarget(u)).toBe('/dashboard/lead-radar')
+    })
+
+    it('prefers churn radar over lead radar when both are held', () => {
+      const u = user({ perms: { ...noDashboards, churn_radar: true, lead_radar: true } })
+      expect(resolveDashboardTarget(u)).toBe('/dashboard/churn-radar')
+    })
+
+    it('still prefers any real dashboard over the radar fallbacks', () => {
+      const u = user({ perms: { ...noDashboards, dashboard_personal: true, churn_radar: true } })
+      expect(resolveDashboardTarget(u)).toBe('/dashboard/today')
+    })
   })
 })

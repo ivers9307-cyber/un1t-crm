@@ -43,8 +43,8 @@ export async function GET(request) {
     return NextResponse.json({ success: false, error: locErr.message }, { status: 500 })
   }
 
-  const radarUrl = `${getAppUrl()}/churn-radar`
-  const leadRadarUrl = `${getAppUrl()}/lead-radar`
+  const radarUrl = `${getAppUrl()}/dashboard/churn-radar`
+  const leadRadarUrl = `${getAppUrl()}/dashboard/lead-radar`
   let emailsSent = 0
   const perLocation = []
 

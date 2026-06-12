@@ -58,7 +58,7 @@ export default async function StudioDashboardPage() {
           label="New leads this week"
           value={newLeadsThisWeek}
           sublabel={newLeadsThisWeek === 1 ? 'contact added' : 'contacts added'}
-          href="/lead-radar"
+          href="/dashboard/lead-radar"
         />
         <KpiCard
           label="WhatsApp unread"

@@ -34,6 +34,13 @@ describe('commandAllowed', () => {
     expect(commandAllowed(cmd, granted('dashboard_business'))).toBe(true)
     expect(commandAllowed(cmd, none)).toBe(false)
   })
+  // SIDEBAR-IA.1 — radars relocated under the dashboard tab strip, so
+  // a radar-only user must still see (and be able to jump to) Dashboard.
+  it('gates the dashboard group open for radar-only users too', () => {
+    const cmd = { dashboardGroup: true }
+    expect(commandAllowed(cmd, granted('churn_radar'))).toBe(true)
+    expect(commandAllowed(cmd, granted('lead_radar'))).toBe(true)
+  })
   it('returns false for a nullish command', () => {
     expect(commandAllowed(null, all)).toBe(false)
   })
@@ -59,6 +66,13 @@ describe('visibleCommands', () => {
     expect(ids).toContain('lead-radar')
     // 'pipeline' would match neither the query nor the granted set
     expect(ids).not.toContain('pipeline')
+  })
+  // SIDEBAR-IA.1 — the radar jump targets follow the pages under the
+  // dashboard tab strip (old standalone URLs are next.config redirects).
+  it('points the radar commands at their dashboard-tab homes', () => {
+    const byId = Object.fromEntries(NAV_COMMANDS.map((c) => [c.id, c]))
+    expect(byId['churn-radar'].href).toBe('/dashboard/churn-radar')
+    expect(byId['lead-radar'].href).toBe('/dashboard/lead-radar')
   })
   it('hides commands the user lacks permission for', () => {
     const out = visibleCommands(NAV_COMMANDS, '', granted('contacts'))

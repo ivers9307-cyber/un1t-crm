@@ -3,7 +3,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
-import { Users, MapPin, Shield, UserCog, LayoutGrid, Trophy, Cable, ChevronRight, Bell, KeyRound, MessagesSquare, Bot } from 'lucide-react'
+import { Users, MapPin, Shield, UserCog, LayoutGrid, Trophy, Cable, ChevronRight, Bell, KeyRound, MessagesSquare, Bot, Download, Globe } from 'lucide-react'
 
 // SETTINGS.3/.4 — reorganized this page:
 //   - Master tools moved to TOP (was mid-page)
@@ -225,6 +225,75 @@ export default async function SettingsPage() {
           </Link>
         </div>
       </div>
+
+      {/* Data & website (SIDEBAR-IA.1) — set-and-forget surfaces that
+          used to sit in the sidebar's Studio Management group. They're
+          rare admin tasks (imports run a handful of times a year, the
+          landing-page form changes occasionally), so they live here on
+          the Settings index instead of costing daily sidebar rows.
+          Each card keeps its own permission; the /admin + /settings
+          pages behind them carry their own server gates regardless. */}
+      {(hasPermission(user, 'glofox_import') || hasPermission(user, 'preferences_import') || hasPermission(user, 'landing_page')) && (
+        <div className="mb-10">
+          <div className="flex items-center gap-2 mb-4">
+            <Download size={18} className="text-un1t-subtle" />
+            <h3 className="text-lg font-semibold">Data &amp; website</h3>
+          </div>
+          <div className="space-y-2">
+            {hasPermission(user, 'glofox_import') && (
+              <Link
+                href="/admin/glofox-import"
+                className="bg-un1t-surface border border-un1t-border hover:border-un1t-subtle rounded-lg p-4 flex items-center justify-between text-sm group transition-colors"
+              >
+                <div className="flex items-center gap-3">
+                  <Download size={16} className="text-un1t-subtle shrink-0" />
+                  <div>
+                    <div className="text-un1t-text">Glofox import</div>
+                    <div className="text-xs text-un1t-subtle mt-0.5">
+                      Interactive Glofox member import + sync history.
+                    </div>
+                  </div>
+                </div>
+                <ChevronRight size={16} className="text-un1t-subtle group-hover:text-un1t-text shrink-0" />
+              </Link>
+            )}
+            {hasPermission(user, 'preferences_import') && (
+              <Link
+                href="/admin/marketing-import"
+                className="bg-un1t-surface border border-un1t-border hover:border-un1t-subtle rounded-lg p-4 flex items-center justify-between text-sm group transition-colors"
+              >
+                <div className="flex items-center gap-3">
+                  <Download size={16} className="text-un1t-subtle shrink-0" />
+                  <div>
+                    <div className="text-un1t-text">Preferences import</div>
+                    <div className="text-xs text-un1t-subtle mt-0.5">
+                      Bulk import of marketing preferences (consent flags).
+                    </div>
+                  </div>
+                </div>
+                <ChevronRight size={16} className="text-un1t-subtle group-hover:text-un1t-text shrink-0" />
+              </Link>
+            )}
+            {hasPermission(user, 'landing_page') && (
+              <Link
+                href="/settings/landing-page"
+                className="bg-un1t-surface border border-un1t-border hover:border-un1t-subtle rounded-lg p-4 flex items-center justify-between text-sm group transition-colors"
+              >
+                <div className="flex items-center gap-3">
+                  <Globe size={16} className="text-un1t-subtle shrink-0" />
+                  <div>
+                    <div className="text-un1t-text">Landing page</div>
+                    <div className="text-xs text-un1t-subtle mt-0.5">
+                      Content + form settings for the public landing pages. The live page stays linked from Studio Management.
+                    </div>
+                  </div>
+                </div>
+                <ChevronRight size={16} className="text-un1t-subtle group-hover:text-un1t-text shrink-0" />
+              </Link>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* SETTINGS.3 — Shift Templates / Bank Holidays / Integrations /
           Branding sections removed from this top-level page:
