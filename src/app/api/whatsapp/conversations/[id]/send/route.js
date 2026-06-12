@@ -1,7 +1,7 @@
 import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { sendTextMessage, sendTemplateMessage, sendMediaMessage, isWindowOpen, substituteTemplateBody } from '@/lib/whatsapp'
+import { sendTextMessage, sendTemplateMessage, sendMediaMessage, isWindowOpen, substituteTemplateBody, headerComponentFor } from '@/lib/whatsapp'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { url } from '@/lib/schemas'
@@ -57,27 +57,45 @@ export async function POST(request, props) {
     let templateName = null
 
     if (messageType === 'template') {
-      // Template message — works outside 24h window
+      // Template message — works outside 24h window.
+      //
+      // WA-TMPL-SEND.1 — fetch the template row BEFORE sending so a
+      // media-header template gets its required header parameter
+      // attached server-side. The inbox picker only collects body
+      // variables; without this a VIDEO/IMAGE/DOCUMENT-header template
+      // went to Meta header-less and failed every time with the
+      // generic "An unexpected error has occurred" (bit live on
+      // 2026-06-12 — same class as the 2026-06-11 broadcast bug that
+      // buildTemplateComponents already guards). The header_media_url
+      // stored at template upload is the fallback; a client-supplied
+      // header component still wins.
+      const { data: tplRow } = await db
+        .from('whatsapp_templates')
+        .select('components, header_media_url')
+        .eq('name', body.template_name)
+        .eq('location_id', conversation.location_id)
+        .maybeSingle()
+
+      let components = body.template_components || []
+      const clientHasHeader = components.some((c) => String(c?.type || '').toLowerCase() === 'header')
+      if (!clientHasHeader && tplRow) {
+        const headerComponent = headerComponentFor(tplRow.components, tplRow.header_media_url)
+        if (headerComponent) components = [headerComponent, ...components]
+      }
+
       result = await sendTemplateMessage(
         phone,
         body.template_name,
         body.template_language || 'en',
-        body.template_components || []
+        components
       )
       templateName = body.template_name
       // Render the actual text the contact received so the thread shows
-      // real content instead of a "[template]" placeholder: look up the
-      // template's BODY text and substitute the param values the client
-      // sent. Falls back to the placeholder if the template row or body
-      // text can't be found.
+      // real content instead of a "[template]" placeholder: substitute
+      // the client's param values into the template's BODY text. Falls
+      // back to the placeholder if the row or body text is absent.
       messageBody = `[Template: ${body.template_name}]`
       try {
-        const { data: tplRow } = await db
-          .from('whatsapp_templates')
-          .select('components')
-          .eq('name', body.template_name)
-          .eq('location_id', conversation.location_id)
-          .maybeSingle()
         const bodyText = (tplRow?.components || []).find((c) => c.type === 'BODY')?.text
         const values = ((body.template_components || []).find((c) => c.type === 'body')?.parameters || [])
           .map((p) => p?.text ?? '')

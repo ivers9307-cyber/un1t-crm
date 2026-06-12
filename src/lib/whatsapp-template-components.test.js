@@ -106,3 +106,31 @@ describe('parseConsentKeyword', () => {
     }
   })
 })
+
+// WA-TMPL-SEND.1 — the shared media-header builder. Extracted from
+// buildTemplateComponents so the conversation send route can attach
+// the header server-side (the inbox picker only collects body vars;
+// a media-header template sent without its header param fails at
+// Meta with the useless generic "unexpected error" — bit Richard
+// live on 2026-06-12, same class as the 2026-06-11 broadcast bug).
+import { headerComponentFor } from './whatsapp'
+
+describe('headerComponentFor', () => {
+  const videoTpl = [{ type: 'HEADER', format: 'VIDEO' }, { type: 'BODY', text: 'Hi {{1}}' }]
+
+  it('builds the lowercase header parameter for media formats', () => {
+    expect(headerComponentFor(videoTpl, 'https://x.test/v.mp4')).toEqual({
+      type: 'header',
+      parameters: [{ type: 'video', video: { link: 'https://x.test/v.mp4' } }],
+    })
+    expect(headerComponentFor([{ type: 'HEADER', format: 'IMAGE' }], 'https://x.test/i.jpg'))
+      .toEqual({ type: 'header', parameters: [{ type: 'image', image: { link: 'https://x.test/i.jpg' } }] })
+  })
+
+  it('returns null without a media header or without a url', () => {
+    expect(headerComponentFor(videoTpl, null)).toBe(null)
+    expect(headerComponentFor([{ type: 'HEADER', format: 'TEXT', text: 'Hello' }], 'https://x.test/v.mp4')).toBe(null)
+    expect(headerComponentFor([{ type: 'BODY', text: 'Hi' }], 'https://x.test/v.mp4')).toBe(null)
+    expect(headerComponentFor(null, 'https://x.test/v.mp4')).toBe(null)
+  })
+})

@@ -26,7 +26,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { hasPermission, hasMobilePermission } from '@/lib/permissions'
 import { validateBody } from '@/lib/validate'
-import { sendTextMessage, sendTemplateMessage, isWindowOpen } from '@/lib/whatsapp'
+import { sendTextMessage, sendTemplateMessage, isWindowOpen, headerComponentFor } from '@/lib/whatsapp'
 import {
   extractTemplateBody,
   isSendableUtilityTemplate,
@@ -152,7 +152,7 @@ export async function POST(request, props) {
       // template; never trust the client's pick.
       const { data: rows } = await db
         .from('whatsapp_templates')
-        .select('name, language, category, status, components')
+        .select('name, language, category, status, components, header_media_url')
         .eq('location_id', contact.location_id)
         .eq('name', template_name)
         .order('created_at', { ascending: false })
@@ -166,6 +166,10 @@ export async function POST(request, props) {
       }
       const { varCount } = extractTemplateBody(template.components)
       const components = buildBodyComponents(varCount, firstNameOf(contact))
+      // WA-TMPL-SEND.1 — attach the media-header param when the
+      // template needs one (stored URL from the template upload).
+      const headerComponent = headerComponentFor(template.components, template.header_media_url)
+      if (headerComponent) components.unshift(headerComponent)
       result = await sendTemplateMessage(
         waPhone, template.name, template.language || 'en', components,
         { locationId: contact.location_id },

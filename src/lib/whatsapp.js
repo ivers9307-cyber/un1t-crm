@@ -103,8 +103,15 @@ export async function sendTemplateMessage(to, templateName, language = 'en', com
 
   const result = await response.json()
   if (result.error) {
-    console.error('WhatsApp template send error:', result.error)
-    throw new Error(result.error.message || 'Failed to send template message')
+    // Full object server-side; code/subcode also ride the thrown
+    // message because the Vercel log table truncates console output
+    // (the embed-diagnostics lesson) and the operator-facing alert is
+    // otherwise just Meta's useless generic text.
+    console.error('WhatsApp template send error:', JSON.stringify(result.error))
+    const codeSuffix = result.error.code
+      ? ` (Meta code ${result.error.code}${result.error.error_subcode ? '/' + result.error.error_subcode : ''})`
+      : ''
+    throw new Error((result.error.message || 'Failed to send template message') + codeSuffix)
   }
 
   return {
@@ -676,6 +683,24 @@ export async function sendDripChunk(broadcastId, { perTickMax = PER_TICK_MAX } =
  * substitution. Exported so the sequence runner can reuse the
  * exact same resolution logic used by broadcasts.
  */
+/**
+ * WA-TMPL-SEND.1 — the media-header parameter for a template send,
+ * or null when the template has no media header / no URL is known.
+ * Shared by buildTemplateComponents (broadcasts + sequence steps) AND
+ * the conversation send route, so a media-header template can never
+ * again be sent header-less from any path (Meta rejects those with
+ * the generic "unexpected error", not a clean validation message).
+ * Pure — unit-tested in whatsapp-template-components.test.js.
+ */
+export function headerComponentFor(templateComponents, mediaUrl) {
+  const headerComp = (templateComponents || []).find(c => c?.type === 'HEADER')
+  if (!headerComp || !['IMAGE', 'VIDEO', 'DOCUMENT'].includes(headerComp.format) || !mediaUrl) {
+    return null
+  }
+  const kind = headerComp.format.toLowerCase()
+  return { type: 'header', parameters: [{ type: kind, [kind]: { link: mediaUrl } }] }
+}
+
 export function buildTemplateComponents(template, contact, variableMapping, headerMediaUrl) {
   const components = []
   const templateComponents = template.components || []
@@ -690,17 +715,9 @@ export function buildTemplateComponents(template, contact, variableMapping, head
   // broadcast (2026-06-11): the template was APPROVED but the broadcast
   // carried no URL, the header param was silently omitted, and every
   // recipient failed.
-  const headerComp = templateComponents.find(c => c.type === 'HEADER')
   const mediaUrl = headerMediaUrl || template.header_media_url || null
-  if (headerComp && ['IMAGE', 'VIDEO', 'DOCUMENT'].includes(headerComp.format) && mediaUrl) {
-    components.push({
-      type: 'header',
-      parameters: [{
-        type: headerComp.format.toLowerCase(),
-        [headerComp.format.toLowerCase()]: { link: mediaUrl },
-      }],
-    })
-  }
+  const headerComponent = headerComponentFor(templateComponents, mediaUrl)
+  if (headerComponent) components.push(headerComponent)
 
   // Check if template has body variables
   const bodyComp = templateComponents.find(c => c.type === 'BODY')
