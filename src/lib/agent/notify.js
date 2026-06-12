@@ -19,6 +19,14 @@ export function buildBookingConfirmationText({ className, classTime } = {}) {
     : "Good news — you're booked in. See you there! 💪"
 }
 
+/** AGENT-CANCEL.1 — in-thread confirmation once an approved cancellation executes. */
+export function buildCancellationConfirmationText({ className, classTime } = {}) {
+  const what = [className, classTime].filter(Boolean).join(' — ')
+  return what
+    ? `All sorted — your booking for ${what} has been cancelled. Hope to see you at another class soon!`
+    : 'All sorted — your booking has been cancelled. Hope to see you at another class soon!'
+}
+
 /**
  * Send `text` into an agent conversation thread.
  * @returns {{ sent: boolean, reason?: string }}

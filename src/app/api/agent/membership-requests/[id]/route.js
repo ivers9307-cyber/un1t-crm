@@ -50,6 +50,43 @@ export async function PATCH(request, { params }) {
   let details = row.details || {}
   let executed = null
 
+  // AGENT-CANCEL.1 — approving a drafted cancellation executes it.
+  if (v.data.status === 'approved' && row.kind === 'class_cancellation' && row.status === 'pending') {
+    const { glofoxCredentialsForLocation, missingGlofoxCredentialsForLocation, cancelBooking } =
+      await import('@/lib/glofox')
+    const { data: contact } = await db.from('contacts')
+      .select('glofox_member_id')
+      .eq('id', row.contact_id)
+      .maybeSingle()
+    const creds = await glofoxCredentialsForLocation(db, row.location_id)
+    if (!contact?.glofox_member_id || !creds || missingGlofoxCredentialsForLocation(creds).length) {
+      finalStatus = 'failed'
+      details = { ...details, result: { ok: false, message_code: 'NOT_EXECUTABLE' } }
+    } else {
+      const result = await cancelBooking(creds, details.booking_id, contact.glofox_member_id)
+      const messageCode = result?.body?.message_code || result?.body?.message || null
+      executed = { ok: result.ok, status: result.status, message_code: messageCode }
+      details = { ...details, result: executed }
+      finalStatus = result.ok ? 'actioned' : 'failed'
+
+      if (result.ok && row.conversation_id) {
+        try {
+          const { sendAgentThreadMessage, buildCancellationConfirmationText } = await import('@/lib/agent/notify')
+          await sendAgentThreadMessage(db, {
+            channel: row.channel,
+            conversationId: row.conversation_id,
+            text: buildCancellationConfirmationText({
+              className: details.class_name,
+              classTime: details.class_time,
+            }),
+          })
+        } catch (e) {
+          console.warn(`[agent-requests] cancellation confirmation send error: ${e?.message || e}`)
+        }
+      }
+    }
+  }
+
   // AGENT-HANDS.1 — approving a drafted class booking executes it.
   if (v.data.status === 'approved' && row.kind === 'class_booking' && row.status === 'pending') {
     const { glofoxCredentialsForLocation, missingGlofoxCredentialsForLocation, createBooking, GLOFOX_BOOKING_MODEL } =
