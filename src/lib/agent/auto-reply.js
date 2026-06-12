@@ -30,6 +30,7 @@ import {
   isVerificationFresh,
   AGENT_MESSAGE_SOURCE,
   DEFAULT_HOLDING_MESSAGE,
+  autoVerifyContactId,
 } from './core'
 import { ACCOUNT_TOOLS, ACCOUNT_TOOL_NAMES, executeAccountTool } from './account-tools'
 import { BOOKING_TOOLS, executeBookingTool } from './booking-tools'
@@ -204,17 +205,49 @@ async function runChannelAgentInner(db, adapter, ctx) {
       return { handled: true, action: 'handoff', reason: 'rate_limited' }
     }
 
+    // AGENT-AUTH.1 — WhatsApp senders are pre-verified by their phone
+    // number when it maps to exactly ONE contact at this location and the
+    // thread is linked to that contact. The match is recomputed every
+    // turn from live data (no TTL concerns); the conversation stamp keeps
+    // draft-approval and audit paths consistent with question-based
+    // verification. Instagram has no phone — its adapter doesn't set
+    // trustsSenderIdentity, so the question flow stands there.
+    let preverifiedContactId = null
+    if (adapter.trustsSenderIdentity && conv?.contact_id && recipient) {
+      const bare = String(recipient).replace(/^\+/, '')
+      const { data: matches } = await db.from('contacts')
+        .select('id')
+        .eq('location_id', locationId)
+        .or(`wa_phone.eq.${bare},wa_phone.eq.+${bare},phone.eq.${bare},phone.eq.+${bare}`)
+        .limit(2)
+      preverifiedContactId = autoVerifyContactId({
+        trusted: true,
+        conversationContactId: conv.contact_id,
+        matches,
+      })
+      if (preverifiedContactId && conv.agent_verified_contact_id !== preverifiedContactId) {
+        await db.from(adapter.conversationsTable).update({
+          agent_verified_contact_id: preverifiedContactId,
+          agent_verified_at: new Date().toISOString(),
+        }).eq('id', conversationId)
+      }
+    }
+
     const { data: knowledge } = await db.from('agent_knowledge')
       .select('category, title, content, enabled, sort_order')
       .eq('location_id', locationId)
       .eq('enabled', true)
       .order('sort_order', { ascending: true })
 
-    const { data: history } = await db.from(adapter.messagesTable)
+    // Newest rows first then reversed — ascending+limit returns the OLDEST
+    // rows, which would freeze the agent's view at the start of the
+    // conversation once a thread outgrows the cap (latent amnesia v2).
+    const { data: historyDesc } = await db.from(adapter.messagesTable)
       .select('direction, body, message_type, created_at')
       .eq('conversation_id', conversationId)
-      .order('created_at', { ascending: true })
+      .order('created_at', { ascending: false })
       .limit(MAX_HISTORY * 2)
+    const history = (historyDesc || []).slice().reverse()
 
     const systemPrompt = buildCustomerSystemPrompt({
       businessName: 'UN1T',
@@ -223,6 +256,7 @@ async function runChannelAgentInner(db, adapter, ctx) {
       extraRules: settings?.extra_rules || null,
       knowledge: knowledge || [],
       today: new Date().toISOString().slice(0, 10),
+      identityPreverified: !!preverifiedContactId,
     })
 
     const messages = formatHistoryForClaude(history || [], { maxMessages: MAX_HISTORY })
@@ -240,7 +274,8 @@ async function runChannelAgentInner(db, adapter, ctx) {
       contactId: conv?.contact_id || contactId || null,
       // Only honour a prior verification if it's still fresh — a stale one
       // (handle changed hands) forces the customer to re-verify.
-      verifiedContactId: isVerificationFresh(conv?.agent_verified_at) ? (conv?.agent_verified_contact_id || null) : null,
+      verifiedContactId: preverifiedContactId
+        || (isVerificationFresh(conv?.agent_verified_at) ? (conv?.agent_verified_contact_id || null) : null),
       locationId,
       channel: adapter.name,
       nameHint: (nameCol && conv?.[nameCol]) || null,
@@ -471,6 +506,8 @@ export const whatsappAdapter = {
   nameColumn: 'wa_profile_name',
   pushCategory: 'whatsapp',
   handoffType: 'whatsapp_agent_handoff',
+  // Meta authenticates the sender's phone number — safe to use as identity.
+  trustsSenderIdentity: true,
   send: (recipient, text, { locationId }) => sendTextMessage(recipient, text, { locationId }),
   sendOptions: (recipient, text, options, { locationId }) => sendInteractiveOptions(recipient, text, options, { locationId }),
   outboundRow: ({ conversationId, locationId, contactId, messageId, text, now }) => ({
