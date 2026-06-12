@@ -14,16 +14,13 @@ import {
 } from './account-tools'
 
 describe('identityMatches', () => {
-  const contact = { email: 'Jo@Example.com', dob: '1990-05-14', last_name: 'Murphy' }
+  const contact = { email: 'Jo@Example.com', last_name: 'Murphy' }
   it('passes on matching email (case-insensitive)', () => {
     expect(identityMatches(contact, { email: 'jo@example.com' })).toBe(true)
     expect(identityMatches(contact, { email: '  JO@EXAMPLE.COM ' })).toBe(true)
   })
-  it('passes on DOB + last name together', () => {
-    expect(identityMatches(contact, { date_of_birth: '1990-05-14', last_name: 'murphy' })).toBe(true)
-  })
-  it('handles an ISO dob value on the contact', () => {
-    expect(identityMatches({ ...contact, dob: '1990-05-14T00:00:00.000Z' }, { date_of_birth: '1990-05-14', last_name: 'Murphy' })).toBe(true)
+  it('ignores DOB entirely — the studio does not gather it (2026-06-12)', () => {
+    expect(identityMatches(contact, { date_of_birth: '1990-05-14', last_name: 'Murphy' })).toBe(false)
   })
   it('fails on DOB alone or last name alone', () => {
     expect(identityMatches(contact, { date_of_birth: '1990-05-14' })).toBe(false)
