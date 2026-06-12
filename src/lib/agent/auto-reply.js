@@ -37,7 +37,7 @@ import { BOOKING_TOOLS, executeBookingTool } from './booking-tools'
 import { EVENT_TOOLS, EVENT_TOOL_NAMES, executeEventTool } from './event-tools'
 
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages'
-const AGENT_MODEL = 'claude-sonnet-4-6'
+export const AGENT_MODEL = 'claude-sonnet-4-6'
 
 // Prompt caching (CACHE.1): ACCOUNT_TOOLS (~4k tokens) is byte-identical on
 // every inbound message and renders BEFORE the per-customer (dynamic) system
@@ -49,7 +49,7 @@ const AGENT_MODEL = 'claude-sonnet-4-6'
 // AGENT-HANDS.1 — the booking tools join the cached block. Still one
 // byte-identical stable prefix; the ephemeral marker moves to the last
 // tool of the COMBINED array so the whole block caches.
-const ALL_AGENT_TOOLS = [...ACCOUNT_TOOLS, ...BOOKING_TOOLS, ...EVENT_TOOLS]
+export const ALL_AGENT_TOOLS = [...ACCOUNT_TOOLS, ...BOOKING_TOOLS, ...EVENT_TOOLS]
 const CACHED_ACCOUNT_TOOLS = ALL_AGENT_TOOLS.map((tool, i) =>
   i === ALL_AGENT_TOOLS.length - 1
     ? { ...tool, cache_control: { type: 'ephemeral' } }
@@ -59,7 +59,7 @@ const CACHED_ACCOUNT_TOOLS = ALL_AGENT_TOOLS.map((tool, i) =>
 // per minute is enough.
 const SOFT_NOTIFY_GAP_MS = 60_000
 const MAX_HISTORY = 20
-const MAX_TOOL_ITERATIONS = 4
+export const MAX_TOOL_ITERATIONS = 4
 
 // A claim older than this is treated as stale (e.g. a crashed turn) and
 // reclaimable, so a single failed run can't wedge a thread forever.
