@@ -27,6 +27,7 @@ const DEFAULTS = {
   // taster).
   booking_mode: 'auto',
   agent_name: 'Mia',
+  membership_signup_url: null,
   followups: { enabled: false, nudge_after_hours: 3, template_name: null, daily_cap: 50 },
   first_class_checkin: { enabled: false, delay_hours: 2, template_name: null, daily_cap: 20 },
   handoff_cooldown_hours: 12,
@@ -52,6 +53,8 @@ const SettingsSchema = z.object({
   }).nullable().optional(),
   booking_mode: z.enum(['auto', 'draft']).optional().default('auto'),
   agent_name: z.string().max(40).nullable().optional(),
+  membership_signup_url: z.string().url().max(512).nullable().optional()
+    .or(z.literal('').transform(() => null)),
   followups: z.object({
     enabled: z.boolean().optional().default(false),
     nudge_after_hours: z.number().min(1).max(18).optional().default(3),
@@ -115,6 +118,7 @@ export async function PUT(request) {
     limits: v.data.limits || null,
     booking_mode: v.data.booking_mode === 'draft' ? 'draft' : 'auto',
     agent_name: v.data.agent_name?.trim() || DEFAULTS.agent_name,
+    membership_signup_url: v.data.membership_signup_url || null,
     handoff_cooldown_hours: v.data.handoff_cooldown_hours ?? DEFAULTS.handoff_cooldown_hours,
     followups: { ...DEFAULTS.followups, ...(v.data.followups || {}) },
     first_class_checkin: { ...DEFAULTS.first_class_checkin, ...(v.data.first_class_checkin || {}) },
