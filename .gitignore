@@ -20,3 +20,4 @@ graphify-out/
 
 # ffmpeg.wasm core/worker — self-hosted at install time (~25MB), never committed
 public/ffmpeg/
+evals/output/
