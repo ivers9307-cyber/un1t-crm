@@ -153,6 +153,34 @@ async function fetchLowFillClasses(db, locationId, nowMs) {
 }
 
 /**
+ * BRIEFING.1 — location-level feed for the morning-briefing cron.
+ * No viewer to gate by, so every location-scoped source is fetched;
+ * the approvals row is deliberately ABSENT (the approvals registry is
+ * per-user scoped — providers fan out on the caller's approvable
+ * locations — and faking a user object there is fragile; the Today
+ * page covers approvals per-viewer). Same fail-soft contract as
+ * fetchTodayFeed.
+ */
+export async function fetchLocationTodayFeed(db, locationId, nowMs = Date.now()) {
+  if (!locationId) return []
+  const todayIso = isoToday(new Date(nowMs))
+  const [issues, invoices, whatsappUnread, bookingsToday, churn, tasksDue, lowFill] =
+    await Promise.all([
+      safe(true, () => countInboxIssues(db, locationId)),
+      safe(true, () => fetchInvoicesPending(db, locationId)),
+      safe(true, () => fetchWhatsappUnread(db, locationId)),
+      safe(true, () => fetchBookingsToday(db, locationId, todayIso)),
+      safe(true, () => fetchChurn(db, locationId)),
+      safe(true, () => fetchTasksDue(db, locationId, todayIso)),
+      safe(true, () => fetchLowFillClasses(db, locationId, nowMs)),
+    ])
+  return assembleTodayFeed({
+    approvals: null, issues, invoices, whatsappUnread,
+    bookingsToday, churn, tasksDue, lowFill,
+  })
+}
+
+/**
  * Fetch + assemble the viewer's triage rows for the active location.
  * Returns [] when nothing needs attention (the page renders "all
  * clear"); individual sources degrade to omitted rows, never throw.
