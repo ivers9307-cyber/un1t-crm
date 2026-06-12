@@ -35,6 +35,55 @@ export const FOLLOWUP_DEFAULTS = {
   daily_cap: 50,
 }
 
+export const CHECKIN_DEFAULTS = {
+  enabled: false,
+  delay_hours: 2,
+  template_name: null,
+  daily_cap: 20,
+}
+
+// Funnel stages that count as "new" — established members never get a
+// first-class check-in (their first class was long ago; the stage
+// gate is what tells a true first-timer from a returning regular).
+const CHECKIN_STAGES = new Set(['new_lead', 'active_trial', 'hot_conversion'])
+const CHECKIN_MAX_AGE_H = 24
+
+/**
+ * AGENT-CHECKIN.1 — is this contact due their (once-ever) post-first-
+ * class check-in? Pure.
+ */
+export function classifyCheckinCandidate({
+  stage,
+  lastAttendedAtMs,
+  checkinSentAt,
+  nowMs,
+  delayHours = CHECKIN_DEFAULTS.delay_hours,
+} = {}) {
+  if (checkinSentAt) return { action: null, reason: 'already_sent' }
+  if (!stage || !CHECKIN_STAGES.has(stage)) return { action: null, reason: 'not_new' }
+  if (!lastAttendedAtMs) return { action: null, reason: 'no_attendance' }
+  const ageH = (nowMs - lastAttendedAtMs) / H_MS
+  if (ageH < delayHours) return { action: null, reason: 'too_soon' }
+  if (ageH > CHECKIN_MAX_AGE_H) return { action: null, reason: 'expired' }
+  return { action: 'checkin' }
+}
+
+/**
+ * The class they actually attended — the attended booking nearest the
+ * attendance stamp, from contacts.recent_bookings. Pure.
+ */
+export function attendedClassName(recentBookings, lastAttendedAtMs) {
+  const targetSec = Math.floor((lastAttendedAtMs || 0) / 1000)
+  let best = null
+  let bestDelta = Infinity
+  for (const b of Array.isArray(recentBookings) ? recentBookings : []) {
+    if (!b || b.attended !== true) continue
+    const delta = Math.abs((Number(b.time_start) || 0) - targetSec)
+    if (delta < bestDelta) { bestDelta = delta; best = b }
+  }
+  return best?.event_name || best?.model_name || null
+}
+
 // Window bands (hours since the customer's last message).
 const NUDGE_MAX_H = 20      // margin before the 24h window shuts
 const TEMPLATE_MIN_H = 24
@@ -212,10 +261,11 @@ async function stampStage(db, conversationId, stage, sent) {
     .eq('id', conversationId)
 }
 
-async function sendNudge(db, conv, location, settings, facts) {
+// One short proactive message in Mia's voice, given the thread + an
+// instruction. Returns the text or null (callers log the reason).
+async function composeAgentText(location, settings, historyRows, instruction) {
   const apiKey = process.env.ANTHROPIC_API_KEY
-  if (!apiKey) return skipLog(conv.id, 'no_api_key')
-
+  if (!apiKey) return { error: 'no_api_key' }
   const system = buildCustomerSystemPrompt({
     businessName: 'UN1T',
     locationName: location.name,
@@ -225,10 +275,9 @@ async function sendNudge(db, conv, location, settings, facts) {
     today: new Date().toDateString(),
   })
   const messages = [
-    ...formatHistoryForClaude(facts.rows),
-    { role: 'user', content: NUDGE_INSTRUCTION },
+    ...formatHistoryForClaude(historyRows || []),
+    { role: 'user', content: instruction },
   ]
-  let text = null
   try {
     const res = await fetch(ANTHROPIC_API_URL, {
       method: 'POST',
@@ -239,12 +288,19 @@ async function sendNudge(db, conv, location, settings, facts) {
       },
       body: JSON.stringify({ model: AGENT_MODEL, max_tokens: 300, system, messages }),
     })
-    if (!res.ok) return skipLog(conv.id, `nudge_model_http_${res.status}`)
+    if (!res.ok) return { error: `model_http_${res.status}` }
     const body = await res.json()
-    text = (body?.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('\n').trim()
+    const text = (body?.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('\n').trim()
+    return { text }
   } catch (e) {
-    return skipLog(conv.id, `nudge_model_error:${e?.message || e}`)
+    return { error: `model_error:${e?.message || e}` }
   }
+}
+
+async function sendNudge(db, conv, location, settings, facts) {
+  const composed = await composeAgentText(location, settings, facts.rows, NUDGE_INSTRUCTION)
+  if (composed.error) return skipLog(conv.id, `nudge_${composed.error}`)
+  const text = composed.text
 
   if (!text || /\[\[SKIP\]\]/.test(text)) {
     await stampStage(db, conv.id, 3, false) // nothing open — close the cycle quietly
@@ -387,6 +443,196 @@ export async function runAgentFollowups(db, { nowMs = Date.now() } = {}) {
       } catch (e) {
         results.skipped++
         console.error('[radar-agent] followup error:', e?.message || e)
+      }
+    }
+  }
+  return results
+}
+
+// ── AGENT-CHECKIN.1 — post-first-class check-in ─────────────────────
+
+function checkinInstruction(className) {
+  return (
+    '[STUDIO SYSTEM — not the customer] This customer attended their first ' +
+    `${className} class earlier today. Send ONE short, warm check-in asking how it went — ` +
+    'reference the class by name. No selling in this message; just genuine interest. ' +
+    'If the conversation already covered how it went, reply with exactly [[SKIP]].'
+  )
+}
+
+async function checkinsSentToday(db, locationId, nowMs) {
+  const d = new Date(nowMs)
+  const dayStart = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())).toISOString()
+  const { count } = await db.from('contacts')
+    .select('id', { count: 'exact', head: true })
+    .eq('location_id', locationId)
+    .gte('first_class_checkin_at', dayStart)
+  return count || 0
+}
+
+async function stampCheckin(db, contact, locationId, className, via) {
+  await db.from('contacts')
+    .update({ first_class_checkin_at: new Date().toISOString() })
+    .eq('id', contact.id)
+  try {
+    await db.from('activities').insert({
+      contact_id: contact.id,
+      location_id: locationId,
+      type: 'agent_checkin',
+      kind: 'event',
+      subject: 'Mia checked in after their first class',
+      note: `${className}${via ? ` (${via})` : ''}`,
+    })
+  } catch { /* timeline entry is best-effort */ }
+}
+
+/**
+ * One cron tick of first-class check-ins (spec:
+ * docs/AGENT_FIRST_CLASS_CHECKIN_SPEC.md). Case A (open 24h window —
+ * they messaged us recently, usually because Mia booked the class) →
+ * free-form composed check-in. Case B (no window — booked via the app
+ * or front desk) → ONE approved marketing template, consent-gated.
+ * Once ever per contact via contacts.first_class_checkin_at.
+ */
+export async function runFirstClassCheckins(db, { nowMs = Date.now() } = {}) {
+  const results = { freeform: 0, templates: 0, skipped: 0 }
+  if (!withinDublinDaytime(nowMs)) return { ...results, reason: 'quiet_hours' }
+
+  const { data: locations } = await db.from('locations')
+    .select('id, name, settings')
+    .eq('active', true)
+
+  for (const location of locations || []) {
+    const settings = location?.settings?.customer_agent || null
+    const checkin = { ...CHECKIN_DEFAULTS, ...(settings?.first_class_checkin || {}) }
+    if (!checkin.enabled) continue
+    if (!settings?.enabled && !settings?.test_mode) continue
+
+    const sinceIso = new Date(nowMs - CHECKIN_MAX_AGE_H * H_MS).toISOString()
+    const { data: contacts } = await db.from('contacts')
+      .select('id, first_name, name, wa_phone, phone, pipeline_stage_slug, last_attended_at, first_class_checkin_at, recent_bookings, opted_out')
+      .eq('location_id', location.id)
+      .in('pipeline_stage_slug', ['new_lead', 'active_trial', 'hot_conversion'])
+      .gte('last_attended_at', sinceIso)
+      .is('first_class_checkin_at', null)
+      .limit(50)
+
+    for (const contact of contacts || []) {
+      try {
+        const decision = classifyCheckinCandidate({
+          stage: contact.pipeline_stage_slug,
+          lastAttendedAtMs: contact.last_attended_at ? new Date(contact.last_attended_at).getTime() : null,
+          checkinSentAt: contact.first_class_checkin_at,
+          nowMs,
+          delayHours: checkin.delay_hours,
+        })
+        if (decision.action !== 'checkin') { results.skipped++; continue }
+
+        const to = contact.wa_phone || contact.phone
+        if (!to || contact.opted_out === true) { results.skipped++; continue }
+        if (!settings?.enabled && settings?.test_mode &&
+            !phoneMatchesAllowlist(to, settings?.test_phones)) {
+          results.skipped++; continue
+        }
+        if ((await checkinsSentToday(db, location.id, nowMs)) >= checkin.daily_cap) {
+          console.warn('[radar-agent] checkin-skip', JSON.stringify({ locationId: location.id, reason: 'daily_cap' }))
+          break
+        }
+
+        const className = attendedClassName(
+          contact.recent_bookings, new Date(contact.last_attended_at).getTime(),
+        ) || 'first'
+        const firstName = (contact.first_name || String(contact.name || '').split(/\s+/)[0] || 'there').trim()
+
+        // Existing conversation? (Case A needs one with a live window.)
+        const { data: convRows } = await db.from('whatsapp_conversations')
+          .select('id, contact_id, location_id, agent_handed_off_at')
+          .eq('location_id', location.id)
+          .eq('contact_id', contact.id)
+          .order('last_message_at', { ascending: false })
+          .limit(1)
+        const existingConv = convRows?.[0] || null
+        if (existingConv?.agent_handed_off_at) { results.skipped++; continue }
+
+        let facts = { rows: [], lastInboundAtMs: null, humanSpokeAfterInbound: false }
+        if (existingConv) facts = await lastInboundFacts(db, existingConv.id)
+        if (facts.humanSpokeAfterInbound) { results.skipped++; continue }
+        const windowOpen = facts.lastInboundAtMs && (nowMs - facts.lastInboundAtMs) < 23 * H_MS
+
+        if (windowOpen) {
+          // Case A — free-form, in Mia's voice, referencing the class.
+          const composed = await composeAgentText(
+            location, settings, facts.rows, checkinInstruction(className),
+          )
+          if (composed.error) {
+            console.warn('[radar-agent] checkin-skip', JSON.stringify({ contactId: contact.id, reason: composed.error }))
+            results.skipped++; continue
+          }
+          if (/\[\[SKIP\]\]/.test(composed.text || '')) {
+            await stampCheckin(db, contact, location.id, className, 'skipped — already discussed')
+            results.skipped++; continue
+          }
+          const parsed = parseAgentResponse(composed.text)
+          if (parsed.handoff || !parsed.text) { results.skipped++; continue }
+          const { sendTextMessage } = await import('@/lib/whatsapp')
+          const res = await sendTextMessage(to, parsed.text, { locationId: location.id })
+          if (!res?.messageId) { results.skipped++; continue }
+          await recordProactiveMessage(db, { id: existingConv.id, contact_id: contact.id, location_id: location.id }, {
+            body: parsed.text, waMessageId: res.messageId, messageType: 'text',
+          })
+          await stampCheckin(db, contact, location.id, className, 'in-window')
+          results.freeform++
+          continue
+        }
+
+        // Case B — template (marketing ⇒ marketing consent, like a campaign).
+        if (!checkin.template_name) {
+          console.warn('[radar-agent] checkin-skip', JSON.stringify({ contactId: contact.id, reason: 'no_template_configured' }))
+          results.skipped++; continue
+        }
+        const { data: prefs } = await db.from('contact_preferences')
+          .select('whatsapp_marketing')
+          .eq('contact_id', contact.id)
+          .maybeSingle()
+        if (prefs?.whatsapp_marketing !== true) {
+          await stampCheckin(db, contact, location.id, className, 'skipped — no marketing consent')
+          results.skipped++; continue
+        }
+        const { data: tRows } = await db.from('whatsapp_templates')
+          .select('name, language, status, components, header_media_url')
+          .eq('location_id', location.id)
+          .eq('name', checkin.template_name)
+          .order('created_at', { ascending: false })
+          .limit(1)
+        const template = tRows?.[0]
+        if (!template || String(template.status || '').toUpperCase() !== 'APPROVED') {
+          console.warn('[radar-agent] checkin-skip', JSON.stringify({ contactId: contact.id, reason: 'template_not_approved' }))
+          results.skipped++; continue
+        }
+        const { extractTemplateBody } = await import('@/lib/radar-outreach')
+        const { sendTemplateMessage, headerComponentFor, getOrCreateConversation } = await import('@/lib/whatsapp')
+        const { varCount } = extractTemplateBody(template.components)
+        const values = [firstName, className]
+        const components = buildFollowupComponents(varCount, values)
+        const headerComponent = headerComponentFor(template.components, template.header_media_url)
+        if (headerComponent) components.unshift(headerComponent)
+        const res = await sendTemplateMessage(to, template.name, template.language || 'en', components, {
+          locationId: location.id,
+        })
+        if (!res?.messageId) { results.skipped++; continue }
+        const conversationId = existingConv?.id
+          || await getOrCreateConversation(db, { id: contact.id, wa_phone: contact.wa_phone, phone: contact.phone, name: contact.name }, location.id)
+        if (conversationId) {
+          await recordProactiveMessage(db, { id: conversationId, contact_id: contact.id, location_id: location.id }, {
+            body: renderFollowupBody(template, values) || `[Template: ${template.name}]`,
+            waMessageId: res.messageId, messageType: 'template', templateName: template.name,
+          })
+        }
+        await stampCheckin(db, contact, location.id, className, 'template')
+        results.templates++
+      } catch (e) {
+        results.skipped++
+        console.error('[radar-agent] checkin error:', e?.message || e)
       }
     }
   }

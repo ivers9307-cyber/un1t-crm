@@ -67,6 +67,12 @@ export default function CustomerAgentSettingsPage() {
           template_name: settings.followups?.template_name || null,
           daily_cap: Number(settings.followups?.daily_cap) || 50,
         },
+        first_class_checkin: {
+          enabled: !!settings.first_class_checkin?.enabled,
+          delay_hours: Number(settings.first_class_checkin?.delay_hours) || 2,
+          template_name: settings.first_class_checkin?.template_name || null,
+          daily_cap: Number(settings.first_class_checkin?.daily_cap) || 20,
+        },
       }
       const res = await fetch('/api/settings/customer-agent', {
         method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
@@ -92,6 +98,8 @@ export default function CustomerAgentSettingsPage() {
   }, [])
   const setFollowup = (key, value) =>
     setSettings(s => ({ ...s, followups: { ...(s.followups || {}), [key]: value } }))
+  const setCheckin = (key, value) =>
+    setSettings(s => ({ ...s, first_class_checkin: { ...(s.first_class_checkin || {}), [key]: value } }))
 
   const [importing, setImporting] = useState(false)
   const [importNote, setImportNote] = useState(null)
@@ -313,6 +321,53 @@ export default function CustomerAgentSettingsPage() {
               value={settings.followups?.daily_cap ?? 50}
               onChange={e => setFollowup('daily_cap', e.target.value === '' ? 50 : Number(e.target.value))} />
             <p className="text-xs text-un1t-subtle mt-1">Hard ceiling on proactive sends per day.</p>
+          </div>
+        </div>
+      </section>
+
+      {/* ── First-class check-in (AGENT-CHECKIN.1) ────────── */}
+      <section className="border border-un1t-border rounded-lg p-5 mt-6">
+        <h2 className="text-base font-semibold text-un1t-text mb-1">First-class check-in</h2>
+        <p className="text-sm text-un1t-muted mb-4">
+          After a new lead or trial member attends their first class, the agent checks in once —
+          free-form when they have an open chat window (e.g. they booked through the agent), or via
+          the approved template below otherwise. Good replies get offered their next booking;
+          complaints hand off to the team immediately.
+        </p>
+        <label className="flex items-center gap-2 text-sm text-un1t-text mb-4">
+          <input type="checkbox" checked={!!settings.first_class_checkin?.enabled}
+            onChange={e => setCheckin('enabled', e.target.checked)} />
+          Enable first-class check-ins
+        </label>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div>
+            <label className="block text-sm font-medium text-un1t-text mb-1">Send after (hours)</label>
+            <input type="number" min={1} max={24} className={inputCls}
+              value={settings.first_class_checkin?.delay_hours ?? 2}
+              onChange={e => setCheckin('delay_hours', e.target.value === '' ? 2 : Number(e.target.value))} />
+            <p className="text-xs text-un1t-subtle mt-1">Hours after the class before the check-in (daytime only; evening classes roll to next morning).</p>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-un1t-text mb-1">Check-in template</label>
+            <select className={inputCls}
+              value={settings.first_class_checkin?.template_name || ''}
+              onChange={e => setCheckin('template_name', e.target.value || null)}>
+              <option value="">— none (open-window check-ins only) —</option>
+              {templates.map(t => (
+                <option key={`fcc:${t.name}:${t.language}`} value={t.name}>{t.name} ({t.language})</option>
+              ))}
+            </select>
+            <p className="text-xs text-un1t-subtle mt-1">
+              Used when they have no open chat window. Variables: {'{{1}}'} first name, {'{{2}}'} class name.
+              Marketing consent required and enforced.
+            </p>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-un1t-text mb-1">Daily cap (per studio)</label>
+            <input type="number" min={1} max={200} className={inputCls}
+              value={settings.first_class_checkin?.daily_cap ?? 20}
+              onChange={e => setCheckin('daily_cap', e.target.value === '' ? 20 : Number(e.target.value))} />
+            <p className="text-xs text-un1t-subtle mt-1">Each contact only ever gets one check-in.</p>
           </div>
         </div>
       </section>

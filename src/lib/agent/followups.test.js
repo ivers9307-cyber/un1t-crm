@@ -9,6 +9,8 @@ import {
   deriveFollowupTopic,
   buildFollowupComponents,
   renderFollowupBody,
+  classifyCheckinCandidate,
+  attendedClassName,
 } from './followups'
 
 const H = 3600_000
@@ -87,5 +89,44 @@ describe('template components + recorded body', () => {
     expect(buildFollowupComponents(0, ['Sarah'])).toEqual([])
     const comps = buildFollowupComponents(3, ['Sarah', 'classes'])
     expect(comps[0].parameters.map(p => p.text)).toEqual(['Sarah', 'classes', 'classes'])
+  })
+})
+
+// AGENT-CHECKIN.1 — eligibility for the post-first-class check-in.
+describe('classifyCheckinCandidate', () => {
+  const base = {
+    stage: 'active_trial',
+    lastAttendedAtMs: now - 3 * H,
+    checkinSentAt: null,
+    nowMs: now,
+    delayHours: 2,
+  }
+  it('sends for a trial-stage contact, after the delay, once ever', () => {
+    expect(classifyCheckinCandidate(base)).toEqual({ action: 'checkin' })
+  })
+  it('waits for the delay and expires after 24h', () => {
+    expect(classifyCheckinCandidate({ ...base, lastAttendedAtMs: now - 1 * H }).reason).toBe('too_soon')
+    expect(classifyCheckinCandidate({ ...base, lastAttendedAtMs: now - 30 * H }).reason).toBe('expired')
+  })
+  it('never repeats and never targets established members', () => {
+    expect(classifyCheckinCandidate({ ...base, checkinSentAt: '2026-06-01T00:00:00Z' }).reason).toBe('already_sent')
+    expect(classifyCheckinCandidate({ ...base, stage: 'active_member' }).reason).toBe('not_new')
+    expect(classifyCheckinCandidate({ ...base, stage: null }).reason).toBe('not_new')
+  })
+})
+
+describe('attendedClassName', () => {
+  const attendedSec = Math.floor((now - 3 * H) / 1000)
+  it('finds the attended booking nearest the attendance stamp', () => {
+    const name = attendedClassName([
+      { event_name: 'ARENA', time_start: attendedSec - 86400 * 3, attended: true },
+      { event_name: 'FUS1ON - HYBRID', time_start: attendedSec, attended: true },
+      { event_name: 'HYROX', time_start: attendedSec + 86400, attended: false },
+    ], now - 3 * H)
+    expect(name).toBe('FUS1ON - HYBRID')
+  })
+  it('falls back to null on no attended bookings', () => {
+    expect(attendedClassName([{ event_name: 'X', attended: false }], now)).toBeNull()
+    expect(attendedClassName(null, now)).toBeNull()
   })
 })
