@@ -50,6 +50,40 @@ export async function PATCH(request, { params }) {
   let details = row.details || {}
   let executed = null
 
+  // AGENT-EVENTS.2 — approving a drafted event booking executes it.
+  if (v.data.status === 'approved' && row.kind === 'event_booking' && row.status === 'pending') {
+    const { registerSoloEventEntry } = await import('@/lib/race-register-solo')
+    const { data: contact } = await db.from('contacts')
+      .select('id, name, first_name, last_name, email, phone')
+      .eq('id', row.contact_id)
+      .maybeSingle()
+    const { data: race } = await db.from('race_events')
+      .select('id, name, kind, slug, race_date, active, location_id, registration_opens_at, registration_closes_at, member_pricing_enabled, member_fee_cents, non_member_fee_cents, members_only, payment_currency, waves:race_waves(id, start_time, capacity, label)')
+      .eq('id', details.event_id)
+      .maybeSingle()
+    if (!contact || !race) {
+      finalStatus = 'failed'
+      details = { ...details, result: { ok: false, reason: 'NOT_EXECUTABLE' } }
+    } else {
+      const result = await registerSoloEventEntry(db, { race, waveId: details.wave_id || null, contact })
+      executed = { ok: result.ok, reason: result.reason || null }
+      details = { ...details, result: executed }
+      finalStatus = result.ok ? 'actioned' : 'failed'
+      if (result.ok && row.conversation_id) {
+        try {
+          const { sendAgentThreadMessage, buildBookingConfirmationText } = await import('@/lib/agent/notify')
+          await sendAgentThreadMessage(db, {
+            channel: row.channel,
+            conversationId: row.conversation_id,
+            text: buildBookingConfirmationText({ className: details.event_name, classTime: details.event_date }),
+          })
+        } catch (e) {
+          console.warn(`[agent-requests] event confirmation send error: ${e?.message || e}`)
+        }
+      }
+    }
+  }
+
   // AGENT-CANCEL.1 — approving a drafted cancellation executes it.
   if (v.data.status === 'approved' && row.kind === 'class_cancellation' && row.status === 'pending') {
     const { glofoxCredentialsForLocation, missingGlofoxCredentialsForLocation, cancelBooking } =

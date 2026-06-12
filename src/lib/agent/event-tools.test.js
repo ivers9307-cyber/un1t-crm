@@ -5,13 +5,15 @@ import {
   formatEventPrice,
   shapeEventsForAgent,
   shapeMyRegistrationsForAgent,
+  eventOpenForRegistration,
+  waveSpotsLeft,
 } from './event-tools'
 
 const now = Date.UTC(2026, 5, 12, 12, 0, 0)
 
 describe('EVENT_TOOLS', () => {
-  it('declares the two read tools', () => {
-    expect(EVENT_TOOLS.map(t => t.name)).toEqual(['list_upcoming_events', 'get_my_event_registrations'])
+  it('declares the event tools', () => {
+    expect(EVENT_TOOLS.map(t => t.name)).toEqual(['list_upcoming_events', 'get_my_event_registrations', 'book_event'])
   })
 })
 
@@ -90,5 +92,30 @@ describe('shapeMyRegistrationsForAgent', () => {
     expect(out.map(r => r.registration_id)).toEqual(['r1', 'r4'])
     expect(out[0].wave_time).toBe('09:00')
     expect(out[1].status).toBe('pending_payment')
+  })
+})
+
+// AGENT-EVENTS.2 — booking guards.
+describe('eventOpenForRegistration', () => {
+  const race = {
+    active: true, race_date: '2026-06-20',
+    registration_opens_at: null, registration_closes_at: null,
+  }
+  it('open for an active future event with no window bounds', () => {
+    expect(eventOpenForRegistration(race, now)).toEqual({ open: true })
+  })
+  it('reports why when closed', () => {
+    expect(eventOpenForRegistration({ ...race, active: false }, now).reason).toBe('inactive')
+    expect(eventOpenForRegistration({ ...race, race_date: '2026-06-01' }, now).reason).toBe('past')
+    expect(eventOpenForRegistration({ ...race, registration_closes_at: '2026-06-10T00:00:00Z' }, now).reason).toBe('closed')
+    expect(eventOpenForRegistration({ ...race, registration_opens_at: '2026-07-01T00:00:00Z' }, now).reason).toBe('not_open_yet')
+  })
+})
+
+describe('waveSpotsLeft', () => {
+  it('computes remaining capacity and treats null capacity as unlimited', () => {
+    expect(waveSpotsLeft({ capacity: 20 }, 5)).toBe(15)
+    expect(waveSpotsLeft({ capacity: 2 }, 2)).toBe(0)
+    expect(waveSpotsLeft({ capacity: null }, 99)).toBeNull()
   })
 })

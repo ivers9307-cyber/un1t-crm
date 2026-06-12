@@ -31,6 +31,27 @@ export const EVENT_TOOLS = [
       'race?", "what wave am I in?".',
     input_schema: { type: 'object', properties: {} },
   },
+  {
+    name: 'book_event',
+    description:
+      'Register the customer (solo entry) for an upcoming event from list_upcoming_events — ' +
+      'ONLY when the event is free for them (the tool refuses paid entries and tells you to ' +
+      'share the signup link instead; team entries also go via the link). CRITICAL: restate ' +
+      'the exact event, date and wave time and get a clear yes before calling. For someone ' +
+      'new, collect their full name and email first — the confirmation goes there.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        event_id: { type: 'string', description: 'The event_id from list_upcoming_events.' },
+        wave_id: { type: 'string', description: 'The wave_id they chose (required when the event has multiple waves).' },
+        event_name: { type: 'string', description: 'The event name you confirmed with the customer.' },
+        event_date: { type: 'string', description: 'The date you confirmed, as shown in the list.' },
+        name: { type: 'string', description: "Full name, if they're new or not on file." },
+        email: { type: 'string', description: 'Email address, if not on file — confirmations go there.' },
+      },
+      required: ['event_id'],
+    },
+  },
 ]
 
 export const EVENT_TOOL_NAMES = new Set(EVENT_TOOLS.map(t => t.name))
@@ -59,6 +80,25 @@ export function formatEventPrice({
     return members_only ? 'Free (members only)' : 'Free'
   }
   return `${euro(non_member_fee_cents)} per person${members_only ? ' (members only)' : ''}`
+}
+
+/** Is this event open for registration right now? Pure. */
+export function eventOpenForRegistration(race, nowMs) {
+  if (!race || race.active === false) return { open: false, reason: 'inactive' }
+  if (!race.race_date || String(race.race_date) < dublinToday(nowMs)) return { open: false, reason: 'past' }
+  if (race.registration_opens_at && nowMs < Date.parse(race.registration_opens_at)) {
+    return { open: false, reason: 'not_open_yet' }
+  }
+  if (race.registration_closes_at && nowMs > Date.parse(race.registration_closes_at)) {
+    return { open: false, reason: 'closed' }
+  }
+  return { open: true }
+}
+
+/** Remaining capacity for a wave (null = unlimited). Pure. */
+export function waveSpotsLeft(wave, taken) {
+  if (wave?.capacity == null) return null
+  return Math.max(0, wave.capacity - (Number(taken) || 0))
 }
 
 const DUBLIN_DATE_FMT = new Intl.DateTimeFormat('en-IE', {
@@ -203,5 +243,111 @@ export async function executeEventTool(toolName, input, ctx) {
       : { registrations: [], message: 'No upcoming event registrations found for this person.' }
   }
 
+  if (toolName === 'book_event') {
+    const targetContactId = verifiedContactId || contactId || null
+    if (!targetContactId) {
+      return { error: 'no_contact', message: 'No contact linked to this conversation — collect their name and email, then hand off to the team.' }
+    }
+    const { data: race } = await db.from('race_events')
+      .select('id, name, kind, slug, description, race_date, active, location_id, registration_opens_at, registration_closes_at, member_pricing_enabled, member_fee_cents, non_member_fee_cents, members_only, payment_currency, waves:race_waves(id, start_time, capacity, label)')
+      .eq('id', String(input?.event_id || ''))
+      .eq('location_id', locationId)
+      .maybeSingle()
+    if (!race) return { error: 'not_found', message: 'That event was not found — re-check list_upcoming_events.' }
+
+    const openCheck = eventOpenForRegistration(race, Date.now())
+    if (!openCheck.open) {
+      return { booked: false, reason: openCheck.reason, message: 'Registration is not open for this event — say so honestly and offer alternatives.' }
+    }
+
+    // Fill-empty contact details from the conversation, then read back.
+    const { data: existing } = await db.from('contacts')
+      .select('id, name, first_name, last_name, email, phone')
+      .eq('id', targetContactId)
+      .maybeSingle()
+    if (!existing) return { error: 'no_contact', message: 'Contact not found — hand off to the team.' }
+    const patch = {}
+    const emailIn = String(input?.email || '').trim().toLowerCase()
+    if (emailIn && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailIn) && !String(existing.email || '').trim()) patch.email = emailIn
+    const nameIn = String(input?.name || '').trim()
+    if (nameIn && !String(existing.name || '').trim()) patch.name = nameIn
+    if (Object.keys(patch).length) await db.from('contacts').update(patch).eq('id', targetContactId)
+    const contact = { ...existing, ...patch }
+    if (!String(contact.email || '').trim()) {
+      return { error: 'need_email', message: 'Ask for their email address first — the confirmation goes there.' }
+    }
+
+    const auditDetails = {
+      event_id: race.id,
+      wave_id: input?.wave_id || null,
+      event_name: input?.event_name || race.name,
+      event_date: input?.event_date || String(race.race_date),
+    }
+
+    // Draft mode parity with class bookings: queue for one-tap approval.
+    const { bookingMode } = await import('./booking-tools')
+    if (bookingMode(ctx.settings) === 'draft') {
+      await logEventRequest(db, ctx, { kind: 'event_booking', status: 'pending', details: { ...auditDetails, mode: 'draft' } })
+      return { requested: true, message: 'Queued for the team to confirm — tell the customer they will hear back shortly. Never say it is booked yet.' }
+    }
+
+    const { registerSoloEventEntry } = await import('@/lib/race-register-solo')
+    const result = await registerSoloEventEntry(db, { race, waveId: input?.wave_id || null, contact })
+    await logEventRequest(db, ctx, {
+      kind: 'event_booking',
+      status: result.ok ? 'actioned' : 'failed',
+      details: { ...auditDetails, mode: 'auto', result: { ok: result.ok, reason: result.reason || null } },
+    })
+
+    if (result.ok) {
+      return { booked: true, event_name: race.name, event_date: auditDetails.event_date }
+    }
+    if (result.reason === 'requires_payment') {
+      const { getAppUrl } = await import('@/lib/app-url')
+      return {
+        booked: false,
+        requires_payment: true,
+        price: formatEventPrice(race),
+        signup_url: `${getAppUrl()}/race/${race.slug}`,
+        message: 'This entry has a fee — share the signup link so they can register and pay securely there. Never collect payment in chat.',
+      }
+    }
+    if (result.reason === 'already_registered') {
+      return { booked: false, reason: 'already_registered', message: 'They already have an entry for this event — confirm that warmly.' }
+    }
+    if (result.reason === 'members_only') {
+      return { booked: false, reason: 'members_only', message: 'This event is members-only and they could not be verified as a member — explain and offer the team.' }
+    }
+    if (result.reason === 'wave_full') {
+      return { booked: false, reason: 'wave_full', message: 'That wave just filled — offer another wave or event from the list.' }
+    }
+    if (result.reason === 'need_email') {
+      return { error: 'need_email', message: 'Ask for their email address first.' }
+    }
+    if (result.reason === 'bad_wave') {
+      return { error: 'bad_wave', message: result.message || 'Pick a wave from list_upcoming_events.' }
+    }
+    return { booked: false, reason: result.reason, message: 'The registration did not go through — relay honestly and offer a handoff.' }
+  }
+
   return { error: 'unknown_tool', tool: toolName }
+}
+
+// Audit-trail writer — same queue/audit table as class bookings (mig
+// 264 added the event kinds). Best-effort: an audit hiccup never
+// blocks the customer-facing outcome.
+async function logEventRequest(db, ctx, { kind, status, details }) {
+  try {
+    await db.from('agent_membership_requests').insert({
+      location_id: ctx.locationId,
+      contact_id: ctx.verifiedContactId || ctx.contactId || null,
+      kind,
+      channel: ctx.channel || null,
+      conversation_id: ctx.conversationId || null,
+      details,
+      status,
+    })
+  } catch (e) {
+    console.warn(`[agent][events] audit insert failed: ${e?.message || e}`)
+  }
 }
