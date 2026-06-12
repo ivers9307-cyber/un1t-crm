@@ -98,9 +98,9 @@ async function fetchChurn(db, locationId) {
     loadRadar(db, locationId),
     db
       .from('churn_radar_snapshots')
-      .select('high_risk, created_at')
+      .select('high_risk, captured_at')
       .eq('location_id', locationId)
-      .order('created_at', { ascending: false })
+      .order('captured_at', { ascending: false })
       .limit(1)
       .maybeSingle(),
   ])
@@ -150,6 +150,34 @@ async function fetchLowFillClasses(db, locationId, nowMs) {
       timeZone: 'Europe/Dublin', hour: '2-digit', minute: '2-digit',
     }),
   }))
+}
+
+/**
+ * BRIEFING.1 — location-level feed for the morning-briefing cron.
+ * No viewer to gate by, so every location-scoped source is fetched;
+ * the approvals row is deliberately ABSENT (the approvals registry is
+ * per-user scoped — providers fan out on the caller's approvable
+ * locations — and faking a user object there is fragile; the Today
+ * page covers approvals per-viewer). Same fail-soft contract as
+ * fetchTodayFeed.
+ */
+export async function fetchLocationTodayFeed(db, locationId, nowMs = Date.now()) {
+  if (!locationId) return []
+  const todayIso = isoToday(new Date(nowMs))
+  const [issues, invoices, whatsappUnread, bookingsToday, churn, tasksDue, lowFill] =
+    await Promise.all([
+      safe(true, () => countInboxIssues(db, locationId)),
+      safe(true, () => fetchInvoicesPending(db, locationId)),
+      safe(true, () => fetchWhatsappUnread(db, locationId)),
+      safe(true, () => fetchBookingsToday(db, locationId, todayIso)),
+      safe(true, () => fetchChurn(db, locationId)),
+      safe(true, () => fetchTasksDue(db, locationId, todayIso)),
+      safe(true, () => fetchLowFillClasses(db, locationId, nowMs)),
+    ])
+  return assembleTodayFeed({
+    approvals: null, issues, invoices, whatsappUnread,
+    bookingsToday, churn, tasksDue, lowFill,
+  })
 }
 
 /**

@@ -45,7 +45,9 @@ export function classifyLowFillClasses(events, nowMs, threshold = LOW_FILL_THRES
  * Compare the live high-risk count against the most recent
  * churn_radar_snapshots row (the snapshot cron is weekly, so this is
  * "since last Monday", not "since yesterday" — label accordingly).
- * Returns { delta, sinceIso } with nulls when no usable snapshot.
+ * The table's timestamp column is captured_at (verified against prod
+ * information_schema 2026-06-12). Returns { delta, sinceIso } with
+ * nulls when no usable snapshot.
  */
 export function churnSnapshotDelta(currentHighRisk, previous) {
   const prev = previous && Number.isFinite(Number(previous.high_risk))
@@ -54,7 +56,7 @@ export function churnSnapshotDelta(currentHighRisk, previous) {
   if (prev === null) return { delta: null, sinceIso: null }
   return {
     delta: Number(currentHighRisk || 0) - prev,
-    sinceIso: previous.created_at || null,
+    sinceIso: previous.captured_at || null,
   }
 }
 
