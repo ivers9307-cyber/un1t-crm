@@ -7,7 +7,7 @@
 
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
-import { ChevronLeft, Bot, TrendingUp, MessageCircle, UserCheck, ArrowUpRight } from 'lucide-react'
+import { ChevronLeft, Bot, TrendingUp, MessageCircle, UserCheck, ArrowUpRight, CalendarCheck, Ban, Send, Hourglass } from 'lucide-react'
 
 const WINDOWS = [7, 30, 90]
 const TOPIC_LABELS = {
@@ -86,6 +86,20 @@ export default function AgentAnalyticsPage() {
             <Stat icon={UserCheck} label="Escalated" value={c.escalated} sub="handed to a human" />
             <Stat icon={MessageCircle} label="Inbound" value={c.inbound_total} sub={`${c.verified} identity-verified`} />
           </div>
+
+          {/* AGENT-ANALYTICS.2 — outcomes: what the agent actually did */}
+          {data.actions && (
+            <>
+              <h3 className="text-sm font-semibold text-un1t-text mb-3">Outcomes</h3>
+              <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-8">
+                <Stat icon={CalendarCheck} label="Bookings made" value={data.actions.bookings} sub="classes, events, consultations" />
+                <Stat icon={Ban} label="Cancellations" value={data.actions.cancellations} sub="processed" />
+                <Stat icon={Hourglass} label="Awaiting approval" value={data.actions.pending_approvals} sub="in /approvals now" />
+                <Stat icon={Send} label="Follow-ups sent" value={data.actions.followups_sent} sub="proactive nudges" />
+                <Stat icon={Send} label="Check-ins sent" value={data.actions.checkins_sent} sub="after first class" />
+              </div>
+            </>
+          )}
 
           <div className="grid md:grid-cols-2 gap-6">
             {/* Most-asked topics */}

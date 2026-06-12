@@ -102,3 +102,30 @@ describe('rankTopics', () => {
     ])
   })
 })
+
+import { summariseActions } from './analytics'
+
+// AGENT-ANALYTICS.2 — business outcomes from the audit trail.
+describe('summariseActions', () => {
+  it('groups audited requests into outcome counts', () => {
+    const out = summariseActions([
+      { kind: 'class_booking', status: 'actioned' },
+      { kind: 'class_booking', status: 'actioned' },
+      { kind: 'class_booking', status: 'failed' },
+      { kind: 'event_booking', status: 'actioned' },
+      { kind: 'consultation', status: 'actioned' },
+      { kind: 'class_cancellation', status: 'actioned' },
+      { kind: 'event_cancellation', status: 'pending' },
+      { kind: 'pause', status: 'pending' },
+    ])
+    expect(out).toEqual({
+      bookings: 4,            // class + event + consultation actioned
+      cancellations: 1,       // actioned cancellations only
+      failed: 1,
+      pending_approvals: 2,   // anything still pending
+    })
+  })
+  it('handles empty input', () => {
+    expect(summariseActions([])).toEqual({ bookings: 0, cancellations: 0, failed: 0, pending_approvals: 0 })
+  })
+})
