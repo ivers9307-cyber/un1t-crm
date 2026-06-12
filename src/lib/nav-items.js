@@ -9,7 +9,8 @@
 //   Sales   — who are we selling to?
 //   Gym     — what's on at the gym?
 //   studio  — the building (self-labelled collapsible group, no header)
-//   cars    — the car-import business, separated from gym ops (no header)
+//   other   — occasional surfaces: car-import business + orders ledger
+//             (header-less bottom zone, out of the daily scan path)
 //   Account — config + policies
 //
 // The radars (churn/lead) are deliberately NOT here — SIDEBAR-IA.1
@@ -114,13 +115,6 @@ export const ALL_NAV = [
   // (live HR is a primary screen, not an admin task). Lived under
   // the Communications header before SIDEBAR-IA.1 — a misfile.
   { href: '/live', label: 'Live HR', icon: Heart, permission: 'studio_management', section: 'gym' },
-  // Orders (mig 085) spans all revenue streams (race signups + cars).
-  // Got its own permission key in the mig-092 audit. Segments USED
-  // to be a top-level entry too — moved under /communications/segments
-  // because operators only ever come to segments to drive a broadcast.
-  // The top-level entry is gone, the /segments URL still works
-  // (legacy redirect).
-  { href: '/orders',     label: 'Orders',       icon: Receipt,         permission: 'orders', section: 'gym' },
 
   // ── Studio Management — expandable group ───────────────────────
   // Parent route /studio-management renders the door-unlock panel
@@ -150,13 +144,21 @@ export const ALL_NAV = [
     ],
   },
 
-  // ── Car Processing — the import business ───────────────────────
-  // Different business, own bottom-of-sidebar zone (header-less
-  // `cars` section) so gym staff stop scanning past it inside the
-  // old Operations list. For CCF Autos users the location feature
-  // gate already hides everything else, so this reads as their
-  // primary entry either way.
-  { href: '/cars',       label: 'Car Processing', icon: Car,           permission: 'car_processing', section: 'cars' },
+  // ── Other — occasional surfaces zone ───────────────────────────
+  // Header-less bottom zone for things that are real but not daily,
+  // so they stop costing attention in the daily scan path.
+  //
+  // Car Processing — different business entirely. For CCF Autos
+  // users the location feature gate already hides everything else,
+  // so this reads as their primary entry either way.
+  { href: '/cars',       label: 'Car Processing', icon: Car,           permission: 'car_processing', section: 'other' },
+  // Orders (mig 085) spans all revenue streams (race signups + cars).
+  // Got its own permission key in the mig-092 audit. Demoted from the
+  // Gym section 2026-06-12 — Richard confirmed it's not a daily
+  // surface; the ⌘K palette keeps it one keystroke away. (Segments
+  // was demoted the same way earlier — moved under /communications/
+  // segments; the /segments URL still works via legacy redirect.)
+  { href: '/orders',     label: 'Orders',       icon: Receipt,         permission: 'orders', section: 'other' },
 
   // ── Account ────────────────────────────────────────────────────
   // Policies (POLICIES.1) — versioned HR policies, open to every
@@ -169,7 +171,7 @@ export const ALL_NAV = [
 
 // UI-FOUND.4 — section render order + headers. A `label` of null renders
 // the section's items with no header (used for the self-labelled Studio
-// Management group and the Car Processing zone). A section with no
+// Management group and the occasional-surfaces zone). A section with no
 // visible items for the current user renders nothing — no empty header.
 // Dashboard is pinned above all sections (it has no `section`).
 export const NAV_SECTIONS = [
@@ -177,6 +179,6 @@ export const NAV_SECTIONS = [
   { id: 'sales',   label: 'Sales' },
   { id: 'gym',     label: 'Gym' },
   { id: 'studio',  label: null },
-  { id: 'cars',    label: null },
+  { id: 'other',   label: null },
   { id: 'account', label: 'Account' },
 ]

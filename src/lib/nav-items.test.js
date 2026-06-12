@@ -5,9 +5,10 @@
 //
 //   Work    — the five badge/action queues, top of the sidebar
 //   Sales   — pipeline, contacts, tasks
-//   Gym     — what's on at the gym (schedule, events, live floor, orders)
+//   Gym     — what's on at the gym (schedule, events, live floor)
 //   studio  — the self-labelled Studio Management group (header-less)
-//   cars    — the car-import business, separated from gym ops (header-less)
+//   other   — occasional surfaces: the car-import business + the
+//             orders ledger, separated from daily gym ops (header-less)
 //   Account — policies + settings
 //
 // Radars are deliberately ABSENT here — they relocated to dashboard
@@ -29,7 +30,7 @@ describe('NAV_SECTIONS', () => {
       { id: 'sales',   label: 'Sales' },
       { id: 'gym',     label: 'Gym' },
       { id: 'studio',  label: null },
-      { id: 'cars',    label: null },
+      { id: 'other',   label: null },
       { id: 'account', label: 'Account' },
     ])
   })
@@ -90,8 +91,8 @@ describe('Sales', () => {
 })
 
 describe('Gym', () => {
-  it('contains schedule, events, live HR and orders', () => {
-    expect(hrefsIn('gym')).toEqual(['/schedule', '/events', '/live', '/orders'])
+  it('contains the daily surfaces only: schedule, events, live HR', () => {
+    expect(hrefsIn('gym')).toEqual(['/schedule', '/events', '/live'])
   })
 
   it('keeps Live HR a top-level entry (primary coach screen, not an admin task)', () => {
@@ -115,10 +116,13 @@ describe('Studio Management group', () => {
   })
 })
 
-describe('Car Processing', () => {
-  it('moves to its own header-less section at the bottom, out of gym ops', () => {
-    expect(hrefsIn('cars')).toEqual(['/cars'])
+describe('Other — occasional surfaces zone', () => {
+  it('holds Car Processing and the demoted Orders ledger, out of daily gym ops', () => {
+    // Orders demoted from Gym 2026-06-12 — Richard confirmed it is not
+    // a daily surface. Jump access survives via the ⌘K palette.
+    expect(hrefsIn('other')).toEqual(['/cars', '/orders'])
     expect(hrefsIn('gym')).not.toContain('/cars')
+    expect(hrefsIn('gym')).not.toContain('/orders')
   })
 })
 
