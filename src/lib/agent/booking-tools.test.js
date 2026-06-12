@@ -74,6 +74,27 @@ describe('shapeClassListForAgent', () => {
     const many = Array.from({ length: 40 }, (_, i) => ev({ _id: String(i).padStart(24, '0'), time_start: Math.floor(NOW / 1000) + 3600 + i * 60 }))
     expect(shapeClassListForAgent(many, NOW).length).toBeLessThanOrEqual(20)
   })
+
+  // Times must be Dublin wall-clock, not UTC. Glofox time_start is an
+  // absolute instant; the raw .toISOString() the agent originally got
+  // made it tell customers a 7am summer class was at "6am" (IST = UTC+1).
+  // The model must never do timezone math — hand it the local label.
+  it('labels class times in Dublin local time, not UTC', () => {
+    // 06:00 UTC on Sat 13 Jun 2026 = 07:00 in Dublin (Irish Summer Time)
+    const seven_am_dublin = Math.floor(Date.UTC(2026, 5, 13, 6, 0, 0) / 1000)
+    const out = shapeClassListForAgent([ev({ time_start: seven_am_dublin })], NOW)
+    expect(out[0].time).toContain('07:00')
+    expect(out[0].time).not.toContain('06:00')
+    expect(out[0].time).toContain('Sat')
+    expect(out[0].time).toContain('13')
+  })
+
+  // Winter (no DST): 07:00 UTC in January IS 07:00 Dublin.
+  it('matches UTC in winter when Dublin offset is zero', () => {
+    const jan = Math.floor(Date.UTC(2027, 0, 15, 7, 0, 0) / 1000)
+    const out = shapeClassListForAgent([ev({ time_start: jan })], NOW)
+    expect(out[0].time).toContain('07:00')
+  })
 })
 
 describe('consultationInputGuard', () => {

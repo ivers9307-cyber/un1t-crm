@@ -123,6 +123,31 @@ export function classBookingGuard({ verifiedContactId, glofoxMemberId, eventId }
 
 const MAX_CLASS_LIST = 20
 
+const DUBLIN_TIME_FMT = new Intl.DateTimeFormat('en-IE', {
+  timeZone: 'Europe/Dublin',
+  weekday: 'short',
+  day: 'numeric',
+  month: 'short',
+  hour: '2-digit',
+  minute: '2-digit',
+  hour12: false,
+})
+
+/**
+ * Format a unix-seconds instant as a Dublin wall-clock label the model
+ * can relay verbatim, e.g. "Sat 13 Jun, 07:00". Glofox time_start is an
+ * absolute instant — the original raw .toISOString() handed the model
+ * UTC, so it told customers a 7am summer class was at "6am" (live test
+ * 2026-06-12). The model must never do timezone math. Pure.
+ */
+export function formatDublinClassTime(unixSec) {
+  const parts = {}
+  for (const p of DUBLIN_TIME_FMT.formatToParts(new Date(unixSec * 1000))) {
+    parts[p.type] = p.value
+  }
+  return `${parts.weekday} ${parts.day} ${parts.month}, ${parts.hour}:${parts.minute}`
+}
+
 /**
  * Shape a Glofox /2.0/events list for the agent: upcoming, public,
  * active classes with spots-left, time-sorted, capped. Pure.
@@ -141,13 +166,15 @@ export function shapeClassListForAgent(events, nowMs, limit = MAX_CLASS_LIST) {
     out.push({
       event_id: e._id || e.id || null,
       name: e.name || 'Class',
-      time: new Date(startSec * 1000).toISOString(),
+      start_sec: startSec,
+      time: formatDublinClassTime(startSec),
       spots_left: spotsLeft,
       full: size > 0 && spotsLeft === 0,
     })
   }
-  out.sort((a, b) => (a.time < b.time ? -1 : 1))
-  return out.slice(0, limit)
+  // Sort on the numeric instant — the Dublin label doesn't sort lexically.
+  out.sort((a, b) => a.start_sec - b.start_sec)
+  return out.slice(0, limit).map(({ start_sec, ...rest }) => rest)
 }
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
