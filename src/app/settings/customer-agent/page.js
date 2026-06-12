@@ -61,6 +61,12 @@ export default function CustomerAgentSettingsPage() {
         agent_name: (settings.agent_name || '').trim() || null,
         handoff_cooldown_hours: settings.handoff_cooldown_hours ?? 12,
         consultation_event_type_id: settings.consultation_event_type_id || null,
+        followups: {
+          enabled: !!settings.followups?.enabled,
+          nudge_after_hours: Number(settings.followups?.nudge_after_hours) || 3,
+          template_name: settings.followups?.template_name || null,
+          daily_cap: Number(settings.followups?.daily_cap) || 50,
+        },
       }
       const res = await fetch('/api/settings/customer-agent', {
         method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
@@ -69,6 +75,23 @@ export default function CustomerAgentSettingsPage() {
       if (j.success) setSavedAt(Date.now()); else setError(j.error || 'Failed to save')
     } catch { setError('Failed to save') } finally { setSaving(false) }
   }
+
+  // AGENT-FOLLOWUP.1 — approved templates for the stage-2 picker. The
+  // template COPY lives in the WhatsApp Templates manager (edit &
+  // resubmit there any time); this picker just selects which one the
+  // follow-up uses — fully updatable without code.
+  const [templates, setTemplates] = useState([])
+  useEffect(() => {
+    fetch('/api/whatsapp/templates')
+      .then(r => r.json())
+      .then(j => {
+        const list = j.templates || j.data || []
+        setTemplates(list.filter(t => String(t.status || '').toUpperCase() === 'APPROVED'))
+      })
+      .catch(() => {})
+  }, [])
+  const setFollowup = (key, value) =>
+    setSettings(s => ({ ...s, followups: { ...(s.followups || {}), [key]: value } }))
 
   const [importing, setImporting] = useState(false)
   const [importNote, setImportNote] = useState(null)
@@ -245,6 +268,52 @@ export default function CustomerAgentSettingsPage() {
             {saving ? 'Saving…' : 'Save settings'}
           </button>
           {savedAt && <span className="ml-3 text-sm text-green-600">Saved ✓</span>}
+        </div>
+      </section>
+
+      {/* ── Proactive follow-ups (AGENT-FOLLOWUP.1) ───────── */}
+      <section className="border border-un1t-border rounded-lg p-5 mt-6">
+        <h2 className="text-base font-semibold text-un1t-text mb-1">Proactive follow-ups</h2>
+        <p className="text-sm text-un1t-muted mb-4">
+          When someone goes quiet on an open request, the agent sends one gentle in-window nudge,
+          then (if they stay quiet past WhatsApp&apos;s 24-hour window) one approved template inviting
+          a reply. A reply re-opens the window and the agent picks the conversation back up.
+        </p>
+        <label className="flex items-center gap-2 text-sm text-un1t-text mb-4">
+          <input type="checkbox" checked={!!settings.followups?.enabled}
+            onChange={e => setFollowup('enabled', e.target.checked)} />
+          Enable proactive follow-ups
+        </label>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div>
+            <label className="block text-sm font-medium text-un1t-text mb-1">Nudge after (hours)</label>
+            <input type="number" min={1} max={18} className={inputCls}
+              value={settings.followups?.nudge_after_hours ?? 3}
+              onChange={e => setFollowup('nudge_after_hours', e.target.value === '' ? 3 : Number(e.target.value))} />
+            <p className="text-xs text-un1t-subtle mt-1">How long they&apos;re quiet before the in-window nudge (sent up to 20h after, daytime only).</p>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-un1t-text mb-1">Outside-window template</label>
+            <select className={inputCls}
+              value={settings.followups?.template_name || ''}
+              onChange={e => setFollowup('template_name', e.target.value || null)}>
+              <option value="">— none (in-window nudge only) —</option>
+              {templates.map(t => (
+                <option key={`${t.name}:${t.language}`} value={t.name}>{t.name} ({t.language})</option>
+              ))}
+            </select>
+            <p className="text-xs text-un1t-subtle mt-1">
+              Approved templates only. Edit the wording in WhatsApp → Templates and re-select here —
+              variables: {'{{1}}'} first name, {'{{2}}'} topic. Marketing consent is required and enforced.
+            </p>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-un1t-text mb-1">Daily cap (per studio)</label>
+            <input type="number" min={1} max={500} className={inputCls}
+              value={settings.followups?.daily_cap ?? 50}
+              onChange={e => setFollowup('daily_cap', e.target.value === '' ? 50 : Number(e.target.value))} />
+            <p className="text-xs text-un1t-subtle mt-1">Hard ceiling on proactive sends per day.</p>
+          </div>
         </div>
       </section>
 
