@@ -28,6 +28,7 @@ const DEFAULTS = {
   booking_mode: 'auto',
   agent_name: 'Mia',
   followups: { enabled: false, nudge_after_hours: 3, template_name: null, daily_cap: 50 },
+  first_class_checkin: { enabled: false, delay_hours: 2, template_name: null, daily_cap: 20 },
   handoff_cooldown_hours: 12,
   consultation_event_type_id: null,
 }
@@ -56,6 +57,12 @@ const SettingsSchema = z.object({
     nudge_after_hours: z.number().min(1).max(18).optional().default(3),
     template_name: z.string().max(512).nullable().optional(),
     daily_cap: z.number().min(1).max(500).optional().default(50),
+  }).nullable().optional(),
+  first_class_checkin: z.object({
+    enabled: z.boolean().optional().default(false),
+    delay_hours: z.number().min(1).max(24).optional().default(2),
+    template_name: z.string().max(512).nullable().optional(),
+    daily_cap: z.number().min(1).max(200).optional().default(20),
   }).nullable().optional(),
   handoff_cooldown_hours: z.number().min(0).max(168).nullable().optional(),
   consultation_event_type_id: z.string().max(64).nullable().optional(),

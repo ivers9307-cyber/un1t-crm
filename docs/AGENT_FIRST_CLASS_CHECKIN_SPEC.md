@@ -1,6 +1,6 @@
 # AGENT-CHECKIN — post-first-class check-in (spec, 2026-06-12)
 
-**Status: SPEC ONLY — awaiting Richard's sign-off.** Requested in the Tier-2
+**Status: APPROVED + BUILT 2026-06-12** (template copy approved; positive path = all open — next booking AND consultation/membership when natural; 2h delay + 20/day cap confirmed). Requested in the Tier-2
 batch ("6 needs to be properly scoped with a specific plan on how to
 communicate with them"). The highest-converting moment in the funnel: someone
 just finished their first class and nobody asks how it went.
