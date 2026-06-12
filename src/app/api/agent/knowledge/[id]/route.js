@@ -10,7 +10,7 @@ const CATEGORIES = ['sales', 'account', 'pause', 'cancellation', 'hours', 'gener
 const UpdateSchema = z.object({
   category: z.enum(CATEGORIES).optional(),
   title: z.string().min(1).max(200).optional(),
-  content: z.string().min(1).max(4000).optional(),
+  content: z.string().max(4000).optional(), // '' allowed — empty entries are drafts the agent never reads
   enabled: z.boolean().optional(),
   sort_order: z.number().int().min(0).max(100000).optional(),
 })

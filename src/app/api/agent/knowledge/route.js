@@ -16,7 +16,11 @@ const CATEGORIES = ['sales', 'account', 'pause', 'cancellation', 'hours', 'gener
 const CreateSchema = z.object({
   category: z.enum(CATEGORIES).optional().default('general'),
   title: z.string().min(1).max(200),
-  content: z.string().min(1).max(4000),
+  // Empty content is a DRAFT — the "+ Add entry" button creates a blank
+  // row the operator types into. The prompt builder already filters
+  // empty-content entries out of what the agent sees, so drafts are
+  // harmless. min(1) here made the button a silent no-op (KNOWLEDGE.1).
+  content: z.string().max(4000).optional().default(''),
   enabled: z.boolean().optional().default(true),
   sort_order: z.number().int().min(0).max(100000).optional().default(0),
 })
