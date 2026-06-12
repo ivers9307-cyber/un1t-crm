@@ -73,6 +73,64 @@ export async function sendTextMessage(to, text, opts = {}) {
   }
 }
 
+// AGENT-UX.1 — interactive tap-choice messages. Meta caps: quick-reply
+// buttons max 3 / titles 20 chars; list messages max 10 rows / titles 24
+// chars. The payload builder picks the right shape from the option count
+// so callers never think about the split. Pure — exported for tests.
+export function buildInteractivePayload(to, text, options) {
+  const opts = (options || []).slice(0, 10)
+  const base = { messaging_product: 'whatsapp', recipient_type: 'individual', to, type: 'interactive' }
+  if (opts.length <= 3) {
+    return {
+      ...base,
+      interactive: {
+        type: 'button',
+        body: { text },
+        action: {
+          buttons: opts.map((o, i) => ({ type: 'reply', reply: { id: `opt_${i}`, title: String(o).slice(0, 20) } })),
+        },
+      },
+    }
+  }
+  return {
+    ...base,
+    interactive: {
+      type: 'list',
+      body: { text },
+      action: {
+        button: 'Choose an option',
+        sections: [{ rows: opts.map((o, i) => ({ id: `opt_${i}`, title: String(o).slice(0, 24) })) }],
+      },
+    },
+  }
+}
+
+/**
+ * Send a tap-choice interactive message (24h window only, same as text).
+ * The customer's tap arrives at the webhook as type 'interactive' and is
+ * already mapped to the button title — the agent sees it as plain text.
+ */
+export async function sendInteractiveOptions(to, text, options, opts = {}) {
+  const config = await resolveConfig(opts)
+
+  const response = await fetch(`${META_API_URL}/${config.phoneNumberId}/messages`, {
+    method: 'POST',
+    headers: headersFor(config),
+    body: JSON.stringify(buildInteractivePayload(to, text, options)),
+  })
+
+  const result = await response.json()
+  if (result.error) {
+    console.error('WhatsApp send error:', result.error)
+    throw new Error(result.error.message || 'Failed to send WhatsApp interactive message')
+  }
+
+  return {
+    messageId: result.messages?.[0]?.id,
+    status: result.messages?.[0]?.message_status || 'sent',
+  }
+}
+
 /**
  * Send a template message (works anytime — no 24h window needed)
  */

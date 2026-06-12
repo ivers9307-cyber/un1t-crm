@@ -4,7 +4,7 @@
 // unit-tested under the Node env. The IO orchestration lives in
 // auto-reply.js; the webhook owns the trigger.
 
-import { HANDOFF_PREFIX } from './prompt'
+import { HANDOFF_PREFIX, OPTIONS_PREFIX } from './prompt'
 
 export const AGENT_MESSAGE_SOURCE = 'agent'
 export const DEFAULT_HOLDING_MESSAGE =
@@ -114,8 +114,10 @@ export function shouldAgentReply({ settings, conversation, message, senderPhone,
   // caller can ACKNOWLEDGE a non-text message (soft handoff → a human)
   // instead of silently dropping it. (Checked after the on-duty gates so
   // we never acknowledge while disabled, off-allowlist, or in quiet hours.)
+  // 'interactive' = a tapped quick-reply/list button; the webhook maps the
+  // tap to its title in body, so it's a text reply in all but name.
   const type = message?.type || 'text'
-  if (type !== 'text') return { reply: false, reason: 'unsupported_type', onDuty: true }
+  if (type !== 'text' && type !== 'interactive') return { reply: false, reason: 'unsupported_type', onDuty: true }
   if (!String(message?.body || '').trim()) return { reply: false, reason: 'empty', onDuty: true }
 
   return { reply: true, reason: 'ok' }
@@ -163,8 +165,29 @@ export function formatHistoryForClaude(rows, opts = {}) {
  *    internal note; `text` is empty (caller sends a holding message).
  *  - reply: normal customer-facing text.
  */
+const MAX_OPTIONS = 10
+const MAX_OPTION_CHARS = 20 // quick-reply button title cap (the tighter of Meta's limits)
+
+/**
+ * Normalize a raw [[OPTIONS]] payload: split on |, trim, drop empties,
+ * dedupe, cap count and title length. Returns null unless at least two
+ * usable choices remain (one button is worse than plain text). Pure.
+ */
+export function normalizeAgentOptions(raw) {
+  const seen = new Set()
+  const out = []
+  for (const part of String(raw || '').split('|')) {
+    const label = part.trim().slice(0, MAX_OPTION_CHARS)
+    if (!label || seen.has(label)) continue
+    seen.add(label)
+    out.push(label)
+    if (out.length >= MAX_OPTIONS) break
+  }
+  return out.length >= 2 ? out : null
+}
+
 export function parseAgentResponse(raw) {
-  const text = String(raw || '').trim()
+  let text = String(raw || '').trim()
   // Detect the sentinel ANYWHERE, not just at the start — if the model
   // emits a sentence before it (occasionally happens), we must still hand
   // off rather than leak the raw "[[HANDOFF]] reason" to the customer.
@@ -172,8 +195,25 @@ export function parseAgentResponse(raw) {
   if (idx !== -1) {
     return { action: 'handoff', text: '', reason: text.slice(idx + HANDOFF_PREFIX.length).trim() || 'unspecified' }
   }
+
+  // AGENT-UX.1 — a trailing [[OPTIONS]] a | b | c line becomes tap
+  // buttons. Strip the sentinel from the text UNCONDITIONALLY (even if
+  // the payload is unusable) so it can never leak to the customer.
+  let options = null
+  const oIdx = text.indexOf(OPTIONS_PREFIX)
+  if (oIdx !== -1) {
+    const after = text.slice(oIdx + OPTIONS_PREFIX.length)
+    const newline = after.indexOf('\n')
+    const payload = newline === -1 ? after : after.slice(0, newline)
+    const rest = newline === -1 ? '' : after.slice(newline + 1)
+    options = normalizeAgentOptions(payload)
+    text = (text.slice(0, oIdx) + rest).trim()
+  }
+
   if (!text) return { action: 'handoff', text: '', reason: 'empty_model_response' }
-  return { action: 'reply', text, reason: 'ok' }
+  const parsed = { action: 'reply', text, reason: 'ok' }
+  if (options) parsed.options = options
+  return parsed
 }
 
 // How long a successful identity verification stays valid on a thread.

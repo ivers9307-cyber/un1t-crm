@@ -78,4 +78,33 @@ describe('sendAndLog', () => {
     )
     errSpy.mockRestore()
   })
+
+  // AGENT-UX.1 — tap-choice options ride sendAndLog. WhatsApp has
+  // adapter.sendOptions (interactive buttons); adapters without it
+  // (Instagram) fall back to the options appended as plain text so the
+  // customer still sees every choice.
+  it('sends interactive options via adapter.sendOptions and records what was offered', async () => {
+    const calls = []
+    const sendOptions = vi.fn().mockResolvedValue({ messageId: 'wamid.3' })
+    const adapter = { ...whatsappAdapter, send: vi.fn(), sendOptions }
+    const ok = await sendAndLog(stubDb(calls), adapter, { ...baseArgs, text: 'Pick a time:', options: ['7am', '8am'] })
+    expect(ok).toBe(true)
+    expect(sendOptions).toHaveBeenCalledWith('353870000000', 'Pick a time:', ['7am', '8am'], expect.anything())
+    expect(adapter.send).not.toHaveBeenCalled()
+    const insert = calls.find(c => c.op === 'insert')
+    expect(insert.row.body).toContain('Pick a time:')
+    expect(insert.row.body).toContain('7am | 8am')
+  })
+  it('falls back to plain text with the options listed when the adapter has no sendOptions', async () => {
+    const calls = []
+    const send = vi.fn().mockResolvedValue({ messageId: 'ig.1' })
+    const adapter = { ...whatsappAdapter, send, sendOptions: undefined }
+    const ok = await sendAndLog(stubDb(calls), adapter, { ...baseArgs, text: 'Pick a time:', options: ['7am', '8am'] })
+    expect(ok).toBe(true)
+    const sentText = send.mock.calls[0][1]
+    expect(sentText).toContain('7am')
+    expect(sentText).toContain('8am')
+    const insert = calls.find(c => c.op === 'insert')
+    expect(insert.row.body).toBe(sentText)
+  })
 })
