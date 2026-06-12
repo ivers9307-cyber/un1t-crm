@@ -16,6 +16,7 @@ export async function listConversations(locationId) {
       id, location_id, contact_id, wa_phone, wa_profile_name, status,
       last_message_at, last_message_direction, last_message_preview,
       unread_count, window_expires_at, assigned_to, created_at,
+      resolved_at, agent_handed_off_at, agent_active,
       contacts:contact_id (id, name, first_name, last_name, pipeline_stage_slug)
     `)
     .order('last_message_at', { ascending: false, nullsFirst: false })
@@ -41,7 +42,7 @@ export async function listMessages(conversationId, limit = 50) {
   // freezes the thread once a conversation outgrows the cap (web had the
   // identical bug; see the conversation [id] route).
   const { data, error } = await supabase.from('whatsapp_messages')
-    .select('id, direction, message_type, body, media_url, media_mime_type, status, sent_at, delivered_at, read_at, sent_by, template_name, created_at')
+    .select('id, direction, message_type, body, media_url, media_mime_type, status, sent_at, delivered_at, read_at, sent_by, source, template_name, created_at')
     .eq('conversation_id', conversationId)
     .order('created_at', { ascending: false })
     .limit(limit)
@@ -77,6 +78,33 @@ export function sendTemplate(conversationId, templateName, components, locationI
       template_name: templateName,
       template_language: 'en',
       template_components: components || [],
+    },
+  })
+}
+
+// Resolve (or un-resolve) a conversation. Goes through the web PATCH
+// route rather than a direct Supabase update because resolving a
+// handed-off thread also RE-ARMS the agent server-side (AGENT-REARM.1)
+// — that logic lives in the route, not in a trigger.
+export function resolveConversation(conversationId, resolved, locationId) {
+  return api(`/api/whatsapp/conversations/${conversationId}`, {
+    method: 'PATCH',
+    locationId,
+    body: { resolved: !!resolved },
+  })
+}
+
+// Rate one of Mia's replies (AGENT-QA.1). Upserts per (message, rater)
+// server-side, so re-rating just overwrites.
+export function rateAgentMessage({ messageId, rating, note, locationId }) {
+  return api('/api/agent/feedback', {
+    method: 'POST',
+    locationId,
+    body: {
+      channel: 'whatsapp',
+      message_id: messageId,
+      rating,
+      note: note || null,
     },
   })
 }
