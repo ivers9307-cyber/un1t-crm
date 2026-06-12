@@ -49,5 +49,11 @@ export function resolveDashboardTarget(user) {
   if (hasPermission(user, 'dashboard_studio'))   return '/dashboard/studio'
   if (hasPermission(user, 'dashboard_personal')) return '/dashboard/today'
 
+  // 3. SIDEBAR-IA.1 — the radars are dashboard tabs now, so a user
+  // holding only a radar permission still gets a landing target
+  // instead of the "no dashboards" empty state.
+  if (hasPermission(user, 'churn_radar')) return '/dashboard/churn-radar'
+  if (hasPermission(user, 'lead_radar'))  return '/dashboard/lead-radar'
+
   return null
 }

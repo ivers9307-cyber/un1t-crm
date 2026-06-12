@@ -2,10 +2,13 @@
 // the .jsx shell so it's unit-testable in the Node test env (no DOM),
 // mirroring the components/ui/styles.js convention.
 
-export const DASHBOARD_PERM_KEYS = ['dashboard_personal', 'dashboard_studio', 'dashboard_business']
+// SIDEBAR-IA.1 — the Dashboard entry's permission keys (3 dashboard
+// sub-views + the 2 radars, which are dashboard tabs now) are shared
+// with the Sidebar via nav-items.js so the two gates can't drift.
+import { DASHBOARD_LINK_PERM_KEYS } from './nav-items'
 
 // Curated jump destinations. Deliberately a hand-maintained subset of
-// the Sidebar nav rather than an import of `allNav` — the palette wants
+// the Sidebar nav rather than an import of `ALL_NAV` — the palette wants
 // flat label+href+permission tuples, not the sidebar's icon/section/
 // children structure. When a top-level destination is added to the
 // sidebar and is worth jumping to, add it here too.
@@ -14,8 +17,10 @@ export const NAV_COMMANDS = [
   { id: 'pipeline', label: 'Pipeline', href: '/pipeline', permission: 'pipeline' },
   { id: 'contacts', label: 'Contacts', href: '/contacts', permission: 'contacts' },
   { id: 'tasks', label: 'Tasks', href: '/activities', permission: 'activities' },
-  { id: 'churn-radar', label: 'Churn Radar', href: '/churn-radar', permission: 'churn_radar' },
-  { id: 'lead-radar', label: 'Lead Radar', href: '/lead-radar', permission: 'lead_radar' },
+  // SIDEBAR-IA.1 — radars live under the dashboard tab strip; the old
+  // standalone URLs are forever-aliased in next.config redirects.
+  { id: 'churn-radar', label: 'Churn Radar', href: '/dashboard/churn-radar', permission: 'churn_radar' },
+  { id: 'lead-radar', label: 'Lead Radar', href: '/dashboard/lead-radar', permission: 'lead_radar' },
   { id: 'bookings', label: 'Bookings', href: '/bookings', anyPermission: ['events', 'bookings'] },
   { id: 'communications', label: 'Communications', href: '/communications', anyPermission: ['email', 'whatsapp'] },
   { id: 'schedule', label: 'Schedule', href: '/schedule', permission: 'schedule' },
@@ -45,7 +50,7 @@ export const CREATE_COMMANDS = [
 export function commandAllowed(cmd, hasPerm) {
   if (!cmd) return false
   if (cmd.always) return true
-  if (cmd.dashboardGroup) return DASHBOARD_PERM_KEYS.some((k) => !!hasPerm(k))
+  if (cmd.dashboardGroup) return DASHBOARD_LINK_PERM_KEYS.some((k) => !!hasPerm(k))
   if (cmd.anyPermission) return cmd.anyPermission.some((k) => !!hasPerm(k))
   if (cmd.permission) return !!hasPerm(cmd.permission)
   return true

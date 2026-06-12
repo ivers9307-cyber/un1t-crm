@@ -3,13 +3,14 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
-import { LayoutDashboard, Users, Columns3, CheckSquare, Calendar, MessagesSquare, CalendarClock, Settings, LogOut, Car, Flag, Receipt, DoorOpen, Activity, ExternalLink, X, FileSignature, Heart, Globe, Download, Tv, ChevronDown, ChevronRight as ChevronRightIcon, BookOpen, Inbox, ClipboardCheck, Radar, UserPlus, AlertCircle } from 'lucide-react'
+import { LogOut, Activity, ExternalLink, X, ChevronDown, ChevronRight as ChevronRightIcon } from 'lucide-react'
 import { createBrowserClient } from '@/lib/supabase'
 import LocationSwitcher from './LocationSwitcher'
 import ImpersonatePicker from './ImpersonatePicker'
 import clsx from 'clsx'
 import { hasPermission } from '@/lib/permissions'
 import { usePolledCount } from './use-polled-count'
+import { ALL_NAV, NAV_SECTIONS, DASHBOARD_LINK_PERM_KEYS } from '@/lib/nav-items'
 
 const roleLabels = {
   master: 'Master',
@@ -19,156 +20,10 @@ const roleLabels = {
   staff: 'Staff',
 }
 
-// The 3 dashboard sub-permissions — the sidebar Dashboard link is
-// visible if ANY are true. Sub-page selection happens via the
-// segmented control at the top of /dashboard/* pages.
-const DASHBOARD_PERM_KEYS = ['dashboard_personal', 'dashboard_studio', 'dashboard_business']
-
-// UI-FOUND.4 — every top-level item carries a `section` so the sidebar
-// renders as labelled groups instead of one flat list. Dashboard has no
-// section (pinned at the top). Section order + headers live in
-// NAV_SECTIONS below. Within a section, items render in the order they
-// appear here.
-const allNav = [
-  { href: '/dashboard',  label: 'Dashboard',   icon: LayoutDashboard, dashboardGroup: true },
-  { href: '/pipeline',   label: 'Pipeline',    icon: Columns3,        permission: 'pipeline',   section: 'sales' },
-  { href: '/contacts',   label: 'Contacts',    icon: Users,           permission: 'contacts',   section: 'sales' },
-  { href: '/activities', label: 'Tasks',        icon: CheckSquare,     permission: 'activities', section: 'sales' },
-  // CHURN-RADAR.1 — at-risk member radar. Scores the active member
-  // base on attendance signals + a quarantine triage list for
-  // zero-activity records. Owner + head_coach by default. The
-  // sidebar badge shows the high-risk count.
-  { href: '/churn-radar', label: 'Churn Radar', icon: Radar,           permission: 'churn_radar', section: 'sales' },
-  // LEAD-RADAR.1 — non-member triage radar. A funnel of leads /
-  // trials / ClassPass drop-ins worth converting + a cleanup list
-  // for dormant records. Owner + head_coach by default. The sidebar
-  // badge shows the high-tier funnel count (ClassPass converts).
-  { href: '/lead-radar', label: 'Lead Radar', icon: UserPlus,          permission: 'lead_radar', section: 'sales' },
-  // Single "Calendly" entry replacing the old Events + Bookings.
-  // The hub lands on /bookings (the high-frequency operational
-  // view — "what's booked today / coming up") with a tab strip
-  // at the top of both /bookings and /events that lets the
-  // operator switch between booking types and reservations.
-  // anyPermission means visible if EITHER permission is granted.
-  // Renamed from "Calendly" → "Bookings" in E2 of the events
-  // expansion, as part of freeing the word "Events" for the new
-  // multi-kind events feature (race + workshop + seminar +
-  // open_day + masterclass). The /events URL itself relocated to
-  // /bookings/event-types — no extraActivePaths needed since both
-  // tabs now live under /bookings/*.
-  { href: '/bookings',   label: 'Bookings',     icon: Calendar,
-    anyPermission: ['events', 'bookings'], section: 'ops' },
-  // Single Communications entry replacing the old Email + WhatsApp.
-  // Visible if the user has EITHER permission — sub-tabs inside the
-  // hub gate themselves further. Marked with a custom check function
-  // since it ORs two permissions instead of requiring one.
-  { href: '/communications', label: 'Communications', icon: MessagesSquare,
-    anyPermission: ['email', 'whatsapp'], section: 'comms' },
-  // Schedule hub — single sidebar entry. Internal tab strip
-  // (ScheduleTabs.jsx) holds Schedule / Approvals / Reporting /
-  // Invoices / Attendance. The Attendance tab (mig 120 — auto-
-  // stamped from UniFi Access door unlocks) used to be a top-level
-  // sidebar entry; folded into the schedule tab strip in May 2026
-  // because operationally it sits next to Invoices (both are
-  // about staff time + pay). Same attendance_reports permission
-  // gate; the standalone /schedule/attendance URL still works as
-  // a deep link for cron-driven emails / scheduled reminders.
-  { href: '/schedule',   label: 'Schedule',     icon: CalendarClock,   permission: 'schedule', section: 'ops' },
-  // Events (mig 082 origin, multi-kind from mig 122 onwards). Was
-  // labelled "Races" before the events expansion — same data table
-  // (race_events), now spans race + workshop + seminar + open_day +
-  // masterclass via the kind discriminator. URL relocated /races →
-  // /events; permission key 'races' stays internal (gates UI, not
-  // user-visible). extraActivePaths keeps the entry highlighted on
-  // old /events/* URLs that hit the back-compat rewrite.
-  { href: '/events',     label: 'Events',       icon: Flag,            permission: 'races',
-    extraActivePaths: ['/events'], section: 'ops' },
-  { href: '/cars',       label: 'Car Processing', icon: Car,           permission: 'car_processing', section: 'ops' },
-  // Orders (mig 085) spans all revenue streams (race signups + cars).
-  // Got its own permission key in the mig-092 audit. Segments USED
-  // to be a top-level entry too — moved under /communications/segments
-  // because operators only ever come to segments to drive a broadcast.
-  // The top-level entry is gone, the /segments URL still works
-  // (legacy redirect).
-  { href: '/orders',     label: 'Orders',       icon: Receipt,         permission: 'orders', section: 'ops' },
-  // INVOICES.1 — Dext-style email-in inbox. Master + owner only by
-  // default. Per-location forwarding addresses are shown at the top
-  // of the page; quality + data approvals run before forward-to-Xero.
-  { href: '/invoices',   label: 'Invoices',     icon: Inbox,           permission: 'invoices_inbox', section: 'ops' },
-  // APPROVALS.1 — central approvals dashboard. Aggregates contractor
-  // invoices, FTE expense claims, time-off, swap requests, and any
-  // future approval surfaces (extensible via src/lib/approvals
-  // registry). Sidebar badge shows total pending count for items
-  // the user can approve. Default-on for master + owner + manager —
-  // head_coach + staff see nothing approvable so it's off for them.
-  { href: '/approvals',  label: 'Approvals',    icon: ClipboardCheck,  permission: 'approvals_inbox', section: 'ops' },
-  // REPORT-ISSUE.2 — handler inbox for staff-reported issues at the
-  // active location. Owner + master by default; the submit + own-
-  // history surface (REPORT-ISSUE.1) is open to all staff via the
-  // mobile More tab and doesn't appear on the web sidebar.
-  { href: '/issues',     label: 'Issues',       icon: AlertCircle,     permission: 'issues_inbox', section: 'ops' },
-  // Studio Management — expandable section. Parent route
-  // /studio-management renders the door-unlock panel (mig 093 cross-
-  // platform key). The six children below used to be top-level
-  // sidebar entries; STUDIO-GROUP.1 (May 2026) grouped them under
-  // this section so the sidebar collapses operator/admin surfaces
-  // that all relate to on-site studio operations. Each child has
-  // its own per-user permission (mig: STUDIO-GROUP.1 added four
-  // new keys — contracts, tv_displays, glofox_import,
-  // preferences_import) so operators can grant access individually.
-  // Lives in its own (header-less) `studio` section — it's already
-  // self-labelled and collapsible, so an extra section header would
-  // be redundant.
-  {
-    href: '/studio-management',
-    label: 'Studio Management',
-    icon: DoorOpen,
-    permission: 'studio_management',
-    section: 'studio',
-    groupId: 'studio',  // localStorage key for expand state
-    children: [
-      // Contracts (mig 106) — digital staff/contractor contracts.
-      { href: '/admin/contracts',         label: 'Contracts',             icon: FileSignature, permission: 'contracts' },
-      // TV.1 — TV display management. UC Cast Pro renders /tv/<token>.
-      { href: '/admin/tv-displays',       label: 'TV Displays',           icon: Tv,            permission: 'tv_displays' },
-      // GLOFOX2.3 — interactive Glofox member import + sync history.
-      { href: '/admin/glofox-import',     label: 'Glofox import',         icon: Download,      permission: 'glofox_import' },
-      // CONSENT.5 — bulk import of marketing preferences.
-      { href: '/admin/marketing-import',  label: 'Preferences import',    icon: Download,      permission: 'preferences_import' },
-      // Public landing page — preview link, opens in new tab.
-      { href: '/welcome',                 label: 'Landing page',          icon: Globe,         permission: 'landing_page', openInNewTab: true },
-      // Landing page settings — operator form for the /welcome page.
-      { href: '/settings/landing-page',   label: 'Landing page settings', icon: Globe,         permission: 'landing_page' },
-    ],
-  },
-  // Live class — coach view of in-studio HR (mig 110-113). Renders
-  // attendees with current zone color, available straps panel, and
-  // override-pairing flow. /live redirects to /live/<activeLocation>.
-  // Same permission gate as Studio Management — anyone running
-  // class can use it. Stays a top-level entry (not nested under
-  // Studio Management) because operationally it's its own surface
-  // (live HR is a primary screen, not an admin task).
-  { href: '/live', label: 'Live HR', icon: Heart, permission: 'studio_management', section: 'comms' },
-  // Policies (POLICIES.1) — versioned HR policies, open to every
-  // authenticated employee. No permission gate; sidebar always shows
-  // the entry to anyone signed in so they can find the documents
-  // they're being asked to acknowledge.
-  { href: '/policies',   label: 'Policies',     icon: BookOpen,        openToAll: true, section: 'account' },
-  { href: '/settings',   label: 'Settings',     icon: Settings,        permission: 'settings', section: 'account' },
-]
-
-// UI-FOUND.4 — section render order + headers. A `label` of null renders
-// the section's items with no header (used for the self-labelled Studio
-// Management group). A section with no visible items for the current
-// user renders nothing — no empty header. Dashboard is pinned above all
-// sections (it has no `section`).
-const NAV_SECTIONS = [
-  { id: 'sales',   label: 'Sales & CRM' },
-  { id: 'ops',     label: 'Operations' },
-  { id: 'comms',   label: 'Communications' },
-  { id: 'studio',  label: null },
-  { id: 'account', label: 'Account' },
-]
+// SIDEBAR-IA.1 — the nav structure (items, sections, the Dashboard
+// link's permission keys) lives in src/lib/nav-items.js as a tested
+// policy contract. This component only filters it per-user and
+// renders it.
 
 // Sidebar badge polling lives in use-polled-count.js (extracted so the
 // Communications tab strip shares the exact same poller for its Inbox
@@ -224,12 +79,15 @@ export default function Sidebar({ user, mobileOpen = false, onMobileClose }) {
     enabled: hasPerm('approvals_inbox'),
     url: '/api/approvals/count',
   })
-  // CHURN-RADAR.1 — badge shows the high-risk at-risk count.
+  // CHURN-RADAR.1 / LEAD-RADAR.1 — high-risk + high-tier funnel
+  // counts. The radars are dashboard tabs since SIDEBAR-IA.1, so the
+  // two counts combine into one badge on the Dashboard entry — the
+  // glance signal survives the relocation; the per-radar split lives
+  // one click away on the tab strip.
   const churnRadarCount = usePolledCount({
     enabled: hasPerm('churn_radar'),
     url: '/api/churn-radar/count',
   })
-  // LEAD-RADAR.1 — badge shows the high-tier funnel count.
   const leadRadarCount = usePolledCount({
     enabled: hasPerm('lead_radar'),
     url: '/api/lead-radar/count',
@@ -249,10 +107,9 @@ export default function Sidebar({ user, mobileOpen = false, onMobileClose }) {
   // Badge map by href. Add more entries here when another nav item
   // needs a notification dot.
   const badges = {
+    '/dashboard': churnRadarCount + leadRadarCount,
     '/invoices': invoicesPendingCount,
     '/approvals': approvalsPendingCount,
-    '/churn-radar': churnRadarCount,
-    '/lead-radar': leadRadarCount,
     '/issues': issuesPendingCount,
     '/communications': whatsappUnreadCount,
   }
@@ -284,6 +141,7 @@ export default function Sidebar({ user, mobileOpen = false, onMobileClose }) {
   // Match-permission predicate. Used both for top-level items and
   // for children of expandable sections.
   //   - dashboardGroup: any of dashboard_personal/studio/business
+  //     or the radar keys (radars are dashboard tabs — SIDEBAR-IA.1)
   //   - anyPermission: any of the listed keys (e.g. communications
   //     shows if either email OR whatsapp is held)
   //   - permission (default): the single key listed
@@ -293,7 +151,7 @@ export default function Sidebar({ user, mobileOpen = false, onMobileClose }) {
   // remain owner-only via separate role gates inside those pages.
   function matches(item) {
     if (item.openToAll) return !!user
-    if (item.dashboardGroup) return DASHBOARD_PERM_KEYS.some(hasPerm)
+    if (item.dashboardGroup) return DASHBOARD_LINK_PERM_KEYS.some(hasPerm)
     if (item.anyPermission) return item.anyPermission.some(hasPerm)
     if (item.masterOrOwnerOnly) return user?.role === 'master' || user?.role === 'owner'
     if (item.masterOnly) return user?.profileRole === 'master' || user?.role === 'master'
@@ -306,7 +164,7 @@ export default function Sidebar({ user, mobileOpen = false, onMobileClose }) {
   // operator who grants `contracts` to a head_coach (who normally
   // doesn't have `studio_management`) still sees the Studio
   // Management section in the sidebar with Contracts inside.
-  const nav = allNav
+  const nav = ALL_NAV
     .map((item) => {
       if (!item.children) return item
       const visibleChildren = item.children.filter(matches)

@@ -13,6 +13,12 @@ const SEGMENTS = [
   { id: 'today',    label: 'Today',    href: '/dashboard/today',    perm: 'dashboard_personal' },
   { id: 'studio',   label: 'Studio',   href: '/dashboard/studio',   perm: 'dashboard_studio'   },
   { id: 'business', label: 'Business', href: '/dashboard/business', perm: 'dashboard_business' },
+  // SIDEBAR-IA.1 — the radars relocated from standalone sidebar
+  // entries to dashboard tabs ("how's the business" lives in one
+  // place). Short labels keep five segments readable; the pages keep
+  // their own permission gates, this strip is display-only.
+  { id: 'churn',    label: 'Churn',    href: '/dashboard/churn-radar', perm: 'churn_radar' },
+  { id: 'leads',    label: 'Leads',    href: '/dashboard/lead-radar',  perm: 'lead_radar'  },
 ]
 
 export default async function DashboardLayout({ children }) {

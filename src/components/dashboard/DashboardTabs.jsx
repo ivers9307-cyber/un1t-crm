@@ -12,7 +12,14 @@ import clsx from 'clsx'
 export default function DashboardTabs({ segments }) {
   const pathname = usePathname()
   return (
-    <div className="flex p-1 bg-un1t-surface border border-un1t-border rounded-xl mb-6 max-w-md">
+    // max-w scales with segment count — five tabs (SIDEBAR-IA.1 added
+    // Churn + Leads) need more room than the original three.
+    <div
+      className={clsx(
+        'flex p-1 bg-un1t-surface border border-un1t-border rounded-xl mb-6',
+        segments.length > 3 ? 'max-w-2xl' : 'max-w-md'
+      )}
+    >
       {segments.map(s => {
         const active = pathname === s.href
         return (

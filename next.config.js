@@ -93,6 +93,21 @@ const nextConfig = {
     ]
   },
 
+  // ─── Back-compat redirects for relocated pages ───────────────────
+  //
+  // SIDEBAR-IA.1 — the radars moved from standalone sidebar pages to
+  // dashboard tabs. Redirects (not rewrites) on purpose: the browser
+  // URL should update to the canonical /dashboard/* path so the tab
+  // strip + sidebar active states light up. Old links live in the
+  // Monday radar digest emails and operator bookmarks. Non-permanent
+  // (307) so the alias stays cheap to re-point if the IA evolves.
+  async redirects() {
+    return [
+      { source: '/churn-radar', destination: '/dashboard/churn-radar', permanent: false },
+      { source: '/lead-radar',  destination: '/dashboard/lead-radar',  permanent: false },
+    ]
+  },
+
   // Don't advertise the framework in every response.
   poweredByHeader: false,
 
