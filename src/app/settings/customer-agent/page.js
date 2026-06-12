@@ -58,6 +58,7 @@ export default function CustomerAgentSettingsPage() {
           ? { start: settings.quiet_hours.start, end: settings.quiet_hours.end, tz: settings.quiet_hours.tz || 'Europe/Dublin' }
           : null,
         booking_mode: settings.booking_mode === 'draft' ? 'draft' : 'auto',
+        handoff_cooldown_hours: settings.handoff_cooldown_hours ?? 12,
         consultation_event_type_id: settings.consultation_event_type_id || null,
       }
       const res = await fetch('/api/settings/customer-agent', {
@@ -146,6 +147,18 @@ export default function CustomerAgentSettingsPage() {
             <option value="auto">Book immediately (agent books verified members straight in)</option>
             <option value="draft">Queue for approval (one tap in Approvals books it + confirms to the member)</option>
           </select>
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-un1t-text mb-1">Hand back to the agent after (hours)</label>
+          <input type="number" min={0} max={168} className={inputCls}
+            value={settings.handoff_cooldown_hours ?? 12}
+            onChange={e => setField('handoff_cooldown_hours', e.target.value === '' ? null : Number(e.target.value))} />
+          <p className="text-xs text-un1t-subtle mt-1">
+            After the agent hands a conversation to a human, it stays out of that thread until a staff member
+            resolves it in the inbox (which hands it straight back) — or until this many hours pass. 0 = only a
+            resolve brings the agent back.
+          </p>
         </div>
 
         <div>

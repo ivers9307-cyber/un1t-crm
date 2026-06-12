@@ -1,6 +1,7 @@
 import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { resolveRearmPatch } from '@/lib/agent/core'
 
 // GET /api/whatsapp/conversations/[id] — get conversation with messages
 export async function GET(request, props) {
@@ -62,7 +63,7 @@ export async function PATCH(request, props) {
 
   const db = createServerClient()
   const { data: conversation, error } = await db.from('whatsapp_conversations')
-    .select('id, location_id')
+    .select('id, location_id, agent_handed_off_at')
     .eq('id', params.id)
     .single()
   if (error || !conversation) {
@@ -71,8 +72,14 @@ export async function PATCH(request, props) {
   const guard = assertLocationAccess(user, conversation.location_id)
   if (guard) return guard
 
+  // AGENT-REARM.1 — resolving a handed-off thread hands it straight back
+  // to the agent: the human engagement is closed, the agent is on duty
+  // again for the next inbound. resolveRearmPatch is a no-op otherwise.
   const { error: upErr } = await db.from('whatsapp_conversations')
-    .update({ resolved_at: body.resolved ? new Date().toISOString() : null })
+    .update({
+      resolved_at: body.resolved ? new Date().toISOString() : null,
+      ...resolveRearmPatch({ resolved: body.resolved, agent_handed_off_at: conversation.agent_handed_off_at }),
+    })
     .eq('id', params.id)
   if (upErr) return NextResponse.json({ success: false, error: upErr.message }, { status: 500 })
 
