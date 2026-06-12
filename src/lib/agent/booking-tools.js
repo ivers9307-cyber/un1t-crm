@@ -94,6 +94,50 @@ export const BOOKING_TOOLS = [
       required: ['date', 'start_time', 'name', 'email'],
     },
   },
+  {
+    name: 'list_my_upcoming_bookings',
+    description:
+      "List the VERIFIED member's own upcoming class bookings (class, day/time, booking id) " +
+      'straight from the booking system. Use when a member asks what they are booked into, or ' +
+      'before cancelling/rescheduling so you have the booking_id. Only works after identity is ' +
+      'verified.',
+    input_schema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'cancel_class_booking',
+    description:
+      "Cancel one of the VERIFIED member's upcoming bookings from list_my_upcoming_bookings. " +
+      'CRITICAL: restate the exact class and day/time and get a clear yes before calling — ' +
+      'never cancel on an ambiguous message. The studio may have a no-late-cancellation rule; ' +
+      'if the system refuses, relay its reason honestly. For a RESCHEDULE: confirm BOTH the ' +
+      'cancellation and the new class with the customer first, then cancel and book the new one.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        booking_id: { type: 'string', description: 'The 24-hex booking id from list_my_upcoming_bookings.' },
+        class_name: { type: 'string', description: 'The class name you confirmed with the customer.' },
+        class_time: { type: 'string', description: 'The class date/time you confirmed, as shown in the list.' },
+      },
+      required: ['booking_id'],
+    },
+  },
+  {
+    name: 'save_lead_details',
+    description:
+      "Save what you've learned about the person you're talking to — their name, email, and " +
+      'what they want from the studio (goal, preferred times, interest). Works for anyone, no ' +
+      'verification needed. Call it once you naturally learn something new — never interrogate ' +
+      'people for details. Existing contact details are never overwritten.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        first_name: { type: 'string', description: 'First name, if they gave it.' },
+        last_name: { type: 'string', description: 'Last name, if they gave it.' },
+        email: { type: 'string', description: 'Email address, if they gave it.' },
+        interest: { type: 'string', description: "What they're after — goal, classes of interest, timing. One or two sentences." },
+      },
+    },
+  },
 ]
 
 export const BOOKING_TOOL_NAMES = new Set(BOOKING_TOOLS.map(t => t.name))
@@ -175,6 +219,68 @@ export function shapeClassListForAgent(events, nowMs, limit = MAX_CLASS_LIST) {
   // Sort on the numeric instant — the Dublin label doesn't sort lexically.
   out.sort((a, b) => a.start_sec - b.start_sec)
   return out.slice(0, limit).map(({ start_sec: _omitted, ...rest }) => rest)
+}
+
+const MAX_MEMBER_BOOKINGS = 10
+
+/**
+ * Shape a member's Glofox /2.0/bookings rows for the agent: future,
+ * still-BOOKED rows with the booking id the cancel call needs, Dublin
+ * labels, time-sorted, capped. Pure.
+ */
+export function shapeMemberBookingsForAgent(bookings, nowMs, limit = MAX_MEMBER_BOOKINGS) {
+  const nowSec = Math.floor(nowMs / 1000)
+  const out = []
+  for (const b of Array.isArray(bookings) ? bookings : []) {
+    if (!b || typeof b !== 'object') continue
+    const status = typeof b.status === 'string' ? b.status.toUpperCase() : null
+    if (status && status !== 'BOOKED') continue
+    const startSec = Number(b.time_start)
+    if (!Number.isFinite(startSec) || startSec <= nowSec) continue
+    out.push({
+      booking_id: b._id || null,
+      class_name: b.event_name || b.model_name || 'Class',
+      start_sec: startSec,
+      time: formatDublinClassTime(startSec),
+    })
+  }
+  out.sort((a, b) => a.start_sec - b.start_sec)
+  return out.slice(0, limit).map(({ start_sec: _omitted, ...rest }) => rest)
+}
+
+/** Server-side guards for cancel_class_booking. Pure. */
+export function cancelBookingGuard({ verifiedContactId, glofoxMemberId, bookingId } = {}) {
+  if (!verifiedContactId) {
+    return { error: 'not_verified', message: 'Identity not verified yet. Call verify_identity first.' }
+  }
+  if (!glofoxMemberId) {
+    return { error: 'not_linked', message: 'This member is not linked to the studio booking system — hand off to the team.' }
+  }
+  if (!OBJECT_ID_RE.test(String(bookingId || ''))) {
+    return { error: 'bad_booking_id', message: 'booking_id must be the 24-hex id from list_my_upcoming_bookings.' }
+  }
+  return { ok: true }
+}
+
+const MAX_NOTE_LEN = 500
+
+/**
+ * AGENT-LEADCAP.1 — fill-empty-only contact enrichment. Returns the
+ * fields safe to write (never overwrites a non-empty value, validates
+ * the email) plus the timeline note for the interest text. Pure.
+ */
+export function leadDetailsPatch(existing = {}, input = {}) {
+  const patch = {}
+  const empty = (v) => v == null || String(v).trim() === ''
+  for (const field of ['first_name', 'last_name']) {
+    const v = String(input?.[field] || '').trim()
+    if (v && empty(existing?.[field])) patch[field] = v.slice(0, 80)
+  }
+  const emailIn = String(input?.email || '').trim().toLowerCase()
+  if (emailIn && EMAIL_RE.test(emailIn) && empty(existing?.email)) patch.email = emailIn
+  const interest = String(input?.interest || '').trim()
+  const note = interest ? `[Mia] ${interest}`.slice(0, MAX_NOTE_LEN) : null
+  return { patch, note }
 }
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
@@ -331,6 +437,108 @@ export async function executeBookingTool(toolName, input, ctx) {
       }
     }
     return { booked: true, class_name: input.class_name || null, class_time: input.class_time || null }
+  }
+
+  if (toolName === 'list_my_upcoming_bookings') {
+    if (!verifiedContactId) {
+      return { error: 'not_verified', message: 'Identity not verified yet. Call verify_identity first.' }
+    }
+    const { data: contact } = await db.from('contacts')
+      .select('glofox_member_id')
+      .eq('id', verifiedContactId)
+      .maybeSingle()
+    if (!contact?.glofox_member_id) {
+      return { error: 'not_linked', message: 'This member is not linked to the studio booking system — hand off to the team.' }
+    }
+    const { glofoxCredentialsForLocation, missingGlofoxCredentialsForLocation, fetchUserBookingsResult } =
+      await import('@/lib/glofox')
+    const creds = await glofoxCredentialsForLocation(db, locationId)
+    if (!creds || missingGlofoxCredentialsForLocation(creds).length) {
+      return { error: 'no_booking_system', message: 'Class booking is not connected at this studio — hand off to the team.' }
+    }
+    // windowDays:0 → time_start cutoff = now → upcoming bookings only.
+    const res = await fetchUserBookingsResult(creds, contact.glofox_member_id, { windowDays: 0, limit: 100 })
+    if (!res.ok) return { error: 'list_failed', message: 'Could not load their bookings just now — offer to hand off.' }
+    const bookings = shapeMemberBookingsForAgent(res.bookings, Date.now())
+    return bookings.length
+      ? { bookings }
+      : { bookings: [], message: 'No upcoming bookings found for this member.' }
+  }
+
+  if (toolName === 'cancel_class_booking') {
+    let glofoxMemberId = null
+    if (verifiedContactId) {
+      const { data } = await db.from('contacts')
+        .select('glofox_member_id')
+        .eq('id', verifiedContactId)
+        .maybeSingle()
+      glofoxMemberId = data?.glofox_member_id || null
+    }
+    const guard = cancelBookingGuard({ verifiedContactId, glofoxMemberId, bookingId: input?.booking_id })
+    if (!guard.ok) return guard
+
+    const mode = bookingMode(settings)
+    const baseDetails = {
+      booking_id: input.booking_id,
+      class_name: input.class_name || null,
+      class_time: input.class_time || null,
+      mode,
+    }
+
+    if (mode === 'draft') {
+      await logBookingRequest(db, ctx, {
+        kind: 'class_cancellation', status: 'pending', details: baseDetails,
+      })
+      return {
+        requested: true,
+        message: 'Queued for the team to confirm — tell the customer the cancellation will be confirmed shortly. Never say it is cancelled yet.',
+      }
+    }
+
+    const { glofoxCredentialsForLocation, missingGlofoxCredentialsForLocation, cancelBooking } =
+      await import('@/lib/glofox')
+    const creds = await glofoxCredentialsForLocation(db, locationId)
+    if (!creds || missingGlofoxCredentialsForLocation(creds).length) {
+      return { error: 'no_booking_system', message: 'Class booking is not connected at this studio — hand off to the team.' }
+    }
+    const result = await cancelBooking(creds, input.booking_id, glofoxMemberId)
+    const messageCode = result?.body?.message_code || result?.body?.message || null
+    await logBookingRequest(db, ctx, {
+      kind: 'class_cancellation',
+      status: result.ok ? 'actioned' : 'failed',
+      details: { ...baseDetails, result: { ok: result.ok, status: result.status, message_code: messageCode } },
+    })
+    if (!result.ok) {
+      return {
+        cancelled: false,
+        reason: messageCode || 'CANCELLATION_FAILED',
+        message: 'The cancellation did not go through — relay the reason honestly (studios often block late cancellations) and offer a handoff.',
+      }
+    }
+    return { cancelled: true, class_name: input.class_name || null, class_time: input.class_time || null }
+  }
+
+  if (toolName === 'save_lead_details') {
+    const targetContactId = verifiedContactId || ctx.contactId || null
+    if (!targetContactId) {
+      return { error: 'no_contact', message: 'No contact linked to this conversation yet — carry on without saving.' }
+    }
+    const { data: existing } = await db.from('contacts')
+      .select('first_name, last_name, email')
+      .eq('id', targetContactId)
+      .maybeSingle()
+    const { patch, note } = leadDetailsPatch(existing || {}, input || {})
+    const saved = []
+    if (Object.keys(patch).length > 0) {
+      const { error } = await db.from('contacts').update(patch).eq('id', targetContactId)
+      if (!error) saved.push(...Object.keys(patch))
+    }
+    let noteAdded = false
+    if (note) {
+      const { error } = await db.from('notes').insert({ contact_id: targetContactId, content: note })
+      noteAdded = !error
+    }
+    return { saved: true, updated_fields: saved, note_added: noteAdded }
   }
 
   if (toolName === 'list_consultation_slots') {

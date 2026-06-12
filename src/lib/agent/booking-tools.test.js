@@ -12,14 +12,19 @@ import {
   shapeClassListForAgent,
   consultationInputGuard,
   findSlot,
+  shapeMemberBookingsForAgent,
+  cancelBookingGuard,
+  leadDetailsPatch,
 } from './booking-tools'
 
 describe('BOOKING_TOOLS definitions', () => {
-  it('declares the four tools with schemas', () => {
+  it('declares the seven tools with schemas', () => {
     const names = BOOKING_TOOLS.map((t) => t.name)
     expect(names).toEqual([
       'list_upcoming_classes', 'book_class',
       'list_consultation_slots', 'book_consultation',
+      'list_my_upcoming_bookings', 'cancel_class_booking',
+      'save_lead_details',
     ])
     for (const t of BOOKING_TOOLS) {
       expect(t.description.length).toBeGreaterThan(40)
@@ -146,5 +151,65 @@ describe('buildBookingConfirmationText', () => {
   })
   it('still reads well with no details', () => {
     expect(buildBookingConfirmationText({}).toLowerCase()).toContain('booked')
+  })
+})
+
+// AGENT-CANCEL.1 — member's upcoming bookings + cancellation guards
+describe('shapeMemberBookingsForAgent', () => {
+  const now = Date.UTC(2026, 5, 12, 12, 0, 0) // 12 Jun 2026 13:00 Dublin
+  const hour = 3600
+  const nowSec = Math.floor(now / 1000)
+  it('keeps only future BOOKED rows, sorted, with Dublin labels and ids', () => {
+    const out = shapeMemberBookingsForAgent([
+      { _id: 'b'.repeat(24), event_name: 'ARENA', time_start: nowSec + 26 * hour, status: 'BOOKED' },
+      { _id: 'a'.repeat(24), event_name: 'FUS1ON - HYBRID', time_start: nowSec + 2 * hour, status: 'BOOKED' },
+      { _id: 'c'.repeat(24), event_name: 'Old', time_start: nowSec - 2 * hour, status: 'BOOKED' },
+      { _id: 'd'.repeat(24), event_name: 'Gone', time_start: nowSec + 5 * hour, status: 'CANCELLED' },
+      null,
+    ], now)
+    expect(out.map(b => b.class_name)).toEqual(['FUS1ON - HYBRID', 'ARENA'])
+    expect(out[0].booking_id).toBe('a'.repeat(24))
+    expect(out[0].time).toMatch(/Fri 12 Jun, 15:00/)
+  })
+  it('caps the list', () => {
+    const rows = Array.from({ length: 30 }, (_, i) => ({
+      _id: String(i).padStart(24, '0'), event_name: 'X', time_start: nowSec + (i + 1) * hour, status: 'BOOKED',
+    }))
+    expect(shapeMemberBookingsForAgent(rows, now)).toHaveLength(10)
+  })
+})
+
+describe('cancelBookingGuard', () => {
+  const ok = { verifiedContactId: 'c1', glofoxMemberId: 'm1', bookingId: 'f'.repeat(24) }
+  it('passes a verified linked member with a real booking id', () => {
+    expect(cancelBookingGuard(ok).ok).toBe(true)
+  })
+  it('rejects unverified, unlinked, and bad ids', () => {
+    expect(cancelBookingGuard({ ...ok, verifiedContactId: null }).error).toBe('not_verified')
+    expect(cancelBookingGuard({ ...ok, glofoxMemberId: null }).error).toBe('not_linked')
+    expect(cancelBookingGuard({ ...ok, bookingId: 'nope' }).error).toBe('bad_booking_id')
+  })
+})
+
+// AGENT-LEADCAP.1 — fill-empty-only contact enrichment
+describe('leadDetailsPatch', () => {
+  it('fills only empty fields and never overwrites', () => {
+    const { patch } = leadDetailsPatch(
+      { first_name: 'Sarah', last_name: null, email: '' },
+      { first_name: 'Hacker', last_name: 'Murphy', email: 'sarah@example.com' },
+    )
+    expect(patch).toEqual({ last_name: 'Murphy', email: 'sarah@example.com' })
+  })
+  it('rejects invalid emails and blank values', () => {
+    const { patch } = leadDetailsPatch({ first_name: null, email: null }, { first_name: '  ', email: 'not-an-email' })
+    expect(patch).toEqual({})
+  })
+  it('builds a note from the interest text', () => {
+    const { note } = leadDetailsPatch({}, { interest: 'Wants 6am strength classes, marathon in Sept' })
+    expect(note).toMatch(/^\[Mia\] /)
+    expect(note).toMatch(/marathon/)
+  })
+  it('returns no note when interest is blank', () => {
+    expect(leadDetailsPatch({}, { interest: '  ' }).note).toBeNull()
   })
 })
