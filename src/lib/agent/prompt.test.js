@@ -73,3 +73,24 @@ describe('identity pre-verification section', () => {
     expect(out).not.toMatch(/already verified/i)
   })
 })
+
+// AGENT-ID.1 — named agent + Meta AI-disclosure rules (Jan 2026
+// AI-Assisted Business Messaging Guidelines: disclose AI in the first
+// message, never claim to be human, human escalation available).
+describe('agent identity & disclosure', () => {
+  it('names the agent and identifies it as an AI assistant', () => {
+    const out = buildCustomerSystemPrompt({ agentName: 'Mia' })
+    expect(out).toMatch(/You are Mia/)
+    expect(out).toMatch(/AI assistant/i)
+  })
+  it('falls back to an unnamed AI assistant when no name is set', () => {
+    const out = buildCustomerSystemPrompt({})
+    expect(out).toMatch(/AI assistant/i)
+    expect(out).not.toMatch(/You are Mia/)
+  })
+  it('instructs first-message disclosure and never claiming to be human', () => {
+    const out = buildCustomerSystemPrompt({ agentName: 'Mia' })
+    expect(out).toMatch(/introduce yourself/i)
+    expect(out).toMatch(/never claim or imply you are a human/i)
+  })
+})

@@ -26,6 +26,7 @@ const DEFAULTS = {
   // consultation booking type (otherwise name-matched consult/intro/
   // taster).
   booking_mode: 'auto',
+  agent_name: 'Mia',
   handoff_cooldown_hours: 12,
   consultation_event_type_id: null,
 }
@@ -48,6 +49,7 @@ const SettingsSchema = z.object({
     max_replies_per_location_per_day: z.number().int().min(1).max(100000).optional(),
   }).nullable().optional(),
   booking_mode: z.enum(['auto', 'draft']).optional().default('auto'),
+  agent_name: z.string().max(40).nullable().optional(),
   handoff_cooldown_hours: z.number().min(0).max(168).nullable().optional(),
   consultation_event_type_id: z.string().max(64).nullable().optional(),
 })
