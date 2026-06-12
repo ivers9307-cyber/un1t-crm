@@ -99,6 +99,11 @@ export async function PUT(request) {
 
   const { data: loc } = await db.from('locations').select('settings').eq('id', locationId).single()
   const settings = loc?.settings || {}
+  // FIX 2026-06-12: this object is built field-by-field, and the
+  // followups / first_class_checkin / agent_name / handoff_cooldown
+  // keys were validated but never WRITTEN — the UI said "Saved ✓"
+  // while the route dropped them. Every SettingsSchema field must
+  // appear here; the schema is the contract.
   settings.customer_agent = {
     enabled: v.data.enabled,
     test_mode: !!v.data.test_mode,
@@ -109,6 +114,10 @@ export async function PUT(request) {
     quiet_hours: v.data.quiet_hours || null,
     limits: v.data.limits || null,
     booking_mode: v.data.booking_mode === 'draft' ? 'draft' : 'auto',
+    agent_name: v.data.agent_name?.trim() || DEFAULTS.agent_name,
+    handoff_cooldown_hours: v.data.handoff_cooldown_hours ?? DEFAULTS.handoff_cooldown_hours,
+    followups: { ...DEFAULTS.followups, ...(v.data.followups || {}) },
+    first_class_checkin: { ...DEFAULTS.first_class_checkin, ...(v.data.first_class_checkin || {}) },
     consultation_event_type_id: v.data.consultation_event_type_id || null,
   }
 
