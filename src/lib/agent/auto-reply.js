@@ -19,7 +19,7 @@
 // verification (account-tools.js). Answers from knowledge or hands off.
 // Never throws.
 
-import { sendTextMessage } from '@/lib/whatsapp'
+import { sendTextMessage, sendInteractiveOptions } from '@/lib/whatsapp'
 import { sendPushToRolesAtLocation } from '@/lib/push'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { buildCustomerSystemPrompt } from './prompt'
@@ -324,7 +324,7 @@ async function runChannelAgentInner(db, adapter, ctx) {
       return { handled: true, action: 'handoff', reason: parsed.reason }
     }
 
-    const sent = await sendAndLog(db, adapter, { ...common, text: parsed.text })
+    const sent = await sendAndLog(db, adapter, { ...common, text: parsed.text, options: parsed.options })
     if (!sent) return { handled: false, reason: 'send_failed' }
     return { handled: true, action: 'reply' }
   } finally {
@@ -337,11 +337,25 @@ async function runChannelAgentInner(db, adapter, ctx) {
 // the customer got NOTHING and the caller must report it (a swallowed
 // send failure here returned { handled: true } during the 2026-06-12
 // dead-token incident and hid the outage from every surface).
-export async function sendAndLog(db, adapter, { conversationId, locationId, recipient, contactId, connection, text }) {
+export async function sendAndLog(db, adapter, { conversationId, locationId, recipient, contactId, connection, text, options }) {
+  // AGENT-UX.1 — tap choices. Channels with adapter.sendOptions render
+  // real buttons; the rest get the choices appended as plain text so the
+  // customer always sees them. recordedText is what actually reached the
+  // customer (the agent re-reads it as its own history next turn).
+  const opts = Array.isArray(options) && options.length >= 2 ? options : null
   let messageId = null
+  let recordedText = text
   try {
-    const r = await adapter.send(recipient, text, { locationId, connection })
-    messageId = r?.messageId || null
+    if (opts && adapter.sendOptions) {
+      const r = await adapter.sendOptions(recipient, text, opts, { locationId, connection })
+      messageId = r?.messageId || null
+      recordedText = `${text}\n[Options: ${opts.join(' | ')}]`
+    } else {
+      const sendText = opts ? `${text}\n\n${opts.map(o => `• ${o}`).join('\n')}` : text
+      const r = await adapter.send(recipient, sendText, { locationId, connection })
+      messageId = r?.messageId || null
+      recordedText = sendText
+    }
   } catch (err) {
     console.error(`[radar-agent] ${adapter.name} send failed`, err?.message)
     return false
@@ -349,12 +363,12 @@ export async function sendAndLog(db, adapter, { conversationId, locationId, reci
 
   const now = new Date().toISOString()
   await recordAgentMessage(db, adapter,
-    adapter.outboundRow({ conversationId, locationId, contactId, messageId, text, now })
+    adapter.outboundRow({ conversationId, locationId, contactId, messageId, text: recordedText, now })
   )
   await db.from(adapter.conversationsTable).update({
     last_message_at: now,
     last_message_direction: 'outbound',
-    last_message_preview: text.substring(0, 100),
+    last_message_preview: recordedText.substring(0, 100),
     agent_last_reply_at: now,
   }).eq('id', conversationId)
   return true
@@ -458,6 +472,7 @@ export const whatsappAdapter = {
   pushCategory: 'whatsapp',
   handoffType: 'whatsapp_agent_handoff',
   send: (recipient, text, { locationId }) => sendTextMessage(recipient, text, { locationId }),
+  sendOptions: (recipient, text, options, { locationId }) => sendInteractiveOptions(recipient, text, options, { locationId }),
   outboundRow: ({ conversationId, locationId, contactId, messageId, text, now }) => ({
     conversation_id: conversationId,
     contact_id: contactId || null,

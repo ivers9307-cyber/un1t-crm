@@ -11,7 +11,7 @@ import {
   isVerificationFresh,
   DEFAULT_HOLDING_MESSAGE,
 } from './core'
-import { HANDOFF_PREFIX } from './prompt'
+import { HANDOFF_PREFIX, OPTIONS_PREFIX } from './prompt'
 
 describe('normalisePhone / phoneMatchesAllowlist', () => {
   it('strips non-digits', () => {
@@ -52,6 +52,19 @@ describe('quiet hours', () => {
 })
 
 describe('shouldAgentReply', () => {
+  // A tapped quick-reply button arrives as type 'interactive' with the
+  // button title as the body — it IS the customer's reply. Treating it
+  // as unsupported would soft-handoff the very flow the buttons drive.
+  it('treats an interactive button tap as a text reply', () => {
+    const r = shouldAgentReply({
+      settings: { enabled: true },
+      conversation: { agent_active: true },
+      message: { type: 'interactive', body: '7am' },
+      senderPhone: '353870000000',
+    })
+    expect(r).toEqual({ reply: true, reason: 'ok' })
+  })
+
   const base = {
     settings: { enabled: true },
     conversation: { agent_active: true },
@@ -160,6 +173,35 @@ describe('parseAgentResponse', () => {
   })
   it('exposes a default holding message', () => {
     expect(DEFAULT_HOLDING_MESSAGE).toMatch(/team/i)
+  })
+
+  // AGENT-UX.1 — tap-choice options. The model ends a reply with one
+  // [[OPTIONS]] a | b | c line; the orchestrator renders WhatsApp
+  // interactive buttons. Parsing is sentinel-based (same philosophy as
+  // HANDOFF): deterministic, no tool round-trip, never leaks raw
+  // sentinel text to the customer.
+  it('extracts a trailing [[OPTIONS]] line into options and strips it from the text', () => {
+    const r = parseAgentResponse(`Tomorrow has 7am, 8am and 9am.\n${OPTIONS_PREFIX} 7am | 8am | 9am`)
+    expect(r.action).toBe('reply')
+    expect(r.text).toBe('Tomorrow has 7am, 8am and 9am.')
+    expect(r.options).toEqual(['7am', '8am', '9am'])
+  })
+  it('normalizes options: trims, drops empties, dedupes, caps at 10, truncates to 20 chars', () => {
+    const eleven = Array.from({ length: 11 }, (_, i) => `opt ${i}`).join(' | ')
+    expect(parseAgentResponse(`Pick:\n${OPTIONS_PREFIX} ${eleven}`).options).toHaveLength(10)
+    const r = parseAgentResponse(`Pick:\n${OPTIONS_PREFIX}  7am | | 7am | this label is way too long to be a button`)
+    expect(r.options).toEqual(['7am', 'this label is way to'])
+  })
+  it('a single or zero usable option is a plain reply with the sentinel stripped', () => {
+    const r = parseAgentResponse(`Sure thing.\n${OPTIONS_PREFIX} only-one`)
+    expect(r.action).toBe('reply')
+    expect(r.text).toBe('Sure thing.')
+    expect(r.options).toBeUndefined()
+    expect(r.text).not.toContain(OPTIONS_PREFIX)
+  })
+  it('handoff beats options', () => {
+    const r = parseAgentResponse(`${HANDOFF_PREFIX} reason\n${OPTIONS_PREFIX} a | b`)
+    expect(r.action).toBe('handoff')
   })
 })
 
