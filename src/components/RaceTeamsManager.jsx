@@ -8,7 +8,7 @@
 // adjust without context-switching.
 
 import { useEffect, useState } from 'react'
-import { Plus, Trash2, Loader2, AlertCircle, Users, Check, X, Pencil, Star, BadgeCheck, Clock, Copy } from 'lucide-react'
+import { Plus, Trash2, Loader2, AlertCircle, Users, Check, X, Pencil, Star, BadgeCheck, Clock, Copy, Ban } from 'lucide-react'
 
 export default function RaceTeamsManager({ race }) {
   const [registrations, setRegistrations] = useState(null)
@@ -285,6 +285,25 @@ function TeamCard({ registration, waves, onChanged, onError }) {
     }
   }
 
+  // AGENT-EVENTS.3 follow-up — soft-cancel: frees the spot and keeps
+  // the registration + payment history (vs Remove, which deletes the
+  // row). Refunds, if any, are decided and processed manually in
+  // Revolut — this never touches money.
+  async function cancelRegistration() {
+    if (!confirm(`Cancel team "${team?.name}"'s entry? The spot is freed but the registration and any payment record are kept. Refunds (if due) are handled separately in Revolut.`)) return
+    setBusy(true)
+    try {
+      const r = await fetch(`/api/registrations/${registration.id}/cancel`, { method: 'POST' })
+      const j = await r.json()
+      if (!r.ok || j.success === false) onError(j.error || 'Cancel failed')
+      else onChanged()
+    } catch (e) {
+      onError(e.message || 'Network error')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   async function removeRegistration() {
     if (!confirm(`Remove team "${team?.name}" from this race?`)) return
     setBusy(true)
@@ -343,12 +362,27 @@ function TeamCard({ registration, waves, onChanged, onError }) {
               <Copy size={11} /> {copied ? 'Copied!' : 'Payment link'}
             </button>
           )}
+          {registration.status === 'cancelled' ? (
+            <span className="text-[11px] text-red-700 inline-flex items-center gap-1 font-medium">
+              <Ban size={11} /> Cancelled
+            </span>
+          ) : (
+            <button
+              type="button"
+              onClick={cancelRegistration}
+              disabled={busy}
+              className="text-[11px] text-un1t-subtle hover:text-amber-700 inline-flex items-center gap-1"
+              title="Cancel this entry — frees the spot, keeps the registration and payment history (refunds handled in Revolut)"
+            >
+              <Ban size={11} /> Cancel entry
+            </button>
+          )}
           <button
             type="button"
             onClick={removeRegistration}
             disabled={busy}
             className="text-[11px] text-un1t-subtle hover:text-red-700 inline-flex items-center gap-1"
-            title="Remove this team from the race"
+            title="Remove this team from the race entirely (deletes the registration)"
           >
             <Trash2 size={11} /> Remove
           </button>
