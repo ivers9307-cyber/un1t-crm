@@ -1,10 +1,11 @@
-// WhatsApp inbox tab.
+// Messages tab — unified WhatsApp + Instagram inbox (MOBILE-MSG.M2/M3).
 //
-// Lists conversations for the active location, newest message first,
-// with unread-count badges. Queue chips (All / Needs reply / Agent
-// handoff) mirror the web unified inbox so a coach on their phone can
-// triage exactly what the desk sees — especially threads Mia escalated
-// (MOBILE-MSG.M1). Tapping opens the conversation thread.
+// Merges both channels into one list (client-side, like the web
+// unified inbox), newest message first, with unread-count badges and a
+// channel glyph on each avatar. Queue chips (All / Needs reply / Agent
+// handoff) mirror the web queues so a coach on their phone can triage
+// exactly what the desk sees — especially threads Mia escalated.
+// Tapping opens the per-channel conversation thread.
 // Pull-to-refresh re-fetches.
 
 import { useState, useEffect, useCallback } from 'react'
@@ -16,14 +17,18 @@ import { useRouter, useFocusEffect } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { useAuth } from '../../lib/auth-context'
 import { listConversations, isWindowOpen } from '../../lib/whatsapp-api'
+import { listConversations as listInstagram, igDisplayName } from '../../lib/instagram-api'
 import { isAgentHandoff, queueCounts, filterByQueue, QUEUES } from '../../lib/inbox'
 
 function ConversationRow({ conv, onPress }) {
+  const ig = conv.channel === 'instagram'
   const c = conv.contacts
-  const name = c?.name
-    || [c?.first_name, c?.last_name].filter(Boolean).join(' ')
-    || conv.wa_profile_name
-    || conv.wa_phone
+  const name = ig
+    ? igDisplayName(conv)
+    : (c?.name
+      || [c?.first_name, c?.last_name].filter(Boolean).join(' ')
+      || conv.wa_profile_name
+      || conv.wa_phone)
   const isInbound = conv.last_message_direction === 'inbound'
   const time = conv.last_message_at
     ? new Date(conv.last_message_at).toLocaleString(undefined, {
@@ -32,7 +37,7 @@ function ConversationRow({ conv, onPress }) {
         ...(isToday(conv.last_message_at) ? {} : { month: 'short', day: 'numeric' }),
       })
     : ''
-  const windowOpen = isWindowOpen(conv)
+  const windowOpen = ig || isWindowOpen(conv)
   return (
     <Pressable
       onPress={onPress}
@@ -42,6 +47,13 @@ function ConversationRow({ conv, onPress }) {
         <Text className="text-base font-semibold text-un1t-text">
           {(name?.[0] || '?').toUpperCase()}
         </Text>
+        <View className="absolute -bottom-0.5 -right-0.5 w-[18px] h-[18px] rounded-full bg-un1t-bg items-center justify-center">
+          <Ionicons
+            name={ig ? 'logo-instagram' : 'logo-whatsapp'}
+            size={12}
+            color={ig ? '#E1306C' : '#25D366'}
+          />
+        </View>
       </View>
       <View className="flex-1">
         <View className="flex-row items-center">
@@ -95,13 +107,26 @@ export default function WhatsApp() {
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState(null)
+  const [igError, setIgError] = useState(null)
 
   const load = useCallback(async () => {
     if (!activeLocation) return
     setError(null)
-    const res = await listConversations(activeLocation.id)
-    if (!res.success) setError(res.error || 'Failed to load conversations')
-    setConversations(res.success ? res.data || [] : [])
+    const [wa, ig] = await Promise.all([
+      listConversations(activeLocation.id),
+      listInstagram(activeLocation.id),
+    ])
+    if (!wa.success) setError(wa.error || 'Failed to load conversations')
+    // An Instagram failure must never blank WhatsApp — degrade to a
+    // WA-only list with a soft note.
+    setIgError(ig.success ? null : ig.error || 'Instagram couldn’t load')
+    const waRows = (wa.success ? wa.data || [] : []).map(c => ({ ...c, channel: 'whatsapp' }))
+    const igRows = (ig.success ? ig.data || [] : []).map(c => ({ ...c, channel: 'instagram' }))
+    setConversations(
+      [...waRows, ...igRows].sort(
+        (a, b) => new Date(b.last_message_at || 0) - new Date(a.last_message_at || 0)
+      )
+    )
   }, [activeLocation])
 
   useEffect(() => {
@@ -143,6 +168,11 @@ export default function WhatsApp() {
       {error && (
         <View className="bg-red-500/10 border border-red-500/30 rounded-xl p-3 mb-3">
           <Text className="text-red-500 text-sm">{error}</Text>
+        </View>
+      )}
+      {igError && (
+        <View className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-3 mb-3">
+          <Text className="text-amber-700 text-sm">Instagram unavailable — showing WhatsApp only. {igError}</Text>
         </View>
       )}
 
@@ -190,9 +220,9 @@ export default function WhatsApp() {
       ) : (
         visible.map(c => (
           <ConversationRow
-            key={c.id}
+            key={`${c.channel}:${c.id}`}
             conv={c}
-            onPress={() => router.push(`/whatsapp/${c.id}`)}
+            onPress={() => router.push(c.channel === 'instagram' ? `/instagram/${c.id}` : `/whatsapp/${c.id}`)}
           />
         ))
       )}
