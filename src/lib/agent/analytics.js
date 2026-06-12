@@ -123,3 +123,20 @@ export function rankTopics(topics = {}) {
     .map(([topic, count]) => ({ topic, count }))
     .sort((a, b) => b.count - a.count)
 }
+
+// AGENT-ANALYTICS.2 — business outcomes from the agent's audit trail
+// (agent_membership_requests rows in the window). Pure.
+const BOOKING_KINDS = new Set(['class_booking', 'event_booking', 'consultation'])
+const CANCEL_KINDS = new Set(['class_cancellation', 'event_cancellation'])
+
+export function summariseActions(rows = []) {
+  const out = { bookings: 0, cancellations: 0, failed: 0, pending_approvals: 0 }
+  for (const r of rows) {
+    if (!r) continue
+    if (r.status === 'pending') { out.pending_approvals++; continue }
+    if (r.status === 'failed') { out.failed++; continue }
+    if (r.status === 'actioned' && BOOKING_KINDS.has(r.kind)) out.bookings++
+    else if (r.status === 'actioned' && CANCEL_KINDS.has(r.kind)) out.cancellations++
+  }
+  return out
+}

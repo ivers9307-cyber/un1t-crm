@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { MANAGER_ROLES } from '@/lib/schemas'
-import { summariseChannel, mergeSummaries, containmentRate, rankTopics } from '@/lib/agent/analytics'
+import { summariseChannel, mergeSummaries, containmentRate, rankTopics, summariseActions } from '@/lib/agent/analytics'
 
 // RADAR-AGENT — operator analytics feed (plan §4e). Manager+ at the
 // active location. Read-only: aggregates the agent's own WhatsApp +
@@ -55,6 +55,29 @@ export async function GET(request) {
 
   const combined = mergeSummaries(wa.summary, ig.summary)
 
+  // AGENT-ANALYTICS.2 — outcomes: what the agent actually DID
+  // (bookings/cancellations from the audit trail) + proactive sends.
+  const [{ data: actionRows }, { count: followupsSent }, { count: checkinsSent }] = await Promise.all([
+    db.from('agent_membership_requests')
+      .select('kind, status')
+      .eq('location_id', locationId)
+      .gte('created_at', since)
+      .limit(2000),
+    db.from('whatsapp_conversations')
+      .select('id', { count: 'exact', head: true })
+      .eq('location_id', locationId)
+      .gte('agent_followup_sent_at', since),
+    db.from('contacts')
+      .select('id', { count: 'exact', head: true })
+      .eq('location_id', locationId)
+      .gte('first_class_checkin_at', since),
+  ])
+  const actions = {
+    ...summariseActions(actionRows || []),
+    followups_sent: followupsSent || 0,
+    checkins_sent: checkinsSent || 0,
+  }
+
   // Escalated conversations to review — newest first, capped. Each side
   // links back to its own inbox thread.
   const escalations = [
@@ -68,6 +91,7 @@ export async function GET(request) {
     combined,
     by_channel: { whatsapp: wa.summary, instagram: ig.summary },
     containment_rate: containmentRate(combined),
+    actions,
     topics: rankTopics(combined.topics),
     escalations,
   })
