@@ -44,6 +44,14 @@ function needsReply(c) {
   return !c.resolved_at && c.last_message_direction === 'inbound'
 }
 
+// INBOX-HANDOFF.1 — the agent escalated this thread to a human and
+// nobody has resolved it yet. agent_handed_off_at is stamped by the
+// customer agent's handoff path (auto-reply.js); resolving the thread
+// clears it from this queue.
+function isAgentHandoff(c) {
+  return !!c.agent_handed_off_at && !c.resolved_at
+}
+
 const CHANNELS = [
   ['all', 'All'],
   ['wa', 'WhatsApp'],
@@ -134,8 +142,11 @@ export default function UnifiedInbox({ locationId, userId, initialConversationId
   ].sort((a, b) => new Date(b.last_message_at || 0) - new Date(a.last_message_at || 0))
 
   const channelMatched = channelFilter === 'all' ? merged : merged.filter(c => c._ch === channelFilter)
-  const visible = queueFilter === 'all' ? channelMatched : channelMatched.filter(needsReply)
+  const visible = queueFilter === 'all'
+    ? channelMatched
+    : channelMatched.filter(queueFilter === 'handoff' ? isAgentHandoff : needsReply)
   const needsReplyCount = merged.filter(needsReply).length
+  const handoffCount = merged.filter(isAgentHandoff).length
 
   // UIX-P2 — the command centre needs the selected thread's linked
   // contact. The queue rows already embed contacts!contact_id, so no
@@ -188,20 +199,23 @@ export default function UnifiedInbox({ locationId, userId, initialConversationId
           ))}
         </div>
 
-        {/* Queue split chips (P1a semantics) */}
+        {/* Queue split chips (P1a semantics; INBOX-HANDOFF.1 added the agent-handoff queue) */}
         <div className="flex gap-1.5 px-3 py-2 border-b border-un1t-border">
-          {[['needs_reply', 'Needs reply'], ['all', 'Everything']].map(([key, label]) => (
+          {[['needs_reply', 'Needs reply'], ['handoff', 'Agent handoff'], ['all', 'Everything']].map(([key, label]) => (
             <button
               key={key}
               onClick={() => setQueueFilter(key)}
               className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${
                 queueFilter === key
-                  ? 'bg-un1t-text text-un1t-bg border-transparent'
+                  ? key === 'handoff'
+                    ? 'bg-amber-500 text-white border-transparent'
+                    : 'bg-un1t-text text-un1t-bg border-transparent'
                   : 'border-un1t-border text-un1t-subtle hover:text-un1t-text'
               }`}
             >
               {label}
               {key === 'needs_reply' && needsReplyCount > 0 && <span className="ml-1">· {needsReplyCount}</span>}
+              {key === 'handoff' && handoffCount > 0 && <span className="ml-1">· {handoffCount}</span>}
             </button>
           ))}
         </div>
@@ -218,7 +232,9 @@ export default function UnifiedInbox({ locationId, userId, initialConversationId
 
           {!loading && merged.length > 0 && visible.length === 0 && (
             <p className="p-4 text-xs text-un1t-subtle text-center">
-              Queue clear — nothing needs a reply. 🎉
+              {queueFilter === 'handoff'
+                ? 'No agent handoffs waiting — the agent is handling things. 🤖'
+                : 'Queue clear — nothing needs a reply. 🎉'}
             </p>
           )}
 
@@ -238,6 +254,11 @@ export default function UnifiedInbox({ locationId, userId, initialConversationId
                       ? <MessageCircle size={13} className="text-green-600 shrink-0" />
                       : <Instagram size={13} className="text-pink-600 shrink-0" />}
                     <span className="font-medium text-sm truncate">{rowName(conv)}</span>
+                    {isAgentHandoff(conv) && (
+                      <span className="text-[10px] font-semibold text-amber-700 bg-amber-500/10 px-1.5 py-0.5 rounded-full shrink-0">
+                        Needs human
+                      </span>
+                    )}
                     {conv.resolved_at && <Check size={12} className="text-green-600 shrink-0" />}
                   </span>
                   <span className="text-xs text-un1t-muted shrink-0">{formatTime(conv.last_message_at)}</span>
