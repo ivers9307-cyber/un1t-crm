@@ -271,11 +271,11 @@ export default function UnifiedInbox({ locationId, userId, initialConversationId
                         {conv.unread_count}
                       </span>
                     )}
-                    {needsReply(conv) && (
+                    {(needsReply(conv) || isAgentHandoff(conv)) && (
                       <span
                         role="button"
                         tabIndex={0}
-                        title="Mark handled — no reply needed"
+                        title={isAgentHandoff(conv) ? 'Mark handled — hand back to the agent' : 'Mark handled — no reply needed'}
                         onClick={e => { e.stopPropagation(); quickResolve(conv) }}
                         onKeyDown={e => { if (e.key === 'Enter') { e.stopPropagation(); quickResolve(conv) } }}
                         className="p-1 rounded-md border border-un1t-border text-un1t-muted hover:text-emerald-700 hover:border-emerald-600 transition-colors"

@@ -27,11 +27,16 @@ export async function GET(request, props) {
   if (guard) return guard
 
   // Get messages
-  const { data: messages } = await db.from('whatsapp_messages')
+  // Newest rows first then reversed for display — ascending+limit returns
+  // the OLDEST rows, which froze the thread pane once a conversation
+  // outgrew the cap (2026-06-12: a 55-message thread showed only its
+  // first 50; new messages and the operator's own sends never appeared).
+  const { data: messagesDesc } = await db.from('whatsapp_messages')
     .select('*')
     .eq('conversation_id', params.id)
-    .order('created_at', { ascending: true })
+    .order('created_at', { ascending: false })
     .limit(limit)
+  const messages = (messagesDesc || []).slice().reverse()
 
   // Mark as read (reset unread count)
   await db.from('whatsapp_conversations')
