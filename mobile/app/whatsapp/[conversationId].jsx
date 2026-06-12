@@ -36,49 +36,95 @@ import { useAuth } from '../../lib/auth-context'
 import {
   getConversation, listMessages, markConversationRead,
   isWindowOpen, sendText, sendTemplate, listTemplates,
+  resolveConversation, rateAgentMessage,
 } from '../../lib/whatsapp-api'
+import { needsReply, isAgentHandoff, mediaLabel } from '../../lib/inbox'
 
-function Bubble({ msg }) {
+function Bubble({ msg, myRating, onRate }) {
   const out = msg.direction === 'outbound'
+  const isAgent = msg.source === 'agent'
+  const media = mediaLabel(msg.message_type)
   const time = msg.created_at
     ? new Date(msg.created_at).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
     : ''
   return (
-    <View className={`flex-row mb-1.5 ${out ? 'justify-end' : 'justify-start'}`}>
-      <View
-        className={`max-w-[80%] px-3.5 py-2 rounded-2xl ${
-          out ? 'bg-blue-500' : 'bg-un1t-surface border border-un1t-border'
-        }`}
-      >
-        {msg.template_name && (
-          <Text className={`text-[10px] uppercase mb-1 ${out ? 'text-white/70' : 'text-un1t-muted'}`}>
-            Template · {msg.template_name}
-          </Text>
-        )}
-        <Text className={`text-base ${out ? 'text-white' : 'text-un1t-text'}`}>
-          {msg.body || `[${msg.message_type}]`}
-        </Text>
-        <View className="flex-row items-center justify-end mt-1">
-          <Text className={`text-[10px] ${out ? 'text-white/60' : 'text-un1t-subtle'}`}>
-            {time}
-          </Text>
-          {out && (
-            <Ionicons
-              name={
-                msg.read_at ? 'checkmark-done'
-                : msg.delivered_at ? 'checkmark-done'
-                : msg.status === 'sent' ? 'checkmark'
-                : msg.status === 'failed' ? 'alert-circle'
-                : 'time-outline'
-              }
-              size={12}
-              color={msg.read_at ? '#FFFFFF' : 'rgba(255,255,255,0.6)'}
-              style={{ marginLeft: 4 }}
-            />
+    <>
+      <View className={`flex-row mb-1.5 ${out ? 'justify-end' : 'justify-start'}`}>
+        <View
+          className={`max-w-[80%] px-3.5 py-2 rounded-2xl ${
+            out ? 'bg-blue-500' : 'bg-un1t-surface border border-un1t-border'
+          }`}
+        >
+          {isAgent && (
+            <View className="flex-row items-center mb-1">
+              <Ionicons name="sparkles" size={10} color={out ? 'rgba(255,255,255,0.8)' : '#64748B'} />
+              <Text className={`text-[10px] uppercase ml-1 font-semibold ${out ? 'text-white/70' : 'text-un1t-muted'}`}>
+                Mia
+              </Text>
+            </View>
           )}
+          {msg.template_name && (
+            <Text className={`text-[10px] uppercase mb-1 ${out ? 'text-white/70' : 'text-un1t-muted'}`}>
+              Template · {msg.template_name}
+            </Text>
+          )}
+          {media && (
+            <View className={`flex-row items-center ${msg.body ? 'mb-0.5' : ''}`}>
+              <Ionicons name={media.icon} size={14} color={out ? 'rgba(255,255,255,0.85)' : '#64748B'} />
+              <Text className={`text-sm italic ml-1.5 ${out ? 'text-white/85' : 'text-un1t-light'}`}>
+                {media.label}
+              </Text>
+            </View>
+          )}
+          {msg.body ? (
+            <Text className={`text-base ${out ? 'text-white' : 'text-un1t-text'}`}>
+              {msg.body}
+            </Text>
+          ) : !media ? (
+            <Text className={`text-base ${out ? 'text-white' : 'text-un1t-text'}`}>—</Text>
+          ) : null}
+          <View className="flex-row items-center justify-end mt-1">
+            <Text className={`text-[10px] ${out ? 'text-white/60' : 'text-un1t-subtle'}`}>
+              {time}
+            </Text>
+            {out && (
+              <Ionicons
+                name={
+                  msg.read_at ? 'checkmark-done'
+                  : msg.delivered_at ? 'checkmark-done'
+                  : msg.status === 'sent' ? 'checkmark'
+                  : msg.status === 'failed' ? 'alert-circle'
+                  : 'time-outline'
+                }
+                size={12}
+                color={msg.read_at ? '#FFFFFF' : 'rgba(255,255,255,0.6)'}
+                style={{ marginLeft: 4 }}
+              />
+            )}
+          </View>
         </View>
       </View>
-    </View>
+      {/* Thumbs on agent replies (AGENT-QA.1) — same quality loop as the
+          web inbox; ratings land on the agent analytics page. */}
+      {isAgent && onRate && (
+        <View className="flex-row justify-end items-center mb-2 mr-1 -mt-0.5">
+          <Pressable onPress={() => onRate(msg, 'up')} hitSlop={8} className="mr-4">
+            <Ionicons
+              name={myRating === 'up' ? 'thumbs-up' : 'thumbs-up-outline'}
+              size={14}
+              color={myRating === 'up' ? '#16A34A' : '#94A3B8'}
+            />
+          </Pressable>
+          <Pressable onPress={() => onRate(msg, 'down')} hitSlop={8}>
+            <Ionicons
+              name={myRating === 'down' ? 'thumbs-down' : 'thumbs-down-outline'}
+              size={14}
+              color={myRating === 'down' ? '#DC2626' : '#94A3B8'}
+            />
+          </Pressable>
+        </View>
+      )}
+    </>
   )
 }
 
@@ -95,6 +141,8 @@ export default function Conversation() {
   const [sending, setSending] = useState(false)
   const [showTemplates, setShowTemplates] = useState(false)
   const [templates, setTemplates] = useState([])
+  const [resolving, setResolving] = useState(false)
+  const [feedback, setFeedback] = useState({})
   const scrollRef = useRef(null)
 
   const refresh = useCallback(async () => {
@@ -157,6 +205,50 @@ export default function Conversation() {
     refresh()
   }
 
+  // Mark the conversation handled. Server-side this also re-arms Mia on
+  // a handed-off thread (AGENT-REARM.1) — the ✓ is "hand it back".
+  async function resolve() {
+    if (resolving) return
+    setResolving(true)
+    const res = await resolveConversation(conversationId, true, activeLocation?.id)
+    setResolving(false)
+    if (!res.success) {
+      Alert.alert('Couldn’t resolve', res.error || 'Unknown error')
+      return
+    }
+    refresh()
+  }
+
+  function rate(msg, rating) {
+    const prev = feedback[msg.id] || null
+    if (prev === rating) return
+    const submit = async (note) => {
+      setFeedback(f => ({ ...f, [msg.id]: rating }))
+      const res = await rateAgentMessage({
+        messageId: msg.id, rating, note, locationId: activeLocation?.id,
+      })
+      if (!res.success) {
+        setFeedback(f => ({ ...f, [msg.id]: prev }))
+        Alert.alert('Couldn’t save feedback', res.error || 'Unknown error')
+      }
+    }
+    if (rating === 'down' && Platform.OS === 'ios') {
+      // Optional note on a thumbs-down — surfaces on the agent analytics
+      // quality list. Alert.prompt is iOS-only; Android sends without.
+      Alert.prompt(
+        'What was wrong?',
+        'Optional — helps tune Mia.',
+        [
+          { text: 'Skip', onPress: () => submit(null) },
+          { text: 'Send', onPress: (note) => submit(note || null) },
+        ],
+        'plain-text'
+      )
+    } else {
+      submit(null)
+    }
+  }
+
   const c = conv?.contacts
   const name = c?.name
     || [c?.first_name, c?.last_name].filter(Boolean).join(' ')
@@ -178,6 +270,15 @@ export default function Conversation() {
         options={{
           title: name,
           headerLeft: () => <BackHeaderLeft router={router} label="Inbox" />,
+          headerRight: conv && !conv.resolved_at && (needsReply(conv) || isAgentHandoff(conv))
+            ? () => (
+                <Pressable onPress={resolve} disabled={resolving} hitSlop={10}>
+                  {resolving
+                    ? <ActivityIndicator size="small" />
+                    : <Ionicons name="checkmark-circle-outline" size={26} color="#16A34A" />}
+                </Pressable>
+              )
+            : undefined,
         }}
       />
 
@@ -187,6 +288,26 @@ export default function Conversation() {
         </View>
       ) : (
         <>
+          {/* Agent handoff banner — Mia escalated this thread and is
+              muted until a human resolves it. */}
+          {isAgentHandoff(conv) && (
+            <View className="bg-amber-500/15 border-b border-amber-500/30 px-4 py-2.5 flex-row items-center">
+              <Ionicons name="hand-left-outline" size={16} color="#B45309" />
+              <Text className="text-xs text-amber-800 flex-1 ml-2">
+                Mia handed this to the team. Reply below, then mark it handled to put her back on duty.
+              </Text>
+              <Pressable
+                onPress={resolve}
+                disabled={resolving}
+                className="bg-amber-600 rounded-lg px-2.5 py-1.5 ml-2 active:opacity-80"
+              >
+                {resolving
+                  ? <ActivityIndicator size="small" color="#FFFFFF" />
+                  : <Text className="text-xs text-white font-semibold">Mark handled</Text>}
+              </Pressable>
+            </View>
+          )}
+
           {/* Window status banner */}
           {!windowOpen && (
             <View className="bg-amber-500/15 border-b border-amber-500/30 px-4 py-2">
@@ -202,7 +323,9 @@ export default function Conversation() {
             contentContainerClassName="p-4"
             onContentSizeChange={() => scrollRef.current?.scrollToEnd?.({ animated: false })}
           >
-            {messages.map(m => <Bubble key={m.id} msg={m} />)}
+            {messages.map(m => (
+              <Bubble key={m.id} msg={m} myRating={feedback[m.id] || null} onRate={rate} />
+            ))}
           </ScrollView>
 
           {/* Composer — bottom padding accounts for the home-indicator

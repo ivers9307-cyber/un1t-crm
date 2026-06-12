@@ -1,7 +1,10 @@
 // WhatsApp inbox tab.
 //
 // Lists conversations for the active location, newest message first,
-// with unread-count badges. Tapping opens the conversation thread.
+// with unread-count badges. Queue chips (All / Needs reply / Agent
+// handoff) mirror the web unified inbox so a coach on their phone can
+// triage exactly what the desk sees — especially threads Mia escalated
+// (MOBILE-MSG.M1). Tapping opens the conversation thread.
 // Pull-to-refresh re-fetches.
 
 import { useState, useEffect, useCallback } from 'react'
@@ -13,6 +16,7 @@ import { useRouter, useFocusEffect } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { useAuth } from '../../lib/auth-context'
 import { listConversations, isWindowOpen } from '../../lib/whatsapp-api'
+import { isAgentHandoff, queueCounts, filterByQueue, QUEUES } from '../../lib/inbox'
 
 function ConversationRow({ conv, onPress }) {
   const c = conv.contacts
@@ -53,7 +57,13 @@ function ConversationRow({ conv, onPress }) {
           <Text className="text-sm text-un1t-subtle flex-1" numberOfLines={1}>
             {conv.last_message_preview || '—'}
           </Text>
-          {!windowOpen && (
+          {isAgentHandoff(conv) && (
+            <View className="ml-2 px-1.5 py-0.5 rounded bg-amber-500/20 flex-row items-center">
+              <Ionicons name="hand-left-outline" size={10} color="#B45309" style={{ marginRight: 3 }} />
+              <Text className="text-[10px] uppercase text-amber-700 font-semibold">Needs human</Text>
+            </View>
+          )}
+          {!windowOpen && !isAgentHandoff(conv) && (
             <View className="ml-2 px-1.5 py-0.5 rounded bg-amber-500/20">
               <Text className="text-[10px] uppercase text-amber-700 font-medium">Closed</Text>
             </View>
@@ -81,6 +91,7 @@ export default function WhatsApp() {
   const { activeLocation } = useAuth()
   const router = useRouter()
   const [conversations, setConversations] = useState([])
+  const [queue, setQueue] = useState('all')
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState(null)
@@ -112,6 +123,9 @@ export default function WhatsApp() {
     setRefreshing(false)
   }
 
+  const counts = queueCounts(conversations)
+  const visible = filterByQueue(conversations, queue)
+
   if (loading) {
     return (
       <View className="flex-1 bg-un1t-bg items-center justify-center">
@@ -131,13 +145,50 @@ export default function WhatsApp() {
           <Text className="text-red-500 text-sm">{error}</Text>
         </View>
       )}
-      {conversations.length === 0 ? (
+
+      {/* Queue chips — same triage queues as the web unified inbox. */}
+      <View className="flex-row mb-3">
+        {QUEUES.map(q => {
+          const count = counts[q.key]
+          const active = queue === q.key
+          return (
+            <Pressable
+              key={q.key}
+              onPress={() => setQueue(q.key)}
+              className={`flex-row items-center px-3 py-1.5 rounded-full mr-2 border ${
+                active ? 'bg-un1t-text border-un1t-text' : 'bg-un1t-surface border-un1t-border'
+              }`}
+            >
+              <Text className={`text-xs font-semibold ${active ? 'text-white' : 'text-un1t-text'}`}>
+                {q.label}
+              </Text>
+              {q.key !== 'all' && count > 0 && (
+                <View className={`ml-1.5 min-w-[18px] px-1 h-[18px] rounded-full items-center justify-center ${
+                  q.key === 'handoff' ? 'bg-amber-500' : 'bg-green-500'
+                }`}>
+                  <Text className="text-[10px] text-white font-bold">{count}</Text>
+                </View>
+              )}
+            </Pressable>
+          )
+        })}
+      </View>
+
+      {visible.length === 0 ? (
         <View className="py-16 items-center">
-          <Ionicons name="chatbubbles-outline" size={32} color="#94A3B8" />
-          <Text className="text-sm text-un1t-subtle mt-2">No conversations yet.</Text>
+          <Ionicons
+            name={queue === 'all' ? 'chatbubbles-outline' : 'checkmark-done-circle-outline'}
+            size={32}
+            color="#94A3B8"
+          />
+          <Text className="text-sm text-un1t-subtle mt-2">
+            {queue === 'all' ? 'No conversations yet.'
+              : queue === 'handoff' ? 'No conversations waiting on a human.'
+              : 'Queue clear — nothing needs a reply.'}
+          </Text>
         </View>
       ) : (
-        conversations.map(c => (
+        visible.map(c => (
           <ConversationRow
             key={c.id}
             conv={c}
