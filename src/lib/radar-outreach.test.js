@@ -116,3 +116,24 @@ describe('buildBodyComponents', () => {
     expect(buildBodyComponents(1, null)[0].parameters[0].text).toBe('there')
   })
 })
+
+// RADAR-THREAD.1 — radar outreach must land in the conversation thread
+// (every other outbound WA path already records; radar was the gap).
+// The recorded body is the REAL rendered text — the agent reads its
+// context from this thread, so "[Template: x]" placeholders are useless.
+import { renderRadarBody } from './radar-outreach'
+
+describe('renderRadarBody', () => {
+  const template = {
+    components: [
+      { type: 'BODY', text: 'Hi {{1}}, fancy a free consultation this week, {{1}}?' },
+    ],
+  }
+  it('substitutes every body variable with the first name', () => {
+    expect(renderRadarBody(template, 'Richard'))
+      .toBe('Hi Richard, fancy a free consultation this week, Richard?')
+  })
+  it('falls back to a placeholder when the template has no body', () => {
+    expect(renderRadarBody({ components: [] }, 'Richard')).toBe(null)
+  })
+})
