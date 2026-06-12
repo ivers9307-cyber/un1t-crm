@@ -69,6 +69,27 @@ export default function CustomerAgentSettingsPage() {
     } catch { setError('Failed to save') } finally { setSaving(false) }
   }
 
+  const [importing, setImporting] = useState(false)
+  const [importNote, setImportNote] = useState(null)
+
+  // KNOWLEDGE-IMPORT.1 — one click pulls the Glofox timetable's class
+  // types + descriptions into knowledge. Existing titles are never
+  // overwritten, so re-running after adding a class is safe.
+  async function importFromGlofox() {
+    setImporting(true); setError(null); setImportNote(null)
+    try {
+      const res = await fetch('/api/agent/knowledge/import-classes', { method: 'POST' })
+      const j = await res.json()
+      if (!j.success) { setError(j.error || 'Import failed'); return }
+      if (j.imported?.length) setEntries(e => [...e, ...j.imported])
+      const bits = []
+      bits.push(`${j.imported?.length || 0} class${(j.imported?.length || 0) === 1 ? '' : 'es'} imported`)
+      if (j.skipped?.length) bits.push(`${j.skipped.length} already in knowledge`)
+      if (j.missing_description?.length) bits.push(`no Glofox description for: ${j.missing_description.join(', ')} (added as drafts — fill them in below)`)
+      setImportNote(j.message || bits.join(' · '))
+    } catch { setError('Import failed') } finally { setImporting(false) }
+  }
+
   async function addEntry() {
     setError(null)
     try {
@@ -219,15 +240,22 @@ export default function CustomerAgentSettingsPage() {
       <section className="border border-un1t-border rounded-lg p-5 mt-6">
         <div className="flex items-center justify-between mb-2">
           <h2 className="text-base font-semibold text-un1t-text">Knowledge</h2>
-          <button type="button" onClick={addEntry}
-            className="text-sm border border-un1t-border rounded-md px-3 py-1.5 text-un1t-text hover:bg-un1t-bg">
-            + Add entry
-          </button>
+          <div className="flex items-center gap-2">
+            <button type="button" onClick={importFromGlofox} disabled={importing}
+              className="text-sm border border-un1t-border rounded-md px-3 py-1.5 text-un1t-text hover:bg-un1t-bg disabled:opacity-50">
+              {importing ? 'Importing…' : 'Import classes from Glofox'}
+            </button>
+            <button type="button" onClick={addEntry}
+              className="text-sm border border-un1t-border rounded-md px-3 py-1.5 text-un1t-text hover:bg-un1t-bg">
+              + Add entry
+            </button>
+          </div>
         </div>
         <p className="text-sm text-un1t-muted mb-4">
           The facts the agent is allowed to use — prices, offers, policies, FAQs. If it isn&apos;t here,
           the agent hands off instead of guessing.
         </p>
+        {importNote && <p className="text-sm text-emerald-700 mb-3">{importNote}</p>}
 
         {entries.length === 0 && (
           <div className="text-sm text-un1t-muted border border-dashed border-un1t-border rounded-md p-4">

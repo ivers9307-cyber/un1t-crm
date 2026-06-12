@@ -116,6 +116,13 @@
       "path": "/api/cron/sync-google-reviews",
       "schedule": "0 4 * * *"
     },
-    { "path": "/api/cron/run-whatsapp-broadcasts", "schedule": "*/15 * * * *" }
+    {
+      "path": "/api/cron/run-whatsapp-broadcasts",
+      "schedule": "*/15 * * * *"
+    },
+    {
+      "path": "/api/cron/sync-class-knowledge",
+      "schedule": "0 6 * * 1"
+    }
   ]
 }
