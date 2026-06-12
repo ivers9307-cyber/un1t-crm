@@ -94,3 +94,12 @@ describe('agent identity & disclosure', () => {
     expect(out).toMatch(/never claim or imply you are a human/i)
   })
 })
+
+// AGENT-LANG.1 — Mia replies in the customer's language.
+describe('multilingual replies', () => {
+  it('instructs replying in the customer language and keeping class names verbatim', () => {
+    const out = buildCustomerSystemPrompt({ agentName: 'Mia' })
+    expect(out).toMatch(/reply in the (same )?language/i)
+    expect(out).toMatch(/class names/i)
+  })
+})

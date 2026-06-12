@@ -46,6 +46,29 @@ function headersFor(config) {
  * Pass `opts.locationId` to route from a specific location's WA
  * number; omit for env-fallback (legacy single-number behaviour).
  */
+/**
+ * AGENT-VOICE.1 — download an inbound media item (voice note) from
+ * Meta. Two-step per the Cloud API: GET /{mediaId} → short-lived URL,
+ * then GET that URL with the same Bearer token. Returns
+ * { bytes: ArrayBuffer, mime } or null — never throws.
+ */
+export async function fetchMediaBytes(mediaId, opts = {}) {
+  try {
+    const config = await resolveConfig(opts)
+    if (!config?.token || !mediaId) return null
+    const metaRes = await fetch(`${META_API_URL}/${mediaId}`, { headers: { Authorization: `Bearer ${config.token}` } })
+    if (!metaRes.ok) return null
+    const meta = await metaRes.json()
+    if (!meta?.url) return null
+    const binRes = await fetch(meta.url, { headers: { Authorization: `Bearer ${config.token}` } })
+    if (!binRes.ok) return null
+    return { bytes: await binRes.arrayBuffer(), mime: meta.mime_type || 'audio/ogg' }
+  } catch (e) {
+    console.warn('[whatsapp] media fetch failed:', e?.message || e)
+    return null
+  }
+}
+
 export async function sendTextMessage(to, text, opts = {}) {
   const config = await resolveConfig(opts)
 
