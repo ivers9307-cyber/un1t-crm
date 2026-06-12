@@ -98,9 +98,9 @@ async function fetchChurn(db, locationId) {
     loadRadar(db, locationId),
     db
       .from('churn_radar_snapshots')
-      .select('high_risk, created_at')
+      .select('high_risk, captured_at')
       .eq('location_id', locationId)
-      .order('created_at', { ascending: false })
+      .order('captured_at', { ascending: false })
       .limit(1)
       .maybeSingle(),
   ])

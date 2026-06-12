@@ -70,15 +70,17 @@ describe('classifyLowFillClasses', () => {
 
 describe('churnSnapshotDelta', () => {
   it('returns the rise/fall vs the previous snapshot', () => {
-    expect(churnSnapshotDelta(7, { high_risk: 5, created_at: '2026-06-08T06:00:00Z' }))
+    // The snapshots table's timestamp column is captured_at (verified
+    // against prod information_schema 2026-06-12) — NOT created_at.
+    expect(churnSnapshotDelta(7, { high_risk: 5, captured_at: '2026-06-08T06:00:00Z' }))
       .toEqual({ delta: 2, sinceIso: '2026-06-08T06:00:00Z' })
-    expect(churnSnapshotDelta(3, { high_risk: 5, created_at: '2026-06-08T06:00:00Z' }).delta)
+    expect(churnSnapshotDelta(3, { high_risk: 5, captured_at: '2026-06-08T06:00:00Z' }).delta)
       .toBe(-2)
   })
 
   it('returns null delta when there is no usable snapshot', () => {
     expect(churnSnapshotDelta(7, null)).toEqual({ delta: null, sinceIso: null })
-    expect(churnSnapshotDelta(7, { high_risk: undefined, created_at: 'x' }).delta).toBe(null)
+    expect(churnSnapshotDelta(7, { high_risk: undefined, captured_at: 'x' }).delta).toBe(null)
   })
 })
 
