@@ -58,6 +58,7 @@ export default function CustomerAgentSettingsPage() {
           ? { start: settings.quiet_hours.start, end: settings.quiet_hours.end, tz: settings.quiet_hours.tz || 'Europe/Dublin' }
           : null,
         booking_mode: settings.booking_mode === 'draft' ? 'draft' : 'auto',
+        agent_name: (settings.agent_name || '').trim() || null,
         handoff_cooldown_hours: settings.handoff_cooldown_hours ?? 12,
         consultation_event_type_id: settings.consultation_event_type_id || null,
       }
@@ -187,6 +188,17 @@ export default function CustomerAgentSettingsPage() {
             After the agent hands a conversation to a human, it stays out of that thread until a staff member
             resolves it in the inbox (which hands it straight back) — or until this many hours pass. 0 = only a
             resolve brings the agent back.
+          </p>
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-un1t-text mb-1">Agent name</label>
+          <input className={inputCls} maxLength={40} value={settings.agent_name || ''}
+            onChange={e => setField('agent_name', e.target.value)}
+            placeholder="Mia" />
+          <p className="text-xs text-un1t-subtle mt-1">
+            The agent introduces itself by this name as the studio&apos;s AI assistant on first contact
+            (Meta&apos;s AI-messaging rules require the disclosure).
           </p>
         </div>
 

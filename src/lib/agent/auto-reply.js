@@ -263,6 +263,7 @@ async function runChannelAgentInner(db, adapter, ctx) {
     const systemPrompt = buildCustomerSystemPrompt({
       businessName: 'UN1T',
       locationName: loc?.name || null,
+      agentName: settings?.agent_name || null,
       tone: settings?.tone || null,
       extraRules: settings?.extra_rules || null,
       knowledge: knowledge || [],
