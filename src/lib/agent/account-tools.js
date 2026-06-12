@@ -30,15 +30,14 @@ export const ACCOUNT_TOOLS = [
       'Call this when the customer asks about THEIR OWN account (membership status, plan, ' +
       'next class, recent attendance) and they have not been verified yet this ' +
       'conversation. Provide whatever identifying details the customer gives. Verification ' +
-      'needs a matching email together with the surname on the account, OR a matching date ' +
-      'of birth together with the surname. A matching email on its own is NOT enough. If it ' +
-      'fails, ask for the missing detail — usually the surname.',
+      'uses the email on their account together with their surname. NEVER ask for a date of ' +
+      'birth — the studio does not hold one. If it fails, ask for the missing detail — ' +
+      'usually the email on the account.',
     input_schema: {
       type: 'object',
       properties: {
         email: { type: 'string', description: 'Email the customer gives, matched against the email on their account.' },
-        date_of_birth: { type: 'string', description: 'Date of birth in YYYY-MM-DD form.' },
-        last_name: { type: 'string', description: 'Surname, used together with date of birth.' },
+        last_name: { type: 'string', description: 'Surname, matched against the account.' },
       },
     },
   },
@@ -114,36 +113,24 @@ export function normEmail(e) {
   return String(e || '').trim().toLowerCase()
 }
 
-function normDate(d) {
-  if (!d) return ''
-  const s = String(d).trim()
-  const m = /^(\d{4}-\d{2}-\d{2})/.exec(s)
-  return m ? m[1] : ''
-}
-
 function normName(n) {
   return String(n || '').trim().toLowerCase()
 }
 
 /**
  * Does the provided identity evidence match this contact? Pure.
- * Passing rule: matching email on file, OR (matching DOB AND matching
- * last name). DOB or last name alone never passes.
- * @param {object|null} contact  { email, dob, last_name }
- * @param {object} provided      { email, date_of_birth, last_name }
+ * Used for LINKED conversations only (the sender's number is already
+ * on the contact, so the channel is a factor): a matching email on
+ * file passes. DOB was removed 2026-06-12 — the studio doesn't gather
+ * dates of birth, so that branch could never match and only made the
+ * agent ask customers for something useless.
+ * @param {object|null} contact  { email }
+ * @param {object} provided      { email }
  */
 export function identityMatches(contact, provided) {
   if (!contact || !provided) return false
   const pe = normEmail(provided.email)
-  if (pe && normEmail(contact.email) && pe === normEmail(contact.email)) return true
-
-  const pdob = normDate(provided.date_of_birth)
-  const cdob = normDate(contact.dob)
-  const pln = normName(provided.last_name)
-  const cln = normName(contact.last_name)
-  if (pdob && cdob && pdob === cdob && pln && cln && pln === cln) return true
-
-  return false
+  return !!(pe && normEmail(contact.email) && pe === normEmail(contact.email))
 }
 
 /**
@@ -293,13 +280,13 @@ export async function executeAccountTool(toolName, input, ctx) {
     let candidate = null
     if (contactId) {
       const { data } = await db.from('contacts')
-        .select('id, email, dob, last_name')
+        .select('id, email, last_name')
         .eq('id', contactId)
         .maybeSingle()
       candidate = data || null
     } else if (normEmail(input?.email)) {
       const { data } = await db.from('contacts')
-        .select('id, email, dob, last_name')
+        .select('id, email, last_name')
         .eq('location_id', locationId)
         .ilike('email', normEmail(input.email))
         .limit(1)
@@ -317,7 +304,7 @@ export async function executeAccountTool(toolName, input, ctx) {
       ? identityMatches(candidate, input || {})
       : emailPathVerifies(candidate, input || {}, { nameHint: ctx.nameHint })
     if (!candidate || !matched) {
-      return { verified: false, hint: 'No match yet. Ask for the surname on the account together with the email, or their date of birth together with their surname. Never reveal which detail did or did not match.' }
+      return { verified: false, hint: 'No match yet. Ask for the email on the account together with the surname. Never ask for a date of birth. Never reveal which detail did or did not match.' }
     }
 
     await db.from(conversationsTable).update({
