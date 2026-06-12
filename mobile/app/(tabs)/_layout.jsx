@@ -51,7 +51,9 @@ export default function TabsLayout() {
   // Render config for every bar-capable (tabs) route.
   const TAB_META = {
     schedule: { title: 'Schedule', icon: 'calendar-outline' },
-    whatsapp: { title: 'WhatsApp', icon: 'chatbubble-outline' },
+    // Route stays /whatsapp (and gates on the whatsapp permission key)
+    // but the screen is the unified WhatsApp + Instagram inbox (M2/M3).
+    whatsapp: { title: 'Messages', icon: 'chatbubbles-outline' },
     studio:   { title: 'Studio',   icon: 'business-outline' },
     pipeline: { title: 'Pipeline', icon: 'trending-up-outline' },
     bookings: { title: 'Bookings', icon: 'calendar-clear-outline' },

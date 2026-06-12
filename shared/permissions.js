@@ -340,6 +340,7 @@ export const MOBILE_PERMISSIONS = Object.freeze([
   { key: 'notify_swap',        label: '… Swap requests',          hint: 'Notify on inbound swap requests and responses',                 mobileOnly: true, isNotify: true },
   { key: 'notify_lead',        label: '… New leads assigned',     hint: 'Notify when a new contact is created at your location',         mobileOnly: true, isNotify: true },
   { key: 'notify_whatsapp',    label: '… WhatsApp messages',      hint: 'Notify on inbound WhatsApp (subject to inbox permission)',      mobileOnly: true, isNotify: true },
+  { key: 'notify_instagram',   label: '… Instagram messages',     hint: 'Notify on inbound Instagram DMs (subject to inbox permission)', mobileOnly: true, isNotify: true },
   // Contractor invoice events (mig 101). Approved + declined go to
   // the contractor; FTE staff don't have an invoice flow so the
   // toggles are still listed but default off for non-contractors.
@@ -398,7 +399,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     churn_radar: true, lead_radar: true,
     push_notifications: true,
     notify_time_off: true, notify_schedule: true, notify_swap: true,
-    notify_lead: true, notify_whatsapp: true,
+    notify_lead: true, notify_whatsapp: true, notify_instagram: true,
     notify_invoice_approved: true, notify_invoice_declined: true,
     notify_shift_adjusted: true,
     notify_contract_issued: true,
@@ -425,7 +426,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     churn_radar: false, lead_radar: false,  // retention/acquisition oversight — not a staff surface
     push_notifications: true,
     notify_time_off: true, notify_schedule: true, notify_swap: true,
-    notify_lead: false, notify_whatsapp: false,
+    notify_lead: false, notify_whatsapp: false, notify_instagram: false,
     notify_invoice_approved: true, notify_invoice_declined: true,
     notify_shift_adjusted: true,
     notify_contract_issued: true,
@@ -453,7 +454,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     churn_radar: true, lead_radar: true,    // head coaches own retention + conversion
     push_notifications: true,
     notify_time_off: true, notify_schedule: true, notify_swap: true,
-    notify_lead: true, notify_whatsapp: true,
+    notify_lead: true, notify_whatsapp: true, notify_instagram: true,
     notify_invoice_approved: true, notify_invoice_declined: true,
     notify_shift_adjusted: true,
     notify_contract_issued: true,
@@ -481,7 +482,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     churn_radar: false, lead_radar: false,  // owner + head_coach by default; grant per-user if needed
     push_notifications: true,
     notify_time_off: true, notify_schedule: true, notify_swap: true,
-    notify_lead: true, notify_whatsapp: true,
+    notify_lead: true, notify_whatsapp: true, notify_instagram: true,
     notify_invoice_approved: true, notify_invoice_declined: true,
     notify_shift_adjusted: true,
     notify_contract_issued: true,
@@ -511,7 +512,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     churn_radar: true, lead_radar: true,
     push_notifications: true,
     notify_time_off: true, notify_schedule: true, notify_swap: true,
-    notify_lead: true, notify_whatsapp: true,
+    notify_lead: true, notify_whatsapp: true, notify_instagram: true,
     notify_invoice_approved: true, notify_invoice_declined: true,
     notify_shift_adjusted: true,
     notify_contract_issued: true,
