@@ -19,8 +19,10 @@ const nextConfig = {
   // the public-facing ones (/race/[slug], /race-pay/[paymentId])
   // because operators have shared signup links via email, calendar,
   // social posts, and QR codes — breaking them is unacceptable.
-  // The operator-internal ones (/races/*, /events/*) get the same
-  // treatment for muscle memory.
+  // The operator-internal ones (/races/*) get the same treatment
+  // for muscle memory. (The E2 /events aliases are gone — see the
+  // history note inside rewrites(); E3's real /events pages had
+  // made them permanently-dead afterFiles config.)
   //
   // What's NOT aliased and why:
   //   /api/cron/race-timing-events — Vercel cron config in vercel.json
@@ -49,17 +51,16 @@ const nextConfig = {
       { source: '/', has: [{ type: 'host', value: 'un1tdublin.com' }],     destination: '/welcome' },
       { source: '/', has: [{ type: 'host', value: 'www.un1tdublin.com' }], destination: '/welcome' },
 
-      // E2 back-compat: old Calendly templates URLs forever-aliased
-      { source: '/events',           destination: '/bookings/event-types' },
-      { source: '/events/new',       destination: '/bookings/event-types/new' },
-      // Note: /events/:id and /events/:id/edit would now collide with
-      // the new multi-kind events feature filesystem. /bookings/event-
-      // types/:id remains reachable directly; old operator-bookmark
-      // paths /events/:id are intentionally NOT aliased to avoid
-      // shadowing legitimate new event-detail routes. Old links go
-      // 404 — operators re-bookmark via the sidebar's "Bookings"
-      // entry. Acceptable because Calendly /events/[id] URLs are
-      // operator-internal admin pages, not externally shared.
+      // E2 history note: the old Calendly-templates aliases
+      // (/events → /bookings/event-types, /events/new → …/new) were
+      // REMOVED in June 2026 — they'd been dead config since E3
+      // recreated /events and /events/new as real filesystem pages.
+      // Plain-array rewrites are afterFiles, so the filesystem pages
+      // always won and the aliases never fired; they just read as if
+      // the Events feature was being redirected away. Old Calendly
+      // /events/:id operator bookmarks were already 404 by design
+      // (deliberately not aliased to avoid shadowing the new
+      // event-detail routes — operators re-bookmark via "Bookings").
 
       // E3 back-compat: race operator URLs forever-aliased
       { source: '/races',                 destination: '/events' },
