@@ -6,9 +6,18 @@ import { validateBody } from '@/lib/validate'
 import { MANAGER_ROLES } from '@/lib/schemas'
 
 // PATCH /api/agent/membership-requests/[id] — manager decides a queued
-// pause/cancellation. 'approved' + 'declined' apply to both kinds;
-// 'saved' is the retention outcome on a cancellation (member kept).
-// The actual Glofox change is made by staff manually after approving.
+// agent request. 'approved' + 'declined' apply to every kind; 'saved'
+// is the retention outcome on a cancellation (member kept).
+//
+// Pause/cancel: the actual Glofox change is made by staff manually
+// after approving (the Glofox API can't fully automate those yet).
+//
+// AGENT-HANDS.1 — class_booking: APPROVING EXECUTES. The route books
+// the class via the same live-probed createBooking the inbox Book tab
+// uses, lands the row on 'actioned' (or 'failed' with the Glofox
+// message_code kept verbatim in details.result), and the agent sends
+// the confirmation into the originating WhatsApp/Instagram thread —
+// staff touch exactly one button.
 
 const DecisionSchema = z.object({
   status: z.enum(['approved', 'declined', 'saved', 'actioned']),
@@ -26,7 +35,8 @@ export async function PATCH(request, { params }) {
 
   // Confirm the request belongs to a location this manager can act on.
   const { data: row } = await db.from('agent_membership_requests')
-    .select('id, location_id').eq('id', id).maybeSingle()
+    .select('id, location_id, kind, status, details, contact_id, channel, conversation_id')
+    .eq('id', id).maybeSingle()
   if (!row) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
   const allowed = getUserLocationIds(user) // null = master
   if (allowed !== null && !allowed.includes(row.location_id)) {
@@ -36,13 +46,60 @@ export async function PATCH(request, { params }) {
   const v = await validateBody(request, DecisionSchema)
   if (!v.ok) return v.response
 
+  let finalStatus = v.data.status
+  let details = row.details || {}
+  let executed = null
+
+  // AGENT-HANDS.1 — approving a drafted class booking executes it.
+  if (v.data.status === 'approved' && row.kind === 'class_booking' && row.status === 'pending') {
+    const { glofoxCredentialsForLocation, missingGlofoxCredentialsForLocation, createBooking, GLOFOX_BOOKING_MODEL } =
+      await import('@/lib/glofox')
+    const { data: contact } = await db.from('contacts')
+      .select('glofox_member_id')
+      .eq('id', row.contact_id)
+      .maybeSingle()
+    const creds = await glofoxCredentialsForLocation(db, row.location_id)
+    if (!contact?.glofox_member_id || !creds || missingGlofoxCredentialsForLocation(creds).length) {
+      finalStatus = 'failed'
+      details = { ...details, result: { ok: false, message_code: 'NOT_EXECUTABLE' } }
+    } else {
+      const result = await createBooking(creds, {
+        user_id: contact.glofox_member_id,
+        model: GLOFOX_BOOKING_MODEL,
+        model_id: details.event_id,
+      })
+      const messageCode = result?.body?.message_code || result?.body?.message || null
+      executed = { ok: result.ok, status: result.status, message_code: messageCode }
+      details = { ...details, result: executed }
+      finalStatus = result.ok ? 'actioned' : 'failed'
+
+      // Close the loop with the customer in-thread — best-effort.
+      if (result.ok && row.conversation_id) {
+        try {
+          const { sendAgentThreadMessage, buildBookingConfirmationText } = await import('@/lib/agent/notify')
+          await sendAgentThreadMessage(db, {
+            channel: row.channel,
+            conversationId: row.conversation_id,
+            text: buildBookingConfirmationText({
+              className: details.class_name,
+              classTime: details.class_time,
+            }),
+          })
+        } catch (e) {
+          console.warn(`[agent-requests] confirmation send error: ${e?.message || e}`)
+        }
+      }
+    }
+  }
+
   const { data, error } = await db.from('agent_membership_requests').update({
-    status: v.data.status,
+    status: finalStatus,
+    details,
     decision_note: v.data.decision_note?.trim() || null,
     decided_by: user.id,
     decided_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
-  }).eq('id', id).select('id, status, decided_at, decision_note').single()
+  }).eq('id', id).select('id, status, decided_at, decision_note, details').single()
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
-  return NextResponse.json({ success: true, request: data })
+  return NextResponse.json({ success: true, request: data, executed })
 }

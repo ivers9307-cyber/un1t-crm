@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
-import { dublinTodayStr, dublinNowMinutes, addDaysISO } from '@/lib/dublin-time'
+import { computeAvailableSlots } from '@/lib/booking-slots'
 
 // GET /api/public/bookings/:slug/slots?date=2026-04-28
 // Returns available time slots for a given date.
@@ -49,91 +49,12 @@ export async function GET(request, props) {
     return NextResponse.json({ success: false, error: 'Booking type not found' }, { status: 404 })
   }
 
-  // Range checks in Dublin time (string comparison on YYYY-MM-DD
-  // is lexically equivalent to date comparison).
-  const todayStr = dublinTodayStr()
-  const maxDateStr = addDaysISO(todayStr, event.max_advance_days)
-
-  if (date < todayStr) {
-    return NextResponse.json({ success: true, data: { date, slots: [] } })
-  }
-  if (date > maxDateStr) {
-    return NextResponse.json({ success: true, data: { date, slots: [] } })
-  }
-
-  // Day of week — parse the date string as UTC midnight and use
-  // getUTCDay() so the result is stable wherever this runs. The
-  // input date is a calendar date with no TZ; we just need its
-  // weekday.
-  const dayNames = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat']
-  const dayName = dayNames[new Date(date + 'T00:00:00Z').getUTCDay()]
-  const dayAvailability = event.availability[dayName]
-
-  if (!dayAvailability) {
-    return NextResponse.json({ success: true, data: { date, slots: [] } })
-  }
-
-  // Generate time slots
-  const slots = []
-  const [startH, startM] = dayAvailability.start.split(':').map(Number)
-  const [endH, endM] = dayAvailability.end.split(':').map(Number)
-  const startMinutes = startH * 60 + startM
-  const endMinutes = endH * 60 + endM
-  const step = event.duration_minutes + event.buffer_minutes
-
-  for (let m = startMinutes; m + event.duration_minutes <= endMinutes; m += step) {
-    const slotStart = `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`
-    const slotEndM = m + event.duration_minutes
-    const slotEnd = `${String(Math.floor(slotEndM / 60)).padStart(2, '0')}:${String(slotEndM % 60).padStart(2, '0')}`
-    slots.push({ start: slotStart, end: slotEnd })
-  }
-
-  // Remove slots that are already booked
-  const { data: existingBookings } = await db.from('bookings')
-    .select('start_time, end_time')
-    .eq('event_type_id', event.id)
-    .eq('booking_date', date)
-    .in('status', ['confirmed', 'completed'])
-
-  // Remove slots blocked by existing bookings
-  const { data: blockedTimes } = await db.from('blocked_times')
-    .select('start_time, end_time')
-    .eq('event_type_id', event.id)
-    .eq('blocked_date', date)
-
-  const bookedSlots = (existingBookings || []).map(b => ({
-    start: b.start_time.slice(0, 5),
-    end: b.end_time.slice(0, 5),
-  }))
-
-  const blocked = (blockedTimes || []).map(b => ({
-    start: b.start_time ? b.start_time.slice(0, 5) : '00:00',
-    end: b.end_time ? b.end_time.slice(0, 5) : '23:59',
-  }))
-
-  // Compute the past-time cutoff once if we're filtering today —
-  // dublinNowMinutes() runs an Intl format under the hood, no need
-  // to repeat it for every slot.
-  const isToday = date === todayStr
-  const nowMinutes = isToday ? dublinNowMinutes() : -1
-
-  const available = slots.filter(slot => {
-    // Check not booked
-    const isBooked = bookedSlots.some(b => slot.start < b.end && slot.end > b.start)
-    if (isBooked) return false
-
-    // Check not blocked
-    const isBlocked = blocked.some(b => slot.start < b.end && slot.end > b.start)
-    if (isBlocked) return false
-
-    // If date is today, filter out past times (Dublin clock).
-    if (isToday) {
-      const [slotH, slotM] = slot.start.split(':').map(Number)
-      if (slotH * 60 + slotM <= nowMinutes) return false
-    }
-
-    return true
-  })
+  // AGENT-HANDS.1 — the slot machinery (range checks, weekday lookup,
+  // generation, booked/blocked subtraction, today's past-time filter)
+  // was extracted verbatim to src/lib/booking-slots.js so the customer
+  // agent's consultation tools share the exact logic. Behaviour here
+  // is unchanged; see the lib for the Dublin-time incident notes.
+  const available = await computeAvailableSlots(db, event, date)
 
   return NextResponse.json({ success: true, data: { date, slots: available } })
 }

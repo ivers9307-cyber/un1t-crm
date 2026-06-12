@@ -31,7 +31,8 @@ import {
   AGENT_MESSAGE_SOURCE,
   DEFAULT_HOLDING_MESSAGE,
 } from './core'
-import { ACCOUNT_TOOLS, executeAccountTool } from './account-tools'
+import { ACCOUNT_TOOLS, ACCOUNT_TOOL_NAMES, executeAccountTool } from './account-tools'
+import { BOOKING_TOOLS, executeBookingTool } from './booking-tools'
 
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages'
 const AGENT_MODEL = 'claude-sonnet-4-6'
@@ -43,8 +44,12 @@ const AGENT_MODEL = 'claude-sonnet-4-6'
 // 2048-token minimum for claude-sonnet-4-6); the dynamic system + messages
 // after it stay uncached. Built once from the shared const so we never mutate
 // it. No anthropic-beta header needed — caching is GA on version 2023-06-01.
-const CACHED_ACCOUNT_TOOLS = ACCOUNT_TOOLS.map((tool, i) =>
-  i === ACCOUNT_TOOLS.length - 1
+// AGENT-HANDS.1 — the booking tools join the cached block. Still one
+// byte-identical stable prefix; the ephemeral marker moves to the last
+// tool of the COMBINED array so the whole block caches.
+const ALL_AGENT_TOOLS = [...ACCOUNT_TOOLS, ...BOOKING_TOOLS]
+const CACHED_ACCOUNT_TOOLS = ALL_AGENT_TOOLS.map((tool, i) =>
+  i === ALL_AGENT_TOOLS.length - 1
     ? { ...tool, cache_control: { type: 'ephemeral' } }
     : tool,
 )
@@ -222,6 +227,9 @@ export async function runChannelAgent(db, adapter, ctx) {
       locationId,
       channel: adapter.name,
       nameHint: (nameCol && conv?.[nameCol]) || null,
+      // AGENT-HANDS.1 — booking tools read the autonomy mode +
+      // consultation type from the agent settings blob.
+      settings,
     }
 
     let modelText = ''
@@ -256,7 +264,9 @@ export async function runChannelAgent(db, adapter, ctx) {
           const toolResults = []
           for (const block of content) {
             if (block.type !== 'tool_use') continue
-            const result = await executeAccountTool(block.name, block.input || {}, toolCtx)
+            const result = ACCOUNT_TOOL_NAMES.has(block.name)
+              ? await executeAccountTool(block.name, block.input || {}, toolCtx)
+              : await executeBookingTool(block.name, block.input || {}, toolCtx)
             if (block.name === 'verify_identity' && result?.verified) {
               // Re-read the contact id the server just stamped so the
               // follow-up lookups in this same turn are authorised.

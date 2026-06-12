@@ -52,6 +52,7 @@ import { shiftSwapsProvider } from './providers/shift-swaps'
 import { rostersProvider } from './providers/rosters'
 import { invoicesQueueProvider } from './providers/invoices-queue'
 import { issuesProvider } from './providers/issues'
+import { agentRequestsProvider } from './providers/agent-requests'
 
 export const APPROVALS_PROVIDERS = Object.freeze([
   // BOOKKEEPER-APPROVALS.1 — invoices_queue tab first so bookkeepers
@@ -65,6 +66,9 @@ export const APPROVALS_PROVIDERS = Object.freeze([
   // expenses (operational items needing handler action) ahead of
   // schedule-side items.
   issuesProvider,
+  // AGENT-HANDS.1 — customer-agent requests (pause / cancel /
+  // class-booking drafts). Time-sensitive, so they ride the badge.
+  agentRequestsProvider,
   timeOffProvider,
   shiftSwapsProvider,
   rostersProvider,
