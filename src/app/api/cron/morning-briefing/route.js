@@ -26,7 +26,8 @@ import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { sendEmail } from '@/lib/postmark'
 import { getAppUrl } from '@/lib/app-url'
 import { fetchLocationTodayFeed } from '@/lib/today-feed-data'
-import { buildMorningBriefingEmail } from '@/lib/morning-briefing'
+import { fetchStudioPulse } from '@/lib/studio-pulse-data'
+import { buildMorningBriefingEmail, shapePulseMetrics } from '@/lib/morning-briefing'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -66,11 +67,17 @@ export async function GET(request) {
     if (recipients.length === 0) continue // briefing off for this location
 
     try {
-      const rows = await fetchLocationTodayFeed(db, loc.id)
+      // BRIEFING.2 — the pulse strip is best-effort (fetchStudioPulse
+      // returns null on failure); the triage list is the core payload.
+      const [rows, pulseBundle] = await Promise.all([
+        fetchLocationTodayFeed(db, loc.id),
+        fetchStudioPulse(db, loc.id),
+      ])
       const { subject, html } = buildMorningBriefingEmail(rows, {
         locationName: loc.name,
         dateLabel,
         appUrl,
+        pulse: pulseBundle ? shapePulseMetrics(pulseBundle) : [],
       })
       for (const to of recipients) {
         await sendEmail({ to, subject, htmlBody: html, stream: 'outbound', tag: 'morning-briefing' })
