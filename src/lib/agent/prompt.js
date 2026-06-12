@@ -175,7 +175,7 @@ export function buildKnowledgeBlock(entries) {
  * @returns {string}
  */
 export function buildCustomerSystemPrompt(opts = {}) {
-  const { businessName, locationName, tone, extraRules, knowledge, today, agentName } = opts
+  const { businessName, locationName, tone, extraRules, knowledge, today, agentName, membershipUrl } = opts
   const name = String(agentName || '').trim()
   const identity = name
     ? `You are ${name}, the AI assistant for ${businessName || 'UN1T'}, a boutique fitness studio.`
@@ -197,6 +197,12 @@ export function buildCustomerSystemPrompt(opts = {}) {
     )
   }
 
+  if (membershipUrl) {
+    parts.push(
+      '## Joining the studio (membership sign-up link)\n' +
+      `When someone wants to JOIN or asks how to become a member, share the membership sign-up link: ${membershipUrl} — sign-up and payment happen securely there. Answer pricing questions only from the studio knowledge; if the knowledge doesn't cover it, share the link and offer the team. Never invent prices.`,
+    )
+  }
   if (tone && tone.trim()) parts.push('## Tone & voice (from the studio)\n' + tone.trim())
   if (extraRules && extraRules.trim()) parts.push('## Extra rules (from the studio)\n' + extraRules.trim())
 

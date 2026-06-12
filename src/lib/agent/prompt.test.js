@@ -113,3 +113,16 @@ describe('events section', () => {
     expect(out).toMatch(/never collect payment details in chat/i)
   })
 })
+
+// AGENT-MEMSALES.1 — editable membership signup link.
+describe('membership signup link', () => {
+  it('renders the link and share-when-joining guidance when configured', () => {
+    const out = buildCustomerSystemPrompt({ membershipUrl: 'https://example.com/join' })
+    expect(out).toMatch(/https:\/\/example\.com\/join/)
+    expect(out).toMatch(/membership sign-up link/i)
+  })
+  it('omits the section when no link is configured', () => {
+    const out = buildCustomerSystemPrompt({})
+    expect(out).not.toMatch(/membership sign-up link/i)
+  })
+})

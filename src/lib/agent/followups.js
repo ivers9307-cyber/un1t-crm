@@ -270,6 +270,7 @@ async function composeAgentText(location, settings, historyRows, instruction) {
     businessName: 'UN1T',
     locationName: location.name,
     agentName: settings?.agent_name || null,
+    membershipUrl: settings?.membership_signup_url || null,
     tone: settings?.tone || null,
     extraRules: settings?.extra_rules || null,
     today: new Date().toDateString(),

@@ -59,6 +59,7 @@ export default function CustomerAgentSettingsPage() {
           : null,
         booking_mode: settings.booking_mode === 'draft' ? 'draft' : 'auto',
         agent_name: (settings.agent_name || '').trim() || null,
+        membership_signup_url: (settings.membership_signup_url || '').trim() || null,
         handoff_cooldown_hours: settings.handoff_cooldown_hours ?? 12,
         consultation_event_type_id: settings.consultation_event_type_id || null,
         followups: {
@@ -230,6 +231,18 @@ export default function CustomerAgentSettingsPage() {
           <p className="text-xs text-un1t-subtle mt-1">
             The agent introduces itself by this name as the studio&apos;s AI assistant on first contact
             (Meta&apos;s AI-messaging rules require the disclosure).
+          </p>
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-un1t-text mb-1">Membership sign-up link</label>
+          <input className={inputCls} maxLength={512} value={settings.membership_signup_url || ''}
+            onChange={e => setField('membership_signup_url', e.target.value)}
+            placeholder="https://…" />
+          <p className="text-xs text-un1t-subtle mt-1">
+            Shared when someone wants to join — sign-up and payment happen on this page. Update it
+            here any time (offers, new landing pages); leave blank and the agent hands membership
+            sign-ups to the team instead.
           </p>
         </div>
 
