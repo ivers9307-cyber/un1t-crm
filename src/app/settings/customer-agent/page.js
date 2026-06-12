@@ -70,21 +70,29 @@ export default function CustomerAgentSettingsPage() {
   }
 
   async function addEntry() {
-    const res = await fetch('/api/agent/knowledge', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ category: 'sales', title: 'New entry', content: '', enabled: true }),
-    })
-    const j = await res.json()
-    if (j.success) setEntries(e => [...e, j.entry])
+    setError(null)
+    try {
+      const res = await fetch('/api/agent/knowledge', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ category: 'sales', title: 'New entry', content: '', enabled: true }),
+      })
+      const j = await res.json()
+      if (j.success) setEntries(e => [...e, j.entry])
+      else setError(j.error || 'Could not add the entry')
+    } catch { setError('Could not add the entry') }
   }
   function editLocal(id, patch) {
     setEntries(e => e.map(x => x.id === id ? { ...x, ...patch } : x))
   }
   async function persist(id, patch) {
     editLocal(id, patch)
-    await fetch(`/api/agent/knowledge/${id}`, {
-      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch),
-    })
+    try {
+      const res = await fetch(`/api/agent/knowledge/${id}`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch),
+      })
+      const j = await res.json()
+      if (!j.success) setError(j.error || 'Could not save the entry')
+    } catch { setError('Could not save the entry') }
   }
   async function deleteEntry(id) {
     setEntries(e => e.filter(x => x.id !== id))
@@ -208,10 +216,10 @@ export default function CustomerAgentSettingsPage() {
       </section>
 
       {/* ── Knowledge ─────────────────────────────────────── */}
-      <section>
-        <div className="flex items-center justify-between mb-3">
+      <section className="border border-un1t-border rounded-lg p-5 mt-6">
+        <div className="flex items-center justify-between mb-2">
           <h2 className="text-base font-semibold text-un1t-text">Knowledge</h2>
-          <button onClick={addEntry}
+          <button type="button" onClick={addEntry}
             className="text-sm border border-un1t-border rounded-md px-3 py-1.5 text-un1t-text hover:bg-un1t-bg">
             + Add entry
           </button>
