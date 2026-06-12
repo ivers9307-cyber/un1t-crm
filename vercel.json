@@ -123,6 +123,10 @@
     {
       "path": "/api/cron/sync-class-knowledge",
       "schedule": "0 6 * * 1"
+    },
+    {
+      "path": "/api/cron/agent-followups",
+      "schedule": "*/15 * * * *"
     }
   ]
 }

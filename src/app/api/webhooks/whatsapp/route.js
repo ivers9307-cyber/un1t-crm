@@ -310,6 +310,9 @@ async function handleIncomingMessage(db, message, contacts, phoneNumberId) {
     last_message_preview: body?.substring(0, 100) || `[${messageType}]`,
     unread_count: (currentConv?.unread_count || 0) + 1,
     resolved_at: null,
+    // AGENT-FOLLOWUP.1 — a reply ends the quiet-cycle: the ladder
+    // starts fresh from this message.
+    agent_followup_stage: 0,
   }).eq('id', conversationId)
 
   // Consent keywords — the broadcast footer promises "Reply STOP to
