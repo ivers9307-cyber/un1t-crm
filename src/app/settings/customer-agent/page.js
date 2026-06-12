@@ -57,6 +57,8 @@ export default function CustomerAgentSettingsPage() {
         quiet_hours: settings.quiet_hours?.start && settings.quiet_hours?.end
           ? { start: settings.quiet_hours.start, end: settings.quiet_hours.end, tz: settings.quiet_hours.tz || 'Europe/Dublin' }
           : null,
+        booking_mode: settings.booking_mode === 'draft' ? 'draft' : 'auto',
+        consultation_event_type_id: settings.consultation_event_type_id || null,
       }
       const res = await fetch('/api/settings/customer-agent', {
         method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
@@ -132,6 +134,18 @@ export default function CustomerAgentSettingsPage() {
               onChange={e => setField('test_phones', e.target.value.split(',').map(s => s.trim()).filter(Boolean))}
               placeholder="+353871234567, +353879999999" />
           </div>
+        </div>
+
+        {/* AGENT-HANDS.1 — class-booking autonomy. Consultations for
+            new leads are always autonomous; this controls member
+            CLASS bookings only. */}
+        <div>
+          <label className="block text-sm font-medium text-un1t-text mb-1">Class bookings</label>
+          <select className={inputCls} value={settings.booking_mode === 'draft' ? 'draft' : 'auto'}
+            onChange={e => setField('booking_mode', e.target.value)}>
+            <option value="auto">Book immediately (agent books verified members straight in)</option>
+            <option value="draft">Queue for approval (one tap in Approvals books it + confirms to the member)</option>
+          </select>
         </div>
 
         <div>

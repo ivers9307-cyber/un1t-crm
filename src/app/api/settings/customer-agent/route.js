@@ -19,6 +19,14 @@ const DEFAULTS = {
   holding_message: null,
   quiet_hours: null,
   limits: null,
+  // AGENT-HANDS.1 — class-booking autonomy. 'auto' (default) books a
+  // verified member's class immediately; 'draft' queues it for a
+  // one-tap staff approval (which executes it). Consultations are
+  // always autonomous. consultation_event_type_id optionally pins the
+  // consultation booking type (otherwise name-matched consult/intro/
+  // taster).
+  booking_mode: 'auto',
+  consultation_event_type_id: null,
 }
 
 const SettingsSchema = z.object({
@@ -38,6 +46,8 @@ const SettingsSchema = z.object({
     max_replies_per_conversation_per_hour: z.number().int().min(1).max(1000).optional(),
     max_replies_per_location_per_day: z.number().int().min(1).max(100000).optional(),
   }).nullable().optional(),
+  booking_mode: z.enum(['auto', 'draft']).optional().default('auto'),
+  consultation_event_type_id: z.string().max(64).nullable().optional(),
 })
 
 export async function GET() {
@@ -80,6 +90,8 @@ export async function PUT(request) {
     holding_message: v.data.holding_message?.trim() || null,
     quiet_hours: v.data.quiet_hours || null,
     limits: v.data.limits || null,
+    booking_mode: v.data.booking_mode === 'draft' ? 'draft' : 'auto',
+    consultation_event_type_id: v.data.consultation_event_type_id || null,
   }
 
   await db.from('locations').update({ settings }).eq('id', locationId).select('id').single()
