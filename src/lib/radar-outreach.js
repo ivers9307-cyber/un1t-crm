@@ -16,7 +16,7 @@
 // The pure helpers (extract / sendable / components) are split out for
 // unit testing; sendRadarOutreach does the DB lookup + the send.
 
-import { headerComponentFor, sendTemplateMessage } from '@/lib/whatsapp'
+import { headerComponentFor, sendTemplateMessage, getOrCreateConversation } from '@/lib/whatsapp'
 
 /**
  * Pull the body text + variable shape out of a whatsapp_templates
@@ -87,6 +87,22 @@ export function buildBodyComponents(varCount, firstName) {
   return [{ type: 'body', parameters: [{ type: 'text', text: name }] }]
 }
 
+/**
+ * Render the template body as the contact will actually read it —
+ * every body variable substituted with the first name (mirrors
+ * buildBodyComponents). Recorded on the conversation so the inbox and
+ * the customer agent both see the REAL outreach text, not a
+ * placeholder. Pure. Returns null when the template has no body.
+ */
+export function renderRadarBody(template, firstName) {
+  const { bodyText } = extractTemplateBody(template?.components)
+  if (!bodyText) return null
+  // Every body variable gets the first name (mirrors buildBodyComponents),
+  // and a repeated {{1}} renders on every occurrence — Meta reuses one
+  // param for repeated indices, so this matches what the contact reads.
+  return bodyText.replace(/\{\{\d+\}\}/g, firstName)
+}
+
 /** First name from a contact row, with a friendly fallback. */
 function firstNameOf(contact) {
   if (contact?.first_name && String(contact.first_name).trim()) {
@@ -146,5 +162,33 @@ export async function sendRadarOutreach({ db, contact, templateName, locationId 
     components,
     { locationId },
   )
+
+  // RADAR-THREAD.1 — land the outreach in the conversation thread, like
+  // every other outbound WA path (broadcasts, drips, sequence steps).
+  // Without this, a reply to the outreach reached the customer agent
+  // and the inbox with ZERO context — the agent couldn't know what the
+  // customer was responding to. Best-effort: a recording failure never
+  // fails the send the operator just clicked.
+  try {
+    const conversationId = await getOrCreateConversation(db, contact, locationId)
+    if (conversationId && res?.messageId) {
+      const { error: recErr } = await db.from('whatsapp_messages').insert({
+        conversation_id: conversationId,
+        contact_id: contact.id,
+        location_id: locationId,
+        wa_message_id: res.messageId,
+        direction: 'outbound',
+        message_type: 'template',
+        template_name: template.name,
+        body: renderRadarBody(template, firstNameOf(contact)) || `[Template: ${template.name}]`,
+        status: 'sent',
+        sent_at: new Date().toISOString(),
+      })
+      if (recErr) console.error('[radar-outreach] failed to record outreach in thread:', recErr.message)
+    }
+  } catch (e) {
+    console.error('[radar-outreach] thread recording failed:', e?.message || e)
+  }
+
   return { messageId: res?.messageId || null, templateName: template.name }
 }
