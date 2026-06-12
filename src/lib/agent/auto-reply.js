@@ -123,11 +123,28 @@ async function countAgentReplies(db, adapter, { field, value, sinceIso }) {
 /**
  * Generic per-channel agent turn.
  *
+ * Thin wrapper over the real runner purely so every "agent stayed
+ * silent" outcome leaves one structured, greppable log line. Skip
+ * reasons used to return invisibly — the 2026-06-12 incident took
+ * hours to diagnose because nothing said WHY the agent didn't reply.
+ *
  * @param {import('@supabase/supabase-js').SupabaseClient} db
  * @param {object} adapter  channel adapter (see whatsappAdapter / instagramAdapter)
  * @param {object} ctx
  */
 export async function runChannelAgent(db, adapter, ctx) {
+  const result = await runChannelAgentInner(db, adapter, ctx)
+  if (result?.handled === false) {
+    console.warn('[radar-agent] no-reply', JSON.stringify({
+      channel: adapter.name,
+      conversationId: ctx?.conversationId || null,
+      reason: result.reason || 'unknown',
+    }))
+  }
+  return result
+}
+
+async function runChannelAgentInner(db, adapter, ctx) {
   const { conversationId, locationId, recipient, contactId, messageType, body, connection } = ctx
 
   const apiKey = process.env.ANTHROPIC_API_KEY
@@ -307,7 +324,8 @@ export async function runChannelAgent(db, adapter, ctx) {
       return { handled: true, action: 'handoff', reason: parsed.reason }
     }
 
-    await sendAndLog(db, adapter, { ...common, text: parsed.text })
+    const sent = await sendAndLog(db, adapter, { ...common, text: parsed.text })
+    if (!sent) return { handled: false, reason: 'send_failed' }
     return { handled: true, action: 'reply' }
   } finally {
     await releaseAgentTurn(db, adapter, conversationId)
@@ -315,14 +333,18 @@ export async function runChannelAgent(db, adapter, ctx) {
 }
 
 // Send an agent reply + persist it + update the conversation.
-async function sendAndLog(db, adapter, { conversationId, locationId, recipient, contactId, connection, text }) {
+// Returns true only when the provider accepted the send — false means
+// the customer got NOTHING and the caller must report it (a swallowed
+// send failure here returned { handled: true } during the 2026-06-12
+// dead-token incident and hid the outage from every surface).
+export async function sendAndLog(db, adapter, { conversationId, locationId, recipient, contactId, connection, text }) {
   let messageId = null
   try {
     const r = await adapter.send(recipient, text, { locationId, connection })
     messageId = r?.messageId || null
   } catch (err) {
     console.error(`[radar-agent] ${adapter.name} send failed`, err?.message)
-    return
+    return false
   }
 
   const now = new Date().toISOString()
@@ -335,6 +357,7 @@ async function sendAndLog(db, adapter, { conversationId, locationId, recipient, 
     last_message_preview: text.substring(0, 100),
     agent_last_reply_at: now,
   }).eq('id', conversationId)
+  return true
 }
 
 // Escalate: holding message, stop the agent on this thread, notify staff.
