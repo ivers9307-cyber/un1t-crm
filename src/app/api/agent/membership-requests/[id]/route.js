@@ -50,6 +50,29 @@ export async function PATCH(request, { params }) {
   let details = row.details || {}
   let executed = null
 
+  // AGENT-EVENTS.3 — approving a drafted PAID-entry cancellation
+  // executes it. The refund (if any) stays a human decision processed
+  // manually in Revolut Business — this only frees the spot.
+  if (v.data.status === 'approved' && row.kind === 'event_cancellation' && row.status === 'pending') {
+    const { cancelRaceRegistration } = await import('@/lib/race-cancel')
+    const result = await cancelRaceRegistration(db, details.registration_id)
+    executed = { ok: result.ok, error: result.error || null }
+    details = { ...details, result: executed }
+    finalStatus = result.ok ? 'actioned' : 'failed'
+    if (result.ok && row.conversation_id) {
+      try {
+        const { sendAgentThreadMessage, buildCancellationConfirmationText } = await import('@/lib/agent/notify')
+        await sendAgentThreadMessage(db, {
+          channel: row.channel,
+          conversationId: row.conversation_id,
+          text: buildCancellationConfirmationText({ className: details.event_name, classTime: details.event_date }),
+        })
+      } catch (e) {
+        console.warn(`[agent-requests] event cancellation confirmation send error: ${e?.message || e}`)
+      }
+    }
+  }
+
   // AGENT-EVENTS.2 — approving a drafted event booking executes it.
   if (v.data.status === 'approved' && row.kind === 'event_booking' && row.status === 'pending') {
     const { registerSoloEventEntry } = await import('@/lib/race-register-solo')

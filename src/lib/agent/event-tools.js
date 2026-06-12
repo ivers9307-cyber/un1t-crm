@@ -52,6 +52,41 @@ export const EVENT_TOOLS = [
       required: ['event_id'],
     },
   },
+  {
+    name: 'cancel_event_registration',
+    description:
+      "Cancel one of the customer's own upcoming event registrations from " +
+      'get_my_event_registrations. CRITICAL: restate the exact event and date and get a clear ' +
+      'yes before calling. FREE entries cancel immediately. PAID entries are passed to the ' +
+      'team to confirm (they also handle any refund question) — tell the customer the team ' +
+      "will confirm shortly and NEVER promise a refund yourself.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        registration_id: { type: 'string', description: 'The registration_id from get_my_event_registrations.' },
+        event_name: { type: 'string', description: 'The event name you confirmed with the customer.' },
+        event_date: { type: 'string', description: 'The date you confirmed.' },
+      },
+      required: ['registration_id'],
+    },
+  },
+  {
+    name: 'reschedule_event_wave',
+    description:
+      "Move the customer's registration to a DIFFERENT START WAVE of the SAME event (e.g. from " +
+      'the 9am wave to the 10:30 wave), capacity permitting. Get the wave_id from ' +
+      'list_upcoming_events and confirm the new time with them first. Moving to a different ' +
+      'EVENT is a cancel + a new booking — handle those separately with their own confirmations.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        registration_id: { type: 'string', description: 'The registration_id from get_my_event_registrations.' },
+        new_wave_id: { type: 'string', description: 'The target wave_id from list_upcoming_events.' },
+        new_wave_time: { type: 'string', description: 'The new wave time you confirmed with the customer.' },
+      },
+      required: ['registration_id', 'new_wave_id'],
+    },
+  },
 ]
 
 export const EVENT_TOOL_NAMES = new Set(EVENT_TOOLS.map(t => t.name))
@@ -99,6 +134,18 @@ export function eventOpenForRegistration(race, nowMs) {
 export function waveSpotsLeft(wave, taken) {
   if (wave?.capacity == null) return null
   return Math.max(0, wave.capacity - (Number(taken) || 0))
+}
+
+/**
+ * AGENT-EVENTS.3 — how a cancellation request routes. Free entries
+ * cancel directly; paid entries go to human approval (refunds are
+ * decided per case by the team — Richard, 2026-06-12). Pure.
+ */
+export function classifyEventCancellation({ isOwner, status, eventDate, paidCents, nowMs } = {}) {
+  if (!isOwner) return { action: null, reason: 'not_yours' }
+  if (status === 'cancelled' || status === 'no_show') return { action: null, reason: 'already_cancelled' }
+  if (!eventDate || String(eventDate) < dublinToday(nowMs)) return { action: null, reason: 'event_past' }
+  return (Number(paidCents) || 0) > 0 ? { action: 'draft' } : { action: 'direct' }
 }
 
 const DUBLIN_DATE_FMT = new Intl.DateTimeFormat('en-IE', {
@@ -328,6 +375,89 @@ export async function executeEventTool(toolName, input, ctx) {
       return { error: 'bad_wave', message: result.message || 'Pick a wave from list_upcoming_events.' }
     }
     return { booked: false, reason: result.reason, message: 'The registration did not go through — relay honestly and offer a handoff.' }
+  }
+
+  if (toolName === 'cancel_event_registration' || toolName === 'reschedule_event_wave') {
+    const targetContactId = verifiedContactId || contactId || null
+    if (!targetContactId) {
+      return { error: 'no_contact', message: 'No contact linked to this conversation — hand off to the team.' }
+    }
+    const { data: reg } = await db.from('race_registrations')
+      .select('id, status, contact_id, wave_id, race_events!inner(id, name, race_date, location_id)')
+      .eq('id', String(input?.registration_id || ''))
+      .eq('race_events.location_id', locationId)
+      .maybeSingle()
+    if (!reg) return { error: 'not_found', message: 'That registration was not found — re-check get_my_event_registrations.' }
+
+    if (toolName === 'reschedule_event_wave') {
+      if (reg.contact_id !== targetContactId) {
+        return { error: 'not_yours', message: 'That registration belongs to someone else — hand off to the team.' }
+      }
+      const { moveRegistrationWave } = await import('@/lib/race-cancel')
+      const result = await moveRegistrationWave(db, reg.id, String(input?.new_wave_id || ''))
+      await logEventRequest(db, ctx, {
+        kind: 'event_booking',
+        status: result.ok ? 'actioned' : 'failed',
+        details: { action: 'reschedule_wave', registration_id: reg.id, event_name: reg.race_events.name, new_wave_id: input?.new_wave_id || null, result },
+      })
+      if (result.ok) {
+        return { rescheduled: true, event_name: reg.race_events.name, new_wave_time: input?.new_wave_time || null }
+      }
+      if (result.error === 'wave_full') {
+        return { rescheduled: false, reason: 'wave_full', message: 'That wave is full — offer another wave from the list.' }
+      }
+      if (result.error === 'wrong_event') {
+        return { error: 'wrong_event', message: 'That wave belongs to a different event — a different event is a cancel + new booking.' }
+      }
+      return { rescheduled: false, reason: result.error, message: 'The move did not go through — relay honestly and offer a handoff.' }
+    }
+
+    // cancel_event_registration
+    const { registrationPaidCents, cancelRaceRegistration } = await import('@/lib/race-cancel')
+    const paidCents = await registrationPaidCents(db, reg.id)
+    const decision = classifyEventCancellation({
+      isOwner: reg.contact_id === targetContactId,
+      status: reg.status,
+      eventDate: String(reg.race_events.race_date),
+      paidCents,
+      nowMs: Date.now(),
+    })
+    const auditDetails = {
+      registration_id: reg.id,
+      event_id: reg.race_events.id,
+      event_name: input?.event_name || reg.race_events.name,
+      event_date: input?.event_date || String(reg.race_events.race_date),
+      paid_cents: paidCents,
+    }
+    if (decision.action === 'direct') {
+      const result = await cancelRaceRegistration(db, reg.id)
+      await logEventRequest(db, ctx, {
+        kind: 'event_cancellation',
+        status: result.ok ? 'actioned' : 'failed',
+        details: { ...auditDetails, mode: 'auto', result },
+      })
+      return result.ok
+        ? { cancelled: true, event_name: auditDetails.event_name, event_date: auditDetails.event_date }
+        : { cancelled: false, message: 'The cancellation did not go through — relay honestly and offer a handoff.' }
+    }
+    if (decision.action === 'draft') {
+      await logEventRequest(db, ctx, {
+        kind: 'event_cancellation',
+        status: 'pending',
+        details: { ...auditDetails, mode: 'draft' },
+      })
+      return {
+        requested: true,
+        message: 'This was a PAID entry, so the team will confirm the cancellation and handle any refund question. Tell the customer they will hear back shortly — never promise a refund.',
+      }
+    }
+    if (decision.reason === 'not_yours') {
+      return { error: 'not_yours', message: 'That registration belongs to someone else — hand off to the team.' }
+    }
+    if (decision.reason === 'already_cancelled') {
+      return { cancelled: true, message: 'It was already cancelled — confirm that warmly.' }
+    }
+    return { cancelled: false, reason: decision.reason, message: 'This event has already taken place — nothing to cancel.' }
   }
 
   return { error: 'unknown_tool', tool: toolName }

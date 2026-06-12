@@ -7,13 +7,14 @@ import {
   shapeMyRegistrationsForAgent,
   eventOpenForRegistration,
   waveSpotsLeft,
+  classifyEventCancellation,
 } from './event-tools'
 
 const now = Date.UTC(2026, 5, 12, 12, 0, 0)
 
 describe('EVENT_TOOLS', () => {
   it('declares the event tools', () => {
-    expect(EVENT_TOOLS.map(t => t.name)).toEqual(['list_upcoming_events', 'get_my_event_registrations', 'book_event'])
+    expect(EVENT_TOOLS.map(t => t.name)).toEqual(['list_upcoming_events', 'get_my_event_registrations', 'book_event', 'cancel_event_registration', 'reschedule_event_wave'])
   })
 })
 
@@ -117,5 +118,22 @@ describe('waveSpotsLeft', () => {
     expect(waveSpotsLeft({ capacity: 20 }, 5)).toBe(15)
     expect(waveSpotsLeft({ capacity: 2 }, 2)).toBe(0)
     expect(waveSpotsLeft({ capacity: null }, 99)).toBeNull()
+  })
+})
+
+// AGENT-EVENTS.3 — cancellation routing: free = direct, paid = human
+// approval (refunds are decided per case by the team — Richard).
+describe('classifyEventCancellation', () => {
+  const base = { isOwner: true, status: 'confirmed', eventDate: '2026-06-20', paidCents: 0, nowMs: now }
+  it('cancels free entries directly', () => {
+    expect(classifyEventCancellation(base)).toEqual({ action: 'direct' })
+  })
+  it('routes paid entries to human approval', () => {
+    expect(classifyEventCancellation({ ...base, paidCents: 3500 })).toEqual({ action: 'draft' })
+  })
+  it('refuses non-owners, finished events and dead registrations', () => {
+    expect(classifyEventCancellation({ ...base, isOwner: false }).reason).toBe('not_yours')
+    expect(classifyEventCancellation({ ...base, eventDate: '2026-06-01' }).reason).toBe('event_past')
+    expect(classifyEventCancellation({ ...base, status: 'cancelled' }).reason).toBe('already_cancelled')
   })
 })
