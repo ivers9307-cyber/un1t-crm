@@ -103,3 +103,13 @@ describe('multilingual replies', () => {
     expect(out).toMatch(/class names/i)
   })
 })
+
+// AGENT-EVENTS.1 — events guidance with the answer-first suggestion rule.
+describe('events section', () => {
+  it('teaches event tools and the answer-first suggestion rule', () => {
+    const out = buildCustomerSystemPrompt({})
+    expect(out).toMatch(/list_upcoming_events/)
+    expect(out).toMatch(/answer the customer's actual question FIRST/i)
+    expect(out).toMatch(/never collect payment details in chat/i)
+  })
+})
