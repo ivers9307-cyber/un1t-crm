@@ -141,6 +141,15 @@ export function buildCustomerSystemPrompt(opts = {}) {
   if (today) ctx.push(`- Today's date: ${today}`)
   if (ctx.length) parts.push('## Context\n' + ctx.join('\n'))
 
+  // AGENT-AUTH.1 — WhatsApp phone match: the sender IS the member. This
+  // section overrides the verification steps in the base prompt above.
+  if (opts.identityPreverified) {
+    parts.push(
+      '## Identity — already verified\n' +
+      'This customer is messaging from the phone number on their membership, so they are ALREADY VERIFIED — the studio system confirmed it. This overrides the verification steps above: do NOT ask for their email, date of birth or surname, and do NOT call verify_identity. Use the account and booking tools directly and answer their own-account questions right away. (Everything else still applies: no billing details, no other people\'s accounts.)'
+    )
+  }
+
   if (tone && tone.trim()) parts.push('## Tone & voice (from the studio)\n' + tone.trim())
   if (extraRules && extraRules.trim()) parts.push('## Extra rules (from the studio)\n' + extraRules.trim())
 

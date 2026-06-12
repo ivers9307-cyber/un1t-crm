@@ -10,6 +10,7 @@ import {
   parseAgentResponse,
   isVerificationFresh,
   DEFAULT_HOLDING_MESSAGE,
+  autoVerifyContactId,
 } from './core'
 import { HANDOFF_PREFIX, OPTIONS_PREFIX } from './prompt'
 
@@ -202,6 +203,35 @@ describe('parseAgentResponse', () => {
   it('handoff beats options', () => {
     const r = parseAgentResponse(`${HANDOFF_PREFIX} reason\n${OPTIONS_PREFIX} a | b`)
     expect(r.action).toBe('handoff')
+  })
+})
+
+// AGENT-AUTH.1 — WhatsApp phone-number authentication. Meta has already
+// authenticated the sender's number (SIM-bound), so on WhatsApp a sender
+// whose number maps to EXACTLY ONE contact — the one the conversation is
+// linked to — is treated as verified without the email/DOB questions.
+// Ambiguous numbers (couples sharing a phone) and Instagram (no phone)
+// keep the question-based verify_identity flow.
+describe('autoVerifyContactId', () => {
+  const base = { trusted: true, conversationContactId: 'c1', matches: [{ id: 'c1' }] }
+  it('verifies a trusted channel with a single agreeing phone match', () => {
+    expect(autoVerifyContactId(base)).toBe('c1')
+  })
+  it('returns null on untrusted channels (Instagram)', () => {
+    expect(autoVerifyContactId({ ...base, trusted: false })).toBeNull()
+  })
+  it('returns null when the conversation has no linked contact', () => {
+    expect(autoVerifyContactId({ ...base, conversationContactId: null })).toBeNull()
+  })
+  it('returns null when the number matches more than one contact', () => {
+    expect(autoVerifyContactId({ ...base, matches: [{ id: 'c1' }, { id: 'c2' }] })).toBeNull()
+  })
+  it('returns null when the single match is a different contact than the thread is linked to', () => {
+    expect(autoVerifyContactId({ ...base, matches: [{ id: 'c2' }] })).toBeNull()
+  })
+  it('returns null on empty/missing matches', () => {
+    expect(autoVerifyContactId({ ...base, matches: [] })).toBeNull()
+    expect(autoVerifyContactId({ ...base, matches: null })).toBeNull()
   })
 })
 

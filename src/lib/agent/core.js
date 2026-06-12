@@ -216,6 +216,27 @@ export function parseAgentResponse(raw) {
   return parsed
 }
 
+/**
+ * AGENT-AUTH.1 — WhatsApp phone-number authentication. Meta has already
+ * authenticated the sender's number (SIM-bound — the same assurance as
+ * an SMS one-time code), so on a trusted channel a sender whose number
+ * maps to EXACTLY ONE contact — the one this conversation is linked to —
+ * is verified without the email/DOB/surname questions. Ambiguous numbers
+ * (a couple sharing a phone) and channels without a phone (Instagram)
+ * return null and keep the question-based verify_identity flow. Pure.
+ *
+ * @param {object} args
+ * @param {boolean} args.trusted                adapter.trustsSenderIdentity
+ * @param {string|null} args.conversationContactId  conversation.contact_id
+ * @param {Array<{id:string}>|null} args.matches    contacts matching the sender's number at this location (capped query)
+ * @returns {string|null} the verified contact id, or null
+ */
+export function autoVerifyContactId({ trusted, conversationContactId, matches }) {
+  if (!trusted || !conversationContactId) return null
+  if (!Array.isArray(matches) || matches.length !== 1) return null
+  return matches[0]?.id === conversationContactId ? conversationContactId : null
+}
+
 // How long a successful identity verification stays valid on a thread.
 // After this, the customer must re-verify before any account lookup or
 // pause/cancel request — so a phone/IG handle changing hands doesn't

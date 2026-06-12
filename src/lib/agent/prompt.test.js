@@ -58,3 +58,18 @@ describe('buildCustomerSystemPrompt', () => {
     expect(p).not.toContain('Extra rules (from the studio)')
   })
 })
+
+// AGENT-AUTH.1 — when the channel has already authenticated the sender
+// (WhatsApp phone match), the prompt must tell the model to skip the
+// verification questions; otherwise the base flow stands.
+describe('identity pre-verification section', () => {
+  it('includes the pre-verified override when identityPreverified is set', () => {
+    const out = buildCustomerSystemPrompt({ identityPreverified: true })
+    expect(out).toMatch(/already verified/i)
+    expect(out).toMatch(/do not ask.*(email|date of birth|surname)/i)
+  })
+  it('omits the override by default so the question-based flow stands', () => {
+    const out = buildCustomerSystemPrompt({})
+    expect(out).not.toMatch(/already verified/i)
+  })
+})

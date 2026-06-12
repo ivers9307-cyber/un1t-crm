@@ -174,7 +174,7 @@ export function shapeClassListForAgent(events, nowMs, limit = MAX_CLASS_LIST) {
   }
   // Sort on the numeric instant — the Dublin label doesn't sort lexically.
   out.sort((a, b) => a.start_sec - b.start_sec)
-  return out.slice(0, limit).map(({ start_sec, ...rest }) => rest)
+  return out.slice(0, limit).map(({ start_sec: _omitted, ...rest }) => rest)
 }
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
