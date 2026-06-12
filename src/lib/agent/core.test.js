@@ -11,6 +11,8 @@ import {
   isVerificationFresh,
   DEFAULT_HOLDING_MESSAGE,
   autoVerifyContactId,
+  isHandoffExpired,
+  resolveRearmPatch,
 } from './core'
 import { HANDOFF_PREFIX, OPTIONS_PREFIX } from './prompt'
 
@@ -212,6 +214,67 @@ describe('parseAgentResponse', () => {
 // linked to — is treated as verified without the email/DOB questions.
 // Ambiguous numbers (couples sharing a phone) and Instagram (no phone)
 // keep the question-based verify_identity flow.
+// AGENT-REARM.1 — a handoff must not silence the agent forever. Two
+// release paths: an operator resolving the thread hands it straight
+// back (resolveRearmPatch, used by the conversation PATCH routes), and
+// a configurable cooldown auto-releases threads nobody resolved
+// (isHandoffExpired + the rearm flag from shouldAgentReply).
+describe('isHandoffExpired', () => {
+  const now = new Date('2026-06-13T12:00:00Z')
+  it('expires a handoff older than the cooldown', () => {
+    expect(isHandoffExpired('2026-06-12T23:00:00Z', 12, now)).toBe(true)
+  })
+  it('keeps a fresh handoff held', () => {
+    expect(isHandoffExpired('2026-06-13T05:00:00Z', 12, now)).toBe(false)
+  })
+  it('never expires without a timestamp (manual agent-off stays off)', () => {
+    expect(isHandoffExpired(null, 12, now)).toBe(false)
+  })
+  it('a zero/absent cooldown means never auto-release', () => {
+    expect(isHandoffExpired('2026-06-01T00:00:00Z', 0, now)).toBe(false)
+    expect(isHandoffExpired('2026-06-01T00:00:00Z', null, now)).toBe(false)
+  })
+})
+
+describe('resolveRearmPatch', () => {
+  it('re-arms the agent when resolving a handed-off thread', () => {
+    expect(resolveRearmPatch({ resolved: true, agent_handed_off_at: '2026-06-12T17:24:11Z' }))
+      .toEqual({ agent_active: true, agent_handed_off_at: null })
+  })
+  it('does nothing when resolving a thread that was never handed off', () => {
+    expect(resolveRearmPatch({ resolved: true, agent_handed_off_at: null })).toEqual({})
+  })
+  it('does nothing when un-resolving', () => {
+    expect(resolveRearmPatch({ resolved: false, agent_handed_off_at: '2026-06-12T17:24:11Z' })).toEqual({})
+  })
+})
+
+describe('shouldAgentReply handoff cooldown', () => {
+  const base = {
+    settings: { enabled: true, handoff_cooldown_hours: 12 },
+    message: { type: 'text', body: 'Can I book a class?' },
+    senderPhone: '353870000000',
+    now: new Date('2026-06-13T12:00:00Z'),
+  }
+  it('re-engages with rearm:true once the cooldown has passed', () => {
+    const r = shouldAgentReply({ ...base, conversation: { agent_active: false, agent_handed_off_at: '2026-06-12T17:24:11Z' } })
+    expect(r.reply).toBe(true)
+    expect(r.rearm).toBe(true)
+  })
+  it('stays handed off inside the cooldown window', () => {
+    const r = shouldAgentReply({ ...base, conversation: { agent_active: false, agent_handed_off_at: '2026-06-13T08:00:00Z' } })
+    expect(r).toEqual({ reply: false, reason: 'handed_off' })
+  })
+  it('a manual agent-off (no handoff timestamp) never auto-re-engages', () => {
+    const r = shouldAgentReply({ ...base, conversation: { agent_active: false, agent_handed_off_at: null } })
+    expect(r).toEqual({ reply: false, reason: 'handed_off' })
+  })
+  it('an active conversation never carries the rearm flag', () => {
+    const r = shouldAgentReply({ ...base, conversation: { agent_active: true } })
+    expect(r).toEqual({ reply: true, reason: 'ok' })
+  })
+})
+
 describe('autoVerifyContactId', () => {
   const base = { trusted: true, conversationContactId: 'c1', matches: [{ id: 'c1' }] }
   it('verifies a trusted channel with a single agreeing phone match', () => {

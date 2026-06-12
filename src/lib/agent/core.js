@@ -88,6 +88,36 @@ export function isWithinQuietHours(now, quiet) {
  * @param {string}      args.senderPhone
  * @param {Date}        [args.now]
  */
+// AGENT-REARM.1 — default hours before a handed-off thread auto-releases
+// back to the agent when nobody resolved it. 0/null = never.
+export const DEFAULT_HANDOFF_COOLDOWN_HOURS = 12
+
+/**
+ * Has a handoff outlived the cooldown? No timestamp (a manual agent-off)
+ * or no/zero cooldown means never. Pure.
+ */
+export function isHandoffExpired(handedOffAt, cooldownHours, now = new Date()) {
+  if (!handedOffAt) return false
+  const hours = Number(cooldownHours)
+  if (!Number.isFinite(hours) || hours <= 0) return false
+  const t = new Date(handedOffAt).getTime()
+  if (!Number.isFinite(t)) return false
+  return now.getTime() - t >= hours * 60 * 60 * 1000
+}
+
+/**
+ * Extra conversation-update fields when an operator resolves a thread:
+ * resolving a handed-off conversation hands it straight back to the
+ * agent ("human engagement closed"). Pure — used by the WA + IG
+ * conversation PATCH routes.
+ */
+export function resolveRearmPatch({ resolved, agent_handed_off_at } = {}) {
+  if (resolved === true && agent_handed_off_at) {
+    return { agent_active: true, agent_handed_off_at: null }
+  }
+  return {}
+}
+
 export function shouldAgentReply({ settings, conversation, message, senderPhone, now = new Date() }) {
   const s = settings || {}
   const enabled = !!s.enabled
@@ -95,8 +125,17 @@ export function shouldAgentReply({ settings, conversation, message, senderPhone,
   if (!enabled && !testMode) return { reply: false, reason: 'disabled' }
 
   // Per-conversation kill switch (human takeover / prior escalation).
+  // AGENT-REARM.1 — a handoff auto-releases after the configured
+  // cooldown so one escalation doesn't silence the agent forever; the
+  // rearm flag tells the caller to clear the handoff stamp in the DB.
+  // A manual agent-off (no handoff timestamp) never auto-releases.
+  let rearm = false
   if (conversation && conversation.agent_active === false) {
-    return { reply: false, reason: 'handed_off' }
+    const cooldown = s.handoff_cooldown_hours ?? DEFAULT_HANDOFF_COOLDOWN_HOURS
+    if (!isHandoffExpired(conversation.agent_handed_off_at, cooldown, now)) {
+      return { reply: false, reason: 'handed_off' }
+    }
+    rearm = true
   }
 
   // Test mode (not globally enabled): only reply to allow-listed numbers.
@@ -120,7 +159,9 @@ export function shouldAgentReply({ settings, conversation, message, senderPhone,
   if (type !== 'text' && type !== 'interactive') return { reply: false, reason: 'unsupported_type', onDuty: true }
   if (!String(message?.body || '').trim()) return { reply: false, reason: 'empty', onDuty: true }
 
-  return { reply: true, reason: 'ok' }
+  const ok = { reply: true, reason: 'ok' }
+  if (rearm) ok.rearm = true
+  return ok
 }
 
 /**

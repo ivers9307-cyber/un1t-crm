@@ -161,7 +161,7 @@ async function runChannelAgentInner(db, adapter, ctx) {
   // Conversation state: kill switch + linked contact + verification.
   const nameCol = adapter.nameColumn
   const { data: conv } = await db.from(adapter.conversationsTable)
-    .select(`agent_active, contact_id, agent_verified_contact_id, agent_verified_at, agent_last_reply_at${nameCol ? `, ${nameCol}` : ''}`)
+    .select(`agent_active, agent_handed_off_at, contact_id, agent_verified_contact_id, agent_verified_at, agent_last_reply_at${nameCol ? `, ${nameCol}` : ''}`)
     .eq('id', conversationId)
     .single()
 
@@ -172,6 +172,17 @@ async function runChannelAgentInner(db, adapter, ctx) {
     senderPhone: recipient,
     now: new Date(),
   })
+  // AGENT-REARM.1 — the cooldown released a handed-off thread: clear the
+  // handoff stamp so the inbox queue and future turns agree the agent is
+  // back on duty. Best-effort; the decision already treats it as active.
+  if (decision.rearm) {
+    try {
+      await db.from(adapter.conversationsTable)
+        .update({ agent_active: true, agent_handed_off_at: null })
+        .eq('id', conversationId)
+    } catch { /* next turn retries */ }
+  }
+
   if (!decision.reply) {
     // Non-text message while the agent is on duty — acknowledge the
     // customer + flag a human rather than leave them hanging. Doesn't
