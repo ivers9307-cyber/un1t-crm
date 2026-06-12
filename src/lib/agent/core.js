@@ -155,8 +155,14 @@ export function shouldAgentReply({ settings, conversation, message, senderPhone,
   // we never acknowledge while disabled, off-allowlist, or in quiet hours.)
   // 'interactive' = a tapped quick-reply/list button; the webhook maps the
   // tap to its title in body, so it's a text reply in all but name.
+  // AGENT-VOICE.1 — a voice note that arrived WITH a body has been
+  // transcribed by the webhook; treat it as text. Untranscribed audio
+  // (no transcription key / failed fetch) keeps the soft handoff.
   const type = message?.type || 'text'
-  if (type !== 'text' && type !== 'interactive') return { reply: false, reason: 'unsupported_type', onDuty: true }
+  const transcribedVoice = type === 'audio' && !!String(message?.body || '').trim()
+  if (type !== 'text' && type !== 'interactive' && !transcribedVoice) {
+    return { reply: false, reason: 'unsupported_type', onDuty: true }
+  }
   if (!String(message?.body || '').trim()) return { reply: false, reason: 'empty', onDuty: true }
 
   const ok = { reply: true, reason: 'ok' }

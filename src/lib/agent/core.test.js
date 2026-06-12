@@ -316,3 +316,22 @@ describe('isVerificationFresh', () => {
     expect(isVerificationFresh('2026-06-01T11:59:40Z', now, 60_000)).toBe(true)  // 20s old
   })
 })
+
+// AGENT-VOICE.1 — a transcribed voice note (type 'audio' with a body)
+// is a text message in all but name; only untranscribed audio soft-hands-off.
+describe('shouldAgentReply — voice notes', () => {
+  const base = {
+    settings: { enabled: true },
+    conversation: { agent_active: true },
+    senderPhone: '+353871234567',
+  }
+  it('replies to a transcribed voice note', () => {
+    const d = shouldAgentReply({ ...base, message: { type: 'audio', body: '🎙️ Can I book a class tomorrow?' } })
+    expect(d.reply).toBe(true)
+  })
+  it('still soft-hands-off an untranscribed voice note', () => {
+    const d = shouldAgentReply({ ...base, message: { type: 'audio', body: '' } })
+    expect(d.reply).toBe(false)
+    expect(d.onDuty).toBe(true)
+  })
+})
