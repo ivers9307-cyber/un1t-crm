@@ -317,21 +317,18 @@ describe('isVerificationFresh', () => {
   })
 })
 
-// AGENT-VOICE.1 — a transcribed voice note (type 'audio' with a body)
-// is a text message in all but name; only untranscribed audio soft-hands-off.
+// Voice notes route to the team's review queue (soft handoff) — no
+// transcription vendor by design (Richard, 2026-06-12).
 describe('shouldAgentReply — voice notes', () => {
-  const base = {
-    settings: { enabled: true },
-    conversation: { agent_active: true },
-    senderPhone: '+353871234567',
-  }
-  it('replies to a transcribed voice note', () => {
-    const d = shouldAgentReply({ ...base, message: { type: 'audio', body: '🎙️ Can I book a class tomorrow?' } })
-    expect(d.reply).toBe(true)
-  })
-  it('still soft-hands-off an untranscribed voice note', () => {
-    const d = shouldAgentReply({ ...base, message: { type: 'audio', body: '' } })
+  it('soft-hands-off a voice note for human review', () => {
+    const d = shouldAgentReply({
+      settings: { enabled: true },
+      conversation: { agent_active: true },
+      senderPhone: '+353871234567',
+      message: { type: 'audio', body: '' },
+    })
     expect(d.reply).toBe(false)
+    expect(d.reason).toBe('unsupported_type')
     expect(d.onDuty).toBe(true)
   })
 })
