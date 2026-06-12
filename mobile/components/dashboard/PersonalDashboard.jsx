@@ -20,6 +20,10 @@ import {
 // when they're on shift today. Self-contained: renders nothing
 // when there's no instance to surface.
 import TodayChecklistCard from './TodayChecklistCard'
+// MOBILE-TODAY-FEED — the "Needs attention" triage card (mirror of
+// the web Today feed). Self-contained: renders nothing when the
+// viewer has no queue permissions or nothing is pending.
+import NeedsAttentionCard from './NeedsAttentionCard'
 
 function shiftTime(shift) {
   const start = (shift.start_time_override || shift.shift_templates?.start_time || '').slice(0, 5)
@@ -253,6 +257,11 @@ export default function PersonalDashboard({ refreshKey }) {
           thing on shift — closer / opener items shouldn't have to
           scroll past a roster. */}
       <TodayChecklistCard />
+
+      {/* MOBILE-TODAY-FEED — what needs the viewer across the gym,
+          right under their own shift card. Coaches without queue
+          permissions never see it. */}
+      <NeedsAttentionCard />
 
       {/* Roster — current week + next week, stacked vertically because
           a phone is too narrow for two side-by-side weeks. The web
