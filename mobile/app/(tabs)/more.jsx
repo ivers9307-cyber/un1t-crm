@@ -20,6 +20,7 @@ import { getOutstandingPolicyCount } from '../../lib/policies-api'
 import { canMobile } from '../../lib/permissions'
 import { getPendingApprovals } from '../../lib/approvals-api'
 import { approvalsBadgeCount } from '../../lib/approvals'
+import { listInboxIssues } from '../../lib/issues-api'
 import { buildSummary } from '../../lib/build-info'
 import { useBiometricLock } from '../../lib/biometric-lock'
 
@@ -97,6 +98,19 @@ export default function More() {
     return () => { alive = false }
   }, [profile, activeLocation]))
 
+  // REPORTS-HUB.1 — open-issue count for the Reports tile badge. Gated on
+  // issue_triage so only handlers fetch (a staff member's Reports tile
+  // never carries a triage count). Best-effort; network error hides it.
+  const [outstandingIssues, setOutstandingIssues] = useState(0)
+  useFocusEffect(useCallback(() => {
+    if (!profile || !canMobile(profile, 'issue_triage', activeLocation)) return
+    let alive = true
+    listInboxIssues().then((res) => {
+      if (alive && res.success !== false && Array.isArray(res.data)) setOutstandingIssues(res.data.length)
+    }).catch(() => {})
+    return () => { alive = false }
+  }, [profile, activeLocation]))
+
   function pickLocation() {
     if (!locations.length) return
     if (locations.length === 1) {
@@ -136,8 +150,14 @@ export default function More() {
   if (inMore.has('invoices'))  tiles.push({ key: 'invoices', icon: 'receipt-outline', label: 'Invoices', onPress: () => router.push('/invoices') })
   if (inMore.has('expenses'))  tiles.push({ key: 'expenses', icon: 'wallet-outline', label: 'Expenses', onPress: () => router.push('/expenses') })
   if (inMore.has('radar'))     tiles.push({ key: 'radar', icon: 'pulse-outline', label: 'Radar', onPress: () => router.push('/radar') })
-  if (inMore.has('issues'))    tiles.push({ key: 'report', icon: 'alert-circle-outline', label: 'Report', onPress: () => router.push('/issues/new') })
-  if (inMore.has('issues'))    tiles.push({ key: 'myreports', icon: 'list-outline', label: 'My reports', onPress: () => router.push('/issues') })
+  // REPORTS-HUB.1 — one "Reports" tile for the whole issue feature. The
+  // hub routes by access level: a regular staffer lands straight on My
+  // reports (submit + own history); a handler (issue_triage) gets a
+  // chooser between My reports and the triage Issue inbox. Replaces the
+  // old Report / My reports / Issue inbox trio of tiles.
+  if (inMore.has('issues') || canMobile(profile, 'issue_triage', activeLocation)) {
+    tiles.push({ key: 'reports', icon: 'document-text-outline', label: 'Reports', badge: outstandingIssues > 0 ? String(outstandingIssues) : null, onPress: () => router.push('/issues/hub') })
+  }
   if (inMore.has('contracts')) tiles.push({ key: 'contracts', icon: 'document-text-outline', label: 'Contracts', onPress: () => router.push('/contracts') })
   if (inMore.has('policies'))  tiles.push({ key: 'policies', icon: 'book-outline', label: 'Policies', badge: outstandingPolicies > 0 ? String(outstandingPolicies) : null, onPress: () => router.push('/policies') })
   if (canMobile(profile, 'approvals', activeLocation)) tiles.push({ key: 'approvals', icon: 'checkmark-done-outline', label: 'Approvals', badge: outstandingApprovals > 0 ? String(outstandingApprovals) : null, onPress: () => router.push('/approvals') })
@@ -148,10 +168,8 @@ export default function More() {
   // capability inside the screens stays owner/master; the GET routes
   // enforce scope server-side regardless.
   if (canMobile(profile, 'staff_management', activeLocation)) tiles.push({ key: 'staff', icon: 'people-outline', label: 'Staff', onPress: () => router.push('/staff') })
-  // Issue triage handler inbox (W1) — owner/master claim/resolve/close
-  // staff-reported issues. Gated by issue_triage (parity inversion of the
-  // web issues_inbox); the routes also enforce isHandler server-side.
-  if (canMobile(profile, 'issue_triage', activeLocation)) tiles.push({ key: 'issueinbox', icon: 'construct-outline', label: 'Issue inbox', onPress: () => router.push('/issues/inbox') })
+  // (Issue triage now lives inside the Reports hub above — the handler
+  // reaches the inbox via the chooser, gated by issue_triage there.)
   // W2 — invoice approver inbox (owner/master review + approve/decline).
   if (canMobile(profile, 'invoices_inbox', activeLocation)) tiles.push({ key: 'invoicesinbox', icon: 'file-tray-full-outline', label: 'Invoices inbox', onPress: () => router.push('/invoices/inbox') })
   // W2 — revenue read view (race signups + car deposits). Manager+/owner/master.
