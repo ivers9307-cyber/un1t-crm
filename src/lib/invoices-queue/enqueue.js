@@ -34,6 +34,7 @@ const STORAGE_BUCKETS = Object.freeze({
   contractor_invoice: 'contractor-invoices',
   fte_expense_item: 'fte-expense-receipts',
   car_document: 'car-documents',
+  card_receipt: 'company-card-receipts',
 })
 
 /**
@@ -268,6 +269,61 @@ export async function enqueueFromCarDocument(documentId) {
       // Car documents auto-queue without owner approval (same as
       // supplier emails). Bookkeeper still reviews before Xero.
       status: 'received',
+    })
+    .select('id')
+    .single()
+  if (insErr) return { ok: false, error: `Queue insert failed: ${insErr.message}` }
+  return { ok: true, queueIds: [inserted.id] }
+}
+
+/**
+ * Enqueue a single company-card receipt for accountant review (SPEND.P3).
+ * The card_receipts row carries `receipt_path` (mig 266) — the receipt
+ * photo/PDF we hand off to the queue. Like contractor invoices, the
+ * owner has already approved, so the row enters at 'quality_approved'
+ * with the attachment set; the bookkeeper clicks Analyse → Claude Vision
+ * → picks Xero refs → sends.
+ *
+ * Caller is responsible for flipping card_receipts.status to
+ * 'awaiting_accountant_review' — this function does not touch the
+ * source row, matching the other enqueue helpers.
+ *
+ * @param {string} receiptId card_receipts.id
+ */
+export async function enqueueFromCardReceipt(receiptId) {
+  const db = createServerClient()
+
+  const { data: rec, error: rErr } = await db
+    .from('card_receipts')
+    .select(`
+      id, location_id, status, merchant, amount, purchase_date,
+      card_last4, receipt_path, receipt_size_bytes, receipt_mime_type,
+      submitter:submitter_id ( id, full_name, email )
+    `)
+    .eq('id', receiptId)
+    .maybeSingle()
+  if (rErr) return { ok: false, error: `Card receipt lookup failed: ${rErr.message}` }
+  if (!rec) return { ok: false, error: 'Card receipt not found.' }
+  if (!rec.receipt_path) {
+    return { ok: false, error: 'Card receipt has no attachment.' }
+  }
+
+  const merchant = (rec.merchant && String(rec.merchant).trim()) || 'Company-card purchase'
+  const cardTag = rec.card_last4 ? ` · card ••${rec.card_last4}` : ''
+  const { data: inserted, error: insErr } = await db
+    .from('invoices_queue')
+    .insert({
+      location_id: rec.location_id,
+      source_type: 'card_receipt',
+      source_card_receipt_id: rec.id,
+      attachment_bucket: STORAGE_BUCKETS.card_receipt,
+      attachment_path: rec.receipt_path,
+      attachment_filename: rec.receipt_path?.split('/').pop() || null,
+      attachment_size_bytes: rec.receipt_size_bytes || null,
+      attachment_mime_type: rec.receipt_mime_type || null,
+      sender_email: rec.submitter?.email || null,
+      subject: `${merchant}${rec.purchase_date ? ` · ${rec.purchase_date}` : ''}${cardTag}`.trim(),
+      status: 'quality_approved',
     })
     .select('id')
     .single()
