@@ -274,6 +274,13 @@ export const MOBILE_PERMISSIONS = Object.freeze([
   // campaign editor stay desktop-only and keep their web gating).
   { key: 'sms',                label: 'SMS (send to a contact)',  hint: 'Text a contact from the company Twilio sender, not your phone. Broadcasts/sequences stay on web.', webEquivalent: 'sms' },
   { key: 'email',              label: 'Email (send to a contact)', hint: 'Email a contact from the company Postmark sender, not your phone. The campaign editor stays on web.', webEquivalent: 'email' },
+  // STUDIO-HUB.1 — TV displays on the mobile Studio hub. View the
+  // location's registered TVs + what each is currently showing, copy the
+  // cast URL, and clear a TV back to idle. Content authoring (templates /
+  // image upload) stays on web. webEquivalent links it to the web
+  // tv_displays key, dropping it from WEB_ONLY_OK. Master/owner/manager by
+  // default (mirrors the web tv_displays role defaults).
+  { key: 'tv_displays',        label: 'TV Displays',              hint: 'View studio TVs + what each is showing, copy the cast URL, clear a TV. Authoring (templates / uploads) stays on web.', webEquivalent: 'tv_displays' },
   // NOTIF.2: mobile mirror of the web 'activities' feature (Tasks tab).
   // Different name from the web key because 'tasks' reads better on a
   // small screen — the parity linter uses webEquivalent='activities'
@@ -410,6 +417,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
   master: {
     schedule: true, pipeline: true, whatsapp: true,
     sms: true, email: true,
+    tv_displays: true,
     contacts: true,
     tasks: true, bookings: true,
     time_off: true,
@@ -436,6 +444,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
   staff: {
     schedule: true, pipeline: false, whatsapp: false,
     sms: false, email: false,
+    tv_displays: false,
     contacts: true,
     // Coaches see tasks (they get assigned them) but not booking
     // reminders by default — those are for the on-shift operator,
@@ -469,6 +478,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
   head_coach: {
     schedule: true, pipeline: true, whatsapp: true,
     sms: true, email: true,
+    tv_displays: false,
     contacts: true,
     tasks: true, bookings: true,
     time_off: true,
@@ -499,6 +509,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
   manager: {
     schedule: true, pipeline: true, whatsapp: true,
     sms: true, email: true,
+    tv_displays: true,
     contacts: true,
     tasks: true, bookings: true,
     time_off: true,
@@ -531,6 +542,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
   owner: {
     schedule: true, pipeline: true, whatsapp: true,
     sms: true, email: true,
+    tv_displays: true,
     contacts: true,
     tasks: true, bookings: true,
     time_off: true,
