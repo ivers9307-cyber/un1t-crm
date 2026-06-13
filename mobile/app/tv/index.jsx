@@ -14,6 +14,7 @@ import {
   Modal, TextInput, KeyboardAvoidingView, Platform, Image,
 } from 'react-native'
 import { useRouter, useFocusEffect } from 'expo-router'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
 import { useAuth } from '../../lib/auth-context'
 import { canMobile } from '../../lib/permissions'
@@ -268,6 +269,7 @@ function TvCard({ tv, onPush, onClear, onDelete, onOrientation }) {
 }
 
 function RegisterModal({ visible, onClose, onRegister }) {
+  const insets = useSafeAreaInsets()
   const [label, setLabel] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
@@ -286,7 +288,7 @@ function RegisterModal({ visible, onClose, onRegister }) {
     <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
       <View className="flex-1 bg-black/40 justify-end">
         <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-          <View className="bg-un1t-bg rounded-t-3xl p-5">
+          <View className="bg-un1t-bg rounded-t-3xl p-5" style={{ paddingBottom: insets.bottom + 20 }}>
             <View className="flex-row items-center justify-between mb-3">
               <Text className="text-lg font-bold text-un1t-text">Register a TV</Text>
               <Pressable onPress={onClose} hitSlop={10}><Ionicons name="close" size={24} color="#111827" /></Pressable>
