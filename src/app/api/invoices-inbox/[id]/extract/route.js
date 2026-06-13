@@ -54,9 +54,16 @@ export async function POST(_request, { params }) {
     return NextResponse.json({ success: false, error: 'Row has no attachment.' }, { status: 400 })
   }
 
-  // Pull the bytes. Service-role bypasses RLS.
+  // Pull the bytes from the row's OWN bucket — each source type lives in a
+  // different one (supplier_email → inbound-invoices, contractor_invoice →
+  // contractor-invoices, fte_expense_item → fte-expense-receipts,
+  // card_receipt → company-card-receipts, …). mig 185 set attachment_bucket
+  // NOT NULL, so it's always present; the constant is only a legacy fallback.
+  // (Was hardcoded to STORAGE_BUCKET, which 404'd Analyse for every
+  // non-supplier source — bulk-analyse + the cron already read the per-row
+  // bucket.) Service-role bypasses RLS.
   const { data: blob, error: dlErr } = await db.storage
-    .from(STORAGE_BUCKET)
+    .from(row.attachment_bucket || STORAGE_BUCKET)
     .download(row.attachment_path)
   if (dlErr || !blob) {
     return NextResponse.json({
