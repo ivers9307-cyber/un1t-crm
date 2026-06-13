@@ -277,16 +277,15 @@ export async function enqueueFromCarDocument(documentId) {
 }
 
 /**
- * Enqueue a single company-card receipt for accountant review (SPEND.P3).
- * The card_receipts row carries `receipt_path` (mig 266) — the receipt
- * photo/PDF we hand off to the queue. Like contractor invoices, the
- * owner has already approved, so the row enters at 'quality_approved'
- * with the attachment set; the bookkeeper clicks Analyse → Claude Vision
- * → picks Xero refs → sends.
+ * Enqueue a single company-card receipt (SPEND.P3.1). Card receipts
+ * ride the emailed-invoice path: the submitter only provides the
+ * receipt photo, so the row enters at status 'received' (like a
+ * supplier email / car document) and the bookkeeper's Analyse (Claude
+ * Vision OCR) fills the fields in /invoices, then reviews + sends to
+ * Xero. There is no owner-approval step — the bookkeeper's queue review
+ * IS the approval.
  *
- * Caller is responsible for flipping card_receipts.status to
- * 'awaiting_accountant_review' — this function does not touch the
- * source row, matching the other enqueue helpers.
+ * Called from the finalise route immediately on submit (auto-enqueue).
  *
  * @param {string} receiptId card_receipts.id
  */
@@ -296,8 +295,7 @@ export async function enqueueFromCardReceipt(receiptId) {
   const { data: rec, error: rErr } = await db
     .from('card_receipts')
     .select(`
-      id, location_id, status, merchant, amount, purchase_date,
-      card_last4, receipt_path, receipt_size_bytes, receipt_mime_type,
+      id, location_id, card_last4, receipt_path, receipt_size_bytes, receipt_mime_type,
       submitter:submitter_id ( id, full_name, email )
     `)
     .eq('id', receiptId)
@@ -308,7 +306,10 @@ export async function enqueueFromCardReceipt(receiptId) {
     return { ok: false, error: 'Card receipt has no attachment.' }
   }
 
-  const merchant = (rec.merchant && String(rec.merchant).trim()) || 'Company-card purchase'
+  // No merchant/amount/date yet — those come from the bookkeeper's
+  // Analyse. The subject just identifies who submitted it (+ which card)
+  // for the queue's inbox display.
+  const submitterName = rec.submitter?.full_name || 'staff member'
   const cardTag = rec.card_last4 ? ` · card ••${rec.card_last4}` : ''
   const { data: inserted, error: insErr } = await db
     .from('invoices_queue')
@@ -322,8 +323,9 @@ export async function enqueueFromCardReceipt(receiptId) {
       attachment_size_bytes: rec.receipt_size_bytes || null,
       attachment_mime_type: rec.receipt_mime_type || null,
       sender_email: rec.submitter?.email || null,
-      subject: `${merchant}${rec.purchase_date ? ` · ${rec.purchase_date}` : ''}${cardTag}`.trim(),
-      status: 'quality_approved',
+      subject: `Company-card receipt — ${submitterName}${cardTag}`,
+      // Raw inbound, exactly like a supplier email: needs Analyse.
+      status: 'received',
     })
     .select('id')
     .single()

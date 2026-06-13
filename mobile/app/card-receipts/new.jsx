@@ -1,13 +1,16 @@
 // SPEND.P3 (mobile) — capture + submit a company-card receipt.
-// Modal-presented from the Card receipts list. The CORE of the flow is
-// taking a photo: an attachment is a photo of the paper receipt
-// (expo-image-picker — camera or library) OR a PDF (expo-document-picker).
-// It uploads direct-to-storage via submitCardReceipt() (the same 3-step
-// flow the contractor invoice / SPEND.P1 receipt path uses).
+// Modal-presented from the Card receipts list. The WHOLE flow is taking
+// a photo: an attachment is a photo of the paper receipt (expo-image-picker
+// — camera or library) OR a PDF (expo-document-picker). It uploads
+// direct-to-storage via submitCardReceipt() (the same 3-step flow the
+// contractor invoice / SPEND.P1 receipt path uses), which auto-files to
+// the bookkeeper queue.
 //
-// STANDALONE — one receipt per purchase (not a batched claim). Form
-// fields: purchase date (YYYY-MM-DD, defaults to today), amount (€), VAT
-// (optional), merchant, card last-4 (optional), notes.
+// STANDALONE — one receipt per purchase (not a batched claim). The
+// submitter types NO financial fields: accounts read amount / merchant /
+// date / VAT off the photo downstream in /invoices. The only inputs are
+// an optional card last-4 and an optional note; the only REQUIREMENT to
+// submit is an attached photo/PDF.
 
 import { useState } from 'react'
 import {
@@ -38,21 +41,10 @@ function extFromMime(mime) {
   }
 }
 
-function todayKey() {
-  // Local calendar day — the operator pays on the card "today" in their
-  // own timezone, so anchor on local, not UTC.
-  const d = new Date()
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-}
-
 export default function NewCardReceiptScreen() {
   const { activeLocation } = useAuth()
   const router = useRouter()
 
-  const [purchaseDate, setPurchaseDate] = useState(todayKey())
-  const [amount, setAmount] = useState('')
-  const [vatAmount, setVatAmount] = useState('')
-  const [merchant, setMerchant] = useState('')
   const [cardLast4, setCardLast4] = useState('')
   const [notes, setNotes] = useState('')
   const [file, setFile] = useState(null) // { uri, name, mimeType, size }
@@ -134,22 +126,6 @@ export default function NewCardReceiptScreen() {
       setError('Please attach a receipt (photo or PDF).')
       return
     }
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(purchaseDate)) {
-      setError('Purchase date must be in YYYY-MM-DD format.')
-      return
-    }
-    const amt = Number(amount)
-    if (!Number.isFinite(amt) || amt <= 0) {
-      setError('Amount must be a positive number.')
-      return
-    }
-    if (vatAmount.trim()) {
-      const vat = Number(vatAmount)
-      if (!Number.isFinite(vat) || vat < 0) {
-        setError('VAT must be a number (or leave it blank).')
-        return
-      }
-    }
     if (cardLast4.trim() && !/^\d{4}$/.test(cardLast4.trim())) {
       setError('Card last-4 must be exactly 4 digits (or leave it blank).')
       return
@@ -161,10 +137,6 @@ export default function NewCardReceiptScreen() {
     setSubmitting(true)
     try {
       const r = await submitCardReceipt({
-        purchaseDate,
-        amount: amt,
-        vatAmount: vatAmount.trim() || null,
-        merchant: merchant.trim() || null,
         cardLast4: cardLast4.trim() || null,
         notes: notes.trim() || null,
         locationId: activeLocation.id,
@@ -195,80 +167,10 @@ export default function NewCardReceiptScreen() {
           keyboardShouldPersistTaps="handled"
         >
           <Text className="text-sm text-un1t-subtle mb-5">
-            One receipt per company-card purchase. PDF or photo, max 10 MB.
+            Snap the receipt — accounts read the details off it and file it to Xero.
+            You don&rsquo;t need to type anything else.
             {activeLocation?.name ? ` Submitting for ${activeLocation.name} — switch studios in the side menu to change.` : ''}
           </Text>
-
-          <Field label="Purchase date">
-            <TextInput
-              value={purchaseDate}
-              onChangeText={setPurchaseDate}
-              placeholder="YYYY-MM-DD"
-              placeholderTextColor="#64748B"
-              autoCapitalize="none"
-              maxLength={10}
-              className="bg-un1t-surface border border-un1t-border rounded-xl px-3 py-3 text-base text-un1t-text"
-            />
-          </Field>
-
-          <Field label="Amount (€)">
-            <TextInput
-              keyboardType="decimal-pad"
-              value={amount}
-              onChangeText={setAmount}
-              placeholder="e.g. 42.50"
-              placeholderTextColor="#64748B"
-              className="bg-un1t-surface border border-un1t-border rounded-xl px-3 py-3 text-base text-un1t-text"
-            />
-          </Field>
-
-          <Field label="VAT (€, optional)">
-            <TextInput
-              keyboardType="decimal-pad"
-              value={vatAmount}
-              onChangeText={setVatAmount}
-              placeholder="e.g. 7.94"
-              placeholderTextColor="#64748B"
-              className="bg-un1t-surface border border-un1t-border rounded-xl px-3 py-3 text-base text-un1t-text"
-            />
-          </Field>
-
-          <Field label="Merchant (optional)">
-            <TextInput
-              value={merchant}
-              onChangeText={setMerchant}
-              placeholder="e.g. Decathlon"
-              placeholderTextColor="#64748B"
-              maxLength={200}
-              className="bg-un1t-surface border border-un1t-border rounded-xl px-3 py-3 text-base text-un1t-text"
-            />
-          </Field>
-
-          <Field label="Card last 4 (optional)">
-            <TextInput
-              keyboardType="number-pad"
-              value={cardLast4}
-              onChangeText={(v) => setCardLast4(v.replace(/[^0-9]/g, ''))}
-              placeholder="e.g. 4321"
-              placeholderTextColor="#64748B"
-              maxLength={4}
-              className="bg-un1t-surface border border-un1t-border rounded-xl px-3 py-3 text-base text-un1t-text"
-            />
-          </Field>
-
-          <Field label="Notes (optional)">
-            <TextInput
-              value={notes}
-              onChangeText={setNotes}
-              multiline
-              numberOfLines={3}
-              maxLength={500}
-              placeholder="Anything the approver should know"
-              placeholderTextColor="#64748B"
-              className="bg-un1t-surface border border-un1t-border rounded-xl px-3 py-3 text-base text-un1t-text"
-              style={{ minHeight: 80, textAlignVertical: 'top' }}
-            />
-          </Field>
 
           <Field label="Receipt">
             {file ? (
@@ -299,6 +201,32 @@ export default function NewCardReceiptScreen() {
             <Text className="text-xs text-un1t-subtle mt-2">
               {file ? 'Pick again to replace.' : 'Photograph the paper receipt or attach a PDF.'}
             </Text>
+          </Field>
+
+          <Field label="Card last 4 (optional)">
+            <TextInput
+              keyboardType="number-pad"
+              value={cardLast4}
+              onChangeText={(v) => setCardLast4(v.replace(/[^0-9]/g, ''))}
+              placeholder="e.g. 4321"
+              placeholderTextColor="#64748B"
+              maxLength={4}
+              className="bg-un1t-surface border border-un1t-border rounded-xl px-3 py-3 text-base text-un1t-text"
+            />
+          </Field>
+
+          <Field label="Note (optional)">
+            <TextInput
+              value={notes}
+              onChangeText={setNotes}
+              multiline
+              numberOfLines={3}
+              maxLength={500}
+              placeholder="Anything accounts should know"
+              placeholderTextColor="#64748B"
+              className="bg-un1t-surface border border-un1t-border rounded-xl px-3 py-3 text-base text-un1t-text"
+              style={{ minHeight: 80, textAlignVertical: 'top' }}
+            />
           </Field>
 
           {error && (

@@ -1,16 +1,18 @@
 // /api/card-receipts
 //
-//   POST  submit a company-card receipt (JSON; the receipt is already
-//         in storage via /api/card-receipts/upload-sign + a signed
-//         direct upload — the body carries a pointer).
-//   GET   list — role-aware:
-//           owner / master → the active location's queue (approver view)
-//           everyone else  → only their own submissions
+//   POST  submit a company-card receipt — just the photo (+ optional
+//         "which card" last-4 + note). The receipt is already in storage
+//         via /api/card-receipts/upload-sign + a signed direct upload;
+//         the body carries a pointer. On submit it auto-enqueues into
+//         the invoices_queue (status 'received', source_type
+//         'card_receipt') — exactly like an emailed supplier invoice —
+//         and the bookkeeper's Analyse (OCR) fills amount/merchant/date/
+//         VAT in /invoices, then reviews + sends to Xero. NO typed
+//         financial fields, NO owner-approval step (SPEND.P3.1).
+//   GET   list — the caller's own submitted receipts (history).
 //
 // Submission is gated by the `card_receipts` permission (card holders).
-// The receipt file lives in the private 'company-card-receipts' bucket
-// at {submitter_id}/{date}-{rand}-{filename}; the path is held on the
-// row, clients fetch a signed URL via /api/card-receipts/[id]/receipt.
+// The receipt file lives in the private 'company-card-receipts' bucket.
 
 import { z } from 'zod'
 import { NextResponse } from 'next/server'
@@ -19,28 +21,19 @@ import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
-import {
-  isCardReceiptPath, sniffReceiptMime, CARD_RECEIPTS_BUCKET, MAX_RECEIPT_BYTES,
-} from '@/lib/card-receipts'
+import { isCardReceiptPath, sniffReceiptMime, CARD_RECEIPTS_BUCKET, MAX_RECEIPT_BYTES } from '@/lib/card-receipts'
+import { enqueueFromCardReceipt } from '@/lib/invoices-queue/enqueue'
+import { logWarn } from '@/lib/log'
 
 export const runtime = 'nodejs'
 
 const SubmitSchema = z.object({
-  purchase_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'YYYY-MM-DD'),
-  amount: z.number().positive(),
-  vat_amount: z.number().min(0).nullable().optional(),
-  merchant: z.string().max(200).nullable().optional(),
-  description: z.string().max(500).nullable().optional(),
   card_last4: z.string().regex(/^[0-9]{4}$/).nullable().optional(),
   notes: z.string().max(2000).nullable().optional(),
   location_id: uuidLike.nullable().optional(),
   receipt_path: z.string().min(3).max(300),
   receipt_name: z.string().min(1).max(200),
 })
-
-function isOwnerOrMaster(user) {
-  return user?.role === 'master' || user?.role === 'owner'
-}
 
 // ── POST: submit a company-card receipt ───────────────────────────
 export async function POST(request) {
@@ -58,12 +51,6 @@ export async function POST(request) {
   const validation = await validateBody(request, SubmitSchema)
   if (!validation.ok) return validation.response
   const b = validation.data
-
-  const amount = Number(b.amount)
-  const vat = b.vat_amount == null ? 0 : Number(b.vat_amount)
-  if (vat > amount) {
-    return NextResponse.json({ success: false, error: 'VAT cannot exceed the total amount.' }, { status: 400 })
-  }
 
   // Resolve location. Default to the user's single location; otherwise
   // the body must say which one, and the user must be a member.
@@ -99,10 +86,8 @@ export async function POST(request) {
 
   // Verify the direct-to-storage object: it must exist and actually be
   // one of the accepted receipt types (the signed upload bypassed the
-  // API, so re-check the real bytes — a wrong Content-Type can't fool
-  // sniffReceiptMime). Delete anything that fails so the bucket doesn't
-  // accumulate unusable objects. (Storage builders are thenables with no
-  // .catch — two-arg .then per the repo lesson.)
+  // API, so re-check the real bytes). Delete anything that fails.
+  // (Storage builders are thenables with no .catch — two-arg .then.)
   const { data: blob, error: dlErr } = await db.storage
     .from(CARD_RECEIPTS_BUCKET)
     .download(b.receipt_path)
@@ -123,16 +108,14 @@ export async function POST(request) {
     return NextResponse.json({ success: false, error: 'Only a PDF or photo (JPG, PNG, HEIC) is accepted.' }, { status: 400 })
   }
 
+  // Insert the intake record — just the photo + optional context. The
+  // financial fields (amount/merchant/date/VAT) are filled later by the
+  // bookkeeper's Analyse in /invoices (mig 267 made them nullable).
   const { data, error } = await db
     .from('card_receipts')
     .insert({
       location_id: locationId,
       submitter_id: user.id,
-      purchase_date: b.purchase_date,
-      amount,
-      vat_amount: vat,
-      merchant: (b.merchant && String(b.merchant).trim()) || null,
-      description: (b.description && String(b.description).trim()) || null,
       card_last4: b.card_last4 || null,
       notes: (b.notes && String(b.notes).trim()) || null,
       receipt_path: b.receipt_path,
@@ -144,15 +127,29 @@ export async function POST(request) {
     .single()
 
   if (error) {
-    // Best-effort orphan cleanup if the DB rejected.
     await db.storage.from(CARD_RECEIPTS_BUCKET).remove([b.receipt_path]).then(() => {}, () => {})
     return NextResponse.json({ success: false, error: error.message }, { status: 400 })
+  }
+
+  // Auto-enqueue into the bookkeeper's invoices_queue (the emailed-invoice
+  // path). If this fails the submission hasn't really happened — roll the
+  // intake row + object back so the submitter can cleanly retry, rather
+  // than orphaning a receipt that never reaches accounts.
+  const enq = await enqueueFromCardReceipt(data.id)
+  if (!enq.ok) {
+    logWarn('card-receipt-submit', 'enqueue failed', { err: enq.error, receiptId: data.id })
+    await db.from('card_receipts').delete().eq('id', data.id).then(() => {}, () => {})
+    await db.storage.from(CARD_RECEIPTS_BUCKET).remove([b.receipt_path]).then(() => {}, () => {})
+    return NextResponse.json(
+      { success: false, error: 'Could not file the receipt with accounts — please try again.' },
+      { status: 502 }
+    )
   }
 
   return NextResponse.json({ success: true, data }, { status: 201 })
 }
 
-// ── GET: role-aware list ──────────────────────────────────────────
+// ── GET: the caller's own submitted receipts ──────────────────────
 export async function GET(request) {
   const user = await getCurrentUser()
   if (!user) {
@@ -160,47 +157,19 @@ export async function GET(request) {
   }
 
   const { searchParams } = new URL(request.url)
-  const statusFilter = searchParams.get('status') // optional
   const limit = Math.min(Number(searchParams.get('limit') || 100), 500)
 
   const db = createServerClient()
-
-  let query = db
+  const { data, error } = await db
     .from('card_receipts')
     .select(`
-      id, status, purchase_date, amount, vat_amount, merchant, description,
-      card_last4, submitted_at, reviewed_at, approved_at, declined_at,
-      revoked_at, decline_reason, notes,
-      submitter:submitter_id ( id, full_name, email ),
-      location:location_id ( id, name ),
-      reviewer:reviewed_by ( id, full_name )
+      id, status, card_last4, notes, submitted_at,
+      location:location_id ( id, name )
     `)
+    .eq('submitter_id', user.id)
     .order('submitted_at', { ascending: false })
     .limit(limit)
 
-  if (statusFilter) query = query.eq('status', statusFilter)
-
-  // Scope — ORG-ISOLATION, mirrors /api/invoices:
-  //   • owner / master → the active location queue (the approver view).
-  //     Master can override via ?location_id.
-  //   • everyone else → only their own submissions.
-  if (isOwnerOrMaster(user)) {
-    const isMaster = user.role === 'master'
-    const ownerLocations = Object.entries(user.rolesByLocation || {})
-      .filter(([, r]) => r === 'owner').map(([loc]) => loc)
-    const explicit = searchParams.get('location_id')
-    const activeId = user.activeLocation?.id || null
-    const target = explicit || activeId
-    if (!target) return NextResponse.json({ success: true, data: [] })
-    if (!isMaster && !ownerLocations.includes(target)) {
-      return NextResponse.json({ success: false, error: 'Forbidden — not your location' }, { status: 403 })
-    }
-    query = query.eq('location_id', target)
-  } else {
-    query = query.eq('submitter_id', user.id)
-  }
-
-  const { data, error } = await query
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
   return NextResponse.json({ success: true, data })
 }

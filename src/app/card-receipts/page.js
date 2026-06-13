@@ -1,18 +1,14 @@
 // /card-receipts — SPEND.P3 company-card receipts.
 //
-// Standalone per-receipt spend flow (not batched into monthly claims).
-// Role-aware via CardReceiptsManager:
-//   - Card holders (the `card_receipts` permission): submit form + their
-//     own submissions list.
-//   - Owner / master: the review queue for their active location, with
-//     status tabs + Approve / Decline.
-// A user can be both (an owner who holds a company card) — they get the
-// form AND the queue.
+// Standalone per-receipt spend flow. Company-card receipts ride the
+// emailed-invoice path: the submitter only provides the receipt PHOTO
+// (+ optional "which card" last-4 + note); the bookkeeper's OCR fills
+// amount / merchant / date / VAT downstream in /invoices. No owner
+// approval, no typed financial fields — `CardReceiptsManager` is a plain
+// submitter surface (submit form + the caller's own receipts list).
 //
-// Access: the `card_receipts` permission gates entry. Owners + master
-// hold it by default (they're also the approvers); other roles only if
-// an owner grants it per-user. Anyone without it is bounced to / — the
-// list/approve API routes enforce the same rules server-side.
+// Access: the `card_receipts` permission gates entry. Anyone without it
+// is bounced to / — the API routes enforce the same rules server-side.
 
 import { redirect } from 'next/navigation'
 import { getCurrentUser } from '@/lib/auth'
@@ -26,18 +22,9 @@ export default async function CardReceiptsPage() {
   if (!user) redirect('/login?redirect=/card-receipts')
   if (!hasPermission(user, 'card_receipts')) redirect('/')
 
-  // Owner-at-any-location or master get the approver queue view. The
-  // GET /api/card-receipts endpoint scopes the queue to the active
-  // location for owners (and lets master override) — we just tell the
-  // manager which surface to render.
-  const isApproverView = user.role === 'master' || user.role === 'owner'
-
   return (
     <div className="p-6 max-w-6xl mx-auto">
-      <CardReceiptsManager
-        canSubmit
-        isApproverView={isApproverView}
-      />
+      <CardReceiptsManager />
     </div>
   )
 }
