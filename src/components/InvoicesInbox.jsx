@@ -57,6 +57,7 @@ const SOURCE_TABS = [
   { key: 'supplier_email',     label: 'Supplier',     sourceTypes: ['supplier_email'] },
   { key: 'contractor_invoice', label: 'Contractor',   sourceTypes: ['contractor_invoice'] },
   { key: 'fte_expense_item',   label: 'Expenses',     sourceTypes: ['fte_expense_item'] },
+  { key: 'card_receipt',       label: 'Card receipts',sourceTypes: ['card_receipt'] },
   { key: 'car_document',       label: 'Car documents',sourceTypes: ['car_document'] },
 ]
 
@@ -82,6 +83,7 @@ const SOURCE_TYPE_LABEL = {
   supplier_email: 'Supplier email',
   contractor_invoice: 'Contractor invoice',
   fte_expense_item: 'Employee expense',
+  card_receipt: 'Company-card receipt',
   car_document: 'Car document',
 }
 
@@ -89,6 +91,7 @@ const SOURCE_TYPE_TONE = {
   supplier_email:     'bg-blue-500/20 text-blue-300 border-blue-500/40',
   contractor_invoice: 'bg-purple-500/20 text-purple-300 border-purple-500/40',
   fte_expense_item:   'bg-orange-500/20 text-orange-300 border-orange-500/40',
+  card_receipt:       'bg-pink-500/20 text-pink-300 border-pink-500/40',
   car_document:       'bg-teal-500/20 text-teal-300 border-teal-500/40',
 }
 

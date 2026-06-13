@@ -7,11 +7,13 @@
 // documented #382 bug class).
 //
 // One receipt per company-card purchase (STANDALONE — not batched like
-// FTE expenses). A card holder photographs / uploads the receipt; the
-// bytes go DIRECT to Supabase Storage (the same three-step flow as the
-// contractor invoice / SPEND.P1 receipt path), then a JSON finalise
-// inserts the row. Owner/master approve; it then rides the existing
-// bookkeeper → Xero queue.
+// FTE expenses). The submitter ONLY provides the receipt photo/PDF (+ an
+// optional "which card" last-4 + note) — they type NO financial fields.
+// The bytes go DIRECT to Supabase Storage (the same three-step flow as
+// the contractor invoice / SPEND.P1 receipt path), then a JSON finalise
+// auto-files the row to the bookkeeper queue. The bookkeeper's OCR reads
+// amount / merchant / date / VAT off the photo downstream in /invoices
+// and files it to Xero. There is NO owner-approval step.
 
 import Constants from 'expo-constants'
 import { authHeaders } from './api'
@@ -32,16 +34,12 @@ function inferReceiptMime(name) {
 }
 
 /**
- * GET /api/card-receipts — role-aware list. Owner/master get the
- * active-location queue; everyone else gets their own submissions. The
- * server returns the appropriate set automatically; the optional status
- * filter narrows it (submitted | awaiting_accountant_review | declined |
- * revoked).
+ * GET /api/card-receipts — the caller's OWN submissions only. Returns
+ * rows shaped { id, status, card_last4, notes, submitted_at, location }.
  */
-export async function listCardReceipts(status) {
+export async function listCardReceipts() {
   const headers = await authHeaders()
-  const qs = status ? `?status=${encodeURIComponent(status)}` : ''
-  const res = await fetch(`${API_BASE}/api/card-receipts${qs}`, { headers })
+  const res = await fetch(`${API_BASE}/api/card-receipts`, { headers })
   return res.json().catch(() => ({ success: false, error: `Bad response (${res.status})` }))
 }
 
@@ -57,35 +55,13 @@ export async function getCardReceiptUrl(id) {
   return res.json().catch(() => ({ success: false, error: `Bad response (${res.status})` }))
 }
 
-// APPROVALS — owner/master approve or decline a submitted card receipt.
-// Decline requires a reason (the route 400s without it).
-export async function approveCardReceipt(id) {
-  const headers = await authHeaders()
-  const res = await fetch(`${API_BASE}/api/card-receipts/${id}/approve`, { method: 'POST', headers })
-  return res.json().catch(() => ({ success: false, error: `Bad response (${res.status})` }))
-}
-
-export async function declineCardReceipt(id, reason) {
-  const headers = await authHeaders({ json: true })
-  const res = await fetch(`${API_BASE}/api/card-receipts/${id}/decline`, {
-    method: 'POST', headers, body: JSON.stringify({ reason }),
-  })
-  return res.json().catch(() => ({ success: false, error: `Bad response (${res.status})` }))
-}
-
-// REVOKE — submitter pulls back their own submitted receipt.
-export async function revokeCardReceipt(id) {
-  const headers = await authHeaders()
-  const res = await fetch(`${API_BASE}/api/card-receipts/${id}/revoke`, {
-    method: 'POST',
-    headers,
-  })
-  return res.json().catch(() => ({ success: false, error: `Bad response (${res.status})` }))
-}
-
 /**
  * Submit a new company-card receipt. file = { uri, name, mimeType, size? }
  * from expo-document-picker (PDF) or expo-image-picker (receipt photo).
+ *
+ * The submitter provides ONLY the photo (+ optional card last-4 + note) —
+ * NO amount/merchant/date/VAT. Accounts read those off the photo in
+ * /invoices downstream.
  *
  * Three-step direct-to-storage flow — identical to submitInvoice(). The
  * bytes go straight from the device to the private company-card-receipts
@@ -94,12 +70,10 @@ export async function revokeCardReceipt(id) {
  *   1. /api/card-receipts/upload-sign mints a path + signed-upload token.
  *   2. The file uploads directly to Supabase Storage (uploadToSignedUrl —
  *      the token is the authz).
- *   3. /api/card-receipts (JSON finalise) verifies the object and inserts.
+ *   3. /api/card-receipts (JSON finalise) verifies the object, inserts,
+ *      and auto-files to the bookkeeper queue.
  */
-export async function submitCardReceipt({
-  purchaseDate, amount, vatAmount, merchant, description, cardLast4,
-  notes, locationId, file,
-}) {
+export async function submitCardReceipt({ cardLast4, notes, locationId, file }) {
   const fileName = file.name || 'receipt.jpg'
   // Carry the real attachment type through to storage so the signed URL
   // later serves the right Content-Type and renders inline. Extension
@@ -141,17 +115,14 @@ export async function submitCardReceipt({
     return { success: false, error: `Upload failed: ${upErr.message}` }
   }
 
-  // 3. Finalise — the server verifies the stored object and inserts the row.
+  // 3. Finalise — the server verifies the stored object, inserts the row,
+  // and files it to the bookkeeper queue. Body is ONLY the photo path +
+  // the two optional submitter fields.
   const headers = await authHeaders({ locationId, json: true })
   const res = await fetch(`${API_BASE}/api/card-receipts`, {
     method: 'POST',
     headers,
     body: JSON.stringify({
-      purchase_date: purchaseDate,
-      amount: Number(amount),
-      vat_amount: vatAmount != null && vatAmount !== '' ? Number(vatAmount) : undefined,
-      merchant: merchant || undefined,
-      description: description || undefined,
       card_last4: cardLast4 || undefined,
       notes: notes || undefined,
       location_id: locationId || undefined,
@@ -164,10 +135,13 @@ export async function submitCardReceipt({
 
 // ── Display helper ────────────────────────────────────────────────
 
-export function formatPurchaseDate(dateStr) {
-  if (!dateStr) return ''
-  const d = new Date(dateStr + 'T00:00:00Z')
+// submitted_at is a full ISO timestamp (not the old YYYY-MM-DD
+// purchase_date), so parse it as-is and show the local calendar day.
+export function formatSubmittedAt(iso) {
+  if (!iso) return ''
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return ''
   return d.toLocaleDateString(undefined, {
-    day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC',
+    day: 'numeric', month: 'short', year: 'numeric',
   })
 }

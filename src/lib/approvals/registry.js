@@ -46,7 +46,6 @@
 //     source pages — this registry is best-effort filter, not auth.
 
 import { contractorInvoicesProvider } from './providers/contractor-invoices'
-import { cardReceiptsProvider } from './providers/card-receipts'
 import { fteExpensesProvider } from './providers/fte-expenses'
 import { timeOffProvider } from './providers/time-off'
 import { shiftSwapsProvider } from './providers/shift-swaps'
@@ -62,9 +61,6 @@ export const APPROVALS_PROVIDERS = Object.freeze([
   // (the inbox UI hides 0-count tabs by default in another change).
   invoicesQueueProvider,
   contractorInvoicesProvider,
-  // SPEND.P3 — company-card receipts. Same finance-approver gate as
-  // contractor invoices; sits beside them in the queue.
-  cardReceiptsProvider,
   fteExpensesProvider,
   // REPORT-ISSUE.2 — staff-submitted issue reports. Sits next to
   // expenses (operational items needing handler action) ahead of
