@@ -25,15 +25,17 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { hasPermission, hasMobilePermission } from '@/lib/permissions'
 
 const ALLOWED_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif', 'image/avif']
 const MAX_BYTES = 15 * 1024 * 1024   // 15MB — TV art is full-bleed 1920×1080+
 
 export async function POST(request) {
   const user = await getCurrentUser()
-  // Same gate as the /admin/tv-displays page itself.
-  if (!user || !hasPermission(user, 'tv_displays')) {
+  // Same gate as the /admin/tv-displays page itself, plus the mobile
+  // tv_displays permission so the phone's "Push → Photo" can upload here
+  // (TV-MOBILE.B).
+  if (!user || (!hasPermission(user, 'tv_displays') && !hasMobilePermission(user, 'tv_displays'))) {
     return NextResponse.json({ success: false, error: 'Not authorised for TV displays' }, { status: 403 })
   }
 
