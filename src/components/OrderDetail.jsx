@@ -170,7 +170,8 @@ export default function OrderDetail({ orderId }) {
       {/* Source summary */}
       <SourceSummary source={source} />
 
-      {/* Retry chain */}
+      {/* Retry chain — each pending line can be cancelled inline so an
+          operator can clear out a buyer's duplicate attempts from here. */}
       {chain.length > 1 && (
         <section>
           <h3 className="text-sm font-semibold text-un1t-text mb-2 inline-flex items-center gap-2">
@@ -178,25 +179,7 @@ export default function OrderDetail({ orderId }) {
           </h3>
           <div className="space-y-2">
             {chain.map((c) => (
-              <Link
-                key={c.id}
-                href={`/orders/${c.id}`}
-                className={`block bg-un1t-surface border rounded-md p-3 flex items-center justify-between gap-3 hover:bg-un1t-border/20 ${
-                  c.id === order.id ? 'border-un1t-text' : 'border-un1t-border'
-                }`}
-              >
-                <div className="flex items-center gap-3">
-                  <StatusPill status={c.status} />
-                  <span className="text-sm text-un1t-text tabular-nums">
-                    {formatMoney(c.amount_cents, c.currency)}
-                  </span>
-                  <span className="text-[11px] text-un1t-subtle">{fmtDateTime(c.created_at)}</span>
-                  {c.id === order.id && (
-                    <span className="text-[10px] uppercase tracking-wider text-un1t-muted">this order</span>
-                  )}
-                </div>
-                <ExternalLink size={12} className="text-un1t-subtle" />
-              </Link>
+              <ChainRow key={c.id} c={c} isCurrent={c.id === order.id} onCancelled={load} />
             ))}
           </div>
         </section>
@@ -228,6 +211,72 @@ export default function OrderDetail({ orderId }) {
           </ol>
         )}
       </section>
+    </div>
+  )
+}
+
+// One retry-chain row. The info area links to that order; a pending row
+// also gets an inline Cancel (ORDERS-CANCEL.1) so the operator can clear
+// duplicate attempts without opening each one. onCancelled refetches.
+function ChainRow({ c, isCurrent, onCancelled }) {
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState(null)
+
+  async function cancel() {
+    if (busy) return
+    if (typeof window !== 'undefined' && !window.confirm('Cancel this pending order? It moves to the Cancelled tab.')) return
+    setBusy(true)
+    setErr(null)
+    try {
+      const r = await fetch(`/api/orders/${c.id}/cancel`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      })
+      const j = await r.json()
+      if (!r.ok || j.success === false) {
+        setErr(j.error || `Cancel failed (${r.status})`)
+        setBusy(false)
+        return
+      }
+      onCancelled?.()
+    } catch (e) {
+      setErr(e.message || 'Network error')
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className={`bg-un1t-surface border rounded-md ${isCurrent ? 'border-un1t-text' : 'border-un1t-border'}`}>
+      <div className="flex items-center justify-between gap-3 p-3">
+        <Link href={`/orders/${c.id}`} className="flex items-center gap-3 flex-1 min-w-0 hover:opacity-80">
+          <StatusPill status={c.status} />
+          <span className="text-sm text-un1t-text tabular-nums">
+            {formatMoney(c.amount_cents, c.currency)}
+          </span>
+          <span className="text-[11px] text-un1t-subtle">{fmtDateTime(c.created_at)}</span>
+          {isCurrent && (
+            <span className="text-[10px] uppercase tracking-wider text-un1t-muted">this order</span>
+          )}
+        </Link>
+        <div className="flex items-center gap-3 shrink-0">
+          {c.status === 'pending' && (
+            <button
+              type="button"
+              onClick={cancel}
+              disabled={busy}
+              title="Cancel this pending order"
+              className="text-[11px] text-un1t-subtle hover:text-red-700 inline-flex items-center gap-1 disabled:opacity-50"
+            >
+              {busy ? <Loader2 size={11} className="animate-spin" /> : <Ban size={11} />} Cancel
+            </button>
+          )}
+          <Link href={`/orders/${c.id}`} className="text-un1t-subtle hover:text-un1t-text">
+            <ExternalLink size={12} />
+          </Link>
+        </div>
+      </div>
+      {err && <div className="text-[11px] text-red-700 px-3 pb-2">{err}</div>}
     </div>
   )
 }
