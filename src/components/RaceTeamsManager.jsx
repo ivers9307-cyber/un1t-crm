@@ -8,7 +8,7 @@
 // adjust without context-switching.
 
 import { useEffect, useState } from 'react'
-import { Plus, Trash2, Loader2, AlertCircle, Users, Check, X, Pencil, Star, BadgeCheck, Clock, Copy, Ban } from 'lucide-react'
+import { Plus, Trash2, Loader2, AlertCircle, Users, Check, X, Pencil, Star, BadgeCheck, Clock, Copy, Ban, MessageSquare } from 'lucide-react'
 
 export default function RaceTeamsManager({ race }) {
   const [registrations, setRegistrations] = useState(null)
@@ -253,6 +253,7 @@ function TeamCard({ registration, waves, onChanged, onError }) {
   const [showAddMember, setShowAddMember] = useState(false)
   const [busy, setBusy] = useState(false)
   const [copied, setCopied] = useState(false)
+  const [smsState, setSmsState] = useState(null) // null | 'sending' | 'sent'
 
   async function moveWave(newWaveId) {
     if (newWaveId === registration.wave_id) return
@@ -282,6 +283,32 @@ function TeamCard({ registration, waves, onChanged, onError }) {
       setTimeout(() => setCopied(false), 2000)
     } catch {
       onError(`Couldn't copy automatically. Link: ${url}`)
+    }
+  }
+
+  // Text the registrant their payment link via the platform's Twilio
+  // sender (company number, not the operator's phone). The route
+  // re-reads the payment row server-side — the phone surfaced on
+  // registration.payment is only for gating + the confirm dialog.
+  async function sendPaymentSms() {
+    const phone = registration.payment?.contact_phone
+    if (!phone) { onError('No phone number on file for this registrant.'); return }
+    const who = registration.payment?.contact_name || team?.name || 'this registrant'
+    if (!confirm(`Text the payment link to ${who} at ${phone}?`)) return
+    setSmsState('sending')
+    try {
+      const r = await fetch(`/api/registrations/${registration.id}/payment-sms`, { method: 'POST' })
+      const j = await r.json()
+      if (!r.ok || j.success === false) {
+        onError(j.error || 'Could not send the payment SMS.')
+        setSmsState(null)
+        return
+      }
+      setSmsState('sent')
+      setTimeout(() => setSmsState(null), 2500)
+    } catch (e) {
+      onError(e.message || 'Network error')
+      setSmsState(null)
     }
   }
 
@@ -360,6 +387,23 @@ function TeamCard({ registration, waves, onChanged, onError }) {
               title="Copy the payment link to send to the customer"
             >
               <Copy size={11} /> {copied ? 'Copied!' : 'Payment link'}
+            </button>
+          )}
+          {registration.status === 'pending_payment' && registration.payment?.checkout_url && registration.payment?.contact_phone && (
+            <button
+              type="button"
+              onClick={sendPaymentSms}
+              disabled={busy || smsState === 'sending'}
+              className="text-[11px] text-un1t-accent hover:underline inline-flex items-center gap-1 disabled:opacity-40"
+              title={`Text the payment link to ${registration.payment.contact_phone}`}
+            >
+              {smsState === 'sending' ? (
+                <><Loader2 size={11} className="animate-spin" /> Sending…</>
+              ) : smsState === 'sent' ? (
+                <><Check size={11} /> Sent!</>
+              ) : (
+                <><MessageSquare size={11} /> Text link</>
+              )}
             </button>
           )}
           {registration.status === 'cancelled' ? (

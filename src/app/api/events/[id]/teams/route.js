@@ -76,7 +76,7 @@ export async function GET(_request, props) {
   if (regIds.length > 0) {
     const { data: payments } = await db
       .from('race_payments')
-      .select('id, race_registration_id, status, payment_checkout_url, created_at')
+      .select('id, race_registration_id, status, payment_checkout_url, contact_phone, contact_name, created_at')
       .in('race_registration_id', regIds)
       .order('created_at', { ascending: false })
     const byReg = {}
@@ -86,6 +86,11 @@ export async function GET(_request, props) {
           id: pmt.id,
           status: pmt.status,
           checkout_url: pmt.payment_checkout_url || null,
+          // Surfaced so the control board can show + gate the "Text link"
+          // action (RACE2.6 follow-up). The actual send re-reads the row
+          // server-side — this is just for render + the confirm dialog.
+          contact_phone: pmt.contact_phone || null,
+          contact_name: pmt.contact_name || null,
         }
       }
     }
