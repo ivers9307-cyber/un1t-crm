@@ -130,7 +130,11 @@ const WEB_ONLY_OK = {
   // the Studio Management section. Each got its own permission so
   // operators can grant access per user (previously role-only gated).
   contracts:          'Digital contract issue + sign + revoke flow lives at /admin/contracts. Desktop-only — managing legal documents on a phone is a worse experience than the laptop, and the typed-name signature ceremony already uses a dedicated mobile flow under /contracts (gated by `notify_contract_issued`).',
-  tv_displays:        'TV display registration + content push (UC Cast Pro) at /admin/tv-displays. Studio-TV surface — operators configure these from the laptop while looking at the actual TV, not from a phone.',
+  // STUDIO-HUB.1: tv_displays now has a mobile counterpart (the matching
+  // MOBILE_PERMISSIONS entry, webEquivalent: 'tv_displays') — the mobile
+  // Studio hub's TV tile (view TVs + current content + cast URL + clear).
+  // Content authoring (templates / uploads) stays desktop-only but rides
+  // the same web key, so no exemption is needed now the key has a surface.
   glofox_import:      'Interactive Glofox member import + sync history at /admin/glofox-import. Bulk-data CSV / preview operation that needs desktop screen real estate; the daily cron handles the ongoing sync without operator input.',
   preferences_import: 'Bulk marketing-preferences CSV import at /admin/marketing-import. Same shape as glofox_import — a preview-and-commit flow that wants a wide screen.',
   // W2 (parity inversion): the invoice approver inbox (review + approve /
