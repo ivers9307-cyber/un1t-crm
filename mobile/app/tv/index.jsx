@@ -22,6 +22,7 @@ import {
   registerTvDisplay, deleteTvDisplay, setTvRotation,
   TV_ORIENTATIONS, orientationLabel,
 } from '../../lib/tv-api'
+import TvPushModal from '../../components/TvPushModal'
 
 export default function TvScreen() {
   const { profile, activeLocation } = useAuth()
@@ -33,6 +34,7 @@ export default function TvScreen() {
   const [error, setError] = useState(null)
   const [refreshing, setRefreshing] = useState(false)
   const [registerOpen, setRegisterOpen] = useState(false)
+  const [pushTv, setPushTv] = useState(null) // the TV being pushed to (TV-MOBILE.B)
 
   const load = useCallback(async () => {
     if (!activeLocation?.id) { setTvs([]); return }
@@ -146,6 +148,7 @@ export default function TvScreen() {
             <TvCard
               key={tv.id}
               tv={tv}
+              onPush={() => setPushTv(tv)}
               onClear={() => confirmClear(tv)}
               onDelete={() => confirmDelete(tv)}
               onOrientation={() => chooseOrientation(tv)}
@@ -153,6 +156,15 @@ export default function TvScreen() {
           ))}
         </View>
       )}
+
+      <TvPushModal
+        visible={!!pushTv}
+        tv={pushTv}
+        locationId={activeLocation?.id}
+        userId={profile?.id}
+        onClose={() => setPushTv(null)}
+        onPushed={() => { setPushTv(null); load().catch(() => {}) }}
+      />
 
       <RegisterModal
         visible={registerOpen}
@@ -169,7 +181,7 @@ export default function TvScreen() {
   )
 }
 
-function TvCard({ tv, onClear, onDelete, onOrientation }) {
+function TvCard({ tv, onPush, onClear, onDelete, onOrientation }) {
   const content = tv.content
   const showing = !!content
   const castUrl = castUrlForToken(tv.token)
@@ -208,16 +220,26 @@ function TvCard({ tv, onClear, onDelete, onOrientation }) {
         </View>
       ) : null}
 
-      {showing && (
+      <View className="flex-row gap-2 mt-3">
         <Pressable
-          onPress={onClear}
+          onPress={onPush}
           accessibilityRole="button"
-          accessibilityLabel={`Clear ${tv.label}`}
-          className="mt-3 py-2 rounded-lg items-center border border-red-500/40 active:opacity-70"
+          accessibilityLabel={`Push content to ${tv.label}`}
+          className="flex-1 py-2 rounded-lg items-center bg-un1t-text active:opacity-80"
         >
-          <Text className="text-sm font-semibold text-red-700">Clear to idle</Text>
+          <Text className="text-sm font-semibold text-un1t-bg">Push content</Text>
         </Pressable>
-      )}
+        {showing && (
+          <Pressable
+            onPress={onClear}
+            accessibilityRole="button"
+            accessibilityLabel={`Clear ${tv.label}`}
+            className="py-2 px-4 rounded-lg items-center border border-red-500/40 active:opacity-70"
+          >
+            <Text className="text-sm font-semibold text-red-700">Clear</Text>
+          </Pressable>
+        )}
+      </View>
     </View>
   )
 }

@@ -12,6 +12,7 @@
 
 import Constants from 'expo-constants'
 import { supabase } from './supabase'
+import { authHeaders } from './api'
 
 const API_BASE = Constants.expoConfig?.extra?.apiBaseUrl || ''
 
@@ -106,6 +107,99 @@ export async function deleteTvDisplay(id) {
 /** Set how the panel is physically hung — the cast picks it up on its next poll. */
 export async function setTvRotation(id, rotation) {
   const { error } = await supabase.from('tv_displays').update({ rotation }).eq('id', id)
+  if (error) return { success: false, error: error.message }
+  return { success: true }
+}
+
+// ── Phase B: push content (URL / photo / template) ─────────────────
+
+/** The location's reusable templates (base image + fixed text zones). */
+export async function listTvTemplates(locationId) {
+  if (!locationId) return { success: true, data: [] }
+  const { data, error } = await supabase
+    .from('tv_templates')
+    .select('id, name, base_image_path, zones')
+    .eq('location_id', locationId)
+    .order('name', { ascending: true })
+  if (error) return { success: false, error: error.message }
+  return { success: true, data: data || [] }
+}
+
+/** Public URL for a tv-content bucket path (templates + uploaded images). */
+export function tvImageUrl(path) {
+  if (!path) return ''
+  try {
+    return supabase.storage.from('tv-content').getPublicUrl(path).data.publicUrl
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * Seed per-zone push values from a template — copies each zone's saved
+ * geometry + styling and the default text, so a mobile push (text-only
+ * edit) renders identically to a web push with default styling.
+ * Mirrors the web PushModal's pickTemplate seed.
+ */
+export function seedTemplateValues(template) {
+  const seed = {}
+  for (const z of template?.zones || []) {
+    seed[z.id] = {
+      text: z.defaultText || '',
+      fontSize: z.fontSize ?? 6,
+      fontWeight: z.fontWeight ?? 700,
+      color: z.color || '#FFFFFF',
+      align: z.align || 'center',
+      vAlign: z.vAlign || 'middle',
+      uppercase: !!z.uppercase,
+      lineHeight: z.lineHeight ?? 1.15,
+      x: z.x ?? 0, y: z.y ?? 0, width: z.width ?? 100, height: z.height ?? 100,
+      colorRuns: Array.isArray(z.colorRuns) ? z.colorRuns : [],
+    }
+  }
+  return seed
+}
+
+/**
+ * Upload a picked image to the tv-content bucket via the (service-role)
+ * upload route — the browser/mobile client can't write that bucket
+ * directly. Multipart, so it bypasses api() (JSON-only) and uses
+ * authHeaders() with no json flag (RN sets the FormData boundary).
+ * Returns { success, path } — the storage path for a 'storage' push.
+ */
+export async function uploadTvImage({ uri, name, mimeType }, locationId) {
+  const headers = await authHeaders({ locationId })
+  const form = new FormData()
+  form.append('file', { uri, name: name || 'tv-image.jpg', type: mimeType || 'image/jpeg' })
+  form.append('kind', 'content')
+  form.append('location_id', locationId)
+  let res
+  try {
+    res = await fetch(`${API_BASE}/api/admin/tv-displays/upload`, { method: 'POST', headers, body: form })
+  } catch (e) {
+    return { success: false, error: `Network error: ${e.message || e}` }
+  }
+  const json = await res.json().catch(() => ({}))
+  if (!res.ok || !json.success) return { success: false, error: json.error || `Upload failed (${res.status})` }
+  return { success: true, path: json.path }
+}
+
+/**
+ * Push content to a TV — upserts the single tv_content row (RLS-direct).
+ * source_type: 'url' | 'storage' | 'template'. template_values carries
+ * the per-zone text for a template push (null otherwise).
+ */
+export async function pushTvContent(tvDisplayId, { source_type, source_ref, label, template_values } = {}, pushedBy) {
+  const { error } = await supabase.from('tv_content').upsert({
+    tv_display_id: tvDisplayId,
+    source_type,
+    source_ref,
+    label: label || null,
+    template_values: template_values ?? null,
+    pushed_at: new Date().toISOString(),
+    pushed_by: pushedBy || null,
+    triggered_by: pushedBy ? `manual:${pushedBy}` : 'manual',
+  }, { onConflict: 'tv_display_id' })
   if (error) return { success: false, error: error.message }
   return { success: true }
 }
