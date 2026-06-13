@@ -23,6 +23,7 @@ import { approvalsBadgeCount } from '../../lib/approvals'
 import { listInboxIssues } from '../../lib/issues-api'
 import { listInvoices } from '../../lib/invoices-api'
 import { accountingLanding, ACCOUNTING_ROUTES } from '../../lib/accounting'
+import { eventsLanding, EVENTS_ROUTES } from '../../lib/events-hub'
 import { buildSummary } from '../../lib/build-info'
 import { useBiometricLock } from '../../lib/biometric-lock'
 
@@ -205,14 +206,23 @@ export default function More() {
   // reaches the inbox via the chooser, gated by issue_triage there.)
   // (Invoices approver inbox now lives inside the Accounting hub above —
   // the approver reaches it via the chooser, gated by invoices_inbox.)
-  // W2 — revenue read view (race signups + car deposits). Manager+/owner/master.
-  if (canMobile(profile, 'orders', activeLocation)) tiles.push({ key: 'orders', icon: 'cash-outline', label: 'Orders', onPress: () => router.push('/orders') })
+  // EVENTS-HUB.1 — one "Events" tile for the event-side surfaces: the
+  // Orders revenue ledger (race signups + car deposits) and trackside
+  // Race control. Routes by access level — a single-surface user goes
+  // straight to their one surface; with both, the hub shows a chooser.
+  // Replaces the old separate Orders + Race control tiles.
+  const evLanding = eventsLanding({
+    canOrders: canMobile(profile, 'orders', activeLocation),
+    canRaceControl: canMobile(profile, 'races', activeLocation),
+  })
+  if (evLanding) {
+    tiles.push({ key: 'events', icon: 'calendar-outline', label: 'Events', onPress: () => router.push(EVENTS_ROUTES[evLanding]) })
+  }
   // W2 — CCF Autos car-import tracker (read-only). Off by default; master
   // or per-user opt-in, and only where car_processing is on at the location.
   if (canMobile(profile, 'car_processing', activeLocation)) tiles.push({ key: 'cars', icon: 'car-sport-outline', label: 'Cars', onPress: () => router.push('/cars') })
-  // W3 — trackside race-day control (start/finish/reset). Manager+ default;
-  // only where races are enabled at the location.
-  if (canMobile(profile, 'races', activeLocation)) tiles.push({ key: 'races', icon: 'flag-outline', label: 'Race control', onPress: () => router.push('/races') })
+  // (Race control now lives inside the Events hub above — reached via the
+  // chooser, gated by the `races` permission there.)
   // W1 — per-location feature toggles (master only; matches the web
   // canEditLocationFeatures gate). Flip which features this studio shows.
   if (profile?.isMaster || profile?.role === 'master') tiles.push({ key: 'features', icon: 'options-outline', label: 'Location features', onPress: () => router.push('/location-features') })
