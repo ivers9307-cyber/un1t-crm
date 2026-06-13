@@ -26,3 +26,22 @@ export function sendContactWhatsApp(contactId, { text, templateName } = {}) {
   const body = templateName ? { template_name: templateName } : { text }
   return api(`/api/contacts/${contactId}/whatsapp`, { method: 'POST', body })
 }
+
+/**
+ * MOBILE-CONTACT-SEND.1 — send an SMS to a contact via the company
+ * Twilio sender (not the phone's Messages app). The route gates on the
+ * web `sms` OR mobile `sms` permission and rejects opted-out numbers.
+ */
+export function sendContactSms(contactId, { body } = {}) {
+  return api(`/api/contacts/${contactId}/sms`, { method: 'POST', body: { body } })
+}
+
+/**
+ * MOBILE-CONTACT-SEND.1 — send a one-off transactional email to a
+ * contact via the company Postmark sender (not the phone's Mail app).
+ * The route gates on the web `email` OR mobile `email` permission and
+ * rejects bounced / complained / unsubscribed addresses.
+ */
+export function sendContactEmail(contactId, { subject, body } = {}) {
+  return api(`/api/contacts/${contactId}/email`, { method: 'POST', body: { subject, body } })
+}

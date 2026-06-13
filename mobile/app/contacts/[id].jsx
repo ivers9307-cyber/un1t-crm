@@ -8,7 +8,10 @@ import { Ionicons } from '@expo/vector-icons'
 import {
   getContact, listActivitiesForContact, prettyStage, contactDisplayName,
 } from '../../lib/contacts-api'
+import { useAuth } from '../../lib/auth-context'
+import { canMobile } from '../../lib/permissions'
 import BackHeaderLeft from '../../components/BackHeaderLeft'
+import ContactComposeModal from '../../components/ContactComposeModal'
 
 function digits(s) { return (s || '').replace(/[^0-9+]/g, '') }
 
@@ -40,9 +43,12 @@ export default function ContactDetail() {
   const params = useLocalSearchParams()
   const id = Array.isArray(params.id) ? params.id[0] : params.id
 
+  const { profile, activeLocation } = useAuth()
   const [contact, setContact] = useState(null)
   const [activities, setActivities] = useState([])
   const [error, setError] = useState(null)
+  // MOBILE-CONTACT-SEND.1 — which channel composer (if any) is open.
+  const [composeChannel, setComposeChannel] = useState(null)
 
   const load = useCallback(async () => {
     const res = await getContact(id)
@@ -80,12 +86,14 @@ export default function ContactDetail() {
             </View>
           )}
 
-          {/* Quick actions */}
+          {/* Quick actions. Call stays a phone dial; Text / WhatsApp /
+              Email send through the platform's linked services (company
+              sender), gated per-channel by the mobile messaging perms. */}
           <View className="flex-row gap-2 mt-4">
             {contact.phone && <ActionButton icon="call-outline" label="Call" onPress={() => openUrl(`tel:${digits(contact.phone)}`)} />}
-            {contact.phone && <ActionButton icon="chatbubble-outline" label="Text" onPress={() => openUrl(`sms:${digits(contact.phone)}`)} />}
-            {(contact.wa_phone || contact.phone) && <ActionButton icon="logo-whatsapp" label="WhatsApp" onPress={() => openUrl(`https://wa.me/${digits(contact.wa_phone || contact.phone).replace(/^\+/, '')}`)} />}
-            {contact.email && <ActionButton icon="mail-outline" label="Email" onPress={() => openUrl(`mailto:${contact.email}`)} />}
+            {contact.phone && canMobile(profile, 'sms', activeLocation) && <ActionButton icon="chatbubble-outline" label="Text" onPress={() => setComposeChannel('sms')} />}
+            {(contact.wa_phone || contact.phone) && canMobile(profile, 'whatsapp', activeLocation) && <ActionButton icon="logo-whatsapp" label="WhatsApp" onPress={() => setComposeChannel('whatsapp')} />}
+            {contact.email && canMobile(profile, 'email', activeLocation) && <ActionButton icon="mail-outline" label="Email" onPress={() => setComposeChannel('email')} />}
           </View>
 
           {/* Fields */}
@@ -116,6 +124,16 @@ export default function ContactDetail() {
 
           <Text className="text-[11px] text-un1t-muted text-center mt-5 px-4">Editing contacts stays on the web for now.</Text>
         </ScrollView>
+      )}
+
+      {contact && (
+        <ContactComposeModal
+          visible={!!composeChannel}
+          channel={composeChannel}
+          contactId={id}
+          contactName={contactDisplayName(contact)}
+          onClose={() => { setComposeChannel(null); load().catch(() => {}) }}
+        />
       )}
     </View>
   )

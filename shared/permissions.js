@@ -264,6 +264,16 @@ export const MOBILE_PERMISSIONS = Object.freeze([
   // every role, same as web — front-of-house staff look members up too.
   { key: 'contacts',           label: 'Contacts',                 hint: 'Search the member directory and open a contact to call / message them. Read-only on mobile; editing stays on web.', webEquivalent: 'contacts' },
   { key: 'whatsapp',           label: 'WhatsApp Inbox',           hint: 'Reply to inbound WhatsApp messages on the go',                  webEquivalent: 'whatsapp' },
+  // MOBILE-CONTACT-SEND.1 — ad-hoc one-to-one send from the mobile
+  // contact card, via the platform's linked service (Twilio / Postmark)
+  // so the message comes from the company, not the staffer's personal
+  // phone. These gate the SMS / Email buttons; WhatsApp reuses the
+  // `whatsapp` key above. webEquivalent links them to the web sms / email
+  // keys for the parity linter — dropping both from WEB_ONLY_OK, since the
+  // ad-hoc single-contact send is no longer web-only (broadcasts /
+  // campaign editor stay desktop-only and keep their web gating).
+  { key: 'sms',                label: 'SMS (send to a contact)',  hint: 'Text a contact from the company Twilio sender, not your phone. Broadcasts/sequences stay on web.', webEquivalent: 'sms' },
+  { key: 'email',              label: 'Email (send to a contact)', hint: 'Email a contact from the company Postmark sender, not your phone. The campaign editor stays on web.', webEquivalent: 'email' },
   // NOTIF.2: mobile mirror of the web 'activities' feature (Tasks tab).
   // Different name from the web key because 'tasks' reads better on a
   // small screen — the parity linter uses webEquivalent='activities'
@@ -399,6 +409,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
   // also short-circuits true for master regardless of these values.
   master: {
     schedule: true, pipeline: true, whatsapp: true,
+    sms: true, email: true,
     contacts: true,
     tasks: true, bookings: true,
     time_off: true,
@@ -424,6 +435,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
   },
   staff: {
     schedule: true, pipeline: false, whatsapp: false,
+    sms: false, email: false,
     contacts: true,
     // Coaches see tasks (they get assigned them) but not booking
     // reminders by default — those are for the on-shift operator,
@@ -456,6 +468,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
   },
   head_coach: {
     schedule: true, pipeline: true, whatsapp: true,
+    sms: true, email: true,
     contacts: true,
     tasks: true, bookings: true,
     time_off: true,
@@ -485,6 +498,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
   },
   manager: {
     schedule: true, pipeline: true, whatsapp: true,
+    sms: true, email: true,
     contacts: true,
     tasks: true, bookings: true,
     time_off: true,
@@ -516,6 +530,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
   },
   owner: {
     schedule: true, pipeline: true, whatsapp: true,
+    sms: true, email: true,
     contacts: true,
     tasks: true, bookings: true,
     time_off: true,

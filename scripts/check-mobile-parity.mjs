@@ -85,8 +85,12 @@ const WEB_ONLY_OK = {
   //   - bookings  → mobile `bookings` permission (today/tomorrow op view)
   //   - activities → mobile `tasks` permission (assigned-to-me + complete)
   // Web still owns creation; mobile is read+complete.
-  email:          'Campaign editor is desktop-only.',
-  sms:            'SMS broadcasts/sequences/automations + ad-hoc sends from the contact profile are web-only — alpha sender ID is configured per-location in Location Settings (mig 059). No mobile SMS UI by design.',
+  // MOBILE-CONTACT-SEND.1: `email` and `sms` now have mobile counterparts
+  // (the matching MOBILE_PERMISSIONS entries, webEquivalent: 'email'/'sms')
+  // — the ad-hoc one-to-one send from the contact card. Broadcasts /
+  // sequences / the campaign editor stay desktop-only but ride the same
+  // web keys, so no exemption is needed now that the keys have a mobile
+  // surface (same pattern as `settings`/`staff_management` below).
   // STAFF-C3 (parity inversion): `settings` is no longer web-only — its
   // staff-management half now has a mobile counterpart (the
   // `staff_management` MOBILE_PERMISSIONS entry, webEquivalent: 'settings'),
