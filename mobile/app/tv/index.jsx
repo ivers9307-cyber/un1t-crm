@@ -11,7 +11,7 @@
 import { useState, useCallback } from 'react'
 import {
   View, Text, ScrollView, Pressable, ActivityIndicator, RefreshControl, Alert,
-  Modal, TextInput, KeyboardAvoidingView, Platform,
+  Modal, TextInput, KeyboardAvoidingView, Platform, Image,
 } from 'react-native'
 import { useRouter, useFocusEffect } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
@@ -21,6 +21,7 @@ import {
   listTvDisplays, clearTvContent, castUrlForToken,
   registerTvDisplay, deleteTvDisplay, setTvRotation,
   TV_ORIENTATIONS, orientationLabel,
+  listTvTemplates, tvImageUrl, deleteTvTemplate,
 } from '../../lib/tv-api'
 import TvPushModal from '../../components/TvPushModal'
 
@@ -31,17 +32,21 @@ export default function TvScreen() {
   const allowed = canMobile(profile, 'tv_displays', activeLocation)
 
   const [tvs, setTvs] = useState(null)
+  const [templates, setTemplates] = useState([])
   const [error, setError] = useState(null)
   const [refreshing, setRefreshing] = useState(false)
   const [registerOpen, setRegisterOpen] = useState(false)
   const [pushTv, setPushTv] = useState(null) // the TV being pushed to (TV-MOBILE.B)
 
   const load = useCallback(async () => {
-    if (!activeLocation?.id) { setTvs([]); return }
-    const r = await listTvDisplays(activeLocation.id)
-    if (!r.success) { setError(r.error || 'Failed to load TVs'); setTvs([]); return }
-    setError(null)
-    setTvs(r.data)
+    if (!activeLocation?.id) { setTvs([]); setTemplates([]); return }
+    const [tvRes, tplRes] = await Promise.all([
+      listTvDisplays(activeLocation.id),
+      listTvTemplates(activeLocation.id),
+    ])
+    if (!tvRes.success) { setError(tvRes.error || 'Failed to load TVs'); setTvs([]) }
+    else { setError(null); setTvs(tvRes.data) }
+    setTemplates(tplRes.success ? tplRes.data : [])
   }, [activeLocation?.id])
 
   useFocusEffect(useCallback(() => {
@@ -100,6 +105,17 @@ export default function TvScreen() {
     )
   }
 
+  function confirmDeleteTemplate(t) {
+    Alert.alert('Delete template', `Delete "${t.name}"? Any TV showing it falls back to the idle screen.`, [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Delete', style: 'destructive', onPress: async () => {
+        const r = await deleteTvTemplate(t.id)
+        if (!r.success) Alert.alert('Couldn’t delete', r.error || 'Unknown error')
+        load().catch(() => {})
+      } },
+    ])
+  }
+
   if (!allowed) {
     return (
       <View className="flex-1 bg-un1t-bg items-center justify-center p-6">
@@ -156,6 +172,13 @@ export default function TvScreen() {
           ))}
         </View>
       )}
+
+      <TemplatesSection
+        templates={templates}
+        onNew={() => router.push('/tv/template-edit')}
+        onEdit={(t) => router.push({ pathname: '/tv/template-edit', params: { id: t.id } })}
+        onDelete={confirmDeleteTemplate}
+      />
 
       <TvPushModal
         visible={!!pushTv}
@@ -290,5 +313,42 @@ function RegisterModal({ visible, onClose, onRegister }) {
         </KeyboardAvoidingView>
       </View>
     </Modal>
+  )
+}
+
+// TV-MOBILE.C — templates list (create / edit / delete). A template is a
+// branded base image + text zones; the editor lives at /tv/template-edit.
+function TemplatesSection({ templates, onNew, onEdit, onDelete }) {
+  return (
+    <View className="mt-7">
+      <View className="flex-row items-center justify-between mb-1">
+        <Text className="text-sm font-bold text-un1t-text">Templates</Text>
+        <Pressable onPress={onNew} accessibilityRole="button" accessibilityLabel="New template" className="flex-row items-center bg-un1t-text px-3 py-1.5 rounded-lg active:opacity-80">
+          <Ionicons name="add" size={15} color="#FFFFFF" />
+          <Text className="text-un1t-bg font-semibold text-xs ml-1">New</Text>
+        </Pressable>
+      </View>
+      <Text className="text-xs text-un1t-subtle mb-2">A branded base image with text zones — push it to a TV and fill in the text.</Text>
+      {templates.length === 0 ? (
+        <Text className="text-sm text-un1t-subtle">No templates yet. Tap New to design one.</Text>
+      ) : (
+        <View className="gap-2">
+          {templates.map((t) => (
+            <View key={t.id} className="flex-row items-center bg-un1t-surface border border-un1t-border rounded-2xl overflow-hidden">
+              <Image source={{ uri: tvImageUrl(t.base_image_path) }} resizeMode="cover" className="w-20 h-14 bg-un1t-bg" />
+              <Pressable onPress={() => onEdit(t)} className="flex-1 px-3 py-2 active:opacity-70">
+                <Text className="text-sm font-medium text-un1t-text" numberOfLines={1}>{t.name}</Text>
+                <Text className="text-[11px] text-un1t-subtle mt-0.5">
+                  {(t.zones?.length || 0)} text {t.zones?.length === 1 ? 'zone' : 'zones'} · tap to edit
+                </Text>
+              </Pressable>
+              <Pressable onPress={() => onDelete(t)} hitSlop={8} accessibilityRole="button" accessibilityLabel={`Delete ${t.name}`} className="px-3 py-3">
+                <Ionicons name="trash-outline" size={16} color="#EF4444" />
+              </Pressable>
+            </View>
+          ))}
+        </View>
+      )}
+    </View>
   )
 }

@@ -167,11 +167,11 @@ export function seedTemplateValues(template) {
  * authHeaders() with no json flag (RN sets the FormData boundary).
  * Returns { success, path } — the storage path for a 'storage' push.
  */
-export async function uploadTvImage({ uri, name, mimeType }, locationId) {
+export async function uploadTvImage({ uri, name, mimeType }, locationId, kind = 'content') {
   const headers = await authHeaders({ locationId })
   const form = new FormData()
   form.append('file', { uri, name: name || 'tv-image.jpg', type: mimeType || 'image/jpeg' })
-  form.append('kind', 'content')
+  form.append('kind', kind === 'template' ? 'template' : 'content')
   form.append('location_id', locationId)
   let res
   try {
@@ -200,6 +200,47 @@ export async function pushTvContent(tvDisplayId, { source_type, source_ref, labe
     pushed_by: pushedBy || null,
     triggered_by: pushedBy ? `manual:${pushedBy}` : 'manual',
   }, { onConflict: 'tv_display_id' })
+  if (error) return { success: false, error: error.message }
+  return { success: true }
+}
+
+// ── Phase C: template authoring (create / edit / delete) ───────────
+
+/** A single template by id (for the editor). */
+export async function getTvTemplate(id) {
+  const { data, error } = await supabase
+    .from('tv_templates')
+    .select('id, name, base_image_path, zones, location_id')
+    .eq('id', id)
+    .single()
+  if (error) return { success: false, error: error.message }
+  return { success: true, data }
+}
+
+/** Create or update a template. Pass `id` to update, omit to insert. */
+export async function saveTvTemplate({ id, locationId, name, base_image_path, zones, createdBy } = {}) {
+  if (!name?.trim()) return { success: false, error: 'A template name is required.' }
+  if (!base_image_path) return { success: false, error: 'A base image is required.' }
+  if (id) {
+    const { error } = await supabase
+      .from('tv_templates')
+      .update({ name: name.trim(), base_image_path, zones: zones || [], updated_at: new Date().toISOString() })
+      .eq('id', id)
+    if (error) return { success: false, error: error.message }
+    return { success: true, id }
+  }
+  const { data, error } = await supabase
+    .from('tv_templates')
+    .insert({ location_id: locationId, name: name.trim(), base_image_path, zones: zones || [], created_by: createdBy || null })
+    .select('id')
+    .single()
+  if (error) return { success: false, error: error.message }
+  return { success: true, id: data?.id }
+}
+
+/** Delete a template. Any TV showing it falls back to idle. */
+export async function deleteTvTemplate(id) {
+  const { error } = await supabase.from('tv_templates').delete().eq('id', id)
   if (error) return { success: false, error: error.message }
   return { success: true }
 }

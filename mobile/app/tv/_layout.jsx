@@ -19,6 +19,13 @@ export default function TvLayout() {
         name="index"
         options={{ title: 'TV displays', headerLeft: () => <BackHeaderLeft label="Studio" fallbackHref="/studio" /> }}
       />
+      {/* Template editor (TV-MOBILE.C) — pushed from the TV list; back
+          to the list (within this same stack, but supply it explicitly
+          so a cold deep-link still has somewhere to go). */}
+      <Stack.Screen
+        name="template-edit"
+        options={{ title: 'Template', headerLeft: () => <BackHeaderLeft label="TV displays" fallbackHref="/tv" /> }}
+      />
     </Stack>
   )
 }
