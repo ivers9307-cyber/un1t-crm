@@ -24,6 +24,19 @@ export function castUrlForToken(token) {
   return `${API_BASE.replace(/\/$/, '')}/tv/cast/${token}`
 }
 
+// Screen-rotation options (clockwise degrees), matched 1:1 by the CSS
+// rotate() the /tv/cast page applies (mig 189). Mirrors the web set.
+export const TV_ORIENTATIONS = Object.freeze([
+  { value: 0, label: 'Landscape' },
+  { value: 90, label: 'Portrait (rotated right)' },
+  { value: 270, label: 'Portrait (rotated left)' },
+  { value: 180, label: 'Landscape (upside down)' },
+])
+
+export function orientationLabel(rotation) {
+  return (TV_ORIENTATIONS.find((o) => o.value === (rotation ?? 0)) || TV_ORIENTATIONS[0]).label
+}
+
 /**
  * List the location's TVs with their current content (one tv_content
  * row per display, or none when the TV is idle).
@@ -38,7 +51,7 @@ export async function listTvDisplays(locationId) {
   if (!locationId) return { success: true, data: [] }
   const { data: displays, error } = await supabase
     .from('tv_displays')
-    .select('id, label, token, active, location_id, created_at')
+    .select('id, label, token, active, rotation, location_id, created_at')
     .eq('location_id', locationId)
     .order('created_at', { ascending: true })
   if (error) return { success: false, error: error.message }
@@ -66,6 +79,33 @@ export async function clearTvContent(tvDisplayId) {
     .from('tv_content')
     .delete()
     .eq('tv_display_id', tvDisplayId)
+  if (error) return { success: false, error: error.message }
+  return { success: true }
+}
+
+// ── Phase A: management (register / delete / orientation) ──────────
+// All RLS-direct writes (tv_displays is authenticated-in-location CRUD).
+
+/** Register a new TV at the location. A unique token is auto-generated. */
+export async function registerTvDisplay(locationId, label) {
+  if (!locationId || !label?.trim()) return { success: false, error: 'A label is required.' }
+  const { error } = await supabase
+    .from('tv_displays')
+    .insert({ location_id: locationId, label: label.trim() })
+  if (error) return { success: false, error: error.message }
+  return { success: true }
+}
+
+/** Delete a TV. Its cast URL stops working (idempotent if already gone). */
+export async function deleteTvDisplay(id) {
+  const { error } = await supabase.from('tv_displays').delete().eq('id', id)
+  if (error) return { success: false, error: error.message }
+  return { success: true }
+}
+
+/** Set how the panel is physically hung — the cast picks it up on its next poll. */
+export async function setTvRotation(id, rotation) {
+  const { error } = await supabase.from('tv_displays').update({ rotation }).eq('id', id)
   if (error) return { success: false, error: error.message }
   return { success: true }
 }
