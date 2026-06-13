@@ -2,6 +2,7 @@
 // tab bar hides; reached from the Studio hub's TV tile.
 
 import { Stack } from 'expo-router'
+import BackHeaderLeft from '../../components/BackHeaderLeft'
 
 export default function TvLayout() {
   return (
@@ -12,7 +13,12 @@ export default function TvLayout() {
         headerTintColor: '#111827',
       }}
     >
-      <Stack.Screen name="index" options={{ title: 'TV displays' }} />
+      {/* Pushed from the Studio hub (a different navigator) → supply the
+          back chevron explicitly (no auto chevron cross-navigator). */}
+      <Stack.Screen
+        name="index"
+        options={{ title: 'TV displays', headerLeft: () => <BackHeaderLeft label="Studio" fallbackHref="/studio" /> }}
+      />
     </Stack>
   )
 }
