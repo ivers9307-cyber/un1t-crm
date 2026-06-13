@@ -1,14 +1,16 @@
 // ACCOUNTING-HUB.1 — the Accounting landing screen on mobile.
 //
-// One "Accounting" tile in More opens this. It nests the three money
-// surfaces (Expenses, Invoices own-submissions, Invoices approver
-// inbox) and routes by access level — the same flow as the Reports hub:
+// One "Accounting" tile in More opens this. It nests the money surfaces
+// (Expenses, Invoices own-submissions, Company-card receipts, Invoices
+// approver inbox, and the Orders revenue ledger) and routes by access
+// level — the same flow as the Reports hub:
 //   • exactly one surface → that screen directly. The More tile routes
 //     single-surface users straight to their one surface, so the hub is
 //     normally only reached with 2+; it self-redirects defensively if
 //     deep-linked with a single surface.
-//   • two or three surfaces → a chooser of cards.
+//   • two or more surfaces → a chooser of cards.
 // Submitting folds in — Expenses and Invoices keep their own + FABs.
+// EVENTS-HUB.2: Orders lives here (it's revenue → money), not under Events.
 
 import { useState, useCallback } from 'react'
 import { View, Text, Pressable, ScrollView } from 'react-native'
@@ -58,7 +60,9 @@ export default function AccountingHub() {
   // SPEND.P3 — card_receipts isn't a nav-feature in the layout `more`
   // set, so read it directly via canMobile (same as the inbox).
   const canCardReceipts = canMobile(profile, 'card_receipts', activeLocation)
-  const landing = accountingLanding({ canExpenses, canInvoices, canInbox, canCardReceipts })
+  // EVENTS-HUB.2 — Orders (revenue ledger) reads its own `orders` gate.
+  const canOrders = canMobile(profile, 'orders', activeLocation)
+  const landing = accountingLanding({ canExpenses, canInvoices, canInbox, canCardReceipts, canOrders })
 
   // Awaiting-approval count for the Invoices inbox card badge (approvers
   // only). listInvoices() is role-aware — for an approver it returns the
@@ -123,6 +127,14 @@ export default function AccountingHub() {
             subtitle="Review & approve supplier invoices"
             badge={awaiting > 0 ? String(awaiting) : null}
             onPress={() => router.push('/invoices/inbox')}
+          />
+        )}
+        {canOrders && (
+          <ChoiceCard
+            icon="cash-outline"
+            title="Orders"
+            subtitle="Revenue across race signups & car deposits"
+            onPress={() => router.push('/orders')}
           />
         )}
       </View>
