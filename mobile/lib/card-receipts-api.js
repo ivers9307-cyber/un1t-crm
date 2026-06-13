@@ -18,6 +18,7 @@
 import Constants from 'expo-constants'
 import { authHeaders } from './api'
 import { supabase } from './supabase'
+import { readFileAsArrayBuffer } from './upload-bytes'
 
 const API_BASE = Constants.expoConfig?.extra?.apiBaseUrl
 
@@ -81,14 +82,17 @@ export async function submitCardReceipt({ cardLast4, notes, locationId, file }) 
   // stale .HEIC name on a re-encoded JPEG, so trust the asset MIME first).
   const mime = file.mimeType || inferReceiptMime(fileName) || 'image/jpeg'
 
-  // Read the picked file into a Blob. RN's fetch handles file://
-  // (and the picker cache) URIs; the blob carries the real byte size
-  // for the sign-time validation.
-  let blob
+  // Read the picked file into an ArrayBuffer of its real bytes. A Blob
+  // from fetch(uri) does NOT transmit through uploadToSignedUrl on RN —
+  // it stores a 0-byte object (see lib/upload-bytes.js for the why).
+  let arrayBuffer
   try {
-    blob = await (await fetch(file.uri)).blob()
+    arrayBuffer = await readFileAsArrayBuffer(file.uri)
   } catch (err) {
     return { success: false, error: `Could not read the selected file: ${err.message || err}` }
+  }
+  if (!arrayBuffer || arrayBuffer.byteLength === 0) {
+    return { success: false, error: 'The selected file appears to be empty — try picking it again.' }
   }
 
   // 1. Mint the signed direct-to-storage upload slot (tiny JSON).
@@ -97,7 +101,7 @@ export async function submitCardReceipt({ cardLast4, notes, locationId, file }) 
     method: 'POST',
     headers: signHeaders,
     body: JSON.stringify({
-      size: blob.size,
+      size: arrayBuffer.byteLength,
       mime,
       file_name: fileName,
     }),
@@ -110,7 +114,7 @@ export async function submitCardReceipt({ cardLast4, notes, locationId, file }) 
   // 2. Device → Supabase Storage directly (bypasses the API size cap).
   const { error: upErr } = await supabase.storage
     .from('company-card-receipts')
-    .uploadToSignedUrl(sign.path, sign.token, blob, { contentType: mime })
+    .uploadToSignedUrl(sign.path, sign.token, arrayBuffer, { contentType: mime })
   if (upErr) {
     return { success: false, error: `Upload failed: ${upErr.message}` }
   }
