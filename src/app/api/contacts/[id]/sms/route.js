@@ -27,7 +27,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { hasPermission, hasMobilePermission } from '@/lib/permissions'
 import { validateBody } from '@/lib/validate'
 import { sendLocationSms, TwilioError } from '@/lib/twilio'
 import { applyMergeTags } from '@/lib/postmark'
@@ -47,7 +47,10 @@ export async function POST(request, props) {
   if (!user) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
   }
-  if (!hasPermission(user, 'sms')) {
+  // Web `sms` permission OR the mobile `sms` permission (MOBILE-CONTACT-
+  // SEND.1) — the mobile contact card sends through this same route so the
+  // text comes from the company Twilio sender, not the staffer's phone.
+  if (!hasPermission(user, 'sms') && !hasMobilePermission(user, 'sms')) {
     return NextResponse.json({ success: false, error: 'Forbidden — SMS not enabled at this location for your role' }, { status: 403 })
   }
 
