@@ -22,7 +22,7 @@
 import {
   LayoutDashboard, Users, Columns3, CheckSquare, Calendar, MessagesSquare,
   CalendarClock, Settings, Car, Flag, Receipt, DoorOpen, FileSignature,
-  Heart, Globe, Tv, BookOpen, Inbox, ClipboardCheck, AlertCircle,
+  Heart, Globe, Tv, BookOpen, Inbox, ClipboardCheck, AlertCircle, CreditCard,
 } from 'lucide-react'
 
 // The sidebar Dashboard link is visible if ANY of these are true. The
@@ -79,6 +79,13 @@ export const ALL_NAV = [
   // default. Per-location forwarding addresses are shown at the top
   // of the page; quality + data approvals run before forward-to-Xero.
   { href: '/invoices',   label: 'Invoices',     icon: Inbox,           permission: 'invoices_inbox', section: 'work' },
+  // SPEND.P3 — company-card receipts. A card holder photographs/uploads
+  // a receipt; owner/master approves it, then it rides the bookkeeper →
+  // Xero queue (the /approvals dashboard also surfaces the pending ones).
+  // Gated by the `card_receipts` permission — default master + owner +
+  // manager; card-holding staff get it granted per-user. No sidebar
+  // badge: approvable receipts already count on the Approvals entry.
+  { href: '/card-receipts', label: 'Company-card receipts', icon: CreditCard, permission: 'card_receipts', section: 'work' },
 
   // ── Sales ──────────────────────────────────────────────────────
   { href: '/pipeline',   label: 'Pipeline',    icon: Columns3,        permission: 'pipeline',   section: 'sales' },
