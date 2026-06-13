@@ -1,6 +1,7 @@
 // Submit a new invoice. Modal-presented from the Invoices tab.
-// Picks a PDF via expo-document-picker, posts as multipart to
-// /api/invoices.
+// The attachment is a PDF (expo-document-picker) OR a photo of a paper
+// receipt taken / chosen on the phone (expo-image-picker, SPEND.P1);
+// it uploads direct-to-storage via submitInvoice().
 //
 // `resubmitMonth` query param pre-selects the month and is set by
 // the "Resubmit a corrected invoice" button on a declined detail
@@ -14,10 +15,28 @@ import {
 import { useRouter, useLocalSearchParams, Stack } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import * as DocumentPicker from 'expo-document-picker'
+import * as ImagePicker from 'expo-image-picker'
 import { useAuth } from '../../lib/auth-context'
 import {
   submitInvoice, recentMonthOptions, defaultMonthKey,
 } from '../../lib/invoices-api'
+
+const MAX_BYTES = 10 * 1024 * 1024 // 10 MB — matches the server cap
+
+// expo-image-picker re-encodes captures to JPEG in practice; synthesise
+// the stored filename's extension from the asset's real MIME so the
+// extension always matches the bytes (an iPhone may report a stale .HEIC
+// name on a re-encoded JPEG).
+function extFromMime(mime) {
+  switch (mime) {
+    case 'image/png': return 'png'
+    case 'image/webp': return 'webp'
+    case 'image/heic': return 'heic'
+    case 'image/heif': return 'heif'
+    case 'application/pdf': return 'pdf'
+    default: return 'jpg'
+  }
+}
 
 export default function NewInvoiceScreen() {
   const { activeLocation } = useAuth()
@@ -54,7 +73,7 @@ export default function NewInvoiceScreen() {
     if (r.canceled) return
     const asset = r.assets?.[0]
     if (!asset) return
-    if (asset.size && asset.size > 10 * 1024 * 1024) {
+    if (asset.size && asset.size > MAX_BYTES) {
       setError('PDF must be 10 MB or less.')
       return
     }
@@ -66,10 +85,57 @@ export default function NewInvoiceScreen() {
     })
   }
 
+  function applyImageAsset(asset) {
+    if (asset.fileSize && asset.fileSize > MAX_BYTES) {
+      setError('Photo must be 10 MB or less.')
+      return
+    }
+    const mime = asset.mimeType || 'image/jpeg'
+    setFile({
+      uri: asset.uri,
+      name: `receipt-${Date.now()}.${extFromMime(mime)}`,
+      mimeType: mime,
+      size: asset.fileSize || 0,
+    })
+  }
+
+  async function pickFromCamera() {
+    setError(null)
+    const perm = await ImagePicker.requestCameraPermissionsAsync()
+    if (!perm.granted) {
+      Alert.alert('Camera permission', 'Allow camera access to photograph a receipt.')
+      return
+    }
+    const r = await ImagePicker.launchCameraAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      quality: 0.7,
+      allowsEditing: false,
+    })
+    if (r.canceled || !r.assets?.[0]) return
+    applyImageAsset(r.assets[0])
+  }
+
+  async function pickFromLibrary() {
+    setError(null)
+    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync()
+    if (!perm.granted) {
+      Alert.alert('Photos permission', 'Allow photo library access to attach a receipt.')
+      return
+    }
+    const r = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      quality: 0.7,
+      allowsEditing: false,
+      selectionLimit: 1,
+    })
+    if (r.canceled || !r.assets?.[0]) return
+    applyImageAsset(r.assets[0])
+  }
+
   async function handleSubmit() {
     setError(null)
     if (!file) {
-      setError('Please attach the PDF.')
+      setError('Please attach a receipt or invoice.')
       return
     }
     const amt = Number(amount)
@@ -116,7 +182,7 @@ export default function NewInvoiceScreen() {
           keyboardShouldPersistTaps="handled"
         >
           <Text className="text-sm text-un1t-subtle mb-5">
-            One invoice per calendar month. PDF only, max 10 MB.
+            One invoice per calendar month. PDF or photo, max 10 MB.
             {activeLocation?.name ? ` Submitting for ${activeLocation.name} — switch studios in the side menu to change.` : ''}
           </Text>
 
@@ -180,33 +246,35 @@ export default function NewInvoiceScreen() {
             />
           </Field>
 
-          <Field label="PDF">
-            <Pressable
-              onPress={pickPdf}
-              className="bg-un1t-surface border border-dashed border-un1t-border rounded-xl p-4 active:opacity-70"
-            >
-              <View className="flex-row items-center">
-                <Ionicons name={file ? 'document-text' : 'cloud-upload-outline'} size={20} color={file ? '#2563EB' : '#94A3B8'} />
+          <Field label="Receipt or invoice">
+            {file ? (
+              <View className="bg-un1t-surface border border-un1t-border rounded-xl p-4 mb-3 flex-row items-center">
+                <Ionicons
+                  name={file.mimeType === 'application/pdf' ? 'document-text' : 'image'}
+                  size={20}
+                  color="#2563EB"
+                />
                 <View className="flex-1 ml-3">
-                  {file ? (
-                    <>
-                      <Text className="text-sm font-semibold text-un1t-text" numberOfLines={1}>
-                        {file.name}
-                      </Text>
-                      <Text className="text-xs text-un1t-subtle mt-0.5">
-                        {file.size ? `${(file.size / 1024 / 1024).toFixed(2)} MB · ` : ''}Tap to replace
-                      </Text>
-                    </>
-                  ) : (
-                    <>
-                      <Text className="text-sm font-semibold text-un1t-text">Choose PDF</Text>
-                      <Text className="text-xs text-un1t-subtle mt-0.5">Browse files on this device</Text>
-                    </>
-                  )}
+                  <Text className="text-sm font-semibold text-un1t-text" numberOfLines={1}>
+                    {file.name}
+                  </Text>
+                  <Text className="text-xs text-un1t-subtle mt-0.5">
+                    {file.size ? `${(file.size / 1024 / 1024).toFixed(2)} MB · ` : ''}Attached
+                  </Text>
                 </View>
-                {file && <Ionicons name="checkmark-circle" size={20} color="#10B981" />}
+                <Pressable onPress={() => setFile(null)} hitSlop={8} className="ml-2 active:opacity-60">
+                  <Ionicons name="close-circle" size={22} color="#94A3B8" />
+                </Pressable>
               </View>
-            </Pressable>
+            ) : null}
+            <View className="flex-row gap-2">
+              <AttachButton icon="camera-outline" label="Take photo" onPress={pickFromCamera} />
+              <AttachButton icon="image-outline" label="Photo" onPress={pickFromLibrary} />
+              <AttachButton icon="document-text-outline" label="PDF" onPress={pickPdf} />
+            </View>
+            <Text className="text-xs text-un1t-subtle mt-2">
+              {file ? 'Pick again to replace.' : 'Photograph a paper receipt or attach a PDF.'}
+            </Text>
           </Field>
 
           {error && (
@@ -240,5 +308,17 @@ function Field({ label, children }) {
       <Text className="text-xs uppercase font-semibold text-un1t-subtle mb-2">{label}</Text>
       {children}
     </View>
+  )
+}
+
+function AttachButton({ icon, label, onPress }) {
+  return (
+    <Pressable
+      onPress={onPress}
+      className="flex-1 bg-un1t-surface border border-dashed border-un1t-border rounded-xl py-4 items-center active:opacity-70"
+    >
+      <Ionicons name={icon} size={22} color="#2563EB" />
+      <Text className="text-xs font-semibold text-un1t-text mt-1.5">{label}</Text>
+    </Pressable>
   )
 }

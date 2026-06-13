@@ -191,3 +191,97 @@ export function isContractorPdfPath(path, contractorId) {
   if (!contractorId || !s.startsWith(`${contractorId}/`)) return false
   return /^[0-9a-fA-F-]{32,36}\/[A-Za-z0-9._-]{1,160}$/.test(s)
 }
+
+// ── Receipt / invoice attachment types ────────────────────────────
+// SPEND.P1 — a contractor can now submit their monthly invoice as a
+// photo of a paper receipt taken on the phone, not just a PDF. Mobile
+// capture (expo-image-picker) re-encodes to JPEG in practice, but we
+// accept the common image types a phone might hand over too. All of
+// these render in the web reviewer's iframe and in mobile's in-app
+// browser without any extra handling.
+
+export const RECEIPT_MIME_TYPES = Object.freeze([
+  'application/pdf',
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'image/heic',
+  'image/heif',
+])
+
+const EXT_TO_MIME = {
+  pdf: 'application/pdf',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  png: 'image/png',
+  webp: 'image/webp',
+  heic: 'image/heic',
+  heif: 'image/heif',
+}
+
+/**
+ * Map a filename's extension to an accepted receipt MIME type, or null
+ * if the extension isn't one we take. Case-insensitive. A fallback for
+ * clients that don't report a MIME type on the picked asset.
+ */
+export function mimeFromFilename(name) {
+  const m = String(name || '').match(/\.([A-Za-z0-9]+)$/)
+  if (!m) return null
+  return EXT_TO_MIME[m[1].toLowerCase()] || null
+}
+
+const HEIF_BRANDS = new Set([
+  'heic', 'heix', 'hevc', 'hevx', 'heim', 'heis', 'hevm', 'hevs',
+  'mif1', 'msf1', 'heif',
+])
+
+function ascii4(bytes, start) {
+  let s = ''
+  for (let i = start; i < start + 4; i++) {
+    const b = bytes[i]
+    if (b === undefined) return ''
+    s += String.fromCharCode(b)
+  }
+  return s
+}
+
+/**
+ * Sniff a receipt's real MIME type from its leading bytes, returning a
+ * value from RECEIPT_MIME_TYPES or null if the signature isn't one we
+ * accept. The signed direct-to-storage upload bypasses the API, so the
+ * finalise route re-checks the actual bytes here rather than trusting
+ * the client-declared Content-Type — magic bytes can't be spoofed by a
+ * wrong header. Accepts a Buffer or Uint8Array.
+ */
+export function sniffReceiptMime(bytes) {
+  if (!bytes || bytes.length < 12) return null
+  // PDF — "%PDF"
+  if (bytes[0] === 0x25 && bytes[1] === 0x50 && bytes[2] === 0x44 && bytes[3] === 0x46) {
+    return 'application/pdf'
+  }
+  // JPEG — FF D8 FF
+  if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
+    return 'image/jpeg'
+  }
+  // PNG — 89 50 4E 47 0D 0A 1A 0A
+  if (
+    bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47 &&
+    bytes[4] === 0x0d && bytes[5] === 0x0a && bytes[6] === 0x1a && bytes[7] === 0x0a
+  ) {
+    return 'image/png'
+  }
+  // WebP — "RIFF"<4-byte size>"WEBP"
+  if (ascii4(bytes, 0) === 'RIFF' && ascii4(bytes, 8) === 'WEBP') {
+    return 'image/webp'
+  }
+  // HEIC/HEIF — ISO-BMFF "ftyp" box with a HEIF-family major brand
+  if (ascii4(bytes, 4) === 'ftyp') {
+    const brand = ascii4(bytes, 8).toLowerCase()
+    if (HEIF_BRANDS.has(brand)) {
+      return (brand === 'heif' || brand === 'mif1' || brand === 'msf1')
+        ? 'image/heif'
+        : 'image/heic'
+    }
+  }
+  return null
+}

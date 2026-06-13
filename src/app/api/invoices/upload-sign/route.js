@@ -23,13 +23,13 @@ import { NextResponse } from 'next/server'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
-import { periodForMonth, buildPdfPath } from '@/lib/contractor-invoices'
+import { periodForMonth, buildPdfPath, RECEIPT_MIME_TYPES } from '@/lib/contractor-invoices'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 const STORAGE_BUCKET = 'contractor-invoices'
-const MAX_PDF_BYTES = 10 * 1024 * 1024 // 10 MB — keep in lockstep with POST /api/invoices
+const MAX_RECEIPT_BYTES = 10 * 1024 * 1024 // 10 MB — keep in lockstep with POST /api/invoices
 
 const SignSchema = z.object({
   month: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/, 'YYYY-MM'),
@@ -54,11 +54,11 @@ export async function POST(request) {
   if (!validation.ok) return validation.response
   const body = validation.data
 
-  if (body.mime !== 'application/pdf') {
-    return NextResponse.json({ success: false, error: 'Only PDF files are accepted.' }, { status: 400 })
+  if (!RECEIPT_MIME_TYPES.includes(body.mime)) {
+    return NextResponse.json({ success: false, error: 'Only a PDF or photo (JPG, PNG, HEIC) is accepted.' }, { status: 400 })
   }
-  if (body.size > MAX_PDF_BYTES) {
-    return NextResponse.json({ success: false, error: 'PDF must be 10 MB or less.' }, { status: 400 })
+  if (body.size > MAX_RECEIPT_BYTES) {
+    return NextResponse.json({ success: false, error: 'File must be 10 MB or less.' }, { status: 400 })
   }
 
   let period

@@ -519,7 +519,7 @@ function InvoiceDetailModal({ invoiceId, reviewerMode, onClose, onChanged }) {
             <div className="flex-1 overflow-y-auto grid grid-cols-1 md:grid-cols-2 gap-0">
               <div className="border-r border-un1t-border bg-un1t-bg/40 min-h-[400px] flex flex-col">
                 <div className="p-3 border-b border-un1t-border flex items-center justify-between">
-                  <span className="text-xs uppercase font-semibold text-un1t-subtle">PDF</span>
+                  <span className="text-xs uppercase font-semibold text-un1t-subtle">Document</span>
                   {pdfUrl && (
                     <a
                       href={pdfUrl}
@@ -534,12 +534,12 @@ function InvoiceDetailModal({ invoiceId, reviewerMode, onClose, onChanged }) {
                 {pdfUrl ? (
                   <iframe
                     src={pdfUrl}
-                    title="Invoice PDF"
+                    title="Invoice attachment"
                     className="flex-1 w-full bg-white"
                   />
                 ) : (
                   <div className="flex-1 flex items-center justify-center text-un1t-subtle text-xs">
-                    PDF preview unavailable
+                    Preview unavailable
                   </div>
                 )}
               </div>
