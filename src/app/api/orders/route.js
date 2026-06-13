@@ -26,7 +26,7 @@ import { MANAGER_ROLES } from '@/lib/schemas'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-const ALLOWED_STATUSES = ['completed', 'pending', 'failed', 'abandoned', 'recovered', 'refunded']
+const ALLOWED_STATUSES = ['completed', 'pending', 'failed', 'abandoned', 'recovered', 'refunded', 'cancelled']
 const ALLOWED_SOURCES = ['race_registration', 'car_deposit']
 
 export async function GET(request) {

@@ -4,15 +4,15 @@
 // Sections: header (status + amount + buyer), source summary
 // (race or car), retry chain, event timeline.
 
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
-import { Loader2, AlertCircle, ArrowLeft, ExternalLink, Tag, Calendar, Users, Receipt, Clock, BadgeCheck, Car } from 'lucide-react'
+import { Loader2, AlertCircle, ArrowLeft, ExternalLink, Tag, Calendar, Users, Receipt, Clock, BadgeCheck, Car, Ban } from 'lucide-react'
 
 export default function OrderDetail({ orderId }) {
   const [data, setData] = useState(null)
   const [error, setError] = useState(null)
 
-  useEffect(() => {
+  const load = useCallback(() => {
     fetch(`/api/orders/${orderId}`)
       .then(r => r.json())
       .then(j => {
@@ -21,6 +21,37 @@ export default function OrderDetail({ orderId }) {
       })
       .catch(e => setError(e.message || 'Network error'))
   }, [orderId])
+
+  useEffect(() => { load() }, [load])
+
+  // ORDERS-CANCEL.1 — clear a pending order (e.g. a duplicate attempt).
+  const [cancelConfirming, setCancelConfirming] = useState(false)
+  const [cancelBusy, setCancelBusy] = useState(false)
+  const [cancelError, setCancelError] = useState(null)
+
+  async function handleCancel() {
+    setCancelBusy(true)
+    setCancelError(null)
+    try {
+      const r = await fetch(`/api/orders/${orderId}/cancel`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      })
+      const j = await r.json()
+      if (!r.ok || j.success === false) {
+        setCancelError(j.error || `Cancel failed (${r.status})`)
+        setCancelBusy(false)
+        return
+      }
+      setCancelConfirming(false)
+      setCancelBusy(false)
+      load()
+    } catch (e) {
+      setCancelError(e.message || 'Network error')
+      setCancelBusy(false)
+    }
+  }
 
   if (error) {
     return (
@@ -56,6 +87,42 @@ export default function OrderDetail({ orderId }) {
               {formatMoney(order.amount_cents, order.currency)}
             </div>
             <div className="mt-2"><StatusPill status={order.status} /></div>
+            {order.status === 'pending' && (
+              <div className="mt-3">
+                {!cancelConfirming ? (
+                  <button
+                    type="button"
+                    onClick={() => setCancelConfirming(true)}
+                    className="text-xs text-un1t-subtle hover:text-red-700 inline-flex items-center gap-1"
+                    title="Clear this pending order (e.g. a duplicate payment attempt)"
+                  >
+                    <Ban size={12} /> Cancel pending order
+                  </button>
+                ) : (
+                  <div className="inline-flex items-center gap-2 flex-wrap">
+                    <span className="text-xs text-un1t-subtle">Clear this pending order?</span>
+                    <button
+                      type="button"
+                      onClick={handleCancel}
+                      disabled={cancelBusy}
+                      className="text-xs bg-red-600 hover:bg-red-700 text-white px-2 py-1 rounded inline-flex items-center gap-1 disabled:opacity-40"
+                    >
+                      {cancelBusy ? <Loader2 size={11} className="animate-spin" /> : null}
+                      {cancelBusy ? 'Cancelling…' : 'Confirm'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => { setCancelConfirming(false); setCancelError(null) }}
+                      disabled={cancelBusy}
+                      className="text-xs text-un1t-subtle hover:text-un1t-text"
+                    >
+                      Keep
+                    </button>
+                  </div>
+                )}
+                {cancelError && <div className="text-[11px] text-red-700 mt-1">{cancelError}</div>}
+              </div>
+            )}
           </div>
           <div className="text-right">
             <div className="text-sm text-un1t-text">{order.contact_name || order.contact_email}</div>
@@ -76,6 +143,11 @@ export default function OrderDetail({ orderId }) {
             {order.refunded_at && (
               <div className="text-[11px] text-purple-700">
                 Refunded {fmtDateTime(order.refunded_at)}
+              </div>
+            )}
+            {order.status === 'cancelled' && order.metadata?.cancelled_at && (
+              <div className="text-[11px] text-slate-600">
+                Cancelled {fmtDateTime(order.metadata.cancelled_at)}
               </div>
             )}
           </div>
@@ -267,6 +339,7 @@ function StatusPill({ status }) {
     abandoned: 'bg-gray-500/15 text-gray-600',
     recovered: 'bg-blue-500/15 text-blue-700',
     refunded: 'bg-purple-500/15 text-purple-700',
+    cancelled: 'bg-slate-500/15 text-slate-600',
   }
   return (
     <span className={`text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded-full ${map[status] || 'bg-un1t-border/30 text-un1t-subtle'}`}>
