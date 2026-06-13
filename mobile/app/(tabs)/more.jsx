@@ -166,12 +166,12 @@ export default function More() {
   // every role, like the web contacts list.
   if (canMobile(profile, 'contacts', activeLocation)) tiles.push({ key: 'contacts', icon: 'people-circle-outline', label: 'Contacts', onPress: () => router.push('/contacts') })
   // ACCOUNTING-HUB.1 — one "Accounting" tile for the money surfaces
-  // (Expenses, own Invoices, Invoices approver inbox, and SPEND.P3
-  // company-card receipts). The hub routes by access level: a
-  // single-surface user is sent straight to their one surface; 2+
-  // surfaces get a chooser. Replaces the old Invoices / Expenses /
-  // Invoices inbox tiles. The badge shows invoices awaiting approval
-  // (approvers only).
+  // (Expenses, own Invoices, Invoices approver inbox, SPEND.P3
+  // company-card receipts, and the EVENTS-HUB.2 Orders revenue ledger).
+  // The hub routes by access level: a single-surface user is sent
+  // straight to their one surface; 2+ surfaces get a chooser. Replaces
+  // the old Invoices / Expenses / Invoices inbox / Orders tiles. The
+  // badge shows invoices awaiting approval (approvers only).
   const accLanding = accountingLanding({
     canExpenses: inMore.has('expenses'),
     canInvoices: inMore.has('invoices'),
@@ -179,6 +179,9 @@ export default function More() {
     // SPEND.P3 — include card_receipts so a card-only holder still gets
     // the Accounting tile (and is routed straight to /card-receipts).
     canCardReceipts: canMobile(profile, 'card_receipts', activeLocation),
+    // EVENTS-HUB.2 — Orders (revenue ledger) lives under Accounting now
+    // (it's money, not an event surface), so it folds into this hub.
+    canOrders: canMobile(profile, 'orders', activeLocation),
   })
   if (accLanding) {
     tiles.push({ key: 'accounting', icon: 'calculator-outline', label: 'Accounting', badge: outstandingInvoices > 0 ? String(outstandingInvoices) : null, onPress: () => router.push(ACCOUNTING_ROUTES[accLanding]) })
@@ -206,13 +209,13 @@ export default function More() {
   // reaches the inbox via the chooser, gated by issue_triage there.)
   // (Invoices approver inbox now lives inside the Accounting hub above —
   // the approver reaches it via the chooser, gated by invoices_inbox.)
-  // EVENTS-HUB.1 — one "Events" tile for the event-side surfaces: the
-  // Orders revenue ledger (race signups + car deposits) and trackside
-  // Race control. Routes by access level — a single-surface user goes
-  // straight to their one surface; with both, the hub shows a chooser.
-  // Replaces the old separate Orders + Race control tiles.
+  // EVENTS-HUB.1 — one "Events" tile for the event-side surfaces.
+  // EVENTS-HUB.2 moved Orders out to the Accounting hub (it's revenue →
+  // money), so today this nests only trackside Race control and routes a
+  // single-surface user straight to /races. Kept as a hub (not folded
+  // back to a bare Race-control tile) because web + mobile event surfaces
+  // will be aligned here in the future and more will land under it.
   const evLanding = eventsLanding({
-    canOrders: canMobile(profile, 'orders', activeLocation),
     canRaceControl: canMobile(profile, 'races', activeLocation),
   })
   if (evLanding) {

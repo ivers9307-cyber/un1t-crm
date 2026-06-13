@@ -1,13 +1,15 @@
 // EVENTS-HUB.1 — the Events landing screen on mobile.
 //
-// One "Events" tile in More opens this. It nests the two event-side
-// surfaces (Orders revenue ledger + trackside Race control) and routes
-// by access level — the same flow as the Accounting / Reports hubs:
+// One "Events" tile in More opens this. EVENTS-HUB.2 moved Orders out to
+// the Accounting hub (revenue → money), so today Events nests only
+// trackside Race control — but it's kept as a hub because web + mobile
+// event surfaces will be aligned here in the future and more will land
+// under it. Routes by access level — same flow as Accounting / Reports:
 //   • exactly one surface → that screen directly. The More tile routes
 //     single-surface users straight to their one surface, so the hub is
-//     normally only reached with both; it self-redirects defensively if
+//     normally only reached with 2+; it self-redirects defensively if
 //     deep-linked with a single surface.
-//   • both surfaces → a chooser of cards.
+//   • two or more surfaces → a chooser of cards.
 
 import { View, Text, Pressable, ScrollView } from 'react-native'
 import { useRouter, Redirect, Stack } from 'expo-router'
@@ -39,9 +41,8 @@ export default function EventsHub() {
   const router = useRouter()
   const { profile, activeLocation } = useAuth()
 
-  const canOrders = canMobile(profile, 'orders', activeLocation)
   const canRaceControl = canMobile(profile, 'races', activeLocation)
-  const landing = eventsLanding({ canOrders, canRaceControl })
+  const landing = eventsLanding({ canRaceControl })
 
   if (!profile) return null
 
@@ -60,14 +61,6 @@ export default function EventsHub() {
       />
       <Text className="text-sm text-un1t-subtle mb-3">What would you like to view?</Text>
       <View className="gap-3">
-        {canOrders && (
-          <ChoiceCard
-            icon="cash-outline"
-            title="Orders"
-            subtitle="Revenue across race signups & car deposits"
-            onPress={() => router.push('/orders')}
-          />
-        )}
         {canRaceControl && (
           <ChoiceCard
             icon="flag-outline"
