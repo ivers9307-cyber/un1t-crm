@@ -55,7 +55,10 @@ export default function AccountingHub() {
   const canExpenses = has.has('expenses')
   const canInvoices = has.has('invoices')
   const canInbox = canMobile(profile, 'invoices_inbox', activeLocation)
-  const landing = accountingLanding({ canExpenses, canInvoices, canInbox })
+  // SPEND.P3 — card_receipts isn't a nav-feature in the layout `more`
+  // set, so read it directly via canMobile (same as the inbox).
+  const canCardReceipts = canMobile(profile, 'card_receipts', activeLocation)
+  const landing = accountingLanding({ canExpenses, canInvoices, canInbox, canCardReceipts })
 
   // Awaiting-approval count for the Invoices inbox card badge (approvers
   // only). listInvoices() is role-aware — for an approver it returns the
@@ -103,6 +106,14 @@ export default function AccountingHub() {
             title="Invoices"
             subtitle="Submit & track your own invoices"
             onPress={() => router.push('/invoices')}
+          />
+        )}
+        {canCardReceipts && (
+          <ChoiceCard
+            icon="card-outline"
+            title="Company-card receipts"
+            subtitle="Snap a receipt for a company-card purchase"
+            onPress={() => router.push('/card-receipts')}
           />
         )}
         {canInbox && (

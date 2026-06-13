@@ -73,13 +73,14 @@ describe('ALL_NAV structure', () => {
 })
 
 describe('Work — the action queues, grouped and ordered', () => {
-  it('contains exactly the five queue surfaces', () => {
+  it('contains exactly the queue surfaces, with card-receipts after invoices', () => {
     expect(hrefsIn('work')).toEqual([
       '/communications',
       '/bookings',
       '/approvals',
       '/issues',
       '/invoices',
+      '/card-receipts',
     ])
   })
 })

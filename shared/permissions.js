@@ -95,6 +95,10 @@ export const WEB_PERMISSIONS = Object.freeze([
   // even if they have race events or car processing on.
   { key: 'orders',     label: 'Orders',                          hint: 'Unified revenue view across race signups + car deposits (mig 085). Refund + retry-recovery flows live here.' },
   { key: 'car_processing', label: 'Car Processing',             hint: 'Tesla import tracker (CCF Autos). Off by default at user level — enable per user.' },
+  // SPEND.P3 — company-card receipts. Permission gates SUBMISSION (who
+  // holds a company card). Approval stays owner/master like the other
+  // spend types; it rides the existing bookkeeper → Xero queue.
+  { key: 'card_receipts', label: 'Company-card receipts',       hint: 'Submit a receipt for a purchase made on a company card (one per purchase, photo or PDF). Permission-gated to card holders; owner/master approves, then it rides the bookkeeper → Xero queue like every other spend type. Default master + owner + manager.' },
   // INVOICES.1 — Dext-style email-in inbox for supplier invoices.
   // Master + owner only by default. Finance surface; doesn't fit
   // under Studio Management because it's about supplier bills not
@@ -147,6 +151,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     // Studio Management children (STUDIO-GROUP.1) — master has all.
     contracts: true, tv_displays: true, glofox_import: true, preferences_import: true,
     orders: true, car_processing: true,
+    card_receipts: true,
     invoices_inbox: true,
     approvals_inbox: true,
     issues_inbox: true,
@@ -165,6 +170,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     // Studio Management children — all off for staff.
     contracts: false, tv_displays: false, glofox_import: false, preferences_import: false,
     orders: false, car_processing: false,         // financial views off by default
+    card_receipts: false,                          // card holders only — grant per user
     invoices_inbox: false,                         // supplier-invoice approval is finance, not staff
     approvals_inbox: false,                        // staff don't approve anything
     issues_inbox: false,                            // staff submit; owner + master handle
@@ -184,6 +190,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     // Studio Management children — all off for head_coach (explicit opt-in by admin).
     contracts: false, tv_displays: false, glofox_import: false, preferences_import: false,
     orders: false, car_processing: false,         // head coach doesn't need orders by default
+    card_receipts: false,                          // card holders only — grant per user
     invoices_inbox: false,
     approvals_inbox: false,                        // head coach isn't an approver by default
     issues_inbox: false,                            // owner + master only by default
@@ -204,6 +211,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     // off — those are owner/master decisions.
     contracts: false, tv_displays: true, glofox_import: false, preferences_import: false,
     orders: true, car_processing: false,          // managers run revenue ops; CCF Autos is per-user opt-in
+    card_receipts: true,                           // managers commonly hold a company card
     invoices_inbox: false,                         // manager isn't an approver — owner/master only
     approvals_inbox: true,                         // managers approve schedule items (time-off, swaps)
     issues_inbox: false,                            // owner + master only by default
@@ -224,6 +232,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     // master-only on first install; owners can opt-in per user.
     contracts: true, tv_displays: true, glofox_import: false, preferences_import: false,
     orders: true, car_processing: false,          // OFF for owner too — explicit opt-in per profile
+    card_receipts: true,                           // owners hold a company card
     invoices_inbox: true,                          // owner approves their location's supplier invoices
     approvals_inbox: true,                         // owner approves invoices, expenses, schedule items
     issues_inbox: true,                             // owner IS the handler per the routing design
@@ -285,6 +294,11 @@ export const MOBILE_PERMISSIONS = Object.freeze([
   // don't map 1:1 to a web sidebar key.
   { key: 'invoices',   label: 'Invoices (own submissions)',  hint: 'Contractor self-service — photograph + submit your own invoices. Only shown to contractor-type staff; this toggle can hide it per user. Default on.', mobileOnly: true },
   { key: 'expenses',   label: 'Expenses (own receipts)',     hint: 'FTE self-service — capture + submit your own expense receipts. Only shown to FTE staff; this toggle can hide it per user. Default on.', mobileOnly: true },
+  // SPEND.P3 — company-card receipt capture (+ owner/master approve) on
+  // mobile, mirroring the web card_receipts key (webEquivalent links them
+  // for the parity linter). Gates the capture screen for card holders;
+  // the approve/decline routes enforce owner-at-location / master.
+  { key: 'card_receipts', label: 'Company-card receipts',    hint: 'Photograph + submit a receipt for a company-card purchase. Card holders only; owners + master also approve here. Master + owner + manager by default.', webEquivalent: 'card_receipts' },
   { key: 'issues',     label: 'Report a Problem',            hint: 'Submit studio issues (broken kit, cleaning, safety) + view your own reports. Universal by default — turning this OFF removes a person’s ability to flag problems from the app, so leave on unless you have a reason.', mobileOnly: true },
   { key: 'contracts',  label: 'Your Contracts',              hint: 'Browse + sign your own staff/contractor contracts. Default on. (A pending-contract signing prompt still appears regardless, so a required signature is never blocked.)', mobileOnly: true },
   { key: 'policies',   label: 'Policies',                    hint: 'Read studio HR policies + acknowledge new ones. Default on.', mobileOnly: true },
@@ -392,6 +406,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     staff_management: true,
     issue_triage: true,
     invoices_inbox: true,
+    card_receipts: true,
     orders: true,
     car_processing: true,
     races: true,
@@ -419,6 +434,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     staff_management: false,
     issue_triage: false,
     invoices_inbox: false,
+    card_receipts: false,
     orders: false,
     car_processing: false,
     races: false,
@@ -447,6 +463,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     staff_management: false,
     issue_triage: false,
     invoices_inbox: false,
+    card_receipts: false,
     orders: false,
     car_processing: false,
     races: true,
@@ -475,6 +492,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     staff_management: true,
     issue_triage: false,
     invoices_inbox: false,
+    card_receipts: true,
     orders: true,
     car_processing: false,
     races: true,
@@ -505,6 +523,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     staff_management: true,
     issue_triage: true,
     invoices_inbox: true,
+    card_receipts: true,
     orders: true,
     car_processing: false,         // CCF Autos — per-user opt-in, matches web
     races: true,

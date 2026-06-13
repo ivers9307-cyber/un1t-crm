@@ -164,16 +164,20 @@ export default function More() {
   // (contacts isn't a bar-eligible layout feature yet); defaults on for
   // every role, like the web contacts list.
   if (canMobile(profile, 'contacts', activeLocation)) tiles.push({ key: 'contacts', icon: 'people-circle-outline', label: 'Contacts', onPress: () => router.push('/contacts') })
-  // ACCOUNTING-HUB.1 — one "Accounting" tile for the three money
-  // surfaces (Expenses, own Invoices, Invoices approver inbox). The hub
-  // routes by access level: a single-surface user is sent straight to
-  // their one surface; 2+ surfaces get a chooser. Replaces the old
-  // Invoices / Expenses / Invoices inbox trio of tiles. The badge shows
-  // invoices awaiting approval (approvers only).
+  // ACCOUNTING-HUB.1 — one "Accounting" tile for the money surfaces
+  // (Expenses, own Invoices, Invoices approver inbox, and SPEND.P3
+  // company-card receipts). The hub routes by access level: a
+  // single-surface user is sent straight to their one surface; 2+
+  // surfaces get a chooser. Replaces the old Invoices / Expenses /
+  // Invoices inbox tiles. The badge shows invoices awaiting approval
+  // (approvers only).
   const accLanding = accountingLanding({
     canExpenses: inMore.has('expenses'),
     canInvoices: inMore.has('invoices'),
     canInbox: canMobile(profile, 'invoices_inbox', activeLocation),
+    // SPEND.P3 — include card_receipts so a card-only holder still gets
+    // the Accounting tile (and is routed straight to /card-receipts).
+    canCardReceipts: canMobile(profile, 'card_receipts', activeLocation),
   })
   if (accLanding) {
     tiles.push({ key: 'accounting', icon: 'calculator-outline', label: 'Accounting', badge: outstandingInvoices > 0 ? String(outstandingInvoices) : null, onPress: () => router.push(ACCOUNTING_ROUTES[accLanding]) })

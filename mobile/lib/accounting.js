@@ -1,22 +1,24 @@
 // ACCOUNTING-HUB.1 — pure routing for the mobile Accounting hub.
 //
-// One "Accounting" tile in the More grid nests the three money
-// surfaces; it routes by access level (same flow as the Reports hub):
+// One "Accounting" tile in the More grid nests the money surfaces; it
+// routes by access level (same flow as the Reports hub):
 //
-//   canExpenses — own expense receipts        (FTE: `expenses`)
-//   canInvoices — own invoice submissions      (contractor: `invoices`)
-//   canInbox    — supplier-invoice approver inbox (owner/master: `invoices_inbox`)
+//   canExpenses      — own expense receipts             (FTE: `expenses`)
+//   canInvoices      — own invoice submissions           (contractor: `invoices`)
+//   canInbox         — supplier-invoice approver inbox    (owner/master: `invoices_inbox`)
+//   canCardReceipts  — company-card receipts (SPEND.P3)   (card holders: `card_receipts`)
 //
 // 0 surfaces → null (the tile is access-gated so this shouldn't render)
 // 1 surface  → that surface's key (go straight there)
-// 2-3        → 'chooser' (show the picker)
+// 2+         → 'chooser' (show the picker)
 // Pure — unit-tested in CI.
 
-export function accountingLanding({ canExpenses, canInvoices, canInbox } = {}) {
+export function accountingLanding({ canExpenses, canInvoices, canInbox, canCardReceipts } = {}) {
   const available = [
     canExpenses ? 'expenses' : null,
     canInvoices ? 'invoices' : null,
     canInbox ? 'inbox' : null,
+    canCardReceipts ? 'card_receipts' : null,
   ].filter(Boolean)
   if (available.length === 0) return null
   if (available.length === 1) return available[0]
@@ -30,5 +32,6 @@ export const ACCOUNTING_ROUTES = Object.freeze({
   expenses: '/expenses',
   invoices: '/invoices',
   inbox: '/invoices/inbox',
+  card_receipts: '/card-receipts',
   chooser: '/accounting',
 })
