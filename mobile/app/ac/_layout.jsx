@@ -4,6 +4,7 @@
 // — AC lives under More, not as a primary tab.
 
 import { Stack } from 'expo-router'
+import BackHeaderLeft from '../../components/BackHeaderLeft'
 
 export default function AcLayout() {
   return (
@@ -14,7 +15,12 @@ export default function AcLayout() {
         headerTintColor: '#111827',
       }}
     >
-      <Stack.Screen name="index" options={{ title: 'Air conditioning' }} />
+      {/* Pushed from the Studio hub (a different navigator) → iOS shows
+          no auto back chevron, so supply one explicitly. */}
+      <Stack.Screen
+        name="index"
+        options={{ title: 'Air conditioning', headerLeft: () => <BackHeaderLeft label="Studio" fallbackHref="/studio" /> }}
+      />
     </Stack>
   )
 }
