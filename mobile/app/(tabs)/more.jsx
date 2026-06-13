@@ -21,6 +21,8 @@ import { canMobile } from '../../lib/permissions'
 import { getPendingApprovals } from '../../lib/approvals-api'
 import { approvalsBadgeCount } from '../../lib/approvals'
 import { listInboxIssues } from '../../lib/issues-api'
+import { listInvoices } from '../../lib/invoices-api'
+import { accountingLanding, ACCOUNTING_ROUTES } from '../../lib/accounting'
 import { buildSummary } from '../../lib/build-info'
 import { useBiometricLock } from '../../lib/biometric-lock'
 
@@ -111,6 +113,21 @@ export default function More() {
     return () => { alive = false }
   }, [profile, activeLocation]))
 
+  // ACCOUNTING-HUB.1 — awaiting-approval count for the Accounting tile
+  // badge. Gated on invoices_inbox so only approvers fetch; 'submitted'
+  // is the count waiting on them. Best-effort; network error hides it.
+  const [outstandingInvoices, setOutstandingInvoices] = useState(0)
+  useFocusEffect(useCallback(() => {
+    if (!profile || !canMobile(profile, 'invoices_inbox', activeLocation)) return
+    let alive = true
+    listInvoices().then((res) => {
+      if (alive && res.success !== false && Array.isArray(res.data)) {
+        setOutstandingInvoices(res.data.filter((i) => i.status === 'submitted').length)
+      }
+    }).catch(() => {})
+    return () => { alive = false }
+  }, [profile, activeLocation]))
+
   function pickLocation() {
     if (!locations.length) return
     if (locations.length === 1) {
@@ -147,8 +164,20 @@ export default function More() {
   // (contacts isn't a bar-eligible layout feature yet); defaults on for
   // every role, like the web contacts list.
   if (canMobile(profile, 'contacts', activeLocation)) tiles.push({ key: 'contacts', icon: 'people-circle-outline', label: 'Contacts', onPress: () => router.push('/contacts') })
-  if (inMore.has('invoices'))  tiles.push({ key: 'invoices', icon: 'receipt-outline', label: 'Invoices', onPress: () => router.push('/invoices') })
-  if (inMore.has('expenses'))  tiles.push({ key: 'expenses', icon: 'wallet-outline', label: 'Expenses', onPress: () => router.push('/expenses') })
+  // ACCOUNTING-HUB.1 — one "Accounting" tile for the three money
+  // surfaces (Expenses, own Invoices, Invoices approver inbox). The hub
+  // routes by access level: a single-surface user is sent straight to
+  // their one surface; 2+ surfaces get a chooser. Replaces the old
+  // Invoices / Expenses / Invoices inbox trio of tiles. The badge shows
+  // invoices awaiting approval (approvers only).
+  const accLanding = accountingLanding({
+    canExpenses: inMore.has('expenses'),
+    canInvoices: inMore.has('invoices'),
+    canInbox: canMobile(profile, 'invoices_inbox', activeLocation),
+  })
+  if (accLanding) {
+    tiles.push({ key: 'accounting', icon: 'calculator-outline', label: 'Accounting', badge: outstandingInvoices > 0 ? String(outstandingInvoices) : null, onPress: () => router.push(ACCOUNTING_ROUTES[accLanding]) })
+  }
   if (inMore.has('radar'))     tiles.push({ key: 'radar', icon: 'pulse-outline', label: 'Radar', onPress: () => router.push('/radar') })
   // REPORTS-HUB.1 — one "Reports" tile for the whole issue feature. The
   // hub routes by access level: a regular staffer lands straight on My
@@ -170,8 +199,8 @@ export default function More() {
   if (canMobile(profile, 'staff_management', activeLocation)) tiles.push({ key: 'staff', icon: 'people-outline', label: 'Staff', onPress: () => router.push('/staff') })
   // (Issue triage now lives inside the Reports hub above — the handler
   // reaches the inbox via the chooser, gated by issue_triage there.)
-  // W2 — invoice approver inbox (owner/master review + approve/decline).
-  if (canMobile(profile, 'invoices_inbox', activeLocation)) tiles.push({ key: 'invoicesinbox', icon: 'file-tray-full-outline', label: 'Invoices inbox', onPress: () => router.push('/invoices/inbox') })
+  // (Invoices approver inbox now lives inside the Accounting hub above —
+  // the approver reaches it via the chooser, gated by invoices_inbox.)
   // W2 — revenue read view (race signups + car deposits). Manager+/owner/master.
   if (canMobile(profile, 'orders', activeLocation)) tiles.push({ key: 'orders', icon: 'cash-outline', label: 'Orders', onPress: () => router.push('/orders') })
   // W2 — CCF Autos car-import tracker (read-only). Off by default; master
