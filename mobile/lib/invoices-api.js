@@ -5,15 +5,29 @@
 // drift; do NOT hand-roll them here (dropping x-impersonate-target is
 // what made View-as show the master's whole-location invoice queue).
 //
-// PDF upload — submitInvoice() builds a multipart FormData with the
-// PDF picked via expo-document-picker. The Next.js POST route
-// already handles multipart bodies.
+// Attachment upload — submitInvoice() uploads the picked file directly
+// to Supabase Storage (see the three-step flow below). The attachment
+// is a PDF (expo-document-picker) OR a photo of a paper receipt
+// (expo-image-picker, SPEND.P1); its MIME type flows through from the
+// picked asset so the stored object serves the right Content-Type.
 
 import Constants from 'expo-constants'
 import { authHeaders } from './api'
 import { supabase } from './supabase'
 
 const API_BASE = Constants.expoConfig?.extra?.apiBaseUrl
+
+// Filename-extension → MIME fallback for assets that don't report a
+// type. Mirrors RECEIPT_MIME_TYPES / mimeFromFilename in the web lib
+// src/lib/contractor-invoices.js (mobile can't import server modules).
+const RECEIPT_EXT_MIME = {
+  pdf: 'application/pdf', jpg: 'image/jpeg', jpeg: 'image/jpeg',
+  png: 'image/png', webp: 'image/webp', heic: 'image/heic', heif: 'image/heif',
+}
+function inferReceiptMime(name) {
+  const m = String(name || '').match(/\.([A-Za-z0-9]+)$/)
+  return m ? (RECEIPT_EXT_MIME[m[1].toLowerCase()] || null) : null
+}
 
 /**
  * GET /api/invoices — role-aware list. The mobile app today only
@@ -65,15 +79,15 @@ export async function declineInvoice(id, reason) {
 
 /**
  * Submit a new invoice. file = { uri, name, mimeType, size? } from
- * expo-document-picker.
+ * expo-document-picker (PDF) or expo-image-picker (receipt photo).
  *
  * INVOICE-UPLOAD.1 — three-step direct-to-storage flow. The old version
- * POSTed the PDF as multipart through /api/invoices, but Vercel caps
+ * POSTed the file as multipart through /api/invoices, but Vercel caps
  * serverless request bodies at ~4.5 MB, so the advertised 10 MB limit
  * 413'd for bigger files (same bug class as the WA template video fix).
  * Now the bytes go straight from the device to Supabase Storage:
  *   1. /api/invoices/upload-sign mints a path + signed-upload token.
- *   2. The PDF uploads directly to the private contractor-invoices
+ *   2. The file uploads directly to the private contractor-invoices
  *      bucket (uploadToSignedUrl — the token is the authz).
  *   3. /api/invoices (JSON mode) verifies the object and inserts.
  * The server keeps multipart back-compat, so older app builds still
@@ -83,10 +97,13 @@ export async function submitInvoice({
   monthKey, amount, invoiceNumber, notes, locationId, file,
 }) {
   const fileName = file.name || 'invoice.pdf'
+  // SPEND.P1 — carry the real attachment type through to storage so the
+  // signed URL later serves the right Content-Type and renders inline.
+  const mime = file.mimeType || inferReceiptMime(fileName) || 'application/pdf'
 
-  // Read the picked document into a Blob. RN's fetch handles file://
-  // (and expo-document-picker cache) URIs; the blob carries the real
-  // byte size for the sign-time validation.
+  // Read the picked file into a Blob. RN's fetch handles file://
+  // (and the picker cache) URIs; the blob carries the real byte size
+  // for the sign-time validation.
   let blob
   try {
     blob = await (await fetch(file.uri)).blob()
@@ -102,7 +119,7 @@ export async function submitInvoice({
     body: JSON.stringify({
       month: monthKey,
       size: blob.size,
-      mime: 'application/pdf',
+      mime,
       file_name: fileName,
     }),
   })
@@ -114,7 +131,7 @@ export async function submitInvoice({
   // 2. Device → Supabase Storage directly (bypasses the API size cap).
   const { error: upErr } = await supabase.storage
     .from('contractor-invoices')
-    .uploadToSignedUrl(sign.path, sign.token, blob, { contentType: 'application/pdf' })
+    .uploadToSignedUrl(sign.path, sign.token, blob, { contentType: mime })
   if (upErr) {
     return { success: false, error: `Upload failed: ${upErr.message}` }
   }

@@ -1,7 +1,7 @@
-// Invoice detail — status, audit timeline, View PDF (opens in
-// external browser via expo-web-browser), Revoke button when
-// applicable. Resubmission goes through the standard /invoices/new
-// route.
+// Invoice detail — status, audit timeline, View attachment (the PDF or
+// receipt photo, opened in the external browser via expo-web-browser),
+// Revoke button when applicable. Resubmission goes through the standard
+// /invoices/new route.
 
 import { useState, useEffect, useCallback } from 'react'
 import {
@@ -200,7 +200,7 @@ export default function InvoiceDetailScreen() {
               : <Ionicons name="document-text" size={20} color="#2563EB" />}
           </View>
           <View className="flex-1 ml-3">
-            <Text className="text-sm font-semibold text-un1t-text">View PDF</Text>
+            <Text className="text-sm font-semibold text-un1t-text">View attachment</Text>
             <Text className="text-xs text-un1t-subtle">Opens in your browser</Text>
           </View>
           <Ionicons name="open-outline" size={18} color="#64748B" />

@@ -19,6 +19,7 @@ import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import {
   periodForMonth, buildPdfPath, isContractorPdfPath,
+  RECEIPT_MIME_TYPES, sniffReceiptMime,
 } from '@/lib/contractor-invoices'
 
 // JSON submit mode (INVOICE-UPLOAD.1): the PDF is already in storage via
@@ -37,8 +38,9 @@ const JsonSubmitSchema = z.object({
 export const runtime = 'nodejs'
 
 const STORAGE_BUCKET = 'contractor-invoices'
-const MAX_PDF_BYTES = 10 * 1024 * 1024 // 10 MB
-const ALLOWED_MIME = ['application/pdf']
+const MAX_RECEIPT_BYTES = 10 * 1024 * 1024 // 10 MB
+// SPEND.P1 — an invoice may be a PDF or a phone photo of a paper receipt.
+const ALLOWED_MIME = RECEIPT_MIME_TYPES
 
 function isOwnerOrMaster(user) {
   return user?.role === 'master' || user?.role === 'owner'
@@ -114,13 +116,13 @@ export async function POST(request) {
 
   if (!isJsonMode) {
     if (!file || typeof file === 'string') {
-      return NextResponse.json({ success: false, error: 'PDF attachment is required.' }, { status: 400 })
+      return NextResponse.json({ success: false, error: 'A PDF or photo attachment is required.' }, { status: 400 })
     }
     if (!ALLOWED_MIME.includes(file.type)) {
-      return NextResponse.json({ success: false, error: 'Only PDF files are accepted.' }, { status: 400 })
+      return NextResponse.json({ success: false, error: 'Only a PDF or photo (JPG, PNG, HEIC) is accepted.' }, { status: 400 })
     }
-    if (file.size > MAX_PDF_BYTES) {
-      return NextResponse.json({ success: false, error: 'PDF must be 10 MB or less.' }, { status: 400 })
+    if (file.size > MAX_RECEIPT_BYTES) {
+      return NextResponse.json({ success: false, error: 'File must be 10 MB or less.' }, { status: 400 })
     }
   }
 
@@ -195,13 +197,16 @@ export async function POST(request) {
     // the real bytes; delete anything that fails so the bucket doesn't
     // accumulate unusable objects. (Storage builders are thenables with
     // no .catch — two-arg .then per the repo lesson.)
-    if (bytes.length > MAX_PDF_BYTES) {
+    if (bytes.length > MAX_RECEIPT_BYTES) {
       await db.storage.from(STORAGE_BUCKET).remove([jsonPdf.path]).then(() => {}, () => {})
-      return NextResponse.json({ success: false, error: 'PDF must be 10 MB or less.' }, { status: 400 })
+      return NextResponse.json({ success: false, error: 'File must be 10 MB or less.' }, { status: 400 })
     }
-    if (!bytes.subarray(0, 5).toString('latin1').startsWith('%PDF')) {
+    // Magic-byte check: the stored object must actually be one of the
+    // accepted receipt types (a wrong Content-Type header can't fool
+    // this — sniffReceiptMime reads the real signature).
+    if (!sniffReceiptMime(bytes)) {
       await db.storage.from(STORAGE_BUCKET).remove([jsonPdf.path]).then(() => {}, () => {})
-      return NextResponse.json({ success: false, error: 'Only PDF files are accepted.' }, { status: 400 })
+      return NextResponse.json({ success: false, error: 'Only a PDF or photo (JPG, PNG, HEIC) is accepted.' }, { status: 400 })
     }
     pdfPath = jsonPdf.path
     pdfSizeBytes = bytes.length
@@ -215,7 +220,10 @@ export async function POST(request) {
     const { error: upErr } = await db.storage
       .from(STORAGE_BUCKET)
       .upload(pdfPath, Buffer.from(ab), {
-        contentType: 'application/pdf',
+        // file.type was already validated against RECEIPT_MIME_TYPES above;
+        // store it so the signed URL serves the right Content-Type and the
+        // reviewer's iframe / in-app browser renders it inline.
+        contentType: file.type || 'application/pdf',
         upsert: false,
       })
     if (upErr) {
