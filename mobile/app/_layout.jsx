@@ -115,6 +115,7 @@ export default function RootLayout() {
               <Stack.Screen name="customise-bar" options={{ headerShown: true, headerStyle: { backgroundColor: '#FFFFFF' }, headerTitleStyle: { fontWeight: '600' }, headerTintColor: '#111827' }} />
               <Stack.Screen name="location-features" options={{ headerShown: true, headerStyle: { backgroundColor: '#FFFFFF' }, headerTitleStyle: { fontWeight: '600' }, headerTintColor: '#111827' }} />
               <Stack.Screen name="orders" options={{ headerShown: true, headerStyle: { backgroundColor: '#FFFFFF' }, headerTitleStyle: { fontWeight: '600' }, headerTintColor: '#111827' }} />
+              <Stack.Screen name="accounting" options={{ headerShown: true, headerStyle: { backgroundColor: '#FFFFFF' }, headerTitleStyle: { fontWeight: '600' }, headerTintColor: '#111827' }} />
             </Stack>
           </BiometricLockProvider>
         </AuthProvider>
