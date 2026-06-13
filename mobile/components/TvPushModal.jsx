@@ -15,6 +15,7 @@ import {
   Modal, View, Text, TextInput, Pressable, ActivityIndicator, ScrollView,
   KeyboardAvoidingView, Platform, Image, Alert,
 } from 'react-native'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
 import * as ImagePicker from 'expo-image-picker'
 import {
@@ -28,6 +29,7 @@ const TABS = [
 ]
 
 export default function TvPushModal({ visible, tv, locationId, userId, onClose, onPushed }) {
+  const insets = useSafeAreaInsets()
   const [mode, setMode] = useState('template')
   const [label, setLabel] = useState('')
   const [busy, setBusy] = useState(false)
@@ -122,7 +124,11 @@ export default function TvPushModal({ visible, tv, locationId, userId, onClose, 
               ))}
             </View>
 
-            <ScrollView contentContainerStyle={{ padding: 16 }} keyboardShouldPersistTaps="handled">
+            <ScrollView
+              style={{ flexShrink: 1 }}
+              contentContainerStyle={{ padding: 16, paddingBottom: insets.bottom + 16 }}
+              keyboardShouldPersistTaps="handled"
+            >
               {mode === 'template' && (
                 <TemplateBody
                   templates={templates}

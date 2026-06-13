@@ -15,6 +15,7 @@ import {
   Modal, View, Text, TextInput, Pressable, ActivityIndicator,
   KeyboardAvoidingView, Platform, ScrollView,
 } from 'react-native'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
 import ContactComposer from './ContactComposer'
 import { sendContactSms, sendContactEmail } from '../lib/messaging-api'
@@ -22,6 +23,7 @@ import { sendContactSms, sendContactEmail } from '../lib/messaging-api'
 const TITLES = { sms: 'Text', whatsapp: 'WhatsApp', email: 'Email' }
 
 export default function ContactComposeModal({ visible, channel, contactId, contactName, onClose }) {
+  const insets = useSafeAreaInsets()
   return (
     <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
       <View className="flex-1 bg-black/40 justify-end">
@@ -36,7 +38,11 @@ export default function ContactComposeModal({ visible, channel, contactId, conta
               </Pressable>
             </View>
             <Text className="text-[11px] text-un1t-muted px-4 pb-2">Sends from the company — not your phone.</Text>
-            <ScrollView contentContainerStyle={{ padding: 16, paddingTop: 4 }} keyboardShouldPersistTaps="handled">
+            <ScrollView
+              style={{ flexShrink: 1 }}
+              contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 4, paddingBottom: insets.bottom + 16 }}
+              keyboardShouldPersistTaps="handled"
+            >
               {channel === 'whatsapp' && contactId ? (
                 <ContactComposer contactId={contactId} contactName={contactName} onSent={onClose} />
               ) : null}
