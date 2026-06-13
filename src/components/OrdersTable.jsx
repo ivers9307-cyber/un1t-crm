@@ -19,6 +19,7 @@ const STATUS_TABS = [
   { id: 'abandoned', label: 'Abandoned', accent: 'gray' },
   { id: 'recovered', label: 'Recovered', accent: 'blue' },
   { id: 'refunded', label: 'Refunded', accent: 'purple' },
+  { id: 'cancelled', label: 'Cancelled', accent: 'slate' },
 ]
 
 const SOURCE_LABELS = {
@@ -188,7 +189,7 @@ export default function OrdersTable() {
               </thead>
               <tbody>
                 {rows.map((row) => (
-                  <OrderRow key={row.id} row={row} onRefunded={load} />
+                  <OrderRow key={row.id} row={row} onChanged={load} />
                 ))}
               </tbody>
             </table>
@@ -231,7 +232,7 @@ export default function OrdersTable() {
   )
 }
 
-function OrderRow({ row, onRefunded }) {
+function OrderRow({ row, onChanged }) {
   const router = useRouter()
   const dt = row.created_at ? new Date(row.created_at) : null
   const dateLabel = dt ? dt.toLocaleString('en-IE', {
@@ -257,12 +258,43 @@ function OrderRow({ row, onRefunded }) {
     Number.isFinite(row.amount_cents) ? (row.amount_cents / 100).toFixed(2) : ''
   )
 
+  // Cancel is the housekeeping counterpart — only meaningful on a
+  // PENDING order (ORDERS-CANCEL.1). Clears the pending clutter.
+  const canCancel = row.status === 'pending'
+  const [cancelConfirming, setCancelConfirming] = useState(false)
+  const [cancelBusy, setCancelBusy] = useState(false)
+  const [cancelError, setCancelError] = useState(null)
+
   function navigateToDetail(e) {
     // Don't navigate when the operator's interacting with the
-    // refund control or any input/button inside the row.
-    if (confirming) return
+    // refund / cancel control or any input/button inside the row.
+    if (confirming || cancelConfirming) return
     if (e.target.closest('button, input')) return
     router.push(`/orders/${row.id}`)
+  }
+
+  async function handleCancel() {
+    setCancelBusy(true)
+    setCancelError(null)
+    try {
+      const r = await fetch(`/api/orders/${row.id}/cancel`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      })
+      const j = await r.json()
+      if (!r.ok || j.success === false) {
+        setCancelError(j.error || `Cancel failed (${r.status})`)
+        setCancelBusy(false)
+        return
+      }
+      setCancelConfirming(false)
+      setCancelBusy(false)
+      onChanged?.()
+    } catch (e) {
+      setCancelError(e.message || 'Network error')
+      setCancelBusy(false)
+    }
   }
 
   async function handleRefund() {
@@ -297,7 +329,7 @@ function OrderRow({ row, onRefunded }) {
       }
       setConfirming(false)
       setBusy(false)
-      onRefunded?.()
+      onChanged?.()
     } catch (e) {
       setRefundError(e.message || 'Network error')
       setBusy(false)
@@ -377,6 +409,43 @@ function OrderRow({ row, onRefunded }) {
             {refundError}
           </div>
         )}
+        {canCancel && !cancelConfirming && (
+          <button
+            type="button"
+            onClick={() => setCancelConfirming(true)}
+            className="text-[11px] text-un1t-subtle hover:text-red-700 inline-flex items-center gap-1"
+            title="Clear this pending order (e.g. a duplicate attempt)"
+          >
+            <X size={11} /> Cancel
+          </button>
+        )}
+        {canCancel && cancelConfirming && (
+          <div className="inline-flex items-center gap-1.5">
+            <span className="text-[11px] text-un1t-subtle">Clear this pending order?</span>
+            <button
+              type="button"
+              onClick={handleCancel}
+              disabled={cancelBusy}
+              className="text-[11px] bg-red-600 hover:bg-red-700 text-white px-2 py-0.5 rounded inline-flex items-center gap-1 disabled:opacity-40"
+            >
+              {cancelBusy ? <Loader2 size={10} className="animate-spin" /> : <CheckIcon size={10} />}
+              {cancelBusy ? 'Cancelling…' : 'Confirm'}
+            </button>
+            <button
+              type="button"
+              onClick={() => { setCancelConfirming(false); setCancelError(null) }}
+              disabled={cancelBusy}
+              className="text-[11px] text-un1t-subtle hover:text-un1t-text"
+            >
+              Keep
+            </button>
+          </div>
+        )}
+        {cancelError && (
+          <div className="text-[11px] text-red-700 mt-1 max-w-[200px] truncate" title={cancelError}>
+            {cancelError}
+          </div>
+        )}
       </td>
     </tr>
   )
@@ -445,6 +514,7 @@ function StatusPill({ status }) {
     abandoned: 'bg-gray-500/15 text-gray-600',
     recovered: 'bg-blue-500/15 text-blue-700',
     refunded: 'bg-purple-500/15 text-purple-700',
+    cancelled: 'bg-slate-500/15 text-slate-600',
   }
   return (
     <span className={`text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded-full ${map[status] || 'bg-un1t-border/30 text-un1t-subtle'}`}>
