@@ -16,6 +16,13 @@ export default function IssuesLayout() {
       headerTitleStyle: { fontWeight: 'bold' },
     }}>
       <Stack.Screen
+        name="hub"
+        options={{
+          title: 'Reports',
+          headerLeft: () => <BackHeaderLeft label="More" fallbackHref="/(tabs)/more" tint="#FFFFFF" />,
+        }}
+      />
+      <Stack.Screen
         name="index"
         options={{
           title: 'My reports',
