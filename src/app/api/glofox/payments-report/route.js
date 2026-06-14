@@ -20,6 +20,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { uuidLike } from '@/lib/schemas'
 import { glofoxCredentialsForLocation, fetchPaymentsReport } from '@/lib/glofox'
+import { analyzeReportShape } from '@/lib/glofox-report-shape'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -43,6 +44,14 @@ export async function GET(request) {
   const start = url.searchParams.get('start')
   const end = url.searchParams.get('end')
   const byMembers = url.searchParams.get('by_members') === 'true'
+  // Read-only shape probe: when ?shape=true, return a compact structural
+  // analysis of the report (envelope types, amount-population rate, status /
+  // event histograms, a couple of sample rows) INSTEAD of the multi-thousand-
+  // row raw body. ?probe_invoice_id=<uuid> additionally dumps every report row
+  // referencing that invoice, fully unwrapped — used to locate where a known
+  // invoice's true amount actually lives. Diagnostic only; writes nothing.
+  const shape = url.searchParams.get('shape') === 'true'
+  const probeInvoiceId = url.searchParams.get('probe_invoice_id') || undefined
   const paymentMethodsRaw = url.searchParams.get('payment_methods')
   const paymentMethods = paymentMethodsRaw
     ? paymentMethodsRaw.split(',').map(id => ({ id: id.trim() })).filter(p => p.id)
@@ -63,6 +72,21 @@ export async function GET(request) {
     byMembers,
     paymentMethods,
   })
+
+  // Shape-probe mode — return the structural analysis, not the raw body.
+  if (shape) {
+    const analysis = analyzeReportShape(result.body?.TransactionsList?.details, {
+      probeInvoiceId,
+    })
+    return NextResponse.json({
+      ok: result.ok,
+      glofox_status: result.status,
+      location_id: locationId,
+      branch_id: creds.branchId,
+      request_body: result.request_body,
+      shape: analysis,
+    })
+  }
 
   // Lightweight summary computed from TransactionsList shape (default
   // when by_members=false). When by_members=true the shape is
