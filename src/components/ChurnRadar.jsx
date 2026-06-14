@@ -15,7 +15,7 @@ import { useEffect, useState, useCallback } from 'react'
 import {
   Radar, AlertTriangle, Clock, TrendingDown, UserX, Phone,
   ClipboardList, BellOff, Check, CalendarClock, RotateCcw,
-  CreditCard, Ticket, TrendingUp, Mail, UserMinus,
+  CreditCard, Ticket, TrendingUp, Mail, UserMinus, Coins,
 } from 'lucide-react'
 import RadarOutreachButton from '@/components/RadarOutreachButton'
 
@@ -57,6 +57,7 @@ export default function ChurnRadar() {
   const [quarantine, setQuarantine] = useState(null)
   const [winback, setWinback] = useState(null)
   const [overdue, setOverdue] = useState(null)
+  const [charges, setCharges] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [busy, setBusy] = useState(null)        // contactId mid-action
@@ -110,12 +111,24 @@ export default function ChurnRadar() {
     }
   }, [])
 
+  const loadCharges = useCallback(async () => {
+    try {
+      const r = await fetch('/api/churn-radar/unpaid-charges', { cache: 'no-store' })
+      const j = await r.json()
+      if (!r.ok || !j.success) throw new Error(j.error || 'Failed to load unpaid charges')
+      setCharges(j.data)
+    } catch (e) {
+      setError(e.message)
+    }
+  }, [])
+
   useEffect(() => { loadRadar() }, [loadRadar])
   useEffect(() => {
     if (tab === 'quarantine' && quarantine === null) loadQuarantine()
     if (tab === 'winback' && winback === null) loadWinback()
     if (tab === 'overdue' && overdue === null) loadOverdue()
-  }, [tab, quarantine, winback, overdue, loadQuarantine, loadWinback, loadOverdue])
+    if (tab === 'charges' && charges === null) loadCharges()
+  }, [tab, quarantine, winback, overdue, charges, loadQuarantine, loadWinback, loadOverdue, loadCharges])
 
   function showFlash(msg, ok = true) {
     setFlash({ msg, ok })
@@ -136,6 +149,7 @@ export default function ChurnRadar() {
       await loadRadar()
       if (winback !== null) await loadWinback()
       if (overdue !== null) await loadOverdue()
+      if (charges !== null) await loadCharges()
     } catch (e) {
       showFlash(e.message, false)
     } finally {
@@ -164,6 +178,7 @@ export default function ChurnRadar() {
       await loadRadar()
       if (winback !== null) await loadWinback()
       if (overdue !== null) await loadOverdue()
+      if (charges !== null) await loadCharges()
     } catch (e) {
       showFlash(e.message, false)
     } finally {
@@ -275,6 +290,8 @@ export default function ChurnRadar() {
           icon={RotateCcw} label={`Win-back${winback ? ` (${winback.winback.length})` : ''}`} />
         <Tab active={tab === 'overdue'} onClick={() => setTab('overdue')}
           icon={CreditCard} label={`Overdue (${summary.overdue})`} />
+        <Tab active={tab === 'charges'} onClick={() => setTab('charges')}
+          icon={Coins} label={`Unpaid charges (${summary.unpaidCharges || 0})`} />
         <Tab active={tab === 'quarantine'} onClick={() => setTab('quarantine')}
           icon={AlertTriangle}
           label={`Quarantine (${quarantine ? quarantine.length : summary.quarantine})`} />
@@ -291,6 +308,10 @@ export default function ChurnRadar() {
 
       {tab === 'overdue' && (
         <OverdueList data={overdue} busy={busy} onAction={runAction} onRefresh={runRefresh} />
+      )}
+
+      {tab === 'charges' && (
+        <UnpaidChargesList data={charges} busy={busy} onAction={runAction} onRefresh={runRefresh} />
       )}
 
       {tab === 'quarantine' && (
@@ -805,10 +826,10 @@ function OverdueList({ data, busy, onAction, onRefresh }) {
     return (
       <div className="rounded-2xl border border-dashed border-un1t-border p-10 text-center">
         <Check size={28} className="mx-auto text-green-500" />
-        <p className="mt-3 font-medium text-un1t-text">Nobody overdue</p>
+        <p className="mt-3 font-medium text-un1t-text">Nobody owes €50 or more</p>
         <p className="mt-1 text-sm text-un1t-subtle">
-          Every live membership is paid up. Members appear here when a Glofox
-          payment fails.
+          No member has a past-due Glofox invoice of €50+. Smaller unpaid
+          charges (under €50) are under the <strong>Unpaid charges</strong> tab.
         </p>
       </div>
     )
@@ -816,9 +837,39 @@ function OverdueList({ data, busy, onAction, onRefresh }) {
   return (
     <div className="space-y-2">
       <p className="mb-1 rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-800">
-        Members with an <strong>unpaid (past-due) Glofox invoice</strong> — the
+        Members with a past-due Glofox invoice of <strong>€50 or more</strong> — the
         amount owed is the sum of their open past-due invoices. Highest owed
-        first; open a profile for their contact details.
+        first; open a profile for their contact details. Smaller charges are
+        under <strong>Unpaid charges</strong>.
+      </p>
+      {rows.map((m) => <OverdueRow key={m.contactId} m={m} busy={busy} onAction={onAction} onRefresh={onRefresh} />)}
+    </div>
+  )
+}
+
+// RADAR-OVERDUE.1 — the small-charges tab (< €50). Same row shape as
+// Overdue, so it reuses OverdueRow; only the framing differs.
+function UnpaidChargesList({ data, busy, onAction, onRefresh }) {
+  if (data === null) return <p className="text-sm text-un1t-subtle">Loading unpaid charges…</p>
+  const rows = data.charges || []
+  if (rows.length === 0) {
+    return (
+      <div className="rounded-2xl border border-dashed border-un1t-border p-10 text-center">
+        <Check size={28} className="mx-auto text-green-500" />
+        <p className="mt-3 font-medium text-un1t-text">No small unpaid charges</p>
+        <p className="mt-1 text-sm text-un1t-subtle">
+          No member has a small past-due charge (under €50). Larger debts appear
+          under the <strong>Overdue</strong> tab.
+        </p>
+      </div>
+    )
+  }
+  return (
+    <div className="space-y-2">
+      <p className="mb-1 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+        Small <strong>past-due charges under €50</strong> — usually one-off custom
+        charges or fees. Lower priority than the main Overdue chase-list, but worth
+        clearing. Highest owed first.
       </p>
       {rows.map((m) => <OverdueRow key={m.contactId} m={m} busy={busy} onAction={onAction} onRefresh={onRefresh} />)}
     </div>

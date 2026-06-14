@@ -9,6 +9,8 @@ import {
   buildRadar,
   buildWinback,
   buildOverdue,
+  splitArrears,
+  OVERDUE_MIN_CENTS,
   radarSummary,
   computeRecoveryStats,
   computeTrend,
@@ -213,16 +215,22 @@ export async function loadRadar(db, locationId, nowMs = Date.now()) {
   // how many came back to training afterwards.
   const recovery = computeRecoveryStats(members, actions, nowMs)
 
-  // RADAR-OVERDUE.1 — the headline Overdue count + value are the FULL
-  // past-due chase-list (incl. ex-members who still owe), so the badge
-  // matches the Overdue tab. radarSummary only sees the member base.
+  // RADAR-OVERDUE.1 — split the full past-due chase-list at OVERDUE_MIN_CENTS
+  // so the headline badges match their tabs: Overdue (≥€50, real debts) vs
+  // Unpaid charges (<€50, small custom charges). Incl. ex-members who owe.
   const overdueIds = [...pastDue.ids].filter((id) => !dismissed.has(id))
-  const overdueValueCents = overdueIds.reduce(
-    (sum, id) => sum + (pastDue.byId.get(id)?.amountCents || 0), 0)
+  let overdueCount = 0, overdueValueCents = 0
+  let unpaidChargesCount = 0, unpaidChargesValueCents = 0
+  for (const id of overdueIds) {
+    const amt = pastDue.byId.get(id)?.amountCents || 0
+    if (amt >= OVERDUE_MIN_CENTS) { overdueCount++; overdueValueCents += amt }
+    else if (amt > 0) { unpaidChargesCount++; unpaidChargesValueCents += amt }
+  }
 
   const finalSummary = {
     ...summary, quarantine: quarantineOpen, snoozed, recovery,
-    overdue: overdueIds.length, overdueValueCents,
+    overdue: overdueCount, overdueValueCents,
+    unpaidCharges: unpaidChargesCount, unpaidChargesValueCents,
   }
 
   // RADAR-TREND.1 — week-over-week deltas vs the most recent weekly
@@ -282,7 +290,13 @@ export async function loadQuarantine(db, locationId) {
  *
  * @returns {Promise<{ overdue: object[], summary: object }>}
  */
-export async function loadOverdue(db, locationId, nowMs = Date.now()) {
+/**
+ * Build every open-past-due row at the location (minus dismissed), each
+ * with its most recent contacting action, then split at OVERDUE_MIN_CENTS:
+ * `overdue` (the chase-list) vs `unpaidCharges` (small custom charges).
+ * Shared by loadOverdue + loadUnpaidCharges so they read identical data.
+ */
+async function loadArrearsRows(db, locationId, nowMs) {
   const [pastDue, actions, dismissed] = await Promise.all([
     fetchPastDue(db, locationId),
     fetchActions(db, locationId),
@@ -299,12 +313,31 @@ export async function loadOverdue(db, locationId, nowMs = Date.now()) {
     }
   }
 
-  const overdue = buildOverdue(contacts, nowMs, { pastDueById: pastDue.byId }).map((r) => ({
+  const rows = buildOverdue(contacts, nowMs, { pastDueById: pastDue.byId }).map((r) => ({
     ...r,
     lastContacted: lastContacted.get(r.contactId) || null,
   }))
+  return splitArrears(rows)
+}
+
+export async function loadOverdue(db, locationId, nowMs = Date.now()) {
+  const { overdue } = await loadArrearsRows(db, locationId, nowMs)
   const totalValueCents = overdue.reduce((sum, r) => sum + (r.amountOwedCents || 0), 0)
   return { overdue, summary: { total: overdue.length, totalValueCents } }
+}
+
+/**
+ * Load the "Unpaid charges" tab — contacts whose open past-due total is
+ * below OVERDUE_MIN_CENTS (€50): the small custom charges (€5–€10 fees)
+ * that would otherwise clutter the main Overdue chase-list. Same row
+ * shape as Overdue.
+ *
+ * @returns {Promise<{ charges: object[], summary: object }>}
+ */
+export async function loadUnpaidCharges(db, locationId, nowMs = Date.now()) {
+  const { unpaidCharges } = await loadArrearsRows(db, locationId, nowMs)
+  const totalValueCents = unpaidCharges.reduce((sum, r) => sum + (r.amountOwedCents || 0), 0)
+  return { charges: unpaidCharges, summary: { total: unpaidCharges.length, totalValueCents } }
 }
 
 // WINBACK.1 — statuses a former member can carry. ex_member is in
