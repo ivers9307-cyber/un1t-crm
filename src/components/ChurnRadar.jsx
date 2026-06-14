@@ -246,7 +246,7 @@ export default function ChurnRadar() {
           delta={td?.revenueAtRiskCents} deltaGoodDir="down" deltaIsMoney />
         <StatCard label="High risk" value={summary.highRisk} accent="red"
           delta={td?.highRisk} deltaGoodDir="down" />
-        <StatCard label="Overdue" value={summary.overdue} accent="red" breakdown={`${formatMoney(summary.overdueValueCents)}/mo owed`}
+        <StatCard label="Overdue" value={summary.overdue} accent="red" breakdown={`${formatMoney(summary.overdueValueCents)} owed`}
           delta={td?.overdue} deltaGoodDir="down" />
         <StatCard label="Paused" value={summary.paused} breakdown="planned freeze"
           delta={td?.paused} />
@@ -816,9 +816,9 @@ function OverdueList({ data, busy, onAction, onRefresh }) {
   return (
     <div className="space-y-2">
       <p className="mb-1 rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-800">
-        Live members whose Glofox payment has <strong>failed</strong> — they still
-        hold a membership but owe money on it. Highest monthly value first; open a
-        profile for their contact details.
+        Members with an <strong>unpaid (past-due) Glofox invoice</strong> — the
+        amount owed is the sum of their open past-due invoices. Highest owed
+        first; open a profile for their contact details.
       </p>
       {rows.map((m) => <OverdueRow key={m.contactId} m={m} busy={busy} onAction={onAction} onRefresh={onRefresh} />)}
     </div>
@@ -846,16 +846,15 @@ function OverdueRow({ m, busy, onAction, onRefresh }) {
           </div>
           <p className="mt-0.5 text-xs text-un1t-subtle">
             {m.membershipPlan || m.membershipStatus}
-            {m.monthlyValueCents > 0 && ` · ${formatMoney(m.monthlyValueCents)}/mo`}
+            {m.invoiceCount > 1 && ` · ${m.invoiceCount} unpaid invoices`}
             {` · ${attendLine}`}
             {m.lastContacted && ` · contacted ${timeAgo(m.lastContacted.at)}`}
           </p>
         </div>
         <span className="inline-flex items-center gap-1 rounded-md border border-red-200 bg-red-50 px-2 py-0.5 text-[11px] font-medium text-red-700">
           <CreditCard size={12} />
-          {m.daysSincePayment == null
-            ? 'No payment on record'
-            : `Unpaid ${m.daysSincePayment}d`}
+          {formatMoney(m.amountOwedCents)} owed
+          {m.daysOverdue != null && ` · ${m.daysOverdue}d overdue`}
         </span>
       </div>
 

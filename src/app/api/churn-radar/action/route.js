@@ -187,13 +187,22 @@ export async function POST(request) {
     }
 
     // Re-derive the trouble state server-side; never trust the client
-    // that this member is behind.
+    // that this member is behind. RADAR-OVERDUE.1: "overdue" is an open
+    // PAST_DUE invoice (the authoritative signal), so check that too —
+    // not just the early-warning payment-slipping heuristic.
     const { data: full } = await db
       .from('contacts')
       .select(TROUBLE_COLUMNS)
       .eq('id', contactId)
       .maybeSingle()
-    const kind = paymentTroubleKind(full || {})
+    const { data: pastDueInv } = await db
+      .from('glofox_invoices')
+      .select('id')
+      .eq('contact_id', contactId)
+      .eq('status', 'PAST_DUE')
+      .limit(1)
+    const pastDueIds = pastDueInv && pastDueInv.length ? new Set([contactId]) : new Set()
+    const kind = paymentTroubleKind({ ...(full || {}), id: contactId }, Date.now(), { pastDueIds })
     if (!kind) {
       return NextResponse.json({
         success: false,

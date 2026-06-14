@@ -70,12 +70,16 @@ describe('classifyContact', () => {
     expect(classifyContact(healthy({ last_attended_at: null, last_booked_at: null }))).toBe('quarantine')
     expect(classifyContact(pack({ last_attended_at: null, last_booked_at: null }))).toBe('quarantine')
   })
-  it('marks a locked (payment-failed) membership as overdue', () => {
-    expect(classifyContact(healthy({ glofox_membership_state: 'locked' }))).toBe('overdue')
-    // overdue is decided before the footprint check
-    expect(classifyContact(healthy({
-      glofox_membership_state: 'locked', last_attended_at: null, last_booked_at: null,
-    }))).toBe('overdue')
+  it('marks a contact with an open PAST_DUE invoice as overdue (RADAR-OVERDUE.1)', () => {
+    const ctx = { pastDueIds: new Set(['c-healthy']) }
+    expect(classifyContact(healthy(), ctx)).toBe('overdue')
+    // overdue (a real debt) is decided before the footprint + live-membership gates
+    expect(classifyContact(healthy({ last_attended_at: null, last_booked_at: null }), ctx)).toBe('overdue')
+  })
+  it('no longer treats a stale membership_state=locked (no past-due invoice) as overdue (RADAR-OVERDUE.1)', () => {
+    // The audit smoking gun: locked is the unreliable singular-membership
+    // field. With no past-due invoice the member is just active.
+    expect(classifyContact(healthy({ glofox_membership_state: 'locked' }))).toBe('active')
   })
 })
 
@@ -307,8 +311,9 @@ describe('Payment-slipping signal', () => {
 })
 
 describe('paymentTroubleKind — dunning guard', () => {
-  it('flags a locked member as overdue', () => {
-    expect(paymentTroubleKind(healthy({ glofox_membership_state: 'locked' }), NOW)).toBe('overdue')
+  it('flags a member with an open past-due invoice as overdue (RADAR-OVERDUE.1)', () => {
+    const ctx = { pastDueIds: new Set(['c-healthy']) }
+    expect(paymentTroubleKind(healthy(), NOW, ctx)).toBe('overdue')
   })
   it('flags an active past-due sub as slipping', () => {
     const c = healthy({ glofox_billing_interval: '1 month', last_payment_at: daysAgo(40) })
@@ -372,19 +377,23 @@ describe('radarSummary', () => {
       healthy({ id: 'c-quar1', last_attended_at: null, last_booked_at: null }),
       pack({ id: 'c-quar2', last_attended_at: null, last_booked_at: null }),
       healthy({ id: 'c-paused', glofox_membership_state: 'paused' }),
-      healthy({ id: 'c-overdue', glofox_membership_state: 'locked',
-        glofox_membership_price_cents: 17900, glofox_billing_interval: '1 month' }),
+      healthy({ id: 'c-overdue', glofox_membership_price_cents: 17900, glofox_billing_interval: '1 month' }),
       { id: 'c-trial', glofox_membership_status: 'trial' },
       { id: 'c-payg', glofox_membership_status: 'member', glofox_membership_type: 'payg', last_attended_at: daysAgo(2) },
     ]
-    const s = radarSummary(contacts, NOW)
+    // RADAR-OVERDUE.1 — c-overdue has an open €179 past-due invoice.
+    const ctx = {
+      pastDueIds: new Set(['c-overdue']),
+      pastDueById: new Map([['c-overdue', { amountCents: 17900, count: 1, oldestDueAt: daysAgo(10) }]]),
+    }
+    const s = radarSummary(contacts, NOW, ctx)
     expect(s.activeBase).toBe(8)   // 6 subs + 2 packs; payg + trial out of scope
     expect(s.atRisk).toBe(2)       // c-quiet, c-bad
     expect(s.highRisk).toBe(1)     // c-bad
     expect(s.quarantine).toBe(2)   // c-quar1, c-quar2
     expect(s.paused).toBe(1)       // c-paused
-    expect(s.overdue).toBe(1)      // c-overdue
-    expect(s.overdueValueCents).toBe(17900)
+    expect(s.overdue).toBe(1)      // c-overdue (open past-due invoice)
+    expect(s.overdueValueCents).toBe(17900)  // the real amount owed, from the invoice
     expect(s.bySegment.member).toEqual({ activeBase: 6, atRisk: 2, highRisk: 1 })
     expect(s.bySegment.credit).toEqual({ activeBase: 2, atRisk: 0, highRisk: 0 })
   })
@@ -406,20 +415,20 @@ describe('paused / overdue membership states', () => {
     })
     expect(scoreMember(wouldBeAtRisk, NOW)).toBe(null)
   })
-  it('scoreMember returns null for an overdue member even when signals fire', () => {
+  it('scoreMember returns null for an overdue member even when signals fire (RADAR-OVERDUE.1)', () => {
     const wouldBeAtRisk = healthy({
-      glofox_membership_state: 'locked',
       last_attended_at: daysAgo(35), total_attended_7d: 0, total_attended_30d: 1, total_noshow_30d: 4,
     })
-    expect(scoreMember(wouldBeAtRisk, NOW)).toBe(null)
+    expect(scoreMember(wouldBeAtRisk, NOW, { pastDueIds: new Set(['c-healthy']) })).toBe(null)
   })
   it('keeps paused + overdue members out of buildRadar', () => {
     const contacts = [
       healthy({ id: 'c-bad', last_attended_at: daysAgo(35), total_attended_7d: 0, total_attended_30d: 1, total_noshow_30d: 4 }),
       healthy({ id: 'c-paused', glofox_membership_state: 'paused', last_attended_at: daysAgo(35), total_attended_7d: 0, total_attended_30d: 1, total_noshow_30d: 4 }),
-      healthy({ id: 'c-overdue', glofox_membership_state: 'locked', last_attended_at: daysAgo(35), total_attended_7d: 0, total_attended_30d: 1, total_noshow_30d: 4 }),
+      healthy({ id: 'c-overdue', last_attended_at: daysAgo(35), total_attended_7d: 0, total_attended_30d: 1, total_noshow_30d: 4 }),
     ]
-    expect(buildRadar(contacts, NOW).map((r) => r.contactId)).toEqual(['c-bad'])
+    const ctx = { pastDueIds: new Set(['c-overdue']) }
+    expect(buildRadar(contacts, NOW, ctx).map((r) => r.contactId)).toEqual(['c-bad'])
   })
 })
 
@@ -550,34 +559,46 @@ describe('MEMBER_STATUSES', () => {
   })
 })
 
-describe('OVERDUE.1 — buildOverdue', () => {
-  it('lists only locked (payment-failed) members, highest value first', () => {
+describe('RADAR-OVERDUE.1 — buildOverdue (invoice-driven)', () => {
+  it('lists only contacts with an open past-due invoice, highest amount owed first', () => {
+    const ctx = {
+      pastDueById: new Map([
+        ['low', { amountCents: 8000, count: 1, oldestDueAt: daysAgo(40) }],
+        ['high', { amountCents: 20000, count: 2, oldestDueAt: daysAgo(20) }],
+      ]),
+    }
     const rows = buildOverdue([
       healthy({ id: 'ok' }),
       healthy({ id: 'paused', glofox_membership_state: 'paused' }),
-      healthy({ id: 'low', glofox_membership_state: 'locked',
-        glofox_membership_price_cents: 8000, glofox_billing_interval: '1 month',
-        last_payment_at: daysAgo(40) }),
-      healthy({ id: 'high', glofox_membership_state: 'locked',
-        glofox_membership_price_cents: 20000, glofox_billing_interval: '1 month',
-        last_payment_at: daysAgo(20) }),
-    ], NOW)
+      healthy({ id: 'low' }),
+      healthy({ id: 'high' }),
+    ], NOW, ctx)
     expect(rows.map((r) => r.contactId)).toEqual(['high', 'low'])
-    expect(rows[0].monthlyValueCents).toBe(20000)
-    expect(rows[0].daysSincePayment).toBe(20)
+    expect(rows[0].amountOwedCents).toBe(20000)
+    expect(rows[0].invoiceCount).toBe(2)
+    expect(rows[0].daysOverdue).toBe(20)
   })
-  it('carries payment + attendance recency and the segment', () => {
+  it('includes a class pack ONLY when it carries a real past-due invoice (never from membership state)', () => {
+    // A normal pack (no invoice) is absent; one with a genuine unpaid invoice shows.
+    const ctx = { pastDueById: new Map([['owes', { amountCents: 2500, count: 1, oldestDueAt: daysAgo(5) }]]) }
+    const rows = buildOverdue([pack({ id: 'fine' }), pack({ id: 'owes' })], NOW, ctx)
+    expect(rows.map((r) => r.contactId)).toEqual(['owes'])
+    expect(rows[0].segment).toBe('credit')
+  })
+  it('carries amount, attendance recency and the segment', () => {
+    const ctx = { pastDueById: new Map([['sub', { amountCents: 17900, count: 1, oldestDueAt: daysAgo(35) }]]) }
     const rows = buildOverdue([
-      healthy({ id: 'sub', glofox_membership_state: 'locked',
-        last_payment_at: daysAgo(35), last_attended_at: daysAgo(3) }),
-    ], NOW)
+      healthy({ id: 'sub', last_attended_at: daysAgo(3) }),
+    ], NOW, ctx)
     expect(rows[0].segment).toBe('member')
-    expect(rows[0].daysSincePayment).toBe(35)
+    expect(rows[0].amountOwedCents).toBe(17900)
+    expect(rows[0].daysOverdue).toBe(35)
     expect(rows[0].daysSinceAttended).toBe(3)
   })
-  it('returns [] for empty / null input', () => {
-    expect(buildOverdue([], NOW)).toEqual([])
-    expect(buildOverdue(null, NOW)).toEqual([])
+  it('returns [] for empty / null input or no past-due context', () => {
+    expect(buildOverdue([], NOW, { pastDueById: new Map() })).toEqual([])
+    expect(buildOverdue(null, NOW, { pastDueById: new Map() })).toEqual([])
+    expect(buildOverdue([healthy()], NOW)).toEqual([])  // no ctx → nobody overdue
   })
 })
 

@@ -59,6 +59,64 @@ async function fetchDismissed(db, locationId) {
 }
 
 /**
+ * RADAR-OVERDUE.1 — the authoritative arrears signal. Aggregates every
+ * OPEN `PAST_DUE` invoice per contact at the location (from
+ * `glofox_invoices`, kept current by the INVOICE_UPDATED webhook) into
+ * `{ amountCents, count, oldestDueAt }`. This DRIVES the Overdue tab and
+ * pulls past-due members off the at-risk list — replacing the stale,
+ * unreliable `glofox_membership_state='locked'` signal (see the audit at
+ * docs/CHURN_OVERDUE_AUDIT_2026-06.md). Returns `{ ids: Set, byId: Map }`.
+ */
+async function fetchPastDue(db, locationId) {
+  const byId = new Map()
+  const PAGE = 1000
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await db
+      .from('glofox_invoices')
+      .select('contact_id, amount_cents, invoice_date')
+      .eq('location_id', locationId)
+      .eq('status', 'PAST_DUE')
+      .not('contact_id', 'is', null)
+      .order('contact_id', { ascending: true })
+      .range(from, from + PAGE - 1)
+    if (error) throw new Error(error.message)
+    for (const r of data || []) {
+      const cur = byId.get(r.contact_id) || { amountCents: 0, count: 0, oldestDueAt: null }
+      cur.amountCents += Number(r.amount_cents) || 0
+      cur.count += 1
+      if (r.invoice_date && (!cur.oldestDueAt || r.invoice_date < cur.oldestDueAt)) {
+        cur.oldestDueAt = r.invoice_date
+      }
+      byId.set(r.contact_id, cur)
+    }
+    if (!data || data.length < PAGE) break
+  }
+  return { ids: new Set(byId.keys()), byId }
+}
+
+/**
+ * Fetch the radar-relevant columns for an explicit list of contact ids
+ * (the past-due cohort — which may include ex-members outside the member
+ * base, so it can't reuse fetchMembers). Chunked to stay under the
+ * URL-length / row caps.
+ */
+async function fetchContactsByIds(db, ids) {
+  const list = Array.from(ids)
+  if (list.length === 0) return []
+  const rows = []
+  const CHUNK = 300
+  for (let i = 0; i < list.length; i += CHUNK) {
+    const { data, error } = await db
+      .from('contacts')
+      .select('id, name, glofox_membership_status, glofox_membership_type, glofox_membership_plan, last_attended_at, last_payment_at')
+      .in('id', list.slice(i, i + CHUNK))
+    if (error) throw new Error(error.message)
+    rows.push(...(data || []))
+  }
+  return rows
+}
+
+/**
  * Fetch every paying member at a location. Paginated — the member
  * base can exceed Supabase's ~1000-row response cap.
  */
@@ -103,14 +161,19 @@ async function fetchActions(db, locationId) {
  * @returns {Promise<{ radar: object[], summary: object }>}
  */
 export async function loadRadar(db, locationId, nowMs = Date.now()) {
-  const [allMembers, actions, dismissed] = await Promise.all([
+  const [allMembers, actions, dismissed, pastDue] = await Promise.all([
     fetchMembers(db, locationId),
     fetchActions(db, locationId),
     fetchDismissed(db, locationId),
+    fetchPastDue(db, locationId),
   ])
   // CHURN-CLEAN.1 — operator-dismissed "not a member" contacts drop off
   // every surface AND the summary counts (active base, at-risk, etc.).
   const members = allMembers.filter((m) => !dismissed.has(m.id))
+  // RADAR-OVERDUE.1 — invoice-driven overdue context: past-due members are
+  // pulled off the at-risk list + counted as overdue (not the stale
+  // membership.status='locked' field).
+  const ctx = { pastDueIds: pastDue.ids, pastDueById: pastDue.byId }
 
   // Actions are newest-first — first hit per contact is the latest.
   const lastContacted = new Map()
@@ -127,7 +190,7 @@ export async function loadRadar(db, locationId, nowMs = Date.now()) {
     }
   }
 
-  const scored = buildRadar(members, nowMs)
+  const scored = buildRadar(members, nowMs, ctx)
   const radar = []
   let snoozed = 0
   for (const r of scored) {
@@ -139,10 +202,10 @@ export async function loadRadar(db, locationId, nowMs = Date.now()) {
   // radarSummary counts every no-footprint member as quarantine; a
   // member that's already been triaged is off the backlog, so subtract
   // them — the badge + card then match the visible quarantine list.
-  const summary = radarSummary(members, nowMs)
+  const summary = radarSummary(members, nowMs, ctx)
   let quarantineOpen = 0
   for (const c of members) {
-    if (!triaged.has(c.id) && classifyContact(c) === 'quarantine') quarantineOpen++
+    if (!triaged.has(c.id) && classifyContact(c, ctx) === 'quarantine') quarantineOpen++
   }
 
   // RADAR-OUTCOMES.1 — did the outreach work? Correlate the action log
@@ -150,7 +213,17 @@ export async function loadRadar(db, locationId, nowMs = Date.now()) {
   // how many came back to training afterwards.
   const recovery = computeRecoveryStats(members, actions, nowMs)
 
-  const finalSummary = { ...summary, quarantine: quarantineOpen, snoozed, recovery }
+  // RADAR-OVERDUE.1 — the headline Overdue count + value are the FULL
+  // past-due chase-list (incl. ex-members who still owe), so the badge
+  // matches the Overdue tab. radarSummary only sees the member base.
+  const overdueIds = [...pastDue.ids].filter((id) => !dismissed.has(id))
+  const overdueValueCents = overdueIds.reduce(
+    (sum, id) => sum + (pastDue.byId.get(id)?.amountCents || 0), 0)
+
+  const finalSummary = {
+    ...summary, quarantine: quarantineOpen, snoozed, recovery,
+    overdue: overdueIds.length, overdueValueCents,
+  }
 
   // RADAR-TREND.1 — week-over-week deltas vs the most recent weekly
   // snapshot (written by the churn-radar-snapshot cron). Null trend
@@ -198,20 +271,25 @@ export async function loadQuarantine(db, locationId) {
 }
 
 /**
- * Load the overdue chase-list — live members whose payment has failed
- * (membership state = locked). Each row carries its most recent
- * contacting action so the operator can see who's already been
- * chased. No snooze filtering — a debt doesn't snooze.
+ * Load the overdue chase-list — contacts with an OPEN `PAST_DUE` invoice
+ * (RADAR-OVERDUE.1). Driven by `glofox_invoices`, the authoritative
+ * arrears signal, NOT the stale membership.status='locked' field — so a
+ * class-pack holder who paid upfront never appears, and a subscriber
+ * whose renewal genuinely failed always does. Each row carries the real
+ * amount owed + how long the oldest invoice has been overdue, plus its
+ * most recent contacting action. No snooze filtering — a debt doesn't
+ * snooze. Operator-dismissed contacts are excluded.
  *
  * @returns {Promise<{ overdue: object[], summary: object }>}
  */
 export async function loadOverdue(db, locationId, nowMs = Date.now()) {
-  const [allMembers, actions, dismissed] = await Promise.all([
-    fetchMembers(db, locationId),
+  const [pastDue, actions, dismissed] = await Promise.all([
+    fetchPastDue(db, locationId),
     fetchActions(db, locationId),
     fetchDismissed(db, locationId),
   ])
-  const members = allMembers.filter((m) => !dismissed.has(m.id))
+  const ids = [...pastDue.ids].filter((id) => !dismissed.has(id))
+  const contacts = await fetchContactsByIds(db, ids)
 
   // Actions are newest-first — first hit per contact is the latest.
   const lastContacted = new Map()
@@ -221,11 +299,11 @@ export async function loadOverdue(db, locationId, nowMs = Date.now()) {
     }
   }
 
-  const overdue = buildOverdue(members, nowMs).map((r) => ({
+  const overdue = buildOverdue(contacts, nowMs, { pastDueById: pastDue.byId }).map((r) => ({
     ...r,
     lastContacted: lastContacted.get(r.contactId) || null,
   }))
-  const totalValueCents = overdue.reduce((sum, r) => sum + (r.monthlyValueCents || 0), 0)
+  const totalValueCents = overdue.reduce((sum, r) => sum + (r.amountOwedCents || 0), 0)
   return { overdue, summary: { total: overdue.length, totalValueCents } }
 }
 

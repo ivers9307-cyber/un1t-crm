@@ -179,9 +179,8 @@ export function hasLiveMembership(contact) {
  *   'out'        — not a paying member, or no live membership at all
  *                  (spent class pack, PAYG drop-in, lapsed sub). Not
  *                  in scope.
- *   'overdue'    — live subscription whose payment has failed (state =
- *                  locked). They still hold a membership — they owe
- *                  money on it. Own tab, own chase-list.
+ *   'overdue'    — has an OPEN PAST_DUE invoice (genuinely owes money).
+ *                  Own tab, own chase-list.
  *   'paused'     — live membership on a planned freeze (state =
  *                  paused). Counts as a member, off the at-risk radar.
  *   'active'     — live membership + an activity footprint; scored.
@@ -190,16 +189,28 @@ export function hasLiveMembership(contact) {
  *
  * 'overdue', 'paused', 'active' and 'quarantine' are all live members —
  * together they make up the active base.
+ *
+ * RADAR-OVERDUE.1 — overdue is driven by the AUTHORITATIVE arrears
+ * signal, an open PAST_DUE invoice (`glofox_invoices`), NOT the stale
+ * `member.membership.status='locked'` field. Glofox's singular
+ * membership reference is unreliable (GLOFOX2.1.9 / the audit in
+ * docs/CHURN_OVERDUE_AUDIT_2026-06.md): it flagged class-pack holders
+ * who'd paid in full and missed the real debtors. `ctx.pastDueIds` is
+ * the Set of contact ids with an open past-due invoice at this location,
+ * supplied by the data layer; the pure scorer stays I/O-free. A class
+ * pack (paid upfront) simply never carries a recurring past-due invoice.
  */
-export function classifyContact(contact) {
+export function classifyContact(contact, ctx = {}) {
   if (!contact || !MEMBER_STATUSES.includes(contact.glofox_membership_status)) {
     return 'out'
   }
+  // Genuinely owes money — checked before the live-membership gate so a
+  // member in arrears on a now-ended membership still surfaces as a debt.
+  if (ctx.pastDueIds && ctx.pastDueIds.has(contact.id)) return 'overdue'
   if (!hasLiveMembership(contact)) return 'out'
   const state = typeof contact.glofox_membership_state === 'string'
     ? contact.glofox_membership_state.toLowerCase()
     : null
-  if (state === 'locked') return 'overdue'
   if (state === 'paused') return 'paused'
   const hasFootprint = Boolean(contact.last_attended_at) || Boolean(contact.last_booked_at)
   return hasFootprint ? 'active' : 'quarantine'
@@ -345,8 +356,8 @@ function tierFor(score) {
  * the active base or trips no signals. Otherwise returns the scored
  * record the radar renders.
  */
-export function scoreMember(contact, nowMs = Date.now()) {
-  if (classifyContact(contact) !== 'active') return null
+export function scoreMember(contact, nowMs = Date.now(), ctx = {}) {
+  if (classifyContact(contact, ctx) !== 'active') return null
   const signals = []
   for (const detect of DETECTORS) {
     const s = detect(contact, nowMs)
@@ -388,8 +399,8 @@ export function scoreMember(contact, nowMs = Date.now()) {
  * a "Send payment reminder" must only ever enrol a member who is
  * genuinely behind, never a paying one.
  */
-export function paymentTroubleKind(contact, nowMs = Date.now()) {
-  const cls = classifyContact(contact)
+export function paymentTroubleKind(contact, nowMs = Date.now(), ctx = {}) {
+  const cls = classifyContact(contact, ctx)
   if (cls === 'overdue') return 'overdue'
   if (cls === 'active' && detectPaymentSlipping(contact, nowMs)) return 'slipping'
   return null
@@ -401,10 +412,10 @@ export function paymentTroubleKind(contact, nowMs = Date.now()) {
  * first. Members with no signals — the healthy active base — are
  * omitted.
  */
-export function buildRadar(contacts, nowMs = Date.now()) {
+export function buildRadar(contacts, nowMs = Date.now(), ctx = {}) {
   const scored = []
   for (const c of contacts || []) {
-    const r = scoreMember(c, nowMs)
+    const r = scoreMember(c, nowMs, ctx)
     if (r) scored.push(r)
   }
   scored.sort((a, b) => {
@@ -429,7 +440,7 @@ export function buildRadar(contacts, nowMs = Date.now()) {
  * churning monthly subscriber and a pack holder running low are
  * different problems.
  */
-export function radarSummary(contacts, nowMs = Date.now()) {
+export function radarSummary(contacts, nowMs = Date.now(), ctx = {}) {
   const blank = () => ({ activeBase: 0, atRisk: 0, highRisk: 0 })
   const bySegment = { member: blank(), credit: blank() }
   let quarantine = 0
@@ -438,7 +449,7 @@ export function radarSummary(contacts, nowMs = Date.now()) {
   let revenueAtRiskCents = 0
   let overdueValueCents = 0
   for (const c of contacts || []) {
-    const cls = classifyContact(c)
+    const cls = classifyContact(c, ctx)
     if (cls === 'out') continue
     // Every live member — active, paused, overdue or quarantine —
     // counts toward the active base.
@@ -448,11 +459,14 @@ export function radarSummary(contacts, nowMs = Date.now()) {
     if (cls === 'paused') { paused++; continue }
     if (cls === 'overdue') {
       overdue++
-      overdueValueCents += monthlyValueCents(c)
+      // The real amount owed (sum of open PAST_DUE invoices) when the data
+      // layer supplied it; falls back to the monthly value as an estimate.
+      const pd = ctx.pastDueById && ctx.pastDueById.get(c.id)
+      overdueValueCents += pd ? pd.amountCents : monthlyValueCents(c)
       continue
     }
     // cls === 'active' — scored on the at-risk radar.
-    const r = scoreMember(c, nowMs)
+    const r = scoreMember(c, nowMs, ctx)
     if (r) {
       bySegment[seg].atRisk++
       if (r.tier === 'high') bySegment[seg].highRisk++
@@ -473,21 +487,28 @@ export function radarSummary(contacts, nowMs = Date.now()) {
 }
 
 // ── overdue ──────────────────────────────────────────────────────
-// OVERDUE.1 — live members in payment arrears (membership state =
-// locked). They still hold a membership; the billing has failed. The
-// operator wants a plain chase-list: who owes, how much per month is
-// at stake, how long they've been unpaid, and whether they're still
-// turning up (an easy save) or already gone.
+// RADAR-OVERDUE.1 — contacts with an OPEN PAST_DUE invoice. The
+// operator wants a plain chase-list: who owes, the real amount owed
+// (sum of their open past-due invoices), how long the oldest has been
+// unpaid, and whether they're still turning up (an easy save) or gone.
+// Driven by `glofox_invoices` (status='PAST_DUE'), supplied via
+// ctx.pastDueById — see classifyContact + docs/CHURN_OVERDUE_AUDIT_2026-06.md.
 
 /**
- * Build the overdue chase-list — live members whose payment has
- * failed. Highest monthly value first, then longest unpaid.
+ * Build the overdue chase-list from the past-due invoice aggregate in
+ * `ctx.pastDueById` (Map<contactId, { amountCents, count, oldestDueAt }>).
+ * Includes any supplied contact carrying an open past-due invoice —
+ * membership type/state is irrelevant to a debt. Highest amount owed
+ * first, then longest overdue. Returns [] when no aggregate is supplied.
  */
-export function buildOverdue(contacts, nowMs = Date.now()) {
+export function buildOverdue(contacts, nowMs = Date.now(), ctx = {}) {
+  const byId = ctx.pastDueById
+  if (!byId) return []
   const rows = []
   for (const c of contacts || []) {
-    if (classifyContact(c) !== 'overdue') continue
-    const dPay = daysSince(c.last_payment_at, nowMs)
+    const pd = byId.get(c.id)
+    if (!pd) continue
+    const dDue = daysSince(pd.oldestDueAt, nowMs)
     const dAtt = daysSince(c.last_attended_at, nowMs)
     rows.push({
       contactId: c.id,
@@ -495,16 +516,20 @@ export function buildOverdue(contacts, nowMs = Date.now()) {
       membershipStatus: c.glofox_membership_status,
       membershipPlan: c.glofox_membership_plan || null,
       segment: c.glofox_membership_type === 'num_classes' ? 'credit' : 'member',
-      monthlyValueCents: monthlyValueCents(c),
-      lastPaymentAt: c.last_payment_at || null,
-      daysSincePayment: dPay == null ? null : Math.floor(dPay),
+      // The real amount owed — sum of the contact's open PAST_DUE invoices.
+      amountOwedCents: pd.amountCents || 0,
+      invoiceCount: pd.count || 0,
+      oldestDueAt: pd.oldestDueAt || null,
+      // Days since the OLDEST unpaid invoice fell due (the real arrears
+      // clock) — not "days since last payment".
+      daysOverdue: dDue == null ? null : Math.floor(dDue),
       lastAttendedAt: c.last_attended_at || null,
       daysSinceAttended: dAtt == null ? null : Math.floor(dAtt),
     })
   }
   rows.sort((a, b) => {
-    if (b.monthlyValueCents !== a.monthlyValueCents) return b.monthlyValueCents - a.monthlyValueCents
-    return (b.daysSincePayment ?? -1) - (a.daysSincePayment ?? -1)
+    if (b.amountOwedCents !== a.amountOwedCents) return b.amountOwedCents - a.amountOwedCents
+    return (b.daysOverdue ?? -1) - (a.daysOverdue ?? -1)
   })
   return rows
 }
