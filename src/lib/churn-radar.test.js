@@ -6,6 +6,8 @@ import {
   classifyContact,
   hasLiveMembership,
   isRealMembershipPlan,
+  splitArrears,
+  OVERDUE_MIN_CENTS,
   scoreMember,
   buildRadar,
   radarSummary,
@@ -599,6 +601,29 @@ describe('RADAR-OVERDUE.1 — buildOverdue (invoice-driven)', () => {
     expect(buildOverdue([], NOW, { pastDueById: new Map() })).toEqual([])
     expect(buildOverdue(null, NOW, { pastDueById: new Map() })).toEqual([])
     expect(buildOverdue([healthy()], NOW)).toEqual([])  // no ctx → nobody overdue
+  })
+})
+
+describe('RADAR-OVERDUE.1 — splitArrears (€50 boundary)', () => {
+  it('splits at OVERDUE_MIN_CENTS — €50, exclusive below', () => {
+    expect(OVERDUE_MIN_CENTS).toBe(5000)
+    const rows = [
+      { contactId: 'big', amountOwedCents: 17900 },
+      { contactId: 'exactly50', amountOwedCents: 5000 },
+      { contactId: 'small', amountOwedCents: 1000 },
+      { contactId: 'tiny', amountOwedCents: 500 },
+      { contactId: 'zero', amountOwedCents: 0 },
+    ]
+    const { overdue, unpaidCharges } = splitArrears(rows)
+    expect(overdue.map((r) => r.contactId)).toEqual(['big', 'exactly50'])  // ≥ €50
+    expect(unpaidCharges.map((r) => r.contactId)).toEqual(['small', 'tiny'])  // 0 < x < €50
+  })
+  it('honours a custom boundary + handles empty/null', () => {
+    const rows = [{ contactId: 'a', amountOwedCents: 3000 }]
+    expect(splitArrears(rows, 2000).overdue.map((r) => r.contactId)).toEqual(['a'])
+    expect(splitArrears(rows, 4000).unpaidCharges.map((r) => r.contactId)).toEqual(['a'])
+    expect(splitArrears([])).toEqual({ overdue: [], unpaidCharges: [] })
+    expect(splitArrears(null)).toEqual({ overdue: [], unpaidCharges: [] })
   })
 })
 

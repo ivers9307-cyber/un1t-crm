@@ -494,6 +494,29 @@ export function radarSummary(contacts, nowMs = Date.now(), ctx = {}) {
 // Driven by `glofox_invoices` (status='PAST_DUE'), supplied via
 // ctx.pastDueById — see classifyContact + docs/CHURN_OVERDUE_AUDIT_2026-06.md.
 
+// RADAR-OVERDUE.1 — the boundary between the main Overdue chase-list and
+// the "Unpaid charges" tab. A contact whose total open past-due is ≥ this
+// is a real debt worth chasing (a failed subscription renewal); below it
+// is a small custom charge (a €5–€10 fee) that gets its own lower-priority
+// tab so it doesn't clutter the chase-list. €50.
+export const OVERDUE_MIN_CENTS = 5000
+
+/**
+ * Split overdue rows (from buildOverdue) by the OVERDUE_MIN_CENTS boundary:
+ *   overdue        — amount owed ≥ minCents (the real chase-list)
+ *   unpaidCharges  — amount owed > 0 and < minCents (small custom charges)
+ */
+export function splitArrears(rows, minCents = OVERDUE_MIN_CENTS) {
+  const overdue = []
+  const unpaidCharges = []
+  for (const r of rows || []) {
+    const amt = r?.amountOwedCents || 0
+    if (amt >= minCents) overdue.push(r)
+    else if (amt > 0) unpaidCharges.push(r)
+  }
+  return { overdue, unpaidCharges }
+}
+
 /**
  * Build the overdue chase-list from the past-due invoice aggregate in
  * `ctx.pastDueById` (Map<contactId, { amountCents, count, oldestDueAt }>).
