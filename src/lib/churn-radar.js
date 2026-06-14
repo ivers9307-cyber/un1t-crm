@@ -40,6 +40,28 @@ const MEMBERSHIP_ENDED_STATES = Object.freeze([
   'cancelled', 'expired', 'frozen', 'suspended',
 ])
 
+// CHURN-CLEAN.1 — plan names that are NOT a real paying membership:
+// Glofox trials, free intro/open weeks, taster sessions, single-class
+// one-offs, and body scans. The churn radar is for genuine paying
+// customers (recurring subscriptions + regular class-pack buyers who've
+// dropped off) — a lead, a trial, or a one-off class pack must never
+// appear. Grounded in the live Stillorgan catalogue: "The UN1T Trial",
+// "Black Friday Open Week", "1 Class Pack", "1 Scan". A "1 Class"/"1
+// Class Pack" is anchored at the start so "10 Class Pack" / "1 Year
+// Membership" are NOT matched.
+const NON_MEMBER_PLAN_RE = /(\btrial\b|open\s*week|\btaster|\bintro|\bscan\b|^\s*1\s+class\b)/i
+
+/**
+ * Is this membership plan a real paying membership (vs a trial / open
+ * week / taster / one-off class / scan)? A missing plan name is treated
+ * as real — the type/state gate still applies — so we never exclude a
+ * genuine member purely because Glofox didn't return a plan label.
+ */
+export function isRealMembershipPlan(plan) {
+  if (!plan) return true
+  return !NON_MEMBER_PLAN_RE.test(String(plan))
+}
+
 // Gone-quiet window. Below MIN they're still attending normally;
 // past MAX they've effectively churned (a re-win, not an at-risk
 // nudge) so they drop off the radar rather than dominating it.
@@ -129,10 +151,20 @@ export function monthlyValueCents(contact) {
  */
 export function hasLiveMembership(contact) {
   if (!contact) return false
+  // CHURN-CLEAN.1 — a trial / open-week / one-off / scan plan is never a
+  // real paying membership, whatever Glofox's status or type says.
+  if (!isRealMembershipPlan(contact.glofox_membership_plan)) return false
   const type = typeof contact.glofox_membership_type === 'string'
     ? contact.glofox_membership_type.toLowerCase()
     : null
   if (type === 'num_classes') {
+    // CHURN-CLEAN.1 — a class pack only counts when Glofox's reliable
+    // credit-member detection tagged it (status='credit_member', via the
+    // /credits + /memberships endpoints — GLOFOX2.1.11 Plan A). A
+    // 'member' + num_classes row is the STALE trial-pack reference on
+    // member.membership (typically the initial trial pack), NOT the
+    // member's current product — so it is not a live membership.
+    if (contact.glofox_membership_status !== 'credit_member') return false
     return Number(contact.trial_credits_remaining) > 0
   }
   if (type === 'payg') return false
@@ -514,6 +546,12 @@ function winbackTier(days) {
 export function scoreWinbackContact(contact, nowMs = Date.now()) {
   const status = contact?.glofox_membership_status
   if (!status || !WINBACK_STATUSES.includes(status)) return null
+  // CHURN-CLEAN.1 — a trial / one-off plan, or the stale member+num_classes
+  // trial-pack reference, was never a real member, so there's nothing to
+  // win back. (ex_member + real subscriptions / packs still qualify.)
+  if (!isRealMembershipPlan(contact.glofox_membership_plan)) return null
+  if (status === 'member'
+    && String(contact.glofox_membership_type || '').toLowerCase() === 'num_classes') return null
   const state = typeof contact?.glofox_membership_state === 'string'
     ? contact.glofox_membership_state.toLowerCase()
     : null

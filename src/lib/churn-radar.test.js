@@ -5,6 +5,7 @@ import { describe, it, expect } from 'vitest'
 import {
   classifyContact,
   hasLiveMembership,
+  isRealMembershipPlan,
   scoreMember,
   buildRadar,
   radarSummary,
@@ -79,11 +80,26 @@ describe('classifyContact', () => {
 })
 
 describe('hasLiveMembership', () => {
-  it('treats a class pack as live only while credits remain', () => {
-    expect(hasLiveMembership({ glofox_membership_type: 'num_classes', trial_credits_remaining: 3 })).toBe(true)
-    expect(hasLiveMembership({ glofox_membership_type: 'num_classes', trial_credits_remaining: 0 })).toBe(false)
-    expect(hasLiveMembership({ glofox_membership_type: 'num_classes', trial_credits_remaining: null })).toBe(false)
-    expect(hasLiveMembership({ glofox_membership_type: 'num_classes' })).toBe(false)
+  it('treats a credit_member class pack as live only while credits remain', () => {
+    const ck = (over) => hasLiveMembership({ glofox_membership_status: 'credit_member', glofox_membership_type: 'num_classes', ...over })
+    expect(ck({ trial_credits_remaining: 3 })).toBe(true)
+    expect(ck({ trial_credits_remaining: 0 })).toBe(false)
+    expect(ck({ trial_credits_remaining: null })).toBe(false)
+    expect(ck({})).toBe(false)
+  })
+  it('rejects a member+num_classes row — the stale trial-pack reference, not a real pack (CHURN-CLEAN.1)', () => {
+    // Glofox's member.membership is typically the initial trial pack;
+    // a real class pack is detected as credit_member (Plan A). A
+    // 'member' + num_classes with credits is NOT a current pack.
+    expect(hasLiveMembership({ glofox_membership_status: 'member', glofox_membership_type: 'num_classes', trial_credits_remaining: 5 })).toBe(false)
+  })
+  it('rejects a trial / open-week / one-off plan by name whatever the type (CHURN-CLEAN.1)', () => {
+    expect(hasLiveMembership({ glofox_membership_status: 'credit_member', glofox_membership_type: 'num_classes', trial_credits_remaining: 5, glofox_membership_plan: 'The UN1T Trial' })).toBe(false)
+    expect(hasLiveMembership({ glofox_membership_status: 'credit_member', glofox_membership_type: 'num_classes', trial_credits_remaining: 5, glofox_membership_plan: 'Black Friday Open Week' })).toBe(false)
+    expect(hasLiveMembership({ glofox_membership_status: 'credit_member', glofox_membership_type: 'num_classes', trial_credits_remaining: 5, glofox_membership_plan: '1 Class Pack' })).toBe(false)
+    expect(hasLiveMembership({ glofox_membership_status: 'member', glofox_membership_type: 'time', glofox_membership_state: 'active', glofox_membership_plan: '1 Scan' })).toBe(false)
+    // a normal subscription plan name stays live
+    expect(hasLiveMembership({ glofox_membership_status: 'member', glofox_membership_type: 'time', glofox_membership_state: 'active', glofox_membership_plan: 'Month to Month Membership' })).toBe(true)
   })
   it('never treats a PAYG drop-in as a live membership', () => {
     expect(hasLiveMembership({ glofox_membership_type: 'payg' })).toBe(false)
@@ -105,7 +121,38 @@ describe('hasLiveMembership', () => {
   })
 })
 
+describe('isRealMembershipPlan (CHURN-CLEAN.1)', () => {
+  it('rejects trial / open-week / taster / intro / scan / single-class plans', () => {
+    for (const p of ['The UN1T Trial', 'Black Friday Open Week', 'Open Week', 'Taster Session',
+      'Intro Offer', '1 Scan', 'InBody Scan', '1 Class Pack', '1 Class', 'Free Trial']) {
+      expect(isRealMembershipPlan(p)).toBe(false)
+    }
+  })
+  it('accepts real subscription + multi-class pack plans', () => {
+    for (const p of ['Month to Month Membership', '3 Month Membership', '1 Year Membership',
+      '10 Class Pack', '20 Class Pack', 'Elite Membership', 'Corporate']) {
+      expect(isRealMembershipPlan(p)).toBe(true)
+    }
+  })
+  it('treats a missing plan name as real (do not exclude on this signal alone)', () => {
+    expect(isRealMembershipPlan(null)).toBe(true)
+    expect(isRealMembershipPlan('')).toBe(true)
+    expect(isRealMembershipPlan(undefined)).toBe(true)
+  })
+})
+
 describe('live-membership gate — classifyContact', () => {
+  it('drops a member+num_classes stale trial-pack reference out of scope (CHURN-CLEAN.1)', () => {
+    expect(classifyContact({
+      glofox_membership_status: 'member',
+      glofox_membership_type: 'num_classes',
+      trial_credits_remaining: 5,
+      last_attended_at: daysAgo(2),
+    })).toBe('out')
+  })
+  it('drops a trial-named plan out of scope even with credits (CHURN-CLEAN.1)', () => {
+    expect(classifyContact(pack({ glofox_membership_plan: 'The UN1T Trial' }))).toBe('out')
+  })
   it('drops a spent class pack (no credits) out of scope', () => {
     expect(classifyContact({
       glofox_membership_status: 'credit_member',
@@ -573,6 +620,16 @@ describe('WINBACK.1 — scoreWinbackContact', () => {
   it('returns null for a non-member status (trial / lead)', () => {
     expect(scoreWinbackContact(
       { id: 'w7', glofox_membership_status: 'trial', last_attended_at: daysAgo(81) }, NOW)).toBeNull()
+  })
+
+  it('returns null for a trial-named plan — never a real member to win back (CHURN-CLEAN.1)', () => {
+    expect(scoreWinbackContact(
+      { id: 'w8', glofox_membership_status: 'member', glofox_membership_plan: 'The UN1T Trial', last_attended_at: daysAgo(81) }, NOW)).toBeNull()
+  })
+
+  it('returns null for a member+num_classes stale trial-pack reference (CHURN-CLEAN.1)', () => {
+    expect(scoreWinbackContact(
+      { id: 'w9', glofox_membership_status: 'member', glofox_membership_type: 'num_classes', last_attended_at: daysAgo(81) }, NOW)).toBeNull()
   })
 
   it('tiers by recency — 90<d<=180 medium, >180 low', () => {
