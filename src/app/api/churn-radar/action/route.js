@@ -24,6 +24,13 @@
 //                   settings (locations.dunning_sequence_id).
 //   snoozed       — hide the member from the radar for snooze_days
 //                   (default 14).
+//   dismissed     — CHURN-CLEAN.1: permanently reclassify this contact
+//                   as "not a member" and remove them from EVERY radar
+//                   surface + the active-base count. Log-only + durable
+//                   (no expiry, unlike snooze) — the data layer
+//                   (fetchDismissed) honours it everywhere. The
+//                   operator backstop for any trial / one-off the
+//                   upstream classifier didn't already exclude.
 //
 // Every action also writes a churn_radar_actions audit row.
 //
@@ -47,7 +54,7 @@ import { logWarn, logInfo } from '@/lib/log'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-const RADAR_ACTIONS = ['contacted', 'task_assigned', 'winback_sent', 'outreach_sent', 'payment_reminder', 'snoozed']
+const RADAR_ACTIONS = ['contacted', 'task_assigned', 'winback_sent', 'outreach_sent', 'payment_reminder', 'snoozed', 'dismissed']
 
 // Membership columns paymentTroubleKind() needs to re-derive that a
 // member is genuinely behind before any dunning enrol.

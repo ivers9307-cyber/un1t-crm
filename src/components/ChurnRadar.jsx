@@ -15,7 +15,7 @@ import { useEffect, useState, useCallback } from 'react'
 import {
   Radar, AlertTriangle, Clock, TrendingDown, UserX, Phone,
   ClipboardList, BellOff, Check, CalendarClock, RotateCcw,
-  CreditCard, Ticket, TrendingUp, Mail,
+  CreditCard, Ticket, TrendingUp, Mail, UserMinus,
 } from 'lucide-react'
 import RadarOutreachButton from '@/components/RadarOutreachButton'
 
@@ -494,6 +494,20 @@ const ACTION_DONE = {
   outreach_sent: 'WhatsApp template sent',
   payment_reminder: 'Enrolled in dunning sequence',
   snoozed: 'Snoozed for 14 days',
+  dismissed: 'Reclassified as not a member — removed from the radar',
+}
+
+// CHURN-CLEAN.1 — durable "Not a member" reclassify. A confirm guards
+// it because it permanently drops the member from every radar list +
+// the active-base count (the operator backstop for a trial / one-off
+// the upstream classifier didn't catch).
+function confirmDismiss(name, onAction, contactId) {
+  if (typeof window !== 'undefined' && !window.confirm(
+    `Reclassify ${name || 'this member'} as "not a paying member"?\n\n` +
+    'They drop off every churn-radar list and stop counting toward the active base. ' +
+    'Use this for leads, trials, and one-off class packs that slipped onto the list.',
+  )) return
+  onAction(contactId, 'dismissed')
 }
 
 // ── small pieces ─────────────────────────────────────────────────
@@ -631,6 +645,9 @@ function RadarRow({ m, busy, onAction, onRefresh }) {
         )}
         <ActionBtn icon={BellOff} label="Snooze" disabled={isBusy}
           onClick={() => onAction(m.contactId, 'snoozed')} />
+        <ActionBtn icon={UserMinus} label="Not a member" disabled={isBusy}
+          title="Reclassify as not a paying member — removes them from the radar for good"
+          onClick={() => confirmDismiss(m.name, onAction, m.contactId)} />
       </div>
     </div>
   )
@@ -771,6 +788,9 @@ function WinbackRow({ m, busy, onAction }) {
           onSelect={(tpl) => onAction(m.contactId, 'outreach_sent', { template_name: tpl })} />
         <ActionBtn icon={BellOff} label="Snooze" disabled={isBusy}
           onClick={() => onAction(m.contactId, 'snoozed')} />
+        <ActionBtn icon={UserMinus} label="Not a member" disabled={isBusy}
+          title="Reclassify as not a paying member — removes them from the radar for good"
+          onClick={() => confirmDismiss(m.name, onAction, m.contactId)} />
       </div>
     </div>
   )
@@ -853,6 +873,9 @@ function OverdueRow({ m, busy, onAction, onRefresh }) {
             title="Re-pull this member's Glofox status now — clears them if they've paid"
             onClick={() => onRefresh(m.contactId)} />
         )}
+        <ActionBtn icon={UserMinus} label="Not a member" disabled={isBusy}
+          title="Reclassify as not a paying member — removes them from the radar for good"
+          onClick={() => confirmDismiss(m.name, onAction, m.contactId)} />
       </div>
     </div>
   )

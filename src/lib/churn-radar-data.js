@@ -35,6 +35,29 @@ const CONTACTING_ACTIONS = ['contacted', 'task_assigned', 'winback_sent', 'outre
 // they're off the quarantine backlog (kept, or marked stale).
 const QUARANTINE_TRIAGE_ACTIONS = ['quarantine_stale', 'quarantine_keep']
 
+// CHURN-CLEAN.1 — actions that permanently exclude a contact from the
+// radar (the operator has reclassified them as "not a member"). Unlike
+// a snooze (≤90 days), these never expire — a misclassified trial /
+// one-off must stay off the list for good — so they're fetched without
+// the 90-day window fetchActions() uses. 'quarantine_stale' is the
+// legacy quarantine "mark stale" decision; it now excludes everywhere,
+// not just the quarantine backlog.
+const EXCLUSION_ACTIONS = ['dismissed', 'quarantine_stale']
+
+/**
+ * The set of contact ids the operator has permanently dismissed from
+ * the radar at this location. Unbounded by time (a dismissal is
+ * permanent) and tiny in practice, so a single un-paged select is safe.
+ */
+async function fetchDismissed(db, locationId) {
+  const { data } = await db
+    .from('churn_radar_actions')
+    .select('contact_id')
+    .eq('location_id', locationId)
+    .in('action', EXCLUSION_ACTIONS)
+  return new Set((data || []).map((r) => r.contact_id))
+}
+
 /**
  * Fetch every paying member at a location. Paginated — the member
  * base can exceed Supabase's ~1000-row response cap.
@@ -80,10 +103,14 @@ async function fetchActions(db, locationId) {
  * @returns {Promise<{ radar: object[], summary: object }>}
  */
 export async function loadRadar(db, locationId, nowMs = Date.now()) {
-  const [members, actions] = await Promise.all([
+  const [allMembers, actions, dismissed] = await Promise.all([
     fetchMembers(db, locationId),
     fetchActions(db, locationId),
+    fetchDismissed(db, locationId),
   ])
+  // CHURN-CLEAN.1 — operator-dismissed "not a member" contacts drop off
+  // every surface AND the summary counts (active base, at-risk, etc.).
+  const members = allMembers.filter((m) => !dismissed.has(m.id))
 
   // Actions are newest-first — first hit per contact is the latest.
   const lastContacted = new Map()
@@ -145,10 +172,12 @@ export async function loadRadar(db, locationId, nowMs = Date.now()) {
  * footprint that haven't yet been triaged (no quarantine_* action).
  */
 export async function loadQuarantine(db, locationId) {
-  const [members, actions] = await Promise.all([
+  const [allMembers, actions, dismissed] = await Promise.all([
     fetchMembers(db, locationId),
     fetchActions(db, locationId),
+    fetchDismissed(db, locationId),
   ])
+  const members = allMembers.filter((m) => !dismissed.has(m.id))
   const triaged = new Set(
     actions
       .filter((a) => QUARANTINE_TRIAGE_ACTIONS.includes(a.action))
@@ -177,10 +206,12 @@ export async function loadQuarantine(db, locationId) {
  * @returns {Promise<{ overdue: object[], summary: object }>}
  */
 export async function loadOverdue(db, locationId, nowMs = Date.now()) {
-  const [members, actions] = await Promise.all([
+  const [allMembers, actions, dismissed] = await Promise.all([
     fetchMembers(db, locationId),
     fetchActions(db, locationId),
+    fetchDismissed(db, locationId),
   ])
+  const members = allMembers.filter((m) => !dismissed.has(m.id))
 
   // Actions are newest-first — first hit per contact is the latest.
   const lastContacted = new Map()
@@ -233,10 +264,12 @@ async function fetchWinbackContacts(db, locationId) {
  * @returns {Promise<{ winback: object[], summary: object }>}
  */
 export async function loadWinback(db, locationId, nowMs = Date.now()) {
-  const [contacts, actions] = await Promise.all([
+  const [allContacts, actions, dismissed] = await Promise.all([
     fetchWinbackContacts(db, locationId),
     fetchActions(db, locationId),
+    fetchDismissed(db, locationId),
   ])
+  const contacts = allContacts.filter((c) => !dismissed.has(c.id))
 
   // Actions are newest-first — first hit per contact is the latest.
   const lastContacted = new Map()
