@@ -85,7 +85,7 @@ export async function POST(request, props) {
   // Load the other contact
   const { data: otherContact, error: otherErr } = await db
     .from('contacts')
-    .select('id, location_id')
+    .select('id, location_id, name')
     .eq('id', otherContactId)
     .single()
 
@@ -155,8 +155,8 @@ export async function POST(request, props) {
     await db.from('activities').insert({
       contact_id: id,
       location_id: contact.location_id,
-      type: 'event',
-      subject: `Linked to contact ${otherContactId}`,
+      type: 'contact_linked',
+      subject: `Linked to ${otherContact.name || 'another account'}`,
       created_by: user.id,
     })
   } catch (_) {
