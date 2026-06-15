@@ -277,3 +277,120 @@ describe('setPrimary', () => {
     expect(result.members).toHaveLength(2)
   })
 })
+
+// ---------------------------------------------------------------------------
+// addToGroup
+// ---------------------------------------------------------------------------
+describe('addToGroup', () => {
+  it('re-derives primary when a better contact is added', async () => {
+    const db = makeDb({
+      contacts: [
+        { id: 'c1', glofox_membership_status: 'classpass_payg', glofox_account_active: true, last_attended_at: null },
+        { id: 'c2', glofox_membership_status: 'member', glofox_account_active: true, last_attended_at: '2026-05-01' },
+      ],
+      person_groups: [
+        { id: 'g1', location_id: 'loc-1', primary_contact_id: 'c1', created_by: 'actor-1', note: null },
+      ],
+      person_group_members: [
+        { id: 'm1', group_id: 'g1', contact_id: 'c1', match_method: 'phone', confidence: 0.9, added_by: 'actor-1' },
+      ],
+    })
+
+    const result = await addToGroup(db, {
+      groupId: 'g1',
+      contactIds: ['c2'],
+      method: 'name',
+      confidence: 0.85,
+      actorId: 'actor-1',
+    })
+
+    // c2 (real active member) should displace c1 (classpass) as primary
+    expect(result.group.primary_contact_id).toBe('c2')
+    // Both c1 and c2 should be in the members list
+    expect(result.members).toHaveLength(2)
+    expect(result.members.map(m => m.contact_id).sort()).toEqual(['c1', 'c2'])
+  })
+
+  it('keeps primary unchanged when the added contact is lower-priority', async () => {
+    const db = makeDb({
+      contacts: [
+        { id: 'c1', glofox_membership_status: 'member', glofox_account_active: true, last_attended_at: '2026-05-01' },
+        { id: 'c2', glofox_membership_status: 'classpass_payg', glofox_account_active: true, last_attended_at: null },
+      ],
+      person_groups: [
+        { id: 'g1', location_id: 'loc-1', primary_contact_id: 'c1', created_by: 'actor-1', note: null },
+      ],
+      person_group_members: [
+        { id: 'm1', group_id: 'g1', contact_id: 'c1', match_method: 'phone', confidence: 0.9, added_by: 'actor-1' },
+      ],
+    })
+
+    const result = await addToGroup(db, {
+      groupId: 'g1',
+      contactIds: ['c2'],
+      method: 'name',
+      confidence: 0.75,
+      actorId: 'actor-1',
+    })
+
+    // c1 (real active member) should remain primary over c2 (classpass)
+    expect(result.group.primary_contact_id).toBe('c1')
+    expect(result.members).toHaveLength(2)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// getPersonGroup
+// ---------------------------------------------------------------------------
+describe('getPersonGroup', () => {
+  it('returns null when the contact has no membership', async () => {
+    const db = makeDb({
+      person_group_members: [],
+    })
+
+    const result = await getPersonGroup(db, 'c-no-group')
+    expect(result).toBeNull()
+  })
+
+  it('returns { group, members } when the contact is in a group', async () => {
+    const db = makeDb({
+      person_groups: [
+        { id: 'g1', location_id: 'loc-1', primary_contact_id: 'c1', created_by: 'actor-1', note: null },
+      ],
+      person_group_members: [
+        { id: 'm1', group_id: 'g1', contact_id: 'c1', match_method: 'phone', confidence: 0.9, added_by: 'actor-1' },
+        { id: 'm2', group_id: 'g1', contact_id: 'c2', match_method: 'phone', confidence: 0.9, added_by: 'actor-1' },
+      ],
+    })
+
+    const result = await getPersonGroup(db, 'c1')
+    expect(result).not.toBeNull()
+    expect(result.group.id).toBe('g1')
+    expect(result.members).toHaveLength(2)
+    expect(result.members.map(m => m.contact_id)).toContain('c1')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// createGroup guard
+// ---------------------------------------------------------------------------
+describe('createGroup — guard', () => {
+  it('throws when no contacts are fetched (empty contactIds)', async () => {
+    const db = makeDb({
+      contacts: [],
+      person_groups: [],
+      person_group_members: [],
+    })
+
+    await expect(
+      createGroup(db, {
+        contactIds: ['c-does-not-exist'],
+        method: 'phone',
+        confidence: 0.9,
+        actorId: 'actor-1',
+        locationId: 'loc-1',
+        note: null,
+      })
+    ).rejects.toThrow('createGroup requires at least one existing contact')
+  })
+})

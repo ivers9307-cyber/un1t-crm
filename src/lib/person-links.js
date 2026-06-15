@@ -57,6 +57,7 @@ export async function createGroup(db, { contactIds, method, confidence, actorId,
     .in('id', contactIds)
 
   const primary = pickPrimary(rows || [])
+  if (!primary) throw new Error('createGroup requires at least one existing contact')
 
   // Insert group row
   const { data: group } = await db
