@@ -108,4 +108,69 @@ describe('computeArrears', () => {
     expect(out.totals.skippedNoAmount).toBe(1)
     expect(out.warnings.length).toBeGreaterThan(0)
   })
+
+  // ── ARREARS-NETTING.1 — cross-invoice-id retry netting ──────────────
+  // Glofox cuts a NEW invoice_id per payment ATTEMPT for one-off purchases
+  // (class packs, single-class fees, signup upfront fees). A failed attempt
+  // orphans as its own PAST_DUE invoice_id; the eventual success is a
+  // separate PAID invoice_id. Glofox's profile nets the purchase to €0, so
+  // a same-member same-amount PAID within ±7 days settles the failed attempt.
+
+  it('nets a failed invoice against a same-member same-amount PAID 2 min later under a DIFFERENT invoice_id (excluded)', () => {
+    const rows = [
+      // Fran Martin's real case: 2× €25 PAST_DUE then 1× €25 PAID, three invoice_ids.
+      mkStripe({ invoice_id: 'fail-1', paid: false, status: 'failed', failed_amount: 25, user_id: 'fran', created: '2026-05-27 10:36:00' }),
+      mkStripe({ invoice_id: 'paid-1', paid: true, status: 'paid', amount: 25, user_id: 'fran', event: 'invoice_payment', created: '2026-05-27 10:38:00' }),
+    ]
+    const out = computeArrears(rows, { existingInvoiceIds: new Set() })
+    expect(out.totals.candidates).toBe(0)
+    expect(out.totals.skippedSettledRetry).toBe(1)
+  })
+
+  it('does NOT net when the only same-amount PAID is 10 days away (window respected — still a candidate)', () => {
+    const rows = [
+      mkStripe({ invoice_id: 'fail-far', paid: false, status: 'failed', failed_amount: 25, user_id: 'farah', created: '2026-05-01 10:00:00' }),
+      mkStripe({ invoice_id: 'paid-far', paid: true, status: 'paid', amount: 25, user_id: 'farah', event: 'invoice_payment', created: '2026-05-11 10:00:00' }),
+    ]
+    const out = computeArrears(rows, { existingInvoiceIds: new Set() })
+    expect(out.totals.candidates).toBe(1)
+    expect(out.candidates[0].invoiceId).toBe('fail-far')
+    expect(out.totals.skippedSettledRetry).toBe(0)
+  })
+
+  it('does NOT net when the in-window PAID is a different amount (candidate unaffected)', () => {
+    const rows = [
+      mkStripe({ invoice_id: 'fail-amt', paid: false, status: 'failed', failed_amount: 25, user_id: 'gus', created: '2026-05-27 10:36:00' }),
+      // Same member, same window, but €40 — an unrelated purchase, not a retry of the €25.
+      mkStripe({ invoice_id: 'paid-amt', paid: true, status: 'paid', amount: 40, user_id: 'gus', event: 'invoice_payment', created: '2026-05-27 10:38:00' }),
+    ]
+    const out = computeArrears(rows, { existingInvoiceIds: new Set() })
+    expect(out.totals.candidates).toBe(1)
+    expect(out.candidates[0].invoiceId).toBe('fail-amt')
+    expect(out.totals.skippedSettledRetry).toBe(0)
+  })
+
+  it('a PAID retry settles only ONE of two identical failed invoices (one-to-one consumption)', () => {
+    // Two distinct €25 failed purchases for the same member in-window, but only
+    // ONE matching PAID — only one is a settled retry, the other still owes.
+    const rows = [
+      mkStripe({ invoice_id: 'fail-a', paid: false, status: 'failed', failed_amount: 25, user_id: 'hana', created: '2026-05-27 10:36:00' }),
+      mkStripe({ invoice_id: 'fail-b', paid: false, status: 'failed', failed_amount: 25, user_id: 'hana', created: '2026-05-27 11:00:00' }),
+      mkStripe({ invoice_id: 'paid-a', paid: true, status: 'paid', amount: 25, user_id: 'hana', event: 'invoice_payment', created: '2026-05-27 10:38:00' }),
+    ]
+    const out = computeArrears(rows, { existingInvoiceIds: new Set() })
+    expect(out.totals.candidates).toBe(1)
+    expect(out.totals.skippedSettledRetry).toBe(1)
+  })
+
+  it('does NOT net across different members even with same amount in-window', () => {
+    const rows = [
+      mkStripe({ invoice_id: 'fail-iris', paid: false, status: 'failed', failed_amount: 25, user_id: 'iris', created: '2026-05-27 10:36:00' }),
+      mkStripe({ invoice_id: 'paid-jack', paid: true, status: 'paid', amount: 25, user_id: 'jack', event: 'invoice_payment', created: '2026-05-27 10:38:00' }),
+    ]
+    const out = computeArrears(rows, { existingInvoiceIds: new Set() })
+    expect(out.totals.candidates).toBe(1)
+    expect(out.candidates[0].invoiceId).toBe('fail-iris')
+    expect(out.totals.skippedSettledRetry).toBe(0)
+  })
 })

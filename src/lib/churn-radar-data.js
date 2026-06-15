@@ -17,6 +17,7 @@ import {
   classifyContact,
   MEMBER_STATUSES,
 } from '@/lib/churn-radar'
+import { nettedOutByRetry } from '@/lib/glofox-arrears'
 
 // Columns the scorer + UI need from contacts. glofox_membership_type
 // and trial_credits_remaining drive the live-membership gate (a class
@@ -61,6 +62,29 @@ async function fetchDismissed(db, locationId) {
 }
 
 /**
+ * Page every `glofox_invoices` row at a location with a given status,
+ * selecting only the columns the caller needs. Paginated — the invoice
+ * table can exceed Supabase's ~1000-row response cap.
+ */
+async function fetchInvoicesByStatus(db, locationId, status, columns) {
+  const rows = []
+  const PAGE = 1000
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await db
+      .from('glofox_invoices')
+      .select(columns)
+      .eq('location_id', locationId)
+      .eq('status', status)
+      .order('id', { ascending: true })
+      .range(from, from + PAGE - 1)
+    if (error) throw new Error(error.message)
+    rows.push(...(data || []))
+    if (!data || data.length < PAGE) break
+  }
+  return rows
+}
+
+/**
  * RADAR-OVERDUE.1 — the authoritative arrears signal. Aggregates every
  * OPEN `PAST_DUE` invoice per contact at the location (from
  * `glofox_invoices`, kept current by the INVOICE_UPDATED webhook) into
@@ -68,30 +92,35 @@ async function fetchDismissed(db, locationId) {
  * pulls past-due members off the at-risk list — replacing the stale,
  * unreliable `glofox_membership_state='locked'` signal (see the audit at
  * docs/CHURN_OVERDUE_AUDIT_2026-06.md). Returns `{ ids: Set, byId: Map }`.
+ *
+ * ARREARS-NETTING.1 — Glofox issues a NEW invoice id per payment ATTEMPT
+ * for one-off purchases (class packs, single-class fees, signup upfront
+ * fees), so a card that fails then succeeds leaves an orphaned PAST_DUE row
+ * (the failed attempt) plus a separate PAID row (the success). Glofox's own
+ * profile nets the purchase to €0. Before aggregating, we net those settled
+ * retries out: a PAST_DUE row whose member (glofox_user_id) has a PAID
+ * `glofox_invoices` row of the same amount_cents within ±7 days is excluded
+ * from the Overdue list + total (shared pure helper `nettedOutByRetry`).
  */
 async function fetchPastDue(db, locationId) {
+  const [pastDueRows, paidRows] = await Promise.all([
+    fetchInvoicesByStatus(db, locationId, 'PAST_DUE', 'id, contact_id, glofox_user_id, amount_cents, invoice_date'),
+    fetchInvoicesByStatus(db, locationId, 'PAID', 'glofox_user_id, amount_cents, invoice_date'),
+  ])
+  // Net cross-invoice-id payment retries out before aggregating.
+  const { kept } = nettedOutByRetry(pastDueRows, paidRows)
+
   const byId = new Map()
-  const PAGE = 1000
-  for (let from = 0; ; from += PAGE) {
-    const { data, error } = await db
-      .from('glofox_invoices')
-      .select('contact_id, amount_cents, invoice_date')
-      .eq('location_id', locationId)
-      .eq('status', 'PAST_DUE')
-      .not('contact_id', 'is', null)
-      .order('contact_id', { ascending: true })
-      .range(from, from + PAGE - 1)
-    if (error) throw new Error(error.message)
-    for (const r of data || []) {
-      const cur = byId.get(r.contact_id) || { amountCents: 0, count: 0, oldestDueAt: null }
-      cur.amountCents += Number(r.amount_cents) || 0
-      cur.count += 1
-      if (r.invoice_date && (!cur.oldestDueAt || r.invoice_date < cur.oldestDueAt)) {
-        cur.oldestDueAt = r.invoice_date
-      }
-      byId.set(r.contact_id, cur)
+  for (const r of kept) {
+    // A row with no contact_id can't be surfaced on a contact-keyed list.
+    if (r.contact_id == null) continue
+    const cur = byId.get(r.contact_id) || { amountCents: 0, count: 0, oldestDueAt: null }
+    cur.amountCents += Number(r.amount_cents) || 0
+    cur.count += 1
+    if (r.invoice_date && (!cur.oldestDueAt || r.invoice_date < cur.oldestDueAt)) {
+      cur.oldestDueAt = r.invoice_date
     }
-    if (!data || data.length < PAGE) break
+    byId.set(r.contact_id, cur)
   }
   return { ids: new Set(byId.keys()), byId }
 }

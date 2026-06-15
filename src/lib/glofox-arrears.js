@@ -74,6 +74,97 @@ function parseCreatedMs(s) {
   return Number.isFinite(ms) ? ms : NaN
 }
 
+// ── ARREARS-NETTING.1 — cross-invoice-id payment-retry netting ─────────
+// Glofox issues a NEW invoice id per payment ATTEMPT for one-off purchases
+// (class packs, single-class fees, signup upfront fees). When a card fails
+// then succeeds, the failed attempts orphan as PAST_DUE rows under their own
+// invoice ids while the success is a separate PAID row under yet another id.
+// Glofox's own profile nets the purchase to €0, but anything keying on
+// invoice_id counts each orphaned PAST_DUE as real arrears. The signal that
+// a PAST_DUE row is a settled retry: the SAME member has a PAID row of the
+// SAME amount within a few days. Concrete confirmed case (Fran Martin,
+// 27 May): 2× €25 PAST_DUE at 10:36 + 1× €25 PAID at 10:40, three invoice
+// ids, one purchase.
+
+// Default match window — ±7 days. A real retry settles within hours/days;
+// 7 days is generous enough to absorb card-retry lag without swallowing a
+// genuine same-amount purchase a billing cycle later.
+export const RETRY_NET_WINDOW_DAYS = 7
+const RETRY_NET_WINDOW_MS = RETRY_NET_WINDOW_DAYS * 86_400_000
+
+/**
+ * Net cross-invoice-id payment retries out of a set of unpaid `glofox_invoices`
+ * rows. A PAST_DUE row is a SETTLED RETRY — and excluded — when the same
+ * member (`glofox_user_id`) has a PAID `glofox_invoices` row of the same
+ * `amount_cents` within ±`windowDays` of the PAST_DUE row's `invoice_date`.
+ *
+ * PAID rows are consumed one-to-one so two identical failed attempts aren't
+ * both netted away by a single success (a member who genuinely owes for one
+ * of two same-amount purchases still surfaces).
+ *
+ * Pure: no I/O. Shared by the live Overdue feature (churn-radar-data's
+ * fetchPastDue) so the radar list + total exclude settled retries, and the
+ * same retry-netting concept backs `computeArrears` (which works off the
+ * Glofox report's euro amounts rather than `amount_cents`).
+ *
+ * @param {Array<{id:string, glofox_user_id?:string|null, amount_cents:number, invoice_date?:string|null}>} pastDueRows
+ * @param {Array<{glofox_user_id?:string|null, amount_cents:number, invoice_date?:string|null}>} paidRows
+ * @param {{ windowDays?: number }} [opts]
+ * @returns {{ kept: Array, nettedIds: Set<string> }}
+ *   kept — the PAST_DUE rows that are NOT settled retries (order preserved)
+ *   nettedIds — ids of the PAST_DUE rows excluded as settled retries
+ */
+export function nettedOutByRetry(pastDueRows, paidRows, opts = {}) {
+  const windowMs =
+    Number.isFinite(opts.windowDays) && opts.windowDays > 0
+      ? opts.windowDays * 86_400_000
+      : RETRY_NET_WINDOW_MS
+
+  // Index the PAID rows by (member, amount_cents) → list of timestamps, each
+  // with a `used` flag so a PAID row settles at most one PAST_DUE row.
+  const paidIndex = new Map() // key -> [{ ms, used }]
+  for (const p of Array.isArray(paidRows) ? paidRows : []) {
+    const member = p?.glofox_user_id
+    const cents = Number(p?.amount_cents)
+    if (member == null || member === '' || !Number.isFinite(cents)) continue
+    const key = `${member}|${cents}`
+    const ms = Date.parse(p?.invoice_date)
+    if (!Number.isFinite(ms)) continue
+    if (!paidIndex.has(key)) paidIndex.set(key, [])
+    paidIndex.get(key).push({ ms, used: false })
+  }
+
+  const kept = []
+  const nettedIds = new Set()
+  for (const pd of Array.isArray(pastDueRows) ? pastDueRows : []) {
+    const member = pd?.glofox_user_id
+    const cents = Number(pd?.amount_cents)
+    const dueMs = Date.parse(pd?.invoice_date)
+    let settled = false
+    if (member != null && member !== '' && Number.isFinite(cents) && Number.isFinite(dueMs)) {
+      const candidates = paidIndex.get(`${member}|${cents}`)
+      if (candidates) {
+        // Prefer the closest unused PAID match within the window.
+        let best = null
+        for (const c of candidates) {
+          if (c.used) continue
+          const delta = Math.abs(c.ms - dueMs)
+          if (delta <= windowMs && (best === null || delta < best.delta)) {
+            best = { ref: c, delta }
+          }
+        }
+        if (best) {
+          best.ref.used = true
+          settled = true
+        }
+      }
+    }
+    if (settled) nettedIds.add(pd.id)
+    else kept.push(pd)
+  }
+  return { kept, nettedIds }
+}
+
 /**
  * @param {Array} details  TransactionsList.details from the Glofox report
  * @param {{ existingInvoiceIds?: Set<string>|string[], beforeDate?: string }} [opts]
@@ -91,6 +182,13 @@ export function computeArrears(details, opts = {}) {
   const taxonomy = { envelopeTypes: {}, events: {}, statuses: {} }
   const groups = new Map() // invoice_id -> { invoiceId, txns: [] }
 
+  // ARREARS-NETTING.1 — index every SETTLED transaction across the WHOLE
+  // report by (user_id, euros) so a failed attempt can be matched against a
+  // same-amount success that landed under a DIFFERENT invoice_id (Glofox's
+  // per-attempt-invoice behaviour for one-off purchases). Each entry carries
+  // a `used` flag so one success settles at most one failed attempt.
+  const settledIndex = new Map() // `${user_id}|${euros}` -> [{ ms, used }]
+
   for (const row of list) {
     const { type, t } = unwrap(row)
     taxonomy.envelopeTypes[type] = (taxonomy.envelopeTypes[type] || 0) + 1
@@ -98,6 +196,17 @@ export function computeArrears(details, opts = {}) {
     if (ev != null) taxonomy.events[ev] = (taxonomy.events[ev] || 0) + 1
     const st = t?.status ?? t?.transaction_status
     if (st != null) taxonomy.statuses[st] = (taxonomy.statuses[st] || 0) + 1
+
+    if (isSettledTxn(t)) {
+      const member = t?.metadata?.user_id
+      const euros = txEuros(t)
+      const ms = parseCreatedMs(t?.created)
+      if (member != null && member !== '' && euros > 0 && Number.isFinite(ms)) {
+        const key = `${member}|${euros}`
+        if (!settledIndex.has(key)) settledIndex.set(key, [])
+        settledIndex.get(key).push({ ms, used: false })
+      }
+    }
 
     const invId = t?.invoice_id
     if (!invId) continue
@@ -113,6 +222,7 @@ export function computeArrears(details, opts = {}) {
   let skippedAlreadyPresent = 0
   let skippedNoAmount = 0
   let skippedByDate = 0
+  let skippedSettledRetry = 0
 
   for (const g of groups.values()) {
     if (g.txns.some(isForgivenTxn)) {
@@ -141,6 +251,38 @@ export function computeArrears(details, opts = {}) {
     if (beforeMs != null && Number.isFinite(earliestMs) && earliestMs >= beforeMs) {
       skippedByDate++
       continue
+    }
+
+    // ARREARS-NETTING.1 — a settled retry: this member has a same-amount
+    // SUCCESS within ±RETRY_NET_WINDOW_DAYS of this attempt, under a different
+    // invoice_id. Glofox's own profile nets the purchase to €0, so the
+    // orphaned PAST_DUE attempt is not real arrears. Consume the matching
+    // success one-to-one so two genuine same-amount failures don't both net
+    // against a single payment.
+    const member = g.txns.find((t) => t?.metadata?.user_id != null)?.metadata?.user_id ?? null
+    if (member != null && member !== '') {
+      const candidatesPaid = settledIndex.get(`${member}|${owedEuros}`)
+      if (candidatesPaid && candidatesPaid.length) {
+        // Match against the attempt closest in time (any attempt in the group).
+        let best = null
+        for (const c of candidatesPaid) {
+          if (c.used) continue
+          let nearest = Infinity
+          for (const am of createdMsList) {
+            const d = Math.abs(c.ms - am)
+            if (d < nearest) nearest = d
+          }
+          if (!Number.isFinite(nearest)) continue
+          if (nearest <= RETRY_NET_WINDOW_MS && (best === null || nearest < best.delta)) {
+            best = { ref: c, delta: nearest }
+          }
+        }
+        if (best) {
+          best.ref.used = true
+          skippedSettledRetry++
+          continue
+        }
+      }
     }
 
     // Representative txn for display metadata = the most recent attempt.
@@ -195,6 +337,7 @@ export function computeArrears(details, opts = {}) {
       skippedAlreadyPresent,
       skippedNoAmount,
       skippedByDate,
+      skippedSettledRetry,
     },
     taxonomy,
     candidatesByEvent: eventMap,
