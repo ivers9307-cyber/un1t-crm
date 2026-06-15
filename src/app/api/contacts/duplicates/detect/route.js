@@ -53,11 +53,12 @@ export async function POST(request) {
 
   const db = createServerClient()
 
-  const result = await runDetection(db, {
-    locationId,
-    commit,
-    actorId: user.id,
-  })
+  let result
+  try {
+    result = await runDetection(db, { locationId, commit, actorId: user.id })
+  } catch (e) {
+    return NextResponse.json({ success: false, error: e?.message || 'Detection failed' }, { status: 500 })
+  }
 
   return NextResponse.json({ success: true, data: result })
 }

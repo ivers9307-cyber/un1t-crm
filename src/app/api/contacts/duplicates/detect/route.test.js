@@ -8,7 +8,8 @@
 //   - missing location_id (no body, no activeLocation) → 400
 //   - no contact_linking permission → 403
 //   - unauthenticated → 401
-//   - cross-location access → 400 (assertLocationAccess guard)
+//   - cross-location access → 403 (assertLocationAccess guard)
+//   - runDetection throws → 500 JSON with success:false
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
@@ -25,7 +26,7 @@ vi.mock('@/lib/auth', () => ({
     if (!allowed) {
       return new Response(
         JSON.stringify({ success: false, error: 'Forbidden' }),
-        { status: 400, headers: { 'Content-Type': 'application/json' } }
+        { status: 403, headers: { 'Content-Type': 'application/json' } }
       )
     }
     return null
@@ -206,10 +207,10 @@ describe('POST /api/contacts/duplicates/detect — auth guards', () => {
     expect(runDetection).not.toHaveBeenCalled()
   })
 
-  it('cross-location access → 400 (assertLocationAccess guard)', async () => {
+  it('cross-location access → 403 (assertLocationAccess guard)', async () => {
     // LOC_B is not in OWNER.locations
     const res = await POST(postReq({ location_id: LOC_B }))
-    expect(res.status).toBe(400)
+    expect(res.status).toBe(403)
     const json = await res.json()
     expect(json.success).toBe(false)
     expect(runDetection).not.toHaveBeenCalled()
@@ -224,5 +225,27 @@ describe('POST /api/contacts/duplicates/detect — empty body handling', () => {
       expect.anything(),
       expect.objectContaining({ locationId: LOC_A })
     )
+  })
+})
+
+describe('POST /api/contacts/duplicates/detect — runDetection error handling', () => {
+  it('runDetection throws → 500 JSON with success:false', async () => {
+    runDetection.mockRejectedValue(new Error('person_link_suggestions does not exist'))
+
+    const res = await POST(postReq({ location_id: LOC_A }))
+    expect(res.status).toBe(500)
+    const json = await res.json()
+    expect(json.success).toBe(false)
+    expect(json.error).toBe('person_link_suggestions does not exist')
+  })
+
+  it('runDetection throws without message → 500 with fallback message', async () => {
+    runDetection.mockRejectedValue(new Error())
+
+    const res = await POST(postReq({ location_id: LOC_A }))
+    expect(res.status).toBe(500)
+    const json = await res.json()
+    expect(json.success).toBe(false)
+    expect(json.error).toBe('Detection failed')
   })
 })
