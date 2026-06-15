@@ -157,6 +157,11 @@ const WEB_ONLY_OK = {
   // webEquivalent: 'assistant' (and drop this line) when a mobile
   // assistant actually ships.
   assistant: 'In-app AI assistant chat (web /assistant). No mobile assistant screen exists yet — the dead mobile toggle was removed (MOBILE-PERMS). Re-pair when a mobile assistant ships.',
+  // PERSON-LINK.1 — identity-link API (link/unlink/set-primary).
+  // The full dedup workflow (choosing which contacts are duplicates,
+  // reviewing a person group, editing the primary) needs the desktop
+  // contact admin surface. Same reasoning as contact merge.
+  contact_linking: 'desktop-only contact-admin action, like contact merge',
 }
 
 const webDrift = []

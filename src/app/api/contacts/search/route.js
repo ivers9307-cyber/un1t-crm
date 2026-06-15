@@ -137,7 +137,7 @@ export async function POST(request) {
   // ContactsView gets a stable shape whichever code path it took.
   // Keep this list in lock-step with `CONTACT_LIST_FIELDS` in
   // src/app/contacts/page.js.
-  const CONTACT_LIST_FIELDS = 'id, name, email, phone, lead_source, pipeline_stage_slug, trial_credits_remaining, created_at, location_id'
+  const CONTACT_LIST_FIELDS = 'id, name, email, phone, lead_source, pipeline_stage_slug, trial_credits_remaining, created_at, location_id, glofox_membership_status'
   // Crossovers are opt-in (see schema) — default OFF so shared callers
   // such as the send people-picker stay owned-only.
   const wantCrossovers = parsed.data.include_crossovers === true
