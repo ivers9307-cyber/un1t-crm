@@ -6,7 +6,6 @@ import { validateBody } from '@/lib/validate'
 import { uuidLike, email, phone, leadSourceSchema, MANAGER_ROLES } from '@/lib/schemas'
 import { sendPushToRolesAtLocation } from '@/lib/push'
 import { triggerSequencesForPipelineStageChange } from '@/lib/sequences'
-import { findOrCreateGlofoxMember } from '@/lib/glofox-push'
 import { logWarn } from '@/lib/log'
 
 const ContactCreateSchema = z.object({
@@ -83,20 +82,12 @@ export async function POST(request) {
     logWarn('contacts', `insert trigger failed for ${data.id}`, { err: e })
   }
 
-  // GLOFOX3.1 — always-on dup-prevention. Search Glofox by email
-  // and link if found. NEVER creates (createIfMissing=false). The
-  // opt-in create-and-trial path is reserved for booking forms,
-  // events, and the manual button. Fire-and-forget; failures land
-  // in glofox_push_events for the operator's Review tab.
+  // AUTOMATIONS: glofox_lead_provisioning. Link-only dup-check today;
+  // create-and-trial when the per-location automation is enabled.
   if (data.location_id && data.email && !data.glofox_member_id) {
-    findOrCreateGlofoxMember({
-      db,
-      locationId: data.location_id,
-      contact: data,
-      source: 'dup_check',
-      createIfMissing: false,
-      attachTrial: false,
-    }).catch(e => logWarn('contacts.POST', `glofox dup_check failed for ${data.id}`, { err: e }))
+    const { maybeProvisionLeadInGlofox } = await import('@/lib/automations/glofox-lead-provisioning')
+    maybeProvisionLeadInGlofox({ db, locationId: data.location_id, contact: data, source: 'manual' })
+      .catch(() => {}) // hook never throws, but belt-and-braces
   }
 
   // Push notification: a new lead has landed. Fan out to managers /

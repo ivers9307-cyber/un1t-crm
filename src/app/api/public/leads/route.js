@@ -85,5 +85,18 @@ export async function POST(request) {
     }
   } catch (e) { logWarn('leads', 'deal create failed', { err: e }) }
 
+  // AUTOMATIONS: glofox_lead_provisioning (website lead path).
+  try {
+    const { data: contactRow } = await db
+      .from('contacts')
+      .select('id, name, email, first_name, last_name, phone, source, glofox_member_id, location_id')
+      .eq('id', contactId)
+      .maybeSingle()
+    if (contactRow) {
+      const { maybeProvisionLeadInGlofox } = await import('@/lib/automations/glofox-lead-provisioning')
+      await maybeProvisionLeadInGlofox({ db, locationId, contact: contactRow, source: 'website_lead' })
+    }
+  } catch (e) { logWarn('leads', 'glofox provisioning hook failed', { err: e }) }
+
   return NextResponse.json({ success: true, data: { already_on_list: alreadyOnList } })
 }
