@@ -403,6 +403,19 @@ describe('rollupByPerson', () => {
     expect(result[0].total_attended_30d).toBe(4)
   })
 
+  it('keeps the primary even when it appears after other group members in sweepRows', () => {
+    const secondary = contact('c-secondary', { person_group_id: 'g1', total_attended_30d: 5 })
+    const primary   = contact('c-primary',   { person_group_id: 'g1', total_attended_30d: 2 })
+    const combinedByGroup = new Map([
+      ['g1', { last_attended_at: null, last_booked_at: null, total_attended_30d: 7, total_attended_7d: 0, total_noshow_30d: 0 }],
+    ])
+    const primaryByGroup = new Map([['g1', 'c-primary']])
+    const result = rollupByPerson([secondary, primary], { combinedByGroup, primaryByGroup })
+    expect(result).toHaveLength(1)
+    expect(result[0].id).toBe('c-primary')
+    expect(result[0].total_attended_30d).toBe(7)
+  })
+
   it('handles a mix of grouped and ungrouped rows across multiple groups', () => {
     // Three groups, two ungrouped. Each group has 2 sweep rows.
     // Verifies that all groups dedup correctly and ungrouped pass through.
