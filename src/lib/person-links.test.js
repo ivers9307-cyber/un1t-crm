@@ -48,6 +48,7 @@ import {
   removeFromGroup,
   setPrimary,
   getPersonGroup,
+  linkContactPair,
 } from './person-links'
 
 // Chainable Supabase mock — mirrors the pattern from churn-radar-data.test.js.
@@ -392,5 +393,116 @@ describe('createGroup — guard', () => {
         note: null,
       })
     ).rejects.toThrow('createGroup requires at least one existing contact')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// linkContactPair
+// ---------------------------------------------------------------------------
+describe('linkContactPair', () => {
+  it('both ungrouped → calls createGroup and returns { group, members }', async () => {
+    const db = makeDb({
+      contacts: [
+        { id: 'c1', glofox_membership_status: 'member', glofox_account_active: true, last_attended_at: '2026-05-01' },
+        { id: 'c2', glofox_membership_status: 'classpass_payg', glofox_account_active: true, last_attended_at: null },
+      ],
+      person_groups: [],
+      person_group_members: [],
+    })
+
+    const { group, members } = await linkContactPair(db, {
+      aId: 'c1',
+      bId: 'c2',
+      method: 'phone',
+      confidence: 'high',
+      actorId: 'actor-1',
+      locationId: 'loc-1',
+    })
+
+    expect(group).toBeTruthy()
+    // c1 (member) should be primary over c2 (classpass)
+    expect(group.primary_contact_id).toBe('c1')
+    expect(members).toHaveLength(2)
+  })
+
+  it('one contact already grouped → calls addToGroup with that group id', async () => {
+    const db = makeDb({
+      contacts: [
+        { id: 'c1', glofox_membership_status: 'member', glofox_account_active: true, last_attended_at: '2026-05-01' },
+        { id: 'c2', glofox_membership_status: 'classpass_payg', glofox_account_active: true, last_attended_at: null },
+      ],
+      person_groups: [
+        { id: 'g-existing', location_id: 'loc-1', primary_contact_id: 'c1', created_by: 'actor-1', note: null },
+      ],
+      person_group_members: [
+        { id: 'm1', group_id: 'g-existing', contact_id: 'c1', match_method: 'phone', confidence: 'high', added_by: 'actor-1' },
+      ],
+    })
+
+    const { group } = await linkContactPair(db, {
+      aId: 'c1',
+      bId: 'c2',
+      method: 'name',
+      confidence: 'medium',
+      actorId: 'actor-1',
+      locationId: 'loc-1',
+    })
+
+    // c2 is ungrouped, c1 is in g-existing → c2 should be added to g-existing
+    expect(group.id).toBe('g-existing')
+    // both c1 and c2 should be in the group after addToGroup
+    const memberIds = db._store.person_group_members.map(m => m.contact_id)
+    expect(memberIds).toContain('c1')
+    expect(memberIds).toContain('c2')
+  })
+
+  it('both in the same group → no-op, returns that group', async () => {
+    const db = makeDb({
+      person_groups: [
+        { id: 'g-same', location_id: 'loc-1', primary_contact_id: 'c1', created_by: 'actor-1', note: null },
+      ],
+      person_group_members: [
+        { id: 'm1', group_id: 'g-same', contact_id: 'c1', match_method: 'phone', confidence: 'high', added_by: 'actor-1' },
+        { id: 'm2', group_id: 'g-same', contact_id: 'c2', match_method: 'phone', confidence: 'high', added_by: 'actor-1' },
+      ],
+    })
+
+    const { group, members } = await linkContactPair(db, {
+      aId: 'c1',
+      bId: 'c2',
+      method: 'name',
+      confidence: 'medium',
+      actorId: 'actor-1',
+      locationId: 'loc-1',
+    })
+
+    // Should not have mutated the store
+    expect(group.id).toBe('g-same')
+    expect(db._store.person_group_members).toHaveLength(2) // unchanged
+    expect(members).toHaveLength(2)
+  })
+
+  it('both in DIFFERENT groups → throws "Both contacts are already linked to different people"', async () => {
+    const db = makeDb({
+      person_groups: [
+        { id: 'g-A', location_id: 'loc-1', primary_contact_id: 'c1', created_by: 'actor-1', note: null },
+        { id: 'g-B', location_id: 'loc-1', primary_contact_id: 'c2', created_by: 'actor-1', note: null },
+      ],
+      person_group_members: [
+        { id: 'm1', group_id: 'g-A', contact_id: 'c1', match_method: 'phone', confidence: 'high', added_by: 'actor-1' },
+        { id: 'm2', group_id: 'g-B', contact_id: 'c2', match_method: 'phone', confidence: 'high', added_by: 'actor-1' },
+      ],
+    })
+
+    await expect(
+      linkContactPair(db, {
+        aId: 'c1',
+        bId: 'c2',
+        method: 'name',
+        confidence: 'medium',
+        actorId: 'actor-1',
+        locationId: 'loc-1',
+      })
+    ).rejects.toThrow('Both contacts are already linked to different people')
   })
 })

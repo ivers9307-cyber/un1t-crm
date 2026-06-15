@@ -354,6 +354,42 @@ registry.registerPath({
   },
 })
 
+// PERSON-LINK.2 — review queue PATCH
+registry.registerPath({
+  method: 'patch',
+  path: '/api/contacts/duplicates/{id}',
+  tags: ['Contacts'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Confirm or dismiss a duplicate-contact suggestion (contact_linking permission)',
+  description: 'status="linked" creates/extends the person group; status="dismissed" marks the pair as reviewed.',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: {
+      content: {
+        'application/json': {
+          schema: z.object({
+            status: z.enum(['linked', 'dismissed']),
+          }).openapi('DuplicateSuggestionPatch'),
+        },
+      },
+    },
+  },
+  responses: {
+    200: {
+      description: 'Suggestion updated',
+      content: {
+        'application/json': {
+          schema: z.object({ success: z.literal(true), data: z.object({}).passthrough() }),
+        },
+      },
+    },
+    400: { description: 'Contacts already in different groups', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — contact_linking permission required', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Suggestion not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // Deals
 registry.registerPath({
   method: 'post',
