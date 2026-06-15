@@ -545,6 +545,55 @@ registry.registerPath({
   },
 })
 
+// CONSULTATIONS SP1 — consultation-photos routes
+registry.registerPath({
+  method: 'post',
+  path: '/api/contacts/{id}/consultation-photos',
+  tags: ['Contacts'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Upload a progress photo for a contact (consultations permission)',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: {
+      content: {
+        'multipart/form-data': {
+          schema: z.object({
+            file:            z.any().openapi({ type: 'string', format: 'binary' }),
+            label:           z.string().optional(),
+            caption:         z.string().optional(),
+            consultation_id: uuidLike.optional(),
+            taken_at:        z.string().optional(),
+          }).openapi('ConsultationPhotoUploadBody'),
+        },
+      },
+    },
+  },
+  responses: {
+    200: { description: 'Photo uploaded', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: z.object({}).passthrough() }) } } },
+    400: { description: 'Validation or upload error', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — consultations permission required', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Contact not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'delete',
+  path: '/api/contacts/{id}/consultation-photos/{pid}',
+  tags: ['Contacts'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Delete a progress photo (consultations permission)',
+  request: {
+    params: z.object({ id: uuidLike, pid: uuidLike }),
+  },
+  responses: {
+    200: { description: 'Photo deleted', content: { 'application/json': { schema: z.object({ success: z.literal(true) }) } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — consultations permission required', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Photo not found for this contact', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // Deals
 registry.registerPath({
   method: 'post',
