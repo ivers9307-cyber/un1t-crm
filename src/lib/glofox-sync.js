@@ -1059,7 +1059,15 @@ export function mapMembershipStatus(member, ctx = null) {
 export async function findExistingContact(db, locationId, mapped) {
   if (!db || !locationId || !mapped) return { byGlofox: null, byEmail: null }
   // Lookup by glofox_member_id and email in parallel.
-  const SELECT_COLS = 'id, email, first_name, last_name, phone, dob, joined_at, glofox_member_id, glofox_membership_status, lead_source, last_booked_at, last_attended_at, total_bookings_30d, total_attended_30d, total_attended_7d, total_noshow_30d, trial_credits_remaining'
+  // PIPELINE-FLAP.2 — last_payment_at, created_at and
+  // glofox_membership_{state,expiry} are selected so the classifier inputs
+  // (proposed-stage in previewMemberSync AND the apply-path snapshot in
+  // applyMemberSync) can fall back to the PERSISTED row when a LIST /
+  // skipBookings sync doesn't (re)compute recency. Without these columns a
+  // blank live value collapsed recency to null and demoted recently-active,
+  // paid-up members to dormant — flapping against the nightly classifier
+  // (pipeline-reclassify), which reads the same persisted columns.
+  const SELECT_COLS = 'id, email, first_name, last_name, phone, dob, joined_at, created_at, glofox_member_id, glofox_membership_status, glofox_membership_state, glofox_membership_expiry, lead_source, last_booked_at, last_attended_at, last_payment_at, total_bookings_30d, total_attended_30d, total_attended_7d, total_noshow_30d, trial_credits_remaining'
   const queries = []
   queries.push(
     db.from('contacts')
@@ -1470,23 +1478,30 @@ export async function previewMemberSync(db, locationId, member, opts = {}) {
   }
 
   const { byGlofox, byEmail } = await findExistingContact(db, locationId, mapped)
+  const existingRow = byGlofox || byEmail
   // PIPELINE5.4 — proposed pipeline placement comes from the
   // unified classifier (status × engagement × recency), not just
   // glofox_membership_status. Computed from the post-sync mapped
   // values so the dry-run preview matches what apply will actually
-  // do. existing.last_payment_at + existing.created_at are passed
-  // because applyMemberSync doesn't compute them.
+  // do.
+  // PIPELINE-FLAP.2 — every recency / live-membership signal falls back to
+  // the PERSISTED row when the mapped (live-sync) value is blank. A LIST or
+  // skipBookings sync doesn't (re)compute last_attended_at / membership
+  // detail, so without the fallback those collapse to null and a
+  // recently-active, paid-up member is wrongly demoted to dormant — flapping
+  // against pipeline-reclassify (the nightly cron), which classifies off the
+  // SAME persisted columns. The two classifiers must consume the same source.
   const proposedStageSlug = classifyContact({
     glofox_membership_status: mapped.glofox_membership_status,
-    glofox_membership_state: mapped.glofox_membership_state ?? null,
-    glofox_membership_expiry: mapped.glofox_membership_expiry ?? null,
-    last_attended_at: mapped.last_attended_at ?? null,
-    total_attended_7d: mapped.total_attended_7d ?? 0,
-    total_attended_30d: mapped.total_attended_30d ?? 0,
-    last_payment_at: (byGlofox || byEmail)?.last_payment_at ?? null,
-    joined_at: mapped.joined_at,
-    created_at: (byGlofox || byEmail)?.created_at ?? null,
-    trial_credits_remaining: mapped.trial_credits_remaining ?? null,
+    glofox_membership_state: mapped.glofox_membership_state ?? existingRow?.glofox_membership_state ?? null,
+    glofox_membership_expiry: mapped.glofox_membership_expiry ?? existingRow?.glofox_membership_expiry ?? null,
+    last_attended_at: mapped.last_attended_at ?? existingRow?.last_attended_at ?? null,
+    total_attended_7d: mapped.total_attended_7d ?? existingRow?.total_attended_7d ?? 0,
+    total_attended_30d: mapped.total_attended_30d ?? existingRow?.total_attended_30d ?? 0,
+    last_payment_at: mapped.last_payment_at ?? existingRow?.last_payment_at ?? null,
+    joined_at: mapped.joined_at ?? existingRow?.joined_at ?? null,
+    created_at: existingRow?.created_at ?? null,
+    trial_credits_remaining: mapped.trial_credits_remaining ?? existingRow?.trial_credits_remaining ?? null,
   })
 
   // Ambiguous: same email already linked to a DIFFERENT glofox member.
@@ -1663,6 +1678,13 @@ export async function previewMemberSync(db, locationId, member, opts = {}) {
   return {
     action: 'update',
     existing_id: existing.id,
+    // PIPELINE-FLAP.2 — expose the matched persisted row so applyMemberSync's
+    // reclassify snapshot can fall back to its recency columns
+    // (last_attended_at / last_payment_at) when the live-sync `mapped` value
+    // is blank. Previously this key didn't exist, so the
+    // `?? preview.existing?.last_*` fallbacks in the apply snapshot were dead
+    // (undefined → null) and the deal flapped to dormant.
+    existing,
     mapped,
     changes,
     deal_action: dealAction,
@@ -1791,21 +1813,34 @@ export async function applyMemberSync(db, locationId, member, opts = {}) {
   if (reclassify) {
     try {
       const m = preview.mapped || {}
+      // PIPELINE-FLAP.2 — this snapshot is what ensureDealForContact runs
+      // through classifyContact to (re)place the deal. It MUST see the same
+      // recency the nightly classifier (pipeline-reclassify) reads from the
+      // persisted contacts row, or the two writers disagree and the deal
+      // flaps Dormant↔Active Member every night. A LIST / skipBookings sync
+      // doesn't (re)compute attendance/payment/membership-detail, so EVERY
+      // such field falls back to the persisted row (preview.existing, now
+      // populated on the update path) before defaulting to null/0.
+      const ex = preview.existing || {}
       const contactSnapshot = {
         glofox_membership_status: m.glofox_membership_status,
-        glofox_membership_state:  m.glofox_membership_state ?? null,
-        glofox_membership_expiry: m.glofox_membership_expiry ?? null,
-        last_attended_at:    m.last_attended_at,
-        total_attended_7d:   m.total_attended_7d,
-        total_attended_30d:  m.total_attended_30d,
+        glofox_membership_state:  m.glofox_membership_state  ?? ex.glofox_membership_state  ?? null,
+        glofox_membership_expiry: m.glofox_membership_expiry ?? ex.glofox_membership_expiry ?? null,
+        // last_attended_at is advance-only on the persisted row (see
+        // mergeBookingAggregates) — i.e. the true most-recent attendance.
+        // Falling back to it can never resurrect stale data: it's the exact
+        // value pipeline-reclassify already classifies off.
+        last_attended_at:    m.last_attended_at  ?? ex.last_attended_at  ?? null,
+        total_attended_7d:   m.total_attended_7d  ?? ex.total_attended_7d  ?? 0,
+        total_attended_30d:  m.total_attended_30d ?? ex.total_attended_30d ?? 0,
         // last_payment_at + lifetime_transaction_count come from
         // INVOICE_UPDATED webhooks (GLOFOX2.1.20) or the PIPELINE5.5
         // backfill — applyMemberSync doesn't compute them, so we
         // pull from the existing row when available.
-        last_payment_at:     m.last_payment_at  ?? (preview.existing?.last_payment_at ?? null),
-        joined_at:           m.joined_at,
-        created_at:          preview.existing?.created_at ?? null,
-        trial_credits_remaining: m.trial_credits_remaining,
+        last_payment_at:     m.last_payment_at  ?? ex.last_payment_at ?? null,
+        joined_at:           m.joined_at ?? ex.joined_at ?? null,
+        created_at:          ex.created_at ?? null,
+        trial_credits_remaining: m.trial_credits_remaining ?? ex.trial_credits_remaining ?? null,
       }
       dealResult = await ensureDealForContact(
         db, locationId, contactId, contactSnapshot,

@@ -1612,6 +1612,91 @@ describe('previewMemberSync', () => {
     expect(out.deal_action.to_slug).toBe('dormant')
   })
 
+  // PIPELINE-FLAP.2 — the nightly classifier (pipeline-reclassify) and the
+  // glofox-sync reclassify path MUST agree for the same contact. They both
+  // call the SAME classifyContact(), but used to read recency from different
+  // sources: pipeline-reclassify from the persisted contacts columns, and
+  // glofox-sync from the freshly-mapped sync object (`mapped.*`), which is
+  // BLANK on a LIST / skipBookings sync (it doesn't recompute attendance).
+  // Result: a paid-up, recently-attended member like Fran Martin
+  // (status='member', state='active', expiry=NULL, recent last_payment_at +
+  // last_attended_at on the row) classified as active_member by the nightly
+  // cron but dormant by glofox-sync — the deal flapped Dormant↔Active Member
+  // every night. Fix: the sync snapshot falls back to the persisted row
+  // (last_attended_at / last_payment_at) so a blank live value can't demote
+  // a member who is recent per the stored columns. This test pins the
+  // convergence: the same recent-persisted member resolves to active_member.
+  it('PIPELINE-FLAP.2 — member with blank live recency falls back to persisted columns (no flap to dormant)', async () => {
+    const isoRecentAttend = isoDaysAgo(18) // ≤ ACTIVE_RECENT_DAYS (30)
+    const isoRecentPay    = isoDaysAgo(19) // ≤ ACTIVE_PAID_RECENT_DAYS (60)
+    // Persisted row: Fran Martin — a real, recently-active member with NO
+    // live plan/expiry, recent attendance AND recent payment on the row.
+    const existing = {
+      id: 'c1', email: 'fran@x.com', glofox_member_id: 'g1',
+      glofox_membership_status: 'member',
+      glofox_membership_state: 'active',
+      glofox_membership_expiry: null,            // no live plan → recency decides
+      last_attended_at: isoRecentAttend,         // recent — should keep them active
+      last_payment_at:  isoRecentPay,            // recent — should keep them active
+      created_at: isoDaysAgo(400),
+    }
+    // LIST-shape sync member: no membership detail, no booking fetch, so the
+    // mapped object carries NO attendance/payment recency — exactly the case
+    // that used to collapse both signals to null and demote to dormant.
+    const out = await previewMemberSync(
+      fakeDb({
+        rowsByGlofoxId: [existing], rowsByEmail: [existing],
+        openDeal: { id: 'd1', stage_id: 's1', stage_slug: 'active_member' },
+      }),
+      'loc',
+      { ...member, email: 'fran@x.com', lead_status: 'MEMBER' },
+      { skipBookings: true },
+    )
+    // Must converge with what pipeline-reclassify produces from the same
+    // persisted columns: active_member, NOT dormant. (Deal already there →
+    // leave, i.e. no flap.)
+    expect(out.deal_action.to_slug ?? out.deal_action.stage_slug).toBe('active_member')
+    expect(out.deal_action.action).toBe('leave')
+    // The preview snapshot must also expose the existing row so the apply
+    // path (applyMemberSync → ensureDealForContact) can read the persisted
+    // fallback — without this, preview.existing is undefined and the
+    // last_attended_at / last_payment_at fallbacks in the apply snapshot are
+    // dead (preview.existing?.X === undefined → null → dormant).
+    expect(out.existing).toBeTruthy()
+    expect(out.existing.last_attended_at).toBe(isoRecentAttend)
+    expect(out.existing.last_payment_at).toBe(isoRecentPay)
+  })
+
+  it('PIPELINE-FLAP.2 — attendance-only persisted recency keeps a member active (payment masking removed)', async () => {
+    // Sharper pin on the ATTENDANCE fallback specifically: the row's only
+    // active signal is last_attended_at (no recent payment). Before the fix,
+    // the preview proposed-stage read last_attended_at from `mapped` only
+    // (blank on a LIST sync) with no persisted fallback, so this member
+    // flapped active_member → dormant on every sync while the nightly cron
+    // (reading the same persisted last_attended_at) kept them active_member.
+    const isoRecentAttend = isoDaysAgo(10) // ≤ ACTIVE_RECENT_DAYS (30)
+    const existing = {
+      id: 'c1', email: 'fran@x.com', glofox_member_id: 'g1',
+      glofox_membership_status: 'member',
+      glofox_membership_state: 'active',
+      glofox_membership_expiry: null,
+      last_attended_at: isoRecentAttend,
+      last_payment_at: null,             // NO recent payment — attendance is the only signal
+      created_at: isoDaysAgo(400),
+    }
+    const out = await previewMemberSync(
+      fakeDb({
+        rowsByGlofoxId: [existing], rowsByEmail: [existing],
+        openDeal: { id: 'd1', stage_id: 's1', stage_slug: 'active_member' },
+      }),
+      'loc',
+      { ...member, email: 'fran@x.com', lead_status: 'MEMBER' },
+      { skipBookings: true },
+    )
+    expect(out.deal_action.to_slug ?? out.deal_action.stage_slug).toBe('active_member')
+    expect(out.deal_action.action).toBe('leave')
+  })
+
   it('returns update when only email matches (link to existing CRM contact)', async () => {
     const existing = { id: 'c2', email: 'me@x.com', first_name: 'Existing', last_name: 'Name', phone: '+353000', glofox_member_id: null, glofox_membership_status: null }
     const out = await previewMemberSync(
