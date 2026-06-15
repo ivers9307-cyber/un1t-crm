@@ -314,6 +314,82 @@ registry.registerPath({
   },
 })
 
+// PERSON-LINK.2 — detection runner
+registry.registerPath({
+  method: 'post',
+  path: '/api/contacts/duplicates/detect',
+  tags: ['Contacts'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Run duplicate-contact detection for a location (contact_linking permission)',
+  description: 'Dry-run by default. Pass ?commit=true to upsert suggestion rows and auto-link high-confidence pairs.',
+  request: {
+    query: z.object({ commit: z.enum(['true', 'false']).optional() }),
+    body: {
+      content: {
+        'application/json': {
+          schema: z.object({ location_id: uuidLike.optional() }).openapi('DuplicateDetectBody'),
+        },
+      },
+    },
+  },
+  responses: {
+    200: {
+      description: 'Detection results (dryRun or commit)',
+      content: {
+        'application/json': {
+          schema: z.object({
+            success: z.literal(true),
+            data: z.object({
+              dryRun: z.boolean(),
+              counts: z.object({ high: z.number(), medium: z.number(), low: z.number() }),
+              totalCandidates: z.number(),
+            }).passthrough(),
+          }),
+        },
+      },
+    },
+    400: { description: 'Missing location_id', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — contact_linking permission required', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// PERSON-LINK.2 — review queue PATCH
+registry.registerPath({
+  method: 'patch',
+  path: '/api/contacts/duplicates/{id}',
+  tags: ['Contacts'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Confirm or dismiss a duplicate-contact suggestion (contact_linking permission)',
+  description: 'status="linked" creates/extends the person group; status="dismissed" marks the pair as reviewed.',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: {
+      content: {
+        'application/json': {
+          schema: z.object({
+            status: z.enum(['linked', 'dismissed']),
+          }).openapi('DuplicateSuggestionPatch'),
+        },
+      },
+    },
+  },
+  responses: {
+    200: {
+      description: 'Suggestion updated',
+      content: {
+        'application/json': {
+          schema: z.object({ success: z.literal(true), data: z.object({}).passthrough() }),
+        },
+      },
+    },
+    400: { description: 'Contacts already in different groups', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — contact_linking permission required', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Suggestion not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // Deals
 registry.registerPath({
   method: 'post',

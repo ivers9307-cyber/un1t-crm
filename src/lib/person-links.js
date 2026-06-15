@@ -264,6 +264,60 @@ export async function setPrimary(db, { groupId, contactId }) {
 }
 
 /**
+ * linkContactPair(db, { aId, bId, method, confidence, actorId, locationId })
+ * → { group, members }
+ *
+ * High-level helper — decides which group operation to run based on
+ * each contact's current grouping:
+ *
+ *   - both ungrouped          → createGroup
+ *   - exactly one grouped     → addToGroup (the ungrouped joins the grouped)
+ *   - both in the same group  → no-op, return that group
+ *   - both in DIFFERENT groups → throws "Both contacts are already linked
+ *                                to different people"
+ */
+export async function linkContactPair(db, {
+  aId,
+  bId,
+  method = 'manual',
+  confidence = 'manual',
+  actorId,
+  locationId,
+}) {
+  const [groupA, groupB] = await Promise.all([
+    getPersonGroup(db, aId),
+    getPersonGroup(db, bId),
+  ])
+
+  const gAId = groupA?.group?.id ?? null
+  const gBId = groupB?.group?.id ?? null
+
+  // Both in the same group — idempotent no-op
+  if (gAId !== null && gBId !== null && gAId === gBId) {
+    return { group: groupA.group, members: groupA.members }
+  }
+
+  // Both in DIFFERENT groups — refuse
+  if (gAId !== null && gBId !== null && gAId !== gBId) {
+    throw new Error('Both contacts are already linked to different people')
+  }
+
+  // Both ungrouped
+  if (gAId === null && gBId === null) {
+    return createGroup(db, { contactIds: [aId, bId], method, confidence, actorId, locationId })
+  }
+
+  // Exactly one grouped
+  if (gAId !== null) {
+    // aId is grouped, bId is not
+    return addToGroup(db, { groupId: gAId, contactIds: [bId], method, confidence, actorId })
+  }
+
+  // bId is grouped, aId is not
+  return addToGroup(db, { groupId: gBId, contactIds: [aId], method, confidence, actorId })
+}
+
+/**
  * getPersonGroup(db, contactId)
  * → { group, members } | null
  *
