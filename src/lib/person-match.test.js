@@ -168,13 +168,22 @@ describe('detectCandidates — phone matching', () => {
     expect(new Set(keys).size).toBe(3)
   })
 
-  it('contacts with no phone produce no phone candidates', () => {
+  it('contacts with no phone produce no phone candidates (but may produce name candidates)', () => {
+    // Two real contacts with no phone and the same name now produce a real↔real
+    // name candidate (MEDIUM — two ungrouped singletons). This test verifies
+    // zero PHONE candidates, not zero total candidates.
     const contacts = [
       { id: 'a', glofox_membership_status: 'member', name: 'Aoife' },
       { id: 'b', glofox_membership_status: 'member', name: 'Aoife' },
     ]
     const results = detectCandidates(contacts)
-    expect(results).toHaveLength(0)
+    // Real↔real name matching fires: 1 MEDIUM candidate
+    expect(results).toHaveLength(1)
+    expect(results[0].method).toBe('name')
+    expect(results[0].confidence).toBe('medium')
+    // No phone candidates specifically
+    const phoneResults = results.filter(r => r.method === 'phone')
+    expect(phoneResults).toHaveLength(0)
   })
 
   it('ClassPass contacts are excluded from phone clustering entirely', () => {
@@ -234,24 +243,35 @@ describe('detectCandidates — name matching', () => {
     const [r] = results
     expect(r.method).toBe('name')
     expect(r.confidence).toBe('high')
-    expect(r.reason).toBe('ClassPass name matches one member')
+    expect(r.reason).toBe('ClassPass matches one person')
   })
 
-  it('ClassPass name matching 2 real members → 2 medium name candidates', () => {
+  it('ClassPass name matching 2 real ungrouped persons → 2 medium CP candidates + 1 real↔real medium', () => {
+    // r1 and r2 are two distinct ungrouped persons (no groupOf entries).
+    // cp1 name-matches both → 2 medium ClassPass candidates (persons.size=2).
+    // r1↔r2 are two ungrouped singletons with same name → 1 medium real↔real.
+    // Total: 3 medium name candidates.
     const contacts = [
       { id: 'cp1', glofox_membership_status: 'classpass_payg', name: 'John Smith', phone: '1111111111' },
       { id: 'r1', glofox_membership_status: 'member', name: 'John Smith', phone: '2222222222' },
       { id: 'r2', glofox_membership_status: 'member', name: 'John Smith', phone: '3333333333' },
     ]
     const results = detectCandidates(contacts)
-    expect(results).toHaveLength(2)
+    expect(results).toHaveLength(3)
     for (const r of results) {
       expect(r.method).toBe('name')
       expect(r.confidence).toBe('medium')
-      expect(r.reason).toBe('ClassPass name matches 2 members')
     }
-    const realIds = results.map(r => (r.aId === 'cp1' ? r.bId : r.aId)).sort()
-    expect(realIds).toEqual(['r1', 'r2'])
+    // The two ClassPass→real candidates target r1 and r2
+    const cpCandidates = results.filter(r => r.aId === 'cp1' || r.bId === 'cp1')
+    expect(cpCandidates).toHaveLength(2)
+    expect(cpCandidates.every(r => r.reason === 'ClassPass name matches 2 people')).toBe(true)
+    const cpRealIds = cpCandidates.map(r => (r.aId === 'cp1' ? r.bId : r.aId)).sort()
+    expect(cpRealIds).toEqual(['r1', 'r2'])
+    // The real↔real candidate
+    const realCandidate = results.find(r => r.aId !== 'cp1' && r.bId !== 'cp1')
+    expect(realCandidate).toBeDefined()
+    expect(realCandidate?.reason).toBe('Same name — possible duplicate')
   })
 
   it('ClassPass with no name match → no candidate', () => {
@@ -276,6 +296,203 @@ describe('detectCandidates — name matching', () => {
       { id: 'cp2', glofox_membership_status: 'classpass_payg', name: 'Alice', phone: '2222222222' },
     ]
     expect(detectCandidates(contacts)).toHaveLength(0)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// detectCandidates — person-aware name matching (new behavior)
+// ---------------------------------------------------------------------------
+
+describe('detectCandidates — person-aware name matching', () => {
+  it('ClassPass → one multi-account person = ONE high candidate targeting primary (Tara point-2)', () => {
+    // A ClassPass contact + a group of 2 reals sharing the same name.
+    // Both reals belong to g1; g1's primary is 'member'.
+    // The name index collapses both reals into ONE person (g1) → persons.size === 1
+    // → exactly ONE high candidate: (classpass, memberId).
+    const contacts = [
+      { id: 'cp', glofox_membership_status: 'classpass_payg', name: 'Tara Burke' },
+      { id: 'member', glofox_membership_status: 'member', name: 'Tara Burke', phone: '2222222222' },
+      { id: 'trial', glofox_membership_status: 'trial', name: 'Tara Burke', phone: '3333333333' },
+    ]
+    const groupOf = new Map([['member', 'g1'], ['trial', 'g1']])
+    const primaryByGroup = new Map([['g1', 'member']])
+
+    const results = detectCandidates(contacts, { groupOf, primaryByGroup })
+    // Only ONE name candidate: cp → member (the group's primary)
+    const nameCandidates = results.filter(r => r.method === 'name')
+    expect(nameCandidates).toHaveLength(1)
+    const [c] = nameCandidates
+    expect(c.confidence).toBe('high')
+    expect(c.reason).toBe('ClassPass matches one person')
+    // Targets the primary, not the trial
+    const otherEnd = c.aId === 'cp' ? c.bId : c.aId
+    expect(otherEnd).toBe('member')
+    // No ambiguous medium candidates
+    expect(nameCandidates.filter(r => r.confidence === 'medium')).toHaveLength(0)
+  })
+
+  it('ClassPass → 2 distinct persons = medium per person', () => {
+    // cp name matches r1 (singleton) and r2 (in group g1 → primary=r2).
+    // persons.size === 2 → 2 medium candidates.
+    const contacts = [
+      { id: 'cp', glofox_membership_status: 'classpass_payg', name: 'Jane Doe' },
+      { id: 'r1', glofox_membership_status: 'member', name: 'Jane Doe', phone: '1111111111' },
+      { id: 'r2', glofox_membership_status: 'member', name: 'Jane Doe', phone: '2222222222' },
+      { id: 'r3', glofox_membership_status: 'trial', name: 'Jane Doe', phone: '3333333333' },
+    ]
+    // r2 and r3 are the same person (group g1), r1 is a different person
+    const groupOf = new Map([['r2', 'g1'], ['r3', 'g1']])
+    const primaryByGroup = new Map([['g1', 'r2']])
+
+    const results = detectCandidates(contacts, { groupOf, primaryByGroup })
+    const nameCandidates = results.filter(r => r.method === 'name')
+
+    // 2 medium CP candidates: one to r1 (singleton), one to r2 (group primary)
+    const cpCandidates = nameCandidates.filter(r => r.aId === 'cp' || r.bId === 'cp')
+    expect(cpCandidates).toHaveLength(2)
+    expect(cpCandidates.every(r => r.confidence === 'medium')).toBe(true)
+    expect(cpCandidates.every(r => r.reason === 'ClassPass name matches 2 people')).toBe(true)
+    const targets = cpCandidates.map(r => (r.aId === 'cp' ? r.bId : r.aId)).sort()
+    expect(targets).toEqual(['r1', 'r2'])
+  })
+
+  it('real↔real: ungrouped singleton whose name matches a grouped person → HIGH (Tara point-1)', () => {
+    // T3 is ungrouped with the same name as a group (g1 with primary M).
+    // The singleton joins the group → HIGH candidate (T3, M).
+    const contacts = [
+      { id: 'M', glofox_membership_status: 'member', name: 'Tara Burke', phone: '1111111111' },
+      { id: 'T2', glofox_membership_status: 'trial', name: 'Tara Burke', phone: '1111111111' },
+      { id: 'T3', glofox_membership_status: 'trial', name: 'Tara Burke', phone: '9999999999' },
+    ]
+    // M and T2 are in g1; T3 is ungrouped
+    const groupOf = new Map([['M', 'g1'], ['T2', 'g1']])
+    const primaryByGroup = new Map([['g1', 'M']])
+
+    const results = detectCandidates(contacts, { groupOf, primaryByGroup })
+    const nameCandidates = results.filter(r => r.method === 'name')
+
+    // The (T3, M) pair: T3 is singleton, g1 is a group → HIGH
+    const highCandidates = nameCandidates.filter(r => r.confidence === 'high')
+    expect(highCandidates).toHaveLength(1)
+    const [h] = highCandidates
+    expect(h.reason).toBe('Name matches an existing linked person')
+    const ids = [h.aId, h.bId].sort()
+    expect(ids).toEqual(['M', 'T3'].sort())
+    // No medium ambiguity for this pair
+    const mediumIds = nameCandidates
+      .filter(r => r.confidence === 'medium')
+      .map(r => [r.aId, r.bId].sort().join(':'))
+    expect(mediumIds).not.toContain(['M', 'T3'].sort().join(':'))
+  })
+
+  it('real↔real: two ungrouped singletons with same name → MEDIUM', () => {
+    const contacts = [
+      { id: 'a', glofox_membership_status: 'member', name: 'Sean Kelly', phone: '1111111111' },
+      { id: 'b', glofox_membership_status: 'member', name: 'Sean Kelly', phone: '2222222222' },
+    ]
+    const results = detectCandidates(contacts)
+    const nameCandidates = results.filter(r => r.method === 'name')
+    expect(nameCandidates).toHaveLength(1)
+    expect(nameCandidates[0].confidence).toBe('medium')
+    expect(nameCandidates[0].reason).toBe('Same name — possible duplicate')
+  })
+
+  it('real↔real: two different groups with same name → SKIP (no candidate)', () => {
+    // Both contacts are group representatives of different groups.
+    // Neither auto-merging two separate person groups → no name candidate.
+    const contacts = [
+      { id: 'a', glofox_membership_status: 'member', name: 'Mary Murphy', phone: '1111111111' },
+      { id: 'b', glofox_membership_status: 'member', name: 'Mary Murphy', phone: '2222222222' },
+    ]
+    const groupOf = new Map([['a', 'g1'], ['b', 'g2']])
+    const primaryByGroup = new Map([['g1', 'a'], ['g2', 'b']])
+
+    const results = detectCandidates(contacts, { groupOf, primaryByGroup })
+    const nameCandidates = results.filter(r => r.method === 'name')
+    expect(nameCandidates).toHaveLength(0)
+  })
+
+  it('Tara end-to-end: member M(g1,primary) + trial T2(g1) + T3(ungrouped,diff phone) + classpass CP(ungrouped)', () => {
+    // M and T2 are already linked as g1, primary=M.
+    // T3 has a different phone but same name → ungrouped singleton.
+    // CP is classpass with same name.
+    //
+    // At detection time there are 2 distinct persons in realByName:
+    //   - g1 (grouped, rep=M)
+    //   - T3 (ungrouped singleton, rep=T3)
+    //
+    // Expected:
+    //   - (T3, M) HIGH name: singleton joins an existing group (Tara point-1)
+    //   - (CP, M) MEDIUM + (CP, T3) MEDIUM: classpass sees 2 persons
+    //     (CP→HIGH would only fire once T3 is linked to g1 in a subsequent pass)
+    const contacts = [
+      { id: 'M', glofox_membership_status: 'member', name: 'Tara Burke', phone: '1111111111' },
+      { id: 'T2', glofox_membership_status: 'trial', name: 'Tara Burke', phone: '1111111111' },
+      { id: 'T3', glofox_membership_status: 'trial', name: 'Tara Burke', phone: '9999999999' },
+      { id: 'CP', glofox_membership_status: 'classpass_payg', name: 'Tara Burke' },
+    ]
+    const groupOf = new Map([['M', 'g1'], ['T2', 'g1']])
+    const primaryByGroup = new Map([['g1', 'M']])
+
+    const results = detectCandidates(contacts, { groupOf, primaryByGroup })
+    const nameCandidates = results.filter(r => r.method === 'name')
+
+    // (T3, M) HIGH: ungrouped singleton name-matches a grouped person
+    const t3M = nameCandidates.find(r =>
+      ([r.aId, r.bId].includes('T3') && [r.aId, r.bId].includes('M')),
+    )
+    expect(t3M).toBeDefined()
+    expect(t3M?.confidence).toBe('high')
+    expect(t3M?.reason).toBe('Name matches an existing linked person')
+
+    // Once T3 is linked (next pass), CP would see only 1 person → HIGH.
+    // In this first-pass state (T3 still ungrouped), CP sees 2 persons → MEDIUM.
+    const cpCandidates = nameCandidates.filter(r => r.aId === 'CP' || r.bId === 'CP')
+    expect(cpCandidates).toHaveLength(2)
+    expect(cpCandidates.every(r => r.confidence === 'medium')).toBe(true)
+    // Both CP candidates target the group primary and the ungrouped singleton
+    const cpTargets = cpCandidates.map(r => (r.aId === 'CP' ? r.bId : r.aId)).sort()
+    expect(cpTargets).toEqual(['M', 'T3'].sort())
+  })
+
+  it('Tara end-to-end (pass 2): after T3 is linked to g1, CP → ONE high to M', () => {
+    // Same contacts, but now T3 is also in g1 (it was linked in pass 1).
+    // CP now sees only 1 person in realByName → HIGH to M.
+    const contacts = [
+      { id: 'M', glofox_membership_status: 'member', name: 'Tara Burke', phone: '1111111111' },
+      { id: 'T2', glofox_membership_status: 'trial', name: 'Tara Burke', phone: '1111111111' },
+      { id: 'T3', glofox_membership_status: 'trial', name: 'Tara Burke', phone: '9999999999' },
+      { id: 'CP', glofox_membership_status: 'classpass_payg', name: 'Tara Burke' },
+    ]
+    // All three reals now in g1
+    const groupOf = new Map([['M', 'g1'], ['T2', 'g1'], ['T3', 'g1']])
+    const primaryByGroup = new Map([['g1', 'M']])
+
+    const results = detectCandidates(contacts, { groupOf, primaryByGroup })
+    const nameCandidates = results.filter(r => r.method === 'name')
+
+    // Only CP→M HIGH; no real↔real name pairs (all reals are same-person)
+    expect(nameCandidates).toHaveLength(1)
+    const [c] = nameCandidates
+    expect(c.confidence).toBe('high')
+    expect(c.reason).toBe('ClassPass matches one person')
+    const cpTarget = c.aId === 'CP' ? c.bId : c.aId
+    expect(cpTarget).toBe('M')
+  })
+
+  it('primaryByGroup defaults to empty Map — existing phone-path tests unaffected', () => {
+    // Regression guard: calling without primaryByGroup should behave correctly
+    // for phone-path scenarios (repOf falls back to personId when no primary mapped)
+    const contacts = [
+      { id: 'a', glofox_membership_status: 'member', name: 'Aoife Byrne', phone: '0871234567' },
+      { id: 'b', glofox_membership_status: 'member', name: 'Aoife Byrne', phone: '0871234567' },
+    ]
+    const groupOf = new Map([['a', 'g1']])
+    // No primaryByGroup → repOf('g1') returns 'g1' itself (not a contact id,
+    // but we're only testing that the call doesn't throw)
+    const results = detectCandidates(contacts, { groupOf })
+    // Phone HIGH for the pair (a is grouped, b is not → same-person check passes)
+    expect(results.some(r => r.method === 'phone' && r.confidence === 'high')).toBe(true)
   })
 })
 
