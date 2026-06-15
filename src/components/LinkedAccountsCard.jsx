@@ -23,7 +23,7 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Link2, AlertCircle } from 'lucide-react'
 import { Card, Button } from '@/components/ui'
-import { initials, accountStatusLabel, accountStatusTone } from '@/lib/person-view'
+import { initials, accountStatusLabel, accountStatusTone, formatLastSeen } from '@/lib/person-view'
 import dynamic from 'next/dynamic'
 
 // Lazy-load the link modal so the contact page doesn't pay its
@@ -33,11 +33,21 @@ const LinkAccountModal = dynamic(() => import('./LinkAccountModal'), { ssr: fals
 // ─── Row component ─────────────────────────────────────────────────────────
 
 function AccountRow({ account, onSetPrimary, onUnlink, busy, error }) {
-  const { name, status, glofoxMemberId, isPrimary } = account
+  const { name, status, glofoxMemberId, isPrimary, attended30d, lastAttendedAt } = account
   const abbr = initials(name)
   const labelText = accountStatusLabel(status)
   const toneCls = accountStatusTone(status)
   const isBusy = busy?.contactId === account.contactId ? busy.action : null
+
+  // Per-account activity summary: "6 visits/30d · last 12 Jun 2026"
+  // Only render when there's at least one piece of activity data.
+  const hasActivity = (attended30d > 0) || lastAttendedAt
+  const activityLine = hasActivity
+    ? [
+        attended30d > 0 ? `${attended30d} visit${attended30d === 1 ? '' : 's'}/30d` : null,
+        `last ${formatLastSeen(lastAttendedAt)}`,
+      ].filter(Boolean).join(' · ')
+    : null
 
   return (
     <div className="flex items-center gap-3 py-2.5 border-b border-un1t-border/50 last:border-b-0">
@@ -66,6 +76,10 @@ function AccountRow({ account, onSetPrimary, onUnlink, busy, error }) {
         </div>
         {glofoxMemberId && (
           <p className="text-[11px] text-un1t-muted mt-0.5">Member #{glofoxMemberId}</p>
+        )}
+        {/* Per-account activity strip — shows which account carries the visits */}
+        {activityLine && (
+          <p className="text-[11px] text-un1t-muted mt-0.5">{activityLine}</p>
         )}
         {error && error.contactId === account.contactId && (
           <p className="text-[11px] text-red-700 mt-0.5 flex items-center gap-1">

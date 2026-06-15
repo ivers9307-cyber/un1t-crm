@@ -57,6 +57,25 @@ export function accountStatusLabel(status) {
     .replace(/\b\w/g, (c) => c.toUpperCase())
 }
 
+// ─── Last seen date ────────────────────────────────────────────────────────
+
+/**
+ * Format an ISO date string as a short human date: "12 Jun 2026".
+ * Returns 'Never' for null/undefined/empty.
+ *
+ * Dependency-free: uses Intl.DateTimeFormat with en-IE locale so the
+ * format stays consistent regardless of the server/browser timezone.
+ *
+ * @param {string|null|undefined} iso  ISO 8601 date/datetime string
+ * @returns {string}
+ */
+export function formatLastSeen(iso) {
+  if (!iso) return 'Never'
+  const d = new Date(iso)
+  if (!Number.isFinite(d.getTime())) return 'Never'
+  return d.toLocaleDateString('en-IE', { day: 'numeric', month: 'short', year: 'numeric' })
+}
+
 // ─── Account status tone ───────────────────────────────────────────────────
 
 // Token-class strings for status badges, following the CLAUDE.md
