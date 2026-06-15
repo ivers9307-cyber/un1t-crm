@@ -269,6 +269,51 @@ registry.registerPath({
   },
 })
 
+// PERSON-LINK.1 — identity-link routes
+registry.registerPath({
+  method: 'post',
+  path: '/api/contacts/{id}/link',
+  tags: ['Contacts'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Link two contacts or set-primary (contact_linking permission)',
+  request: {
+    params: z.object({ id: uuidLike }),
+    query: z.object({ action: z.enum(['set-primary']).optional() }),
+    body: {
+      content: {
+        'application/json': {
+          schema: z.object({ otherContactId: uuidLike }).openapi('ContactLinkBody'),
+        },
+      },
+    },
+  },
+  responses: {
+    200: { description: 'Linked / primary set', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: z.object({}).passthrough() }) } } },
+    400: { description: 'Cross-location / not in group / validation error', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — contact_linking permission required', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Contact not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'delete',
+  path: '/api/contacts/{id}/link',
+  tags: ['Contacts'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Unlink a contact from its person group (contact_linking permission)',
+  request: {
+    params: z.object({ id: uuidLike }),
+  },
+  responses: {
+    200: { description: 'Unlinked', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: z.object({}).passthrough() }) } } },
+    400: { description: 'Contact not linked', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — contact_linking permission required', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Contact not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // Deals
 registry.registerPath({
   method: 'post',

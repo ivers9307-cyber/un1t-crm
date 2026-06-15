@@ -124,6 +124,12 @@ export const WEB_PERMISSIONS = Object.freeze([
   // grants per-user via StaffForm for month-end coverage.
   { key: 'bookkeeper', label: 'Bookkeeper (accountant sign-off)', hint: 'Grants the final-sign-off step inside /invoices: run Claude Vision analysis on queued items and send approved invoices to Xero. Owners approve at the source feature (FTE expenses, contractor invoices); bookkeepers approve at the queue. Default master only — grant temporarily to a senior manager for month-end cover and remove again.' },
   // — Infra —
+  // PERSON-LINK.1 — non-destructive identity linking. Gates the
+  // link/unlink/set-primary API so only authorised staff can group
+  // duplicate contacts into a person. Desktop-only contact-admin
+  // action (like contact merge). Owner + manager + head_coach by
+  // default; staff off.
+  { key: 'contact_linking', label: 'Link duplicate contacts', hint: 'Non-destructive identity linking — group duplicate contacts into a single person view without merging or deleting.' },
   { key: 'settings',   label: 'Settings & Staff Management',    hint: 'Location settings, staff management, integrations, branding.' },
   // Landing-page editor (mig 126-130, Phase LP1-3c). Operator
   // editor for the public /welcome marketing page (un1tdublin.com).
@@ -156,6 +162,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     approvals_inbox: true,
     issues_inbox: true,
     bookkeeper: true,
+    contact_linking: true,
     settings: true,
     landing_page: true,
   },
@@ -175,6 +182,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     approvals_inbox: false,                        // staff don't approve anything
     issues_inbox: false,                            // staff submit; owner + master handle
     bookkeeper: false,                              // accountant sign-off — never the default
+    contact_linking: false,                         // admin-level contact dedup action
     settings: false,
     landing_page: false,                          // marketing copy isn't a staff concern
   },
@@ -195,6 +203,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     approvals_inbox: false,                        // head coach isn't an approver by default
     issues_inbox: false,                            // owner + master only by default
     bookkeeper: false,
+    contact_linking: true,
     settings: false,
     landing_page: false,
   },
@@ -216,6 +225,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     approvals_inbox: true,                         // managers approve schedule items (time-off, swaps)
     issues_inbox: false,                            // owner + master only by default
     bookkeeper: false,                              // grant temporarily for month-end cover if needed
+    contact_linking: true,
     settings: true,
     landing_page: false,                          // owner/master decision; per-user override available
   },
@@ -237,6 +247,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     approvals_inbox: true,                         // owner approves invoices, expenses, schedule items
     issues_inbox: true,                             // owner IS the handler per the routing design
     bookkeeper: false,                              // owner approves at the source; accountant sign-off is master/dedicated only
+    contact_linking: true,
     settings: true,
     landing_page: true,
   },
