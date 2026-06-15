@@ -210,6 +210,17 @@ export async function runDetection(db, { locationId, commit = false, actorId }) 
         if (newGroupId) {
           groupOfMap.set(aId, newGroupId)
           groupOfMap.set(bId, newGroupId)
+        } else {
+          // createGroup succeeded (didn't throw) but returned no group id —
+          // the pair cannot be tracked in-memory, so a later pair touching
+          // either contact would wrongly call createGroup again. Treat this
+          // as a failure so the caller can investigate.
+          console.error(
+            `[person-detect] createGroup returned no group id for pair ${aId}:${bId}; result:`,
+            result
+          )
+          failures++
+          continue
         }
       } else if (gA !== undefined) {
         // aId is grouped, bId is not

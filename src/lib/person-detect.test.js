@@ -486,4 +486,55 @@ describe('runDetection — commit=true', () => {
     expect(linkedRow).toBeDefined()
     expect(linkedRow.decided_by).toBe('u1')
   })
+
+  it('cross-method cascade: groupOfMap updated mid-batch so C joins A\'s group via addToGroup, not a second createGroup', async () => {
+    // Setup: cA is the single real (non-ClassPass) contact.
+    // cB and cC are two independent ClassPass contacts with the same normalised name as cA.
+    // Because each ClassPass contact matches exactly ONE real contact (cA), detectCandidates
+    // emits two separate HIGH-confidence name pairs: cA–cB and cA–cC.
+    //
+    // Detection is phone-first then name (person-match.js ordering); both pairs here
+    // are name-based and iterate in insertion order of contacts: cA–cB before cA–cC.
+    //
+    // Cascade property being tested:
+    //   1. Process cA–cB → both ungrouped → createGroup called → groupOfMap updated
+    //      so cA now maps to 'g-cascade'.
+    //   2. Process cA–cC → cA is NOW in groupOfMap, cC is not → addToGroup called
+    //      (NOT a second createGroup). This only works if groupOfMap was updated in step 1.
+    //
+    // If createGroup returned no group id (Fix 1 path), step 1 would count as a failure
+    // and groupOfMap would remain empty, causing cA–cC to also hit createGroup.
+    // This test therefore validates both the cascade AND that Fix 1's visible-failure
+    // path does NOT trigger here (because createGroup returns a valid id).
+
+    const cA = contact('cA', { name: 'Jordan Lee' }) // sole real contact
+    const cB = contact('cB', { name: 'Jordan Lee', glofox_membership_status: 'classpass_payg' })
+    const cC = contact('cC', { name: 'Jordan Lee', glofox_membership_status: 'classpass_payg' })
+
+    // createGroup must return a group id so groupOfMap gets updated after step 1.
+    createGroup.mockResolvedValue({ group: { id: 'g-cascade' }, members: [] })
+    addToGroup.mockResolvedValue({ group: { id: 'g-cascade' }, members: [] })
+
+    const db = makeDb({ contacts: [cA, cB, cC], person_link_suggestions: [] })
+
+    const result = await runDetection(db, { locationId: 'loc-1', commit: true, actorId: 'u1' })
+
+    // createGroup called exactly once (for the first high pair, cA–cB)
+    expect(createGroup).toHaveBeenCalledTimes(1)
+    expect(createGroup).toHaveBeenCalledWith(db, expect.objectContaining({
+      contactIds: expect.arrayContaining(['cA', 'cB']),
+    }))
+
+    // addToGroup called exactly once (for the second high pair, cA–cC);
+    // cC joins cA's existing group — NOT a second createGroup call.
+    expect(addToGroup).toHaveBeenCalledTimes(1)
+    expect(addToGroup).toHaveBeenCalledWith(db, expect.objectContaining({
+      groupId: 'g-cascade',
+      contactIds: ['cC'],
+    }))
+
+    // Both pairs successfully auto-linked
+    expect(result.autoLinked).toBe(2)
+    expect(result.failures).toBe(0)
+  })
 })
