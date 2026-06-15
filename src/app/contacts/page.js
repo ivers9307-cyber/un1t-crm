@@ -28,7 +28,7 @@ export default async function ContactsPage(props) {
   // client. If a downstream component needs more columns, add them
   // here AND in the /api/contacts/search route so both paths return
   // the same shape.
-  const CONTACT_LIST_FIELDS = 'id, name, email, phone, lead_source, pipeline_stage_slug, trial_credits_remaining, created_at, location_id'
+  const CONTACT_LIST_FIELDS = 'id, name, email, phone, lead_source, pipeline_stage_slug, trial_credits_remaining, created_at, location_id, glofox_membership_status'
   const crossIds = await crossoverContactIds(db, locationId)
   let query = db.from('contacts').select(CONTACT_LIST_FIELDS)
   query = crossIds.length > 0
