@@ -8,7 +8,7 @@ import { nettedOutByRetry } from './glofox-arrears'
 // failed attempt orphans as a PAST_DUE `glofox_invoices` row; the eventual
 // success is a separate PAID row with a different id. A PAST_DUE row whose
 // member (glofox_user_id) has a PAID row of the same amount_cents within
-// ±7 days is a settled retry → net it out.
+// ±1 day is a settled retry → net it out.
 //
 // Rows are the `glofox_invoices` shape:
 //   { id, glofox_user_id, amount_cents, invoice_date, status }
@@ -21,7 +21,7 @@ function paid({ id, glofox_user_id = 'u', amount_cents, invoice_date = '2026-05-
 }
 
 describe('nettedOutByRetry', () => {
-  it('excludes a PAST_DUE row matched by a same-member same-amount PAID within ±7 days', () => {
+  it('excludes a PAST_DUE row matched by a same-member same-amount PAID within the retry window', () => {
     const pd = [pastDue({ id: 'pd1', amount_cents: 2500 })]
     const paidRows = [paid({ id: 'p1', amount_cents: 2500, invoice_date: '2026-05-27T10:38:00Z' })]
     const { kept, nettedIds } = nettedOutByRetry(pd, paidRows)
@@ -62,11 +62,18 @@ describe('nettedOutByRetry', () => {
     expect(nettedIds.size).toBe(1)
   })
 
-  it('nets exactly at the ±7 day boundary (inclusive)', () => {
+  it('nets exactly at the ±1 day boundary (inclusive)', () => {
     const pd = [pastDue({ id: 'pd1', amount_cents: 2500, invoice_date: '2026-05-01T00:00:00Z' })]
-    const paidRows = [paid({ id: 'p1', amount_cents: 2500, invoice_date: '2026-05-08T00:00:00Z' })] // exactly 7 days
+    const paidRows = [paid({ id: 'p1', amount_cents: 2500, invoice_date: '2026-05-02T00:00:00Z' })] // exactly 1 day
     const { kept } = nettedOutByRetry(pd, paidRows)
     expect(kept).toHaveLength(0)
+  })
+
+  it('does NOT net a same-amount PAID 48h away (a real separate fee, not a retry — the Tara Diggin case)', () => {
+    const pd = [pastDue({ id: 'pd1', amount_cents: 1000, invoice_date: '2026-01-30T15:24:00Z' })]
+    const paidRows = [paid({ id: 'p1', amount_cents: 1000, invoice_date: '2026-01-28T15:21:00Z' })] // 48h earlier = different fee
+    const { kept } = nettedOutByRetry(pd, paidRows)
+    expect(kept.map((r) => r.id)).toEqual(['pd1'])
   })
 
   it('returns all rows untouched when there are no paid rows', () => {

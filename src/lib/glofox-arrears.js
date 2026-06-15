@@ -86,10 +86,15 @@ function parseCreatedMs(s) {
 // 27 May): 2× €25 PAST_DUE at 10:36 + 1× €25 PAID at 10:40, three invoice
 // ids, one purchase.
 
-// Default match window — ±7 days. A real retry settles within hours/days;
-// 7 days is generous enough to absorb card-retry lag without swallowing a
-// genuine same-amount purchase a billing cycle later.
-export const RETRY_NET_WINDOW_DAYS = 7
+// Default match window — ±1 day. Cross-invoice-id retries (a one-off purchase
+// whose card failed then succeeded under a NEW invoice id) happen in a single
+// checkout session — minutes apart, same day (every confirmed case settled
+// within ~4 min). Keep this TIGHT: a looser window risks netting a GENUINE
+// separate same-amount debt for regular same-price buyers (e.g. a weekly €25
+// class-pack buyer who truly missed one payment), and a known false match
+// (Tara Diggin) sat exactly 48h away. Multi-day subscription dunning REUSES one
+// invoice id, so it never produces the cross-id orphans this is here to net.
+export const RETRY_NET_WINDOW_DAYS = 1
 const RETRY_NET_WINDOW_MS = RETRY_NET_WINDOW_DAYS * 86_400_000
 
 /**
