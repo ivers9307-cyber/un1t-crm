@@ -1,0 +1,12 @@
+-- 275_drop_dead_handle_booking_status_change.sql
+-- Remove dead code. public.handle_booking_status_change() is a plpgsql
+-- trigger function with NO trigger bound to it (confirmed 2026-06-15 via
+-- pg_trigger + a full plpgsql_check audit: 0 triggers, 0 dependents). It
+-- is a superseded twin of the live log_booking_status_change()
+-- (booking_status_change_trigger on bookings), left behind when the
+-- trigger was repointed. Its body is valid (all columns exist) so it is
+-- harmless — this is pure schema tidy-up.
+--
+-- Non-CASCADE drop is self-guarding: if any trigger still depended on it
+-- this would error rather than silently break anything.
+drop function if exists public.handle_booking_status_change();
