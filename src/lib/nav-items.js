@@ -23,7 +23,6 @@ import {
   LayoutDashboard, Users, Columns3, CheckSquare, Calendar, MessagesSquare,
   CalendarClock, Settings, Car, Flag, Receipt, DoorOpen, FileSignature,
   Heart, Globe, Tv, BookOpen, Inbox, ClipboardCheck, AlertCircle, CreditCard,
-  GitMerge,
 } from 'lucide-react'
 
 // The sidebar Dashboard link is visible if ANY of these are true. The
@@ -91,10 +90,8 @@ export const ALL_NAV = [
   // ── Sales ──────────────────────────────────────────────────────
   { href: '/pipeline',            label: 'Pipeline',  icon: Columns3,   permission: 'pipeline',        section: 'sales' },
   { href: '/contacts',            label: 'Contacts',  icon: Users,      permission: 'contacts',        section: 'sales' },
-  // PERSON-LINK.2 — duplicate-contact review queue. Gated by contact_linking
-  // (owner/master by default; staff don't see it). Placed directly under
-  // Contacts so it's discoverable without being in the daily scan path.
-  { href: '/contacts/duplicates', label: 'Duplicates', icon: GitMerge,  permission: 'contact_linking', section: 'sales' },
+  // PERSON-LINK.2 — duplicate review is now a tab on /contacts?tab=duplicates,
+  // not a standalone sidebar entry. No sidebar item needed.
   { href: '/activities',          label: 'Tasks',     icon: CheckSquare, permission: 'activities',     section: 'sales' },
 
   // ── Gym — what's on at the gym ─────────────────────────────────
