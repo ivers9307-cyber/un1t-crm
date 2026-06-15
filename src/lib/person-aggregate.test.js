@@ -372,8 +372,160 @@ describe('aggregatePerson', () => {
       phones: expect.any(Array),
       arrearsCents: expect.any(Number),
       attended: expect.any(Number),
+      lastAttendedAt: expect.anything(), // string or null
       dealsCount: expect.any(Number),
       timeline: expect.any(Array),
     })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Combined + per-account attendance tests (PERSON-LINK activity-aware)
+// ---------------------------------------------------------------------------
+//
+// Distinct from the main fixture above — uses a three-member group where:
+//   att-primary   — member, last_attended_at '2024-01-25', total_attended_30d 0
+//   att-classpass — classpass, last_attended_at '2026-06-12', total_attended_30d 6
+//   att-trial     — trial, last_attended_at '2024-03-15', total_attended_30d 0
+//
+// Expected outcomes:
+//   result.lastAttendedAt === '2026-06-12...' (the ClassPass account is the most recent)
+//   result.attended === 6 (only classpass has 30d visits)
+//   accounts[0] (primary) shows attended30d=0, lastAttendedAt='2024-01-25...'
+//   accounts[1] (classpass) shows attended30d=6, lastAttendedAt='2026-06-12...'
+//   accounts[2] (trial) shows attended30d=0, lastAttendedAt='2024-03-15...'
+// ---------------------------------------------------------------------------
+
+const ATT_GROUP_ID = 'g-att-test'
+const ATT_PRIMARY_ID = 'att-primary'
+const ATT_CLASSPASS_ID = 'att-classpass'
+const ATT_TRIAL_ID = 'att-trial'
+
+const attPersonGroups = [
+  { id: ATT_GROUP_ID, primary_contact_id: ATT_PRIMARY_ID, location_id: 'loc-1', note: null },
+]
+
+const attPersonGroupMembers = [
+  { id: 'am1', group_id: ATT_GROUP_ID, contact_id: ATT_PRIMARY_ID },
+  { id: 'am2', group_id: ATT_GROUP_ID, contact_id: ATT_CLASSPASS_ID },
+  { id: 'am3', group_id: ATT_GROUP_ID, contact_id: ATT_TRIAL_ID },
+]
+
+const attContacts = [
+  {
+    id: ATT_PRIMARY_ID,
+    name: 'Bob Member',
+    first_name: 'Bob',
+    last_name: 'Member',
+    email: 'bob@example.com',
+    email_status: 'active',
+    phone: '+353 87 333 3333',
+    wa_phone: null,
+    glofox_member_id: 'gfx-bob',
+    glofox_membership_status: 'member',
+    glofox_membership_state: 'active',
+    glofox_account_active: true,
+    pipeline_stage_slug: 'active_member',
+    last_attended_at: '2024-01-25T10:00:00Z',
+    total_attended_30d: 0,
+  },
+  {
+    id: ATT_CLASSPASS_ID,
+    name: 'Bob Classpass',
+    first_name: 'Bob',
+    last_name: 'Classpass',
+    email: 'bob.cp@example.com',
+    email_status: 'active',
+    phone: '+353 87 444 4444',
+    wa_phone: null,
+    glofox_member_id: null,
+    glofox_membership_status: 'classpass_payg',
+    glofox_membership_state: null,
+    glofox_account_active: false,
+    pipeline_stage_slug: 'classpass_active',
+    last_attended_at: '2026-06-12T09:00:00Z',
+    total_attended_30d: 6,
+  },
+  {
+    id: ATT_TRIAL_ID,
+    name: 'Bob Trial',
+    first_name: 'Bob',
+    last_name: 'Trial',
+    email: 'bob.trial@example.com',
+    email_status: 'active',
+    phone: '+353 87 555 5555',
+    wa_phone: null,
+    glofox_member_id: 'gfx-bobt',
+    glofox_membership_status: 'trial',
+    glofox_membership_state: null,
+    glofox_account_active: false,
+    pipeline_stage_slug: 'active_trial',
+    last_attended_at: '2024-03-15T08:00:00Z',
+    total_attended_30d: 0,
+  },
+]
+
+function makeAttDb() {
+  return makeDb({
+    person_groups: attPersonGroups,
+    person_group_members: attPersonGroupMembers,
+    contacts: attContacts,
+    glofox_invoices: [],
+    deals: [],
+    activities: [],
+  })
+}
+
+describe('aggregatePerson — combined + per-account attendance', () => {
+  it('picks the MAX last_attended_at across all accounts as lastAttendedAt', async () => {
+    const db = makeAttDb()
+    const result = await aggregatePerson(db, ATT_GROUP_ID)
+    // ClassPass was last seen 2026-06-12, which is more recent than primary (2024-01-25)
+    // and trial (2024-03-15). The top-level lastAttendedAt must reflect that.
+    expect(result.lastAttendedAt).toBe('2026-06-12T09:00:00Z')
+  })
+
+  it('keeps attended as the sum of total_attended_30d (unchanged)', async () => {
+    const db = makeAttDb()
+    const result = await aggregatePerson(db, ATT_GROUP_ID)
+    // primary=0, classpass=6, trial=0 → sum=6
+    expect(result.attended).toBe(6)
+  })
+
+  it('exposes per-account attended30d on each accounts[] entry', async () => {
+    const db = makeAttDb()
+    const result = await aggregatePerson(db, ATT_GROUP_ID)
+    const primary = result.accounts.find(a => a.contactId === ATT_PRIMARY_ID)
+    const classpass = result.accounts.find(a => a.contactId === ATT_CLASSPASS_ID)
+    const trial = result.accounts.find(a => a.contactId === ATT_TRIAL_ID)
+    expect(primary.attended30d).toBe(0)
+    expect(classpass.attended30d).toBe(6)
+    expect(trial.attended30d).toBe(0)
+  })
+
+  it('exposes per-account lastAttendedAt on each accounts[] entry', async () => {
+    const db = makeAttDb()
+    const result = await aggregatePerson(db, ATT_GROUP_ID)
+    const primary = result.accounts.find(a => a.contactId === ATT_PRIMARY_ID)
+    const classpass = result.accounts.find(a => a.contactId === ATT_CLASSPASS_ID)
+    const trial = result.accounts.find(a => a.contactId === ATT_TRIAL_ID)
+    expect(primary.lastAttendedAt).toBe('2024-01-25T10:00:00Z')
+    expect(classpass.lastAttendedAt).toBe('2026-06-12T09:00:00Z')
+    expect(trial.lastAttendedAt).toBe('2024-03-15T08:00:00Z')
+  })
+
+  it('returns lastAttendedAt null when ALL accounts have null last_attended_at', async () => {
+    // Override all contacts to have null last_attended_at
+    const nullAttContacts = attContacts.map(c => ({ ...c, last_attended_at: null }))
+    const db = makeDb({
+      person_groups: attPersonGroups,
+      person_group_members: attPersonGroupMembers,
+      contacts: nullAttContacts,
+      glofox_invoices: [],
+      deals: [],
+      activities: [],
+    })
+    const result = await aggregatePerson(db, ATT_GROUP_ID)
+    expect(result.lastAttendedAt).toBeNull()
   })
 })

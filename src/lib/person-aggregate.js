@@ -135,6 +135,8 @@ export async function aggregatePerson(db, groupId) {
     glofoxMemberId: c.glofox_member_id || null,
     active: c.glofox_account_active ?? false,
     isPrimary: c.id === primaryContactId,
+    attended30d: Number(c.total_attended_30d) || 0,
+    lastAttendedAt: c.last_attended_at || null,
   }))
 
   // ── Step 5: Emails — deduped by lowercased value ─────────────────────────
@@ -188,6 +190,19 @@ export async function aggregatePerson(db, groupId) {
     0,
   )
 
+  // ── Step 8b: lastAttendedAt — MAX last_attended_at across member contacts ──
+  // A person can be ACTIVE on a non-primary account (e.g. ClassPass: 6 visits/30d,
+  // last seen last week) while their PRIMARY account is dormant. Reading only from
+  // the primary would make the person look quiet when they're actually in every
+  // other day. Take the max across all accounts so the profile reflects combined
+  // real activity. Attendance data only exists as rolled-up Glofox fields —
+  // total_attended_30d and last_attended_at — so we compare those directly.
+  const lastAttendedAt = contacts.reduce((max, c) => {
+    if (!c.last_attended_at) return max
+    if (!max) return c.last_attended_at
+    return new Date(c.last_attended_at) > new Date(max) ? c.last_attended_at : max
+  }, null)
+
   // ── Step 9: Deals count ───────────────────────────────────────────────────
   const dealsCount = Array.isArray(dealCountRes?.data) ? dealCountRes.data.length : 0
 
@@ -212,6 +227,7 @@ export async function aggregatePerson(db, groupId) {
     phones,
     arrearsCents,
     attended,
+    lastAttendedAt,
     dealsCount,
     timeline: cappedTimeline,
   }
