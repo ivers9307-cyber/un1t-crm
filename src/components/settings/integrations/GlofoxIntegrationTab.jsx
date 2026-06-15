@@ -12,6 +12,7 @@
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createBrowserClient } from '@/lib/supabase'
+import { buildTrialOptions } from '@/lib/glofox-trial-options'
 import { Save, Loader2, Check, AlertCircle } from 'lucide-react'
 
 export default function GlofoxIntegrationTab({ location, canEdit }) {
@@ -45,7 +46,10 @@ export default function GlofoxIntegrationTab({ location, canEdit }) {
         const r = await fetch(`/api/locations/${location.id}/glofox-memberships`, { cache: 'no-store' })
         const j = await r.json()
         if (cancelled) return
-        if (r.ok && j.success !== false) setMemberships(j.data || [])
+        // The route returns the catalogue under `memberships` (legacy
+        // top-level key). Reading `j.data` (the wrong key) was the bug
+        // that left the picker permanently empty.
+        if (r.ok && j.success !== false) setMemberships(j.memberships || j.data || [])
       } catch {
         // Silently ignore — picker just shows what we have stored.
       } finally {
@@ -150,10 +154,8 @@ export default function GlofoxIntegrationTab({ location, canEdit }) {
           className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
         >
           <option value="">— None —</option>
-          {memberships.map(m => (
-            <option key={`${m.membership_id}:${m.plan_code}`} value={`${m.membership_id}:${m.plan_code}`}>
-              {m.label || `${m.membership_id} / ${m.plan_code}`}
-            </option>
+          {buildTrialOptions(memberships, trialKey).map(o => (
+            <option key={o.value} value={o.value}>{o.label}</option>
           ))}
         </select>
         {membershipsLoading && <p className="text-[11px] text-un1t-muted mt-1">Loading membership list…</p>}
