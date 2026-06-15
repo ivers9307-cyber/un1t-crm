@@ -185,6 +185,9 @@ async function fetchActions(db, locationId) {
   return data || []
 }
 
+const GROUPS_PAGE_SIZE = 1000
+const GROUPS_HARD_LIMIT = 20_000
+
 /**
  * CHURN-RADAR-PERSON-AWARE — combine cross-account activity and deduplicate
  * a sweep's contact rows to one row per person, using the person_groups table.
@@ -195,39 +198,66 @@ async function fetchActions(db, locationId) {
  * On any DB error, degrades gracefully by returning the raw rows so the radar
  * still works; never throws.
  *
+ * Fix: loads person_groups and grouped contacts via location-scoped paginated
+ * queries rather than giant .in(groupIds) calls that overflow Supabase's URL
+ * limit when there are ~895 groups (~33 KB URL → silent error → empty map).
+ *
  * @param {object} db - Supabase server client
+ * @param {string} locationId - The location being swept
  * @param {Array<object>} rows - Sweep contact rows (already dismissed-filtered)
  * @returns {Promise<Array<object>>}
  */
-async function applyPersonRollup(db, rows) {
-  const groupIds = [...new Set(rows.map((r) => r.person_group_id).filter(Boolean))]
-  if (groupIds.length === 0) return rows
+async function applyPersonRollup(db, locationId, rows) {
+  const hasGroups = rows.some((r) => r.person_group_id)
+  if (!hasGroups) return rows
 
   try {
-    // 1. Look up primary_contact_id for each group.
-    const { data: groupRows, error: groupErr } = await db
-      .from('person_groups')
-      .select('id, primary_contact_id')
-      .in('id', groupIds)
-    if (groupErr) throw new Error(groupErr.message)
+    // 1. Load ALL person_groups for this location (paginated, location-scoped).
+    //    Avoids the giant .in(groupIds) URL-overflow with ~895 groups.
+    const primaryByGroup = new Map()
+    let pgStart = 0
+    while (true) {
+      const pgEnd = Math.min(pgStart + GROUPS_PAGE_SIZE - 1, GROUPS_HARD_LIMIT - 1)
+      const { data: page, error: pgErr } = await db
+        .from('person_groups')
+        .select('id, primary_contact_id')
+        .eq('location_id', locationId)
+        .order('id', { ascending: true })
+        .range(pgStart, pgEnd)
+      if (pgErr) throw new Error(pgErr.message)
+      if (!Array.isArray(page) || page.length === 0) break
+      for (const g of page) {
+        if (g.primary_contact_id) primaryByGroup.set(g.id, g.primary_contact_id)
+      }
+      if (page.length < GROUPS_PAGE_SIZE) break
+      if (primaryByGroup.size >= GROUPS_HARD_LIMIT) break
+      pgStart += GROUPS_PAGE_SIZE
+    }
 
-    const primaryByGroup = new Map(
-      (groupRows || []).map((g) => [g.id, g.primary_contact_id]),
-    )
-
-    // 2. Fetch ALL contacts in those groups (cross-status — includes accounts
-    //    the sweep didn't load, e.g. an active classpass_payg alongside a
-    //    dormant member). Bounded small (a few hundred rows at most); .order('id')
-    //    for deterministic pagination if ever needed.
-    const { data: allGroupContacts, error: contactErr } = await db
-      .from('contacts')
-      .select('id, person_group_id, last_attended_at, last_booked_at, total_attended_30d, total_attended_7d, total_noshow_30d')
-      .in('person_group_id', groupIds)
-      .order('id', { ascending: true })
-    if (contactErr) throw new Error(contactErr.message)
+    // 2. Load ALL grouped contacts at this location (cross-status — includes
+    //    accounts the sweep didn't load, e.g. an active classpass_payg alongside
+    //    a dormant member). Location-scoped + paginated, no .in(groupIds).
+    const allGroupContacts = []
+    let gcStart = 0
+    while (true) {
+      const gcEnd = Math.min(gcStart + GROUPS_PAGE_SIZE - 1, GROUPS_HARD_LIMIT - 1)
+      const { data: page, error: gcErr } = await db
+        .from('contacts')
+        .select('id, person_group_id, last_attended_at, last_booked_at, total_attended_30d, total_attended_7d, total_noshow_30d')
+        .eq('location_id', locationId)
+        .not('person_group_id', 'is', null)
+        .order('id', { ascending: true })
+        .range(gcStart, gcEnd)
+      if (gcErr) throw new Error(gcErr.message)
+      if (!Array.isArray(page) || page.length === 0) break
+      allGroupContacts.push(...page)
+      if (page.length < GROUPS_PAGE_SIZE) break
+      if (allGroupContacts.length >= GROUPS_HARD_LIMIT) break
+      gcStart += GROUPS_PAGE_SIZE
+    }
 
     // 3. Build combined activity across ALL accounts in each group.
-    const combinedByGroup = combineGroupActivity(allGroupContacts || [])
+    const combinedByGroup = combineGroupActivity(allGroupContacts)
 
     // 4. Deduplicate to one row per person, injecting combined activity.
     return rollupByPerson(rows, { combinedByGroup, primaryByGroup })
@@ -257,7 +287,7 @@ export async function loadRadar(db, locationId, nowMs = Date.now()) {
   // CHURN-RADAR-PERSON-AWARE — combine cross-account activity and deduplicate
   // to one row per person so a dormant member with an active ClassPass account
   // isn't wrongly flagged, and a person with 2+ member accounts counts once.
-  const members = await applyPersonRollup(db, dismissed_members)
+  const members = await applyPersonRollup(db, locationId, dismissed_members)
   // RADAR-OVERDUE.1 — invoice-driven overdue context: past-due members are
   // pulled off the at-risk list + counted as overdue (not the stale
   // membership.status='locked' field).
@@ -347,7 +377,7 @@ export async function loadQuarantine(db, locationId) {
   const dismissed_members = allMembers.filter((m) => !dismissed.has(m.id))
   // CHURN-RADAR-PERSON-AWARE — combine cross-account activity so a member
   // who shows quarantine on one account but activity on another isn't surfaced.
-  const members = await applyPersonRollup(db, dismissed_members)
+  const members = await applyPersonRollup(db, locationId, dismissed_members)
   const triaged = new Set(
     actions
       .filter((a) => QUARANTINE_TRIAGE_ACTIONS.includes(a.action))
@@ -472,7 +502,7 @@ export async function loadWinback(db, locationId, nowMs = Date.now()) {
   const dismissed_contacts = allContacts.filter((c) => !dismissed.has(c.id))
   // CHURN-RADAR-PERSON-AWARE — combine cross-account activity so a former
   // member who is still active on another account doesn't appear as a win-back.
-  const contacts = await applyPersonRollup(db, dismissed_contacts)
+  const contacts = await applyPersonRollup(db, locationId, dismissed_contacts)
 
   // Actions are newest-first — first hit per contact is the latest.
   const lastContacted = new Map()

@@ -506,7 +506,7 @@ describe('runDetection — commit=true', () => {
     const db = makeDb({
       contacts: [member1, member2, cp],
       person_link_suggestions: [],
-      person_groups: [{ id: 'g1', primary_contact_id: 'member1' }],
+      person_groups: [{ id: 'g1', primary_contact_id: 'member1', location_id: 'loc-1' }],
     })
 
     const result = await runDetection(db, { locationId: 'loc-1', commit: true, actorId: 'u1' })
@@ -603,7 +603,7 @@ describe('supersedeRedundantPending — commit=true', () => {
           status: 'pending',
         },
       ],
-      person_groups: [{ id: 'g1', primary_contact_id: 'c1' }],
+      person_groups: [{ id: 'g1', primary_contact_id: 'c1', location_id: 'loc-1' }],
     })
 
     const result = await runDetection(db, { locationId: 'loc-1', commit: true, actorId: 'u1' })
@@ -634,8 +634,8 @@ describe('supersedeRedundantPending — commit=true', () => {
         },
       ],
       person_groups: [
-        { id: 'g1', primary_contact_id: 'c1' },
-        { id: 'g2', primary_contact_id: 'c2' },
+        { id: 'g1', primary_contact_id: 'c1', location_id: 'loc-1' },
+        { id: 'g2', primary_contact_id: 'c2', location_id: 'loc-1' },
       ],
     })
 
@@ -661,7 +661,7 @@ describe('supersedeRedundantPending — commit=true', () => {
           status: 'pending',
         },
       ],
-      person_groups: [{ id: 'g1', primary_contact_id: 'c1' }],
+      person_groups: [{ id: 'g1', primary_contact_id: 'c1', location_id: 'loc-1' }],
     })
 
     const result = await runDetection(db, { locationId: 'loc-1', commit: false, actorId: 'u1' })
