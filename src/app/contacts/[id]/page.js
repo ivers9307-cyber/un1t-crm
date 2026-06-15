@@ -27,6 +27,11 @@ import PersonHeader from '@/components/PersonHeader'
 import LinkedAccountsCard from '@/components/LinkedAccountsCard'
 import ContactDetailTabs from '@/components/ContactDetailTabs'
 import { formatLastSeen } from '@/lib/person-view'
+// CONSULTATIONS SP1 — coach/web surface (mig 272 tables), permission-gated.
+import ContactGoalsCard from '@/components/ContactGoalsCard'
+import ConsultationsList from '@/components/ConsultationsList'
+import ProgressPhotos from '@/components/ProgressPhotos'
+import InBodyProgress from '@/components/InBodyProgress'
 
 export const dynamic = 'force-dynamic'
 
@@ -194,6 +199,73 @@ export default async function ContactDetailPage(props) {
         bodyText: extractTemplateBody(t.components).bodyText,
         sendable: true,
       }))
+  }
+
+  // CONSULTATIONS SP1 — coach/web surface. Loaded only when the caller
+  // holds the `consultations` permission; otherwise the tab is omitted
+  // entirely (and we never query the sub-resources). The page already
+  // runs through createServerClient() (service role — RLS doesn't bind
+  // it), so the permission check IS the access gate here, mirroring the
+  // goals/consultations/photos API routes.
+  const canConsultations = hasPermission(user, 'consultations')
+  let consultationsTab = null
+  if (canConsultations) {
+    const [consultsRes, goalsRes, photosRes, scansRes, coachLinksRes] = await Promise.all([
+      db.from('consultations').select('*').eq('contact_id', contact.id).order('consulted_at', { ascending: false }),
+      db.from('contact_goals').select('*').eq('contact_id', contact.id).order('created_at', { ascending: false }),
+      db.from('consultation_photos').select('*').eq('contact_id', contact.id).order('taken_at', { ascending: false }),
+      db.from('inbody_scans').select('*').eq('contact_id', contact.id).order('scanned_at', { ascending: false }),
+      // Location staff for the coach <select> + name resolution. The
+      // permissions JSONB isn't needed here, so a slim join is fine.
+      db.from('profile_locations')
+        .select('profiles:profile_id ( id, full_name )')
+        .eq('location_id', contact.location_id),
+    ])
+
+    const consultations = consultsRes.data || []
+    const contactGoals = goalsRes.data || []
+    const inbodyScans = scansRes.data || []
+
+    // De-dupe + shape the coach list ([{id, name}]). A profile can be
+    // assigned to the location more than once historically; key on id.
+    const coachMap = new Map()
+    for (const row of coachLinksRes.data || []) {
+      const p = row.profiles
+      if (p?.id && !coachMap.has(p.id)) coachMap.set(p.id, { id: p.id, name: p.full_name || 'Coach' })
+    }
+    const coaches = [...coachMap.values()].sort((a, b) => a.name.localeCompare(b.name))
+
+    // Generate a 600s signed URL per photo (private bucket) and attach it
+    // as `url` for the gallery. Best-effort per photo — a failed sign just
+    // drops that thumbnail rather than crashing the tab.
+    const rawPhotos = photosRes.data || []
+    const photos = await Promise.all(rawPhotos.map(async (p) => {
+      let url = null
+      try {
+        const { data: signed } = await db.storage
+          .from('consultation-photos')
+          .createSignedUrl(p.storage_path, 600)
+        url = signed?.signedUrl ?? null
+      } catch {
+        url = null
+      }
+      return { id: p.id, url, taken_at: p.taken_at, label: p.label, caption: p.caption }
+    }))
+    const signedPhotos = photos.filter((p) => p.url)
+
+    consultationsTab = (
+      <div className="space-y-5">
+        <ContactGoalsCard contactId={contact.id} goals={contactGoals} />
+        <ConsultationsList
+          contactId={contact.id}
+          consultations={consultations}
+          coaches={coaches}
+          currentUserId={user.id}
+        />
+        <ProgressPhotos contactId={contact.id} photos={signedPhotos} />
+        <InBodyProgress scans={inbodyScans} />
+      </div>
+    )
   }
 
   const today = new Date().toISOString().split('T')[0]
@@ -762,6 +834,10 @@ export default async function ContactDetailPage(props) {
         tabs={[
           { id: 'overview', label: 'Overview', content: overviewTab },
           { id: 'activity', label: 'Activity', content: activityTab },
+          // CONSULTATIONS SP1 — only when the caller holds the permission
+          // (consultationsTab is null otherwise; ContactDetailTabs filters
+          // out falsy entries).
+          canConsultations ? { id: 'consultations', label: 'Consultations', content: consultationsTab } : null,
           { id: 'comms', label: 'Comms', content: commsTab },
           { id: 'admin', label: 'Admin', content: adminTab },
         ]}
