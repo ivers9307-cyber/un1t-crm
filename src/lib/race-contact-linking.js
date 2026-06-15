@@ -22,6 +22,7 @@
 // itself; this helper only cares about the contacts row.
 
 import { logWarn } from './log'
+import { splitName } from './name-utils'
 
 /**
  * Find an existing contact at the location with the given email,
@@ -71,11 +72,19 @@ export async function findOrCreateRaceContact({ db, locationId, email, name = nu
     // here. The deal trigger (mig 155) will populate
     // pipeline_stage_slug if a deal is later attached. Race-signup
     // audience targeting works off lead_source='website' + tags.
+    // Split the single signup name into first/last so the contact
+    // edit form and the "Create in Glofox" gate (both read
+    // first_name/last_name) work — mirrors /api/contacts. A blank
+    // name leaves first/last null and falls back to the 'Race
+    // competitor' placeholder for the required `name` column.
+    const { firstName, lastName } = splitName(name)
     const { data: inserted, error } = await db
       .from('contacts')
       .insert({
         location_id: locationId,
         name: name || 'Race competitor',
+        first_name: firstName,
+        last_name: lastName,
         email: normalised,
         phone: phone || null,
         source: 'race_signup',
