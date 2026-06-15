@@ -74,16 +74,37 @@ const CONFIDENCE_RANK = { high: 2, medium: 1, low: 0 }
  *
  * Returns array of { aId, bId, method, confidence, reason } with aId < bId.
  *
- * @param {Array}  contacts              - Full contact array for this location
- * @param {Set}    options.dismissedPairKeys - pairKey strings to skip
- * @param {Map}    options.groupOf       - contactId → groupId (already linked)
+ * @param {Array}  contacts                   - Full contact array for this location
+ * @param {Set}    options.dismissedPairKeys   - pairKey strings to skip
+ * @param {Map}    options.groupOf             - contactId → groupId (already linked)
+ * @param {Map}    options.primaryByGroup      - groupId → primaryContactId
  * @param {number} options.placeholderThreshold - threshold for placeholder detection
  */
 export function detectCandidates(contacts, {
   dismissedPairKeys = new Set(),
   groupOf = new Map(),
+  primaryByGroup = new Map(),
   placeholderThreshold = 10,
 } = {}) {
+  // ---------------------------------------------------------------------------
+  // Person identity helpers
+  // ---------------------------------------------------------------------------
+
+  // Set of valid contact ids — used to guard against emitting candidates
+  // with group ids when primaryByGroup is incomplete.
+  const contactIdSet = new Set(contacts.map(c => c.id))
+
+  // A contact's "person" identity: its group id if grouped, else its own id.
+  function personOf(c) {
+    return groupOf.get(c.id) ?? c.id
+  }
+
+  // The contact to link TO for a person: the group's primary if it's a group,
+  // else the contact itself.
+  function repOf(personId) {
+    return primaryByGroup.get(personId) ?? personId
+  }
+
   // Map from pairKey → best candidate so far (for dedup)
   const best = new Map()
 
@@ -93,10 +114,10 @@ export function detectCandidates(contacts, {
     // Drop dismissed pairs
     if (dismissedPairKeys.has(key)) return
 
-    // Drop if both already in the same group
-    const gA = groupOf.get(aId)
-    const gB = groupOf.get(bId)
-    if (gA !== undefined && gB !== undefined && gA === gB) return
+    // Drop if the two endpoints resolve to the SAME person (already linked)
+    const pA = groupOf.get(aId) ?? aId
+    const pB = groupOf.get(bId) ?? bId
+    if (pA === pB) return
 
     // Dedup: keep the highest-confidence match for this pair
     const existing = best.get(key)
@@ -150,38 +171,88 @@ export function detectCandidates(contacts, {
   }
 
   // ---------------------------------------------------------------------------
-  // 2. Name-based matching (ClassPass↔real only)
+  // 2. Name-based matching (person-aware)
   // ---------------------------------------------------------------------------
 
-  // Index non-ClassPass contacts by normalised name (skip empty)
+  // Build realByName: Map<nname, Map<personId, repContactId>>
+  // Collapses multi-account persons to ONE entry per name key.
   const realByName = new Map()
   for (const c of contacts) {
     if (isClassPass(c)) continue
     const nm = contactName(c)
     if (!nm) continue
-    if (!realByName.has(nm)) realByName.set(nm, [])
-    realByName.get(nm).push(c)
+    if (!realByName.has(nm)) realByName.set(nm, new Map())
+    const personId = personOf(c)
+    // repOf maps: grouped person → primary; ungrouped → itself
+    realByName.get(nm).set(personId, repOf(personId))
   }
 
-  // For each ClassPass contact with a non-empty name, find real matches
+  // (a) ClassPass↔real: for each ClassPass contact, look up matching persons
   for (const c of contacts) {
     if (!isClassPass(c)) continue
     const nm = contactName(c)
     if (!nm) continue
-    const matches = realByName.get(nm)
-    if (!matches || matches.length === 0) continue
+    const persons = realByName.get(nm)
+    if (!persons || persons.size === 0) continue
 
-    const k = matches.length
-    if (k === 1) {
-      consider(c.id, matches[0].id, {
+    if (persons.size === 1) {
+      const [[, rep]] = persons
+      // Guard: skip if rep is a group id (primaryByGroup incomplete)
+      if (!contactIdSet.has(rep)) continue
+      consider(c.id, rep, {
         method: 'name',
         confidence: 'high',
-        reason: 'ClassPass name matches one member',
+        reason: 'ClassPass matches one person',
       })
     } else {
-      const reason = `ClassPass name matches ${k} members`
-      for (const m of matches) {
-        consider(c.id, m.id, { method: 'name', confidence: 'medium', reason })
+      const reason = `ClassPass name matches ${persons.size} people`
+      for (const rep of persons.values()) {
+        // Guard: skip if rep is a group id (primaryByGroup incomplete)
+        if (!contactIdSet.has(rep)) continue
+        consider(c.id, rep, { method: 'name', confidence: 'medium', reason })
+      }
+    }
+  }
+
+  // (b) real↔real by name: for each name with ≥2 distinct persons,
+  // emit a candidate for each unordered pair of distinct persons.
+  for (const persons of realByName.values()) {
+    if (persons.size < 2) continue
+    const entries = Array.from(persons.entries()) // [personId, repId]
+
+    for (let i = 0; i < entries.length; i++) {
+      for (let j = i + 1; j < entries.length; j++) {
+        const [pId, pRep] = entries[i]
+        const [qId, qRep] = entries[j]
+
+        const pIsGroup = primaryByGroup.has(pId)
+        const qIsGroup = primaryByGroup.has(qId)
+
+        if (pIsGroup && qIsGroup) {
+          // Both are already groups — skip, do not auto-merge two existing groups
+          continue
+        }
+
+        // Guard: only emit if both reps are valid contact ids.
+        // If primaryByGroup is incomplete (e.g. no entry for a group id),
+        // repOf returns the group id itself which is not a contact id.
+        if (!contactIdSet.has(pRep) || !contactIdSet.has(qRep)) continue
+
+        if (pIsGroup !== qIsGroup) {
+          // Exactly one is a group → HIGH: the singleton joins the group's primary
+          consider(pRep, qRep, {
+            method: 'name',
+            confidence: 'high',
+            reason: 'Name matches an existing linked person',
+          })
+        } else {
+          // Neither is a group → MEDIUM: two ungrouped singletons with the same name
+          consider(pRep, qRep, {
+            method: 'name',
+            confidence: 'medium',
+            reason: 'Same name — possible duplicate',
+          })
+        }
       }
     }
   }
