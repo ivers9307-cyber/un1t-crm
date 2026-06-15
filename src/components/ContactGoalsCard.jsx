@@ -3,12 +3,12 @@
 //
 // Member goals on the contact profile's Consultations tab. Goals are
 // shared into the member-facing champ app (SP3) via the customer-self
-// RLS policy on contact_goals, so the copy here stays member-appropriate
+// RLS policy on coaching_goals, so the copy here stays member-appropriate
 // (no internal jargon).
 //
 // Props:
 //   contactId — string UUID of the contact the goals belong to
-//   goals     — Array<contact_goals row> (unsorted; we sortGoals() here)
+//   goals     — Array<coaching_goals row> (unsorted; we sortGoals() here)
 //
 // Mutations hit the goals API:
 //   POST   /api/contacts/{id}/goals             → create

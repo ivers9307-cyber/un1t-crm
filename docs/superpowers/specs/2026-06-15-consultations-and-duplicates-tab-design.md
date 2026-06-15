@@ -36,7 +36,7 @@ Progress photos. Tied to the contact + a date; optionally to a consultation.
 - index `(contact_id, taken_at desc)`
 - **Shared to the customer view in SP3** (a member sees their own photos).
 
-### `contact_goals`
+### `coaching_goals`
 Persistent goals on the contact, reviewed/updated at consultations.
 - `id uuid pk`, `contact_id uuid not null → contacts`, `location_id uuid not null`
 - `title text not null`, `detail text`
@@ -75,7 +75,7 @@ New **private** bucket `consultation-photos`. Object key `consultations/<contact
 ### 2. Consultations tab on the contact profile
 A 5th tab in `ContactDetailTabs` on `src/app/contacts/[id]/page.js` (after Overview/Activity/Comms/Admin), gated by a new `consultations` permission. The tab contains:
 
-- **Goals card** — list `contact_goals` (open first, then achieved/dropped); add/edit/achieve/drop. Each: title, optional target + target date, status.
+- **Goals card** — list `coaching_goals` (open first, then achieved/dropped); add/edit/achieve/drop. Each: title, optional target + target date, status.
 - **Consultations timeline** — list `consultations` newest-first; "New consultation" (date, coach defaulting to the current user, notes) + edit/delete own. Notes labelled *staff-internal*.
 - **Progress photos** — chronological gallery from `consultation_photos` (signed-URL thumbnails); upload (drag/drop or picker) with optional label/caption + taken_at, optionally attached to a consultation. Before/after friendly (group by label or show side-by-side first/latest).
 - **InBody section** — when `inbody_scans` exist for the contact: latest scan headline (weight / PBF / SMM / score) + a small line chart of each metric over `scanned_at` (reuse the lazy-loaded `recharts` pattern from `MembershipTrendChart`). When none / not configured: a muted "InBody not connected" (or "no scans yet") placeholder. (Data arrives in SP2.)
@@ -109,7 +109,7 @@ Component breakdown (compose `@/components/ui`, `un1t-*` tokens):
 `src/lib/inbody.js` Lookin'Body Web client (EU base, `API-KEY` + `Account` headers, lookup by `UserToken`=phone). Per-location config UI at Settings → Integrations (like `XeroLocationCard`). A backfill/sync (on-demand "Refresh InBody" + optional daily cron) that, for each contact with a real phone (via the person-group — skip the ClassPass placeholder), pulls scan history and upserts `inbody_scans` (dedupe on `(source, external_id)`). Then `InBodyProgress` lights up. Confirm exact endpoint paths + response field names against the live authenticated API docs at connect time.
 
 ## SP3 — champ-app customer view (own spec later)
-In champ-app: a "My Progress" surface reading the member's own `contact_goals` (shared), `consultation_photos` (own, via signed URLs), and `inbody_scans` (own) through customer-self RLS. Consultation **notes are NOT shown** (staff-internal) unless a future per-note "share" flag is added. Decide photo-consent copy there.
+In champ-app: a "My Progress" surface reading the member's own `coaching_goals` (shared), `consultation_photos` (own, via signed URLs), and `inbody_scans` (own) through customer-self RLS. Consultation **notes are NOT shown** (staff-internal) unless a future per-note "share" flag is added. Decide photo-consent copy there.
 
 ---
 

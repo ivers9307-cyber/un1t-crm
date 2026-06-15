@@ -57,7 +57,7 @@ export async function POST(request, props) {
   const body = validation.data
 
   const { data, error } = await db
-    .from('contact_goals')
+    .from('coaching_goals')
     .insert({
       contact_id: id,
       location_id: contact.location_id,

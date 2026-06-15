@@ -53,7 +53,7 @@ function mockInsertResult(result = { id: 'g1', contact_id: CONTACT_ID, location_
           })),
         }
       }
-      if (table === 'contact_goals') {
+      if (table === 'coaching_goals') {
         return {
           insert: vi.fn(() => ({
             select: vi.fn(() => ({
@@ -125,7 +125,7 @@ describe('POST /api/contacts/[id]/goals', () => {
             })),
           }
         }
-        if (table === 'contact_goals') {
+        if (table === 'coaching_goals') {
           return { insert: insertSpy }
         }
         throw new Error(`unexpected table: ${table}`)
@@ -195,7 +195,7 @@ describe('POST /api/contacts/[id]/goals', () => {
             })),
           }
         }
-        if (table === 'contact_goals') {
+        if (table === 'coaching_goals') {
           return { insert: insertSpy }
         }
         throw new Error(`unexpected table: ${table}`)

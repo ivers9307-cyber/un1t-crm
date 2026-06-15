@@ -67,7 +67,7 @@ function mockUpdateResult(updatedRow) {
             })),
           }
         }
-        if (table === 'contact_goals') {
+        if (table === 'coaching_goals') {
           return { update: updateSpy }
         }
         throw new Error(`unexpected table: ${table}`)
@@ -96,7 +96,7 @@ function mockDeleteOk() {
             })),
           }
         }
-        if (table === 'contact_goals') {
+        if (table === 'coaching_goals') {
           return { delete: deleteSpy }
         }
         throw new Error(`unexpected table: ${table}`)
@@ -172,7 +172,7 @@ describe('PUT /api/contacts/[id]/goals/[gid]', () => {
             })),
           }
         }
-        if (table === 'contact_goals') {
+        if (table === 'coaching_goals') {
           return {
             update: vi.fn((updates) => {
               capturedUpdates = updates
@@ -218,7 +218,7 @@ describe('PUT /api/contacts/[id]/goals/[gid]', () => {
             })),
           }
         }
-        if (table === 'contact_goals') {
+        if (table === 'coaching_goals') {
           return {
             update: vi.fn((updates) => {
               capturedUpdates = updates

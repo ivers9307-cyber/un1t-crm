@@ -77,7 +77,7 @@ export async function PUT(request, props) {
   }
 
   const { data, error } = await db
-    .from('contact_goals')
+    .from('coaching_goals')
     .update(updates)
     .eq('id', gid)
     .eq('contact_id', id)
@@ -122,7 +122,7 @@ export async function DELETE(request, props) {
   if (guard) return guard
 
   const { error } = await db
-    .from('contact_goals')
+    .from('coaching_goals')
     .delete()
     .eq('id', gid)
     .eq('contact_id', id)

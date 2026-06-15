@@ -4,7 +4,7 @@
 
 **Goal:** Add a **Consultations** tab to each contact profile (notes, progress photos, goals, and a progress view incl. an InBody section that's empty until SP2), plus move the Duplicates review into a tab on the Contacts list.
 
-**Architecture:** New schema (mig 272) for `consultations` / `consultation_photos` / `contact_goals` / `inbody_scans` with staff + customer-self RLS (the latter for SP3). A private `consultation-photos` Storage bucket (signed-URL access). New API routes follow the repo's mutation-route skeleton. The contact page loads the data server-side, generates signed photo URLs, and renders a new tab via the existing `ContactDetailTabs`. Pure view-logic lives in a tested `consultations-view.js`.
+**Architecture:** New schema (mig 272) for `consultations` / `consultation_photos` / `coaching_goals` / `inbody_scans` with staff + customer-self RLS (the latter for SP3). A private `consultation-photos` Storage bucket (signed-URL access). New API routes follow the repo's mutation-route skeleton. The contact page loads the data server-side, generates signed photo URLs, and renders a new tab via the existing `ContactDetailTabs`. Pure view-logic lives in a tested `consultations-view.js`.
 
 **Tech Stack:** Next.js 16 App Router, Supabase (Postgres + RLS + Storage), Vitest, Tailwind `un1t-*` tokens, `recharts` (lazy) for the InBody chart. Spec: `docs/superpowers/specs/2026-06-15-consultations-and-duplicates-tab-design.md`.
 
@@ -68,7 +68,7 @@ create table public.consultation_photos (
 );
 create index idx_consultation_photos_contact on public.consultation_photos(contact_id, taken_at desc);
 
-create table public.contact_goals (
+create table public.coaching_goals (
   id uuid primary key default gen_random_uuid(),
   contact_id uuid not null references public.contacts(id) on delete cascade,
   location_id uuid not null references public.locations(id) on delete cascade,
@@ -82,7 +82,7 @@ create table public.contact_goals (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
-create index idx_contact_goals_contact on public.contact_goals(contact_id, status);
+create index idx_coaching_goals_contact on public.coaching_goals(contact_id, status);
 
 create table public.inbody_scans (
   id uuid primary key default gen_random_uuid(),
@@ -103,7 +103,7 @@ create index idx_inbody_scans_contact on public.inbody_scans(contact_id, scanned
 -- RLS: staff in-location (read+write via authenticated is N/A — writes are service-role) + customer-self read.
 alter table public.consultations enable row level security;
 alter table public.consultation_photos enable row level security;
-alter table public.contact_goals enable row level security;
+alter table public.coaching_goals enable row level security;
 alter table public.inbody_scans enable row level security;
 
 -- staff in-location (mirrors existing data tables)
@@ -111,13 +111,13 @@ create policy consultations_loc on public.consultations for all to authenticated
   using (private.auth_is_in_location(location_id)) with check (private.auth_is_in_location(location_id));
 create policy consultation_photos_loc on public.consultation_photos for all to authenticated
   using (private.auth_is_in_location(location_id)) with check (private.auth_is_in_location(location_id));
-create policy contact_goals_loc on public.contact_goals for all to authenticated
+create policy coaching_goals_loc on public.coaching_goals for all to authenticated
   using (private.auth_is_in_location(location_id)) with check (private.auth_is_in_location(location_id));
 create policy inbody_scans_loc on public.inbody_scans for all to authenticated
   using (private.auth_is_in_location(location_id)) with check (private.auth_is_in_location(location_id));
 
 -- customer-self read (champ-app, SP3) — goals + photos + scans shared; NOT consultation notes.
-create policy contact_goals_self on public.contact_goals for select to public
+create policy coaching_goals_self on public.coaching_goals for select to public
   using (contact_id = private.auth_contact_id());
 create policy consultation_photos_self on public.consultation_photos for select to public
   using (contact_id = private.auth_contact_id());
@@ -248,7 +248,7 @@ export function scanSeries(scans, metric) {
 
 **Files:** Modify `src/app/contacts/[id]/page.js`.
 
-- [ ] **Step 1:** In the page server load, when `hasPermission(user,'consultations')`, fetch (service-role): `consultations` (+ join coach name or pass the location staff list), `contact_goals`, `consultation_photos` (then generate a short-lived **signed URL** per photo via `storage.from('consultation-photos').createSignedUrl(path, 600)`), and `inbody_scans` — all for `contact.id`, newest-first, paginated per the 1k rule if needed.
+- [ ] **Step 1:** In the page server load, when `hasPermission(user,'consultations')`, fetch (service-role): `consultations` (+ join coach name or pass the location staff list), `coaching_goals`, `consultation_photos` (then generate a short-lived **signed URL** per photo via `storage.from('consultation-photos').createSignedUrl(path, 600)`), and `inbody_scans` — all for `contact.id`, newest-first, paginated per the 1k rule if needed.
 - [ ] **Step 2:** Build a `consultationsTab` node (GoalsCard + ConsultationsList + ProgressPhotos + InBodyProgress) and add `{ id:'consultations', label:'Consultations', content: consultationsTab }` to the `ContactDetailTabs` array — only when the permission is held (else omit the tab).
 - [ ] **Step 3:** `npm run build` (page + new imports). Commit `CONSULTATIONS — Consultations tab on the contact profile`.
 

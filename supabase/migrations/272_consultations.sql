@@ -26,7 +26,7 @@ create table public.consultation_photos (
 );
 create index idx_consultation_photos_contact on public.consultation_photos(contact_id, taken_at desc);
 
-create table public.contact_goals (
+create table public.coaching_goals (
   id uuid primary key default gen_random_uuid(),
   contact_id uuid not null references public.contacts(id) on delete cascade,
   location_id uuid not null references public.locations(id) on delete cascade,
@@ -40,7 +40,7 @@ create table public.contact_goals (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
-create index idx_contact_goals_contact on public.contact_goals(contact_id, status);
+create index idx_coaching_goals_contact on public.coaching_goals(contact_id, status);
 
 create table public.inbody_scans (
   id uuid primary key default gen_random_uuid(),
@@ -60,19 +60,19 @@ create index idx_inbody_scans_contact on public.inbody_scans(contact_id, scanned
 
 alter table public.consultations enable row level security;
 alter table public.consultation_photos enable row level security;
-alter table public.contact_goals enable row level security;
+alter table public.coaching_goals enable row level security;
 alter table public.inbody_scans enable row level security;
 
 create policy consultations_loc on public.consultations for all to authenticated
   using (private.auth_is_in_location(location_id)) with check (private.auth_is_in_location(location_id));
 create policy consultation_photos_loc on public.consultation_photos for all to authenticated
   using (private.auth_is_in_location(location_id)) with check (private.auth_is_in_location(location_id));
-create policy contact_goals_loc on public.contact_goals for all to authenticated
+create policy coaching_goals_loc on public.coaching_goals for all to authenticated
   using (private.auth_is_in_location(location_id)) with check (private.auth_is_in_location(location_id));
 create policy inbody_scans_loc on public.inbody_scans for all to authenticated
   using (private.auth_is_in_location(location_id)) with check (private.auth_is_in_location(location_id));
 
-create policy contact_goals_self on public.contact_goals for select to public
+create policy coaching_goals_self on public.coaching_goals for select to public
   using (contact_id = private.auth_contact_id());
 create policy consultation_photos_self on public.consultation_photos for select to public
   using (contact_id = private.auth_contact_id());

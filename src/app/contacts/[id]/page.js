@@ -212,7 +212,7 @@ export default async function ContactDetailPage(props) {
   if (canConsultations) {
     const [consultsRes, goalsRes, photosRes, scansRes, coachLinksRes] = await Promise.all([
       db.from('consultations').select('*').eq('contact_id', contact.id).order('consulted_at', { ascending: false }),
-      db.from('contact_goals').select('*').eq('contact_id', contact.id).order('created_at', { ascending: false }),
+      db.from('coaching_goals').select('*').eq('contact_id', contact.id).order('created_at', { ascending: false }),
       db.from('consultation_photos').select('*').eq('contact_id', contact.id).order('taken_at', { ascending: false }),
       db.from('inbody_scans').select('*').eq('contact_id', contact.id).order('scanned_at', { ascending: false }),
       // Location staff for the coach <select> + name resolution. The
