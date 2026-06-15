@@ -26,6 +26,7 @@ import { aggregatePerson } from '@/lib/person-aggregate'
 import PersonHeader from '@/components/PersonHeader'
 import LinkedAccountsCard from '@/components/LinkedAccountsCard'
 import ContactDetailTabs from '@/components/ContactDetailTabs'
+import { formatLastSeen } from '@/lib/person-view'
 
 export const dynamic = 'force-dynamic'
 
@@ -122,8 +123,17 @@ export default async function ContactDetailPage(props) {
   // uses (so it follows the person), and what's queued to happen next.
   // classifyContact / scoreMember are pure; contacts.* carries the
   // attendance + membership fields they need.
-  const churnClass = classifyContact(contact)
-  const churnScored = churnClass === 'active' ? scoreMember(contact, Date.now()) : null
+  //
+  // PERSON-LINK.1 (activity-aware) — when the contact is grouped, merge
+  // the COMBINED activity across all linked accounts into the contact used
+  // for classification. This ensures the at-risk/churn chip reflects the
+  // person's most-recent activity (not just the primary account). The
+  // primary contact itself is unchanged for outreach purposes.
+  const activityContact = person
+    ? { ...contact, last_attended_at: person.lastAttendedAt, total_attended_30d: person.attended }
+    : contact
+  const churnClass = classifyContact(activityContact)
+  const churnScored = churnClass === 'active' ? scoreMember(activityContact, Date.now()) : null
   let risk = null
   if (churnClass === 'overdue') {
     risk = { label: 'Payment overdue', cls: 'bg-red-50 text-red-700 border-red-200', title: 'Membership locked in Glofox — on the Overdue chase-list.' }
@@ -282,6 +292,22 @@ export default async function ContactDetailPage(props) {
         <MetricCard label="Attended (30d)" value={metricAttended} />
         <MetricCard label="Deals" value={metricDeals} />
       </div>
+
+      {/* PERSON-LINK.1 (activity-aware) — combined last attended.
+          When grouped, shows the MAX last_attended_at across all accounts
+          so a ClassPass-active person with a dormant primary doesn't look
+          quiet. For ungrouped contacts falls back to the contact's own
+          field. Hidden when both are null (no attendance data at all). */}
+      {(person?.lastAttendedAt || contact.last_attended_at) && (
+        <p className="text-xs text-un1t-subtle px-1">
+          Last attended: <span className="font-medium text-un1t-text">
+            {formatLastSeen(person ? person.lastAttendedAt : contact.last_attended_at)}
+          </span>
+          {person && person.accounts.length > 1 && (
+            <span className="text-un1t-muted"> (across all accounts)</span>
+          )}
+        </p>
+      )}
 
       {/* Info Card. GLOFOX2.9 — Glofox-specific fields (credits,
           glofox_member_id) moved to the dedicated Glofox Profile

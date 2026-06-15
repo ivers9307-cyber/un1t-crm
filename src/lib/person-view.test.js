@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { initials, accountStatusLabel, accountStatusTone } from './person-view'
+import { initials, accountStatusLabel, accountStatusTone, formatLastSeen } from './person-view'
 
 // ─── initials ─────────────────────────────────────────────────────────────
 
@@ -65,6 +65,30 @@ describe('accountStatusLabel', () => {
   })
   it('returns Unknown for empty string', () => {
     expect(accountStatusLabel('')).toBe('Unknown')
+  })
+})
+
+// ─── formatLastSeen ───────────────────────────────────────────────────────
+
+describe('formatLastSeen', () => {
+  it('formats an ISO datetime string as a short human date', () => {
+    // 12 Jun 2026 — use a midday UTC time so timezone offsets don't shift the date
+    expect(formatLastSeen('2026-06-12T12:00:00.000Z')).toBe('12 Jun 2026')
+  })
+  it('formats a date-only ISO string', () => {
+    expect(formatLastSeen('2026-01-05T12:00:00.000Z')).toBe('5 Jan 2026')
+  })
+  it('returns Never for null', () => {
+    expect(formatLastSeen(null)).toBe('Never')
+  })
+  it('returns Never for undefined', () => {
+    expect(formatLastSeen(undefined)).toBe('Never')
+  })
+  it('returns Never for empty string', () => {
+    expect(formatLastSeen('')).toBe('Never')
+  })
+  it('returns Never for an invalid date string', () => {
+    expect(formatLastSeen('not-a-date')).toBe('Never')
   })
 })
 
