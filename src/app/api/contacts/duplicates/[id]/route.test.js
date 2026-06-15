@@ -170,6 +170,16 @@ describe('PATCH /api/contacts/duplicates/[id] — link', () => {
 })
 
 describe('PATCH /api/contacts/duplicates/[id] — guards', () => {
+  it('401 when no authenticated user', async () => {
+    getCurrentUser.mockResolvedValue(null)
+    createServerClient.mockReturnValue(mockDb())
+
+    const res = await PATCH(patchReq({ status: 'dismissed' }), PARAMS)
+    expect(res.status).toBe(401)
+    const json = await res.json()
+    expect(json.success).toBe(false)
+  })
+
   it('403 when user lacks contact_linking permission', async () => {
     hasPermission.mockReturnValue(false)
     createServerClient.mockReturnValue(mockDb())
