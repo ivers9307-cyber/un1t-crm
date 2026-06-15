@@ -167,6 +167,7 @@ const WEB_ONLY_OK = {
   // not the staff mobile app. Staff mobile doesn't need a consultation-create
   // surface — coaches use the web CRM for structured consultation entry.
   consultations: 'coach/web surface; member-facing equivalent is the champ app (SP3), not the staff mobile app',
+  automations: 'operational-automation admin hub; web/operator surface, no mobile counterpart',
 }
 
 const webDrift = []

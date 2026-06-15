@@ -110,6 +110,11 @@ export const WEB_PERMISSIONS = Object.freeze([
   // approval surfaces. Master + owner + manager by default; head
   // coach + staff don't approve anything so it's off for them.
   { key: 'approvals_inbox', label: 'Approvals',                 hint: 'Central inbox aggregating contractor invoices, FTE expenses, time-off and swap requests awaiting your review. Master + owner + manager by default.' },
+  // AUTOMATIONS-HUB.1 — operator surface for toggling per-location
+  // automations (e.g. auto-creating new leads in Glofox). Web-only;
+  // no mobile counterpart (operator/admin surface only). Master +
+  // owner + manager by default.
+  { key: 'automations', label: 'Automations',                   hint: 'Operational-automation hub at /automations — toggle per-location automations like auto-creating new leads in Glofox. Master + owner + manager by default.' },
   // REPORT-ISSUE.2 — owner / master inbox for staff-reported
   // issues at the location. The submit + own-history surface
   // (REPORT-ISSUE.1) is open to all staff; THIS key gates the
@@ -165,6 +170,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     card_receipts: true,
     invoices_inbox: true,
     approvals_inbox: true,
+    automations: true,
     issues_inbox: true,
     bookkeeper: true,
     contact_linking: true,
@@ -186,6 +192,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     card_receipts: false,                          // card holders only — grant per user
     invoices_inbox: false,                         // supplier-invoice approval is finance, not staff
     approvals_inbox: false,                        // staff don't approve anything
+    automations: false,                             // operator surface — not a staff concern
     issues_inbox: false,                            // staff submit; owner + master handle
     bookkeeper: false,                              // accountant sign-off — never the default
     contact_linking: false,                         // admin-level contact dedup action
@@ -208,6 +215,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     card_receipts: false,                          // card holders only — grant per user
     invoices_inbox: false,
     approvals_inbox: false,                        // head coach isn't an approver by default
+    automations: false,                             // operator surface — head coach doesn't manage automations
     issues_inbox: false,                            // owner + master only by default
     bookkeeper: false,
     contact_linking: true,
@@ -231,6 +239,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     card_receipts: true,                           // managers commonly hold a company card
     invoices_inbox: false,                         // manager isn't an approver — owner/master only
     approvals_inbox: true,                         // managers approve schedule items (time-off, swaps)
+    automations: true,                              // managers can toggle per-location automations
     issues_inbox: false,                            // owner + master only by default
     bookkeeper: false,                              // grant temporarily for month-end cover if needed
     contact_linking: true,
@@ -254,6 +263,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     card_receipts: true,                           // owners hold a company card
     invoices_inbox: true,                          // owner approves their location's supplier invoices
     approvals_inbox: true,                         // owner approves invoices, expenses, schedule items
+    automations: true,                              // owner manages per-location automations
     issues_inbox: true,                             // owner IS the handler per the routing design
     bookkeeper: false,                              // owner approves at the source; accountant sign-off is master/dedicated only
     contact_linking: true,
