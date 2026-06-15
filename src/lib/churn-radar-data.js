@@ -18,6 +18,7 @@ import {
   MEMBER_STATUSES,
 } from '@/lib/churn-radar'
 import { nettedOutByRetry } from '@/lib/glofox-arrears'
+import { combineGroupActivity, rollupByPerson } from '@/lib/person-rollup'
 
 // Columns the scorer + UI need from contacts. glofox_membership_type
 // and trial_credits_remaining drive the live-membership gate (a class
@@ -30,7 +31,7 @@ const MEMBER_COLUMNS =
   'glofox_billing_interval, trial_credits_remaining, ' +
   'last_attended_at, last_booked_at, last_payment_at, ' +
   'total_attended_30d, total_attended_7d, total_noshow_30d, ' +
-  'total_bookings_30d, joined_at, lifetime_value_cents'
+  'total_bookings_30d, joined_at, lifetime_value_cents, person_group_id'
 
 const CONTACTING_ACTIONS = ['contacted', 'task_assigned', 'winback_sent', 'outreach_sent']
 
@@ -185,6 +186,58 @@ async function fetchActions(db, locationId) {
 }
 
 /**
+ * CHURN-RADAR-PERSON-AWARE — combine cross-account activity and deduplicate
+ * a sweep's contact rows to one row per person, using the person_groups table.
+ *
+ * If no rows in the sweep carry a person_group_id, returns the input unchanged
+ * (fast path — the common case for most contacts).
+ *
+ * On any DB error, degrades gracefully by returning the raw rows so the radar
+ * still works; never throws.
+ *
+ * @param {object} db - Supabase server client
+ * @param {Array<object>} rows - Sweep contact rows (already dismissed-filtered)
+ * @returns {Promise<Array<object>>}
+ */
+async function applyPersonRollup(db, rows) {
+  const groupIds = [...new Set(rows.map((r) => r.person_group_id).filter(Boolean))]
+  if (groupIds.length === 0) return rows
+
+  try {
+    // 1. Look up primary_contact_id for each group.
+    const { data: groupRows, error: groupErr } = await db
+      .from('person_groups')
+      .select('id, primary_contact_id')
+      .in('id', groupIds)
+    if (groupErr) throw new Error(groupErr.message)
+
+    const primaryByGroup = new Map(
+      (groupRows || []).map((g) => [g.id, g.primary_contact_id]),
+    )
+
+    // 2. Fetch ALL contacts in those groups (cross-status — includes accounts
+    //    the sweep didn't load, e.g. an active classpass_payg alongside a
+    //    dormant member). Bounded small (a few hundred rows at most); .order('id')
+    //    for deterministic pagination if ever needed.
+    const { data: allGroupContacts, error: contactErr } = await db
+      .from('contacts')
+      .select('id, person_group_id, last_attended_at, last_booked_at, total_attended_30d, total_attended_7d, total_noshow_30d')
+      .in('person_group_id', groupIds)
+      .order('id', { ascending: true })
+    if (contactErr) throw new Error(contactErr.message)
+
+    // 3. Build combined activity across ALL accounts in each group.
+    const combinedByGroup = combineGroupActivity(allGroupContacts || [])
+
+    // 4. Deduplicate to one row per person, injecting combined activity.
+    return rollupByPerson(rows, { combinedByGroup, primaryByGroup })
+  } catch {
+    // Degrade gracefully — radar works with raw rows, just without dedup.
+    return rows
+  }
+}
+
+/**
  * Load the scored at-risk radar for a location. Snoozed members are
  * counted but excluded from the list. Each radar row carries its
  * most recent contacting action.
@@ -200,7 +253,11 @@ export async function loadRadar(db, locationId, nowMs = Date.now()) {
   ])
   // CHURN-CLEAN.1 — operator-dismissed "not a member" contacts drop off
   // every surface AND the summary counts (active base, at-risk, etc.).
-  const members = allMembers.filter((m) => !dismissed.has(m.id))
+  const dismissed_members = allMembers.filter((m) => !dismissed.has(m.id))
+  // CHURN-RADAR-PERSON-AWARE — combine cross-account activity and deduplicate
+  // to one row per person so a dormant member with an active ClassPass account
+  // isn't wrongly flagged, and a person with 2+ member accounts counts once.
+  const members = await applyPersonRollup(db, dismissed_members)
   // RADAR-OVERDUE.1 — invoice-driven overdue context: past-due members are
   // pulled off the at-risk list + counted as overdue (not the stale
   // membership.status='locked' field).
@@ -287,7 +344,10 @@ export async function loadQuarantine(db, locationId) {
     fetchActions(db, locationId),
     fetchDismissed(db, locationId),
   ])
-  const members = allMembers.filter((m) => !dismissed.has(m.id))
+  const dismissed_members = allMembers.filter((m) => !dismissed.has(m.id))
+  // CHURN-RADAR-PERSON-AWARE — combine cross-account activity so a member
+  // who shows quarantine on one account but activity on another isn't surfaced.
+  const members = await applyPersonRollup(db, dismissed_members)
   const triaged = new Set(
     actions
       .filter((a) => QUARANTINE_TRIAGE_ACTIONS.includes(a.action))
@@ -409,7 +469,10 @@ export async function loadWinback(db, locationId, nowMs = Date.now()) {
     fetchActions(db, locationId),
     fetchDismissed(db, locationId),
   ])
-  const contacts = allContacts.filter((c) => !dismissed.has(c.id))
+  const dismissed_contacts = allContacts.filter((c) => !dismissed.has(c.id))
+  // CHURN-RADAR-PERSON-AWARE — combine cross-account activity so a former
+  // member who is still active on another account doesn't appear as a win-back.
+  const contacts = await applyPersonRollup(db, dismissed_contacts)
 
   // Actions are newest-first — first hit per contact is the latest.
   const lastContacted = new Map()
