@@ -390,6 +390,161 @@ registry.registerPath({
   },
 })
 
+// CONSULTATIONS SP1 — goals routes
+registry.registerPath({
+  method: 'post',
+  path: '/api/contacts/{id}/goals',
+  tags: ['Contacts'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Create a goal for a contact (consultations permission)',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: {
+      content: {
+        'application/json': {
+          schema: z.object({
+            title: z.string().min(1),
+            detail: z.string().optional(),
+            target_value: z.string().optional(),
+            target_date: isoDate.optional(),
+          }).openapi('ContactGoalCreateBody'),
+        },
+      },
+    },
+  },
+  responses: {
+    200: { description: 'Goal created', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: z.object({}).passthrough() }) } } },
+    400: { description: 'Validation error', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — consultations permission required', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Contact not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'put',
+  path: '/api/contacts/{id}/goals/{gid}',
+  tags: ['Contacts'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Update a goal (consultations permission)',
+  request: {
+    params: z.object({ id: uuidLike, gid: uuidLike }),
+    body: {
+      content: {
+        'application/json': {
+          schema: z.object({
+            title: z.string().min(1).optional(),
+            detail: z.string().optional(),
+            target_value: z.string().optional(),
+            target_date: isoDate.optional(),
+            status: z.enum(['open', 'achieved', 'dropped']).optional(),
+          }).openapi('ContactGoalUpdateBody'),
+        },
+      },
+    },
+  },
+  responses: {
+    200: { description: 'Goal updated', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: z.object({}).passthrough() }) } } },
+    400: { description: 'Validation error', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — consultations permission required', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Contact or goal not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'delete',
+  path: '/api/contacts/{id}/goals/{gid}',
+  tags: ['Contacts'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Delete a goal (consultations permission)',
+  request: {
+    params: z.object({ id: uuidLike, gid: uuidLike }),
+  },
+  responses: {
+    200: { description: 'Goal deleted', content: { 'application/json': { schema: z.object({ success: z.literal(true) }) } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — consultations permission required', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Contact not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// CONSULTATIONS SP1 — consultations routes
+registry.registerPath({
+  method: 'post',
+  path: '/api/contacts/{id}/consultations',
+  tags: ['Contacts'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Create a consultation for a contact (consultations permission)',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: {
+      content: {
+        'application/json': {
+          schema: z.object({
+            consulted_at: z.string().optional(),
+            coach_id: uuidLike.optional(),
+            notes: z.string().optional(),
+          }).openapi('ConsultationCreateBody'),
+        },
+      },
+    },
+  },
+  responses: {
+    200: { description: 'Consultation created', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: z.object({}).passthrough() }) } } },
+    400: { description: 'Validation error', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — consultations permission required', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Contact not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'put',
+  path: '/api/contacts/{id}/consultations/{cid}',
+  tags: ['Contacts'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Update a consultation (consultations permission)',
+  request: {
+    params: z.object({ id: uuidLike, cid: uuidLike }),
+    body: {
+      content: {
+        'application/json': {
+          schema: z.object({
+            consulted_at: z.string().optional(),
+            coach_id: uuidLike.optional(),
+            notes: z.string().optional(),
+          }).openapi('ConsultationUpdateBody'),
+        },
+      },
+    },
+  },
+  responses: {
+    200: { description: 'Consultation updated', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: z.object({}).passthrough() }) } } },
+    400: { description: 'Validation error', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — consultations permission required', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Contact or consultation not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'delete',
+  path: '/api/contacts/{id}/consultations/{cid}',
+  tags: ['Contacts'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Delete a consultation (consultations permission)',
+  request: {
+    params: z.object({ id: uuidLike, cid: uuidLike }),
+  },
+  responses: {
+    200: { description: 'Consultation deleted', content: { 'application/json': { schema: z.object({ success: z.literal(true) }) } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — consultations permission required', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Contact not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // Deals
 registry.registerPath({
   method: 'post',

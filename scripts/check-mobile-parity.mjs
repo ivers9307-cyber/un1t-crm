@@ -162,6 +162,11 @@ const WEB_ONLY_OK = {
   // reviewing a person group, editing the primary) needs the desktop
   // contact admin surface. Same reasoning as contact merge.
   contact_linking: 'desktop-only contact-admin action, like contact merge',
+  // CONSULTATIONS SP1 — coach/web surface for consultations + goals.
+  // The member-facing equivalent (progress & history) is the champ app (SP3),
+  // not the staff mobile app. Staff mobile doesn't need a consultation-create
+  // surface — coaches use the web CRM for structured consultation entry.
+  consultations: 'coach/web surface; member-facing equivalent is the champ app (SP3), not the staff mobile app',
 }
 
 const webDrift = []

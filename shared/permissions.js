@@ -130,6 +130,11 @@ export const WEB_PERMISSIONS = Object.freeze([
   // action (like contact merge). Owner + manager + head_coach by
   // default; staff off.
   { key: 'contact_linking', label: 'Link duplicate contacts', hint: 'Non-destructive identity linking — group duplicate contacts into a single person view without merging or deleting.' },
+  // CONSULTATIONS SP1 — coach/web surface for tracking member consultations
+  // and goals. Gates the consultations + goals CRUD APIs and the contact-page
+  // Consultations tab. Staff off by default (coach/owner surface); mobile
+  // equivalent is the champ app member portal (SP3), not the staff mobile app.
+  { key: 'consultations', label: 'Consultations', hint: 'Create and edit member consultations and goals. Coach/web surface — the member-facing equivalent is the champ app (SP3).' },
   { key: 'settings',   label: 'Settings & Staff Management',    hint: 'Location settings, staff management, integrations, branding.' },
   // Landing-page editor (mig 126-130, Phase LP1-3c). Operator
   // editor for the public /welcome marketing page (un1tdublin.com).
@@ -163,6 +168,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     issues_inbox: true,
     bookkeeper: true,
     contact_linking: true,
+    consultations: true,
     settings: true,
     landing_page: true,
   },
@@ -183,6 +189,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     issues_inbox: false,                            // staff submit; owner + master handle
     bookkeeper: false,                              // accountant sign-off — never the default
     contact_linking: false,                         // admin-level contact dedup action
+    consultations: false,                            // coach/web surface — off for staff
     settings: false,
     landing_page: false,                          // marketing copy isn't a staff concern
   },
@@ -204,6 +211,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     issues_inbox: false,                            // owner + master only by default
     bookkeeper: false,
     contact_linking: true,
+    consultations: true,
     settings: false,
     landing_page: false,
   },
@@ -226,6 +234,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     issues_inbox: false,                            // owner + master only by default
     bookkeeper: false,                              // grant temporarily for month-end cover if needed
     contact_linking: true,
+    consultations: true,
     settings: true,
     landing_page: false,                          // owner/master decision; per-user override available
   },
@@ -248,6 +257,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     issues_inbox: true,                             // owner IS the handler per the routing design
     bookkeeper: false,                              // owner approves at the source; accountant sign-off is master/dedicated only
     contact_linking: true,
+    consultations: true,
     settings: true,
     landing_page: true,
   },
