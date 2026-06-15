@@ -151,18 +151,21 @@ describe('loadOverdue — retry netting (Fix B)', () => {
 // ── CHURN-RADAR-PERSON-AWARE: loadRadar person-group integration ──────────────
 //
 // Tests that `applyPersonRollup` is wired correctly into the three loaders.
-// We extend the mock builder so it captures the `.in()` filter column, enabling
-// the contacts dispatch to differentiate between `in('id', ...)` (overdue path)
-// and `in('person_group_id', ...)` (cross-status activity path) on the same
-// table, and between `in('id', ...)` on `person_groups` vs `contacts`.
+// We extend the mock builder so it tracks both .eq() filters and .not() calls,
+// allowing dispatch to differentiate between:
+//   - contacts loaded via .eq('location_id') for member sweep (key: 'contacts')
+//   - contacts loaded via .eq('location_id') + .not('person_group_id', 'is', null)
+//     for the cross-status activity path (key: 'contacts:grouped')
+//   - person_groups loaded via .eq('location_id') (key: 'person_groups:location')
+//   - contacts loaded via .in('id', ...) for the overdue path (key: 'contacts:id')
 
 function makeDbPersonAware(tables) {
   function builder(table) {
-    const state = { table, inCol: null, single: false }
+    const state = { table, inCol: null, notCol: null, eqFilters: {}, single: false }
     const b = {
       select() { return b },
-      eq() { return b },
-      not() { return b },
+      eq(col, val) { state.eqFilters[col] = val; return b },
+      not(col) { state.notCol = col; return b },
       in(col) { state.inCol = col; return b },
       gte() { return b },
       order() { return b },
@@ -172,7 +175,23 @@ function makeDbPersonAware(tables) {
       then(resolve, reject) {
         let rows
         try {
-          const key = state.inCol ? `${table}:${state.inCol}` : table
+          // Determine dispatch key based on which filters were set.
+          // Priority: explicit in() col > not(col) > table default.
+          let key
+          if (state.inCol) {
+            key = `${table}:${state.inCol}`
+          } else if (state.notCol) {
+            // .not('person_group_id', ...) on contacts = cross-status grouped load
+            key = `${table}:grouped`
+          } else {
+            // person_groups with .eq('location_id') goes to 'person_groups:location'
+            // for disambiguation from any other person_groups query
+            if (table === 'person_groups' && state.eqFilters.location_id) {
+              key = 'person_groups:location'
+            } else {
+              key = table
+            }
+          }
           const src = tables[key] !== undefined ? tables[key] : tables[table]
           rows = typeof src === 'function' ? src(state) : (src || [])
         } catch (e) { return Promise.resolve().then(() => reject(e)) }
@@ -261,10 +280,10 @@ describe('loadRadar — person-group-aware (CHURN-RADAR-PERSON-AWARE)', () => {
     const db = makeDbPersonAware({
       // fetchMembers returns the dormant member (only member-status contacts)
       contacts: [markMember],
-      // applyPersonRollup — person_groups lookup
-      'person_groups:id': [{ id: GROUP_ID, primary_contact_id: 'c-mark-member' }],
-      // applyPersonRollup — cross-status contacts for those groups
-      'contacts:person_group_id': [markMember, markClasspass],
+      // applyPersonRollup — person_groups location-scoped load
+      'person_groups:location': [{ id: GROUP_ID, primary_contact_id: 'c-mark-member', location_id: LOC }],
+      // applyPersonRollup — cross-status grouped contacts (location-scoped, not null person_group_id)
+      'contacts:grouped': [markMember, markClasspass],
       // Other tables used by loadRadar
       churn_radar_actions: [],
       glofox_invoices: [],
@@ -290,10 +309,10 @@ describe('loadRadar — person-group-aware (CHURN-RADAR-PERSON-AWARE)', () => {
 
     const db = makeDbPersonAware({
       contacts: [memberA, memberB],
-      'person_groups:id': [{ id: GROUP_ID, primary_contact_id: 'c-dedup-a' }],
+      'person_groups:location': [{ id: GROUP_ID, primary_contact_id: 'c-dedup-a', location_id: LOC }],
       // Both members in the cross-status fetch; combined = 0+0 = 0 attended 30d,
       // last_attended stays 30 days ago → at-risk as one person, not two.
-      'contacts:person_group_id': [memberA, memberB],
+      'contacts:grouped': [memberA, memberB],
       churn_radar_actions: [],
       glofox_invoices: [],
       churn_radar_snapshots: [],
@@ -318,10 +337,10 @@ describe('loadRadar — person-group-aware (CHURN-RADAR-PERSON-AWARE)', () => {
 
     const db = makeDbPersonAware({
       contacts: [ungroupedMember],
-      // person_groups + cross-status contacts should not be called (groupIds empty)
+      // person_groups + cross-status contacts should not be called (fast path: no grouped rows)
       // but we leave them empty just in case to avoid false errors
-      'person_groups:id': [],
-      'contacts:person_group_id': [],
+      'person_groups:location': [],
+      'contacts:grouped': [],
       churn_radar_actions: [],
       glofox_invoices: [],
       churn_radar_snapshots: [],
@@ -342,8 +361,8 @@ describe('loadRadar — person-group-aware (CHURN-RADAR-PERSON-AWARE)', () => {
     const db = makeDbPersonAware({
       contacts: [markMember],
       // Simulate person_groups throwing an error
-      'person_groups:id': () => { throw new Error('DB exploded') },
-      'contacts:person_group_id': [],
+      'person_groups:location': () => { throw new Error('DB exploded') },
+      'contacts:grouped': [],
       churn_radar_actions: [],
       glofox_invoices: [],
       churn_radar_snapshots: [],

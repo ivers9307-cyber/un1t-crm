@@ -79,6 +79,34 @@ async function loadContactsForLocation(db, locationId) {
   return rows
 }
 
+async function loadPrimaryByGroup(db, locationId) {
+  const map = new Map()
+  let pageStart = 0
+  try {
+    while (true) {
+      const pageEnd = Math.min(pageStart + PAGE_SIZE - 1, HARD_LIMIT - 1)
+      const { data: page, error } = await db
+        .from('person_groups')
+        .select('id, primary_contact_id')
+        .eq('location_id', locationId)
+        .order('id', { ascending: true })
+        .range(pageStart, pageEnd)
+      if (error) throw error
+      if (!Array.isArray(page) || page.length === 0) break
+      for (const g of page) {
+        if (g.primary_contact_id) map.set(g.id, g.primary_contact_id)
+      }
+      if (page.length < PAGE_SIZE) break
+      if (map.size >= HARD_LIMIT) break
+      pageStart += PAGE_SIZE
+    }
+  } catch (e) {
+    // Degrade safely: detection still runs without primaryByGroup
+    console.error('[person-detect] loadPrimaryByGroup error:', e?.message || e)
+  }
+  return map
+}
+
 async function loadSuggestionsForLocation(db, locationId) {
   const rows = []
   let pageStart = 0
@@ -124,27 +152,10 @@ export async function runDetection(db, { locationId, commit = false, actorId }) 
     loadSuggestionsForLocation(db, locationId),
   ])
 
-  // 1b. Build primaryByGroup from the loaded contacts' person_group_ids
-  let primaryByGroup = new Map()
-  const groupIds = [...new Set(contacts.map((c) => c.person_group_id).filter(Boolean))]
-  if (groupIds.length > 0) {
-    try {
-      const { data: groups, error } = await db
-        .from('person_groups')
-        .select('id, primary_contact_id')
-        .in('id', groupIds)
-      if (!error && Array.isArray(groups)) {
-        for (const g of groups) {
-          if (g.primary_contact_id) {
-            primaryByGroup.set(g.id, g.primary_contact_id)
-          }
-        }
-      }
-    } catch (e) {
-      // Degrade safely: detection still runs without primaryByGroup
-      console.error('[person-detect] primaryByGroup fetch error:', e?.message || e)
-    }
-  }
+  // 1b. Build primaryByGroup via a location-scoped paginated load.
+  // Avoids the giant .in(groupIds) URL-overflow that was silently returning
+  // an empty map when there are ~895 groups (URL ~33 KB > Supabase limit).
+  const primaryByGroup = await loadPrimaryByGroup(db, locationId)
 
   // 2. Plan
   const { candidates, autoLink, review } = planDetection({ contacts, existingSuggestions, primaryByGroup })
@@ -355,16 +366,19 @@ async function supersedeRedundantPending(db, locationId) {
     }
     const contactIds = [...contactIdSet]
 
-    // Fetch current person_group_id for each contact
-    const { data: contactRows, error: cErr } = await db
-      .from('contacts')
-      .select('id, person_group_id')
-      .in('id', contactIds)
-    if (cErr) throw cErr
-
+    // Fetch current person_group_id for each contact — chunked to stay under URL limits
+    const IN_CHUNK = 150
     const groupOfContact = new Map()
-    for (const c of contactRows || []) {
-      if (c.person_group_id) groupOfContact.set(c.id, c.person_group_id)
+    for (let i = 0; i < contactIds.length; i += IN_CHUNK) {
+      const chunk = contactIds.slice(i, i + IN_CHUNK)
+      const { data: contactRows, error: cErr } = await db
+        .from('contacts')
+        .select('id, person_group_id')
+        .in('id', chunk)
+      if (cErr) throw cErr
+      for (const c of contactRows || []) {
+        if (c.person_group_id) groupOfContact.set(c.id, c.person_group_id)
+      }
     }
 
     // Find pending suggestions where both endpoints share the same group
@@ -379,13 +393,16 @@ async function supersedeRedundantPending(db, locationId) {
 
     if (redundantIds.length === 0) return 0
 
-    // Mark redundant rows as linked (superseded — already in the same person group)
+    // Mark redundant rows as linked — chunked to stay under URL limits
     const decidedAt = new Date().toISOString()
-    const { error: uErr } = await db
-      .from('person_link_suggestions')
-      .update({ status: 'linked', decided_at: decidedAt })
-      .in('id', redundantIds)
-    if (uErr) throw uErr
+    for (let i = 0; i < redundantIds.length; i += IN_CHUNK) {
+      const chunk = redundantIds.slice(i, i + IN_CHUNK)
+      const { error: uErr } = await db
+        .from('person_link_suggestions')
+        .update({ status: 'linked', decided_at: decidedAt })
+        .in('id', chunk)
+      if (uErr) throw uErr
+    }
 
     return redundantIds.length
   } catch (e) {
