@@ -197,6 +197,8 @@ export function detectCandidates(contacts, {
 
     if (persons.size === 1) {
       const [[, rep]] = persons
+      // Guard: skip if rep is a group id (primaryByGroup incomplete)
+      if (!contactIdSet.has(rep)) continue
       consider(c.id, rep, {
         method: 'name',
         confidence: 'high',
@@ -205,6 +207,8 @@ export function detectCandidates(contacts, {
     } else {
       const reason = `ClassPass name matches ${persons.size} people`
       for (const rep of persons.values()) {
+        // Guard: skip if rep is a group id (primaryByGroup incomplete)
+        if (!contactIdSet.has(rep)) continue
         consider(c.id, rep, { method: 'name', confidence: 'medium', reason })
       }
     }

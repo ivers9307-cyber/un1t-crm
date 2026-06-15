@@ -494,6 +494,29 @@ describe('detectCandidates — person-aware name matching', () => {
     // Phone HIGH for the pair (a is grouped, b is not → same-person check passes)
     expect(results.some(r => r.method === 'phone' && r.confidence === 'high')).toBe(true)
   })
+
+  it('ClassPass name matches a grouped real but primaryByGroup is missing that group → no candidate emitted (contactIdSet guard)', () => {
+    // Regression guard for the ClassPass↔real path symmetry:
+    // groupOf says 'r1' belongs to 'g1', but primaryByGroup has NO entry for 'g1'.
+    // repOf('g1') falls back to 'g1' itself, which is NOT a contact id.
+    // The guard must skip this rep so no candidate with a group-id endpoint is emitted.
+    const contacts = [
+      { id: 'cp1', glofox_membership_status: 'classpass_payg', name: 'Kate Flood' },
+      { id: 'r1', glofox_membership_status: 'member', name: 'Kate Flood', phone: '0871234567' },
+    ]
+    const groupOf = new Map([['r1', 'g1']])
+    // primaryByGroup intentionally omits 'g1' — simulates an inconsistent/incomplete caller state
+    const primaryByGroup = new Map()
+
+    const results = detectCandidates(contacts, { groupOf, primaryByGroup })
+    // No candidate should be emitted — the only possible rep is 'g1' (not a contact id)
+    expect(results).toHaveLength(0)
+    // Confirm no endpoint is a group id (belt-and-braces)
+    for (const r of results) {
+      expect(['cp1', 'r1']).toContain(r.aId)
+      expect(['cp1', 'r1']).toContain(r.bId)
+    }
+  })
 })
 
 // ---------------------------------------------------------------------------
