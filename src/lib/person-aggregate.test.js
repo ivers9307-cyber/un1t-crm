@@ -130,6 +130,7 @@ const contacts = [
     glofox_account_active: true,
     pipeline_stage_slug: 'active_member',
     last_attended_at: '2026-06-10T10:00:00Z',
+    total_attended_30d: 5,
   },
   {
     id: SHADOW_ID,
@@ -146,6 +147,7 @@ const contacts = [
     glofox_account_active: false,
     pipeline_stage_slug: 'classpass_active',
     last_attended_at: null,
+    total_attended_30d: 2,
   },
   {
     id: DORMANT_ID,
@@ -162,6 +164,7 @@ const contacts = [
     glofox_account_active: false,
     pipeline_stage_slug: 'dormant',
     last_attended_at: '2025-01-01T10:00:00Z',
+    total_attended_30d: 0,
   },
 ]
 
@@ -323,14 +326,10 @@ describe('aggregatePerson', () => {
   })
 
   it('counts attendedBookingsCount from attended bookings across all member contacts', async () => {
-    // The attended signal uses glofox_invoices with PAID status (bookings attended)
-    // Actually the contact page shows last_attended_at and total_attended_30d from contacts
-    // Our implementation uses total_attended_30d + ... let's test what we implement
-    // For now test that the field exists and is a number
+    // primary=5, shadow=2, dormant=0 → sum=7
     const db = makeSeededDb()
     const result = await aggregatePerson(db, GROUP_ID)
-    expect(typeof result.attended).toBe('number')
-    expect(result.attended).toBeGreaterThanOrEqual(0)
+    expect(result.attended).toBe(7)
   })
 
   it('counts dealsCount as total deals across all member contacts', async () => {
