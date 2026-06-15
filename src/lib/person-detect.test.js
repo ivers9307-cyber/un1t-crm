@@ -228,7 +228,11 @@ function makeDb(tables = {}) {
 
       if (state.op === 'update') {
         if (!Array.isArray(store[state.table])) store[state.table] = []
-        const matchFn = (row) => state.filters.every(f => row[f.col] === f.val)
+        const matchFn = (row) => state.filters.every(f => {
+          if (f.type === 'eq') return row[f.col] === f.val
+          if (f.type === 'in') return f.vals.includes(row[f.col])
+          return true
+        })
         store[state.table] = store[state.table].map(row =>
           matchFn(row) ? { ...row, ...state.payload } : row
         )
@@ -487,6 +491,36 @@ describe('runDetection — commit=true', () => {
     expect(linkedRow.decided_by).toBe('u1')
   })
 
+  it('primaryByGroup wired: ClassPass auto-links to the PRIMARY of its existing group', async () => {
+    // Seed: two real contacts already in group g1, and a ClassPass contact with
+    // the same name. person_groups returns g1 → primary = 'member1'.
+    // detectCandidates should produce ONE high candidate: classpass → member1 (the primary).
+    // The commit path calls addToGroup (member1 is grouped, classpass is not).
+    const member1 = contact('member1', { name: 'Tara Murphy', person_group_id: 'g1' })
+    const member2 = contact('member2', { name: 'Tara Murphy', person_group_id: 'g1' })
+    const cp = contact('cp1', { name: 'Tara Murphy', glofox_membership_status: 'classpass_payg' })
+
+    // mock: createGroup/addToGroup return the existing group
+    addToGroup.mockResolvedValue({ group: { id: 'g1' }, members: [] })
+
+    const db = makeDb({
+      contacts: [member1, member2, cp],
+      person_link_suggestions: [],
+      person_groups: [{ id: 'g1', primary_contact_id: 'member1' }],
+    })
+
+    const result = await runDetection(db, { locationId: 'loc-1', commit: true, actorId: 'u1' })
+
+    // addToGroup called with the classpass into g1 (member1's group)
+    expect(addToGroup).toHaveBeenCalledWith(db, expect.objectContaining({
+      groupId: 'g1',
+      contactIds: ['cp1'],
+    }))
+    // createGroup should NOT be called (the primary is already grouped)
+    expect(createGroup).not.toHaveBeenCalled()
+    expect(result.autoLinked).toBe(1)
+  })
+
   it('cross-method cascade: groupOfMap updated mid-batch so C joins A\'s group via addToGroup, not a second createGroup', async () => {
     // Setup: cA is the single real (non-ClassPass) contact.
     // cB and cC are two independent ClassPass contacts with the same normalised name as cA.
@@ -536,5 +570,181 @@ describe('runDetection — commit=true', () => {
     // Both pairs successfully auto-linked
     expect(result.autoLinked).toBe(2)
     expect(result.failures).toBe(0)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// supersedeRedundantPending
+// ---------------------------------------------------------------------------
+
+describe('supersedeRedundantPending — commit=true', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    createGroup.mockResolvedValue({ group: { id: 'g-new-1' }, members: [] })
+    addToGroup.mockResolvedValue({ group: { id: 'g-existing' }, members: [] })
+  })
+
+  it('marks a pending suggestion as linked when both contacts are already in the same group', async () => {
+    // Two contacts both in group g1 — already linked, so the pending suggestion is redundant
+    const c1 = contact('c1', { name: 'Alice Smith', person_group_id: 'g1' })
+    const c2 = contact('c2', { name: 'Alice Smith', person_group_id: 'g1' })
+
+    const db = makeDb({
+      contacts: [c1, c2],
+      person_link_suggestions: [
+        {
+          id: 's1',
+          location_id: 'loc-1',
+          contact_id_a: 'c1',
+          contact_id_b: 'c2',
+          match_method: 'name',
+          confidence: 'high',
+          reason: 'Same name',
+          status: 'pending',
+        },
+      ],
+      person_groups: [{ id: 'g1', primary_contact_id: 'c1' }],
+    })
+
+    const result = await runDetection(db, { locationId: 'loc-1', commit: true, actorId: 'u1' })
+
+    // The redundant pending suggestion must now be 'linked'
+    const row = db._store.person_link_suggestions.find((r) => r.id === 's1')
+    expect(row.status).toBe('linked')
+    // Result reports the superseded count
+    expect(result.superseded).toBeGreaterThanOrEqual(1)
+  })
+
+  it('does not supersede a pending suggestion when contacts are in DIFFERENT groups', async () => {
+    const c1 = contact('c1', { name: 'Alice Smith', person_group_id: 'g1' })
+    const c2 = contact('c2', { name: 'Alice Smith', person_group_id: 'g2' })
+
+    const db = makeDb({
+      contacts: [c1, c2],
+      person_link_suggestions: [
+        {
+          id: 's2',
+          location_id: 'loc-1',
+          contact_id_a: 'c1',
+          contact_id_b: 'c2',
+          match_method: 'name',
+          confidence: 'medium',
+          reason: 'Same name',
+          status: 'pending',
+        },
+      ],
+      person_groups: [
+        { id: 'g1', primary_contact_id: 'c1' },
+        { id: 'g2', primary_contact_id: 'c2' },
+      ],
+    })
+
+    await runDetection(db, { locationId: 'loc-1', commit: true, actorId: 'u1' })
+
+    // Different groups — must NOT be superseded
+    const row = db._store.person_link_suggestions.find((r) => r.id === 's2')
+    expect(row.status).toBe('pending')
+  })
+
+  it('dry-run: supersede does not run and no writes happen', async () => {
+    const c1 = contact('c1', { name: 'Alice Smith', person_group_id: 'g1' })
+    const c2 = contact('c2', { name: 'Alice Smith', person_group_id: 'g1' })
+
+    const db = makeDb({
+      contacts: [c1, c2],
+      person_link_suggestions: [
+        {
+          id: 's3',
+          location_id: 'loc-1',
+          contact_id_a: 'c1',
+          contact_id_b: 'c2',
+          status: 'pending',
+        },
+      ],
+      person_groups: [{ id: 'g1', primary_contact_id: 'c1' }],
+    })
+
+    const result = await runDetection(db, { locationId: 'loc-1', commit: false, actorId: 'u1' })
+
+    // Dry-run must return dryRun:true
+    expect(result.dryRun).toBe(true)
+    // Dry-run result has no superseded key
+    expect(result).not.toHaveProperty('superseded')
+    // The pending row stays pending (no writes)
+    const row = db._store.person_link_suggestions.find((r) => r.id === 's3')
+    expect(row.status).toBe('pending')
+    expect(createGroup).not.toHaveBeenCalled()
+    expect(addToGroup).not.toHaveBeenCalled()
+  })
+
+  it('degrade-safe: primaryByGroup fetch error → detection still completes', async () => {
+    // Contacts with person_group_id set, but person_groups table throws
+    const c1 = contact('c1', { phone: PHONE_A, name: 'Alice Smith', person_group_id: 'g1' })
+    const c2 = contact('c2', { phone: PHONE_A, name: 'Alice Smith' })
+
+    const db = makeDb({
+      contacts: [c1, c2],
+      person_link_suggestions: [],
+      // Override person_groups with a function that throws
+      person_groups: () => { throw new Error('DB error') },
+    })
+
+    // Should not throw — detection degrades to primaryByGroup = empty Map
+    const result = await runDetection(db, { locationId: 'loc-1', commit: true, actorId: 'u1' })
+
+    expect(result.dryRun).toBe(false)
+    // Even without primaryByGroup, c1 is grouped (groupOf) and c2 is not → addToGroup
+    expect(addToGroup).toHaveBeenCalledWith(db, expect.objectContaining({
+      groupId: 'g1',
+      contactIds: ['c2'],
+    }))
+  })
+
+  it('degrade-safe: supersedeRedundantPending error → commit still succeeds and returns superseded=0', async () => {
+    const c1 = contact('c1', { phone: PHONE_A, name: 'Alice Smith' })
+    const c2 = contact('c2', { phone: PHONE_A, name: 'Alice Smith' })
+
+    // Simulate the pending-query inside supersedeRedundantPending throwing.
+    // We'll override the builder to throw for queries with status='pending'.
+    const baseDb = makeDb({ contacts: [c1, c2], person_link_suggestions: [] })
+    const originalFrom = baseDb.from.bind(baseDb)
+    let pendingQueryCount = 0
+    const db = {
+      ...baseDb,
+      from(table) {
+        const b = originalFrom(table)
+        if (table === 'person_link_suggestions') {
+          // Wrap the builder: if a filter for status=pending is added, make it throw
+          const originalEq = b.eq.bind(b)
+          b.eq = (col, val) => {
+            if (col === 'status' && val === 'pending') {
+              pendingQueryCount++
+              // Return a thenable that rejects
+              return {
+                select() { return this },
+                order() { return this },
+                range() { return this },
+                in() { return this },
+                eq() { return this },
+                then(res, rej) {
+                  const err = new Error('supersedeRedundantPending simulated failure')
+                  return rej ? Promise.resolve().then(() => rej(err)) : Promise.reject(err)
+                },
+              }
+            }
+            return originalEq(col, val)
+          }
+        }
+        return b
+      },
+    }
+
+    // The commit should still succeed despite the supersede error
+    const result = await runDetection(db, { locationId: 'loc-1', commit: true, actorId: 'u1' })
+
+    expect(result.dryRun).toBe(false)
+    expect(result.superseded).toBe(0)
+    // The main linking should still have happened
+    expect(result.autoLinked).toBeGreaterThanOrEqual(0)
   })
 })

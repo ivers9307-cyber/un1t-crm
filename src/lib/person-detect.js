@@ -16,17 +16,21 @@ const HARD_LIMIT = 20_000
 // ---------------------------------------------------------------------------
 
 /**
- * planDetection({ contacts, existingSuggestions })
+ * planDetection({ contacts, existingSuggestions, primaryByGroup })
  *
  * Pure function — builds the candidate list from scratch given contacts and
  * any existing suggestion rows (dismissed or linked pairs are excluded).
+ *
+ * @param {Array}  contacts              - Full contact array for this location
+ * @param {Array}  existingSuggestions   - Existing suggestion rows (for dismissed/linked exclusion)
+ * @param {Map}    primaryByGroup        - groupId → primaryContactId (from person_groups)
  *
  * Returns { candidates, autoLink, review }:
  *   candidates  — full detectCandidates output
  *   autoLink    — high-confidence candidates only
  *   review      — medium + low confidence candidates
  */
-export function planDetection({ contacts, existingSuggestions = [] }) {
+export function planDetection({ contacts, existingSuggestions = [], primaryByGroup = new Map() }) {
   // Build dismissedPairKeys: skip pairs that are already decided
   const dismissedPairKeys = new Set(
     existingSuggestions
@@ -42,7 +46,7 @@ export function planDetection({ contacts, existingSuggestions = [] }) {
     }
   }
 
-  const candidates = detectCandidates(contacts, { dismissedPairKeys, groupOf })
+  const candidates = detectCandidates(contacts, { dismissedPairKeys, groupOf, primaryByGroup })
 
   const autoLink = candidates.filter((c) => c.confidence === 'high')
   const review = candidates.filter((c) => c.confidence !== 'high')
@@ -120,8 +124,30 @@ export async function runDetection(db, { locationId, commit = false, actorId }) 
     loadSuggestionsForLocation(db, locationId),
   ])
 
+  // 1b. Build primaryByGroup from the loaded contacts' person_group_ids
+  let primaryByGroup = new Map()
+  const groupIds = [...new Set(contacts.map((c) => c.person_group_id).filter(Boolean))]
+  if (groupIds.length > 0) {
+    try {
+      const { data: groups, error } = await db
+        .from('person_groups')
+        .select('id, primary_contact_id')
+        .in('id', groupIds)
+      if (!error && Array.isArray(groups)) {
+        for (const g of groups) {
+          if (g.primary_contact_id) {
+            primaryByGroup.set(g.id, g.primary_contact_id)
+          }
+        }
+      }
+    } catch (e) {
+      // Degrade safely: detection still runs without primaryByGroup
+      console.error('[person-detect] primaryByGroup fetch error:', e?.message || e)
+    }
+  }
+
   // 2. Plan
-  const { candidates, autoLink, review } = planDetection({ contacts, existingSuggestions })
+  const { candidates, autoLink, review } = planDetection({ contacts, existingSuggestions, primaryByGroup })
 
   const counts = {
     high: autoLink.length,
@@ -268,6 +294,9 @@ export async function runDetection(db, { locationId, commit = false, actorId }) 
     }
   }
 
+  // 4d. Supersede redundant pending suggestions (both endpoints already in same group)
+  const superseded = await supersedeRedundantPending(db, locationId)
+
   return {
     dryRun: false,
     counts,
@@ -275,5 +304,93 @@ export async function runDetection(db, { locationId, commit = false, actorId }) 
     skipped,
     failures,
     totalCandidates: candidates.length,
+    superseded,
+  }
+}
+
+// ---------------------------------------------------------------------------
+// supersedeRedundantPending (IO, commit-only)
+// ---------------------------------------------------------------------------
+
+/**
+ * supersedeRedundantPending(db, locationId)
+ *
+ * Finds pending person_link_suggestions where BOTH contact endpoints already
+ * share the same person_group_id (i.e. they've been auto-linked by this or
+ * a previous run). Marks those suggestions status='linked' so they stop
+ * cluttering the review queue.
+ *
+ * Best-effort: any error is caught and logged; never fails the caller.
+ * Returns a count of rows superseded (0 on error or nothing to supersede).
+ */
+async function supersedeRedundantPending(db, locationId) {
+  try {
+    // Load all pending suggestions for this location
+    const pendingRows = []
+    let pageStart = 0
+    while (true) {
+      const pageEnd = Math.min(pageStart + PAGE_SIZE - 1, HARD_LIMIT - 1)
+      const { data: page, error } = await db
+        .from('person_link_suggestions')
+        .select('id, contact_id_a, contact_id_b')
+        .eq('location_id', locationId)
+        .eq('status', 'pending')
+        .order('id', { ascending: true })
+        .range(pageStart, pageEnd)
+      if (error) throw error
+      if (!Array.isArray(page) || page.length === 0) break
+      pendingRows.push(...page)
+      if (page.length < PAGE_SIZE) break
+      if (pendingRows.length >= HARD_LIMIT) break
+      pageStart += PAGE_SIZE
+    }
+
+    if (pendingRows.length === 0) return 0
+
+    // Collect distinct contact ids across all pending rows
+    const contactIdSet = new Set()
+    for (const row of pendingRows) {
+      contactIdSet.add(row.contact_id_a)
+      contactIdSet.add(row.contact_id_b)
+    }
+    const contactIds = [...contactIdSet]
+
+    // Fetch current person_group_id for each contact
+    const { data: contactRows, error: cErr } = await db
+      .from('contacts')
+      .select('id, person_group_id')
+      .in('id', contactIds)
+    if (cErr) throw cErr
+
+    const groupOfContact = new Map()
+    for (const c of contactRows || []) {
+      if (c.person_group_id) groupOfContact.set(c.id, c.person_group_id)
+    }
+
+    // Find pending suggestions where both endpoints share the same group
+    const redundantIds = []
+    for (const row of pendingRows) {
+      const gA = groupOfContact.get(row.contact_id_a)
+      const gB = groupOfContact.get(row.contact_id_b)
+      if (gA && gB && gA === gB) {
+        redundantIds.push(row.id)
+      }
+    }
+
+    if (redundantIds.length === 0) return 0
+
+    // Mark redundant rows as linked (superseded — already in the same person group)
+    const decidedAt = new Date().toISOString()
+    const { error: uErr } = await db
+      .from('person_link_suggestions')
+      .update({ status: 'linked', decided_at: decidedAt })
+      .in('id', redundantIds)
+    if (uErr) throw uErr
+
+    return redundantIds.length
+  } catch (e) {
+    // Best-effort: cleanup failure must never fail the commit
+    console.error('[person-detect] supersedeRedundantPending error:', e?.message || e)
+    return 0
   }
 }
