@@ -127,7 +127,7 @@ export const ALL_NAV = [
   { href: '/live', label: 'Live HR', icon: Heart, permission: 'studio_management', section: 'gym' },
 
   // ── Automations ────────────────────────────────────────────────
-  { href: '/automations', label: 'Automations', icon: Workflow, permission: 'automations', section: 'automations' },
+  { href: '/automations', label: 'Automations', icon: Workflow, anyPermission: ['automations', 'email', 'whatsapp'], section: 'automations' },
 
   // ── Studio Management — expandable group ───────────────────────
   // Parent route /studio-management renders the door-unlock panel
