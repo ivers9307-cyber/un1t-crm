@@ -40,8 +40,10 @@ const nextConfig = {
       // Clean public URLs for each studio's landing page. The split
       // chooser lives at /welcome; these map the pretty paths to the
       // per-studio pages (resolved by landing_page_settings.public_path).
-      { source: '/stillorgan',    destination: '/welcome/stillorgan' },
-      { source: '/hatch-street',  destination: '/welcome/hatch-street' },
+      { source: '/stillorgan',         destination: '/welcome/stillorgan' },
+      { source: '/hatch-street',       destination: '/welcome/hatch-street' },
+      { source: '/stillorgan/events',  destination: '/welcome/stillorgan/events' },
+      { source: '/hatch-street/events', destination: '/welcome/hatch-street/events' },
 
       // Apex marketing domain: when someone lands on the bare
       // un1tdublin.com root, serve the split chooser (/welcome) rather

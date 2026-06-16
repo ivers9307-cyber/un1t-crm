@@ -774,6 +774,7 @@ export function SiteHeader({
   sticky = false,
   ctaHref = null,
   ctaLabel = 'Book a free consult',
+  eventsHref = null,
 }) {
   return (
     <header
@@ -803,12 +804,17 @@ export function SiteHeader({
         ) : (
           <div className="font-display font-extrabold text-2xl tracking-widest text-white">UN1T</div>
         )}
-        {sticky && ctaHref && (
-          <a href={ctaHref} className="lp-btn !px-5 !py-2.5 !text-sm shrink-0">
-            {ctaLabel}
-            <span className="lp-btn-arrow hidden sm:inline" aria-hidden="true">→</span>
-          </a>
-        )}
+        <div className="flex items-center gap-4">
+          {eventsHref && (
+            <Link href={eventsHref} className="text-white/80 hover:text-white transition-colors text-sm font-medium shrink-0">Events</Link>
+          )}
+          {sticky && ctaHref && (
+            <a href={ctaHref} className="lp-btn !px-5 !py-2.5 !text-sm shrink-0">
+              {ctaLabel}
+              <span className="lp-btn-arrow hidden sm:inline" aria-hidden="true">→</span>
+            </a>
+          )}
+        </div>
       </div>
     </header>
   )
