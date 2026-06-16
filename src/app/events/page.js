@@ -11,6 +11,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { Plus, Flag, ExternalLink, Users } from 'lucide-react'
 import { getAppUrl } from '@/lib/app-url'
+import { formatSignupSummary } from '@/lib/event-signups'
 
 export const dynamic = 'force-dynamic'
 
@@ -73,7 +74,7 @@ export default async function EventsIndexPage(props) {
       .select(`
         id, name, slug, race_date, start_time, capacity, allowed_team_sizes,
         active, kind, shared, location_id, registration_opens_at, registration_closes_at,
-        registrations:race_registrations ( id, status )
+        registrations:race_registrations ( id, status, team:teams ( size ) )
       `)
       .or(`location_id.eq.${activeLocationId},shared.eq.true`)
       .order('race_date', { ascending: false })
@@ -183,10 +184,10 @@ export default async function EventsIndexPage(props) {
               </thead>
               <tbody className="divide-y divide-un1t-border">
                 {visible.map((r) => {
-                  const confirmedCount = (r.registrations || []).filter(x => x.status === 'confirmed').length
                   const publicUrl = appOrigin ? `${appOrigin}/event/${r.slug}` : `/event/${r.slug}`
                   const isRace = (r.kind || 'race') === 'race'
                   const badge = kindBadge(r.kind || 'race')
+                  const signupSummary = formatSignupSummary(r.registrations, { isRace, capacity: r.capacity })
                   return (
                     <tr key={r.id} className="hover:bg-un1t-border/20">
                       <td className="p-3">
@@ -204,8 +205,8 @@ export default async function EventsIndexPage(props) {
                         {r.start_time && <span className="text-[11px] text-un1t-muted ml-1">@ {r.start_time.slice(0, 5)}</span>}
                       </td>
                       <td className="p-3 text-un1t-subtle">
-                        <span className="inline-flex items-center gap-1">
-                          <Users size={11} /> {confirmedCount}{r.capacity ? ` / ${r.capacity}` : ''}
+                        <span className="inline-flex items-center gap-1 whitespace-nowrap">
+                          <Users size={11} /> {signupSummary}
                         </span>
                       </td>
                       <td className="p-3 text-un1t-subtle text-xs">
@@ -274,10 +275,10 @@ export default async function EventsIndexPage(props) {
               footer row with action links spaced for tap targets. */}
           <div className="md:hidden space-y-2">
             {races.map((r) => {
-              const confirmedCount = (r.registrations || []).filter(x => x.status === 'confirmed').length
               const publicUrl = appOrigin ? `${appOrigin}/event/${r.slug}` : `/event/${r.slug}`
               const isRace = (r.kind || 'race') === 'race'
               const badge = kindBadge(r.kind || 'race')
+              const signupSummary = formatSignupSummary(r.registrations, { isRace, capacity: r.capacity })
               return (
                 <div
                   key={r.id}
@@ -305,8 +306,8 @@ export default async function EventsIndexPage(props) {
                       {r.race_date}
                       {r.start_time && <span className="text-un1t-muted"> · {r.start_time.slice(0, 5)}</span>}
                     </span>
-                    <span className="inline-flex items-center gap-1">
-                      <Users size={11} /> {confirmedCount}{r.capacity ? ` / ${r.capacity}` : ''}
+                    <span className="inline-flex items-center gap-1 whitespace-nowrap">
+                      <Users size={11} /> {signupSummary}
                     </span>
                     {(r.allowed_team_sizes || []).length > 0 && (
                       <span className="text-un1t-muted">
