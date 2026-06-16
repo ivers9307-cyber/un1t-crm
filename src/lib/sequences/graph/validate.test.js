@@ -75,6 +75,18 @@ describe('validateGraph', () => {
     expect(err.nodeId).toBe('n1')
   })
 
+  it('accepts a glofox_provision node with no config', () => {
+    const g = {
+      version: 1,
+      trigger: { type: 'manual', config: {} },
+      nodes: [{ id: 'n1', type: 'glofox_provision', config: {} }],
+      edges: [{ from: 'trigger', to: 'n1' }],
+    }
+    const r = validateGraph(g)
+    expect(r.ok).toBe(true)
+    expect(r.errors).toEqual([])
+  })
+
   // Trigger-taxonomy reconciliation (PR3c-4): the runner fires these, so the
   // graph schema must accept them. Previously schema.js had 'order_status' /
   // 'achievement' (never the runner's names) and the builder couldn't load such

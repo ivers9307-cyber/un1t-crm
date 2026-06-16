@@ -27,6 +27,8 @@ function requiredConfigError(node) {
       return need(typeof c.url === 'string' && /^https:\/\//.test(c.url), 'webhook needs an https url')
     case 'branch':
       return need(c.predicate && c.predicate.type, 'branch needs a predicate')
+    case 'glofox_provision':
+      return null // no required config — uses the location's trial settings
     default:
       return null
   }

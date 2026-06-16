@@ -41,6 +41,7 @@ const TYPE_LABELS = {
   email: 'Email', whatsapp: 'WhatsApp', sms: 'SMS', wait: 'Wait',
   apply_tag: 'Apply tag', update_field: 'Update field', internal_task: 'Internal task',
   webhook: 'Webhook', branch: 'Branch', move_pipeline_stage: 'Move pipeline',
+  glofox_provision: 'Create in Glofox',
 }
 
 function humaniseDelay(c) {
@@ -77,6 +78,7 @@ export function describeNode(node) {
     case 'webhook': summary = c.url ? `${c.method || 'POST'} ${c.url}` : 'Webhook'; break
     case 'move_pipeline_stage': summary = c.stage_slug ? `Move to ${c.stage_slug}` : 'Move pipeline stage'; break
     case 'branch': summary = describePredicate(c.predicate); break
+    case 'glofox_provision': summary = 'Create Glofox account + trial'; break
     default: summary = typeLabel
   }
   return { typeLabel, summary }
