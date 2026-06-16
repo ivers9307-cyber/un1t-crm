@@ -53,6 +53,11 @@ describe('validateAlphaSenderId', () => {
     expect(validateAlphaSenderId('A1B2C3D4E5F')).toBeNull() // 11 chars exactly
   })
 
+  it('accepts spaces between words (Twilio allows the space character, ≤11 chars)', () => {
+    expect(validateAlphaSenderId('UN1T STILL')).toBeNull() // 10 chars incl. the space
+    expect(validateAlphaSenderId('UN1T HATCH')).toBeNull()
+  })
+
   it('rejects empty / non-string', () => {
     expect(validateAlphaSenderId('')).toMatch(/empty/i)
     expect(validateAlphaSenderId(null)).toMatch(/string/i)
@@ -64,10 +69,19 @@ describe('validateAlphaSenderId', () => {
     expect(validateAlphaSenderId('TWELVECHARSXX')).toMatch(/exceed 11/i)
   })
 
-  it('rejects spaces / punctuation', () => {
-    expect(validateAlphaSenderId('UN1T HATCH')).toMatch(/alphanumeric/i)
-    expect(validateAlphaSenderId('UN1T-Hatch')).toMatch(/alphanumeric/i)
-    expect(validateAlphaSenderId('UN1T.Hatch')).toMatch(/alphanumeric/i)
+  it('rejects punctuation (hyphen, dot, etc.)', () => {
+    expect(validateAlphaSenderId('UN1T-Hatch')).toMatch(/letters, numbers and spaces/i)
+    expect(validateAlphaSenderId('UN1T.Hatch')).toMatch(/letters, numbers and spaces/i)
+  })
+
+  it('rejects leading or trailing spaces', () => {
+    expect(validateAlphaSenderId(' UN1T')).toMatch(/start or end with a space/i)
+    expect(validateAlphaSenderId('UN1T ')).toMatch(/start or end with a space/i)
+  })
+
+  it('requires at least one letter (rejects all-number / all-space IDs)', () => {
+    expect(validateAlphaSenderId('12345')).toMatch(/at least one letter/i)
+    expect(validateAlphaSenderId('   ')).toBeTruthy() // rejected — it has leading/trailing space
   })
 })
 

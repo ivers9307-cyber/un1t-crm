@@ -22,9 +22,9 @@
 // Sender format: alphanumeric ID (e.g. 'UN1T'), full E.164 number
 // (e.g. '+35315550000'), or a Messaging Service SID ('MGxxx...').
 // Twilio's API treats the From param as opaque, so any of those
-// work in the same field. Alpha sender IDs are 11 chars max,
-// alphanumeric only — validated app-side at the Location Settings
-// edit form.
+// work in the same field. Alpha sender IDs are 11 chars max —
+// letters, numbers and spaces, with at least one letter — validated
+// app-side at the Location Settings edit form.
 //
 // Refs: https://www.twilio.com/docs/sms/api/message-resource
 
@@ -175,10 +175,15 @@ export function getLocationSenderId(location) {
 }
 
 /**
- * Validate an alpha sender ID before persisting. Twilio carrier
- * rules: 1-11 chars, alphanumeric only (no spaces, no punctuation).
- * Returns null if valid, or a short human message naming the
- * problem.
+ * Validate an alpha sender ID before persisting. Twilio's rules
+ * (https://www.twilio.com/docs/glossary/what-alphanumeric-sender-id):
+ * 1-11 characters; letters, numbers AND spaces are allowed; must
+ * contain at least one letter (an all-number ID looks like a phone
+ * number and is rejected). We additionally disallow leading/trailing
+ * spaces. (Twilio also permits `- + _ &`, but we keep the set to
+ * alphanumerics + space — the common case — and reject other
+ * punctuation rather than guess per-country support.) Returns null if
+ * valid, or a short human message naming the problem.
  *
  * @param {string} value
  * @returns {string | null}
@@ -187,7 +192,9 @@ export function validateAlphaSenderId(value) {
   if (typeof value !== 'string') return 'Sender ID must be a string'
   if (value.length === 0) return 'Sender ID cannot be empty'
   if (value.length > 11) return 'Sender ID cannot exceed 11 characters'
-  if (!/^[A-Za-z0-9]+$/.test(value)) return 'Sender ID must be alphanumeric (no spaces or punctuation)'
+  if (value !== value.trim()) return 'Sender ID cannot start or end with a space'
+  if (!/^[A-Za-z0-9 ]+$/.test(value)) return 'Sender ID can only contain letters, numbers and spaces'
+  if (!/[A-Za-z]/.test(value)) return 'Sender ID must contain at least one letter'
   return null
 }
 
