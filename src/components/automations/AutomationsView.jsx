@@ -5,14 +5,12 @@ import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { Loader2, Zap, AlertCircle, ExternalLink } from 'lucide-react'
 
-export default function AutomationsView({ locationId, locationName, cards }) {
+export default function AutomationsView({ locationId, _locationName, cards }) {
   return (
-    <div className="max-w-3xl mx-auto p-4 space-y-4">
+    <div className="space-y-4">
       <div>
-        <h1 className="text-xl font-semibold text-un1t-white">Automations</h1>
-        <p className="text-sm text-un1t-light">
-          Things that run automatically for {locationName || 'this location'}. Each one is off until you turn it on.
-        </p>
+        <h2 className="text-lg font-semibold text-un1t-text">Quick automations</h2>
+        <p className="text-xs text-un1t-subtle mt-0.5">Each one is off until you turn it on.</p>
       </div>
 
       {cards.map((card) => (

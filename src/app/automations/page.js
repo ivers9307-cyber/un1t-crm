@@ -49,6 +49,10 @@ export default async function AutomationsPage() {
 
   return (
     <div className="p-6 max-w-5xl mx-auto space-y-10">
+      <div>
+        <h1 className="text-xl font-semibold text-un1t-text">Automations</h1>
+        <p className="text-sm text-un1t-subtle mt-1">Things that run by themselves for {location?.name || 'your studio'}</p>
+      </div>
       {canCurated && (
         <AutomationsView locationId={location?.id || null} locationName={location?.name || ''} cards={cards} />
       )}
