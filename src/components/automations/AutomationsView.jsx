@@ -109,15 +109,22 @@ function AutomationCard({ card, locationId }) {
           </div>
           <p className="text-sm text-un1t-light mt-1">{card.description}</p>
         </div>
-        <button
-          type="button"
-          onClick={toggle}
-          disabled={disabled}
-          aria-pressed={enabled}
-          className={`shrink-0 inline-flex h-6 w-11 items-center rounded-full transition ${enabled ? 'bg-emerald-500' : 'bg-un1t-gray'} disabled:opacity-40`}
-        >
-          <span className={`h-5 w-5 rounded-full bg-white transition ${enabled ? 'translate-x-5' : 'translate-x-0.5'}`} />
-        </button>
+        <div className="flex items-center gap-2 shrink-0">
+          <span className={`text-xs font-semibold ${enabled ? 'text-emerald-700' : 'text-un1t-light'}`}>
+            {enabled ? 'On' : 'Off'}
+          </span>
+          <button
+            type="button"
+            onClick={toggle}
+            disabled={disabled}
+            aria-pressed={enabled}
+            aria-label={enabled ? 'Turn automation off' : 'Turn automation on'}
+            title={disabled ? 'Connect Glofox at this location to enable' : (enabled ? 'Turn off' : 'Turn on')}
+            className={`inline-flex h-6 w-11 items-center rounded-full border transition disabled:opacity-50 disabled:cursor-not-allowed ${enabled ? 'bg-emerald-500 border-emerald-600' : 'bg-un1t-mid border-un1t-mid'}`}
+          >
+            <span className={`h-5 w-5 rounded-full bg-white shadow-sm transition ${enabled ? 'translate-x-5' : 'translate-x-0.5'}`} />
+          </button>
+        </div>
       </div>
 
       <div className="mt-3 text-xs">
