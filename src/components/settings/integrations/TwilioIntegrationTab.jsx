@@ -79,15 +79,15 @@ export default function TwilioIntegrationTab({ location, canEdit }) {
           type="text"
           value={senderId}
           onChange={e => setSenderId(e.target.value)}
-          placeholder="e.g. UN1T or UN1THATCH"
+          placeholder="e.g. UN1T or UN1T STILL"
           maxLength={11}
-          pattern="[A-Za-z0-9]*"
+          pattern="[A-Za-z0-9 ]*"
           className="w-full max-w-xs bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm font-mono text-un1t-text"
         />
         <p className="text-[11px] text-un1t-muted mt-1">
-          Max 11 chars, alphanumeric only (no spaces or punctuation). Some carriers
-          require pre-registration of branded sender IDs — check Twilio's regional
-          guidelines for IE/UK before going live.
+          Max 11 chars — letters, numbers and spaces (e.g. “UN1T STILL”), with at least
+          one letter and no leading/trailing space. Some carriers require pre-registration
+          of branded sender IDs — check Twilio's regional guidelines for IE/UK before going live.
         </p>
       </div>
 
