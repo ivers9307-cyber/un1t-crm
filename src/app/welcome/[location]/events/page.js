@@ -99,7 +99,7 @@ export default async function StudioEventsPage(props) {
         eventsHref={eventsHref}
       />
       <PublicEventsList studioName={studioName} cards={cards} />
-      <SiteFooter />
+      <SiteFooter ctaHref={`/${row.public_path}#book`} />
     </div>
   )
 }
