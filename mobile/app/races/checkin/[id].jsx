@@ -5,7 +5,7 @@
 // recomputed locally for optimistic toggles).
 import { useState, useCallback, useMemo } from 'react'
 import { View, Text, ScrollView, Pressable, RefreshControl, ActivityIndicator, TextInput } from 'react-native'
-import { useLocalSearchParams, Stack, useFocusEffect } from 'expo-router'
+import { useLocalSearchParams, Stack, useFocusEffect, useRouter } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { useAuth } from '../../../lib/auth-context'
 import { canMobile } from '../../../lib/permissions'
@@ -24,6 +24,7 @@ function countPeople(registrations) {
 
 export default function MobileEventCheckin() {
   const { id } = useLocalSearchParams()
+  const router = useRouter()
   const { profile, activeLocation } = useAuth()
   const canView = canMobile(profile, 'races', activeLocation)
 
@@ -104,7 +105,16 @@ export default function MobileEventCheckin() {
 
   return (
     <View className="flex-1 bg-un1t-bg">
-      <Stack.Screen options={{ title: 'Check-in', headerLeft: () => <BackHeaderLeft label="Back" fallbackHref={`/races/${id}`} /> }} />
+      <Stack.Screen options={{
+        title: 'Check-in',
+        headerLeft: () => <BackHeaderLeft label="Back" fallbackHref={`/races/${id}`} />,
+        headerRight: () => (canView ? (
+          <Pressable onPress={() => router.push('/races/scan')} className="px-2 py-1 active:opacity-60 flex-row items-center">
+            <Ionicons name="scan-outline" size={16} color="#1d4ed8" />
+            <Text className="text-blue-700 text-sm font-medium ml-1">Scan</Text>
+          </Pressable>
+        ) : null),
+      }} />
 
       {!canView ? (
         <View className="py-16 items-center px-6">
