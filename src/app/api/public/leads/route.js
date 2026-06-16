@@ -89,7 +89,7 @@ export async function POST(request) {
   try {
     const { data: contactRow } = await db
       .from('contacts')
-      .select('id, name, email, first_name, last_name, phone, source, glofox_member_id, location_id')
+      .select('id, name, email, first_name, last_name, phone, source, lead_source, glofox_member_id, location_id')
       .eq('id', contactId)
       .maybeSingle()
     if (contactRow) {

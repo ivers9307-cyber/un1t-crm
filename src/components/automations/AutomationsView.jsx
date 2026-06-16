@@ -49,7 +49,9 @@ function AutomationCard({ card, locationId }) {
   async function runBackfill() {
     setBf((s) => ({ ...s, phase: 'running', error: null, done: 0, created: 0, linked: 0, needs_review: 0, failed: 0 }))
     try {
-      while (true) {
+      // Hard cap (500 batches × 20 = 10k) as belt-and-braces; real
+      // termination is the server's remaining===0 / processed===0 below.
+      for (let i = 0; i < 500; i++) {
         const res = await fetch(`/api/automations/${card.key}/backfill`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },

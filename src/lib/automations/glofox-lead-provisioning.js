@@ -21,7 +21,9 @@ export function qualifiesForGlofoxProvisioning(contact) {
   if (!contact) return false
   if (contact.glofox_member_id) return false
   if (!contact.email) return false
-  if (contact.source === 'classpass') return false
+  // ClassPass is tracked via lead_source='classpass' (the codebase
+  // convention); `source` never holds it, but check both belt-and-braces.
+  if (contact.source === 'classpass' || contact.lead_source === 'classpass') return false
   return true
 }
 
