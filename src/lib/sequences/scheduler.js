@@ -26,6 +26,7 @@ import {
   internalTaskStep,
   processBranchStep,
   movePipelineStageStep,
+  glofoxProvisionStep,
 } from './steps.js'
 
 export const MAX_ERRORS = 5
@@ -332,6 +333,12 @@ export async function runSequences({ now = new Date() } = {}) {
         // pipeline stage. Config: { stage_slug }. Writes a
         // 'pipeline' activity row for the audit trail. Idempotent.
         await movePipelineStageStep(db, { step, contact, sequence })
+        sendId = null
+      } else if (step.step_type === 'glofox_provision') {
+        // AUTOMATIONS Phase 1 — create the contact in Glofox + attach
+        // the trial. No send_id. Idempotent + audited; per-contact
+        // failures land in the Glofox Review queue, not as runner errors.
+        await glofoxProvisionStep(db, { contact, sequence })
         sendId = null
       } else {
         throw new Error(`Unknown step_type "${step.step_type}".`)
