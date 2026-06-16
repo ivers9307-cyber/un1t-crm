@@ -16,6 +16,8 @@
 import { sendTransactionalEmail } from './postmark'
 import { sendLocationSms, TwilioError } from './twilio'
 import { formatWeekdayLongDateInTZ } from './dates'
+import { getAppUrl } from './app-url'
+import { signCheckinToken } from './event-checkin-tokens'
 
 function fmtRaceDate(dateStr) {
   if (!dateStr) return ''
@@ -90,6 +92,19 @@ export async function sendRaceConfirmations({ db, paymentId }) {
     (a.name || '').localeCompare(b.name || '')
   )
 
+  // EVENT-CHECKIN.B — give each member a per-person check-in QR. The image is
+  // a public signed-token endpoint (renders reliably in email clients); the
+  // QR opens a staff-only scan page, so it's safe to expose.
+  const appOrigin = (() => { try { return new URL(getAppUrl()).origin } catch { return '' } })()
+  const checkinSecret = process.env.SUPABASE_SERVICE_ROLE_KEY || ''
+  const checkinEventId = race?.id || null
+  const checkinRegistrationId = reg?.id || null
+  const teamMembersWithQr = teamMembers.map((m) => {
+    if (!appOrigin || !checkinEventId || !checkinRegistrationId || !checkinSecret) return { ...m, qrSrc: '' }
+    const token = signCheckinToken({ eventId: checkinEventId, registrationId: checkinRegistrationId, memberId: m.id }, checkinSecret)
+    return { ...m, qrSrc: `${appOrigin}/api/public/events/checkin-qr?t=${encodeURIComponent(token)}` }
+  })
+
   const ctx = {
     raceName: race?.name || 'UN1T Race',
     raceDateLabel: fmtRaceDate(race?.race_date),
@@ -99,7 +114,7 @@ export async function sendRaceConfirmations({ db, paymentId }) {
     locationName: location?.name || '',
     teamName: team?.name || '',
     teamSize: team?.size || 0,
-    teamMembers,
+    teamMembers: teamMembersWithQr,
     captainFirstName: (payment.contact_name || '').split(' ')[0] || '',
     amountLabel: payment.amount_cents > 0 ? fmtMoney(payment.amount_cents, payment.currency) : 'Free entry',
     memberCount: payment.member_count || 0,
@@ -185,7 +200,15 @@ async function sendEmail({ payment, ctx }) {
 
   <h3 style="font-size:16px;margin:24px 0 8px">Your team</h3>
   <ul style="padding-left:20px;margin:0 0 24px;font-size:14px;line-height:1.7">${memberLineup}</ul>
-
+${ctx.teamMembers.some((m) => m.qrSrc) ? `
+  <h3 style="font-size:16px;margin:24px 0 8px">Check-in codes</h3>
+  <p style="margin:0 0 12px;color:#666;font-size:13px">Show your code to a team member at the door for a quick check-in.</p>
+  <table cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;margin:0 0 24px">
+    ${ctx.teamMembers.filter((m) => m.qrSrc).map((m) => `<tr>
+      <td style="padding:10px 0;font-size:14px;vertical-align:middle">${escapeHtml(m.name)}${m.role === 'captain' ? ' <em style="color:#666">(captain)</em>' : ''}</td>
+      <td style="padding:10px 0;text-align:right"><img src="${m.qrSrc}" alt="Check-in code" width="110" height="110" style="border:1px solid #eee;border-radius:8px"/></td>
+    </tr>`).join('')}
+  </table>` : ''}
   <div style="background:#f5f5f5;padding:16px;border-radius:8px;font-size:13px;color:#333;line-height:1.5">
     <strong>What's next:</strong> arrive 30 minutes before your wave. Bring water, a towel, and your race-day energy. We'll send a reminder the day before with parking + check-in details.
   </div>
