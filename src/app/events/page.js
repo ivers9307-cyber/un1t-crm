@@ -259,7 +259,7 @@ export default async function EventsIndexPage(props) {
               with name + status, sub-row with date + signup count,
               footer row with action links spaced for tap targets. */}
           <div className="md:hidden space-y-2">
-            {races.map((r) => {
+            {visible.map((r) => {
               const publicUrl = appOrigin ? `${appOrigin}/event/${r.slug}` : `/event/${r.slug}`
               const isRace = isRaceKind(r.kind)
               const badge = kindBadge(r.kind || 'race')
