@@ -19,7 +19,6 @@ export default function AutomationsView({ locationId, _locationName, cards }) {
 
       <div className="text-xs text-un1t-light border-t border-un1t-gray pt-3">
         See also:{' '}
-        <Link href="/communications/sequences" className="underline">Sequences</Link> (message automations) ·{' '}
         <Link href="/settings/customer-agent" className="underline">Mia agent</Link>
       </div>
     </div>

@@ -27,7 +27,7 @@ export default function InstallTemplateButton({ templateId, templateName }) {
       })
       const j = await r.json()
       if (!r.ok || j.success === false) throw new Error(j.error || `Install failed (${r.status})`)
-      router.push(`/communications/sequences/${j.data.sequence_id}`)
+      router.push(`/automations/${j.data.sequence_id}`)
     } catch (e) {
       setError(e.message || 'Install failed')
       setBusy(false)

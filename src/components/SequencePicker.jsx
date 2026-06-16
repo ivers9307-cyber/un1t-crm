@@ -215,7 +215,7 @@ export default function SequencePicker({ contactIds, locationId, variant = 'popo
             <div className="text-xs text-un1t-subtle py-2">
               No active sequences at this location.
               <br />
-              <Link href="/communications/sequences" className="text-blue-400 hover:underline">
+              <Link href="/automations" className="text-blue-400 hover:underline">
                 Create one →
               </Link>
             </div>

@@ -143,7 +143,7 @@ export default function SequenceFlowBuilder({ graph, sequence, isDraft }) {
     <div className="max-w-6xl mx-auto px-4 py-6">
       <div className="flex items-start justify-between gap-4 mb-1">
         <div className="min-w-0">
-          <Link href="/communications/sequences" className="text-xs text-un1t-subtle hover:text-un1t-text">← All sequences</Link>
+          <Link href="/automations" className="text-xs text-un1t-subtle hover:text-un1t-text">← All automations</Link>
           <h1 className="text-xl font-semibold text-un1t-text truncate mt-1">{sequence?.name || 'Sequence'}</h1>
         </div>
         <div className="flex items-center gap-2 shrink-0">

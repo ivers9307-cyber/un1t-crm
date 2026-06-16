@@ -189,7 +189,7 @@ export default async function CommunicationsHub() {
         )}
         {canEmail && (
           <ActionCard
-            href="/communications/sequences"
+            href="/automations"
             icon={Repeat}
             color="bg-purple-500/20 text-purple-400"
             title="Sequences"

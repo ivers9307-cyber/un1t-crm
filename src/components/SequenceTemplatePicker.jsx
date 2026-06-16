@@ -52,7 +52,7 @@ export default function SequenceTemplatePicker() {
         setBusyId(null)
         return
       }
-      router.push(`/communications/sequences/${j.data.sequence_id}`)
+      router.push(`/automations/${j.data.sequence_id}`)
     } catch (e) {
       setCreateError(e.message || 'Network error')
       setBusyId(null)

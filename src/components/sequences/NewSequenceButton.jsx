@@ -23,7 +23,7 @@ export default function NewSequenceButton({ className, label = 'New Sequence' })
       })
       const j = await r.json()
       if (j.success && j.sequence?.id) {
-        router.push(`/communications/sequences/${j.sequence.id}`)
+        router.push(`/automations/${j.sequence.id}`)
       } else {
         setBusy(false)
         window.alert(j.error || 'Could not create the sequence.')

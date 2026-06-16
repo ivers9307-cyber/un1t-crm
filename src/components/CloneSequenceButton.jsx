@@ -33,7 +33,7 @@ export default function CloneSequenceButton({ sequenceId, sequenceName }) {
       const r = await fetch(`/api/sequences/${sequenceId}/clone`, { method: 'POST' })
       const j = await r.json()
       if (!r.ok || j.success === false) throw new Error(j.error || `Clone failed (${r.status})`)
-      router.push(`/communications/sequences/${j.data.sequence_id}`)
+      router.push(`/automations/${j.data.sequence_id}`)
     } catch (err) {
       setError(err.message || 'Clone failed')
       setBusy(false)
