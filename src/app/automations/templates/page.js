@@ -95,7 +95,7 @@ export default async function FlowTemplatesGallery() {
           </Link>
           <h2 className="text-lg font-semibold">Flow templates</h2>
           <p className="text-xs text-un1t-subtle mt-0.5">
-            Pre-built automation recipes. Install one, then edit it like any other sequence — triggers, steps, copy, timing all yours to change.
+            Pre-built automation recipes. Install one, then edit it like any other automation — triggers, steps, copy, timing all yours to change.
           </p>
         </div>
       </div>

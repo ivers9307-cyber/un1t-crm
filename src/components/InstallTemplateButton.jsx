@@ -1,7 +1,7 @@
 'use client'
 
 // InstallTemplateButton — small client-side button used on the
-// Flow templates gallery (/communications/sequences/templates).
+// Flow templates gallery (/automations/templates).
 // Posts to the existing /api/sequences/from-template endpoint and
 // redirects into the editor for the freshly-cloned draft. Same
 // endpoint the older SequenceTemplatePicker modal uses; this is

@@ -144,7 +144,7 @@ export default function SequenceFlowBuilder({ graph, sequence, isDraft }) {
       <div className="flex items-start justify-between gap-4 mb-1">
         <div className="min-w-0">
           <Link href="/automations" className="text-xs text-un1t-subtle hover:text-un1t-text">← All automations</Link>
-          <h1 className="text-xl font-semibold text-un1t-text truncate mt-1">{sequence?.name || 'Sequence'}</h1>
+          <h1 className="text-xl font-semibold text-un1t-text truncate mt-1">{sequence?.name || 'Automation'}</h1>
         </div>
         <div className="flex items-center gap-2 shrink-0">
           <span className={`text-xs px-2 py-0.5 rounded-full ${STATUS_BADGE[status] || STATUS_BADGE.draft}`}>{status}</span>

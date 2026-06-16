@@ -4,8 +4,8 @@
 // recipe in src/lib/sequence-templates.js + clones the picked one
 // into a fresh draft sequence (Tier 3B).
 //
-// Lives next to the "New Sequence" button on
-// /communications/sequences. Opens a modal, fetches the template
+// Lives next to the "New automation" button on
+// /automations. Opens a modal, fetches the template
 // list lazily, and on click POSTs to /api/sequences/from-template
 // then redirects the operator into the editor for the new draft.
 
