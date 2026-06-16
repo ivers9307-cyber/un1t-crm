@@ -15,6 +15,7 @@ import { validateTeamRoster, computeTeamPricing } from '@/lib/member-validation'
 import { createRacePayment } from '@/lib/race-payments'
 import { sendRaceConfirmations } from '@/lib/race-confirmations'
 import { getAppUrl } from '@/lib/app-url'
+import { wouldFit } from '@/lib/event-signups'
 
 /**
  * Register one person for an event when it's FREE for them.
@@ -52,11 +53,16 @@ export async function registerSoloEventEntry(db, { race, waveId, contact }) {
     return { ok: false, reason: 'bad_wave', message: 'Pick a wave — this event has more than one start time.' }
   }
   if (wave?.capacity != null) {
-    const { count } = await db.from('race_registrations')
-      .select('id', { count: 'exact', head: true })
+    // EVENTS-CAPACITY-MODE.1 — teams = one per registration, people = sum
+    // of team sizes. A solo entry adds exactly one of whichever unit.
+    // Mirrors the public register route's gate.
+    const mode = race.capacity_mode === 'people' ? 'people' : 'teams'
+    const { data: waveRegs } = await db.from('race_registrations')
+      .select('status, team:teams ( size )')
       .eq('wave_id', wave.id)
-      .not('status', 'in', '("cancelled","no_show")')
-    if ((count || 0) >= wave.capacity) return { ok: false, reason: 'wave_full' }
+      .eq('status', 'confirmed')
+      .limit(2000)
+    if (!wouldFit(wave.capacity, waveRegs || [], mode, 1)) return { ok: false, reason: 'wave_full' }
   }
 
   // Member validation + pricing — identical to the route.

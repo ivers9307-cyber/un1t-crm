@@ -36,6 +36,9 @@ const UpdateSchema = z.object({
   // accepts kind-NULL keep semantics — only patches when explicitly set.
   staff_required: z.number().int().min(0).max(50).optional(),
   active: z.boolean().optional(),
+  // EVENTS-CAPACITY-MODE.1 (mig 280): cap by teams or people. Scalar —
+  // flows through the generic `updates` patch in PUT below.
+  capacity_mode: z.enum(['teams', 'people']).optional(),
   // Member pricing (mig 084).
   member_pricing_enabled: z.boolean().optional(),
   members_only: z.boolean().optional(),

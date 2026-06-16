@@ -11,7 +11,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { Plus, Flag, ExternalLink, Users } from 'lucide-react'
 import { getAppUrl } from '@/lib/app-url'
-import { formatSignupSummary } from '@/lib/event-signups'
+import { formatSignupSummary, sumWaveCapacity } from '@/lib/event-signups'
 
 export const dynamic = 'force-dynamic'
 
@@ -72,8 +72,9 @@ export default async function EventsIndexPage(props) {
     const { data } = await db
       .from('race_events')
       .select(`
-        id, name, slug, race_date, start_time, capacity, allowed_team_sizes,
+        id, name, slug, race_date, start_time, capacity, capacity_mode, allowed_team_sizes,
         active, kind, shared, location_id, registration_opens_at, registration_closes_at,
+        waves:race_waves ( capacity ),
         registrations:race_registrations ( id, status, team:teams ( size ) )
       `)
       .or(`location_id.eq.${activeLocationId},shared.eq.true`)
@@ -187,7 +188,7 @@ export default async function EventsIndexPage(props) {
                   const publicUrl = appOrigin ? `${appOrigin}/event/${r.slug}` : `/event/${r.slug}`
                   const isRace = (r.kind || 'race') === 'race'
                   const badge = kindBadge(r.kind || 'race')
-                  const signupSummary = formatSignupSummary(r.registrations, { isRace, capacity: r.capacity })
+                  const signupSummary = formatSignupSummary(r.registrations, { isRace, capacity: sumWaveCapacity(r.waves) ?? r.capacity, mode: r.capacity_mode })
                   return (
                     <tr key={r.id} className="hover:bg-un1t-border/20">
                       <td className="p-3">
@@ -278,7 +279,7 @@ export default async function EventsIndexPage(props) {
               const publicUrl = appOrigin ? `${appOrigin}/event/${r.slug}` : `/event/${r.slug}`
               const isRace = (r.kind || 'race') === 'race'
               const badge = kindBadge(r.kind || 'race')
-              const signupSummary = formatSignupSummary(r.registrations, { isRace, capacity: r.capacity })
+              const signupSummary = formatSignupSummary(r.registrations, { isRace, capacity: sumWaveCapacity(r.waves) ?? r.capacity, mode: r.capacity_mode })
               return (
                 <div
                   key={r.id}

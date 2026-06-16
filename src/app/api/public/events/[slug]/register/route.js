@@ -33,6 +33,7 @@ import { findOrCreateRaceContact } from '@/lib/race-contact-linking'
 import { writeContactTags } from '@/lib/contact-tags'
 import { triggerSequencesForRaceRegistered } from '@/lib/sequences'
 import { logWarn } from '@/lib/log'
+import { wouldFit, spotsLeft } from '@/lib/event-signups'
 
 export const runtime = 'nodejs'
 
@@ -86,7 +87,7 @@ export async function POST(request, props) {
   const { data: race, error: raceErr } = await db
     .from('race_events')
     .select(`
-      id, location_id, name, slug, race_date, kind, allowed_team_sizes,
+      id, location_id, name, slug, race_date, kind, capacity_mode, allowed_team_sizes,
       registration_opens_at, registration_closes_at, active,
       member_pricing_enabled, member_fee_cents, non_member_fee_cents,
       members_only, payment_currency, create_in_glofox,
@@ -245,18 +246,39 @@ export async function POST(request, props) {
     }, { status: 400 })
   }
   if (wave.capacity != null) {
-    const { count } = await db
-      .from('race_registrations')
-      .select('*', { count: 'exact', head: true })
-      .eq('race_event_id', race.id)
-      .eq('wave_id', wave.id)
-      .eq('status', 'confirmed')
-    if ((count || 0) >= wave.capacity) {
-      return NextResponse.json({
-        success: false,
-        error: `The ${wave.label || wave.start_time.slice(0, 5)} wave is full. Pick another.`,
-        code: 'wave_full',
-      }, { status: 409 })
+    // EVENTS-CAPACITY-MODE.1 — enforce the wave cap by teams (one per
+    // registration, legacy default) or by people (sum of team sizes).
+    const mode = race.capacity_mode === 'people' ? 'people' : 'teams'
+    const waveLabel = wave.label || wave.start_time.slice(0, 5)
+    if (mode === 'people') {
+      const { data: waveRegs } = await db
+        .from('race_registrations')
+        .select('status, team:teams ( size )')
+        .eq('race_event_id', race.id)
+        .eq('wave_id', wave.id)
+        .eq('status', 'confirmed')
+        .limit(2000)
+      if (!wouldFit(wave.capacity, waveRegs || [], 'people', body.team_size)) {
+        const left = spotsLeft(wave.capacity, waveRegs || [], 'people')
+        const error = left > 0
+          ? `Only ${left} ${left === 1 ? 'spot' : 'spots'} left in the ${waveLabel} wave — a group of ${body.team_size} won't fit. Pick another.`
+          : `The ${waveLabel} wave is full. Pick another.`
+        return NextResponse.json({ success: false, error, code: 'wave_full' }, { status: 409 })
+      }
+    } else {
+      const { count } = await db
+        .from('race_registrations')
+        .select('*', { count: 'exact', head: true })
+        .eq('race_event_id', race.id)
+        .eq('wave_id', wave.id)
+        .eq('status', 'confirmed')
+      if ((count || 0) >= wave.capacity) {
+        return NextResponse.json({
+          success: false,
+          error: `The ${waveLabel} wave is full. Pick another.`,
+          code: 'wave_full',
+        }, { status: 409 })
+      }
     }
   }
 

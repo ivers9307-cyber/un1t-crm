@@ -1,7 +1,14 @@
 // Tests for the /events signup-summary helpers. Pure, Node env.
 
 import { describe, it, expect } from 'vitest'
-import { computeSignupCounts, formatSignupSummary } from './event-signups.js'
+import {
+  computeSignupCounts,
+  formatSignupSummary,
+  loadForMode,
+  spotsLeft,
+  wouldFit,
+  sumWaveCapacity,
+} from './event-signups.js'
 
 const confirmed = (size) => ({ status: 'confirmed', team: size === undefined ? undefined : { size } })
 
@@ -83,5 +90,94 @@ describe('formatSignupSummary', () => {
 
   it('handles an empty event', () => {
     expect(formatSignupSummary([], { isRace: false })).toBe('0 people · 0 signups')
+  })
+
+  it('people mode puts the cap on the headcount', () => {
+    expect(formatSignupSummary([confirmed(2), confirmed(1)], { isRace: true, capacity: 40, mode: 'people' }))
+      .toBe('3 / 40 people · 2 teams')
+    expect(formatSignupSummary([confirmed(2), confirmed(1)], { isRace: false, capacity: 40, mode: 'people' }))
+      .toBe('3 / 40 people · 2 signups')
+  })
+
+  it('teams mode puts the cap on the registration count (unchanged default)', () => {
+    expect(formatSignupSummary([confirmed(1), confirmed(1)], { isRace: true, capacity: 40, mode: 'teams' }))
+      .toBe('2 people · 2 / 40 teams')
+  })
+
+  it('shows no cap when capacity is null, in either mode', () => {
+    expect(formatSignupSummary([confirmed(2), confirmed(1)], { isRace: true, capacity: null, mode: 'people' }))
+      .toBe('3 people · 2 teams')
+  })
+})
+
+describe('loadForMode', () => {
+  it('counts teams (registrations) in teams mode', () => {
+    expect(loadForMode([confirmed(2), confirmed(1)], 'teams')).toBe(2)
+  })
+
+  it('counts people (sum of sizes) in people mode', () => {
+    expect(loadForMode([confirmed(2), confirmed(1)], 'people')).toBe(3)
+  })
+
+  it('defaults to teams when mode is missing or unknown', () => {
+    expect(loadForMode([confirmed(2), confirmed(1)])).toBe(2)
+    expect(loadForMode([confirmed(2), confirmed(1)], 'nonsense')).toBe(2)
+  })
+
+  it('ignores non-confirmed registrations in both modes', () => {
+    const regs = [confirmed(2), { status: 'cancelled', team: { size: 5 } }]
+    expect(loadForMode(regs, 'people')).toBe(2)
+    expect(loadForMode(regs, 'teams')).toBe(1)
+  })
+})
+
+describe('spotsLeft', () => {
+  it('returns null for an uncapped wave', () => {
+    expect(spotsLeft(null, [confirmed(2)], 'people')).toBeNull()
+  })
+
+  it('subtracts the people load in people mode', () => {
+    expect(spotsLeft(40, [confirmed(2), confirmed(1)], 'people')).toBe(37)
+  })
+
+  it('subtracts the team load in teams mode', () => {
+    expect(spotsLeft(40, [confirmed(2), confirmed(1)], 'teams')).toBe(38)
+  })
+
+  it('never goes negative', () => {
+    expect(spotsLeft(2, [confirmed(2), confirmed(1)], 'people')).toBe(0)
+  })
+})
+
+describe('wouldFit', () => {
+  it('always fits an uncapped wave', () => {
+    expect(wouldFit(null, [confirmed(2)], 'people', 8)).toBe(true)
+  })
+
+  it('people mode: a team fits only if the whole group fits', () => {
+    const regs = [confirmed(2), confirmed(1)] // 3 people
+    expect(wouldFit(5, regs, 'people', 2)).toBe(true)  // 3 + 2 = 5
+    expect(wouldFit(5, regs, 'people', 3)).toBe(false) // 3 + 3 = 6 > 5
+  })
+
+  it('teams mode: a registration adds one team regardless of its size', () => {
+    const regs = [confirmed(8), confirmed(8)] // 2 teams
+    expect(wouldFit(2, regs, 'teams', 8)).toBe(false) // 2 + 1 > 2
+    expect(wouldFit(3, [confirmed(1)], 'teams', 8)).toBe(true) // 1 + 1 <= 3
+  })
+})
+
+describe('sumWaveCapacity', () => {
+  it('sums wave capacities', () => {
+    expect(sumWaveCapacity([{ capacity: 40 }, { capacity: 20 }])).toBe(60)
+  })
+
+  it('treats any uncapped wave as making the whole event uncapped', () => {
+    expect(sumWaveCapacity([{ capacity: 40 }, { capacity: null }])).toBeNull()
+  })
+
+  it('returns null for no waves', () => {
+    expect(sumWaveCapacity([])).toBeNull()
+    expect(sumWaveCapacity(null)).toBeNull()
   })
 })

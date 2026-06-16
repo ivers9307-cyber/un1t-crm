@@ -6,6 +6,7 @@
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
+import { loadForMode } from '@/lib/event-signups'
 
 export const runtime = 'nodejs'
 // Force-dynamic so wave / fee edits in the operator UI show up
@@ -19,7 +20,7 @@ export async function GET(_request, props) {
   const { data, error } = await db
     .from('race_events')
     .select(`
-      id, name, slug, description, race_date, kind,
+      id, name, slug, description, race_date, kind, capacity_mode,
       registration_opens_at, registration_closes_at,
       allowed_team_sizes, location_id,
       member_pricing_enabled, member_fee_cents, non_member_fee_cents,
@@ -45,17 +46,29 @@ export async function GET(_request, props) {
   const wavesIn = (data.waves || []).slice().sort((a, b) =>
     (a.display_order ?? 0) - (b.display_order ?? 0) || (a.start_time || '').localeCompare(b.start_time || '')
   )
+  const mode = data.capacity_mode === 'people' ? 'people' : 'teams'
   const publicWaves = []
   for (const w of wavesIn) {
     let isFull = false
     if (w.capacity != null) {
-      const { count } = await db
-        .from('race_registrations')
-        .select('*', { count: 'exact', head: true })
-        .eq('race_event_id', data.id)
-        .eq('wave_id', w.id)
-        .eq('status', 'confirmed')
-      isFull = (count || 0) >= w.capacity
+      if (mode === 'people') {
+        const { data: waveRegs } = await db
+          .from('race_registrations')
+          .select('status, team:teams ( size )')
+          .eq('race_event_id', data.id)
+          .eq('wave_id', w.id)
+          .eq('status', 'confirmed')
+          .limit(2000)
+        isFull = loadForMode(waveRegs || [], 'people') >= w.capacity
+      } else {
+        const { count } = await db
+          .from('race_registrations')
+          .select('*', { count: 'exact', head: true })
+          .eq('race_event_id', data.id)
+          .eq('wave_id', w.id)
+          .eq('status', 'confirmed')
+        isFull = (count || 0) >= w.capacity
+      }
     }
     // Strip capacity from the per-wave object — only id, start_time,
     // label, display_order, is_full leave the building.

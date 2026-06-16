@@ -155,11 +155,23 @@ export default function RaceEventForm({ race, locationId }) {
   )
   const [staffRequiredTouched, setStaffRequiredTouched] = useState(isEditing)
 
+  // EVENTS-CAPACITY-MODE.1 — cap by 'teams' or 'people'. New events default
+  // by kind (race -> teams, others -> people); existing events keep their
+  // stored mode. Switching kind on a NEW event re-applies the kind default
+  // until the operator picks one explicitly.
+  const [capacityMode, setCapacityMode] = useState(
+    race?.capacity_mode || ((race?.kind || 'race') === 'race' ? 'teams' : 'people')
+  )
+  const [capacityModeTouched, setCapacityModeTouched] = useState(isEditing)
+
   function handleKindChange(newKind) {
     setKind(newKind)
     if (!staffRequiredTouched) {
       const def = kindMeta(newKind).defaultStaffRequired ?? 1
       setStaffRequired(String(def))
+    }
+    if (!capacityModeTouched) {
+      setCapacityMode(newKind === 'race' ? 'teams' : 'people')
     }
   }
 
@@ -366,6 +378,7 @@ export default function RaceEventForm({ race, locationId }) {
       registration_opens_at: registrationOpensAt ? new Date(registrationOpensAt).toISOString() : null,
       registration_closes_at: registrationClosesAt ? new Date(registrationClosesAt).toISOString() : null,
       allowed_team_sizes: meta.isLeadGen ? [1] : allowedTeamSizes,
+      capacity_mode: capacityMode,
       active,
       member_pricing_enabled: memberPricingEnabled,
       members_only: membersOnly,
@@ -716,6 +729,46 @@ export default function RaceEventForm({ race, locationId }) {
             )
           })}
         </div>
+      </div>
+      )}
+
+      {!meta.isLeadGen && (
+      <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5 space-y-3">
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle flex items-center gap-2">
+          <Users size={14} /> Capacity counts
+        </h3>
+        <p className="text-[11px] text-un1t-subtle">
+          {meta.value === 'race'
+            ? 'Whether each wave’s capacity limits the number of teams or the total number of people across all teams.'
+            : 'Whether the capacity limits the number of signups or the total number of people (a group can bring several).'}
+        </p>
+        <div className="inline-flex rounded-md border border-un1t-border overflow-hidden">
+          {[
+            { value: 'teams', label: meta.value === 'race' ? 'Teams' : 'Signups' },
+            { value: 'people', label: 'People' },
+          ].map(opt => {
+            const on = capacityMode === opt.value
+            return (
+              <button
+                key={opt.value}
+                type="button"
+                onClick={() => { setCapacityMode(opt.value); setCapacityModeTouched(true) }}
+                className={`text-xs px-4 py-1.5 ${
+                  on
+                    ? 'bg-emerald-500/15 text-emerald-700 font-medium'
+                    : 'bg-un1t-bg text-un1t-subtle hover:text-un1t-text'
+                }`}
+              >
+                {opt.label}
+              </button>
+            )
+          })}
+        </div>
+        <p className="text-[11px] text-un1t-muted">
+          {capacityMode === 'people'
+            ? 'A capacity of 40 means 40 people — a group only fits if the whole group fits.'
+            : `A capacity of 40 means 40 ${meta.value === 'race' ? 'teams' : 'signups'}, regardless of group size.`}
+        </p>
       </div>
       )}
 
