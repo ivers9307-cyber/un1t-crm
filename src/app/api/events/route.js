@@ -38,6 +38,9 @@ const CreateSchema = z.object({
   // muscle memory (where every event is a race) keeps working without
   // the form having to send the field.
   kind: z.enum(['race', 'workshop', 'seminar', 'open_day', 'masterclass', 'lead_gen']).optional(),
+  // EVENTS-CAPACITY-MODE.1 (mig 280): does per-wave capacity count teams
+  // (registrations, legacy default) or people (sum of team sizes)?
+  capacity_mode: z.enum(['teams', 'people']).optional(),
   // Mig 125: staffing requirement for the studio overview demand
   // classifier. 0-50 (matches DB CHECK). Default 1 (matches DB DEFAULT).
   // Form pre-fills per kind (race=4, workshop=1, etc.) but operator
@@ -148,6 +151,7 @@ export async function POST(request) {
     .insert({
       location_id: body.location_id,
       kind: body.kind ?? 'race',
+      capacity_mode: body.capacity_mode ?? 'teams',
       staff_required: body.staff_required ?? 1,
       name: body.name,
       slug,

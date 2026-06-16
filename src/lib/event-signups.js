@@ -32,21 +32,89 @@ export function computeSignupCounts(registrations) {
 
 /**
  * Human summary for the Signups column, e.g. "35 people · 27 teams".
- * Leads with headcount (the capacity-relevant number); the registration
- * count is secondary and labelled per kind ("teams" for races, "signups"
- * otherwise, matching the Teams/Attendees terminology used elsewhere).
- * An optional event-level capacity is appended to the signup count to
- * preserve the prior "27 / 40" behaviour.
+ * Leads with headcount; the registration count is secondary and labelled
+ * per kind ("teams" for races, "signups" otherwise). When an event-level
+ * capacity is supplied it is shown against the unit the event caps on:
+ * people mode -> "35 / 40 people · 27 teams"; teams mode (default) ->
+ * "35 people · 27 / 40 teams".
  * @param {Array} registrations
- * @param {{isRace?:boolean, capacity?:number|null}} [opts]
+ * @param {{isRace?:boolean, capacity?:number|null, mode?:'teams'|'people'}} [opts]
  * @returns {string}
  */
-export function formatSignupSummary(registrations, { isRace = false, capacity = null } = {}) {
+export function formatSignupSummary(registrations, { isRace = false, capacity = null, mode = 'teams' } = {}) {
   const { people, signups } = computeSignupCounts(registrations)
   const peopleNoun = people === 1 ? 'person' : 'people'
   const unit = isRace
     ? (signups === 1 ? 'team' : 'teams')
     : (signups === 1 ? 'signup' : 'signups')
-  const cap = Number.isFinite(capacity) && capacity > 0 ? ` / ${capacity}` : ''
+  const hasCap = Number.isFinite(capacity) && capacity > 0
+  if (hasCap && mode === 'people') {
+    return `${people} / ${capacity} ${peopleNoun} · ${signups} ${unit}`
+  }
+  const cap = hasCap ? ` / ${capacity}` : ''
   return `${people} ${peopleNoun} · ${signups}${cap} ${unit}`
+}
+
+// Capacity-mode helpers. An event caps either by team/registration count
+// ('teams', the historical default) or by headcount ('people'). The number
+// itself lives per-wave on race_waves.capacity; the mode (race_events.
+// capacity_mode) decides what that number means. These power the signup
+// gate, the public "wave full" check, the agent, and the list display.
+
+/**
+ * A wave's current load under a capacity mode. Confirmed-only.
+ * @param {Array} registrations
+ * @param {'teams'|'people'} [mode]
+ * @returns {number}
+ */
+export function loadForMode(registrations, mode) {
+  const { people, signups } = computeSignupCounts(registrations)
+  return mode === 'people' ? people : signups
+}
+
+/**
+ * Spots remaining in a wave, or null when uncapped. Never negative.
+ * @param {number|null} capacity
+ * @param {Array} registrations
+ * @param {'teams'|'people'} [mode]
+ * @returns {number|null}
+ */
+export function spotsLeft(capacity, registrations, mode) {
+  if (!Number.isFinite(capacity)) return null
+  return Math.max(0, capacity - loadForMode(registrations, mode))
+}
+
+/**
+ * Would an incoming registration of `incomingTeamSize` people fit in the
+ * wave? In teams mode a registration adds one regardless of size; in people
+ * mode the whole group must fit. Uncapped waves always fit.
+ * @param {number|null} capacity
+ * @param {Array} registrations  existing confirmed registrations in the wave
+ * @param {'teams'|'people'} mode
+ * @param {number} [incomingTeamSize]
+ * @returns {boolean}
+ */
+export function wouldFit(capacity, registrations, mode, incomingTeamSize = 1) {
+  if (!Number.isFinite(capacity)) return true
+  const increment = mode === 'people'
+    ? (Number.isFinite(incomingTeamSize) && incomingTeamSize > 0 ? incomingTeamSize : 1)
+    : 1
+  return loadForMode(registrations, mode) + increment <= capacity
+}
+
+/**
+ * Total capacity across an event's waves, or null (unlimited) when there
+ * are no waves or ANY wave is uncapped.
+ * @param {Array<{capacity?:number|null}>|null} waves
+ * @returns {number|null}
+ */
+export function sumWaveCapacity(waves) {
+  if (!Array.isArray(waves) || waves.length === 0) return null
+  let total = 0
+  for (const w of waves) {
+    const cap = w?.capacity
+    if (!Number.isFinite(cap)) return null
+    total += cap
+  }
+  return total
 }
