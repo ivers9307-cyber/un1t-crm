@@ -97,6 +97,11 @@ export async function executeTool(toolName, input, context) {
         location_id: locationId,
       }).select().single()
       if (error) return { error: error.message }
+      // AUTOMATIONS: glofox_lead_provisioning (assistant-created lead).
+      try {
+        const { maybeProvisionLeadInGlofox } = await import('@/lib/automations/glofox-lead-provisioning')
+        await maybeProvisionLeadInGlofox({ db, locationId, contact: data, source: 'assistant' })
+      } catch { /* hook never throws */ }
       return { success: true, contact: { id: data.id, name: data.name, email: data.email } }
     }
 
