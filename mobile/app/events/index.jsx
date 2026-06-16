@@ -9,22 +9,12 @@ import { useRouter, Stack, useFocusEffect } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { useAuth } from '../../lib/auth-context'
 import { canMobile } from '../../lib/permissions'
-import { listEvents, eventDateLabel } from '../../lib/events-api'
-import { eventKindLabel, eventKindTone, isRaceKind } from '../../../shared/events'
+import { listEvents, eventDateLabel, eventKindBadgeClasses } from '../../lib/events-api'
+import { eventKindLabel, isRaceKind } from '../../../shared/events'
 import BackHeaderLeft from '../../components/BackHeaderLeft'
 
-// Semantic tone (shared/events) → NativeWind pill classes.
-const TONE_CLS = {
-  emerald: 'bg-emerald-500/15 text-emerald-700',
-  sky:     'bg-sky-500/15 text-sky-700',
-  indigo:  'bg-indigo-500/15 text-indigo-700',
-  amber:   'bg-amber-500/15 text-amber-700',
-  pink:    'bg-pink-500/15 text-pink-700',
-  teal:    'bg-teal-500/15 text-teal-700',
-}
-
 function EventRow({ event, onPress }) {
-  const toneCls = TONE_CLS[eventKindTone(event.kind)] || TONE_CLS.emerald
+  const badge = eventKindBadgeClasses(event.kind)
   return (
     <Pressable
       onPress={onPress}
@@ -32,8 +22,8 @@ function EventRow({ event, onPress }) {
     >
       <View className="flex-row items-center justify-between mb-0.5">
         <Text className="text-base font-semibold text-un1t-text flex-1" numberOfLines={1}>{event.name || 'Event'}</Text>
-        <View className={`px-2 py-0.5 rounded-full ml-2 ${toneCls}`}>
-          <Text className={`text-[10px] uppercase tracking-wider ${toneCls.split(' ')[1]}`}>{eventKindLabel(event.kind)}</Text>
+        <View className={`px-2 py-0.5 rounded-full ml-2 ${badge.bg}`}>
+          <Text className={`text-[10px] uppercase tracking-wider ${badge.text}`}>{eventKindLabel(event.kind)}</Text>
         </View>
       </View>
       <Text className="text-xs text-un1t-subtle">
