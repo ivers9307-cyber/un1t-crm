@@ -293,7 +293,7 @@ import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { formatSignupSummary, sumWaveCapacity } from '@/lib/event-signups'
-import { isRaceKind, orderEventsForBrowse } from '../../../../shared/events'
+import { isRaceKind, orderEventsForBrowse } from '@shared/events'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -369,7 +369,7 @@ export async function GET(request) {
 }
 ```
 
-> Path note: `src/app/api/events/route.js` → repo-root `shared/` is `../../../../shared/events` (events → api → app → src → root).
+> Import note: web/`src` code imports the repo-root `shared/` via the **`@shared/*`** jsconfig alias (e.g. `@shared/events`) — that's the convention across `src/`. (Only the mobile RN bundle uses relative `../../../shared/...` paths, since it has no alias.)
 
 - [ ] **Step 2: Confirm the route-guard linter accepts it**
 
@@ -533,6 +533,7 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 - Create: `mobile/app/events/index.jsx`
 - Delete: `mobile/app/events.jsx`
 - Modify: `mobile/app/(tabs)/more.jsx`
+- Modify: `mobile/app/_layout.jsx` (root stack — flip the `events` screen to `headerShown: false`)
 - Delete: `mobile/lib/events-hub.js`, `mobile/lib/events-hub.test.js`
 
 - [ ] **Step 1: Delete the old chooser screen (frees the `/events` route for the folder)**
@@ -722,6 +723,16 @@ Replace the events-tile block (lines 212–223, the comment block + `const evLan
   }
 ```
 
+- [ ] **Step 4b: Flip the root-stack `events` screen to `headerShown: false`**
+
+The root `mobile/app/_layout.jsx` explicitly registers each screen. The old single-file `events.jsx` was registered with `headerShown: true` (it had no nested layout). Now that `events` is a folder route group **with its own `_layout.jsx`** (which supplies per-screen headers, exactly like the `races` group), the root entry must hide its header to avoid a double header. Change the events line to match the `races` line:
+
+```jsx
+              <Stack.Screen name="events" options={{ headerShown: false }} />
+```
+
+(Leave every other `Stack.Screen` registration untouched.)
+
 - [ ] **Step 5: Delete the now-unused events-hub module + test**
 
 ```bash
@@ -739,7 +750,7 @@ Expected: PASS. Specifically:
 - [ ] **Step 7: Commit**
 
 ```bash
-git add mobile/app/events/_layout.jsx mobile/app/events/index.jsx 'mobile/app/(tabs)/more.jsx'
+git add mobile/app/events/_layout.jsx mobile/app/events/index.jsx 'mobile/app/(tabs)/more.jsx' mobile/app/_layout.jsx
 git commit -m "EVENT-CHECKIN.E — mobile events list + route the Events tile to it
 
 New /events route group (all kinds): race rows → race-day control,
@@ -776,18 +787,9 @@ import { Ionicons } from '@expo/vector-icons'
 import { useAuth } from '../../lib/auth-context'
 import { canMobile } from '../../lib/permissions'
 import { getCheckinRoster } from '../../lib/event-checkin-api'
-import { eventDateLabel } from '../../lib/events-api'
-import { eventKindLabel, eventKindTone, isRaceKind } from '../../../shared/events'
+import { eventDateLabel, eventKindBadgeClasses } from '../../lib/events-api'
+import { eventKindLabel, isRaceKind } from '../../../shared/events'
 import BackHeaderLeft from '../../components/BackHeaderLeft'
-
-const TONE_CLS = {
-  emerald: 'bg-emerald-500/15 text-emerald-700',
-  sky:     'bg-sky-500/15 text-sky-700',
-  indigo:  'bg-indigo-500/15 text-indigo-700',
-  amber:   'bg-amber-500/15 text-amber-700',
-  pink:    'bg-pink-500/15 text-pink-700',
-  teal:    'bg-teal-500/15 text-teal-700',
-}
 
 function MetaRow({ icon, children }) {
   if (!children) return null
@@ -824,7 +826,7 @@ export default function EventDetail() {
 
   const event = data?.event
   const counts = data?.counts
-  const toneCls = event ? (TONE_CLS[eventKindTone(event.kind)] || TONE_CLS.emerald) : TONE_CLS.emerald
+  const badge = event ? eventKindBadgeClasses(event.kind) : eventKindBadgeClasses('race')
 
   function openPublicPage() {
     const base = Constants.expoConfig?.extra?.apiBaseUrl
@@ -851,8 +853,8 @@ export default function EventDetail() {
           {/* Header: name + kind badge */}
           <View className="flex-row items-center mb-4">
             <Text className="text-xl font-bold text-un1t-text flex-1" numberOfLines={2}>{event.name}</Text>
-            <View className={`px-2.5 py-1 rounded-full ml-2 ${toneCls}`}>
-              <Text className={`text-[11px] uppercase tracking-wider ${toneCls.split(' ')[1]}`}>{eventKindLabel(event.kind)}</Text>
+            <View className={`px-2.5 py-1 rounded-full ml-2 ${badge.bg}`}>
+              <Text className={`text-[11px] uppercase tracking-wider ${badge.text}`}>{eventKindLabel(event.kind)}</Text>
             </View>
           </View>
 
@@ -1013,6 +1015,6 @@ Append the EVENT-CHECKIN.E outcome (PR #, OTA status, device-QA-pending) to the 
 ## Notes for the implementer
 - **Do not edit `mobile/app/races/checkin/[id].jsx` or `mobile/app/races/[id].jsx`** — they're reused as-is and editing them risks conflicts with the open Phase D PR #553.
 - **`race_events.start_time`** is an event-level column (not a wave time) — render it directly (`String(start_time).slice(0,5)`), as the web list does.
-- The relative path to `shared/` differs by file depth: `../../../shared/events` from `mobile/app/events/*` and from `src/app/events/page.js`; `../../../../shared/events` from `src/app/api/events/route.js`. Count the segments.
+- Importing `shared/events.js`: **web/`src` code uses the `@shared/events` jsconfig alias** (the convention across `src/`). **Mobile RN code uses a relative path** — `../../../shared/events` from `mobile/app/events/*` (no alias in the RN bundle). Don't use a relative `../../../../shared` path from `src/` — switch it to `@shared`.
 - Mobile cannot import `src/lib/*` — that's why the count formatting happens server-side in `GET /api/events` and only `shared/events.js` crosses into the RN bundle.
 ```
