@@ -5,15 +5,16 @@ import {
 } from './schema.js'
 
 describe('graph schema constants', () => {
-  it('lists the 10 node types', () => {
+  it('lists the 11 node types', () => {
     expect(NODE_TYPES).toEqual([
       'email', 'whatsapp', 'sms', 'wait', 'apply_tag', 'update_field',
-      'internal_task', 'webhook', 'branch', 'move_pipeline_stage',
+      'internal_task', 'webhook', 'branch', 'move_pipeline_stage', 'glofox_provision',
     ])
   })
   it('splits channel vs config nodes', () => {
     expect(CHANNEL_NODE_TYPES).toEqual(['email', 'whatsapp', 'sms', 'wait'])
     expect(CONFIG_NODE_TYPES).toContain('branch')
+    expect(CONFIG_NODE_TYPES).toContain('glofox_provision')
     expect(CONFIG_NODE_TYPES).not.toContain('email')
     expect(isChannelNode('sms')).toBe(true)
     expect(isChannelNode('branch')).toBe(false)

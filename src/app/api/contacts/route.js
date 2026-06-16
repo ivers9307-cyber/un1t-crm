@@ -89,6 +89,9 @@ export async function POST(request) {
     maybeProvisionLeadInGlofox({ db, locationId: data.location_id, contact: data, source: 'manual' })
       .catch(() => {}) // hook never throws, but belt-and-braces
   }
+  // AUTOMATIONS Phase 1 — fire any custom contact_created automations (best-effort).
+  const { triggerSequencesForContactCreated } = await import('@/lib/sequences/triggers')
+  triggerSequencesForContactCreated(data.id)
 
   // Push notification: a new lead has landed. Fan out to managers /
   // head-coaches at the contact's location. Per-user opt-in via

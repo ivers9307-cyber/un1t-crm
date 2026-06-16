@@ -101,6 +101,8 @@ export async function executeTool(toolName, input, context) {
       try {
         const { maybeProvisionLeadInGlofox } = await import('@/lib/automations/glofox-lead-provisioning')
         await maybeProvisionLeadInGlofox({ db, locationId, contact: data, source: 'assistant' })
+        const { triggerSequencesForContactCreated } = await import('@/lib/sequences/triggers')
+        await triggerSequencesForContactCreated(data.id)
       } catch { /* hook never throws */ }
       return { success: true, contact: { id: data.id, name: data.name, email: data.email } }
     }

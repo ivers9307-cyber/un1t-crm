@@ -17,6 +17,7 @@
 // mechanics are out of scope for this slice.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { glofoxProvisionStep } from './steps.js'
 
 vi.mock('@/lib/postmark', () => ({
   sendTransactionalEmail: vi.fn(),
@@ -569,5 +570,47 @@ describe('movePipelineStageStep — guard rails + audit', () => {
       contact: { id: 'c1', location_id: 'loc1' },
       sequence: { id: 's1', name: 'X', location_id: 'loc1' },
     })).rejects.toThrow(/PG conn lost/)
+  })
+})
+
+// ── glofoxProvisionStep (AUTOMATIONS Phase 1) ────────────────────
+
+describe('glofoxProvisionStep', () => {
+  it('calls findOrCreate in create-and-trial mode with source=automation at the sequence location', async () => {
+    const calls = []
+    const fake = async (args) => { calls.push(args); return { status: 'created' } }
+    await glofoxProvisionStep({}, {
+      contact: { id: 'c1', location_id: 'loc-from-contact', email: 'a@b.com', first_name: 'A', last_name: 'B' },
+      sequence: { id: 's1', location_id: 'loc-1' },
+      _findOrCreateGlofoxMember: fake,
+    })
+    expect(calls).toHaveLength(1)
+    expect(calls[0]).toMatchObject({
+      locationId: 'loc-1',
+      createIfMissing: true,
+      attachTrial: true,
+      source: 'automation',
+    })
+    expect(calls[0].contact.id).toBe('c1')
+  })
+
+  it('falls back to the contact location when the sequence has none', async () => {
+    const calls = []
+    const fake = async (args) => { calls.push(args); return { status: 'linked' } }
+    await glofoxProvisionStep({}, {
+      contact: { id: 'c1', location_id: 'loc-contact', email: 'a@b.com' },
+      sequence: {},
+      _findOrCreateGlofoxMember: fake,
+    })
+    expect(calls[0].locationId).toBe('loc-contact')
+  })
+
+  it('does not throw when findOrCreate reports a failed status', async () => {
+    const fake = async () => ({ status: 'failed', error: 'missing first_name or last_name' })
+    await expect(glofoxProvisionStep({}, {
+      contact: { id: 'c2', location_id: 'loc-1', email: 'x@y.com' },
+      sequence: { id: 's1', location_id: 'loc-1' },
+      _findOrCreateGlofoxMember: fake,
+    })).resolves.toBeUndefined()
   })
 })

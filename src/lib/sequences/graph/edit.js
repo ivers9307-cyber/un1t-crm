@@ -76,6 +76,7 @@ export function defaultConfigForType(type) {
     case 'internal_task': return { subject: '', note: '' }
     case 'webhook': return { url: '', method: 'POST' }
     case 'move_pipeline_stage': return { stage_slug: '' }
+    case 'glofox_provision': return {}
     default: return {}
   }
 }

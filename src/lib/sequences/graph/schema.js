@@ -5,12 +5,12 @@ import { z } from 'zod'
 
 export const CHANNEL_NODE_TYPES = ['email', 'whatsapp', 'sms', 'wait']
 export const CONFIG_NODE_TYPES = [
-  'apply_tag', 'update_field', 'internal_task', 'webhook', 'branch', 'move_pipeline_stage',
+  'apply_tag', 'update_field', 'internal_task', 'webhook', 'branch', 'move_pipeline_stage', 'glofox_provision',
 ]
 // Order matters for the test + for stable UI listing.
 export const NODE_TYPES = [
   'email', 'whatsapp', 'sms', 'wait',
-  'apply_tag', 'update_field', 'internal_task', 'webhook', 'branch', 'move_pipeline_stage',
+  'apply_tag', 'update_field', 'internal_task', 'webhook', 'branch', 'move_pipeline_stage', 'glofox_provision',
 ]
 
 // The engine's trigger vocabulary (triggers.js + cron-triggers.js). Kept as a

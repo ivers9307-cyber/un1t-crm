@@ -81,6 +81,7 @@ describe('describeNode — operator-facing one-line summary per type', () => {
     [{ type: 'move_pipeline_stage', config: { stage_slug: 'active_member' } }, 'Move pipeline', 'Move to active_member'],
     [{ type: 'branch', config: { predicate: { type: 'has_tag', tag: 'vip' } } }, 'Branch', 'Has tag “vip”'],
     [{ type: 'branch', config: { predicate: { type: 'field_equals', field: 'label', value: 'hot' } } }, 'Branch', 'label = hot'],
+    [{ type: 'glofox_provision', config: {} }, 'Create in Glofox', 'Create Glofox account + trial'],
   ]
   for (const [node, typeLabel, summary] of cases) {
     it(`${node.type} → ${typeLabel} / ${summary}`, () => {

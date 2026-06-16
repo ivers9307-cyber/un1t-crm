@@ -28,6 +28,7 @@ export {
   triggerSequencesForAchievement,
   triggerSequencesForSegmentAdded,
   triggerSequencesForSegmentRemoved,
+  triggerSequencesForContactCreated,
 } from './triggers.js'
 export {
   runEventReminderTriggers,

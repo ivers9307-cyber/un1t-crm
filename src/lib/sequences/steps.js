@@ -616,3 +616,30 @@ export async function movePipelineStageStep(db, { step, contact, sequence }) {
     done: false,
   })
 }
+
+// ── glofox_provision (AUTOMATIONS Phase 1) ───────────────────────
+//
+// Operational action: create the contact's Glofox account + attach the
+// studio trial as a step in an automation flow. Wraps the vetted
+// findOrCreateGlofoxMember create-and-trial primitive — idempotent
+// (links by email if the member already exists), audited to
+// glofox_push_events (source='automation'), and never-throws on a
+// per-contact data problem (missing name / no Glofox creds → a 'failed'
+// status that surfaces in the Glofox Review queue, NOT a runner error).
+//
+// Config: none — uses the location's settings.glofox trial config.
+// `_findOrCreateGlofoxMember` is a test seam; production resolves the
+// real helper via dynamic import (mirrors movePipelineStageStep).
+export async function glofoxProvisionStep(db, { contact, sequence, _findOrCreateGlofoxMember }) {
+  const findOrCreate = _findOrCreateGlofoxMember
+    || (await import('../glofox-push.js')).findOrCreateGlofoxMember
+  const locationId = sequence?.location_id || contact.location_id
+  await findOrCreate({
+    db,
+    locationId,
+    contact,
+    source: 'automation',
+    createIfMissing: true,
+    attachTrial: true,
+  })
+}
