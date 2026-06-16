@@ -34,6 +34,46 @@ function AutomationCard({ card, locationId }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
 
+  const [bf, setBf] = useState({ phase: 'idle', eligible: null, done: 0, created: 0, linked: 0, needs_review: 0, failed: 0, error: null })
+
+  async function openBackfill() {
+    setBf((s) => ({ ...s, phase: 'counting', error: null }))
+    try {
+      const res = await fetch(`/api/automations/${card.key}/backfill?location_id=${encodeURIComponent(locationId)}`)
+      const j = await res.json()
+      if (!res.ok || j.success === false) throw new Error(j.error || 'Count failed')
+      setBf((s) => ({ ...s, phase: 'confirm', eligible: j.data.eligible }))
+    } catch (e) { setBf((s) => ({ ...s, phase: 'idle', error: e.message })) }
+  }
+
+  async function runBackfill() {
+    setBf((s) => ({ ...s, phase: 'running', error: null, done: 0, created: 0, linked: 0, needs_review: 0, failed: 0 }))
+    try {
+      while (true) {
+        const res = await fetch(`/api/automations/${card.key}/backfill`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ location_id: locationId }),
+        })
+        const j = await res.json()
+        if (!res.ok || j.success === false) throw new Error(j.error || 'Backfill failed')
+        const d = j.data
+        setBf((s) => ({
+          ...s,
+          done: s.done + d.processed,
+          created: s.created + d.created,
+          linked: s.linked + d.linked,
+          needs_review: s.needs_review + d.needs_review,
+          failed: s.failed + d.failed,
+          eligible: d.remaining + (s.done + d.processed),
+        }))
+        if (d.processed === 0 || d.remaining === 0) break
+      }
+      setBf((s) => ({ ...s, phase: 'done' }))
+      router.refresh()
+    } catch (e) { setBf((s) => ({ ...s, phase: 'done', error: e.message })) }
+  }
+
   const disabled = busy || !card.status.available || !locationId
 
   async function toggle() {
@@ -100,6 +140,41 @@ function AutomationCard({ card, locationId }) {
         <Link href={card.reviewBase} className="text-[11px] text-un1t-light underline inline-flex items-center gap-1">
           Recent failures <ExternalLink size={11} />
         </Link>
+        {card.supportsBackfill && card.status.available && (
+          <div className="mt-2">
+            {bf.phase === 'idle' && (
+              <button type="button" onClick={openBackfill} disabled={!locationId}
+                className="text-xs underline text-un1t-light hover:text-un1t-white">
+                Push existing un-linked leads…
+              </button>
+            )}
+            {bf.phase === 'counting' && <p className="text-[11px] text-un1t-light">Counting eligible leads…</p>}
+            {bf.phase === 'confirm' && (
+              <div className="text-xs text-un1t-white bg-amber-500/10 border border-amber-500/30 rounded p-2">
+                This will create <b>{bf.eligible}</b> Glofox account{bf.eligible === 1 ? '' : 's'} + trial{bf.eligible === 1 ? '' : 's'} for existing un-linked leads.
+                <div className="mt-2 flex gap-2">
+                  <button type="button" onClick={runBackfill} disabled={!bf.eligible}
+                    className="px-2 py-1 rounded bg-un1t-text text-un1t-bg font-semibold disabled:opacity-40">
+                    {bf.eligible ? 'Run now' : 'Nothing to do'}
+                  </button>
+                  <button type="button" onClick={() => setBf((s) => ({ ...s, phase: 'idle' }))} className="px-2 py-1 underline text-un1t-light">Cancel</button>
+                </div>
+              </div>
+            )}
+            {bf.phase === 'running' && (
+              <p className="text-[11px] text-un1t-light inline-flex items-center gap-1">
+                <Loader2 size={11} className="animate-spin" /> Pushing… {bf.done} done{bf.eligible != null ? ` / ${bf.eligible}` : ''} (created {bf.created}, linked {bf.linked}, review {bf.needs_review})
+              </p>
+            )}
+            {bf.phase === 'done' && (
+              <p className="text-[11px] text-emerald-700">
+                Done — {bf.created} created, {bf.linked} linked{bf.needs_review ? `, ${bf.needs_review} need review` : ''}{bf.failed ? `, ${bf.failed} failed` : ''}.
+                {(bf.needs_review || bf.failed) ? <> See <Link href={card.reviewBase} className="underline">Review</Link>.</> : null}
+              </p>
+            )}
+            {bf.error && <p className="text-[11px] text-red-700 mt-1">{bf.error}</p>}
+          </div>
+        )}
       </div>
     </div>
   )
