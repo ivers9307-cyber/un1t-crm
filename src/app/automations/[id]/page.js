@@ -3,6 +3,7 @@ import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { redirect, notFound } from 'next/navigation'
 import { resolveSequenceGraph } from '@/lib/sequences/graph/persist'
 import SequenceFlowBuilder from '@/components/sequences/SequenceFlowBuilder'
+import AutomationPerformance from '@/components/automations/AutomationPerformance'
 
 // FLOW-GRAPH Phase 2 (PR2) — the canonical sequence detail route. Loads the
 // sequence + its steps, resolves the flow graph server-side (draft → published →
@@ -28,5 +29,10 @@ export default async function SequenceBuilderPage(props) {
 
   const graph = resolveSequenceGraph(sequence)
 
-  return <SequenceFlowBuilder graph={graph} sequence={sequence} isDraft={sequence.draft_graph != null} />
+  return (
+    <>
+      <SequenceFlowBuilder graph={graph} sequence={sequence} isDraft={sequence.draft_graph != null} />
+      <AutomationPerformance sequenceId={sequence.id} steps={sequence.sequence_steps || []} />
+    </>
+  )
 }
