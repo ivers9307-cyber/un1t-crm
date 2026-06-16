@@ -1,28 +1,35 @@
-// /api/events
+// GET /api/events — list every event kind at the active (or ?location_id=)
+// location for the mobile events browse surface (EVENT-CHECKIN.E).
 //
-// List + create events. Manager+ permission. Scoped to the caller's
-// active location (originally mig 082 as race events; multi-kind
-// since mig 122). Permission key is still 'races' internally.
+// Staff-accessible: hasPermission('races') with NO MANAGER_ROLES gate — the
+// mobile door-staff use case mirrors web /events (front-of-house). This is
+// the deliberate divergence from GET /api/races, which is the manager-only
+// race-day CONTROL list. Returns the data a list row needs: kind, date/time,
+// status, a rendered signup summary, and an is_upcoming flag (the Dublin
+// today boundary is computed server-side so mobile carries no timezone math).
 //
-// Multi-kind: race_events.kind discriminates between 'race' (the
-// original Hyrox-sim shape — multiple waves, team-name required,
-// race-day control panel, TV display) and 'workshop' / 'seminar' /
-// 'open_day' / 'masterclass' (single time slot, per-seat capture
-// without a team name). UI gates on kind; the underlying data shape
-// (waves[], allowed_team_sizes, race_payments per-seat) stays the
-// same — non-race kinds always submit exactly one synthetic wave.
+// POST /api/events — create a new event. Manager+ permission. Multi-kind:
+// race_events.kind discriminates between 'race' (the original Hyrox-sim
+// shape — multiple waves, team-name required, race-day control panel, TV
+// display) and 'workshop' / 'seminar' / 'open_day' / 'masterclass' (single
+// time slot, per-seat capture without a team name). UI gates on kind; the
+// underlying data shape (waves[], allowed_team_sizes, race_payments per-seat)
+// stays the same — non-race kinds always submit exactly one synthetic wave.
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser, getUserLocationIds, assertLocationAccess } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import { toSlug } from '@/lib/slug'
+import { formatSignupSummary, sumWaveCapacity } from '@/lib/event-signups'
+import { isRaceKind, orderEventsForBrowse, todayIsoDublin } from '@shared/events'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
+
 
 // Wave shape used in both create + update. capacity null = unlimited.
 const WaveInputSchema = z.object({
@@ -89,38 +96,61 @@ export async function GET(request) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
   if (!hasPermission(user, 'races')) {
-    return NextResponse.json({ success: false, error: 'Races feature is disabled at this location' }, { status: 403 })
+    return NextResponse.json({ success: false, error: 'Events feature is disabled at this location' }, { status: 403 })
   }
 
   const url = new URL(request.url)
   const filterLocation = url.searchParams.get('location_id')
-
-  const db = createServerClient()
-  const locationIds = filterLocation ? [filterLocation] : getUserLocationIds(user)
-  if (locationIds.length === 0) {
-    return NextResponse.json({ success: true, data: [] })
-  }
   if (filterLocation) {
     const guard = assertLocationAccess(user, filterLocation)
-    if (guard) return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+    if (guard) return guard
   }
+  const activeLocationId = filterLocation || user.activeLocation?.id || null
+  if (!activeLocationId) return NextResponse.json({ success: true, data: [] })
 
+  const db = createServerClient()
+  // Scope to the active location PLUS any event flagged `shared` (owned by
+  // one location, surfaced everywhere) — same rule as the web /events list.
   const { data, error } = await db
     .from('race_events')
     .select(`
-      id, location_id, name, slug, description, race_date, kind, staff_required,
-      registration_opens_at, registration_closes_at,
-      allowed_team_sizes, active, created_at, updated_at,
-      member_pricing_enabled, member_fee_cents, non_member_fee_cents,
-      members_only, payment_currency, shared,
-      waves:race_waves ( id, start_time, capacity, label, display_order ),
-      registrations:race_registrations ( id, status, race_started_at, race_finished_at, wave_id, team_composition )
+      id, name, slug, race_date, start_time, capacity, capacity_mode,
+      active, kind, shared, location_id,
+      waves:race_waves ( capacity ),
+      registrations:race_registrations ( id, status, team:teams ( size ) )
     `)
-    .in('location_id', locationIds)
+    .or(`location_id.eq.${activeLocationId},shared.eq.true`)
     .order('race_date', { ascending: false })
-
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
-  return NextResponse.json({ success: true, data: data || [] })
+
+  const shaped = (data || []).map((r) => {
+    const isRace = isRaceKind(r.kind)
+    return {
+      id: r.id,
+      name: r.name,
+      slug: r.slug,
+      kind: r.kind || 'race',
+      race_date: r.race_date,
+      start_time: r.start_time,
+      active: r.active,
+      shared: r.shared,
+      signup_summary: formatSignupSummary(r.registrations, {
+        isRace,
+        capacity: sumWaveCapacity(r.waves) ?? r.capacity,
+        mode: r.capacity_mode,
+      }),
+    }
+  })
+
+  // Upcoming first (nearest date asc), then past (most recent desc). Stamp
+  // is_upcoming so the client can render a "Past" divider without doing its
+  // own timezone-sensitive date math.
+  const { upcoming, past } = orderEventsForBrowse(shaped, todayIsoDublin())
+  const ordered = [
+    ...upcoming.map((e) => ({ ...e, is_upcoming: true })),
+    ...past.map((e) => ({ ...e, is_upcoming: false })),
+  ]
+  return NextResponse.json({ success: true, data: ordered })
 }
 
 export async function POST(request) {

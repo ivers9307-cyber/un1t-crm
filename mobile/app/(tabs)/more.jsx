@@ -23,7 +23,6 @@ import { approvalsBadgeCount } from '../../lib/approvals'
 import { listInboxIssues } from '../../lib/issues-api'
 import { listInvoices } from '../../lib/invoices-api'
 import { accountingLanding, ACCOUNTING_ROUTES } from '../../lib/accounting'
-import { eventsLanding, EVENTS_ROUTES } from '../../lib/events-hub'
 import { buildSummary } from '../../lib/build-info'
 import { useBiometricLock } from '../../lib/biometric-lock'
 
@@ -209,17 +208,12 @@ export default function More() {
   // reaches the inbox via the chooser, gated by issue_triage there.)
   // (Invoices approver inbox now lives inside the Accounting hub above —
   // the approver reaches it via the chooser, gated by invoices_inbox.)
-  // EVENTS-HUB.1 — one "Events" tile for the event-side surfaces.
-  // EVENTS-HUB.2 moved Orders out to the Accounting hub (it's revenue →
-  // money), so today this nests only trackside Race control and routes a
-  // single-surface user straight to /races. Kept as a hub (not folded
-  // back to a bare Race-control tile) because web + mobile event surfaces
-  // will be aligned here in the future and more will land under it.
-  const evLanding = eventsLanding({
-    canRaceControl: canMobile(profile, 'races', activeLocation),
-  })
-  if (evLanding) {
-    tiles.push({ key: 'events', icon: 'calendar-outline', label: 'Events', onPress: () => router.push(EVENTS_ROUTES[evLanding]) })
+  // EVENT-CHECKIN.E — one "Events" tile opens the unified mobile events
+  // list (all kinds). Race rows open the race-day control board; non-race
+  // rows open the event detail → check-in. Gated by the `races` permission
+  // (kept as the internal key for the whole multi-kind events feature).
+  if (canMobile(profile, 'races', activeLocation)) {
+    tiles.push({ key: 'events', icon: 'calendar-outline', label: 'Events', onPress: () => router.push('/events') })
   }
   // W2 — CCF Autos car-import tracker (read-only). Off by default; master
   // or per-user opt-in, and only where car_processing is on at the location.

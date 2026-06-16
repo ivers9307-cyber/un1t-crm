@@ -12,37 +12,23 @@ import { hasPermission } from '@/lib/permissions'
 import { Plus, Flag, ExternalLink, Users } from 'lucide-react'
 import { getAppUrl } from '@/lib/app-url'
 import { formatSignupSummary, sumWaveCapacity } from '@/lib/event-signups'
+import { eventKindLabel, eventKindTone, isRaceKind, orderEventsForBrowse, todayIsoDublin } from '@shared/events'
 
 export const dynamic = 'force-dynamic'
 
-// Kind label + colour map. Per-kind pill uses these on the index.
-// Race uses the existing emerald pillstyling, others get muted blues
-// / purples / ambers / pinks so workshops vs masterclasses are
-// visually distinct at a glance.
-const KIND_BADGE = {
-  race:        { label: 'Race',        cls: 'bg-emerald-500/15 text-emerald-700' },
-  workshop:    { label: 'Workshop',    cls: 'bg-sky-500/15 text-sky-700' },
-  seminar:     { label: 'Seminar',     cls: 'bg-indigo-500/15 text-indigo-700' },
-  open_day:    { label: 'Open day',    cls: 'bg-amber-500/15 text-amber-700' },
-  masterclass: { label: 'Masterclass', cls: 'bg-pink-500/15 text-pink-700' },
-  lead_gen:    { label: 'Lead Gen',    cls: 'bg-teal-500/15 text-teal-700' },
+// Tone (from shared/events) → web Tailwind pill classes. The label and
+// tone now live in shared/events.js so web + mobile can't drift; this map
+// is just the web colour binding.
+const TONE_CLS = {
+  emerald: 'bg-emerald-500/15 text-emerald-700',
+  sky:     'bg-sky-500/15 text-sky-700',
+  indigo:  'bg-indigo-500/15 text-indigo-700',
+  amber:   'bg-amber-500/15 text-amber-700',
+  pink:    'bg-pink-500/15 text-pink-700',
+  teal:    'bg-teal-500/15 text-teal-700',
 }
-const kindBadge = (k) => KIND_BADGE[k] || KIND_BADGE.race
+const kindBadge = (k) => ({ label: eventKindLabel(k), cls: TONE_CLS[eventKindTone(k)] })
 
-// Today in YYYY-MM-DD (Europe/Dublin) — used to split events into
-// upcoming vs past tabs. Server-side renders against THIS date so the
-// boundary doesn't shift mid-page-render. Anything dated today counts
-// as upcoming (race day is the day OF the event).
-function todayIsoDublin() {
-  // Dublin is UTC+0/+1 depending on DST. The simplest correct way to
-  // get "today's date as the operator sees it" is to format via Intl
-  // in the Dublin tz. Returns YYYY-MM-DD.
-  const fmt = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Europe/Dublin',
-    year: 'numeric', month: '2-digit', day: '2-digit',
-  })
-  return fmt.format(new Date())
-}
 
 export default async function EventsIndexPage(props) {
   const searchParams = await props.searchParams;
@@ -82,17 +68,8 @@ export default async function EventsIndexPage(props) {
     races = data || []
   }
 
-  // Split into upcoming (race_date >= today) and past (race_date <
-  // today). Anything with no race_date defaults to upcoming so a
-  // half-created event doesn't get hidden in the past tab.
   const today = todayIsoDublin()
-  const upcoming = races.filter((r) => !r.race_date || r.race_date >= today)
-  const past     = races.filter((r) => r.race_date && r.race_date < today)
-
-  // Upcoming sorts by date ASC (next event first); past stays DESC
-  // (most recent past at top of the history list).
-  upcoming.sort((a, b) => (a.race_date || '').localeCompare(b.race_date || ''))
-  // past is already DESC from the SQL order
+  const { upcoming, past } = orderEventsForBrowse(races, today)
 
   const visible = tab === 'past' ? past : upcoming
   const tabs = [
@@ -186,7 +163,7 @@ export default async function EventsIndexPage(props) {
               <tbody className="divide-y divide-un1t-border">
                 {visible.map((r) => {
                   const publicUrl = appOrigin ? `${appOrigin}/event/${r.slug}` : `/event/${r.slug}`
-                  const isRace = (r.kind || 'race') === 'race'
+                  const isRace = isRaceKind(r.kind)
                   const badge = kindBadge(r.kind || 'race')
                   const signupSummary = formatSignupSummary(r.registrations, { isRace, capacity: sumWaveCapacity(r.waves) ?? r.capacity, mode: r.capacity_mode })
                   return (
@@ -284,7 +261,7 @@ export default async function EventsIndexPage(props) {
           <div className="md:hidden space-y-2">
             {races.map((r) => {
               const publicUrl = appOrigin ? `${appOrigin}/event/${r.slug}` : `/event/${r.slug}`
-              const isRace = (r.kind || 'race') === 'race'
+              const isRace = isRaceKind(r.kind)
               const badge = kindBadge(r.kind || 'race')
               const signupSummary = formatSignupSummary(r.registrations, { isRace, capacity: sumWaveCapacity(r.waves) ?? r.capacity, mode: r.capacity_mode })
               return (

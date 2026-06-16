@@ -17,6 +17,7 @@ import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import { emitEvent, EVENT_TYPES } from '@/lib/contact-events'
 import { checkinCounts } from '@/lib/event-checkins'
+import { sumWaveCapacity } from '@/lib/event-signups'
 
 export const runtime = 'nodejs'
 
@@ -134,8 +135,8 @@ export async function GET(_request, props) {
   const { data: race } = await db
     .from('race_events')
     .select(`
-      id, name, location_id, race_date, kind,
-      waves:race_waves ( id, start_time, label, display_order ),
+      id, name, location_id, race_date, kind, slug, start_time, capacity, capacity_mode, active,
+      waves:race_waves ( id, start_time, label, display_order, capacity ),
       registrations:race_registrations (
         id, status, wave_id,
         teams ( id, name, team_members ( id, name, email, contact_id ) )
@@ -183,7 +184,18 @@ export async function GET(_request, props) {
   return NextResponse.json({
     success: true,
     data: {
-      event: { id: race.id, name: race.name, kind: race.kind, isRace: (race.kind || 'race') === 'race' },
+      event: {
+        id: race.id,
+        name: race.name,
+        kind: race.kind,
+        isRace: (race.kind || 'race') === 'race',
+        slug: race.slug,
+        race_date: race.race_date,
+        start_time: race.start_time,
+        capacity: sumWaveCapacity(race.waves) ?? race.capacity,
+        capacity_mode: race.capacity_mode,
+        active: race.active,
+      },
       registrations,
       counts,
     },
