@@ -50,6 +50,7 @@ NODE TYPES (${NODE_TYPES.join(', ')}). Channel/timing nodes are ${CHANNEL_NODE_T
 - internal_task:    { subject } (+ optional note, due_offset_minutes).
 - webhook:          { url } (MUST be https), { method }.
 - move_pipeline_stage: { stage_slug } — one of new_lead, active_trial, hot_conversion, active_member, at_risk_member, classpass_active, lapsed, dormant, dormant_classpass.
+- glofox_provision: {} (no config). Creates the contact's Glofox account + attaches the studio trial. Use when the request is about registering/adding a new lead in Glofox (e.g. "when a new lead comes in, add them to Glofox with a trial").
 - branch:  { predicate } where predicate is { type:"has_tag", tag } OR { type:"field_equals", field, value } OR { type:"field_in", field, values:[...] }.
 
 EDGES & STRUCTURE RULES (these are validated — follow them exactly):
@@ -61,7 +62,7 @@ EDGES & STRUCTURE RULES (these are validated — follow them exactly):
 - Paths must NOT merge back together: NEVER point two edges at the same node. Each branch's yes and no paths run to their OWN independent end. The whole flow is a TREE (no diamonds) — this keeps it fully editable in the builder.
 - Node ids are short unique strings like n1, n2, ...
 
-TRIGGER + NAME: trigger types are ${TRIGGER_TYPES.join(', ')}. CHOOSE the trigger that best fits the request and set trigger.type (+ any trigger.config) accordingly — e.g. a welcome flow → booking_created or manual; a re-engagement flow → inactivity; a tag-driven flow → tag_added; a stage-based flow → pipeline_stage_change. Avoid "webhook" unless the user explicitly describes an inbound integration. Also set a short, descriptive "name" for the sequence.
+TRIGGER + NAME: trigger types are ${TRIGGER_TYPES.join(', ')}. CHOOSE the trigger that best fits the request and set trigger.type (+ any trigger.config) accordingly — e.g. a new-lead onboarding flow → contact_created; a welcome flow → booking_created or manual; a re-engagement flow → inactivity; a tag-driven flow → tag_added; a stage-based flow → pipeline_stage_change. Avoid "webhook" unless the user explicitly describes an inbound integration. Also set a short, descriptive "name" for the sequence.
 
 GUIDANCE:
 - Build a thoughtful, realistic nurture flow: open with a timely message, space messages with wait nodes (don't bunch them), and use a branch when the user describes a condition ("if they've booked / if they're a member / if tagged X").

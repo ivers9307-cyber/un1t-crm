@@ -20,6 +20,7 @@ import AgentPanel from './AgentPanel'
 const WRITE_STEP_LABELS = {
   apply_tag: 'add a tag', update_field: 'update a contact field',
   webhook: 'call an external webhook', move_pipeline_stage: 'move the pipeline stage',
+  glofox_provision: 'create Glofox accounts + attach trials',
 }
 
 const STATUS_BADGE = {

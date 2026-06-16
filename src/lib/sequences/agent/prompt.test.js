@@ -34,4 +34,12 @@ describe('flow agent prompt', () => {
     expect(msg).toContain('branch needs a no lane')
     expect(msg).toContain('emit_sequence_graph')
   })
+
+  it('documents the glofox_provision action and the contact_created trigger', () => {
+    const p = buildAgentSystemPrompt()
+    expect(p).toContain('glofox_provision')
+    expect(p).toMatch(/Glofox account/i)
+    expect(p).toContain('contact_created')
+    expect(p).toMatch(/new lead/i)
+  })
 })
