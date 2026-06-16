@@ -44,14 +44,16 @@ export default function EventDetail() {
   }, [id, activeLocation?.id])
 
   useFocusEffect(useCallback(() => {
-    if (!canView) { setLoading(false); return }
+    if (!canView) { setLoading(false); return undefined }
+    let alive = true
     setLoading(true)
-    load().finally(() => setLoading(false))
+    load().finally(() => { if (alive) setLoading(false) })
+    return () => { alive = false }
   }, [canView, load]))
 
   const event = data?.event
   const counts = data?.counts
-  const badge = event ? eventKindBadgeClasses(event.kind) : eventKindBadgeClasses('race')
+  const badge = eventKindBadgeClasses(event?.kind ?? 'race')
 
   function openPublicPage() {
     const base = Constants.expoConfig?.extra?.apiBaseUrl
@@ -65,6 +67,7 @@ export default function EventDetail() {
       {!canView ? (
         <View className="py-16 items-center px-6">
           <Text className="text-base font-semibold text-un1t-text mt-3">Not available</Text>
+          <Text className="text-xs text-un1t-subtle text-center mt-1">Events are only shown where they're enabled for you.</Text>
         </View>
       ) : loading && !data ? (
         <View className="flex-1 items-center justify-center"><ActivityIndicator color="#94A3B8" /></View>
