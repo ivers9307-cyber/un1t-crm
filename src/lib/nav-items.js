@@ -23,6 +23,7 @@ import {
   LayoutDashboard, Users, Columns3, CheckSquare, Calendar, MessagesSquare,
   CalendarClock, Settings, Car, Flag, Receipt, DoorOpen, FileSignature,
   Heart, Globe, Tv, BookOpen, Inbox, ClipboardCheck, AlertCircle, CreditCard,
+  Workflow,
 } from 'lucide-react'
 
 // The sidebar Dashboard link is visible if ANY of these are true. The
@@ -125,6 +126,9 @@ export const ALL_NAV = [
   // the Communications header before SIDEBAR-IA.1 — a misfile.
   { href: '/live', label: 'Live HR', icon: Heart, permission: 'studio_management', section: 'gym' },
 
+  // ── Automations ────────────────────────────────────────────────
+  { href: '/automations', label: 'Automations', icon: Workflow, permission: 'automations', section: 'automations' },
+
   // ── Studio Management — expandable group ───────────────────────
   // Parent route /studio-management renders the door-unlock panel
   // (mig 093 cross-platform key). Children each carry their own
@@ -186,8 +190,9 @@ export const ALL_NAV = [
 export const NAV_SECTIONS = [
   { id: 'work',    label: 'Work' },
   { id: 'sales',   label: 'Sales' },
-  { id: 'gym',     label: 'Gym' },
-  { id: 'studio',  label: null },
+  { id: 'gym',          label: 'Gym' },
+  { id: 'automations',  label: 'Automations' },
+  { id: 'studio',       label: null },
   { id: 'other',   label: null },
   { id: 'account', label: 'Account' },
 ]

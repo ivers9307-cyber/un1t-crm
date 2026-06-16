@@ -26,12 +26,13 @@ const hrefsIn = (id) => itemsIn(id).map((i) => i.href)
 describe('NAV_SECTIONS', () => {
   it('renders the regrouped sections in order', () => {
     expect(NAV_SECTIONS).toEqual([
-      { id: 'work',    label: 'Work' },
-      { id: 'sales',   label: 'Sales' },
-      { id: 'gym',     label: 'Gym' },
-      { id: 'studio',  label: null },
-      { id: 'other',   label: null },
-      { id: 'account', label: 'Account' },
+      { id: 'work',         label: 'Work' },
+      { id: 'sales',        label: 'Sales' },
+      { id: 'gym',          label: 'Gym' },
+      { id: 'automations',  label: 'Automations' },
+      { id: 'studio',       label: null },
+      { id: 'other',        label: null },
+      { id: 'account',      label: 'Account' },
     ])
   })
 })
