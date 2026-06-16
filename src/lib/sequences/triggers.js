@@ -608,6 +608,57 @@ export async function triggerSequencesForFirstBooking(bookingId) {
   }
 }
 
+// ── contact_created ──────────────────────────────────────────────
+
+/**
+ * Called from the interactive lead-creation sites (manual POST /api/contacts,
+ * the website POST /api/public/leads form, and the assistant create_contact
+ * tool) right after a NEW contact row is inserted. Enrols the contact into
+ * every active sequence with trigger_type='contact_created' whose
+ * audience_filter the contact matches.
+ *
+ * Deliberately NOT wired into bulk-import or Glofox-sync (the mass-create
+ * guard) — same scoping as the curated glofox_lead_provisioning hook.
+ *
+ * Best-effort — errors swallowed + logged so it can never fail the upstream
+ * contact insert.
+ *
+ * @param {string} contactId
+ */
+export async function triggerSequencesForContactCreated(contactId) {
+  if (!contactId) return
+  const db = createServerClient()
+  try {
+    const { data: contact } = await db
+      .from('contacts')
+      .select('id, location_id')
+      .eq('id', contactId)
+      .single()
+    if (!contact) return
+
+    const { data: sequences } = await db
+      .from('email_sequences')
+      .select('id, audience_filter')
+      .eq('location_id', contact.location_id)
+      .eq('trigger_type', 'contact_created')
+      .eq('status', 'active')
+    if (!sequences || sequences.length === 0) return
+
+    for (const seq of sequences) {
+      const matches = await contactMatchesSequenceAudience(db, contactId, seq.audience_filter)
+      if (!matches) continue
+      await enrolContacts({
+        sequenceId: seq.id,
+        contactIds: [contactId],
+        sourceType: 'contact_created',
+        sourceRef: 'created',
+      })
+    }
+  } catch (e) {
+    logWarn('sequences', `contact_created trigger failed for ${contactId}`, { err: e })
+  }
+}
+
 // ── achievement_unlocked (Phase 4 Slice B) ───────────────────────
 
 /**

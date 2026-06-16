@@ -550,6 +550,53 @@ describe('triggerSequencesForSegmentAdded', () => {
   })
 })
 
+// ── contact_created ─────────────────────────────────────────────
+
+describe('triggerSequencesForContactCreated', () => {
+  it('does nothing when no contactId is given', async () => {
+    await triggers.triggerSequencesForContactCreated(null)
+    expect(createServerClient).not.toHaveBeenCalled()
+  })
+
+  it('enrols the contact into each matching active contact_created sequence', async () => {
+    createServerClient.mockReturnValue(mockDb({
+      contacts: { single: { id: 'c1', location_id: 'loc-1' } },
+      email_sequences: { list: [{ id: 'seq-1', audience_filter: null }] },
+    }))
+    await triggers.triggerSequencesForContactCreated('c1')
+    expect(enrolContacts).toHaveBeenCalledWith({
+      sequenceId: 'seq-1',
+      contactIds: ['c1'],
+      sourceType: 'contact_created',
+      sourceRef: 'created',
+    })
+  })
+
+  it('skips contacts that do not match the sequence audience', async () => {
+    contactMatchesSequenceAudience.mockResolvedValue(false)
+    createServerClient.mockReturnValue(mockDb({
+      contacts: { single: { id: 'c1', location_id: 'loc-1' } },
+      email_sequences: { list: [{ id: 'seq-1', audience_filter: { foo: 'bar' } }] },
+    }))
+    await triggers.triggerSequencesForContactCreated('c1')
+    expect(enrolContacts).not.toHaveBeenCalled()
+  })
+
+  it('does nothing when the contact is not found', async () => {
+    createServerClient.mockReturnValue(mockDb({
+      contacts: { single: null },
+    }))
+    await triggers.triggerSequencesForContactCreated('missing')
+    expect(enrolContacts).not.toHaveBeenCalled()
+  })
+
+  it('never throws if the db read fails', async () => {
+    createServerClient.mockReturnValue({ from: () => { throw new Error('boom') } })
+    await expect(triggers.triggerSequencesForContactCreated('c1')).resolves.toBeUndefined()
+    expect(logWarn).toHaveBeenCalled()
+  })
+})
+
 describe('triggerSequencesForSegmentRemoved', () => {
   // Removed mirrors Added — only the trigger_type query and the
   // sourceType label differ. One end-to-end happy-path test plus a
