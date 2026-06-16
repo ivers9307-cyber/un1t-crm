@@ -99,7 +99,11 @@ export default function RaceControlBoard() {
 
   return (
     <View className="flex-1 bg-un1t-bg">
-      <Stack.Screen options={{ title: board?.race?.name || 'Race control', headerLeft: () => <BackHeaderLeft label="Races" fallbackHref="/races" /> }} />
+      <Stack.Screen options={{ title: board?.race?.name || 'Race control', headerLeft: () => <BackHeaderLeft label="Races" fallbackHref="/races" />, headerRight: () => (canView ? (
+        <Pressable onPress={() => router.push(`/races/checkin/${id}`)} className="px-2 py-1 active:opacity-60">
+          <Text className="text-blue-700 text-sm font-medium">Check in</Text>
+        </Pressable>
+      ) : null) }} />
 
       {!canView ? (
         <View className="py-16 items-center px-6">
