@@ -16,6 +16,7 @@ import { hasPermission } from '@/lib/permissions'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import { emitEvent, EVENT_TYPES } from '@/lib/contact-events'
+import { checkinCounts } from '@/lib/event-checkins'
 
 export const runtime = 'nodejs'
 
@@ -116,4 +117,75 @@ export async function DELETE(request, props) {
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
 
   return NextResponse.json({ success: true, data: { checked_in: false } })
+}
+
+// GET — the confirmed roster + per-member check-in state + live counts.
+// Powers the mobile check-in screen (the web page server-loads its own copy);
+// service-role read avoids client-side RLS/embed pitfalls.
+export async function GET(_request, props) {
+  const params = await props.params
+  const user = await getCurrentUser()
+  if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
+  if (!hasPermission(user, 'races')) {
+    return NextResponse.json({ success: false, error: 'Events feature is disabled at this location' }, { status: 403 })
+  }
+
+  const db = createServerClient()
+  const { data: race } = await db
+    .from('race_events')
+    .select(`
+      id, name, location_id, race_date, kind,
+      waves:race_waves ( id, start_time, label, display_order ),
+      registrations:race_registrations (
+        id, status, wave_id,
+        teams ( id, name, team_members ( id, name, email, contact_id ) )
+      )
+    `)
+    .eq('id', params.id)
+    .single()
+  if (!race) return NextResponse.json({ success: false, error: 'Event not found' }, { status: 404 })
+  const guard = assertLocationAccess(user, race.location_id)
+  if (guard) return guard
+
+  const confirmed = (race.registrations || []).filter((r) => r.status === 'confirmed')
+  const regIds = confirmed.map((r) => r.id)
+  let checkedSet = new Set()
+  if (regIds.length) {
+    const { data: checks } = await db
+      .from('race_checkins')
+      .select('race_registration_id, team_member_id')
+      .in('race_registration_id', regIds)
+    checkedSet = new Set((checks || []).map((c) => `${c.race_registration_id}:${c.team_member_id}`))
+  }
+
+  const wavesById = new Map((race.waves || []).map((w) => [w.id, w]))
+  const registrations = confirmed
+    .map((r) => {
+      const w = wavesById.get(r.wave_id)
+      return {
+        id: r.id,
+        wave_label: w ? (w.label || (w.start_time ? String(w.start_time).slice(0, 5) : null)) : null,
+        _order: w?.display_order ?? 999,
+        team: {
+          name: r.teams?.name || 'Entry',
+          team_members: (r.teams?.team_members || []).map((m) => ({
+            id: m.id,
+            name: m.name || m.email || 'Member',
+            email: m.email || null,
+            checked_in: checkedSet.has(`${r.id}:${m.id}`),
+          })),
+        },
+      }
+    })
+    .sort((a, b) => a._order - b._order || a.team.name.localeCompare(b.team.name))
+
+  const counts = checkinCounts(registrations.map((r) => ({ status: 'confirmed', team: r.team })))
+  return NextResponse.json({
+    success: true,
+    data: {
+      event: { id: race.id, name: race.name, kind: race.kind, isRace: (race.kind || 'race') === 'race' },
+      registrations,
+      counts,
+    },
+  })
 }
