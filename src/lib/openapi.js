@@ -830,6 +830,37 @@ registry.registerPath({
   },
 })
 
+// Automations
+registry.registerPath({
+  method: 'put',
+  path: '/api/automations/{key}',
+  tags: ['Automations'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Toggle a per-location automation',
+  request: {
+    params: z.object({ key: z.string() }),
+    body: {
+      content: {
+        'application/json': {
+          schema: z.object({
+            location_id: uuidLike,
+            enabled: z.boolean(),
+            config: z.record(z.any()).optional(),
+          }).openapi('AutomationToggle'),
+        },
+      },
+    },
+  },
+  responses: {
+    200: {
+      description: 'Automation updated',
+      content: { 'application/json': { schema: SuccessResponse(z.object({ location_id: uuidLike, automation_key: z.string(), enabled: z.boolean() }).openapi('LocationAutomation')) } },
+    },
+    400: { description: 'Unknown automation key or DB error', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Unauthorized or location access denied', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // ============================================================================
 // Spec generator — build once and cache
 // ============================================================================
