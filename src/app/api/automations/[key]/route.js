@@ -12,7 +12,7 @@ export const runtime = 'nodejs'
 const Schema = z.object({
   location_id: uuidLike,
   enabled: z.boolean(),
-  config: z.record(z.any()).optional(),
+  config: z.record(z.string(), z.unknown()).optional(),
 })
 
 export async function PUT(request, { params }) {

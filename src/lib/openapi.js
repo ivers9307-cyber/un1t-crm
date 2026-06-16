@@ -845,7 +845,7 @@ registry.registerPath({
           schema: z.object({
             location_id: uuidLike,
             enabled: z.boolean(),
-            config: z.record(z.any()).optional(),
+            config: z.record(z.string(), z.unknown()).optional(),
           }).openapi('AutomationToggle'),
         },
       },

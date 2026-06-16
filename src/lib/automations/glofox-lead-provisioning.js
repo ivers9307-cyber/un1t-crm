@@ -64,11 +64,15 @@ export async function maybeProvisionLeadInGlofox({ db, locationId, contact, sour
       db,
       locationId,
       contact,
-      source: source || 'lead',
+      // glofox_push_events.source is CHECK-constrained (mig 277 added
+      // 'automation'). Create path → 'automation'; link-only → 'dup_check'
+      // (preserves the prior dup-check behaviour exactly). The incoming
+      // `source` arg is kept for log context only.
+      source: create ? 'automation' : 'dup_check',
       createIfMissing: create,
       attachTrial: create,
     })
   } catch (e) {
-    logWarn('automations.glofox-lead', 'provisioning hook failed', { err: e })
+    logWarn('automations.glofox-lead', 'provisioning hook failed', { err: e, source })
   }
 }

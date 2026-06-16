@@ -40,7 +40,7 @@ describe('maybeProvisionLeadInGlofox', () => {
       _findOrCreateGlofoxMember: spy,
     })
     expect(spy).toHaveBeenCalledTimes(1)
-    expect(spy.mock.calls[0][0]).toMatchObject({ createIfMissing: true, attachTrial: true })
+    expect(spy.mock.calls[0][0]).toMatchObject({ createIfMissing: true, attachTrial: true, source: 'automation' })
   })
 
   it('falls back to LINK-ONLY (createIfMissing:false) when the automation is disabled', async () => {
@@ -51,7 +51,7 @@ describe('maybeProvisionLeadInGlofox', () => {
       contact: { id: 'c1', email: 'a@b.com', glofox_member_id: null, location_id: 'loc1' },
       _findOrCreateGlofoxMember: spy,
     })
-    expect(spy.mock.calls[0][0]).toMatchObject({ createIfMissing: false, attachTrial: false })
+    expect(spy.mock.calls[0][0]).toMatchObject({ createIfMissing: false, attachTrial: false, source: 'dup_check' })
   })
 
   it('falls back to LINK-ONLY when enabled but the lead is ineligible (already linked)', async () => {
@@ -62,7 +62,7 @@ describe('maybeProvisionLeadInGlofox', () => {
       contact: { id: 'c1', email: 'a@b.com', glofox_member_id: 'gm_1', location_id: 'loc1' },
       _findOrCreateGlofoxMember: spy,
     })
-    expect(spy.mock.calls[0][0]).toMatchObject({ createIfMissing: false, attachTrial: false })
+    expect(spy.mock.calls[0][0]).toMatchObject({ createIfMissing: false, attachTrial: false, source: 'dup_check' })
   })
 
   it('never throws when the helper throws', async () => {
