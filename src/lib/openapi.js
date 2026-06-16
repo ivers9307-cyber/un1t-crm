@@ -861,6 +861,64 @@ registry.registerPath({
   },
 })
 
+registry.registerPath({
+  method: 'get',
+  path: '/api/automations/{key}/backfill',
+  tags: ['Automations'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Count contacts eligible for the backfill (manager+)',
+  request: {
+    params: z.object({ key: z.string() }),
+    query: z.object({ location_id: uuidLike }),
+  },
+  responses: {
+    200: {
+      description: 'Eligible count',
+      content: { 'application/json': { schema: SuccessResponse(z.object({ eligible: z.number().int() }).openapi('BackfillEligibleCount')) } },
+    },
+    400: { description: 'Unknown automation key or missing location_id', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Unauthorized or location access denied', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/automations/{key}/backfill',
+  tags: ['Automations'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Run one backfill batch (manager+)',
+  request: {
+    params: z.object({ key: z.string() }),
+    body: {
+      content: {
+        'application/json': {
+          schema: z.object({ location_id: uuidLike }).openapi('BackfillRunBody'),
+        },
+      },
+    },
+  },
+  responses: {
+    200: {
+      description: 'Batch complete — returns processed/created/linked/needs_review/failed/skipped/remaining counts',
+      content: {
+        'application/json': {
+          schema: SuccessResponse(z.object({
+            processed: z.number().int(),
+            created: z.number().int(),
+            linked: z.number().int(),
+            needs_review: z.number().int(),
+            failed: z.number().int(),
+            skipped: z.number().int(),
+            remaining: z.number().int(),
+          }).openapi('BackfillBatchSummary')),
+        },
+      },
+    },
+    400: { description: 'Unknown automation key or validation error', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Unauthorized or location access denied', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // ============================================================================
 // Spec generator — build once and cache
 // ============================================================================

@@ -11,7 +11,8 @@ describe('qualifiesForGlofoxProvisioning', () => {
   it('false with no email', () => {
     expect(qualifiesForGlofoxProvisioning({ email: null, glofox_member_id: null })).toBe(false)
   })
-  it('false for ClassPass shadow contacts', () => {
+  it('false for ClassPass shadow contacts (via lead_source or source)', () => {
+    expect(qualifiesForGlofoxProvisioning({ email: 'a@b.com', lead_source: 'classpass' })).toBe(false)
     expect(qualifiesForGlofoxProvisioning({ email: 'a@b.com', source: 'classpass' })).toBe(false)
   })
   it('false for null/garbage input', () => {
