@@ -22,7 +22,7 @@ const SequenceUpdateSchema = z.object({
     // achievement_unlocked were missing — the runner (triggers.js) fires them
     // but the API rejected them. Now aligned to the engine's trigger vocabulary.
     'pipeline_stage_change', 'segment_added', 'segment_removed', 'membership_state_change', 'achievement_unlocked',
-    'webhook',
+    'webhook', 'contact_created',
   ]).optional(),
   trigger_config: z.unknown().optional(),
   goal_config: z.unknown().nullable().optional(),

@@ -100,6 +100,7 @@ describe('describeTrigger — what starts the flow', () => {
     expect(describeTrigger({ type: 'manual' })).toBe('Manually enrolled')
     expect(describeTrigger({ type: 'booking_created' })).toBe('When a booking is created')
     expect(describeTrigger({ type: 'tag_added', config: { tag: 'trial' } })).toBe('When the tag “trial” is added')
+    expect(describeTrigger({ type: 'contact_created' })).toBe('When a new lead is created')
   })
   it('humanises an unknown trigger type', () => {
     expect(describeTrigger({ type: 'some_new_thing' })).toBe('Some new thing')

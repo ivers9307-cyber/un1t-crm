@@ -21,7 +21,8 @@ describe('graph schema constants', () => {
   })
   it('includes the engine trigger vocabulary', () => {
     for (const t of ['manual', 'booking_created', 'pipeline_stage_change', 'tag_added',
-      'event_reminder', 'segment_added', 'segment_removed', 'anniversary', 'inactivity']) {
+      'event_reminder', 'segment_added', 'segment_removed', 'anniversary', 'inactivity',
+      'contact_created']) {
       expect(TRIGGER_TYPES).toContain(t)
     }
   })
