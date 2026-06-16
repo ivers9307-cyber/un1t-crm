@@ -1,7 +1,7 @@
 'use client'
 
 // CloneSequenceButton — small icon button on each sequence row
-// in /communications/sequences. Posts to /api/sequences/[id]/clone
+// in /automations. Posts to /api/sequences/[id]/clone
 // and routes the operator into the freshly-created draft so they
 // can rename and tweak. Pairs with the Flow templates gallery:
 // templates seed new sequences from canned recipes; this clones
@@ -33,7 +33,7 @@ export default function CloneSequenceButton({ sequenceId, sequenceName }) {
       const r = await fetch(`/api/sequences/${sequenceId}/clone`, { method: 'POST' })
       const j = await r.json()
       if (!r.ok || j.success === false) throw new Error(j.error || `Clone failed (${r.status})`)
-      router.push(`/communications/sequences/${j.data.sequence_id}`)
+      router.push(`/automations/${j.data.sequence_id}`)
     } catch (err) {
       setError(err.message || 'Clone failed')
       setBusy(false)

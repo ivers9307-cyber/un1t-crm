@@ -9,7 +9,7 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Plus } from 'lucide-react'
 
-export default function NewSequenceButton({ className, label = 'New Sequence' }) {
+export default function NewSequenceButton({ className, label = 'New automation' }) {
   const router = useRouter()
   const [busy, setBusy] = useState(false)
 
@@ -23,14 +23,14 @@ export default function NewSequenceButton({ className, label = 'New Sequence' })
       })
       const j = await r.json()
       if (j.success && j.sequence?.id) {
-        router.push(`/communications/sequences/${j.sequence.id}`)
+        router.push(`/automations/${j.sequence.id}`)
       } else {
         setBusy(false)
-        window.alert(j.error || 'Could not create the sequence.')
+        window.alert(j.error || 'Could not create the automation.')
       }
     } catch {
       setBusy(false)
-      window.alert('Network error creating the sequence.')
+      window.alert('Network error creating the automation.')
     }
   }
 
