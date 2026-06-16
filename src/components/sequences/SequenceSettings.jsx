@@ -21,6 +21,7 @@ const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 // schema.js TRIGGER_TYPES / the PUT route enum / the runner).
 const TRIGGER_OPTIONS = [
   ['manual', 'Manual — you enrol contacts yourself'],
+  ['contact_created', 'When a new lead is created'],
   ['booking_created', 'When a booking is created'],
   ['first_booking', 'On a contact’s first booking'],
   ['pipeline_stage_change', 'When the pipeline stage changes'],

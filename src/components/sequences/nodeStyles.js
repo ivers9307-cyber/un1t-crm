@@ -4,7 +4,7 @@
 // src/lib/sequences/graph/view.js (describeNode); this is the visual half.
 import {
   Mail, MessageCircle, MessageSquare, Hourglass, Tag, PencilLine,
-  ClipboardList, Webhook, GitBranch, ArrowRightCircle, CircleDot,
+  ClipboardList, Webhook, GitBranch, ArrowRightCircle, CircleDot, UserPlus,
 } from 'lucide-react'
 
 export const NODE_STYLES = {
@@ -18,6 +18,7 @@ export const NODE_STYLES = {
   webhook: { icon: Webhook, chip: 'bg-fuchsia-500/10 text-fuchsia-700', label: 'Webhook' },
   branch: { icon: GitBranch, chip: 'bg-purple-500/10 text-purple-700', label: 'Branch' },
   move_pipeline_stage: { icon: ArrowRightCircle, chip: 'bg-emerald-500/10 text-emerald-700', label: 'Move pipeline' },
+  glofox_provision: { icon: UserPlus, chip: 'bg-teal-500/10 text-teal-700', label: 'Create in Glofox' },
 }
 
 export function styleForType(type) {
@@ -29,5 +30,5 @@ export function styleForType(type) {
 // graphs render read-only until then.
 export const ADDABLE_TYPES = [
   'email', 'whatsapp', 'sms', 'wait',
-  'apply_tag', 'update_field', 'internal_task', 'move_pipeline_stage', 'webhook',
+  'apply_tag', 'update_field', 'internal_task', 'move_pipeline_stage', 'glofox_provision', 'webhook',
 ]
