@@ -25,19 +25,11 @@ import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import { toSlug } from '@/lib/slug'
 import { formatSignupSummary, sumWaveCapacity } from '@/lib/event-signups'
-import { isRaceKind, orderEventsForBrowse } from '@shared/events'
+import { isRaceKind, orderEventsForBrowse, todayIsoDublin } from '@shared/events'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-// Today's date as the operator sees it (Europe/Dublin), YYYY-MM-DD —
-// same approach as the web /events page so the boundary matches.
-function todayIsoDublin() {
-  const fmt = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Europe/Dublin', year: 'numeric', month: '2-digit', day: '2-digit',
-  })
-  return fmt.format(new Date())
-}
 
 // Wave shape used in both create + update. capacity null = unlimited.
 const WaveInputSchema = z.object({

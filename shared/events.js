@@ -38,6 +38,20 @@ export function isRaceKind(kind) {
 }
 
 /**
+ * Return today's date in Europe/Dublin as YYYY-MM-DD — the operator-timezone
+ * "today" boundary used by the events upcoming/past browse split. Pure: no
+ * DB, no network. Intl + Date are globals available in both Node and the RN
+ * runtime, so this stays RN-safe.
+ */
+export function todayIsoDublin() {
+  const fmt = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Europe/Dublin',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+  })
+  return fmt.format(new Date())
+}
+
+/**
  * Split events into upcoming vs past against a YYYY-MM-DD "today" and
  * sort each block for a browse list: upcoming ascending (nearest first),
  * past descending (most recent first). An event with no race_date counts

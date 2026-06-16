@@ -12,7 +12,7 @@ import { hasPermission } from '@/lib/permissions'
 import { Plus, Flag, ExternalLink, Users } from 'lucide-react'
 import { getAppUrl } from '@/lib/app-url'
 import { formatSignupSummary, sumWaveCapacity } from '@/lib/event-signups'
-import { eventKindLabel, eventKindTone, isRaceKind, orderEventsForBrowse } from '@shared/events'
+import { eventKindLabel, eventKindTone, isRaceKind, orderEventsForBrowse, todayIsoDublin } from '@shared/events'
 
 export const dynamic = 'force-dynamic'
 
@@ -29,20 +29,6 @@ const TONE_CLS = {
 }
 const kindBadge = (k) => ({ label: eventKindLabel(k), cls: TONE_CLS[eventKindTone(k)] })
 
-// Today in YYYY-MM-DD (Europe/Dublin) — used to split events into
-// upcoming vs past tabs. Server-side renders against THIS date so the
-// boundary doesn't shift mid-page-render. Anything dated today counts
-// as upcoming (race day is the day OF the event).
-function todayIsoDublin() {
-  // Dublin is UTC+0/+1 depending on DST. The simplest correct way to
-  // get "today's date as the operator sees it" is to format via Intl
-  // in the Dublin tz. Returns YYYY-MM-DD.
-  const fmt = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Europe/Dublin',
-    year: 'numeric', month: '2-digit', day: '2-digit',
-  })
-  return fmt.format(new Date())
-}
 
 export default async function EventsIndexPage(props) {
   const searchParams = await props.searchParams;

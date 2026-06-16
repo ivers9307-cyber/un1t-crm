@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest'
-import { EVENT_KINDS, eventKindLabel, eventKindTone, isRaceKind, orderEventsForBrowse } from './events'
+import { EVENT_KINDS, eventKindLabel, eventKindTone, isRaceKind, orderEventsForBrowse, todayIsoDublin } from './events'
+
+describe('todayIsoDublin', () => {
+  it('returns a YYYY-MM-DD string', () => {
+    expect(todayIsoDublin()).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+  })
+})
 
 describe('event kind presentation', () => {
   it('exposes the multi-kind list (mig 122)', () => {
