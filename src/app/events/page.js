@@ -235,6 +235,13 @@ export default async function EventsIndexPage(props) {
                           >
                             {isRace ? 'Teams' : 'Attendees'}
                           </Link>
+                          <Link
+                            href={`/events/${r.id}/checkin`}
+                            className="text-[11px] text-un1t-subtle hover:text-un1t-text"
+                            title="Check in attendees at the door"
+                          >
+                            Check in
+                          </Link>
                           {/* Race-day control panel is race-only —
                               there's no equivalent for workshop /
                               seminar etc. (no live timing). E7 hides
@@ -334,6 +341,12 @@ export default async function EventsIndexPage(props) {
                       className="px-3 py-1.5 rounded-md border border-un1t-border text-un1t-subtle"
                     >
                       {isRace ? 'Teams' : 'Attendees'}
+                    </Link>
+                    <Link
+                      href={`/events/${r.id}/checkin`}
+                      className="px-3 py-1.5 rounded-md border border-un1t-border text-un1t-subtle"
+                    >
+                      Check in
                     </Link>
                     <Link
                       href={`/events/${r.id}/edit`}
