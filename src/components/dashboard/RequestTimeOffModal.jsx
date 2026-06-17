@@ -9,22 +9,18 @@
 import { useState } from 'react'
 import Modal from '@/components/ui/Modal'
 import Button from '@/components/ui/Button'
-
-const TYPE_OPTIONS = [
-  { value: 'holiday', label: 'Holiday' },
-  { value: 'sick',    label: 'Sick Leave' },
-  { value: 'unpaid',  label: 'Unpaid Leave' },
-  { value: 'other',   label: 'Other' },
-]
+import { timeOffTypesFor, defaultTimeOffTypeFor } from '@shared/time-off'
 
 function todayIso() {
   const d = new Date()
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
-export default function RequestTimeOffModal({ open, onClose, onSuccess }) {
+export default function RequestTimeOffModal({ open, onClose, onSuccess, employmentType }) {
   const today = todayIso()
-  const [type, setType]           = useState('holiday')
+  const typeOptions = timeOffTypesFor(employmentType)
+  const defaultType = defaultTimeOffTypeFor(employmentType)
+  const [type, setType]           = useState(defaultType)
   const [startDate, setStartDate] = useState(today)
   const [endDate, setEndDate]     = useState(today)
   const [reason, setReason]       = useState('')
@@ -32,7 +28,7 @@ export default function RequestTimeOffModal({ open, onClose, onSuccess }) {
   const [error, setError]         = useState(null)
 
   function reset() {
-    setType('holiday')
+    setType(defaultType)
     setStartDate(today)
     setEndDate(today)
     setReason('')
@@ -100,22 +96,29 @@ export default function RequestTimeOffModal({ open, onClose, onSuccess }) {
       }
     >
       <form id="time-off-form" onSubmit={handleSubmit} className="space-y-4">
-        {/* Type */}
+        {/* Type — dropdown when the employee has a choice; a static line
+            when only one type is allowed (contractor / casual → Unavailable). */}
         <div>
           <label className="block text-xs font-medium text-un1t-subtle mb-1" htmlFor="tof-type">
             Type
           </label>
-          <select
-            id="tof-type"
-            value={type}
-            onChange={(e) => setType(e.target.value)}
-            disabled={saving}
-            className="w-full rounded-lg border border-un1t-border bg-un1t-surface text-un1t-text text-sm px-3 py-2 focus:outline-none focus:ring-2 focus:ring-un1t-accent"
-          >
-            {TYPE_OPTIONS.map((o) => (
-              <option key={o.value} value={o.value}>{o.label}</option>
-            ))}
-          </select>
+          {typeOptions.length > 1 ? (
+            <select
+              id="tof-type"
+              value={type}
+              onChange={(e) => setType(e.target.value)}
+              disabled={saving}
+              className="w-full rounded-lg border border-un1t-border bg-un1t-surface text-un1t-text text-sm px-3 py-2 focus:outline-none focus:ring-2 focus:ring-un1t-accent"
+            >
+              {typeOptions.map((o) => (
+                <option key={o.value} value={o.value}>{o.label}</option>
+              ))}
+            </select>
+          ) : (
+            <p className="text-sm text-un1t-subtle">
+              Type: <span className="font-medium text-un1t-text">{typeOptions[0]?.label}</span>
+            </p>
+          )}
         </div>
 
         {/* Dates */}
