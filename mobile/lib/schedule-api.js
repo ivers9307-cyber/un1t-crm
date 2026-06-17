@@ -55,6 +55,14 @@ export function cancelTimeOffRequest(id, locationId) {
   })
 }
 
+export function cancelSwapRequest(id, locationId) {
+  return api(`/api/schedule/swaps/${id}`, {
+    method: 'PUT',
+    locationId,
+    body: { status: 'cancelled' },
+  })
+}
+
 export function createSwapRequest({ requesterShiftId, targetShiftId, targetId, reason, locationId }) {
   return api('/api/schedule/swaps', {
     method: 'POST',
